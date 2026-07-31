@@ -86,7 +86,8 @@ async fn seed_session(pool: &SqlitePool) -> (String, String) {
         project_path.to_str().unwrap(),
         "mock-model",
         None,
-    )
+None,
+None,)
     .await
     .expect("create_session");
     (project_id, session_id)

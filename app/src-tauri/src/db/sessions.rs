@@ -32,16 +32,37 @@ pub async fn create_session(
     initial_cwd: &str,
     model: &str,
     model_id: Option<&str>,
+    // Group chat (07-29-group-chat, Phase 4 Step 3): `None` /
+    // `Some("chat")` for classic chat (default; matches the
+    // column DEFAULT 'chat'). `Some("group_chat")` for the
+    // multi-LLM session type. Backed by the `sessions.session_type`
+    // column (Phase 1 migration, nullable in tests / never
+    // unset in production).
+    session_type: Option<&str>,
+    // Group chat (07-29-group-chat, Phase 4 Step 3): JSON-encoded
+    // metadata blob. `None` for classic chat. `Some(json)` for
+    // group-chat sessions (currently `{participants: [{...}]}`
+    // per the `GroupChatConfig` model). Backed by the
+    // `sessions.metadata` JSON column (Phase 1 migration, column
+    // already exists for legacy subagent use cases — this is the
+    // first primary consumer).
+    metadata: Option<&str>,
 ) -> Result<SessionRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let title = "新对话".to_string();
+    // Phase 4 default: 'chat' (matches column DEFAULT). The
+    // group-chat caller passes Some("group_chat"). Stored as a
+    // typed enum on the in-memory row (`SessionType::Chat`),
+    // but the SQL column is plain TEXT for forward compatibility.
+    let session_type = session_type.unwrap_or("chat");
+    let session_type_typed = crate::db::SessionType::from_str_opt(session_type);
 
     sqlx::query(
         r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
  worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled, plugin_name, session_type)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0, 'dev', 'chat')
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0, 'dev', ?)
  "#,
     )
     .bind(session_id)
@@ -49,9 +70,11 @@ pub async fn create_session(
     .bind(&now)
     .bind(&now)
     .bind(model)
+    .bind(metadata)
     .bind(project_id)
     .bind(initial_cwd)
     .bind(model_id)
+    .bind(session_type)
     .execute(pool)
     .await?;
 
@@ -87,15 +110,14 @@ pub async fn create_session(
         // round-trip race for callers that read the return
         // value before any SELECT).
         plugin_name: "dev".to_string(),
-        // Group chat (07-29-group-chat): new sessions are classic
-        // chat by default (matches the column DEFAULT 'chat'). The
-        // group-chat entrypoint will UPDATE session_type after
-        // create if the user chose group_chat. metadata is NULL on
-        // creation (participants configured later). Mirrors the
-        // explicit-field convention above (struct matches the row
-        // verbatim, no round-trip race).
-        session_type: crate::db::SessionType::Chat,
-        metadata: None,
+        // Group chat (07-29-group-chat, Phase 4 Step 3):
+        // reflect the `session_type` arg into the typed
+        // struct so the caller sees the row verbatim (no
+        // round-trip race; same convention as the previous
+        // hard-coded `::Chat` default).
+        session_type: session_type_typed,
+        metadata: metadata
+            .and_then(|s| serde_json::from_str(s).ok()),
     })
 }
 

@@ -245,7 +245,8 @@ mod tests {
             "/tmp",
             "GLM-4.7",
             None,
-        )
+None,
+None,)
         .await
         .unwrap();
         row.id

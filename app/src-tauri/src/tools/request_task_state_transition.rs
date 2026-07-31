@@ -803,7 +803,8 @@ mod tests {
             project_path.to_str().unwrap(),
             "mock-model",
             None,
-        )
+None,
+None,)
         .await
         .expect("create_session");
     }

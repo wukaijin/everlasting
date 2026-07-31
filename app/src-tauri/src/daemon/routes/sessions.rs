@@ -19,6 +19,7 @@ use crate::agent::question_store::PendingInteractionEntry;
 use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, create_session_inner, delete_session_inner, diff_worktree_inner,
+    update_session_metadata_inner,
     edit_user_message_inner, list_sessions_inner, load_session_inner, record_tool_duration_inner,
     rename_session_inner, set_session_color_inner, set_session_plugin_name_inner,
     set_session_workflow_enabled_inner, update_message_latency_inner,
@@ -47,13 +48,27 @@ pub struct CreateSessionRequest {
     pub project_id: String,
     pub initial_cwd: String,
     pub model: Option<String>,
+    // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E2):
+    // session type discriminator + per-session JSON metadata.
+    // Serpent-case to match the `CreateSession` Tauri command
+    // + the `serde_json::Value` shape. `None` for classic chat.
+    pub session_type: Option<String>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<db::SessionRow>, AppCommandError> {
-    let result = create_session_inner(&state, req.project_id, req.initial_cwd, req.model).await?;
+    let result = create_session_inner(
+        &state,
+        req.project_id,
+        req.initial_cwd,
+        req.model,
+        req.session_type,
+        req.metadata,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -236,6 +251,26 @@ pub async fn record_tool_duration(
     Ok(Json(result))
 }
 
+// Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E4):
+// REST mirror of the `update_session_metadata` Tauri command.
+// The IPC body carries the per-session JSON metadata blob
+// (typically `{participants: [...]}` for group-chat sessions);
+// backend writes it verbatim to `sessions.metadata` (TEXT
+// column, JSON string).
+#[derive(Debug, Deserialize)]
+pub struct UpdateSessionMetadataRequest {
+    pub session_id: String,
+    pub metadata: serde_json::Value,
+}
+
+pub async fn update_session_metadata(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateSessionMetadataRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    update_session_metadata_inner(&state, req.session_id, req.metadata).await?;
+    Ok(Json(()))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct EditUserMessageRequest {
     pub session_id: String,
@@ -276,6 +311,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/list_sessions", post(list_sessions))
         .route("/create_session", post(create_session))
         .route("/load_session", post(load_session))
+        .route("/update_session_metadata", post(update_session_metadata))
         .route("/:id/snapshot", get(snapshot))
         .route("/diff_worktree", post(diff_worktree))
         .route("/delete_session", post(delete_session))

@@ -43,6 +43,18 @@ pub async fn create_session_inner(
     project_id: String,
     initial_cwd: String,
     model: Option<String>,
+    // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E2):
+    // optional session type discriminator. `None` / `Some("chat")`
+    // for classic chat (default; matches the column DEFAULT 'chat').
+    // `Some("group_chat")` for the multi-LLM session type. Threaded
+    // straight into `db::create_session`'s INSERT.
+    session_type: Option<String>,
+    // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E2):
+    // optional per-session JSON metadata blob (e.g. the
+    // `GroupChatConfig { participants: [...] }` for group-chat
+    // sessions). `None` for classic chat. Stored verbatim in
+    // `sessions.metadata` (TEXT column, JSON string).
+    metadata: Option<serde_json::Value>,
 ) -> Result<db::SessionRow, AppCommandError> {
     // `model` defaults to an empty string when the caller doesn't
     // pass one. The frontend's `create_session` call never sends a
@@ -51,6 +63,20 @@ pub async fn create_session_inner(
     // not from this column. An empty string just means "no legacy
     // model label recorded for this session".
     let model = model.unwrap_or_default();
+    // Group chat (Phase 4 Step 3): serialize the metadata JSON
+    // for the SQL bind. `None` passes through to `NULL` in the
+    // column. Errors only surface if the input is malformed
+    // (group-chat config is built client-side and validated
+    // before IPC, so this is defense-in-depth).
+    let metadata_str = match metadata.as_ref() {
+        Some(v) => Some(serde_json::to_string(v).map_err(|e| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("create_session: metadata serialization failed: {}", e),
+            )
+        })?),
+        None => None,
+    };
     // Defensive: every session is bound to a project. The frontend
     // is expected to gate this with a "no project = no chat" check,
     // but a stray IPC call should not silently create a
@@ -97,6 +123,8 @@ pub async fn create_session_inner(
         &initial_cwd,
         &model,
         model_id.as_deref(),
+        session_type.as_deref(),
+        metadata_str.as_deref(),
     )
     .await
     .map_err(|e| anyhow::anyhow!("create_session: db insert failed: {}", e).into())
@@ -108,8 +136,14 @@ pub async fn create_session(
     project_id: String,
     initial_cwd: String,
     model: Option<String>,
+    // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E2):
+    // optional session type + metadata. Both null in the
+    // classic-chat path (the existing IPC contract for the 1
+    // production caller — `chat.ts::createNewSession`).
+    session_type: Option<String>,
+    metadata: Option<serde_json::Value>,
 ) -> Result<db::SessionRow, AppCommandError> {
-    create_session_inner(&state, project_id, initial_cwd, model).await
+    create_session_inner(&state, project_id, initial_cwd, model, session_type, metadata).await
 }
 
 pub async fn load_session_inner(
@@ -127,6 +161,67 @@ pub async fn load_session(
     session_id: String,
 ) -> Result<Option<db::LoadedSession>, AppCommandError> {
     load_session_inner(&state, session_id).await
+}
+
+// Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E3/E5):
+// per-session metadata overwrite. Currently the only primary
+// consumer is the `GroupChatConfigModal` re-edit flow (which
+// writes the participant roster as a JSON blob into
+// `sessions.metadata`). The backend is intentionally
+// type-agnostic — it accepts any JSON value and writes it
+// verbatim → the `GroupChatConfig` parser is the source of
+// truth for the shape on the frontend side. Returns
+// `Ok(())` on success; the IPC layer propagates errors.
+pub async fn update_session_metadata_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    metadata: serde_json::Value,
+) -> Result<(), AppCommandError> {
+    // Defensive: refuse empty session_id (would silently
+    // update zero rows). The frontend's modal flow never
+    // sends empty, but a stray IPC call should not silently
+    // succeed.
+    if session_id.trim().is_empty() {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "update_session_metadata: session_id must not be empty",
+        ));
+    }
+    let metadata_str = serde_json::to_string(&metadata).map_err(|e| {
+        AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("update_session_metadata: metadata serialization failed: {}", e),
+        )
+    })?;
+    // 0 rows = no such session (FK / session_id not found).
+    // We surface this as InvalidRequest so the frontend can
+    // decide whether to retry / drop the modal.
+    let rows = sqlx::query("UPDATE sessions SET metadata = ?2 WHERE id = ?1")
+        .bind(&session_id)
+        .bind(&metadata_str)
+        .execute(&state.db)
+        .await
+        .map_err(|e| anyhow::anyhow!("update_session_metadata: db update failed: {}", e))?
+        .rows_affected();
+    if rows == 0 {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "update_session_metadata: session '{}' not found",
+                session_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_session_metadata(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    metadata: serde_json::Value,
+) -> Result<(), AppCommandError> {
+    update_session_metadata_inner(&state, session_id, metadata).await
 }
 
 pub async fn diff_worktree_inner(

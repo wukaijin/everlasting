@@ -28,12 +28,23 @@ import { ref } from "vue";
 import { useChatStore } from "../../stores/chat";
 import SessionList from "../SessionList.vue";
 import SettingsModal from "../settings/SettingsModal.vue";
+import GroupChatConfigModal from "../chat/GroupChatConfigModal.vue";
 import Icon from "../Icon.vue";
 
 const chat = useChatStore();
 
 function onNew() {
   void chat.createNewSession();
+}
+
+// Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E7):
+// open the GroupChatConfigModal in create mode. The modal
+// emits `created` with the new session id; we close it via
+// the v-model open binding (the modal emits "update:open"
+// which flips it back to false).
+const groupChatModalOpen = ref<boolean>(false);
+function onNewGroupChat() {
+  groupChatModalOpen.value = true;
 }
 
 const settingsOpen = ref(false);
@@ -120,6 +131,17 @@ function onSearchClear() {
           <Icon name="magnifying-glass" :size="14" />
         </button>
         <button
+          v-if="!searchActive"
+          class="sidebar__action"
+          type="button"
+          title="新建群聊"
+          aria-label="新建群聊"
+          data-testid="sidebar-new-group-chat"
+          @click="onNewGroupChat"
+        >
+          <Icon name="users" :size="14" />
+        </button>
+        <button
           class="sidebar__add"
           type="button"
           title="新建会话"
@@ -147,6 +169,17 @@ function onSearchClear() {
       </button>
     </div>
     <SettingsModal v-model:open="settingsOpen" />
+    <!--
+      Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E7/E6):
+      modal for creating a new group_chat session. Same component
+      is reused at runtime for editing an existing group's
+      participant roster (mounted from ChatWindow / AppHeader).
+    -->
+    <GroupChatConfigModal
+      v-model:open="groupChatModalOpen"
+      mode="create"
+      @created="(id) => { void chat.switchSession(id); }"
+    />
   </aside>
 </template>
 

@@ -69,7 +69,8 @@ async fn create_session_scopes_to_project() {
         "/tmp/foo",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     let s2 = create_session(
@@ -79,7 +80,8 @@ async fn create_session_scopes_to_project() {
         "/tmp/bar",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     assert_eq!(s1.project_id, p.id);
@@ -111,7 +113,8 @@ async fn persist_and_load_messages() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -168,7 +171,8 @@ async fn first_user_message_auto_titles_session() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -191,7 +195,8 @@ async fn second_user_message_does_not_overwrite_title() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -232,7 +237,8 @@ async fn delete_session_cascades_messages() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     persist_turn(
@@ -261,7 +267,8 @@ async fn delete_messages_by_session_keeps_session_drops_messages() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     persist_turn(
@@ -306,7 +313,8 @@ async fn list_sessions_preview_truncates_at_80_chars() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     let long = "a".repeat(120);
@@ -337,7 +345,8 @@ async fn touch_session_updates_timestamp() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     let original = session.updated_at.clone();
@@ -357,7 +366,8 @@ async fn update_session_cwd_persists() {
         "/tmp/start",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     assert_eq!(session.current_cwd, "/tmp/start");
@@ -388,7 +398,8 @@ async fn set_session_workflow_enabled_round_trip() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     // New session: workflow_enabled defaults to false (per the
@@ -453,7 +464,8 @@ async fn set_session_plugin_name_round_trip() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     // New session: plugin_name defaults to "dev" (per the
@@ -513,7 +525,8 @@ async fn new_session_defaults_to_none_state() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     assert_eq!(s.worktree_state, WorktreeState::None);
@@ -535,7 +548,8 @@ async fn worktree_state_setter_round_trip() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     // Attach.
@@ -628,7 +642,8 @@ async fn insert_system_event_appends_to_history() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     persist_turn(
@@ -678,7 +693,8 @@ async fn insert_system_event_seq_increments() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     insert_system_event(&pool, &s.id, "first", "attached")
@@ -712,7 +728,8 @@ async fn update_session_model_id_sets_and_clears() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     // New session: model_id is NULL (falls back to global default).
@@ -770,7 +787,8 @@ async fn load_session_includes_model_id() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     // Directly set model_id in the DB to verify the SELECT picks it up.
@@ -823,7 +841,8 @@ async fn update_last_turn_usage_overwrites_not_accumulates() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
@@ -875,7 +894,8 @@ async fn list_sessions_includes_last_turn_columns() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
     let u = TokenUsage {
@@ -915,7 +935,8 @@ async fn persist_turn_with_latency_writes_three_columns() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -974,7 +995,8 @@ async fn persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1087,7 +1109,8 @@ async fn persist_turn_with_no_latency_leaves_columns_null() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1120,7 +1143,8 @@ async fn update_message_latency_patches_columns_by_id() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1178,7 +1202,8 @@ async fn update_message_latency_accepts_partial_payload() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1239,7 +1264,8 @@ async fn update_message_latency_patches_thinking_ms_independently() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1292,7 +1318,8 @@ async fn find_message_id_by_seq_returns_none_for_unknown_pair() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1316,7 +1343,8 @@ async fn record_tool_duration_patches_matching_tool_result_block() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1382,7 +1410,8 @@ async fn record_tool_duration_returns_false_when_no_block_matches() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 
@@ -1414,7 +1443,8 @@ async fn record_tool_duration_handles_text_only_message_without_error() {
         "/tmp",
         "GLM-4.7",
         None,
-    )
+None,
+None,)
     .await
     .unwrap();
 

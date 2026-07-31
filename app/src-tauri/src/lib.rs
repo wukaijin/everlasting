@@ -230,6 +230,7 @@ pub fn run() {
             commands::sessions::list_sessions,
             commands::sessions::create_session,
             commands::sessions::load_session,
+            commands::sessions::update_session_metadata,
             commands::sessions::delete_session,
             commands::sessions::clear_session_messages,
             commands::sessions::diff_worktree,

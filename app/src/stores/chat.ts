@@ -49,6 +49,7 @@ import {
   type DiffResult,
   type FileDiff,
   type LatencyInfo,
+  type ParticipantConfig,
   type SessionMode,
   type SessionSummary,
   type SessionTokenUsage,
@@ -545,14 +546,39 @@ export const useChatStore = defineStore("chat", () => {
    *  project is active — the caller (the chat area) is expected to
    *  be visible only when a project is selected (Q2 in dispatch
    *  prompt: the empty state hides the input, so send/create is
-   *  unreachable from the UI). */
-  async function createNewSession(): Promise<string> {
+   *  unreachable from the UI).
+   *
+   *  Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E1):
+   *  optional `opts` carries the session-type discriminator + the
+   *  participant roster for group-chat sessions. Server-side:
+   *  - `session_type`: `"chat"` (default) or `"group_chat"`
+   *  - `metadata`: JSON blob with `{participants: [...]}` for
+   *    group-chat sessions; `null` for classic chat.
+   *  Both are optional — the existing callers (the "new session"
+   *  button + the auto-create flow) get classic chat semantics
+   *  (no behavior change). The `GroupChatConfigModal` is the only
+   *  caller that sets `sessionType: "group_chat"` + `participants`. */
+  async function createNewSession(
+    opts: {
+      sessionType?: "chat" | "group_chat";
+      participants?: ParticipantConfig[];
+    } = {},
+  ): Promise<string> {
     const projectId = projectsStore.currentProjectId;
     if (!projectId) {
       throw new Error("createNewSession: no current project");
     }
     const project = projectsStore.projectById(projectId);
     const initialCwd = project?.path ?? "";
+    // Group chat (Phase 4 Step 3): attach the session_type +
+    // metadata only when the caller opted in. Classic chat uses
+    // the same wire shape but with both fields undefined →
+    // server-side defaults to `chat` + NULL metadata.
+    const sessionType = opts.sessionType;
+    const metadata =
+      opts.sessionType === "group_chat" && opts.participants
+        ? { participants: opts.participants }
+        : null;
     const session = await transport.invoke<{
       id: string;
       title: string;
@@ -564,6 +590,8 @@ export const useChatStore = defineStore("chat", () => {
     }>("create_session", {
       projectId: projectId,
       initialCwd: initialCwd,
+      sessionType,
+      metadata,
     });
     currentSessionId.value = session.id;
     currentCwd.value = session.current_cwd ?? "";
@@ -574,6 +602,40 @@ export const useChatStore = defineStore("chat", () => {
     await controller.ensureLoaded(session.id);
     await loadSessions(projectId);
     return session.id;
+  }
+
+  /** Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E5):
+   *  overwrite the participant roster on an existing group-chat
+   *  session. Calls `update_session_metadata` IPC (REST mirror
+   *  `PATCH /api/v1/sessions/:id/metadata`). The caller
+   *  (`GroupChatConfigModal` edit mode) is responsible for
+   *  validating the new roster before invoking this. The
+   *  session_list is refreshed so the SessionList re-renders
+   *  with the new metadata.
+   *  Refuses to call on a non-group-chat session (the server
+   *  accepts any JSON, but the result would be meaningless
+   *  if applied to a classic chat session). */
+  async function updateGroupChatConfig(
+    sessionId: string,
+    participants: ParticipantConfig[],
+  ): Promise<void> {
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    if (summary && summary.session_type !== "group_chat") {
+      throw new Error(
+        `updateGroupChatConfig: session ${sessionId} is not a group_chat session`,
+      );
+    }
+    await transport.invoke("update_session_metadata", {
+      sessionId,
+      metadata: { participants },
+    });
+    // Refresh the session list so the SessionList re-renders
+    // with the new metadata. `loadSessions` is the existing
+    // façade; the controller's LRU is untouched (the messages
+    // themselves are unchanged).
+    if (projectsStore.currentProjectId) {
+      await loadSessions(projectsStore.currentProjectId);
+    }
   }
 
   async function switchSession(sessionId: string) {
@@ -1937,6 +1999,7 @@ export const useChatStore = defineStore("chat", () => {
     cancel,
     loadSessions,
     createNewSession,
+    updateGroupChatConfig,
     switchSession,
     deleteSession,
     // B3 (PR2): `/clear` — wipe messages, keep session row.
