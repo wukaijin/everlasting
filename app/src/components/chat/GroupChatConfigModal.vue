@@ -31,6 +31,7 @@ import {
   DialogOverlay,
   DialogContent,
   DialogTitle,
+  DialogDescription,
   DialogClose,
   SelectRoot,
   SelectTrigger,
@@ -239,15 +240,15 @@ function modelLabel(id: string): string {
   <DialogRoot :open="open" @update:open="(v: boolean) => emit('update:open', v)">
     <DialogPortal>
       <DialogOverlay class="gcfg-overlay" />
-      <DialogContent class="gcfg-content">
+      <DialogContent class="gcfg-content" aria-describedby="gcfg-desc">
         <DialogTitle class="gcfg-title">
           {{ mode === "create" ? "新建群聊" : "编辑参与者" }}
         </DialogTitle>
-        <p class="gcfg-subtitle">
+        <DialogDescription class="gcfg-subtitle">
           {{ mode === "create"
             ? "配置 2-3 个参与者(不含主持人)。"
             : "修改当前群聊的参与者配置。" }}
-        </p>
+        </DialogDescription>
 
         <div v-if="errorMessage" class="gcfg-error" role="alert">
           {{ errorMessage }}

@@ -331,7 +331,7 @@ projection, and make `reduceThreads` the only thread replay reducer.
 ## Session Type + JSON Metadata Pattern (2026-07-31, Phase 4 group-chat 沉淀)
 
 当事物需要一个新的会话类型(skip-session)或者本身的多变 JSON
-配置(例如 group-chat 的 participants)的时候,opnionated 模式:
+配置(例如 group-chat 的 participants)的时候,opinionated 模式:
 
 ### Schema 层(DB)
 
