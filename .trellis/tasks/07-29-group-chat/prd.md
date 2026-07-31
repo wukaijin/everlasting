@@ -1,6 +1,6 @@
 # 群聊 group chat (主持人 LLM 主持 + 多 LLM 真对话)
 
-> 状态:**PRD 已收敛**(2026-07-31)。D1-D11 全部拍板。下一步进入 planning。
+> 状态:**Phase 1-3 已实现并提交**(2026-07-31,分支 `feat/group-chat`,commit `d2fca90` + `80ab4bd`)。Phase 4(人类抢占插话 + 配置 UI + utterance 渲染)待下一个 session 接手。D1-D11 全部拍板。详见文末「Phase 4 接手指南」。
 
 ## Goal
 
@@ -105,23 +105,33 @@
 
 ## Acceptance Criteria
 
-### Phase 1(数据层 + session 类型骨架)
-- [ ] `sessions` 表加 `session_type` 列 + migration(默认 `chat`,存量兼容);`messages` 表加 `speaker` 列 + migration(可空)。
-- [ ] `SessionRow`/`SessionSummary` 透传 `session_type` + `metadata`(后者已就绪);`create_session` 支持创建 `group_chat` 类型。
-- [ ] 群聊 session 的 `metadata` 能写入/读出 participants JSON。
-- [ ] `ChatMessage` 加 `speaker` 字段;落库/读取往返正确(含回归:普通 chat session speaker 字段为 null 不破坏现有逻辑)。
+> Phase 划分以**实际实现**为准(下方标注)。每项标注完成状态(commit)。
 
-### Phase 2(wire 层 + turn-taking 引擎)
-- [ ] OpenAI provider emit `name` 字段;Anthropic provider 前缀注入 `@参与者名:`;两 provider 均能让模型正确识别发言者。
-- [ ] `nominate_speaker` / `end_discussion` 拦截 tool 注册 + 拦截点就位;主持人 system prompt 引导使用。
-- [ ] 群聊 turn-taking 编排跑通:主持人 → `nominate_speaker` → 参与者发言(带 speaker 落库)→ 回主持人 → `end_discussion` 结束。
-- [ ] 参与者发言时能看到前序所有 utterance(互见性,真群聊硬指标)。
+### Phase 1 数据层 ✅ (commit `d2fca90`)
+- [x] `sessions` 表加 `session_type` 列 + migration(默认 `chat`,存量兼容);`messages` 表加 `speaker` 列 + migration(可空)。
+- [x] `SessionRow`/`SessionSummary` 透传 `session_type` + `metadata`;`create_session` 支持 `group_chat`(INSERT 已含 session_type,但**前端创建入口待 Phase 4** —— 当前只能手工改 DB 建 group_chat session)。
+- [x] 群聊 session 的 `metadata` 能写入/读出 participants JSON。
+- [x] `ChatMessage` 加 `speaker` 字段;落库/读取往返正确(含回归:普通 chat session speaker 字段为 null 不破坏现有逻辑)。
 
-### Phase 3(人类插话 + UI)
+### Phase 2 wire 层 ✅ (commit `d2fca90`)
+- [x] OpenAI provider emit `name` 字段;Anthropic provider 前缀注入 `@参与者名:` + 移除 speaker 字段。
+- [x] `WireMessage::User/Assistant` 携带 speaker,forward/reverse/strip_unsupported 全透传。
+- [ ] 两 provider 均能让模型正确识别发言者 —— **真模型验证待 Phase 4 集成测试**(单测只验 wire 形态,未跑真实 LLM)。
+
+### Phase 3 turn-taking 编排引擎 ✅ (commit `80ab4bd`)
+- [x] `nominate_speaker` / `end_discussion` 拦截 tool 注册 + 拦截点就位;主持人 system prompt 引导使用。
+- [x] 群聊 turn-taking 编排跑通:`run_group_chat_loop` 外层调度器(moderator → nominate_speaker → participant → reload → 回 moderator → end_discussion)。
+- [x] 兜底机制:moderator 不 nominate → round-robin;MAX 30 轮硬上限。
+- [x] 参与者发言时能看到前序所有 utterance(互见性 = 共享 messages Vec + DB reload)。
+- [ ] **⚠️ participant 发言尚未带 speaker 落库** —— 见「Phase 4 接手指南」TODO-A。
+- [ ] 端到端跑通验证 —— 待 Phase 4 集成(需真实 LLM + 配好的 session)。
+
+### Phase 4 人类抢占插话 + UI ⬜ (待实现)
 - [ ] 人类抢占插话跑通:cancel 当前发言 + 人类消息落库 + 主持人基于新上下文重新调度。
-- [ ] 参与者配置 UI(加/删/重排/选模型/选人设)可用。
-- [ ] 前端按 speaker 渲染 utterance 流(区分不同参与者,可读性 OK)。
-- [ ] **集成**:完整群聊跑通——创建群聊 session(配 2-3 参与者)→ 主持人开场点名 → 参与者互相回应/反驳 → 人类插话打断 → 主持人收尾结束。
+- [ ] 参与者配置 UI(加/删/重排/选模型/选人设)。
+- [ ] 前端按 speaker 渲染 utterance 流(区分不同参与者)。
+- [ ] 前端创建群聊 session 入口(选 session_type=group_chat + 配 participants)。
+- [ ] **集成**:完整群聊跑通——创建(配 2-3 参与者)→ 主持人点名 → 互相反驳 → 人类插话 → 收尾。
 - [ ] 回归:普通 chat session + 现有 subagent/review 机制全绿;`cargo test --lib` + `cargo clippy --lib --tests` 通过。
 
 ## Out of Scope
@@ -138,8 +148,81 @@
 ## Notes
 
 - 本任务前置依赖:无硬前置,所有基建(cancel/compaction/per-dispatch model/拦截 tool 模式)均已就绪。
-- 风险最高点:
-  1. **D6b 两套 wire 逻辑**(OpenAI name / Anthropic 前缀)—— 实现时需各自测试 speaker 识别正确性,Anthropic 前缀注入可能被模型混淆。
-  2. **主持人 arbitrator 可靠性** —— 模型可能不调用 `nominate_speaker`/`end_discussion` 或调用错乱,需兜底(如超时强制结束 / 主持人无响应时轮转 fallback)。planning 时重点设计兜底。
-  3. **turn-taking 编排侵入 chat_loop** —— `run_chat_loop`(`chat_loop.rs:175`)是核心入口,加 `session_type` 分支需谨慎不破坏现有 chat 路径。
+- 风险点(实现后复盘):
+  1. **D6b 两套 wire 逻辑** —— ✅ 已实现(Phase 2)。Anthropic 前缀注入可能被模型混淆 → 待 Phase 4 真模型验证。
+  2. **主持人 arbitrator 可靠性** —— ✅ 已兜底(Phase 3 round-robin fallback + MAX 30 轮)。
+  3. **turn-taking 编排侵入 chat_loop** —— ✅ 用路径 A(外层包装器)规避,不改 run_chat_loop,零回归(1616 测试)。
 - 与 review epic Phase 2 的交集:review 的「跨 session / 人机混合评审」与本任务的「人类插话」有概念交集,但本任务聚焦 AI 内部闭环多 LLM 对话,混合评审留 review Phase 2。
+
+---
+
+## Phase 4 接手指南(下一个 session 必读)
+
+> 本指南为下个 session 无缝接手 Phase 4 而写。包含:实际定型的数据结构、精确待改文件清单、已知 TODO、验证方法。
+
+### 实际定型的数据结构(Phase 1-3 已落地)
+
+**participants 配置 JSON(存 `sessions.metadata`)** —— 见 `agent/group_chat.rs`:
+```rust
+// sessions.metadata 列(已存在,Phase 1 启用)
+GroupChatConfig { participants: Vec<ParticipantConfig> }
+ParticipantConfig {
+    name: String,           // 显示名 + speaker 身份,session 内唯一
+    model: String,          // model_id —— ProviderCatalog 的 key(catalog 按 model_id 解析 provider)
+    persona_md: Option<String>,  // inline persona markdown(D8)
+    order: Option<i32>,     // UI 排序 + 未来 order-aware fallback(当前 round-robin 未用)
+}
+```
+
+**关键事实(实现中确认/修正)**:
+- `sessions.model` 字段语义 = **主持人模型**;`moderator_model_id` 优先取 `session.model_id`,fallback `session.model`(见 `group_chat.rs::build_group_chat_ctx`)。
+- `SessionRow`/`SessionSummary` 已有 `session_type: SessionType` + `metadata: Option<serde_json::Value>` 字段(Phase 1)。
+- `ChatMessage.speaker: Option<String>` 已加(`llm/types.rs:201`,`#[serde(default, skip_serializing_if = Option::is_none)]` → None 不序列化,Some 序列化到前端)。
+- `messages.speaker` 列已加(Phase 1 migration,可空)。
+
+### ⚠️ 已知 TODO(Phase 3 遗留,Phase 4 必须处理)
+
+**TODO-A:participant 发言未带 speaker 落库(高优先级)**
+`run_group_chat_loop`(`agent/group_chat_loop.rs`)派发 participant turn 时,调用了 `run_chat_loop`,但 `run_chat_loop` 内部的 assistant 落库点(`chat_loop.rs:2129` 附近)写的是 `speaker: None`(Phase 1.4 机械补的)。群聊里 participant 的 speaker 需要在这里被设置成参与者名。
+- **修复方向**:run_chat_loop 的 assistant 落库需要知道「当前发言者是谁」。最干净的方式是给 run_chat_loop 加一个 `current_speaker: Option<String>` 参数(或复用 system_prompt_override 的伴随信息),在 assistant 落库点 `msg.speaker = current_speaker`。moderator turn 传主持人名,participant turn 传参与者名。
+- **注意**:reload_messages(`group_chat_loop.rs`)当前把 speaker 硬编码为 None,也要改成读 DB 的 speaker 列(但 MessageRow 当前没有 speaker 字段 —— 见 TODO-B)。
+
+**TODO-B:MessageRow 未读 speaker 列**
+`db/types.rs` 的 `MessageRow` + `load_session` 的 SELECT(`db/sessions.rs:222`)还没有 `speaker` 字段。Phase 1 加了 DB 列 + persist_turn 写入,但读取侧没接通。Phase 4 要:MessageRow 加 `speaker: Option<String>` + SELECT 加列 + 映射。
+
+### Phase 4 待改文件清单(精确)
+
+**后端**:
+- `db/types.rs`:`MessageRow` 加 `speaker: Option<String>` 字段(TODO-B)。
+- `db/sessions.rs`:`load_session` 的 messages SELECT(~222)+ MessageRow 映射(~235)加 speaker(TODO-B)。
+- `agent/chat_loop.rs`:assistant 落库点(~2129)接通 speaker(TODO-A);可能需给 run_chat_loop 加 current_speaker 参数。
+- `agent/group_chat_loop.rs`:`reload_messages` 读 speaker 列(替换硬编码 None)。
+
+**前端**:
+- `stores/chat.types.ts`:`ChatMessage`(~206)加 `speaker?: string`;`SessionSummary`(~310)加 `session_type` + `metadata` 字段。
+- `stores/streamController.ts`:`rehydrateMessages`(~443)读 speaker(从 LoadedMessage)。
+- `stores/chat.ts`:`createNewSession`(~549)支持 session_type=group_chat + 写 metadata;新增「配置 participants」IPC 或复用现有 session 更新。
+- `components/chat/MessageItem.vue`:`msg--${message.role}`(~1121)加 speaker 维度 —— 按 speaker 渲染名字 chip + accent 色(仿 color_tag palette);区分不同参与者。
+- 新建:参与者配置组件(加/删/重排/选模型/选人设 inline persona)。
+
+**IPC / 命令**:
+- 可能需新增 `create_group_chat_session` 或给 `create_session`(`commands/sessions.rs:106`)加 session_type + metadata 参数。
+- 参与者运行时增删改 → 需 `update_session_metadata` IPC(写 sessions.metadata)。
+
+### 人类抢占插话(D9)—— 后端现状
+Phase 3 的 `run_group_chat_loop` 已持有 `token: CancellationToken`(每轮 `token.is_cancelled()` 检查 break)。**人类抢占的 cancel 路径已就绪**(复用现有 `commands/cancel.rs`)。Phase 4 主要工作是:
+- 前端群聊 session 的 send_message → 触发 cancel 当前发言(cancel_chat IPC)→ 人类消息落库 → 重新 send(chat_inner 会因 session_type=group_chat 重新进入 run_group_chat_loop,主持人 reload 看到人类插话)。
+- 验证:cancel → run_group_chat_loop 的 token 检查 break → 外层退出 → 新 send 进入新编排循环(看到人类消息)。
+
+### 验证方法
+- **端到端**:手工建 group_chat session(DB 改 session_type + 写 metadata participants)→ 前端发首条消息 → 观察 moderator 点名 → participant 发言 → 人类插话 → end_discussion。
+- **回归**:`cargo test --lib`(当前 1616 全绿)+ `cargo clippy --lib --tests`(注意 WSL 用 `PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo check/test`)。
+- **前置**:WSL 环境编译需 `PKG_CONFIG_PATH`(见 CLAUDE.md「WSL 环境」节);完整 build 需 GTK 系统库(用 `pnpm tauri dev/build`)。
+
+### 建议实施顺序(Phase 4)
+1. TODO-A + TODO-B(speaker 落库/读取接通)—— 后端闭环,可单测验证。
+2. 前端类型 + rehydrate(chat.types.ts + streamController.ts)—— speaker 透传到 UI。
+3. 创建群聊 session 入口 + 参与者配置 UI(chat.ts + 新组件)。
+4. utterance 渲染(MessageItem.vue speaker chip)。
+5. 人类抢占插话验证。
+6. 端到端集成测试。
