@@ -43,6 +43,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { getToolResult } from "../../utils/messageFormat";
 import { createDebouncedRenderer, renderMarkdown } from "../../utils/markdown";
+import { COLOR_PALETTE } from "../../utils/colorTag";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
@@ -179,6 +180,48 @@ const useTimeline = computed(
   () =>
     !!props.message.contentBlocks &&
     props.message.contentBlocks.length > 0 &&
+    props.message.role === "assistant",
+);
+
+// -----------------------------------------------------------------
+// Group chat (07-29-group-chat, Phase 4 Step 4 TODO-F1/F2/F3):
+// speaker chip rendering. The originating speaker is carried
+// in `message.speaker` (round-tripped from `messages.speaker`
+// column via `rehydrateMessages`). `undefined` for classic chat
+// / subagent / review rows → no chip. `Some("moderator")` for
+// the moderator's turns. `Some(<participant.name>)` for each
+// participant's turns. The chip is rendered only on assistant
+// rows (user rows are human by definition in any session type).
+// -----------------------------------------------------------------
+const speakerLabel = computed(() => {
+  const s = props.message.speaker;
+  if (!s) return "";
+  if (s === "moderator") return "主持人";
+  return s;
+});
+
+// Hash the speaker name into a palette index for the chip
+// accent. The hash is a stable per-name function (so the same
+// participant always gets the same color across reloads +
+// sessions). Moderator gets a fixed "neutral" treatment (not
+// palette-derived) so its role is visually distinct from the
+// participants — the user knows who's arbitrating.
+const speakerAccent = computed(() => {
+  const s = props.message.speaker;
+  if (!s) return ""; // v-if guard — not rendered
+  if (s === "moderator") return "neutral";
+  // djb2 hash → 0..7 palette index
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  }
+  const idx = h % COLOR_PALETTE.length;
+  return `palette-${idx}`;
+});
+
+const showSpeakerChip = computed(
+  () =>
+    !!props.message.speaker &&
     props.message.role === "assistant",
 );
 
@@ -1147,6 +1190,32 @@ const showEditedLabel = computed<boolean>(
       @resend="onResend"
     />
 
+    <!--
+      Group chat (07-29-group-chat, Phase 4 Step 4 TODO-F1):
+      speaker chip. Renders only when `message.speaker` is set
+      AND the row is an assistant message (user rows are human
+      by definition in any session type, so no chip). The chip
+      follows the assistant bubble — appears at the top of the
+      row, above the ThinkingBlock.
+
+      Visual: small pill with the speaker's display name +
+      accent color. Moderator gets a neutral color + a fixed
+      "主持人" label (so the user can always tell who
+      arbitrating). Participants get a hash-derived palette
+      color (deterministic — same name = same color across
+      reloads + sessions).
+    -->
+    <div
+      v-if="showSpeakerChip"
+      class="msg-speaker-chip"
+      :class="`msg-speaker-chip--${speakerAccent}`"
+      :data-testid="`msg-speaker-chip-${message.seq}`"
+      :data-speaker="message.speaker"
+    >
+      <span class="msg-speaker-chip__dot" aria-hidden="true" />
+      <span class="msg-speaker-chip__label">{{ speakerLabel }}</span>
+    </div>
+
     <ThinkingBlock
       v-if="
         message.role === 'assistant' &&
@@ -1502,6 +1571,67 @@ const showEditedLabel = computed<boolean>(
 .msg--assistant {
   align-self: flex-start;
 }
+
+/* Group chat (07-29-group-chat, Phase 4 Step 4 TODO-F4):
+   speaker chip. Small pill at the top of the row, before
+   the ThinkingBlock / bubble. The chip pairs a 6px colored
+   dot with the speaker's display name. Color comes from one
+   of two buckets:
+     - "neutral" (moderator): fixed accent, no palette.
+     - "palette-N" (participant): one of the 8-color palette
+       from `utils/colorTag.ts` (djb2 hash of the speaker
+       name → N). Same name = same color across reloads +
+       sessions, deterministic without needing a DB lookup.
+   The chip is rendered only on assistant rows (the v-if
+   guard on the template side skips user rows). */
+.msg-speaker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  border-radius: 999px;
+  background: var(--ev-color-bg-input, #2a2a2a);
+  color: var(--ev-color-text, #e0e0e0);
+  border: 1px solid var(--ev-color-border, #444);
+  align-self: flex-start;
+}
+
+.msg-speaker-chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ev-color-border, #555);
+  flex-shrink: 0;
+}
+
+.msg-speaker-chip__label {
+  white-space: nowrap;
+}
+
+/* Moderator: fixed neutral accent so the role is visually
+   distinct from participants (who each get a unique palette
+   color). The dot uses the muted accent token. */
+.msg-speaker-chip--neutral .msg-speaker-chip__dot {
+  background: var(--ev-color-accent, #4a8eff);
+}
+
+/* Participant chips: 8 palette buckets matching
+   `utils/colorTag.ts::COLOR_PALETTE`. Each bucket sets the
+   dot color; the chip background stays neutral so the
+   visual weight is dominated by the dot + label, not the
+   chip background — keeps the chat readable. */
+.msg-speaker-chip--palette-0 .msg-speaker-chip__dot { background: #d4826a; }
+.msg-speaker-chip--palette-1 .msg-speaker-chip__dot { background: #6a9e7e; }
+.msg-speaker-chip--palette-2 .msg-speaker-chip__dot { background: #6a82b5; }
+.msg-speaker-chip--palette-3 .msg-speaker-chip__dot { background: #b56a9e; }
+.msg-speaker-chip--palette-4 .msg-speaker-chip__dot { background: #8eb56a; }
+.msg-speaker-chip--palette-5 .msg-speaker-chip__dot { background: #6ab5ae; }
+.msg-speaker-chip--palette-6 .msg-speaker-chip__dot { background: #b5a06a; }
+.msg-speaker-chip--palette-7 .msg-speaker-chip__dot { background: #9e6ab5; }
 
 /* D3 PR2: the inline edit mode gets a subtle accent border
    + a tinted background to signal "this row is in
