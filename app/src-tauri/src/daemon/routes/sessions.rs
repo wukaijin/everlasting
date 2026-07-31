@@ -19,10 +19,10 @@ use crate::agent::question_store::PendingInteractionEntry;
 use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, create_session_inner, delete_session_inner, diff_worktree_inner,
-    update_session_metadata_inner,
     edit_user_message_inner, list_sessions_inner, load_session_inner, record_tool_duration_inner,
     rename_session_inner, set_session_color_inner, set_session_plugin_name_inner,
     set_session_workflow_enabled_inner, update_message_latency_inner,
+    update_session_metadata_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;

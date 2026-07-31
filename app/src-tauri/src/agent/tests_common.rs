@@ -266,8 +266,9 @@ pub(crate) async fn make_harness() -> TestHarness {
         project_path.to_str().unwrap(),
         "mock-model",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .expect("create_session");
 

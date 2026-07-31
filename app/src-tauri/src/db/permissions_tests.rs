@@ -52,8 +52,9 @@ async fn update_session_mode_persists_and_round_trips() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     // Default after create_session = 'edit'.
@@ -95,8 +96,9 @@ async fn list_sessions_includes_mode_field() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     update_session_mode(&pool, &s.id, crate::db::Mode::Yolo)
@@ -118,8 +120,9 @@ async fn grant_tool_permission_round_trip_and_has_check() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     // Fresh session: no permissions yet.
@@ -158,8 +161,9 @@ async fn grant_tool_permission_cascades_on_session_delete() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     grant_tool_permission(&pool, &s.id, "shell", "tool", None)
@@ -183,8 +187,9 @@ async fn record_audit_event_inserts_and_cascades_on_delete() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     record_audit_event(
@@ -250,8 +255,9 @@ async fn tool_executed_audit_round_trips_via_list_audit_events() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
 
@@ -330,8 +336,9 @@ async fn list_audit_events_empty_session_returns_empty_vec() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let rows = list_audit_events(&pool, &s.id).await.unwrap();
@@ -353,8 +360,9 @@ async fn list_audit_events_tolerates_null_payload() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     record_audit_event(&pool, &s.id, "tool_executed", None, None)
@@ -512,8 +520,9 @@ async fn list_tool_permissions_empty_session_returns_empty_vec() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
@@ -534,8 +543,9 @@ async fn list_tool_permissions_returns_all_three_match_kinds() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     // tool kind (match_value = NULL) — e.g. web_fetch.
@@ -590,8 +600,9 @@ async fn revoke_tool_permission_null_value_tool_kind() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     grant_tool_permission(&pool, &s.id, "web_fetch", "tool", None)
@@ -628,8 +639,9 @@ async fn revoke_tool_permission_preserves_sibling_grants() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     grant_tool_permission(&pool, &s.id, "read_file", "path", Some("src/*"))
@@ -679,8 +691,9 @@ async fn revoke_tool_permission_is_session_scoped() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let b = create_session(
@@ -690,8 +703,9 @@ None,)
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     grant_tool_permission(&pool, &a.id, "web_fetch", "tool", None)
@@ -729,8 +743,9 @@ async fn record_audit_event_persists_turn_seq() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
 

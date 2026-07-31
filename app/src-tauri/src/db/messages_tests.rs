@@ -64,8 +64,9 @@ async fn setup_session_with_3_turns(pool: &SqlitePool) -> String {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     // seq 0: user prompt
@@ -387,8 +388,9 @@ async fn resend_message_audit_round_trips_via_list_audit_events() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
 
@@ -455,8 +457,9 @@ async fn resend_message_audit_on_deleted_session_returns_error() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     delete_session(&pool, &s.id).await.unwrap();
@@ -493,8 +496,9 @@ async fn loop_intervention_audit_round_trips_via_list_audit_events() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
 
@@ -578,8 +582,9 @@ async fn loop_intervention_audit_on_deleted_session_returns_error() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     delete_session(&pool, &s.id).await.unwrap();

@@ -76,7 +76,8 @@ async fn run_loop_with_sink(
         h.question_store.clone(),
         None,
         None,
-None,)
+        None,
+    )
     .await;
 }
 

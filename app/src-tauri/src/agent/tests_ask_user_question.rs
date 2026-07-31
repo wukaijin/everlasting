@@ -217,7 +217,8 @@ async fn run_loop(
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 }
 

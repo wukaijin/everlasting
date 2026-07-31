@@ -56,8 +56,9 @@ async fn subagent_runs_insert_creates_running_row() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-test", "researcher", None)
@@ -104,8 +105,9 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-test", "general-purpose", None)
@@ -171,8 +173,9 @@ async fn subagent_runs_update_finished_records_truncated_flag() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-test", "researcher", None)
@@ -212,8 +215,9 @@ async fn subagent_runs_cascade_delete_with_parent_session() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id1 = insert_run(&pool, &s.id, "rid-1", "researcher", None)
@@ -244,8 +248,9 @@ async fn subagent_runs_list_by_session_orders_by_started_desc() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id1 = insert_run(&pool, &s.id, "rid-1", "researcher", None)
@@ -281,8 +286,9 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     // Insert + complete 1 run with a populated transcript + summary.
@@ -375,8 +381,9 @@ async fn subagent_runs_insert_writes_task_column() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let task_text = "find all files that mention dispatch_subagent";
@@ -405,8 +412,9 @@ async fn subagent_runs_insert_with_none_task_leaves_column_null() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-no-task", "researcher", None)
@@ -432,8 +440,9 @@ async fn subagent_runs_update_finished_writes_final_text_column() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(
@@ -490,8 +499,9 @@ async fn subagent_runs_update_finished_cancelled_status_and_marker() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-cancel", "researcher", None)
@@ -544,8 +554,9 @@ async fn subagent_runs_update_finished_error_status_and_text() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-error", "general-purpose", None)
@@ -585,8 +596,9 @@ async fn subagent_runs_list_returns_task_and_final_text() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-list", "researcher", Some("prompt here"))
@@ -687,8 +699,9 @@ async fn subagent_runs_update_finished_round_trips_turn_count() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
 
@@ -807,8 +820,9 @@ async fn subagent_runs_incomplete_status_round_trips() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-incomplete", "general-purpose", None)
@@ -898,8 +912,9 @@ async fn subagent_runs_widen_incomplete_migration_is_idempotent() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-re", "researcher", None)
@@ -929,8 +944,9 @@ async fn subagent_runs_insert_with_model_display_persists() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let run_id = Uuid::new_v4().to_string();
@@ -965,8 +981,9 @@ async fn subagent_runs_insert_with_none_model_display_writes_null() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let run_id = Uuid::new_v4().to_string();
@@ -1000,8 +1017,9 @@ async fn subagent_runs_list_summary_includes_model_display() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     insert_run_with_id(
@@ -1068,8 +1086,9 @@ async fn c1_update_run_finished_persists_messages_and_load_reads_them_back() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-c1", "researcher", None)
@@ -1123,8 +1142,9 @@ async fn c1_load_messages_returns_empty_for_run_with_null_messages() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     let id = insert_run(&pool, &s.id, "rid-legacy", "researcher", None)
@@ -1185,8 +1205,9 @@ async fn c1_load_messages_returns_running_status_for_in_flight_run() {
         "/tmp",
         "GLM-4.7",
         None,
-None,
-None,)
+        None,
+        None,
+    )
     .await
     .unwrap();
     // insert_run leaves the row in "running" state (no update_run_finished).

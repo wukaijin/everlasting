@@ -116,8 +116,7 @@ pub async fn create_session(
         // round-trip race; same convention as the previous
         // hard-coded `::Chat` default).
         session_type: session_type_typed,
-        metadata: metadata
-            .and_then(|s| serde_json::from_str(s).ok()),
+        metadata: metadata.and_then(|s| serde_json::from_str(s).ok()),
     })
 }
 

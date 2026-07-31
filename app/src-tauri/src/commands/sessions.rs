@@ -143,7 +143,15 @@ pub async fn create_session(
     session_type: Option<String>,
     metadata: Option<serde_json::Value>,
 ) -> Result<db::SessionRow, AppCommandError> {
-    create_session_inner(&state, project_id, initial_cwd, model, session_type, metadata).await
+    create_session_inner(
+        &state,
+        project_id,
+        initial_cwd,
+        model,
+        session_type,
+        metadata,
+    )
+    .await
 }
 
 pub async fn load_session_inner(
@@ -190,7 +198,10 @@ pub async fn update_session_metadata_inner(
     let metadata_str = serde_json::to_string(&metadata).map_err(|e| {
         AppCommandError::new(
             ErrorCategory::InvalidRequest,
-            format!("update_session_metadata: metadata serialization failed: {}", e),
+            format!(
+                "update_session_metadata: metadata serialization failed: {}",
+                e
+            ),
         )
     })?;
     // 0 rows = no such session (FK / session_id not found).

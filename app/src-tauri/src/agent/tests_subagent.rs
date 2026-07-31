@@ -110,7 +110,8 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // ONLY the worker's single turn — the parent contributed ZERO
@@ -279,7 +280,8 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // Parent turn count: parent_t1 + worker_t1 + parent_t2 = 3 sends.
@@ -505,7 +507,8 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -663,7 +666,8 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // 3 sends: parent_t1 + worker_t1 (errored) + parent_t2.
@@ -824,7 +828,8 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // 4 sends: parent_t1 + worker_t1 (tool_use) + worker_t2 (errored) + parent_t2.
@@ -1094,7 +1099,8 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -1233,7 +1239,8 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // Verify the worker run is in `subagent_runs` and the row
@@ -1390,7 +1397,8 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
     let _ = cancel_task.await;
 
@@ -1529,7 +1537,8 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
@@ -1676,7 +1685,8 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // The parent's session snapshot should reflect ONLY the last
@@ -1915,7 +1925,8 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 None,
                 // group_chat_state = None (tests don't exercise group chat).
                 None,
-None,),
+                None,
+            ),
         ),
     )
     .await;
@@ -2151,7 +2162,8 @@ async fn system_prompt_override_worker_path_sends_override() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // The override must reach the LLM verbatim.
@@ -2246,7 +2258,8 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 
     // Recompute what the parent path should send. We mirror the
@@ -2345,7 +2358,8 @@ async fn run_loop(
         // `agent::workflow::inject` tests).
         None,
         None,
-None,)
+        None,
+    )
     .await;
 }
 

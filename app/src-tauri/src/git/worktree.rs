@@ -1903,8 +1903,9 @@ mod tests {
             project_dir.to_str().unwrap(),
             "GLM-4.7",
             None,
-None,
-None,)
+            None,
+            None,
+        )
         .await
         .unwrap();
         (project, session_id, data_dir)
