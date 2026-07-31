@@ -516,3 +516,47 @@ describe("MessageItem — AC10 inherited (no modal / no portal)", () => {
     ).toBe(0);
   });
 });
+// ---------------------------------------------------------------------
+// Group chat (07-29-group-chat, Phase 4 Step 4 G3): speaker chip
+// rendering. Three cases cover the v-if gate + the two rendering
+// branches (moderator → "主持人" + neutral, participant → name +
+// palette hash, no-chip → undefined speaker).
+// ---------------------------------------------------------------------
+
+describe("MessageItem — group chat speaker chip", () => {
+  it("renders the chip when message.speaker is set on an assistant row", async () => {
+    const message = makeAssistantMessage([], []);
+    message.speaker = "Alex";
+    message.seq = 5;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-5"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("Alex");
+    expect(chip.attributes("data-speaker")).toBe("Alex");
+  });
+
+  it("renders '主持人' + neutral accent for moderator turns", async () => {
+    const message = makeAssistantMessage([], []);
+    message.speaker = "moderator";
+    message.seq = 7;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-7"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("主持人");
+    // The moderator class is a fixed "neutral" — no palette hash.
+    expect(chip.classes()).toContain("msg-speaker-chip--neutral");
+  });
+
+  it("does not render the chip when message.speaker is undefined", async () => {
+    const message = makeAssistantMessage([], []);
+    message.seq = 9;
+    // speaker intentionally undefined (classic chat path).
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="msg-speaker-chip-9"]').exists()).toBe(
+      false,
+    );
+  });
+});
