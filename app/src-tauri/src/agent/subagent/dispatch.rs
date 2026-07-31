@@ -1304,6 +1304,13 @@ pub(crate) async fn run_subagent(
         // the parent session's workflow state. Workflow
         // breadcrumbs stay parent-scoped.
         None,
+        // Group chat (07-29-group-chat): worker nested call passes
+        // `None` — group-chat turn-taking is an outer-loop concern
+        // (`run_group_chat_loop`), not a worker concern. The
+        // nominate/end tools are also stripped from the worker's
+        // toolset (only surfaced via builtin_tools to the moderator's
+        // loop), so the interception never fires here.
+        None,
     ))
     .await;
 

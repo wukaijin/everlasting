@@ -169,6 +169,7 @@ async fn run_loop(
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 }

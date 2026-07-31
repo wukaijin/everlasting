@@ -111,6 +111,7 @@ async fn agent_loop_basic_text_only_completes() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -246,6 +247,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -387,6 +389,7 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -511,6 +514,7 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -676,6 +680,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -852,6 +857,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -962,6 +968,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -1045,6 +1052,7 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -1249,6 +1257,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -1443,6 +1452,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -1622,6 +1632,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -1796,6 +1807,7 @@ async fn agent_loop_persist_failure_emits_error() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -1974,6 +1986,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2112,6 +2125,7 @@ async fn agent_loop_error_persists_partial_text() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -2231,6 +2245,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -2343,6 +2358,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -2491,6 +2507,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -2605,6 +2622,7 @@ async fn agent_loop_error_emits_turn_complete() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -2762,6 +2780,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -2952,6 +2971,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -3120,6 +3140,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -3529,6 +3550,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -3727,6 +3749,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -3947,6 +3970,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4117,6 +4141,7 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -4302,6 +4327,7 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -4439,6 +4465,7 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -4562,6 +4589,7 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -4699,6 +4727,7 @@ async fn agent_loop_p5_soft_block_short_circuits_execute() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -4833,6 +4862,7 @@ async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -4966,6 +4996,7 @@ async fn a5plus_retry_does_not_double_count_token_usage() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -5068,6 +5099,7 @@ async fn a5plus_retry_emits_retrying_chat_events() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -5176,6 +5208,7 @@ async fn a5plus_retry_terminal_state_matches_no_retry_path() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -5312,6 +5345,7 @@ async fn agent_loop_emits_recall_on_fts_hit() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -5464,6 +5498,7 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;

@@ -419,6 +419,13 @@ pub async fn run_chat_loop(
     // test fixtures on one-line edits when they upgrade
     // from 29 to 30).
     mut workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
+    // Group chat (07-29-group-chat): shared turn state for the
+    // `nominate_speaker` / `end_discussion` interception. `None`
+    // for classic-chat + worker paths (the interception no-ops with
+    // an error tool_result if these tools are somehow invoked
+    // outside group chat). Appended at the tail per the same
+    // convention as `workflow_ctx` (one-line test-fixture edits).
+    group_chat_state: Option<crate::tools::nominate_speaker::SharedTurnState>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -3571,6 +3578,68 @@ pub async fn run_chat_loop(
                             if cancelled {
                                 break;
                             }
+                            continue;
+                        }
+
+                        // Group chat (07-29-group-chat): the
+                        // moderator calls `nominate_speaker` to hand
+                        // the floor to a participant, or
+                        // `end_discussion` to stop. Both are SIGNAL
+                        // tools (non-blocking) — they record into the
+                        // shared `group_chat_state` (read by
+                        // `run_group_chat_loop` after this loop
+                        // returns) and emit a confirmation as
+                        // tool_result so the moderator's turn ends
+                        // at a clean boundary.
+                        //
+                        // No audit row + no oneshot (unlike
+                        // ask_user_question): these are pure
+                        // in-process signals. When `group_chat_state`
+                        // is `None` (classic chat / worker), the call
+                        // is a misuse — return an error tool_result.
+                        if name == crate::tools::nominate_speaker::NOMINATE_SPEAKER_TOOL_NAME
+                            || name == crate::tools::end_discussion::END_DISCUSSION_TOOL_NAME
+                        {
+                            let (content, is_error) = match &group_chat_state {
+                                Some(state) if name
+                                    == crate::tools::nominate_speaker::NOMINATE_SPEAKER_TOOL_NAME =>
+                                {
+                                    crate::tools::nominate_speaker::execute_intercept(
+                                        state, input,
+                                    )
+                                    .await
+                                }
+                                Some(state) if name
+                                    == crate::tools::end_discussion::END_DISCUSSION_TOOL_NAME =>
+                                {
+                                    crate::tools::end_discussion::execute_intercept(
+                                        state, input,
+                                    )
+                                    .await
+                                }
+                                _ => (
+                                    format!(
+                                        "{}: this tool is only available in a group chat session.",
+                                        name
+                                    ),
+                                    true,
+                                ),
+                            };
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
                             continue;
                         }
 

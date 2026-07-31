@@ -125,6 +125,7 @@ async fn run_loop(
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 }
@@ -837,6 +838,7 @@ async fn c2plus_worker_breaks_and_notifies_parent() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;

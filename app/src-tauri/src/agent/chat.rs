@@ -217,6 +217,23 @@ pub(crate) async fn chat_inner(
     // the agent loop can drain completion notifications each turn
     // and the 3 L1a tools can call into it from `ToolContext`.
     let background_shells = state.background_shells.clone();
+    // Group chat (07-29-group-chat): resolve the group-chat context
+    // BEFORE the spawn, mirroring `build_workflow_ctx`. `None` for
+    // classic-chat sessions (zero overhead). When `Some`, the spawn
+    // closure routes to `run_group_chat_loop` instead of the plain
+    // `run_chat_loop`.
+    let group_chat_ctx =
+        match crate::agent::group_chat::build_group_chat_ctx(&db, &session_id).await {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "build_group_chat_ctx failed; proceeding as classic chat",
+                );
+                None
+            }
+        };
     // L3d (2026-06-25): clone the subagent cache so the agent loop
     // can build the dynamic `dispatch_subagent` enum + look up
     // workers by name. Same closure-capture pattern as the other
@@ -369,147 +386,190 @@ pub(crate) async fn chat_inner(
         // all four emit channels (chat-event / tool:call /
         // tool:result / permission:ask) and the `CancellationGuard`
         // that cleans the cancel maps on every exit path.
-        run_chat_loop(
-            tool_defs,
-            provider,
-            context_window,
-            rid.clone(),
-            session_id.clone(),
-            messages,
-            sink_for_spawn,
-            db,
-            cancellations,
-            session_active_request,
-            read_guard,
-            memory_cache,
-            skill_cache,
-            permission_asks,
-            token,
-            // D3 PR3 (2026-06-17): pass the resend context
-            // through so the user-message persist site can
-            // fire the `resend_message` audit row when set.
-            // `None` for normal sends (the common case).
-            resend_seq,
-            // L1a (2026-06-19): cross-request registry. Threaded
-            // through so the 3 L1a tools can start / query / kill
-            // background processes and the agent loop can drain
-            // completion notifications each turn.
-            background_shells.clone(),
-            // B6 Subagent (2026-06-19, review #4): `None` keeps
-            // the default `MAX_TURNS` (50) budget for the
-            // production chat path. Worker agents (PR1b) pass
-            // `Some(20)` to bound their own turn budget.
-            None,
-            // B6 Subagent (PR1b review #2): production chat owns
-            // the session's "active request" slot, so the guard's
-            // Drop must clear it. Workers pass `true` to skip.
-            false,
-            // B6 Subagent (PR1b): production chat persists every
-            // turn normally. Workers pass `true` so their
-            // intermediate turns stay in-memory only (the
-            // SubagentBufferSink captures them; PR2 persists the
-            // transcript into `subagent_runs`). Production MUST
-            // persist — the user's turns are the source of truth.
-            false,
-            // B6 Subagent PR2b (RULE-A-014, 2026-06-20): production
-            // chat is never a worker. `Some(false)` makes the
-            // production-style default explicit at the call site;
-            // inside `run_chat_loop` this falls through to the
-            // session-row mode (Edit/Plan/Yolo) with
-            // `PermissionContext.is_worker = false` — Tier 4 ask
-            // is reachable (permission:ask modal works normally).
-            Some(false),
-            // P2.4 C5 (2026-07-22): forward the worker dispatch
-            // context (catalog + event sink) to `run_chat_loop`'s
-            // 22nd/23rd params. Closes the daemon-path gap — worker
-            // `subagent:event` now reaches the transport live (was
-            // buffer-only pre-C5).
-            worker_catalog.clone(),
-            worker_event_sink.clone(),
-            // 2026-06-21 fix (B6 review defect A): production
-            // chat is never a worker, so the parent's
-            // `assemble_system_prompt(mode_prefix, base_prompt)`
-            // path runs unchanged (`None` override → the loop
-            // builds the prompt from the project + session
-            // row). The worker nested call (in `run_subagent`)
-            // passes `Some(assemble_subagent_prompt(def, &task))`
-            // to fully replace the parent's prompt with the
-            // worker's `SubagentDef.system_prompt`. See the
-            // doc comment on `run_chat_loop.system_prompt_override`
-            // for the full rationale + the review reference.
-            None,
-            // 2026-06-22 (RULE-FrontSubagent-003 fix): production
-            // chat is never a worker, so `worker_run_id` is
-            // `None`. The nested `run_subagent` call passes
-            // `Some(worker_run_id_opt)` so the worker's
-            // `PermissionContext.worker_run_id` is populated and
-            // `ask_path` can route the interactive ask via the
-            // `"worker:<worker_run_id>"` permission session id.
-            None,
-            // L3d (2026-06-25): thread the subagent cache so the
-            // loop's per-turn tool list construction can append the
-            // dynamic `dispatch_subagent` ToolDef
-            // (`definition_with_cache`) and `run_subagent` can look
-            // up workers by name across builtin + user + project
-            // layers.
-            subagent_cache,
-            // 2026-06-26 (task 06-26-subagent-per-run-grant):
-            // production chat is the parent path — pass `None` so
-            // the parent's `PermissionContext.run_grants` is `None`
-            // and the Tier 4 grant-check branches in `check.rs`
-            // skip the cache lookup entirely. Parent session grants
-            // continue to use the `session_tool_permissions` DB
-            // table (unchanged behavior). Only the worker nested
-            // call (in `run_subagent`) passes `Some(Arc<...>)`.
-            None,
-            // L3b (2026-06-27): production chat is the parent path —
-            // pass `None` so the loop builds the worktree_path from
-            // the session row (the parent's session worktree, or
-            // the project root if no worktree). Only the isolated
-            // worker nested call (in `run_subagent`) passes
-            // `Some(worker_worktree_path)` to redirect the worker's
-            // tools into an isolated checkout.
-            None,
-            // project_main_override (2026-07-29): production chat is
-            // the parent path → `None` (the loop falls back to
-            // worktree_path, which IS the project root here). Only the
-            // isolated worker nested call passes Some(project_main).
-            None,
-            // L3b (2026-06-27): thread the app data dir so the
-            // dispatch_subagent interceptor (`run_subagent`) can
-            // compute the worker worktree path when isolation is
-            // active. Pass-through — the agent loop body itself
-            // does not read this.
-            app_data_dir,
-            // explicit-agent-dispatch: thread the user-forced
-            // dispatch into the loop's turn-1 short-circuit
-            // (trailing `forced_dispatch` parameter).
-            forced_dispatch,
-            // 2026-06-30 (`ask_user_question` task): pass the
-            // `QuestionStore` cloned above (captured-by-value in
-            // the spawn closure). The `ask_user_question`
-            // interception in `chat_loop.rs` reads it; workers
-            // won't (the tool is in `STRUCTURALLY_DISABLED` so
-            // the worker's tool list strips it).
-            question_store,
-            // W1 (Workflow integration, Phase 0 Step 0.5
-            // — 2026-07-08): per-session workflow context.
-            // Eagerly resolved at IPC entry (DB read + at
-            // most a handful of small task.json reads,
-            // ~10 ms cost on a warm pool); cached for the
-            // entire 200-turn loop. `None` for non-workflow
-            // sessions — the per-turn helper short-circuits
-            // and the session behaves byte-identically to
-            // pre-Step-0.5.
-            workflow_ctx,
-        )
-        .await;
-        // RULE-E-005 (2026-06-15): the agent loop has fully exited.
-        // Signal any destructive command awaiting the
-        // `cancel_inflight_for_session` receiver so it proceeds
-        // with the delete. `send` is `Err` if no one is awaiting
-        // (no destructive op, or it already drained + timed out) —
-        // both are fine, we ignore it.
+        //
+        // Group chat (07-29-group-chat): when the session is
+        // group_chat, route to the outer orchestrator instead. It
+        // internally calls `run_chat_loop` per speaker (moderator +
+        // participants), so all the loop's guarantees (persistence,
+        // cancel, tool exec) still hold.
+        if let Some(gc_ctx) = group_chat_ctx {
+            crate::agent::group_chat_loop::run_group_chat_loop(
+                tool_defs,
+                context_window,
+                rid.clone(),
+                session_id.clone(),
+                messages,
+                sink_for_spawn,
+                db,
+                cancellations,
+                session_active_request,
+                read_guard,
+                memory_cache,
+                skill_cache,
+                permission_asks,
+                token,
+                resend_seq,
+                background_shells.clone(),
+                worker_catalog.clone(),
+                worker_event_sink.clone(),
+                subagent_cache,
+                app_data_dir,
+                question_store,
+                gc_ctx,
+            )
+            .await;
+        } else {
+            run_chat_loop(
+                tool_defs,
+                provider,
+                context_window,
+                rid.clone(),
+                session_id.clone(),
+                messages,
+                sink_for_spawn,
+                db,
+                cancellations,
+                session_active_request,
+                read_guard,
+                memory_cache,
+                skill_cache,
+                permission_asks,
+                token,
+                // D3 PR3 (2026-06-17): pass the resend context
+                // through so the user-message persist site can
+                // fire the `resend_message` audit row when set.
+                // `None` for normal sends (the common case).
+                resend_seq,
+                // L1a (2026-06-19): cross-request registry. Threaded
+                // through so the 3 L1a tools can start / query / kill
+                // background processes and the agent loop can drain
+                // completion notifications each turn.
+                background_shells.clone(),
+                // B6 Subagent (2026-06-19, review #4): `None` keeps
+                // the default `MAX_TURNS` (50) budget for the
+                // production chat path. Worker agents (PR1b) pass
+                // `Some(20)` to bound their own turn budget.
+                None,
+                // B6 Subagent (PR1b review #2): production chat owns
+                // the session's "active request" slot, so the guard's
+                // Drop must clear it. Workers pass `true` to skip.
+                false,
+                // B6 Subagent (PR1b): production chat persists every
+                // turn normally. Workers pass `true` so their
+                // intermediate turns stay in-memory only (the
+                // SubagentBufferSink captures them; PR2 persists the
+                // transcript into `subagent_runs`). Production MUST
+                // persist — the user's turns are the source of truth.
+                false,
+                // B6 Subagent PR2b (RULE-A-014, 2026-06-20): production
+                // chat is never a worker. `Some(false)` makes the
+                // production-style default explicit at the call site;
+                // inside `run_chat_loop` this falls through to the
+                // session-row mode (Edit/Plan/Yolo) with
+                // `PermissionContext.is_worker = false` — Tier 4 ask
+                // is reachable (permission:ask modal works normally).
+                Some(false),
+                // P2.4 C5 (2026-07-22): forward the worker dispatch
+                // context (catalog + event sink) to `run_chat_loop`'s
+                // 22nd/23rd params. Closes the daemon-path gap — worker
+                // `subagent:event` now reaches the transport live (was
+                // buffer-only pre-C5).
+                worker_catalog.clone(),
+                worker_event_sink.clone(),
+                // 2026-06-21 fix (B6 review defect A): production
+                // chat is never a worker, so the parent's
+                // `assemble_system_prompt(mode_prefix, base_prompt)`
+                // path runs unchanged (`None` override → the loop
+                // builds the prompt from the project + session
+                // row). The worker nested call (in `run_subagent`)
+                // passes `Some(assemble_subagent_prompt(def, &task))`
+                // to fully replace the parent's prompt with the
+                // worker's `SubagentDef.system_prompt`. See the
+                // doc comment on `run_chat_loop.system_prompt_override`
+                // for the full rationale + the review reference.
+                None,
+                // 2026-06-22 (RULE-FrontSubagent-003 fix): production
+                // chat is never a worker, so `worker_run_id` is
+                // `None`. The nested `run_subagent` call passes
+                // `Some(worker_run_id_opt)` so the worker's
+                // `PermissionContext.worker_run_id` is populated and
+                // `ask_path` can route the interactive ask via the
+                // `"worker:<worker_run_id>"` permission session id.
+                None,
+                // L3d (2026-06-25): thread the subagent cache so the
+                // loop's per-turn tool list construction can append the
+                // dynamic `dispatch_subagent` ToolDef
+                // (`definition_with_cache`) and `run_subagent` can look
+                // up workers by name across builtin + user + project
+                // layers.
+                subagent_cache,
+                // 2026-06-26 (task 06-26-subagent-per-run-grant):
+                // production chat is the parent path — pass `None` so
+                // the parent's `PermissionContext.run_grants` is `None`
+                // and the Tier 4 grant-check branches in `check.rs`
+                // skip the cache lookup entirely. Parent session grants
+                // continue to use the `session_tool_permissions` DB
+                // table (unchanged behavior). Only the worker nested
+                // call (in `run_subagent`) passes `Some(Arc<...>)`.
+                None,
+                // L3b (2026-06-27): production chat is the parent path —
+                // pass `None` so the loop builds the worktree_path from
+                // the session row (the parent's session worktree, or
+                // the project root if no worktree). Only the isolated
+                // worker nested call (in `run_subagent`) passes
+                // `Some(worker_worktree_path)` to redirect the worker's
+                // tools into an isolated checkout.
+                None,
+                // project_main_override (2026-07-29): production chat is
+                // the parent path → `None` (the loop falls back to
+                // worktree_path, which IS the project root here). Only the
+                // isolated worker nested call passes Some(project_main).
+                None,
+                // L3b (2026-06-27): thread the app data dir so the
+                // dispatch_subagent interceptor (`run_subagent`) can
+                // compute the worker worktree path when isolation is
+                // active. Pass-through — the agent loop body itself
+                // does not read this.
+                app_data_dir,
+                // explicit-agent-dispatch: thread the user-forced
+                // dispatch into the loop's turn-1 short-circuit
+                // (trailing `forced_dispatch` parameter).
+                forced_dispatch,
+                // 2026-06-30 (`ask_user_question` task): pass the
+                // `QuestionStore` cloned above (captured-by-value in
+                // the spawn closure). The `ask_user_question`
+                // interception in `chat_loop.rs` reads it; workers
+                // won't (the tool is in `STRUCTURALLY_DISABLED` so
+                // the worker's tool list strips it).
+                question_store,
+                // W1 (Workflow integration, Phase 0 Step 0.5
+                // — 2026-07-08): per-session workflow context.
+                // Eagerly resolved at IPC entry (DB read + at
+                // most a handful of small task.json reads,
+                // ~10 ms cost on a warm pool); cached for the
+                // entire 200-turn loop. `None` for non-workflow
+                // sessions — the per-turn helper short-circuits
+                // and the session behaves byte-identically to
+                // pre-Step-0.5.
+                workflow_ctx,
+                // Group chat (07-29-group-chat): `None` here at the
+                // classic-chat call site. The group-chat orchestration
+                // (Phase 3.5) wraps this call — when the session is
+                // group_chat, `run_group_chat_loop` is entered instead
+                // and IT constructs the `SharedTurnState` to thread
+                // through its own `run_chat_loop` calls. So the
+                // classic-chat path stays None (the nominate/end
+                // interception no-ops if somehow invoked).
+                None,
+            )
+            .await;
+        } // end else (classic-chat path)
+          // RULE-E-005 (2026-06-15): the agent loop has fully exited.
+          // Signal any destructive command awaiting the
+          // `cancel_inflight_for_session` receiver so it proceeds
+          // with the delete. `send` is `Err` if no one is awaiting
+          // (no destructive op, or it already drained + timed out) —
+          // both are fine, we ignore it.
         let _ = done_tx.send(());
         // Clean up the `inflight_exits` entry (no-op if
         // `cancel_inflight_for_session` already took it). This lives

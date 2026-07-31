@@ -48,6 +48,8 @@ pub mod behavior_prompt;
 pub mod chat;
 pub mod chat_loop;
 pub mod context;
+pub mod group_chat;
+pub mod group_chat_loop;
 pub mod helpers;
 pub mod loop_detection;
 pub mod memory_hygiene;

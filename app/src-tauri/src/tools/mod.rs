@@ -20,10 +20,12 @@ pub mod ask_user_question;
 pub mod create_task;
 pub mod discard_worker;
 pub mod edit_file;
+pub mod end_discussion;
 pub mod glob;
 pub mod grep;
 pub mod list_dir;
 pub mod merge_worker;
+pub mod nominate_speaker;
 pub mod read_file;
 pub mod read_guard;
 pub mod remember;
@@ -203,6 +205,19 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // Stripped from non-workflow sessions by
         // `filter_tools_for_workflow` below.
         create_task::definition(),
+        // Group chat (07-29-group-chat): moderator turn-control
+        // tools. SIGNAL tools (non-blocking) — the chat_loop
+        // interception records the nominee / end signal into the
+        // shared `GroupChatTurnState` and returns a confirmation as
+        // tool_result. Only meaningful in group_chat sessions; the
+        // interception handler checks session_type and no-ops
+        // (returns an error tool_result) outside group chat, so
+        // surfacing them to classic-chat sessions is harmless (the
+        // moderator persona + system prompt only appears in group
+        // chat). MVP: always registered; Phase 4 may filter by
+        // session_type for a cleaner classic-chat tool list.
+        nominate_speaker::definition(),
+        end_discussion::definition(),
     ]
 }
 

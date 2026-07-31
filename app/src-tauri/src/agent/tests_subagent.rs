@@ -109,6 +109,7 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -276,6 +277,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -502,6 +504,7 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -658,6 +661,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -818,6 +822,7 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -1088,6 +1093,7 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1225,6 +1231,7 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -1382,6 +1389,7 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
     let _ = cancel_task.await;
@@ -1519,6 +1527,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -1665,6 +1674,7 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -1903,6 +1913,8 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 // breadcrumb injection seam; that lives in separate
                 // `agent::workflow::inject` tests).
                 None,
+                // group_chat_state = None (tests don't exercise group chat).
+                None,
             ),
         ),
     )
@@ -2138,6 +2150,7 @@ async fn system_prompt_override_worker_path_sends_override() {
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
+        None,
     )
     .await;
 
@@ -2231,6 +2244,7 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
@@ -2329,6 +2343,7 @@ async fn run_loop(
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
+        None,
         None,
     )
     .await;
