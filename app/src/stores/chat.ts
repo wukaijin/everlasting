@@ -1054,11 +1054,26 @@ export const useChatStore = defineStore("chat", () => {
 
   async function send(text: string) {
     const trimmed = text.trim();
+    // Empty input is always rejected.
+    if (!trimmed) return;
     // Bug 6 fix (PR3): the old guard was a single global `sending`
     // ref. The new guard is per-session: the user can have multiple
     // sessions streaming concurrently, but they can't fire a second
     // message into the SAME session while it's still streaming.
-    if (!trimmed || isCurrentSessionStreaming.value) return;
+    //
+    // Group chat (Phase 4 / D9-Q4): preemptive interrupt. In a
+    // group_chat session a human message while the host/participant
+    // is streaming is *preemptive* — we cancel the in-flight turn
+    // first (the backend `run_group_chat_loop` checks the cancel
+    // token every round and breaks), then continue the normal send
+    // path so the new message lands in the DB and the host re-enters
+    // turn-taking (its reload observes the human interrupt). We do
+    // NOT loosen the guard for ordinary `chat` sessions: there the
+    // original "can't interject while streaming" semantics stay.
+    if (isCurrentSessionStreaming.value) {
+      if (currentSession.value?.session_type !== "group_chat") return;
+      await cancel();
+    }
     const projectId = projectsStore.currentProjectId;
     if (!projectId) {
       throw new Error("send: no current project");
