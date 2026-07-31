@@ -690,6 +690,67 @@ pub(crate) fn apply_deepseek_reasoning_fix(req: &ChatRequest) -> serde_json::Val
     body
 }
 
+/// Group chat (07-29-group-chat, 2026-07-31): inject speaker
+/// identity as an `@name:` text prefix and strip the raw `speaker`
+/// field. Anthropic's Messages API has no native `name` field
+/// (unlike OpenAI), so a participant's identity must be folded
+/// into the visible content. The `speaker` field itself (serialized
+/// from [`crate::llm::types::ChatMessage::speaker`]) is an unknown
+/// field to Anthropic and would cause a 400, so it is always
+/// removed — even when no prefix is injected (classic-chat rows
+/// never carry `speaker`, so this is a no-op there).
+///
+/// Handles both content shapes Anthropic accepts:
+/// - string content → `format!("@{}: {}", name, original)`
+/// - array content → prepend a `Text` block carrying the prefix
+///
+/// Mirrors `apply_deepseek_reasoning_fix`'s "walk the serialized
+/// JSON body in place" pattern (cheaper than re-deriving the
+/// ChatRequest, and the body is already a serde_json::Value here).
+pub(crate) fn apply_speaker_prefix(body: &mut serde_json::Value) {
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(arr) => arr,
+        None => return,
+    };
+    for msg in messages.iter_mut() {
+        // Take ownership of the speaker field, removing it from the
+        // object (so Anthropic never sees an unknown field).
+        let speaker = match msg.get_mut("speaker") {
+            Some(v) => v.take(),
+            None => continue, // no speaker field — nothing to inject
+        };
+        let speaker = match speaker.as_str() {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => {
+                // speaker was null/empty — still must remove the key.
+                if let Some(obj) = msg.as_object_mut() {
+                    obj.remove("speaker");
+                }
+                continue;
+            }
+        };
+        // Remove the speaker key (take() left it as null in place).
+        if let Some(obj) = msg.as_object_mut() {
+            obj.remove("speaker");
+        }
+        let prefix = format!("@{}: ", speaker);
+        // Inject the prefix into content (string or array form).
+        match msg.get_mut("content") {
+            Some(serde_json::Value::String(s)) => {
+                s.insert_str(0, &prefix);
+            }
+            Some(serde_json::Value::Array(blocks)) => {
+                // Prepend a dedicated text block so we never mutate
+                // an existing block's structure (e.g. a tool_result).
+                blocks.insert(0, serde_json::json!({ "type": "text", "text": prefix }));
+            }
+            _ => {
+                // content missing or null — nothing to prefix (rare).
+            }
+        }
+    }
+}
+
 /// Parse Anthropic's `usage` payload into a protocol-agnostic
 /// [`TokenUsage`]. Defensive: any of the four fields may be missing
 /// (older Anthropic API versions / proxies only emitted a subset);
@@ -853,7 +914,13 @@ impl Provider for AnthropicProvider {
         // `thinking: adaptive` field is untouched (Claude extended
         // thinking needs it), and the only added field on assistant
         // messages is `reasoning_content`, which Anthropic ignores.
-        let body = apply_deepseek_reasoning_fix(&req);
+        let mut body = apply_deepseek_reasoning_fix(&req);
+        // Group chat (07-29-group-chat): Anthropic's Messages API
+        // has no `name` field (unlike OpenAI), so speaker identity
+        // is injected as a `@name:` text prefix and the raw `speaker`
+        // field is stripped (Anthropic would 400 on an unknown
+        // field). No-op for classic-chat messages (no `speaker`).
+        apply_speaker_prefix(&mut body);
 
         Box::pin(Self::chat_stream_with_tools(config, body))
     }

@@ -45,6 +45,8 @@ fn make_session_row(
         mode: db::Mode::Edit,
         workflow_enabled: false,
         plugin_name: "dev".to_string(),
+        session_type: db::SessionType::Chat,
+        metadata: None,
     }
 }
 

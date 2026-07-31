@@ -419,6 +419,17 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // thinking).
     add_messages_column_if_missing(pool, "thinking_ms", "INTEGER").await?;
 
+    // --- Group chat (07-29-group-chat, 2026-07-31): per-message
+    // speaker identity. In a group_chat session multiple LLM
+    // participants take turns; `speaker` records which participant
+    // (by name) authored each assistant turn, so the UI can render
+    // distinct bubbles and the next speaker's model can see who
+    // said what. NULL for classic-chat messages (single agent) and
+    // for user messages — the classic path is byte-identical to
+    // pre-group-chat. Nullable, no DEFAULT (additive pattern
+    // matching `thinking_ms`).
+    add_messages_column_if_missing(pool, "speaker", "TEXT").await?;
+
     // --- A2 + B7 (Permission system + per-session Mode, 2026-06-13).
     //
     // Per-session Mode binding (`sessions.mode TEXT`), persistent
@@ -466,6 +477,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // the DEFAULT handles it). Mirrors the `workflow_enabled`
     // additive pattern: existing rows survive the upgrade.
     add_session_column_if_missing(pool, "plugin_name", "TEXT NOT NULL DEFAULT 'dev'").await?;
+
+    // --- Group chat (07-29-group-chat, 2026-07-31): per-session
+    // type discriminator. `chat` (default, existing single-LLM
+    // behavior) vs `group_chat` (moderator-LLM-orchestrated multi-
+    // LLM conversation). TEXT NOT NULL DEFAULT 'chat' so
+    // pre-existing rows resolve to the classic single-agent path
+    // (opt-in: only `group_chat` rows enter the group-chat
+    // orchestration). Mirrors the `mode` / `plugin_name` additive
+    // pattern — existing rows survive the upgrade with no backfill.
+    add_session_column_if_missing(pool, "session_type", "TEXT NOT NULL DEFAULT 'chat'").await?;
 
     sqlx::query(
         r#"

@@ -493,6 +493,7 @@ mod tests {
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text(text.into()),
+            speaker: None,
         }
     }
 
@@ -501,6 +502,7 @@ mod tests {
         ChatMessage {
             role: Role::Assistant,
             content: MessageContent::Text(text.into()),
+            speaker: None,
         }
     }
 
@@ -519,6 +521,7 @@ mod tests {
                     input: serde_json::json!({"path": "/tmp"}),
                 },
             ]),
+            speaker: None,
         }
     }
 
@@ -531,6 +534,7 @@ mod tests {
                 content: "result body".to_string(),
                 is_error: false,
             }]),
+            speaker: None,
         }
     }
 
@@ -549,6 +553,7 @@ mod tests {
                     cache_control: None,
                 },
             ]),
+            speaker: None,
         }
     }
 

@@ -185,6 +185,20 @@ impl<'de> Deserialize<'de> for MessageContent {
 pub struct ChatMessage {
     pub role: Role,
     pub content: MessageContent,
+    /// Group chat (07-29-group-chat, 2026-07-31): which participant
+    /// authored this message. `None` for classic-chat messages and
+    /// for user messages — the classic single-agent path is
+    /// unaffected. In a group_chat session this is set on each
+    /// assistant turn so the next speaker's model can attribute
+    /// prior utterances (互见性). NOT a wire `role` — Anthropic/
+    /// OpenAI only accept `user`/`assistant`, so speaker identity
+    /// is threaded separately and injected per-provider at the wire
+    /// layer (OpenAI `name` field; Anthropic `@name:` prefix).
+    ///
+    /// `#[serde(default)]` so legacy persisted messages (no
+    /// speaker) and existing test fixtures deserialize to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

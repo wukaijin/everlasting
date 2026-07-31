@@ -1072,7 +1072,11 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
                 "user" => Role::User,
                 _ => return None,
             };
-            Some(ChatMessage { role, content: mc })
+            Some(ChatMessage {
+                role,
+                content: mc,
+                speaker: None,
+            })
         })
         .collect();
 
@@ -1153,18 +1157,22 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text("tiny head 1".into()),
+            speaker: None,
         },
         ChatMessage {
             role: Role::Assistant,
             content: MessageContent::Text("tiny head 2".into()),
+            speaker: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text(big_middle),
+            speaker: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text("tiny tail".into()),
+            speaker: None,
         },
     ];
     run_chat_loop(
@@ -1521,18 +1529,22 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text("tiny head 1".into()),
+            speaker: None,
         },
         ChatMessage {
             role: Role::Assistant,
             content: MessageContent::Text("tiny head 2".into()),
+            speaker: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text("droppable middle".into()),
+            speaker: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text(huge),
+            speaker: None,
         },
     ];
 
@@ -5260,6 +5272,7 @@ async fn agent_loop_emits_recall_on_fts_hit() {
     let messages = vec![ChatMessage {
         role: Role::User,
         content: MessageContent::Text("please run cargo test in wsl and check the output".into()),
+        speaker: None,
     }];
 
     run_chat_loop(
@@ -5411,6 +5424,7 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
     let messages = vec![ChatMessage {
         role: Role::User,
         content: MessageContent::Text("run cargo test please".into()),
+        speaker: None,
     }];
 
     run_chat_loop(

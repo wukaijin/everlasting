@@ -1092,6 +1092,7 @@ mod tests {
         crate::llm::types::ChatMessage {
             role: Role::User,
             content: MessageContent::Text(text.to_string()),
+            speaker: None,
         }
     }
 

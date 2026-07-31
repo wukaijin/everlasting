@@ -782,6 +782,7 @@ mod tests {
                 text: "memory block".into(),
                 cache_control: None,
             }]),
+            speaker: None,
         }];
         let ok = append_delegation_template(&mut messages, Some("PLUGIN_TEMPLATE".to_string()));
         assert!(ok, "append must succeed for user-role Blocks messages");
@@ -808,6 +809,7 @@ mod tests {
                 text: "memory".into(),
                 cache_control: None,
             }]),
+            speaker: None,
         }];
         let ok = append_delegation_template(&mut messages, None);
         assert!(!ok, "None template → returns false");

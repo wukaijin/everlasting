@@ -75,6 +75,7 @@ async fn setup_session_with_3_turns(pool: &SqlitePool) -> String {
         &MessageContent::Text("old prompt text".to_string()),
         0,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -84,16 +85,24 @@ async fn setup_session_with_3_turns(pool: &SqlitePool) -> String {
         name: "read_file".to_string(),
         input: serde_json::json!({"path": "/etc/hostname"}),
     }]);
-    persist_turn(pool, &s.id, Role::Assistant, &assistant_content, 1, None)
-        .await
-        .unwrap();
+    persist_turn(
+        pool,
+        &s.id,
+        Role::Assistant,
+        &assistant_content,
+        1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     // seq 2: user(tool_result) — the assistant's tool result.
     let tool_result_content = MessageContent::Blocks(vec![ContentBlock::ToolResult {
         tool_use_id: "toolu_abc".to_string(),
         content: "host1".to_string(),
         is_error: false,
     }]);
-    persist_turn(pool, &s.id, Role::User, &tool_result_content, 2, None)
+    persist_turn(pool, &s.id, Role::User, &tool_result_content, 2, None, None)
         .await
         .unwrap();
     s.id
@@ -196,6 +205,7 @@ async fn edit_user_message_preserves_original_across_subsequent_edits() {
         Role::Assistant,
         &MessageContent::Text("assistant reply 2".to_string()),
         1,
+        None,
         None,
     )
     .await

@@ -161,8 +161,18 @@ impl OpenAIProvider {
         //    `role: "tool"` message per `tool_call_id`.
         for m in &wire.messages {
             match m {
-                super::wire::WireMessage::User { content } => {
-                    msgs.push(json!({ "role": "user", "content": content }));
+                super::wire::WireMessage::User { content, speaker } => {
+                    // Group chat (07-29-group-chat): OpenAI Chat
+                    // Completions natively supports a `name` field
+                    // on `role: "user"` to identify the speaker. We
+                    // emit it when present so the model can attribute
+                    // prior utterances. `None` (classic chat) → omit
+                    // the field, byte-identical to pre-group-chat.
+                    let mut msg = json!({ "role": "user", "content": content });
+                    if let Some(name) = speaker {
+                        msg["name"] = json!(name);
+                    }
+                    msgs.push(msg);
                 }
                 // B5 refactor (2026-06-11): a user message that
                 // carries a `cache_control` marker on any text
@@ -188,7 +198,7 @@ impl OpenAIProvider {
                     }
                     msgs.push(json!({ "role": "user", "content": content }));
                 }
-                super::wire::WireMessage::Assistant { blocks } => {
+                super::wire::WireMessage::Assistant { blocks, speaker } => {
                     let (text_parts, tool_calls, reasoning) = assistant_blocks_to_openai(blocks);
                     let mut msg = json!({ "role": "assistant" });
                     if !text_parts.is_empty() {
@@ -261,6 +271,14 @@ impl OpenAIProvider {
                             _ => "none".to_string(),
                         };
                         msg["reasoning_content"] = json!(rc);
+                    }
+                    // Group chat (07-29-group-chat): emit the native
+                    // OpenAI `name` field so the model attributes
+                    // prior assistant utterances to the right
+                    // participant. `None` (classic chat) → omit,
+                    // byte-identical to pre-group-chat.
+                    if let Some(name) = speaker {
+                        msg["name"] = json!(name);
                     }
                     msgs.push(msg);
                 }
@@ -1045,10 +1063,11 @@ mod tests {
                     cache_control: None,
                 },
             ],
+            speaker: None,
         }];
         let caps = openai_caps(None);
         let stripped = strip_unsupported(messages, &caps);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant");
         };
         // Reasoning dropped (non-reasoning model), only Text remains.
@@ -1137,6 +1156,7 @@ mod tests {
             system: Some("You are a coding agent".to_string()),
             messages: vec![WireMessage::User {
                 content: "hello".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1157,6 +1177,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "hi".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1174,6 +1195,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "x".to_string(),
+                speaker: None,
             }],
             tools: vec![WireTool {
                 name: "read_file".to_string(),
@@ -1202,6 +1224,7 @@ mod tests {
             messages: vec![
                 WireMessage::User {
                     content: "looking:".to_string(),
+                    speaker: None,
                 },
                 WireMessage::Tool {
                     tool_call_id: "call_1".to_string(),
@@ -1236,6 +1259,7 @@ mod tests {
                         input: serde_json::json!({"path": "/etc/hosts"}),
                     },
                 ],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1271,6 +1295,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "x".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1289,6 +1314,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "x".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1346,6 +1372,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "x".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1380,6 +1407,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "hi".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1505,6 +1533,7 @@ mod tests {
                         cache_control: None,
                     },
                 ]),
+                speaker: None,
             }],
             stream: true,
             tools: vec![],
@@ -1524,7 +1553,7 @@ mod tests {
         // `reasoning_content` field by `build_http_body` — see
         // `deepseek_reasoning_content_round_trip_*` tests below.
         assert_eq!(stripped.len(), 1);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant")
         };
         // Reasoning kept (reasoning_effort=true), Signature dropped.
@@ -1745,6 +1774,7 @@ mod tests {
                         cache_control: None,
                     },
                 ],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1780,6 +1810,7 @@ mod tests {
                     text: "Understood.".to_string(),
                     cache_control: None,
                 }],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1814,6 +1845,7 @@ mod tests {
                         cache_control: None,
                     },
                 ],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1835,6 +1867,7 @@ mod tests {
             system: None,
             messages: vec![WireMessage::User {
                 content: "hi there".to_string(),
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1890,6 +1923,7 @@ mod tests {
                         input: serde_json::json!({"path": "/x"}),
                     },
                 ],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1934,6 +1968,7 @@ mod tests {
                         cache_control: None,
                     },
                 ],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -1979,6 +2014,7 @@ mod tests {
                     text: "ok".to_string(),
                     cache_control: None,
                 }],
+                speaker: None,
             }],
             tools: vec![],
         };
@@ -2022,15 +2058,18 @@ mod tests {
             messages: vec![
                 WireMessage::User {
                     content: "remember: project uses pnpm".to_string(),
+                    speaker: None,
                 },
                 WireMessage::Assistant {
                     blocks: vec![WireBlock::Text {
                         text: "Understood.".to_string(),
                         cache_control: None,
                     }],
+                    speaker: None,
                 },
                 WireMessage::User {
                     content: "how do I run tests?".to_string(),
+                    speaker: None,
                 },
                 WireMessage::Assistant {
                     blocks: vec![
@@ -2042,9 +2081,11 @@ mod tests {
                             cache_control: None,
                         },
                     ],
+                    speaker: None,
                 },
                 WireMessage::User {
                     content: "thanks".to_string(),
+                    speaker: None,
                 },
             ],
             tools: vec![],
@@ -2142,6 +2183,7 @@ mod tests {
             vec![ChatMessage {
                 role: Role::User,
                 content: MessageContent::Text("吃了吗".to_string()),
+                speaker: None,
             }],
             vec![],
         );

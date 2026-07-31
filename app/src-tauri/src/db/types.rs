@@ -238,6 +238,50 @@ impl Mode {
 }
 
 // ---------------------------------------------------------------------------
+// SessionType (Group chat, 07-29-group-chat, 2026-07-31)
+// ---------------------------------------------------------------------------
+
+/// The conversation shape a session uses. Orthogonal to [`Mode`]
+/// (which is a permission policy); `SessionType` discriminates the
+/// orchestration: a single main LLM (`Chat`, the classic path) vs a
+/// moderator-LLM-orchestrated multi-LLM discussion (`GroupChat`).
+///
+/// Stored in `sessions.session_type` (TEXT, DEFAULT 'chat'). The
+/// group-chat orchestration layer (`run_group_chat_loop`) is entered
+/// only when this is `GroupChat`; classic-chat behavior is
+/// byte-identical to pre-group-chat sessions.
+///
+/// Mirrors [`Mode`]'s shape: `Copy`, `serde rename_all="lowercase"`,
+/// lenient `from_str_opt` falling back to `Chat` so unknown /
+/// legacy values never break a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionType {
+    Chat,
+    GroupChat,
+}
+
+impl SessionType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionType::Chat => "chat",
+            SessionType::GroupChat => "group_chat",
+        }
+    }
+
+    /// Lenient parse: unknown / empty strings fall back to `Chat`
+    /// (the classic single-agent path, matches the migration
+    /// DEFAULT). Mirrors [`Mode::from_str_opt`]'s defensive
+    /// fallback so a corrupt or future value can't break a session.
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "group_chat" => SessionType::GroupChat,
+            _ => SessionType::Chat,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Row types (Serialize for Tauri IPC payload)
 // ---------------------------------------------------------------------------
 
@@ -300,6 +344,24 @@ pub struct SessionRow {
     /// plugin author controls the workflow shape by editing
     /// `<project>/.everlasting/workflow/<name>/workflow.json`.
     pub plugin_name: String,
+    /// Group chat (07-29-group-chat, 2026-07-31): session
+    /// orchestration type. `Chat` = classic single-agent (default,
+    /// existing behavior); `GroupChat` = moderator-LLM-orchestrated
+    /// multi-LLM discussion. Read at IPC entry by
+    /// `build_group_chat_ctx` to decide whether to enter the group-
+    /// chat orchestration. Mirrors the `mode` / `plugin_name`
+    /// additive pattern. Backed by `sessions.session_type`
+    /// (DEFAULT 'chat' — legacy rows resolve to `Chat`).
+    pub session_type: SessionType,
+    /// Group chat (07-29-group-chat, 2026-07-31): session-level
+    /// structured metadata. The `sessions.metadata` column existed
+    /// since the table's CREATE TABLE but was never read/written
+    /// (always NULL on legacy rows); group chat is its first
+    /// consumer — it stores the participants config
+    /// (`{participants: [{name, model, persona_md?, order}]}`)
+    /// for a group_chat session. `None` for classic-chat and for
+    /// group_chat sessions without a saved config.
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -342,6 +404,14 @@ pub struct SessionSummary {
     /// name. The sidebar's workflow chip / the top-bar
     /// `PluginSelect` reads this without an IPC round-trip.
     pub plugin_name: String,
+    /// Group chat (07-29-group-chat): session orchestration type
+    /// (see `SessionRow::session_type`). The sidebar / top bar use
+    /// this to render a group-chat badge without an IPC round-trip.
+    pub session_type: SessionType,
+    /// Group chat (07-29-group-chat): session-level metadata
+    /// (see `SessionRow::metadata`). The sidebar reads the
+    /// participants config from here.
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

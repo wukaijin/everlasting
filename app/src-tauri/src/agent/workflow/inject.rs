@@ -724,6 +724,7 @@ mod tests {
                 text: "user-typed content".to_string(),
                 cache_control: Some(CacheControl::Ephemeral),
             }]),
+            speaker: None,
         }
     }
 
@@ -1027,6 +1028,7 @@ mod tests {
                 text: "i'm the assistant; not a user".to_string(),
                 cache_control: None,
             }]),
+            speaker: None,
         }];
         let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
         assert!(!appended);
@@ -1050,6 +1052,7 @@ mod tests {
         let mut msgs = vec![ChatMessage {
             role: Role::User,
             content: MessageContent::Text("plain string".to_string()),
+            speaker: None,
         }];
         let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
         assert!(!appended);
@@ -1076,6 +1079,7 @@ mod tests {
                     cache_control: None,
                 },
             ]),
+            speaker: None,
         }];
         append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
         match &msgs[0].content {

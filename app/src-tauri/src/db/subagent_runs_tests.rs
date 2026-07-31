@@ -1032,6 +1032,7 @@ fn msg(role: Role, text: &str) -> ChatMessage {
     ChatMessage {
         role,
         content: MessageContent::Text(text.to_string()),
+        speaker: None,
     }
 }
 

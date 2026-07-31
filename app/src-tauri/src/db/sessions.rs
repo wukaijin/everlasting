@@ -40,8 +40,8 @@ pub async fn create_session(
         r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled, plugin_name)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0, 'dev')
+ worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled, plugin_name, session_type)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0, 'dev', 'chat')
  "#,
     )
     .bind(session_id)
@@ -87,6 +87,15 @@ pub async fn create_session(
         // round-trip race for callers that read the return
         // value before any SELECT).
         plugin_name: "dev".to_string(),
+        // Group chat (07-29-group-chat): new sessions are classic
+        // chat by default (matches the column DEFAULT 'chat'). The
+        // group-chat entrypoint will UPDATE session_type after
+        // create if the user chose group_chat. metadata is NULL on
+        // creation (participants configured later). Mirrors the
+        // explicit-field convention above (struct matches the row
+        // verbatim, no round-trip race).
+        session_type: crate::db::SessionType::Chat,
+        metadata: None,
     })
 }
 
@@ -106,6 +115,7 @@ pub async fn list_sessions(
  s.last_context_input_tokens, s.last_input_tokens,
  s.last_output_tokens, s.last_cache_creation, s.last_cache_read,
  s.color_tag, s.mode, s.workflow_enabled, s.plugin_name,
+ s.session_type, s.metadata,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -133,6 +143,14 @@ pub async fn list_sessions(
             let state_str: String = r.try_get("worktree_state")?;
             let color_tag: Option<i32> = r.try_get("color_tag")?;
             let mode_str: String = r.try_get("mode")?;
+            // Group chat (07-29-group-chat): parse session_type +
+            // metadata the same defensive way as the full SessionRow
+            // load below. metadata is JSON-or-NULL; a malformed value
+            // is swallowed (→ None) so it can never break the sidebar.
+            let session_type_str: String = r.try_get("session_type")?;
+            let metadata: Option<serde_json::Value> = r
+                .try_get::<Option<String>, _>("metadata")?
+                .and_then(|s| serde_json::from_str(&s).ok());
             Ok(SessionSummary {
                 id: r.try_get("id")?,
                 title: r.try_get("title")?,
@@ -157,6 +175,8 @@ pub async fn list_sessions(
                 mode: crate::db::Mode::from_str_opt(&mode_str),
                 workflow_enabled: r.try_get::<i64, _>("workflow_enabled")? != 0,
                 plugin_name: r.try_get("plugin_name")?,
+                session_type: crate::db::SessionType::from_str_opt(&session_type_str),
+                metadata,
             })
         })
         .collect()
@@ -176,7 +196,8 @@ pub async fn load_session(
  cache_creation_total, cache_read_total,
  last_context_input_tokens, last_input_tokens,
  last_output_tokens, last_cache_creation, last_cache_read,
- color_tag, mode, workflow_enabled, plugin_name
+ color_tag, mode, workflow_enabled, plugin_name,
+ session_type, metadata
  FROM sessions
  WHERE id = ?
  "#,
@@ -189,6 +210,13 @@ pub async fn load_session(
         Some(r) => {
             let state_str: String = r.try_get("worktree_state")?;
             let mode_str: String = r.try_get("mode")?;
+            // Group chat (07-29-group-chat): parse session_type
+            // (defensive fallback to Chat) + metadata (JSON-or-NULL,
+            // malformed swallowed). Mirrors the list_sessions map.
+            let session_type_str: String = r.try_get("session_type")?;
+            let metadata: Option<serde_json::Value> = r
+                .try_get::<Option<String>, _>("metadata")?
+                .and_then(|s| serde_json::from_str(&s).ok());
             SessionRow {
                 id: r.try_get("id")?,
                 title: r.try_get("title")?,
@@ -214,6 +242,8 @@ pub async fn load_session(
                 mode: crate::db::Mode::from_str_opt(&mode_str),
                 workflow_enabled: r.try_get::<i64, _>("workflow_enabled")? != 0,
                 plugin_name: r.try_get("plugin_name")?,
+                session_type: crate::db::SessionType::from_str_opt(&session_type_str),
+                metadata,
             }
         }
         None => return Ok(None),
@@ -696,6 +726,7 @@ pub async fn persist_turn(
     content: &MessageContent,
     seq: i64,
     latency: Option<&MessageLatency>,
+    speaker: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let role_str = match role {
@@ -706,15 +737,15 @@ pub async fn persist_turn(
         .map_err(|e| sqlx::Error::Encode(format!("serialize content: {}", e).into()))?;
     let text = content.to_text();
     let has_tool_calls = matches!(content, MessageContent::Blocks(b)
- if b.iter().any(|x| matches!(x, ContentBlock::ToolUse { .. })));
+     if b.iter().any(|x| matches!(x, ContentBlock::ToolUse { .. })));
     let has_tool_results = matches!(content, MessageContent::Blocks(b)
- if b.iter().any(|x| matches!(x, ContentBlock::ToolResult { .. })));
+     if b.iter().any(|x| matches!(x, ContentBlock::ToolResult { .. })));
 
     sqlx::query(
  r#"
  INSERT INTO messages
- (session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq, ttfb_ms, gen_ms, total_ms, thinking_ms)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ (session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq, ttfb_ms, gen_ms, total_ms, thinking_ms, speaker)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
  "#,
  )
  .bind(session_id)
@@ -728,16 +759,21 @@ pub async fn persist_turn(
  .bind(latency.and_then(|l| l.ttfb_ms))
  .bind(latency.and_then(|l| l.gen_ms))
  .bind(latency.and_then(|l| l.total_ms))
- // F5 follow-up: thinking-phase duration. Persisted
- // alongside the three latency columns in the same
- // INSERT — both go in at the moment the agent loop
- // calls `persist_turn` for the assistant row, which
- // is also the row the frontend will fire
- // `update_message_latency` / `update_message_thinking`
- // against (those IPCs are the patch-after-the-fact
- // path for rows persisted BEFORE the per-message
- // telemetry was wired through the agent loop).
+    // F5 follow-up: thinking-phase duration. Persisted
+    // alongside the three latency columns in the same
+    // INSERT — both go in at the moment the agent loop
+    // calls `persist_turn` for the assistant row, which
+    // is also the row the frontend will fire
+    // `update_message_latency` / `update_message_thinking`
+    // against (those IPCs are the patch-after-the-fact
+    // path for rows persisted BEFORE the per-message
+    // telemetry was wired through the agent loop).
  .bind(latency.and_then(|l| l.thinking_ms))
+    // Group chat (07-29-group-chat): which participant
+    // authored this turn. NULL for classic-chat rows and
+    // for user messages. The group-chat orchestration sets
+    // this on each participant's assistant turn.
+ .bind(speaker)
  .execute(pool)
  .await?;
 

@@ -116,7 +116,7 @@ async fn persist_and_load_messages() {
     .unwrap();
 
     let user_msg = MessageContent::Text("read the file".to_string());
-    persist_turn(&pool, &session.id, Role::User, &user_msg, 0, None)
+    persist_turn(&pool, &session.id, Role::User, &user_msg, 0, None, None)
         .await
         .unwrap();
 
@@ -132,9 +132,17 @@ async fn persist_and_load_messages() {
         },
     ];
     let assistant_msg = MessageContent::Blocks(assistant_blocks);
-    persist_turn(&pool, &session.id, Role::Assistant, &assistant_msg, 1, None)
-        .await
-        .unwrap();
+    persist_turn(
+        &pool,
+        &session.id,
+        Role::Assistant,
+        &assistant_msg,
+        1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
     assert_eq!(loaded.messages.len(), 2);
@@ -165,7 +173,7 @@ async fn first_user_message_auto_titles_session() {
     .unwrap();
 
     let msg = MessageContent::Text("帮我读一下 /etc/hostname".to_string());
-    persist_turn(&pool, &session.id, Role::User, &msg, 0, None)
+    persist_turn(&pool, &session.id, Role::User, &msg, 0, None, None)
         .await
         .unwrap();
 
@@ -194,6 +202,7 @@ async fn second_user_message_does_not_overwrite_title() {
         &MessageContent::Text("first".into()),
         0,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -203,6 +212,7 @@ async fn second_user_message_does_not_overwrite_title() {
         Role::User,
         &MessageContent::Text("second".into()),
         1,
+        None,
         None,
     )
     .await
@@ -232,6 +242,7 @@ async fn delete_session_cascades_messages() {
         &MessageContent::Text("hi".into()),
         0,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -259,6 +270,7 @@ async fn delete_messages_by_session_keeps_session_drops_messages() {
         Role::User,
         &MessageContent::Text("hi".into()),
         0,
+        None,
         None,
     )
     .await
@@ -304,6 +316,7 @@ async fn list_sessions_preview_truncates_at_80_chars() {
         Role::User,
         &MessageContent::Text(long),
         0,
+        None,
         None,
     )
     .await
@@ -625,6 +638,7 @@ async fn insert_system_event_appends_to_history() {
         &MessageContent::Text("hi".into()),
         0,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -915,9 +929,17 @@ async fn persist_turn_with_latency_writes_three_columns() {
         total_ms: Some(3200),
         thinking_ms: Some(850),
     };
-    persist_turn(&pool, &s.id, Role::Assistant, &content, 0, Some(&latency))
-        .await
-        .unwrap();
+    persist_turn(
+        &pool,
+        &s.id,
+        Role::Assistant,
+        &content,
+        0,
+        Some(&latency),
+        None,
+    )
+    .await
+    .unwrap();
 
     let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
     let m = loaded.messages.first().expect("one message");
@@ -977,6 +999,7 @@ async fn persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn() {
         &mk_content("t0 answer"),
         0,
         Some(&lat0),
+        None,
     )
     .await
     .unwrap();
@@ -995,6 +1018,7 @@ async fn persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn() {
         &mk_content("t1 answer"),
         1,
         Some(&lat1),
+        None,
     )
     .await
     .unwrap();
@@ -1013,6 +1037,7 @@ async fn persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn() {
         &mk_content("t2 final answer"),
         2,
         Some(&lat2),
+        None,
     )
     .await
     .unwrap();
@@ -1070,7 +1095,7 @@ async fn persist_turn_with_no_latency_leaves_columns_null() {
         text: "ok".to_string(),
         cache_control: None,
     }]);
-    persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+    persist_turn(&pool, &s.id, Role::User, &content, 0, None, None)
         .await
         .unwrap();
 
@@ -1103,7 +1128,7 @@ async fn update_message_latency_patches_columns_by_id() {
         text: "ok".to_string(),
         cache_control: None,
     }]);
-    persist_turn(&pool, &s.id, Role::Assistant, &content, 0, None)
+    persist_turn(&pool, &s.id, Role::Assistant, &content, 0, None, None)
         .await
         .unwrap();
 
@@ -1161,7 +1186,7 @@ async fn update_message_latency_accepts_partial_payload() {
         text: "ok".to_string(),
         cache_control: None,
     }]);
-    persist_turn(&pool, &s.id, Role::Assistant, &content, 0, None)
+    persist_turn(&pool, &s.id, Role::Assistant, &content, 0, None, None)
         .await
         .unwrap();
     let id = find_message_id_by_seq(&pool, &s.id, 0)
@@ -1232,9 +1257,17 @@ async fn update_message_latency_patches_thinking_ms_independently() {
         total_ms: Some(800),
         thinking_ms: None,
     };
-    persist_turn(&pool, &s.id, Role::Assistant, &content, 0, Some(&latency))
-        .await
-        .unwrap();
+    persist_turn(
+        &pool,
+        &s.id,
+        Role::Assistant,
+        &content,
+        0,
+        Some(&latency),
+        None,
+    )
+    .await
+    .unwrap();
 
     // No follow-up IPC this time — thinking_ms stays NULL.
     let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
@@ -1301,7 +1334,7 @@ async fn record_tool_duration_patches_matching_tool_result_block() {
             is_error: false,
         },
     ]);
-    persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+    persist_turn(&pool, &s.id, Role::User, &content, 0, None, None)
         .await
         .unwrap();
 
@@ -1358,7 +1391,7 @@ async fn record_tool_duration_returns_false_when_no_block_matches() {
         content: "x".to_string(),
         is_error: false,
     }]);
-    persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+    persist_turn(&pool, &s.id, Role::User, &content, 0, None, None)
         .await
         .unwrap();
 
@@ -1389,7 +1422,7 @@ async fn record_tool_duration_handles_text_only_message_without_error() {
         text: "hello".to_string(),
         cache_control: None,
     }]);
-    persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+    persist_turn(&pool, &s.id, Role::User, &content, 0, None, None)
         .await
         .unwrap();
 

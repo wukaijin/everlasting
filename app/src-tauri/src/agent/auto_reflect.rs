@@ -441,6 +441,7 @@ async fn reflect_to_pitfall(
     let messages = vec![ChatMessage {
         role: Role::User,
         content: MessageContent::Text(user_message),
+        speaker: None,
     }];
 
     // Empty tool list — the reflection is a single text

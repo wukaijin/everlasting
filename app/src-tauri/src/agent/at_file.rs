@@ -811,10 +811,12 @@ mod tests {
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Text("look @foo.txt".to_string()),
+                speaker: None,
             },
             ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Text("@foo.txt must NOT be touched".to_string()),
+                speaker: None,
             },
         ];
         let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;
@@ -848,6 +850,7 @@ mod tests {
         let mut messages = vec![ChatMessage {
             role: Role::User,
             content: MessageContent::Blocks(blocks),
+            speaker: None,
         }];
         let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;
         // unchanged: Blocks variant preserved exactly
@@ -873,14 +876,17 @@ mod tests {
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Text("@a.txt".to_string()),
+                speaker: None,
             },
             ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Text("ok".to_string()),
+                speaker: None,
             },
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Text("@b.txt".to_string()),
+                speaker: None,
             },
         ];
         let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;

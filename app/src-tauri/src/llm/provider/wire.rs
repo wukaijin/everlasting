@@ -129,7 +129,17 @@ pub struct WireRequest {
 pub enum WireMessage {
     /// A user-role message. Content is plain text (Anthropic and
     /// OpenAI both accept string content for `role: "user"`).
-    User { content: String },
+    ///
+    /// `speaker` (group chat, 07-29-group-chat): which participant
+    /// authored this message. `None` for classic-chat messages.
+    /// Forward-pass threaded from [`ChatMessage::speaker`]; the
+    /// OpenAI adapter emits it as the native `name` field, the
+    /// Anthropic adapter consumes it to inject an `@name:` prefix
+    /// (then strips it so Anthropic's API never sees the field).
+    User {
+        content: String,
+        speaker: Option<String>,
+    },
     /// A user-role message whose content MUST remain block-shaped
     /// (multi-block, or any block carrying a [`CacheControl`]
     /// marker). Anthropic serializes this as a content array; the
@@ -142,7 +152,12 @@ pub enum WireMessage {
     /// An assistant-role message. The model may emit text, reasoning,
     /// tool_use, signature blobs, or redacted-thinking payloads —
     /// all stored in order in `blocks`.
-    Assistant { blocks: Vec<WireBlock> },
+    ///
+    /// `speaker` (group chat): see [`WireMessage::User::speaker`].
+    Assistant {
+        blocks: Vec<WireBlock>,
+        speaker: Option<String>,
+    },
     /// A tool result. Mapped to:
     /// - Anthropic: a `role: "user"` message with a `tool_result`
     ///   block.
@@ -336,7 +351,7 @@ pub(crate) fn orphan_tool_call_order(messages: &[WireMessage]) -> Vec<String> {
     let mut i = 0;
     while i < messages.len() {
         // Collect tool_use ids from this assistant message (in order).
-        if let WireMessage::Assistant { blocks } = &messages[i] {
+        if let WireMessage::Assistant { blocks, .. } = &messages[i] {
             let tool_uses: Vec<String> = blocks
                 .iter()
                 .filter_map(|b| {
@@ -356,7 +371,7 @@ pub(crate) fn orphan_tool_call_order(messages: &[WireMessage]) -> Vec<String> {
                         WireMessage::Tool { tool_call_id, .. } => {
                             remaining.remove(tool_call_id);
                         }
-                        WireMessage::User { content } => {
+                        WireMessage::User { content, .. } => {
                             let kind = format!("User({:?})", truncate(content, 40));
                             let missing: Vec<String> = remaining.iter().cloned().collect();
                             let which = if first {
@@ -427,9 +442,17 @@ fn truncate(s: &str, max: usize) -> String {
 /// message per `tool_call_id`. A `role: "user"` message containing
 /// only text stays a single `User` message.
 fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
+    // Group chat (07-29-group-chat): hoist speaker out before the
+    // move-heavy match below so every User/Assistant variant can
+    // thread it. Classic-chat messages have `speaker == None`, so
+    // this is a cheap clone of None for the common path.
+    let speaker = msg.speaker.clone();
     match msg.role {
         Role::User => match msg.content {
-            MessageContent::Text(s) => vec![WireMessage::User { content: s }],
+            MessageContent::Text(s) => vec![WireMessage::User {
+                content: s,
+                speaker,
+            }],
             MessageContent::Blocks(blocks) => {
                 // B5 refactor (2026-06-11): if any text block in
                 // the user role carries a `cache_control` marker,
@@ -506,6 +529,7 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                                 if !pending_text.is_empty() {
                                     out.push(WireMessage::User {
                                         content: std::mem::take(&mut pending_text),
+                                        speaker: speaker.clone(),
                                     });
                                 }
                                 out.push(WireMessage::Tool {
@@ -525,6 +549,7 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                     if !pending_text.is_empty() {
                         out.push(WireMessage::User {
                             content: pending_text,
+                            speaker,
                         });
                     }
                     out
@@ -542,7 +567,7 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                     .flat_map(content_block_to_wire_block)
                     .collect(),
             };
-            vec![WireMessage::Assistant { blocks }]
+            vec![WireMessage::Assistant { blocks, speaker }]
         }
     }
 }
@@ -641,7 +666,7 @@ pub fn strip_unsupported(
     messages
         .into_iter()
         .filter_map(|m| match m {
-            WireMessage::User { content } => Some(WireMessage::User { content }),
+            WireMessage::User { content, speaker } => Some(WireMessage::User { content, speaker }),
             WireMessage::UserBlocks { blocks } => {
                 // B5 refactor (2026-06-11): `UserBlocks` carries
                 // block-level cache_control on text blocks. We
@@ -660,7 +685,7 @@ pub fn strip_unsupported(
                 tool_call_id,
                 content,
             }),
-            WireMessage::Assistant { blocks } => {
+            WireMessage::Assistant { blocks, speaker } => {
                 let filtered: Vec<WireBlock> = blocks
                     .into_iter()
                     .filter(|b| block_supported(b, target_caps))
@@ -670,7 +695,10 @@ pub fn strip_unsupported(
                 // pure-reasoning turn. Keep it (with empty
                 // blocks); the provider-wire converter will
                 // decide whether to send it.
-                Some(WireMessage::Assistant { blocks: filtered })
+                Some(WireMessage::Assistant {
+                    blocks: filtered,
+                    speaker,
+                })
             }
         })
         .collect()
@@ -772,9 +800,10 @@ pub fn wire_messages_to_chat_messages(messages: Vec<WireMessage>) -> Vec<ChatMes
 
 fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
     match msg {
-        WireMessage::User { content } => vec![ChatMessage {
+        WireMessage::User { content, speaker } => vec![ChatMessage {
             role: Role::User,
             content: MessageContent::Text(content),
+            speaker,
         }],
         WireMessage::UserBlocks { blocks } => {
             // B5 refactor (2026-06-11): preserve block-level
@@ -789,6 +818,7 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
             vec![ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(merged),
+                speaker: None,
             }]
         }
         WireMessage::Tool {
@@ -804,9 +834,10 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
                     content,
                     is_error: false,
                 }]),
+                speaker: None,
             }]
         }
-        WireMessage::Assistant { blocks } => {
+        WireMessage::Assistant { blocks, speaker } => {
             // The forward pass (`content_block_to_wire_block`) splits
             // `Thinking { thinking, signature }` into a consecutive
             // `[Reasoning, Signature]` pair. The inverse recombines
@@ -820,6 +851,7 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
             vec![ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(merged),
+                speaker,
             }]
         }
     }
@@ -985,6 +1017,7 @@ mod tests {
                 name: "read_file".to_string(),
                 input: serde_json::json!({}),
             }]),
+            speaker: None,
         }];
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_1".to_string()]);
     }
@@ -999,6 +1032,7 @@ mod tests {
                     name: "read_file".to_string(),
                     input: serde_json::json!({}),
                 }]),
+                speaker: None,
             },
             ChatMessage {
                 role: Role::User,
@@ -1007,6 +1041,7 @@ mod tests {
                     content: "ok".to_string(),
                     is_error: false,
                 }]),
+                speaker: None,
             },
         ];
         assert!(orphan_tool_use_ids(&msgs).is_empty());
@@ -1031,6 +1066,7 @@ mod tests {
                         input: serde_json::json!({}),
                     },
                 ]),
+                speaker: None,
             },
             ChatMessage {
                 role: Role::User,
@@ -1039,6 +1075,7 @@ mod tests {
                     content: "ok".to_string(),
                     is_error: false,
                 }]),
+                speaker: None,
             },
         ];
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_2".to_string()]);
@@ -1057,6 +1094,7 @@ mod tests {
                     name: "read_file".to_string(),
                     input: serde_json::json!({}),
                 }],
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
@@ -1064,6 +1102,7 @@ mod tests {
             },
             WireMessage::User {
                 content: "thanks".to_string(),
+                speaker: None,
             },
         ];
         assert!(
@@ -1090,6 +1129,7 @@ mod tests {
                         input: serde_json::json!({}),
                     },
                 ],
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
@@ -1101,6 +1141,7 @@ mod tests {
             },
             WireMessage::User {
                 content: "next".to_string(),
+                speaker: None,
             },
         ];
         assert!(
@@ -1121,9 +1162,11 @@ mod tests {
                     name: "read_file".to_string(),
                     input: serde_json::json!({}),
                 }],
+                speaker: None,
             },
             WireMessage::User {
                 content: "⚠️  loop detected ...".to_string(),
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
@@ -1169,6 +1212,7 @@ mod tests {
                     name: "read_file".to_string(),
                     input: serde_json::json!({}),
                 }],
+                speaker: None,
             },
             WireMessage::UserBlocks {
                 blocks: vec![WireBlock::Text {
@@ -1201,12 +1245,14 @@ mod tests {
                     name: "read_file".to_string(),
                     input: serde_json::json!({}),
                 }],
+                speaker: None,
             },
             WireMessage::Assistant {
                 blocks: vec![WireBlock::Text {
                     text: "thinking...".to_string(),
                     cache_control: None,
                 }],
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
@@ -1228,12 +1274,14 @@ mod tests {
         let messages = vec![
             WireMessage::User {
                 content: "hi".to_string(),
+                speaker: None,
             },
             WireMessage::Assistant {
                 blocks: vec![WireBlock::Text {
                     text: "hello".to_string(),
                     cache_control: None,
                 }],
+                speaker: None,
             },
         ];
         assert!(orphan_tool_call_order(&messages).is_empty());
@@ -1251,9 +1299,11 @@ mod tests {
                     name: "read_file".to_string(),
                     input: serde_json::json!({}),
                 }],
+                speaker: None,
             },
             WireMessage::User {
                 content: long.clone(),
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
@@ -1296,6 +1346,7 @@ mod tests {
                         input: serde_json::json!({}),
                     },
                 ],
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
@@ -1303,6 +1354,7 @@ mod tests {
             },
             WireMessage::User {
                 content: "interleaved".to_string(),
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_2".to_string(),
@@ -1339,6 +1391,7 @@ mod tests {
             messages: vec![ChatMessage {
                 role: Role::User,
                 content: MessageContent::Text("hello".to_string()),
+                speaker: None,
             }],
             stream: true,
             tools: vec![ToolDef {
@@ -1354,7 +1407,9 @@ mod tests {
         assert_eq!(wire.tools.len(), 1);
         assert_eq!(wire.tools[0].name, "read_file");
         assert_eq!(wire.messages.len(), 1);
-        assert!(matches!(&wire.messages[0], WireMessage::User { content } if content == "hello"));
+        assert!(
+            matches!(&wire.messages[0], WireMessage::User { content, .. } if content == "hello")
+        );
     }
 
     #[test]
@@ -1385,6 +1440,7 @@ mod tests {
                         is_error: false,
                     },
                 ]),
+                speaker: None,
             }],
             stream: true,
             tools: vec![],
@@ -1394,14 +1450,14 @@ mod tests {
         // Expect: [User("looking at result:"), Tool, User("and another:"), Tool]
         assert_eq!(wire.messages.len(), 4);
         assert!(
-            matches!(&wire.messages[0], WireMessage::User { content } if content == "looking at result:")
+            matches!(&wire.messages[0], WireMessage::User { content, .. } if content == "looking at result:")
         );
         assert!(
             matches!(&wire.messages[1], WireMessage::Tool { tool_call_id, content }
             if tool_call_id == "toolu_1" && content == "127.0.0.1 localhost")
         );
         assert!(
-            matches!(&wire.messages[2], WireMessage::User { content } if content == "and another:")
+            matches!(&wire.messages[2], WireMessage::User { content, .. } if content == "and another:")
         );
         assert!(
             matches!(&wire.messages[3], WireMessage::Tool { tool_call_id, .. }
@@ -1430,6 +1486,7 @@ mod tests {
                         cache_control: None,
                     },
                 ]),
+                speaker: None,
             }],
             stream: true,
             tools: vec![],
@@ -1437,7 +1494,7 @@ mod tests {
         };
         let wire = chat_request_to_wire(req, None);
         assert_eq!(wire.messages.len(), 1);
-        let WireMessage::Assistant { blocks } = &wire.messages[0] else {
+        let WireMessage::Assistant { blocks, .. } = &wire.messages[0] else {
             panic!("expected Assistant")
         };
         // Thinking → [Reasoning, Signature]; Text → Text. The
@@ -1469,10 +1526,11 @@ mod tests {
                     cache_control: None,
                 },
             ],
+            speaker: None,
         }];
         let caps = openai_caps(false, true);
         let stripped = strip_unsupported(messages, &caps);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant")
         };
         // Signature dropped, Reasoning kept (reasoning_effort is true),
@@ -1496,10 +1554,11 @@ mod tests {
                     cache_control: None,
                 },
             ],
+            speaker: None,
         }];
         let caps = openai_caps(false, false);
         let stripped = strip_unsupported(messages, &caps);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant")
         };
         assert_eq!(blocks.len(), 1);
@@ -1520,6 +1579,7 @@ mod tests {
                     cache_control: None,
                 },
             ],
+            speaker: None,
         }];
         // Worst-case caps: nothing supported except text + tool.
         let caps = WireCapabilities {
@@ -1528,7 +1588,7 @@ mod tests {
             supports_thinking_signatures: false,
         };
         let stripped = strip_unsupported(messages, &caps);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant")
         };
         assert_eq!(blocks.len(), 2);
@@ -1548,11 +1608,12 @@ mod tests {
                     cache_control: None,
                 },
             ],
+            speaker: None,
         }];
         // OpenAI target: redacted_thinking is opaque to us → drop.
         let caps = openai_caps(true, true);
         let stripped = strip_unsupported(messages, &caps);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant")
         };
         assert_eq!(blocks.len(), 1);
@@ -1564,6 +1625,7 @@ mod tests {
         let messages = vec![
             WireMessage::User {
                 content: "hi".to_string(),
+                speaker: None,
             },
             WireMessage::Tool {
                 tool_call_id: "t1".to_string(),
@@ -1577,7 +1639,7 @@ mod tests {
         };
         let stripped = strip_unsupported(messages, &caps);
         assert_eq!(stripped.len(), 2);
-        assert!(matches!(&stripped[0], WireMessage::User { content } if content == "hi"));
+        assert!(matches!(&stripped[0], WireMessage::User { content, .. } if content == "hi"));
         assert!(
             matches!(&stripped[1], WireMessage::Tool { tool_call_id, .. } if tool_call_id == "t1")
         );
@@ -1595,10 +1657,11 @@ mod tests {
                     data: "sig_keep".to_string(),
                 },
             ],
+            speaker: None,
         }];
         let caps = anthropic_caps(true);
         let stripped = strip_unsupported(messages, &caps);
-        let WireMessage::Assistant { blocks } = &stripped[0] else {
+        let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant")
         };
         assert_eq!(blocks.len(), 2);
@@ -1682,6 +1745,7 @@ mod tests {
                     cache_control: None,
                 },
             ]),
+            speaker: None,
         }];
         let req = ChatRequest {
             model: "claude-sonnet-4-5".to_string(),
@@ -1730,6 +1794,7 @@ mod tests {
                 thinking: "thought".to_string(),
                 signature: String::new(),
             }]),
+            speaker: None,
         }];
         let req = ChatRequest {
             model: "m".to_string(),
@@ -1789,6 +1854,7 @@ mod tests {
                     cache_control: None,
                 },
             ]),
+            speaker: None,
         }];
         let req = ChatRequest {
             model: "m".to_string(),
@@ -1886,6 +1952,7 @@ mod tests {
                         cache_control: None,
                     },
                 ]),
+                speaker: None,
             }],
             stream: true,
             tools: vec![],

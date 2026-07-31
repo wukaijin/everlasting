@@ -747,6 +747,7 @@ pub async fn run_chat_loop(
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(instructions_blocks),
+                speaker: None,
             },
         );
         messages.insert(
@@ -757,6 +758,7 @@ pub async fn run_chat_loop(
                     "Understood. I will follow these instructions throughout our session."
                         .to_string(),
                 ),
+                speaker: None,
             },
         );
     }
@@ -806,6 +808,7 @@ pub async fn run_chat_loop(
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(skill_blocks),
+                speaker: None,
             },
         );
     }
@@ -868,91 +871,98 @@ pub async fn run_chat_loop(
     // keys on reload are `${sid}-${seq}`, so `message_seq`
     // round-trips through the DB and matches the rehydrated
     // key).
-    let (last_user_snapshot, last_user_seq) = if let Some(last_user) =
-        messages.iter().rev().find(|m| m.role == Role::User)
-    {
-        let msg = last_user.clone();
-        // B6 PR1b: in the worker path, skip ALL DB writes (see
-        // `skip_persist` docstring at the function head). The
-        // worker still bumps the in-memory `seq` and pushes into
-        // `messages` so the agent loop stays coherent, but it
-        // NEVER writes to the parent's `messages` table (the
-        // SubagentBufferSink captures the transcript for PR2).
-        //
-        // RULE-A-003 (2026-06-15): if the very first user message
-        // can't be persisted, abort with a visible Error —
-        // continuing would let the LLM answer a message the DB
-        // never recorded, so the next session reload is blank.
-        if !skip_persist {
-            if let Err(e) =
-                crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None).await
-            {
-                emit_persist_failure(&sink, &rid, &e);
-                return;
-            }
-        }
-        // D3 PR3 (2026-06-17): if the user hit Resend (instead of
-        // Edit), the frontend passed `resend_seq` through the chat
-        // IPC. Fire the `resend_message` audit row pointing at the
-        // original user message's seq (the one the user clicked
-        // Resend on). Best-effort: a failure is logged + swallowed
-        // — audit loss is acceptable here because the user has
-        // already seen the visual confirmation (the new assistant
-        // turn is about to stream). The `content_text_preview`
-        // comes from the ORIGINAL message's content (truncated to
-        // 80 chars inside the helper), not the new send's text —
-        // they're identical because Resend re-fires the same
-        // prompt, but we use the ORIGINAL seq to keep the audit
-        // link obvious ("you re-ran this row at T").
-        //
-        // Sits AFTER persist_turn so the audit row's payload can
-        // safely reference `seq` (the original row's seq — the
-        // user message we just persisted is a NEW row with seq=N+1,
-        // not the one being re-run). The `resend_seq` is the seq
-        // of the ORIGINAL user message; the new send uses seq=N+1.
-        if let Some(original_seq) = resend_seq {
-            // B6 PR1b: skip audit writes in the worker path (see
-            // `skip_persist` docstring). The resend audit is
-            // user-message scope; workers don't observe user
-            // resends.
+    let (last_user_snapshot, last_user_seq) =
+        if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
+            let msg = last_user.clone();
+            // B6 PR1b: in the worker path, skip ALL DB writes (see
+            // `skip_persist` docstring at the function head). The
+            // worker still bumps the in-memory `seq` and pushes into
+            // `messages` so the agent loop stays coherent, but it
+            // NEVER writes to the parent's `messages` table (the
+            // SubagentBufferSink captures the transcript for PR2).
+            //
+            // RULE-A-003 (2026-06-15): if the very first user message
+            // can't be persisted, abort with a visible Error —
+            // continuing would let the LLM answer a message the DB
+            // never recorded, so the next session reload is blank.
             if !skip_persist {
-                // Derive a short text preview from the original
-                // message's content. `MessageContent` carries
-                // `to_text()` which concatenates all text blocks
-                // (mirrors the `text` column write). We use the
-                // in-memory `msg` (which equals what just got
-                // persisted) — same text, same preview budget.
-                let preview = msg.content.to_text();
-                if let Err(e) = crate::agent::permissions::record_message_resend_audit(
+                if let Err(e) = crate::db::persist_turn(
                     &db,
                     &session_id,
-                    original_seq,
-                    &preview,
+                    msg.role,
+                    &msg.content,
+                    seq,
                     None,
+                    msg.speaker.as_deref(),
                 )
                 .await
                 {
-                    tracing::warn!(
-                            error = %e,
-                            request_id = %rid,
-                            session_id = %session_id,
-                            original_seq = original_seq,
-                            "chat_loop: record_message_resend_audit failed (non-fatal)"
-                    );
+                    emit_persist_failure(&sink, &rid, &e);
+                    return;
                 }
             }
-        }
-        // B2 PR3: snap the seq for the FileInjections event;
-        // the original (un-injected) content stays in the
-        // `messages` vec at this point because the inject
-        // pass below mutates the in-memory copy in place —
-        // but the DB row is already locked to the original.
-        let user_seq = seq;
-        seq += 1;
-        (Some(msg.content), user_seq)
-    } else {
-        (None, -1)
-    };
+            // D3 PR3 (2026-06-17): if the user hit Resend (instead of
+            // Edit), the frontend passed `resend_seq` through the chat
+            // IPC. Fire the `resend_message` audit row pointing at the
+            // original user message's seq (the one the user clicked
+            // Resend on). Best-effort: a failure is logged + swallowed
+            // — audit loss is acceptable here because the user has
+            // already seen the visual confirmation (the new assistant
+            // turn is about to stream). The `content_text_preview`
+            // comes from the ORIGINAL message's content (truncated to
+            // 80 chars inside the helper), not the new send's text —
+            // they're identical because Resend re-fires the same
+            // prompt, but we use the ORIGINAL seq to keep the audit
+            // link obvious ("you re-ran this row at T").
+            //
+            // Sits AFTER persist_turn so the audit row's payload can
+            // safely reference `seq` (the original row's seq — the
+            // user message we just persisted is a NEW row with seq=N+1,
+            // not the one being re-run). The `resend_seq` is the seq
+            // of the ORIGINAL user message; the new send uses seq=N+1.
+            if let Some(original_seq) = resend_seq {
+                // B6 PR1b: skip audit writes in the worker path (see
+                // `skip_persist` docstring). The resend audit is
+                // user-message scope; workers don't observe user
+                // resends.
+                if !skip_persist {
+                    // Derive a short text preview from the original
+                    // message's content. `MessageContent` carries
+                    // `to_text()` which concatenates all text blocks
+                    // (mirrors the `text` column write). We use the
+                    // in-memory `msg` (which equals what just got
+                    // persisted) — same text, same preview budget.
+                    let preview = msg.content.to_text();
+                    if let Err(e) = crate::agent::permissions::record_message_resend_audit(
+                        &db,
+                        &session_id,
+                        original_seq,
+                        &preview,
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                                error = %e,
+                                request_id = %rid,
+                                session_id = %session_id,
+                                original_seq = original_seq,
+                                "chat_loop: record_message_resend_audit failed (non-fatal)"
+                        );
+                    }
+                }
+            }
+            // B2 PR3: snap the seq for the FileInjections event;
+            // the original (un-injected) content stays in the
+            // `messages` vec at this point because the inject
+            // pass below mutates the in-memory copy in place —
+            // but the DB row is already locked to the original.
+            let user_seq = seq;
+            seq += 1;
+            (Some(msg.content), user_seq)
+        } else {
+            (None, -1)
+        };
 
     // B2 PR2: expand `@relpath` tokens in user messages into file
     // content (text) or placeholder (image/PDF/Office/binary). Runs
@@ -1182,6 +1192,7 @@ pub async fn run_chat_loop(
                     cache_control: None,
                 },
             ]),
+            speaker: None,
         };
         if !skip_persist {
             if let Err(e) = crate::db::persist_turn(
@@ -1191,6 +1202,7 @@ pub async fn run_chat_loop(
                 &assistant_msg.content,
                 seq,
                 None,
+                assistant_msg.speaker.as_deref(),
             )
             .await
             {
@@ -1472,6 +1484,7 @@ pub async fn run_chat_loop(
                         text,
                         cache_control: None,
                     }]),
+                    speaker: None,
                 };
                 // APPEND, never prepend — see cache-correctness note
                 // above. Prepending would bust the memory cache
@@ -1498,6 +1511,7 @@ pub async fn run_chat_loop(
                         text,
                         cache_control: None,
                     }]),
+                    speaker: None,
                 };
                 req.push(msg);
             }
@@ -2094,6 +2108,7 @@ pub async fn run_chat_loop(
             let msg = ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(assistant_blocks),
+                speaker: None,
             };
             let turn_latency = build_turn_latency(
                 turn_send_at,
@@ -2126,6 +2141,7 @@ pub async fn run_chat_loop(
                     &msg.content,
                     seq,
                     Some(&turn_latency),
+                    msg.speaker.as_deref(),
                 )
                 .await
                 {
@@ -2190,6 +2206,7 @@ pub async fn run_chat_loop(
                         &tool_result_msg.content,
                         seq,
                         None,
+                        None,
                     )
                     .await
                     {
@@ -2248,6 +2265,7 @@ pub async fn run_chat_loop(
                         tool_result_msg.role,
                         &tool_result_msg.content,
                         seq,
+                        None,
                         None,
                     )
                     .await
@@ -4127,6 +4145,7 @@ pub async fn run_chat_loop(
                 let tool_result_msg = ChatMessage {
                     role: Role::User,
                     content: MessageContent::Blocks(result_blocks),
+                    speaker: None,
                 };
                 // B6 PR1b: skip the cancelled tool_result persist
                 // in worker mode (SubagentBufferSink transcript is
@@ -4142,6 +4161,7 @@ pub async fn run_chat_loop(
                         tool_result_msg.role,
                         &tool_result_msg.content,
                         seq,
+                        None,
                         None,
                     )
                     .await
@@ -4178,6 +4198,7 @@ pub async fn run_chat_loop(
         let tool_result_msg = ChatMessage {
             role: Role::User,
             content: MessageContent::Blocks(result_blocks),
+            speaker: None,
         };
         // B6 PR1b: skip the tool_result persist in worker mode
         // (SubagentBufferSink transcript is the worker's record).
@@ -4193,6 +4214,7 @@ pub async fn run_chat_loop(
                 tool_result_msg.role,
                 &tool_result_msg.content,
                 seq,
+                None,
                 None,
             )
             .await
@@ -4366,6 +4388,7 @@ async fn finalize_pending_tool_results(
         tool_result_msg.role,
         &tool_result_msg.content,
         seq,
+        None,
         None,
     )
     .await

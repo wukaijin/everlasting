@@ -249,6 +249,7 @@ async fn build_resume_messages(
     messages.push(crate::llm::types::ChatMessage {
         role: crate::llm::types::Role::User,
         content: crate::llm::types::MessageContent::Text(final_task.to_string()),
+        speaker: None,
     });
     tracing::info!(
         run_id = %run_id,
@@ -294,6 +295,7 @@ fn build_clarification_message(
     Some(crate::llm::types::ChatMessage {
         role: crate::llm::types::Role::User,
         content: crate::llm::types::MessageContent::Text(lines.join("\n")),
+        speaker: None,
     })
 }
 
