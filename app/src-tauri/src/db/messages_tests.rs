@@ -586,3 +586,125 @@ None,)
     let result = record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked", None).await;
     assert!(result.is_err(), "audit insert must fail on missing session");
 }
+
+// ---------------------------------------------------------------------
+// Group chat (07-29-group-chat, Phase 4 Step 1 TODO-A/B): speaker
+// round-trip — `persist_turn` writes the optional `speaker`
+// column, `load_session` reads it back as `MessageRow.speaker`.
+// Phase 1 added the column + write path; Phase 4 closed the
+// read loop + extended `MessageRow`. Two tests:
+//   1. With a speaker — round-trip preserves the speaker string.
+//   2. Without a speaker (`None`) — round-trip yields `None`,
+//      i.e. classic chat sessions stay unaffected (zero
+//      regression on the pre-Phase 4 default).
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn persist_turn_writes_speaker_and_load_session_round_trips() {
+    let pool = make_pool().await;
+    let sid = Uuid::new_v4().to_string();
+    let s = create_session(
+        &pool,
+        &sid,
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    // seq 0: user prompt (no speaker — user's turns are human by
+    // definition in any session type, including group chat).
+    persist_turn(
+        &pool,
+        &s.id,
+        Role::User,
+        &MessageContent::Text("prompt".to_string()),
+        0,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    // seq 1: moderator turn — speaker = "moderator".
+    persist_turn(
+        &pool,
+        &s.id,
+        Role::Assistant,
+        &MessageContent::Text("Welcome — opening the discussion.".to_string()),
+        1,
+        None,
+        Some("moderator"),
+    )
+    .await
+    .unwrap();
+    // seq 2: participant turn — speaker = the participant's name.
+    persist_turn(
+        &pool,
+        &s.id,
+        Role::Assistant,
+        &MessageContent::Text("I disagree.".to_string()),
+        2,
+        None,
+        Some("Alex"),
+    )
+    .await
+    .unwrap();
+
+    let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+    assert_eq!(loaded.messages.len(), 3);
+    assert_eq!(loaded.messages[0].speaker, None, "user row has no speaker");
+    assert_eq!(
+        loaded.messages[1].speaker.as_deref(),
+        Some("moderator"),
+        "moderator turn speaker round-tripped"
+    );
+    assert_eq!(
+        loaded.messages[2].speaker.as_deref(),
+        Some("Alex"),
+        "participant turn speaker round-tripped"
+    );
+}
+
+#[tokio::test]
+async fn persist_turn_without_speaker_round_trips_as_none() {
+    // Regression test for the pre-Phase 4 default: classic chat
+    // sessions persist turns with `speaker = None`, and the read
+    // path returns `None` (NOT a default string like "user" or
+    // "assistant"). The frontend's `v-if="message.speaker"` chip
+    // condition relies on this exact null semantics.
+    let pool = make_pool().await;
+    let sid = Uuid::new_v4().to_string();
+    let s = create_session(
+        &pool,
+        &sid,
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    persist_turn(
+        &pool,
+        &s.id,
+        Role::Assistant,
+        &MessageContent::Text("classic chat reply".to_string()),
+        0,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+    assert_eq!(loaded.messages.len(), 1);
+    assert_eq!(
+        loaded.messages[0].speaker, None,
+        "classic chat speaker must be None (no behavior change vs pre-Phase 4)"
+    );
+}
