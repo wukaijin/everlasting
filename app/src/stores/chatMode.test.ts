@@ -84,6 +84,11 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
         mode: opts.mode ?? "edit",
         workflow_enabled: false,
         plugin_name: "dev",
+        // Group chat (Phase 4) — classic chat session fixture; new
+        // SessionSummary fields are required but unused by the
+        // chatMode code paths under test.
+        session_type: "chat",
+        metadata: null,
       },
     ];
     store.currentSessionId = opts.id;
@@ -192,6 +197,11 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
         mode: "edit",
         workflow_enabled: false,
         plugin_name: "dev",
+        // Group chat (Phase 4) — classic chat session fixture; new
+        // SessionSummary fields are required but unused by the
+        // chatMode code paths under test.
+        session_type: "chat",
+        metadata: null,
       },
     ];
     invokeMock.mockResolvedValue({});

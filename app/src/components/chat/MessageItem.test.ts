@@ -130,6 +130,11 @@ beforeEach(() => {
       mode: "edit",
       workflow_enabled: false,
         plugin_name: "dev",
+        // Group chat (Phase 4) — classic chat session fixture;
+        // new SessionSummary fields are required but unused by
+        // the MessageItem code paths under test.
+        session_type: "chat",
+        metadata: null,
     },
   ];
 });

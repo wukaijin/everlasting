@@ -54,6 +54,11 @@ function seedSession(id: string, mode: "edit" | "plan" | "yolo" = "edit") {
       mode,
       workflow_enabled: false,
         plugin_name: "dev",
+        // Group chat (Phase 4) — classic chat session fixture;
+        // new SessionSummary fields are required but unused by
+        // the ModeSelect code paths under test.
+        session_type: "chat",
+        metadata: null,
     },
   ];
   store.currentSessionId = id;

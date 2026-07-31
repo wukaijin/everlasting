@@ -364,6 +364,20 @@ interface LoadedMessage {
    *  estimate). Persisted by `update_message_latency`'s
    *  new 4th-column UPDATE — same IPC, one extra bind. */
   thinking_ms: number | null;
+  /** Group chat (07-29-group-chat, Phase 4 TODO-B/D3): the
+   *  originating speaker for this message. Round-tripped
+   *  from the Rust `MessageRow.speaker` column. `undefined`
+   *  / `null` for classic chat / subagent / review messages
+   *  (the pre-Phase 4 default + unchanged). For group-chat
+   *  sessions, set to the fixed identifier `"moderator"` for
+   *  moderator turns or the participant's `name` for
+   *  participant turns. Rehydrated into the
+   *  `ChatMessage.speaker` field; the `MessageItem` renders
+   *  a chip + accent color when present. Optional in the
+   *  type so pre-Phase-4 test fixtures without `speaker` still
+   *  typecheck — the rehydrate path treats `undefined` as
+   *  `null` (no chip). */
+  speaker?: string | null;
   /** B2 PR3: optional per-user-turn injection manifest
    *  JSON, written by the agent loop's `update_message_metadata`
    *  SQL after `inject_at_tokens` produces the list. `null`
@@ -411,6 +425,25 @@ interface LoadedSession {
     output_tokens_total: number | null;
     cache_creation_total: number | null;
     cache_read_total: number | null;
+    /** Group chat (07-29-group-chat, Phase 4 TODO-D1):
+     *  session type discriminator. `"chat"` is the default
+     *  (existing classic-chat + review + subagent sessions);
+     *  `"group_chat"` is the new free-form multi-LLM
+     *  session type. Backed by the `sessions.session_type`
+     *  column (Phase 1 migration, default `"chat"`). Drives
+     *  the chat entry-point branch in `chat_inner` (classic
+     *  vs. `run_group_chat_loop`) + the frontend `SessionList`
+     *  type badge + the `GroupChatConfigModal` access path. */
+    session_type: "chat" | "group_chat";
+    /** Group chat (07-29-group-chat, Phase 4 TODO-D1):
+     *  per-session free-form JSON metadata. Classic chat
+     *  sessions have `null` (no metadata). Group-chat
+     *  sessions store `{participants: ParticipantConfig[]}`.
+     *  Optional in the type so existing test fixtures that
+     *  don't model group chat still typecheck; the production
+     *  IPC always sends `metadata` (NULL for non-group-chat
+     *  rows per `db::SessionRow::metadata`). */
+    metadata?: Record<string, any> | null;
   };
   messages: LoadedMessage[];
 }
@@ -604,6 +637,18 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     // it on `RequestState` instead (the seq is the agent
     // loop's handle, not the controller's).
     msg.seq = m.seq;
+    // Group chat (07-29-group-chat, Phase 4 TODO-D3): pass the
+    // speaker through verbatim. `m.speaker` is `undefined` /
+    // `null` for classic chat / subagent / review rows
+    // (pre-Phase 4 behavior) and rehydrates into `msg.speaker`
+    // as undefined — the UI's `v-if="message.speaker"` chip
+    // condition naturally skips these. For group-chat rows,
+    // carries the moderator's `"moderator"` identifier or the
+    // participant's user-visible name; the `MessageItem`
+    // renders the corresponding chip + accent color.
+    if (m.speaker) {
+      msg.speaker = m.speaker;
+    }
     return msg;
   });
   // Merge user-message tool_results into the previous assistant

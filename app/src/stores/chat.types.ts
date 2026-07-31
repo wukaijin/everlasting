@@ -303,6 +303,18 @@ export interface ChatMessage {
    *  metadata fields (e.g. `original_content` for undo)
    *  don't require touching this interface. */
   metadata?: Record<string, unknown>;
+  /** Group chat (07-29-group-chat, Phase 4 TODO-A): the
+   *  originating speaker for this message. `undefined` for
+   *  classic chat / subagent / review messages (no chip
+   *  rendered). For group-chat sessions, set to the fixed
+   *  identifier `"moderator"` for moderator turns or the
+   *  participant's `name` for participant turns. Drives the
+   *  frontend speaker-chip rendering in `MessageItem.vue` +
+   *  the reload round-trip via `rehydrateMessages`. Round-
+   *  tripped from the Rust `MessageRow.speaker` column (DB
+   *  nullable; classic-chat rows are NULL and rehydrate as
+   *  undefined). */
+  speaker?: string;
 }
 
 /** Session summary shown in the sidebar. Snake_case to match PR1's
@@ -384,6 +396,58 @@ export interface SessionSummary {
    *  column `DEFAULT 'dev'`. Persisted via
    *  `set_session_plugin_name` IPC. */
   plugin_name: string;
+  /** Group chat (07-29-group-chat, Phase 4 TODO-D1):
+   *  session type discriminator. `"chat"` is the default
+   *  (existing classic-chat + review + subagent sessions);
+   *  `"group_chat"` is the new free-form multi-LLM session
+   *  type introduced in Phase 3. Backed by the
+   *  `sessions.session_type` column (Phase 1 migration,
+   *  default `"chat"`). Drives the chat entry-point
+   *  branch in `chat_inner` (classic vs. `run_group_chat_loop`)
+   *  + the frontend SessionList "type" badge + the
+   *  `GroupChatConfigModal` access path. */
+  session_type: "chat" | "group_chat";
+  /** Group chat (07-29-group-chat, Phase 4 TODO-D1):
+   *  per-session free-form JSON metadata. Classic chat
+   *  sessions have `null` (no metadata). Group-chat
+   *  sessions store `{participants: ParticipantConfig[]}`
+   *  (the roster of distinct LLM speakers — `name`, `model`,
+   *  optional `persona_md`, optional `order`). Rehydrated
+   *  from the `sessions.metadata` column (JSON string, parsed
+   *  `serde_json::from_str` with permissive fallback). The
+   *  `update_session_metadata` IPC (Phase 4 Step 3) writes
+   *  this column for runtime re-edit. */
+  metadata: Record<string, any> | null;
+}
+
+/** Group chat (07-29-group-chat, Phase 4 TODO-D2): one
+ *  participant in a group_chat session. Round-tripped
+ *  through `sessions.metadata.participants[]` (JSON column) —
+ *  the layout mirrors the Rust `ParticipantConfig` struct
+ *  fields one-to-one (snake_case per project convention).
+ *
+ *  Field semantics:
+ *  - `name`: display name + session-scoped speaker identifier
+ *    (used as the `messages.speaker` value for the
+ *    participant's turns + as the `name` field on OpenAI
+ *    provider wire + as the `@name` prefix for Anthropic).
+ *    Must be unique within a session (validator runs in
+ *    `GroupChatConfigModal`).
+ *  - `model`: model_id (ProviderCatalog key). Resolved to a
+ *    `Provider` via the catalog's `get(model_id)` path on
+ *    each turn dispatch (`group_chat_loop.rs::resolve_provider`).
+ *  - `persona_md`: optional inline persona markdown. Threaded
+ *    into the participant's `run_chat_loop` as
+ *    `system_prompt_override` (full-replace pattern, mirroring
+ *    subagent persona). `undefined` / `""` → omitted.
+ *  - `order`: optional UI sort + future round-robin index.
+ *    MVP (Phase 4) uses array order; this field is reserved
+ *    for explicit ordering if the UI later supports drag-reorder. */
+export interface ParticipantConfig {
+  name: string;
+  model: string;
+  persona_md?: string;
+  order?: number;
 }
 
 /** User-facing mode subset — the three modes the MVP UI exposes.

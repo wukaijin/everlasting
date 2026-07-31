@@ -54,6 +54,11 @@ function makeSession(id: string, title: string): SessionSummary {
     workflow_enabled: false,
     plugin_name: "",
     mode: "edit",
+    // Group chat (Phase 4) — classic chat session fixture; new
+    // SessionSummary fields are required but unused by the
+    // PendingBadge code paths under test.
+    session_type: "chat",
+    metadata: null,
   };
 }
 
