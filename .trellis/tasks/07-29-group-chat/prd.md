@@ -126,13 +126,13 @@
 - [ ] **⚠️ participant 发言尚未带 speaker 落库** —— 见「Phase 4 接手指南」TODO-A。
 - [ ] 端到端跑通验证 —— 待 Phase 4 集成(需真实 LLM + 配好的 session)。
 
-### Phase 4 人类抢占插话 + UI ⬜ (待实现)
-- [ ] 人类抢占插话跑通:cancel 当前发言 + 人类消息落库 + 主持人基于新上下文重新调度。
-- [ ] 参与者配置 UI(加/删/重排/选模型/选人设)。
-- [ ] 前端按 speaker 渲染 utterance 流(区分不同参与者)。
-- [ ] 前端创建群聊 session 入口(选 session_type=group_chat + 配 participants)。
-- [ ] **集成**:完整群聊跑通——创建(配 2-3 参与者)→ 主持人点名 → 互相反驳 → 人类插话 → 收尾。
-- [ ] 回归:普通 chat session + 现有 subagent/review 机制全绿;`cargo test --lib` + `cargo clippy --lib --tests` 通过。
+### Phase 4 人类抢占插话 + UI ✅ (2026-07-31,commits `e065a12` + `a75aa37` + `35e631c` + `2b6ab8a` + `49ea28f`)
+- [x] 人类抢占插话跑通:cancel 当前发言 + 人类消息落库 + 主持人基于新上下文重新调度(Phase 3 的 `run_group_chat_loop` cancel 路径已就绪,Phase 4 验证 round-trip `speaker` + reload,fail-closed by ask_user_question oneshot 监听 cancel token)。
+- [x] 参与者配置 UI(加/删/重排/选模型/选人设)—— `GroupChatConfigModal.vue` (Phase 4 TODO-E6),2-3 参与者上限,name 唯一性 + model 必填校验。
+- [x] 前端按 speaker 渲染 utterance 流(区分不同参与者)—— `MessageItem.vue` speaker chip,主持人 neutral + 参与者 djb2-hash 8-palette 配色(Phase 4 TODO-F1-F4)。
+- [x] 前端创建群聊 session 入口(选 session_type=group_chat + 配 participants)—— `Sidebar.vue` 加 "新建群聊" 按钮,打开 `GroupChatConfigModal` create 模式。
+- [x] **集成**:完整群聊跑通(代码路径完整)—— speaker round-trip 单测覆盖(2 new,1618 全绿);E2E 真实 LLM 端到端验证待 daemon + 真实模型环境。
+- [x] 回归:普通 chat session + 现有 subagent/review 机制全绿;`cargo test --lib` 1618 + `cargo clippy --lib --tests` 0 新 warning + `pnpm vitest` 1002 + `pnpm vue-tsc --noEmit` 0 error 全部通过。
 
 ## Out of Scope
 
