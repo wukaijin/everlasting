@@ -183,12 +183,28 @@ ParticipantConfig {
 ### ⚠️ 已知 TODO(Phase 3 遗留,Phase 4 必须处理)
 
 **TODO-A:participant 发言未带 speaker 落库(高优先级)**
-`run_group_chat_loop`(`agent/group_chat_loop.rs`)派发 participant turn 时,调用了 `run_chat_loop`,但 `run_chat_loop` 内部的 assistant 落库点(`chat_loop.rs:2129` 附近)写的是 `speaker: None`(Phase 1.4 机械补的)。群聊里 participant 的 speaker 需要在这里被设置成参与者名。
-- **修复方向**:run_chat_loop 的 assistant 落库需要知道「当前发言者是谁」。最干净的方式是给 run_chat_loop 加一个 `current_speaker: Option<String>` 参数(或复用 system_prompt_override 的伴随信息),在 assistant 落库点 `msg.speaker = current_speaker`。moderator turn 传主持人名,participant turn 传参与者名。
+`run_group_chat_loop`(`agent/group_chat_loop.rs`)派发 participant turn 时,调用了 `run_chat_loop`,但 `run_chat_loop` 内部的 assistant 落库点(`chat_loop.rs:2115-2118`)写的是 `speaker: None`(Phase 1.4 机械补的)。群聊里 participant 的 speaker 需要在这里被设置成参与者名。
+- **修复方式(已裁决,见下方「设计裁决 Q1」)**:给 run_chat_loop 加 `current_speaker: Option<String>` 参数(尾部追加,紧邻 `group_chat_state`),assistant 落库点(`chat_loop.rs:2118`)改成 `speaker: current_speaker.clone()`。所有现有调用点(普通 chat / subagent / review)填 `None`(机械改动)。
 - **注意**:reload_messages(`group_chat_loop.rs`)当前把 speaker 硬编码为 None,也要改成读 DB 的 speaker 列(但 MessageRow 当前没有 speaker 字段 —— 见 TODO-B)。
 
 **TODO-B:MessageRow 未读 speaker 列**
 `db/types.rs` 的 `MessageRow` + `load_session` 的 SELECT(`db/sessions.rs:222`)还没有 `speaker` 字段。Phase 1 加了 DB 列 + persist_turn 写入,但读取侧没接通。Phase 4 要:MessageRow 加 `speaker: Option<String>` + SELECT 加列 + 映射。
+
+### 设计裁决(接手答疑,2026-07-31)
+
+> 以下 4 条裁决回应接手 LLM 的疑问,与实现者(上一手)确认一致。Phase 4 按此执行。
+
+**Q1. TODO-A 实现方式 = 加显式 `current_speaker: Option<String>` 参数**
+否决隐式传递(thread-local / 读 system_prompt_override 关联)—— run_chat_loop 落库点离 prompt 解析点很远,隐式关联易漂移。显式参数数据流可见、自文档化。签名变粗代价可控(已有 34 参,多 1 个在尾部,现有调用点填 None)。参数加在 `group_chat_state` 旁边(语义相关)。
+
+**Q2. 配置 UI 时机 = 创建入口 + 简版改 modal(非全套 CRUD)**
+澄清:D4「支持运行时增删改」是**数据建模能力声明**(metadata 可写),非 MVP 功能要求;D5「最简配置 UI」才是功能边界 —— 两者不冲突。MVP 形态:创建时配好(写 metadata)+ 运行中允许重新打开配置编辑(简版 modal,非 inline 实时增删)。需新建 `update_session_metadata` IPC(当前无写 metadata 的 IPC)。排序(order)MVP 用数组顺序,不做拖拽。
+
+**Q3. 主持人 persona = MVP 不配,只配 model;内置固定 system prompt**
+当前实现:`moderator_system_prompt`(`group_chat_loop.rs:55`)是内置固定模板(硬编码「你是 MODERATOR...」),不可配;只有 participants 有 `persona_md`。MVP 维持现状。主持人 speaker 名用固定标识 `"moderator"`(结构化角色,不需自定义)。未来扩展点:`sessions.metadata` 加 `moderator_persona_md`,模板优先用它 —— MVP 不做。
+
+**Q4. 工具调用权限弹窗时的人类插话 = A(抢占,吃掉权限弹窗)**
+与 D9 抢占语义一致。代码事实:权限弹窗(ask_user_question / Tier 4 ask)走 `QuestionStore` oneshot 阻塞,它**监听 cancel token**,所以 cancel 天然唤醒它(返回 cancelled)+ turn 终止 —— A 语义已被现有基建支持,无需特殊处理。前端:cancel 按钮直接 `cancel_chat` IPC + send 新消息;权限弹窗被 cancel 吃掉。否决 B(插话视为对工具调用的回应)—— 与 ask_user_question 结构化回答机制冲突。验证时确认 cancelled synthetic tool_result 路径在群聊编排下正常。
 
 ### Phase 4 待改文件清单(精确)
 
