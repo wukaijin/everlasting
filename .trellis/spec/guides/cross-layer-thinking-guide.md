@@ -325,3 +325,85 @@ state correctly, but several commands still re-parsed event payload fields with
 local casts. The fix was to make the core event layer own `ThreadChannelEvent`
 and `isThreadEvent`, make `reduceChannelMetadata` the only channel metadata
 projection, and make `reduceThreads` the only thread replay reducer.
+
+---
+
+## Session Type + JSON Metadata Pattern (2026-07-31, Phase 4 group-chat 沉淀)
+
+当事物需要一个新的会话类型(skip-session)或者本身的多变 JSON
+配置(例如 group-chat 的 participants)的时候,opnionated 模式:
+
+### Schema 层(DB)
+
+```sql
+ALTER TABLE sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'chat';
+-- 'chat' = 经典 single-LLM, 'group_chat' = 多 LLM turn-taking
+ALTER TABLE sessions ADD COLUMN metadata TEXT;  -- JSON 字符串,nullable
+```
+
+存 `metadata` 列复用已存在的 JSON 列(分阶段:零迁移 + 后续主用),
+迁移最小化;`session_type` 列是 session 一等公民,前端能识别 + chat_inner
+按类型分流。
+
+### Wire 层
+
+- **session_type**: Rust 端 `enum SessionType { Chat, GroupChat }` +
+  `#[serde(rename_all = "snake_case")]` → wire `"chat"` / `"group_chat"`。
+- **metadata**: 服务端 serialize 成 JSON 字符串,前端收到解析成
+  `Record<string, any> | null`。**前端 permissive 解析**(缺字段 → null)
+  保证向前兼容。
+
+### Rust 端
+
+```rust
+// db/types.rs
+pub enum SessionType {
+    Chat, GroupChat,
+}
+
+impl SessionType {
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "group_chat" => SessionType::GroupChat,
+            _ => SessionType::Chat,  // 缺省 fallback,不能 break
+        }
+    }
+}
+
+// db/types.rs::SessionRow 加 session_type + metadata 字段
+// db/sessions.rs::create_session 加 (session_type, metadata) 两个 optional parameter
+// commands/sessions.rs::create_session 加对应 IPC 参数
+```
+
+### 前端类型
+
+```typescript
+// chat.types.ts
+export interface SessionSummary {
+  // ... 其他字段
+  session_type: "chat" | "group_chat";
+  metadata: Record<string, any> | null;
+}
+```
+
+### Checklist: 给 session 加新类型
+
+- [ ] DB 层: `ALTER TABLE sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'chat'`
+  + migration 写好。**永远带 DEFAULT** —— 保证存量兼容。
+- [ ] `db/types.rs::SessionType` 枚举 + `from_str_opt` lenient fallback(不能 break 未知值)。
+- [ ] `db/<sessions>.rs::create_session` 加 `(session_type, metadata)` 两个 optional。
+- [ ] `commands/<sessions>.rs::create_session` + `create_session_inner` 加同样参数,
+  透传到 `db::create_session`。
+- [ ] **daemon REST 镜像** `create_session` 请求结构加字段
+  (`daemon/routes/<sessions>.rs::CreateSessionRequest`)。
+- [ ] **`http.ts::CMD_TO_DOMAIN`** 加新 cmd 的映射!**(最容易漏)**
+- [ ] 前端 `SessionSummary` 类型加 `session_type` + `metadata` 字段(必填,非 optional)。
+- [ ] 前端 `createNewSession` 等 façade 加 optional opts,透传到 IPC。
+- [ ] 测试 fixtures(Summary mocks)同步加两字段,否则 `pnpm vue-tsc` 失败。
+
+### 真实案例
+
+**Phase 4 group-chat 创建**:`session_type` + `{participants: [...]}` →
+`metadata` JSON 列 → 前端 `participants` 数组渲染 + runtime 可改
+(`update_session_metadata` IPC)。整个跨层 6 处注册,一条不少,
+但 `CMD_TO_DOMAIN` 在 `http.ts` 漏了,见 daemon-server.md Scenario §8。
