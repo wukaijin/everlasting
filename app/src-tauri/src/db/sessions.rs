@@ -252,7 +252,8 @@ pub async fn load_session(
     let msg_rows = sqlx::query(
         r#"
  SELECT id, session_id, role, content, text, has_tool_calls, has_tool_results,
- created_at, seq, metadata, ttfb_ms, gen_ms, total_ms, thinking_ms
+ created_at, seq, metadata, ttfb_ms, gen_ms, total_ms, thinking_ms,
+ speaker
  FROM messages
  WHERE session_id = ?
  ORDER BY seq ASC
@@ -293,8 +294,17 @@ pub async fn load_session(
                 // F5 follow-up: thinking-phase wall-clock. `None` for
                 // messages that never entered the thinking phase AND
                 // for pre-F5-follow-up rows. Set by the
-                // `update_message_thinking` IPC at stream done.
+                // `update_message_thinking` IPC at stream end.
                 thinking_ms: r.try_get("thinking_ms")?,
+                // Group chat (07-29-group-chat, Phase 4 TODO-B): the
+                // originating speaker for this message. `None` for
+                // classic chat / subagent / review messages (no
+                // behavior change vs. pre-Phase 4). For group-chat
+                // sessions, set to "moderator" or participant.name by
+                // the per-turn `current_speaker` parameter (see
+                // `chat_loop.rs:run_chat_loop` + `persist_turn`). The
+                // frontend renders this as a chip + accent color.
+                speaker: r.try_get("speaker")?,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()?;

@@ -126,7 +126,7 @@ async fn run_loop(
         // `agent::workflow::inject` tests).
         None,
         None,
-    )
+None,)
     .await;
 }
 
@@ -840,7 +840,7 @@ async fn c2plus_worker_breaks_and_notifies_parent() {
         // `agent::workflow::inject` tests).
         None,
         None,
-    )
+None,)
     .await;
 
     // The dispatch_subagent tool_result carries the loop-terminated

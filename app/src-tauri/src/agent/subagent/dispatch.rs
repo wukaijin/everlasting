@@ -1311,6 +1311,15 @@ pub(crate) async fn run_subagent(
         // toolset (only surfaced via builtin_tools to the moderator's
         // loop), so the interception never fires here.
         None,
+        // Group chat (07-29-group-chat, Phase 4 TODO-A): worker
+        // nested call passes `None` — workers don't carry a
+        // speaker (they ARE the assistant's inner sub-task, not a
+        // distinct participant in the outer session's transcript).
+        // Additionally, the worker path above sets `skip_persist =
+        // true`, so the carried value would never reach the DB
+        // anyway. Pass `None` for symmetry with the parent's
+        // classic-chat call site.
+        None,
     ))
     .await;
 

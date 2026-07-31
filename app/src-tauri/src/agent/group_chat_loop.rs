@@ -108,8 +108,12 @@ async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> 
         .map(|m| {
             // MessageRow.content is a serialized MessageContent JSON
             // value; role is a "user"/"assistant" string; speaker is
-            // carried in the row's metadata-less top-level (the
-            // `speaker` column maps onto ChatMessage.speaker).
+            // carried on the row's `speaker` column (Phase 4 TODO-B,
+            // wired up in `db::types::MessageRow` + `db::load_session`).
+            // The reload MUST round-trip the speaker so the next
+            // speaker sees the prior speaker's attribution correctly
+            // (this is what enables the frontend's per-utterance
+            // chip rendering + reload consistency).
             let role = match m.role.as_str() {
                 "assistant" => Role::Assistant,
                 _ => Role::User,
@@ -119,7 +123,7 @@ async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> 
             ChatMessage {
                 role,
                 content,
-                speaker: None,
+                speaker: m.speaker,
             }
         })
         .collect()
@@ -214,6 +218,16 @@ pub async fn run_group_chat_loop(
                 question_store.clone(),
                 None, // workflow_ctx
                 Some(turn_state.clone()),
+                // Group chat (Phase 4 TODO-A): the moderator is a
+                // distinct speaker — its assistant turns persist with
+                // `speaker = "moderator"` (the fixed identifier; the
+                // moderator's own persona is the built-in
+                // `moderator_system_prompt` template, NOT a per-
+                // session customizable config). The frontend renders
+                // this as the "主持人" chip; reload reads it back
+                // from the same column so cross-turn visibility is
+                // preserved.
+                Some("moderator".to_string()),
             )
             .await;
         }
@@ -315,6 +329,13 @@ pub async fn run_group_chat_loop(
             question_store.clone(),
             None,
             None, // group_chat_state — participant doesn't arbitrate
+            // Group chat (Phase 4 TODO-A): each participant's
+            // assistant turns persist with `speaker = participant.name`
+            // (the user-visible display name + session-scoped unique
+            // identifier). The reload fuses these into the next
+            // speaker's view so every participant sees the full
+            // transcript with the correct attribution.
+            Some(participant.name.clone()),
         )
         .await;
 

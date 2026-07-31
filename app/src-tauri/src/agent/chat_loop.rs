@@ -426,6 +426,19 @@ pub async fn run_chat_loop(
     // outside group chat). Appended at the tail per the same
     // convention as `workflow_ctx` (one-line test-fixture edits).
     group_chat_state: Option<crate::tools::nominate_speaker::SharedTurnState>,
+    // Group chat (07-29-group-chat, Phase 4 TODO-A): per-turn
+    // speaker. `None` for normal chat / subagent / review /
+    // moderator-of-self paths; `Some("moderator")` for the
+    // moderator turn in group_chat; `Some(participant.name)` for
+    // the participant turn. Carried into the assistant persist
+    // site (line ~2129) so messages are stored with the
+    // originating speaker for frontend speaker-chip rendering +
+    // reload consistency. Read-only — never affects tool routing,
+    // role mapping, or wire shape (the wire layer operates on
+    // `Role::User`/`Role::Assistant` regardless). Live tests
+    // (~58 callsites) + 4 production callsites pass `None`; the
+    // two `run_group_chat_loop` dispatch sites pass `Some(name)`.
+    current_speaker: Option<String>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -2115,7 +2128,14 @@ pub async fn run_chat_loop(
             let msg = ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(assistant_blocks),
-                speaker: None,
+                // Group chat (Phase 4 TODO-A): carry the originating
+                // speaker into the assistant persist site. `None` for
+                // classic chat / subagent / review (no behavior change
+                // vs. pre-Phase 4); `Some("moderator" | participant.name)`
+                // for group chat turns. The DB column is nullable
+                // (Phase 1 migration) so existing rows / sessions are
+                // unaffected.
+                speaker: current_speaker.clone(),
             };
             let turn_latency = build_turn_latency(
                 turn_send_at,

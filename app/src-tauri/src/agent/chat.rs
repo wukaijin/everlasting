@@ -561,6 +561,14 @@ pub(crate) async fn chat_inner(
                 // classic-chat path stays None (the nominate/end
                 // interception no-ops if somehow invoked).
                 None,
+                // Group chat (07-29-group-chat, Phase 4 TODO-A): the
+                // classic-chat path never carries a speaker — its
+                // assistant turns persist with `speaker = NULL` (the
+                // pre-Phase 4 default, unchanged). The
+                // `run_group_chat_loop` orchestration passes
+                // `Some("moderator")` / `Some(participant.name)` for
+                // its own dispatch sites.
+                None,
             )
             .await;
         } // end else (classic-chat path)

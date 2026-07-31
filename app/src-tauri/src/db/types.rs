@@ -452,6 +452,16 @@ pub struct MessageRow {
     /// IPC fired at stream end, same shape as
     /// `update_message_latency`.
     pub thinking_ms: Option<i64>,
+    /// Group chat (07-29-group-chat, Phase 4 TODO-B): the
+    /// originating speaker for this message. `None` for classic
+    /// chat / subagent / review messages (pre-Phase 4 default +
+    /// unchanged). For group-chat sessions, set to the fixed
+    /// identifier `"moderator"` for moderator turns or the
+    /// participant's `name` for participant turns (decided by the
+    /// per-turn `current_speaker` parameter on `run_chat_loop`).
+    /// Drives the frontend speaker-chip rendering in
+    /// `MessageItem.vue` (round-tripped via `ChatMessage.speaker`).
+    pub speaker: Option<String>,
 }
 
 /// Result of `load_session` — session meta + all messages ordered by `seq`.
