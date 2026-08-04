@@ -97,6 +97,10 @@ function seedStreamingRequest(
     projectId: "p1",
     userMsgId: "u-existing",
     assistantMsgId: "a-existing",
+    // 08-04 群聊逐轮流式: plain chat — first `done` finalizes (existing).
+    groupChat: false,
+    groupChatStarted: false,
+    pendingSpeaker: null,
     history: [],
     sendAt: Date.now(),
     firstDeltaAt: null,

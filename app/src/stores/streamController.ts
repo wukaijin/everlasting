@@ -89,6 +89,28 @@ interface RequestState {
   projectId: string;
   userMsgId: string;
   assistantMsgId: string;
+  // 08-04 follow-up (群聊逐轮流式): `true` when the session is a
+  // `group_chat`. The orchestrator (`run_group_chat_loop`) reuses ONE
+  // request_id across every inner `run_chat_loop` (moderator +
+  // participants) and emits one `Done` per speaker turn; only the
+  // final `Done { stop_reason: "group_chat_end" }` terminates the
+  // request. When set, the `done` handler seals the current speaker's
+  // placeholder but does NOT finalize the request, and the `start`
+  // handler pushes a fresh placeholder for each new speaker.
+  groupChat: boolean;
+  // 08-04 follow-up (群聊逐轮流式): whether this group-chat request
+  // has seen its first `start`. The FIRST `start` reuses the assistant
+  // placeholder `chat.ts` pushed alongside the user message; every
+  // LATER `start` means the orchestrator moved to a new speaker turn,
+  // so a fresh placeholder is pushed.
+  groupChatStarted: boolean;
+  // 08-04 follow-up (实时 speaker 标识): the speaker announced by the
+  // orchestrator's `speaker` event for the upcoming turn. The `start`
+  // handler stamps it on the freshly-pushed placeholder's `speaker`
+  // field so the MessageItem chip renders the name live; cleared once
+  // consumed (and on `done`, so the chip doesn't linger on the wrong
+  // speaker between turns).
+  pendingSpeaker: string | null;
   // Captured at send time so the wire-format history matches
   // what `chat.ts` constructed (preserves thinking blocks,
   // tool_use blocks, and tool_result blocks verbatim — the
@@ -216,10 +238,19 @@ interface ChatEventPayload {
     // to camelCase typed sub-objects on the live path.
     | "context_compacted"
     | "loop_hint"
-    | "workflow_breadcrumb";
+    | "workflow_breadcrumb"
+    // 08-04 follow-up (实时 speaker 标识): emitted by the group-chat
+    // orchestrator (`run_group_chat_loop`) right before each inner
+    // speaker turn, so the frontend knows whose placeholder is about to
+    // stream. Mirrors Rust `ChatEvent::Speaker { speaker }`.
+    | "speaker";
   text?: string;
   signature?: string;
   data?: string;
+  // 08-04 follow-up: present only when `kind === "speaker"`. The
+  // speaker name ("moderator" or a participant name) for the upcoming
+  // turn.
+  speaker?: string;
   stop_reason?: string;
   message?: string;
   category?: ErrorCategory;
@@ -993,7 +1024,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     if (!req) return; // event for unknown / already-finished request — drop
     const msgs = messagesBySession.get(req.sessionId);
     if (!msgs) return; // session was evicted mid-stream — shouldn't happen because pinned, but guard
-    const last = msgs[msgs.length - 1];
+    let last = msgs[msgs.length - 1];
     if (!last || last.role !== "assistant") return;
 
     switch (event.kind) {
@@ -1010,8 +1041,35 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // turn — see the `RequestState` comment for the full
         // close-trigger list.
         req.currentTurnIndex++;
+        // 08-04 follow-up (群聊逐轮流式): a `start` from a NEW speaker
+        // (any start after the FIRST) means the orchestrator moved on
+        // from the previous speaker — push a fresh assistant placeholder
+        // so this speaker's deltas land on it instead of overwriting the
+        // previous speaker's message. The FIRST `start` reuses the
+        // placeholder `chat.ts` pushed alongside the user message. The
+        // orchestration shares one `request_id` across every inner
+        // `run_chat_loop`, so without this every speaker after the first
+        // would write into the first placeholder (the "群聊内容不实时出现"
+        // bug).
+        if (req.groupChat && req.groupChatStarted) {
+          msgs.push({
+            id: genId(),
+            role: "assistant",
+            content: "",
+          });
+          last = msgs[msgs.length - 1];
+        }
+        req.groupChatStarted = true;
         last.streaming = true;
         last.error = undefined;
+        // 08-04 follow-up (实时 speaker 标识): stamp the announced
+        // speaker on this turn's placeholder so the MessageItem chip
+        // renders the name live. Cleared here (consumed) so a later
+        // `done` without a new `speaker` doesn't leave a stale name.
+        if (req.pendingSpeaker !== null) {
+          last.speaker = req.pendingSpeaker;
+          req.pendingSpeaker = null;
+        }
         // 交错思考(实时态): 新 turn 边界 —— seal 上一 turn 可能仍活动的
         // thinking 块 + flush 残留 text(若上一 turn 以纯思考结束,无后续
         // delta/tool 触发 seal)。防止下一 turn 的 thinking_delta 复用
@@ -1024,6 +1082,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // MessageItem row disappears the moment the stream
         // resumes after a successful retry.
         last.retrying = undefined;
+        break;
+      case "speaker":
+        // 08-04 follow-up (实时 speaker 标识): the orchestrator
+        // announced which speaker's turn is next. Stash it on the
+        // request; the upcoming `start` stamps it on the placeholder.
+        // Only meaningful for group-chat requests, but harmless for
+        // ordinary chat (no `speaker` events are ever emitted there).
+        if (typeof event.speaker === "string") {
+          req.pendingSpeaker = event.speaker;
+        }
         break;
       case "delta":
         // 交错思考(实时态): 文本到达 = 思考块边界,seal 活动 thinking 块
@@ -1318,7 +1386,17 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         }
         // F2: reset force-follow mode when the stream finishes.
         useChatStore().forceFollowActive = false;
-        finalizeRequest(req.requestId, req.sessionId, false);
+        // 08-04 follow-up (群聊逐轮流式): for a group-chat request the
+        // per-speaker `Done`s are turn boundaries, NOT the end of the
+        // orchestration (one request_id spans every speaker). Keep the
+        // request alive and only finalize on the terminal signals —
+        // `Done { stop_reason: "group_chat_end" }` (the orchestrator
+        // ended the discussion) or `cancelled` (human preemption). The
+        // speaker placeholder is already sealed (`last.streaming =
+        // false` above); the next speaker's `start` pushes a fresh one.
+        if (!req.groupChat || event.stop_reason === "group_chat_end" || event.stop_reason === "cancelled") {
+          finalizeRequest(req.requestId, req.sessionId, false);
+        }
         break;
       case "error":
         last.streaming = false;
@@ -1394,7 +1472,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (last.contentBlocks) markRaw(last.contentBlocks);
         // F2: reset force-follow on error too.
         useChatStore().forceFollowActive = false;
-        finalizeRequest(req.requestId, req.sessionId, true);
+        // 08-04 follow-up (群聊逐轮流式): an inner speaker's turn
+        // erroring mid-orchestration must NOT tear down the request —
+        // the orchestrator keeps going (round-robin fallback) and the
+        // terminal `group_chat_end` / `cancelled` `done` finalizes.
+        // Ordinary chat: error is terminal (existing behavior).
+        if (!req.groupChat) {
+          finalizeRequest(req.requestId, req.sessionId, true);
+        }
         break;
       case "file_injections": {
         // B2 PR3: the agent loop emitted a per-user-turn
@@ -2302,6 +2387,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     projectId: string;
     userMsg: ChatMessage;
     assistantMsg: ChatMessage;
+    /** 08-04 follow-up (群聊逐轮流式): `true` when the session is a
+     *  `group_chat` — the request stays alive across the inner
+     *  per-speaker `Done`s and only finalizes on
+     *  `Done { stop_reason: "group_chat_end" }`. `false`/omitted for
+     *  ordinary chat (existing behavior: first `Done` finalizes). */
+    groupChat?: boolean;
     /** Wire-format history (the `messages` array the backend's
      *  `chat` command expects). The caller (chat.ts) builds this
      *  so it can reuse the existing `toPayloadContent` logic. */
@@ -2344,6 +2435,9 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       projectId: args.projectId,
       userMsgId: args.userMsg.id,
       assistantMsgId: args.assistantMsg.id,
+      groupChat: args.groupChat ?? false,
+      groupChatStarted: false,
+      pendingSpeaker: null,
       history: args.history,
       // F5: capture the send timestamp for TTFB / total
       // calculation. The `firstDeltaAt` field stays null until

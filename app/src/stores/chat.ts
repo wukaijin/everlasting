@@ -1230,6 +1230,10 @@ export const useChatStore = defineStore("chat", () => {
       assistantMsg,
       history,
       forcedDispatch,
+      // 08-04 follow-up (群聊逐轮流式): group-chat sessions keep the
+      // request alive across the inner per-speaker `Done`s and only
+      // finalize on `Done { stop_reason: "group_chat_end" }`.
+      groupChat: currentSession.value?.session_type === "group_chat",
     });
   }
 
@@ -1461,6 +1465,8 @@ export const useChatStore = defineStore("chat", () => {
       // `resend_message` audit row at the user-message
       // persist site (best-effort).
       resendSeq: messageSeq,
+      // 08-04 follow-up (群聊逐轮流式): see the send() call site.
+      groupChat: currentSession.value?.session_type === "group_chat",
     });
   }
 
@@ -1624,6 +1630,8 @@ export const useChatStore = defineStore("chat", () => {
       // edit. The backend does not write a `resend_message`
       // audit row.
       resendSeq: undefined,
+      // 08-04 follow-up (群聊逐轮流式): see the send() call site.
+      groupChat: currentSession.value?.session_type === "group_chat",
     });
   }
 

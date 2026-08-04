@@ -1871,4 +1871,110 @@ describe("rehydrateMessages — interleaved thinking contentBlocks passthrough",
     ])[0];
     expect(m.contentBlocks).toBeUndefined();
   });
+
+  it("08-04 群聊逐轮流式: per-speaker done 不终结请求, start 推新 placeholder, group_chat_end 才 finalize", () => {
+    // 群聊编排复用同一个 request_id,每个内层 run_chat_loop(主持人 + 参与者)
+    // 各自发 start/delta/done。修复前:第一个 done 就 finalizeRequest →
+    // activeRequests.delete → 后续参与者的事件被静默丢弃(前端停在主持人
+    // 第一轮,内容不实时出现)。
+    //
+    // 修复后(groupChat 请求):
+    //   - 内层 done(stop_reason != group_chat_end / cancelled)→ 只 seal
+    //     当前 placeholder(streaming=false),不删除请求;
+    //   - 下一轮 start 时检测到上一轮已完成 → push 一条新 placeholder;
+    //   - 终端 Done{stop_reason:"group_chat_end"} → finalizeRequest。
+    const stream = useStreamControllerStore();
+    const sid = "08-04-group-chat-stream-sid";
+
+    const req = {
+      requestId: "rid-group-chat",
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      groupChat: true,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(req.requestId, req);
+    // 初始缓冲区:用户消息 + 主持人第一个 placeholder。
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "开始群聊"), asst(1, "", [])]),
+      false,
+    );
+
+    const handleChatEvent = (
+      stream as unknown as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          text?: string;
+          stop_reason?: string;
+          speaker?: string;
+        }) => void;
+      }
+    ).handleChatEvent;
+    const activeReq = () =>
+      (stream as unknown as { activeRequests: Map<string, typeof req> })
+        .activeRequests;
+
+    // Round 0: 主持人 start → delta → done(tool_use)。
+    // 先发 speaker 事件宣布"moderator"轮到 → start 把它印到 placeholder。
+    handleChatEvent({ request_id: "rid-group-chat", kind: "speaker", speaker: "moderator" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "start" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "delta", text: "主持人:请 M1" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "done", stop_reason: "tool_use" });
+
+    // 内层 done 不得终结请求 —— activeRequests 仍持有。
+    expect(activeReq().has("rid-group-chat")).toBe(true);
+    let msgs = stream.getMessages(sid)!;
+    expect(msgs).toHaveLength(2); // user + 主持人 placeholder(streaming=false)
+    expect(msgs[1].content).toContain("主持人:请 M1");
+    expect(msgs[1].speaker).toBe("moderator"); // speaker 事件被印到 placeholder
+    expect(msgs[1].streaming).toBe(false);
+
+    // Round 1: M1 参与者的新一轮 start → 必须 push 新 placeholder + 印 M1 名。
+    handleChatEvent({ request_id: "rid-group-chat", kind: "speaker", speaker: "M1" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "start" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "delta", text: "我是 M1" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "done", stop_reason: "end_turn" });
+
+    expect(activeReq().has("rid-group-chat")).toBe(true);
+    msgs = stream.getMessages(sid)!;
+    // M1 的 start 必须 push 新 placeholder,而不是覆写主持人消息。
+    expect(msgs).toHaveLength(3);
+    expect(msgs[2].content).toContain("我是 M1");
+    expect(msgs[2].speaker).toBe("M1"); // 参与者名字实时印上
+    expect(msgs[2].streaming).toBe(false);
+    // 主持人第一轮的消息不能被 M1 的 delta 污染。
+    expect(msgs[1].content).toContain("主持人:请 M1");
+    expect(msgs[1].speaker).toBe("moderator"); // 主持人 chip 不被 M1 覆盖
+
+    // 终端:编排结束 → Done{stop_reason:"group_chat_end"} → finalize。
+    handleChatEvent({ request_id: "rid-group-chat", kind: "speaker", speaker: "moderator" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "start" });
+    handleChatEvent({ request_id: "rid-group-chat", kind: "delta", text: "主持人:结束" });
+    handleChatEvent({
+      request_id: "rid-group-chat",
+      kind: "done",
+      stop_reason: "group_chat_end",
+    });
+
+    // group_chat_end 后请求必须被 finalize。
+    expect(activeReq().has("rid-group-chat")).toBe(false);
+    msgs = stream.getMessages(sid)!;
+    expect(msgs).toHaveLength(4);
+    expect(msgs[3].content).toContain("主持人:结束");
+    expect(msgs[3].speaker).toBe("moderator");
+  });
 });
