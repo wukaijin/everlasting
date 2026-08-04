@@ -172,6 +172,66 @@ impl RetrySink for LlmRetrySink {
     }
 }
 
+/// Does the in-memory tail user message `mem_msg` correspond to an
+/// already-persisted DB row `db_row`? Used by `run_chat_loop`'s
+/// user-message persist site to skip re-persisting a message that
+/// `reload_messages` fed back in (group_chat per-speaker loop), which
+/// would otherwise write a duplicate tool_result and trip OpenAI 400
+/// "Messages with role 'tool' must be a response to a preceding message
+/// with 'tool_calls'".
+///
+/// Conservative — it is always safe to return `false` (the original
+/// persist path runs and at worst writes an idempotent-looking row); it
+/// is NEVER safe to wrongly return `true` (a genuine new message would
+/// be dropped). Two cases:
+///   - tool_result blocks: match by `tool_use_id` (globally unique, the
+///     most stable key — content text / is_error could legitimately
+///     differ across a re-serialize).
+///   - plain text: `to_text()` byte equality.
+///
+/// The 08-04 rewrite (design.md D-D/D-F) matches against ANY user-role
+/// DB row (the caller scans `loaded_session.messages`), NOT a length/
+/// tail-alignment criterion — a filtered participant view has fewer
+/// rows than the DB, so a length check would always misfire.
+fn user_message_matches(db_row: &crate::db::MessageRow, mem_msg: &ChatMessage) -> bool {
+    if db_row.role != "user" {
+        return false;
+    }
+    // Collect tool_use_ids from the in-memory message's blocks.
+    let mem_ids: Vec<&str> = match &mem_msg.content {
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect(),
+        MessageContent::Text(_) => Vec::new(),
+    };
+    if !mem_ids.is_empty() {
+        // tool_result: compare tool_use_ids against the DB row's
+        // deserialized content. Deserialize failure → no match (safe).
+        let db_content: MessageContent = match serde_json::from_value(db_row.content.clone()) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let db_ids: Vec<&str> = match &db_content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            MessageContent::Text(_) => Vec::new(),
+        };
+        return !mem_ids.is_empty() && mem_ids == db_ids;
+    }
+    // Plain text user message: byte equality against the DB `text`
+    // column. A fresh send's text never equals the prior persisted row.
+    mem_msg.content.to_text() == db_row.text
+}
+
 pub async fn run_chat_loop(
     tool_defs: Vec<ToolDef>,
     provider: Arc<dyn Provider>,
@@ -891,95 +951,148 @@ pub async fn run_chat_loop(
     // keys on reload are `${sid}-${seq}`, so `message_seq`
     // round-trips through the DB and matches the rehydrated
     // key).
+    //
+    // Group chat (08-04 dedup rewrite, design.md D-D): detect when the
+    // tail user message is ALREADY in the DB (happens in group_chat's
+    // per-speaker loop, where `reload_messages` feeds an already-
+    // persisted tool_result — stored as role=user — back in as the
+    // tail). Blindly re-persisting it wrote a duplicate tool_result row
+    // with no matching tool_calls, which OpenAI rejects with HTTP 400
+    // "Messages with role 'tool' must be a response to a preceding
+    // message with 'tool_calls'", erroring every subsequent turn. When
+    // the tail user message is already in the DB, skip the persist +
+    // resend audit + seq bump, and point `user_seq` at the existing row
+    // so the FileInjections metadata update below still targets the
+    // right row. Normal single-agent chat is unaffected: its tail is a
+    // freshly-composed user message that does NOT match any DB row, so
+    // this guard returns false and the original path runs verbatim.
+    //
+    // The guard replaces the pre-08-04 heuristic (design D-F): the old
+    // version required `messages.len() == loaded_session.messages.len()`,
+    // which is always false once the memory/skill injection pass above
+    // inserts synthetic user rows into `messages` — and it was NOT
+    // scoped to `group_chat_state`, so it could never fire at all. The
+    // new version (a) requires `group_chat_state.is_some()` (a group-
+    // chat speaker — ordinary chat never enters), and (b) content-matches
+    // the tail user message against ANY user-role row in the loaded
+    // session (not just the tail / not length-based), so a filtered
+    // participant view (fewer rows than the DB) is still matched
+    // correctly.
+    //
+    // Known cosmetic boundary (design §5): a human re-sending the EXACT
+    // same text in a group chat (cancel + resend identical text) is
+    // judged already-persisted and skipped → the transcript loses one
+    // text row. Harmless: it does not break tool pairing and never
+    // triggers a 400.
     let (last_user_snapshot, last_user_seq) =
         if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
             let msg = last_user.clone();
-            // B6 PR1b: in the worker path, skip ALL DB writes (see
-            // `skip_persist` docstring at the function head). The
-            // worker still bumps the in-memory `seq` and pushes into
-            // `messages` so the agent loop stays coherent, but it
-            // NEVER writes to the parent's `messages` table (the
-            // SubagentBufferSink captures the transcript for PR2).
-            //
-            // RULE-A-003 (2026-06-15): if the very first user message
-            // can't be persisted, abort with a visible Error —
-            // continuing would let the LLM answer a message the DB
-            // never recorded, so the next session reload is blank.
-            if !skip_persist {
-                if let Err(e) = crate::db::persist_turn(
-                    &db,
-                    &session_id,
-                    msg.role,
-                    &msg.content,
-                    seq,
-                    None,
-                    msg.speaker.as_deref(),
-                )
-                .await
-                {
-                    emit_persist_failure(&sink, &rid, &e);
-                    return;
-                }
-            }
-            // D3 PR3 (2026-06-17): if the user hit Resend (instead of
-            // Edit), the frontend passed `resend_seq` through the chat
-            // IPC. Fire the `resend_message` audit row pointing at the
-            // original user message's seq (the one the user clicked
-            // Resend on). Best-effort: a failure is logged + swallowed
-            // — audit loss is acceptable here because the user has
-            // already seen the visual confirmation (the new assistant
-            // turn is about to stream). The `content_text_preview`
-            // comes from the ORIGINAL message's content (truncated to
-            // 80 chars inside the helper), not the new send's text —
-            // they're identical because Resend re-fires the same
-            // prompt, but we use the ORIGINAL seq to keep the audit
-            // link obvious ("you re-ran this row at T").
-            //
-            // Sits AFTER persist_turn so the audit row's payload can
-            // safely reference `seq` (the original row's seq — the
-            // user message we just persisted is a NEW row with seq=N+1,
-            // not the one being re-run). The `resend_seq` is the seq
-            // of the ORIGINAL user message; the new send uses seq=N+1.
-            if let Some(original_seq) = resend_seq {
-                // B6 PR1b: skip audit writes in the worker path (see
-                // `skip_persist` docstring). The resend audit is
-                // user-message scope; workers don't observe user
-                // resends.
+            let already_in_db = (!skip_persist)
+                .then(|| {
+                    loaded_session
+                        .messages
+                        .iter()
+                        .filter(|m| m.role == "user")
+                        .find(|db_row| user_message_matches(db_row, &msg))
+                })
+                .flatten()
+                .filter(|_| group_chat_state.is_some())
+                .map(|db_row| db_row.seq);
+            if let Some(existing_seq) = already_in_db {
+                // Already persisted (group_chat reload path): do not
+                // write a new row, do not bump seq. `user_seq` points
+                // at the existing row so FileInjections metadata
+                // update + memory injection target the right message.
+                let user_seq = existing_seq;
+                (Some(msg.content), user_seq)
+            } else {
+                // B6 PR1b: in the worker path, skip ALL DB writes (see
+                // `skip_persist` docstring at the function head). The
+                // worker still bumps the in-memory `seq` and pushes into
+                // `messages` so the agent loop stays coherent, but it
+                // NEVER writes to the parent's `messages` table (the
+                // SubagentBufferSink captures the transcript for PR2).
+                //
+                // RULE-A-003 (2026-06-15): if the very first user message
+                // can't be persisted, abort with a visible Error —
+                // continuing would let the LLM answer a message the DB
+                // never recorded, so the next session reload is blank.
                 if !skip_persist {
-                    // Derive a short text preview from the original
-                    // message's content. `MessageContent` carries
-                    // `to_text()` which concatenates all text blocks
-                    // (mirrors the `text` column write). We use the
-                    // in-memory `msg` (which equals what just got
-                    // persisted) — same text, same preview budget.
-                    let preview = msg.content.to_text();
-                    if let Err(e) = crate::agent::permissions::record_message_resend_audit(
+                    if let Err(e) = crate::db::persist_turn(
                         &db,
                         &session_id,
-                        original_seq,
-                        &preview,
+                        msg.role,
+                        &msg.content,
+                        seq,
                         None,
+                        msg.speaker.as_deref(),
                     )
                     .await
                     {
-                        tracing::warn!(
-                                error = %e,
-                                request_id = %rid,
-                                session_id = %session_id,
-                                original_seq = original_seq,
-                                "chat_loop: record_message_resend_audit failed (non-fatal)"
-                        );
+                        emit_persist_failure(&sink, &rid, &e);
+                        return;
                     }
                 }
+                // D3 PR3 (2026-06-17): if the user hit Resend (instead of
+                // Edit), the frontend passed `resend_seq` through the chat
+                // IPC. Fire the `resend_message` audit row pointing at
+                // the original user message's seq (the one the user clicked
+                // Resend on). Best-effort: a failure is logged + swallowed
+                // — audit loss is acceptable here because the user has
+                // already seen the visual confirmation (the new assistant
+                // turn is about to stream). The `content_text_preview`
+                // comes from the ORIGINAL message's content (truncated to
+                // 80 chars inside the helper), not the new send's text —
+                // they're identical because Resend re-fires the same
+                // prompt, but we use the ORIGINAL seq to keep the audit
+                // link obvious ("you re-ran this row at T").
+                //
+                // Sits AFTER persist_turn so the audit row's payload can
+                // safely reference `seq` (the original row's seq — the
+                // user message we just persisted is a NEW row with seq=N+1,
+                // not the one being re-run). The `resend_seq` is the seq
+                // of the ORIGINAL user message; the new send uses seq=N+1.
+                if let Some(original_seq) = resend_seq {
+                    // B6 PR1b: skip audit writes in the worker path (see
+                    // `skip_persist` docstring). The resend audit is
+                    // user-message scope; workers don't observe user
+                    // resends.
+                    if !skip_persist {
+                        // Derive a short text preview from the original
+                        // message's content. `MessageContent` carries
+                        // `to_text()` which concatenates all text blocks
+                        // (mirrors the `text` column write). We use the
+                        // in-memory `msg` (which equals what just got
+                        // persisted) — same text, same preview budget.
+                        let preview = msg.content.to_text();
+                        if let Err(e) = crate::agent::permissions::record_message_resend_audit(
+                            &db,
+                            &session_id,
+                            original_seq,
+                            &preview,
+                            None,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                    error = %e,
+                                    request_id = %rid,
+                                    session_id = %session_id,
+                                    original_seq = original_seq,
+                                    "chat_loop: record_message_resend_audit failed (non-fatal)"
+                            );
+                        }
+                    }
+                }
+                // B2 PR3: snap the seq for the FileInjections event;
+                // the original (un-injected) content stays in the
+                // `messages` vec at this point because the inject
+                // pass below mutates the in-memory copy in place —
+                // but the DB row is already locked to the original.
+                let user_seq = seq;
+                seq += 1;
+                (Some(msg.content), user_seq)
             }
-            // B2 PR3: snap the seq for the FileInjections event;
-            // the original (un-injected) content stays in the
-            // `messages` vec at this point because the inject
-            // pass below mutates the in-memory copy in place —
-            // but the DB row is already locked to the original.
-            let user_seq = seq;
-            seq += 1;
-            (Some(msg.content), user_seq)
         } else {
             (None, -1)
         };
@@ -2026,6 +2139,19 @@ pub async fn run_chat_loop(
                             tracing::warn!(
                                 request_id = %rid,
                                 "chat: unexpected Recall in LLM stream (ignoring — emitted via emit_recall_event)"
+                            );
+                        }
+                        // 08-04 group-chat follow-up: `Speaker` is
+                        // emitted by the orchestrator
+                        // (`run_group_chat_loop`) before each inner
+                        // speaker turn — NOT by a provider. Reaching
+                        // this arm means the wire shape leaked. Drop
+                        // it (the controller already received the
+                        // legitimate one on the chat-event channel).
+                        ChatEvent::Speaker { .. } => {
+                            tracing::warn!(
+                                request_id = %rid,
+                                "chat: unexpected Speaker in LLM stream (ignoring — emitted by group_chat orchestrator)"
                             );
                         }
                         // E2 trace (2026-07-14): the 3 trace events are
@@ -4694,5 +4820,98 @@ pub(crate) fn classify_dispatch_batch(
         }
     } else {
         DispatchBatch::Serial
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::MessageRow;
+    use serde_json::json;
+
+    fn db_row(role: &str, content: serde_json::Value, text: &str, seq: i64) -> MessageRow {
+        MessageRow {
+            id: seq,
+            session_id: "s".to_string(),
+            role: role.to_string(),
+            content,
+            text: text.to_string(),
+            has_tool_calls: false,
+            has_tool_results: false,
+            created_at: "t".to_string(),
+            seq,
+            metadata: None,
+            ttfb_ms: None,
+            gen_ms: None,
+            total_ms: None,
+            thinking_ms: None,
+            speaker: None,
+        }
+    }
+
+    fn user_msg(content: MessageContent) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content,
+            speaker: None,
+        }
+    }
+
+    /// tool_result: same tool_use_id → match (the group_chat reload
+    /// case this whole fix exists for).
+    #[test]
+    fn user_message_matches_tool_result_same_id() {
+        let blocks = json!([{
+            "type": "tool_result",
+            "tool_use_id": "call_abc",
+            "content": "Floor handed to M3."
+        }]);
+        let row = db_row("user", blocks.clone(), "", 4);
+        let mem = user_msg(serde_json::from_value(blocks).unwrap());
+        assert!(user_message_matches(&row, &mem));
+    }
+
+    /// tool_result: different tool_use_id → no match (different tool
+    /// interaction, must not be treated as the same row).
+    #[test]
+    fn user_message_matches_tool_result_different_id() {
+        let row_blocks = json!([{"type":"tool_result","tool_use_id":"call_abc","content":"x"}]);
+        let mem_blocks = json!([{"type":"tool_result","tool_use_id":"call_xyz","content":"x"}]);
+        let row = db_row("user", row_blocks, "", 4);
+        let mem = user_msg(serde_json::from_value(mem_blocks).unwrap());
+        assert!(!user_message_matches(&row, &mem));
+    }
+
+    /// plain text: identical text → match.
+    #[test]
+    fn user_message_matches_plain_text_equal() {
+        let row = db_row("user", json!("hello"), "hello", 2);
+        let mem = user_msg(MessageContent::Text("hello".to_string()));
+        assert!(user_message_matches(&row, &mem));
+    }
+
+    /// plain text: different text → no match (a fresh send whose text
+    /// differs from the prior persisted row — the normal-chat case).
+    #[test]
+    fn user_message_matches_plain_text_different() {
+        let row = db_row("user", json!("old message"), "old message", 2);
+        let mem = user_msg(MessageContent::Text("new message".to_string()));
+        assert!(!user_message_matches(&row, &mem));
+    }
+
+    /// role mismatch (db row is assistant) → no match.
+    #[test]
+    fn user_message_matches_wrong_role() {
+        let row = db_row("assistant", json!("hello"), "hello", 1);
+        let mem = user_msg(MessageContent::Text("hello".to_string()));
+        assert!(!user_message_matches(&row, &mem));
+    }
+
+    /// malformed DB content JSON → no match (safe default: persist).
+    #[test]
+    fn user_message_matches_malformed_db_content() {
+        let row = db_row("user", json!(42), "", 4); // not a valid MessageContent
+        let mem = user_msg(MessageContent::Text("hi".to_string()));
+        assert!(!user_message_matches(&row, &mem));
     }
 }

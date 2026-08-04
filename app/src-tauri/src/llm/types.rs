@@ -355,6 +355,15 @@ pub struct TokenUsage {
 pub enum ChatEvent {
     /// Stream started. Frontend can show a "thinking…" indicator.
     Start,
+    /// 08-04 group-chat follow-up: the orchestrator
+    /// (`run_group_chat_loop`) emits this right before each inner
+    /// speaker turn so the frontend knows whose placeholder is about
+    /// to stream. The per-speaker wire events (`Delta` / `Done`) do
+    /// NOT carry the speaker; the frontend stashes this value and
+    /// stamps it on the placeholder's `speaker` field (renders the
+    /// speaker chip live). Never emitted by a provider — the agent
+    /// loop's per-event stream match drops it defensively.
+    Speaker { speaker: String },
     /// Incremental text from the model.
     Delta { text: String },
     /// Incremental thinking summary from the model. Streamed via

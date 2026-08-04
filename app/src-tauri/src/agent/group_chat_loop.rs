@@ -1,4 +1,5 @@
-//! Group-chat turn-taking orchestrator (07-29-group-chat, Phase 3.4).
+//! Group-chat turn-taking orchestrator (07-29-group-chat, Phase 3.4;
+//! 08-04 rewrite — `08-04-group-chat-orchestration-rewrite`).
 //!
 //! `run_group_chat_loop` is an OUTER loop that drives a multi-LLM
 //! discussion by repeatedly calling `run_chat_loop` (one call per
@@ -6,6 +7,38 @@
 //! (reloaded from the DB between turns — `run_chat_loop` returns `()`
 //! and persists its state), which is what makes the conversation
 //! mutually visible (互见性): each speaker sees every prior utterance.
+//!
+//! # 08-04 rewrite (design.md)
+//!
+//! The pre-rewrite orchestrator reloaded the FULL message history and
+//! fed it verbatim into every speaker's `run_chat_loop`. That produced
+//! three intertwined defects:
+//!   1. the previous speaker's already-persisted `tool_result` (role =
+//!      user) became the next speaker's tail user message and was
+//!      re-persisted → duplicate `tool_result` rows → OpenAI 400 /
+//!      Anthropic 2013 → `[生成出错中断]` death loop;
+//!   2. a participant's transcript contained the moderator's
+//!      `nominate_speaker` / `end_discussion` tool interaction →
+//!      identity confusion (a participant thought it WAS the moderator);
+//!   3. participants received the arbitration tools (fixed by
+//!      `participant_tool_defs`, commit `d2c7c32`, retained).
+//!
+//! The rewrite changes the per-speaker entry transcript:
+//! - **round 0** uses the caller-supplied `messages` (tail = the new
+//!   human message, which the entry guard in `run_chat_loop` persists
+//!   normally — design D-D);
+//! - **later rounds** reload once into `full`, then the moderator gets
+//!   `full` verbatim (View-1) while each participant gets
+//!   [`participant_view`] (View-2, design D-A) — arbitration
+//!   tool_use↔tool_result pairs are stripped as one atomic unit
+//!   (llm-contract.md §469) so the participant's identity can't be
+//!   confused and no orphan tool block survives.
+//!
+//! `reload_messages` is retained (design D-B): `run_chat_loop` returns
+//! `()` and the orchestrator cannot know which rows it appended, so a
+//! reload between speakers is the only resync mechanism. Reload is
+//! safe because the entry guard (D-D) prevents re-persisting already-
+//! persisted rows.
 //!
 //! Turn-taking (D3 = moderator-driven + human preemption):
 //! ```text
@@ -15,10 +48,9 @@
 //!   2. read SharedTurnState
 //!   3. if end_discussion → break
 //!   4. resolve nominee X → (provider, system_prompt) from GroupChatCtx
-//!   5. reload messages from DB
+//!   5. reload messages from DB → participant_view()
 //!   6. participant X turn → run_chat_loop(X_provider, X_prompt, max_turns=1, speaker=X)
-//!   7. reload messages from DB
-//!   └─ back to 1
+//!   └─ back to 1 (round>0 reloads the moderator view)
 //! }
 //! ```
 //!
@@ -34,9 +66,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::group_chat::GroupChatCtx;
+use crate::agent::helpers::emit_chat_event_via_sink;
 use crate::background_shell::DefaultRegistry;
 use crate::db;
-use crate::llm::types::{ChatMessage, MessageContent, Role, ToolDef};
+use crate::llm::types::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Role, ToolDef};
 use crate::memory::MemoryCache;
 use crate::skill::loader::SkillCache;
 use crate::state::ProviderCatalog;
@@ -78,6 +111,121 @@ fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          the discussion focused; end it when it has run its course.",
         roster.join("\n")
     )
+}
+
+/// The participant's transcript view (design.md D-A, §4 View-2).
+///
+/// Scans `full` (the reloaded DB transcript, seq-ascending) and strips
+/// every arbitration tool interaction — an assistant row carrying a
+/// `nominate_speaker` / `end_discussion` `ToolUse` block plus the
+/// immediately-following user row carrying the matching `tool_result`.
+/// The strip is **atomic per pair** (llm-contract.md §469): either both
+/// the assistant(tool_use) and its user(tool_result) stay, or both go,
+/// so the participant's request body never contains an orphan
+/// `tool_use` / `tool_result`.
+///
+/// Only the arbitrator (the moderator) legitimately uses these tools,
+/// so they always appear as "someone else's history" from a
+/// participant's point of view. Showing them caused the identity-
+/// confusion defect (a participant concluded it WAS the moderator and
+/// replied as @moderator — DB evidence in research/db-evidence.md §2).
+///
+/// Rules (design §4):
+/// - an assistant row whose blocks include an arbitration ToolUse:
+///   keep its non-tool blocks (thinking / text), drop the ToolUse
+///   blocks, and skip the immediately-following user row;
+/// - an assistant row that consists ONLY of arbitration ToolUse blocks
+///   → the whole row is dropped (its user(tool_result) row is still
+///   skipped);
+/// - everything else (human messages, moderator/participant text,
+///   non-arbitration tool pairs) passes through unchanged.
+///
+/// The `full` rows are DB-persisted per turn, so an arbitration pair
+/// is always adjacent in `full` (the tool_result is persisted right
+/// after the tool_use assistant row within the same moderator turn) —
+/// a one-pass state machine suffices, no backtracking needed.
+fn participant_view(full: &[ChatMessage]) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::with_capacity(full.len());
+    let mut pending_arbitration_tool_use_id: Option<String> = None;
+    for m in full {
+        if let Some(ref id) = pending_arbitration_tool_use_id {
+            // Skip the user row that carries this arbitration pair's
+            // tool_result. The row is skipped if ANY of its blocks is
+            // the pending pair's tool_result (persisted per-turn rows
+            // are a single tool_result for the arbitration call, so in
+            // practice the whole row belongs to the pair; a mixed row
+            // would be dropped wholesale, which is safe — it can only
+            // lose non-arbitration blocks already stripped from the
+            // assistant side, never creating an orphan).
+            let is_result_row = matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id
+                    ))
+            );
+            pending_arbitration_tool_use_id = None;
+            if is_result_row {
+                continue;
+            }
+        }
+        let (kept, pending) = participant_view_row(m);
+        if let Some(k) = kept {
+            out.push(k);
+        }
+        pending_arbitration_tool_use_id = pending;
+    }
+    out
+}
+
+/// Single-row filter for [`participant_view`]: returns
+/// `(Some(row), Some(tool_use_id))` when the row is an assistant row
+/// whose arbitration ToolUse pair must be followed by skipping the next
+/// user row.
+fn participant_view_row(m: &ChatMessage) -> (Option<ChatMessage>, Option<String>) {
+    let MessageContent::Blocks(blocks) = &m.content else {
+        return (Some(m.clone()), None);
+    };
+    let arbitration_ids: Vec<String> = blocks
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse { id, name, .. }
+                if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME =>
+            {
+                Some(id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    if arbitration_ids.is_empty() {
+        // No arbitration tool here — pass the row through unchanged
+        // (this includes the moderator's NON-arbitration tool pairs).
+        return (Some(m.clone()), None);
+    }
+    // This assistant row carries arbitration tool use(s). Keep the
+    // non-tool blocks (thinking / text) so the participant still sees
+    // the moderator's reasoning and remarks; drop the tool blocks.
+    let kept_blocks: Vec<ContentBlock> = blocks
+        .iter()
+        .filter(|b| !matches!(b, ContentBlock::ToolUse { .. }))
+        .cloned()
+        .collect();
+    let first_id = arbitration_ids[0].clone();
+    if kept_blocks.is_empty() {
+        // Pure tool row → drop the whole row (still expect a
+        // following tool_result row to skip).
+        (None, Some(first_id))
+    } else {
+        (
+            Some(ChatMessage {
+                role: m.role,
+                content: MessageContent::Blocks(kept_blocks),
+                speaker: m.speaker.clone(),
+            }),
+            Some(first_id),
+        )
+    }
 }
 
 /// Strip the two moderator-only arbitration tools (`nominate_speaker`
@@ -141,13 +289,316 @@ mod tests {
             p_names
         );
     }
+
+    // -------------------------------------------------------------------
+    // participant_view unit tests (design.md §4 + llm-contract.md §469)
+    // -------------------------------------------------------------------
+
+    fn user_text(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+            speaker: None,
+        }
+    }
+
+    fn assistant_blocks(blocks: Vec<ContentBlock>) -> ChatMessage {
+        ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(blocks),
+            speaker: Some("moderator".to_string()),
+        }
+    }
+
+    fn tool_use(id: &str, name: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: serde_json::json!({}),
+        }
+    }
+
+    fn tool_result(id: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.to_string(),
+            content: "Floor handed to M1.".to_string(),
+            is_error: false,
+        }
+    }
+
+    /// design.md §4 View-2: an arbitration pair (assistant tool_use row
+    /// + its following user tool_result row) is stripped atomically,
+    /// the assistant row's non-tool blocks are preserved, and no orphan
+    /// tool_use / tool_result survives (llm-contract.md §469).
+    #[test]
+    fn participant_view_strips_arbitration_pair_keeps_text() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![
+                ContentBlock::Thinking {
+                    thinking: "think".to_string(),
+                    signature: "sig".to_string(),
+                },
+                ContentBlock::Text {
+                    text: "主持人发言".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c1", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+
+        let view = participant_view(&full);
+        assert_eq!(
+            view.len(),
+            3,
+            "arbitration pair dropped; user + moderator text + M1 text kept"
+        );
+        assert_eq!(view[0].content.to_text(), "hello");
+        let mod_text = view[1].content.to_text();
+        assert!(
+            mod_text.contains("主持人发言"),
+            "moderator text kept: {mod_text:?}"
+        );
+        assert!(
+            !has_arbitration_blocks(&view),
+            "no arbitration tool_use / tool_result may survive in the participant view"
+        );
+        // Pair atomicity: no ToolUse without its ToolResult and vice versa.
+        assert!(no_orphan_pairs(&view));
+    }
+
+    /// No arbitration interaction present → the view is unchanged
+    /// (all rows pass through verbatim).
+    #[test]
+    fn participant_view_no_arbitration_pair_passes_through() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "主持人发言".to_string(),
+                cache_control: None,
+            }]),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        assert_eq!(view.len(), full.len(), "no arbitration → unchanged");
+        for (v, f) in view.iter().zip(full.iter()) {
+            assert_eq!(v.content.to_text(), f.content.to_text());
+            assert_eq!(v.role, f.role);
+        }
+    }
+
+    /// A NON-arbitration tool pair (e.g. the moderator's `read_file`)
+    /// must pass through the filter INTACT — `participant_view` only
+    /// strips arbitration (`nominate_speaker` / `end_discussion`)
+    /// pairs. Guards against the filter accidentally broadening to
+    /// "drop all tool interactions" (which would leave the
+    /// participant blind to the moderator's non-arbitration work).
+    #[test]
+    fn participant_view_non_arbitration_tool_pair_passes_through() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "先看下文件".to_string(),
+                    cache_control: None,
+                },
+                tool_use("r1", "read_file"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("r1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        assert_eq!(
+            view.len(),
+            4,
+            "non-arbitration pair passes through unchanged"
+        );
+        // No arbitration ToolUse may survive (the loose `has_arbitration_blocks`
+        // helper treats ANY ToolResult as arbitration, so it is not usable
+        // here — a non-arbitration result legitimately survives).
+        assert!(
+            !view.iter().any(|m| {
+                matches!(
+                    &m.content,
+                    MessageContent::Blocks(blocks)
+                        if blocks.iter().any(|b| matches!(
+                            b,
+                            ContentBlock::ToolUse { name, .. }
+                                if name == NOMINATE_SPEAKER_TOOL_NAME
+                                    || name == END_DISCUSSION_TOOL_NAME
+                        ))
+                )
+            }),
+            "no arbitration tool_use may survive in the participant view"
+        );
+        // The read_file pair must still be present (pair atomicity).
+        assert!(no_orphan_pairs(&view));
+        let tool_ids: Vec<String> = view
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => Some(blocks.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, .. } => Some(id),
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_ids, vec!["r1".to_string(), "r1".to_string()]);
+    }
+
+    /// A pure tool row (only arbitration ToolUse blocks, no think/text)
+    /// → the whole row is dropped AND its following tool_result row is
+    /// skipped (no orphan tool_result).
+    #[test]
+    fn participant_view_pure_tool_row_dropped_with_result_row() {
+        let full = vec![
+            assistant_blocks(vec![tool_use("c1", "nominate_speaker")]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        assert_eq!(view.len(), 1, "pure tool row + its result row both dropped");
+        assert_eq!(view[0].content.to_text(), "M1 发言");
+        assert!(no_orphan_pairs(&view));
+    }
+
+    /// Two consecutive moderator arbitration rounds: both pairs are
+    /// stripped, later pairs do not disturb earlier text, and the tail
+    /// stays clean (no orphan at the boundary).
+    #[test]
+    fn participant_view_two_consecutive_moderator_rounds() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "主持人:先请 M1".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c1", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "主持人:再请 M2".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c2", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c2")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M2 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        let text = view
+            .iter()
+            .map(|m| m.content.to_text())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert_eq!(
+            text, "hello|主持人:先请 M1|M1 发言|主持人:再请 M2|M2 发言",
+            "both arbitration pairs stripped, all text preserved in order: {text:?}"
+        );
+        assert!(no_orphan_pairs(&view));
+    }
+
+    fn has_arbitration_blocks(msgs: &[ChatMessage]) -> bool {
+        msgs.iter().any(|m| {
+            matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::ToolUse { name, .. }
+                            if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME
+                    ) || matches!(b, ContentBlock::ToolResult { .. }))
+            )
+        })
+    }
+
+    /// llm-contract.md §469 Pair Atomicity check: every ToolUse has a
+    /// matching ToolResult and vice versa (within the message list).
+    fn no_orphan_pairs(msgs: &[ChatMessage]) -> bool {
+        let mut use_ids = Vec::new();
+        let mut result_ids = Vec::new();
+        for m in msgs {
+            if let MessageContent::Blocks(blocks) = &m.content {
+                for b in blocks {
+                    match b {
+                        ContentBlock::ToolUse { id, .. } => use_ids.push(id.clone()),
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            result_ids.push(tool_use_id.clone())
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        use_ids.iter().all(|id| result_ids.contains(id))
+            && result_ids.iter().all(|id| use_ids.contains(id))
+    }
 }
 
 /// A participant's system prompt = its persona (D8: inline markdown
-/// from metadata). If no persona, a minimal default so the model
-/// knows it's in a group discussion.
+/// from metadata) PLUS an identity-guard block. If no persona, a
+/// minimal default so the model knows it's in a group discussion.
+///
+/// 08-04 rewrite follow-up (identity-confusion residual, user-approved
+/// "Prompt 强化 + moderator 单轮"): the wire layer labels each assistant
+/// message with its author (OpenAI `name` / Anthropic `@name:` prefix),
+/// but weak models routinely ignore the label. DB evidence from the
+/// 4th group-chat test (session `b144cc2a-…`, seq 4) shows participant
+/// M3 concluding "I (as the system) am prompting the conversation. The
+/// first turn was my moderator opening" and replying as `@moderator:`.
+/// The identity-guard block below states the role boundaries
+/// explicitly so the participant never adopts the moderator's voice.
+/// Appended to BOTH the persona and the default template — a persona
+/// only describes the persona, it does not defend against role
+/// confusion.
 fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
-    match persona_md {
+    let base = match persona_md {
         Some(p) if !p.trim().is_empty() => p.to_string(),
         _ => format!(
             "You are {}, a participant in a group chat discussion led by a moderator. \
@@ -156,7 +607,23 @@ fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
              Be concise and substantive.",
             name
         ),
-    }
+    };
+    format!(
+        "{}\n\n\
+         ## Group-chat roles (read carefully)\n\
+         - You are {} — one of the PARTICIPANTS. A separate moderator runs the discussion\n\
+           and assigns turns; you never do.\n\
+         - Every message is labeled with its author (user / moderator / {} / other\n\
+           participants). The moderator's messages are NOT yours — never reply in the\n\
+           moderator's voice and never act as the moderator (no summing up the whole\n\
+           discussion, no handing the floor, no nominating speakers, no opening or\n\
+           closing the conversation).\n\
+         - Only ever reply as {}. Do not start your reply with another speaker's label\n\
+           (e.g. never prefix your answer with `@moderator:` or `@` another name), and\n\
+           do not refer to yourself in the third person.\n\
+         - Just say your own piece on the topic and respond to what others said.",
+        base, name, name, name
+    )
 }
 
 /// Reload the session's messages from the DB as `Vec<ChatMessage>`.
@@ -202,13 +669,28 @@ async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> 
 ///
 /// Returns `()` like `run_chat_loop` — all state is persisted to the
 /// DB + emitted via `sink`.
+///
+/// # 08-04 rewrite (design.md §6) — per-speaker entry transcripts
+///
+/// - **round 0**: the moderator enters with the caller-supplied
+///   `messages` verbatim (tail = the freshly-composed human message,
+///   which the entry guard in `run_chat_loop` persists normally —
+///   D-D). No reload here: the session has no prior rows yet.
+/// - **round > 0**: reload once into `full` (D-B — `run_chat_loop`
+///   returns `()` and the orchestrator cannot know which rows it
+///   appended, so a reload is the only resync). The moderator gets
+///   `full` verbatim (View-1, its own arbitration history is kept).
+/// - **participant turn**: reload again into `full` (fresh — the
+///   moderator's just-persisted rows must be visible) then enter with
+///   [`participant_view`]`(&full)` (View-2, D-A): arbitration
+///   tool_use↔tool_result pairs stripped as atomic units.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_group_chat_loop(
     tool_defs: Vec<ToolDef>,
     context_window: u32,
     rid: String,
     session_id: String,
-    mut messages: Vec<ChatMessage>,
+    messages: Vec<ChatMessage>,
     sink: Arc<dyn crate::state::ChatEventSink>,
     db: SqlitePool,
     cancellations: Arc<tokio::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
@@ -247,6 +729,29 @@ pub async fn run_group_chat_loop(
         // The moderator gets the nominate/end tools (already in
         // builtin_tools) + the shared turn state. Its system prompt
         // is fully replaced (system_prompt_override = Some).
+        //
+        // View-1 (design §4): the moderator sees `full` verbatim —
+        // including its OWN arbitration history from prior rounds
+        // (跨轮连贯, AC5). round 0 uses the caller-supplied `messages`
+        // (tail = the new human message); later rounds reload once.
+        let full = if round == 0 {
+            messages.clone()
+        } else {
+            reload_messages(&db, &session_id).await
+        };
+        // 08-04 follow-up (实时 speaker 标识): announce the upcoming
+        // speaker BEFORE the inner `run_chat_loop` so the frontend can
+        // stamp this speaker's name on the placeholder that's about to
+        // stream (the per-speaker `Delta` / `Done` wire events carry no
+        // speaker). The frontend's `speaker` case stashes it and
+        // `start` applies it to the freshly-pushed placeholder.
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Speaker {
+                speaker: "moderator".to_string(),
+            },
+        );
         if let Some(provider) = &moderator_provider {
             run_chat_loop(
                 tool_defs.clone(),
@@ -254,7 +759,7 @@ pub async fn run_group_chat_loop(
                 context_window,
                 rid.clone(),
                 session_id.clone(),
-                messages.clone(),
+                full,
                 sink.clone(),
                 db.clone(),
                 cancellations.clone(),
@@ -266,8 +771,17 @@ pub async fn run_group_chat_loop(
                 token.clone(),
                 resend_seq,
                 background_shells.clone(),
-                // Moderator gets a few turns to think + call a tool.
-                Some(3),
+                // Single turn (08-04 follow-up, user-approved "moderator
+                // 单轮"): the moderator must nominate / end in ONE turn.
+                // The pre-follow-up `Some(3)` let it burn a second LLM
+                // call on turn-2 filler text ("（已把话筒交给 M3，等待发
+                // 言…）") — that filler is first-person arbitration
+                // narration which weak participants misread as their own
+                // voice (identity confusion, DB session b144cc2a seq 3-4).
+                // With max_turns=1 the turn ends right after the
+                // tool_result, and the moderator only speaks again on its
+                // next round (round-robin / nomination loop).
+                Some(1),
                 false, // owns session_active slot
                 false, // persist (moderator turns are part of the record)
                 Some(false),
@@ -339,19 +853,31 @@ pub async fn run_group_chat_loop(
         let participant_prompt =
             participant_system_prompt(&participant.name, participant.persona_md.as_deref());
 
-        // --- 5. Reload shared transcript --------------------------------------
-        messages = reload_messages(&db, &session_id).await;
-        // Tag the final assistant message's speaker? No — the
-        // participant's run_chat_loop persists with speaker via the
-        // persist_turn path once Phase 3 wires speaker into the
-        // loop's assistant-row construction. For now the speaker
-        // identity travels via the system prompt + (Phase 2) wire
-        // injection.
-
         let Some(provider) = participant_provider else {
             tracing::warn!(round, model=%participant.model, "group_chat: participant provider unresolved; skipping turn");
             continue;
         };
+
+        // --- 5. Reload + filter the shared transcript --------------------------
+        // Reload once (D-B) to pick up the moderator's just-persisted
+        // rows (its tool_result + text), then build the participant's
+        // View-2 (D-A): arbitration tool_use↔tool_result pairs are
+        // stripped atomically so the participant never sees the
+        // moderator's floor-arbitration interaction (identity-confusion
+        // root cause, research/db-evidence.md §2).
+        let full = reload_messages(&db, &session_id).await;
+        let view = participant_view(&full);
+
+        // 08-04 follow-up (实时 speaker 标识): announce the participant
+        // before its turn so the frontend stamps the name on the
+        // placeholder about to stream.
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Speaker {
+                speaker: participant.name.clone(),
+            },
+        );
 
         // --- 6. Participant turn ----------------------------------------------
         // Single turn (max_turns=1): speak once, then hand back to
@@ -375,7 +901,11 @@ pub async fn run_group_chat_loop(
             context_window,
             rid.clone(),
             session_id.clone(),
-            messages.clone(),
+            // View-2 (D-A): arbitration pairs stripped — the tail user
+            // row is an already-persisted message (the entry guard
+            // skips re-persisting it) and the moderator's tool
+            // interaction is invisible to the participant.
+            view,
             sink.clone(),
             db.clone(),
             cancellations.clone(),
@@ -403,7 +933,23 @@ pub async fn run_group_chat_loop(
             None,
             question_store.clone(),
             None,
-            None, // group_chat_state — participant doesn't arbitrate
+            // group_chat_state — the participant shares the SAME
+            // turn_state Arc so the D-D entry guard's scope condition
+            // (`group_chat_state.is_some()`) holds and it skips
+            // re-persisting the already-persisted tail user message
+            // (e.g. the round-0 human text), satisfying PRD AC2
+            // "无多写" / implement.md "round-0 人类消息恰 1 条".
+            //
+            // Deviation note (design.md §6 wrote `None` here): the
+            // guard needs this scope for the participant too — design
+            // §5's own reliability argument covers "每个 speaker 入口
+            // transcript 的尾部 user 消息必是已落库行 → 跳过", which
+            // only holds when the participant also passes Some.
+            // Arbitration safety is NOT weakened: `participant_tool_defs`
+            // above already strips nominate_speaker / end_discussion
+            // from the participant's schema, so the interception branch
+            // can never fire for a participant.
+            Some(turn_state.clone()),
             // Group chat (Phase 4 TODO-A): each participant's
             // assistant turns persist with `speaker = participant.name`
             // (the user-visible display name + session-scoped unique
@@ -414,14 +960,40 @@ pub async fn run_group_chat_loop(
         )
         .await;
 
-        // --- 7. Reload for the next moderator turn ----------------------------
-        messages = reload_messages(&db, &session_id).await;
+        // --- 7. Loop back to the moderator --------------------------------
+        // No reload here: the next iteration's `round > 0` branch reloads
+        // `full` (fresh, includes this participant's rows) before the
+        // moderator's next turn.
     }
 
     if !token.is_cancelled() {
         tracing::warn!(
             rounds = MAX_ORCHESTRATION_ROUNDS,
             "group_chat: hit max rounds; stopping"
+        );
+    }
+
+    // Terminal signal for the frontend (08-04 follow-up, user-approved
+    // "终止事件 + 逐轮流式"): the orchestrator shares ONE `rid` across
+    // every inner `run_chat_loop` (moderator + participants), and each
+    // inner turn emits its own `Done` (moderator `max_turns` /
+    // participant `end_turn`). The frontend cannot know the discussion
+    // has actually ENDED from those inner Dones — it would finalize
+    // the request after the FIRST speaker turn and silently drop every
+    // later event (the "群聊内容不实时出现" bug). Emit a dedicated
+    // terminal `Done { stop_reason: "group_chat_end" }` so the
+    // frontend keeps the request alive across inner turns and only
+    // finalizes on this signal. Not emitted when cancelled (the
+    // cancelled inner turn already emitted `Done { cancelled }`, which
+    // the frontend treats as terminal).
+    if !token.is_cancelled() {
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Done {
+                stop_reason: Some("group_chat_end".to_string()),
+                usage: None,
+            },
         );
     }
 }
