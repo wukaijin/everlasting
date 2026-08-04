@@ -104,6 +104,10 @@ fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          3. When the discussion has covered the topic, call \
          `end_discussion({{summary: \"...\"}})`.\n\
          \n\
+         The system already labels who is speaking — never start your reply with your \
+         OWN name or role (no \"moderator:\" / \"主持人:\" prefix). You MAY address a \
+         participant by name in the body when directly replying to them.\n\
+         \n\
          Participants (you are NOT one of them — you moderate):\n{}\n\
          \n\
          Participants can see each other's prior remarks, so they can respond, \
@@ -287,6 +291,58 @@ mod tests {
             p_names.contains(&"read_file"),
             "participant should still see read_file, got: {:?}",
             p_names
+        );
+    }
+
+    /// Regression (08-04 follow-up, user decision "例子移除@，在和别人交流时允许@别人"):
+    /// the participant identity-guard block must (a) NOT showcase an `@`-prefix
+    /// example (naming `@moderator:` self-primed the models into writing
+    /// `@moderator:` / `@M3:` self-labels — DB sessions 2bbc0d55 / 7bb0c351 show
+    /// `@M3:  @M3:  @D4F`-style noise accumulating), (b) forbid starting a reply
+    /// with your OWN name/role, and (c) explicitly ALLOW @-mentioning another
+    /// participant in the body.
+    #[test]
+    fn participant_prompt_forbids_self_label_but_allows_mentions() {
+        let p = participant_system_prompt("M3", None);
+        // (a) no `@`-prefixed example in the guard block (it self-primes).
+        assert!(
+            !p.contains("@moderator:"),
+            "guard block must not showcase an @-prefix example: {p:?}"
+        );
+        // (b) never start with your OWN name/role. (Line-continuation
+        // `\n\` breaks "with your OWN" across a newline in the string —
+        // match the two fragments separately.)
+        assert!(
+            p.contains("never start your reply with") && p.contains("your OWN name or role"),
+            "must forbid self-label prefixes: {p:?}"
+        );
+        // (c) @-mentioning another participant in the body is allowed.
+        assert!(
+            p.contains("without an @ (e.g. \"@D4F，你说得对…\"") || p.contains("@D4F，你说得对"),
+            "must explicitly allow @-mentioning others in the body: {p:?}"
+        );
+    }
+
+    /// The moderator prompt must carry the same "no self-label prefix" rule.
+    #[test]
+    fn moderator_prompt_forbids_self_label() {
+        let ctx = GroupChatCtx {
+            participants: vec![crate::agent::group_chat::ParticipantConfig {
+                name: "M3".to_string(),
+                model: "m3".to_string(),
+                persona_md: None,
+                order: None,
+            }],
+            moderator_model_id: "mod".to_string(),
+        };
+        let p = moderator_system_prompt(&ctx);
+        assert!(
+            p.contains("never start your reply with") && p.contains("your OWN name or role"),
+            "moderator prompt must forbid self-label prefixes: {p:?}"
+        );
+        assert!(
+            !p.contains("@moderator:"),
+            "moderator prompt must not showcase an @-prefix example: {p:?}"
         );
     }
 
@@ -618,14 +674,16 @@ fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
            moderator's voice and never act as the moderator (no summing up the whole\n\
            discussion, no handing the floor, no nominating speakers, no opening or\n\
            closing the conversation).\n\
-         - Only ever reply as {}. Do not start your reply with another speaker's label\n\
-           (e.g. never prefix your answer with `@moderator:` or `@` another name), and\n\
-           do not refer to yourself in the third person.\n\
+         - The system already shows who is speaking, so never start your reply with\n\
+           your OWN name or role (no \"{}:\" / \"主持人:\" prefix) — just speak directly.\n\
+           You MAY address another participant in the body of your reply, with or\n\
+           without an @ (e.g. \"@D4F，你说得对…\" or \"D4F，你说得对…\"), when you are\n\
+           directly answering them.\n\
+         - Never refer to yourself in the third person.\n\
          - Just say your own piece on the topic and respond to what others said.",
         base, name, name, name
     )
 }
-
 /// Reload the session's messages from the DB as `Vec<ChatMessage>`.
 /// `run_chat_loop` returns `()` and persists turns to the DB, so the
 /// orchestrator reloads between speakers to get the latest shared

@@ -1350,9 +1350,15 @@ run_chat_loop(participant_tool_defs(&tool_defs), /* … */ view, /* … */);
    (DB evidence: participant M3 replied as `@moderator:` and wrote "I am
    prompting the conversation"). `participant_system_prompt` therefore
    appends an explicit role-boundary block ("The moderator's messages are
-   NOT yours", "never prefix your reply with another speaker's label")
-   to BOTH the persona and the default template. Moderator single-turn
-   (bullet 3) removes the identity-confusing filler text at the source.
+   NOT yours", "never start your reply with your OWN name or role") to
+   BOTH the persona and the default template; `moderator_system_prompt`
+   carries the same no-self-label rule. Do NOT showcase an `@`-prefixed
+   example in the guard block — naming `@moderator:` self-primed weak
+   models into writing `@moderator:` / `@M3:` self-labels (DB sessions
+   `2bbc0d55` / `7bb0c351` show `@M3:  @M3:  @D4F`-style noise).
+   @-mentioning ANOTHER participant in the reply body is allowed and
+   desirable ("@D4F，你说得对…"). Moderator single-turn (bullet 3)
+   removes the identity-confusing filler text at the source.
 6. **Terminal signal (08-04 follow-up "终止事件 + 逐轮流式")**: the
    orchestrator shares ONE `request_id` across every inner
    `run_chat_loop`; the frontend cannot know when the discussion has
