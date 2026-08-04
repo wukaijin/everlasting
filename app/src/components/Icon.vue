@@ -55,6 +55,7 @@ import {
   BoltIcon,
   ClockIcon,
   MagnifyingGlassIcon,
+  UserGroupIcon,
 } from "@heroicons/vue/24/outline";
 import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink } from "@lucide/vue";
 
@@ -111,6 +112,10 @@ const map = {
   "clock": ClockIcon,
   // 2026-06-27 sidebar 搜索入口: MagnifyingGlassIcon 触发搜索 input 行
   "magnifying-glass": MagnifyingGlassIcon,
+  // 08-04 group-chat UI: 群聊入口按钮 (Sidebar "新建群聊") + 群聊
+  // 头部编辑 chip (ChatPanel) 共用。UserGroupIcon 比 UsersIcon 语义
+  // 更贴"群聊"。此前两处调用 name="users" 但未注册, Icon 渲染成空 span。
+  "users": UserGroupIcon,
   "brain": Brain,
   // PR3 (A2 + B7): PermissionModal visuals — lucide icons
   // for the shield/terminal/copy/info family. Heroicons

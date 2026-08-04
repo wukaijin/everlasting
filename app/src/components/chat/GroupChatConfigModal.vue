@@ -250,113 +250,121 @@ function modelLabel(id: string): string {
             : "修改当前群聊的参与者配置。" }}
         </DialogDescription>
 
-        <div v-if="errorMessage" class="gcfg-error" role="alert">
-          {{ errorMessage }}
-        </div>
-
-        <div class="gcfg-list">
-          <div
-            v-for="(_, idx) in participants"
-            :key="idx"
-            class="gcfg-row"
-            :data-testid="`gcfg-row-${idx}`"
-          >
-            <div class="gcfg-row__head">
-              <span class="gcfg-row__title">参与者 #{{ idx + 1 }}</span>
-              <div class="gcfg-row__actions">
-                <button
-                  type="button"
-                  class="gcfg-icon-btn"
-                  :disabled="idx === 0"
-                  :aria-label="`Move participant ${idx + 1} up`"
-                  @click="moveUp(idx)"
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  class="gcfg-icon-btn"
-                  :disabled="idx === participants.length - 1"
-                  :aria-label="`Move participant ${idx + 1} down`"
-                  @click="moveDown(idx)"
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  class="gcfg-icon-btn gcfg-icon-btn--danger"
-                  :disabled="participants.length <= MIN_PARTICIPANTS"
-                  :aria-label="`Remove participant ${idx + 1}`"
-                  :data-testid="`gcfg-remove-${idx}`"
-                  @click="removeParticipant(idx)"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            <label class="gcfg-field">
-              <span class="gcfg-field__label">名字</span>
-              <input
-                v-model="participants[idx].name"
-                type="text"
-                class="gcfg-input"
-                placeholder="例如:Alex"
-                :data-testid="`gcfg-name-${idx}`"
-              />
-            </label>
-
-            <label class="gcfg-field">
-              <span class="gcfg-field__label">模型</span>
-              <SelectRoot v-model="participants[idx].model">
-                <SelectTrigger class="gcfg-trigger" :data-testid="`gcfg-model-${idx}`">
-                  <SelectValue :placeholder="modelLabel(participants[idx].model)">
-                    {{ modelLabel(participants[idx].model) }}
-                  </SelectValue>
-                  <SelectIcon>
-                    <Icon name="chevron-down" />
-                  </SelectIcon>
-                </SelectTrigger>
-                <SelectPortal>
-                  <SelectContent class="gcfg-select-content">
-                    <SelectViewport>
-                      <SelectItem
-                        v-for="m in availableModels"
-                        :key="m.id"
-                        :value="m.id"
-                        class="gcfg-select-item"
-                        :data-testid="`gcfg-model-option-${idx}-${m.id}`"
-                      >
-                        <SelectItemText>{{ modelLabel(m.id) }}</SelectItemText>
-                      </SelectItem>
-                    </SelectViewport>
-                  </SelectContent>
-                </SelectPortal>
-              </SelectRoot>
-            </label>
-
-            <label class="gcfg-field">
-              <span class="gcfg-field__label">人设 (可选)</span>
-              <textarea
-                v-model="participants[idx].persona_md"
-                class="gcfg-textarea"
-                rows="3"
-                placeholder="例如:你是 Alex,关注..."
-                :data-testid="`gcfg-persona-${idx}`"
-              />
-            </label>
+        <!-- 滚动 body: 错误条 + 参与者列表 + 添加按钮。
+             标题/副标题/footer 留在滚动区外, 内容超高时只滚动这里。
+             见 R3 / RuntimeMemoryModal 的 flex-column + overflow body 模式。 -->
+        <div class="gcfg-body">
+          <div v-if="errorMessage" class="gcfg-error" role="alert">
+            {{ errorMessage }}
           </div>
-        </div>
 
-        <button
-          v-if="participants.length < MAX_PARTICIPANTS"
-          type="button"
-          class="gcfg-add"
-          :data-testid="'gcfg-add'"
-          @click="addParticipant"
-        >
-          + 添加参与者
-        </button>
+          <div class="gcfg-list">
+            <div
+              v-for="(_, idx) in participants"
+              :key="idx"
+              class="gcfg-row"
+              :data-testid="`gcfg-row-${idx}`"
+            >
+              <div class="gcfg-row__head">
+                <span class="gcfg-row__title">参与者 #{{ idx + 1 }}</span>
+                <div class="gcfg-row__actions">
+                  <button
+                    type="button"
+                    class="gcfg-icon-btn"
+                    :disabled="idx === 0"
+                    :aria-label="`Move participant ${idx + 1} up`"
+                    @click="moveUp(idx)"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    class="gcfg-icon-btn"
+                    :disabled="idx === participants.length - 1"
+                    :aria-label="`Move participant ${idx + 1} down`"
+                    @click="moveDown(idx)"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    class="gcfg-icon-btn gcfg-icon-btn--danger"
+                    :disabled="participants.length <= MIN_PARTICIPANTS"
+                    :aria-label="`Remove participant ${idx + 1}`"
+                    :data-testid="`gcfg-remove-${idx}`"
+                    @click="removeParticipant(idx)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <label class="gcfg-field">
+                <span class="gcfg-field__label">名字</span>
+                <input
+                  v-model="participants[idx].name"
+                  type="text"
+                  class="gcfg-input"
+                  placeholder="例如:Alex"
+                  :data-testid="`gcfg-name-${idx}`"
+                />
+              </label>
+
+              <label class="gcfg-field">
+                <span class="gcfg-field__label">模型</span>
+                <SelectRoot v-model="participants[idx].model">
+                  <SelectTrigger class="gcfg-trigger" :data-testid="`gcfg-model-${idx}`">
+                    <SelectValue :placeholder="modelLabel(participants[idx].model)">
+                      {{ modelLabel(participants[idx].model) }}
+                    </SelectValue>
+                    <SelectIcon>
+                      <Icon name="chevron-down" />
+                    </SelectIcon>
+                  </SelectTrigger>
+                  <SelectPortal>
+                    <SelectContent
+                      class="gcfg-select-content"
+                      position="popper"
+                    >
+                      <SelectViewport>
+                        <SelectItem
+                          v-for="m in availableModels"
+                          :key="m.id"
+                          :value="m.id"
+                          class="gcfg-select-item"
+                          :data-testid="`gcfg-model-option-${idx}-${m.id}`"
+                        >
+                          <SelectItemText>{{ modelLabel(m.id) }}</SelectItemText>
+                        </SelectItem>
+                      </SelectViewport>
+                    </SelectContent>
+                  </SelectPortal>
+                </SelectRoot>
+              </label>
+
+              <label class="gcfg-field">
+                <span class="gcfg-field__label">人设 (可选)</span>
+                <textarea
+                  v-model="participants[idx].persona_md"
+                  class="gcfg-textarea"
+                  rows="3"
+                  placeholder="例如:你是 Alex,关注..."
+                  :data-testid="`gcfg-persona-${idx}`"
+                />
+              </label>
+            </div>
+          </div>
+
+          <button
+            v-if="participants.length < MAX_PARTICIPANTS"
+            type="button"
+            class="gcfg-add"
+            :data-testid="'gcfg-add'"
+            @click="addParticipant"
+          >
+            + 添加参与者
+          </button>
+        </div>
 
         <div class="gcfg-footer">
           <button
@@ -391,9 +399,14 @@ function modelLabel(id: string): string {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 9999;
+  z-index: 2000;
 }
 
+/* DialogContent 本身不滚动: 改成 flex 列容器, header/subtitle/footer 固定,
+   只有 .gcfg-body 滚动 (R3)。z-index 与 RuntimeMemoryModal 对齐到同一
+   基线 (overlay 2000 / content 2001), Select portal 内容用 3000, 留足
+   分层空间——此 modal 与 RuntimeMemoryModal 不会同时打开, 无冲突。
+   见 .trellis/spec/frontend/reka-ui-usage.md。 */
 .gcfg-content {
   position: fixed;
   top: 50%;
@@ -401,12 +414,13 @@ function modelLabel(id: string): string {
   transform: translate(-50%, -50%);
   width: min(640px, 92vw);
   max-height: 88vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--ev-color-bg-panel, #1e1e1e);
   color: var(--ev-color-text, #e0e0e0);
   border-radius: 8px;
   padding: 24px;
-  z-index: 10000;
+  z-index: 2001;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
@@ -429,6 +443,14 @@ function modelLabel(id: string): string {
   border-radius: 4px;
   font-size: 13px;
   margin-bottom: 12px;
+}
+
+/* 滚动 body: 撑满 dialog 剩余高度, 内容超高时只滚这里。
+   min-height:0 是 flex 子项可收缩的关键 (R3)。 */
+.gcfg-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .gcfg-list {
@@ -527,21 +549,27 @@ function modelLabel(id: string): string {
   cursor: pointer;
 }
 
-.gcfg-select-content {
+/* Select 内容由 <SelectPortal> teleport 到 <body>, 是嵌套渲染的 portal
+   子元素——scoped 选择器在 Vue 3.5 下不一定稳定命中, 必须用 :deep()。
+   z-index 抬到 3000 高于 dialog(2001); 宽度贴合 trigger。对齐
+   RuntimeMemoryModal 既有规范。见 .trellis/spec/frontend/reka-ui-usage.md。 */
+:deep(.gcfg-select-content) {
+  width: var(--reka-select-trigger-width);
+  min-width: var(--reka-select-trigger-width, 240px);
   background: var(--ev-color-bg-panel, #1e1e1e);
   border: 1px solid var(--ev-color-border, #444);
   border-radius: 4px;
   max-height: 240px;
-  z-index: 10001;
+  z-index: 3000 !important;
 }
 
-.gcfg-select-item {
+:deep(.gcfg-select-item) {
   padding: 6px 12px;
   font-size: 13px;
   cursor: pointer;
   outline: none;
 }
-.gcfg-select-item[data-highlighted] {
+:deep(.gcfg-select-item[data-highlighted]) {
   background: var(--ev-color-bg-hover, #2a2a2a);
 }
 
