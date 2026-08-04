@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "tool_use↔tool_result Pair Atomicity (§469) + block ordering 契约 — participant_view 剔除必须成对"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 架构:持久化点 / max_turns / turn 循环不变量"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "Provider trait + catalog 解析 + wire 层契约"}
+{"file": ".trellis/tasks/08-04-group-chat-orchestration-rewrite/research/db-evidence.md", "reason": "线上 DB 取证:缺陷机制 + 重复写入路径确认"}
