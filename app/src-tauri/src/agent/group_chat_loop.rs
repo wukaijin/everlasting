@@ -40,7 +40,10 @@ use crate::llm::types::{ChatMessage, MessageContent, Role, ToolDef};
 use crate::memory::MemoryCache;
 use crate::skill::loader::SkillCache;
 use crate::state::ProviderCatalog;
-use crate::tools::nominate_speaker::{GroupChatTurnState, SharedTurnState};
+use crate::tools::end_discussion::END_DISCUSSION_TOOL_NAME;
+use crate::tools::nominate_speaker::{
+    GroupChatTurnState, SharedTurnState, NOMINATE_SPEAKER_TOOL_NAME,
+};
 use crate::tools::read_guard::ReadGuard;
 
 /// Hard cap on moderator↔participant round-trips. Prevents a
@@ -75,6 +78,69 @@ fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          the discussion focused; end it when it has run its course.",
         roster.join("\n")
     )
+}
+
+/// Strip the two moderator-only arbitration tools (`nominate_speaker`
+/// / `end_discussion`) from the tool list a participant sees. Only the
+/// moderator arbitrates the floor; if a participant is given these
+/// tools it tends to call `nominate_speaker` itself, and because the
+/// participant's `run_chat_loop` runs with `group_chat_state = None`
+/// the interception returns an error tool_result that poisons the
+/// reloaded transcript (every subsequent turn errors → loop to
+/// MAX_ORCHESTRATION_ROUNDS). Filtering at the source means the model
+/// never even sees the tool schema.
+fn participant_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef> {
+    tool_defs
+        .iter()
+        .filter(|t| t.name != NOMINATE_SPEAKER_TOOL_NAME && t.name != END_DISCUSSION_TOOL_NAME)
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: participants must NOT receive the nominate_speaker /
+    /// end_discussion arbitration tools. The moderator's full
+    /// `builtin_tools()` set contains both; `participant_tool_defs`
+    /// must strip them. Previously the participant call site passed
+    /// the unfiltered set and a participant that called
+    /// nominate_speaker poisoned the transcript.
+    #[test]
+    fn participant_tool_defs_strips_arbitration_tools() {
+        let full = crate::tools::builtin_tools();
+        let names: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
+        // Sanity: the source set actually contains both (otherwise the
+        // filter is a silent no-op and the bug would be masked).
+        assert!(
+            names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
+            "builtin_tools must include nominate_speaker for this test to be meaningful"
+        );
+        assert!(
+            names.contains(&END_DISCUSSION_TOOL_NAME),
+            "builtin_tools must include end_discussion for this test to be meaningful"
+        );
+
+        let participant_tools = participant_tool_defs(&full);
+        let p_names: Vec<&str> = participant_tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            !p_names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
+            "participant must not see nominate_speaker, got: {:?}",
+            p_names
+        );
+        assert!(
+            !p_names.contains(&END_DISCUSSION_TOOL_NAME),
+            "participant must not see end_discussion, got: {:?}",
+            p_names
+        );
+        // Non-arbitration tools are preserved.
+        assert!(
+            p_names.contains(&"read_file"),
+            "participant should still see read_file, got: {:?}",
+            p_names
+        );
+    }
 }
 
 /// A participant's system prompt = its persona (D8: inline markdown
@@ -292,10 +358,19 @@ pub async fn run_group_chat_loop(
         // the moderator. The participant's system prompt is its
         // persona (fully replaces the parent prompt).
         run_chat_loop(
-            // Participant does NOT get nominate/end tools — only the
-            // moderator arbitrates. Reuse tool_defs but the
-            // interception no-ops (group_chat_state = None here).
-            crate::tools::builtin_tools(),
+            // Participant does NOT get the nominate_speaker /
+            // end_discussion arbitration tools — only the moderator
+            // arbitrates the floor. Previously this passed the full
+            // `builtin_tools()` (which include both), so a participant
+            // that *chose* to call nominate_speaker hit the
+            // `group_chat_state = None` interception below and got
+            // back "this tool is only available in a group chat
+            // session." That error tool_result then poisoned the
+            // reloaded transcript, erroring every subsequent turn
+            // and looping until MAX_ORCHESTRATION_ROUNDS. Filter the
+            // two tools out at the source so participants never see
+            // them (mirrors filter_tools_for_workflow's shape).
+            participant_tool_defs(&tool_defs),
             provider,
             context_window,
             rid.clone(),
