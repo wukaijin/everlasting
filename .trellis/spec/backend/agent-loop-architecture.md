@@ -176,6 +176,41 @@ pub async fn run_chat_loop(
 ) { ... }
 ```
 
+> **Warning — Entry invariant: "the tail user message is a fresh, not-yet-persisted send".**
+>
+> `run_chat_loop`'s entry user-message persist site
+> (`chat_loop.rs`, "Persist the most recent user message before the agent
+> loop runs") **unconditionally re-persists** `messages`'s tail user-role
+> message. This relies on an implicit invariant: that message is a fresh
+> frontend send, not an already-persisted DB row.
+>
+> **Violating it is the root cause of the group-chat 400 death-loop**
+> (`08-04-group-chat-orchestration-rewrite`): `messages` has
+> `UNIQUE(session_id, seq)` but `run_chat_loop` recomputes `seq = max+1`
+> on every entry, so re-persisting a reloaded `tool_result` (role=user)
+> writes a NEW row with the same content — no UNIQUE collision → a
+> duplicate `tool_result` with no matching `tool_calls` → OpenAI 400 /
+> Anthropic 2013 on every subsequent request. DB forensics in
+> `.trellis/tasks/08-04-group-chat-orchestration-rewrite/research/db-evidence.md`
+> show the same `tool_use_id` accumulating 30+ rows.
+>
+> **Guard (D-D, 08-04 rewrite)** — the persist site skips re-writing when
+> ALL of:
+> 1. `group_chat_state.is_some()` (a group-chat speaker — ordinary chat
+>    short-circuits, byte-identical behavior);
+> 2. the tail user message content-matches **any** user-role row in
+>    `loaded_session.messages` (`user_message_matches`: `tool_result`
+>    by `tool_use_id`, plain text by byte equality).
+>
+> Do NOT restore a `messages.len() == loaded_session.messages.len()`
+> length criterion (the pre-08-04 heuristic, D-F): it is always false
+> after the memory/skill injection pass inserts synthetic user rows into
+> `messages`, and it misfires on filtered participant views (fewer rows
+> than the DB). Known cosmetic boundary (documented in the guard
+> comment): a human re-sending the EXACT same text in a group chat is
+> judged already-persisted and skipped — one text row lost, no tool-pair
+> breakage, no 400.
+
 ### Why 23 parameters (and not a config struct)?
 
 The 23 parameters look excessive, but they are the **exact set of state pieces
@@ -1252,3 +1287,103 @@ loop (`commands/question.rs` resolve_* handlers,
 `None` and the audit row stays un-grouped. This is a single,
 explicit, grep-able seam — preferred over a thread-local turn
 context (would not match Rust idiom).
+
+## Pattern: Group-chat transcript view (08-04-group-chat-orchestration-rewrite)
+
+**Problem**: `run_group_chat_loop`(群聊编排)reloads the full DB history
+and feeds it verbatim into every speaker's `run_chat_loop`. Two defects
+follow: (1) the previous speaker's persisted `tool_result` becomes the
+next speaker's tail user message and is re-persisted (see the entry
+invariant warning above → 400 death-loop); (2) a participant sees the
+moderator's `nominate_speaker` / `end_discussion` tool interaction and
+mistakes itself for the moderator (DB evidence: a participant's thinking
+was "I need to respond as the moderator").
+
+**Solution** — give each speaker a purpose-built transcript view, and
+rely on the D-D entry guard (above) instead of per-persist-site patches:
+
+```rust
+// group_chat_loop.rs
+// View-1 (moderator): full reload, verbatim — its OWN arbitration
+// history stays (cross-round coherence).
+let full = if round == 0 { messages.clone() }          // tail = new human msg
+           else { reload_messages(&db, &session_id).await };
+run_chat_loop(/* … */ full, /* … */);
+
+// View-2 (participant): arbitration pairs stripped as atomic units.
+let full = reload_messages(&db, &session_id).await;
+let view = participant_view(&full);                    // D-A
+run_chat_loop(participant_tool_defs(&tool_defs), /* … */ view, /* … */);
+```
+
+**Key contracts**:
+
+1. **Pair-atomic stripping (§469)**: `participant_view` drops an
+   assistant row's arbitration `ToolUse` blocks (keeping think/text
+   blocks) AND skips the immediately-following user row carrying the
+   matching `tool_result`. The pair stays adjacent in the reloaded
+   `full` (persisted within one moderator turn), so a one-pass state
+   machine suffices — no orphan `tool_use` / `tool_result` survives.
+   Pure-tool rows are dropped whole; non-arbitration tool pairs
+   (e.g. `read_file`) pass through unchanged.
+2. **Scope via the shared turn-state**: participants pass
+   `Some(turn_state)` (same Arc as the moderator) so the D-D guard's
+   `group_chat_state.is_some()` holds for them too — otherwise the
+   round-0 human message would be re-persisted. Arbitration safety is
+   unaffected: `participant_tool_defs` strips the two tools from the
+   participant's schema, so the interception branch can never fire.
+3. **Moderator runs `max_turns=Some(1)` (single turn, 08-04 follow-up)**:
+   each moderator round is exactly ONE `provider.send` — remark +
+   `nominate_speaker` / `end_discussion` `ToolCall` in one stream, then
+   the turn ends right after the tool_result (no second send). The
+   earlier `Some(3)` burned a second call on first-person arbitration
+   filler ("已把话筒交给 X，等待发言…") which weak participants
+   misread as their own voice (identity confusion — DB session
+   `b144cc2a`, seq 3-4); single-turn removes it. A mock script must
+   script one send per moderator tool round.
+4. **Reload is retained (D-B)**: `run_chat_loop` returns `()`; a reload
+   between speakers is the only resync. It is safe only because the
+   entry guard prevents re-persisting already-persisted rows.
+5. **Identity-guard prompt (08-04 follow-up)**: the wire-layer speaker
+   label (OpenAI `name` / Anthropic `@name:` prefix) is NOT enough —
+   weak models ignore it and adopt the moderator's first-person voice
+   (DB evidence: participant M3 replied as `@moderator:` and wrote "I am
+   prompting the conversation"). `participant_system_prompt` therefore
+   appends an explicit role-boundary block ("The moderator's messages are
+   NOT yours", "never prefix your reply with another speaker's label")
+   to BOTH the persona and the default template. Moderator single-turn
+   (bullet 3) removes the identity-confusing filler text at the source.
+6. **Terminal signal (08-04 follow-up "终止事件 + 逐轮流式")**: the
+   orchestrator shares ONE `request_id` across every inner
+   `run_chat_loop`; the frontend cannot know when the discussion has
+   actually ENDED from the inner per-speaker `Done`s. The orchestrator
+   therefore emits a dedicated terminal
+   `Done { stop_reason: "group_chat_end" }` after the outer loop ends
+   (NOT on cancel — the cancelled inner turn's `Done { cancelled }` is
+   the terminal there). The frontend keeps the request alive across the
+   inner `Done`s and only finalizes on `group_chat_end` / `cancelled`.
+7. **Live speaker identity (08-04 follow-up "实时 speaker 标识")**: the
+   per-speaker wire events (`Delta` / `Done`) carry no speaker, so the
+   orchestrator emits `ChatEvent::Speaker { speaker }` right before
+   each inner turn ("moderator" or the participant name). The frontend
+   stashes it (`req.pendingSpeaker`) and the next `start` stamps it on
+   the freshly-pushed placeholder's `speaker` field — the existing
+   MessageItem speaker chip then renders the name live. `Speaker` is
+   orchestrator-only: the agent loop's per-event stream match drops it
+   defensively if a provider ever re-emits it. Test: the integration
+   test asserts one `Speaker` event per inner turn, in turn order.
+
+**When to apply**: any orchestrator that drives multiple `run_chat_loop`
+calls over one shared session — give each callee a view, never the raw
+reload, and never patch the persist sites heuristically.
+
+**Tests**: `.trellis/spec/backend/…` → `app/src-tauri/src/agent/tests_group_chat.rs`
+(integration: full multi-round flow, no `ChatEvent::Error`, one
+`tool_result` row per `tool_use_id`, participant views free of
+arbitration blocks, system-prompt identity, one `group_chat_end` +
+one `Speaker` per turn) + `participant_view` unit
+tests (with/without arbitration pair, pure tool row, two consecutive
+moderator rounds, non-arbitration pair passthrough) +
+`app/src/stores/streamController.test.ts` (group-chat streaming:
+inner `done` doesn't finalize, `start` pushes a new placeholder, the
+`speaker` event stamps the chip, `group_chat_end` finalizes).
