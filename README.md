@@ -18,7 +18,7 @@
 
 ## 状态
 
-MVP 主体 + V2 路线图主体已落地，近期重点是 **daemon 化**（agent core 拆出独立进程，GUI 作为瘦客户端）。
+MVP 主体 + V2 路线图主体已落地；daemon 化（agent core 拆出独立进程，GUI 作为瘦客户端）已于 2026-07 收官，近期主线是**群聊（group chat）多参与者编排**与 review 可视化。
 
 完整路线 / 排期 / 维护承诺见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth）；决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。本文档不重复细节。
 
@@ -72,14 +72,15 @@ WSL 环境踩坑（中文输入法、linuxbrew pkg-config、Rust 工具链、字
 
 ## 能做什么
 
-agent core 内置 21 个工具，按职能分组：
+agent core 内置 24 个工具，按职能分组：
 
 - **读写 & 文件** — 读 / 写 / 编辑（前置 ReadGuard 三道隔离 check）/ grep / glob / 列目录
 - **Shell** — 前台 shell（落盘 + cat -n）/ 后台 shell（长任务，24h 保留，APPEND 到 user message 保 memory cache breakpoint）/ 状态查询 / kill
 - **联网** — web 抓取（SSRF 拦截 + 5 MiB body cap + 来源标注）
 - **技能 / 记忆 / UI** — Skill 调用（三层渐进披露）/ 生成式 UI 卡片（non-blocking）/ checklist 自跟踪 / 自主记忆写入
-- **跨 turn 交互** — 向用户提问 / 申请切换 mode（用户 inline card 授权）
+- **跨 turn 交互** — 向用户提问（支持自由输入）/ 申请切换 mode（用户 inline card 授权）
 - **工作流编排** — task 状态机（Planning → Implement → Check → Done），Check→Done 触发 spec 沉淀
+- **群聊编排** — nominate_speaker / end_discussion（群聊发言控制，仅 group_chat session 生效）
 - **Subagent** — 派发 worker（独立 worktree 隔离）/ 合并 / 丢弃
 - **Git 集成** — 每 session 一个 worktree，opt-in attach / detach / delete
 

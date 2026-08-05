@@ -1,10 +1,12 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-07-23 commit `3307d93`(在 2026-07-10 `f08d61e` 基础上 + 07-14 E2 trace + 07-20~23 daemon 化 remote-access Phase 2:transport 抽象层 + axum daemon + sidecar spawn + httpTransport 默认 + ServeDir 浏览器模式 + E2E)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化
+> **基线**:2026-08-05 commit `6449f16`(在 2026-07-23 `3307d93` 基础上 + 07-23/24 交错思考 + 07-25 daemon graceful shutdown 加固 + 07-26 C2 review-viz + lefthook + ask_user_question allow_custom + 07-28 subagent resume C0/C1 + 07-29~08-04 群聊 group chat)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊
 > **状态**: 由 CLAUDE.md §Architecture 段引用
 >
-> **2026-07-23 同步**:daemon 化(remote-access Phase 2)收官。§1/§2/§3 目录树补 `daemon/` + `bin/` + `sidecar.rs` + `transport/` + `BrowserHeader.vue` + `scripts/`;§4 依赖图/数据流改为 transport + 双进程;§5 IPC 表更新为 79 + 双暴露;§8 加 transport/sidecar 设计模式;§10.2/§12 补 daemon 命令与依赖;§13.3 全景图重画。下次重大重构后再次校准。
+> **2026-08-05 同步**:补群聊(`agent/group_chat.rs` + `group_chat_loop.rs` + `nominate_speaker`/`end_discussion` 工具 + `GroupChatConfigModal.vue` + sessions/messages 群聊列)+ C2 review-viz(`commands/review.rs` + `ReviewMatrix*` 4 组件 + `reviewState.ts` store)+ 交错思考(ARCHITECTURE ⑦⑭)。§2/§3 目录树补新模块;§5 IPC 表 79→91 + Review 域;§6 表 8→12(补 `subagent_model_overrides`/`autonomous_memories`/`turn_trace` + 群聊列);stores/commands 清单补漏。下次重大重构后再次校准。
+>
+> **2026-07-23 同步**:daemon 化(remote-access Phase 2)收官。§1/§2/§3 目录树补 `daemon/` + `bin/` + `sidecar.rs` + `transport/` + `BrowserHeader.vue` + `scripts/`;§4 依赖图/数据流改为 transport + 双进程;§5 IPC 表更新为 79 + 双暴露;§8 加 transport/sidecar 设计模式;§10.2/§12 补 daemon 命令与依赖;§13.3 全景图重画。
 >
 > **历史快照标注约定**:本任务对 split 前路径保留 + 加 (拆分自 X, 2026-06-23/24) 标注,git blame 可追溯。
 
@@ -77,7 +79,10 @@ app/src/
 │ │ ├── SubagentDrawerHeader.vue # ★ NEW (06-23 拆,~250 行)
 │ │ ├── SubagentDrawerErrorCard.vue # ★ NEW (06-23 拆,~100 行,R25 错误卡)
 │ │ ├── WorktreeChip.vue # ★ NEW (8-PR3拆出)
-│ │ └── DiffModal.vue # ★ NEW (8-PR3拆出)
+│ │ ├── DiffModal.vue # ★ NEW (8-PR3拆出)
+│ │ ├── GroupChatConfigModal.vue # ★ NEW (07-29 群聊) — 创建群聊 session + 参与者配置 UI
+│ │ ├── ReviewMatrix.vue / ReviewMatrixGrid.vue # ★ NEW (07-26 C2) — review-state 矩阵视图(维度×发现)
+│ │ ├── ReviewFindingDetail.vue / ReviewDimensionCompare.vue # ★ NEW (07-26 C2) — 发现详情 + 维度对比
 │ ├── trace/ # ★ NEW (07-14 E2) — harness trace viewer (TracePanel drawer / TurnTimeline / TurnCard / TraceEventItem)
 │ ├── settings/ # (8-PR3拆分后)
 │ │ ├── SettingsModal.vue / DefaultTab.vue / ProvidersTab.vue
@@ -98,8 +103,11 @@ app/src/
 │ ├── subagentRuns.types.ts # ★ NEW (06-23 拆,~354 行)
 │ ├── runAccumulator.ts # ★ NEW (06-23 拆,~537 行 RunAccumulator + parseTranscriptJson)
 │ ├── config.ts / projects.ts / models.ts / providers.ts
-│ ├── permissions.ts / audit.ts / memory.ts / checklist.ts
+│ ├── permissions.ts / permissionGrants.ts / audit.ts / memory.ts / checklist.ts
+│ ├── questionCards.ts + questionCards.types.ts # ★ NEW (07-07) — ask_user_question / request_mode_change inline card
+│ ├── subagents.ts # ★ NEW (07-03 B6+ C) — subagent 模型 override UI store
 │ ├── traceStore.ts # ★ NEW (07-14 E2) — harness trace store (live+回看同构 TurnTrace)
+│ ├── reviewState.ts # ★ NEW (07-26 C2) — review-state 矩阵视图 store(三态载荷)
 │ └── traceStore.test.ts
 └── utils/ # (Opus §4.2漏看,8-PR4阶段补;06-23 加 chatInputCodeMirror)
  ├── lru.ts + .test.ts / markdown.ts + .test.ts
@@ -163,6 +171,7 @@ app/src-tauri/src/
 │ ├── chat.rs # Agent Loop entry(IPC 入口)
 │ ├── trace.rs # ★ NEW (07-14 E2) — trace pipeline(3 record_* 双写 emit+upsert)
 │ ├── chat_loop.rs # (06-23 抽 run_subagent 后)2586→~2064 行,主循环 + 主循环辅助
+│ ├── group_chat.rs / group_chat_loop.rs # ★ NEW (07-29) — 群聊 turn-taking 编排引擎(moderator 轮次控制 + 参与者身份护栏 + 终止/发言人事件 + 逐轮流式;session_type=group_chat 时走此循环)
 │ ├── subagent/ # ★ NEW (06-23 拆 4 文件,06-23/24 续拆 dispatch)
 │ │ ├── mod.rs # 类型 + helpers(lookup / assemble / filter / build_messages)
 │ │ ├── sink.rs # SubagentBufferSink (1450 行)
@@ -207,8 +216,10 @@ app/src-tauri/src/
 │ ├── permissions.rs / memory.rs / command_palette.rs / panel.rs / files.rs / subagent_runs.rs
 │ ├── task.rs # ★ (07-08~10) — task.json CRUD IPC(create_task / read_task / list_tasks / set_task_state / archive_task)
 │ ├── subagents.rs # ★ (07-03) — subagent model override IPC(list_subagents_with_model + set_subagent_model)
-│ └── question.rs # ★ (07-07) — get_pending_interaction + resolve_mode_change(QuestionStore 升级)
-├── tools/ # 内置工具 (21 个 builtin;07-08~10 加 workflow + B6+ 等)
+│ ├── question.rs # ★ (07-07) — get_pending_interaction + resolve_mode_change(QuestionStore 升级)
+│ ├── review.rs # ★ (07-26 C2) — get_review_state + get_current_task_slug(review-state.json 三态载荷)
+│ └── ui.rs # ★ (07-13 B9+) — apply_ui_diff(生成式 UI diff 应用)
+├── tools/ # 内置工具 (24 个 builtin;07-08~10 加 workflow + B6+ 等;07-29 加群聊 nominate_speaker/end_discussion)
 │ ├── mod.rs (builtin_tools + execute_tool 分发 + filter_tools_for_mode/subagent/workflow)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
 │ ├── shell.rs (5min超时 +30K spill)
@@ -224,6 +235,7 @@ app/src-tauri/src/
 │ ├── merge_worker.rs / discard_worker.rs # ★ L3b PR3 worker worktree 收口(ToolKind::GitMutation)
 │ ├── request_mode_change.rs # ★ (07-07 B6+ A) LLM 申请切 mode(用户 inline card 授权)
 │ ├── create_task.rs / request_task_state_transition.rs # ★ (07-08/10) workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
+│ ├── nominate_speaker.rs / end_discussion.rs # ★ (07-29 群聊) — moderator 发言控制 SIGNAL 工具(chat_loop 拦截记录提名/终止信号)
 │ └── read_guard.rs (session隔离读权限,edit_file前置)
 ├── skill/ # B4 Skill 系统
 │ ├── mod.rs / loader.rs (SkillCache + 17 单测)
@@ -237,10 +249,10 @@ app/src-tauri/src/
 │ ├── server.rs (build_router + serve_daemon:TcpListener 0.0.0.0:7456 + ServeDir 同源 SPA fallback + graceful shutdown)
 │ ├── sse.rs (HttpSseSink — agent loop 的 SSE 事件流广播)
 │ ├── error.rs (DaemonError → axum IntoResponse)
-│ └── routes/ # 79 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│ └── routes/ # 91 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
 │ ├── mod.rs / health.rs / stream.rs(SSE)
 │ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
-│ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs
+│ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs / review.rs
 │ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs
 ├── bin/ # ★ NEW (07-20) — cargo bin targets
 │ └── everlasting-daemon.rs (daemon 进程入口:resolve_data_dir + clap --port/--data-dir + serve_daemon)
@@ -291,10 +303,10 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ▼
 ┌─────────────────────────── 后端 ────────────────────────────┐
 │ everlasting-daemon(axum,独立进程) / 或 Full 模式 GUI 进程 │
-│ daemon/server.rs::build_router (79 个 command 镜像 REST 路由)│
+│ daemon/server.rs::build_router (91 个 command 镜像 REST 路由)│
 │ ├─ commands/* + daemon/routes/* (同一 handler 双暴露 IPC+HTTP)│
 │ ├─ agent/* → llm::provider::* → wire.rs + client.rs │
-│ ├─ tools/* (21 个 + read_guard) │
+│ ├─ tools/* (24 个 builtin + read_guard) │
 │ ├─ db/* (CRUD by域 + migrations) │
 │ ├─ git/* (worktree + diff) │
 │ └─ projects/* (boundary + detector + store) │
@@ -318,9 +330,9 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ##5. Tauri IPC表面
 
-**总命令数**:79 个(2026-07 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07 续增 task/subagents/question/audit/checklist/trace 等)。
+**总命令数**:91 个(2026-08 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08 续增 review/group_chat 相关 + question/permissions 扩展)。
 
-> **daemon 化后双暴露(07-20 Q0 决策)**:这 79 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
+> **daemon 化后双暴露(07-20 Q0 决策)**:这 91 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
@@ -344,6 +356,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 | Audit (C4) |1 | `commands/audit.rs` (list_audit_events) |
 | Checklist (B12) |1 | `commands/checklist.rs`(随 B12) |
 | Files |1 | `commands/files.rs` (list_files 供 @ 触发) |
+| Review (C2) |3 | `commands/review.rs` (get_review_state + get_current_task_slug + 1) |
 
 **IPC命名**: Rust snake_case → Tauri2自动 camelCase转换给前端。
 
@@ -353,19 +366,22 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 **位置**: `app/src-tauri/src/db/mod.rs::run_migrations`
 
-**8 张核心表**(2026-06-24 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs`):
+**12 张表**(2026-08 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace`):
 
 | 表 | 主键 |关键字段 |
 |----|------|---------|
 | `projects` | `id` (UUID) | `path` / `name` / `is_git_repo` / `git_remote` / `git_branch` / `is_hidden` |
-| `sessions` | `id` (UUID) | `project_id` (FK) / `title` / `model_id` (FK, nullable) / `worktree_path` / `worktree_state` / `current_cwd` / `created_at` / `updated_at` |
-| `messages` | `id` | `session_id` (FK) / `role` / `content` (JSON) / `tool_use` (JSON) / `tool_result` (JSON) / `thinking_blocks` (JSON) / `metadata` (JSON, B2 PR3 加:含 `edited_at` / `original_content` 等 D3 字段) / `ttfb_ms` / `gen_ms` / `total_ms` (F5 latency 三列) / `thinking_ms` (F5) / `created_at` |
+| `sessions` | `id` (UUID) | `project_id` (FK) / `title` / `model_id` (FK, nullable) / `session_type` (chat/group_chat,07-29 群聊) / `worktree_path` / `worktree_state` / `current_cwd` / `created_at` / `updated_at` |
+| `messages` | `id` | `session_id` (FK) / `role` / `content` (JSON) / `speaker` (群聊参与者标识,07-29) / `tool_use` (JSON) / `tool_result` (JSON) / `thinking_blocks` (JSON) / `metadata` (JSON, B2 PR3 加:含 `edited_at` / `original_content` 等 D3 字段) / `ttfb_ms` / `gen_ms` / `total_ms` (F5 latency 三列) / `thinking_ms` (F5) / `created_at` |
 | `providers` | `id` | `name` / `protocol` / `base_url` / `api_key` / `enabled` |
 | `models` | `id` | `provider_id` (FK) / `name` / `model_id` / `max_tokens` / `enabled` |
 | `app_config` | `key` | `value` (JSON) |
 | `session_audit_events` | `id` | `session_id` (FK, ON DELETE CASCADE) / `kind` (AuditKind 17 variant wire string) / `tool_use_id?` / `path?` / `match_kind?` / `match_value?` / `mode?` / `risk?` / `ts` (RFC3339) |
 | `session_tool_permissions` | `id` | `session_id` (FK) / `tool_name` / `match_kind` (`tool` / `prefix` / `path`) / `match_value` / `granted_at` |
 | `subagent_runs` | `id` (UUID) | `parent_session_id` (FK, ON DELETE CASCADE) / `parent_request_id` (TEXT, soft FK) / `subagent_name` / `status` (CHECK 5 值) / `started_at` / `finished_at?` / `token_usage_json?` / `summary?` / `transcript_json?` / `transcript_truncated` / `turn_count?`(RULE-FrontSubagent-004 加) / `created_at` |
+| `autonomous_memories` | `id` | `memory_id` (UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` / `tool_name` / `command_pattern` / `path_globs` / `source_session_id` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(★ V2 2 期,06-29) |
+| `subagent_model_overrides` | `agent_name` (TEXT PK) | `model_id` / `updated_at`(★ B6+ C,07-03,builtin agent 全局 DB override,优先级 `DB > frontmatter > parent`) |
+| `turn_trace` | `id` (INTEGER) | `session_id` (FK CASCADE) / `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(★ E2,07-14,UNIQUE(session_id, seq)) |
 
 **索引**:
 ```sql
@@ -629,11 +645,11 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ ┌────────────────────┐ transport ┌──────────────────────────┐ │
 │ │ Vue3 Frontend │ http(默认) │ everlasting-daemon │ │
 │ │ (app/src/) │ /tauri(逃生)│ (axum,app/src-tauri/ │ │
-│ │ · Pinia(7 stores) │◄─────────►│ src/daemon/ + bin/) │ │
-│ │ · transport/ 抽象 │ │ ·79 commands→REST 路由 │ │
+│ │ · Pinia(18 stores) │◄─────────►│ src/daemon/ + bin/) │ │
+│ │ · transport/ 抽象 │ │ ·91 commands→REST 路由 │ │
 │ │ · stream1 source │ │ · Provider trait │ │
 │ │ · reka-ui2.9.9 │ │ (Anthropic/OpenAI) │ │
-│ │ · marked+DOMPurify │ │ · Tool registry (21) │ │
+│ │ · marked+DOMPurify │ │ · Tool registry (24) │ │
 │ │ · Vue3.4+ │ │ · git2-rs worktree │ │
 │ │ · BrowserHeader │ │ · sqlx + SQLite │ │
 │ │ (浏览器模式) │ │ · HttpSseSink + ServeDir │ │
@@ -693,4 +709,4 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化)。下次重大重构后再次校准。*
+*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考)。下次重大重构后再次校准。*

@@ -31,14 +31,14 @@
 ║                           ▼                                            ║
 ║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
 ║  │  axum router (daemon/server.rs::build_router)            │          ║
-║  │   · 79 个 #[tauri::command] 镜像为 REST 路由             │          ║
+║  │   · 91 个 #[tauri::command] 镜像为 REST 路由             │          ║
 ║  │     (同 handler 双暴露 IPC + HTTP,Q0 决策)              │          ║
 ║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
 ║  │   · ServeDir fallback(同源服务 dist/ SPA)              │          ║
 ║  │  ──────────────────────────────────────────────────────  │          ║
 ║  │  AppState (Arc,axum 每个 handler clone 一份)             │          ║
 ║  │   · SQLite pool(持有 WAL writer;Thin 模式 GUI 不开)   │          ║
-║  │   · agent core(Agent Loop / Tool Registry 21 builtin    │          ║
+║  │   · agent core(Agent Loop / Tool Registry 24 builtin    │          ║
 ║  │     / Workflow Engine / Resource Loaders /              │          ║
 ║  │     PermissionStore / SessionManager)                   │          ║
 ║  │   · 自研 LLM Provider trait(Anthropic/OpenAI)          │          ║
@@ -66,7 +66,7 @@
 ```
 **进程边界说明**:
 - **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
-- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 79 个原 `#[tauri::command]` handler 镜像为 REST 路由,前端同一份 handler 代码服务 IPC 与 HTTP。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 91 个原 `#[tauri::command]` handler 镜像为 REST 路由,前端同一份 handler 代码服务 IPC 与 HTTP。
 - **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
 - **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
 - **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client 共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
@@ -122,6 +122,12 @@
 [2] Frontend: transport.invoke('load_session', { sessionId: B })
 [3] daemon / Tauri backend: 从 SQLite 读 messages → 返回 SessionSnapshot
 ```
+
+### 1.4 群聊模式(group chat,2026-07-29 落地)
+
+> 📌 **session_type 区分两种循环**:`sessions.session_type = 'chat'`(默认)走 `agent/chat_loop.rs`(经典单 agent);`'group_chat'` 走 `agent/group_chat_loop.rs`(多参与者 turn-taking 编排)。
+>
+> **群聊循环**(`group_chat_loop.rs`)由一个 **moderator**(主持人)agent 协调多个 **参与者** agent 轮流发言:moderator 用 `nominate_speaker` 工具点名下一发言者,参与者发言后回到 moderator;任意参与者可用 `end_discussion` 终止讨论。每条 message 落库时带 `speaker` 列(参与者标识),前端按 speaker 渲染独立气泡 + 实时发言人 chip。入口层做持久化去重 + 参与者身份护栏(防 LLM 自名开头)+ 终止/发言人事件 + 逐轮流式。Phase 1-4 见 `.trellis/tasks/archive/2026-07/07-29-group-chat/`。
 
 ---
 
@@ -315,6 +321,7 @@ for event in stream {
 
 - **关卡点**:event 顺序保证、断点续传、token 累计
 - 没有真正的"决策关卡",但事件流可靠解析是地基
+- **交错思考(2026-07-23/24 落地)**:contentBlocks 按**真实流序**交错落库与渲染(thinking / text / tool_use 时间轴,run 分组),而非 Anthropic 的"text 全先于 tool_use"分组顺序 —— 后端保留 BlockState 时间戳序,前端 run 分组 + contentBlocks 时间轴渲染,修复 Anthropic thinking 块在中途消失 + 真工具穿插。设计见 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)。
 
 #### ⑧ 决策分叉(LLM 给的指令 + Mode 维度)
 
@@ -545,6 +552,7 @@ match tool_call.name {
 - **关键设计**:`ui_render` 不在 chat 流里走,单独的 UiCard 事件,前端用 component registry 渲染
 - **为什么混合模式**:高频 token 需要单 listener 低开销;低频 tool/permission 需要精确 filter。两种模式各取所长
 - **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)
+- **交错思考渲染(2026-07-23/24)**:前端按 run 分组 + contentBlocks 时间轴交错渲染(thinking/text/tool_use 按到达序),与 ⑦ 后端落库的真实流序对齐,见 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)。
 
 #### ⑮ daemon 输出(HttpSseSink / Tauri event → client)
 
@@ -722,7 +730,7 @@ agent loop 结束(text-only response or max_turns reached):
 - 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
 - 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
 - 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
-- 79 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用)
+- 91 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用)
 
 **自研 daemon**:进程就一个,行为可预测;sidecar 由 GUI 进程托管生命周期,裸跑由 `scripts/daemon.sh` 托管。
 

@@ -46,15 +46,15 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 
 ---
 
-## 2. Schema 索引(10 张表)
+## 2. Schema 索引(12 张表)
 
 权威定义在 [`app/src-tauri/src/db/migrations.rs`](../../app/src-tauri/src/db/migrations.rs);每张表的 CRUD 函数按表分文件组织在 `app/src-tauri/src/db/{table}.rs`。
 
 | # | 表 | 文件 | 关键列 |
 |---|----|------|--------|
 | 1 | `projects` | `migrations.rs:59` | `id` (TEXT PK) / `name` / `path` / `git_branch` / `hidden` / `created_at` / `updated_at` |
-| 2 | `sessions` | `migrations.rs:103` | `id` / `project_id` / `title` / `model_id` / `mode` (edit/plan/yolo) / `cwd` / `color` / token 累计 4 列 |
-| 3 | `messages` | `migrations.rs:192` | `id` / `session_id` / `seq` / `role` (user/assistant) / `content` (JSON 序列化的 ContentBlock[]) / `is_error` / `parent_tool_use_id` |
+| 2 | `sessions` | `migrations.rs:103` | `id` / `project_id` / `title` / `model_id` / `mode` (edit/plan/yolo) / `session_type` (chat/group_chat,2026-07-29 群聊) / `cwd` / `color` / token 累计 4 列 |
+| 3 | `messages` | `migrations.rs:192` | `id` / `session_id` / `seq` / `role` (user/assistant) / `content` (JSON 序列化的 ContentBlock[]) / `speaker` (群聊参与者标识,2026-07-29) / `is_error` / `parent_tool_use_id` |
 | 4 | `providers` | `migrations.rs:235` | `id` / `kind` (anthropic/openai) / `base_url` / `has_key` (BOOL,因 RULE-D-001 api_key 加密) |
 | 5 | `models` | `migrations.rs:250` | `id` / `provider_id` / `model_name` / `display_name` / `context_window` |
 | 6 | `app_config` | `migrations.rs:276` | 单行 kv 表(默认 model_id / 默认 cwd 等) |
@@ -62,6 +62,8 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 | 8 | `session_audit_events` | `migrations.rs:428` | `id` / `session_id` / `ts` / `kind` (AuditKind 字符串) / `payload_json` |
 | 9 | `subagent_runs` | `migrations.rs:1137` | `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` (running/completed/cancelled/error/incomplete) / `started_at` / `finished_at` (NULL while running) / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation` (L3b PR1+) |
 | 10 | `autonomous_memories` | `migrations.rs:707` | `id` / `memory_id` (TEXT UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` (JSON) / `tool_name` / `command_pattern` / `path_globs` (JSON) / `source_session_id` / `source_ref` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(V2 2 期,2026-06-29 落地,状态机候选/激活/已验证) |
+| 11 | `subagent_model_overrides` | `migrations.rs:737` | `agent_name` (TEXT PK) / `model_id` / `updated_at`(B6+ C,2026-07-03,builtin agent 无 frontmatter 文件可改 → 全局 DB override,优先级 `DB > frontmatter > parent`) |
+| 12 | `turn_trace` | `migrations.rs:1000` | `id` (INTEGER PK) / `session_id` (FK CASCADE) / `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(E2,2026-07-14,turn-level harness trace,UNIQUE(session_id, seq)) |
 
 **索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` 等(`migrations.rs` 顶部)。
 

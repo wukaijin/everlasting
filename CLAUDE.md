@@ -8,7 +8,7 @@ Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 a
 
 **进程模型（2026-07-20 daemon 化后）**：agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），Tauri GUI 进程作为瘦客户端，spawn daemon 为 sidecar 并经同源 HTTP/SSE 通信（默认 `httpTransport`，daemon 同时用 ServeDir 服务前端 SPA）。前端也可脱离 Tauri 用纯浏览器访问 daemon（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障时的逃生舱（回退到一体化 Tauri IPC）。详见 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) + [docs/ARCHITECTURE.md §1](./docs/ARCHITECTURE.md)。
 
-**当前状态**:MVP 主体 + V2 路线图主体已落地（多 Provider、memory/指令文件系统、context 压缩、权限系统、subagent、workflow、自主记忆、生成式 UI、harness trace viewer 等）；近期重点是 **daemon 化**（agent core 拆出独立 `everlasting-daemon` 进程，GUI 作为瘦客户端）。完整路线 / 排期见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth），决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
+**当前状态**:MVP 主体 + V2 路线图主体已落地（多 Provider、memory/指令文件系统、context 压缩、权限系统、subagent、workflow、自主记忆、生成式 UI、harness trace viewer、交错思考渲染、review 可视化等）；daemon 化（agent core 拆出独立 `everlasting-daemon` 进程，GUI 作为瘦客户端）已于 2026-07 收官，近期主线是**群聊（group chat）多参与者编排**。完整路线 / 排期见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth），决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
@@ -65,7 +65,7 @@ app/
 ├── src/                    # Vue 3 前端
 │   ├── components/
 │   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo / BrowserHeader(浏览器模式顶栏)
-│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer / UiCard(生成式 UI)/ WorkerBranchBadge + WorkerMergeControls 等
+│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer / UiCard(生成式 UI)/ WorkerBranchBadge + WorkerMergeControls / GroupChatConfigModal(群聊配置,07-29)/ ReviewMatrix + ReviewMatrixGrid + ReviewFindingDetail + ReviewDimensionCompare(C2 review 矩阵视图,07-26) 等
 │   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
 │   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
 │   │   ├── audit/          # 审计日志查询 UI (AuditLogModal / AuditLogItem)
@@ -76,15 +76,19 @@ app/
 │   ├── stores/             # Pinia stores
 │   │   ├── chat.ts         # facade: sessions 列表 + currentSessionId + currentCwd + CRUD 委托
 │   │   ├── chat.types.ts   # ~310 行纯类型 + 强绑定 const(MODE_CYCLE 等)
-│   │   ├── streamController.ts # SSE 单源 + LRU 20 + activeRequests
+│   │   ├── streamController.ts # SSE 单源 + LRU 20 + activeRequests(tool:call 路由刷新 review-state)
 │   │   ├── subagentRuns.ts # store 主体 + coerceStatus
 │   │   ├── subagentRuns.types.ts # ~354 行类型
+│   │   ├── subagents.ts    # subagent 模型 override UI store(B6+ C)
 │   │   ├── runAccumulator.ts # RunAccumulator + parseTranscriptJson
 │   │   ├── config.ts / models.ts / providers.ts / projects.ts
 │   │   ├── memory.ts       # memory/指令文件 UI 状态
 │   │   ├── permissions.ts  # 权限 / Mode (edit/plan/yolo) 状态
+│   │   ├── permissionGrants.ts # 权限授权 store(决策记忆)
+│   │   ├── questionCards.ts + questionCards.types.ts # ask_user_question / request_mode_change inline card 状态
 │   │   ├── audit.ts        # 审计日志查询 store
-│   │   ├── trace.ts        # harness trace store (live+回看同构 TurnTrace)
+│   │   ├── traceStore.ts   # harness trace store (live+回看同构 TurnTrace)
+│   │   ├── reviewState.ts  # C2 review-state 矩阵视图 store(review-state.json 三态载荷)
 │   │   └── checklist.ts    # agent 自跟踪 checklist store
 │   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard / chatInputCodeMirror
 ├── transport/              # 前端 transport 抽象层(invoke/listen 与载体解耦)
@@ -116,6 +120,7 @@ app/
 │       │   ├── loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
 │       ├── agent/          # Agent Loop 主循环 + 周边
 │       │   ├── chat.rs / chat_loop.rs    # 主循环 + run_subagent 串联
+│       │   ├── group_chat.rs / group_chat_loop.rs  # ★ 群聊(07-29) — turn-taking 编排引擎(moderator 轮次控制 + 参与者身份护栏 + 终止/发言人事件 + 逐轮流式)
 │       │   ├── trace.rs                 # trace pipeline(3 record_* 双写:emit + upsert turn_trace)
 │       │   ├── context.rs               # context 压缩(token 阈值 + 降级 + memory 保护)
 │       │   ├── loop_detection.rs        # 循环检测分级触发 + 主动干预(per-run-local count + QuestionStore)
@@ -149,10 +154,10 @@ app/
 │       ├── bin/            # cargo bin targets
 │       │   └── everlasting-daemon.rs  # daemon 进程入口(resolve_data_dir + clap --port/--data-dir + serve_daemon)
 │       ├── skill/          # Skill 系统(资源加载 + 注册,/skill + use_skill tool)
-│       ├── commands/       # Tauri commands(sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist/task/subagents/question)
+│       ├── commands/       # Tauri commands(sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist/task/subagents/question/review/ui)
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
-│       └── tools/          # Tool 定义与执行(21 个 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
+│       └── tools/          # Tool 定义与执行(24 个 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
 │           ├── mod.rs       # builtin_tools()、execute_tool() 分发、ToolKind/GitMutation(tool-level grant)
 │           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs  # 并发只读集
 │           ├── shell.rs / run_background_shell.rs / shell_status.rs / shell_kill.rs  # 前台/后台 shell(tokio Child,无 PTY)
@@ -166,6 +171,7 @@ app/
 │           ├── merge_worker.rs / discard_worker.rs  # worker worktree 收口(ToolKind::GitMutation)
 │           ├── create_task.rs / request_task_state_transition.rs  # workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
 │           ├── request_mode_change.rs  # LLM 申请切 mode(用户 inline card 授权)
+│           ├── nominate_speaker.rs / end_discussion.rs  # 群聊发言控制(SIGNAL 工具,仅 group_chat session 生效;chat_loop 拦截记录提名/终止信号)
 │           └── read_guard.rs  # session 隔离的已读文件校验(edit_file 前置 3 道 check)
 docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非项目根)
 ```

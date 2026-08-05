@@ -1362,3 +1362,39 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **测试**:1539 后端(cargo test --lib,新增 7:`turn_trace` upsert 累积/顺序/清除/覆盖/空值/级联 + `turn_seq` 审计)+ 863 前端(vitest,含 `trace.test.ts` 8 + `traceStore.test.ts`)+ vue-tsc 0 err + cargo fmt clean。零回归(现有审计/C3/C2/breadcrumb 行为不变)。
 
 - **推后期**:筛选(按维度/turn/工具过滤)/ 导出(JSON)/ worker trace 隔离(`is_worker` 列,MVP 接受混入 parent session_id)/ C2 `loop_window` 滑动窗口中间态可视化(只 emit hit_count+verdict 摘要)/ workflow from→to hook 独立审计行(维持 `task.json.summary` marker)。
+
+### 2026-07-23/24 — 交错思考渲染(contentBlocks 真实流序)
+
+- **Context**:Anthropic Messages API 的 SSE 流里 thinking / text / tool_use block 按**真实到达序**交错出现,但旧实现落库时按"先 text 后 tool_use"分组,导致 thinking 块在中途消失 + 工具无法在思考之间穿插执行。
+- **决策 — 后端保留真实流序 + 前端 run 分组时间轴**:`chat_loop.rs` 落库时保留 BlockState 时间戳序(thinking/text/tool_use 按 SSE 到达序),前端按 run 分组 + contentBlocks 时间轴交错渲染。修复 Anthropic thinking 消失 + 实现真·工具穿插(工具在思考之间执行)。
+- **影响**:设计文档沉淀为 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)(含评审 triage 修订)。3 commit:后端落库(`ba1eeca`)+ 前端 run 分组(`5b1fc81`)+ 实时流序交错渲染(`78d7ec7`)+ 修复 thinking 消失(`8daaf23`)。
+
+### 2026-07-25 — daemon graceful shutdown 加固
+
+- **Context**:SIGTERM 硬终止 daemon 时,agent loop 可能还在跑(in-flight LLM 请求 + tool 执行),直接退出导致:SSE 长连接客户端卡住等 SIGKILL、agent loop 资源泄漏、sidecar 孤儿进程。
+- **决策 — 三层 graceful shutdown**:① `serve_daemon` 收到 shutdown signal 后主动 cancel + drain agent loop(等当前 turn 收口,而非立即死);② 主动关 SSE 长连接(`HttpSseSink` graceful,客户端立即感知断开而非超时);③ sidecar 孤儿进程清理(`RunEvent::Exit` 钩子兜底 kill)。修复 `serve_daemon` 3s 自杀回归(过早返回导致 sidecar 误判 daemon 已死)。另:`f95d5ff` 持 SIGNAL_TEST_MUTEX 防进程级信号竞争假性测试失败。
+
+### 2026-07-26 — C2 review-state 可视化 + lefthook pre-commit
+
+- **Context(Review 可视化)**:review plugin 产出 `.everlasting/outputs/review-state.json`(维度×发现矩阵 + 三态:pending/approved/rejected),但前端无可视化,用户只能读 JSON。
+- **决策 — 前端矩阵视图 + tool:call 路由刷新**:新增 4 组件(`<ReviewMatrix>` / `<ReviewMatrixGrid>` 维度×发现网格 / `<ReviewFindingDetail>` / `<ReviewDimensionCompare>`)+ `reviewState.ts` store(三态载荷);刷新机制复用 `streamController` 的 `tool:call` 路由(review plugin 写完 review-state.json 后调一个 tool 触发前端重读,无新 backend event)。后端 `commands/review.rs`(get_review_state + get_current_task_slug,3 IPC)+ `daemon/routes/review.rs` 双暴露。
+- **Context(lefthook)**:cargo fmt 未跑 / pnpm-lock.yaml 漂移反复进仓,CI 才发现。
+- **决策 — lefthook pre-commit 拦截**:引入 `lefthook.yml`,pre-commit 阶段跑 `cargo fmt --check` + lockfile 同步检查,堵问题进仓。spec 沉淀为强制约定(`.trellis/spec/`)。
+
+### 2026-07-26 — ask_user_question allow_custom + skip-semantics
+
+- **Context**:`ask_user_question` 原只能让用户在 LLM 给定的 options 里选,无法接受自由输入;且回灌语义不清(用户跳过 vs deny 都是 `is_error: true`)。
+- **决策 — allow_custom 选项 + skip-semantics**:加 `allow_custom` 字段(为 true 时用户除预设 options 外可自由输入文本);区分 skip(自由输入 / 跳过,`is_error: false`)vs deny(拒绝,`is_error: true`),让 LLM 能据语义决定下一步。任务 `07-29-ask-user-question-custom-input/`(archive)。
+
+### 2026-07-28 — subagent resume (C1) + TaskStatus 自定义 plugin state (C0)
+
+- **Context**:review epic 前置基建两缺口:① review 用自定义 workflow plugin,但 `TaskStatus` 硬编码 builtin dev workflow 的四态(Planning/Implement/Check/Done),不支持 plugin 自定义状态;② subagent run 中断后无法续跑,长任务断点重跑成本高。
+- **决策 C0 — TaskStatus accommodate custom plugin state**:`TaskStatus` 扩展支持非 builtin workflow plugin 的自定义状态字符串(plugin 自带状态机定义)。
+- **决策 C1 — resume mechanism for worker runs**:中断的 subagent run 可续跑(保留 run_id + 已完成 turn 的 transcript,从中断点继续)。Merge `feat/subagent-resume-c1`(C0 `e1afa67` + C1 `703ab7d`)。
+
+### 2026-07-29~08-04 — 群聊 group chat(turn-taking 编排引擎 + 4 Phase)
+
+- **Context**:经典 chat 是单 agent 循环;多 agent 协作(如多视角 review / 多角色讨论)需要多个 LLM 参与者在同一 session 内轮流发言,旧架构无此能力。
+- **决策 — session_type 区分两种循环 + moderator 编排**:`sessions.session_type` 列区分 `'chat'`(经典单 agent,走 `chat_loop.rs`)/ `'group_chat'`(走新 `group_chat_loop.rs`)。群聊循环由 **moderator**(主持人)agent 协调多个**参与者**:moderator 用 `nominate_speaker` 工具点名下一发言者,参与者发言后回 moderator,任意参与者用 `end_discussion` 终止。每条 message 落库带 `speaker` 列(参与者标识),前端按 speaker 渲染独立气泡 + 实时发言人 chip。两个新工具 `nominate_speaker` / `end_discussion` 是 SIGNAL 工具(chat_loop 拦截记录信号,非真执行)。
+- **4 Phase 落地**:① 数据层 + wire 层 speaker 维度(`d2fca90`);② turn-taking 编排引擎(`80ab4bd`);③ speaker 落库/读取(`e065a12`~`a75aa37`);④ 创建群聊 session + 参与者配置 UI + 逐轮流式(`35e631c`~`2b6ab8a`)。
+- **08-04 编排重写**:入口持久化去重(防重复进入群聊循环)+ 参与者身份护栏(禁自名开头、允许 @点名别人)+ 终止/发言人事件 + 逐轮流式(群聊内容实时出现 + 发言人 chip 实时渲染)+ 人类抢占插话(send 在 group_chat streaming 时先 cancel 再发)。PRD 走 `.trellis/tasks/archive/2026-07/07-29-group-chat/`,08-04 重写见 `.trellis/tasks/08-04-group-chat-orchestration-rewrite/`。
