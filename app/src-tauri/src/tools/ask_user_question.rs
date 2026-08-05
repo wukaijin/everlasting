@@ -665,11 +665,12 @@ mod tests {
         }
 
         // emit was called.
-        let emitted = sink.emitted.lock().unwrap();
-        assert_eq!(emitted.len(), 1, "emit_tool_question called once");
-        assert_eq!(emitted[0].session_id, "s1");
-        assert_eq!(emitted[0].tool_use_id, "tu_1");
-        drop(emitted);
+        {
+            let emitted = sink.emitted.lock().unwrap();
+            assert_eq!(emitted.len(), 1, "emit_tool_question called once");
+            assert_eq!(emitted[0].session_id, "s1");
+            assert_eq!(emitted[0].tool_use_id, "tu_1");
+        }
 
         // Resolve with an Answer.
         let answers = vec![QuestionAnswer {

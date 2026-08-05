@@ -24,8 +24,8 @@ pub async fn cancel_chat(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CancelChatRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = cancel_chat_inner(&state, req.request_id).await?;
-    Ok(Json(result))
+    cancel_chat_inner(&state, req.request_id).await?;
+    Ok(Json(()))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

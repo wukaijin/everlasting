@@ -434,10 +434,8 @@ pub fn resolve_user_known_path(path: &std::path::Path) -> Option<(MemoryKind, Me
         .ok()
         .unwrap_or_else(|| path.to_path_buf());
     for (kind, source, candidate) in all_paths(None) {
-        if candidate == canon || candidate == path {
-            if matches!(kind, MemoryKind::User) {
-                return Some((kind, source));
-            }
+        if (candidate == canon || candidate == path) && matches!(kind, MemoryKind::User) {
+            return Some((kind, source));
         }
     }
     None

@@ -376,10 +376,10 @@ fn git_numstat(worktree: &Path, path: &str) -> Result<(usize, usize), std::io::E
         .current_dir(worktree)
         .output()?;
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("git --numstat exited with {:?}", output.status),
-        ));
+        return Err(std::io::Error::other(format!(
+            "git --numstat exited with {:?}",
+            output.status
+        )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Each output line: "<added>\t<removed>\t<path>". For binary
@@ -655,7 +655,7 @@ mod tests {
         let result = diff_worktree(&wt, session_id).expect("diff should succeed");
         let paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
         assert!(
-            paths.iter().any(|p| *p == "real.txt"),
+            paths.contains(&"real.txt"),
             "real.txt should appear: {:?}",
             paths
         );

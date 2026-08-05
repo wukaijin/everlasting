@@ -254,7 +254,7 @@ pub(crate) async fn make_harness() -> TestHarness {
         .expect("list_projects");
     let project_id = projects
         .iter()
-        .find(|p| p.path == project_path.to_string_lossy().to_string())
+        .find(|p| p.path == project_path.to_string_lossy())
         .map(|p| p.id.clone())
         .expect("project should be present after create");
 

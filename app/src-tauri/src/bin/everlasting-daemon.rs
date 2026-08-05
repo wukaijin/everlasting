@@ -1,3 +1,7 @@
+// 见 lib.rs 同名 allow:clippy 1.96 对自然语言 doc 注释的误报。
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::doc_overindented_list_items)]
+
 //! `everlasting-daemon` bin entry (Phase 2.2 B1, 2026-07-21).
 //!
 //! Hosts the agent core outside the Tauri GUI process. Shares the

@@ -192,9 +192,7 @@ pub async fn cancel_inflight_for_session(
         let map = session_active_request.lock().await;
         map.get(session_id).cloned()
     };
-    let Some(rid) = request_id else {
-        return None;
-    };
+    let rid = request_id?;
     let token = {
         let map = cancellations.lock().await;
         map.get(&rid).cloned()

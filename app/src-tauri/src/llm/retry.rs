@@ -112,11 +112,11 @@ impl RetryPolicy {
         // policy-configurable ceiling (default 60s — parity — but a stricter
         // policy can clamp further). Then Full Jitter fallback, then the
         // circuit-breaker budget.
-        let raw = advisory
+
+        advisory
             .map(|a| a.min(self.retry_after_cap))
             .unwrap_or_else(|| self.full_jitter(attempt, rng))
-            .min(budget_remaining);
-        raw
+            .min(budget_remaining)
     }
 }
 
@@ -182,6 +182,7 @@ fn once_err(err: LlmError) -> Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmErr
 /// Cancellation (prd R7): both the first-byte await and the backoff sleep
 /// race against `token.cancelled()` (biased select, cancel wins); either
 /// returns [`OpenOutcome::Cancelled`] immediately.
+#[allow(clippy::too_many_arguments)]
 pub async fn retry_open(
     provider: &dyn Provider,
     system: Option<String>,

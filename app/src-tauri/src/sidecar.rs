@@ -48,7 +48,7 @@
 //! hook so closing the GUI window reaps the daemon — no orphan
 //! `everlasting-daemon` processes.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};
@@ -156,7 +156,7 @@ impl GuiMode {
 /// Failures here are fatal (Q1 fail-loud): a missing sidecar binary
 /// or a rejected spawn means the GUI cannot reach the agent core, so
 /// we surface the error rather than silently degrading.
-pub fn spawn_and_manage(app: &AppHandle, data_dir: &PathBuf) {
+pub fn spawn_and_manage(app: &AppHandle, data_dir: &Path) {
     let data_dir_str = data_dir.to_string_lossy().into_owned();
     let sidecar_cmd = app
         .shell()

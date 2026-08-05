@@ -34,7 +34,7 @@ pub async fn resolve_tool_question(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ResolveToolQuestionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = resolve_tool_question_inner(
+    resolve_tool_question_inner(
         &state,
         req.session_id,
         req.tool_use_id,
@@ -42,7 +42,7 @@ pub async fn resolve_tool_question(
         req.cancelled,
     )
     .await?;
-    Ok(Json(result))
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]

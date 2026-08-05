@@ -373,7 +373,7 @@ pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
 /// Returns `true` when the breadcrumb was appended,
 /// `false` when the S-B guard tripped (caller doesn't
 /// branch on this — the log line is the signal).
-pub fn append_workflow_breadcrumb(turn_messages: &mut Vec<ChatMessage>, ctx: &WorkflowCtx) -> bool {
+pub fn append_workflow_breadcrumb(turn_messages: &mut [ChatMessage], ctx: &WorkflowCtx) -> bool {
     let block = build_breadcrumb_block(ctx);
     if let Some(first) = turn_messages.first_mut() {
         if first.role == Role::User {
@@ -574,10 +574,7 @@ fn resolve_relevant_specs(project_path: &str) -> String {
 /// tripped or the template is `None` (no plugin
 /// template for this role → caller falls back to the
 /// sub-agent's own system prompt).
-pub fn append_delegation_template(
-    turn_messages: &mut Vec<ChatMessage>,
-    body: Option<String>,
-) -> bool {
+pub fn append_delegation_template(turn_messages: &mut [ChatMessage], body: Option<String>) -> bool {
     let body = match body {
         Some(b) => b,
         None => return false,

@@ -128,6 +128,7 @@ pub async fn record_loop_hint(
 /// workflow task (the bootstrap breadcrumb branch).
 ///
 /// **Best-effort**: same contract as `record_compaction`.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_breadcrumb(
     sink: &Arc<dyn ChatEventSink>,
     db: &SqlitePool,

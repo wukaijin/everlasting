@@ -89,8 +89,8 @@ pub async fn hide_project(
     State(state): State<Arc<AppState>>,
     Json(req): Json<HideProjectRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = hide_project_inner(&state, req.id).await?;
-    Ok(Json(result))
+    hide_project_inner(&state, req.id).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,8 +102,8 @@ pub async fn unhide_project(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UnhideProjectRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = unhide_project_inner(&state, req.id).await?;
-    Ok(Json(result))
+    unhide_project_inner(&state, req.id).await?;
+    Ok(Json(()))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

@@ -142,6 +142,7 @@ pub async fn chat(
 /// gets live worker events via `HttpSseSubagentSink`) is deferred to
 /// a follow-up — see task `07-20-remote-access-daemon-split` implement.md
 /// C5 "完整 subagent sink 注入" 复盘点.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn chat_inner(
     state: &Arc<AppState>,
     request_id: String,

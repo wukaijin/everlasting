@@ -249,394 +249,6 @@ fn participant_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Regression: participants must NOT receive the nominate_speaker /
-    /// end_discussion arbitration tools. The moderator's full
-    /// `builtin_tools()` set contains both; `participant_tool_defs`
-    /// must strip them. Previously the participant call site passed
-    /// the unfiltered set and a participant that called
-    /// nominate_speaker poisoned the transcript.
-    #[test]
-    fn participant_tool_defs_strips_arbitration_tools() {
-        let full = crate::tools::builtin_tools();
-        let names: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
-        // Sanity: the source set actually contains both (otherwise the
-        // filter is a silent no-op and the bug would be masked).
-        assert!(
-            names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
-            "builtin_tools must include nominate_speaker for this test to be meaningful"
-        );
-        assert!(
-            names.contains(&END_DISCUSSION_TOOL_NAME),
-            "builtin_tools must include end_discussion for this test to be meaningful"
-        );
-
-        let participant_tools = participant_tool_defs(&full);
-        let p_names: Vec<&str> = participant_tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(
-            !p_names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
-            "participant must not see nominate_speaker, got: {:?}",
-            p_names
-        );
-        assert!(
-            !p_names.contains(&END_DISCUSSION_TOOL_NAME),
-            "participant must not see end_discussion, got: {:?}",
-            p_names
-        );
-        // Non-arbitration tools are preserved.
-        assert!(
-            p_names.contains(&"read_file"),
-            "participant should still see read_file, got: {:?}",
-            p_names
-        );
-    }
-
-    /// Regression (08-04 follow-up, user decision "例子移除@，在和别人交流时允许@别人"):
-    /// the participant identity-guard block must (a) NOT showcase an `@`-prefix
-    /// example (naming `@moderator:` self-primed the models into writing
-    /// `@moderator:` / `@M3:` self-labels — DB sessions 2bbc0d55 / 7bb0c351 show
-    /// `@M3:  @M3:  @D4F`-style noise accumulating), (b) forbid starting a reply
-    /// with your OWN name/role, and (c) explicitly ALLOW @-mentioning another
-    /// participant in the body.
-    #[test]
-    fn participant_prompt_forbids_self_label_but_allows_mentions() {
-        let p = participant_system_prompt("M3", None);
-        // (a) no `@`-prefixed example in the guard block (it self-primes).
-        assert!(
-            !p.contains("@moderator:"),
-            "guard block must not showcase an @-prefix example: {p:?}"
-        );
-        // (b) never start with your OWN name/role. (Line-continuation
-        // `\n\` breaks "with your OWN" across a newline in the string —
-        // match the two fragments separately.)
-        assert!(
-            p.contains("never start your reply with") && p.contains("your OWN name or role"),
-            "must forbid self-label prefixes: {p:?}"
-        );
-        // (c) @-mentioning another participant in the body is allowed.
-        assert!(
-            p.contains("without an @ (e.g. \"@D4F，你说得对…\"") || p.contains("@D4F，你说得对"),
-            "must explicitly allow @-mentioning others in the body: {p:?}"
-        );
-    }
-
-    /// The moderator prompt must carry the same "no self-label prefix" rule.
-    #[test]
-    fn moderator_prompt_forbids_self_label() {
-        let ctx = GroupChatCtx {
-            participants: vec![crate::agent::group_chat::ParticipantConfig {
-                name: "M3".to_string(),
-                model: "m3".to_string(),
-                persona_md: None,
-                order: None,
-            }],
-            moderator_model_id: "mod".to_string(),
-        };
-        let p = moderator_system_prompt(&ctx);
-        assert!(
-            p.contains("never start your reply with") && p.contains("your OWN name or role"),
-            "moderator prompt must forbid self-label prefixes: {p:?}"
-        );
-        assert!(
-            !p.contains("@moderator:"),
-            "moderator prompt must not showcase an @-prefix example: {p:?}"
-        );
-    }
-
-    // -------------------------------------------------------------------
-    // participant_view unit tests (design.md §4 + llm-contract.md §469)
-    // -------------------------------------------------------------------
-
-    fn user_text(text: &str) -> ChatMessage {
-        ChatMessage {
-            role: Role::User,
-            content: MessageContent::Text(text.to_string()),
-            speaker: None,
-        }
-    }
-
-    fn assistant_blocks(blocks: Vec<ContentBlock>) -> ChatMessage {
-        ChatMessage {
-            role: Role::Assistant,
-            content: MessageContent::Blocks(blocks),
-            speaker: Some("moderator".to_string()),
-        }
-    }
-
-    fn tool_use(id: &str, name: &str) -> ContentBlock {
-        ContentBlock::ToolUse {
-            id: id.to_string(),
-            name: name.to_string(),
-            input: serde_json::json!({}),
-        }
-    }
-
-    fn tool_result(id: &str) -> ContentBlock {
-        ContentBlock::ToolResult {
-            tool_use_id: id.to_string(),
-            content: "Floor handed to M1.".to_string(),
-            is_error: false,
-        }
-    }
-
-    /// design.md §4 View-2: an arbitration pair (assistant tool_use row
-    /// + its following user tool_result row) is stripped atomically,
-    /// the assistant row's non-tool blocks are preserved, and no orphan
-    /// tool_use / tool_result survives (llm-contract.md §469).
-    #[test]
-    fn participant_view_strips_arbitration_pair_keeps_text() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![
-                ContentBlock::Thinking {
-                    thinking: "think".to_string(),
-                    signature: "sig".to_string(),
-                },
-                ContentBlock::Text {
-                    text: "主持人发言".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c1", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-
-        let view = participant_view(&full);
-        assert_eq!(
-            view.len(),
-            3,
-            "arbitration pair dropped; user + moderator text + M1 text kept"
-        );
-        assert_eq!(view[0].content.to_text(), "hello");
-        let mod_text = view[1].content.to_text();
-        assert!(
-            mod_text.contains("主持人发言"),
-            "moderator text kept: {mod_text:?}"
-        );
-        assert!(
-            !has_arbitration_blocks(&view),
-            "no arbitration tool_use / tool_result may survive in the participant view"
-        );
-        // Pair atomicity: no ToolUse without its ToolResult and vice versa.
-        assert!(no_orphan_pairs(&view));
-    }
-
-    /// No arbitration interaction present → the view is unchanged
-    /// (all rows pass through verbatim).
-    #[test]
-    fn participant_view_no_arbitration_pair_passes_through() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "主持人发言".to_string(),
-                cache_control: None,
-            }]),
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        assert_eq!(view.len(), full.len(), "no arbitration → unchanged");
-        for (v, f) in view.iter().zip(full.iter()) {
-            assert_eq!(v.content.to_text(), f.content.to_text());
-            assert_eq!(v.role, f.role);
-        }
-    }
-
-    /// A NON-arbitration tool pair (e.g. the moderator's `read_file`)
-    /// must pass through the filter INTACT — `participant_view` only
-    /// strips arbitration (`nominate_speaker` / `end_discussion`)
-    /// pairs. Guards against the filter accidentally broadening to
-    /// "drop all tool interactions" (which would leave the
-    /// participant blind to the moderator's non-arbitration work).
-    #[test]
-    fn participant_view_non_arbitration_tool_pair_passes_through() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "先看下文件".to_string(),
-                    cache_control: None,
-                },
-                tool_use("r1", "read_file"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("r1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        assert_eq!(
-            view.len(),
-            4,
-            "non-arbitration pair passes through unchanged"
-        );
-        // No arbitration ToolUse may survive (the loose `has_arbitration_blocks`
-        // helper treats ANY ToolResult as arbitration, so it is not usable
-        // here — a non-arbitration result legitimately survives).
-        assert!(
-            !view.iter().any(|m| {
-                matches!(
-                    &m.content,
-                    MessageContent::Blocks(blocks)
-                        if blocks.iter().any(|b| matches!(
-                            b,
-                            ContentBlock::ToolUse { name, .. }
-                                if name == NOMINATE_SPEAKER_TOOL_NAME
-                                    || name == END_DISCUSSION_TOOL_NAME
-                        ))
-                )
-            }),
-            "no arbitration tool_use may survive in the participant view"
-        );
-        // The read_file pair must still be present (pair atomicity).
-        assert!(no_orphan_pairs(&view));
-        let tool_ids: Vec<String> = view
-            .iter()
-            .filter_map(|m| match &m.content {
-                MessageContent::Blocks(blocks) => Some(blocks.clone()),
-                _ => None,
-            })
-            .flatten()
-            .filter_map(|b| match b {
-                ContentBlock::ToolUse { id, .. } => Some(id),
-                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(tool_ids, vec!["r1".to_string(), "r1".to_string()]);
-    }
-
-    /// A pure tool row (only arbitration ToolUse blocks, no think/text)
-    /// → the whole row is dropped AND its following tool_result row is
-    /// skipped (no orphan tool_result).
-    #[test]
-    fn participant_view_pure_tool_row_dropped_with_result_row() {
-        let full = vec![
-            assistant_blocks(vec![tool_use("c1", "nominate_speaker")]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        assert_eq!(view.len(), 1, "pure tool row + its result row both dropped");
-        assert_eq!(view[0].content.to_text(), "M1 发言");
-        assert!(no_orphan_pairs(&view));
-    }
-
-    /// Two consecutive moderator arbitration rounds: both pairs are
-    /// stripped, later pairs do not disturb earlier text, and the tail
-    /// stays clean (no orphan at the boundary).
-    #[test]
-    fn participant_view_two_consecutive_moderator_rounds() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "主持人:先请 M1".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c1", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "主持人:再请 M2".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c2", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c2")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M2 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        let text = view
-            .iter()
-            .map(|m| m.content.to_text())
-            .collect::<Vec<_>>()
-            .join("|");
-        assert_eq!(
-            text, "hello|主持人:先请 M1|M1 发言|主持人:再请 M2|M2 发言",
-            "both arbitration pairs stripped, all text preserved in order: {text:?}"
-        );
-        assert!(no_orphan_pairs(&view));
-    }
-
-    fn has_arbitration_blocks(msgs: &[ChatMessage]) -> bool {
-        msgs.iter().any(|m| {
-            matches!(
-                &m.content,
-                MessageContent::Blocks(blocks)
-                    if blocks.iter().any(|b| matches!(
-                        b,
-                        ContentBlock::ToolUse { name, .. }
-                            if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME
-                    ) || matches!(b, ContentBlock::ToolResult { .. }))
-            )
-        })
-    }
-
-    /// llm-contract.md §469 Pair Atomicity check: every ToolUse has a
-    /// matching ToolResult and vice versa (within the message list).
-    fn no_orphan_pairs(msgs: &[ChatMessage]) -> bool {
-        let mut use_ids = Vec::new();
-        let mut result_ids = Vec::new();
-        for m in msgs {
-            if let MessageContent::Blocks(blocks) = &m.content {
-                for b in blocks {
-                    match b {
-                        ContentBlock::ToolUse { id, .. } => use_ids.push(id.clone()),
-                        ContentBlock::ToolResult { tool_use_id, .. } => {
-                            result_ids.push(tool_use_id.clone())
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        use_ids.iter().all(|id| result_ids.contains(id))
-            && result_ids.iter().all(|id| use_ids.contains(id))
-    }
-}
-
 /// A participant's system prompt = its persona (D8: inline markdown
 /// from metadata) PLUS an identity-guard block. If no persona, a
 /// minimal default so the model knows it's in a group discussion.
@@ -1074,4 +686,392 @@ async fn resolve_provider(
         );
         None
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: participants must NOT receive the nominate_speaker /
+    /// end_discussion arbitration tools. The moderator's full
+    /// `builtin_tools()` set contains both; `participant_tool_defs`
+    /// must strip them. Previously the participant call site passed
+    /// the unfiltered set and a participant that called
+    /// nominate_speaker poisoned the transcript.
+    #[test]
+    fn participant_tool_defs_strips_arbitration_tools() {
+        let full = crate::tools::builtin_tools();
+        let names: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
+        // Sanity: the source set actually contains both (otherwise the
+        // filter is a silent no-op and the bug would be masked).
+        assert!(
+            names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
+            "builtin_tools must include nominate_speaker for this test to be meaningful"
+        );
+        assert!(
+            names.contains(&END_DISCUSSION_TOOL_NAME),
+            "builtin_tools must include end_discussion for this test to be meaningful"
+        );
+
+        let participant_tools = participant_tool_defs(&full);
+        let p_names: Vec<&str> = participant_tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            !p_names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
+            "participant must not see nominate_speaker, got: {:?}",
+            p_names
+        );
+        assert!(
+            !p_names.contains(&END_DISCUSSION_TOOL_NAME),
+            "participant must not see end_discussion, got: {:?}",
+            p_names
+        );
+        // Non-arbitration tools are preserved.
+        assert!(
+            p_names.contains(&"read_file"),
+            "participant should still see read_file, got: {:?}",
+            p_names
+        );
+    }
+
+    /// Regression (08-04 follow-up, user decision "例子移除@，在和别人交流时允许@别人"):
+    /// the participant identity-guard block must (a) NOT showcase an `@`-prefix
+    /// example (naming `@moderator:` self-primed the models into writing
+    /// `@moderator:` / `@M3:` self-labels — DB sessions 2bbc0d55 / 7bb0c351 show
+    /// `@M3:  @M3:  @D4F`-style noise accumulating), (b) forbid starting a reply
+    /// with your OWN name/role, and (c) explicitly ALLOW @-mentioning another
+    /// participant in the body.
+    #[test]
+    fn participant_prompt_forbids_self_label_but_allows_mentions() {
+        let p = participant_system_prompt("M3", None);
+        // (a) no `@`-prefixed example in the guard block (it self-primes).
+        assert!(
+            !p.contains("@moderator:"),
+            "guard block must not showcase an @-prefix example: {p:?}"
+        );
+        // (b) never start with your OWN name/role. (Line-continuation
+        // `\n\` breaks "with your OWN" across a newline in the string —
+        // match the two fragments separately.)
+        assert!(
+            p.contains("never start your reply with") && p.contains("your OWN name or role"),
+            "must forbid self-label prefixes: {p:?}"
+        );
+        // (c) @-mentioning another participant in the body is allowed.
+        assert!(
+            p.contains("without an @ (e.g. \"@D4F，你说得对…\"") || p.contains("@D4F，你说得对"),
+            "must explicitly allow @-mentioning others in the body: {p:?}"
+        );
+    }
+
+    /// The moderator prompt must carry the same "no self-label prefix" rule.
+    #[test]
+    fn moderator_prompt_forbids_self_label() {
+        let ctx = GroupChatCtx {
+            participants: vec![crate::agent::group_chat::ParticipantConfig {
+                name: "M3".to_string(),
+                model: "m3".to_string(),
+                persona_md: None,
+                order: None,
+            }],
+            moderator_model_id: "mod".to_string(),
+        };
+        let p = moderator_system_prompt(&ctx);
+        assert!(
+            p.contains("never start your reply with") && p.contains("your OWN name or role"),
+            "moderator prompt must forbid self-label prefixes: {p:?}"
+        );
+        assert!(
+            !p.contains("@moderator:"),
+            "moderator prompt must not showcase an @-prefix example: {p:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // participant_view unit tests (design.md §4 + llm-contract.md §469)
+    // -------------------------------------------------------------------
+
+    fn user_text(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+            speaker: None,
+        }
+    }
+
+    fn assistant_blocks(blocks: Vec<ContentBlock>) -> ChatMessage {
+        ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(blocks),
+            speaker: Some("moderator".to_string()),
+        }
+    }
+
+    fn tool_use(id: &str, name: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: serde_json::json!({}),
+        }
+    }
+
+    fn tool_result(id: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.to_string(),
+            content: "Floor handed to M1.".to_string(),
+            is_error: false,
+        }
+    }
+
+    /// design.md §4 View-2: an arbitration pair (assistant tool_use row
+    /// + its following user tool_result row) is stripped atomically,
+    /// the assistant row's non-tool blocks are preserved, and no orphan
+    /// tool_use / tool_result survives (llm-contract.md §469).
+    #[test]
+    fn participant_view_strips_arbitration_pair_keeps_text() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![
+                ContentBlock::Thinking {
+                    thinking: "think".to_string(),
+                    signature: "sig".to_string(),
+                },
+                ContentBlock::Text {
+                    text: "主持人发言".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c1", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+
+        let view = participant_view(&full);
+        assert_eq!(
+            view.len(),
+            3,
+            "arbitration pair dropped; user + moderator text + M1 text kept"
+        );
+        assert_eq!(view[0].content.to_text(), "hello");
+        let mod_text = view[1].content.to_text();
+        assert!(
+            mod_text.contains("主持人发言"),
+            "moderator text kept: {mod_text:?}"
+        );
+        assert!(
+            !has_arbitration_blocks(&view),
+            "no arbitration tool_use / tool_result may survive in the participant view"
+        );
+        // Pair atomicity: no ToolUse without its ToolResult and vice versa.
+        assert!(no_orphan_pairs(&view));
+    }
+
+    /// No arbitration interaction present → the view is unchanged
+    /// (all rows pass through verbatim).
+    #[test]
+    fn participant_view_no_arbitration_pair_passes_through() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "主持人发言".to_string(),
+                cache_control: None,
+            }]),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        assert_eq!(view.len(), full.len(), "no arbitration → unchanged");
+        for (v, f) in view.iter().zip(full.iter()) {
+            assert_eq!(v.content.to_text(), f.content.to_text());
+            assert_eq!(v.role, f.role);
+        }
+    }
+
+    /// A NON-arbitration tool pair (e.g. the moderator's `read_file`)
+    /// must pass through the filter INTACT — `participant_view` only
+    /// strips arbitration (`nominate_speaker` / `end_discussion`)
+    /// pairs. Guards against the filter accidentally broadening to
+    /// "drop all tool interactions" (which would leave the
+    /// participant blind to the moderator's non-arbitration work).
+    #[test]
+    fn participant_view_non_arbitration_tool_pair_passes_through() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "先看下文件".to_string(),
+                    cache_control: None,
+                },
+                tool_use("r1", "read_file"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("r1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        assert_eq!(
+            view.len(),
+            4,
+            "non-arbitration pair passes through unchanged"
+        );
+        // No arbitration ToolUse may survive (the loose `has_arbitration_blocks`
+        // helper treats ANY ToolResult as arbitration, so it is not usable
+        // here — a non-arbitration result legitimately survives).
+        assert!(
+            !view.iter().any(|m| {
+                matches!(
+                    &m.content,
+                    MessageContent::Blocks(blocks)
+                        if blocks.iter().any(|b| matches!(
+                            b,
+                            ContentBlock::ToolUse { name, .. }
+                                if name == NOMINATE_SPEAKER_TOOL_NAME
+                                    || name == END_DISCUSSION_TOOL_NAME
+                        ))
+                )
+            }),
+            "no arbitration tool_use may survive in the participant view"
+        );
+        // The read_file pair must still be present (pair atomicity).
+        assert!(no_orphan_pairs(&view));
+        let tool_ids: Vec<String> = view
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => Some(blocks.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, .. } => Some(id),
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_ids, vec!["r1".to_string(), "r1".to_string()]);
+    }
+
+    /// A pure tool row (only arbitration ToolUse blocks, no think/text)
+    /// → the whole row is dropped AND its following tool_result row is
+    /// skipped (no orphan tool_result).
+    #[test]
+    fn participant_view_pure_tool_row_dropped_with_result_row() {
+        let full = vec![
+            assistant_blocks(vec![tool_use("c1", "nominate_speaker")]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        assert_eq!(view.len(), 1, "pure tool row + its result row both dropped");
+        assert_eq!(view[0].content.to_text(), "M1 发言");
+        assert!(no_orphan_pairs(&view));
+    }
+
+    /// Two consecutive moderator arbitration rounds: both pairs are
+    /// stripped, later pairs do not disturb earlier text, and the tail
+    /// stays clean (no orphan at the boundary).
+    #[test]
+    fn participant_view_two_consecutive_moderator_rounds() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "主持人:先请 M1".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c1", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M1 发言".to_string(),
+                cache_control: None,
+            }]),
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "主持人:再请 M2".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c2", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c2")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "M2 发言".to_string(),
+                cache_control: None,
+            }]),
+        ];
+        let view = participant_view(&full);
+        let text = view
+            .iter()
+            .map(|m| m.content.to_text())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert_eq!(
+            text, "hello|主持人:先请 M1|M1 发言|主持人:再请 M2|M2 发言",
+            "both arbitration pairs stripped, all text preserved in order: {text:?}"
+        );
+        assert!(no_orphan_pairs(&view));
+    }
+
+    fn has_arbitration_blocks(msgs: &[ChatMessage]) -> bool {
+        msgs.iter().any(|m| {
+            matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::ToolUse { name, .. }
+                            if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME
+                    ) || matches!(b, ContentBlock::ToolResult { .. }))
+            )
+        })
+    }
+
+    /// llm-contract.md §469 Pair Atomicity check: every ToolUse has a
+    /// matching ToolResult and vice versa (within the message list).
+    fn no_orphan_pairs(msgs: &[ChatMessage]) -> bool {
+        let mut use_ids = Vec::new();
+        let mut result_ids = Vec::new();
+        for m in msgs {
+            if let MessageContent::Blocks(blocks) = &m.content {
+                for b in blocks {
+                    match b {
+                        ContentBlock::ToolUse { id, .. } => use_ids.push(id.clone()),
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            result_ids.push(tool_use_id.clone())
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        use_ids.iter().all(|id| result_ids.contains(id))
+            && result_ids.iter().all(|id| use_ids.contains(id))
+    }
 }

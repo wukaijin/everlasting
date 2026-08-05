@@ -265,10 +265,7 @@ fn self_heal_for_create(
 ) -> Result<(), GitError> {
     // 2a. Stale worktree metadata.
     if let Ok(worktrees) = repo.worktrees() {
-        if worktrees
-            .iter()
-            .any(|name| name.as_deref() == Some(metadata_name))
-        {
+        if worktrees.iter().any(|name| name == Some(metadata_name)) {
             tracing::warn!(
                 project = %project_path.display(),
                 metadata = %metadata_name,
@@ -451,7 +448,7 @@ pub async fn attach_session(
         .await
         .map_err(|e| GitError::Io {
             path: project_path.display().to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+            source: std::io::Error::other(e.to_string()),
         })?
         .ok_or_else(|| GitError::Io {
             path: project_path.display().to_string(),
@@ -476,7 +473,7 @@ pub async fn attach_session(
     .await
     .map_err(|e| GitError::Io {
         path: project_path.display().to_string(),
-        source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        source: std::io::Error::other(e.to_string()),
     })?;
 
     // Inject the system event. Best-effort (tracing::warn! on
@@ -753,7 +750,7 @@ pub fn commit_worker_changes(worker_wt: &Path, run_id: &str) -> Result<git2::Oid
 
     // Stage all changes — tracked modifications + untracked files.
     let mut index = repo.index()?;
-    index.add_all(&["*"], git2::IndexAddOption::DEFAULT, None)?;
+    index.add_all(["*"], git2::IndexAddOption::DEFAULT, None)?;
     index.write()?;
 
     // Write the staged tree and commit on top of the current tip.
@@ -964,7 +961,7 @@ pub fn sweep_stale_worker_worktrees(
             age_days = age_secs / 86_400,
             "sweep: destroying stale worker worktree"
         );
-        if let Err(e) = destroy_worker(&project_path, &wt_path, &run_id) {
+        if let Err(e) = destroy_worker(project_path, &wt_path, &run_id) {
             tracing::warn!(
                 run_id = %run_id,
                 worktree = %wt_path.display(),

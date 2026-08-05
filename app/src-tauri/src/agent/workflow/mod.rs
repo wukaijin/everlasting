@@ -728,11 +728,11 @@ mod tests {
         let spec_dir = tmp.path().join(".everlasting").join("spec");
         std::fs::create_dir_all(spec_dir.join("agents/backend")).unwrap();
         std::fs::write(spec_dir.join("agents/backend/index.md"), "# backend spec").unwrap();
-        std::fs::write(spec_dir.join("agents/backend/style.md"), "# style");
+        std::fs::write(spec_dir.join("agents/backend/style.md"), "# style").unwrap();
         // A non-.md file should be ignored.
-        std::fs::write(spec_dir.join("README.txt"), "ignored");
+        std::fs::write(spec_dir.join("README.txt"), "ignored").unwrap();
         // Top-level .md too — should also appear.
-        std::fs::write(spec_dir.join("top.md"), "# top");
+        std::fs::write(spec_dir.join("top.md"), "# top").unwrap();
 
         let project_path = tmp.path().to_string_lossy().to_string();
         let filled = compute_delegation_template(&ctx, &project_path, "checker")

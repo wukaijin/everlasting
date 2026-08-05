@@ -49,6 +49,7 @@ use super::types::{Decision, PermissionContext};
 /// check (Plan block writes) was Tier 4 in the old design;
 /// moving it to Tier 3 eliminates the "user clicks 始终允许,
 /// then gets Mode-denied" bad interaction.
+#[allow(clippy::too_many_arguments)]
 pub async fn check(
     ctx: &PermissionContext,
     store: &PermissionStore,
@@ -106,7 +107,7 @@ pub async fn check(
             // 失败(不存在)→ 不挡(read 走 IO error)。
             let sensitive_hit =
                 if crate::projects::boundary::is_within_root(&ctx.project_main_path, &abs_path) {
-                    abs_path.canonicalize().map_or(false, |canon| {
+                    abs_path.canonicalize().is_ok_and(|canon| {
                         !crate::projects::boundary::is_within_root(&ctx.project_main_path, &canon)
                             && super::sensitive::is_sensitive_path(&canon)
                     })
@@ -146,33 +147,31 @@ pub async fn check(
     // 也禁掉且无放行口子. shell 的 mode 感知下沉到 Tier 4 的
     // Shell 分支: ReadOnly→Allow, SideEffect/Ask→弹窗 (Plan 下
     // 用户可当场放行). 见 shell_trust.rs 三档分类.
-    if matches!(ctx.mode, Mode::Plan) {
-        if matches!(tool_name, "write_file" | "edit_file") {
-            tracing::info!(
-                session_id = %ctx.session_id,
-                mode = %ctx.mode.as_str(),
-                tool = %tool_name,
-                "permission::check: Tier 3 mode block (write tools in read-only mode)"
-            );
-            let reason = format!(
-                "I cannot execute {} in {} mode (read-only session)",
-                tool_name,
-                ctx.mode.as_str()
-            );
-            let _ = record_audit(
-                db,
-                ctx,
-                AuditKind::ToolDenied,
-                tool_name,
-                tool_input,
-                Some(&format!("tool blocked in {} mode", ctx.mode.as_str())),
-            )
-            .await;
-            return Decision::Deny {
-                reason,
-                critical: false,
-            };
-        }
+    if matches!(ctx.mode, Mode::Plan) && matches!(tool_name, "write_file" | "edit_file") {
+        tracing::info!(
+            session_id = %ctx.session_id,
+            mode = %ctx.mode.as_str(),
+            tool = %tool_name,
+            "permission::check: Tier 3 mode block (write tools in read-only mode)"
+        );
+        let reason = format!(
+            "I cannot execute {} in {} mode (read-only session)",
+            tool_name,
+            ctx.mode.as_str()
+        );
+        let _ = record_audit(
+            db,
+            ctx,
+            AuditKind::ToolDenied,
+            tool_name,
+            tool_input,
+            Some(&format!("tool blocked in {} mode", ctx.mode.as_str())),
+        )
+        .await;
+        return Decision::Deny {
+            reason,
+            critical: false,
+        };
     }
 
     // ----- Tier 4: Path / Prefix / External policy -----
@@ -337,7 +336,7 @@ pub async fn check(
                     let _ =
                         record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
                             .await;
-                    return Decision::Allow;
+                    Decision::Allow
                 }
             }
         }
@@ -419,7 +418,7 @@ pub async fn check(
                     let _ =
                         record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
                             .await;
-                    return Decision::Allow;
+                    Decision::Allow
                 }
                 super::shell_trust::ShellTrust::SideEffect => {
                     if ctx.mode == Mode::Plan {
@@ -443,7 +442,7 @@ pub async fn check(
                     let _ =
                         record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
                             .await;
-                    return Decision::Allow;
+                    Decision::Allow
                 }
                 super::shell_trust::ShellTrust::Ask => {
                     // Asklist / unknown / structurally complex — modal in
@@ -565,7 +564,7 @@ pub async fn check(
             // ReadGuard for edit_file) are the real gate.
             let _ =
                 record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
-            return Decision::Allow;
+            Decision::Allow
         }
     }
 }

@@ -406,7 +406,7 @@ fn generalize_home_path(text: &str) -> String {
 /// insert. Returns the first offending component (for the error
 /// message) or `None` if clean.
 fn find_sensitive_path(text: &str) -> Option<&'static str> {
-    for component in text.split(|c| c == '/' || c == '\\') {
+    for component in text.split(['/', '\\']) {
         for deny in SENSITIVE_PATH_COMPONENTS {
             if component == *deny {
                 return Some(deny);
@@ -1576,9 +1576,10 @@ pub async fn update_memory(
                     error = %other,
                     "update_memory: unexpected scope/project_id safety-net variant"
                 );
-                MemoryUpdateError::Db(sqlx::Error::Protocol(
-                    format!("unexpected scope variant: {}", other).into(),
-                ))
+                MemoryUpdateError::Db(sqlx::Error::Protocol(format!(
+                    "unexpected scope variant: {}",
+                    other
+                )))
             }
             MemoryInsertError::Db(e) => MemoryUpdateError::Db(e),
         })?;
@@ -1740,6 +1741,7 @@ pub(crate) mod test_helpers {
     /// to verify the FTS trigger or to test the trigger directly).
     /// Production code MUST use [`insert_memory`].
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_raw(
         pool: &SqlitePool,
         memory_id: &str,

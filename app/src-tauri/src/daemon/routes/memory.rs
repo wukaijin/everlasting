@@ -57,8 +57,8 @@ pub async fn open_memory_in_editor(
     State(state): State<Arc<AppState>>,
     Json(req): Json<OpenMemoryInEditorRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = open_memory_in_editor_inner(&state, req.project_id, req.path).await?;
-    Ok(Json(result))
+    open_memory_in_editor_inner(&state, req.project_id, req.path).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,14 +98,14 @@ pub async fn update_autonomous_memory_status(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateAutonomousMemoryStatusRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = update_autonomous_memory_status_inner(
+    update_autonomous_memory_status_inner(
         &state,
         req.memory_id,
         req.new_status,
         req.demoted_reason,
     )
     .await?;
-    Ok(Json(result))
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]

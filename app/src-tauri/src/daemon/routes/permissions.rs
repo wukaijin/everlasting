@@ -46,7 +46,7 @@ pub async fn grant_tool_permission(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GrantToolPermissionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = grant_tool_permission_inner(
+    grant_tool_permission_inner(
         &state,
         req.session_id,
         req.tool_name,
@@ -54,7 +54,7 @@ pub async fn grant_tool_permission(
         req.match_value,
     )
     .await?;
-    Ok(Json(result))
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,7 +82,7 @@ pub async fn revoke_tool_permission(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RevokeToolPermissionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = revoke_tool_permission_inner(
+    revoke_tool_permission_inner(
         &state,
         req.session_id,
         req.tool_name,
@@ -90,7 +90,7 @@ pub async fn revoke_tool_permission(
         req.match_value,
     )
     .await?;
-    Ok(Json(result))
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,8 +128,8 @@ pub async fn clear_session_trace(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ClearSessionTraceRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = clear_session_trace_inner(&state, req.session_id).await?;
-    Ok(Json(result))
+    clear_session_trace_inner(&state, req.session_id).await?;
+    Ok(Json(()))
 }
 
 /// `POST /api/v1/permissions/permission_response` — frontend

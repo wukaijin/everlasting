@@ -496,8 +496,8 @@ mod tests {
             tdd: None,
         }];
         write_task(path, &t).expect("write");
-        let reread = read_task(path, slug).expect("read");
-        reread
+
+        read_task(path, slug).expect("read")
     }
 
     // --- parse_target_state ---------------------------------------------

@@ -182,7 +182,7 @@ impl FailureTracker {
                     last_failure_input: entry
                         .last_failure_input
                         .take()
-                        .unwrap_or_else(|| serde_json::Value::Null),
+                        .unwrap_or(serde_json::Value::Null),
                     last_failure_content: entry.last_failure_content.take().unwrap_or_default(),
                     success_input: tool_input.clone(),
                     success_content: result_content.to_string(),
@@ -244,6 +244,7 @@ pub struct Trigger {
 /// `failure_tracker` is an `Arc<Mutex<FailureTracker>>` so
 /// the two seam sites (parallel + serial) can share the
 /// same per-session state.
+#[allow(clippy::too_many_arguments)]
 pub async fn try_record_outcome(
     failure_tracker: &Arc<Mutex<FailureTracker>>,
     provider: Arc<dyn Provider>,

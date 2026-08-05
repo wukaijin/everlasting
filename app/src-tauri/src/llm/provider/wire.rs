@@ -665,8 +665,8 @@ pub fn strip_unsupported(
 ) -> Vec<WireMessage> {
     messages
         .into_iter()
-        .filter_map(|m| match m {
-            WireMessage::User { content, speaker } => Some(WireMessage::User { content, speaker }),
+        .map(|m| match m {
+            WireMessage::User { content, speaker } => WireMessage::User { content, speaker },
             WireMessage::UserBlocks { blocks } => {
                 // B5 refactor (2026-06-11): `UserBlocks` carries
                 // block-level cache_control on text blocks. We
@@ -676,15 +676,15 @@ pub fn strip_unsupported(
                 // Anthropic → OpenAI path: the OpenAI adapter
                 // drops cache_control at serialization time, so
                 // no special handling is needed here.
-                Some(WireMessage::UserBlocks { blocks })
+                WireMessage::UserBlocks { blocks }
             }
             WireMessage::Tool {
                 tool_call_id,
                 content,
-            } => Some(WireMessage::Tool {
+            } => WireMessage::Tool {
                 tool_call_id,
                 content,
-            }),
+            },
             WireMessage::Assistant { blocks, speaker } => {
                 let filtered: Vec<WireBlock> = blocks
                     .into_iter()
@@ -695,10 +695,10 @@ pub fn strip_unsupported(
                 // pure-reasoning turn. Keep it (with empty
                 // blocks); the provider-wire converter will
                 // decide whether to send it.
-                Some(WireMessage::Assistant {
+                WireMessage::Assistant {
                     blocks: filtered,
                     speaker,
-                })
+                }
             }
         })
         .collect()
@@ -1366,7 +1366,7 @@ mod tests {
             violations.len(),
             1,
             "the User at index 2 is the only violation: {}",
-            violations.iter().cloned().collect::<Vec<_>>().join("\n")
+            violations.to_vec().join("\n")
         );
         assert!(
             violations[0].contains("toolu_2"),

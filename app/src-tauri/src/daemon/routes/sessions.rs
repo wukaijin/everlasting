@@ -134,8 +134,8 @@ pub async fn delete_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeleteSessionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = delete_session_inner(&state, req.session_id).await?;
-    Ok(Json(result))
+    delete_session_inner(&state, req.session_id).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,8 +147,8 @@ pub async fn clear_session_messages(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ClearSessionMessagesRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = clear_session_messages_inner(&state, req.session_id).await?;
-    Ok(Json(result))
+    clear_session_messages_inner(&state, req.session_id).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,8 +161,8 @@ pub async fn rename_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameSessionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = rename_session_inner(&state, req.session_id, req.new_title).await?;
-    Ok(Json(result))
+    rename_session_inner(&state, req.session_id, req.new_title).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,8 +175,8 @@ pub async fn set_session_color(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SetSessionColorRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = set_session_color_inner(&state, req.session_id, req.color_tag).await?;
-    Ok(Json(result))
+    set_session_color_inner(&state, req.session_id, req.color_tag).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,8 +189,8 @@ pub async fn set_session_workflow_enabled(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SetSessionWorkflowEnabledRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = set_session_workflow_enabled_inner(&state, req.session_id, req.enabled).await?;
-    Ok(Json(result))
+    set_session_workflow_enabled_inner(&state, req.session_id, req.enabled).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,8 +203,8 @@ pub async fn set_session_plugin_name(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SetSessionPluginNameRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = set_session_plugin_name_inner(&state, req.session_id, req.name).await?;
-    Ok(Json(result))
+    set_session_plugin_name_inner(&state, req.session_id, req.name).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,9 +282,8 @@ pub async fn edit_user_message(
     State(state): State<Arc<AppState>>,
     Json(req): Json<EditUserMessageRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result =
-        edit_user_message_inner(&state, req.session_id, req.message_seq, req.new_content).await?;
-    Ok(Json(result))
+    edit_user_message_inner(&state, req.session_id, req.message_seq, req.new_content).await?;
+    Ok(Json(()))
 }
 
 /// `POST /api/v1/sessions/list_workflow_plugins` — discover
