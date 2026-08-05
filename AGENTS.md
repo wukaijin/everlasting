@@ -19,3 +19,26 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+## Running Tests
+
+**Frontend** (Vitest, in `app/`):
+
+```bash
+cd app && pnpm test            # run all *.test.ts under app/src
+cd app && pnpm test -- --ui    # interactive watch mode
+```
+
+**Backend** (Rust `cargo test`, in `app/src-tauri/`). On WSL you must export `PKG_CONFIG_PATH` or system libs (gdk-pixbuf / webkit2gtk) won't be found — see [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) 坑 1:
+
+```bash
+cd app/src-tauri && \
+  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo test --lib             # ~1635 unit tests; default is multi-threaded (= nproc)
+```
+
+Notes:
+- `cargo test` is multi-threaded by default (one thread per core). **Don't add `--test-threads=1`** for routine runs — single-threaded is ~3× slower here (72s vs 26s for `--lib`).
+- Scope a smoke run with a filter inside one `cargo test` call, e.g. `cargo test --lib "agent::tests_agent_loop::"`. Avoid looping `cargo test <module>` per module — each invocation pays ~11s relink + spawn tax and skews timing.
+- To profile slow tests, prefer [`cargo-nextest`](https://nexte.st) (`cargo nextest run --lib`, per-test timings); otherwise see the timestamp fallback in [HACKING-wsl.md §测试性能](./docs/HACKING-wsl.md#测试性能wsl-后端-cargo-test).
+- Cold compile `--no-run` ≈ 1m37s; incremental ≈ 11s.
