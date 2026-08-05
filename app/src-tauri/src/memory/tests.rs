@@ -90,7 +90,11 @@ async fn tokens_count_ascii_short() {
     ensure_initialized().await;
     // "hello" is a single cl100k_base token.
     let n = count_tokens("hello").await;
-    assert!(n >= 1 && n <= 2, "expected ~1 token for 'hello', got {}", n);
+    assert!(
+        (1..=2).contains(&n),
+        "expected ~1 token for 'hello', got {}",
+        n
+    );
 }
 
 #[tokio::test]

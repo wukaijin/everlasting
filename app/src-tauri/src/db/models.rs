@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::types::{ModelRow, ModelWithProvider};
 
 /// Insert a new model. Returns the inserted row.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_model(
     pool: &SqlitePool,
     provider_id: &str,
@@ -140,6 +141,7 @@ pub async fn get_model(pool: &SqlitePool, id: &str) -> Result<Option<ModelRow>, 
 }
 
 /// Patch a model by `id`. Returns `None` if the row doesn't exist.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_model(
     pool: &SqlitePool,
     id: &str,

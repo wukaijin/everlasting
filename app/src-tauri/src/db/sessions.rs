@@ -25,6 +25,7 @@ use super::types::{LoadedSession, MessageRow, SessionRow, SessionSummary, Worktr
 /// worktree; the user must call `attach_worktree` explicitly).
 /// Sessions that have been migrated from the pre-follow-up auto-
 /// create flow get the path on attach instead.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_session(
     pool: &SqlitePool,
     session_id: &str,

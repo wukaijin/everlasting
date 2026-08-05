@@ -214,7 +214,7 @@ pub fn classify_error_response(
     let retry_after = headers
         .and_then(|h| parse_retry_after(h, std::time::Duration::from_secs(RETRY_AFTER_CAP_SECS)));
 
-    let classified = if keyword.contains("authentication")
+    if keyword.contains("authentication")
         || keyword.contains("new_api_error")
         || keyword.contains("invalid_api_key")
     {
@@ -241,9 +241,7 @@ pub fn classify_error_response(
             message: inner_message,
             retry_after,
         }
-    };
-
-    classified
+    }
 }
 
 /// Parse a server retry advisory from response headers, capped at `cap`.

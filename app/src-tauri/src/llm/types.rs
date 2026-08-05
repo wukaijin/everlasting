@@ -278,11 +278,11 @@ pub struct ChatRequest {
 // ChatEvent — events pushed to the frontend
 // ---------------------------------------------------------------------------
 
-/// One thinking content block. The model can produce multiple blocks per
-/// turn (interleaved thinking with tool calls); each must be preserved
-/// in order and round-tripped back to the LLM verbatim, otherwise the
-/// next turn 400s. `text` is the streamed summary (or empty under
-/// `display: "omitted"`); `signature` is the opaque, encrypted blob. */
+// One thinking content block. The model can produce multiple blocks per
+// turn (interleaved thinking with tool calls); each must be preserved
+// in order and round-tripped back to the LLM verbatim, otherwise the
+// next turn 400s. `text` is the streamed summary (or empty under
+// `display: "omitted"`); `signature` is the opaque, encrypted blob.
 // ---------------------------------------------------------------------------
 // TokenUsage — A4 (Token Usage Tracking)
 // ---------------------------------------------------------------------------

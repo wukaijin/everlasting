@@ -137,6 +137,7 @@ pub async fn list_models(
     list_models_inner(&state).await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn add_model_inner(
     state: &Arc<AppState>,
     provider_id: String,
@@ -169,6 +170,7 @@ pub async fn add_model_inner(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn add_model(
     state: State<'_, Arc<AppState>>,
     provider_id: String,
@@ -192,6 +194,7 @@ pub async fn add_model(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_model_inner(
     state: &Arc<AppState>,
     id: String,
@@ -226,6 +229,7 @@ pub async fn update_model_inner(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_model(
     state: State<'_, Arc<AppState>>,
     id: String,

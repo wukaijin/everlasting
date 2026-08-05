@@ -614,7 +614,7 @@ pub async fn resolve_task_state_transition_inner(
     // Accepted for routing parity with the wire shape (the
     // store keys on session_id alone, single-pending gate).
     let _ = tool_use_id;
-    let project_path = state_to_project_path(&state, &session_id).await?;
+    let project_path = state_to_project_path(state, &session_id).await?;
     resolve_task_state_transition_internal(
         &state.db,
         &state.question_store,

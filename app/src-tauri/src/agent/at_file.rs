@@ -243,7 +243,7 @@ fn is_binary_content(bytes: &[u8]) -> bool {
     if sample.is_empty() {
         return false;
     }
-    if sample.iter().any(|&b| b == 0) {
+    if sample.contains(&0) {
         return true;
     }
     if std::str::from_utf8(sample).is_err() {
@@ -569,8 +569,8 @@ mod tests {
     fn control_char_ratio_over_threshold_is_binary() {
         // > 30% control chars (0x01), valid ASCII (UTF-8 ok, no NUL).
         let mut v = vec![0x41u8; 100];
-        for i in 0..40 {
-            v[i] = 0x01; // 40% control chars
+        for b in v.iter_mut().take(40) {
+            *b = 0x01; // 40% control chars
         }
         assert!(is_binary_content(&v));
     }
@@ -579,8 +579,8 @@ mod tests {
     fn control_char_ratio_under_threshold_is_text() {
         // 10% control chars → text.
         let mut v = vec![0x41u8; 100];
-        for i in 0..10 {
-            v[i] = 0x01;
+        for b in v.iter_mut().take(10) {
+            *b = 0x01;
         }
         assert!(!is_binary_content(&v));
     }

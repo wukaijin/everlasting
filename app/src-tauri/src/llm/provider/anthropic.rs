@@ -330,7 +330,7 @@ impl AnthropicProvider {
                                                 data_buf: data,
                                             };
                                         }
-                                        Some("text") | _ => {
+                                        _ => {
                                             block_state = BlockState::Text;
                                         }
                                     }

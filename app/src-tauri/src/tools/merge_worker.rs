@@ -492,7 +492,7 @@ pub fn do_merge_blocking(
     // `Reference` is the branch's tip ref.
     let worker_annotated = {
         let worker_ref = worker_branch.get();
-        repo.reference_to_annotated_commit(&worker_ref)
+        repo.reference_to_annotated_commit(worker_ref)
             .map_err(|e| {
                 format!(
                     "merge_worker: could not build annotated commit for worker branch: {}",
@@ -707,7 +707,7 @@ pub fn merge_session_into_main(project_path: &Path, session_id: &str) -> Result<
     // 3-way merge: session into main.
     let session_annotated = {
         let session_ref = session_branch.get();
-        repo.reference_to_annotated_commit(&session_ref)
+        repo.reference_to_annotated_commit(session_ref)
             .map_err(|e| format!("merge_session: annotated commit: {}", e))?
     };
     let mut merge_opts = MergeOptions::new();

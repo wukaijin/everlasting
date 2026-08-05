@@ -232,6 +232,7 @@ fn user_message_matches(db_row: &crate::db::MessageRow, mem_msg: &ChatMessage) -
     mem_msg.content.to_text() == db_row.text
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_chat_loop(
     tool_defs: Vec<ToolDef>,
     provider: Arc<dyn Provider>,
@@ -612,13 +613,12 @@ pub async fn run_chat_loop(
     // point at a path inside the parent's checkout, not the
     // worker's). The override path wins; non-override path keeps
     // the legacy behavior (read `current_cwd` from the session row).
-    let session_cwd_raw = if worktree_override.is_some() {
-        worktree_path.to_string_lossy().to_string()
-    } else if loaded_session.session.current_cwd.is_empty() {
-        worktree_path.to_string_lossy().to_string()
-    } else {
-        loaded_session.session.current_cwd.clone()
-    };
+    let session_cwd_raw =
+        if worktree_override.is_some() || loaded_session.session.current_cwd.is_empty() {
+            worktree_path.to_string_lossy().to_string()
+        } else {
+            loaded_session.session.current_cwd.clone()
+        };
     let session_cwd = match crate::projects::boundary::assert_within_root(
         &worktree_path,
         std::path::Path::new(&session_cwd_raw),
@@ -2020,7 +2020,7 @@ pub async fn run_chat_loop(
                         }
                         ChatEvent::Done { stop_reason: sr, usage } => {
                             stop_reason = sr.clone();
-                            last_usage = usage.clone();
+                            last_usage = *usage;
                             // 2026-06-21 (R3): mirror the per-turn
                             // `last_usage` to the function-scope
                             // `last_usage_terminal` so the
@@ -2035,7 +2035,7 @@ pub async fn run_chat_loop(
                             // produced the all-zero
                             // `subagent_runs.token_usage_json`
                             // regression.
-                            last_usage_terminal = usage.clone();
+                            last_usage_terminal = *usage;
                             turn_done_at = Some(Instant::now());
                             if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
                                 turn_thinking_done = Some(Instant::now());
@@ -2543,7 +2543,10 @@ pub async fn run_chat_loop(
             }
         }
 
-        if loop_hit_count >= 3 && verdict_kind_str.is_some() {
+        if loop_hit_count >= 3 {
+            let Some(verdict_kind_str_expect) = verdict_kind_str else {
+                return;
+            };
             // Reached the consecutive-hit threshold on a loop turn.
             // Worker path: direct break (R5) — no QuestionStore
             // round-trip, no audit row. The worker's loop_terminated
@@ -2568,7 +2571,7 @@ pub async fn run_chat_loop(
                     &rid,
                     &ChatEvent::Done {
                         stop_reason: Some("loop_terminated".to_string()),
-                        usage: last_usage.clone(),
+                        usage: last_usage,
                     },
                 );
                 return;
@@ -2576,8 +2579,6 @@ pub async fn run_chat_loop(
 
             // Main loop: build the fixed payload (PRD R2) and drive
             // the QuestionStore round-trip.
-            let verdict_kind_str_expect =
-                verdict_kind_str.expect("non-None verdict at C2+ trigger");
             let payload = crate::agent::question_store::ToolQuestionPayload {
                 session_id: session_id.clone(),
                 tool_use_id: format!("loop_intervention_{}", turn),
@@ -3403,7 +3404,6 @@ pub async fn run_chat_loop(
                             let current_ctx = current_ctx.clone();
                             let worker_event_sink = worker_event_sink.clone();
                             let worker_catalog = worker_catalog.clone();
-                            let skip_persist = skip_persist;
                             let cancelled_flag = cancelled_flag.clone();
                             // W1 Step 2.4: workflow role-gate
                             // needs WorkflowCtx inside the

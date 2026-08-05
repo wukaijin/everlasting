@@ -78,7 +78,7 @@ const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const DISK_SPILL_THRESHOLD: usize = 30 * 1024;
 /// Preview size (head + tail) when we spill to disk. Keeps the
 /// tool_result under ~1.5 KB so the agent's context stays small.
-const PREVIEW_BYTES: usize = 1 * 1024;
+const PREVIEW_BYTES: usize = 1024;
 /// Sub-directory under cwd where spilled outputs are written.
 const SPILL_DIR: &str = ".everlasting/outputs";
 /// Default command timeout in milliseconds (2 minutes).
@@ -1458,7 +1458,7 @@ mod tests {
             "AWS_SECRET_ACCESS_KEY",
         ] {
             assert!(
-                !SAFE_ENV_VARS.contains(&forbidden),
+                !SAFE_ENV_VARS.contains(forbidden),
                 "SAFE_ENV_VARS must not contain {}",
                 forbidden
             );

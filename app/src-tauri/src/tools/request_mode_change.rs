@@ -66,7 +66,7 @@
 //! Schema validation is **strict** — boundary violations
 //! (`target_mode` not in {edit, plan, yolo} / empty / `reason`
 //! > 500 chars) are `is_error: true` and do NOT enter the blocking
-//! wait.
+//! > wait.
 
 use std::sync::Arc;
 
@@ -752,11 +752,12 @@ mod tests {
         }
 
         // emit was called.
-        let emitted = sink.emitted_mode_change.lock().unwrap();
-        assert_eq!(emitted.len(), 1, "emit_mode_change_request called once");
-        assert_eq!(emitted[0].target_mode, "edit");
-        assert_eq!(emitted[0].tool_use_id, "tu_1");
-        drop(emitted);
+        {
+            let emitted = sink.emitted_mode_change.lock().unwrap();
+            assert_eq!(emitted.len(), 1, "emit_mode_change_request called once");
+            assert_eq!(emitted[0].target_mode, "edit");
+            assert_eq!(emitted[0].tool_use_id, "tu_1");
+        }
 
         // Resolve with Answered(true) (mirrors the
         // `resolve_mode_change` IPC allow-path outcome).

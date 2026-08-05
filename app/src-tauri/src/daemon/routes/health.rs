@@ -182,6 +182,6 @@ mod tests {
     /// (PRD §4.3) and MUST go through a deprecation cycle.
     #[test]
     fn supported_api_versions_contains_v1() {
-        assert!(SUPPORTED_API_VERSIONS.iter().any(|v| *v == "v1"));
+        assert!(SUPPORTED_API_VERSIONS.contains(&"v1"));
     }
 }

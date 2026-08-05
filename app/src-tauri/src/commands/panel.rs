@@ -96,7 +96,7 @@ pub async fn list_subagents_inner(
     state: &Arc<AppState>,
     project_id: Option<String>,
 ) -> Result<Vec<SubagentInfo>, AppCommandError> {
-    let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
+    let project_path = resolve_project_path(state, project_id.as_deref()).await?;
     let path_str = project_path.as_deref().unwrap_or("");
     let loaded = state.subagent_cache.list(path_str).await;
     Ok(loaded
@@ -122,7 +122,7 @@ pub async fn list_panel_items_inner(
     state: &Arc<AppState>,
     project_id: Option<String>,
 ) -> Result<Vec<PanelItem>, AppCommandError> {
-    let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
+    let project_path = resolve_project_path(state, project_id.as_deref()).await?;
 
     // Skills: list_skill_infos already handles project > user
     // precedence. We use it as-is (no dedup across the same-type
@@ -211,7 +211,7 @@ pub async fn get_skill_body_inner(
     name: String,
     project_id: Option<String>,
 ) -> Result<Option<String>, AppCommandError> {
-    let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
+    let project_path = resolve_project_path(state, project_id.as_deref()).await?;
     match crate::skill::loader::find_skill(&state.skill_cache, &name, project_path.as_deref()).await
     {
         Some(skill) => {

@@ -376,17 +376,17 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
     let worker_t1_names: Vec<&str> = sent_tools[1].iter().map(|t| t.name.as_str()).collect();
     let parent_t2_names: Vec<&str> = sent_tools[2].iter().map(|t| t.name.as_str()).collect();
     assert!(
-        parent_t1_names.iter().any(|n| *n == "dispatch_subagent"),
+        parent_t1_names.contains(&"dispatch_subagent"),
         "parent_t1 MUST see dispatch_subagent (so it can dispatch): {:?}",
         parent_t1_names
     );
     assert!(
-        !worker_t1_names.iter().any(|n| *n == "dispatch_subagent"),
+        !worker_t1_names.contains(&"dispatch_subagent"),
         "worker_t1 MUST NOT see dispatch_subagent (no nesting): {:?}",
         worker_t1_names
     );
     assert!(
-        parent_t2_names.iter().any(|n| *n == "dispatch_subagent"),
+        parent_t2_names.contains(&"dispatch_subagent"),
         "parent_t2 MUST see dispatch_subagent again: {:?}",
         parent_t2_names
     );

@@ -41,7 +41,7 @@ thread_local! {
     /// production code never reads the cell. Kept here (not in
     /// `sink.rs`) so the trait file owns the test affordance.
     static TEST_COLLECTOR: std::cell::RefCell<Option<Arc<StdMutex<Vec<serde_json::Value>>>>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Wire the test thread-local collector. Idempotent: a second call

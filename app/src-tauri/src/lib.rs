@@ -1,3 +1,12 @@
+// clippy 1.96 的 `doc_lazy_continuation` / `doc_overindented_list_items`
+// 对本 crate 里大量中/英文混排的 `///` 自然语言段落会误判成 markdown
+// 列表续行(建议在纯文本续写处加缩进,会破坏语义)。这些 lint 不区分
+// "列表项续行" 与 "普通段落换行",对本项目的文档注释基本是噪音 —— CI
+// 也只跑 `cargo test --lib` + `cargo fmt`,不跑 clippy。crate 级 allow
+// 抑制这两条,其余 clippy lint 仍保持默认 deny-on-check(见本地手动跑法)。
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::doc_overindented_list_items)]
+
 //! Everlasting Tauri app entry point.
 //!
 //! Post-PR1 of the audit task (Step 8-PR1): this file is now a

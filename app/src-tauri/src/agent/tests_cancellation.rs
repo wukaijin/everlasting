@@ -42,7 +42,7 @@ async fn select_loop_breaks_on_cancellation() {
     token.cancel();
 
     // The select! arm should win within a few ms.
-    let joined = tokio::time::timeout(Duration::from_millis(500), handle)
+    tokio::time::timeout(Duration::from_millis(500), handle)
         .await
         .expect("select loop should have broken within 500ms")
         .expect("task should not have panicked");
@@ -50,9 +50,6 @@ async fn select_loop_breaks_on_cancellation() {
         *cancelled_flag.lock().unwrap(),
         "cancelled flag should be set when select! breaks on cancel"
     );
-    // Silence the "joined result unused" warning — the function
-    // already returns ().
-    let _ = joined;
 }
 
 #[tokio::test]

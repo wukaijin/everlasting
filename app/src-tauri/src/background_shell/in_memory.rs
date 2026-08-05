@@ -45,7 +45,7 @@ pub(crate) const DEFAULT_MAX_RUNTIME_MS: u64 = 86_400_000;
 /// Head/tail preview size for `shell_status::stdout_preview` /
 /// `stderr_preview`. Matches [`crate::tools::shell`]'s
 /// `PREVIEW_BYTES`.
-const PREVIEW_BYTES: usize = 1 * 1024;
+const PREVIEW_BYTES: usize = 1024;
 
 /// Disk-spill threshold: outputs above this size save the full
 /// buffer to `<cwd>/.everlasting/outputs/<uuid>.txt` and the
@@ -505,7 +505,7 @@ fn push_notification_bounded(
     let q = inner
         .notifications
         .entry(session_id.to_string())
-        .or_insert_with(VecDeque::new);
+        .or_default();
     if q.len() >= MAX_NOTIFICATIONS_PER_SESSION {
         q.pop_front();
         tracing::warn!(

@@ -303,14 +303,10 @@ fn find_similar_lines(haystack: &str, needle: &str, limit: usize) -> Vec<(usize,
         let line_chars: std::collections::HashSet<char> = line_norm.chars().collect();
         let intersection = needle_chars.intersection(&line_chars).count();
         let union = needle_chars.union(&line_chars).count();
-        let jaccard = if union == 0 {
-            0
-        } else {
-            intersection * 1000 / union
-        };
+        let jaccard = (intersection * 1000).checked_div(union).unwrap_or(0);
         scored.push((i + 1, line.to_string(), jaccard));
     }
-    scored.sort_by(|a, b| b.2.cmp(&a.2));
+    scored.sort_by_key(|b| std::cmp::Reverse(b.2));
     scored
         .into_iter()
         .filter(|(_, _, s)| *s > 0)

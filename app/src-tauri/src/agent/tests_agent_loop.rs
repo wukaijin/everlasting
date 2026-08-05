@@ -4983,7 +4983,7 @@ async fn a5plus_retry_does_not_double_count_token_usage() {
             Ok(ChatEvent::Delta { text: "hi".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
-                usage: Some(success_usage.clone()),
+                usage: Some(success_usage),
             }),
         ]),
     ]));

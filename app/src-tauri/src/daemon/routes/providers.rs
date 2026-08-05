@@ -191,8 +191,8 @@ pub async fn set_default_model(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SetDefaultModelRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = set_default_model_inner(&state, req.model_id).await?;
-    Ok(Json(result))
+    set_default_model_inner(&state, req.model_id).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,8 +205,8 @@ pub async fn update_session_model_id(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateSessionModelIdRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = update_session_model_id_inner(&state, req.session_id, req.model_id).await?;
-    Ok(Json(result))
+    update_session_model_id_inner(&state, req.session_id, req.model_id).await?;
+    Ok(Json(()))
 }
 
 #[derive(Debug, Deserialize)]

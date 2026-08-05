@@ -91,7 +91,7 @@ pub async fn list_files_at_inner(
     // arbitrary subdirs of `/` here — that would let a chat turn
     // walk `/home/...` or other users' homes. If the need arises,
     // add a separate `list_files_under` with explicit boundary checks.
-    if root_path != PathBuf::from("/") {
+    if root_path != *"/" {
         return Err(AppCommandError::new(
             ErrorCategory::InvalidRequest,
             format!(

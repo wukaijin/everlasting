@@ -416,7 +416,7 @@ pub fn classify_prefix(cmd: &str) -> ShellTrust {
     segments
         .iter()
         .map(|seg| classify_single(seg))
-        .fold(ShellTrust::ReadOnly, |acc, t| max_of(acc, t))
+        .fold(ShellTrust::ReadOnly, max_of)
 }
 
 /// `true` if `cmd` contains a structural metacharacter that should

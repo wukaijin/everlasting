@@ -87,11 +87,8 @@ async fn run_loop_with_sink(
 /// close,空 channel 上 `recv` 会 block,靠 timeout 退出)。
 async fn drain_live(rx: &mut mpsc::Receiver<SseFrame>) -> Vec<SseFrame> {
     let mut frames = Vec::new();
-    loop {
-        match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-            Ok(Some(f)) => frames.push(f),
-            Ok(None) | Err(_) => break,
-        }
+    while let Ok(Some(f)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+        frames.push(f);
     }
     frames
 }
@@ -195,17 +192,17 @@ async fn sse_tool_round_emits_distinct_event_names() {
     let frames = drain_live(&mut sub.live).await;
     let names: Vec<&str> = frames.iter().map(|f| f.event.as_str()).collect();
     assert!(
-        names.iter().any(|n| *n == "tool:call"),
+        names.contains(&"tool:call"),
         "expected a tool:call frame, names = {:?}",
         names
     );
     assert!(
-        names.iter().any(|n| *n == "tool:result"),
+        names.contains(&"tool:result"),
         "expected a tool:result frame, names = {:?}",
         names
     );
     assert!(
-        names.iter().any(|n| *n == "chat-event"),
+        names.contains(&"chat-event"),
         "expected chat-event frames, names = {:?}",
         names
     );

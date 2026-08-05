@@ -334,12 +334,12 @@ mod tests {
         assert!(set.is_match(&worker_wt));
 
         // 3. static 段仍然命中
-        assert!(set.is_match(&home().join(".config/everlasting/commands/x.md")));
+        assert!(set.is_match(home().join(".config/everlasting/commands/x.md")));
 
         // 4. 不相关子目录不命中
-        assert!(!set.is_match(&test_dir.join("not-worktrees/foo")));
+        assert!(!set.is_match(test_dir.join("not-worktrees/foo")));
         // 4b. worktrees 兄弟目录不命中
-        assert!(!set.is_match(&test_dir.join("other/foo")));
+        assert!(!set.is_match(test_dir.join("other/foo")));
     }
 
     // 空 app_data_dir 不抛、只生成 static 段(防御性,见

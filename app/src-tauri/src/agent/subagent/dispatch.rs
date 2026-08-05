@@ -1994,42 +1994,42 @@ mod tests {
     #[test]
     fn resolve_isolation_frontmatter_true_no_override_isolates() {
         // frontmatter `isolation: worktree` + dispatch omits → isolated.
-        assert_eq!(resolve_isolation(Some(true), None), true);
+        assert!(resolve_isolation(Some(true), None));
     }
 
     #[test]
     fn resolve_isolation_frontmatter_true_dispatch_false_opts_out() {
         // frontmatter `isolation: worktree` + dispatch `isolation: false`
         // → NOT isolated (LLM opted out).
-        assert_eq!(resolve_isolation(Some(true), Some(false)), false);
+        assert!(!resolve_isolation(Some(true), Some(false)));
     }
 
     #[test]
     fn resolve_isolation_frontmatter_none_dispatch_true_opts_in() {
         // frontmatter not declared + dispatch `isolation: true`
         // → isolated (LLM opted in).
-        assert_eq!(resolve_isolation(None, Some(true)), true);
+        assert!(resolve_isolation(None, Some(true)));
     }
 
     #[test]
     fn resolve_isolation_frontmatter_false_dispatch_false_stays_shared() {
         // frontmatter `isolation: false` + dispatch `isolation: false`
         // → NOT isolated.
-        assert_eq!(resolve_isolation(Some(false), Some(false)), false);
+        assert!(!resolve_isolation(Some(false), Some(false)));
     }
 
     #[test]
     fn resolve_isolation_no_default_no_override_is_legacy_shared() {
         // frontmatter not declared + dispatch omits → NOT isolated
         // (legacy shared-cwd behavior — the researcher builtin path).
-        assert_eq!(resolve_isolation(None, None), false);
+        assert!(!resolve_isolation(None, None));
     }
 
     #[test]
     fn resolve_isolation_dispatch_input_wins_over_frontmatter() {
         // Dispatch input always wins (precedence rule).
-        assert_eq!(resolve_isolation(Some(false), Some(true)), true);
-        assert_eq!(resolve_isolation(Some(true), Some(false)), false);
+        assert!(resolve_isolation(Some(false), Some(true)));
+        assert!(!resolve_isolation(Some(true), Some(false)));
     }
 
     // -----------------------------------------------------------------------

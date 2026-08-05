@@ -762,7 +762,7 @@ mod tests {
 
     // ---- Phase 2 Step 2.6: workflow persistence ----------------------
 
-    use crate::agent::workflow::{TaskItem, TaskJson, TaskStatus, WorkflowCtx};
+    use crate::agent::workflow::{TaskItem, TaskJson, TaskStatus};
 
     /// Workflow-session `ToolContext` factory. Builds a
     /// task.json under a temp project root + returns a

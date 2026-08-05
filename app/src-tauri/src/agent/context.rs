@@ -172,7 +172,7 @@ fn push_message_tokens(buf: &mut String, m: &ChatMessage) {
                     signature,
                 } => {
                     buf.push_str(thinking);
-                    buf.push_str(&signature);
+                    buf.push_str(signature);
                 }
                 ContentBlock::RedactedThinking { data } => {
                     buf.push_str(data);
@@ -286,9 +286,9 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
         {
             break;
         }
-        for i in *start..*end {
-            if !dropped_indices[i] {
-                dropped_indices[i] = true;
+        for slot in dropped_indices.iter_mut().take(*end).skip(*start) {
+            if !*slot {
+                *slot = true;
                 dropped_count += 1;
             }
         }
@@ -407,10 +407,10 @@ fn group_droppable_turns(
             // assistant(tool_use) cannot be dropped alone (would
             // orphan the tail). So in that case we skip emitting
             // any group for this assistant message entirely.
-            let pair_with_next = i + 1 <= tail_index
+            let pair_with_next = i < tail_index
                 && messages
                     .get(i + 1)
-                    .map_or(false, |n| n.role == Role::User && has_tool_result(n));
+                    .is_some_and(|n| n.role == Role::User && has_tool_result(n));
             if i + 1 < tail_index && pair_with_next {
                 // The tool_result sits in the droppable middle;
                 // the whole pair is one atomic group.
@@ -655,9 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_3_tool_use_tool_result_pair_intact_or_dropped_together() {
-        let mut messages = Vec::new();
-        messages.push(user("B5 memory"));
-        messages.push(assistant("ack"));
+        let mut messages = vec![user("B5 memory"), assistant("ack")];
         // First turn pair.
         messages.push(assistant_tool_use("tu_1", "read_file"));
         messages.push(user_tool_result("tu_1"));
@@ -1084,14 +1082,15 @@ mod tests {
         //         tail[1 huge user text].
         // context_window = 1000 → trigger = 800, target = 500.
         // The huge tail alone is well over 500 tokens.
-        let mut messages = Vec::new();
-        messages.push(user("B5 memory instructions"));
-        messages.push(assistant("ack"));
-        // One droppable middle user(text) message — small but
-        // still needs to be the FIRST candidate so it gets dropped.
-        messages.push(user("droppable middle"));
-        // Protected tail: huge user text (> target 500 tokens).
-        messages.push(user(big_pad(8_000)));
+        let messages = vec![
+            user("B5 memory instructions"),
+            assistant("ack"),
+            // One droppable middle user(text) message — small but
+            // still needs to be the FIRST candidate so it gets dropped.
+            user("droppable middle"),
+            // Protected tail: huge user text (> target 500 tokens).
+            user(big_pad(8_000)),
+        ];
 
         let result = compact_messages(messages, 1000).await;
 

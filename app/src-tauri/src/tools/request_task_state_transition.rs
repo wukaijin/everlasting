@@ -1141,14 +1141,15 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         // Emit happened.
-        let emitted = sink.emitted_task_state_transition.lock().unwrap();
-        assert_eq!(emitted.len(), 1, "emit_task_state_transition called once");
-        assert_eq!(emitted[0].session_id, "s1");
-        assert_eq!(emitted[0].tool_use_id, "tu_1");
-        assert_eq!(emitted[0].target_state, "in_progress");
-        assert_eq!(emitted[0].current_state.as_deref(), Some("planning"));
-        assert_eq!(emitted[0].slug.as_deref(), Some("my-feat"));
-        drop(emitted);
+        {
+            let emitted = sink.emitted_task_state_transition.lock().unwrap();
+            assert_eq!(emitted.len(), 1, "emit_task_state_transition called once");
+            assert_eq!(emitted[0].session_id, "s1");
+            assert_eq!(emitted[0].tool_use_id, "tu_1");
+            assert_eq!(emitted[0].target_state, "in_progress");
+            assert_eq!(emitted[0].current_state.as_deref(), Some("planning"));
+            assert_eq!(emitted[0].slug.as_deref(), Some("my-feat"));
+        }
 
         // Resolve as Answered.
         store

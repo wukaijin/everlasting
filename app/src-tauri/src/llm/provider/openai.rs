@@ -876,7 +876,7 @@ fn accumulate_tool_call_delta(state: &mut HashMap<u32, ToolCallBuf>, tc: &Value)
         return;
     };
     let idx = idx as u32;
-    let entry = state.entry(idx).or_insert_with(ToolCallBuf::default);
+    let entry = state.entry(idx).or_default();
     if let Some(id) = tc.get("id").and_then(|s| s.as_str()) {
         if !id.is_empty() {
             entry.id = id.to_string();
@@ -1602,12 +1602,12 @@ mod tests {
 
     #[test]
     fn build_tool_call_event_parses_accumulated_arguments_json() {
-        let mut buf = ToolCallBuf {
+        let buf = ToolCallBuf {
             id: "call_42".to_string(),
             name: "read_file".to_string(),
             args_buf: r#"{"path":"/etc/hosts"}"#.to_string(),
         };
-        let ev = build_tool_call_event(&mut buf, 0).expect("name is set");
+        let ev = build_tool_call_event(&buf, 0).expect("name is set");
         match ev {
             ChatEvent::ToolCall { id, name, input } => {
                 assert_eq!(id, "call_42");
@@ -1635,7 +1635,7 @@ mod tests {
             args_buf: "{\"cmd\":\"".to_string(),
         };
         buf.args_buf.push_str("ls\"}");
-        let ev = build_tool_call_event(&mut buf, 0).expect("name is set");
+        let ev = build_tool_call_event(&buf, 0).expect("name is set");
         match ev {
             ChatEvent::ToolCall { name, input, .. } => {
                 assert_eq!(name, "shell");
@@ -1650,12 +1650,12 @@ mod tests {
         // Defensive: an OpenAI delta never carried a name
         // for this index. Drop the event rather than emit
         // an incomplete ToolCall.
-        let mut buf = ToolCallBuf {
+        let buf = ToolCallBuf {
             id: "call_x".to_string(),
             name: String::new(),
             args_buf: "{}".to_string(),
         };
-        let ev = build_tool_call_event(&mut buf, 0);
+        let ev = build_tool_call_event(&buf, 0);
         assert!(ev.is_none());
     }
 
@@ -1663,12 +1663,12 @@ mod tests {
     fn build_tool_call_event_empty_args_buf_yields_empty_object() {
         // Defensive: no arguments at all → empty object,
         // not a parse failure.
-        let mut buf = ToolCallBuf {
+        let buf = ToolCallBuf {
             id: "call_x".to_string(),
             name: "ping".to_string(),
             args_buf: String::new(),
         };
-        let ev = build_tool_call_event(&mut buf, 0).expect("name is set");
+        let ev = build_tool_call_event(&buf, 0).expect("name is set");
         match ev {
             ChatEvent::ToolCall { input, .. } => {
                 assert_eq!(input, serde_json::json!({}));

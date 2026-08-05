@@ -132,6 +132,7 @@ enum WorkerAskTerminal {
 ///   `toolInput` (no separate "path scope" row) — surfacing
 ///   a misleading "仓库外" badge for a shell command or URL
 ///   is a UX bug.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn ask_path(
     sink: &Arc<dyn ChatEventSink>,
     db: &SqlitePool,
@@ -242,7 +243,7 @@ pub(super) async fn ask_path(
         // emit_permission_ask impl (production non-worker path)
         // is irrelevant here because the worker branch always uses
         // the buffer sink.
-        let _ = sink.emit_permission_ask(payload);
+        sink.emit_permission_ask(payload);
 
         // Register the ask against the worker-owned session_id so the
         // store's pending map separates worker asks from parent asks.
@@ -463,7 +464,7 @@ pub(super) async fn ask_path(
             // (the pre-PR1 behavior).
             worker_run_id: None,
         };
-        let _ = sink.emit_permission_ask(payload);
+        sink.emit_permission_ask(payload);
         let _ = record_audit(
             db,
             ctx,

@@ -25,7 +25,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sqlx::Row;
 use tokio_util::sync::CancellationToken;
 
 use super::tests_common::{make_harness, test_messages, MockEmitter, TestHarness};
@@ -68,18 +67,6 @@ fn text_turn(text: &str) -> MockResponse {
             text: text.to_string(),
         }),
         end_turn(),
-    ])
-}
-
-fn tool_turn(id: &str, name: &str, input: serde_json::Value) -> MockResponse {
-    MockResponse::Events(vec![
-        ok_evt(ChatEvent::Start),
-        ok_evt(ChatEvent::ToolCall {
-            id: id.to_string(),
-            name: name.to_string(),
-            input,
-        }),
-        tool_use_stop(),
     ])
 }
 
