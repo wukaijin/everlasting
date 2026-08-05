@@ -735,6 +735,67 @@ ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
 
 ---
 
+## 测试性能(WSL 后端 cargo test)
+
+> **背景**:本机 12 核 / 11G 内存(WSL 2 swap 常满),`--lib` 套件 1635 个用例。实测基线(2026-08-05,rustc 1.96):
+
+| 阶段 | 耗时 | 备注 |
+|---|---|---|
+| `cargo test --no-run`(冷编译) | ~1m37s | 全量编 4 个 test binary |
+| `cargo test --no-run`(增量) | ~11s | 改完代码重测的实际成本 |
+| `cargo test --lib`(默认多线程 ≈ 6 线程) | **26.3s** | 1635 用例全过 |
+| `cargo test --lib`(`--test-threads=1`) | **72.1s** | 仅用于逐用例计时 |
+| `cargo test --test e2e` | 4.2s 跑测 / 26.7s 含编译 | 10 个 e2e |
+
+### 建议:默认多线程跑,别逐模块串行
+
+**坑(踩过)**:想测某个模块的耗时,直觉写法是
+
+```bash
+for m in agent llm tools db ...; do
+  cargo test --lib "$m::" 2>&1 | tail   # ❌ 每次都重新链接 + spawn test binary
+done
+```
+
+**每次** `cargo test` 调用都要付 ~11s 的 relink + 进程启动税,16 个模块串下来光 baseline 就 ~180s,真实测试时间反而被淹没。实测会看到 `agent` 模块"耗时 630s"的假象(其实是 16 次串行 baseline 累加),而一次性 `cargo test --lib` 只要 26s。
+
+**正确做法**:
+- **日常跑测**直接 `cargo test --lib`(默认就是多线程,thread 数 = CPU 核数),**不要**自己加 `--test-threads=1`。
+- **找慢用例**用 [`cargo-nextest`](https://nexte.st)(`cargo nextest run --lib`),它原生带逐用例计时 + 可并行;本机离线装不上时,退而求其次:单线程跑一次 `cargo test --lib -- --test-threads=1` 并对每行输出打时间戳(见下方脚本),相邻两行的时间差 ≈ 该用例耗时。
+- **冒烟**用模块 filter 缩范围:`cargo test --lib "agent::tests_agent_loop::"`,**一次** `cargo test` 调用内用 filter,而不是循环调多次。
+
+```bash
+# 单线程逐用例计时(无 nextest 时的 fallback;lib binary hash 随编译变,先 --no-run 拿到)
+cd app/src-tauri && \
+  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo test --lib --no-run  # 得到 target/debug/deps/everlasting_lib-<hash>
+BIN=target/debug/deps/everlasting_lib-<hash>
+"$BIN" --test-threads=1 2>&1 | awk '
+  /^test .* \.\.\. (ok|FAILED|ignored)/ {
+    "date +%s.%N" | getline ts; close("date +%s.%N")
+    print ts, $0
+  }
+' | awk 'NR>1 { printf "%8.3f %s\n", $1-prev, substr($0, index($0,$2)) } { prev=$1 }' \
+  | sort -rn | head
+```
+
+### 已知最耗时用例(单线程计时,2026-08-05)
+
+| 耗时 | 用例 | 根因 |
+|---|---|---|
+| **14.2s** | `agent::tests_agent_loop::agent_loop_max_turns_emits_done_marker` | 跑满 `MAX_TURNS=200` 轮 mock loop(每轮 resolver poll sleep 5+2ms) |
+| 7.5s | `daemon::server::tests::serve_daemon_shutdown_drains_active_agent_loop` | 真实 SIGTERM + 等 `SHUTDOWN_GRACE_SECS=3` |
+| 5.3s | `daemon::server::tests::serve_daemon_keeps_serving_without_signal_past_grace_window` | 硬 `sleep(GRACE_SECS+2)=5s`,且受 `SIGNAL_TEST_MUTEX` 串行 |
+| 2.9s | `agent::context::case_7_long_history_at_max_turns_compacts_safely` | 100 条消息 token 计数压缩(纯计算,无 sleep) |
+
+> daemon 三个信号测试因 `libc::kill(getpid(), SIGTERM)` 是进程级信号,必须经 `SIGNAL_TEST_MUTEX` **串行**——多线程也救不了,这是设计约束不是 bug。
+
+### 内存压力对并行度的限制
+
+本机 swap 已满(11G RAM / 3G swap 全占),`cargo test --lib` 6 线程只拿到 ~2.7× 加速(72s→26s),远不到理论 6×。表现是编译/链接阶段大量换页。**临时缓解**:跑测前关掉 daemon / 浏览器 / 其他大内存进程;或显式压线程数 `cargo test --lib -- --test-threads=4`(避免 OOM 时被 kernel 杀 test 进程)。
+
+---
+
 ## 关联文档
 
 - [spike-001](./spikes/001-wsl-tauri-window.md) — 这些坑的来源 spike
