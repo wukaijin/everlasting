@@ -41,8 +41,8 @@ contrast.
 | Token | Value | Use |
 |---|---|---|
 | `--color-text-primary` | `#cbd5e1` | Main body text, form input text |
-| `--color-text-secondary` | `#8b95a7` | Less important text (captions, labels) |
-| `--color-text-muted` | `#7c8aa0` | Subtitles, status bar, sidebar headers, hint text |
+| `--color-text-secondary` | `#9aa3b8` | Less important text (captions, labels) — bumped 2026-08-05 from `#8b95a7` (slate-350, +6% luminance) |
+| `--color-text-muted` | `#8a93a8` | Subtitles, status bar, sidebar headers, hint text — bumped 2026-08-05 from `#7c8aa0` (slate-400) in step with `--color-text-secondary` to preserve the 7% luminance gap |
 | `--color-text-on-accent` | `#ffffff` | Pure white for text on saturated accent / tool-error backgrounds (buttons, toasts, counts) where `--color-text-primary` reads dirty. Added 2026-06-27 PR2 (14 ad-hoc `#ffffff` swept). |
 
 **Token gap rules**:
@@ -165,6 +165,68 @@ lift) as part of the UI polish PR.
 **When to revisit**: if the contrast between `--color-text-muted`
 and `--color-text-secondary` ever feels too small (or too
 large), bump both in step, keeping the relative gap.
+
+---
+
+## Decision: `--color-text-secondary` / `--color-text-muted` lifted one slate tier (2026-08-05)
+
+**Context**: secondary text (`--color-text-secondary: #8b95a7`,
+slate-400-equivalent) read as too dim across 40+ component
+call sites (sidebar captions, model/mode select labels, tool
+card metadata, message footer, chat input hint, audit log
+rows, ...). User reported the overall text felt under-lit even
+though `--color-text-primary` (#cbd5e1) is already at
+slate-300. The fix is to lift the secondary + muted tier one
+slate step (slate-400 → slate-350, slate-450 → slate-400)
+without disturbing `--color-text-primary` — that anchor is
+where the "primary vs secondary" hierarchy starts, and pulling
+it up would compress the gap to the primary tier.
+
+**Decision**:
+
+- `--color-text-secondary`: `#8b95a7` → `#9aa3b8` (slate-350,
+  +6% luminance)
+- `--color-text-muted`: `#7c8aa0` → `#8a93a8` (slate-400, in
+  step with secondary to preserve the documented 7% luminance
+  gap)
+- `--color-text-primary`: untouched (`#cbd5e1`, slate-300)
+- `--color-text-on-accent`: untouched (`#ffffff`)
+
+**Rationale**:
+
+- The two tokens are lifted together so the relative
+  secondary↔muted contrast stays at the previously-tuned
+  ~7% luminance. Bumping only `--color-text-secondary` would
+  invert the gap and make `--color-text-muted` look dimmer
+  than it used to — visible regression for the 11px mono
+  caption tier that the 2026-06-09 bump was supposed to
+  rescue.
+- Keeping `--color-text-primary` at `#cbd5e1` preserves the
+  ~10% luminance gap between primary and secondary — the
+  hierarchy still reads "primary headline, secondary
+  metadata" at a glance. A more aggressive lift (e.g.
+  `--color-text-secondary: #a8b0c0`) would narrow this to
+  ~4% and start to flatten the visual hierarchy the design
+  depends on.
+- No component CSS needs to change — all 40+ call sites
+  already reference `var(--color-text-secondary)`, so the
+  lift cascades automatically. The `PluginSelect.vue` line
+  that uses `--color-text-secondary` for a border + a
+  background (not just text) inherits the same lift; the
+  lift is small enough that the visual impact on those
+  decorations is the right direction (a slightly lighter
+  border on a 1px chip edge) rather than a regression.
+
+**When to revisit**:
+
+- If components that *should* be dim (inactive placeholder
+  text, very subtle hint text) start to read as too bright,
+  consider adding a dedicated `--color-text-faint` below
+  `--color-text-muted` rather than dimming muted back down.
+- If the gap to primary ever feels too tight, lift primary
+  to `#d1d8e3` (slate-280) — but only if a real readability
+  audit (e.g. axe-core WCAG AA pass on body text) flags
+  primary itself. Don't lift primary speculatively.
 
 ---
 

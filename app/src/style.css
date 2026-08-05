@@ -31,10 +31,17 @@
      --color-bg-elevated and reads as invisible). */
     --color-bg-border-strong: #3b475a;
 
-    /* Text colors */
+    /* Text colors. --color-text-secondary / --color-text-muted bumped
+       2026-08-05 (task ongoing): #8b95a7→#9aa3b8 / #7c8aa0→#8a93a8
+       (slate-350 / slate-400). Rationale: secondary text felt dim
+       across 40+ component call sites; the new values land roughly
+       one slate tier brighter while keeping the 7% luminance gap
+       rule intact. --color-text-primary (#cbd5e1, slate-300) was
+       intentionally left alone — the hierarchy should still read
+       primary > secondary > muted at a glance. */
     --color-text-primary: #cbd5e1;
-    --color-text-secondary: #8b95a7;
-    --color-text-muted: #7c8aa0;
+    --color-text-secondary: #9aa3b8;
+    --color-text-muted: #8a93a8;
     /* On-accent / on-error text: pure white for text on saturated
      colored backgrounds where --color-text-primary (#cbd5e1) would
      read dirty. Added 2026-06-27 PR2 — 14 ad-hoc color:#ffffff across
