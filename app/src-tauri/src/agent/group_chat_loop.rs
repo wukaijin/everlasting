@@ -85,6 +85,23 @@ use crate::tools::read_guard::ReadGuard;
 /// `run_chat_loop`; this is an outer-loop safety bound.
 const MAX_ORCHESTRATION_ROUNDS: usize = 30;
 
+/// How many consecutive times the moderator may end its turn WITHOUT
+/// calling `nominate_speaker` / `end_discussion` before we give up.
+///
+/// Root-cause note (sessions a6c87247 / 4a9d3566 / 093823f3): the OLD
+/// behavior on "no nomination" was a **round-robin fallback** — it
+/// mechanically dispatched `participants[round % len]`. But the
+/// moderator often uses natural language to signal intent ("接下来请
+/// D4F…") without calling the tool, so round-robin dispatched the
+/// WRONG participant. The mis-dispatched speaker then mimicked the
+/// intended speaker's voice → full role confusion.
+///
+/// Fix: instead of round-robin, RETRY the moderator turn (no
+/// participant is dispatched) so it gets another chance to call the
+/// tool. After this many retries with no nomination, we stop the
+/// discussion (the moderator is stuck / the model isn't tool-calling).
+const MAX_NO_NOMINATE_STREAK: usize = 3;
+
 /// The moderator's system prompt. Tells it to facilitate + use the
 /// `nominate_speaker` / `end_discussion` tools. Built once per
 /// orchestration entry (participants list is stable for the run).
@@ -114,6 +131,23 @@ fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          agree, or push back. Pick the order that best explores the topic. Keep \
          the discussion focused; end it when it has run its course.",
         roster.join("\n")
+    )
+}
+
+/// Nudge appended to the moderator's system prompt when it ended its
+/// previous turn(s) without calling `nominate_speaker` /
+/// `end_discussion`. Forces a tool call so the orchestrator can
+/// dispatch the right participant (or stop). See
+/// [`MAX_NO_NOMINATE_STREAK`] for the retry design.
+fn moderator_nudge(streak: usize) -> String {
+    format!(
+        "\n\n\
+         IMPORTANT: your previous {streak} turn(s) did NOT call a tool — you spoke \
+         but did not hand the floor to anyone. You MUST end THIS turn by calling \
+         either `nominate_speaker({{name: \"...\"}})` (to let a participant speak) \
+         or `end_discussion({{summary: \"...\"}})` (to close the discussion). \
+         Do NOT output only text.",
+        streak = streak
     )
 }
 
@@ -390,6 +424,13 @@ pub async fn run_group_chat_loop(
     let moderator_provider =
         resolve_provider(&worker_catalog, &gc_ctx.moderator_model_id, &db).await;
 
+    // Consecutive moderator turns that ended WITHOUT a
+    // `nominate_speaker` / `end_discussion` call. Each such turn bumps
+    // this; a nomination / end resets it to 0. At MAX_NO_NOMINATE_STREAK
+    // we stop retrying (the moderator is stuck). See the fallback logic
+    // below the turn-state read for the full rationale.
+    let mut no_nominate_streak: usize = 0;
+
     for round in 0..MAX_ORCHESTRATION_ROUNDS {
         if token.is_cancelled() {
             break;
@@ -423,6 +464,17 @@ pub async fn run_group_chat_loop(
             },
         );
         if let Some(provider) = &moderator_provider {
+            // Build the prompt: base + nudge if this is a retry (the
+            // moderator ended prior turns without calling a tool).
+            let prompt = if no_nominate_streak > 0 {
+                format!(
+                    "{}{}",
+                    moderator_prompt,
+                    moderator_nudge(no_nominate_streak)
+                )
+            } else {
+                moderator_prompt.clone()
+            };
             run_chat_loop(
                 tool_defs.clone(),
                 provider.clone(),
@@ -450,14 +502,14 @@ pub async fn run_group_chat_loop(
                 // voice (identity confusion, DB session b144cc2a seq 3-4).
                 // With max_turns=1 the turn ends right after the
                 // tool_result, and the moderator only speaks again on its
-                // next round (round-robin / nomination loop).
+                // next round (retry / nomination loop).
                 Some(1),
                 false, // owns session_active slot
                 false, // persist (moderator turns are part of the record)
                 Some(false),
                 worker_catalog.clone(),
                 worker_event_sink.clone(),
-                Some(moderator_prompt.clone()),
+                Some(prompt),
                 None,
                 subagent_cache.clone(),
                 None,
@@ -493,21 +545,44 @@ pub async fn run_group_chat_loop(
         }
 
         let nominee_name = match next_speaker {
-            Some(n) => n,
+            Some(n) => {
+                // The moderator nominated — reset the streak and proceed.
+                no_nominate_streak = 0;
+                n
+            }
             None => {
-                // Fallback (D7 risk): moderator didn't nominate.
-                // Round-robin to the next participant so the
-                // discussion isn't stuck.
-                if gc_ctx.participants.is_empty() {
+                // The moderator ended its turn WITHOUT calling
+                // nominate_speaker / end_discussion. The OLD behavior
+                // (pre-08-06) was a round-robin fallback: dispatch
+                // `participants[round % len]`. That was the ROOT CAUSE of
+                // the group-chat role confusion across three sessions
+                // (a6c87247 / 4a9d3566 / 093823f3): the moderator often
+                // signals intent in natural language ("接下来请 D4F…")
+                // without calling the tool, so round-robin dispatched the
+                // WRONG participant. The mis-dispatched speaker then
+                // mimicked the intended speaker's voice → full role
+                // collapse.
+                //
+                // Fix: DON'T dispatch anyone. Retry the moderator turn
+                // (it will see its own prior non-tool text in the
+                // reloaded history + get a nudge in its system prompt).
+                // After MAX_NO_NOMINATE_STREAK retries, give up and stop.
+                no_nominate_streak += 1;
+                if no_nominate_streak > MAX_NO_NOMINATE_STREAK {
                     tracing::warn!(
                         round,
-                        "group_chat: no participants to fall back to; stopping"
+                        streak = no_nominate_streak,
+                        "group_chat: moderator did not nominate after {} retries; stopping discussion",
+                        MAX_NO_NOMINATE_STREAK
                     );
                     break;
                 }
-                let idx = round % gc_ctx.participants.len();
-                tracing::warn!(round, fallback=?gc_ctx.participants[idx].name, "group_chat: moderator didn't nominate; round-robin fallback");
-                gc_ctx.participants[idx].name.clone()
+                tracing::warn!(
+                    round,
+                    streak = no_nominate_streak,
+                    "group_chat: moderator did not nominate; retrying moderator turn (no participant dispatched)"
+                );
+                continue;
             }
         };
 
@@ -783,6 +858,35 @@ mod tests {
             !p.contains("@moderator:"),
             "moderator prompt must not showcase an @-prefix example: {p:?}"
         );
+    }
+
+    /// 08-06 fix: the no-nominate nudge must (a) name BOTH arbitration
+    /// tools, (b) forbid outputting only text, and (c) carry the streak
+    /// count. The base moderator prompt (streak 0) must NOT carry the
+    /// nudge.
+    #[test]
+    fn moderator_nudge_forces_tool_call() {
+        let n = moderator_nudge(2);
+        assert!(
+            n.contains("nominate_speaker") && n.contains("end_discussion"),
+            "nudge must name both tools: {n:?}"
+        );
+        assert!(
+            n.contains("Do NOT output only text"),
+            "nudge must forbid text-only: {n:?}"
+        );
+        assert!(
+            n.contains("previous 2 turn(s)"),
+            "nudge must carry streak count: {n:?}"
+        );
+    }
+
+    /// 08-06 fix: MAX_NO_NOMINATE_STREAK sanity — must be ≥ 1 (retry at
+    /// least once) and small enough to bound cost.
+    #[test]
+    fn max_no_nominate_streak_is_sane() {
+        assert!(MAX_NO_NOMINATE_STREAK >= 1, "must retry at least once");
+        assert!(MAX_NO_NOMINATE_STREAK <= 5, "too many retries is wasteful");
     }
 
     // -------------------------------------------------------------------

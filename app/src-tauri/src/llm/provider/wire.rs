@@ -243,22 +243,46 @@ pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireReq
     // `tool_result` anywhere in history. Such an orphan makes the very
     // request we're about to build fail upstream — OpenAI 400
     // "insufficient tool messages following tool_calls" / Anthropic
-    // 2013. Pure diagnostics: we do NOT mutate `messages`, only log so
-    // the next failure is grep-able (`tracing::error` "wire: orphan
-    // tool_use") instead of requiring fresh root-causing.
-    let orphans = orphan_tool_use_ids(&req.messages);
+    // 2013.
+    //
+    // 08-06 fix (group-chat speaker-desync): previously this was pure
+    // diagnostics — it logged the orphan but still sent the broken
+    // request, which 400'd every subsequent turn in a group chat once a
+    // single orphan landed in the DB (root cause: an intercepted
+    // arbitration tool whose error tool_result wasn't persisted on a
+    // max_turns exit; see session 4a9d3566 seq 29). Now we SELF-HEAL:
+    // append a synthetic `tool_result` (role: user) for each orphan id
+    // so the request satisfies Pair Atomicity and the conversation can
+    // continue. The synthetic result marks itself as an error so the
+    // model knows the tool call didn't complete normally.
+    let mut messages = req.messages;
+    let orphans = orphan_tool_use_ids(&messages);
     if !orphans.is_empty() {
-        tracing::error!(
+        tracing::warn!(
             orphan_count = orphans.len(),
             orphan_tool_use_ids = ?orphans,
-            "wire: orphan tool_use detected — assistant emitted tool_use with no \
-             matching tool_result in history; this request will fail upstream \
-             (OpenAI 400 \"insufficient tool messages\" / Anthropic 2013). See \
-             llm-contract.md §469 Pair Atomicity."
+            "wire: orphan tool_use detected — injecting synthetic tool_result(s) \
+             to satisfy Pair Atomicity (llm-contract.md §469). Root cause is \
+             upstream (a tool_result that should have been persisted); this is \
+             a defensive heal so the request doesn't 400."
         );
+        let synthetic_results: Vec<ContentBlock> = orphans
+            .iter()
+            .map(|id| ContentBlock::ToolResult {
+                tool_use_id: id.clone(),
+                content: "[tool result missing from history — synthesized by \
+                          wire layer to keep the conversation going]"
+                    .to_string(),
+                is_error: true,
+            })
+            .collect();
+        messages.push(ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(synthetic_results),
+            speaker: None,
+        });
     }
-    let messages = req
-        .messages
+    let messages = messages
         .into_iter()
         .flat_map(chat_message_to_wire_messages)
         .collect();
@@ -1081,8 +1105,95 @@ mod tests {
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_2".to_string()]);
     }
 
-    // ---- orphan_tool_call_order (OpenAI "tool_calls must be followed
-    // by tool messages" order guard) ----
+    // ---- chat_request_to_wire orphan self-heal (08-06 group-chat fix) ----
+
+    /// 08-06: an orphan tool_use (assistant emitted tool_use with no
+    /// matching tool_result) would 400 upstream. `chat_request_to_wire`
+    /// must self-heal by appending a synthetic tool_result for each
+    /// orphan id so the request satisfies Pair Atomicity. This is the
+    /// defensive fix for the group-chat death-loop (session 4a9d3566):
+    /// once a single orphan landed in the DB, every subsequent request
+    /// 400'd → `[生成出错中断]` → moderator retried → more orphans.
+    #[test]
+    fn chat_request_to_wire_heals_orphan_tool_use_with_synthetic_result() {
+        let req = ChatRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "orphan_1".to_string(),
+                    name: "nominate_speaker".to_string(),
+                    input: serde_json::json!({}),
+                }]),
+                speaker: None,
+            }],
+            system: None,
+            stream: false,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        // The last wire message must be a Tool carrying the synthetic
+        // result for the orphan id.
+        let last = wire.messages.last().expect("wire must have the heal msg");
+        match last {
+            WireMessage::Tool {
+                tool_call_id,
+                content,
+            } => {
+                assert_eq!(tool_call_id, "orphan_1");
+                assert!(
+                    content.contains("synthesized by wire layer"),
+                    "synthetic result must mark itself: {content:?}"
+                );
+            }
+            other => panic!("expected WireMessage::Tool, got {other:?}"),
+        }
+    }
+
+    /// 08-06: when there are NO orphans, `chat_request_to_wire` must not
+    /// inject anything (byte-identical to pre-fix for clean history).
+    #[test]
+    fn chat_request_to_wire_no_heal_when_history_is_clean() {
+        let req = ChatRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![
+                ChatMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "ok_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({}),
+                    }]),
+                    speaker: None,
+                },
+                ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                        tool_use_id: "ok_1".to_string(),
+                        content: "data".to_string(),
+                        is_error: false,
+                    }]),
+                    speaker: None,
+                },
+            ],
+            system: None,
+            stream: false,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        // No synthetic Tool appended — the wire has exactly the
+        // assistant + tool pair, nothing more.
+        assert_eq!(
+            wire.messages.len(),
+            2,
+            "clean history must not get a heal injection: {:?}",
+            wire.messages
+        );
+    }
 
     #[test]
     fn orphan_tool_call_order_empty_when_assistant_directly_followed_by_tool() {
