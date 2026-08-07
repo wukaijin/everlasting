@@ -82,12 +82,19 @@ LLM 不认 `name` 字段,只认 `role`。所有 `role: assistant` 历史都被�
   `role_history(&full, &participant.name)`。
 - **删除** `participant_view`(`:231`)+ `participant_view_row`(`:270`)+ 对应测试。
 
-### R2.5 — D-D 入口守卫扩展(P0-1,第二改动点)
+### R2.5 — D-D 入口守卫扩展(P0-1 + P0-3,第二改动点)
 
-`run_chat_loop` 的 tail user persist 守卫(`chat_loop.rs:990-1000`)扩展:群聊作用域内
-(`group_chat_state.is_some()`),tail user 行 `speaker.is_some()` 时视同已落库、跳过 persist。
-否则改写出的 user 行会被当"新人类消息"重复落库 → DB 污染 + 前端重复行。安全依据:
-群聊人类消息恒 speaker None,speaker Some 的 user 行只能是 role_history 改写产物。
+`run_chat_loop` 的 tail user persist 守卫(`chat_loop.rs:990-1000`)扩展,**两处配套**:
+1. **跳过 persist(P0-1)**:群聊作用域内(`group_chat_state.is_some()`),tail user 行
+   `speaker.is_some()` 时视同已落库、跳过 persist。否则改写出的 user 行会被当"新人类
+   消息"重复落库 → DB 污染 + 前端重复行。安全依据:群聊人类消息恒 speaker None,
+   speaker Some 的 user 行只能是 role_history 改写产物。
+2. **跳过 at_file 注入(P0-3,自查发现)**:改写行命中守卫后 `last_user_snapshot` 返回
+   `None`(而非 `Some(msg.content)`),使 `chat_loop.rs:1116` 的注入条件为 false——改写行
+   是他人发言转述,不是人类输入,本就不该触发 `@file` 注入(否则注入 manifest 写到错误
+   seq 行 + 前端 FileInjections 事件错位)。seq 取尾部最后一个 user 行,不再因常数短路
+   匹配到 DB 第一条 user 行。
+
 详见 `design.md` §R1.5。
 
 ### R3 — 工具结果语义:不共享(双向影响)
@@ -132,7 +139,9 @@ LLM 不认 `name` 字段,只认 `role`。所有 `role: assistant` 历史都被�
 - [ ] AC5:`role_history_*` 测试覆盖上表所有重写规则 + signature 回传契约
       (当前角色 Thinking 块 signature 完整)+ **wire 无双重 `@` 前缀**(P0-2)。
 - [ ] AC6(R2.5):D-D 守卫扩展——群聊作用域内 tail user 行 `speaker.is_some()` 不触发
-      persist(无 DB 重复行/前端无重行);经典聊天/群聊 human prompt 行为不变。
+      persist(无 DB 重复行/前端无重行);经典聊天/群聊 human prompt 行为不变;
+      **改写行不触发 at_file 注入(P0-3)**(last_user_snapshot=None,无注入 manifest
+      写入/无 FileInjections 事件;seq 不匹配 DB 第一条 user 行)。
 - [ ] AC7:既有群聊测试(`participant_view_*` 迁移为 `role_history_*`;`identity_contract_view`
       按 P1-1 **语义重写**非对象替换;其余 identity_contract + view 不变量)全绿。
 - [ ] AC8:`cargo test --lib` + `pnpm test` + clippy 零警告 + vue-tsc 零错误。

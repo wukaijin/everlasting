@@ -41,11 +41,18 @@
 - [ ] 删除 `participant_view`(`:231-264`)+ `participant_view_row`(`:270-313`)。
 - [ ] grep 确认 `participant_view` 全仓零残留(除 git 历史)。
 
-## Step 2.5 — R2.5 D-D 入口守卫扩展(P0-1)
+## Step 2.5 — R2.5 D-D 入口守卫扩展(P0-1 + P0-3)
 
 - [ ] `chat_loop.rs:990-1000` 的 `already_in_db` 判定:在 `group_chat_state.is_some()` 作用域内,
       tail user 消息 `speaker.is_some()` 时**视同已落库、跳过 persist**(短路)。按 design §R1.5
       的安全依据实现(群聊人类消息恒 speaker None,speaker Some 的 user 行只能是改写产物)。
+- [ ] **P0-3(自查发现)**:speaker Some 分支的 seq 取**尾部最后一个 user 行**
+      (`iter().rev().find(role=="user")`),**不用** `find(|db_row| speaker_some || matches)`
+      (常数短路会匹配到 DB 第一条 user 行,seq 错位)。
+- [ ] **P0-3**:speaker Some 命中守卫后,`last_user_snapshot` 返回 **`None`**(非
+      `Some(msg.content)`),使 `chat_loop.rs:1116` 的 at_file 注入条件为 false——改写行是
+      他人发言转述,不触发 `@file` 注入(否则注入 manifest 写错误 seq 行 + FileInjections
+      事件错位)。
 - [ ] 不改守卫对非群聊路径的行为(speaker None 时走原判定)。
 
 ## Step 3 — 测试新增 + 迁移
@@ -59,7 +66,10 @@
       - `role_history_wire_no_double_prefix`:改写行经 wire 序列化后 Anthropic `@name:` 只一次(P0-2)。
 - [ ] 新增 D-D 守卫测试(chat_loop 守卫测试处):
       `dd_guard_skips_persist_for_speaker_user_in_group_chat`(speaker Some 不 persist)+
-      `dd_guard_unchanged_for_classic_chat_speaker_none`(非群聊行为不变)。
+      `dd_guard_unchanged_for_classic_chat_speaker_none`(非群聊行为不变)+
+      `dd_guard_rewrite_row_skips_at_file_injection`(P0-3:改写行 last_user_snapshot=None,
+      注入条件 false,无 manifest 写入/无 FileInjections 事件)+
+      `dd_guard_rewrite_row_seq_not_first_user_row`(P0-3:改写行 seq 非 DB 第一条 user 行)。
 - [ ] **P1-1 语义重写**:`identity_contract_view_holds_under_same_model_and_mislabel`(`:1537`)
       **不是断言对象替换**——旧前提是"view 不消毒,mislabeled 行原样透传";role_history
       按 speaker 强制归因。迁移做法:断言 mislabeled 行(`speaker="M3"` 内容 `@D4F: …`)在

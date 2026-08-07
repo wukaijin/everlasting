@@ -143,33 +143,60 @@ tail user 消息在 DB 里按 `role == "user"` + `user_message_matches`(文本�
 ```rust
 let already_in_db = (!skip_persist)
     .then(|| {
-        // P0-1 (08-07-group-chat-same-model-crossover): a tail user row
-        // carrying `speaker` can ONLY be a role_history rewrite product
-        // (他人发言改写) — human prompts, tool_results, synthetic
-        // tool_results all have speaker == None. Treat it as already
-        // persisted to avoid duplicate writes + frontend ghost rows.
-        let msg_speaker_some = msg.speaker.is_some();
+        if msg.speaker.is_some() {
+            // P0-1 + P0-3 (08-07-group-chat-same-model-crossover): a tail
+            // user row carrying `speaker` can ONLY be a role_history
+            // rewrite product (他人发言改写) — human prompts, tool_results,
+            // synthetic tool_results all have speaker == None. Treat it as
+            // already persisted to avoid duplicate writes + frontend ghost
+            // rows. seq 取尾部最后一个 user 行(语义上最接近改写行的位置);
+            // 实际 seq 值不再被消费(注入被下方 last_user_snapshot=None 跳过)。
+            return loaded_session.messages.iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|db_row| db_row.seq);
+        }
         loaded_session.messages.iter()
             .filter(|m| m.role == "user")
-            .find(|db_row|
-                msg_speaker_some  // 改写行:无条件视同已落库
-                || user_message_matches(db_row, &msg)
-            )
+            .find(|db_row| user_message_matches(db_row, &msg))
     })
     .flatten()
     .filter(|_| group_chat_state.is_some())
     .map(|db_row| db_row.seq);
 ```
 
+**且**(P0-3,注入跳过的另一半):`already_in_db` 命中(speaker Some)分支的返回,
+`last_user_snapshot` 改为 `None`(现状是 `Some(msg.content)`):
+
+```rust
+if let Some(existing_seq) = already_in_db {
+    let user_seq = existing_seq;
+    // P0-3: 改写行 last_user_snapshot 返回 None —— chat_loop.rs:1116 的
+    // at_file 注入条件 (injections 非空 && last_user_snapshot.is_some()) 为
+    // false,注入整体跳过。改写行是他人发言转述,不是人类输入,本就不该
+    // 触发 @file 注入(否则注入 manifest 会写到错误的 seq 行 + 前端
+    // FileInjections 事件打到错误消息)。
+    (None, user_seq)
+} else { ... }
+```
+
 **安全依据**:群聊现代码库中,人类 prompt(`speaker: None`)、tool_result(`speaker: None`)、
 synthetic tool_result(`speaker: None`)恒为 None;`speaker: Some` 的 user 行**只能是
 role_history 的改写产物**。判定零误伤,现有调用路径(speaker None)行为不变。
 
+> **P0-3 背景(自查发现,评审 P0-1 只抓了一半)**:原方案守卫闭包写
+> `find(|db_row| msg_speaker_some || user_message_matches(...))` —— `msg_speaker_some`
+> 是外层常数,`find` 对 DB **第一条** user 行就返回 true,拿到错误 seq;且跳过 persist
+> 分支 `last_user_snapshot` 仍返回 `Some(改写内容)`,触发 `:1116` 的 at_file 注入 → 注入
+> manifest 写到错误 seq 行 + 前端事件错位。修正:speaker Some 时 seq 取尾部最后一个
+> user 行 + `last_user_snapshot` 返回 None。两条配套,重复落库与注入错位一起解决。
+
 ### 这意味着 R4 的修订
 
-`run_chat_loop` 不再"完全不动"——它的 D-D 守卫有**一处扩展**(在群聊作用域内的判定)。
-这是本任务除编排器外**唯一的第二改动点**,如实记入 PRD R4 / AC4。改动面仍极小(守卫
-判定加一个 `speaker.is_some()` 短路),且不改变守卫对非群聊路径的行为。
+`run_chat_loop` 不再"完全不动"——它的 D-D 守卫有**一处扩展**(在群聊作用域内的判定:
+跳过 persist + 跳过 at_file 注入)。这是本任务除编排器外**唯一的第二改动点**,如实记入
+PRD R4 / AC4。改动面仍极小(守卫判定加 `speaker.is_some()` 分支 + `last_user_snapshot`
+返回 None),且不改变守卫对非群聊路径的行为。
 
 ---
 
@@ -233,12 +260,14 @@ let view = role_history(&full, &participant.name);    // ← 取代 participant_
 | `role_history_signature_roundtrip_contract` | 构造含 signature 的 transcript,断言当前角色 Thinking.signature 完整(契约级守 Anthropic 回传) |
 | `role_history_wire_no_double_prefix`(P0-2) | 改写行经 wire 序列化后,Anthropic `@name:` 前缀只出现一次(无双重);OpenAI `name` 字段正确填入 |
 
-### D-D 守卫扩展测试(P0-1,在 chat_loop 守卫的测试处)
+### D-D 守卫扩展测试(P0-1 + P0-3,在 chat_loop 守卫的测试处)
 
 | 测试 | 断言 |
 |---|---|
 | `dd_guard_skips_persist_for_speaker_user_in_group_chat` | 群聊作用域内,tail user 行 `speaker.is_some()` → 不触发 persist_turn(无 DB 重复行) |
 | `dd_guard_unchanged_for_classic_chat_speaker_none` | 经典聊天(speaker None)/ 群聊 human prompt(speaker None)→ 守卫行为不变 |
+| `dd_guard_rewrite_row_skips_at_file_injection`(P0-3) | 改写行(speaker Some)命中守卫后 `last_user_snapshot` 返回 None → at_file 注入条件 false,无注入 manifest 写入、无 FileInjections 事件 |
+| `dd_guard_rewrite_row_seq_not_first_user_row`(P0-3) | 改写行的 `user_seq` 不等于 DB 第一条 user 行的 seq(find 不再因常数短路匹配错行);`last_user_snapshot` None 时 seq 不被消费,但值合理 |
 
 ### 迁移既有测试(P1-1 语义重写,关键)
 
