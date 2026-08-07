@@ -267,6 +267,107 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
     assert_eq!(emitter.tool_result_count(), 1);
 }
 
+/// 08-07-group-chat-role-history-isolation follow-up fix: some
+/// OpenAI-compatible providers (Console Go) end a tool_use stream with
+/// a NON-"tool_use" finish_reason (e.g. "stop" → normalized
+/// "end_turn"). The pre-fix `should_continue` predicate required
+/// `stop_reason == Some("tool_use")`, so the tools were NEVER executed
+/// and no tool_result was persisted → the next reload built a context
+/// with an orphan assistant(tool_calls) → every later turn 400'd with
+/// "An assistant message with 'tool_calls' must be followed by tool
+/// messages responding to each 'tool_call_id'" and the group chat
+/// burned MAX_ORCHESTRATION_ROUNDS on [生成出错中断] retries (DB
+/// session d7fe451c: seq 5 emitted 3 read_file tool_uses, zero
+/// tool_results, 26 consecutive error turns).
+///
+/// The fix keys tool execution on `tool_calls` alone. This test scripts
+/// turn 1 as tool_use + `stop_reason: Some("end_turn")` (the broken
+/// input) and asserts the tools STILL execute (2 sends + 1
+/// tool:result), then turn 2 terminates normally.
+#[tokio::test]
+async fn agent_loop_tool_use_with_non_tool_use_stop_reason_still_executes() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: tool_use, but the provider reports a NON-"tool_use"
+        // stop_reason ("end_turn" — what Console Go emits for "stop"
+        // after a tool_calls-only stream).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_1".into(),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: text response (after the agent loop executed the
+        // tool and fed the result back).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-tool-endturn".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        Some(false),
+        None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        None,
+        None,
+        h.subagent_cache.clone(),
+        None,
+        None,
+        None,
+        h.app_data_dir.clone(),
+        None,
+        h.question_store.clone(),
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        mock.call_count(),
+        2,
+        "tool_use with a non-'tool_use' stop_reason must still execute the tools"
+    );
+    assert_eq!(emitter.tool_call_count(), 1);
+    assert_eq!(
+        emitter.tool_result_count(),
+        1,
+        "tool_result must be emitted/persisted (pair atomicity, llm-contract §469)"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 2b) B4 use_skill loads the skill body into the tool_result
 // ---------------------------------------------------------------------------

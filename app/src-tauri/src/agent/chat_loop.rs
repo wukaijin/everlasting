@@ -2533,7 +2533,31 @@ pub async fn run_chat_loop(
             return;
         }
 
-        let should_continue = stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
+        // 08-07-group-chat-role-history-isolation follow-up fix: the
+        // pre-fix predicate required `stop_reason == Some("tool_use")`
+        // in addition to a non-empty `tool_calls`. That is too strict:
+        // an OpenAI-compatible provider (Console Go) can end a stream
+        // that emitted tool_calls with a DIFFERENT finish_reason
+        // (e.g. "stop" → normalized "end_turn"; some providers even
+        // omit it). The old predicate then took the `!should_continue`
+        // return below — the assistant(tool_use) row was already
+        // persisted, but the tools were never executed and no
+        // tool_result was persisted → the next reload built a context
+        // with an orphan assistant(tool_calls) (llm-contract.md §469
+        // violated) → every subsequent provider call 400'd with
+        // "An assistant message with 'tool_calls' must be followed by
+        // tool messages responding to each 'tool_call_id'" and the
+        // group chat died after MAX_ORCHESTRATION_ROUNDS of
+        // [生成出错中断] retries (DB session d7fe451c: seq 5 emitted 3
+        // read_file tool_uses, zero tool_results, 26 consecutive
+        // error turns).
+        //
+        // The correct signal is the tool_calls themselves: if the
+        // model emitted ANY tool_use, they MUST be executed and their
+        // results fed back (otherwise the pair is broken for every
+        // future request). stop_reason is informational only — it
+        // decides the terminal `Done` value, not whether tools run.
+        let should_continue = !tool_calls.is_empty();
 
         if !should_continue {
             // B6 PR1b: skip the cwd/touch_session writes in worker

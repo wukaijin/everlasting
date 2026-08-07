@@ -480,9 +480,25 @@ problem — the agent loop sees a generic 400 and retries, which 400s again.
 - Any future "summarize old messages" feature
 - Any future "sliding window context" feature
 - Edge case in `compact_messages`: when a pair straddles the **protected tail**
- boundary (current user message is protected), the algorithm must recognize
- `messages[len-2] = assistant(tool_use)` + `messages[len-1] = user(tool_result)`
- and treat them as a single protected unit (not as separate droppable turns).
+  boundary (current user message is protected), the algorithm must recognize
+  `messages[len-2] = assistant(tool_use)` + `messages[len-1] = user(tool_result)`
+  and treat them as a single protected unit (not as separate droppable turns).
+- The agent loop's own tool-execution gate (08-07-group-chat-role-history-
+  isolation follow-up, 2026-08-07): `should_continue` keys on `tool_calls`
+  alone — an OpenAI-compatible provider (Console Go) can end a tool_use
+  stream with a NON-"tool_use" finish_reason ("stop" → "end_turn", or
+  missing). The pre-fix predicate (`stop_reason == Some("tool_use")`)
+  skipped tool execution entirely → the assistant(tool_use) row was already
+  persisted but no tool_result followed → every later turn 400'd with
+  "An assistant message with 'tool_calls' must be followed by tool messages
+  responding to each 'tool_call_id'" and the group chat burned
+  MAX_ORCHESTRATION_ROUNDS on `[生成出错中断]` retries (DB session
+  `d7fe451c`: seq 5 emitted 3 read_file tool_uses, zero tool_results, 26
+  consecutive error turns). The correct signal is the tool_calls themselves:
+  if the model emitted ANY tool_use they MUST be executed and their results
+  fed back; stop_reason only decides the terminal `Done` value.
+  Test: `agent_loop_tool_use_with_non_tool_use_stop_reason_still_executes`
+  (`agent/tests_agent_loop.rs`).
 
 **Test coverage** (in `agent/context.rs`):
 - `case_3_tool_use_tool_result_pair_intact_or_dropped_together`
