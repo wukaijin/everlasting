@@ -103,16 +103,16 @@ export interface ChatMessage {
 }
 ```
 
-`rehydrateMessages`(`streamController.ts:424-688`)把 DB 的块数组按类型 push 进各自桶里;`MessageItem.vue:1050-1292` 再以固定顺序渲染:**思考折叠块 → redacted 计数 → 工具卡列表 → 文本气泡**。所以单条气泡内永远是"思考扎堆在上、工具扎堆在中、文本在下",不会出现"想一下、调一下"的流水形态。
+`rehydrateMessages`(`streamRehydrate.ts`,08-07-large-file-splitting 拆分)把 DB 的块数组按类型 push 进各自桶里;`MessageItem.vue` 的 `buildTimeline`(`messageTimeline.ts`)再以固定顺序渲染:**思考折叠块 → redacted 计数 → 工具卡列表 → 文本气泡**。所以单条气泡内永远是"思考扎堆在上、工具扎堆在中、文本在下",不会出现"想一下、调一下"的流水形态。
 
 ### 1.4 关键洞察:实时流式阶段已经是"一条流"
 
-`handleChatEvent`(`streamController.ts:877-1366`)在整个 run 期间始终 mutate 同一个 assistant placeholder(`msgs[len-1]`),turn1/turn2/turnN 的 think/tool/result/text 全部堆叠上去:
+`handleChatEvent`(`streamEvents.ts`,08-07-large-file-splitting 拆分)在整个 run 期间始终 mutate 同一个 assistant placeholder(`msgs[len-1]`),turn1/turn2/turnN 的 think/tool/result/text 全部堆叠上去:
 
-- `case "start"`(`streamController.ts:886-906`):turn2/turn3 只 `req.currentTurnIndex++`,**不新建 message**。
+- `case "start"`(`streamEvents.ts`):turn2/turn3 只 `req.currentTurnIndex++`,**不新建 message**。
 - `case "delta"` / `thinking_delta` / `tool:call` / `tool:result`:全部 append 到同一个 placeholder 的各桶。
 
-**所以实时态已经是一条流。** 问题只在 finalize:`reloadAfterFinalize`(`streamController.ts:1726-1852`)调 `load_session` 把单个流式占位替换成 N 条 per-turn DB 行,于是"一条流"散成了多个气泡。
+**所以实时态已经是一条流。** 问题只在 finalize:`reloadAfterFinalize`(`streamEvents.ts`)调 `load_session` 把单个流式占位替换成 N 条 per-turn DB 行,于是"一条流"散成了多个气泡。
 
 ### 1.5 为什么单 turn 内"保留流序"几乎不改变观感
 
@@ -161,7 +161,7 @@ Anthropic 一旦发出 `tool_use`,本轮 `stop_reason` 即为 `tool_use`,本轮�
 
 ### 3.2 前端 A:`rehydrateMessages` 输出有序结构
 
-**文件**:`app/src/stores/streamController.ts:424-688`
+**文件**:`app/src/stores/streamRehydrate.ts`(`rehydrateMessages`)
 
 **现状**:把 DB 的 `content` 数组按类型分桶到平行数组。
 
@@ -310,12 +310,12 @@ reload/rehydrate:  [user] [asst t1] [user(tr)] [asst t2] [user(tr)] [asst t3]   
 - `app/src-tauri/src/llm/types.rs:133` — `to_text()`(Text 块求和,顺序无关)
 
 **前端(渲染分组)**
-- `app/src/stores/streamController.ts:424-688` — `rehydrateMessages`(分桶)
-- `app/src/stores/streamController.ts:877-1366` — `handleChatEvent`(实时态已合并)
-- `app/src/stores/streamController.ts:1726-1852` — `reloadAfterFinalize`(打散成 per-turn 行)
+- `app/src/stores/streamRehydrate.ts` — `rehydrateMessages`(分桶,08-07 拆分)
+- `app/src/stores/streamEvents.ts` — `handleChatEvent`(实时态已合并,08-07 拆分)
+- `app/src/stores/streamEvents.ts` — `reloadAfterFinalize`(打散成 per-turn 行,08-07 拆分)
 - `app/src/stores/chat.types.ts:173-264` — `ChatMessage`(平行数组,无有序字段)
 - `app/src/components/chat/MessageList.vue:41-50, 207-213` — flat v-for,无分组
-- `app/src/components/chat/MessageItem.vue:1050-1292` — 渲染顺序(think→tool→text 固定)
+- `app/src/components/chat/messageTimeline.ts` — `buildTimeline` 渲染顺序(think→tool→text 固定,08-07 拆分)
 
 **测试**
 - `app/src/stores/streamController.test.ts` — `describe("finalizeRequest (… step-4 follow-up — 2013 wire invariant)")`(测 buffer eviction / diff cache,标题含 2013 但**不锁 wire 重建**)+ `describe("rehydrateMessages — orphan tool_use repair")` / `describe("… existing merge step is preserved")`(orphan/merge,与分组逻辑相关)

@@ -132,7 +132,7 @@
 - 跨机器 worktree 路径冲突(用 session_id 隔离)
 - 源机器断网时目标机器不能接续 — 设计选择,不是 bug
 
-> 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION.md#4-决策日志)。本节功能在 [ROADMAP §2 第四档(最远远期)](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),前期不展开实现细节。
+> 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION/decisions.md)。本节功能在 [ROADMAP §2 第四档(最远远期)](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),前期不展开实现细节。
 
 ---
 

@@ -72,12 +72,19 @@ use crate::llm::types::MessageContent;
 use crate::llm::{ChatMessage, Role, ToolDef};
 use crate::memory::MemoryCache;
 
+mod cache;
 pub(crate) mod dispatch;
 mod event_sink;
+mod frontmatter;
 mod loader;
+mod prep;
+mod resolve;
 mod sink;
+mod tests_dispatch;
+mod tests_loader;
 mod transcript;
 mod truncate_summary;
+mod worktree;
 
 // transport-abstraction 2026-07-20 (P1.3): re-export the new
 // subagent event sink trait + its two impls so callers reach it
@@ -109,7 +116,9 @@ pub use event_sink::{AppHandleSubagentSink, SubagentEventSink, ThreadLocalSubage
 // the `#[allow(unused_imports)]` keeps the re-export contract
 // visible to future consumers without churn.
 #[allow(unused_imports)]
-pub use loader::{LoadedSubagent, SubagentCache, SubagentSource};
+pub use cache::SubagentCache;
+#[allow(unused_imports)]
+pub use loader::{LoadedSubagent, SubagentSource};
 pub use sink::SubagentBufferSink;
 pub use transcript::TranscriptEntry;
 // `TranscriptKind` + the two wire-shape builders are consumed by
@@ -138,7 +147,8 @@ pub use truncate_summary::{
 // re-export them here so the IPC layer can reach them via
 // `crate::agent::subagent::*` without making the whole loader
 // module `pub`.
-pub use loader::{locate_agent_file, write_frontmatter_model};
+pub use cache::locate_agent_file;
+pub use loader::write_frontmatter_model;
 
 // ---------------------------------------------------------------------------
 // Forced dispatch (explicit-agent-dispatch, 2026-06-30)

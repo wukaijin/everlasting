@@ -228,7 +228,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 本方案是**登记性质**,未排期。实施时:
 
 1. **建 Trellis 任务**(按阶段拆,P1+P2 可一个任务,P3 独立):`prd.md`(要解决的具体场景 + 不变量)+ `design.md`(拆分器的状态机、引号处理、取 max 的偏序、grant 短路新前置的精确条件)+ `implement.md`(分步 + 回归测试矩阵 + 回滚点)。
-2. **选型 ADR 记** [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION.md#4-决策日志):自研拆分器 vs tree-sitter-bash vs 沙盒优先,讲清为什么先做 P1+P2 再 P3。
+2. **选型 ADR 记** [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION/decisions.md):自研拆分器 vs tree-sitter-bash vs 沙盒优先,讲清为什么先做 P1+P2 再 P3。
 3. **回归测试矩阵**(P2 的核心交付物):
    - 纯读单条(`ls`/`git diff`)→ ReadOnly,不回归
    - 纯读复合(`ls | grep`/`git diff | head`)→ ReadOnly(新)

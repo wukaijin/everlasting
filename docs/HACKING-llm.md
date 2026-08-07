@@ -278,7 +278,7 @@ OpenAI 用顶层 `reasoning_effort: "low|medium|high"`(o1/o3 系列),Anthropic �
 
 **坑点 6:跨协议降级(in-memory,不持久化)**
 
-切 model 时,`provider.send()` 内部 `strip_unsupported(target_caps)` 一次,DB 不动。规则(`wire.rs::strip_unsupported`):
+切 model 时,`provider.send()` 内部 `strip_unsupported(target_caps)` 一次,DB 不动。规则(`wire/to_wire.rs::strip_unsupported`,08-07 拆分):
 - `Reasoning` block → `target.supports_thinking || target.supports_reasoning_effort` 时保留,否则丢
 - `Signature` / `RedactedThinking` → 只 Anthropic + supports_thinking 保留,OpenAI 丢(opaque 不可转)
 - `ToolUse` / `ToolResult` / `Text` → 全部保留
@@ -403,8 +403,8 @@ body={"error":{"type":"<nil>","message":"invalid params, tool call result does n
 - 陷阱 4:`tool_result` 在 DB 里有,但**前端 in-memory 没正确反映 DB 拆分**;`toPayloadContent` 按协议只发 `tool_use` 不发 `tool_result`,所以 wire 上看似孤儿
 
 **根因链**:
-1. `streamController.handleToolCall` / `handleToolResult` 累积到 `last = msgs[msgs.length-1] = assistantMsg placeholder`(`app/src/stores/streamController.ts:494-518`)
-2. `handleChatEvent` for `delta` 累积 text 到**同一个** placeholder(`app/src/stores/streamController.ts:440-442`)
+1. `streamController.handleToolCall` / `handleToolResult` 累积到 `last = msgs[msgs.length-1] = assistantMsg placeholder`(`app/src/stores/streamEvents.ts`(08-07 拆分))
+2. `handleChatEvent` for `delta` 累积 text 到**同一个** placeholder(`app/src/stores/streamEvents.ts`(08-07 拆分))
 3. 后端 agent loop 每个 turn **单独** persist 一个 assistant message 到 DB(`app/src-tauri/src/lib.rs:1413-1424`)
 4. **结果**:in-memory placeholder 累积了所有 turn 的 `toolCalls` + `toolResults` + text;DB 实际是 N 条独立 assistant message
 5. `toPayloadContent` for `assistant` role 按协议只发 `thinking` / `text` / **`tool_use`** / `redacted_thinking`,**跳过** `m.toolResults`(`app/src/stores/chat.ts:519-528`,陷阱 2 的设计)
@@ -502,4 +502,4 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 - token 统计不重复(R9):retry_open 首字节前失败不消费 stream → 不 emit `Done` → `update_last_turn_usage` 只记最终成功 turn 一次(集成测试直查 SQL `sessions.last_input_tokens == <success_usage>` 验证)
 - Retry 不入审计(transient UX,不入 AuditKind;prd grill §4 锁定,避免 17 类 AuditKind 膨胀)
 
-**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/` + ADR `IMPLEMENTATION §4 2026-07-05`。
+**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/` + ADR `IMPLEMENTATION/decisions.md 2026-07-05`。

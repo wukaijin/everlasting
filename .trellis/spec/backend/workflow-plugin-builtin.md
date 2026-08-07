@@ -8,7 +8,7 @@
 > `.trellis/tasks/07-26-review-plugin-pack` (C3, review plugin 内置化)。
 >
 > **何时读本文**:新增 builtin workflow plugin、改 `builtin.rs`、改 `skill/loader.rs::builtin_plugin_skills` 或
-> `agent/subagent/loader.rs::builtin_plugin_agents`、或排查「新 plugin 在 PluginSelect 不可见 / skill 没加载 /
+> `agent/subagent/cache.rs::builtin_plugin_agents`(08-07 拆分)、或排查「新 plugin 在 PluginSelect 不可见 / skill 没加载 /
 > agent 角色没生效」时。
 
 ## 机制概览
@@ -45,7 +45,7 @@ app/src-tauri/resources/builtin-workflow/<plugin>/
 | 4 | `agent/workflow/builtin.rs` | `builtin_workflow_json(name)` match 加 `"<plugin>" => Some(BUILTIN_<PLUGIN>_WORKFLOW_JSON)` |
 | 5 | `agent/workflow/mod.rs` | re-export 新的 `BUILTIN_<PLUGIN>_*` 常量（照 `BUILTIN_DEV_*` 的 re-export 行） |
 | 6 | `skill/loader.rs::builtin_plugin_skills` | 从 `if != "dev"` / match 扩成覆盖新 plugin，返回对应 `BUILTIN_<PLUGIN>_SKILLS` |
-| 7 | `agent/subagent/loader.rs::builtin_plugin_agents` | 同 #6，返回 `BUILTIN_<PLUGIN>_AGENTS` |
+| 7 | `agent/subagent/cache.rs::builtin_plugin_agents`(08-07 拆分) | 同 #6，返回 `BUILTIN_<PLUGIN>_AGENTS` |
 | 8 | `agent/workflow/builtin.rs` tests mod | 加 3 个单测（照 dev 模式）：workflow.json 过 `validate()` + skills body 非空 + frontmatter 含 name |
 | 9 | `.everlasting/workflow/<plugin>/` | 同步 byte-identical 镜像 |
 

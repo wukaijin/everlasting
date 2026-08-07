@@ -25,7 +25,7 @@ worker subagent 的右侧 drawer。reka-ui `Dialog*` 组合实现（@2.9.9 无 `
 | `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片(复用 ToolCallHeader + ToolInputBody/ToolOutputBody,**不 wrap ToolCallCard**) |
 | `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片(复用 ToolCallHeader + PermissionAskBody,live interactive + historical outcome badge) |
 | `app/src/components/chat/ToolCallHeader.vue` | ★ (RULE-FrontSubagent-001, 2026-06-25) 共享 tool-card header(纯展示,0 store);ToolCallCard / DrawerToolCallCard / DrawerPermissionAskCard 三处复用,props 驱动差异(filePath/suffix/statusIconName/durationLabel/isError/isRunning/statusVariant) + `#status-extra` slot(ToolCallCard diff-btn) |
-| `app/src/components/chat/MessageItem.vue` | 主消息项(06-23 拆后 ~770 行,拆分自 1099 行) |
+| `app/src/components/chat/MessageItem.vue` | 主消息项(08-07 拆后 1125 行;卡片解析簇在 `messageCards/*`、时间轴在 `messageTimeline.ts`、编辑在 `useMessageEditing.ts`) |
 | `app/src/components/chat/MessageItemEdit.vue` | ★ (06-23 拆)user 消息 inline edit 模式(textarea + Save/Cancel + inline error) |
 | `app/src/components/chat/MessageItemFooter.vue` | ★ (06-23 拆)assistant/user 通用底部两联(error footer + F5 latency chip) |
 | `app/src/utils/transcriptPairing.ts` | `pairSections` section 级配对(snake→camel) |
@@ -830,9 +830,9 @@ Yolo 路径已有 `chatMode.test.ts` 覆盖(零回归)。
 不要让 store 自己 `transport.listen("tool:call")`(会与 streamController 的
 全局监听重复 + 丢失 sessionId 上下文)。而是:
 
-1. streamController 在 `handleToolCall`(`streamController.ts:1364`)已有
-   全局 `transport.listen("tool:call")`,payload 含 `name` + `input` +
-   通过 `req.sessionId` 可拿当前 session。
+1. streamController 在 `handleToolCall`(`streamEvents.ts`,经 streamController
+   re-export)已有全局 `transport.listen("tool:call")`,payload 含 `name` + `input`
+   + 通过 `req.sessionId` 可拿当前 session。
 2. 在 `handleToolCall` 里按 `payload.name` 加路由分支,调对应 feature store
    的入口方法:
    ```ts
@@ -847,8 +847,8 @@ Yolo 路径已有 `chatMode.test.ts` 覆盖(零回归)。
 
 | tool_name | feature store | 入口 | 触发条件 | 位置 |
 |---|---|---|---|---|
-| `update_checklist` | `useChecklistStore` | `handleToolCall(sessionId, name, input)` | 总是(B12 checklist 是该工具的唯一消费者) | `streamController.ts:1381` |
-| `write_file` | `useReviewStateStore` | `handleReviewStateWritten(sessionId, slug)` | `matchesReviewStatePath(input.path, slug)` 命中 review-state.json | `streamController.ts:1400` |
+| `update_checklist` | `useChecklistStore` | `handleToolCall(sessionId, name, input)` | 总是(B12 checklist 是该工具的唯一消费者) | `handleToolCall` 内 `CHECKLIST_TOOL_NAME` 分支(`streamEvents.ts`) |
+| `write_file` | `useReviewStateStore` | `handleReviewStateWritten(sessionId, slug)` | `matchesReviewStatePath(input.path, slug)` 命中 review-state.json | `handleToolCall` 内 `write_file` 分支(`streamEvents.ts`) |
 
 ### 关键纪律
 

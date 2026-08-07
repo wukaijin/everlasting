@@ -125,9 +125,9 @@
 
 ### 1.4 群聊模式(group chat,2026-07-29 落地,08-04~08-07 迭代加固)
 
-> 📌 **session_type 区分两种循环**:`sessions.session_type = 'chat'`(默认)走 `agent/chat_loop.rs`(经典单 agent);`'group_chat'` 走 `agent/group_chat_loop.rs`(多参与者 turn-taking 编排)。
+> 📌 **session_type 区分两种循环**:`sessions.session_type = 'chat'`(默认)走 `agent/chat_loop.rs`(经典单 agent);`'group_chat'` 走 `agent/group_chat_loop.rs` 编排 + `agent/group_chat_prompts.rs`(prompt/history 纯函数)(多参与者 turn-taking)。
 >
-> **群聊循环**(`group_chat_loop.rs`)由一个 **moderator**(主持人)agent 协调多个 **参与者** agent 轮流发言:moderator 用 `nominate_speaker` 点名下一发言者(**唯一调度机制**,`nominate_speaker` / `end_discussion` 均 moderator-only,参与者不得调用),参与者发言后回到 moderator,moderator 调 `end_discussion(summary)` 终止并给出全场总结。每条 message 落库带 `speaker` 列(参与者标识),前端按 speaker 渲染独立气泡 + 实时发言人 chip,`end_discussion` 的 summary 由 `DiscussionSummaryCard.vue` 渲染为"讨论总结"卡片。
+> **群聊循环**(`group_chat_loop.rs`,prompt/历史纯函数在 `group_chat_prompts.rs`)由一个 **moderator**(主持人)agent 协调多个 **参与者** agent 轮流发言:moderator 用 `nominate_speaker` 点名下一发言者(**唯一调度机制**,`nominate_speaker` / `end_discussion` 均 moderator-only,参与者不得调用),参与者发言后回到 moderator,moderator 调 `end_discussion(summary)` 终止并给出全场总结。每条 message 落库带 `speaker` 列(参与者标识),前端按 speaker 渲染独立气泡 + 实时发言人 chip,`end_discussion` 的 summary 由 `DiscussionSummaryCard.vue` 渲染为"讨论总结"卡片。
 >
 > **上下文构建 — per-role history 隔离(08-07)**:每个角色从共享 DB transcript 经 `role_history(full, current_role)` 组装**独立** LLM 上下文:只保留自己的 assistant 行(verbatim,含 thinking + signature),他人发言改写为 `role:user`(归属由 wire 层插 `@name:` 前缀),他人 thinking / 工具对(工具结果不共享)与 moderator 仲裁对被剥离。取代早期 `participant_view`(多身份 assistant 共存 = 同模型串台根因)。
 >
@@ -476,7 +476,7 @@ match tool_call.name {
     "glob"        => globset walk, cap 100, mtime desc,
     "list_dir"    => tokio::fs::read_dir, alphabetical + `/` suffix on dirs,
                      non-recursive,
-    "use_skill"   => SkillCache 取 SKILL.md 正文 → tool_result 回填(L1,2026-06-18 落地,详见 [IMPLEMENTATION §4](./IMPLEMENTATION.md#4-决策日志))
+    "use_skill"   => SkillCache 取 SKILL.md 正文 → tool_result 回填(L1,2026-06-18 落地,详见 [IMPLEMENTATION §4](./IMPLEMENTATION/decisions.md))
     "use_memory"  => 读 / 写 runtime memory(详见 [BACKLOG §3](./BACKLOG.md#3-多层-memory-与约束))
     "use_ui"      => 构造 UiCard 走 ⑭ 分支(详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关))
     ...
@@ -601,7 +601,7 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
-> 16 关卡在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION.md#4-决策日志) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
+> 16 关卡在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION/decisions.md) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
 
 ### 2.5 横切关注点:16 关之外但必做的事
 
@@ -614,7 +614,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **关键设计**:取消不立即终止 LLM 请求,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
 - **`shell` 进程组杀整组**:`shell` tool 子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程。Windows 留 P2
 - **缺失后果**:用户按 stop 没反应 → 跑光了 token 还在跑 → 信任崩塌
-- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION.md#4-决策日志)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
+- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION/decisions.md)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
 
 #### 2.5.2 ⑩ Tool 超时回填
 
@@ -643,7 +643,7 @@ agent loop 结束(text-only response or max_turns reached):
   - **Level 2 Jaccard 软提示**(`SOFT_WINDOW=5` / `SOFT_THRESHOLD=0.85`):≥2 对 token-set Jaccard > 0.85 → 容忍近重复
 - **per-tool 签名**:`read_file`/`write_file`/`list_dir`=path,`grep`/`glob`=pattern+path,`edit_file`=path+old_string(含 old_string 才不误判正当的同文件多块编辑),`shell`/`run_background_shell`=command,其余 fallback `name+canonical(input)`
 - **命中动作(软)**:两层都 `tracing::warn!` + 把 hint 文本插入 result message,**不跳过执行、不终止 loop**,MAX_TURNS=200 仍是硬兜底。无 AuditKind 落表
-- **完整设计 + 调研**:详见 [IMPLEMENTATION §4 2026-06-24 ADR](./IMPLEMENTATION.md#4-决策日志)
+- **完整设计 + 调研**:详见 [IMPLEMENTATION §4 2026-06-24 ADR](./IMPLEMENTATION/decisions.md)
 
 #### 2.5.5 ⑤ Context 超限降级(C3 MVP,2026-06-12 落地,**已实施**)
 
@@ -657,7 +657,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **不能做**:丢 system prompt / role prompt / 所有 memory
 - **MAX_TURNS 兜底**:200(从 20 → 50 → 200 演进,详见 ADR)
 - **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护)
-- **完整设计 + BUG 修复历史**:详见 [IMPLEMENTATION §4 2026-06-12/14/15 ADR](./IMPLEMENTATION.md#4-决策日志)(RULE-A-001/002/006 已闭环)
+- **完整设计 + BUG 修复历史**:详见 [IMPLEMENTATION §4 2026-06-12/14/15 ADR](./IMPLEMENTATION/decisions.md)(RULE-A-001/002/006 已闭环)
 
 #### 2.5.6 Session 切换的并发态
 
@@ -680,7 +680,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
 - **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
 - **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
-- **17 类 AuditKind + 完整 schema + payload wire shape + UI 渲染细节**:见 [IMPLEMENTATION §4 2026-06-13/14 ADR](./IMPLEMENTATION.md#4-决策日志) + `app/src-tauri/src/agent/permissions/audit.rs`
+- **17 类 AuditKind + 完整 schema + payload wire shape + UI 渲染细节**:见 [IMPLEMENTATION §4 2026-06-13/14 ADR](./IMPLEMENTATION/decisions.md) + `app/src-tauri/src/agent/permissions/audit.rs`
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
 
@@ -692,7 +692,7 @@ agent loop 结束(text-only response or max_turns reached):
   - `web_fetch` 虽只读但 Tier 4 默认 `emit ask`,MVP 排除(走串行,保留逐个 ask UX)
   - 共享状态安全:并发集合无 shell(改 cwd)/edit_file(写 read_guard)→ 无写冲突;`PermissionStore`/`SkillCache`/`ReadGuard` 都是 `Arc<Mutex/RwLock>`,多 task 并发 read 安全
   - cancel:并发不 `break`,等所有 task 完成或被 cancel;`execute_tool` 内 `tokio::select!` 各 task 独立响应 cancel
-- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION.md#4-决策日志) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./spikes/2026-06-19-async-parallel-tool-research.md)
+- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION/decisions.md) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./spikes/2026-06-19-async-parallel-tool-research.md)
 
 ---
 

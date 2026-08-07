@@ -205,18 +205,18 @@ camelCase + PascalCase category,**跨进程 JSON 协议化零成本**。11 个�
 
 | 事件名 | 监听点 | 说明 |
 |---|---|---|
-| `chat-event` | `streamController.ts:1826` | LLM 流主通道,按 request_id 路由 |
-| `tool:call` | `streamController.ts:1829` | |
-| `tool:result` | `streamController.ts:1832` | |
-| `tool:question` | `streamController.ts:1848` | `ask_user_question` 卡片 |
-| `mode:change:request` | `streamController.ts:1861` | `request_mode_change` 卡片 |
-| `task:state:transition:request` | `streamController.ts:1871` | W1 task 状态转换卡片 |
+| `chat-event` | `streamEvents.ts`(08-07 拆分) | LLM 流主通道,按 request_id 路由 |
+| `tool:call` | `streamEvents.ts` | |
+| `tool:result` | `streamEvents.ts` | |
+| `tool:question` | `streamEvents.ts`(08-07 拆分) | `ask_user_question` 卡片 |
+| `mode:change:request` | `streamEvents.ts` | `request_mode_change` 卡片 |
+| `task:state:transition:request` | `streamEvents.ts` | W1 task 状态转换卡片 |
 | `permission:ask` | `permissions.ts:252` | Tier 3/4 权限 modal |
 | `subagent:event` | `subagentRuns.ts:442` | worker transcript 流 |
 | `subagent:finished` | `subagentRuns.ts:473` | worker 完成 |
 | `projects:refreshed` | `projects.ts:131` | 启动 backfill 完成通知 |
 
-**streamController 是单点 funnel**——6 个流式事件都从这里进 Pinia store,按 `activeRequests: Map<requestId, RequestState>`(`streamController.ts:736`)路由。这是 transport 抽象的天然切点。该文件单点消费了 6 个 invoke(`chat` / `cancel_chat` / `load_session` / `record_tool_duration` / `update_message_latency` / `get_pending_interaction`)+ 6 个 listen,是 transport 抽象后最大的受益者。
+**streamController 是单点 funnel**——6 个流式事件都从这里进 Pinia store,按 `activeRequests: Map<requestId, RequestState>`(`streamController.ts`,`activeRequests` 声明)路由。这是 transport 抽象的天然切点。该文件单点消费了 6 个 invoke(`chat` / `cancel_chat` / `load_session` / `record_tool_duration` / `update_message_latency` / `get_pending_interaction`)+ 6 个 listen,是 transport 抽象后最大的受益者。
 
 #### 1.5c 其他 Tauri API 使用(非 IPC)
 

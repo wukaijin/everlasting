@@ -31,7 +31,7 @@ vi.mock("../transport", () => ({
 
 import { useStreamControllerStore } from "./streamController";
 import { useReviewStateStore } from "./reviewState";
-import { rehydrateMessages } from "./streamController";
+import { rehydrateMessages } from "./streamRehydrate";
 
 const SID = "review-sess";
 const RID = "rid-review";

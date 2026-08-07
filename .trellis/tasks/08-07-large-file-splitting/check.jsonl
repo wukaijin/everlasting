@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "校验拆分是否违反模块/模式约定(特别:RULE-A-006 未被触碰;Group-chat Pattern 引用路径已更新)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量验收(clippy/fmt/测试)"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "校验新模块布局符合目录结构约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "校验 streamEvents.ts 拆分后符合(Phase 2.7 写入的)Stream Controller 模式 + return 块导出保留约束"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量验收"}

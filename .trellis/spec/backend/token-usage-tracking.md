@@ -389,7 +389,7 @@ Total token-usage cargo tests: **17**（types 5 + anthropic 4 + openai 6 + db::s
 #### Frontend
 
 - `pnpm build` (vue-tsc strict) must pass.
-- **Known test gap (unguarded contract)**: `streamController.handleChatEvent("done")` 对 `context_input_tokens` 的 wire-optional fallback（`?? input + cache_creation + cache_read`，`streamController.ts:999-1003`）目前**无前端单测覆盖**（`**/*.test.ts` 无相关断言）。旧后端 wire shape 或字段缺失时该 fallback 是 load-bearing 的，后续应补一个 fallback 正确性测试。
+- **Known test gap (unguarded contract)**: `streamController.handleChatEvent("done")` 对 `context_input_tokens` 的 wire-optional fallback（`?? input + cache_creation + cache_read`，`streamEvents.ts`(08-07 拆分)）目前**无前端单测覆盖**（`**/*.test.ts` 无相关断言）。旧后端 wire shape 或字段缺失时该 fallback 是 load-bearing 的，后续应补一个 fallback 正确性测试。
 - Manual smoke test (acceptance A2 from the parent PRD):
  1. `cd app && pnpm tauri dev`
  2. Open a session, send a question, click Send.

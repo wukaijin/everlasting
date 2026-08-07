@@ -358,6 +358,9 @@ mod tests {
 
 pub mod anthropic;
 pub mod openai;
+pub mod streaming;
+pub mod tests_openai;
+pub mod tests_wire;
 pub mod wire;
 
 #[cfg(test)]

@@ -22,7 +22,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia, storeToRefs } from "pinia";
 import { effectScope, nextTick, watch } from "vue";
-import { groupChatNotice, rehydrateMessages, useStreamControllerStore } from "./streamController";
+import { groupChatNotice, useStreamControllerStore } from "./streamController";
+import { rehydrateMessages } from "./streamRehydrate";
 import { useMemoryStore } from "./memory";
 import { useChatStore } from "./chat";
 import { useQuestionCardsStore } from "./questionCards";

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "模块/模式约定(RULE-A-006 单一入口约束,本任务不碰 chat_loop.rs);Group-chat transcript view Pattern 引用 group_chat_loop.rs 路径,拆分后需按 R2 更新"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "模块组织结构约定 — 本任务全部是文件/模块拆分,必须遵守"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "wire 层契约(wire.rs 拆分参照:类型/双向转换边界)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量约束(clippy/fmt/测试全绿验收)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "当前为 51 行空模板(评审 P3-1)——Phase 2.7 streamController 拆分时把 return 块导出约束写入其 Stream Controller 小节(填补真实 spec);拆分参照以 design §1.7 + 现有代码结构为准"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "前端组件规范(MessageItem.vue 拆分参照)"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量约束(typecheck/测试验收)"}

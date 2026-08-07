@@ -13,7 +13,7 @@
 - 之后再回来能快速回到上下文
 - 讨论时有共同语言
 
-讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION.md#4-决策日志)。
+讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION/decisions.md)。
 
 ---
 
@@ -118,7 +118,7 @@
 - ❌ **不做 MCP 暴露** — 个人工具,工具集对外开放杠杆不足
 - ❌ **不做 Provider 限流(令牌桶)** — 个人使用场景未撞到限流,后期按需再评估
 
-> 完整"移除"决策矩阵见 [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION.md#4-决策日志) + [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
+> 完整"移除"决策矩阵见 [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION/decisions.md) + [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
 
 ---
 
@@ -153,7 +153,7 @@
 | Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#9-工具权限检查) 实施的前提 |
-| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION.md#4-决策日志) |
+| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION/decisions.md) |
 | 上下文爆炸                    | 高     | ✅ C3 context 压缩(0.80→0.50,B5 保护)+ 消息裁剪 + tool result 截断 |
 | 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,MAX_TURNS=200 兜底 |
 
@@ -162,7 +162,7 @@
 **复杂度 vs 学习价值**(历史决策,2026-06-04 起 + 2026-06-09 rig-core 弃用):
 - 选 rig:省掉 50% 样板代码,但少学 50% harness 细节
 - 选 reqwest:多学 50%,但每个字节都懂
-- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION.md#4-决策日志))
+- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions.md))
 
 **功能范围 vs 完成度**:
 - MVP 8 项都做,每项做到 70 分,胜过做 15 项每项 40 分

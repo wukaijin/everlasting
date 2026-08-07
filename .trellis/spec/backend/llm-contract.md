@@ -589,7 +589,7 @@ empty sig + UUID sig 混合 / 全 UUID 都可能 400；具体 threshold 不稳�
 
 ## Scenario: LLM Retry / Backoff (A5+, 2026-07-05)
 
-> 堵长会话 5xx / 429 / 网络断连整轮重来的体验缺口。Provider 层补网络重试 + Full Jitter 退避 + retry-after 解析,SSE 断连走"首字节前重试"安全边界。调研:`docs/research/llm-network-resilience-survey.md`;完整 PRD `.trellis/tasks/07-04-a5plus-llm-network-resilience/`;决策见 [IMPLEMENTATION §4 2026-07-05](../../../docs/IMPLEMENTATION.md#4-决策日志)。
+> 堵长会话 5xx / 429 / 网络断连整轮重来的体验缺口。Provider 层补网络重试 + Full Jitter 退避 + retry-after 解析,SSE 断连走"首字节前重试"安全边界。调研:`docs/research/llm-network-resilience-survey.md`;完整 PRD `.trellis/tasks/07-04-a5plus-llm-network-resilience/`;决策见 [IMPLEMENTATION §4 2026-07-05](../../../docs/IMPLEMENTATION/decisions.md)。
 
 ###1. Scope / Trigger
 

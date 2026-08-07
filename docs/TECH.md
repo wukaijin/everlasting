@@ -15,7 +15,7 @@
 | 前端       | **Vue 3.4+** + Vite     | `<script setup>` 组合式 API + Pinia + reka-ui / shadcn-vue |
 | 后端语言   | Rust 1.75+              | edition 2021                             |
 | 异步运行时 | tokio                   | Tauri 已经用 tokio                       |
-| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION.md#4-决策日志) |
+| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions.md) |
 | MCP        | **(已移除)** ~~rmcp 0.16.0~~ | A3 MCP 外暴露 2026-06-10 V2 重排移除,rmcp 从 Cargo.toml 删除(详见 §3) |
 | Git 操作   | **git2-rs**             | libgit2 绑定,worktree / diff / commit   |
 | 数据库     | **sqlx** + SQLite       | 编译期 SQL 检查,async 友好               |
@@ -83,12 +83,12 @@
 
 ## 2. 决策:rig-core 弃用(2026-06-09),改自研 Provider trait
 
-**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-04 段](./IMPLEMENTATION.md#4-决策日志))。理由:
+**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-04 段](./IMPLEMENTATION/decisions.md))。理由:
 - 20+ provider 支持,后期切 OpenAI / 本地模型无痛
 - 自带 `Agent<M>` 抽象,省掉"消息 → tool call → 循环"样板
 - 自带 `MessageStore` trait,接 SQLite 顺
 
-**弃用原因**(2026-06-09 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-09 段](./IMPLEMENTATION.md#4-决策日志)):
+**弃用原因**(2026-06-09 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-09 段](./IMPLEMENTATION/decisions.md)):
 - 学习价值:自研 Provider trait 比用 rig 学到更多 harness 细节
 - 控制粒度:rig 帮你做了"消息流 → tool call → 循环",自研可以插自定义逻辑(权限、审计、统计)
 - 风险:rig 预 1.0,breaking change 风险,锁版本治标不治本
