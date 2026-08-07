@@ -839,6 +839,30 @@ export function buildPendingNotification(
   return { message, sessionId };
 }
 
+/** 08-07-group-chat-review-fixes R2: map a group-chat orchestrator
+ *  boundary `stop_reason` to a user-facing notice string. Returns
+ *  `null` for any reason that is not an orchestrator boundary signal
+ *  (ordinary `end_turn` / `cancelled` / `group_chat_end` etc.). The
+ *  `done` handler calls this and attaches the result to the in-flight
+ *  placeholder's `notice` field so MessageItem can render a muted row.
+ *  Pure (no store access) so it is unit-testable in isolation.
+ *
+ *  Note: `group_chat_end` (the normal end) is intentionally NOT mapped
+ *  to a notice — a clean discussion end is not an abnormal event worth
+ *  flagging; only the skip/abnormal-end reasons surface a notice. */
+export function groupChatNotice(stopReason: string | undefined): string | null {
+  switch (stopReason) {
+    case "max_rounds":
+      return "讨论已达轮次上限，自动停止。";
+    case "nominee_unknown":
+      return "主持人点名的发言者不在列表中，跳过该轮。";
+    case "participant_unresolved":
+      return "某参与者的模型不可用，跳过该轮。";
+    default:
+      return null;
+  }
+}
+
 export const useStreamControllerStore = defineStore("streamController", () => {
   // ---------------------------------------------------------------------
   // State
@@ -1082,6 +1106,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // MessageItem row disappears the moment the stream
         // resumes after a successful retry.
         last.retrying = undefined;
+        // 08-07-group-chat-review-fixes R2: a new speaker turn also
+        // clears the prior orchestrator notice (e.g. a
+        // `nominee_unknown` skip was followed by a successful
+        // nomination + a real speaker turn).
+        last.notice = undefined;
         break;
       case "speaker":
         // 08-04 follow-up (实时 speaker 标识): the orchestrator
@@ -1386,15 +1415,37 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         }
         // F2: reset force-follow mode when the stream finishes.
         useChatStore().forceFollowActive = false;
+        // 08-07-group-chat-review-fixes R2: when the orchestrator emits
+        // a boundary `stop_reason`, attach a transient notice to the
+        // placeholder so the user sees WHY the discussion skipped a turn
+        // or ended abnormally. Done before the finalize gate so the
+        // notice lands on the placeholder while it still exists. The
+        // notice is NOT persisted (transient field, like `retrying`).
+        const gcNotice = groupChatNotice(event.stop_reason);
+        if (gcNotice) {
+          last.notice = gcNotice;
+        }
         // 08-04 follow-up (群聊逐轮流式): for a group-chat request the
         // per-speaker `Done`s are turn boundaries, NOT the end of the
         // orchestration (one request_id spans every speaker). Keep the
         // request alive and only finalize on the terminal signals —
-        // `Done { stop_reason: "group_chat_end" }` (the orchestrator
-        // ended the discussion) or `cancelled` (human preemption). The
+        // `group_chat_end` (the orchestrator ended the discussion),
+        // `max_rounds` (the outer loop hit its bound — added 08-07 R2,
+        // the loop has exited so no further events will arrive), or
+        // `cancelled` (human preemption). The non-terminal
+        // `nominee_unknown` / `participant_unresolved` reasons do NOT
+        // finalize — the orchestrator keeps going and the post-loop
+        // terminal `Done` is what finalizes. (08-07 R2 originally also
+        // had `moderator_stuck` as terminal; 08-07-toolset R2 removed
+        // the streak mechanism that produced it, so it's gone.) The
         // speaker placeholder is already sealed (`last.streaming =
         // false` above); the next speaker's `start` pushes a fresh one.
-        if (!req.groupChat || event.stop_reason === "group_chat_end" || event.stop_reason === "cancelled") {
+        const isTerminal =
+          !req.groupChat ||
+          event.stop_reason === "group_chat_end" ||
+          event.stop_reason === "cancelled" ||
+          event.stop_reason === "max_rounds";
+        if (isTerminal) {
           finalizeRequest(req.requestId, req.sessionId, false);
         }
         break;

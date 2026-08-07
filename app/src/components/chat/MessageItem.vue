@@ -1333,6 +1333,26 @@ const showEditedLabel = computed<boolean>(
       </span>
     </div>
 
+    <!--
+      08-07-group-chat-review-fixes R2: group-chat orchestrator
+      boundary notice. When a group-chat discussion skips a turn or
+      ends abnormally, `streamController`'s `done` handler attaches a
+      `notice` string to the in-flight placeholder (mirroring the
+      `retrying` pattern above). We render a muted row above the bubble
+      so the user understands why a turn vanished or why the discussion
+      stopped. NOT persisted (the controller / rehydrate both skip it),
+      so a session reload drops the row — it is live-orchestration
+      state only. Assistant rows only.
+    -->
+    <div
+      v-if="message.role === 'assistant' && message.notice"
+      class="msg__notice"
+      data-testid="msg-notice"
+    >
+      <Icon name="info" :size="12" icon-class="msg__notice-icon" />
+      <span class="msg__notice-text">{{ message.notice }}</span>
+    </div>
+
     <div
       v-if="message.redactedThinkingData && message.redactedThinkingData.length"
       class="msg__redacted"
@@ -1738,6 +1758,34 @@ const showEditedLabel = computed<boolean>(
 .msg__retrying-text {
   /* mono font already set on the parent; keep this span plain so
      the reason text wraps naturally on narrow viewports. */
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* 08-07-group-chat-review-fixes R2: group-chat orchestrator notice.
+   Mirrors the retrying chip's layout (inline-flex chip above the
+   bubble) but uses a solid neutral border instead of the dashed warn
+   orange — a notice is informational, not an in-flight retry. */
+.msg__notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border, var(--color-border-subtle));
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.msg__notice-icon {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.msg__notice-text {
   white-space: normal;
   word-break: break-word;
 }

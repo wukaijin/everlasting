@@ -1313,7 +1313,7 @@ run_chat_loop(/* … */ full, /* … */);
 // View-2 (participant): arbitration pairs stripped as atomic units.
 let full = reload_messages(&db, &session_id).await;
 let view = participant_view(&full);                    // D-A
-run_chat_loop(participant_tool_defs(&tool_defs), /* … */ view, /* … */);
+run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */);
 ```
 
 **Key contracts**:
@@ -1330,8 +1330,9 @@ run_chat_loop(participant_tool_defs(&tool_defs), /* … */ view, /* … */);
    `Some(turn_state)` (same Arc as the moderator) so the D-D guard's
    `group_chat_state.is_some()` holds for them too — otherwise the
    round-0 human message would be re-persisted. Arbitration safety is
-   unaffected: `participant_tool_defs` strips the two tools from the
-   participant's schema, so the interception branch can never fire.
+   unaffected: `group_chat_tool_defs(.., false)` does not list the
+   arbitration tools for participants, so the interception branch can
+   never fire.
 3. **Moderator runs `max_turns=Some(1)` (single turn, 08-04 follow-up)**:
    each moderator round is exactly ONE `provider.send` — remark +
    `nominate_speaker` / `end_discussion` `ToolCall` in one stream, then
@@ -1378,10 +1379,42 @@ run_chat_loop(participant_tool_defs(&tool_defs), /* … */ view, /* … */);
    orchestrator-only: the agent loop's per-event stream match drops it
    defensively if a provider ever re-emits it. Test: the integration
    test asserts one `Speaker` event per inner turn, in turn order.
+8. **Tool whitelist, not blacklist (08-07-group-chat-toolset-and-identity R1)**:
+   group-chat speakers receive ONLY `group_chat_tool_defs(tool_defs,
+   is_moderator)` — a whitelist of research tools
+   (`read_file`/`grep`/`glob`/`list_dir`/`web_fetch`) shared by both
+   roles, plus the two arbitration tools for the moderator. This replaced
+   the pre-R1 `participant_tool_defs` blacklist ("strip the two
+   arbitration tools"), which leaked `use_skill` / `update_checklist` /
+   `shell` / `write_file` into group chat. DB session `8be4687f` showed a
+   participant abusing `use_skill` (hallucinated
+   `"group-chat-director"` — no `<available-skills>` block is injected
+   under `system_prompt_override`) and `update_checklist` (self-built
+   speaker rotation) to hijack the moderator. The whitelist is
+   **exhaustive**: a newly added `builtin_tools` entry does NOT enter
+   group chat unless explicitly added to the whitelist, so this leak
+   class can't recur. Tests:
+   `group_chat_tool_defs_moderator_has_research_plus_arbitration` +
+   `group_chat_tool_defs_participant_has_research_only`.
+9. **No nominate-streak counter (08-07-group-chat-toolset-and-identity R2)**:
+   when the moderator ends a turn without calling
+   `nominate_speaker`/`end_discussion`, the orchestrator simply retries
+   the moderator turn (`continue`) — there is NO "stuck" detection, NO
+   `moderator_nudge`, NO `MAX_NO_NOMINATE_STREAK`. The only bound is
+   `MAX_ORCHESTRATION_ROUNDS` (→ terminal `Done { stop_reason:
+   "max_rounds" }`). This replaced the 08-07 streak mechanism, which
+   couldn't distinguish "moderator is legitimately researching" (DB
+   `8be4687f` seq 1/3/5) from "stuck" and mis-killed the former.
+   Pacing guidance now lives in the moderator prompt (contract: the
+   "research is a MEANS, hand the floor after a short look" block), not
+   in a dynamically-appended nudge. The `moderator_stuck` stop_reason is
+   gone; the finalize whitelist is `{ group_chat_end, cancelled,
+   max_rounds }`.
 
 **When to apply**: any orchestrator that drives multiple `run_chat_loop`
 calls over one shared session — give each callee a view, never the raw
-reload, and never patch the persist sites heuristically.
+reload, never patch the persist sites heuristically, and scope each
+callee's tool list to a whitelist (never the full `builtin_tools`).
 
 **Tests**: `.trellis/spec/backend/…` → `app/src-tauri/src/agent/tests_group_chat.rs`
 (integration: full multi-round flow, no `ChatEvent::Error`, one

@@ -129,7 +129,6 @@ watch(
         name: p.name,
         model: p.model,
         persona_md: p.persona_md,
-        order: p.order,
       }));
     } else if (props.mode === "create") {
       // Seed two empty participants (D5 minimum).
@@ -159,18 +158,6 @@ function removeParticipant(idx: number) {
   participants.value.splice(idx, 1);
 }
 
-function moveUp(idx: number) {
-  if (idx <= 0) return;
-  const arr = participants.value;
-  [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-}
-
-function moveDown(idx: number) {
-  if (idx >= participants.value.length - 1) return;
-  const arr = participants.value;
-  [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
-}
-
 // ---------------------------------------------------------------------
 // Submit
 // ---------------------------------------------------------------------
@@ -181,11 +168,10 @@ async function submit() {
   errorMessage.value = null;
   try {
     // Strip empty persona_md (cleaner DB).
-    const payload: ParticipantConfig[] = participants.value.map((p, i) => {
+    const payload: ParticipantConfig[] = participants.value.map((p) => {
       const out: ParticipantConfig = {
         name: p.name.trim(),
         model: p.model,
-        order: i,
       };
       const pm = p.persona_md?.trim();
       if (pm) out.persona_md = pm;
@@ -195,12 +181,11 @@ async function submit() {
     if (props.mode === "create") {
       const newSessionId = await chatStore.createNewSession({
         sessionType: "group_chat",
-        participants: participants.value.map((q, i) => {
+        participants: participants.value.map((q) => {
           // Strip empty persona_md (cleaner DB).
           const out: ParticipantConfig = {
             name: q.name.trim(),
             model: q.model,
-            order: i,
           };
           const pm = q.persona_md?.trim();
           if (pm) out.persona_md = pm;
@@ -268,24 +253,6 @@ function modelLabel(id: string): string {
               <div class="gcfg-row__head">
                 <span class="gcfg-row__title">参与者 #{{ idx + 1 }}</span>
                 <div class="gcfg-row__actions">
-                  <button
-                    type="button"
-                    class="gcfg-icon-btn"
-                    :disabled="idx === 0"
-                    :aria-label="`Move participant ${idx + 1} up`"
-                    @click="moveUp(idx)"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    class="gcfg-icon-btn"
-                    :disabled="idx === participants.length - 1"
-                    :aria-label="`Move participant ${idx + 1} down`"
-                    @click="moveDown(idx)"
-                  >
-                    ↓
-                  </button>
                   <button
                     type="button"
                     class="gcfg-icon-btn gcfg-icon-btn--danger"
