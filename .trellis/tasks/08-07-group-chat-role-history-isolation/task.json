@@ -1,7 +1,7 @@
 {
-  "id": "group-chat-same-model-crossover",
-  "name": "group-chat-same-model-crossover",
-  "title": "群聊同模型串台治理",
+  "id": "group-chat-role-history-isolation",
+  "name": "group-chat-role-history-isolation",
+  "title": "群聊 per-role history 隔离",
   "description": "",
   "status": "planning",
   "dev_type": null,

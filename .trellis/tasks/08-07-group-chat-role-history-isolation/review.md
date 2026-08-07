@@ -1,6 +1,6 @@
 # Review — 群聊 per-role history 隔离(形态 B)
 
-> **评审对象**:任务 `08-07-group-chat-same-model-crossover`(planning 阶段,未 `task.py start`)。
+> **评审对象**:任务 `08-07-group-chat-role-history-isolation`(planning 阶段,未 `task.py start`)。
 > **评审范围**:`prd.md` / `design.md` / `design-draft.md` / `implement.md` / jsonl 清单,逐条对照代码查证。
 > **评审结论**:方案根因判断与形态取舍**成立**;但 R4"不动的"边界漏了 **2 条会被改写的链路**(D-D 入口守卫 persist、provider wire 归属 pass)——**必须补进 design 才能开工(阻塞)**。另有文档路径断裂 2 处、测试迁移语义低估 1 处。
 > **代码基线**:`main@7cf1271`(planning 提交)。工作树干净,`participant_view` 仍在线。

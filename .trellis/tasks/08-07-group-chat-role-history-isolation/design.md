@@ -144,7 +144,7 @@ tail user 消息在 DB 里按 `role == "user"` + `user_message_matches`(文本�
 let already_in_db = (!skip_persist)
     .then(|| {
         if msg.speaker.is_some() {
-            // P0-1 + P0-3 (08-07-group-chat-same-model-crossover): a tail
+            // P0-1 + P0-3 (08-07-group-chat-role-history-isolation): a tail
             // user row carrying `speaker` can ONLY be a role_history
             // rewrite product (他人发言改写) — human prompts, tool_results,
             // synthetic tool_results all have speaker == None. Treat it as

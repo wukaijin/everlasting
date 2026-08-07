@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/08-07-group-chat-role-history-isolation/design.md", "reason": "核对实现是否符合 design 的重写规则表 + 不变量(签名回传/他人 thinking 丢弃/工具对剥离)+ D-D 守卫扩展(R2.5)"}
+{"file": ".trellis/tasks/08-07-group-chat-role-history-isolation/prd.md", "reason": "核对 AC1-AC9 验收标准逐条达成,尤其中 AC1(重写规则+归属策略)/AC5(signature 契约+无双重前缀)/AC6(D-D 守卫)/AC9(DB 无重复行人工核验)"}
+{"file": ".trellis/tasks/archive/2026-08/08-07-group-chat-toolset-and-identity/research/diagnosis.md", "reason": "对照三层缺陷根因(多身份 assistant 共存)确认 role_history 隔离方向确实命中第三层"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核对 spec 沉淀完整(participant_view→role_history + per-role 隔离 + D-D 守卫 speaker 短路两条新不变量)"}

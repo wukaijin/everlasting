@@ -105,7 +105,7 @@ M3        = 另一个模型（model_id 42274366）
 
 **本质**：同模型组合（PRD D2 硬约束）的结构性后果——**同一个模型扮演多个角色时，会在自己的 turn 之间记忆串台**。这不是 prompt 能完全解决的：prompt 在，但模型在自己的连续 history 压力下不认（seq 12/14 的 thinking 明确引用了 system prompt 的角色定义，说明它读了，只是输入太矛盾）。
 
-**归属任务**：**单列 `08-07-group-chat-same-model-crossover`**。`08-07-group-chat-toolset-and-identity` 的工具收敛 + prompt 加固对这层**效果有限**——它治的是 seq 9 的 M3 夺权（另一个模型主动接管），不是 seq 12/14 的同模型串台（同一模型记忆混乱）。
+**归属任务**：**单列 `08-07-group-chat-role-history-isolation`**。`08-07-group-chat-toolset-and-identity` 的工具收敛 + prompt 加固对这层**效果有限**——它治的是 seq 9 的 M3 夺权（另一个模型主动接管），不是 seq 12/14 的同模型串台（同一模型记忆混乱）。
 
 ## 4. 三层的关系与归属
 
@@ -113,7 +113,7 @@ M3        = 另一个模型（model_id 42274366）
 session 8be4687f
 ├─ 第一层 use_skill 幻觉 ─────────→ 08-07-group-chat-toolset-and-identity（工具收敛）
 ├─ 第二层 M3 夺权(seq9) ──────────→ 08-07-group-chat-toolset-and-identity（工具收敛 + prompt）
-└─ 第三层 同模型串台(seq12/14) ───→ 08-07-group-chat-same-model-crossover（单列，更深）
+└─ 第三层 同模型串台(seq12/14) ───→ 08-07-group-chat-role-history-isolation（单列，更深）
 ```
 
 - 第一层和第二层**叠加**：幻觉技能是 M3 夺权的"合法性道具"。工具收敛同时治两者。

@@ -106,7 +106,7 @@ turn），直到 `nominate_speaker` / `end_discussion` 或撞 `MAX_ORCHESTRATION
 ## Out of Scope
 
 - 真模型端到端验证（仍人工；08-07 R1 契约测试 + 本任务 R3 prompt 测试守结构）。
-- **同模型串台（单列任务 `08-07-group-chat-same-model-crossover`）**：session `8be4687f`
+- **同模型串台（单列任务 `08-07-group-chat-role-history-isolation`）**：session `8be4687f`
   seq 12/14 取证发现——当 moderator 和某 participant 是同一个模型（本例 moderator = D4F
   = deepseek `b8d0abc2`），该模型在自己的 moderator turn（seq 12）和 participant turn
   （seq 14）之间**记忆串台**：两个 turn 的 thinking 都是 "我是 M3" 第一人称，模型在

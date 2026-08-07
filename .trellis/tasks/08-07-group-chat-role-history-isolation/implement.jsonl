@@ -1,4 +1,4 @@
-{"file": ".trellis/tasks/08-07-group-chat-same-model-crossover/design.md", "reason": "技术设计核心:role_history 组装器状态机 + 重写规则表 + 不变量 + 调用点改动 + D-D 守卫扩展(R2.5)"}
-{"file": ".trellis/tasks/08-07-group-chat-same-model-crossover/research/design-draft.md", "reason": "形态 A vs B 取舍论证 + signature 400 约束为何被形态 B 绕开的详细分析"}
+{"file": ".trellis/tasks/08-07-group-chat-role-history-isolation/design.md", "reason": "技术设计核心:role_history 组装器状态机 + 重写规则表 + 不变量 + 调用点改动 + D-D 守卫扩展(R2.5)"}
+{"file": ".trellis/tasks/08-07-group-chat-role-history-isolation/research/design-draft.md", "reason": "形态 A vs B 取舍论证 + signature 400 约束为何被形态 B 绕开的详细分析"}
 {"file": ".trellis/tasks/archive/2026-08/08-07-group-chat-toolset-and-identity/research/diagnosis.md", "reason": "三层缺陷完整因果链;本任务治第三层,根因坐实(DB thinking 字段 + 多身份 assistant 共存)"}
 {"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "群聊 transcript view 现有不变量;本任务更新 participant_view → role_history + 补 per-role 隔离不变量"}
