@@ -46,6 +46,7 @@ import { createDebouncedRenderer, renderMarkdown } from "../../utils/markdown";
 import { COLOR_PALETTE } from "../../utils/colorTag";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
+import DiscussionSummaryCard from "./DiscussionSummaryCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import RequestModeChangeCard from "./RequestModeChangeCard.vue";
 import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue";
@@ -75,6 +76,11 @@ const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
 const controller = useStreamControllerStore();
 const questionCardsStore = useQuestionCardsStore();
+
+// Group-chat closing tool (08-07-group-chat-role-history-isolation
+// follow-up): its `summary` is the discussion's final conclusion — render
+// a visible DiscussionSummaryCard instead of a plain ToolCallCard.
+const END_DISCUSSION_TOOL_NAME = "end_discussion";
 
 const hasVisibleBubble = computed<boolean>(() => {
   const m = props.message;
@@ -1253,7 +1259,16 @@ const showEditedLabel = computed<boolean>(
           与原 msg__tools 的 `<template v-for tc>` 结构一致。
         -->
         <template v-else-if="item.kind === 'tool_use'">
-          <ToolCallCard :call="item" :result="getToolResult(message, item.id)" />
+          <DiscussionSummaryCard
+            v-if="item.name === END_DISCUSSION_TOOL_NAME"
+            :call="item"
+            :result="getToolResult(message, item.id)"
+          />
+          <ToolCallCard
+            v-else
+            :call="item"
+            :result="getToolResult(message, item.id)"
+          />
           <AskUserQuestionCard
             v-if="askCardPropsFor(item) !== undefined"
             v-bind="askCardPropsFor(item)!"
@@ -1394,7 +1409,21 @@ const showEditedLabel = computed<boolean>(
         live pending nor DB result exists yet.
       -->
       <template v-for="tc in visibleToolCalls" :key="tc.id">
-        <ToolCallCard :call="tc" :result="getToolResult(message, tc.id)" />
+        <!--
+          08-07-group-chat-role-history-isolation follow-up:
+          end_discussion 的 summary 是讨论最终结论,渲染为可见的
+          DiscussionSummaryCard;其余工具仍走 ToolCallCard。
+        -->
+        <DiscussionSummaryCard
+          v-if="tc.name === END_DISCUSSION_TOOL_NAME"
+          :call="tc"
+          :result="getToolResult(message, tc.id)"
+        />
+        <ToolCallCard
+          v-else
+          :call="tc"
+          :result="getToolResult(message, tc.id)"
+        />
         <AskUserQuestionCard
           v-if="askCardPropsFor(tc) !== undefined"
           v-bind="askCardPropsFor(tc)!"
