@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/08-07-group-chat-same-model-crossover/design.md", "reason": "核对实现是否符合 design 的重写规则表 + 不变量(签名回传/他人 thinking 丢弃/工具对剥离)"}
+{"file": ".trellis/tasks/08-07-group-chat-same-model-crossover/prd.md", "reason": "核对 AC1-AC8 验收标准逐条达成,尤其中 AC1(重写规则)/AC4(冲击面只在编排器)/AC5(signature 契约)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核对 spec 沉淀完整(participant_view→role_history + per-role 隔离不变量)"}
