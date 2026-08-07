@@ -65,10 +65,14 @@ LLM 不认 `name` 字段,只认 `role`。所有 `role: assistant` 历史都被�
 |---|---|
 | 人类原始 user 消息(speaker == None,原始 prompt) | **保留** role:user |
 | 当前角色的 assistant 消息(speaker == current_role) | **原样保留**(role:assistant + 全部 blocks,含 Thinking+signature) |
-| 他人 assistant 消息(speaker != current_role) | **改写为 role:user + 单 Text block** `"@<speaker>: <text>"`;**丢弃 Thinking 块** |
+| 他人 assistant 消息(speaker != current_role) | **改写为 role:user + 单 Text block**(content 不带 `@` 前缀,**保留 speaker 字段**,归属交给 wire 层);**丢弃 Thinking 块**(P0-2) |
 | 他人 assistant 含 ToolUse(调研工具) | 标记 pending,整对(其 tool_result 行)剥离;仅 text 部分(若有)改写为 user |
 | 当前角色自己的调研 tool 对(read_file 等) | **原样保留**(role 配对合法) |
 | moderator 仲裁对(nominate/end,对非 moderator 角色) | **剥离**(沿用 participant_view 既有不变量) |
+
+> **归属策略(P0-2 评审修订)**:改写行 content **不带 `@` 前缀**、**保留 speaker 字段**。
+> wire 层 Anthropic `apply_speaker_prefix` 自动加 `@name:`、OpenAI 自动填 `name` 字段;
+> 若 content 自带 `@` 会造成双重前缀。speaker 字段同时是 R1.5 D-D 守卫的区分信号。
 
 ### R2 — 调用点切换
 
@@ -78,24 +82,36 @@ LLM 不认 `name` 字段,只认 `role`。所有 `role: assistant` 历史都被�
   `role_history(&full, &participant.name)`。
 - **删除** `participant_view`(`:231`)+ `participant_view_row`(`:270`)+ 对应测试。
 
-### R3 — 工具结果语义:不共享
+### R2.5 — D-D 入口守卫扩展(P0-1,第二改动点)
+
+`run_chat_loop` 的 tail user persist 守卫(`chat_loop.rs:990-1000`)扩展:群聊作用域内
+(`group_chat_state.is_some()`),tail user 行 `speaker.is_some()` 时视同已落库、跳过 persist。
+否则改写出的 user 行会被当"新人类消息"重复落库 → DB 污染 + 前端重复行。安全依据:
+群聊人类消息恒 speaker None,speaker Some 的 user 行只能是 role_history 改写产物。
+详见 `design.md` §R1.5。
+
+### R3 — 工具结果语义:不共享(双向影响)
 
 他人的 tool_use/tool_result 整对剥离,当前角色看不到他人调了什么工具/原始数据,
 **只通过他人文本发言得知结论**。这是用户初始表述("不共享工具调用结果")的落地,
-也是隔离优先原则的体现。影响:
-- moderator 连续调研不发言时,participant 不知调研内容。
+也是隔离优先原则的体现。影响(**双向**,P2-3 修订):
+- **participant 方向**:moderator 连续调研不发言时,participant 不知调研内容。
+- **moderator 方向**:moderator 也只看到 participant 的文本发言,**看不到 participant
+  的 tool 对与 thinking**(现状 moderator 用全量 `full` 能看到)。不影响提名/收尾
+  (moderator 只读文本判断讨论走向),但需知悉。
 - 两人查同文件可能重复调用(token 浪费,可接受)。
-- 好处:context 完全干净,无串台。
+- 好处:context 完全干净,无串台(双向隔离)。
 
-### R4 — 不动的(关键不变量)
+### R4 — 改动面(评审修订:如实陈述第二改动点)
 
-- **DB schema / persist_turn / load_session** — 单 session_id,speaker 列不变。
-- **前端** `messagesBySession` / `RequestState` / `load_session` IPC / 流式聚合 — 不动。
+冲击面**主要在编排器**,但有一处必要的第二改动点:
+- **改**:编排器 `group_chat_loop.rs`(R1 role_history + R2 调用切换 + 删 participant_view)。
+- **改**:`chat_loop.rs` D-D 守卫(R2.5,一处 `speaker.is_some()` 短路,仅群聊作用域)。
+- **不动**:DB schema / persist_turn / load_session / 单 session_id / speaker 列。
+- **不动**:前端 `messagesBySession` / `RequestState` / `load_session` IPC / 流式聚合。
   每角色 turn 仍是单 request 上的一个 turn,speaker 事件/chip 渲染不变。
-- **run_chat_loop** — 收到的就是组装好的 messages,不关心来源。
-- **turn_state / nominate_speaker / end_discussion 拦截** — 不动。
-- **group_chat_tool_defs**(08-07 R1)— 不动。
-- 08-07 落地的所有修复(工具白名单/无 streak/prompt 加固)— 不破坏。
+- **不动**:`turn_state` / `nominate_speaker` / `end_discussion` 拦截 / `group_chat_tool_defs`(08-07 R1)。
+- **不破坏**:08-07 落地的所有修复(工具白名单/无 streak/prompt 加固)。
 
 ## Out of Scope
 
@@ -107,18 +123,21 @@ LLM 不认 `name` 字段,只认 `role`。所有 `role: assistant` 历史都被�
 ## Acceptance Criteria
 
 - [ ] AC1(R1):`role_history` 实现且按上表重写;当前角色 assistant 消息(含
-      Thinking+signature)原样保留,他人 assistant 改写为 user+text 且不含 Thinking。
+      Thinking+signature)原样保留,他人 assistant 改写为 user+text 且不含 Thinking;
+      **改写行 content 不带 `@` 前缀、speaker 字段保留**(P0-2)。
 - [ ] AC2(R2):moderator/participant 两处调用切换;`participant_view` 一族删除。
 - [ ] AC3(R3):他人 tool_use/tool_result 整对剥离;当前角色自己的 tool 对保留。
-- [ ] AC4(R4):DB schema / 前端 / run_chat_loop / turn_state / tool_defs 均无改动
-      (diff 审查确认冲击面只在编排器)。
+- [ ] AC4(R4):改动面**只在编排器 + chat_loop.rs D-D 守卫一处**(R2.5);DB schema /
+      前端 / turn_state / tool_defs 均无改动(diff 审查确认)。
 - [ ] AC5:`role_history_*` 测试覆盖上表所有重写规则 + signature 回传契约
-      (当前角色 Thinking 块 signature 完整)。
-- [ ] AC6:既有群聊测试(`participant_view_*` 迁移为 `role_history_*` + identity_contract
-      + view 不变量)全绿。
-- [ ] AC7:`cargo test --lib` + `pnpm test` + clippy 零警告 + vue-tsc 零错误。
-- [ ] AC8(人工):真模型重跑同模型组合 session,确认不再出现 seq 12/14 式角色
-      纠结/生成中断。
+      (当前角色 Thinking 块 signature 完整)+ **wire 无双重 `@` 前缀**(P0-2)。
+- [ ] AC6(R2.5):D-D 守卫扩展——群聊作用域内 tail user 行 `speaker.is_some()` 不触发
+      persist(无 DB 重复行/前端无重行);经典聊天/群聊 human prompt 行为不变。
+- [ ] AC7:既有群聊测试(`participant_view_*` 迁移为 `role_history_*`;`identity_contract_view`
+      按 P1-1 **语义重写**非对象替换;其余 identity_contract + view 不变量)全绿。
+- [ ] AC8:`cargo test --lib` + `pnpm test` + clippy 零警告 + vue-tsc 零错误。
+- [ ] AC9(人工):真模型重跑同模型组合 session,确认不再出现 seq 12/14 式角色
+      纠结/生成中断;且 DB 无 `@` 前缀重复行(AC6 守的人工核验)。
 
 ## Constraints / 约束
 

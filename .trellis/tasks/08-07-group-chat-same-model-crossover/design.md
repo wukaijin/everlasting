@@ -1,7 +1,10 @@
 # Design — 群聊 per-role history 隔离(形态 B)
 
-> PRD: `prd.md`。设计草案与取舍论证: `research/design-draft.md`。
+> PRD: `prd.md`。设计草案与取舍论证: `research/design-draft.md`(形态 A vs B 取舍 +
+> signature 约束分析)。
 > 调研依据:三份架构现状报告(编排器/前端/DB)+ signature 约束查证。
+> **评审修订**(review.md,P0/P1/P2):归属策略改方案 (a)、补 D-D 守卫扩展、
+> 状态机代码清理、测试语义重写。本版反映修订后状态。
 
 ## 全局约束(不改)
 
@@ -39,49 +42,58 @@ moderator 用全量 `full`(无 view 层),同样存在多身份 assistant 共存�
 ///
 /// Each role sees ONLY its own assistant messages (verbatim, incl. thinking
 /// + signature — Anthropic round-trip safe) plus other speakers' utterances
-/// rewritten as role:user ("@<name>: <text>"). Other speakers' Thinking
-/// blocks are dropped (they carry signatures bound to *their* generation
-/// context; re-injecting them into *this* role's context would either break
-/// the signature round-trip or, worse, be echoed as if this role produced
-/// them). Other speakers' tool_use/tool_result pairs are dropped entirely
-/// (tool results are NOT shared — relayed only via their text remarks). The
-/// moderator's arbitration pairs (nominate/end) are also dropped for
-/// non-moderator roles.
+/// rewritten as role:user. Other speakers' Thinking blocks are dropped
+/// (they carry signatures bound to *their* generation context; re-injecting
+/// them into *this* role's context would either break the signature
+/// round-trip or be echoed as if this role produced them). Other speakers'
+/// tool_use/tool_result pairs are dropped entirely (tool results are NOT
+/// shared — relayed only via their text remarks). The moderator's
+/// arbitration pairs (nominate/end) are also dropped for non-moderator roles.
+///
+/// 归属策略(P0-2 评审修订):改写行 **保留 speaker 字段、content 不带 `@` 前缀**。
+/// 归属交给 wire 层统一负责——Anthropic `apply_speaker_prefix` 自动插 `@name: `、
+/// OpenAI 自动填 `name` 字段。若 content 自带 `@` 前缀会造成双重前缀(Anthropic
+/// `@moderator: @moderator: …`)。speaker 字段同时是 P0-1 D-D 守卫的区分信号。
 fn role_history(full: &[ChatMessage], current_role: &str) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = Vec::with_capacity(full.len());
-    let mut pending_other_tool_use_ids: Vec<String> = Vec::new(); // 其人 tool_use 的 id,用于跳过其 tool_result
+    let mut pending_other_tool_use_ids: Vec<String> = Vec::new();
     for m in full {
-        // (1) 先处理 pending:若这行 user 是某个他人 tool_use 的 tool_result,跳过
+        // (1) 若这行是某个他人 tool_use 的 tool_result,跳过(他人 tool 对整对剥离)
         if !pending_other_tool_use_ids.is_empty() {
             if row_carries_any_tool_result(m, &pending_other_tool_use_ids) {
-                pending_other_tool_use_ids.retain(|id| /* 清掉匹配的 */);
-                continue; // 整行跳过(他人 tool_result 不进当前上下文)
+                pending_other_tool_use_ids.clear();
+                continue;
             }
             pending_other_tool_use_ids.clear();
         }
-        // (2) 按角色归属重写
-        match (m.role, &m.speaker) {
-            (Role::User, None) => out.push(m.clone()),             // 人类原始 prompt
-            (Role::Assistant, sp) if sp.as_deref() == Some(current_role) => {
-                out.push(m.clone());                                // 自己的 assistant 原样
-            }
-            (Role::Assistant, sp) => {
-                // 他人 assistant。抽 text 改写为 user;ToolUse 收集 id 待跳过;Thinking 丢
-                let text = extract_text_blocks(&m.content);
-                if !text.is_empty() {
-                    out.push(ChatMessage {
-                        role: Role::User,
-                        content: MessageContent::Text(format!("@{}: {}", sp.as_deref().unwrap_or("?"), text)),
-                        speaker: sp.clone(),                        // 保留原 speaker 供前端 chip(虽然 role 变了)
-                    });
+        // (2) 按角色归属重写。先判 role 再判 speaker,避免重复分支(P2-1)。
+        match m.role {
+            Role::User => out.push(m.clone()),   // 人类 prompt / tool_result(非他人 pending)
+            Role::Assistant => {
+                match &m.speaker {
+                    Some(sp) if sp == current_role => out.push(m.clone()),  // 自己 assistant 原样
+                    Some(sp) => {
+                        // 他人 assistant:抽 text 改写为 user(不带 @ 前缀,归属靠 speaker 字段);
+                        // Thinking 丢;ToolUse 收集 id 待跳过。
+                        let text = extract_text_blocks(&m.content);
+                        if !text.is_empty() {
+                            out.push(ChatMessage {
+                                role: Role::User,
+                                content: MessageContent::Text(text),
+                                speaker: Some(sp.clone()),
+                            });
+                        }
+                        pending_other_tool_use_ids.extend(extract_tool_use_ids(&m.content));
+                    }
+                    None => {
+                        // 群聊 assistant 行必有 speaker(moderator 或 participant.name)。
+                        // 出现 None 说明数据异常(P2-2):不静默改写成 @?,直接原样保留
+                        // 交后续诊断,或加 debug_assert 报警。实现时选 debug_assert。
+                        debug_assert!(m.speaker.is_some(), "group-chat assistant row missing speaker: {:?}", m);
+                        out.push(m.clone());
+                    }
                 }
-                pending_other_tool_use_ids.extend(extract_tool_use_ids(&m.content));
             }
-            (Role::User, Some(_)) => {
-                // 他人 user 行(罕见,非 tool_result 的 user)。保守保留为 user。
-                out.push(m.clone());
-            }
-            (Role::User, None) => out.push(m.clone()),             // 人类 user(重复分支,合并)
         }
     }
     out
@@ -96,8 +108,8 @@ fn role_history(full: &[ChatMessage], current_role: &str) -> Vec<ChatMessage> {
 - **他人 tool 对整对剥离**(assistant tool_use + 其 tool_result)→ 不污染 role 配对,
   符合"不共享工具结果"语义。
 - **人类原始 prompt 保留为 user** → 讨论主题不丢。
-- **speaker 字段保留在改写后的 user 消息上** → 前端 chip 渲染不变(虽然 role 变 user,
-  但 speaker 标识仍在;MessageItem 的 chip 仅看 speaker 字段,不依赖 role——见调研 §4.2)。
+- **改写行保留 speaker、content 不带 `@` 前缀**(P0-2 方案 a)→ wire 层统一归属,
+  无双重前缀;speaker 字段供 D-D 守卫区分(P0-1)。
 
 ### 工具函数(私有,`group_chat_loop.rs` 内)
 
@@ -106,6 +118,58 @@ fn extract_text_blocks(c: &MessageContent) -> String
 fn extract_tool_use_ids(c: &MessageContent) -> Vec<String>
 fn row_carries_any_tool_result(m: &ChatMessage, ids: &[String]) -> bool
 ```
+
+---
+
+## R1.5 — D-D 入口守卫扩展(P0-1,第二改动点,在 chat_loop.rs)
+
+### 问题(评审 P0-1 坐实)
+
+`run_chat_loop` 的 tail user 消息 persist 点(`chat_loop.rs:987-1034`)走 D-D 入口守卫:
+tail user 消息在 DB 里按 `role == "user"` + `user_message_matches`(文本字节/tool_use_id 判等)
+查找,**且仅在 `group_chat_state.is_some()` 时生效**;匹配则跳过 persist,否则 `persist_turn`。
+
+形态 B 下,**他人最后一条 text 发言被改写为 `role:user` + `speaker:Some(...)` 的新 tail**
+(原始 DB 行是 assistant),守卫按 role==user 查 DB 找不到匹配 → **判定为"新人类消息"→ 重复落库**。
+
+后果(每轮叠加):DB 追加 `@<speaker>: <text>` 重复 user 行 → 前端 `load_session` 显示
+重复 speaker chip 行 → 下一轮 reload 落入"保守保留"分支永久留在上下文 → 持续膨胀。
+
+### 修复:守卫扩展(chat_loop.rs:990-1000 附近)
+
+在 `already_in_db` 判定里,**对 tail user 消息 `speaker.is_some()` 视同已落库、跳过 persist**
+(仅在 `group_chat_state.is_some()` 作用域内,与现有守卫同域):
+
+```rust
+let already_in_db = (!skip_persist)
+    .then(|| {
+        // P0-1 (08-07-group-chat-same-model-crossover): a tail user row
+        // carrying `speaker` can ONLY be a role_history rewrite product
+        // (他人发言改写) — human prompts, tool_results, synthetic
+        // tool_results all have speaker == None. Treat it as already
+        // persisted to avoid duplicate writes + frontend ghost rows.
+        let msg_speaker_some = msg.speaker.is_some();
+        loaded_session.messages.iter()
+            .filter(|m| m.role == "user")
+            .find(|db_row|
+                msg_speaker_some  // 改写行:无条件视同已落库
+                || user_message_matches(db_row, &msg)
+            )
+    })
+    .flatten()
+    .filter(|_| group_chat_state.is_some())
+    .map(|db_row| db_row.seq);
+```
+
+**安全依据**:群聊现代码库中,人类 prompt(`speaker: None`)、tool_result(`speaker: None`)、
+synthetic tool_result(`speaker: None`)恒为 None;`speaker: Some` 的 user 行**只能是
+role_history 的改写产物**。判定零误伤,现有调用路径(speaker None)行为不变。
+
+### 这意味着 R4 的修订
+
+`run_chat_loop` 不再"完全不动"——它的 D-D 守卫有**一处扩展**(在群聊作用域内的判定)。
+这是本任务除编排器外**唯一的第二改动点**,如实记入 PRD R4 / AC4。改动面仍极小(守卫
+判定加一个 `speaker.is_some()` 短路),且不改变守卫对非群聊路径的行为。
 
 ---
 
@@ -158,7 +222,7 @@ let view = role_history(&full, &participant.name);    // ← 取代 participant_
 | 测试 | 断言 |
 |---|---|
 | `role_history_current_role_assistant_verbatim` | 当前角色 assistant 消息原样保留(role:assistant + 全部 blocks,含 Thinking{thinking,signature}) |
-| `role_history_other_speaker_rewritten_as_user` | 他人 assistant → role:user + `"@<name>: <text>"`;**不含 Thinking 块** |
+| `role_history_other_speaker_rewritten_as_user` | 他人 assistant → role:user + **content 不带 `@` 前缀** + `speaker` 字段保留为该发言者;**不含 Thinking 块**(P0-2 修订) |
 | `role_history_other_thinking_dropped` | 他人 Thinking/RedactedThinking 块不出现(关键:绕 signature) |
 | `role_history_other_tool_pair_dropped` | 他人 read_file 的 ToolUse + 其 tool_result 整对不出现在结果里 |
 | `role_history_own_tool_pair_preserved` | 当前角色自己的 read_file 对原样保留(role 配对合法,OpenAI 不报 400) |
@@ -167,17 +231,37 @@ let view = role_history(&full, &participant.name);    // ← 取代 participant_
 | `role_history_moderator_keeps_own_arbitration` | moderator 自己的 nominate/end 对保留(moderator 需知道自己提名过谁) |
 | `role_history_multiturn_same_role_preserved` | 某 participant 多轮发言,所有自己的 assistant 轮次保留(speaker==current_role 覆盖所有轮) |
 | `role_history_signature_roundtrip_contract` | 构造含 signature 的 transcript,断言当前角色 Thinking.signature 完整(契约级守 Anthropic 回传) |
+| `role_history_wire_no_double_prefix`(P0-2) | 改写行经 wire 序列化后,Anthropic `@name:` 前缀只出现一次(无双重);OpenAI `name` 字段正确填入 |
 
-### 迁移既有测试
+### D-D 守卫扩展测试(P0-1,在 chat_loop 守卫的测试处)
 
-`participant_view_*` 一族(`:1373+` + `tests_group_chat.rs`)改写为 `role_history_*`
-对应场景。不变量(仲裁剥离、相邻性、混合 tool 对)在 role_history 下仍成立,断言对象
-从 participant_view 输出改为 role_history 输出。
+| 测试 | 断言 |
+|---|---|
+| `dd_guard_skips_persist_for_speaker_user_in_group_chat` | 群聊作用域内,tail user 行 `speaker.is_some()` → 不触发 persist_turn(无 DB 重复行) |
+| `dd_guard_unchanged_for_classic_chat_speaker_none` | 经典聊天(speaker None)/ 群聊 human prompt(speaker None)→ 守卫行为不变 |
+
+### 迁移既有测试(P1-1 语义重写,关键)
+
+`participant_view_*` 一族(`group_chat_loop.rs:1373+` + `tests_group_chat.rs`)迁移到
+`role_history_*`,但**不是简单断言对象替换**——其中一条测试的**前提发生逆转**,必须重写:
+
+**`identity_contract_view_holds_under_same_model_and_mislabel`(`group_chat_loop.rs:1537`)**
+- **旧前提**(注释 `:1541-1544, :1560-1563`):"view 不读 speaker、不消毒 content,
+  mislabeled 行原样透传"——测的是 view 结构不变量。
+- **新前提**(role_history):view **按 speaker 强制归因**——mislabeled 行
+  (`speaker="M3"` 但内容 `@D4F: …`)会被改写为 `role:user + speaker=M3`,content 仍是
+  原文 `@D4F: …`(role_history 不消毒文本,只改 role/speaker 归属 + 丢 Thinking)。
+- **迁移做法**:断言该 mislabeled 行在 role_history 输出里变成 `role:user + speaker=M3`,
+  content 文本不变;**不再断言"原样透传 assistant"**。仲裁剥离 + 无孤儿不变量仍成立。
+- **另**:08-07 加的 `identity_contract_prompts_separate_roles_under_same_model`(`:1614`)
+  只测 prompt,不依赖 view,**不受影响** ✓。
+
+其余 `participant_view_*` 测试(仲裁剥离、相邻性、混合 tool 对)在 role_history 下
+不变量仍成立,断言对象换成 role_history 输出即可。
 
 ### 不破坏的既有测试
 
-- `identity_contract_*`(08-07 R1)— 守 prompt 角色边界 + view 结构,role_history 是
-  view 层升级,契约仍成立(需在 implement 阶段确认断言不依赖 participant_view 具体输出)。
+- `identity_contract_prompts_*`(08-07 R1)— 只测 prompt,不依赖 view,不受影响。
 - `group_chat_tool_defs_*`(08-07 R1)— 工具层不动。
 - prompt 回归测试(08-07 R3)— prompt 不动。
 
@@ -185,16 +269,20 @@ let view = role_history(&full, &participant.name);    // ← 取代 participant_
 
 ## 风险与回滚
 
-- **R1 重写规则边界 bug**(如误把自己当他人剥离):缓解 — 10 个测试覆盖每条重写规则;
+- **R1 重写规则边界 bug**(如误把自己当他人剥离):缓解 — 测试覆盖每条重写规则;
   signature 契约测试 + identity_contract 兜底。回滚 = 恢复 participant_view。
-- **他人发言改写成 user 后语义失真**:`"@moderator: <text>"` 前缀让模型知道来源;
+- **P0-1 守卫扩展误伤**(把真人类消息也跳过):缓解 — `speaker.is_some()` 信号零误伤
+  (群聊人类消息恒 speaker None);两测试守边界。回滚 = 去掉短路。
+- **P0-2 归属策略**(保留 speaker、不带 @ 前缀):OpenAI/Anthropic 双 provider 都能归因;
+  `role_history_wire_no_double_prefix` 守无双重前缀。
+- **他人发言改写成 user 后语义**:模型通过 wire 层 `@name:`/`name` 字段知道来源;
   thinking 丢失意味着模型看不到他人推理过程(本就是设计目标,非 bug)。
-- **moderator 看不到 participant 的 tool 细节**:moderator 只看到 participant 的文本
-  发言,不影响它提名/收尾(它本就只读文本判断讨论走向)。
+- **moderator 看不到 participant 的 tool 细节**(P2-3):moderator 只看到 participant 文本
+  发言,不影响它提名/收尾(它本就只读文本判断讨论走向)。双向影响记入 PRD R3。
 - **跨 provider 一致**:OpenAI 无 signature,他人 thinking 丢弃无额外影响;Anthropic
   他人 thinking 带签名,丢弃正是为不触发回传约束。两 provider 行为一致(role_history
   无 provider 分叉)。
-- **回滚成本**:纯逻辑层改动,无 DB 迁移,git revert 即可。
+- **回滚成本**:纯逻辑层改动(R1 组装器 + R1.5 守卫一处短路),无 DB 迁移,git revert 即可。
 
 ---
 
