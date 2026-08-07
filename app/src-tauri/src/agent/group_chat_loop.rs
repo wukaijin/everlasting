@@ -27,12 +27,14 @@
 //! - **round 0** uses the caller-supplied `messages` (tail = the new
 //!   human message, which the entry guard in `run_chat_loop` persists
 //!   normally — design D-D);
-//! - **later rounds** reload once into `full`, then the moderator gets
-//!   `full` verbatim (View-1) while each participant gets
-//!   [`participant_view`] (View-2, design D-A) — arbitration
-//!   tool_use↔tool_result pairs are stripped as one atomic unit
-//!   (llm-contract.md §469) so the participant's identity can't be
-//!   confused and no orphan tool block survives.
+//! - **later rounds** reload once into `full`, then EVERY speaker
+//!   (moderator and participants alike) gets a per-role isolated
+//!   history via [`role_history`] (08-07-group-chat-role-history-
+//!   isolation, replaces the 08-04 `participant_view`) — each role
+//!   sees only its own assistant rows verbatim + other speakers'
+//!   remarks rewritten as `role:user`, other speakers' thinking/tool
+//!   pairs dropped (kills the multi-identity-assistant 串台 root cause
+//!   and sidesteps the Anthropic signature round-trip constraint).
 //!
 //! `reload_messages` is retained (design D-B): `run_chat_loop` returns
 //! `()` and the orchestrator cannot know which rows it appended, so a
@@ -48,7 +50,7 @@
 //!   2. read SharedTurnState
 //!   3. if end_discussion → break
 //!   4. resolve nominee X → (provider, system_prompt) from GroupChatCtx
-//!   5. reload messages from DB → participant_view()
+//!   5. reload messages from DB → role_history(full, X.name)
 //!   6. participant X turn → run_chat_loop(X_provider, X_prompt, max_turns=1, speaker=X)
 //!   └─ back to 1 (round>0 reloads the moderator view)
 //! }
@@ -174,142 +176,131 @@ fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
     )
 }
 
-/// The participant's transcript view (design.md D-A, §4 View-2).
+/// Build a role's isolated LLM history from the shared DB transcript
+/// (08-07-group-chat-role-history-isolation, design §R1 — replaces the
+/// 08-04 `participant_view`).
 ///
-/// Scans `full` (the reloaded DB transcript, seq-ascending) and strips
-/// every arbitration tool interaction — an assistant row carrying a
-/// `nominate_speaker` / `end_discussion` `ToolUse` block plus the
-/// immediately-following user row carrying the matching `tool_result`.
-/// The strip is **atomic per pair** (llm-contract.md §469): either both
-/// the assistant(tool_use) and its user(tool_result) stay, or both go,
-/// so the participant's request body never contains an orphan
-/// `tool_use` / `tool_result`.
+/// Each role sees ONLY its own assistant messages (verbatim, incl.
+/// thinking + signature — Anthropic round-trip safe) plus other
+/// speakers' utterances rewritten as `role:user`. Other speakers'
+/// Thinking blocks are dropped (they carry signatures bound to *their*
+/// generation context; re-injecting them into *this* role's context
+/// would either break the signature round-trip or be echoed as if this
+/// role produced them). Other speakers' tool_use/tool_result pairs are
+/// dropped entirely (tool results are NOT shared — relayed only via
+/// their text remarks). The moderator's arbitration pairs
+/// (nominate/end) are likewise dropped for non-moderator roles — from
+/// a participant's point of view they are just another "other speaker's
+/// tool pair" (the 08-04 identity-confusion invariant carries over:
+/// showing them made a participant conclude it WAS the moderator and
+/// reply as `@moderator` — DB evidence in research/db-evidence.md §2).
 ///
-/// Only the arbitrator (the moderator) legitimately uses these tools,
-/// so they always appear as "someone else's history" from a
-/// participant's point of view. Showing them caused the identity-
-/// confusion defect (a participant concluded it WAS the moderator and
-/// replied as @moderator — DB evidence in research/db-evidence.md §2).
+/// 归属策略 (评审 P0-2 修订): 改写行 **保留 speaker 字段、content 不带
+/// `@` 前缀**。归属交给 wire 层统一负责——Anthropic `apply_speaker_prefix`
+/// 自动插 `@name: `、OpenAI 自动填 `name` 字段。若 content 自带 `@` 前缀
+/// 会造成双重前缀(Anthropic `@moderator: @moderator: …`)。speaker 字段
+/// 同时是 D-D 入口守卫(P0-1,见 chat_loop.rs)的区分信号。
 ///
-/// Rules (design §4):
-/// - an assistant row whose blocks include an arbitration ToolUse:
-///   keep its non-tool blocks (thinking / text), drop the ToolUse
-///   blocks, and skip the immediately-following user row;
-/// - an assistant row that consists ONLY of arbitration ToolUse blocks
-///   → the whole row is dropped (its user(tool_result) row is still
-///   skipped);
-/// - everything else (human messages, moderator/participant text,
-///   non-arbitration tool pairs) passes through unchanged.
+/// # Invariants (locked)
 ///
-/// The `full` rows are DB-persisted per turn, so an arbitration pair
-/// is always adjacent in `full` (the tool_result is persisted right
-/// after the tool_use assistant row within the same moderator turn) —
-/// a one-pass state machine suffices, no backtracking needed.
+/// 1. **Current-role assistant rows stay verbatim** (`role:assistant` +
+///    all blocks, incl. thinking + signature) → Anthropic round-trip
+///    contract (AC1/AC5).
+/// 2. **Other-speaker assistant rows never appear as `assistant`**
+///    (认知根因——多身份 assistant 共存——消除);their thinking is dropped
+///    (no signature round-trip duty) and their tool pairs are stripped
+///    whole (工具结果不共享, R3).
+/// 3. **Human prompts** (`speaker == None`) stay `role:user`.
 ///
-/// # Invariant: arbitration-pair adjacency (locked, 08-07 R5)
-///
-/// The adjacency the one-pass strip relies on is **only** the
-/// moderator's arbitration pairs (`nominate_speaker` /
-/// `end_discussion`). It holds because the moderator runs at
-/// `max_turns = Some(1)` (08-04 follow-up, unchanged): the
-/// `tool_use` assistant row and its `tool_result` user row persist
-/// within that single turn, landing in adjacent `seq` slots.
-///
-/// Participants now run at `max_turns = Some(20)` (R3) so a
-/// participant may emit several NON-arbitration tool pairs
-/// (`read_file` / `grep` / …) across its turns. Those pairs never
-/// enter the strip state machine — [`participant_view_row`] only
-/// flags rows carrying a `nominate_speaker` / `end_discussion`
-/// `ToolUse`, so every other tool pair passes through unchanged.
-/// The strip's one-pass + adjacency assumption therefore does NOT
-/// touch participant tool pairs and is unaffected by R3. The mixed
-/// test below (`participant_view_participant_multiturn_mixed`)
-/// locks this: a transcript with moderator arbitration pairs +
-/// multi-turn participant read_file pairs + text stays correct
-/// (arbitration stripped atomically, non-arbitration pairs intact,
-/// no orphan, order preserved).
-fn participant_view(full: &[ChatMessage]) -> Vec<ChatMessage> {
+/// The one-pass strip's adjacency assumption holds because persisted
+/// rows land in adjacent `seq` slots within one speaker turn: an
+/// assistant row carrying `ToolUse` is immediately followed by the
+/// user row carrying its `tool_result`.
+fn role_history(full: &[ChatMessage], current_role: &str) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = Vec::with_capacity(full.len());
-    let mut pending_arbitration_tool_use_id: Option<String> = None;
+    let mut pending_other_tool_use_ids: Vec<String> = Vec::new();
     for m in full {
-        if let Some(ref id) = pending_arbitration_tool_use_id {
-            // Skip the user row that carries this arbitration pair's
-            // tool_result. The row is skipped if ANY of its blocks is
-            // the pending pair's tool_result (persisted per-turn rows
-            // are a single tool_result for the arbitration call, so in
-            // practice the whole row belongs to the pair; a mixed row
-            // would be dropped wholesale, which is safe — it can only
-            // lose non-arbitration blocks already stripped from the
-            // assistant side, never creating an orphan).
-            let is_result_row = matches!(
-                &m.content,
-                MessageContent::Blocks(blocks)
-                    if blocks.iter().any(|b| matches!(
-                        b,
-                        ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id
-                    ))
-            );
-            pending_arbitration_tool_use_id = None;
-            if is_result_row {
+        // (1) A row carrying a pending other-speaker tool_result belongs
+        // to that stripped tool pair → skip the whole row (one-row
+        // lookahead; persisted per-turn rows are a single tool_result
+        // for the pending calls, so in practice the whole row belongs
+        // to the pair — a mixed row would be dropped wholesale, which
+        // is safe: it can only lose blocks already stripped on the
+        // assistant side, never creating an orphan).
+        if !pending_other_tool_use_ids.is_empty() {
+            if row_carries_any_tool_result(m, &pending_other_tool_use_ids) {
+                pending_other_tool_use_ids.clear();
                 continue;
             }
+            pending_other_tool_use_ids.clear();
         }
-        let (kept, pending) = participant_view_row(m);
-        if let Some(k) = kept {
-            out.push(k);
+        // (2) Rewrite by role, then by speaker (评审 P2-1: no duplicated
+        // `(Role::User, None)` branch).
+        match m.role {
+            Role::User => out.push(m.clone()), // human prompt / current role's tool_result
+            Role::Assistant => match &m.speaker {
+                // 自己:原样保留(role:assistant + 全部 blocks,含 Thinking+signature)。
+                Some(sp) if sp == current_role => out.push(m.clone()),
+                // 他人:抽 text 改写为 user(不带 `@` 前缀、保留 speaker —— 归属
+                // 交给 wire 层);Thinking 丢;ToolUse id 收集待跳过其 tool_result。
+                Some(sp) => {
+                    // `to_text()` reuses MessageContent's visible-text
+                    // extractor (skips thinking by design — same rule as
+                    // the DB `text` column).
+                    let text = m.content.to_text();
+                    if !text.is_empty() {
+                        out.push(ChatMessage {
+                            role: Role::User,
+                            content: MessageContent::Text(text),
+                            speaker: Some(sp.clone()),
+                        });
+                    }
+                    pending_other_tool_use_ids.extend(extract_tool_use_ids(&m.content));
+                }
+                // 群聊 assistant 行必有 speaker(moderator 或 participant.name)。
+                // None 说明数据异常(评审 P2-2):debug_assert 报警 + 原样保留交
+                // 后续诊断,不静默改写成 `@?`。
+                None => {
+                    debug_assert!(
+                        m.speaker.is_some(),
+                        "group-chat assistant row missing speaker: {:?}",
+                        m
+                    );
+                    out.push(m.clone());
+                }
+            },
         }
-        pending_arbitration_tool_use_id = pending;
     }
     out
 }
 
-/// Single-row filter for [`participant_view`]: returns
-/// `(Some(row), Some(tool_use_id))` when the row is an assistant row
-/// whose arbitration ToolUse pair must be followed by skipping the next
-/// user row.
-fn participant_view_row(m: &ChatMessage) -> (Option<ChatMessage>, Option<String>) {
-    let MessageContent::Blocks(blocks) = &m.content else {
-        return (Some(m.clone()), None);
-    };
-    let arbitration_ids: Vec<String> = blocks
-        .iter()
-        .filter_map(|b| match b {
-            ContentBlock::ToolUse { id, name, .. }
-                if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME =>
-            {
-                Some(id.clone())
-            }
-            _ => None,
-        })
-        .collect();
-    if arbitration_ids.is_empty() {
-        // No arbitration tool here — pass the row through unchanged
-        // (this includes the moderator's NON-arbitration tool pairs).
-        return (Some(m.clone()), None);
+/// Collect every `ToolUse` id in a message's content (the ids whose
+/// tool_result rows must be skipped when stripping another speaker's
+/// tool pair).
+fn extract_tool_use_ids(c: &MessageContent) -> Vec<String> {
+    match c {
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect(),
+        MessageContent::Text(_) => Vec::new(),
     }
-    // This assistant row carries arbitration tool use(s). Keep the
-    // non-tool blocks (thinking / text) so the participant still sees
-    // the moderator's reasoning and remarks; drop the tool blocks.
-    let kept_blocks: Vec<ContentBlock> = blocks
-        .iter()
-        .filter(|b| !matches!(b, ContentBlock::ToolUse { .. }))
-        .cloned()
-        .collect();
-    let first_id = arbitration_ids[0].clone();
-    if kept_blocks.is_empty() {
-        // Pure tool row → drop the whole row (still expect a
-        // following tool_result row to skip).
-        (None, Some(first_id))
-    } else {
-        (
-            Some(ChatMessage {
-                role: m.role,
-                content: MessageContent::Blocks(kept_blocks),
-                speaker: m.speaker.clone(),
-            }),
-            Some(first_id),
-        )
-    }
+}
+
+/// Whether the message carries a `tool_result` for any of the given
+/// tool_use ids (i.e. it is the other half of a stripped tool pair).
+fn row_carries_any_tool_result(m: &ChatMessage, ids: &[String]) -> bool {
+    matches!(
+        &m.content,
+        MessageContent::Blocks(blocks)
+            if blocks.iter().any(|b| matches!(
+                b,
+                ContentBlock::ToolResult { tool_use_id, .. } if ids.contains(tool_use_id)
+            ))
+    )
 }
 
 /// Group-chat research tool whitelist (08-07-group-chat-toolset-and-identity R1).
@@ -400,6 +391,14 @@ fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
          - Never refer to yourself in the third person.\n\
          - Just say your own piece on the topic and respond to what others said.\n\
          \n\
+         ## Research is allowed (08-07-group-chat-role-history-isolation follow-up)\n\
+         You MAY research the codebase to ground your remarks — read_file / grep / glob / list_dir / web_fetch\n\
+         are available to you, and a brief look at the\n\
+         code before you speak is good (the moderator will verify / build on it).\n\
+         But research is a MEANS, not the goal: after a short look, say your piece\n\
+         and end your turn. Do not stall the discussion by investigating for many\n\
+         turns without speaking.\n\
+         \n\
          ## Do NOT take over the moderator's job (read carefully)\n\
          Even if the discussion seems stalled, or the moderator takes several turns\n\
          before nominating, you must NOT step in as the host. Specifically:\n\
@@ -408,8 +407,11 @@ fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
          - Do NOT address the room as the moderator (no opening, closing, or\n\
            summarizing the whole discussion on everyone's behalf).\n\
          - Do NOT invent or invoke system tools / skills to legitimize hosting —\n\
-           if you find yourself wanting to \"run\" the discussion, stop: you are a\n\
-           participant. Speak only your own view, then end your turn. The\n\
+           the arbitration tools (nominate_speaker / end_discussion) are\n\
+           moderator-only and you never call them; the RESEARCH tools above are\n\
+           yours to use, but only to ground your own remarks, never to \"run\" the\n\
+           discussion. If you find yourself wanting to \"run\" the discussion, stop:\n\
+           you are a participant. Speak only your own view, then end your turn. The\n\
            moderator will pick the next speaker.",
         base, name, name, name
     )
@@ -466,12 +468,16 @@ async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> 
 ///   D-D). No reload here: the session has no prior rows yet.
 /// - **round > 0**: reload once into `full` (D-B — `run_chat_loop`
 ///   returns `()` and the orchestrator cannot know which rows it
-///   appended, so a reload is the only resync). The moderator gets
-///   `full` verbatim (View-1, its own arbitration history is kept).
+///   appended, so a reload is the only resync). The moderator enters
+///   with [`role_history`]`(&full, "moderator")` (08-07-group-chat-
+///   role-history-isolation — its own assistant history verbatim,
+///   incl. its arbitration history for 跨轮连贯).
 /// - **participant turn**: reload again into `full` (fresh — the
 ///   moderator's just-persisted rows must be visible) then enter with
-///   [`participant_view`]`(&full)` (View-2, D-A): arbitration
-///   tool_use↔tool_result pairs stripped as atomic units.
+///   [`role_history`]`(&full, &participant.name)`: own assistant rows
+///   verbatim, other speakers' remarks as `role:user`, other speakers'
+///   thinking / tool pairs (incl. the moderator's arbitration pairs)
+///   dropped.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_group_chat_loop(
     tool_defs: Vec<ToolDef>,
@@ -529,15 +535,20 @@ pub async fn run_group_chat_loop(
         // builtin_tools) + the shared turn state. Its system prompt
         // is fully replaced (system_prompt_override = Some).
         //
-        // View-1 (design §4): the moderator sees `full` verbatim —
-        // including its OWN arbitration history from prior rounds
-        // (跨轮连贯, AC5). round 0 uses the caller-supplied `messages`
+        // R1 (08-07-group-chat-role-history-isolation): the moderator
+        // gets its OWN isolated history via `role_history` — its own
+        // assistant rows verbatim (incl. its arbitration history from
+        // prior rounds — 跨轮连贯) + participants' remarks rewritten as
+        // user. The pre-R1 `full` verbatim view mixed EVERY speaker's
+        // assistant rows + thinking into one context (串台源, same as
+        // participant_view). round 0 uses the caller-supplied `messages`
         // (tail = the new human message); later rounds reload once.
         let full = if round == 0 {
             messages.clone()
         } else {
             reload_messages(&db, &session_id).await
         };
+        let history = role_history(&full, "moderator");
         // 08-04 follow-up (实时 speaker 标识): announce the upcoming
         // speaker BEFORE the inner `run_chat_loop` so the frontend can
         // stamp this speaker's name on the placeholder that's about to
@@ -567,7 +578,7 @@ pub async fn run_group_chat_loop(
                 context_window,
                 rid.clone(),
                 session_id.clone(),
-                full,
+                history,
                 sink.clone(),
                 db.clone(),
                 cancellations.clone(),
@@ -705,15 +716,18 @@ pub async fn run_group_chat_loop(
             continue;
         };
 
-        // --- 5. Reload + filter the shared transcript --------------------------
+        // --- 5. Reload + assemble the shared transcript ------------------------
         // Reload once (D-B) to pick up the moderator's just-persisted
         // rows (its tool_result + text), then build the participant's
-        // View-2 (D-A): arbitration tool_use↔tool_result pairs are
-        // stripped atomically so the participant never sees the
-        // moderator's floor-arbitration interaction (identity-confusion
-        // root cause, research/db-evidence.md §2).
+        // per-role history (08-07-group-chat-role-history-isolation
+        // R1, replaces the 08-04 View-2 `participant_view`): only the
+        // participant's own assistant rows stay verbatim, the
+        // moderator's arbitration tool_use↔tool_result pairs are
+        // stripped atomically, and every other speaker's remarks arrive
+        // as `role:user` (identity-confusion root cause, research/
+        // db-evidence.md §2).
         let full = reload_messages(&db, &session_id).await;
-        let view = participant_view(&full);
+        let history = role_history(&full, &participant.name);
 
         // 08-04 follow-up (实时 speaker 标识): announce the participant
         // before its turn so the frontend stamps the name on the
@@ -761,11 +775,12 @@ pub async fn run_group_chat_loop(
             context_window,
             rid.clone(),
             session_id.clone(),
-            // View-2 (D-A): arbitration pairs stripped — the tail user
-            // row is an already-persisted message (the entry guard
-            // skips re-persisting it) and the moderator's tool
-            // interaction is invisible to the participant.
-            view,
+            // Per-role history: the participant's own assistant rows
+            // verbatim + other speakers' remarks as user — the tail user
+            // row is an already-persisted message (the entry guard skips
+            // re-persisting it) and the moderator's tool interaction is
+            // invisible to the participant.
+            history,
             sink.clone(),
             db.clone(),
             cancellations.clone(),
@@ -1133,8 +1148,45 @@ mod tests {
         );
     }
 
+    /// R1 follow-up (08-07-group-chat-role-history-isolation): the
+    /// participant prompt must EXPLICITLY allow + encourage codebase
+    /// research (read_file / grep / glob / list_dir / web_fetch are in
+    /// the participant's tool whitelist, but the pre-follow-up prompt
+    /// never mentioned them — combined with role_history stripping all
+    /// other-speaker tool pairs, participants stopped using tools
+    /// entirely; DB session 6c00f286: zero participant tool calls vs
+    /// 4/5 earlier sessions with participant tool use).
+    #[test]
+    fn participant_prompt_encourages_research() {
+        let p = participant_system_prompt("M3", None);
+        assert!(
+            p.contains("You MAY research the codebase"),
+            "participant prompt must allow research: {p:?}"
+        );
+        assert!(
+            p.contains("read_file / grep / glob / list_dir / web_fetch"),
+            "participant prompt must name the research whitelist: {p:?}"
+        );
+        assert!(
+            p.contains("research is a MEANS, not the goal"),
+            "participant prompt must bound research (brief look then speak): {p:?}"
+        );
+        // The allowance must NOT leak the arbitration tools.
+        assert!(
+            !p.contains("nominate_speaker / end_discussion are available"),
+            "arbitration tools must stay moderator-only: {p:?}"
+        );
+        assert!(
+            p.contains("moderator-only"),
+            "prompt must state arbitration tools are moderator-only: {p:?}"
+        );
+    }
+
     // -------------------------------------------------------------------
-    // participant_view unit tests (design.md §4 + llm-contract.md §469)
+    // role_history unit tests (08-07-group-chat-role-history-isolation
+    // design §R1 + llm-contract.md §469) — replaces the 08-04
+    // participant_view suite. Each test locks one rewrite rule of the
+    // per-role isolation assembler.
     // -------------------------------------------------------------------
 
     fn user_text(text: &str) -> ChatMessage {
@@ -1145,11 +1197,11 @@ mod tests {
         }
     }
 
-    fn assistant_blocks(blocks: Vec<ContentBlock>) -> ChatMessage {
+    fn assistant_blocks_speaker(blocks: Vec<ContentBlock>, speaker: &str) -> ChatMessage {
         ChatMessage {
             role: Role::Assistant,
             content: MessageContent::Blocks(blocks),
-            speaker: Some("moderator".to_string()),
+            speaker: Some(speaker.to_string()),
         }
     }
 
@@ -1169,346 +1221,519 @@ mod tests {
         }
     }
 
-    /// design.md §4 View-2: an arbitration pair (assistant tool_use row
-    /// + its following user tool_result row) is stripped atomically,
-    /// the assistant row's non-tool blocks are preserved, and no orphan
-    /// tool_use / tool_result survives (llm-contract.md §469).
+    /// R1: the current role's own assistant rows are preserved VERBATIM
+    /// — `role:assistant` + ALL blocks, including Thinking + signature
+    /// (Anthropic round-trip contract, AC1/AC5).
     #[test]
-    fn participant_view_strips_arbitration_pair_keeps_text() {
+    fn role_history_current_role_assistant_verbatim() {
         let full = vec![
             user_text("hello"),
-            assistant_blocks(vec![
-                ContentBlock::Thinking {
-                    thinking: "think".to_string(),
-                    signature: "sig".to_string(),
-                },
-                ContentBlock::Text {
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "my reasoning".to_string(),
+                        signature: "sig-own".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "M1 发言".to_string(),
+                        cache_control: None,
+                    },
+                ],
+                "M1",
+            ),
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
                     text: "主持人发言".to_string(),
                     cache_control: None,
-                },
-                tool_use("c1", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
+                }],
+                "moderator",
+            ),
         ];
 
-        let view = participant_view(&full);
-        assert_eq!(
-            view.len(),
-            3,
-            "arbitration pair dropped; user + moderator text + M1 text kept"
-        );
-        assert_eq!(view[0].content.to_text(), "hello");
-        let mod_text = view[1].content.to_text();
+        let history = role_history(&full, "M1");
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0], full[0], "human prompt unchanged");
+        let own = &history[1];
+        assert_eq!(own.role, Role::Assistant, "own row stays assistant");
+        assert_eq!(own.speaker.as_deref(), Some("M1"));
+        assert_eq!(own.content, full[1].content, "own blocks verbatim");
         assert!(
-            mod_text.contains("主持人发言"),
-            "moderator text kept: {mod_text:?}"
+            matches!(
+                &own.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::Thinking { signature, .. } if signature == "sig-own"
+                    ))
+            ),
+            "own Thinking block + signature must survive: {:?}",
+            own.content
         );
-        assert!(
-            !has_arbitration_blocks(&view),
-            "no arbitration tool_use / tool_result may survive in the participant view"
-        );
-        // Pair atomicity: no ToolUse without its ToolResult and vice versa.
-        assert!(no_orphan_pairs(&view));
+        // The other speaker (moderator) is rewritten to user.
+        assert_eq!(history[2].role, Role::User);
+        assert_eq!(history[2].speaker.as_deref(), Some("moderator"));
     }
 
-    /// No arbitration interaction present → the view is unchanged
-    /// (all rows pass through verbatim).
+    /// R1 + P0-2 (评审修订): another speaker's assistant row is rewritten
+    /// to `role:user` with the content stripped to a single Text block —
+    /// NO `@` prefix (the wire layer adds it) — and the `speaker` field
+    /// preserved for wire attribution. Thinking blocks never survive.
     #[test]
-    fn participant_view_no_arbitration_pair_passes_through() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "主持人发言".to_string(),
-                cache_control: None,
-            }]),
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        assert_eq!(view.len(), full.len(), "no arbitration → unchanged");
-        for (v, f) in view.iter().zip(full.iter()) {
-            assert_eq!(v.content.to_text(), f.content.to_text());
-            assert_eq!(v.role, f.role);
-        }
-    }
-
-    /// A NON-arbitration tool pair (e.g. the moderator's `read_file`)
-    /// must pass through the filter INTACT — `participant_view` only
-    /// strips arbitration (`nominate_speaker` / `end_discussion`)
-    /// pairs. Guards against the filter accidentally broadening to
-    /// "drop all tool interactions" (which would leave the
-    /// participant blind to the moderator's non-arbitration work).
-    #[test]
-    fn participant_view_non_arbitration_tool_pair_passes_through() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "先看下文件".to_string(),
-                    cache_control: None,
-                },
-                tool_use("r1", "read_file"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("r1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        assert_eq!(
-            view.len(),
-            4,
-            "non-arbitration pair passes through unchanged"
-        );
-        // No arbitration ToolUse may survive (the loose `has_arbitration_blocks`
-        // helper treats ANY ToolResult as arbitration, so it is not usable
-        // here — a non-arbitration result legitimately survives).
-        assert!(
-            !view.iter().any(|m| {
-                matches!(
-                    &m.content,
-                    MessageContent::Blocks(blocks)
-                        if blocks.iter().any(|b| matches!(
-                            b,
-                            ContentBlock::ToolUse { name, .. }
-                                if name == NOMINATE_SPEAKER_TOOL_NAME
-                                    || name == END_DISCUSSION_TOOL_NAME
-                        ))
-                )
-            }),
-            "no arbitration tool_use may survive in the participant view"
-        );
-        // The read_file pair must still be present (pair atomicity).
-        assert!(no_orphan_pairs(&view));
-        let tool_ids: Vec<String> = view
-            .iter()
-            .filter_map(|m| match &m.content {
-                MessageContent::Blocks(blocks) => Some(blocks.clone()),
-                _ => None,
-            })
-            .flatten()
-            .filter_map(|b| match b {
-                ContentBlock::ToolUse { id, .. } => Some(id),
-                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(tool_ids, vec!["r1".to_string(), "r1".to_string()]);
-    }
-
-    /// A pure tool row (only arbitration ToolUse blocks, no think/text)
-    /// → the whole row is dropped AND its following tool_result row is
-    /// skipped (no orphan tool_result).
-    #[test]
-    fn participant_view_pure_tool_row_dropped_with_result_row() {
-        let full = vec![
-            assistant_blocks(vec![tool_use("c1", "nominate_speaker")]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        assert_eq!(view.len(), 1, "pure tool row + its result row both dropped");
-        assert_eq!(view[0].content.to_text(), "M1 发言");
-        assert!(no_orphan_pairs(&view));
-    }
-
-    /// Two consecutive moderator arbitration rounds: both pairs are
-    /// stripped, later pairs do not disturb earlier text, and the tail
-    /// stays clean (no orphan at the boundary).
-    #[test]
-    fn participant_view_two_consecutive_moderator_rounds() {
-        let full = vec![
-            user_text("hello"),
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "主持人:先请 M1".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c1", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M1 发言".to_string(),
-                cache_control: None,
-            }]),
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "主持人:再请 M2".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c2", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c2")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "M2 发言".to_string(),
-                cache_control: None,
-            }]),
-        ];
-        let view = participant_view(&full);
-        let text = view
-            .iter()
-            .map(|m| m.content.to_text())
-            .collect::<Vec<_>>()
-            .join("|");
-        assert_eq!(
-            text, "hello|主持人:先请 M1|M1 发言|主持人:再请 M2|M2 发言",
-            "both arbitration pairs stripped, all text preserved in order: {text:?}"
-        );
-        assert!(no_orphan_pairs(&view));
-    }
-
-    /// R5 lock (08-07-group-chat-review-fixes): the participant-view
-    /// strip's one-pass + adjacency assumption must remain correct when
-    /// a participant runs multiple turns (R3 bumped participant
-    /// `max_turns` to 20) and therefore emits several NON-arbitration
-    /// tool pairs (`read_file` × 2 here). Those pairs must pass through
-    /// intact (full pair, both halves, in order), the moderator's
-    /// arbitration pairs must still strip atomically, and no orphan may
-    /// survive. This is the regression that locks the invariant doc on
-    /// [`participant_view`] — if someone later changes
-    /// [`participant_view_row`] to flag non-arbitration tools, or breaks
-    /// the adjacency assumption, this test fails.
-    #[test]
-    fn participant_view_participant_multiturn_mixed() {
+    fn role_history_other_speaker_rewritten_as_user() {
         let full = vec![
             user_text("topic"),
-            // Moderator opens + nominates M1 (arbitration pair — must strip).
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "先请 M1".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c1", "nominate_speaker"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("c1")]),
-                speaker: None,
-            },
-            // Participant M1 turn 1: read_file tool pair (NON-arbitration —
-            // must pass through intact, NOT enter the strip state machine).
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "看下文件".to_string(),
-                    cache_control: None,
-                },
-                tool_use("r1", "read_file"),
-            ]),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "moderator reasoning".to_string(),
+                        signature: "sig-mod".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "主持人发言".to_string(),
+                        cache_control: None,
+                    },
+                ],
+                "moderator",
+            ),
+        ];
+
+        let history = role_history(&full, "M1");
+
+        assert_eq!(history.len(), 2);
+        let rewritten = &history[1];
+        assert_eq!(
+            rewritten.role,
+            Role::User,
+            "other speaker never stays assistant"
+        );
+        assert_eq!(
+            rewritten.content,
+            MessageContent::Text("主持人发言".to_string()),
+            "single Text block, verbatim text — no @ prefix, no Thinking"
+        );
+        assert_eq!(
+            rewritten.speaker.as_deref(),
+            Some("moderator"),
+            "speaker field preserved for the wire layer's attribution"
+        );
+        assert!(
+            !rewritten.content.to_text().contains('@'),
+            "content must NOT carry the @ prefix (apply_speaker_prefix would double it)"
+        );
+    }
+
+    /// R1: other speakers' Thinking / RedactedThinking blocks never enter
+    /// the current role's context — they carry signatures bound to THEIR
+    /// generation context (re-injecting would break the signature
+    /// round-trip or be echoed as if this role produced them).
+    #[test]
+    fn role_history_other_thinking_dropped() {
+        let full = vec![
+            user_text("topic"),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "moderator reasoning".to_string(),
+                        signature: "sig-mod".to_string(),
+                    },
+                    ContentBlock::RedactedThinking {
+                        data: "opaque".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "主持人发言".to_string(),
+                        cache_control: None,
+                    },
+                ],
+                "moderator",
+            ),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "other participant reasoning".to_string(),
+                        signature: "sig-other".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "M2 发言".to_string(),
+                        cache_control: None,
+                    },
+                ],
+                "M2",
+            ),
+        ];
+
+        let history = role_history(&full, "M1");
+
+        assert!(
+            !history.iter().any(|m| matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+                    ))
+            )),
+            "no other speaker's thinking may survive: {:?}",
+            history
+        );
+        assert_eq!(history[1].content.to_text(), "主持人发言");
+        assert_eq!(history[2].content.to_text(), "M2 发言");
+    }
+
+    /// R3: another speaker's tool pair (assistant ToolUse + its user
+    /// tool_result row) is stripped WHOLE — tool results are NOT shared,
+    /// only the text remark is relayed. No orphan survives.
+    #[test]
+    fn role_history_other_tool_pair_dropped() {
+        let full = vec![
+            user_text("topic"),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Text {
+                        text: "看下文件".to_string(),
+                        cache_control: None,
+                    },
+                    tool_use("r1", "read_file"),
+                ],
+                "moderator",
+            ),
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("r1")]),
                 speaker: None,
             },
-            // Participant M1 turn 2: another read_file pair + a closing text.
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "再看一个".to_string(),
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "M1 发言".to_string(),
                     cache_control: None,
-                },
-                tool_use("r2", "read_file"),
-            ]),
-            ChatMessage {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![tool_result("r2")]),
-                speaker: None,
-            },
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "我的结论".to_string(),
-                cache_control: None,
-            }]),
+                }],
+                "M1",
+            ),
         ];
 
-        let view = participant_view(&full);
+        let history = role_history(&full, "M1");
 
-        // 1. Arbitration pair (c1) fully stripped — neither the
-        //    `nominate_speaker` ToolUse nor its `c1` tool_result may
-        //    survive. (Precise by id; the loose `has_arbitration_blocks`
-        //    helper flags ANY ToolResult as arbitration, so it would
-        //    false-positive on the legitimate read_file results below —
-        //    that's why this test checks the arbitration id directly.)
-        let c1_survives = view.iter().any(|m| match &m.content {
-            MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
-                ContentBlock::ToolUse { id, name, .. }
-                    if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME =>
-                {
-                    id == "c1"
-                }
-                ContentBlock::ToolResult { tool_use_id, .. } => tool_use_id == "c1",
-                _ => false,
-            }),
-            _ => false,
-        });
+        assert_eq!(history.len(), 3, "tool pair dropped, text remarks kept");
+        let text: Vec<String> = history.iter().map(|m| m.content.to_text()).collect();
+        assert_eq!(text, vec!["topic", "看下文件", "M1 发言"]);
         assert!(
-            !c1_survives,
-            "arbitration tool_use/result for c1 must be stripped: {view:?}"
+            !history.iter().any(|m| matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+                    ))
+            )),
+            "other speaker's tool pair must be fully stripped: {:?}",
+            history
         );
-        // 2. Non-arbitration pairs (r1, r2) pass through intact — both
-        //    halves present, so no_orphan_pairs holds (pair atomicity).
+        assert!(no_orphan_pairs(&history));
+    }
+
+    /// R3: the CURRENT role's own tool pair is preserved verbatim
+    /// (role pairing stays legal — OpenAI rejects a tool_result without
+    /// its tool_use with HTTP 400).
+    #[test]
+    fn role_history_own_tool_pair_preserved() {
+        let full = vec![
+            user_text("topic"),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Text {
+                        text: "看下文件".to_string(),
+                        cache_control: None,
+                    },
+                    tool_use("r1", "read_file"),
+                ],
+                "M1",
+            ),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("r1")]),
+                speaker: None,
+            },
+        ];
+
+        let history = role_history(&full, "M1");
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[1], full[1], "own tool_use row verbatim");
+        assert_eq!(history[2], full[2], "own tool_result row kept");
+        assert!(no_orphan_pairs(&history));
+    }
+
+    /// R1: the human's original prompt (`speaker == None`) is preserved
+    /// as `role:user` — the discussion topic is never lost.
+    #[test]
+    fn role_history_human_prompt_preserved() {
+        let full = vec![user_text("聊聊这个项目")];
+        let history = role_history(&full, "M1");
+        assert_eq!(history, full);
+        assert_eq!(history[0].role, Role::User);
+        assert_eq!(history[0].speaker, None);
+    }
+
+    /// R1 (08-04 invariant carried over): the moderator's arbitration
+    /// pair (nominate/end) never reaches a participant — showing it made
+    /// participants conclude they WERE the moderator (DB session
+    /// evidence, research/db-evidence.md §2). Here the pair is stripped
+    /// via the generic "other speaker's tool pair" path; the moderator's
+    /// text remark is still relayed.
+    #[test]
+    fn role_history_moderator_arbitration_dropped_for_participant() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Text {
+                        text: "先请 M1".to_string(),
+                        cache_control: None,
+                    },
+                    tool_use("c1", "nominate_speaker"),
+                ],
+                "moderator",
+            ),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "M1 发言".to_string(),
+                    cache_control: None,
+                }],
+                "M1",
+            ),
+        ];
+
+        let history = role_history(&full, "M1");
+
+        assert_eq!(history.len(), 3, "arbitration pair dropped");
+        assert_eq!(history[1].content.to_text(), "先请 M1");
+        assert_eq!(history[1].role, Role::User);
         assert!(
-            no_orphan_pairs(&view),
-            "non-arbitration read_file pairs must be intact: {view:?}"
+            !has_arbitration_blocks(&history),
+            "no arbitration may survive in the participant history"
         );
-        // 3. The read_file tool ids survive in order.
-        let tool_ids: Vec<String> = view
+        assert!(no_orphan_pairs(&history));
+    }
+
+    /// R1: the moderator keeps its OWN arbitration history (it must know
+    /// who it has already nominated — 跨轮连贯, AC5). The pair is its
+    /// own speaker, so it passes through verbatim.
+    #[test]
+    fn role_history_moderator_keeps_own_arbitration() {
+        let full = vec![
+            user_text("hello"),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Text {
+                        text: "先请 M1".to_string(),
+                        cache_control: None,
+                    },
+                    tool_use("c1", "nominate_speaker"),
+                ],
+                "moderator",
+            ),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+        ];
+
+        let history = role_history(&full, "moderator");
+
+        assert_eq!(history.len(), 3, "own pair preserved verbatim");
+        assert_eq!(history[1], full[1]);
+        assert_eq!(history[2], full[2]);
+        assert!(no_orphan_pairs(&history));
+    }
+
+    /// R1: a participant speaking multiple times keeps ALL its own
+    /// assistant rows (every turn where speaker == current_role) while
+    /// other speakers' rows rewrite to user — the isolation must not
+    /// collapse into "keep only the latest turn".
+    #[test]
+    fn role_history_multiturn_same_role_preserved() {
+        let full = vec![
+            user_text("topic"),
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "M1 第一轮".to_string(),
+                    cache_control: None,
+                }],
+                "M1",
+            ),
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "主持人插话".to_string(),
+                    cache_control: None,
+                }],
+                "moderator",
+            ),
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "M1 第二轮".to_string(),
+                    cache_control: None,
+                }],
+                "M1",
+            ),
+        ];
+
+        let history = role_history(&full, "M1");
+
+        let assistant_texts: Vec<String> = history
             .iter()
-            .flat_map(|m| match &m.content {
-                MessageContent::Blocks(blocks) => blocks.clone(),
-                _ => vec![],
-            })
-            .filter_map(|b| match b {
-                ContentBlock::ToolUse { id, name, .. } if name == "read_file" => Some(id),
+            .filter(|m| m.role == Role::Assistant)
+            .map(|m| m.content.to_text())
+            .collect();
+        assert_eq!(
+            assistant_texts,
+            vec!["M1 第一轮".to_string(), "M1 第二轮".to_string()],
+            "all own turns preserved as assistant"
+        );
+        let user_speakers: Vec<&str> = history
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .filter_map(|m| m.speaker.as_deref())
+            .collect();
+        assert_eq!(
+            user_speakers,
+            vec!["moderator"],
+            "moderator remark rewritten to user"
+        );
+    }
+
+    /// AC5 contract-level lock: the current role's Thinking block
+    /// signature must round-trip COMPLETE through the assembler (the
+    /// Anthropic API 400s on a dropped/mutated signature), and other
+    /// speakers' signatures must NOT leak into this role's context.
+    #[test]
+    fn role_history_signature_roundtrip_contract() {
+        let full = vec![
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "reasoning".to_string(),
+                        signature: "sig-abc-123".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "M1 发言".to_string(),
+                        cache_control: None,
+                    },
+                ],
+                "M1",
+            ),
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "moderator reasoning".to_string(),
+                        signature: "sig-mod".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "主持人发言".to_string(),
+                        cache_control: None,
+                    },
+                ],
+                "moderator",
+            ),
+        ];
+
+        let history = role_history(&full, "M1");
+
+        let signatures: Vec<String> = history
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                    ContentBlock::Thinking { signature, .. } => Some(signature.clone()),
+                    _ => None,
+                }),
                 _ => None,
             })
             .collect();
         assert_eq!(
-            tool_ids,
-            vec!["r1".to_string(), "r2".to_string()],
-            "read_file pairs preserved in order: {view:?}"
+            signatures,
+            vec!["sig-abc-123".to_string()],
+            "own signature round-trips verbatim; the moderator's must not leak"
         );
-        // 4. Text content preserved in order across the multi-turn mix.
-        //    The read_file result rows render as empty `to_text()`
-        //    (a tool_result block carries no text), so the joined view
-        //    has empty slots where those user(tool_result) rows sit —
-        //    the point is the assistant text + the order survive.
-        let text = view
-            .iter()
-            .map(|m| m.content.to_text())
-            .collect::<Vec<_>>()
-            .join("|");
+    }
+
+    /// P0-2 (评审修订): 归属策略方案 (a) —— 改写行 content 不带 `@` 前缀、
+    /// 保留 speaker。经 wire 层序列化后,Anthropic `apply_speaker_prefix`
+    /// 恰好插入一次 `@name: `(无双重前缀);OpenAI 侧 speaker 经 wire 转换
+    /// 保留(适配器填 `name` 字段)。
+    #[test]
+    fn role_history_wire_no_double_prefix() {
+        let full = vec![
+            user_text("topic"),
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "主持人发言".to_string(),
+                    cache_control: None,
+                }],
+                "moderator",
+            ),
+        ];
+        let history = role_history(&full, "M1");
+        let rewritten = &history[1];
+        assert_eq!(rewritten.role, Role::User);
+        assert_eq!(rewritten.speaker.as_deref(), Some("moderator"));
         assert_eq!(
-            text, "topic|先请 M1|看下文件||再看一个||我的结论",
-            "arbitration stripped, non-arbitration text + tool pairs preserved in order: {text:?}"
+            rewritten.content.to_text(),
+            "主持人发言",
+            "no @ prefix in the rewrite row"
         );
+
+        // Anthropic wire: serialize the history the way the provider
+        // body is built (ChatMessage JSON carries `speaker`), then run
+        // the attribution pass.
+        let mut body = serde_json::json!({
+            "messages": history
+                .iter()
+                .map(|m| serde_json::to_value(m).unwrap())
+                .collect::<Vec<_>>()
+        });
+        crate::llm::provider::anthropic::apply_speaker_prefix(&mut body);
+        let wire_text = body["messages"][1]["content"].as_str().unwrap();
+        assert!(
+            wire_text.starts_with("@moderator: "),
+            "Anthropic wire must attribute the rewrite row once: {wire_text:?}"
+        );
+        assert_eq!(
+            wire_text.matches("@moderator:").count(),
+            1,
+            "no double @ prefix: {wire_text:?}"
+        );
+        assert!(
+            body["messages"][1].get("speaker").is_none(),
+            "apply_speaker_prefix must strip the speaker field from the wire body"
+        );
+
+        // OpenAI wire: the rewritten row converts to a user message that
+        // still carries `speaker` (the adapter emits the native `name`
+        // field from it) with the bare text (no @ prefix).
+        let wire = crate::llm::provider::wire::chat_request_to_wire(
+            crate::llm::types::ChatRequest {
+                model: "m".to_string(),
+                max_tokens: 1000,
+                messages: history.clone(),
+                system: None,
+                stream: false,
+                tools: vec![],
+                thinking: None,
+            },
+            None,
+        );
+        match &wire.messages[1] {
+            crate::llm::provider::wire::WireMessage::User { content, speaker } => {
+                assert_eq!(content, "主持人发言");
+                assert_eq!(speaker.as_deref(), Some("moderator"));
+            }
+            other => panic!("rewritten row must map to WireMessage::User, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------
@@ -1517,57 +1742,61 @@ mod tests {
     // self-awareness dimension — they do NOT run a real model, so they
     // cannot prove a weak model won't role-collapse at runtime. What
     // they DO prove: the structural invariants that any prompt-level
-    // defense relies on (a clean participant transcript view + an
+    // defense relies on (per-role isolated transcript history + an
     // unambiguous role-boundary system prompt) hold even under the
     // worst input we've actually seen in production (DB sessions
     // a6c87247 / b144cc2a: same-model combination + a weak model that
     // prefixes its reply with another participant's name). If someone
-    // later weakens `participant_view` or strips the identity-guard
+    // later weakens `role_history` or strips the identity-guard
     // block from the prompt, these fail immediately.
     // -----------------------------------------------------------------
 
-    /// R1: under the worst observed input — same-model moderator +
-    /// participant, plus a "weak model emits another participant's
-    /// name prefix" assistant row — the `participant_view` structural
-    /// invariants hold: zero arbitration blocks survive, no orphan
-    /// tool_use/tool_result, and the mislabeled row passes through as
-    /// a normal non-arbitration row (content sanitization is the
-    /// prompt's job, not the view's; the view only guarantees structure).
+    /// P1-1 (08-07-group-chat-role-history-isolation 评审,语义重写):
+    /// the 08-04 `participant_view` structural contract ("the view never
+    /// rewrites content — mislabeled rows pass through verbatim") is
+    /// REPLACED by `role_history`'s per-speaker attribution contract: a
+    /// mislabeled assistant row (`speaker="M3"` but content reads as
+    /// D4F) is rewritten to `role:user + speaker=M3` with the TEXT
+    /// unchanged (role_history reassigns role/speaker and drops
+    /// thinking — it does not sanitize text). Arbitration stripping +
+    /// pair atomicity invariants carry over unchanged.
     #[test]
     fn identity_contract_view_holds_under_same_model_and_mislabel() {
         // Worst-case `full`: the moderator's arbitration pair + an
         // assistant row whose speaker is "M3" but whose CONTENT reads
-        // as if D4F is speaking (the role-collapse signature from
-        // DB session a6c87247 seq 16). `participant_view` does not
-        // read `speaker`, so the speaker attribution is irrelevant to
-        // the structural test — the point is the row is non-arbitration
-        // and must pass through unchanged.
+        // as if D4F is speaking (the role-collapse signature from DB
+        // session a6c87247 seq 16).
         let full = vec![
             user_text("聊聊这个项目"),
-            // Moderator arbitration pair — must strip atomically.
-            assistant_blocks(vec![
-                ContentBlock::Text {
-                    text: "先请 M3".to_string(),
-                    cache_control: None,
-                },
-                tool_use("c1", "nominate_speaker"),
-            ]),
+            // Moderator arbitration pair — must strip atomically (now
+            // via the generic "other speaker's tool pair" path).
+            assistant_blocks_speaker(
+                vec![
+                    ContentBlock::Text {
+                        text: "先请 M3".to_string(),
+                        cache_control: None,
+                    },
+                    tool_use("c1", "nominate_speaker"),
+                ],
+                "moderator",
+            ),
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("c1")]),
                 speaker: None,
             },
-            // The weak-model mislabel row: content reads as D4F speaking
-            // but it's a non-arbitration assistant row → must survive
-            // the view unchanged (the view cannot / must not rewrite
-            // content; the identity-guard prompt is what disciplines it).
-            assistant_blocks(vec![ContentBlock::Text {
-                text: "@D4F: 接过 M3 留的钩子…".to_string(),
-                cache_control: None,
-            }]),
+            // The weak-model mislabel row: speaker claims M3 but content
+            // reads as D4F speaking.
+            assistant_blocks_speaker(
+                vec![ContentBlock::Text {
+                    text: "@D4F: 接过 M3 留的钩子…".to_string(),
+                    cache_control: None,
+                }],
+                "M3",
+            ),
         ];
 
-        let view = participant_view(&full);
+        let view = role_history(&full, "M1");
 
         // Structural invariant 1: zero arbitration blocks survive.
         let c1_survives = view.iter().any(|m| match &m.content {
@@ -1588,16 +1817,23 @@ mod tests {
             no_orphan_pairs(&view),
             "no orphan tool_use/result: {view:?}"
         );
-        // Structural invariant 3: the mislabeled row survives intact
-        // (content NOT rewritten by the view — that's the prompt's job).
-        let text = view
+        // Structural invariant 3 (P1-1 语义重写): the mislabeled row is
+        // RE-ATTRIBUTED, not passed through as assistant — it becomes
+        // role:user + speaker=M3, text byte-identical (no sanitization:
+        // role_history only reassigns role/speaker and drops thinking).
+        let mislabeled = view
             .iter()
-            .map(|m| m.content.to_text())
-            .collect::<Vec<_>>()
-            .join("|");
-        assert!(
-            text.contains("@D4F: 接过 M3 留的钩子"),
-            "the mislabeled non-arbitration row must pass through unchanged: {text:?}"
+            .find(|m| m.speaker.as_deref() == Some("M3"))
+            .expect("mislabeled row must survive re-attribution");
+        assert_eq!(
+            mislabeled.role,
+            Role::User,
+            "mislabeled row must NOT survive as assistant (per-role isolation)"
+        );
+        assert_eq!(
+            mislabeled.content.to_text(),
+            "@D4F: 接过 M3 留的钩子…",
+            "text is NOT sanitized — only role/speaker are reassigned"
         );
     }
 

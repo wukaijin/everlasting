@@ -232,6 +232,76 @@ fn user_message_matches(db_row: &crate::db::MessageRow, mem_msg: &ChatMessage) -
     mem_msg.content.to_text() == db_row.text
 }
 
+/// A D-D entry-guard hit: the tail user message is judged already
+/// persisted — the persist site must skip `persist_turn` and anchor
+/// on `seq` instead.
+struct DdGuardHit {
+    /// seq of the DB row the tail user message maps to (the at_file
+    /// injection anchor; for rewrite products it is not consumed —
+    /// see `snapshot`).
+    seq: i64,
+    /// The `last_user_snapshot` the persist site should return.
+    /// `None` for rewrite products (P0-3) so the at_file injection
+    /// condition (`injections` non-empty && snapshot `Some`) stays
+    /// false — a rewrite row is another speaker's remark, NOT a human
+    /// input, and must not trigger `@file` expansion (it would write
+    /// the injection manifest to the wrong seq row + misplace the
+    /// FileInjections event). `Some(content)` for speaker-None hits
+    /// (behavior unchanged).
+    snapshot: Option<MessageContent>,
+}
+
+/// The D-D entry guard's "already persisted?" decision for a tail user
+/// message (design D-F + 08-07-group-chat-role-history-isolation
+/// P0-1/P0-3). Returns `Some(hit)` when the caller should treat the
+/// message as already in the DB (skip `persist_turn`) — which only
+/// ever happens in a group-chat scope (`group_chat_state` present).
+///
+/// Two match paths:
+/// - `msg.speaker.is_some()`: the tail is a `role_history` rewrite
+///   product — another speaker's utterance rewritten as `role:user`.
+///   The original DB row is an assistant row, so content-matching
+///   against user rows can never hit. Anchor on the tail-most user
+///   row's seq instead (semantically the closest position; P0-3 makes
+///   the seq unreachable as an injection anchor). Safety: in the
+///   group-chat codebase a user row with `speaker == Some` can ONLY be
+///   a rewrite product — human prompts, tool_results and synthetic
+///   tool_results all carry `speaker == None`, so the signal cannot
+///   misfire.
+/// - `speaker == None`: original content match (`user_message_matches`).
+fn dd_guard_hit(
+    skip_persist: bool,
+    group_chat_state: Option<&crate::tools::nominate_speaker::SharedTurnState>,
+    loaded_messages: &[crate::db::MessageRow],
+    msg: &ChatMessage,
+) -> Option<DdGuardHit> {
+    if skip_persist {
+        return None;
+    }
+    let seq = if msg.speaker.is_some() {
+        loaded_messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|db_row| db_row.seq)
+    } else {
+        loaded_messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .find(|db_row| user_message_matches(db_row, msg))
+            .map(|db_row| db_row.seq)
+    };
+    seq.filter(|_| group_chat_state.is_some())
+        .map(|seq| DdGuardHit {
+            seq,
+            snapshot: if msg.speaker.is_some() {
+                None
+            } else {
+                Some(msg.content.clone())
+            },
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_chat_loop(
     tool_defs: Vec<ToolDef>,
@@ -984,27 +1054,49 @@ pub async fn run_chat_loop(
     // judged already-persisted and skipped → the transcript loses one
     // text row. Harmless: it does not break tool pairing and never
     // triggers a 400.
+    //
+    // P0-1/P0-3 extension (08-07-group-chat-role-history-isolation):
+    // `role_history` rewrite products — other speakers' utterances
+    // rewritten as `role:user` + `speaker` — would ALSO be judged "new
+    // human messages" here (their original DB rows are assistant, so
+    // `user_message_matches` can never hit) and re-persisted every
+    // round. `dd_guard_hit` treats any tail user row with
+    // `speaker.is_some()` as already persisted (safety: in the
+    // group-chat codebase only rewrite products carry speaker on a
+    // user row), anchoring `seq` on the tail-most user row, and its
+    // `None` snapshot disables the at_file injection pass below for
+    // those rows.
     let (last_user_snapshot, last_user_seq) =
         if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
             let msg = last_user.clone();
-            let already_in_db = (!skip_persist)
-                .then(|| {
-                    loaded_session
-                        .messages
-                        .iter()
-                        .filter(|m| m.role == "user")
-                        .find(|db_row| user_message_matches(db_row, &msg))
-                })
-                .flatten()
-                .filter(|_| group_chat_state.is_some())
-                .map(|db_row| db_row.seq);
-            if let Some(existing_seq) = already_in_db {
+            // P0-1 + P0-3 (08-07-group-chat-role-history-isolation):
+            // the guard now also treats a tail user row carrying
+            // `speaker` as already persisted — such a row can ONLY be
+            // a `role_history` rewrite product (an other-speaker
+            // utterance rewritten as user; the original DB row is
+            // assistant, so content-matching can never hit). Without
+            // this, every rewrite row would be judged a "new human
+            // message" and re-persisted every round → DB pollution +
+            // frontend ghost rows. The seq anchors on the tail-most
+            // user row; the snapshot is None so at_file injection
+            // below is skipped (P0-3).
+            let already_in_db = dd_guard_hit(
+                skip_persist,
+                group_chat_state.as_ref(),
+                &loaded_session.messages,
+                &msg,
+            );
+            if let Some(hit) = already_in_db {
                 // Already persisted (group_chat reload path): do not
                 // write a new row, do not bump seq. `user_seq` points
                 // at the existing row so FileInjections metadata
                 // update + memory injection target the right message.
-                let user_seq = existing_seq;
-                (Some(msg.content), user_seq)
+                // P0-3: a speaker-carrying hit (rewrite product) returns
+                // `None` for the snapshot → the at_file injection
+                // condition below stays false (no manifest write to the
+                // wrong seq row, no misplaced FileInjections event).
+                let user_seq = hit.seq;
+                (hit.snapshot, user_seq)
             } else {
                 // B6 PR1b: in the worker path, skip ALL DB writes (see
                 // `skip_persist` docstring at the function head). The
@@ -4913,5 +5005,104 @@ mod tests {
         let row = db_row("user", json!(42), "", 4); // not a valid MessageContent
         let mem = user_msg(MessageContent::Text("hi".to_string()));
         assert!(!user_message_matches(&row, &mem));
+    }
+
+    // -----------------------------------------------------------------
+    // D-D entry-guard extension (08-07-group-chat-role-history-isolation
+    // P0-1/P0-3): `dd_guard_hit` unit tests. The two match paths +
+    // snapshot rule are pure functions over the loaded rows.
+    // -----------------------------------------------------------------
+
+    fn group_chat_state() -> Option<crate::tools::nominate_speaker::SharedTurnState> {
+        Some(Arc::new(Mutex::new(
+            crate::tools::nominate_speaker::GroupChatTurnState {
+                next_speaker: None,
+                discussion_ended: false,
+            },
+        )))
+    }
+
+    /// P0-1: 群聊作用域内,tail user 行 `speaker.is_some()`(role_history
+    /// 改写产物)→ 视同已落库,不触发 persist_turn(无 DB 重复行)。
+    #[test]
+    fn dd_guard_skips_persist_for_speaker_user_in_group_chat() {
+        let loaded = vec![
+            db_row("user", json!("hello"), "hello", 1),
+            db_row("assistant", json!([{"type":"text","text":"x"}]), "", 2),
+            db_row("user", json!("old"), "old", 3),
+        ];
+        let msg = ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("主持人发言".to_string()),
+            speaker: Some("moderator".to_string()),
+        };
+        let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg);
+        assert!(
+            hit.is_some(),
+            "speaker-carrying tail must be judged already-persisted"
+        );
+        assert_eq!(hit.unwrap().seq, 3, "seq anchors on the tail-most user row");
+    }
+
+    /// 非群聊(group_chat_state None)+ 经典聊天(speaker None)→ 守卫行为
+    /// 不变(不命中);群聊 human prompt(speaker None)命中时 snapshot 仍是
+    /// 原内容(不因扩展而丢失 at_file 注入能力)。
+    #[test]
+    fn dd_guard_unchanged_for_classic_chat_speaker_none() {
+        let loaded = vec![db_row("user", json!("hello"), "hello", 2)];
+        let msg = user_msg(MessageContent::Text("hello".to_string()));
+        // Classic chat: no group_chat_state → the guard never fires,
+        // even on an exact content match.
+        assert!(dd_guard_hit(false, None, &loaded, &msg).is_none());
+        // Group-chat human prompt (speaker None) with a matching row:
+        // the original path still hits (seq = the matched row) and the
+        // snapshot keeps the content (at_file injection still works).
+        let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg);
+        assert_eq!(hit.as_ref().map(|h| h.seq), Some(2));
+        assert_eq!(
+            hit.map(|h| h.snapshot),
+            Some(Some(MessageContent::Text("hello".to_string()))),
+            "speaker-None hit keeps the content snapshot (unchanged behavior)"
+        );
+    }
+
+    /// P0-3: 改写行(speaker Some)命中守卫后 `last_user_snapshot` 返回
+    /// None → chat_loop.rs:1116 的 at_file 注入条件 (`injections` 非空 &&
+    /// snapshot Some)为 false,改写行不触发 `@file` 注入(无注入 manifest
+    /// 写入、无 FileInjections 事件)。
+    #[test]
+    fn dd_guard_rewrite_row_skips_at_file_injection() {
+        let loaded = vec![db_row("user", json!("hello"), "hello", 1)];
+        let msg = ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("M1 发言".to_string()),
+            speaker: Some("M1".to_string()),
+        };
+        let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg).unwrap();
+        assert!(
+            hit.snapshot.is_none(),
+            "rewrite row must not trigger at_file injection"
+        );
+    }
+
+    /// P0-3: 改写行的 seq 取**尾部最后一个 user 行**,而非 DB 第一条
+    /// user 行(find 不再因常数短路匹配错行)。
+    #[test]
+    fn dd_guard_rewrite_row_seq_not_first_user_row() {
+        let loaded = vec![
+            db_row("user", json!("hello"), "hello", 1),
+            db_row("assistant", json!([{"type":"text","text":"x"}]), "", 2),
+            db_row("user", json!("tool_result"), "", 7),
+        ];
+        let msg = ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("主持人发言".to_string()),
+            speaker: Some("moderator".to_string()),
+        };
+        let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg).unwrap();
+        assert_eq!(
+            hit.seq, 7,
+            "seq must be the tail-most user row, NOT the first user row (1)"
+        );
     }
 }

@@ -17,8 +17,9 @@
 //!   3. participant arbitration tools (already fixed by `participant_tool_defs`).
 //!
 //! See `.trellis/tasks/08-04-group-chat-orchestration-rewrite/design.md`
-//! (D-A participant_view filtering / D-B reload retention / D-D entry
-//! guard / D-F old heuristic guard replaced).
+//! (D-B reload retention / D-D entry guard / D-F old heuristic guard
+//! replaced) + `08-07-group-chat-role-history-isolation` (per-role
+//! `role_history` assembler replaces the 08-04 participant_view).
 
 #![cfg(test)]
 

@@ -1300,32 +1300,47 @@ mistakes itself for the moderator (DB evidence: a participant's thinking
 was "I need to respond as the moderator").
 
 **Solution** — give each speaker a purpose-built transcript view, and
-rely on the D-D entry guard (above) instead of per-persist-site patches:
+rely on the D-D entry guard (above) instead of per-persist-site patches.
+Since 08-07-group-chat-role-history-isolation, the view is a **per-role
+isolated history** (`role_history`); the pre-isolation `participant_view`
+only stripped arbitration pairs and left every speaker's assistant rows
+(including thinking + signature) in one context — the 多身份 assistant
+串台 root cause:
 
 ```rust
 // group_chat_loop.rs
-// View-1 (moderator): full reload, verbatim — its OWN arbitration
-// history stays (cross-round coherence).
+// View (every speaker, moderator + participants): role_history builds
+// an isolated LLM context — ONLY the speaker's own assistant rows
+// verbatim (incl. thinking + signature, Anthropic round-trip safe) +
+// other speakers' remarks rewritten as role:user; other speakers'
+// thinking / tool pairs (incl. the moderator's arbitration pairs) are
+// dropped (tool results are NOT shared).
 let full = if round == 0 { messages.clone() }          // tail = new human msg
            else { reload_messages(&db, &session_id).await };
-run_chat_loop(/* … */ full, /* … */);
-
-// View-2 (participant): arbitration pairs stripped as atomic units.
-let full = reload_messages(&db, &session_id).await;
-let view = participant_view(&full);                    // D-A
-run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */);
+let history = role_history(&full, current_role);       // "moderator" | participant.name
+run_chat_loop(/* … */ history, /* … */);
 ```
 
 **Key contracts**:
 
-1. **Pair-atomic stripping (§469)**: `participant_view` drops an
-   assistant row's arbitration `ToolUse` blocks (keeping think/text
-   blocks) AND skips the immediately-following user row carrying the
-   matching `tool_result`. The pair stays adjacent in the reloaded
-   `full` (persisted within one moderator turn), so a one-pass state
-   machine suffices — no orphan `tool_use` / `tool_result` survives.
-   Pure-tool rows are dropped whole; non-arbitration tool pairs
-   (e.g. `read_file`) pass through unchanged.
+1. **Per-role history isolation (08-07-group-chat-role-history-isolation
+   R1)**: `role_history(full, current_role)` is a one-pass state machine
+   over the reloaded transcript. A speaker sees ONLY its own assistant
+   rows verbatim (`role:assistant` + all blocks, incl. thinking +
+   signature — the Anthropic round-trip contract), other speakers'
+   utterances rewritten as `role:user` (single Text block, content
+   WITHOUT `@` prefix, `speaker` field preserved — attribution is the
+   wire layer's job: Anthropic `apply_speaker_prefix` adds `@name:`,
+   OpenAI fills the native `name` field; a content-embedded `@` would
+   double-prefix). Other speakers' Thinking/RedactedThinking blocks are
+   DROPPED (their signatures are bound to *their* generation context)
+   and their tool_use↔tool_result pairs stripped whole (tool results
+   are NOT shared — relayed only via text remarks). The moderator's
+   arbitration pairs are just another "other speaker's tool pair" from
+   a participant's view; the moderator keeps its own (跨轮连贯). The
+   strip is **atomic per pair** (llm-contract.md §469): no orphan
+   `tool_use` / `tool_result` survives; persisted pairs are adjacent in
+   `full` (one speaker turn), so a one-pass state machine suffices.
 2. **Scope via the shared turn-state**: participants pass
    `Some(turn_state)` (same Arc as the moderator) so the D-D guard's
    `group_chat_state.is_some()` holds for them too — otherwise the
@@ -1345,7 +1360,18 @@ run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */
 4. **Reload is retained (D-B)**: `run_chat_loop` returns `()`; a reload
    between speakers is the only resync. It is safe only because the
    entry guard prevents re-persisting already-persisted rows.
-5. **Identity-guard prompt (08-04 follow-up)**: the wire-layer speaker
+5. **D-D guard speaker 短路 (08-07-group-chat-role-history-isolation
+   R2.5, P0-1/P0-3)**: inside `group_chat_state.is_some()` scope, a
+   tail user row carrying `speaker` is treated as already persisted and
+   skipped — such a row can ONLY be a `role_history` rewrite product
+   (group-chat human prompts, tool_results and synthetic tool_results
+   all carry `speaker == None`, so the signal cannot misfire); the seq
+   anchors on the tail-most user row and `last_user_snapshot` returns
+   `None` so the at_file `@file` injection pass is skipped for rewrite
+   rows (they are another speaker's remark, not a human input). Without
+   this, every rewrite row would be re-persisted each round → DB
+   pollution + frontend ghost rows.
+6. **Identity-guard prompt (08-04 follow-up)**: the wire-layer speaker
    label (OpenAI `name` / Anthropic `@name:` prefix) is NOT enough —
    weak models ignore it and adopt the moderator's first-person voice
    (DB evidence: participant M3 replied as `@moderator:` and wrote "I am
@@ -1360,7 +1386,7 @@ run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */
    @-mentioning ANOTHER participant in the reply body is allowed and
    desirable ("@D4F，你说得对…"). Moderator single-turn (bullet 3)
    removes the identity-confusing filler text at the source.
-6. **Terminal signal (08-04 follow-up "终止事件 + 逐轮流式")**: the
+7. **Terminal signal (08-04 follow-up "终止事件 + 逐轮流式")**: the
    orchestrator shares ONE `request_id` across every inner
    `run_chat_loop`; the frontend cannot know when the discussion has
    actually ENDED from the inner per-speaker `Done`s. The orchestrator
@@ -1369,7 +1395,7 @@ run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */
    (NOT on cancel — the cancelled inner turn's `Done { cancelled }` is
    the terminal there). The frontend keeps the request alive across the
    inner `Done`s and only finalizes on `group_chat_end` / `cancelled`.
-7. **Live speaker identity (08-04 follow-up "实时 speaker 标识")**: the
+8. **Live speaker identity (08-04 follow-up "实时 speaker 标识")**: the
    per-speaker wire events (`Delta` / `Done`) carry no speaker, so the
    orchestrator emits `ChatEvent::Speaker { speaker }` right before
    each inner turn ("moderator" or the participant name). The frontend
@@ -1379,7 +1405,7 @@ run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */
    orchestrator-only: the agent loop's per-event stream match drops it
    defensively if a provider ever re-emits it. Test: the integration
    test asserts one `Speaker` event per inner turn, in turn order.
-8. **Tool whitelist, not blacklist (08-07-group-chat-toolset-and-identity R1)**:
+9. **Tool whitelist, not blacklist (08-07-group-chat-toolset-and-identity R1)**:
    group-chat speakers receive ONLY `group_chat_tool_defs(tool_defs,
    is_moderator)` — a whitelist of research tools
    (`read_file`/`grep`/`glob`/`list_dir`/`web_fetch`) shared by both
@@ -1396,7 +1422,7 @@ run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */
    class can't recur. Tests:
    `group_chat_tool_defs_moderator_has_research_plus_arbitration` +
    `group_chat_tool_defs_participant_has_research_only`.
-9. **No nominate-streak counter (08-07-group-chat-toolset-and-identity R2)**:
+10. **No nominate-streak counter (08-07-group-chat-toolset-and-identity R2)**:
    when the moderator ends a turn without calling
    `nominate_speaker`/`end_discussion`, the orchestrator simply retries
    the moderator turn (`continue`) — there is NO "stuck" detection, NO
@@ -1412,17 +1438,26 @@ run_chat_loop(group_chat_tool_defs(&tool_defs, false), /* … */ view, /* … */
    max_rounds }`.
 
 **When to apply**: any orchestrator that drives multiple `run_chat_loop`
-calls over one shared session — give each callee a view, never the raw
-reload, never patch the persist sites heuristically, and scope each
-callee's tool list to a whitelist (never the full `builtin_tools`).
+calls over one shared session — give each callee a per-role isolated
+history (`role_history`), never the raw reload, never patch the persist
+sites heuristically (the D-D guard speaker 短路 is the single seam), and
+scope each callee's tool list to a whitelist (never the full
+`builtin_tools`).
 
 **Tests**: `.trellis/spec/backend/…` → `app/src-tauri/src/agent/tests_group_chat.rs`
 (integration: full multi-round flow, no `ChatEvent::Error`, one
-`tool_result` row per `tool_use_id`, participant views free of
+`tool_result` row per `tool_use_id`, participant histories free of
 arbitration blocks, system-prompt identity, one `group_chat_end` +
-one `Speaker` per turn) + `participant_view` unit
-tests (with/without arbitration pair, pure tool row, two consecutive
-moderator rounds, non-arbitration pair passthrough) +
+one `Speaker` per turn) + `role_history` unit
+tests in `group_chat_loop.rs` (own rows verbatim incl. signature
+round-trip, other-speaker rewrite as user without `@` prefix +
+`speaker` preserved, other thinking dropped, other tool pairs stripped
+whole, own tool pairs preserved, human prompt preserved, arbitration
+dropped for participants / kept for the moderator, multi-turn same-role
+preserved, wire no-double-prefix) + `dd_guard_*` unit tests in
+`chat_loop.rs` (speaker-carrying tail skipped in group-chat scope,
+classic-chat behavior unchanged, rewrite rows skip at_file injection,
+seq anchors on the tail-most user row) +
 `app/src/stores/streamController.test.ts` (group-chat streaming:
 inner `done` doesn't finalize, `start` pushes a new placeholder, the
 `speaker` event stamps the chip, `group_chat_end` finalizes).
