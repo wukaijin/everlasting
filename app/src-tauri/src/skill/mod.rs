@@ -19,3 +19,4 @@
 //!   (agentskills.io standard min set). No `allowed-tools` / switches.
 
 pub mod loader;
+pub mod tests_loader;

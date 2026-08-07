@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "worktree.rs 拆分的领域契约——naming/create/sweep/check 簇边界须符合既有 worktree 契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "db/memories.rs 拆分须遵守 DB 层规范(SQL 组织/事务/测试约定)"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试迁出 tests_*.rs 同级子模块模式 + 被测私有项升 pub(crate) 的约定来源"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-production-test-entry.md", "reason": "RULE-A-006 生产/测试共用单一入口约束——拆分不得新增第二条入口"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "module 目录组织约定(loader.rs + loader/ 共存、mod 声明、re-export 惯例)"}

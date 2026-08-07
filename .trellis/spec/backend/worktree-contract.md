@@ -801,7 +801,7 @@ pub fn resolve_cleanup_period_days(explicit: Option<u32>) -> u32;
 | Destroy via `git::worktree::destroy_worker(project_path, &wt_path, run_id)` | same best-effort semantics as the explicit discard path |
 | Increment destroyed counter; continue to next entry | best-effort: a single failure doesn't abort the sweep |
 
-### Tests Required (`git/worktree.rs::tests`)
+### Tests Required (`git::tests_worktree`)
 
 | Test | Asserts |
 |------|---------|

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "纯搬迁质量验收基线——行数/clippy/fmt/测试全绿标准"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "核对测试迁出符合 tests_*.rs 同级模式 + pub(crate) 可见性约束"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-production-test-entry.md", "reason": "RULE-A-006——核对拆分未引入第二条生产/测试入口"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "核对 worktree 拆分后 git/mod.rs re-export 与领域契约一致"}

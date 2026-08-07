@@ -206,7 +206,7 @@ For comparison, `write_file` / `edit_file` / `shell` (filesystem writes) **DO** 
 >
 > Layer 2 **不**走 FTS5,**不**消费 layer 1 的 query 文本,**不**产出新 message 块 — 它产出的是一个 plain-text 注脚,prepend 到 `tool_result.content`。
 
-**Signatures**(已在 `db/memories.rs:1046` 由 P1 产出):
+**Signatures**(已在 `db::memories` 由 P1 产出;08-08 拆分后函数在 `db/memories/search.rs`):
 
 ```rust
 // db::memories::find_pitfalls_by_trigger
