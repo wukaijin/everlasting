@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia, storeToRefs } from "pinia";
 import { effectScope, nextTick, watch } from "vue";
-import { rehydrateMessages, useStreamControllerStore } from "./streamController";
+import { groupChatNotice, rehydrateMessages, useStreamControllerStore } from "./streamController";
 import { useMemoryStore } from "./memory";
 import { useChatStore } from "./chat";
 import { useQuestionCardsStore } from "./questionCards";
@@ -1976,5 +1976,161 @@ describe("rehydrateMessages — interleaved thinking contentBlocks passthrough",
     expect(msgs).toHaveLength(4);
     expect(msgs[3].content).toContain("主持人:结束");
     expect(msgs[3].speaker).toBe("moderator");
+  });
+
+  it("08-07 R2: 终端 max_rounds → finalize + 挂 notice", () => {
+    // 编排器撞 MAX_ORCHESTRATION_ROUNDS 上限后,发 Done{stop_reason:
+    // "max_rounds"}。前端必须 (a) finalize(循环已退,不再有事件),
+    // (b) 在 placeholder 上挂 notice 让 MessageItem 渲染提示行。
+    // (08-07 R2 原有 moderator_stuck 测试已随 streak 机制移除 —— 见
+    // 08-07-group-chat-toolset-and-identity R2。)
+    const stream = useStreamControllerStore();
+    const sid = "08-07-r2-max-rounds-sid";
+    const req = {
+      requestId: "rid-r2-maxrounds",
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      groupChat: true,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(req.requestId, req);
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "聊聊"), asst(1, "", [])]),
+      false,
+    );
+
+    const handleChatEvent = (
+      stream as unknown as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          text?: string;
+          stop_reason?: string;
+          speaker?: string;
+        }) => void;
+      }
+    ).handleChatEvent;
+    const activeReq = () =>
+      (stream as unknown as { activeRequests: Map<string, typeof req> })
+        .activeRequests;
+
+    handleChatEvent({ request_id: "rid-r2-maxrounds", kind: "speaker", speaker: "moderator" });
+    handleChatEvent({ request_id: "rid-r2-maxrounds", kind: "start" });
+    handleChatEvent({ request_id: "rid-r2-maxrounds", kind: "delta", text: "主持人:(调研中)" });
+    handleChatEvent({
+      request_id: "rid-r2-maxrounds",
+      kind: "done",
+      stop_reason: "max_rounds",
+    });
+
+    // 终端 stop_reason → finalize。
+    expect(activeReq().has("rid-r2-maxrounds")).toBe(false);
+    const msgs = stream.getMessages(sid)!;
+    // notice 挂在当前 placeholder(最后一条 assistant)上。
+    expect(msgs[1].notice).toBeTruthy();
+    expect(msgs[1].notice).toContain("轮次上限");
+  });
+
+  it("08-07 R2: 非终端 nominee_unknown → 不 finalize + 挂 notice", () => {
+    // 编排器在"提名的名字不在花名册"时发 Done{stop_reason:
+    // "nominee_unknown"} 但讨论继续(主持人下一轮重试)。前端必须
+    // (a) 不 finalize(后续还有事件),(b) 挂 notice 提示该轮被跳过。
+    const stream = useStreamControllerStore();
+    const sid = "08-07-r2-nominee-unknown-sid";
+    const req = {
+      requestId: "rid-r2-nominee",
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      groupChat: true,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(req.requestId, req);
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "聊聊"), asst(1, "", [])]),
+      false,
+    );
+
+    const handleChatEvent = (
+      stream as unknown as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          text?: string;
+          stop_reason?: string;
+          speaker?: string;
+        }) => void;
+      }
+    ).handleChatEvent;
+    const activeReq = () =>
+      (stream as unknown as { activeRequests: Map<string, typeof req> })
+        .activeRequests;
+
+    handleChatEvent({ request_id: "rid-r2-nominee", kind: "speaker", speaker: "moderator" });
+    handleChatEvent({ request_id: "rid-r2-nominee", kind: "start" });
+    handleChatEvent({ request_id: "rid-r2-nominee", kind: "delta", text: "主持人:请 X" });
+    handleChatEvent({
+      request_id: "rid-r2-nominee",
+      kind: "done",
+      stop_reason: "nominee_unknown",
+    });
+
+    // 非终端 → 不 finalize,请求仍活着。
+    expect(activeReq().has("rid-r2-nominee")).toBe(true);
+    const msgs = stream.getMessages(sid)!;
+    expect(msgs[1].notice).toBeTruthy();
+    expect(msgs[1].notice).toContain("不在列表中");
+
+    // 下一轮真正的 speaker turn 的 start 应清掉这条 notice(stale)。
+    handleChatEvent({ request_id: "rid-r2-nominee", kind: "speaker", speaker: "M1" });
+    handleChatEvent({ request_id: "rid-r2-nominee", kind: "start" });
+    const msgsAfterStart = stream.getMessages(sid)!;
+    // 新 placeholder 被推入,上一条(moderator)的 notice 不再有意义 ——
+    // notice 是 transient,新 turn 开始即清。这里验新 placeholder 无 notice。
+    const lastAssistant = msgsAfterStart[msgsAfterStart.length - 1];
+    expect(lastAssistant.notice).toBeUndefined();
+  });
+});
+
+describe("groupChatNotice (08-07 R2)", () => {
+  // 纯函数单测:stop_reason → 提示文案映射。覆盖 3 个边界 + 默认。
+  // (moderator_stuck 随 streak 机制移除 —— 08-07-group-chat-toolset-and-identity R2。)
+  it("maps each orchestrator boundary stop_reason to a notice", () => {
+    expect(groupChatNotice("max_rounds")).toContain("轮次上限");
+    expect(groupChatNotice("nominee_unknown")).toContain("不在列表中");
+    expect(groupChatNotice("participant_unresolved")).toContain("模型不可用");
+  });
+
+  it("returns null for non-boundary stop_reasons (no notice)", () => {
+    // group_chat_end 是正常结束,不该挂提示;其他普通 stop_reason 同理。
+    expect(groupChatNotice("group_chat_end")).toBeNull();
+    expect(groupChatNotice("end_turn")).toBeNull();
+    expect(groupChatNotice("cancelled")).toBeNull();
+    expect(groupChatNotice(undefined)).toBeNull();
   });
 });

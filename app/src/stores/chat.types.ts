@@ -236,6 +236,18 @@ export interface ChatMessage {
     waitMs: number;
     reason: string;
   };
+  /** 08-07-group-chat-review-fixes R2: transient orchestrator notice
+   *  shown when a group-chat discussion ends abnormally or skips a
+   *  turn. Set by `streamController`'s `done` handler when the
+   *  terminal/non-terminal `stop_reason` is one of the group-chat
+   *  orchestrator's boundary signals (`max_rounds` / `nominee_unknown`
+   *  / `participant_unresolved`). NOT persisted to DB (in-memory
+   *  placeholder only) and NOT part of the rehydrate shape —
+   *  `rehydrateMessages` skips it (a reloaded message has no live
+   *  orchestrator state). The MessageItem renders a small muted notice
+   *  row above the bubble when set; cleared by the next `start` (a new
+   *  speaker turn). */
+  notice?: string;
   toolCalls?: ToolCallInfo[];
   toolResults?: ToolResultInfo[];
   /** All thinking blocks emitted by the model for this message, in
@@ -440,14 +452,16 @@ export interface SessionSummary {
  *    into the participant's `run_chat_loop` as
  *    `system_prompt_override` (full-replace pattern, mirroring
  *    subagent persona). `undefined` / `""` → omitted.
- *  - `order`: optional UI sort + future round-robin index.
- *    MVP (Phase 4) uses array order; this field is reserved
- *    for explicit ordering if the UI later supports drag-reorder. */
+ *
+ *  `order` was removed (08-07-group-chat-review-fixes, R4): the
+ *  orchestrator's round-robin fallback is gone, so the moderator's
+ *  `nominate_speaker` fully decides turn order. Legacy sessions may
+ *  still carry `order` in their persisted metadata; it is ignored
+ *  on read (extra object keys are dropped by the rehydrate path). */
 export interface ParticipantConfig {
   name: string;
   model: string;
   persona_md?: string;
-  order?: number;
 }
 
 /** User-facing mode subset — the three modes the MVP UI exposes.

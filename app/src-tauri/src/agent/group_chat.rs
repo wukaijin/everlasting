@@ -9,7 +9,7 @@
 //! See `.trellis/tasks/07-29-group-chat/prd.md` (D4/D8) for the
 //! data-modeling decisions:
 //! - participants config lives in `sessions.metadata` JSON
-//!   (`{participants: [{name, model, persona_md?, order}]}`)
+//!   (`{participants: [{name, model, persona_md?}]}`)
 //! - `model` is a model_id (key into `ProviderCatalog`)
 //! - persona is inline markdown (D8), not an agent.md file
 
@@ -35,11 +35,14 @@ pub struct ParticipantConfig {
     /// same semantics as subagent's `system_prompt`). Optional.
     #[serde(default)]
     pub persona_md: Option<String>,
-    /// Display order. The UI sorts by this; the orchestrator's
-    /// round-robin fallback iterates in this order.
-    #[serde(default)]
-    #[allow(dead_code)] // read by the UI layer (Phase 4) + future order-aware fallback
-    pub order: Option<i32>,
+    // `order` was removed (08-07-group-chat-review-fixes, R4):
+    // round-robin fallback is gone, so the orchestrator no longer
+    // reads a display order — the moderator's `nominate_speaker`
+    // fully decides turn order. The UI used to expose ↑/↓ reorder
+    // buttons that wrote `order`, which misled users into thinking
+    // it affected speaking order. serde ignores the unknown key, so
+    // existing sessions whose `metadata.participants[].order` still
+    // carries a value deserialize fine (the field is dropped).
 }
 
 /// Top-level `sessions.metadata` shape for a group_chat session.
@@ -140,5 +143,49 @@ impl GroupChatCtx {
     /// `nominate_speaker` target.
     pub fn participant_by_name(&self, name: &str) -> Option<&ParticipantConfig> {
         self.participants.iter().find(|p| p.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R4 regression (08-07-group-chat-review-fixes): the `order`
+    /// field was removed from `ParticipantConfig`. Existing group-chat
+    /// sessions persisted `order` into `sessions.metadata.participants[]`
+    /// before the removal, so on first load after upgrade the metadata
+    /// JSON still carries the key. serde's default behavior is to IGNORE
+    /// unknown fields (neither `ParticipantConfig` nor `GroupChatConfig`
+    /// sets `deny_unknown_fields`), so those sessions must deserialize
+    /// cleanly — the stale `order` value is silently dropped. This test
+    /// locks that forward-compat contract so a future `deny_unknown_fields`
+    /// addition doesn't silently break every pre-upgrade group chat.
+    #[test]
+    fn participant_config_ignores_legacy_order_field() {
+        let metadata = serde_json::json!({
+            "participants": [
+                {
+                    "name": "M1",
+                    "model": "m1",
+                    "persona_md": "you are M1",
+                    "order": 0
+                },
+                {
+                    "name": "M2",
+                    "model": "m2",
+                    "order": 1
+                }
+            ]
+        });
+        let config: GroupChatConfig =
+            serde_json::from_value(metadata).expect("legacy metadata with order must deserialize");
+        assert_eq!(config.participants.len(), 2);
+        assert_eq!(config.participants[0].name, "M1");
+        assert_eq!(
+            config.participants[0].persona_md.as_deref(),
+            Some("you are M1")
+        );
+        assert_eq!(config.participants[1].name, "M2");
+        assert!(config.participants[1].persona_md.is_none());
     }
 }

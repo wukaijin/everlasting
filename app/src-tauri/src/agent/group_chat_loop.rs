@@ -85,22 +85,51 @@ use crate::tools::read_guard::ReadGuard;
 /// `run_chat_loop`; this is an outer-loop safety bound.
 const MAX_ORCHESTRATION_ROUNDS: usize = 30;
 
-/// How many consecutive times the moderator may end its turn WITHOUT
-/// calling `nominate_speaker` / `end_discussion` before we give up.
-///
-/// Root-cause note (sessions a6c87247 / 4a9d3566 / 093823f3): the OLD
-/// behavior on "no nomination" was a **round-robin fallback** — it
-/// mechanically dispatched `participants[round % len]`. But the
-/// moderator often uses natural language to signal intent ("接下来请
-/// D4F…") without calling the tool, so round-robin dispatched the
-/// WRONG participant. The mis-dispatched speaker then mimicked the
-/// intended speaker's voice → full role confusion.
-///
-/// Fix: instead of round-robin, RETRY the moderator turn (no
-/// participant is dispatched) so it gets another chance to call the
-/// tool. After this many retries with no nomination, we stop the
-/// discussion (the moderator is stuck / the model isn't tool-calling).
-const MAX_NO_NOMINATE_STREAK: usize = 3;
+// R2 (08-07-group-chat-review-fixes): `stop_reason` values the
+// orchestrator emits on `Done` to surface its boundary behavior to the
+// user (D2: reuse `Done.stop_reason`, no new ChatEvent variant). The
+// frontend reads these in its `done` handler to (a) decide finalize for
+// the terminal ones and (b) render a transient notice line. These are
+// FREE-FORM STRINGS, not a typed enum — matching the existing convention
+// (`end_turn` / `cancelled` / `group_chat_end` / `loop_terminated` /
+// `max_turns` / `tool_use` are all bare string literals).
+//
+// Terminal (loop exited → this is the last Done the orchestrator emits):
+//   - `max_rounds`: the outer loop hit MAX_ORCHESTRATION_ROUNDS. This is
+//                   the ONLY non-normal terminal reason left.
+// Non-terminal (emitted mid-loop, the discussion continues — the frontend
+// must NOT finalize on these, it only shows a one-line notice):
+//   - `nominee_unknown`       : the nominated name is not in the roster;
+//                               the moderator gets another round.
+//   - `participant_unresolved`: the participant's model could not be
+//                               resolved from the catalog; turn skipped.
+//
+// History note: 08-07-group-chat-review-fixes originally added
+// `moderator_stuck` for the "moderator fails to nominate after N retries"
+// case. 08-07-group-chat-toolset-and-identity R2 removed that streak
+// mechanism entirely (it couldn't distinguish "moderator is researching"
+// from "moderator is stuck" — DB session 8be4687f seq 1/3/5 showed
+// legitimate research being a valid no-nominate run). Now the moderator
+// simply gets another round on no-nominate, and `MAX_ORCHESTRATION_ROUNDS`
+// is the only bound. So `moderator_stuck` / `STOP_REASON_MODERATOR_STUCK`
+// / the streak counter / `moderator_nudge` are all gone.
+pub const STOP_REASON_GROUP_CHAT_END: &str = "group_chat_end";
+pub const STOP_REASON_MAX_ROUNDS: &str = "max_rounds";
+pub const STOP_REASON_NOMINEE_UNKNOWN: &str = "nominee_unknown";
+pub const STOP_REASON_PARTICIPANT_UNRESOLVED: &str = "participant_unresolved";
+
+/// Why the outer orchestration loop stopped (R2). Carried out of the
+/// `for` loop so the post-loop terminal `Done` can name the cause. The
+/// happy path (`end_discussion`) maps to the existing `group_chat_end`;
+/// the failure path is `MaxRounds`. A cancel is NOT a `HaltReason` — the
+/// cancelled inner turn emits `Done { cancelled }` itself and the
+/// post-loop emit is suppressed (unchanged).
+enum HaltReason {
+    /// Moderator called `end_discussion` (normal end).
+    DiscussionEnded,
+    /// Outer loop hit `MAX_ORCHESTRATION_ROUNDS`.
+    MaxRounds,
+}
 
 /// The moderator's system prompt. Tells it to facilitate + use the
 /// `nominate_speaker` / `end_discussion` tools. Built once per
@@ -129,25 +158,19 @@ fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          \n\
          Participants can see each other's prior remarks, so they can respond, \
          agree, or push back. Pick the order that best explores the topic. Keep \
-         the discussion focused; end it when it has run its course.",
+         the discussion focused; end it when it has run its course.\n\
+         \n\
+         ## Pacing and boundaries (read carefully)\n\
+         - You MAY research the codebase (read_file / grep / glob / list_dir / \
+         web_fetch) to ground the discussion — a brief investigation is good. \
+         But research is a MEANS, not the goal: after a short look, hand the \
+         floor to a participant with `nominate_speaker`. Do not stall the \
+         discussion by investigating for many rounds without nominating.\n\
+         - `nominate_speaker` is the ONLY scheduling mechanism. Do NOT use other \
+         tools (checklists, notes, skills, etc.) to build your own \
+         speaker-rotation or progress-tracking flow — call `nominate_speaker` \
+         to pick the next speaker, or `end_discussion` to close.",
         roster.join("\n")
-    )
-}
-
-/// Nudge appended to the moderator's system prompt when it ended its
-/// previous turn(s) without calling `nominate_speaker` /
-/// `end_discussion`. Forces a tool call so the orchestrator can
-/// dispatch the right participant (or stop). See
-/// [`MAX_NO_NOMINATE_STREAK`] for the retry design.
-fn moderator_nudge(streak: usize) -> String {
-    format!(
-        "\n\n\
-         IMPORTANT: your previous {streak} turn(s) did NOT call a tool — you spoke \
-         but did not hand the floor to anyone. You MUST end THIS turn by calling \
-         either `nominate_speaker({{name: \"...\"}})` (to let a participant speak) \
-         or `end_discussion({{summary: \"...\"}})` (to close the discussion). \
-         Do NOT output only text.",
-        streak = streak
     )
 }
 
@@ -182,6 +205,29 @@ fn moderator_nudge(streak: usize) -> String {
 /// is always adjacent in `full` (the tool_result is persisted right
 /// after the tool_use assistant row within the same moderator turn) —
 /// a one-pass state machine suffices, no backtracking needed.
+///
+/// # Invariant: arbitration-pair adjacency (locked, 08-07 R5)
+///
+/// The adjacency the one-pass strip relies on is **only** the
+/// moderator's arbitration pairs (`nominate_speaker` /
+/// `end_discussion`). It holds because the moderator runs at
+/// `max_turns = Some(1)` (08-04 follow-up, unchanged): the
+/// `tool_use` assistant row and its `tool_result` user row persist
+/// within that single turn, landing in adjacent `seq` slots.
+///
+/// Participants now run at `max_turns = Some(20)` (R3) so a
+/// participant may emit several NON-arbitration tool pairs
+/// (`read_file` / `grep` / …) across its turns. Those pairs never
+/// enter the strip state machine — [`participant_view_row`] only
+/// flags rows carrying a `nominate_speaker` / `end_discussion`
+/// `ToolUse`, so every other tool pair passes through unchanged.
+/// The strip's one-pass + adjacency assumption therefore does NOT
+/// touch participant tool pairs and is unaffected by R3. The mixed
+/// test below (`participant_view_participant_multiturn_mixed`)
+/// locks this: a transcript with moderator arbitration pairs +
+/// multi-turn participant read_file pairs + text stays correct
+/// (arbitration stripped atomically, non-arbitration pairs intact,
+/// no orphan, order preserved).
 fn participant_view(full: &[ChatMessage]) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = Vec::with_capacity(full.len());
     let mut pending_arbitration_tool_use_id: Option<String> = None;
@@ -266,19 +312,45 @@ fn participant_view_row(m: &ChatMessage) -> (Option<ChatMessage>, Option<String>
     }
 }
 
-/// Strip the two moderator-only arbitration tools (`nominate_speaker`
-/// / `end_discussion`) from the tool list a participant sees. Only the
-/// moderator arbitrates the floor; if a participant is given these
-/// tools it tends to call `nominate_speaker` itself, and because the
-/// participant's `run_chat_loop` runs with `group_chat_state = None`
-/// the interception returns an error tool_result that poisons the
-/// reloaded transcript (every subsequent turn errors → loop to
-/// MAX_ORCHESTRATION_ROUNDS). Filtering at the source means the model
-/// never even sees the tool schema.
-fn participant_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef> {
+/// Group-chat research tool whitelist (08-07-group-chat-toolset-and-identity R1).
+/// Both the moderator and participants get exactly these read-only / evidence-
+/// gathering tools — a group-chat discussion reads the codebase to ground the
+/// conversation, but does NOT modify it and does NOT run side-effecting tools.
+///
+/// This replaced the pre-R1 `participant_tool_defs` BLACKLIST ("strip the two
+/// arbitration tools"). The blacklist leaked `use_skill` / `update_checklist` /
+/// `shell` / `write_file` / ... into group chats, which DB session `8be4687f`
+/// showed weak models abusing: M3 called `use_skill("group-chat-director")` (a
+/// hallucinated skill — no `<available-skills>` block is injected under
+/// `system_prompt_override`, so the model fabricated one) and `update_checklist`
+/// to build its own speaker-rotation flow, hijacking the moderator's job. The
+/// whitelist is exhaustive: a newly added `builtin_tools` entry does NOT enter
+/// group chat unless explicitly added here, so this class of leak can't recur.
+const GROUP_CHAT_RESEARCH_TOOLS: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
+
+/// Tools the moderator gets ON TOP of the research whitelist: the two
+/// arbitration tools that drive the turn-taking loop. Participants never get
+/// these — `participant_tool_defs` used to strip them; the whitelist now
+/// achieves the same by simply not listing them for participants.
+const MODERATOR_EXTRA_TOOLS: &[&str] = &[NOMINATE_SPEAKER_TOOL_NAME, END_DISCUSSION_TOOL_NAME];
+
+/// Build the tool list a group-chat speaker sees, by whitelist.
+/// `is_moderator = true` → research tools + arbitration tools.
+/// `is_moderator = false` → research tools only (no arbitration, no
+/// write/execute/interaction/skill/checklist tools).
+fn group_chat_tool_defs(tool_defs: &[ToolDef], is_moderator: bool) -> Vec<ToolDef> {
+    let allow: Vec<&str> = if is_moderator {
+        GROUP_CHAT_RESEARCH_TOOLS
+            .iter()
+            .chain(MODERATOR_EXTRA_TOOLS.iter())
+            .copied()
+            .collect()
+    } else {
+        GROUP_CHAT_RESEARCH_TOOLS.to_vec()
+    };
     tool_defs
         .iter()
-        .filter(|t| t.name != NOMINATE_SPEAKER_TOOL_NAME && t.name != END_DISCUSSION_TOOL_NAME)
+        .filter(|t| allow.contains(&t.name.as_str()))
         .cloned()
         .collect()
 }
@@ -326,7 +398,19 @@ fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
            without an @ (e.g. \"@D4F，你说得对…\" or \"D4F，你说得对…\"), when you are\n\
            directly answering them.\n\
          - Never refer to yourself in the third person.\n\
-         - Just say your own piece on the topic and respond to what others said.",
+         - Just say your own piece on the topic and respond to what others said.\n\
+         \n\
+         ## Do NOT take over the moderator's job (read carefully)\n\
+         Even if the discussion seems stalled, or the moderator takes several turns\n\
+         before nominating, you must NOT step in as the host. Specifically:\n\
+         - Do NOT build your own speaker-rotation or progress checklist (no\n\
+           \"next let's hear from X\", no tracking who has spoken).\n\
+         - Do NOT address the room as the moderator (no opening, closing, or\n\
+           summarizing the whole discussion on everyone's behalf).\n\
+         - Do NOT invent or invoke system tools / skills to legitimize hosting —\n\
+           if you find yourself wanting to \"run\" the discussion, stop: you are a\n\
+           participant. Speak only your own view, then end your turn. The\n\
+           moderator will pick the next speaker.",
         base, name, name, name
     )
 }
@@ -424,12 +508,16 @@ pub async fn run_group_chat_loop(
     let moderator_provider =
         resolve_provider(&worker_catalog, &gc_ctx.moderator_model_id, &db).await;
 
-    // Consecutive moderator turns that ended WITHOUT a
-    // `nominate_speaker` / `end_discussion` call. Each such turn bumps
-    // this; a nomination / end resets it to 0. At MAX_NO_NOMINATE_STREAK
-    // we stop retrying (the moderator is stuck). See the fallback logic
-    // below the turn-state read for the full rationale.
-    let mut no_nominate_streak: usize = 0;
+    // R2 (08-07-group-chat-toolset-and-identity): the reason the loop
+    // stopped, if it exited via a `break`. Stays `None` on cancel (the
+    // post-loop emit is suppressed) and is set to `DiscussionEnded` by
+    // the `end_discussion` path, and `MaxRounds` if the loop ran to
+    // completion. The pre-R2 `ModeratorStuck` variant + the
+    // `no_nominate_streak` counter are GONE — a no-nominate round is no
+    // longer treated as "stuck" (DB session 8be4687f showed legitimate
+    // research runs that legitimately don't nominate); the moderator
+    // simply gets another round, bounded only by MAX_ORCHESTRATION_ROUNDS.
+    let mut halt_reason: Option<HaltReason> = None;
 
     for round in 0..MAX_ORCHESTRATION_ROUNDS {
         if token.is_cancelled() {
@@ -464,19 +552,17 @@ pub async fn run_group_chat_loop(
             },
         );
         if let Some(provider) = &moderator_provider {
-            // Build the prompt: base + nudge if this is a retry (the
-            // moderator ended prior turns without calling a tool).
-            let prompt = if no_nominate_streak > 0 {
-                format!(
-                    "{}{}",
-                    moderator_prompt,
-                    moderator_nudge(no_nominate_streak)
-                )
-            } else {
-                moderator_prompt.clone()
-            };
+            // R2: the moderator prompt is now STABLE across rounds (no
+            // per-streak nudge — the streak mechanism is gone). Pacing
+            // guidance ("research then nominate") lives in the prompt
+            // itself (R3), not in a dynamically-appended nudge.
+            let prompt = moderator_prompt.clone();
             run_chat_loop(
-                tool_defs.clone(),
+                // R1 (08-07-group-chat-toolset-and-identity): moderator gets
+                // the research whitelist + arbitration tools (not the full
+                // builtin_tools set — that leaked update_checklist/use_skill/
+                // shell into group chat, which weak models abused).
+                group_chat_tool_defs(&tool_defs, true),
                 provider.clone(),
                 context_window,
                 rid.clone(),
@@ -541,45 +627,33 @@ pub async fn run_group_chat_loop(
         };
         if ended {
             tracing::info!(round, "group_chat: moderator ended discussion");
+            halt_reason = Some(HaltReason::DiscussionEnded);
             break;
         }
 
         let nominee_name = match next_speaker {
-            Some(n) => {
-                // The moderator nominated — reset the streak and proceed.
-                no_nominate_streak = 0;
-                n
-            }
+            Some(n) => n,
             None => {
-                // The moderator ended its turn WITHOUT calling
-                // nominate_speaker / end_discussion. The OLD behavior
-                // (pre-08-06) was a round-robin fallback: dispatch
-                // `participants[round % len]`. That was the ROOT CAUSE of
-                // the group-chat role confusion across three sessions
-                // (a6c87247 / 4a9d3566 / 093823f3): the moderator often
-                // signals intent in natural language ("接下来请 D4F…")
-                // without calling the tool, so round-robin dispatched the
-                // WRONG participant. The mis-dispatched speaker then
-                // mimicked the intended speaker's voice → full role
-                // collapse.
+                // R2 (08-07-group-chat-toolset-and-identity): the moderator
+                // ended its turn WITHOUT calling nominate_speaker /
+                // end_discussion. The OLD behavior (pre-08-06) was a
+                // round-robin fallback that dispatched the WRONG participant
+                // → role collapse (sessions a6c87247 / 4a9d3566 / 093823f3).
+                // 08-06 fixed that by retrying the moderator turn, and 08-07
+                // bounded the retries with a streak counter (ModeratorStuck).
                 //
-                // Fix: DON'T dispatch anyone. Retry the moderator turn
-                // (it will see its own prior non-tool text in the
-                // reloaded history + get a nudge in its system prompt).
-                // After MAX_NO_NOMINATE_STREAK retries, give up and stop.
-                no_nominate_streak += 1;
-                if no_nominate_streak > MAX_NO_NOMINATE_STREAK {
-                    tracing::warn!(
-                        round,
-                        streak = no_nominate_streak,
-                        "group_chat: moderator did not nominate after {} retries; stopping discussion",
-                        MAX_NO_NOMINATE_STREAK
-                    );
-                    break;
-                }
+                // This task (R2) drops the streak counter: DB session
+                // 8be4687f showed the moderator legitimately running several
+                // research rounds (seq 1/3/5) without nominating, and the
+                // streak=3 bound mis-killed that as "stuck". Now we simply
+                // retry the moderator turn with NO bound other than
+                // MAX_ORCHESTRATION_ROUNDS — the moderator sees its own prior
+                // text in the reloaded history and the pacing guidance in its
+                // system prompt (R3) nudges it toward nominating. If it truly
+                // never nominates, the outer round cap stops the discussion
+                // (HaltReason::MaxRounds → stop_reason "max_rounds").
                 tracing::warn!(
                     round,
-                    streak = no_nominate_streak,
                     "group_chat: moderator did not nominate; retrying moderator turn (no participant dispatched)"
                 );
                 continue;
@@ -590,7 +664,24 @@ pub async fn run_group_chat_loop(
         let participant = match gc_ctx.participant_by_name(&nominee_name) {
             Some(p) => p.clone(),
             None => {
+                // R2: surface the skip to the user. This is NON-terminal —
+                // the discussion continues (the moderator gets another
+                // round to nominate a valid name). Emit a `Done` whose
+                // `stop_reason` is NOT `group_chat_end`, so the frontend's
+                // finalize gate (which keys on `group_chat_end` /
+                // `cancelled` / the new terminal reasons) does NOT
+                // finalize; it only renders a one-line notice. The
+                // orchestrator's own post-loop terminal `Done` is still
+                // what finalizes the request.
                 tracing::warn!(round, nominee=%nominee_name, "group_chat: nominee not in roster; skipping turn");
+                emit_chat_event_via_sink(
+                    &sink,
+                    &rid,
+                    &ChatEvent::Done {
+                        stop_reason: Some(STOP_REASON_NOMINEE_UNKNOWN.to_string()),
+                        usage: None,
+                    },
+                );
                 continue;
             }
         };
@@ -599,7 +690,18 @@ pub async fn run_group_chat_loop(
             participant_system_prompt(&participant.name, participant.persona_md.as_deref());
 
         let Some(provider) = participant_provider else {
+            // R2: same non-terminal notice pattern as nominee_unknown —
+            // the participant's model couldn't be resolved (catalog miss),
+            // so the turn is skipped but the discussion continues.
             tracing::warn!(round, model=%participant.model, "group_chat: participant provider unresolved; skipping turn");
+            emit_chat_event_via_sink(
+                &sink,
+                &rid,
+                &ChatEvent::Done {
+                    stop_reason: Some(STOP_REASON_PARTICIPANT_UNRESOLVED.to_string()),
+                    usage: None,
+                },
+            );
             continue;
         };
 
@@ -625,23 +727,36 @@ pub async fn run_group_chat_loop(
         );
 
         // --- 6. Participant turn ----------------------------------------------
-        // Single turn (max_turns=1): speak once, then hand back to
-        // the moderator. The participant's system prompt is its
-        // persona (fully replaces the parent prompt).
+        // Multi-turn (max_turns=20, 08-07-group-chat-review-fixes R3):
+        // a participant may gather evidence from the codebase
+        // (read_file / grep / glob / list_dir / web_fetch) across
+        // several turns before delivering its substantive remark. The
+        // pre-R3 `Some(1)` gave participants the tool schema but no
+        // follow-up turn to act on a tool_result, so "read then speak"
+        // was impossible. 20 is generous enough for a focused
+        // investigation while still bounding cost (the outer
+        // `MAX_ORCHESTRATION_ROUNDS` is the hard cap; 20 is the
+        // per-participant inner cap).
+        //
+        // The moderator stays at `max_turns = Some(1)` (unchanged) —
+        // see the moderator call site above for the rationale (nominate
+        // must end the turn immediately, and single-turn suppresses
+        // the identity-confusing first-person arbitration filler that
+        // 08-04 follow-up removed).
+        //
+        // The participant's system prompt is its persona (fully
+        // replaces the parent prompt).
         run_chat_loop(
-            // Participant does NOT get the nominate_speaker /
-            // end_discussion arbitration tools — only the moderator
-            // arbitrates the floor. Previously this passed the full
-            // `builtin_tools()` (which include both), so a participant
-            // that *chose* to call nominate_speaker hit the
-            // `group_chat_state = None` interception below and got
-            // back "this tool is only available in a group chat
-            // session." That error tool_result then poisoned the
-            // reloaded transcript, erroring every subsequent turn
-            // and looping until MAX_ORCHESTRATION_ROUNDS. Filter the
-            // two tools out at the source so participants never see
-            // them (mirrors filter_tools_for_workflow's shape).
-            participant_tool_defs(&tool_defs),
+            // R1 (08-07-group-chat-toolset-and-identity): participant gets the
+            // research whitelist ONLY (read_file/grep/glob/list_dir/web_fetch).
+            // No arbitration tools (only the moderator arbitrates) AND no
+            // write/execute/skill/checklist tools — DB session 8be4687f seq 9
+            // showed a participant abusing use_skill (hallucinated
+            // "group-chat-director") + update_checklist (self-built speaker
+            // rotation) to hijack the moderator. The whitelist supersedes the
+            // old `participant_tool_defs` blacklist, which only stripped the
+            // two arbitration tools and leaked everything else.
+            group_chat_tool_defs(&tool_defs, false),
             provider,
             context_window,
             rid.clone(),
@@ -662,7 +777,7 @@ pub async fn run_group_chat_loop(
             token.clone(),
             None,
             background_shells.clone(),
-            Some(1), // single turn
+            Some(20), // participant multi-turn — may read the codebase before speaking
             false,
             false,
             Some(false),
@@ -711,11 +826,15 @@ pub async fn run_group_chat_loop(
         // moderator's next turn.
     }
 
-    if !token.is_cancelled() {
+    // R2: if the loop ran to completion (no `break` set a HaltReason),
+    // the cause is max-rounds exhaustion. Set it here so the post-loop
+    // terminal `Done` carries the right `stop_reason`.
+    if !token.is_cancelled() && halt_reason.is_none() {
         tracing::warn!(
             rounds = MAX_ORCHESTRATION_ROUNDS,
             "group_chat: hit max rounds; stopping"
         );
+        halt_reason = Some(HaltReason::MaxRounds);
     }
 
     // Terminal signal for the frontend (08-04 follow-up, user-approved
@@ -726,17 +845,32 @@ pub async fn run_group_chat_loop(
     // has actually ENDED from those inner Dones — it would finalize
     // the request after the FIRST speaker turn and silently drop every
     // later event (the "群聊内容不实时出现" bug). Emit a dedicated
-    // terminal `Done { stop_reason: "group_chat_end" }` so the
-    // frontend keeps the request alive across inner turns and only
-    // finalizes on this signal. Not emitted when cancelled (the
-    // cancelled inner turn already emitted `Done { cancelled }`, which
-    // the frontend treats as terminal).
+    // terminal `Done` so the frontend keeps the request alive across
+    // inner turns and only finalizes on this signal. Not emitted when
+    // cancelled (the cancelled inner turn already emitted
+    // `Done { cancelled }`, which the frontend treats as terminal).
+    //
+    // R2 (08-07): the `stop_reason` now reflects WHY the loop ended, so
+    // the frontend can finalize the terminal cases AND show the user a
+    // notice when the discussion ended abnormally (moderator stuck /
+    // max rounds). `DiscussionEnded` keeps the original `group_chat_end`
+    // value (backward-compat for any frontend path keyed on it); the two
+    // failure paths get their own values and are added to the frontend's
+    // finalize whitelist alongside `group_chat_end` / `cancelled`.
     if !token.is_cancelled() {
+        let stop_reason = match halt_reason {
+            Some(HaltReason::DiscussionEnded) => STOP_REASON_GROUP_CHAT_END,
+            Some(HaltReason::MaxRounds) => STOP_REASON_MAX_ROUNDS,
+            // Unreachable: !cancelled → halt_reason was set by a break or
+            // the MaxRounds default above. Defensive fallback keeps the
+            // emit shape stable if a future path forgets to set it.
+            None => STOP_REASON_GROUP_CHAT_END,
+        };
         emit_chat_event_via_sink(
             &sink,
             &rid,
             &ChatEvent::Done {
-                stop_reason: Some("group_chat_end".to_string()),
+                stop_reason: Some(stop_reason.to_string()),
                 usage: None,
             },
         );
@@ -767,45 +901,124 @@ async fn resolve_provider(
 mod tests {
     use super::*;
 
-    /// Regression: participants must NOT receive the nominate_speaker /
-    /// end_discussion arbitration tools. The moderator's full
-    /// `builtin_tools()` set contains both; `participant_tool_defs`
-    /// must strip them. Previously the participant call site passed
-    /// the unfiltered set and a participant that called
-    /// nominate_speaker poisoned the transcript.
+    /// R1 (08-07-group-chat-toolset-and-identity): the moderator's tool set
+    /// is the research whitelist PLUS the two arbitration tools — and NOTHING
+    /// else. This replaces the pre-R1 blacklist; DB session 8be4687f showed
+    /// the full `builtin_tools()` set leaking `update_checklist` / `use_skill`
+    /// into group chat, which weak models abused to self-build a speaker
+    /// rotation and hallucinate a skill. The whitelist is exhaustive.
     #[test]
-    fn participant_tool_defs_strips_arbitration_tools() {
+    fn group_chat_tool_defs_moderator_has_research_plus_arbitration() {
         let full = crate::tools::builtin_tools();
-        let names: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
-        // Sanity: the source set actually contains both (otherwise the
-        // filter is a silent no-op and the bug would be masked).
-        assert!(
-            names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
-            "builtin_tools must include nominate_speaker for this test to be meaningful"
-        );
-        assert!(
-            names.contains(&END_DISCUSSION_TOOL_NAME),
-            "builtin_tools must include end_discussion for this test to be meaningful"
-        );
+        // Sanity: the research + arbitration tools actually exist in
+        // builtin_tools (otherwise the whitelist is a silent no-op and the
+        // test would pass vacuously).
+        let src_names: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
+        for needed in [
+            "read_file",
+            "grep",
+            "glob",
+            "list_dir",
+            "web_fetch",
+            NOMINATE_SPEAKER_TOOL_NAME,
+            END_DISCUSSION_TOOL_NAME,
+        ] {
+            assert!(
+                src_names.contains(&needed),
+                "builtin_tools must include {needed}"
+            );
+        }
 
-        let participant_tools = participant_tool_defs(&full);
-        let p_names: Vec<&str> = participant_tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(
-            !p_names.contains(&NOMINATE_SPEAKER_TOOL_NAME),
-            "participant must not see nominate_speaker, got: {:?}",
-            p_names
-        );
-        assert!(
-            !p_names.contains(&END_DISCUSSION_TOOL_NAME),
-            "participant must not see end_discussion, got: {:?}",
-            p_names
-        );
-        // Non-arbitration tools are preserved.
-        assert!(
-            p_names.contains(&"read_file"),
-            "participant should still see read_file, got: {:?}",
-            p_names
-        );
+        let mod_tools = group_chat_tool_defs(&full, true);
+        let m_names: Vec<&str> = mod_tools.iter().map(|t| t.name.as_str()).collect();
+
+        // Has the research whitelist + arbitration.
+        for required in [
+            "read_file",
+            "grep",
+            "glob",
+            "list_dir",
+            "web_fetch",
+            NOMINATE_SPEAKER_TOOL_NAME,
+            END_DISCUSSION_TOOL_NAME,
+        ] {
+            assert!(
+                m_names.contains(&required),
+                "moderator must see {required}, got: {m_names:?}"
+            );
+        }
+        // Does NOT contain the abuse-prone / irrelevant tools (the leak that
+        // caused 8be4687f seq 9). Enumerate the full deny-set so a future
+        // builtin_tools addition is caught here if someone wrongly whitelists it.
+        for forbidden in [
+            "use_skill",
+            "update_checklist",
+            "shell",
+            "write_file",
+            "edit_file",
+            "run_background_shell",
+            "shell_status",
+            "shell_kill",
+            "merge_worker",
+            "discard_worker",
+            "remember",
+            "ask_user_question",
+            "use_ui",
+            "request_mode_change",
+            "request_task_state_transition",
+            "create_task",
+        ] {
+            assert!(
+                !m_names.contains(&forbidden),
+                "moderator must NOT see {forbidden}, got: {m_names:?}"
+            );
+        }
+    }
+
+    /// R1: the participant's tool set is the research whitelist ONLY — no
+    /// arbitration tools (only the moderator arbitrates) AND none of the
+    /// abuse-prone / write / execute / interaction tools. This is stricter
+    /// than the old `participant_tool_defs` blacklist, which only stripped
+    /// the two arbitration tools.
+    #[test]
+    fn group_chat_tool_defs_participant_has_research_only() {
+        let full = crate::tools::builtin_tools();
+        let p_tools = group_chat_tool_defs(&full, false);
+        let p_names: Vec<&str> = p_tools.iter().map(|t| t.name.as_str()).collect();
+
+        // Has exactly the research whitelist.
+        for required in ["read_file", "grep", "glob", "list_dir", "web_fetch"] {
+            assert!(
+                p_names.contains(&required),
+                "participant must see {required}, got: {p_names:?}"
+            );
+        }
+        // No arbitration tools (the original participant_tool_defs guarantee,
+        // now achieved via whitelist instead of blacklist).
+        for arb in [NOMINATE_SPEAKER_TOOL_NAME, END_DISCUSSION_TOOL_NAME] {
+            assert!(
+                !p_names.contains(&arb),
+                "participant must NOT see {arb}, got: {p_names:?}"
+            );
+        }
+        // No abuse-prone / write / execute / interaction tools.
+        for forbidden in [
+            "use_skill",
+            "update_checklist",
+            "shell",
+            "write_file",
+            "edit_file",
+            "run_background_shell",
+            "shell_status",
+            "shell_kill",
+            "remember",
+            "ask_user_question",
+        ] {
+            assert!(
+                !p_names.contains(&forbidden),
+                "participant must NOT see {forbidden}, got: {p_names:?}"
+            );
+        }
     }
 
     /// Regression (08-04 follow-up, user decision "例子移除@，在和别人交流时允许@别人"):
@@ -845,7 +1058,6 @@ mod tests {
                 name: "M3".to_string(),
                 model: "m3".to_string(),
                 persona_md: None,
-                order: None,
             }],
             moderator_model_id: "mod".to_string(),
         };
@@ -860,33 +1072,65 @@ mod tests {
         );
     }
 
-    /// 08-06 fix: the no-nominate nudge must (a) name BOTH arbitration
-    /// tools, (b) forbid outputting only text, and (c) carry the streak
-    /// count. The base moderator prompt (streak 0) must NOT carry the
-    /// nudge.
+    // -------------------------------------------------------------------
+    // R3 (08-07-group-chat-toolset-and-identity): prompt pacing/takeover
+    // hardening. DB session 8be4687f showed the moderator researching for
+    // many rounds without nominating (seq 1/3/5) and a participant (M3,
+    // seq 9) hijacking the host role via update_checklist + a hallucinated
+    // skill. R3 adds explicit pacing guidance to the moderator prompt and
+    // an explicit anti-takeover block to the participant prompt.
+    // -------------------------------------------------------------------
+
+    /// R3: the moderator prompt must guide "research → nominate" pacing and
+    /// forbid building a self-rolled speaker-rotation flow (the seq 1/3/5
+    /// over-research + the seq-12-pre "want to use update_checklist" failure
+    /// modes).
     #[test]
-    fn moderator_nudge_forces_tool_call() {
-        let n = moderator_nudge(2);
+    fn moderator_prompt_guides_research_to_nominate() {
+        let ctx = GroupChatCtx {
+            participants: vec![crate::agent::group_chat::ParticipantConfig {
+                name: "M3".to_string(),
+                model: "m3".to_string(),
+                persona_md: None,
+            }],
+            moderator_model_id: "mod".to_string(),
+        };
+        let p = moderator_system_prompt(&ctx);
+        // Pacing: research is allowed but bounded — must hand the floor.
         assert!(
-            n.contains("nominate_speaker") && n.contains("end_discussion"),
-            "nudge must name both tools: {n:?}"
+            p.contains("research is a MEANS") && p.contains("hand the floor"),
+            "moderator prompt must frame research as means + require nominating: {p:?}"
         );
+        // Boundary: nominate_speaker is the ONLY scheduling mechanism; no
+        // self-built rotation flow.
         assert!(
-            n.contains("Do NOT output only text"),
-            "nudge must forbid text-only: {n:?}"
-        );
-        assert!(
-            n.contains("previous 2 turn(s)"),
-            "nudge must carry streak count: {n:?}"
+            p.contains("ONLY scheduling mechanism") && p.contains("Do NOT use other"),
+            "moderator prompt must forbid self-built speaker-rotation: {p:?}"
         );
     }
 
-    /// 08-06 fix: MAX_NO_NOMINATE_STREAK sanity — must be ≥ 1 (retry at
-    /// least once) and small enough to bound cost.
+    /// R3: the participant prompt must explicitly forbid taking over the
+    /// moderator's job — the three failure modes from seq 9 (self-built
+    /// checklist, addressing the room as host, inventing system tools/skills
+    /// to legitimize hosting).
     #[test]
-    fn max_no_nominate_streak_is_sane() {
-        assert!(MAX_NO_NOMINATE_STREAK >= 1, "must retry at least once");
-        assert!(MAX_NO_NOMINATE_STREAK <= 5, "too many retries is wasteful");
+    fn participant_prompt_forbids_takeover() {
+        let p = participant_system_prompt("M3", None);
+        assert!(
+            p.contains("must NOT step in as the host"),
+            "participant prompt must forbid taking over the host role: {p:?}"
+        );
+        // No self-built speaker rotation / checklist (seq 9's update_checklist).
+        assert!(
+            p.contains("speaker-rotation or progress checklist"),
+            "participant prompt must forbid self-built rotation/checklist: {p:?}"
+        );
+        // No inventing system tools/skills to legitimize hosting (seq 9's
+        // hallucinated use_skill("group-chat-director")).
+        assert!(
+            p.contains("Do NOT invent or invoke system tools"),
+            "participant prompt must forbid inventing tools/skills to host: {p:?}"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1141,6 +1385,278 @@ mod tests {
             "both arbitration pairs stripped, all text preserved in order: {text:?}"
         );
         assert!(no_orphan_pairs(&view));
+    }
+
+    /// R5 lock (08-07-group-chat-review-fixes): the participant-view
+    /// strip's one-pass + adjacency assumption must remain correct when
+    /// a participant runs multiple turns (R3 bumped participant
+    /// `max_turns` to 20) and therefore emits several NON-arbitration
+    /// tool pairs (`read_file` × 2 here). Those pairs must pass through
+    /// intact (full pair, both halves, in order), the moderator's
+    /// arbitration pairs must still strip atomically, and no orphan may
+    /// survive. This is the regression that locks the invariant doc on
+    /// [`participant_view`] — if someone later changes
+    /// [`participant_view_row`] to flag non-arbitration tools, or breaks
+    /// the adjacency assumption, this test fails.
+    #[test]
+    fn participant_view_participant_multiturn_mixed() {
+        let full = vec![
+            user_text("topic"),
+            // Moderator opens + nominates M1 (arbitration pair — must strip).
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "先请 M1".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c1", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            // Participant M1 turn 1: read_file tool pair (NON-arbitration —
+            // must pass through intact, NOT enter the strip state machine).
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "看下文件".to_string(),
+                    cache_control: None,
+                },
+                tool_use("r1", "read_file"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("r1")]),
+                speaker: None,
+            },
+            // Participant M1 turn 2: another read_file pair + a closing text.
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "再看一个".to_string(),
+                    cache_control: None,
+                },
+                tool_use("r2", "read_file"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("r2")]),
+                speaker: None,
+            },
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "我的结论".to_string(),
+                cache_control: None,
+            }]),
+        ];
+
+        let view = participant_view(&full);
+
+        // 1. Arbitration pair (c1) fully stripped — neither the
+        //    `nominate_speaker` ToolUse nor its `c1` tool_result may
+        //    survive. (Precise by id; the loose `has_arbitration_blocks`
+        //    helper flags ANY ToolResult as arbitration, so it would
+        //    false-positive on the legitimate read_file results below —
+        //    that's why this test checks the arbitration id directly.)
+        let c1_survives = view.iter().any(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
+                ContentBlock::ToolUse { id, name, .. }
+                    if name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME =>
+                {
+                    id == "c1"
+                }
+                ContentBlock::ToolResult { tool_use_id, .. } => tool_use_id == "c1",
+                _ => false,
+            }),
+            _ => false,
+        });
+        assert!(
+            !c1_survives,
+            "arbitration tool_use/result for c1 must be stripped: {view:?}"
+        );
+        // 2. Non-arbitration pairs (r1, r2) pass through intact — both
+        //    halves present, so no_orphan_pairs holds (pair atomicity).
+        assert!(
+            no_orphan_pairs(&view),
+            "non-arbitration read_file pairs must be intact: {view:?}"
+        );
+        // 3. The read_file tool ids survive in order.
+        let tool_ids: Vec<String> = view
+            .iter()
+            .flat_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => blocks.clone(),
+                _ => vec![],
+            })
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, name, .. } if name == "read_file" => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_ids,
+            vec!["r1".to_string(), "r2".to_string()],
+            "read_file pairs preserved in order: {view:?}"
+        );
+        // 4. Text content preserved in order across the multi-turn mix.
+        //    The read_file result rows render as empty `to_text()`
+        //    (a tool_result block carries no text), so the joined view
+        //    has empty slots where those user(tool_result) rows sit —
+        //    the point is the assistant text + the order survive.
+        let text = view
+            .iter()
+            .map(|m| m.content.to_text())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert_eq!(
+            text, "topic|先请 M1|看下文件||再看一个||我的结论",
+            "arbitration stripped, non-arbitration text + tool pairs preserved in order: {text:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // R1 (08-07-group-chat-review-fixes): identity-correctness contract
+    // baseline. These tests are the AUTOMATED regression floor for the
+    // self-awareness dimension — they do NOT run a real model, so they
+    // cannot prove a weak model won't role-collapse at runtime. What
+    // they DO prove: the structural invariants that any prompt-level
+    // defense relies on (a clean participant transcript view + an
+    // unambiguous role-boundary system prompt) hold even under the
+    // worst input we've actually seen in production (DB sessions
+    // a6c87247 / b144cc2a: same-model combination + a weak model that
+    // prefixes its reply with another participant's name). If someone
+    // later weakens `participant_view` or strips the identity-guard
+    // block from the prompt, these fail immediately.
+    // -----------------------------------------------------------------
+
+    /// R1: under the worst observed input — same-model moderator +
+    /// participant, plus a "weak model emits another participant's
+    /// name prefix" assistant row — the `participant_view` structural
+    /// invariants hold: zero arbitration blocks survive, no orphan
+    /// tool_use/tool_result, and the mislabeled row passes through as
+    /// a normal non-arbitration row (content sanitization is the
+    /// prompt's job, not the view's; the view only guarantees structure).
+    #[test]
+    fn identity_contract_view_holds_under_same_model_and_mislabel() {
+        // Worst-case `full`: the moderator's arbitration pair + an
+        // assistant row whose speaker is "M3" but whose CONTENT reads
+        // as if D4F is speaking (the role-collapse signature from
+        // DB session a6c87247 seq 16). `participant_view` does not
+        // read `speaker`, so the speaker attribution is irrelevant to
+        // the structural test — the point is the row is non-arbitration
+        // and must pass through unchanged.
+        let full = vec![
+            user_text("聊聊这个项目"),
+            // Moderator arbitration pair — must strip atomically.
+            assistant_blocks(vec![
+                ContentBlock::Text {
+                    text: "先请 M3".to_string(),
+                    cache_control: None,
+                },
+                tool_use("c1", "nominate_speaker"),
+            ]),
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result("c1")]),
+                speaker: None,
+            },
+            // The weak-model mislabel row: content reads as D4F speaking
+            // but it's a non-arbitration assistant row → must survive
+            // the view unchanged (the view cannot / must not rewrite
+            // content; the identity-guard prompt is what disciplines it).
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "@D4F: 接过 M3 留的钩子…".to_string(),
+                cache_control: None,
+            }]),
+        ];
+
+        let view = participant_view(&full);
+
+        // Structural invariant 1: zero arbitration blocks survive.
+        let c1_survives = view.iter().any(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks.iter().any(
+                |b| matches!(b, ContentBlock::ToolUse { id, name, .. }
+                    if (name == NOMINATE_SPEAKER_TOOL_NAME || name == END_DISCUSSION_TOOL_NAME)
+                        && id == "c1")
+                    || matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "c1"),
+            ),
+            _ => false,
+        });
+        assert!(
+            !c1_survives,
+            "arbitration pair c1 must be fully stripped: {view:?}"
+        );
+        // Structural invariant 2: pair atomicity (no orphan).
+        assert!(
+            no_orphan_pairs(&view),
+            "no orphan tool_use/result: {view:?}"
+        );
+        // Structural invariant 3: the mislabeled row survives intact
+        // (content NOT rewritten by the view — that's the prompt's job).
+        let text = view
+            .iter()
+            .map(|m| m.content.to_text())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            text.contains("@D4F: 接过 M3 留的钩子"),
+            "the mislabeled non-arbitration row must pass through unchanged: {text:?}"
+        );
+    }
+
+    /// R1: under a same-model combination (moderator and a participant
+    /// share the same model_id — the hardest identity case, mandated
+    /// supported by PRD D2), the system prompts still draw an
+    /// unambiguous role boundary. The participant prompt must assert
+    /// it is the participant + forbid adopting the moderator's voice;
+    /// the moderator prompt must list the participant in the roster +
+    /// not contain the participant's identity-guard wording. This is
+    /// the prompt-level structural floor that the view test above
+    /// depends on.
+    #[test]
+    fn identity_contract_prompts_separate_roles_under_same_model() {
+        // Same-model combination: moderator_model_id == participant.model.
+        // The hardest identity case (PRD D2 mandates it supported).
+        let same_model = "deepseek-v4-flash";
+        let ctx = GroupChatCtx {
+            participants: vec![crate::agent::group_chat::ParticipantConfig {
+                name: "D4F".to_string(),
+                model: same_model.to_string(),
+                persona_md: None,
+            }],
+            moderator_model_id: same_model.to_string(),
+        };
+
+        let participant_prompt = participant_system_prompt("D4F", None);
+        let moderator_prompt = moderator_system_prompt(&ctx);
+
+        // Participant prompt: asserts it is D4F + the identity guard.
+        assert!(
+            participant_prompt.contains("You are D4F"),
+            "participant prompt must name the participant: {participant_prompt:?}"
+        );
+        assert!(
+            participant_prompt.contains("The moderator's messages are NOT yours"),
+            "participant prompt must carry the role-boundary guard: {participant_prompt:?}"
+        );
+        assert!(
+            participant_prompt.contains("never start your reply with")
+                && participant_prompt.contains("your OWN name or role"),
+            "participant prompt must forbid self-label prefixes: {participant_prompt:?}"
+        );
+
+        // Moderator prompt: lists D4F in the roster + the moderator's
+        // own no-self-label rule. Must NOT carry the participant's
+        // "you are D4F" wording (would be a role leak).
+        assert!(
+            moderator_prompt.contains("D4F"),
+            "moderator prompt must list the participant: {moderator_prompt:?}"
+        );
+        assert!(
+            moderator_prompt.contains("You are the MODERATOR"),
+            "moderator prompt must assert the moderator role: {moderator_prompt:?}"
+        );
+        assert!(
+            !moderator_prompt.contains("You are D4F"),
+            "moderator prompt must NOT carry the participant's identity wording (role leak): {moderator_prompt:?}"
+        );
     }
 
     fn has_arbitration_blocks(msgs: &[ChatMessage]) -> bool {

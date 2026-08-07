@@ -283,7 +283,6 @@ export const useChatStore = defineStore("chat", () => {
           name: e.name,
           model: e.model,
           persona_md: e.persona_md,
-          order: e.order,
         });
       }
     }

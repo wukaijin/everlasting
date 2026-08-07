@@ -177,13 +177,11 @@ fn group_chat_ctx() -> GroupChatCtx {
                 name: "M1".to_string(),
                 model: "m1".to_string(),
                 persona_md: Some(M1_PERSONA.to_string()),
-                order: None,
             },
             ParticipantConfig {
                 name: "M2".to_string(),
                 model: "m2".to_string(),
                 persona_md: None,
-                order: None,
             },
         ],
         moderator_model_id: "moderator".to_string(),
@@ -660,5 +658,261 @@ async fn entry_guard_skips_when_group_chat_state_some_and_tail_matches_db() {
     assert_eq!(
         user_rows, 1,
         "group_chat_state=Some must skip the already-persisted reloaded user message"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R3 (08-07-group-chat-review-fixes): participant multi-turn evidence
+// gathering. Participants now run at max_turns=20, so a participant may
+// call a tool (read_file) in one turn and deliver its remark in a second
+// turn after seeing the tool_result. The pre-R3 max_turns=1 made this
+// impossible — the tool schema was present but there was no follow-up
+// turn to act on the result.
+// ---------------------------------------------------------------------------
+
+/// Script a participant (M1) that gathers evidence before speaking: its
+/// first scripted response is a `read_file` tool_use (stop_reason=
+/// `tool_use` → the loop executes the tool and continues to a second
+/// turn); its second response is the substantive text remark
+/// (stop_reason=`end_turn` → the participant turn ends). The moderator
+/// nominates M1 once then ends, so only M1 needs the 2-response script.
+fn script_participant_evidence_mocks(notes_abs_path: &str) -> GroupChatMocks {
+    let moderator = Arc::new(MockProvider::new(vec![
+        // Round 0: nominate M1.
+        mod_tool_turn(
+            "c1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "主持人:请 M1 调研",
+        ),
+        // Round 1: end_discussion.
+        mod_tool_turn("c2", "end_discussion", serde_json::json!({}), "主持人:结束"),
+    ]));
+    // M1's two responses: evidence read, then remark. The order is
+    // consumed FIFO by MockProvider, matching the participant's turn
+    // progression (turn 1 tool_use → turn 2 text).
+    let m1 = Arc::new(MockProvider::new(vec![
+        MockResponse::Events(vec![
+            ok_evt(ChatEvent::Start),
+            ok_evt(ChatEvent::ToolCall {
+                id: "r1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": notes_abs_path}),
+            }),
+            tool_use_stop(),
+        ]),
+        // Second send (after the tool_result lands): deliver the remark.
+        text_turn("M1 看过了，结论是 A"),
+    ]));
+    // M2 is never nominated in this flow; an empty script is fine
+    // because MockProvider is only consumed when its model is dispatched.
+    let m2 = Arc::new(MockProvider::new(vec![]));
+
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    catalog.insert("m2".to_string(), m2.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    GroupChatMocks {
+        moderator,
+        m1,
+        m2,
+        catalog: Some(catalog),
+    }
+}
+
+#[tokio::test]
+async fn participant_gathers_evidence_then_speaks_across_turns() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Seed a real file in the project tempdir so read_file succeeds and
+    // the tool_result is non-error — this exercises the genuine
+    // "gather evidence then speak" path rather than an error fallback.
+    let notes_path = h.project_path.join("notes.md");
+    tokio::fs::write(&notes_path, "# notes\n决策: 选 A\n")
+        .await
+        .expect("seed notes.md");
+    let notes_abs = notes_path.to_str().unwrap().to_string();
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mocks = script_participant_evidence_mocks(&notes_abs);
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        "rid-r3".to_string(),
+        gc_session_id.clone(),
+        test_messages(), // [user "hello"] — round-0 tail, genuinely new
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        mocks.catalog.clone(),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    // AC: no errors — the tool round + the follow-up turn both completed.
+    assert_eq!(
+        emitter.error_event_count(),
+        0,
+        "participant multi-turn evidence flow must run without ChatEvent::Error"
+    );
+
+    // AC: M1 was sent two requests (turn 1 = tool_use, turn 2 = remark).
+    // This is the core R3 assertion — the pre-R3 max_turns=1 would have
+    // ended M1's turn right after the tool_result and the second send
+    // (the actual remark) would never happen.
+    assert_eq!(
+        mocks.m1.call_count(),
+        2,
+        "M1 must run TWO turns: read_file then speak (max_turns >= 2)"
+    );
+
+    // AC: the second send M1 saw contains the read_file tool_result as a
+    // user-role message (the loop persisted it and reloaded), proving
+    // the evidence gathered in turn 1 was visible in turn 2.
+    let m1_sends = mocks.m1.sent_messages();
+    let second_send = &m1_sends[1];
+    let saw_read_result = second_send.iter().any(|m| match &m.content {
+        MessageContent::Blocks(blocks) => blocks.iter().any(
+            |b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "r1"),
+        ),
+        _ => false,
+    });
+    assert!(
+        saw_read_result,
+        "M1's second turn must see the read_file tool_result from turn 1: {second_send:?}"
+    );
+
+    // AC: the participant's remark made it into the DB as an assistant
+    // row (turn 2 persisted). Sanity-check it carries the expected text.
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT text FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY seq",
+    )
+    .bind(&gc_session_id)
+    .fetch_all(&h.db)
+    .await
+    .expect("fetch assistant rows");
+    let any_m1_remark = rows.iter().any(|t| t.contains("M1 看过了，结论是 A"));
+    assert!(
+        any_m1_remark,
+        "M1's substantive remark must be persisted: {rows:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R2 (08-07-group-chat-review-fixes): the orchestrator's previously-silent
+// boundary paths (max rounds / nominee unknown / participant unresolved)
+// now emit Done { stop_reason } so the frontend can surface them. The
+// `moderator_stuck` path that 08-07 originally added was REMOVED by
+// 08-07-group-chat-toolset-and-identity R2 (the streak mechanism couldn't
+// distinguish "researching" from "stuck"; now bounded only by
+// MAX_ORCHESTRATION_ROUNDS → stop_reason "max_rounds"). This test covers
+// the non-terminal nominee_unknown shape (mid-loop → Done but discussion
+// continues). The terminal max_rounds shape is covered by the existing
+// full-multi-round flow test's group_chat_end + the stop_reason doc above.
+// ---------------------------------------------------------------------------
+
+/// Script a moderator that nominates an unknown name ("Nobody"), then on
+/// its next round ends the discussion. The unknown-nominee round must
+/// emit a non-terminal `Done { stop_reason: "nominee_unknown" }` (the
+/// discussion continues — the moderator gets another round), and the
+/// final terminal Done is still `group_chat_end`.
+#[tokio::test]
+async fn orchestrator_emits_nonterminal_done_for_unknown_nominee() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+
+    let moderator = Arc::new(MockProvider::new(vec![
+        // Round 0: nominate a name NOT in the roster (M1/M2 exist; Nobody doesn't).
+        mod_tool_turn(
+            "c1",
+            "nominate_speaker",
+            serde_json::json!({"name": "Nobody"}),
+            "主持人:请 Nobody",
+        ),
+        // Round 1: end the discussion (so the loop terminates cleanly).
+        mod_tool_turn("c2", "end_discussion", serde_json::json!({}), "主持人:结束"),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![]));
+    let m2 = Arc::new(MockProvider::new(vec![]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    catalog.insert("m2".to_string(), m2.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        "rid-r2-nominee".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    assert_eq!(
+        emitter.error_event_count(),
+        0,
+        "unknown-nominee skip must not emit ChatEvent::Error"
+    );
+
+    let dones: Vec<String> = emitter
+        .chat_events()
+        .iter()
+        .filter_map(|p| match &p.event {
+            ChatEvent::Done { stop_reason, .. } => stop_reason.clone(),
+            _ => None,
+        })
+        .collect();
+
+    // The non-terminal nominee_unknown Done must appear (mid-loop).
+    assert!(
+        dones.iter().any(|s| s == "nominee_unknown"),
+        "the unknown-nominee round must emit Done{{stop_reason=nominee_unknown}}: {dones:?}"
+    );
+    // The discussion continued and ended cleanly → terminal Done is group_chat_end.
+    assert_eq!(
+        dones[dones.len() - 1],
+        "group_chat_end",
+        "the terminal Done must be group_chat_end (discussion ended normally): {dones:?}"
+    );
+    // The nominee_unknown must come BEFORE the terminal group_chat_end
+    // (it's a mid-loop event, the end is post-loop).
+    let nominee_idx = dones.iter().position(|s| s == "nominee_unknown");
+    let end_idx = dones.iter().position(|s| s == "group_chat_end");
+    assert!(
+        nominee_idx.is_some() && end_idx.is_some() && nominee_idx < end_idx,
+        "nominee_unknown must precede group_chat_end: {dones:?}"
     );
 }
