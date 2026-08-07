@@ -15,12 +15,12 @@
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "a0b06aa",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "落地于 a0b06aa(与 08-07-group-chat-toolset-and-identity 合并提交——两任务在同批文件高度交织:review-fixes 引入 stop_reason 体系,toolset 又收敛/移除其中一部分,按最终状态一并提交更清晰)。R1 身份正确性契约底线:新增 identity_contract 测试(同模型组合+弱模型他名前缀最坏输入),守 participant_view 结构不变量+prompt 角色边界,契约级(不依赖真模型)。R2 编排器静默路径变可见事件:4 条静默 break/continue 改为 emit Done{stop_reason};终态 max_rounds→finalize,非终态 nominee_unknown/participant_unresolved→挂 notice 不 finalize;前端 groupChatNotice+ChatMessage.notice+MessageItem 提示行。R3 参与者 max_turns 1→20:允许查询代码库取材实证(read_file 等工具后第二轮发言),moderator 保持 1。R4 删 ParticipantConfig.order 死字段+UI 重排按钮:round-robin 废弃后 order 不再用,serde 忽略旧 metadata 的 order(向后兼容,加回归测试锁死)。R5 participant_view 相邻性不变量:补显式不变量注释+参与者多轮非仲裁对混合场景测试。验证:cargo test --lib 1646 passed/pnpm test 1018 passed/vue-tsc 零错误/clippy 零警告。",
   "meta": {}
 }
