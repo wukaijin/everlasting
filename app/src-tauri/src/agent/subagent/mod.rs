@@ -81,6 +81,7 @@ mod tests_dispatch;
 mod tests_loader;
 #[cfg(test)]
 mod tests_mod;
+mod tests_sink;
 mod tools_filter;
 mod transcript;
 mod truncate_summary;

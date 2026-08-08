@@ -15,9 +15,12 @@ use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 
 use super::transcript::{TranscriptEntry, TranscriptKind};
-use crate::agent::permissions::PermissionAskPayload;
-use crate::llm::types::{ChatEvent, TokenUsage};
-use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
+use crate::llm::types::TokenUsage;
+
+pub(crate) mod events;
+
+#[allow(unused_imports)]
+pub(crate) use events::*;
 
 // Test-only thread-local collector for `subagent:event` IPC
 // payloads. The test constructor `SubagentBufferSink::new_with_collector`
@@ -36,7 +39,7 @@ use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
 // stays `None` for the entire production lifetime; only test
 // code arms it.
 thread_local! {
-    static TEST_COLLECTOR: RefCell<Option<Arc<StdMutex<Vec<serde_json::Value>>>>> =
+    pub(crate) static TEST_COLLECTOR: RefCell<Option<Arc<StdMutex<Vec<serde_json::Value>>>>> =
         const { RefCell::new(None) };
 }
 
@@ -62,11 +65,11 @@ thread_local! {
 /// no-op and the transcript-only path still works (test coverage
 /// of `transcript_snapshot` is unchanged).
 pub struct SubagentBufferSink {
-    transcript: StdMutex<Vec<TranscriptEntry>>,
+    pub(crate) transcript: StdMutex<Vec<TranscriptEntry>>,
     /// Accumulated assistant text deltas. Read by `run_subagent`
     /// after `run_chat_loop` returns to extract the worker's
     /// final summary.
-    text_parts: StdMutex<Vec<String>>,
+    pub(crate) text_parts: StdMutex<Vec<String>>,
     /// Per-turn `TokenUsage` accumulated from `ChatEvent::Done { usage: Some(t) }`
     /// events. Read by `run_subagent` after the worker loop returns
     /// to populate `subagent_runs.token_usage_json`.
@@ -87,15 +90,15 @@ pub struct SubagentBufferSink {
     /// is retained as `#[allow(dead_code)]` for the future
     /// worker↔parent session identity split (see the helper's own
     /// doc). It has no production callsite.
-    per_turn_usage: StdMutex<Vec<TokenUsage>>,
+    pub(crate) per_turn_usage: StdMutex<Vec<TokenUsage>>,
     /// Set when the worker emitted a terminal `Error` event.
     /// `run_subagent` reads this to pick the `status: error`
     /// prefix.
-    had_error: std::sync::atomic::AtomicBool,
+    pub(crate) had_error: std::sync::atomic::AtomicBool,
     /// Set when the worker emitted a terminal `Done{cancelled}`
     /// event (stop_reason == "cancelled"). `run_subagent` reads
     /// this to pick the `status: cancelled` prefix.
-    was_cancelled: std::sync::atomic::AtomicBool,
+    pub(crate) was_cancelled: std::sync::atomic::AtomicBool,
     /// 2026-06-21 (R2): set when the worker emitted a synthetic
     /// terminal `Done{max_turns}` event. `run_subagent` reads
     /// this to pick the `status: incomplete` prefix (vs.
@@ -104,7 +107,7 @@ pub struct SubagentBufferSink {
     /// practice — the agent loop's `max_turns` branch fires
     /// when the worker exhausts its turn budget, which is not
     /// a cancel or an error path.
-    was_incomplete: std::sync::atomic::AtomicBool,
+    pub(crate) was_incomplete: std::sync::atomic::AtomicBool,
     /// C2+ (2026-07-05, task `07-05-c2-loop-active-intervention`
     /// PR3): set when the worker emitted a terminal
     /// `Done { stop_reason: "loop_terminated" }` event. C2+
@@ -124,7 +127,7 @@ pub struct SubagentBufferSink {
     /// Mutually exclusive with `was_cancelled`, `had_error`, and
     /// `was_incomplete` in practice — the worker's C2+ branch
     /// (`chat_loop.rs`) emits exactly one terminal `Done` event.
-    was_loop_terminated: std::sync::atomic::AtomicBool,
+    pub(crate) was_loop_terminated: std::sync::atomic::AtomicBool,
     /// 2026-06-22 (RULE-FrontSubagent-004): count of REAL per-turn
     /// `Done` events the worker received. Incremented once per
     /// completed LLM turn iteration (the natural per-turn Done
@@ -137,7 +140,7 @@ pub struct SubagentBufferSink {
     /// Matches the `per_turn_usage` push guard (the same real-Done
     /// discriminator) so the two stay 1:1: turns_completed.len() ==
     /// per_turn_usage.len() at exit.
-    turns_completed: std::sync::atomic::AtomicU64,
+    pub(crate) turns_completed: std::sync::atomic::AtomicU64,
     /// transport-abstraction 2026-07-20 (P1.3): the worker's
     /// event-injection sink. Replaces the `Option<AppHandle>` +
     /// inline `app.emit` + `TEST_COLLECTOR` branches that used to
@@ -149,7 +152,7 @@ pub struct SubagentBufferSink {
     /// routes through a thread-local cell) was easier to thread
     /// through this way; new code should use
     /// `new_with_event_sink` instead.
-    event_sink: Arc<dyn super::SubagentEventSink>,
+    pub(crate) event_sink: Arc<dyn super::SubagentEventSink>,
     /// PR2 hotfix (B6 PR3, 2026-06-20): kept for the
     /// `new_with_collector` test constructor (which arms a
     /// thread-local collector; the collector path predates the
@@ -159,16 +162,16 @@ pub struct SubagentBufferSink {
     /// `emit_permission_ask` (those route through the trait) but
     /// stays for `new_with_collector`'s use.
     #[allow(dead_code)]
-    app_handle: Option<tauri::AppHandle>,
+    pub(crate) app_handle: Option<tauri::AppHandle>,
     /// PR2 hotfix: the worker's `run_id` (the `parent_rid-sub-<seq>`
     /// string `run_subagent` builds at subagent/dispatch.rs). Carried
     /// on the sink so each `subagent:event` payload can identify
     /// which worker run the event belongs to.
-    run_id: String,
+    pub(crate) run_id: String,
     /// PR2 hotfix: the parent session_id (worker reuses parent's
     /// session_id). Each `subagent:event` payload includes this so
     /// the frontend can route events to the right session's drawer.
-    session_id: String,
+    pub(crate) session_id: String,
     /// B6 PR3 redesign (2026-06-21): per-`tool_use_id` `Instant` of
     /// the matching `emit_tool_call` arrival, used to measure the
     /// wall-clock gap to the paired `emit_tool_result` so the
@@ -181,7 +184,7 @@ pub struct SubagentBufferSink {
     /// Entries older than the matching result (or unreachable due
     /// to a lost tool_call event) are removed on result arrival;
     /// see `record_tool_result` for the orphan-fallback path.
-    tool_call_received_at: StdMutex<HashMap<String, Instant>>,
+    pub(crate) tool_call_received_at: StdMutex<HashMap<String, Instant>>,
     /// C1 (07-26-subagent-resume): the worker's final `Vec<ChatMessage>`
     /// snapshot, captured once by `record_worker_messages` on the chat
     /// loop's normal completion path. Read by `run_subagent` after the
@@ -191,7 +194,7 @@ pub struct SubagentBufferSink {
     /// exits — those don't call `record_worker_messages`, so the
     /// snapshot is the empty default and resume falls back to fresh
     /// dispatch (design §5).
-    worker_messages: StdMutex<Vec<crate::llm::types::ChatMessage>>,
+    pub(crate) worker_messages: StdMutex<Vec<crate::llm::types::ChatMessage>>,
 }
 
 impl SubagentBufferSink {
@@ -286,7 +289,7 @@ impl SubagentBufferSink {
         sink
     }
 
-    fn record(&self, kind: TranscriptKind, payload_json: serde_json::Value) {
+    pub(crate) fn record(&self, kind: TranscriptKind, payload_json: serde_json::Value) {
         // transport-abstraction 2026-07-20 (P1.3): route the
         // `subagent:event` IPC emit through the
         // `SubagentEventSink` trait instead of branching on
@@ -453,337 +456,6 @@ fn sum_usage(items: &[TokenUsage]) -> TokenUsage {
     total
 }
 
-impl crate::state::ChatEventSink for SubagentBufferSink {
-    fn emit_chat_event(&self, payload: &ChatEventPayload) {
-        // Track terminal signals + accumulate text deltas for the
-        // final summary.
-        match &payload.event {
-            ChatEvent::Delta { text } => {
-                self.text_parts
-                    .lock()
-                    .expect("SubagentBufferSink text_parts mutex poisoned")
-                    .push(text.clone());
-            }
-            ChatEvent::Error { .. } => {
-                self.had_error
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-            ChatEvent::Done { stop_reason, usage } => {
-                // Capture per-turn token usage for the worker run's
-                // `subagent_runs.token_usage_json` (written at worker
-                // exit by `dispatch.rs::run_subagent`).
-                //
-                // 2026-06-26 (RULE-A-015 reversal): the parent's
-                // `sessions.last_*` snapshot is NO LONGER updated
-                // by the worker. `update_last_turn_usage` is back
-                // inside the `!skip_persist` gate at `chat_loop.rs`,
-                // so worker turns (which run with `skip_persist=true`)
-                // don't touch the parent's snapshot. Worker token
-                // usage stays isolated in `per_turn_usage` here +
-                // the eventual `token_usage_json` write.
-                //
-                // 2026-06-21 (R3): synthetic terminals
-                // (`max_turns` / `cancelled`) are emitted with
-                // `usage = last_usage` for `max_turns` (see
-                // `chat_loop.rs:1797-1804`). The prior per-turn
-                // Done for the final turn ALREADY pushed its
-                // `usage: Some(t)` into the Vec; pushing again
-                // here would double-count the last turn. The
-                // stop_reason guard skips the push for synthetic
-                // terminals so the Vec holds exactly one entry
-                // per real per-turn Done, no more.
-                if let Some(u) = usage {
-                    if stop_reason.as_deref() != Some("cancelled")
-                        && stop_reason.as_deref() != Some("max_turns")
-                    {
-                        self.per_turn_usage
-                            .lock()
-                            .expect("SubagentBufferSink per_turn_usage mutex poisoned")
-                            .push(*u);
-                        // 2026-06-22 (RULE-FrontSubagent-004):
-                        // increment the turn counter on the SAME
-                        // discriminator as the `per_turn_usage`
-                        // push so the two stay 1:1
-                        // (turns_completed() == per_turn_usage.len()
-                        // at worker exit). Synthetic terminals
-                        // (cancelled / max_turns) do NOT increment
-                        // because they reuse the prior turn's
-                        // usage (would double-count). The counter
-                        // thus always reflects the actual count of
-                        // real per-turn Dones — even when the
-                        // worker exited via the soft-cap or cancel.
-                        self.turns_completed
-                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    }
-                }
-                if stop_reason.as_deref() == Some("cancelled")
-                    || stop_reason.as_deref() == Some("max_turns")
-                {
-                    // Treat max_turns as a soft "ran out of budget"
-                    // — the worker did useful work but didn't
-                    // cleanly finish. The summary still carries
-                    // whatever it produced. Status prefix =
-                    // "incomplete" with a note appended (R2
-                    // 2026-06-21); for cancelled (user Stop
-                    // propagated to worker) we use status=cancelled.
-                    if stop_reason.as_deref() == Some("cancelled") {
-                        self.was_cancelled
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                    } else if stop_reason.as_deref() == Some("max_turns") {
-                        // 2026-06-21 (R2): distinct from
-                        // `was_cancelled` so `run_subagent`'s
-                        // status picker can distinguish the
-                        // budget-exhaustion path from the
-                        // clean-failure path. Mutually exclusive
-                        // with `was_cancelled` in practice.
-                        self.was_incomplete
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                    }
-                } else if stop_reason.as_deref() == Some("loop_terminated") {
-                    // C2+ (2026-07-05, task `07-05-c2-loop-active-
-                    // intervention` PR3): the worker took the
-                    // C2+ direct-break short-circuit (consecutive
-                    // loop-detection hits ≥ 3). Mutually exclusive
-                    // with `was_cancelled` / `was_incomplete` /
-                    // `had_error` in practice — the worker's C2+
-                    // branch emits exactly one terminal `Done`.
-                    // `run_subagent` reads this to (1) pick the
-                    // `status: incomplete` prefix (the worker did
-                    // not cleanly finish — it was force-stopped by
-                    // the harness mid-loop) and (2) append the
-                    // `[loop terminated: ...]` line to the
-                    // dispatch_result content so the parent LLM
-                    // sees the loop-termination signal.
-                    self.was_loop_terminated
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-            _ => {}
-        }
-        let payload_json = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        self.record(TranscriptKind::ChatEvent, payload_json);
-    }
-
-    fn emit_tool_call(&self, payload: &ToolCallPayload) {
-        // B6 PR3 redesign (2026-06-21): record the `Instant` of this
-        // tool_call so the paired `emit_tool_result` can compute the
-        // wall-clock `duration_ms`. The frontend drawer pairs the
-        // two transcript entries by `tool_use_id` and renders the
-        // duration in the merged card header (see
-        // `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style/prd.md`
-        // §"Technical Approach"). The Instant is the wall-clock now
-        // (`Instant::now()`), not the message's emit timestamp —
-        // matches the main panel's `ToolCallCard` duration contract
-        // (F5), which is "from tool_call to tool_result wall-clock".
-        let mut map = self
-            .tool_call_received_at
-            .lock()
-            .expect("SubagentBufferSink tool_call_received_at mutex poisoned");
-        map.insert(payload.id.clone(), Instant::now());
-        // Defensive cap: if a worker ever produces a runaway number
-        // of distinct tool_use_ids without results landing (e.g. an
-        // error-loop worker spamming tool_use), bound the map. The
-        // 1024 cap is generous for the 20-turn worker's realistic
-        // case (a busy tool-heavy turn produces ~5-10 distinct
-        // tool_use_ids). The eviction policy is "drop oldest entry"
-        // to keep the most recent measurements intact.
-        if map.len() > 1024 {
-            if let Some(oldest_key) = map
-                .iter()
-                .min_by_key(|(_, v)| v.elapsed())
-                .map(|(k, _)| k.clone())
-            {
-                map.remove(&oldest_key);
-            }
-        }
-        drop(map);
-        let payload_json = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        // Inject the `tool_use_id` field at the top level of
-        // payload_json so the frontend can pair tool_call with the
-        // matching tool_result. The original `ToolCallPayload` does
-        // not serialize `id` separately (it has `request_id` and
-        // `id`, but the frontend `TranscriptEntry` projection
-        // historically only exposed `payload_json.{name,input}` for
-        // tool_call — see `subagentRuns.ts:TranscriptEntry`). Adding
-        // the field at serialization time keeps the Rust struct
-        // stable for cross-process Tauri commands (no DB migration
-        // needed — see PRD §"Cross-layer Decision Points").
-        let mut payload_obj = match payload_json {
-            serde_json::Value::Object(m) => m,
-            other => {
-                tracing::warn!(
-                    tool_use_id = %payload.id,
-                    "tool_call payload_json not an object; wrapping as-is"
-                );
-                let mut m = serde_json::Map::new();
-                m.insert("raw".into(), other);
-                m
-            }
-        };
-        payload_obj.insert(
-            "tool_use_id".into(),
-            serde_json::Value::String(payload.id.clone()),
-        );
-        let enriched = serde_json::Value::Object(payload_obj);
-        self.record(TranscriptKind::ToolCall, enriched);
-    }
-
-    fn emit_tool_result(&self, payload: &ToolResultPayload) {
-        // B6 PR3 redesign (2026-06-21): look up the matching
-        // `tool_call` Instant, compute the wall-clock gap, and embed
-        // it (plus `tool_use_id`) into payload_json so the frontend
-        // drawer can render the per-tool duration on the merged
-        // card header. Orphan tool_result (no matching tool_call —
-        // possible if the IPC `subagent:event` was lost or the
-        // transcript was truncated at the 4 MiB cap) falls back to
-        // `duration_ms = 0` with a `tracing::warn!`; the entry
-        // still lands in the transcript so the user sees the result,
-        // the drawer's pairing layer treats it as a standalone
-        // "orphan result" card.
-        let mut map = self
-            .tool_call_received_at
-            .lock()
-            .expect("SubagentBufferSink tool_call_received_at mutex poisoned");
-        let duration_ms: u64 = if let Some(start) = map.remove(&payload.tool_use_id) {
-            let ms = start.elapsed().as_millis();
-            // Saturating cast — a `u128` ms value cannot realistically
-            // exceed `u64::MAX`, but the saturating cast keeps the
-            // conversion safe under any pathological clock behavior.
-            u64::try_from(ms).unwrap_or(u64::MAX)
-        } else {
-            tracing::warn!(
-                tool_use_id = %payload.tool_use_id,
-                "tool_result arrived without matching tool_call; duration_ms=0"
-            );
-            0
-        };
-        drop(map);
-        let payload_json = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        // Enrich payload_json with `tool_use_id` (top-level) +
-        // `duration_ms` so the frontend pairing layer can locate the
-        // matching call and render the duration. The Rust struct
-        // `ToolResultPayload` does not derive `tool_use_id` at the
-        // top level (it has `request_id` + `tool_use_id` as separate
-        // fields, but the original `TranscriptEntry` projection in
-        // `subagentRuns.ts` only exposed
-        // `payload_json.{content,is_error}`). Adding the field at
-        // serialization time keeps the Rust struct stable.
-        let mut payload_obj = match payload_json {
-            serde_json::Value::Object(m) => m,
-            other => {
-                tracing::warn!(
-                    tool_use_id = %payload.tool_use_id,
-                    "tool_result payload_json not an object; wrapping as-is"
-                );
-                let mut m = serde_json::Map::new();
-                m.insert("raw".into(), other);
-                m
-            }
-        };
-        payload_obj.insert(
-            "tool_use_id".into(),
-            serde_json::Value::String(payload.tool_use_id.clone()),
-        );
-        payload_obj.insert(
-            "duration_ms".into(),
-            serde_json::Value::Number(duration_ms.into()),
-        );
-        let enriched = serde_json::Value::Object(payload_obj);
-        self.record(TranscriptKind::ToolResult, enriched);
-    }
-
-    fn emit_permission_ask(&self, payload: PermissionAskPayload) {
-        // 2026-06-22 (RULE-FrontSubagent-003 fix): worker asks now
-        // go through the full interactive round-trip
-        // (`register_ask + tokio::select!{cancel, timeout, oneshot}`)
-        // instead of auto-denying at the Tier 4 is_worker collapse.
-        //
-        // The ask is delivered to the frontend over TWO channels:
-        //   1. `permission:ask` (emitted below when AppHandle is
-        //      present) → consumed by `usePermissionsStore` →
-        //      live pending entry (`pendingWorkerByRunId`) →
-        //      interactive Allow/Deny card in `<SubagentDrawer>`
-        //      + `<WorkerAskBanner>` counter.
-        //   2. `subagent:event` (via self.record below) →
-        //      transcript, consumed by `useSubagentRunsStore` →
-        //      historical render in the drawer (also captures
-        //      the ask when no AppHandle is wired, e.g. in unit
-        //      tests that use the test collector).
-        //
-        // Both channels carry the same rid; the drawer dedups by
-        // rid (interactive while the permissions store has it
-        // pending, historical once resolved). The dual emit is
-        // the correct separation: worker chat events stay on
-        // `subagent:event` (don't pollute the main chat), while
-        // `permission:ask` is the shared approval channel both
-        // main-chat and worker asks use.
-        //
-        // The resolve side (user Allow / Deny / timeout / cancel)
-        // does NOT write a follow-up audit row to the parent's
-        // `session_audit_events` per RULE-A-016 — the transcript
-        // is the worker's audit-like record.
-        //
-        // PR1.5 (2026-06-22): emit BEFORE `record()` so the
-        // frontend permissions store is armed before/alongside
-        // the transcript entry (avoids a render race where the
-        // transcript card appears historical before the live
-        // entry lands). Both are synchronous emits so ordering
-        // is minor, but emit-first is the safer choice.
-        //
-        // transport-abstraction 2026-07-20 (P1.3): route through
-        // the `SubagentEventSink` trait instead of branching on
-        // `Option<AppHandle>`. The trait impl handles
-        // `app.emit` (production) or no-op (test) uniformly.
-        self.event_sink.emit_permission_ask(&payload);
-        // Test-only: when no app_handle is wired, the payload is
-        // still captured via the transcript record below (test
-        // collectors inspect transcript entries). The IPC emit
-        // path is exercised in integration, not unit, tests.
-        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-        self.record(TranscriptKind::PermissionAsk, payload_json);
-    }
-
-    /// 2026-06-22 (RULE-WorkerAsk-001): trait override of
-    /// `ChatEventSink::emit_permission_ask_resolved`. Records the
-    /// worker's `PermissionAsk` resolve outcome as a
-    /// `PermissionAskResolved` transcript entry. Called by
-    /// `ask_path`'s worker branch AFTER its `tokio::select!` arm
-    /// returns its outcome.
-    ///
-    /// **Transcript-only** (no dual IPC emit). The live
-    /// interaction card's disappearance is driven by the
-    /// permissions store removing the pending entry on resolve
-    /// (Session 62 `89e5ba1`). This transcript entry is the
-    /// **historical-replay record** — when the user reopens the
-    /// drawer after the worker exits, the frontend pairs this
-    /// entry to the matching ask by `rid` and surfaces the
-    /// outcome as a badge on the card.
-    ///
-    /// **No audit** (RULE-A-016): worker resolve events stay in
-    /// the transcript, NOT in `session_audit_events`.
-    ///
-    /// `outcome` is one of `"allow"` / `"deny"` / `"timeout"` /
-    /// `"cancel"` (DEBT-locked four-state wire). The caller
-    /// (`ask_path` worker branch) maps its `tokio::select!` arm
-    /// to the appropriate outcome string before calling this.
-    fn emit_permission_ask_resolved(&self, rid: &str, outcome: &str) {
-        self.record_permission_ask_resolved(rid, outcome);
-    }
-
-    /// C1 (07-26-subagent-resume): stash the worker's final messages
-    /// snapshot. Called ONCE by `run_chat_loop` on its normal
-    /// completion path (gated on `is_worker == Some(true)`).
-    /// Overwrites any prior snapshot — the snapshot is the complete
-    /// history at loop exit, not an append log. `run_subagent` reads
-    /// it via `worker_messages()` after the loop returns.
-    fn record_worker_messages(&self, messages: &[crate::llm::types::ChatMessage]) {
-        *self
-            .worker_messages
-            .lock()
-            .expect("SubagentBufferSink worker_messages mutex poisoned") = messages.to_vec();
-    }
-}
-
 impl SubagentBufferSink {
     /// 2026-06-22 (RULE-WorkerAsk-001): record the resolve outcome of
     /// a worker's `PermissionAsk` as a `PermissionAskResolved`
@@ -817,863 +489,5 @@ impl SubagentBufferSink {
             "outcome": outcome,
         });
         self.record(TranscriptKind::PermissionAskResolved, payload_json);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::ChatEventSink;
-
-    // ---- helpers ----
-
-    fn done_with_usage(input: u32, output: u32) -> ChatEventPayload {
-        ChatEventPayload {
-            request_id: "rid-u".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("end_turn".to_string()),
-                usage: Some(TokenUsage {
-                    input_tokens: input,
-                    output_tokens: output,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    context_input_tokens: input,
-                }),
-            },
-        }
-    }
-
-    fn sink_with_resolved(rid: &str, outcome: &str) -> Vec<TranscriptEntry> {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_permission_ask_resolved(rid, outcome);
-        sink.transcript_snapshot()
-    }
-
-    // ---- basic sink behavior ----
-
-    #[test]
-    fn buffer_sink_accumulates_text_deltas() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        let rid = "rid-test".to_string();
-        for t in ["hello", " ", "world"] {
-            sink.emit_chat_event(&ChatEventPayload {
-                request_id: rid.clone(),
-                event: ChatEvent::Delta {
-                    text: t.to_string(),
-                },
-            });
-        }
-        assert_eq!(sink.final_text(), "hello world");
-    }
-
-    #[test]
-    fn buffer_sink_tracks_cancelled_done() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        let rid = "rid-cancel".to_string();
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: rid.clone(),
-            event: ChatEvent::Done {
-                stop_reason: Some("cancelled".to_string()),
-                usage: None,
-            },
-        });
-        assert!(sink.was_cancelled());
-        assert!(!sink.had_error());
-    }
-
-    #[test]
-    fn buffer_sink_tracks_error_event() {
-        use crate::llm::LlmErrorCategory;
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        let rid = "rid-err".to_string();
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: rid.clone(),
-            event: ChatEvent::Error {
-                message: "boom".to_string(),
-                category: LlmErrorCategory::Server,
-            },
-        });
-        assert!(sink.had_error());
-        assert!(!sink.was_cancelled());
-    }
-
-    #[test]
-    fn buffer_sink_records_transcript_entries() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        let rid = "rid-transcript".to_string();
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: rid.clone(),
-            event: ChatEvent::Start,
-        });
-        sink.emit_tool_call(&ToolCallPayload {
-            request_id: rid.clone(),
-            id: "toolu_1".to_string(),
-            name: "read_file".to_string(),
-            input: serde_json::json!({"path": "/x"}),
-        });
-        sink.emit_tool_result(&ToolResultPayload {
-            request_id: rid,
-            tool_use_id: "toolu_1".to_string(),
-            content: "ok".to_string(),
-            is_error: false,
-        });
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 3);
-        assert_eq!(transcript[0].kind, TranscriptKind::ChatEvent);
-        assert_eq!(transcript[1].kind, TranscriptKind::ToolCall);
-        assert_eq!(transcript[2].kind, TranscriptKind::ToolResult);
-    }
-
-    // ---- token usage accumulation (B6 PR2) ----
-
-    #[test]
-    fn buffer_sink_accumulates_token_usage_per_turn() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&done_with_usage(200, 30));
-        sink.emit_chat_event(&done_with_usage(50, 10));
-        let total = sink.cumulative_usage();
-        assert_eq!(total.input_tokens, 350);
-        assert_eq!(total.output_tokens, 90);
-    }
-
-    #[test]
-    fn buffer_sink_drain_per_turn_usage_clears_buffer() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(10, 5));
-        let drained = sink.drain_per_turn_usage();
-        assert_eq!(drained.input_tokens, 10);
-        assert_eq!(drained.output_tokens, 5);
-        // After drain, the cumulative is zero.
-        let after = sink.cumulative_usage();
-        assert_eq!(after.input_tokens, 0);
-        assert_eq!(after.output_tokens, 0);
-    }
-
-    #[test]
-    fn buffer_sink_done_without_usage_does_not_accumulate() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("cancelled".to_string()),
-                usage: None,
-            },
-        });
-        let total = sink.cumulative_usage();
-        assert_eq!(total.input_tokens, 0);
-        assert_eq!(total.output_tokens, 0);
-    }
-
-    // ---- R3 (2026-06-21) max_turns terminal-patch regression tests ----
-
-    /// R3 regression: the synthetic terminal `Done{max_turns, usage:
-    /// last_usage}` must NOT double-count the last turn (the guard
-    /// skips the push for synthetic terminals).
-    #[test]
-    fn buffer_sink_max_turns_terminal_does_not_double_count_last_turn() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&done_with_usage(200, 30));
-        sink.emit_chat_event(&done_with_usage(50, 10));
-        let t_last = TokenUsage {
-            input_tokens: 50,
-            output_tokens: 10,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            context_input_tokens: 50,
-        };
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("max_turns".to_string()),
-                usage: Some(t_last),
-            },
-        });
-        let total = sink.cumulative_usage();
-        assert_eq!(
-            total.input_tokens, 350,
-            "cumulative input = 100+200+50 (synthetic terminal must not double-count)"
-        );
-        assert_eq!(
-            total.output_tokens, 90,
-            "cumulative output = 50+30+10 (synthetic terminal must not double-count)"
-        );
-    }
-
-    /// R3 mirror: cancelled synthetic terminal must NOT affect
-    /// cumulative_usage().
-    #[test]
-    fn buffer_sink_cancelled_terminal_does_not_affect_cumulative_usage() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&done_with_usage(200, 30));
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("cancelled".to_string()),
-                usage: None,
-            },
-        });
-        let total = sink.cumulative_usage();
-        assert_eq!(total.input_tokens, 300);
-        assert_eq!(total.output_tokens, 80);
-    }
-
-    /// RULE-FrontSubagent-004: `turns_completed()` increments once
-    /// per REAL per-turn Done (synthetic terminals do NOT bump).
-    #[test]
-    fn buffer_sink_turns_completed_tracks_real_per_turn_dones() {
-        // (a) Clean end_turn: 3 per-turn Dones → turns_completed == 3.
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&done_with_usage(200, 30));
-        sink.emit_chat_event(&done_with_usage(50, 10));
-        assert_eq!(
-            sink.turns_completed(),
-            3,
-            "3 real per-turn Dones → counter == 3"
-        );
-
-        // (b) Cancelled: 2 per-turn Dones + 1 synthetic cancelled.
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&done_with_usage(200, 30));
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("cancelled".to_string()),
-                usage: None,
-            },
-        });
-        assert_eq!(
-            sink.turns_completed(),
-            2,
-            "cancelled synthetic terminal must NOT increment"
-        );
-
-        // (c) max_turns: 200 per-turn Dones + 1 synthetic max_turns.
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        for _ in 0..200 {
-            sink.emit_chat_event(&done_with_usage(100, 50));
-        }
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("max_turns".to_string()),
-                usage: Some(TokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 50,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    context_input_tokens: 100,
-                }),
-            },
-        });
-        assert_eq!(
-            sink.turns_completed(),
-            200,
-            "max_turns synthetic terminal must NOT increment (counter == real turn budget)"
-        );
-    }
-
-    /// RULE-FrontSubagent-004: turns_completed() and per_turn_usage
-    /// stay 1:1 (same discriminator guards both).
-    #[test]
-    fn buffer_sink_turns_completed_equals_per_turn_usage_len() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&done_with_usage(200, 30));
-        sink.emit_chat_event(&done_with_usage(50, 10));
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("cancelled".to_string()),
-                usage: None,
-            },
-        });
-        assert_eq!(sink.turns_completed(), 3);
-        let total = sink.cumulative_usage();
-        assert_eq!(total.input_tokens, 350);
-        assert_eq!(total.output_tokens, 90);
-    }
-
-    /// R3 was_incomplete: set on synthetic `Done{max_turns}`.
-    #[test]
-    fn buffer_sink_max_turns_terminal_sets_was_incomplete() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("max_turns".to_string()),
-                usage: None,
-            },
-        });
-        assert!(
-            sink.was_incomplete(),
-            "max_turns terminal must set was_incomplete=true"
-        );
-        assert!(
-            !sink.was_cancelled(),
-            "max_turns must NOT also set was_cancelled"
-        );
-        assert!(!sink.had_error(), "max_turns must NOT also set had_error");
-    }
-
-    /// R3 was_cancelled: set on synthetic `Done{cancelled}`.
-    #[test]
-    fn buffer_sink_cancelled_terminal_sets_was_cancelled_only() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("cancelled".to_string()),
-                usage: None,
-            },
-        });
-        assert!(
-            sink.was_cancelled(),
-            "cancelled terminal must set was_cancelled=true"
-        );
-        assert!(
-            !sink.was_incomplete(),
-            "cancelled must NOT also set was_incomplete"
-        );
-    }
-
-    /// R3: clean `end_turn` exit sets neither flag.
-    #[test]
-    fn buffer_sink_end_turn_terminal_does_not_set_incomplete_or_cancelled() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_chat_event(&done_with_usage(100, 50));
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid".to_string(),
-            event: ChatEvent::Done {
-                stop_reason: Some("end_turn".to_string()),
-                usage: None,
-            },
-        });
-        assert!(
-            !sink.was_incomplete(),
-            "end_turn terminal must NOT set was_incomplete"
-        );
-        assert!(
-            !sink.was_cancelled(),
-            "end_turn terminal must NOT set was_cancelled"
-        );
-    }
-
-    // ---- PR2 hotfix: subagent:event IPC payload ----
-
-    /// Each `emit_*` appends a transcript entry AND (when armed via
-    /// `new_with_collector`) the matching IPC payload.
-    #[test]
-    fn subagent_buffer_sink_emits_ipc_event_per_emit() {
-        crate::agent::subagent::clear_test_collector();
-        let collector: Arc<StdMutex<Vec<serde_json::Value>>> = Arc::new(StdMutex::new(Vec::new()));
-        let sink = SubagentBufferSink::new_with_collector(
-            "rid-pr2".into(),
-            "sid-pr2".into(),
-            collector.clone(),
-        );
-
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid-pr2".into(),
-            event: ChatEvent::Start,
-        });
-        sink.emit_tool_call(&ToolCallPayload {
-            request_id: "rid-pr2".into(),
-            id: "toolu_1".into(),
-            name: "read_file".into(),
-            input: serde_json::json!({"path": "/x"}),
-        });
-        sink.emit_tool_result(&ToolResultPayload {
-            request_id: "rid-pr2".into(),
-            tool_use_id: "toolu_1".into(),
-            content: "ok".into(),
-            is_error: false,
-        });
-        sink.emit_permission_ask(crate::agent::permissions::PermissionAskPayload {
-            rid: "ask-rid".into(),
-            session_id: "sid-pr2".into(),
-            tool_use_id: "toolu_1".into(),
-            tool_name: "shell".into(),
-            tool_input: serde_json::json!({"command": "rm -rf /"}),
-            risk: crate::agent::permissions::Risk::High,
-            reason: Some("dangerous".into()),
-            path: None,
-            worker_run_id: None,
-        });
-
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 4);
-        assert_eq!(transcript[0].kind, TranscriptKind::ChatEvent);
-        assert_eq!(transcript[1].kind, TranscriptKind::ToolCall);
-        assert_eq!(transcript[2].kind, TranscriptKind::ToolResult);
-        assert_eq!(transcript[3].kind, TranscriptKind::PermissionAsk);
-
-        let collected = collector.lock().unwrap().clone();
-        assert_eq!(collected.len(), 4, "every emit must produce 1 IPC payload");
-        assert_eq!(collected[0]["kind"], "chat_event");
-        assert_eq!(collected[1]["kind"], "tool_call");
-        assert_eq!(collected[2]["kind"], "tool_result");
-        assert_eq!(collected[3]["kind"], "permission_ask");
-        for (i, p) in collected.iter().enumerate() {
-            assert_eq!(p["runId"], "rid-pr2", "payload #{i} runId");
-            assert_eq!(p["sessionId"], "sid-pr2", "payload #{i} sessionId");
-            assert!(
-                p["payload"].is_object() || p["payload"].is_null(),
-                "payload #{i} shape"
-            );
-            assert!(
-                p["timestamp"].as_str().unwrap().contains('T'),
-                "payload #{i} timestamp is RFC 3339"
-            );
-        }
-
-        crate::agent::subagent::clear_test_collector();
-    }
-
-    /// `new_without_app_handle` does NOT emit IPC events.
-    #[test]
-    fn subagent_buffer_sink_without_app_handle_does_not_emit_ipc() {
-        crate::agent::subagent::clear_test_collector();
-        let sink = SubagentBufferSink::new_without_app_handle("rid-noop".into(), "sid-noop".into());
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid-noop".into(),
-            event: ChatEvent::Start,
-        });
-        assert_eq!(sink.transcript_snapshot().len(), 1);
-        TEST_COLLECTOR.with(|c| {
-            assert!(
-                c.borrow().is_none(),
-                "no collector armed → no IPC attempted"
-            );
-        });
-    }
-
-    // ---- B6 PR3 redesign: tool_use_id + duration_ms payload fields ----
-
-    #[test]
-    fn tool_call_payload_json_includes_tool_use_id() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_tool_call(&ToolCallPayload {
-            request_id: "rid".into(),
-            id: "toolu_42".into(),
-            name: "read_file".into(),
-            input: serde_json::json!({"path": "/foo"}),
-        });
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 1);
-        let entry = &transcript[0];
-        assert_eq!(entry.kind, TranscriptKind::ToolCall);
-        let pj = entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("tool_use_id").and_then(|v| v.as_str()),
-            Some("toolu_42"),
-            "tool_call payload_json must carry top-level tool_use_id"
-        );
-        assert_eq!(
-            pj.get("id").and_then(|v| v.as_str()),
-            Some("toolu_42"),
-            "original `id` field preserved"
-        );
-        assert_eq!(pj.get("name").and_then(|v| v.as_str()), Some("read_file"));
-        assert!(pj.get("input").is_some(), "input preserved");
-    }
-
-    #[test]
-    fn tool_result_payload_json_includes_duration_ms() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_tool_call(&ToolCallPayload {
-            request_id: "rid".into(),
-            id: "toolu_p".into(),
-            name: "shell".into(),
-            input: serde_json::json!({"command": "ls"}),
-        });
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        sink.emit_tool_result(&ToolResultPayload {
-            request_id: "rid".into(),
-            tool_use_id: "toolu_p".into(),
-            content: "ok".into(),
-            is_error: false,
-        });
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 2);
-        let result_entry = &transcript[1];
-        assert_eq!(result_entry.kind, TranscriptKind::ToolResult);
-        let pj = result_entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("tool_use_id").and_then(|v| v.as_str()),
-            Some("toolu_p"),
-            "tool_result payload_json carries top-level tool_use_id"
-        );
-        let duration = pj
-            .get("duration_ms")
-            .and_then(|v| v.as_u64())
-            .expect("duration_ms is u64");
-        assert!(
-            duration >= 4,
-            "duration_ms must reflect wall-clock gap, got {duration}"
-        );
-        assert!(
-            duration < 5_000,
-            "duration_ms unreasonably large: {duration}"
-        );
-        assert_eq!(pj.get("content").and_then(|v| v.as_str()), Some("ok"));
-        assert_eq!(pj.get("is_error").and_then(|v| v.as_bool()), Some(false));
-    }
-
-    #[test]
-    fn orphan_tool_result_gets_duration_ms_zero() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_tool_result(&ToolResultPayload {
-            request_id: "rid".into(),
-            tool_use_id: "toolu_orphan".into(),
-            content: "partial".into(),
-            is_error: false,
-        });
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 1);
-        let pj = transcript[0]
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("tool_use_id").and_then(|v| v.as_str()),
-            Some("toolu_orphan"),
-        );
-        assert_eq!(
-            pj.get("duration_ms").and_then(|v| v.as_u64()),
-            Some(0),
-            "orphan tool_result must have duration_ms=0"
-        );
-    }
-
-    #[test]
-    fn consecutive_pairs_get_independent_durations() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_tool_call(&ToolCallPayload {
-            request_id: "rid".into(),
-            id: "toolu_a".into(),
-            name: "read_file".into(),
-            input: serde_json::json!({}),
-        });
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        sink.emit_tool_result(&ToolResultPayload {
-            request_id: "rid".into(),
-            tool_use_id: "toolu_a".into(),
-            content: "a".into(),
-            is_error: false,
-        });
-        sink.emit_tool_call(&ToolCallPayload {
-            request_id: "rid".into(),
-            id: "toolu_b".into(),
-            name: "read_file".into(),
-            input: serde_json::json!({}),
-        });
-        std::thread::sleep(std::time::Duration::from_millis(8));
-        sink.emit_tool_result(&ToolResultPayload {
-            request_id: "rid".into(),
-            tool_use_id: "toolu_b".into(),
-            content: "b".into(),
-            is_error: false,
-        });
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 4);
-        let dur_a = transcript[1]
-            .payload_json
-            .as_object()
-            .unwrap()
-            .get("duration_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap();
-        let dur_b = transcript[3]
-            .payload_json
-            .as_object()
-            .unwrap()
-            .get("duration_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap();
-        assert!(
-            dur_b >= dur_a,
-            "second pair ({dur_b}ms) should be at least as long as first ({dur_a}ms)"
-        );
-        assert!(dur_a >= 1, "dur_a < 1ms is implausible, got {dur_a}");
-        assert!(
-            dur_b >= 4,
-            "dur_b < 4ms is implausible (we slept 8ms), got {dur_b}"
-        );
-    }
-
-    // ---- emit_permission_ask (RULE-FrontSubagent-003) ----
-
-    /// PR1.5: `emit_permission_ask` produces a PermissionAsk
-    /// transcript entry whose payload carries the PARENT session id.
-    #[test]
-    fn emit_permission_ask_populates_transcript_with_parent_session_id() {
-        let sink = SubagentBufferSink::new_without_app_handle(
-            "worker-rid-1".into(),
-            "parent-sess-1".into(),
-        );
-        sink.emit_permission_ask(crate::agent::permissions::PermissionAskPayload {
-            rid: "ask-rid-1".into(),
-            session_id: "parent-sess-1".into(),
-            tool_use_id: "toolu_w1".into(),
-            tool_name: "write_file".into(),
-            tool_input: serde_json::json!({"path": "/repo/outside/foo.rs"}),
-            risk: crate::agent::permissions::Risk::High,
-            reason: Some("requires confirmation".into()),
-            path: Some("/repo/outside/foo.rs".into()),
-            worker_run_id: Some("worker-run-1".into()),
-        });
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(
-            transcript.len(),
-            1,
-            "emit_permission_ask must produce exactly 1 transcript entry"
-        );
-        let entry = &transcript[0];
-        assert_eq!(entry.kind, TranscriptKind::PermissionAsk);
-        let pj = entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("sessionId").and_then(|v| v.as_str()),
-            Some("parent-sess-1"),
-            "transcript payload must carry parent session_id (PR1.5 cross-layer fix)"
-        );
-        assert_eq!(
-            pj.get("workerRunId").and_then(|v| v.as_str()),
-            Some("worker-run-1"),
-            "transcript payload must carry workerRunId camelCase"
-        );
-        assert_eq!(pj.get("rid").and_then(|v| v.as_str()), Some("ask-rid-1"),);
-        assert_eq!(
-            pj.get("toolName").and_then(|v| v.as_str()),
-            Some("write_file"),
-        );
-        assert_eq!(
-            pj.get("toolUseId").and_then(|v| v.as_str()),
-            Some("toolu_w1"),
-        );
-    }
-
-    // ---- emit_permission_ask_resolved (RULE-WorkerAsk-001) ----
-
-    #[test]
-    fn emit_permission_ask_resolved_allow_records_entry() {
-        let transcript = sink_with_resolved("ask-rid-allow", "allow");
-        assert_eq!(
-            transcript.len(),
-            1,
-            "emit_permission_ask_resolved must produce exactly 1 transcript entry"
-        );
-        let entry = &transcript[0];
-        assert_eq!(
-            entry.kind,
-            TranscriptKind::PermissionAskResolved,
-            "kind must be PermissionAskResolved"
-        );
-        let pj = entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("rid").and_then(|v| v.as_str()),
-            Some("ask-rid-allow"),
-            "rid must match the input"
-        );
-        assert_eq!(
-            pj.get("outcome").and_then(|v| v.as_str()),
-            Some("allow"),
-            "outcome must be 'allow' for AllowOnce/AllowAlways arm"
-        );
-    }
-
-    #[test]
-    fn emit_permission_ask_resolved_deny_records_entry() {
-        let transcript = sink_with_resolved("ask-rid-deny", "deny");
-        assert_eq!(transcript.len(), 1);
-        let entry = &transcript[0];
-        assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
-        let pj = entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(pj.get("rid").and_then(|v| v.as_str()), Some("ask-rid-deny"));
-        assert_eq!(
-            pj.get("outcome").and_then(|v| v.as_str()),
-            Some("deny"),
-            "outcome must be 'deny' for user-initiated Deny arm"
-        );
-    }
-
-    #[test]
-    fn emit_permission_ask_resolved_timeout_records_entry() {
-        let transcript = sink_with_resolved("ask-rid-timeout", "timeout");
-        assert_eq!(transcript.len(), 1);
-        let entry = &transcript[0];
-        assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
-        let pj = entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("rid").and_then(|v| v.as_str()),
-            Some("ask-rid-timeout"),
-        );
-        assert_eq!(
-            pj.get("outcome").and_then(|v| v.as_str()),
-            Some("timeout"),
-            "outcome must be 'timeout' for the 120s ASK_TIMEOUT arm"
-        );
-    }
-
-    #[test]
-    fn emit_permission_ask_resolved_cancel_records_entry() {
-        let transcript = sink_with_resolved("ask-rid-cancel", "cancel");
-        assert_eq!(transcript.len(), 1);
-        let entry = &transcript[0];
-        assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
-        let pj = entry
-            .payload_json
-            .as_object()
-            .expect("payload_json is object");
-        assert_eq!(
-            pj.get("rid").and_then(|v| v.as_str()),
-            Some("ask-rid-cancel"),
-        );
-        assert_eq!(
-            pj.get("outcome").and_then(|v| v.as_str()),
-            Some("cancel"),
-            "outcome must be 'cancel' for parent-token cancel arm"
-        );
-    }
-
-    /// The trait default is a no-op for sinks that do NOT override it.
-    #[test]
-    fn emit_permission_ask_resolved_default_is_noop_on_non_buffer_sink() {
-        struct NoopSink;
-        impl crate::state::ChatEventSink for NoopSink {
-            fn emit_chat_event(&self, _: &ChatEventPayload) {}
-            fn emit_tool_call(&self, _: &ToolCallPayload) {}
-            fn emit_tool_result(&self, _: &ToolResultPayload) {}
-            fn emit_permission_ask(&self, _: PermissionAskPayload) {}
-            // emit_permission_ask_resolved: default no-op.
-        }
-        let sink = NoopSink;
-        // Must not panic.
-        sink.emit_permission_ask_resolved("rid", "allow");
-        sink.emit_permission_ask_resolved("rid", "deny");
-        sink.emit_permission_ask_resolved("rid", "timeout");
-        sink.emit_permission_ask_resolved("rid", "cancel");
-    }
-
-    /// Multiple outcomes for the same rid produce multiple entries
-    /// (the sink does NOT deduplicate by rid).
-    #[test]
-    fn emit_permission_ask_resolved_multiple_outcomes_for_same_rid() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        sink.emit_permission_ask_resolved("same-rid", "allow");
-        sink.emit_permission_ask_resolved("same-rid", "deny");
-        let transcript = sink.transcript_snapshot();
-        assert_eq!(transcript.len(), 2);
-        assert_eq!(transcript[0].kind, TranscriptKind::PermissionAskResolved);
-        assert_eq!(transcript[1].kind, TranscriptKind::PermissionAskResolved);
-        assert_eq!(
-            transcript[0]
-                .payload_json
-                .get("outcome")
-                .and_then(|v| v.as_str()),
-            Some("allow"),
-        );
-        assert_eq!(
-            transcript[1]
-                .payload_json
-                .get("outcome")
-                .and_then(|v| v.as_str()),
-            Some("deny"),
-        );
-    }
-
-    /// 07-06 (am-observability-panel, R2b / AC7): the worker's
-    /// `SubagentBufferSink` does NOT forward `ChatEvent::Recall`
-    /// to the main chat IPC channel. The worker's own
-    /// `build_recall_text_with_rows` / `recall_pitfall_with_hits`
-    /// still runs (the worker can recall autonomously), but
-    /// the recall event stays inside the worker's transcript
-    /// — the main chat's `lastRecallHits` chip is unaffected.
-    ///
-    /// The test pins two related structural properties:
-    ///
-    /// (a) **No `app_handle` use in `emit_chat_event`**: the
-    ///     worker's sink impl is in `sink.rs:421-530`; that
-    ///     block does not reference `self.app_handle` at all
-    ///     (a `grep` of the impl confirms it). The chat-event
-    ///     IPC forwarding is the `AppHandleSink`'s
-    ///     responsibility, NOT the worker's. The `Recall` event
-    ///     is recorded into the worker's transcript (per
-    ///     line 528-529 in `emit_chat_event`); that's the
-    ///     intended scope.
-    /// (b) **Constructed without an `app_handle`**: the test
-    ///     constructor `new_without_app_handle` (line 198)
-    ///     sets `app_handle: None`. The worker's nested
-    ///     `run_chat_loop` (production path) constructs
-    ///     `SubagentBufferSink::new_without_app_handle` too —
-    ///     the production worker has no `app_handle` to forward
-    ///     to. So even if a future refactor accidentally added
-    ///     `self.app_handle.as_ref().map(|h| h.emit(...))` to
-    ///     the chat-event path, the `None` case would silently
-    ///     no-op (no `app` to emit on).
-    ///
-    /// Net effect: the worker's `Recall` events land in the
-    /// worker's transcript; the main chat's IPC is structurally
-    /// unreachable from a worker's `SubagentBufferSink`. The
-    /// main chat's `lastRecallHits` chip never sees a worker
-    /// recall (AC7).
-    #[test]
-    fn worker_sink_does_not_forward_recall_to_main_chat() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
-        // (a) The worker's sink constructor exposes NO way to
-        // forward chat events to the main chat IPC. `app_handle`
-        // is `None`; even if a future refactor added
-        // `self.app_handle.as_ref().map(|h| h.emit("chat-event", ...))`,
-        // it would be a `None`-no-op (no `app` to emit on).
-        assert!(
-            sink.app_handle.is_none(),
-            "worker sink must be constructed without an app_handle (no IPC forward path)"
-        );
-        // (b) The worker's emit_chat_event must NOT panic on
-        // the new `Recall` variant. The match has a wildcard
-        // arm that drops it into the transcript record (no
-        // IPC, just local buffer).
-        sink.emit_chat_event(&ChatEventPayload {
-            request_id: "rid-recall".into(),
-            event: ChatEvent::Recall {
-                hits: vec![crate::llm::types::RecallHit {
-                    memory_id: "m1".into(),
-                    title: "t".into(),
-                    kind: "fact".into(),
-                    source: "fts".into(),
-                }],
-            },
-        });
-        // The sink's `transcript_snapshot` is the worker-side
-        // audit surface — the Recall event IS recorded there
-        // (for historical-replay rendering in the drawer), but
-        // it does NOT reach the main chat IPC. The test above
-        // pins the structural property; the practical effect
-        // (no main-chat IPC emit) is the absence of an
-        // `app_handle` to call.
     }
 }

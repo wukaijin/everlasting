@@ -112,7 +112,7 @@ grep -rn "from '@tauri-apps/api/core'" app/src --include="*.ts" --include="*.vue
 |---|---|
 | `agent/chat.rs:187` pre-flight error 直调 `chat-event` | 改走 `AppHandleSink`(构造一个临时 sink 或复用传入的) |
 | `agent/helpers.rs:160,170` `emit_chat_event` / `emit_tool_result` | **删除这两个 helper 函数**,调用方改用 sink(疑似早期遗留,sink trait 已覆盖) |
-| `agent/subagent/sink.rs:279,698` subagent 事件直调 | **保留 collector 双通道语义**,但把 `tauri::AppHandle` 抽象成 `dyn SubagentEventSink` trait,新增 `AppHandleSubagentSink` 实现(包装现有逻辑) |
+| `agent/subagent/sink.rs::record` + `sink/events.rs::emit_permission_ask` subagent 事件直调 | **保留 collector 双通道语义**,但把 `tauri::AppHandle` 抽象成 `dyn SubagentEventSink` trait,新增 `AppHandleSubagentSink` 实现(包装现有逻辑) |
 | `agent/subagent/dispatch/finalize.rs::collect_outcome` `subagent:finished` 直调 | 同上,走 `SubagentEventSink` trait |
 | `state.rs:317` `projects:refreshed` 直调 | 这个在 `AppState::load` 后台任务里,新增轻量 `SystemEventSink` trait 或直接保留(Phase 2 daemon 化时再处理,因为它不在 agent loop 热路径) |
 
@@ -129,7 +129,7 @@ pnpm tauri dev
 #    □ 普通 chat 流式正常(chat-event 经 sink)
 #    □ agent error 时前端收到错误事件(chat.rs:187 散点)
 #    □ 触发 subagent,drawer 看到完整事件流(subagent:event / subagent:finished)
-#    □ subagent 内触发 permission:ask,弹窗正常(subagent/sink.rs:698 散点)
+#    □ subagent 内触发 permission:ask,弹窗正常(subagent/sink/events.rs::emit_permission_ask 散点)
 #    □ 首次启动,项目列表 backfill 后刷新(projects:refreshed)
 
 # 3. grep 确认散点收敛(除允许保留的)

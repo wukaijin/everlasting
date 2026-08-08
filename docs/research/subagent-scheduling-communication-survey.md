@@ -58,8 +58,8 @@
 | 子↔子通信 | ❌ | 无此概念 |
 | 父↔子双向 | ❌ | 单向委派 |
 | 嵌套深度 | ❌ 限制深度 1 | `mod.rs:350` `STRUCTURALLY_DISABLED` |
-| 前端实时展示 | ✅ `subagent:event` + `subagent:finished` IPC | `sink.rs:238-281` |
-| 权限交互 | ✅ `permission:ask` 共享通道 + `is_worker=true` Deny | `sink.rs:608-659` |
+| 前端实时展示 | ✅ `subagent:event` + `subagent:finished` IPC | `sink.rs::new_with_collector` |
+| 权限交互 | ✅ `permission:ask` 共享通道 + `is_worker=true` Deny | `sink/events.rs::emit_permission_ask` |
 
 ---
 

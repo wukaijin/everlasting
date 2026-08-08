@@ -46,6 +46,18 @@
 
 **收益**:宏体从 ~430 行降到 ~90 行(骨架 + 分发 + yield 点);事件状态机(`BlockState`)与 handler 成为可独立单测的纯逻辑(零覆盖 → 补 5 个测试,1657 → 1662)。
 
+## Variant:大 struct + 大 trait impl(可见性拆分,08-08 sink 专项)
+
+无单函数单体,但 struct(14 字段)+ `impl Trait`(6 方法 ~330 行)+ 856 行内联测试构成大文件(1679 行)。
+
+**模式**:impl 块整体平移进子模块(方法零改动,锁序/emit 顺序零变化),struct 定义留 hub:
+- 子模块方法访问字段 → struct 字段升 `pub(crate)`(独立"可见性准备"commit,先于拆分,便于回滚)
+- 内部方法(`record` 等)升 `pub(crate)`;thread_local! 测试收集器若被测试直接访问,`thread_local! { pub(crate) static ... }`(宏内 static 支持可见性修饰)
+- 测试迁出后需要显式 import 的类型(glob 只传播 pub 项):`#[allow(unused_imports)]` 文件级逐个补(Arc/StdMutex/TranscriptEntry/TokenUsage/payload 类型等)
+- 锁序推理:拆分前先核实所有 mutex 均为方法内单锁/顺序锁、无嵌套持有;方法整体平移后锁序不变(死锁风险零引入)
+
+**收益**:hub 1679 → 493 行 + events.rs 346 行 + tests_sink.rs 877 行;测试 30 个全部保留(1662 基线)。
+
 ## 验收(dispatch.rs 实例)
 
 - `run_subagent` 函数体 171 行(7 个阶段调用 + 解构 + 胶水),签名 118 行冻结。

@@ -47,7 +47,7 @@ thread_local! {
 /// Wire the test thread-local collector. Idempotent: a second call
 /// replaces the prior collector so the test snapshot is fresh. Must
 /// be paired with a `clear_test_collector` in a test cleanup
-/// (the test in `sink.rs:1126` does this in its `Drop`-equivalent
+/// (the test in `tests_sink.rs::buffer_sink_max_turns_terminal_sets_was_incomplete` does this in its `Drop`-equivalent
 /// teardown).
 #[allow(dead_code)]
 pub(crate) fn arm_test_collector(c: Arc<StdMutex<Vec<serde_json::Value>>>) {
