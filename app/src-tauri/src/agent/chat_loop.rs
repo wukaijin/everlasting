@@ -619,7 +619,6 @@ async fn prepare_loop_state(
         // (pre-turn-loop); the turn loop sets Some(seq) per turn.
         turn_seq: None,
     };
-    let permission_ctx = permission_ctx;
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 
     // B6+ B (task 07-06-b6plus-b-dispatch-model-arg): snapshot the
@@ -4818,8 +4817,8 @@ async fn finalize_turn(
                 // site above for why this stays tracing-only
                 // instead of emit_persist_failure).
                 if let Err(e) = crate::db::persist_turn(
-                    &db,
-                    &session_id,
+                    db,
+                    session_id,
                     tool_result_msg.role,
                     &tool_result_msg.content,
                     seq,
@@ -4839,16 +4838,16 @@ async fn finalize_turn(
             );
         }
         if !skip_persist {
-            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-            let _ = crate::db::touch_session(&db, &session_id).await;
+            persist_turn_cwd(db, session_id, last_cwd.as_deref()).await;
+            let _ = crate::db::touch_session(db, session_id).await;
         }
         // B6 PR1b: always emit terminal `Done { cancelled }` —
         // the SubagentBufferSink reads it to set `was_cancelled`
         // (so `run_subagent` can format the dispatch_subagent
         // tool_result with `status=cancelled`).
         emit_chat_event_via_sink(
-            &sink,
-            &rid,
+            sink,
+            rid,
             &ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -4871,8 +4870,8 @@ async fn finalize_turn(
         // otherwise be built on a tool_result the DB never
         // recorded.
         if let Err(e) = crate::db::persist_turn(
-            &db,
-            &session_id,
+            db,
+            session_id,
             tool_result_msg.role,
             &tool_result_msg.content,
             seq,
@@ -4881,7 +4880,7 @@ async fn finalize_turn(
         )
         .await
         {
-            emit_persist_failure(&sink, &rid, &e);
+            emit_persist_failure(sink, rid, &e);
             return Err(());
         }
     }
