@@ -120,7 +120,7 @@ pub struct MockProvider {
     /// dynamically via `definition_with_cache`); capturing it here
     /// lets integration tests assert the worker path's tool list
     /// does NOT contain `dispatch_subagent` (no-nesting invariant,
-    /// see `agent/subagent/dispatch.rs:187`'s
+    /// see `agent/subagent/dispatch/prepare.rs::prepare_worker`'s
     /// `filter_tools_for_subagent` + the `effective_is_worker` gate
     /// at the per-turn append site in `chat_loop.rs`). Locked by
     /// `std::sync::Mutex` because the writes happen inside the

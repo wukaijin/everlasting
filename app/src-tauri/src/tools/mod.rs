@@ -128,7 +128,7 @@ pub(crate) fn test_default_pool() -> SqlitePool {
 /// though it traverses the same code path.
 /// `filter_tools_for_subagent` (which strips `dispatch_subagent` via
 /// `STRUCTURALLY_DISABLED`) remains as defense-in-depth on the seed
-/// `worker_tool_defs` list (`dispatch.rs:187`) — it strips
+/// `worker_tool_defs` list (`dispatch/prepare.rs::prepare_worker`) — it strips
 /// `dispatch_subagent` / `update_checklist` / the L1a shell triple
 /// from the worker's initial toolset, but that filter alone would be
 /// insufficient because the per-turn append runs inside the same

@@ -113,7 +113,7 @@ grep -rn "from '@tauri-apps/api/core'" app/src --include="*.ts" --include="*.vue
 | `agent/chat.rs:187` pre-flight error 直调 `chat-event` | 改走 `AppHandleSink`(构造一个临时 sink 或复用传入的) |
 | `agent/helpers.rs:160,170` `emit_chat_event` / `emit_tool_result` | **删除这两个 helper 函数**,调用方改用 sink(疑似早期遗留,sink trait 已覆盖) |
 | `agent/subagent/sink.rs:279,698` subagent 事件直调 | **保留 collector 双通道语义**,但把 `tauri::AppHandle` 抽象成 `dyn SubagentEventSink` trait,新增 `AppHandleSubagentSink` 实现(包装现有逻辑) |
-| `agent/subagent/dispatch.rs:1192` `subagent:finished` 直调 | 同上,走 `SubagentEventSink` trait |
+| `agent/subagent/dispatch/finalize.rs::collect_outcome` `subagent:finished` 直调 | 同上,走 `SubagentEventSink` trait |
 | `state.rs:317` `projects:refreshed` 直调 | 这个在 `AppState::load` 后台任务里,新增轻量 `SystemEventSink` trait 或直接保留(Phase 2 daemon 化时再处理,因为它不在 agent loop 热路径) |
 
 **关键**:subagent 路径**不能简单合并到 `AppHandleSink`**——subagent 事件注入走 collector 路径,与父 agent loop 的 sink 是两套语义(注释明确 "runs in place of app_handle.emit")。只抽象类型,不改语义。

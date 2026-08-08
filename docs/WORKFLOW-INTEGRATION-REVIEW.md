@@ -146,7 +146,7 @@ fn delegation_template_for(def: &WorkflowDef, role: &str) -> Option<&str>;
 
 两个候选执行点:
 - **(A)** tool 参数解析后、`run_subagent` 调用前（`chat_loop.rs:3283` 附近）——不需要改 `run_subagent` 签名
-- **(B)** `run_subagent` 内部（`dispatch.rs:335` 附近）——需要传入当前 state 参数
+- **(B)** `run_subagent` 内部（`dispatch.rs::run_subagent` 内部）——需要传入当前 state 参数
 
 **建议**: 选 **(A)**。在 §5.2.3 补充:"门控执行点在 `chat_loop.rs` 的 `dispatch_subagent` 拦截处（`run_subagent` 调用前），检查 `roles_by_state[当前 state]` 是否包含目标 role。不允许时触发协商流程。"
 

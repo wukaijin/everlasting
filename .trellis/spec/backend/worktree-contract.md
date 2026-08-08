@@ -760,7 +760,7 @@ pub fn destroy_worker(
 | `destroy_worker_removes_branch_and_dir` | physical dir + libgit2 metadata + branch all gone |
 | (added by PR1 inline review) `create_worker` + `destroy_worker` correctly lock/unlock |
 
-See `dispatch.rs::tests::probe_worker_changes_*` (3 tests, also added in PR1) for the end-to-end create → worker edits → diff probe flow.
+See `tests_dispatch.rs::probe_worker_changes_*` (3 tests, also added in PR1) for the end-to-end create → worker edits → diff probe flow.
 
 ---
 

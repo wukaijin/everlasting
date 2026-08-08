@@ -1897,7 +1897,7 @@ pub async fn run_chat_loop(
         // MUST NOT see `dispatch_subagent` in its turn tool list.
         // The B6 `filter_tools_for_subagent` strips
         // `dispatch_subagent` from the worker's *initial*
-        // `worker_tool_defs` (`dispatch.rs:187`), but that filter
+        // `worker_tool_defs` (`dispatch/prepare.rs::prepare_worker`), but that filter
         // only applies to the seed list — this per-turn append runs
         // inside the nested `run_chat_loop` and would otherwise
         // re-introduce the ToolDef on every turn, defeating the

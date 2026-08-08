@@ -29,7 +29,7 @@
 父 LLM turn N
   → LLM 输出 dispatch_subagent tool_use { subagent, task }
   → chat_loop.rs 拦截（绕过常规 execute_tool 路径）
-  → run_subagent() @ dispatch.rs:85
+  → run_subagent() @ dispatch.rs::run_subagent
     → 解析参数,lookup_subagent()
     → filter_tools_for_subagent() 构建 tool subset
     → build_worker_messages() 构造 [memory_blocks, delegation_task]
@@ -52,7 +52,7 @@
 
 | 特征 | 状态 | 位置 |
 |------|------|------|
-| 同步/阻塞 | ✅ **同步阻塞** | `dispatch.rs:286` `.await`；`mod.rs:109` 自述 "synchronous" |
+| 同步/阻塞 | ✅ **同步阻塞** | `dispatch.rs::drive_worker` `.await`；`mod.rs:109` 自述 "synchronous" |
 | 并发 | ❌ **单 worker 串行** | `chat_loop.rs:1697-1702` 排除在 `is_parallel_eligible` 外 |
 | 子→父实时流 | ❌ 只拿最终 tool_result | SubagentBufferSink 只向前端 IPC 发射,不向父 LLM 回传 |
 | 子↔子通信 | ❌ | 无此概念 |

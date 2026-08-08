@@ -104,7 +104,7 @@
 | `mode:change:request` | `ModeChangePayload` | `state.rs:692` | ✅ 经 sink |
 | `task:state:transition:request` | `TaskStateTransitionPayload` | `state.rs:706` | ✅ 经 sink |
 | `subagent:event` | `{ runId, sessionId, kind, payload, timestamp }` | **`agent/subagent/sink.rs:279` 直调**(有意绕过 sink,走 collector 路径) | ❌ 直调 |
-| `subagent:finished` | 动态 payload | **`agent/subagent/dispatch.rs:1192` 直调** | ❌ 直调 |
+| `subagent:finished` | 动态 payload | **`agent/subagent/dispatch/finalize.rs::collect_outcome` 直调** | ❌ 直调 |
 | `projects:refreshed` | `usize` | **`state.rs:317` 直调**(启动 backfill 完成通知,从 `AppState::load` 内) | ❌ 直调 |
 
 **⚠️ 抽象现状修正**(2026-07-20 review 后):
@@ -117,7 +117,7 @@
 > - `agent/chat.rs:187` — pre-flight error 路径直调 `chat-event`
 > - `agent/helpers.rs:160,170` — `emit_chat_event` / `emit_tool_result` 直调(疑似早期 helper,后续未迁移到 sink)
 > - `agent/subagent/sink.rs:279,698` — `subagent:event` / `permission:ask` 直调(**有意为之**:subagent 事件注入走 collector 路径,与父 agent loop 的 sink 是两套语义,注释明确 "runs in place of app_handle.emit")
-> - `agent/subagent/dispatch.rs:1192` — `subagent:finished` 直调
+> - `agent/subagent/dispatch/finalize.rs::collect_outcome` — `subagent:finished` 直调
 > - `state.rs:317` — `projects:refreshed` 直调(从 `AppState::load` 的后台 backfill 任务)
 >
 > **对 daemon 化 / transport 抽象的影响**:Phase 1 后端**不是零改动**。换 transport 时这 6 处散点都要收(subagent 路径需要保留 collector 双通道语义,不能简单合并到 sink)。详见 §4.2 修正后的工作量。
@@ -658,7 +658,7 @@ export const transport = isTauri() ? tauriTransport : httpTransport;
 > 1. `AppHandleSink` trait 保留(已实现 7 事件)
 > 2. 收 `agent/chat.rs:187` pre-flight error 直调 → 走 sink
 > 3. 收 `agent/helpers.rs:160,170` 的 `emit_chat_event` / `emit_tool_result` → 走 sink(疑似早期遗留,该删函数直接用 sink)
-> 4. `agent/subagent/sink.rs:279,698` + `dispatch.rs:1192` 的 subagent 事件 → **保留 collector 双通道语义**,但把 `tauri::AppHandle` 类型抽象成 `dyn SubagentEventSink` trait,让 daemon 化时能换实现
+> 4. `agent/subagent/sink.rs:279,698` + `dispatch/finalize.rs::collect_outcome` 的 subagent 事件 → **保留 collector 双通道语义**,但把 `tauri::AppHandle` 类型抽象成 `dyn SubagentEventSink` trait,让 daemon 化时能换实现
 > 5. `state.rs:317` `projects:refreshed` 直调 → 走一个轻量 emit 抽象(它在 `AppState::load` 后台任务里,不在 agent loop)
 >
 > **结论**:Phase 1 是"前端机械替换 + 后端收 6 处散点",后端不是零改动,但工作量可控(主要是类型抽象,不改业务逻辑)。

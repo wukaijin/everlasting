@@ -356,7 +356,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
     // WITHOUT the `effective_is_worker` gate this would re-expose
     // `dispatch_subagent` to a worker LLM even though
     // `filter_tools_for_subagent` stripped it from the seed list
-    // (the seed is filtered once in `dispatch.rs:187`, but the
+    // (the seed is filtered once in `dispatch/prepare.rs::prepare_worker`, but the
     // per-turn append happens inside the nested `run_chat_loop`
     // body that the worker also reaches). This assertion locks
     // the no-nesting invariant: the worker turn (send slot 1,

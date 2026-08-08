@@ -47,7 +47,7 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 
 **Test**: `agent_loop_forced_dispatch_runs_worker_without_llm` asserts `mock.call_count() == 1` (only the worker's single turn — the parent contributed zero LLM calls).
 | `builtin_*_defaults_to_isolated` | `general-purpose.isolation == Some(true)`, `researcher.isolation == None` |
-| `probe_worker_changes_*` (3 tests in dispatch.rs) | empty worktree → no changes; tracked edit → changes; untracked file → changes |
+| `probe_worker_changes_*` (3 tests in tests_dispatch.rs) | empty worktree → no changes; tracked edit → changes; untracked file → changes |
 
 ---
 

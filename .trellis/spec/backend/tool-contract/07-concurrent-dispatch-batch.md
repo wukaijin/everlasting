@@ -191,7 +191,7 @@ let result_blocks = result_slots.into_iter().flatten().collect();
 
 ### `dispatch_subagent` worktree-isolation input (L3b PR1, 2026-06-27)
 
-L3b PR1 extends `dispatch_subagent` with a `isolation: Option<bool>` input parameter and a matching `SubagentDef.isolation: Option<bool>` frontmatter field. The merge semantics (`resolve_isolation(frontmatter_default, dispatch_input) -> bool` in `agent/subagent/dispatch.rs`):
+L3b PR1 extends `dispatch_subagent` with a `isolation: Option<bool>` input parameter and a matching `SubagentDef.isolation: Option<bool>` frontmatter field. The merge semantics (`resolve_isolation(frontmatter_default, dispatch_input) -> bool` in `agent/subagent/resolve.rs`):
 
 | frontmatter `isolation` | dispatch `isolation` | result |
 |---|---|---|

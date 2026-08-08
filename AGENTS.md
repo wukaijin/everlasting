@@ -34,7 +34,7 @@ cd app && pnpm test -- --ui    # interactive watch mode
 ```bash
 cd app/src-tauri && \
   PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo test --lib             # ~1635 unit tests; default is multi-threaded (= nproc)
+  cargo test --lib             # ~1657 unit tests; default is multi-threaded (= nproc)
 ```
 
 Notes:
