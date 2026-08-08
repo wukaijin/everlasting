@@ -36,7 +36,7 @@
       │ provider.send(system, messages, tools)
       ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Layer 4 · Provider  app/src-tauri/src/llm/provider/anthropic.rs:789   │
+│ Layer 4 · Provider  app/src-tauri/src/llm/provider/anthropic.rs::send   │
 │   ChatRequest → wire layer (provider-agnostic) → Anthropic JSON body   │
 │   + DeepSeek-relay 补丁(本 session 的 provider 是 Anthropic protocol   │
 │   但走 wukaijin.com relay,所以 apply_deepseek_reasoning_fix 也会跑)   │
@@ -289,7 +289,7 @@ dispatch_subagent            ← 由 SubagentCache.merge_builtin_user_project �
 
 ## Layer 4 · AnthropicProvider.send() → wire → Anthropic JSON
 
-`app/src-tauri/src/llm/provider/anthropic.rs:789`。流程:
+`app/src-tauri/src/llm/provider/anthropic.rs::send`。流程:
 
 ```
 1. ChatRequest {

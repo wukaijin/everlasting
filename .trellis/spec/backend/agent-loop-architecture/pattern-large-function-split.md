@@ -32,6 +32,20 @@
 
 > **Warning**:函数行数验收口径:25+ 参数签名(含每参数历史注释)是冻结债务,不计入"函数体 ≤250 行";awk 从签名起测会虚高 ~40%。
 
+> **Warning**:测试迁出(内联 `mod tests` → 同级 `tests_*.rs`)时:文件级 `use super::*` 改 `use super::<hub>::*` 只传播 **pub 项**——hub 的私有 use 导入(如 `ThinkingConfig`)与私有 fn(如 `parse_anthropic_usage`)不传播,需显式 import 或升 `pub(crate)`;`mod tests` 内的 `use super::*` 保持原样(指向测试文件文件级作用域);测试文件需在**父模块**(非 hub)声明 `mod tests_xxx;`(文件位置决定声明位置)。
+
+## Variant:stream!/闭包生成器(无 yield 纯函数提取,08-08 anthropic 专项)
+
+`async_stream::stream!` / 含 `yield` 的生成器函数无法按"阶段输出 struct"模式提取——`yield` 只能在宏体内。
+
+**模式**:把每个事件 match 臂提取为**无 yield 纯函数**:
+
+- 有即时产出的事件臂 → `fn handle_x(data: &str, state: &mut ...) -> Option<ChatEvent>`,宏体内统一 `if let Some(ev) = handle_x(...) { yield Ok(ev); }`(yield 点收敛,事件顺序逐一对应原分支)。
+- 纯状态转换臂(无 yield)→ 返回 `()`。
+- 含 `yield Err` 的 IO 段(HTTP 发送)→ `async fn -> Result<T, LlmError>`,宏体 `match { Err(e) => { yield Err(e); return; } }`。
+
+**收益**:宏体从 ~430 行降到 ~90 行(骨架 + 分发 + yield 点);事件状态机(`BlockState`)与 handler 成为可独立单测的纯逻辑(零覆盖 → 补 5 个测试,1657 → 1662)。
+
 ## 验收(dispatch.rs 实例)
 
 - `run_subagent` 函数体 171 行(7 个阶段调用 + 解构 + 胶水),签名 118 行冻结。

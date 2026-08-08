@@ -563,7 +563,7 @@ pub(crate) fn apply_deepseek_reasoning_fix(req: &ChatRequest) -> serde_json::Val
 
 empty sig + UUID sig 混合 / 全 UUID 都可能 400；具体 threshold 不稳定。修复通过**降低触发因子**（减少 thinking block 数量 + 显式提供 `reasoning_content` 字段）规避 400。
 
-`AuditKind` 14 variant 全部是 permission / mode / tool / edit 类，**没有 LlmError / NetworkError / ProviderError**（`app/src-tauri/src/agent/permissions/mod.rs:152`）—— LLM 错误**只**走 `tracing::warn!`（`anthropic.rs:262`），不进 `session_audit_events`。LLM 错误时间定位**只能靠** `messages.created_at` 的 `ERROR_MARKER`（`app/src-tauri/src/agent/helpers.rs:307` = `"[生成出错中断]"`）。
+`AuditKind` 14 variant 全部是 permission / mode / tool / edit 类，**没有 LlmError / NetworkError / ProviderError**（`app/src-tauri/src/agent/permissions/mod.rs:152`）—— LLM 错误**只**走 `tracing::warn!`（`anthropic.rs::send_request`），不进 `session_audit_events`。LLM 错误时间定位**只能靠** `messages.created_at` 的 `ERROR_MARKER`（`app/src-tauri/src/agent/helpers.rs:307` = `"[生成出错中断]"`）。
 
 ###6. Tests Required
 

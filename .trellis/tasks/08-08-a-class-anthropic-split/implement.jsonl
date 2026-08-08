@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-large-function-split.md", "reason": "A类拆分模式 + gotcha(本任务直接复用)"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "multi-provider 契约(Anthropic wire 层约束,提取时对照)"}

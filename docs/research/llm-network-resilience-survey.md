@@ -176,7 +176,7 @@ MAX_RETRY_DELAY = 8.0       # 封顶 8s
 
 ### 5.1 HTTP client 构造与超时(✅ 已就绪)
 
-- `AnthropicProvider` 在 `llm/provider/anthropic.rs:238-241` 构造 `Client::builder()`;`OpenAIProvider` 在 `llm/provider/openai.rs:571-574`。
+- `AnthropicProvider` 在 `llm/provider/anthropic/transport.rs::send_request` 构造 `Client::builder()`;`OpenAIProvider` 在 `llm/provider/openai.rs:571-574`。
 - ✅ 已配置 `read_timeout(60s)` + `connect_timeout(10s)`(RULE-A-011,2026-06-19)。
 - **关键设计决策(正确)**:用 `read_timeout` 而非 `timeout`。`timeout` 是连接到 EOF 的总截止时间,不适配 SSE(可能 60s 才收到首个 thinking delta);`read_timeout` 是每次读取的超时,每个 chunk 重置,适配 SSE 流式。
 - ❌ 未配置 `pool_max_idle_per_host`、TCP keepalive、任何重试中间件。
@@ -184,7 +184,7 @@ MAX_RETRY_DELAY = 8.0       # 封顶 8s
 
 ### 5.2 流式请求发送路径
 
-- 入口:AnthropicProvider::send(`anthropic.rs:789-912`)/ OpenAIProvider::send(`openai.rs:489-818`)。
+- 入口:AnthropicProvider::send(`anthropic.rs::send`)/ OpenAIProvider::send(`openai.rs:489-818`)。
 - 转换链:`chat_request_to_wire()` → `strip_unsupported()` → `wire_messages_to_chat_messages()` → HTTP POST → `resp.bytes_stream()` → `SseParser::feed()` → 事件分发。
 - Provider trait(`llm/provider/mod.rs:66-99`)定义:
   ```rust
@@ -196,7 +196,7 @@ MAX_RETRY_DELAY = 8.0       # 封顶 8s
 
 - 行导向状态机:`feed(chunk: &str) → Vec<SseEvent>`,缓冲 `event_type` + `data_buf`,空行 `\n\n` 触发 emit。
 - 处理 `event:` / `data:` 行;`id:` / `retry:` / `:`(comment)忽略但不报错(`sse.rs:68-73`)。
-- **Anthropic 事件映射**(`anthropic.rs:319-622`):`content_block_start` 切换 `BlockState`(Text/ToolUse/Thinking/RedactedThinking);`content_block_delta` 增量拼装(`input_json_delta` → `ToolUse.json_buf`);`content_block_stop` 完成块(`ToolUse` → 解析 JSON → emit `ChatEvent::ToolCall`);`message_delta` 提取 `stop_reason` + `usage`;`message_stop` 日志记录。
+- **Anthropic 事件映射**(`anthropic/events.rs`(5 个 handler)):`content_block_start` 切换 `BlockState`(Text/ToolUse/Thinking/RedactedThinking);`content_block_delta` 增量拼装(`input_json_delta` → `ToolUse.json_buf`);`content_block_stop` 完成块(`ToolUse` → 解析 JSON → emit `ChatEvent::ToolCall`);`message_delta` 提取 `stop_reason` + `usage`;`message_stop` 日志记录。
 - **OpenAI 事件映射**(`openai.rs:656-812`):无 `event:` 行,仅 `data:`;`[DONE]` 结束 flush;`tool_calls` 累积到 `HashMap<u32, ToolCallBuf>`;`finish_reason` 时 flush。
 - **流中断行为**:`content_block_stop` 未到达前若连接断开 —— 已接收的 `text_delta` / `thinking_delta` 已 emit 到前端;**未完成的 `ToolUse.json_buf` 留在 `BlockState` 中不会 emit**(即 partial tool_use 不下发)。SseParser 有 `reset()` 方法(`sse.rs:81-85`)但 marked `dead_code`,未调用。
 - ❌ Anthropic `event: error` **未显式处理**(可能被下游错误分支捕获)。
@@ -227,8 +227,8 @@ MAX_RETRY_DELAY = 8.0       # 封顶 8s
 5. `Network(String)` — 网络错误(连接 / 超时 / SSE 断连,可重试)
 
 `classify_error_response`(`error.rs:96-183`)统一入口:关键词匹配(`error.type` → `error.code` → `type`)+ 状态码 fallback。具体映射:
-- 网络超时 / 连接错误 / DNS → reqwest `Err` → `Network(e.to_string())`(`anthropic.rs:269-271`,`openai.rs:600-603`)
-- SSE 中途断连 → `stream.read()` `Err` → `Network("stream read: ...")`(`anthropic.rs:304-309`,`openai.rs:641-646`)
+- 网络超时 / 连接错误 / DNS → reqwest `Err` → `Network(e.to_string())`(`anthropic/transport.rs::send_request`,`openai.rs:600-603`)
+- SSE 中途断连 → `stream.read()` `Err` → `Network("stream read: ...")`(`anthropic.rs::chat_stream_with_tools`,`openai.rs:641-646`)
 - 5xx → `Server`;429 → `RateLimit`;4xx 非 429 → `InvalidRequest`
 
 错误冒泡到 agent loop:`stream.next()` match(`chat_loop.rs:1424-1457`)`Err` → `ChatEvent::Error` → 终止当前 turn(break)→ persist partial + ERROR_MARKER。**❌ 不重试**(直接进下一 turn 或终止)。
