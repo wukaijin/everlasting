@@ -89,7 +89,7 @@ pub async fn execute_blocking(
 注意:`execute_blocking` **不**接收 `pool: &SqlitePool` —— 落库走
 `resolve_mode_change` IPC → `set_session_mode` 内部函数(`design §5.3`
 决策变更,tool 内不直接调 `db::update_session_mode`,避免双路径漂移)。
-`current_mode` 由 `chat_loop` turn 0 快照提供(`chat_loop.rs:600`)。
+`current_mode` 由 `chat_loop` turn 0 快照提供(`chat_loop.rs::run_chat_loop`)。
 
 #### IPC surface(`app/src-tauri/src/commands/permissions.rs` + `commands/question.rs`)
 

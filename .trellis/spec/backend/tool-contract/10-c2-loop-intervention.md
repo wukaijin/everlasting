@@ -1,7 +1,7 @@
 ## Scenario: C2+ loop intervention (2026-07-06)
 
 **Context**: C2 (06-24) `loop_detection::detect` hit injects only a soft
-hint into `tool_result` (`chat_loop.rs:1980`); it does NOT terminate the
+hint into `tool_result` (`chat_loop/tools.rs::finalize_turn`); it does NOT terminate the
 loop — `MAX_TURNS=200` is the sole hard backstop. C2+ adds a middle
 active layer: when soft hints fail N consecutive turns, the harness asks
 the user whether to terminate.

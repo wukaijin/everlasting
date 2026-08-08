@@ -53,7 +53,7 @@ pub enum ChecklistStatus { Pending, InProgress, Done }   // wire: "pending"/"in_
 pub struct ChecklistItem { pub content: String, pub status: ChecklistStatus }
 
 /// Per-request handle. NOT a run_chat_loop parameter — it lives inside ToolContext
-/// (built once per run_chat_loop call ~chat_loop.rs:216), so run_chat_loop's 23-param
+/// (built once per run_chat_loop call ~chat_loop/init.rs::prepare_loop_state), so run_chat_loop's 23-param
 /// signature is UNCHANGED by the checklist addition (no agent_loop_* test call-site
 /// sync needed; the B6 cluster + the 2026-06-21 B6 review defect A fix raised it from
 /// 21→23 for `app_handle` + `system_prompt_override` respectively).

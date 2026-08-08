@@ -41,7 +41,7 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 3. emits the worker's summary as `tool:result` + `ChatEvent::Delta` (assistant text) + `ChatEvent::Done`;
 4. persists the assistant turn (`Blocks = [ToolUse(dispatch), Text(summary)]`) + returns. **Forced dispatch runs exactly ONE turn** — no follow-up LLM loop.
 
-**Reuses `run_subagent` verbatim** — the 19 params mirror the LLM-driven interceptor at `chat_loop.rs:2374` (force_readonly=false, parallel=false → single serial dispatch; isolation falls back to the subagent's frontmatter default via `resolve_isolation`). The permission chain (worker inherits parent Mode → `WorkerAskBanner`) is unchanged.
+**Reuses `run_subagent` verbatim** — the 19 params mirror the LLM-driven interceptor at `chat_loop/tools.rs::dispatch_tool_calls` (force_readonly=false, parallel=false → single serial dispatch; isolation falls back to the subagent's frontmatter default via `resolve_isolation`). The permission chain (worker inherits parent Mode → `WorkerAskBanner`) is unchanged.
 
 **Why this isn't a new dispatch path**: it's the same `run_subagent` the LLM-driven interceptor uses, just triggered by a user prefix instead of an LLM `tool_use`. The only thing the prefix skips is `provider.stream` on the parent's turn 1.
 

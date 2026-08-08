@@ -37,7 +37,7 @@ ToolDef {
 }
 ```
 
-#### `run_chat_loop` 嵌套调用(worker 路径,`chat_loop.rs:2155`)
+#### `run_chat_loop` 嵌套调用(worker 路径,`chat_loop.rs::run_chat_loop`)
 
 ```rust
 Box::pin(run_chat_loop(
@@ -76,7 +76,7 @@ Box::pin(run_chat_loop(
 | 20 | `skip_persist: bool` | PR1b + PR2a fix | run_chat_loop 函数体内 **16 处**(PR1 spec 写 18,PR2a RULE-A-015 拆出 2 处:`add_token_usage` 应 streaming 累加进父 sessions 表,不在 messages 表 UNIQUE 范围内;terminal `Done` emit 必经 sink 才能让 `was_cancelled` 正确 catch) `if !skip_persist { ... }` gate 守住所有 persist 站点(persist_turn / update_message_metadata / touch_session / record_*_audit / persist_turn_cwd)。worker 传 `true` 避免与父 `messages` 表 `(session_id, seq)` UNIQUE 约束冲突;worker 中间过程由 `SubagentBufferSink` transcript 捕获(PR2 落 `subagent_runs.transcript_json`) |
 | 21 | `is_worker: Option<bool>` | PR2b (RULE-A-014) | worker 路径传 `Some(true)`,`run_chat_loop` 内部构造 `PermissionContext { is_worker: true }`。Pre-2026-06-22 让 Tier 4 `ask_path`/`ask_shell` 顶部 `if ctx.is_worker { Decision::Deny }` 立刻拒绝(worker 无 UI sink,弹 modal 会挂起到 user Stop);**2026-06-22 RULE-FrontSubagent-003 后** worker ask 走 `WorkerAskBanner` round-trip(见 permission-layer.md §5b:biased select over parent cancel / 120s timeout / oneshot),`is_worker` 现主要用于 (a) ask 内部 session key `"worker:{run_id}"` 隔离 + (b) 阻止 worker `AllowAlways` 持久化进父 `session_tool_permissions`(跨权限边界)。production + 35 个 `agent_loop_*` 集成测试传 `Some(false)` 显式声明非 worker;None 默认 `false`(向后兼容) |
 | 22 | `app_handle: Option<AppHandle>` | PR3 (PR2 hotfix) | 转发父 AppHandle,worker SubagentBufferSink 才能 emit `subagent:event` IPC channel(否则 PR3 drawer 看不到 worker transcript live streaming)。production 传 `Some(app.clone())`,tests 传 `None`(无 Tauri runtime,emit 路径变 no-op) |
-| 23 | `system_prompt_override: Option<String>` | 06-21 fix (B6 review defect A) | worker 路径传 `Some(assemble_subagent_prompt(def, task))`,让 worker 真正使用 `SubagentDef.system_prompt` —— pre-fix `_worker_system_prompt = assemble_subagent_prompt(def, task)` 是 dead code(`chat_loop.rs:2052`),worker 实际拿到父的 `assemble_system_prompt(mode_prefix, base_prompt)` 输出,导致 prompt / permission 矛盾(pre-2026-06-22 Edit/Plan 模式下 worker prompt 写"可写"但 Tier 4 把写工具 collapse 到 `Deny`;2026-06-22 后写工具走 `WorkerAskBanner`)。fix 后 `run_chat_loop` 内部守卫:`Some(p)` → 直接用 `p`;`None` → 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`(production + 36 tests 路径)。4 指令文件 prompt caching 不受影响(cache_control breakpoint 在 user role,跟 system 正交) |
+| 23 | `system_prompt_override: Option<String>` | 06-21 fix (B6 review defect A) | worker 路径传 `Some(assemble_subagent_prompt(def, task))`,让 worker 真正使用 `SubagentDef.system_prompt` —— pre-fix `_worker_system_prompt = assemble_subagent_prompt(def, task)` 是 dead code in `chat_loop.rs::run_chat_loop`,worker 实际拿到父的 `assemble_system_prompt(mode_prefix, base_prompt)` 输出,导致 prompt / permission 矛盾(pre-2026-06-22 Edit/Plan 模式下 worker prompt 写"可写"但 Tier 4 把写工具 collapse 到 `Deny`;2026-06-22 后写工具走 `WorkerAskBanner`)。fix 后 `run_chat_loop` 内部守卫:`Some(p)` → 直接用 `p`;`None` → 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`(production + 36 tests 路径)。4 指令文件 prompt caching 不受影响(cache_control breakpoint 在 user role,跟 system 正交) |
 
 ### 3. Contracts
 
@@ -102,7 +102,7 @@ Box::pin(run_chat_loop(
 >
 > **Forbidden Pattern**:在 parent/worker 共享的 `run_chat_loop` body 内 append 动态 tool(或任何结构性禁项 tool),**必须**用 `effective_is_worker` gate 区分;只靠下游 `filter_tools_for_subagent` 不够 —— filter 只过滤 seed list,不过滤 per-turn append。回归测试 `agent_loop_dispatch_subagent_completes_and_returns_summary` 用 `MockProvider::sent_tools()` 断言 worker turn(slot 1)收到的 tools 不含 `dispatch_subagent`。
 
-#### worker context(`subagent.rs::build_worker_messages`,`chat_loop.rs:1940` 传入)
+#### worker context(`subagent.rs::build_worker_messages`,`chat_loop.rs::run_chat_loop` 传入)
 
 - `messages[0]` = `build_instructions_blocks(memory_cache)` synthetic user message(4 文件:User/Project × CLAUDE.md/AGENTS.md,带 `cache_control: Ephemeral`,worker **自己** cache breakpoint,与父正交)
 - (可选) `messages[1]` = synthetic assistant ack("Understood. I will follow these instructions...")—— 镜像 main loop 的 memory pair 保持 Anthropic wire user/assistant 交替

@@ -252,7 +252,7 @@ Session context:
  **await agent-loop exit** → destructive execute → system event
  injection (if any). The cancel token only *sets* the flag; the agent
  loop checks it at stream-event boundaries and *after* the current
- tool (`chat_loop.rs:670`), so one in-flight tool may still run before
+ tool (`chat_loop.rs::run_chat_loop`), so one in-flight tool may still run before
  the loop returns. Without the await, that tool could write into a
  just-deleted worktree (ENOENT / panic / orphaned fingerprint). The
  destructive caller `await_inflight_exit(rx, label)` (10 s defensive

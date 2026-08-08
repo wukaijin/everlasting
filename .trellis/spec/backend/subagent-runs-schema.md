@@ -64,7 +64,7 @@ characteristics fall out naturally:
   `subagent_runs_cascade_delete_with_parent_session`.
 - **`parent_request_id` is a TEXT NOT NULL with NO FK** — it carries
   the worker rid (the `"{parent_rid}-sub-{seq}"` string the agent loop
-  builds at `agent/subagent/dispatch.rs`,拆分自 `chat_loop.rs:1989` 当年的位置,
+  builds at `agent/subagent/dispatch.rs`,拆分自当年的 `chat_loop.rs` 位置,
   2026-06-23 run_subagent 抽离 chat_loop 主循环至 `subagent/dispatch.rs`)。
   The rid is **not durable** (the
   `cancellations` map is in-memory), so a hard FK would be wrong. This

@@ -92,7 +92,7 @@ pub async fn update_autonomous_memory(
 
 ### 3. Contracts
 
-- **Recall event 生命周期**:emit 在 3 处 — FTS 召回(turn start,`chat_loop.rs:1391`)+ pitfall 召回(tool dispatch,`:2496` / `:3267`)。`emit_recall_event` helper 集中 emit 逻辑。LLM stream 路径的 defensive match arm(`:1710`)丢弃任何漏过来的 Recall(只读事件不该来自 LLM)。**新 user message(`startRequest`)清空该 session 的累积 recall hits**(per-turn,非跨对话累积 — design D7)。
+- **Recall event 生命周期**:emit 在 3 处 — FTS 召回(turn start,`chat_loop/drive.rs::drive_turn`)+ pitfall 召回(tool dispatch,`chat_loop/tools.rs::dispatch_tool_calls`)。`emit_recall_event` helper 集中 emit 逻辑。LLM stream 路径的 defensive match arm(`chat_loop/drive.rs::drive_turn` 内)丢弃任何漏过来的 Recall(只读事件不该来自 LLM)。**新 user message(`startRequest`)清空该 session 的累积 recall hits**(per-turn,非跨对话累积 — design D7)。
 - **worker 隔离 (AC7)**:`SubagentBufferSink.emit_chat_event` 只调 `self.record()`(→ `subagent:event` channel),**无 `chat-event` emit 路径**。结构性锁定:测试 `worker_sink_does_not_forward_recall_to_main_chat`。
 - **状态机矩阵**:前端 `LEGAL_STATUS_TRANSITIONS`(memory.ts 导出)= backend `update_status` 矩阵的只读副本。candidate→{active,verified,demoted} / active→{verified,demoted} / verified→{demoted} / demoted→{candidate,active,verified}(自转换排除)。**backend 永远 re-validate**;前端 dropdown 只是 UX,不是安全边界。
 - **`edited_by_user` provenance**:agent 写(`remember` / P4 auto-reflect)→ 0;人写(`update_memory`)→ 1。UI 渲染「人工编辑」徽标。migration 默认 0(旧行回填)。
