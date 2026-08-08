@@ -804,7 +804,7 @@ TurnComplete {
 
 `ChatEvent::Start` no longer has the `if turn == 1` guard (`app/src-tauri/src/agent/chat.rs:422-425`) — every turn emits Start so the frontend can key its `latencyByTurn` per turn reliably.
 
-At the `persist_turn` call site (line 600-607) the existing `latency: Option<&MessageLatency>` parameter is filled with `Some(&MessageLatency { ttfb_ms, gen_ms, total_ms, thinking_ms })` derived from the 4 Instants. The INSERT statement (`app/src-tauri/src/db/sessions.rs:565-595`) already binds all 4 columns — F5 added `thinking_ms` on 2026-06-12. Per-turn rows therefore get all 4 columns populated atomically, no follow-up `UPDATE` needed for the common case.
+At the `persist_turn` call site (line 600-607) the existing `latency: Option<&MessageLatency>` parameter is filled with `Some(&MessageLatency { ttfb_ms, gen_ms, total_ms, thinking_ms })` derived from the 4 Instants. The INSERT statement in `db::sessions::messages::persist_turn` already binds all 4 columns — F5 added `thinking_ms` on 2026-06-12. Per-turn rows therefore get all 4 columns populated atomically, no follow-up `UPDATE` needed for the common case.
 
 Right after each successful `persist_turn` (assistant row), the loop emits `ChatEvent::TurnComplete { seq, ttfb_ms, gen_ms, total_ms, thinking_ms }`. Cancel-mid-turn and cancel-during-tool-exec paths also fire TurnComplete for whatever assistant row they persisted. The `MAX_TURNS = 20` safety net does NOT fire TurnComplete (it never persists).
 
@@ -830,4 +830,4 @@ The 4 close-boundary sites that snapshot `thinkingDurationMs` (text `delta` line
 
 `reloadAfterFinalize` (line 974-1113) iterates `req.latencyByTurn` and fires one `update_message_latency` IPC per entry, keyed by `lat.seq` (not by "max seq" of all assistant rows as in the F5 path). The in-place mutate loop is `m.seq === lat.seq` (per-turn) instead of "max seq" (per-request). `cancel` / `error` paths go through the same `reloadAfterFinalize` and naturally fire N IPCs for whatever turns had a `TurnComplete` arrive before the cancel/error.
 
-`update_message_latency` IPC signature is unchanged (F5 + 2026-06-12 already takes `(sessionId, seq, ttfbMs, genMs, totalMs, thinkingMs)`). The 4-column `UPDATE` in `app/src-tauri/src/db/sessions.rs:662-677` is also unchanged — it's just called N times instead of once.
+`update_message_latency` IPC signature is unchanged (F5 + 2026-06-12 already takes `(sessionId, seq, ttfbMs, genMs, totalMs, thinkingMs)`). The 4-column `UPDATE` in `db::sessions::messages::update_message_latency` is also unchanged — it's just called N times instead of once.

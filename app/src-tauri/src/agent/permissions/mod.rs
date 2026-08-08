@@ -91,6 +91,7 @@ pub mod tests_common;
 pub mod tests_mode;
 pub mod tests_payload;
 pub mod tests_run_grant;
+pub mod tests_shell_trust;
 pub mod tests_store;
 pub mod tests_types;
 

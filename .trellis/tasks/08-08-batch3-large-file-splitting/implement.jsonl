@@ -1,0 +1,3 @@
+{"file": "docs/HACKING-wsl.md", "reason": "WSL 后端 cargo test 坑(PKG_CONFIG_PATH、勿加 --test-threads=1、cargo test 性能);批3 全程跑 cargo test --lib 必读"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "纯搬迁须复用既有 hub+subdir 模式(wire/mod.rs、git/worktree.rs 批1/批2 惯例),不重复造轮子"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "拆分跨 db/llm/tools/permissions/workflow 多层,re-export 保持调用点零改动属跨层一致性"}

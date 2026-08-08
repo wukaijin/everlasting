@@ -34,7 +34,7 @@ fn classify_dispatch_batch(tool_calls: &[(String, String, Value)]) -> DispatchBa
 // web_fetch is read-only (network fetch, no file mutation) so it is kept
 // in the concurrent-branch allowlist; the 4 file-reading tools cover the
 // on-disk read surface. See `READONLY_TOOL_ALLOWLIST` doc in
-// `app/src-tauri/src/agent/subagent/mod.rs:546` for rationale.
+// `subagent::tools_filter::READONLY_TOOL_ALLOWLIST` for rationale.
 const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
 pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef>;   // mirrors STRUCTURALLY_DISABLED pattern
 

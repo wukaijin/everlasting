@@ -34,3 +34,6 @@ pub use provider::{AnthropicProvider, ProviderCapabilities};
 pub use types::{
     ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role, ToolDef,
 };
+
+#[cfg(test)]
+mod tests_types;

@@ -35,11 +35,18 @@ pub mod run_background_shell;
 pub mod shell;
 pub mod shell_kill;
 pub mod shell_status;
+pub mod tests_merge_worker;
+pub mod tests_shell;
+pub mod tests_web_fetch;
 pub mod update_checklist;
 pub mod use_skill;
 pub mod use_ui;
 pub mod web_fetch;
 pub mod write_file;
+
+// Test files (flat layout — aligned with `agent/permissions/tests_*.rs`
+// style; file-level `#![cfg(test)]` gates them in non-test builds).
+pub mod tests_request_task_state_transition;
 
 use std::path::PathBuf;
 

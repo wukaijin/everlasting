@@ -67,7 +67,7 @@ LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自
 父 session 通过 `dispatch_subagent` tool 派 worker agent 跑独立任务。worker 拥有**独立 context + token 预算**,完成 / 取消 / 失败后回填 summary。B6(2026-06-18/20/21)落地,L3a-d 持续扩展(并发只读 / worker worktree 隔离 / worker 联网 / frontmatter loader)。`app/src-tauri/src/agent/subagent/dispatch.rs` 实现 `run_subagent`。
 
 ### SubagentRun
-`subagent_runs` 表一行(`migrations.rs:1137`),完整 schema: `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` / `started_at` / `finished_at` / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation`(L3b PR1 起)。
+`subagent_runs` 表一行(`db/migrations/schema.rs` 的 subagent_runs 段),完整 schema: `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` / `started_at` / `finished_at` / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation`(L3b PR1 起)。
 
 - **status** ∈ `{running, completed, cancelled, error, incomplete}`(终态 4 个,无 `failed`)
 - `transcript_json` 持久化整段 transcript + `transcript_truncated` 哨兵(超限截断)

@@ -11,7 +11,7 @@
 
 ### 1.1 现状
 
-EverLasting 的 shell 权限判定由 `shell_trust::classify_prefix` 做,它把一条 shell 命令分进三档(`shell_trust.rs:77-91`):
+EverLasting 的 shell 权限判定由 `shell_trust::classify_prefix` 做,它把一条 shell 命令分进三档(`ShellTrust` 枚举):
 
 | 档位 | 语义 | Plan | Edit | Yolo |
 |---|---|---|---|---|
@@ -19,9 +19,9 @@ EverLasting 的 shell 权限判定由 `shell_trust::classify_prefix` 做,它把�
 | `SideEffect` | 可恢复副作用(`mkdir`/`cargo`/`git push`) | 弹窗 | 静默 Allow | bypass |
 | `Ask` | 危险/未知/结构复杂 | 弹窗 | 弹窗 | Tier 2 仍兜 |
 
-判定算法(`shell_trust.rs:349`)短路径五步:**取首 token → 检测结构元字符 → git 子命令细化 → 查白名单 → 默认 Ask**。
+判定算法(`classify_prefix`)短路径五步:**取首 token → 检测结构元字符 → git 子命令细化 → 查白名单 → 默认 Ask**。
 
-其中第 2 步"结构元字符检测"是**一刀切**:`cmd` 含 `|` / `&&` / `;` 任意一个,整条命令直接降级 `Ask`(`shell_trust.rs:365`)。设计动机写在模块文档里——管道和命令链能在无害首 token 后藏副作用(`git log | bash`),首 token 分类器无法可靠分类,于是"宁误弹不漏弹"。
+其中第 2 步"结构元字符检测"是**一刀切**:`cmd` 含 `|` / `&&` / `;` 任意一个,整条命令直接降级 `Ask`(`has_structural_metachar`)。设计动机写在模块文档里——管道和命令链能在无害首 token 后藏副作用(`git log | bash`),首 token 分类器无法可靠分类,于是"宁误弹不漏弹"。
 
 ### 1.2 两个已知缺口
 
@@ -29,7 +29,7 @@ EverLasting 的 shell 权限判定由 `shell_trust::classify_prefix` 做,它把�
 
 **缺口 A — 复合命令 grant 绕过(安全)**
 
-Tier 4 Shell 分支里,"始终允许"的 prefix-grant 短路在 `classify_prefix` **之前**(`check.rs:298` 在 `check.rs:326` 之前):
+Tier 4 Shell 分支里,"始终允许"的 prefix-grant 短路在 `classify_prefix` **之前**(`check_prefix_grant` 在 `classify_prefix` 之前):
 
 ```
 check_prefix_grant(首 token)  ──命中──▶  直接 Allow (return)
@@ -38,7 +38,7 @@ check_prefix_grant(首 token)  ──命中──▶  直接 Allow (return)
 classify_prefix(cmd)  ──▶  三档判定
 ```
 
-grant 存的是首 token(`check.rs:690` `match_value_for_allow_always`)。于是用户对 `ls` 点过一次"始终允许"后,任何 `ls` 开头的命令——包括 `ls foo; rm -rf ~/notes`——首 token 都是 `ls`,grant 命中 → 直接 Allow,**结构性降级根本没机会跑**。
+grant 存的是首 token(`match_value_for_allow_always`)。于是用户对 `ls` 点过一次"始终允许"后,任何 `ls` 开头的命令——包括 `ls foo; rm -rf ~/notes`——首 token 都是 `ls`,grant 命中 → 直接 Allow,**结构性降级根本没机会跑**。
 
 而 Tier 2 kill-list(`dangerous.rs`,10 条灾难性正则)只兜 `rm -rf /` 这类,**故意不挡** `rm -rf <非根>`(`dangerous.rs:143` 测试明示,理由是"靠 worktree + git 恢复")。可 `~/notes` 在项目外,git 救不回。
 
@@ -76,7 +76,7 @@ grant 存的是首 token(`check.rs:690` `match_value_for_allow_always`)。于是
 - **grant 表三 match_kind 不变**(`tool` / `prefix` / `path`):不改 schema,只改 `prefix` 的**短路前置条件**。
 - **审计 17 类 AuditKind 不变**:可加细分 reason,不加新 Kind。
 - **shell 是异构工具**:本方案仍只判定"启发式可信度",不声称完美——不确定就降级 `Ask` 的总原则不变。
-- **执行层加固已落地,本方案不动执行层**:`shell.rs` 的 `env_clear()` + 白名单重注入(RULE-E-001,挡 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 等 env 泄漏)+ `process_group(0)` + `killpg`(RULE-E-002,挡 cancel/timeout 后孤儿进程)均已落地(`shell.rs:130` / `shell.rs:388`,含防泄漏测试)。本方案只改判定层(`shell_trust.rs` / `check.rs`),与执行层正交——判定准了不替代执行层加固,执行层加固也不依赖判定。
+- **执行层加固已落地,本方案不动执行层**:`shell.rs` 的 `env_clear()` + 白名单重注入(RULE-E-001,挡 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 等 env 泄漏)+ `process_group(0)` + `killpg`(RULE-E-002,挡 cancel/timeout 后孤儿进程)均已落地(`apply_safe_env` / `kill_and_collect`,含防泄漏测试)。本方案只改判定层(`shell_trust` / `check`),与执行层正交——判定准了不替代执行层加固,执行层加固也不依赖判定。
 
 ### 2.3 非目标(明确不做)
 
@@ -121,7 +121,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 | **Mode (edit/plan/yolo)** | ReadOnly 三档静默 / SideEffect 看 Mode / Ask 两档弹窗 | **不变**。本方案产出仍是三档之一,Mode 映射规则原样复用 |
 | **审计日志** | 17 类 AuditKind,Tier 4 Allow/Ask 各记一行 | **不变**。可加细分 reason(如"复合命令拆分后命中危险子命令"),不加新 Kind |
 | **Tier 1 pitfall recall**(P5 软拦截) | 按 `(tool, command_pattern, path_globs)` 触发 | **顺带受益**:拆分后按**子命令**匹配 command_pattern 更准(现在 `ls; cargo` 整串匹配会漏掉 cargo 的 pitfall)。非目标,但是个 nice side-effect |
-| **worker subagent grant**(per-run cache) | worker 的 run-grant 同样首 token 匹配 | **阶段 1 同步覆盖**:worker 的 prefix run-grant 也应加"结构简单"前置,否则 worker 路径有同样的绕过。见 `check.rs:307` |
+| **worker subagent grant**(per-run cache) | worker 的 run-grant 同样首 token 匹配 | **阶段 1 同步覆盖**:worker 的 prefix run-grant 也应加"结构简单"前置,否则 worker 路径有同样的绕过。见 `check_prefix_grant` 的 worker 分支 |
 
 > **关键认知**:本方案**不改任何审批组件的接口**,只改 Tier 4 Shell 分支内部的判定逻辑 + grant 短路前置。PermissionModal、Mode、审计、kill-list 全部无感。这是它能安全分阶段上线的根本原因。
 
@@ -129,7 +129,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 
 ## 4. 分阶段方案
 
-三个阶段,**每阶段可独立上线、独立收回缺口的一部分**,互不阻塞。顺序有依赖:**阶段 1(grant 收紧)必须先于或同于阶段 2(拆分)**——因为 Tier 4 的 (a) prefix-grant 短路在 (b) classify 之前(`check.rs:298` 在 `check.rs:326` 之前),若先上阶段 2 的拆分器而不收紧 grant,复合命令仍会被 (a) 短路放行,拆分成果到不了。所以顺序是 P1 堵安全缺口(grant 绕过 + `>` 静默写)→ P2 恢复体验 + 精度。
+三个阶段,**每阶段可独立上线、独立收回缺口的一部分**,互不阻塞。顺序有依赖:**阶段 1(grant 收紧)必须先于或同于阶段 2(拆分)**——因为 Tier 4 的 (a) prefix-grant 短路在 (b) classify 之前(`check_prefix_grant` 在 `classify_prefix` 之前),若先上阶段 2 的拆分器而不收紧 grant,复合命令仍会被 (a) 短路放行,拆分成果到不了。所以顺序是 P1 堵安全缺口(grant 绕过 + `>` 静默写)→ P2 恢复体验 + 精度。
 
 ### 阶段 1（P1)— grant 短路收紧 + `>` 写重定向检测(先堵安全缺口)
 
@@ -137,8 +137,8 @@ Tier 6   审计                                         ── 不动(可加 rea
 
 **做什么**:两件都补安全、都只动 `classify_prefix` 前后的检测、都 < 20 行,适合同 PR 同回归:
 
-1. **grant 短路收紧**:Tier 4 Shell 分支 (a) prefix-grant 短路(`check.rs:298`)加前置——命令含结构元字符(`;`/`&&`/`|`)时**不享受短路**,强制回落 (b) classify。同步覆盖 worker 的 per-run prefix grant(`check.rs:307`)。
-2. **`>` 写重定向检测**:`classify_prefix` 的结构检测(`shell_trust.rs:365`)补检 `>`——命令含写重定向(`>`/`>>`/`&>` 到文件)时,整条命令**至少 SideEffect**(覆盖 `git diff > patch.txt` 这类"只读命令 + 写文件"的静默写漏判)。**fd 复制 `2>&1`/`>&N` 不升档**(无文件副作用),输入重定向 `<`/`<<`/`<<<` 不升档(纯读)。
+1. **grant 短路收紧**:Tier 4 Shell 分支 (a) prefix-grant 短路(`check_prefix_grant`)加前置——命令含结构元字符(`;`/`&&`/`|`)时**不享受短路**,强制回落 (b) classify。同步覆盖 worker 的 per-run prefix grant(`check_prefix_grant` 的 worker 分支)。
+2. **`>` 写重定向检测**:`classify_prefix` 的结构检测(`has_structural_metachar`)补检 `>`——命令含写重定向(`>`/`>>`/`&>` 到文件)时,整条命令**至少 SideEffect**(覆盖 `git diff > patch.txt` 这类"只读命令 + 写文件"的静默写漏判)。**fd 复制 `2>&1`/`>&N` 不升档**(无文件副作用),输入重定向 `<`/`<<`/`<<<` 不升档(纯读)。
 
 **收的缺口**:A(grant 绕过)+ 现状 `>` 静默写漏判(独立缺口,非 P2 副产品——P2 上线前 LLM 任何一次 `>` 写重定向都会触发)。
 
@@ -148,7 +148,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 
 **回归要点**:`ls`(单条)+ grant 仍 Allow;`ls; rm`+ grant 不再短路、回落 classify→Ask;`git diff > x`→SideEffect;`cmd 2>&1 | head` 的 `2>&1` 不误升;`cat < /etc/hostname` 的 `<` 不升;worker 路径同款。
 
-**交付物**:`check.rs` (a) 分支前置条件 + `shell_trust.rs:365` 加 `>` 检测 + 回归测试。
+**交付物**:`check` (a) 分支前置条件 + `has_structural_metachar` 加 `>` 检测 + 回归测试。
 
 ---
 
@@ -156,7 +156,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 
 **目标**:堵住缺口 B(只读管道误伤),同时恢复 P1 牺牲的体验。
 
-**做什么**:把 `classify_prefix` 的一刀切结构降级(`shell_trust.rs:365`),换成"复合命令拆分 + 子命令独立判定取最危险档"。具体职责(不讲算法):
+**做什么**:把 `classify_prefix` 的一刀切结构降级(`has_structural_metachar`),换成"复合命令拆分 + 子命令独立判定取最危险档"。具体职责(不讲算法):
 
 - 按**顶层** `;`/`&&`/`||`/`|` 把命令拆成多个子段(尊重引号/转义,引号内的不拆);
 - 对每个子段独立跑现有 first-token 分类(复用白名单 + git 子命令表);
@@ -216,7 +216,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 | **拆分器引号误判** | 引号内元字符拆错(false positive 误降级 / false negative 漏拆) | false positive 安全(降级 Ask,用户可放行);false negative 靠测试矩阵 + kill-list 兜底 |
 | **P1 单独上线的体验回退** | P1 后、P2 前复合命令一律 Ask | P1/P2 同批合,或 P1 紧跟 P2(间隔内是已知短期体验损失) |
 | **grant 语义变更的存量数据** | 已有的 `prefix` grant 行在新规则下覆盖面缩小 | 无需迁移——grant 表数据不变,只是短路前置收紧;用户既有授权仍对单条命令生效 |
-| **现状 `>` 写重定向静默放行**(P1 收) | 现状 `shell_trust.rs:365` 不检 `>`,`git diff > patch.txt` 被 ReadOnly 静默放行,Plan 模式下静默写文件 | **P1 收**:与 grant 收紧同批,在 classify 加 `>` 写重定向检测(升 SideEffect)。优先级高于 P2 的拆分器引号风险——这是现状已有攻击面,P2 是新增风险 |
+| **现状 `>` 写重定向静默放行**(P1 收) | 现状 `has_structural_metachar` 不检 `>`,`git diff > patch.txt` 被 ReadOnly 静默放行,Plan 模式下静默写文件 | **P1 收**:与 grant 收紧同批,在 classify 加 `>` 写重定向检测(升 SideEffect)。优先级高于 P2 的拆分器引号风险——这是现状已有攻击面,P2 是新增风险 |
 | **`2>&1`/`>&N` 误升 SideEffect** | fd 复制无副作用,若重定向检测按 `2>` 子串匹配会误伤 `cmd 2>&1 \| head` | P1 检测只升"重定向到文件"(`>`/`>>`/`&>` 后跟路径),不升 `2>&1`/`>&N`/`1>&2` |
 | **沙盒在 WSL 不可用** | bubblewrap 依赖 user namespace,WSL 内核支持有坑 | P3 前置 spike;不可用则降级方案 |
 | **性能** | 拆分器每条 shell 命令跑一次 | 命令长度有界,单遍扫描,开销可忽略 |

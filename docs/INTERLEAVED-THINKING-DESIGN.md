@@ -31,7 +31,7 @@
 
 ### 1.1 DB 层:能存顺序,没有限制
 
-`messages` 表(`db/migrations.rs:210-242`):
+`messages` 表(`db::migrations::run_migrations` 的 messages 段):
 
 ```sql
 CREATE TABLE IF NOT EXISTS messages (
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 ```
 
-`ContentBlock` 是个枚举,文本/思考/工具调用/工具结果都是同一个 `content` 数组里的并列成员(`llm/types.rs:73-109`):
+`ContentBlock` 是个枚举,文本/思考/工具调用/工具结果都是同一个 `content` 数组里的并列成员(`llm::types::ContentBlock`):
 
 ```rust
 pub enum ContentBlock {
@@ -155,7 +155,7 @@ Anthropic 一旦发出 `tool_use`,本轮 `stop_reason` 即为 `tool_use`,本轮�
 - cancel/error marker(`:1984-2003`):仍需拼到末尾——在 `ordered_blocks` 的最后一个 Text 块或新增 Text 块上追加 marker,而非单独分桶。
 - 落库时(`:1976`):用 `ordered_blocks` 替代手工拼装的 `assistant_blocks`。
 
-**为何安全**:Anthropic 的 signature 是 per-block 的,顺序不影响 round-trip;`to_text()`(`llm/types.rs:133`)遍历所有 Text 块求和,顺序无关。
+**为何安全**:Anthropic 的 signature 是 per-block 的,顺序不影响 round-trip;`to_text()`(`MessageContent::to_text`)遍历所有 Text 块求和,顺序无关。
 
 **测试影响**:`tests_agent_loop.rs` 的多 turn 测试只断言"persist 了几行 + TurnComplete.seq",不锁块顺序——应能通过。`db/messages_tests.rs:59-99` 的 canonical 示例手工构造块,顺序由调用方决定,不受影响。
 
@@ -305,9 +305,9 @@ reload/rehydrate:  [user] [asst t1] [user(tr)] [asst t2] [user(tr)] [asst t3]   
 - `app/src-tauri/src/agent/chat_loop.rs:1761-1805` — 事件 switch(accumulate)
 - `app/src-tauri/src/agent/chat_loop.rs:1976-2098` — 块拼装 + persist(**THE flatten**)
 - `app/src-tauri/src/agent/thinking.rs` — `PendingThinking` + `flush_pending_thinking`
-- `app/src-tauri/src/db/sessions.rs:692-764` — `persist_turn`(单次 INSERT)
-- `app/src-tauri/src/llm/types.rs:73-109` — `ContentBlock` 枚举
-- `app/src-tauri/src/llm/types.rs:133` — `to_text()`(Text 块求和,顺序无关)
+- `db::sessions::messages::persist_turn` — `persist_turn`(单次 INSERT)
+- `llm::types::ContentBlock` — `ContentBlock` 枚举
+- `MessageContent::to_text` — `to_text()`(Text 块求和,顺序无关)
 
 **前端(渲染分组)**
 - `app/src/stores/streamRehydrate.ts` — `rehydrateMessages`(分桶,08-07 拆分)

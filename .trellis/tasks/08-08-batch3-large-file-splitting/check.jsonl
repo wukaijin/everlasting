@@ -1,0 +1,2 @@
+{"file": "docs/HACKING-wsl.md", "reason": "复验 cargo test --lib 全绿 + clippy/fmt 零警告的正确命令(WSL PKG_CONFIG_PATH、勿 --test-threads=1)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查 hub re-export 保证 ~10+ 调用方零改动属跨层一致性验证"}

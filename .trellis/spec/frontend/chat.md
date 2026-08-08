@@ -181,7 +181,7 @@ pairSections(sections: TranscriptSection[], now: number, pendingFirstSeenAt: Map
 
 `v-if status==='error'`，❌ card 在 DrawerPromptCard 下方，独立组件 `SubagentDrawerErrorCard.vue` 接 `errorMessage: string` 单 prop。chrome：复用 `.drawer-tool-card` chrome + `--color-tool-error` 3px 左 border + `shield-x` icon。`errorMessage` computed（留在 main drawer）**4 级 fallback**：
 
-1. `parseTranscriptJson(run.transcriptJson)` **反向扫描**末位 `kind==='chat_event'` 且 inner `payload_json.kind==='error'`，读 `payload_json.message`（对应 Rust `ChatEvent::Error { message, category }`，`llm/types.rs:407`）
+1. `parseTranscriptJson(run.transcriptJson)` **反向扫描**末位 `kind==='chat_event'` 且 inner `payload_json.kind==='error'`，读 `payload_json.message`（对应 Rust `ChatEvent::Error { message, category }`，`llm::types::ChatEvent::Error`）
 2. `run.finalText`（error 时 `format_final_text` 返回 worker_text verbatim）
 3. `run.summary`
 4. `"(no error text captured)"`

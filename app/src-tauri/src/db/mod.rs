@@ -60,6 +60,7 @@ pub mod memories;
 pub mod memories_tests;
 pub mod messages_tests;
 pub mod migrations;
+pub mod migrations_tests;
 pub mod models;
 pub mod permissions;
 pub mod permissions_tests;

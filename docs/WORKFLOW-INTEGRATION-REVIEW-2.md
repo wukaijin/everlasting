@@ -106,7 +106,7 @@ workflow session 默认开 → CLAUDE.md 等指令文件经 B5 自动加载 → 
 
 **位置**：§A.3 implementer.md frontmatter（"tools: []   # 空数组 = 全集"）
 
-**问题**：`subagent/mod.rs:717` `filter_tools_for_subagent`：`tools: []` 表示"全集"（再减 STRUCTURALLY_DISABLED）。`researcher` 是白名单（只读 5 tool），`checker` 是白名单（只读 + shell），**唯独 implementer 是全集 = 跟 general-purpose 同 toolset，只能靠 system_prompt 区分角色**。一轮评审小问题 2 已记，但二轮看 implementer.md 改成了加注释（"engine 自动剥离 STRUCTURALLY_DISABLED"），并未真正解决 frontmatter 不可区分角色的问题。这违背 B6 引入 SubagentDef 的初衷——角色 = tools + body 不能光靠 body。
+**问题**：`subagent::filter_tools_for_subagent`：`tools: []` 表示"全集"（再减 STRUCTURALLY_DISABLED）。`researcher` 是白名单（只读 5 tool），`checker` 是白名单（只读 + shell），**唯独 implementer 是全集 = 跟 general-purpose 同 toolset，只能靠 system_prompt 区分角色**。一轮评审小问题 2 已记，但二轮看 implementer.md 改成了加注释（"engine 自动剥离 STRUCTURALLY_DISABLED"），并未真正解决 frontmatter 不可区分角色的问题。这违背 B6 引入 SubagentDef 的初衷——角色 = tools + body 不能光靠 body。
 
 **建议**：frontmatter 给 implementer 列显式白名单（全部 builtin 共 19 个工具名），把"禁用 dispatch_subagent 等结构化禁用"对标到 STRUCTURALLY_DISABLED（不可由 frontmatter 重开启）。或者为 SubagentDef 加 `tools_negation: Vec<String>` 字段，空白名单 + 减号表达"全集去掉 X"。让"角色 = 工具集 + body"，而非"全 tool + 纯靠 prompt"。
 

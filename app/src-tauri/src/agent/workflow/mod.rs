@@ -148,6 +148,11 @@ pub use builtin::{
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+mod tests_inject;
+#[cfg(test)]
+mod tests_task;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

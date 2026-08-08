@@ -64,7 +64,7 @@ delegation 模板是**角色相关的**（researcher / implementer / checker 各
 **两个场景都断裂**:
 
 1. **跨 session 续 task**: session 重开后, `update_checklist` 重建空 Vec —— agent 看不到上次的 checklist 进度
-2. **implementer worker 看 checklist**: worker 的 `STRUCTURALLY_DISABLED` 包含 `update_checklist`（`subagent/mod.rs:677`），worker 根本拿不到 checklist 状态——除非靠 `read_file` 读 `checklist.md`，但 implement 期间的 item 状态变更（done / in_progress）不同步回文件
+2. **implementer worker 看 checklist**: worker 的 `STRUCTURALLY_DISABLED` 包含 `update_checklist`（`subagent::tools_filter::STRUCTURALLY_DISABLED`），worker 根本拿不到 checklist 状态——除非靠 `read_file` 读 `checklist.md`，但 implement 期间的 item 状态变更（done / in_progress）不同步回文件
 
 **建议**（三选一，需要作者拍板）:
 
