@@ -64,6 +64,7 @@ pub mod tests_agent_loop;
 pub mod tests_ask_user_question;
 pub mod tests_c2plus;
 pub mod tests_cancellation;
+pub mod tests_chat_loop;
 pub mod tests_common;
 pub mod tests_envelope;
 pub mod tests_group_chat;
