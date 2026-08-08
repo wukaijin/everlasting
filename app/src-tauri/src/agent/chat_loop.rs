@@ -3183,123 +3183,26 @@ pub async fn run_chat_loop(
         cancelled = dispatch_outcome.cancelled;
         current_ctx = dispatch_outcome.current_ctx;
         last_cwd = dispatch_outcome.last_cwd;
-        let mut result_blocks = dispatch_outcome.result_blocks;
+        let result_blocks = dispatch_outcome.result_blocks;
 
-        // ⑬ loop detection (C2): if this turn tripped the detector,
-        // append the hint as a Text block AT THE END of the
-        // tool_results. Soft nudge only — execution was NOT skipped
-        // and the loop is NOT terminated.
-        //
-        // WHY the END (not position 0): the user-role message built
-        // from `result_blocks` is fed through `wire::chat_request_to_wire`,
-        // whose `chat_message_to_wire_messages` fans out each block to a
-        // separate wire message — Text → `WireMessage::User { content }`,
-        // ToolResult → `WireMessage::Tool { tool_call_id, .. }`, in block
-        // order. If the hint Text block sits at position 0, the fan-out
-        // produces `user(text) → tool×N`, i.e. a `WireMessage::User`
-        // inserted BETWEEN the preceding `assistant(tool_calls)` and the
-        // `role: "tool"` messages. OpenAI Chat Completions rejects this
-        // with HTTP 400 "An assistant message with 'tool_calls' must be
-        // followed by tool messages responding to each 'tool_call_id'"
-        // (Anthropic has the same Pair Atomicity rule, see
-        // llm-contract.md §469 — but OpenAI enforces the *order*
-        // strictly while Anthropic tolerates tool_results inside a user
-        // message regardless of interleaving). Putting the hint at the
-        // END yields `tool×N → user(text)`, which both protocols accept
-        // (the tool pair stays contiguous; the trailing user message is a
-        // normal follow-up).
-        if let Some(hint) = &loop_hint {
-            result_blocks.push(ContentBlock::Text {
-                text: format!("⚠️  {}\n", hint),
-                cache_control: None,
-            });
-        }
-
-        if cancelled {
-            let result_count = result_blocks.len();
-            if !result_blocks.is_empty() {
-                let tool_result_msg = ChatMessage {
-                    role: Role::User,
-                    content: MessageContent::Blocks(result_blocks),
-                    speaker: None,
-                };
-                // B6 PR1b: skip the cancelled tool_result persist
-                // in worker mode (SubagentBufferSink transcript is
-                // the worker's record).
-                if !skip_persist {
-                    // RULE-A-003 (2026-06-15): cancel path —
-                    // log-only (see the synthetic tool_result
-                    // site above for why this stays tracing-only
-                    // instead of emit_persist_failure).
-                    if let Err(e) = crate::db::persist_turn(
-                        &db,
-                        &session_id,
-                        tool_result_msg.role,
-                        &tool_result_msg.content,
-                        seq,
-                        None,
-                        None,
-                    )
-                    .await
-                    {
-                        tracing::error!(error = %e, "failed to persist cancelled tool_result turn");
-                    }
-                }
-                messages.push(tool_result_msg);
-                tracing::info!(
-                    request_id = %rid,
-                    tool_results = result_count,
-                    "chat_loop: cancelled during tool execution — persisted partial results"
-                );
-            }
-            if !skip_persist {
-                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-                let _ = crate::db::touch_session(&db, &session_id).await;
-            }
-            // B6 PR1b: always emit terminal `Done { cancelled }` —
-            // the SubagentBufferSink reads it to set `was_cancelled`
-            // (so `run_subagent` can format the dispatch_subagent
-            // tool_result with `status=cancelled`).
-            emit_chat_event_via_sink(
-                &sink,
-                &rid,
-                &ChatEvent::Done {
-                    stop_reason: Some("cancelled".to_string()),
-                    usage: None,
-                },
-            );
+        if finalize_turn(
+            result_blocks,
+            &loop_hint,
+            cancelled,
+            skip_persist,
+            &db,
+            &sink,
+            &rid,
+            &session_id,
+            seq,
+            &mut messages,
+            &last_cwd,
+        )
+        .await
+        .is_err()
+        {
             return;
         }
-
-        let tool_result_msg = ChatMessage {
-            role: Role::User,
-            content: MessageContent::Blocks(result_blocks),
-            speaker: None,
-        };
-        // B6 PR1b: skip the tool_result persist in worker mode
-        // (SubagentBufferSink transcript is the worker's record).
-        if !skip_persist {
-            // RULE-A-003 (2026-06-15): tool_result persist
-            // failure → emit Error + abort. Previously silent +
-            // `seq += 1` drift; the next turn's LLM context would
-            // otherwise be built on a tool_result the DB never
-            // recorded.
-            if let Err(e) = crate::db::persist_turn(
-                &db,
-                &session_id,
-                tool_result_msg.role,
-                &tool_result_msg.content,
-                seq,
-                None,
-                None,
-            )
-            .await
-            {
-                emit_persist_failure(&sink, &rid, &e);
-                return;
-            }
-        }
-        messages.push(tool_result_msg);
         seq += 1;
     }
 
@@ -4842,6 +4745,148 @@ async fn dispatch_tool_calls(
         current_ctx,
         last_cwd,
     }
+}
+
+/// Per-turn finalize: append the loop-detection hint (if any) to the
+/// `result_blocks`, then persist the tool-result turn. Two early-return paths
+/// surface as `Err(())` so the hub returns: (a) the cancel path (partial
+/// results persisted + terminal `Done { cancelled }` emitted), (b) a
+/// `persist_turn` failure (`emit_persist_failure`). On the normal path the
+/// tool-result message is pushed to `messages` (the hub bumps `seq` after a
+/// successful return; the cancel path skips the bump via the early return).
+///
+/// Split off `run_chat_loop` (08-08-a-class-chat-loop-split). No behavior
+/// change — pure lift.
+#[allow(clippy::too_many_arguments)]
+async fn finalize_turn(
+    mut result_blocks: Vec<ContentBlock>,
+    loop_hint: &Option<String>,
+    cancelled: bool,
+    skip_persist: bool,
+    db: &SqlitePool,
+    sink: &Arc<dyn ChatEventSink>,
+    rid: &str,
+    session_id: &str,
+    seq: i64,
+    messages: &mut Vec<ChatMessage>,
+    last_cwd: &Option<PathBuf>,
+) -> Result<(), ()> {
+    // ⑬ loop detection (C2): if this turn tripped the detector,
+    // append the hint as a Text block AT THE END of the
+    // tool_results. Soft nudge only — execution was NOT skipped
+    // and the loop is NOT terminated.
+    //
+    // WHY the END (not position 0): the user-role message built
+    // from `result_blocks` is fed through `wire::chat_request_to_wire`,
+    // whose `chat_message_to_wire_messages` fans out each block to a
+    // separate wire message — Text → `WireMessage::User { content }`,
+    // ToolResult → `WireMessage::Tool { tool_call_id, .. }`, in block
+    // order. If the hint Text block sits at position 0, the fan-out
+    // produces `user(text) → tool×N`, i.e. a `WireMessage::User`
+    // inserted BETWEEN the preceding `assistant(tool_calls)` and the
+    // `role: "tool"` messages. OpenAI Chat Completions rejects this
+    // with HTTP 400 "An assistant message with 'tool_calls' must be
+    // followed by tool messages responding to each 'tool_call_id'"
+    // (Anthropic has the same Pair Atomicity rule, see
+    // llm-contract.md §469 — but OpenAI enforces the *order*
+    // strictly while Anthropic tolerates tool_results inside a user
+    // message regardless of interleaving). Putting the hint at the
+    // END yields `tool×N → user(text)`, which both protocols accept
+    // (the tool pair stays contiguous; the trailing user message is a
+    // normal follow-up).
+    if let Some(hint) = &loop_hint {
+        result_blocks.push(ContentBlock::Text {
+            text: format!("⚠️  {}\n", hint),
+            cache_control: None,
+        });
+    }
+
+    if cancelled {
+        let result_count = result_blocks.len();
+        if !result_blocks.is_empty() {
+            let tool_result_msg = ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(result_blocks),
+                speaker: None,
+            };
+            // B6 PR1b: skip the cancelled tool_result persist
+            // in worker mode (SubagentBufferSink transcript is
+            // the worker's record).
+            if !skip_persist {
+                // RULE-A-003 (2026-06-15): cancel path —
+                // log-only (see the synthetic tool_result
+                // site above for why this stays tracing-only
+                // instead of emit_persist_failure).
+                if let Err(e) = crate::db::persist_turn(
+                    &db,
+                    &session_id,
+                    tool_result_msg.role,
+                    &tool_result_msg.content,
+                    seq,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    tracing::error!(error = %e, "failed to persist cancelled tool_result turn");
+                }
+            }
+            messages.push(tool_result_msg);
+            tracing::info!(
+                request_id = %rid,
+                tool_results = result_count,
+                "chat_loop: cancelled during tool execution — persisted partial results"
+            );
+        }
+        if !skip_persist {
+            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+            let _ = crate::db::touch_session(&db, &session_id).await;
+        }
+        // B6 PR1b: always emit terminal `Done { cancelled }` —
+        // the SubagentBufferSink reads it to set `was_cancelled`
+        // (so `run_subagent` can format the dispatch_subagent
+        // tool_result with `status=cancelled`).
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Done {
+                stop_reason: Some("cancelled".to_string()),
+                usage: None,
+            },
+        );
+        return Err(());
+    }
+
+    let tool_result_msg = ChatMessage {
+        role: Role::User,
+        content: MessageContent::Blocks(result_blocks),
+        speaker: None,
+    };
+    // B6 PR1b: skip the tool_result persist in worker mode
+    // (SubagentBufferSink transcript is the worker's record).
+    if !skip_persist {
+        // RULE-A-003 (2026-06-15): tool_result persist
+        // failure → emit Error + abort. Previously silent +
+        // `seq += 1` drift; the next turn's LLM context would
+        // otherwise be built on a tool_result the DB never
+        // recorded.
+        if let Err(e) = crate::db::persist_turn(
+            &db,
+            &session_id,
+            tool_result_msg.role,
+            &tool_result_msg.content,
+            seq,
+            None,
+            None,
+        )
+        .await
+        {
+            emit_persist_failure(&sink, &rid, &e);
+            return Err(());
+        }
+    }
+    messages.push(tool_result_msg);
+    Ok(())
 }
 
 fn build_turn_latency(
