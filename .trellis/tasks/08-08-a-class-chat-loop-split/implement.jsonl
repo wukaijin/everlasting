@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture/signature-run-chat-loop.md", "reason": "run_chat_loop 签名契约(冻结,拆分时对照)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-large-function-split.md", "reason": "A类拆分模式 + 全部变体(本任务混合复用)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-skip-persist-gate.md", "reason": "persist gate 语义(turn 收尾提取时对照)"}
