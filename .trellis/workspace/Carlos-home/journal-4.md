@@ -191,3 +191,25 @@ C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 93: tests_agent_loop.rs 目录化拆分(5674 行 → hub + 9 簇,41 测原样)
+
+**Date**: 2026-08-09
+**Task**: tests_agent_loop.rs 目录化拆分(5674 行 → hub + 9 簇,41 测原样)
+**Branch**: `main`
+
+### Summary
+
+把 agent/tests_agent_loop.rs(5674 行,41 测 + 5 helper)目录化为 tests_agent_loop/(hub mod.rs + 9 簇文件)。纯搬迁:agent/mod.rs:63 零改动,函数集 46 项前后逐名比对零增删改。规划期发现并修正 PRD 事实错误(原表 32 测,实测 41——漏算 error_after_tool/c3_compaction/c3_still_over/p5_soft_block×2/a5plus_retry×3),据此重建簇映射。mock_provider 与 error_path 在源文件交错,故按测试函数逐个 sed 提取而非连续区间切片。验证:AC1-AC6 全 PASS,模块 41/全量 1662 全绿,clippy+fmt 零警告,最大文件 basic.rs 1085 <1200。共享 helper 仅 messages_to_text 真跨文件(checklist+notifications)提 hub pub(super);load_assistant_rows/p5_seed 留使用处私有。tests_common re-export 在 hub 透传(已核实 load-bearing)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3d77217` | (see git log) |
+| `a104bc2` | (see git log) |
+
+### Status
+
+[OK] **Completed**

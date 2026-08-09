@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 92
-- **Last Active**: 2026-07-27
+- **Total Sessions**: 93
+- **Last Active**: 2026-08-09
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~193 | Active |
+| `journal-4.md` | ~215 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 93 | 2026-08-09 | tests_agent_loop.rs 目录化拆分(5674 行 → hub + 9 簇,41 测原样) | `3d77217`, `a104bc2` | `main` |
 | 92 | 2026-07-27 | C2 review visualization 实施（review epic 子任务收官） | `6523aef`, `14d2ae0`, `b4e9fb9` | `feat/review-viz-c2` |
 | 91 | 2026-07-27 | C3 review plugin resource pack 实施 | `83207f4`, `79711d1`, `83c4b49` | `feat/review-plugin-pack-c3` |
 | 90 | 2026-07-06 | C2+ 循环检测主动干预(loop_hit_count + QuestionStore 复用 + 三分支) | `943d951`, `212aa1b` | `main` |
