@@ -215,7 +215,7 @@ Precedence: **dispatch input > frontmatter default > not isolated**.
 {
   "isolation": {
     "type": "boolean",
-    "description": "Override the subagent's worktree-isolation decision for THIS dispatch only. When `true`, the worker runs in its own git worktree on branch `worker/<run_id>`; when `false`, the worker reuses the parent session's checkout (legacy B6 behavior). Precedence: this input overrides the subagent's frontmatter default. See `agent-loop-architecture.md` §worktree_override + `worktree-contract.md` §Worker Worktree Variant for the runtime behavior."
+    "description": "Override the subagent's worktree-isolation decision for THIS dispatch only. When `true`, the worker runs in its own git worktree on branch `worker/<run_id>`; when `false`, the worker reuses the parent session's checkout (legacy B6 behavior). Precedence: this input overrides the subagent's frontmatter default. See `agent-loop-architecture.md` §worktree_override + `worktree-contract/worker-variant.md` for the runtime behavior."
   }
 }
 ```

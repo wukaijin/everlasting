@@ -1,6 +1,6 @@
 # Worktree Contract — attach/detach/delete + Cancel + System Prompt
 
-> **基线**:2026-06-10 commit `0f9a167` (8-PR5拆分后)
+> **基线**:2026-06-10 commit `0f9a167` (8-PR5拆分后) + 2026-08-10 (3 个 worker Pattern 拆出子文件)
 > **来源**:从原 `llm-contract.md` (3149 行)拆出本文件
 > **同源文档**:
 > - [llm-contract.md](./llm-contract.md) —核心类型 + 反模式汇总(Extended Thinking 已拆至 [llm-contract/extended-thinking.md](./llm-contract/extended-thinking.md))
@@ -9,7 +9,12 @@
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider trait + catalog + Anthropic/OpenAI 分发
 > - [test-model-contract.md](./test-model-contract.md) — `test_model` IPC
 >
-> **何时读本文**:涉及 `attach_worktree` / `detach_worktree` / `delete_worktree` / `cancel_inflight_for_session` / `build_system_prompt` / synthetic `tool_result` 时。
+> **worker Pattern 子文件**(2026-08-10 拆出):
+> - [worktree-contract/worker-variant.md](./worktree-contract/worker-variant.md) — `create_worker` / `destroy_worker` 变体(L3b PR1)
+> - [worktree-contract/worker-sweep.md](./worktree-contract/worker-sweep.md) — 启动期 stale worker worktree sweep(L3b PR3)
+> - [worktree-contract/lazy-auto-attach.md](./worktree-contract/lazy-auto-attach.md) — merge 后懒 attach(06-30 follow-up)
+>
+> **何时读本文**:涉及 `attach_worktree` / `detach_worktree` / `delete_worktree` / `cancel_inflight_for_session` / `build_system_prompt` / synthetic `tool_result` 时。worker 隔离/sweep/merge-attach 见上述子文件。
 
 ---
 
@@ -715,206 +720,15 @@ the worktree"). Both work together:
 
 ## Pattern: Worker Worktree Variant (`create_worker` / `destroy_worker`, L3b PR1, 2026-06-27)
 
-L3b PR1 adds a **per-run** worktree variant to the existing per-session worktree machinery, letting a `dispatch_subagent` worker execute in an isolated checkout (independent `worker/<run_id>` branch) rather than reusing the parent session's checkout. The base mechanism (3-state self-heal, create-then-prune cleanup, libgit2 commit ownership workaround via OID round-trip) is shared with the session variant — no copy-paste of recovery logic.
-
-### Signatures
-
-```rust
-pub fn create_worker(
-    project_path: &Path,           // main repo (.git dir shared with parent worktree)
-    worktree_path: &Path,           // new isolated checkout under <app_data_dir>/worktrees/<project_uuid>/worker/<run_id>
-    base_worktree_path: &Path,      // parent session's worktree (its HEAD is the base commit)
-    run_id: &str,                   // UUID; metadata name + branch suffix
-) -> Result<(), GitError>
-
-pub fn destroy_worker(
-    project_path: &Path,
-    worktree_path: &Path,
-    run_id: &str,
-) -> Result<(), GitError>
-```
-
-### Differences from session variant
-
-- **Branch prefix**: `worker/<run_id>` (NOT `session/<id>`). Avoids collision with concurrent workers.
-- **Base commit**: parent session worktree's HEAD (`base_worktree_path.head()`), NOT project main repo HEAD.
-- **Lock**: `create_worker` calls `wt.lock(Some("L3b worker active"))` after a successful worktree add; `destroy_worker` calls `wt.unlock()` before `wt.prune(None)`. libgit2 refuses to prune a locked worktree without the `force` option, so this guard prevents `git worktree prune` (sweep, manual) from sweeping the worktree mid-run. `self_heal_for_create` also unlocks before pruning stale locks from crashed previous runs.
-- **Self-heal reuse**: both `create_worker` and `create` go through the shared `self_heal_for_create` + `create_worktree_add` helpers (no copy-paste of the 3 stale-state roots).
-
-### Behavior matrix
-
-| Caller scenario | Worker worktree path | Branch | Lock |
-|---|---|---|---|
-| `isolation = Some(true)` (PR1 default for general-purpose) | `<app_data_dir>/worktrees/<project_uuid>/worker/<run_id>` | `worker/<run_id>` | yes |
-| `isolation = Some(false)` (researcher / override false) | reuse parent worktree_path (no extra checkout) | n/a | n/a |
-| Worker exits no changes | destroyed | branch deleted | n/a |
-| Worker exits has changes | preserved (PR3 merge_worker picks it up) | `worker/<run_id>` retained | unlocked (user-initiated destroy will unlock first) |
-
-### Tests Required (`git/worktree.rs` `#[cfg(test)]`)
-
-| Test | Asserts |
-|---|---|
-| `create_worker_uses_worker_branch_prefix` | branch name is `worker/<run_id>`, NOT `session/<id>` |
-| `create_worker_bases_off_parent_worktree_head` | base commit equals parent worktree HEAD (even if parent has unpushed commits) |
-| `create_worker_self_heals_orphan_dir` | 3-state self-heal still triggers for worker variant |
-| `destroy_worker_removes_branch_and_dir` | physical dir + libgit2 metadata + branch all gone |
-| (added by PR1 inline review) `create_worker` + `destroy_worker` correctly lock/unlock |
-
-See `tests_dispatch.rs::probe_worker_changes_*` (3 tests, also added in PR1) for the end-to-end create → worker edits → diff probe flow.
-
----
+> **已拆出**(2026-08-10 doc-split):完整 Pattern(签名 / 与 session 变体差异 / behavior matrix /
+> Tests Required)见 [worktree-contract/worker-variant.md](./worktree-contract/worker-variant.md)。
 
 ## Pattern: Worker Worktree Sweep (L3b PR3, 2026-06-27)
 
-PR3 adds a one-shot startup sweep that destroys
-worker worktrees whose mtime is older than a configurable
-retention period AND whose libgit2 lock is NOT present
-(a locked worktree is an active worker — sweeping it
-would destroy the in-flight worker's checkout
-mid-execution). Closes the disk-leak + branch-list
-pollution loop that PR1 introduced (worker branches +
-worktrees accumulate forever otherwise).
-
-### Signatures
-
-```rust
-pub const DEFAULT_CLEANUP_PERIOD_DAYS: u32 = 7;
-pub const CLEANUP_PERIOD_DAYS_ENV: &str = "EVERLASTING_CLEANUP_PERIOD_DAYS";
-
-pub fn sweep_stale_worker_worktrees(
-    app_data_dir: &Path,
-    project_uuid: &str,
-    project_path: &Path,         // explicit, not derived
-    cleanup_period_days: u32,
-) -> Result<usize, GitError>;     // count destroyed
-
-pub fn resolve_cleanup_period_days(explicit: Option<u32>) -> u32;
-```
-
-### Behavior
-
-| Step | Source of truth |
-|------|-----------------|
-| Walk `<app_data_dir>/worktrees/<project_uuid>/worker/` for subdirectories | one entry per worker run_id |
-| **Lock check**: `repo.find_worktree(run_id).is_locked() == Locked(_)` → SKIP | libgit2 API; `WorktreeLockStatus::Locked(_)` is the canonical "active worker" signal |
-| **Mtime check**: `now - mtime > cleanup_period_days * 86400` → destroy | `std::fs::metadata(&wt_path).modified()` |
-| Destroy via `git::worktree::destroy_worker(project_path, &wt_path, run_id)` | same best-effort semantics as the explicit discard path |
-| Increment destroyed counter; continue to next entry | best-effort: a single failure doesn't abort the sweep |
-
-### Tests Required (`git::tests_worktree`)
-
-| Test | Asserts |
-|------|---------|
-| `sweep_removes_stale_worker_worktrees` | 30-day-old worker, unlocked → sweep returns 1; worktree + branch destroyed |
-| `sweep_skips_locked_worker_worktrees` | 30-day-old worker, locked → sweep returns 0; worktree + branch preserved |
-| `sweep_keeps_recent_worker_worktrees` | 0-day-old worker → sweep returns 0; worktree preserved |
-| `sweep_with_no_worker_dir_is_noop` | no worker dir → sweep returns 0 (no error) |
-| `resolve_cleanup_period_days_prefers_explicit` | `Some(14)` → 14 |
-| `resolve_cleanup_period_days_uses_default_when_no_env` | `None` + env unset → 7 (or env value if set) |
-
-### Startup wiring
-
-`lib.rs::run` spawns a one-shot background task at startup
-that walks every `projects` DB row and calls
-`sweep_stale_worker_worktrees(...)` for each. The task runs
-`tauri::async_runtime::spawn` (not awaited) so the Tauri
-window's first paint isn't blocked by the sweep. Per-project
-failures log `warn!` and the sweep continues to the next
-project. The total destroyed count is emitted as a
-`tracing::info!` event at the end (only when `> 0` — the
-common no-op case stays quiet).
-
-### Env override
-
-`EVERLASTING_CLEANUP_PERIOD_DAYS=<N>` (parsed as `u32`).
-A value of `0` is treated as unset (the sweep's "0 days"
-interpretation would destroy every unlocked worker worktree
-on every startup, which is clearly not what the user
-intended if they accidentally set the env var to `0`).
-
----
+> **已拆出**(2026-08-10 doc-split):完整 Pattern(签名 / behavior / Tests Required / startup
+> wiring / env override)见 [worktree-contract/worker-sweep.md](./worktree-contract/worker-sweep.md)。
 
 ## Pattern: Lazy Auto-Attach on Merge (06-30 follow-up)
 
-The `merge_worker` tool and the `merge_worker_run` IPC command
-both reach into a parent session's `session/<id>` worktree.
-Both entry points historically hard-failed with
-`"parent session has no worktree"` (IPC) or
-`"parent branch '<id>' not found (parent session has no
-worktree?)"` (tool path) when the parent was at
-`WorktreeState::None`. This was a UX trap because session
-creation is opt-in (`create_session` always starts at
-`None`), so any user who dispatched an isolated worker
-(`general-purpose` default `isolated=true`) without first
-manually attaching a worktree would hit this wall at merge
-time.
-
-### Helper contract
-
-`merge_worker::ensure_parent_worktree_attached(db, data_dir,
-parent_session_id) -> Result<bool, String>` — called identically
-by both entry points before `do_merge_blocking`:
-
-| Parent state | Helper returns | Side effects |
-|---|---|---|
-| `Active` | `Ok(false)` | none |
-| `Detached` | `Ok(false)` | none (do NOT re-attach — respect user intent) |
-| `None` | `Ok(true)` | calls `git::worktree::attach_session` → DB row flips to Active, `[worktree event] attached:` row injected |
-| none (helper error: non-git project, dirty root, etc.) | `Err(reason)` | none; caller surfaces verbatim |
-
-The Detached → no-op decision is INV-M3 and is the only
-non-obvious choice. The user explicitly tore down their
-worktree (via `detach_worktree`), and silently re-attaching
-on merge would override that intent. The merge then fails
-downstream with a recognizable, actionable error so the
-user can attach via the chat header manually.
-
-### Helper layering
-
-- `git::worktree::attach_session(db, project, session_id,
-  data_dir) -> Result<PathBuf, GitError>` — extracted from
-  `commands::worktree::attach_worktree` so the IPC and
-  tool-layer call sites share the same disk + DB + system
-  event injection path. The IPC's `attach_worktree`
-  command body now delegates to this helper.
-- `git::worktree::attach_session` does NOT include the
-  state-machine guard — each caller enforces its own
-  policy. The IPC command rejects `Active` (already
-  attached) and accepts `None` / `Detached`; the
-  merge_worker helper has the tri-state policy above.
-
-### IPC return value
-
-`merge_worker_run` returns `Result<MergeWorkerResult, String>`:
-```rust
-#[derive(Serialize, serde::rename_all = "camelCase")]
-pub struct MergeWorkerResult {
-    pub message: String,                  // libgit2 outcome (fast-forward / 3-way / conflict text)
-    pub auto_attached_parent: bool,       // true iff this call did a lazy attach
-}
-```
-
-Frontend `subagentRuns.mergeWorker(runId, parentSessionId?)`:
-- On `Ok` with `autoAttachedParent = true`, calls
-  `useChatStore().loadSessions(currentProjectId)` so the
-  chat header's worktree chip flips `none → active`.
-- Renders a specific toast (`"已合并到父 session 分支,并自动
-  绑定了父工作区"`) only when the flag is set, so the user
-  is told about the side effect.
-
-The error arm is still a plain `String` (verbatim from
-`attach_session` / `do_merge_blocking`), so `parseConflictFiles`
-parsing on the frontend's catch path is unaffected.
-
-### Validation & error matrix
-
-| Condition | helper result | upstream message |
-|---|---|---|
-| Parent Active | `Ok(false)` | normal merge path |
-| Parent Detached | `Ok(false)` | `merge_worker_run: parent session '<id>' is detached (no worktree bound); please attach via the chat header before merging` |
-| Parent None + project non-git | `Err("project ... is not a git repository")` | `merge_worker_run: cannot auto-attach parent worktree: project ... is not a git repository` |
-| Parent None + dirty project root | `Err("... uncommitted changes ...")` | `merge_worker_run: cannot auto-attach parent worktree: ...` |
-| Parent None + libgit2 fail | `Err(GitError::Git2(e))` | propagated verbatim |
-| Parent session row missing | `Err("parent session ... not found")` | propagated verbatim |
-
-The tool-path tuple is `(String, true, ToolContextUpdate::default(), None)` on any error and `(...msg, false, ...)` on success. The LLM-facing return shape carries no auto-attach signal because the LLM doesn't need to render a chip — a `[worktree event] attached:` row in history is sufficient.
+> **已拆出**(2026-08-10 doc-split):完整 Pattern(helper contract / layering / IPC return value /
+> validation & error matrix)见 [worktree-contract/lazy-auto-attach.md](./worktree-contract/lazy-auto-attach.md)。

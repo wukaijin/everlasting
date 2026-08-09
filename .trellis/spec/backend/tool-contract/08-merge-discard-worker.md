@@ -85,8 +85,7 @@ pattern is unaffected.
 > one-time ~17-site update across test fixtures
 > (`tools/*.rs::test_ctx` + `agent/tests_subagent.rs`); see
 > the lazy-attach pattern in
-> `backend/worktree-contract.md` §"Pattern: Lazy Auto-Attach
-> on Merge" for the full contract.
+> `backend/worktree-contract/lazy-auto-attach.md` for the full contract.
 
 #### `merge_worker` execution pipeline (libgit2 + DB)
 
