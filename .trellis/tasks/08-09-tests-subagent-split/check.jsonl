@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "AC1/AC7 验收依据:<1200 行目标、纯搬迁铁律、收官状态表本任务行需更新为 ✅"}
+{"file": ".trellis/tasks/archive/2026-08/08-09-tests-agent-loop-split/prd.md", "reason": "AC2-AC6 验收标准(1662 基线 / clippy+fmt 零警告 / mod.rs 声明零改动 / 独立可回滚 / 无残留行号引用)的 sibling 范本"}
