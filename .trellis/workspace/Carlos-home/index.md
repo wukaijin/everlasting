@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 95
-- **Last Active**: 2026-08-09
+- **Total Sessions**: 96
+- **Last Active**: 2026-08-10
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~259 | Active |
+| `journal-4.md` | ~296 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 96 | 2026-08-10 | directory-structure 收官表文档订正(loader 错配 + subagent_runs_tests 漏网登记) | `25fb619`, `cd79d7a` | `main` |
 | 95 | 2026-08-09 | sessions_tests.rs 目录化拆分(hub + 5 簇, 35 测) | `6a6c96c`, `d20ff7b` | `main` |
 | 94 | 2026-08-09 | memories_tests.rs 目录化拆分(2241 行 → hub 35 + 9 簇,49 测) | `acb1480`, `93a0f7d` | `main` |
 | 93 | 2026-08-09 | tests_agent_loop.rs 目录化拆分(5674 行 → hub + 9 簇,41 测原样) | `3d77217`, `a104bc2` | `main` |

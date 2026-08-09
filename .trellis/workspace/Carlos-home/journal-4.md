@@ -257,3 +257,40 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 96: directory-structure 收官表文档订正(loader 错配 + subagent_runs_tests 漏网登记)
+
+**Date**: 2026-08-10
+**Task**: directory-structure 收官表文档订正(loader 错配 + subagent_runs_tests 漏网登记)
+**Branch**: `main`
+
+### Summary
+
+审计 08-07~08-09 大文件拆分收官表发现三处与代码现状偏移,逐条 wc -l/git show 核实后订正 directory-structure.md。纯文档,零代码逻辑变更。
+
+### Main Changes
+
+- line 72 loader 行三列错配两个同名 loader → 拆为两行(agent/subagent/loader.rs 2290→批1 7b60b55→319 扁平拆 frontmatter.rs+cache.rs;skill/loader.rs 1660→批2 dfcb9ba→649 loader/frontmatter.rs)
+- 新增遗留条目 db/subagent_runs_tests.rs 1219(范围外漏网,group-chat Phase 4 + subagent resume 迭代长成)
+- line 93 措辞 全仓…全部<1200 → 批范围内…全部<1200,附范围外遗留清单(subagent_runs_tests + 前端 4 文件)
+- 表头日期 08-09 → 08-10
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `25fb619` | (see git log) |
+| `cd79d7a` | (see git log) |
+
+### Testing
+
+- [OK] wc -l 复核改动引用的 10 个行数全部与当前代码一致(9/9 评审核验 + 1 处双 loader 拆分史)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 可选:拆 db/subagent_runs_tests.rs 1219(沿用 tests_* 目录化模式,另立任务)
