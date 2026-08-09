@@ -49,7 +49,7 @@
 //! and pass through here unchecked (`additionalProperties: true`).
 //!
 //! `diff_text` accepts two formats (see `definition().description`
-//! and `frontend/chat.md` "DiffPrimitive raw fallback contract"):
+//! and `frontend/chat/generative-ui.md` "DiffPrimitive raw fallback contract"):
 //!   - PREFERRED: standard unified-diff with `---`/`+++`/`@@` headers
 //!     (full colored hunk rendering, line numbers, collapse)
 //!   - ACCEPTED: plain +/-/context-line fragment without headers
@@ -371,7 +371,7 @@ mod tests {
     /// ACCEPTED). If a future cleanup collapses to a single format, this
     /// fails and forces the author to choose between expanding the
     /// renderer's accepted formats and shrinking the description.
-    /// Mirrors the raw fallback contract in `frontend/chat.md`
+    /// Mirrors the raw fallback contract in `frontend/chat/generative-ui.md`
     /// `RULE-FrontDiff-001` and the b00dde2 + b5073ea bug fixes.
     #[test]
     fn diff_description_advertises_both_accepted_formats() {

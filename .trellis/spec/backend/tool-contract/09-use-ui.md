@@ -26,7 +26,7 @@ type-specific fields are added by Child B/C and pass through unchecked):
 **`diff_text` format (2026-07-02, RULE-FrontDiff-001)**: the `diff`
 primitive accepts **two formats** for `diff_text` and the frontend
 `DiffPrimitive` + `DiffView` both render correctly (frontend invariant
-documented in `frontend/chat.md` §"DiffPrimitive raw fallback contract"):
+documented in `frontend/chat/generative-ui.md` §"DiffPrimitive raw fallback contract"):
 
 | Format | Example | Render path |
 |---|---|---|
