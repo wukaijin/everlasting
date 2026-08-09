@@ -55,7 +55,7 @@ src/
 
 ---
 
-## Large-File Splitting — 收官对照 (2026-08-09)
+## Large-File Splitting — 收官对照 (2026-08-10)
 
 ### 守则
 
@@ -64,12 +64,13 @@ src/
 
 ### 收官状态表
 
-| 总纲条目(拆分前行数) | 消化批次 | 现状(2026-08-09) |
+| 总纲条目(拆分前行数) | 消化批次 | 现状(2026-08-10) |
 |---|---|---|
 | `agent/chat_loop.rs` 5132 | A 类 batch4(`08-08-a-class-chat-loop-split`) | ✅ hub 1376(降 75%);run_chat_loop 726 行 |
 | `agent/tests_agent_loop.rs` 5674 | `08-09-tests-agent-loop-split` | ✅ tests_agent_loop/ 目录(hub 39 + 9 簇);41 测原样,最大 basic.rs 1085 |
 | `agent/subagent/dispatch.rs` 3040 | A 类 batch1 | ✅ 469(run_subagent → 7 阶段函数) |
-| `agent/subagent/loader.rs` 2290 | 批 2 | ✅ 649 |
+| `agent/subagent/loader.rs` 2290 | 批 1(`7b60b55`) | ✅ 319(扁平拆 `frontmatter.rs` 240 + `cache.rs` 616;测试 → `tests_loader.rs`) |
+| `skill/loader.rs` 1660 | 批 2(`dfcb9ba`) | ✅ 649(子模块 `loader/frontmatter.rs` 167;测试 → `tests_loader.rs`;同名不同域,纠正原表错配) |
 | `agent/subagent/sink.rs` 1679 | A 类 batch3 | ✅ 493 |
 | `llm/provider/openai.rs` 2219 | 批 1 | ✅ 848 + streaming.rs 382 |
 | `llm/provider/wire.rs` 2081 | 批 1 | ✅ wire/ 目录(types/from_wire/to_wire) |
@@ -90,4 +91,5 @@ src/
 - `agent/chat_loop.rs` hub 1376 行(超目标 176):A 类收官状态,run_chat_loop 骨架 + 已提取函数 + re-export,再拆收益小,暂缓。
 - `agent/chat_loop/drive.rs` 1653 / `agent/chat_loop/tools.rs` 1648:子模块化产物;design 预留 tools.rs 内再拆 `execute_parallel`/`execute_serial` 私有函数(可选)。
 - `run_chat_loop` 34 参数签名债务:冻结,PRD 约定"另立任务"(未立)。
-- 4 个测试任务进度:agent_loop ✅ / memories ✅ / sessions ✅ / subagent ✅(4/4 完成);全仓源码/测试文件现已全部 <1200 行(除上述遗留)。
+- `db/subagent_runs_tests.rs` 1219(超 19):**范围外漏网**——不在 08-09 四个 tests_* 拆分任务范围内(group-chat Phase 4 `35e631c` + subagent resume `703ab7d` 多轮迭代长成),可选后续拆,沿用 tests_* 目录化模式。
+- 4 个测试任务进度:agent_loop ✅ / memories ✅ / sessions ✅ / subagent ✅(4/4 完成);**批范围内**源码/测试文件现已全部 <1200 行。范围外遗留:`subagent_runs_tests.rs` 1219(见上)+ 前端 4 文件(`chat.ts` 2156 / `streamController.test.ts` 2137 / `ChatPanel.vue` 1495 / `SubagentDrawer.test.ts` 1249,总纲 PRD line 61 显式 Out of Scope)。
