@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "验收硬闸:大文件拆分收官准则(<1200 行 / 纯搬迁禁改逻辑 / cargo test --lib 全绿 / clippy+fmt 零警告 / 每簇独立可回滚)——check 阶段逐条对照"}
+{"file": ".trellis/tasks/archive/2026-08/08-09-tests-memories-split/design.md", "reason": "验收对照基线:hub re-export + 6 兄弟扩展是否正确、簇边界是否连续无漏、helper 可见性是否 pub(super)、是否动 db/mod.rs(应空 diff)——与已落地的 memories 拆分结果做结构一致性比对"}
