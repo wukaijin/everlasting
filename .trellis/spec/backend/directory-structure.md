@@ -78,7 +78,7 @@ src/
 | `git/worktree.rs` 2039 | 批 2 | ✅ 54 |
 | `db/memories.rs` 1781 | 批 2 | ✅ 83 |
 | `tools/shell.rs` 1472 | 批 3 | ✅ 586 |
-| `agent/tests_subagent.rs` 4270 | `08-09-tests-subagent-split` | ⏳ 规划中 |
+| `agent/tests_subagent.rs` 4270 | `08-09-tests-subagent-split` | ✅ tests_subagent/ 目录(hub 82 + 10 簇);30 测原样,最大 dispatch_main.rs 969 |
 | `db/memories_tests.rs` 2241 | `08-09-tests-memories-split` | ✅ memories_tests/ 目录(hub 35 + 9 簇);49 测原样,最大 list_delete_search.rs 657 |
 | `db/sessions_tests.rs` 1493 | `08-09-tests-sessions-split` | ✅ sessions_tests/ 目录(hub 35 + 5 簇);35 测原样,最大 latency_message.rs 564 |
 | `app/src/stores/streamController.ts` 2683 | 批 1 | ✅ 1121 + streamEvents.ts 1200(临界) |
@@ -90,4 +90,4 @@ src/
 - `agent/chat_loop.rs` hub 1376 行(超目标 176):A 类收官状态,run_chat_loop 骨架 + 已提取函数 + re-export,再拆收益小,暂缓。
 - `agent/chat_loop/drive.rs` 1653 / `agent/chat_loop/tools.rs` 1648:子模块化产物;design 预留 tools.rs 内再拆 `execute_parallel`/`execute_serial` 私有函数(可选)。
 - `run_chat_loop` 34 参数签名债务:冻结,PRD 约定"另立任务"(未立)。
-- 4 个测试任务进度:agent_loop ✅ / memories ✅ / sessions ✅ / subagent ⏳(3/4 完成);4 个完成后,全仓源码/测试文件应全部 <1200 行(除上述遗留)。
+- 4 个测试任务进度:agent_loop ✅ / memories ✅ / sessions ✅ / subagent ✅(4/4 完成);全仓源码/测试文件现已全部 <1200 行(除上述遗留)。

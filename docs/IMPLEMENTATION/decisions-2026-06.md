@@ -708,7 +708,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **原因**:`READONLY_TOOL_ALLOWLIST` 只被 `filter_tools_readonly` 引用(仅 `dispatch.rs:157` force_readonly 并发路径调用);L2 用独立谓词 `is_parallel_eligible`(`chat_loop.rs:1439`),不引用本常量。web_fetch 是只读网络 op、`Risk::Low`、SSRF 已防护,符合"只读并发"语义(无本地副作用,N 个独立 GET 无共享状态竞争)
 - **决策**:顺手修正 worker ask 过时描述(L3a 遗留文档债)
   - **范围**:`mod.rs` `dispatch_subagent` ToolDef.description(**LLM-facing**,原"worker has no UI...auto-denied"会让主 agent 不派 worker 做需工具任务,直接损害本 task 的可用性)+ `dispatch.rs:339` 注释 + `tool-contract.md` 第 21 参/is_worker 注释/description block(原"collapse to Deny"与 permission-layer.md §5b 矛盾)。纯文档/注释/prompt,**零行为改动**(行为早已是 WorkerAskBanner)
-  - **残留**(未纳入本 PR):`permissions/types.rs:144` is_worker 字段 doc + `tests_subagent.rs:1363/1669` 测试注释同款过时,留作关联文档债后续清理
+  - **残留**(未纳入本 PR):`permissions/types.rs:144` is_worker 字段 doc + `tests_subagent/persist_audit_token.rs`(`agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` / `..._token_usage_does_not_fold_into_parent` 两测试注释)同款过时,留作关联文档债后续清理
 - **测试**:`mod.rs` 2 处(researcher allowlist + filter 加 web_fetch keep 断言)+ `tests_subagent.rs` `l3a_filter_tools_readonly_keeps_only_four_read_tools` 改名 `_five_` + len 5 + required 加 web_fetch + forbidden 去 web_fetch;`cargo test --lib` **864 passed 0 failed**
 - **沉淀**:`.trellis/spec/backend/tool-contract.md`(web_fetch §1 加 subagent 可用性 + 第 21 参/is_worker/description 过时描述修正 + researcher 表格);`app/src-tauri/src/agent/subagent/mod.rs`(researcher tools+prompt+description + READONLY_TOOL_ALLOWLIST + 注释);`dispatch.rs:339` 注释
 
