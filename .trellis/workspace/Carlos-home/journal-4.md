@@ -213,3 +213,25 @@ C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 94: memories_tests.rs 目录化拆分(2241 行 → hub 35 + 9 簇,49 测)
+
+**Date**: 2026-08-09
+**Task**: memories_tests.rs 目录化拆分(2241 行 → hub 35 + 9 簇,49 测)
+**Branch**: `main`
+
+### Summary
+
+将 db/memories_tests.rs(2241 行,49 测)按被测功能簇目录化拆分为 db/memories_tests/(hub mod.rs 35 行 + 9 簇文件)。纯搬迁:hub 用 #[allow(unused_imports)] use super::memories; re-export trick(沿用 tests_agent_loop 先例)让簇文件 use super::memories::{...} 零改动;test_pool/make_pool 提 hub pub(super),input/reseat_created_at 留簇内私有。db/mod.rs:60 声明零改动。订正 PRD 笔误(测试数 40→49,helper 3→4 含 input)。全量验收:1662 passed(基线持平)、49 测守恒、clippy 0 warning、fmt clean、db/mod.rs diff 空、AC6 文档 sweep 0 引用、最大簇 list_delete_search.rs 657 < 1200。收官表 directory-structure.md 同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `acb1480` | (see git log) |
+| `93a0f7d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
