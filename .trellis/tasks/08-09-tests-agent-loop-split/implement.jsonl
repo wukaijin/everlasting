@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "大文件拆分收官对照表 + 纯搬迁铁律守则(Large-File Splitting 节)— 本任务即该表 tests_agent_loop.rs 行的落地"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试组织/cfg(test) 约定参考(split-agent-tests 先例同源 spec)"}
