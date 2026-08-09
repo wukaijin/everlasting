@@ -5,7 +5,7 @@
 > - 2026-06-29 `06-29-am-p2-readwrite`(`remember` 工具加入 builtin_tools(),silent-allow 模式)
 > **来源**:从原 `llm-contract.md` (3149 行)拆出本文件
 > **同源文档**:
-> - [llm-contract.md](./llm-contract.md) —核心类型 + Extended Thinking + 反模式汇总 + ⑨ 关 IPC 协议
+> - [llm-contract.md](./llm-contract.md) —核心类型 + 反模式汇总 + ⑨ 关 IPC 协议(Extended Thinking 已拆至 [llm-contract/extended-thinking.md](./llm-contract/extended-thinking.md))
 > - [tool-contract.md](./tool-contract.md) (本文) —工具定义 + ReadGuard + shell spillover + `remember` silent-allow
 > - [permission-layer.md](./permission-layer.md) —⑨ 关 Permission Layer 设计合约(A2 + B7 canonical,2026-06-13)
 > - [worktree-contract.md](./worktree-contract.md) — attach/detach/delete + cancel + system prompt
