@@ -235,3 +235,25 @@ C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 95: sessions_tests.rs 目录化拆分(hub + 5 簇, 35 测)
+
+**Date**: 2026-08-09
+**Task**: sessions_tests.rs 目录化拆分(hub + 5 簇, 35 测)
+**Branch**: `main`
+
+### Summary
+
+db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 目录(hub mod.rs + session_crud/fields_worktree/system_events/model_usage/latency_message 5 簇),纯搬迁零逻辑改动。关键差异点:hub re-export 从 memories 先例的 1 兄弟扩到 6 兄弟(migrations/models/projects/providers/sessions/types)。验收全绿:35 测过滤 + 1662 全量、clippy+fmt 0 警告、db/mod.rs 零改动、各文件 <1200(最大 latency_message 564)。收官表进度 3/4(agent_loop/memories/sessions ✅,subagent ⏳)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6a6c96c` | (see git log) |
+| `d20ff7b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
