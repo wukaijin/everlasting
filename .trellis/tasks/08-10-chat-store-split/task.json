@@ -1,0 +1,38 @@
+{
+  "id": "08-10-chat-store-split",
+  "name": "08-10-chat-store-split",
+  "title": "stores/chat.ts 拆分(2156 行 → hub + 4 action 簇,工厂 + ctx 注入)",
+  "description": "把 stores/chat.ts 的 4 个 action 簇(会话 CRUD / send+cancel / edit+resend+retry / mode+yolo+workflow)按 streamEvents.ts 那轮沉淀的 factory + ctx 注入契约拆出,hub 降到 ~700 行,纯搬迁不改逻辑,pnpm test 全绿。",
+  "status": "in_progress",
+  "dev_type": "refactor",
+  "scope": "frontend",
+  "package": "app/src/stores",
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-08-10",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "app/src/stores/chat.ts",
+    "app/src/stores/chat.test.ts",
+    "app/src/stores/chatMode.test.ts",
+    "app/src/stores/chatSend.test.ts",
+    ".trellis/spec/frontend/state-management.md",
+    ".trellis/spec/frontend/directory-structure.md"
+  ],
+  "notes": "",
+  "meta": {
+    "source_file_lines": 2156,
+    "hub_target_lines": 700,
+    "contract_ref": "streamEvents.ts (createStreamEventHandlers factory)",
+    "spec_ref": ".trellis/spec/frontend/state-management.md §Stream Controller Pattern"
+  }
+}
