@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "AC1 行数目标 <1200 + 纯搬迁铁律验收口径(Large-File Splitting 节收官表)"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试拆分后 cfg(test)/命名/无 unused-import 验收基准(tests_agent_loop 先例同源 spec)"}

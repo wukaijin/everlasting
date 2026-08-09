@@ -79,7 +79,7 @@ src/
 | `db/memories.rs` 1781 | 批 2 | ✅ 83 |
 | `tools/shell.rs` 1472 | 批 3 | ✅ 586 |
 | `agent/tests_subagent.rs` 4270 | `08-09-tests-subagent-split` | ⏳ 规划中 |
-| `db/memories_tests.rs` 2241 | `08-09-tests-memories-split` | ⏳ 规划中 |
+| `db/memories_tests.rs` 2241 | `08-09-tests-memories-split` | ✅ memories_tests/ 目录(hub 35 + 9 簇);49 测原样,最大 list_delete_search.rs 657 |
 | `db/sessions_tests.rs` 1493 | `08-09-tests-sessions-split` | ⏳ 规划中 |
 | `app/src/stores/streamController.ts` 2683 | 批 1 | ✅ 1121 + streamEvents.ts 1200(临界) |
 | `app/src/components/chat/MessageItem.vue` 2054 | 批 1 | ✅ 1125 + messageCards/*.ts |
