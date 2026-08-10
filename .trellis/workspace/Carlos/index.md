@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 33
+- **Total Sessions**: 34
 - **Last Active**: 2026-08-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~284 | Active |
+| `journal-2.md` | ~308 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-08-10 | 群聊参与者/主持人缓存率显示 + 上下文占用缓存率讨论 | `0da5705`, `355a57b`, `bfb0d8c`, `607d5b7` | `main` |
 | 33 | 2026-08-10 | docs 过时审查收官 — 43 文档审计 + 断链/错卷/索引处置 + 归档 | `d8be89f`, `5f5a9b6`, `f948452`, `2596b81` | `main` |
 | 32 | 2026-07-28 | review plugin 可用性修复 C4+C5（breadcrumb + reviewer 派发死锁 + 跨 plugin task 归属） | `072f8c6`, `81fed8d`, `1f4b506`, `ac5597c`, `b27ba14` | `main` |
 | 31 | 2026-07-26 | daemon shutdown: agent loop drain(闭合硬终止缺口) | `4284315` | `main` |

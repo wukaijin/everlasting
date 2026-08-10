@@ -282,3 +282,27 @@ docs-staleness-audit 任务收官:43 个活文档逐行审计(design 误计 48,�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 34: 群聊参与者/主持人缓存率显示 + 上下文占用缓存率讨论
+
+**Date**: 2026-08-10
+**Task**: 群聊参与者/主持人缓存率显示 + 上下文占用缓存率讨论
+**Branch**: `main`
+
+### Summary
+
+讨论并实现群聊缓存率显示:缓存率=单次调用 cache_read/context_input(非聚合);零 schema 改动,基于 turn_trace × messages.speaker join 取每 speaker 最近一次轮次。后端 list_speaker_cache_usage + group_chat_cache_rates 命令(tauri/daemon/http.ts 三处注册);前端 GroupChatConfigModal edit 模式参与者行+主持人区只读展示,cacheRatePercent 纯函数。check 子代理修复 max-seq 测试语义与删参与者错位两问题。cargo 1665 / pnpm 1027 全绿。spec 补 token-usage-tracking 群聊按说话人聚合 Scenario。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0da5705` | (see git log) |
+| `355a57b` | (see git log) |
+| `bfb0d8c` | (see git log) |
+| `607d5b7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
