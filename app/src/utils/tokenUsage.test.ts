@@ -10,7 +10,12 @@
 //   - 75%+    → "alert" (red)
 
 import { describe, it, expect } from "vitest";
-import { abbreviateTokens, parseTokenUsageJson, tokenUsageLevel } from "./tokenUsage";
+import {
+  abbreviateTokens,
+  cacheRatePercent,
+  parseTokenUsageJson,
+  tokenUsageLevel,
+} from "./tokenUsage";
 
 describe("tokenUsageLevel", () => {
   it("returns 'ok' for 0%", () => {
@@ -134,5 +139,29 @@ describe("parseTokenUsageJson", () => {
     expect(snap.cache_creation_input_tokens).toBe(0); // boolean → 0
     expect(snap.cache_read_input_tokens).toBe(0); // null → 0
     expect(snap.context_input_tokens).toBe(600); // number passes through
+  });
+});
+
+describe("cacheRatePercent", () => {
+  it("returns null for contextInput <= 0 (legacy rows → '—' placeholder)", () => {
+    expect(cacheRatePercent(50, 0)).toBeNull();
+    expect(cacheRatePercent(50, -1)).toBeNull();
+    expect(cacheRatePercent(0, 0)).toBeNull();
+  });
+
+  it("returns 0% when nothing was cache-read", () => {
+    expect(cacheRatePercent(0, 200)).toBe(0);
+  });
+
+  it("returns exact percentages for clean ratios", () => {
+    expect(cacheRatePercent(50, 200)).toBe(25);
+    expect(cacheRatePercent(100, 100)).toBe(100);
+    expect(cacheRatePercent(200, 100)).toBe(200);
+  });
+
+  it("rounds non-integer ratios to the nearest integer percent", () => {
+    expect(cacheRatePercent(1, 3)).toBe(33); // 33.33… → 33
+    expect(cacheRatePercent(2, 3)).toBe(67); // 66.66… → 67
+    expect(cacheRatePercent(150, 400)).toBe(38); // 37.5 → 38
   });
 });

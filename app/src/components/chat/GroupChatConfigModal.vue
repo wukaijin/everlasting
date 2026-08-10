@@ -45,7 +45,13 @@ import {
 } from "reka-ui";
 import { useChatStore } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
-import type { ParticipantConfig } from "../../stores/chat.types";
+import type {
+  ParticipantConfig,
+  SessionSummary,
+  SpeakerCacheUsage,
+} from "../../stores/chat.types";
+import { transport } from "../../transport";
+import { cacheRatePercent } from "../../utils/tokenUsage";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -117,6 +123,58 @@ const isValid = computed(() => {
 // Models available for the dropdown.
 const availableModels = computed(() => modelsStore.models ?? []);
 
+// ---------------------------------------------------------------------
+// Group-chat cache rates (08-10-group-chat-cache-rate, R6/R7)
+// ---------------------------------------------------------------------
+
+// Per-speaker latest-turn cache-usage map, keyed by the persisted
+// `messages.speaker` value (participant name / "moderator").
+// Read-only auxiliary info: fetched once per open in edit mode
+// (R7), failures degrade to "—" and never block editing.
+const cacheRates = ref<Map<string, SpeakerCacheUsage>>(new Map());
+
+// Speaker names per row index, snapshotted at open time. The rate
+// rows must survive the user editing a name in the draft — the
+// persisted `messages.speaker` still holds the old name until
+// save, so lookups key off the snapshot, not the live draft.
+const rosterSpeakers = ref<string[]>([]);
+
+// The current session record (for the moderator's model label —
+// the host only passes sessionId; the model lives on
+// `SessionSummary.model_id`).
+const currentSession = computed<SessionSummary | null>(() => {
+  if (!props.sessionId) return null;
+  return chatStore.sessions.find((s) => s.id === props.sessionId) ?? null;
+});
+
+async function loadCacheRates(sessionId: string) {
+  cacheRates.value = new Map();
+  try {
+    const rows = await transport.invoke<SpeakerCacheUsage[]>("group_chat_cache_rates", {
+      sessionId,
+    });
+    cacheRates.value = new Map(rows.map((r) => [r.speaker, r]));
+  } catch (e) {
+    // Silent degradation: the rate is auxiliary, the edit flow
+    // stays usable (design.md: 不阻塞编辑).
+    console.error("group_chat_cache_rates failed:", e);
+  }
+}
+
+/** Latest-turn cache rate (%) for `speaker`, or `null` when there
+ *  is no usable usage row (no turns yet / all cancelled / legacy
+ *  `context_input = 0` / request failure) → "—" placeholder. */
+function cacheRateFor(speaker: string): number | null {
+  const u = cacheRates.value.get(speaker);
+  if (!u) return null;
+  return cacheRatePercent(u.cache_read, u.context_input);
+}
+
+function cacheRateText(speaker: string): string {
+  const pct = cacheRateFor(speaker);
+  return pct === null ? "—" : `${pct}%`;
+}
+
 // Seed / re-seed the draft when the modal opens.
 watch(
   () => [props.open, props.mode, props.sessionId, props.initialParticipants] as const,
@@ -130,12 +188,31 @@ watch(
         model: p.model,
         persona_md: p.persona_md,
       }));
+      rosterSpeakers.value = props.initialParticipants.map((p) => p.name.trim());
     } else if (props.mode === "create") {
       // Seed two empty participants (D5 minimum).
       participants.value = [
         { name: "", model: availableModels.value[0]?.id ?? "" },
         { name: "", model: availableModels.value[0]?.id ?? "" },
       ];
+      rosterSpeakers.value = [];
+    }
+  },
+  { immediate: true },
+);
+
+// Fetch cache rates once per open (edit mode only — a fresh group
+// chat has no turns, R6). Separate watcher so the draft seeding
+// above stays untouched. `immediate: true` so a mount with
+// `open=true` (tests / fast open) fetches on first render; the
+// open-state change still refetches on every reopen (R7).
+watch(
+  () => [props.open, props.mode, props.sessionId] as const,
+  ([isOpen, mode, sessionId]) => {
+    if (!isOpen) return;
+    cacheRates.value = new Map();
+    if (mode === "edit" && sessionId) {
+      void loadCacheRates(sessionId);
     }
   },
   { immediate: true },
@@ -151,11 +228,19 @@ function addParticipant() {
     name: "",
     model: availableModels.value[0]?.id ?? "",
   });
+  // Keep the roster snapshot index-aligned with the draft: the new
+  // row has no history → empty speaker → "—" rate.
+  rosterSpeakers.value.push("");
 }
 
 function removeParticipant(idx: number) {
   if (participants.value.length <= MIN_PARTICIPANTS) return;
   participants.value.splice(idx, 1);
+  // Splice the snapshot at the SAME index — otherwise every
+  // subsequent row shifts by one and shows the wrong speaker's
+  // cache rate (row N would render rosterSpeakers[N] which now
+  // belongs to the removed participant's successor).
+  rosterSpeakers.value.splice(idx, 1);
 }
 
 // ---------------------------------------------------------------------
@@ -309,6 +394,23 @@ function modelLabel(id: string): string {
                 </SelectRoot>
               </label>
 
+              <!--
+                Group-chat cache rate (08-10-group-chat-cache-rate,
+                R6): read-only line showing THIS speaker's latest
+                LLM call cache-hit rate ("—" when no usable usage
+                row yet / legacy context_input=0 / fetch failure).
+                Keyed off the roster snapshot — the draft name may
+                be mid-edit while the DB still holds the old
+                speaker value.
+              -->
+              <div
+                v-if="mode === 'edit'"
+                class="gcfg-cache-rate"
+                :data-testid="`gcfg-cache-rate-${idx}`"
+              >
+                缓存率 {{ cacheRateText(rosterSpeakers[idx] ?? "") }}
+              </div>
+
               <label class="gcfg-field">
                 <span class="gcfg-field__label">人设 (可选)</span>
                 <textarea
@@ -331,6 +433,31 @@ function modelLabel(id: string): string {
           >
             + 添加参与者
           </button>
+
+          <!--
+            Moderator zone (08-10-group-chat-cache-rate, R6):
+            read-only row at the bottom of the edit modal. The
+            moderator is not in the participant roster; its
+            speaker key is fixed to "moderator" (matches the
+            backend `group_chat_loop` write), and its model is
+            the session's own `model_id`.
+          -->
+          <div
+            v-if="mode === 'edit'"
+            class="gcfg-moderator"
+            data-testid="gcfg-moderator"
+          >
+            <span class="gcfg-moderator__label">主持人</span>
+            <span class="gcfg-moderator__model">
+              {{ modelLabel(currentSession?.model_id ?? "") }}
+            </span>
+            <span
+              class="gcfg-moderator__rate"
+              data-testid="gcfg-moderator-cache-rate"
+            >
+              缓存率 {{ cacheRateText("moderator") }}
+            </span>
+          </div>
         </div>
 
         <div class="gcfg-footer">
@@ -480,6 +607,40 @@ function modelLabel(id: string): string {
 
 .gcfg-field__label {
   font-size: 12px;
+  color: var(--ev-color-text-muted, #8a8a8a);
+}
+
+/* Read-only cache-rate line on each participant row
+   (08-10-group-chat-cache-rate). */
+.gcfg-cache-rate {
+  font-size: 12px;
+  color: var(--ev-color-text-muted, #8a8a8a);
+  margin-bottom: 8px;
+}
+
+/* Read-only moderator zone at the bottom of the edit modal. */
+.gcfg-moderator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 4px;
+  border: 1px solid var(--ev-color-border, #333);
+  border-radius: 6px;
+  background: var(--ev-color-bg-input, #2a2a2a);
+  font-size: 13px;
+}
+
+.gcfg-moderator__label {
+  font-weight: 500;
+}
+
+.gcfg-moderator__model {
+  color: var(--ev-color-text-muted, #8a8a8a);
+}
+
+.gcfg-moderator__rate {
+  margin-left: auto;
   color: var(--ev-color-text-muted, #8a8a8a);
 }
 

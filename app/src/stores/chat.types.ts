@@ -464,6 +464,26 @@ export interface ParticipantConfig {
   persona_md?: string;
 }
 
+/** Per-speaker latest-turn cache-usage numbers returned by the
+ *  `group_chat_cache_rates` IPC (08-10-group-chat-cache-rate).
+ *  Snake_case to match the Rust `db::trace::SpeakerCacheUsage`
+ *  serialization (no `rename_all`).
+ *
+ *  Semantics (single-call, NOT aggregated):
+ *   - `cache_read` / `context_input` come from that speaker's
+ *     MOST RECENT assistant turn that carried token usage
+ *     (backend max-seq join over `turn_trace` + `messages`).
+ *   - `context_input = 0` marks legacy usage rows that predate
+ *     the 2026-06-26 `context_input_tokens` field — the caller
+ *     renders the "—" placeholder via `cacheRatePercent`.
+ *   - `speaker` is the participant name, or `"moderator"` for
+ *     the host (matches `messages.speaker`). */
+export interface SpeakerCacheUsage {
+  speaker: string;
+  cache_read: number;
+  context_input: number;
+}
+
 /** User-facing mode subset — the three modes the MVP UI exposes.
  *  Excludes `Background` (reserved in the backend enum for
  *  schema stability but never shown to the user). */

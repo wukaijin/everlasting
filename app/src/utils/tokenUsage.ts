@@ -61,6 +61,31 @@ export function abbreviateTokens(n: number): string {
   return m % 1 === 0 ? `${m}M` : `${m.toFixed(1).replace(/\.0$/, "")}M`;
 }
 
+/** Cache-hit rate of a single LLM call (08-10-group-chat-cache-rate):
+ *  `cache_read_input_tokens / context_input_tokens` as a rounded
+ *  integer percentage.
+ *
+ *  Semantics (locked by the task PRD):
+ *   - Single-call, NOT aggregated: each group-chat speaker's rate
+ *     comes from their latest turn that carried token usage.
+ *   - The denominator is `context_input_tokens` (the
+ *     cross-provider-normalized total input: Anthropic =
+ *     input + cache_creation + cache_read; OpenAI = prompt_tokens).
+ *     Using raw `input_tokens` would distort the rate across
+ *     providers.
+ *   - `contextInput <= 0` → `null`: legacy rows that predate the
+ *     2026-06-26 `context_input_tokens` field serialize it as 0
+ *     (see the backend `COALESCE` in `list_speaker_cache_usage`),
+ *     so the caller renders the "—" placeholder instead of a
+ *     misleading 0%/∞.
+ *   - `cacheRead` may exceed `contextInput` with compatible
+ *     proxies (non-normalized counters) — the raw ratio is
+ *     returned unclamped; a > 100% value is real data. */
+export function cacheRatePercent(cacheRead: number, contextInput: number): number | null {
+  if (contextInput <= 0) return null;
+  return Math.round((cacheRead / contextInput) * 100);
+}
+
 /** Parsed `TokenUsage` snapshot — the snake_case JSON stored in
  *  `subagent_runs.token_usage_json` (and `sessions.last_*_json`).
  *  Field names are snake_case because the Rust `TokenUsage` struct

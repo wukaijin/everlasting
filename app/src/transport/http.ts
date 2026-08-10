@@ -42,7 +42,7 @@
 import type { Transport, UnlistenFn } from "./types";
 
 // ---------------------------------------------------------------------------
-// cmd → domain 映射(76 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
+// cmd → domain 映射(81 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
 // 的 `.route("/<cmd>", ...)` 提取)。invoke("cmd", args) →
 // POST `{daemonBase}/api/v1/{domain}/cmd`。新增 command 时同步加这里
 // (Rust 侧 routes 注册 + 此映射是两处需手工对齐的点)。
@@ -115,6 +115,7 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   delete_session: "sessions",
   diff_worktree: "sessions",
   edit_user_message: "sessions",
+  group_chat_cache_rates: "sessions",
   list_sessions: "sessions",
   list_workflow_plugins: "sessions",
   load_session: "sessions",
