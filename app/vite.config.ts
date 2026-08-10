@@ -16,11 +16,34 @@ const host = process.env.TAURI_DEV_HOST;
  * we can fix from the consumer side — filter the noisy warnings
  * here so they don't drown real build errors. All other warnings
  * pass through to the default handler unchanged.
+ *
+ * Also filtered: the `dynamic import will not move module into
+ * another chunk` warning (emitted by the `vite:reporter` plugin).
+ * A few store modules use `await import(...)` as an intentional
+ * cycle-breaker at module-init time (`questionCards` ↔ `chat` /
+ * `chatModeActions` — see those files). Because those modules are
+ * also statically imported by components, Rollup correctly notes the
+ * dynamic import can't produce a separate chunk; that's fine here —
+ * the dynamic import exists to defer evaluation, not to code-split.
+ * This is a build-time informational notice, not a defect.
  */
 function viteOnwarn(warning: unknown, defaultHandler: (w: unknown) => void) {
-  const w = warning as { code?: string; id?: string };
+  const w = warning as {
+    code?: string;
+    id?: string;
+    plugin?: string;
+    message?: string;
+  };
   const code = w?.code;
   const id = w?.id ?? "";
+  const msg = w?.message ?? "";
+  if (
+    code === "PLUGIN_WARNING" &&
+    w?.plugin === "vite:reporter" &&
+    msg.includes("will not move module into another chunk")
+  ) {
+    return;
+  }
   if (
     (code === "PARSER_ERROR" || code === "INVALID_ANNOTATION") &&
     id.includes("@vueuse/core")

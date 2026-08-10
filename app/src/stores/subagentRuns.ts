@@ -80,6 +80,7 @@ import {
   parseConflictFiles,
 } from "./subagentRuns.types";
 import { RunAccumulator, parseTranscriptJson } from "./runAccumulator";
+import { useProjectsStore } from "./projects";
 import { useChatStore } from "./chat";
 
 // -----------------------------------------------------------------------
@@ -598,7 +599,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       // no parentSessionId was supplied (defensive — old
       // callers passing only runId still get the toast-and-
       // workflow behavior, just without the chip refresh).
-      const projectsStore = (await import("./projects")).useProjectsStore();
+      const projectsStore = useProjectsStore();
       if (result.autoAttachedParent && parentSessionId && projectsStore.currentProjectId) {
         await useChatStore().loadSessions(projectsStore.currentProjectId);
       }
