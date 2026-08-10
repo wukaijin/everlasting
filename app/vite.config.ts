@@ -88,12 +88,43 @@ export default defineConfig(async () => ({
   },
 
   build: {
-    // TODO(follow-up): code-split vendor chunk (vue / @vueuse / pinia).
-    // Main bundle is 745 kB — the proper fix is `manualChunks` to
-    // split vendor from app code (better caching + faster TTI).
-    // Tracked in ROADMAP V2-档2 code-splitting item.
+    // Main app chunk was ~1.08 MB. Split stable third-party code into
+    // vendor chunks so the app chunk stays small: better HTTP caching
+    // (vendor rarely changes), faster TTI for the critical path.
+    // The chunks below are grouped by runtime role:
+    //   - vendor-vue:      framework + state (vue, @vue/*, pinia)
+    //   - vendor-reka:     reka-ui component library (heavy)
+    //   - vendor-editor:   CodeMirror editor core (ChatInput)
+    //   - vendor-markdown: markdown rendering + sanitize
+    //   - vendor-icons:    icon sets (heroicons / lucide)
+    //   - vendor-misc:     everything else (diff / fuzzysort / tauri api)
+    // A module is matched via its node_modules package root so pnpm
+    // symlink paths (node_modules/.pnpm/<pkg>/node_modules/<pkg>) work.
     chunkSizeWarningLimit: 800,
     rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return;
+          const pkg = id.split("node_modules/").pop() ?? "";
+          if (
+            pkg.startsWith("vue") ||
+            pkg.startsWith("@vue/") ||
+            pkg.startsWith("pinia")
+          )
+            return "vendor-vue";
+          if (pkg.startsWith("reka-ui")) return "vendor-reka";
+          if (pkg.startsWith("@codemirror")) return "vendor-editor";
+          if (
+            pkg.startsWith("marked") ||
+            pkg.startsWith("highlight.js") ||
+            pkg.startsWith("dompurify")
+          )
+            return "vendor-markdown";
+          if (pkg.startsWith("@heroicons") || pkg.startsWith("@lucide"))
+            return "vendor-icons";
+          return "vendor-misc";
+        },
+      },
       onwarn: viteOnwarn,
     },
   },
