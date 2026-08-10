@@ -1,21 +1,23 @@
 # 交错思考渲染 — 方案设计
 
+> **状态**:✅ **已实施(2026-07-23/24)** — 后端落库保流序(`ba1eeca`)+ 前端 run 分组(`5b1fc81`)+ 实时流序交错渲染(`78d7ec7`)+ 修复 thinking 消失(`8daaf23`);ADR 见 [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md)。本文档保留为方案回顾,正文「现状 vs 目标」均指实施前。
+>
 > **背景**:同类产品(Claude.ai / Cursor)在前端把 LLM 的一次完整 agent run 渲染成**一条连续流动的消息**:想 → 调工具 → 结果 → 想 → 调工具 → 结果 → 文本。而 EverLasting 当前把每个 LLM turn 渲染成**独立气泡**,气泡内思考/工具/文本分桶固定排序,观感上像是"思考和文本扎堆",形态上不一样。业界把这种连续形态称作"交错思考"(interleaved thinking)。
 >
 > **结论先行**:**形态差异不是 DB 收集方式导致的**。`messages.content` 列存的是 `Vec<ContentBlock>` 的 JSON 数组,物理上完全能保留块顺序;真正把"交错"压平的是后端攒块落库 + 前端 rehydrate + 渲染这条管线里的两次"分桶"。而且实时流式阶段其实**已经是"一条流"**,问题只集中在 reload 之后。
 
 ---
 
-## 0. 全景数据流(现状 vs 目标)
+## 0. 全景数据流(实施前 vs 实施后)
 
 ```
-现状:
+实施前:
   实时流式:  [user] → [assistant placeholder(整个 run 堆叠)]   ← 已经是一条流
                           ↓ finalize → reloadAfterFinalize
   reload 后:  [user] [asst t1] [user(tr)] [asst t2] [user(tr)] [asst t3]   ← 散成 N 个气泡
   渲染:       每行一个 MessageItem,气泡内 think→tool→text 固定排序
 
-目标:
+实施后:
   实时流式:  [user] → [assistant placeholder(一条流)]          ← 不变
                           ↓ finalize → reloadAfterFinalize
   reload 后:  [user] [asst t1] [user(tr)] [asst t2] [user(tr)] [asst t3]   ← DB 行不变

@@ -81,7 +81,7 @@ skill 是**描述性规范**(markdown body),agent 通过 `use_skill` 加载,不�
 
 ### 6.4 artifact 查阅(已定:两条机制)
 
-1. **加载机制**:task.json 元数据 + `summary` → append `messages[0]`(**per-turn 注入,持久化不动**;小,~50 tokens)。prd/design/progress **全文不放**,只给 path,agent `read_file` 自取(避免大文件撑爆 context,复用 [`RECALL_TOKEN_BUDGET`](../.trellis/spec/backend/memory.md) 预算思维)。
+1. **加载机制**:task.json 元数据 + `summary` → append `messages[0]`(**per-turn 注入,持久化不动**;小,~50 tokens)。prd/design/progress **全文不放**,只给 path,agent `read_file` 自取(避免大文件撑爆 context,复用 [`RECALL_TOKEN_BUDGET`](../../.trellis/spec/backend/memory.md) 预算思维)。
 2. **skill 查阅**:agent 通过 wf-* skill 知道"该读哪些 artifact";也通过通用 read_file 主动查。
 
 ### 6.5 sub-agent 三角色(plugin 专属,自带 agents/ 子目录)
@@ -156,7 +156,7 @@ plugin 目录有的角色用 plugin 的;没有的 fallback 到全局。用户想
 
 **问题**:engine 填好 task meta 占位符后,模板文本如何到达 agent 上下文?
 
-**决定**:走方案 (a)——engine 把填好的 delegation 模板 append 到 **per-turn request clone 的 `messages[0]` block 数组**(复用 [`inject_recall_into_turn`](../.trellis/spec/backend/memory.md) 同款 seam,`cache_control: None`)。
+**决定**:走方案 (a)——engine 把填好的 delegation 模板 append 到 **per-turn request clone 的 `messages[0]` block 数组**(复用 [`inject_recall_into_turn`](../../.trellis/spec/backend/memory.md) 同款 seam,`cache_control: None`)。
 
 **注入时机(M-E 评审修正)**:**仅 dispatch turn 追加**。当 turn 内出现 `dispatch_subagent` tool_use 时,engine 在 `run_subagent` 内部拦截点(见 §6.6.2)解析目标 role → 取 `delegation_templates[role]` → 填占位符 → append messages[0]。**非 dispatch turn 不追加 delegation 模板**(只有 breadcrumb + task meta,见 §6.4)。这与 §10.7"per-turn 都 append,但内容因 turn 而异"一致:大多数 turn 只有 breadcrumb+meta,dispatch turn 多一块 delegation 模板。
 

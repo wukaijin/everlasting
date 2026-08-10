@@ -4,6 +4,6 @@
 
 ## 分卷索引
 
-- [2026-07](./IMPLEMENTATION/decisions-2026-07.md)
-- [2026-06](./IMPLEMENTATION/decisions-2026-06.md)
-- [2026-08](./IMPLEMENTATION/decisions-2026-08.md)
+- [2026-07](./decisions-2026-07.md)
+- [2026-06](./decisions-2026-06.md)
+- [2026-08](./decisions-2026-08.md)

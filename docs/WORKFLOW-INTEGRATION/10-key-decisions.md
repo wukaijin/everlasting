@@ -18,7 +18,7 @@
 
 ### 10.4 workflow 是 session 级开关,正交于 Mode
 
-**决策**:workflow = `sessions.workflow_enabled`;[Mode](./DESIGN.md) 是独立权限旋钮,两者正交,state 不替用户切 Mode。
+**决策**:workflow = `sessions.workflow_enabled`;[Mode](../DESIGN.md) 是独立权限旋钮,两者正交,state 不替用户切 Mode。
 
 ### 10.5 state machine 元流程(固定枚举)+ 实施阶段(LLM 拆)
 
@@ -32,7 +32,7 @@
 
 ### 10.7 注入一律 append 到 messages[0],不碰持久化
 
-**决策**:所有 workflow 注入 append 到 per-turn request clone 的 messages[0],`cache_control: None`,绝不新开 user message。保 Anthropic prompt cache breakpoint 不失效(5-10× 成本)。这是 [`memory_recall`](../.trellis/spec/backend/memory.md) + [B12 checklist](../.trellis/spec/backend/agent-loop-architecture.md) 已验证的硬规则。
+**决策**:所有 workflow 注入 append 到 per-turn request clone 的 messages[0],`cache_control: None`,绝不新开 user message。保 Anthropic prompt cache breakpoint 不失效(5-10× 成本)。这是 [`memory_recall`](../../.trellis/spec/backend/memory.md) + [B12 checklist](../../.trellis/spec/backend/agent-loop-architecture.md) 已验证的硬规则。
 
 **S-B 评审加注**:`inject_recall_into_turn` 在 `messages[0]` 非 user instruction 时有 **fallback 分支会 prepend 新建 synthetic user message**(memory_recall.rs:259-278),破坏 cache。**本工作流不允许触发该 fallback**——workflow session 默认 B5 指令文件加载保证 messages[0] 是 user-role Blocks message(见 §6.6.1 前置约束);`load_for_session` 返回空 layers 的 workflow session 属配置异常,engine warn + 降级非 workflow 行为,不走 fallback prepend。
 

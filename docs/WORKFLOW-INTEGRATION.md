@@ -11,7 +11,7 @@
 - [4. 愿景:两个 workflow plugin](./WORKFLOW-INTEGRATION/04-vision-two-plugins.md)
 - [5. 架构:engine vs plugin](./WORKFLOW-INTEGRATION/05-architecture-engine-vs-plugin.md)
 - [6. 默认 plugin `dev`(开发流)内容详解](./WORKFLOW-INTEGRATION/06-default-dev-plugin.md)
-- [7. 第二个 plugin `review`(评审流)(愿景,延迟讨论)](./WORKFLOW-INTEGRATION/07-review-plugin-vision.md)
+- [7. 第二个 plugin `review`(评审流)—— 已开工](./WORKFLOW-INTEGRATION/07-review-plugin-vision.md)
 - [8. hook:Everlasting 没有 hook runner](./WORKFLOW-INTEGRATION/08-hooks.md)
 - [9. 分阶段实施计划](./WORKFLOW-INTEGRATION/09-phased-plan.md)
 - [10. 关键决策(岔路记录)](./WORKFLOW-INTEGRATION/10-key-decisions.md)

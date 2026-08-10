@@ -1,8 +1,8 @@
 # 远程访问 / 多通道改造 — 实施路线图
 
-> **状态**:实施路线图(2026-07-20)。本文档是 [REMOTE-ACCESS-RESEARCH.md](./REMOTE-ACCESS-RESEARCH.md) 调研评估的**可执行版本**,把 Phase 1/2/3 拆成可独立验证、独立交付的子阶段。
+> **状态**:实施路线图(2026-07-20)。本文档是 [REMOTE-ACCESS-RESEARCH.md](./_archive/2026-07-20-remote-access-research.md) 调研评估的**可执行版本**,把 Phase 1/2/3 拆成可独立验证、独立交付的子阶段。
 > **定位**:RESEARCH.md 是"为什么这么做",本文是"具体怎么做、怎么验证"。每个子阶段都满足三个条件:① 能独立提交 ② 有明确的验证标准 ③ Tauri 版始终可用(不破坏现状)。
-> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路) / [ROADMAP B10](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正)
+> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正)
 
 ---
 
@@ -345,7 +345,7 @@ cargo test --package everlasting-daemon --test e2e large_payload
 
 ### Phase 2 整体验收
 
-> **状态(2026-07-23,P2.5)**:P2.1–P2.5 的**代码 + 自动化测试**全部就绪并提交。下方 GUI 运行时验证项(dogfooding、WSL→Windows 宿主浏览器实跑)需在 GUI-capable 机器手动验证后才能勾选 —— WSL 无头环境无法跑 Tauri 窗口 / 无真实 LLM 凭据。手动 smoke 清单见 `.trellis/tasks/07-20-remote-access-daemon-split/implement.md` P2.5 §E4。
+> **状态(2026-07-23,P2.5)**:P2.1–P2.5 的**代码 + 自动化测试**全部就绪并提交。下方 GUI 运行时验证项(dogfooding、WSL→Windows 宿主浏览器实跑)需在 GUI-capable 机器手动验证后才能勾选 —— WSL 无头环境无法跑 Tauri 窗口 / 无真实 LLM 凭据。手动 smoke 清单见 `.trellis/tasks/archive/2026-07/07-20-remote-access-daemon-split/implement.md` P2.5 §E4。
 
 - [x] P2.1 ~ P2.5 **代码 + 自动化测试**全部完成(commit `84d4689` + P2.5)
 - [ ] **本机浏览器可访问 daemon**(Windows 宿主访问 WSL daemon 跑通)—— 留手动,见 [HACKING-wsl §远程访问 daemon 部署](./HACKING-wsl.md#远程访问-daemon-部署phase-22026-07-23)
@@ -363,7 +363,7 @@ cargo test --package everlasting-daemon --test e2e large_payload
 
 ## Phase 3:认证 + 跨设备远程(远期,1 周+)
 
-> 📌 **本阶段定为远期规划**,不在近期实施范围。前置条件:Phase 2 本机访问跑通 + HTTP/SSE 协议经实际使用稳定(至少 dogfooding 1 个月)。设计草稿见 [RESEARCH §4.4](./REMOTE-ACCESS-RESEARCH.md#44-phase-3远期规划认证--跨设备远程访问)。
+> 📌 **本阶段定为远期规划**,不在近期实施范围。前置条件:Phase 2 本机访问跑通 + HTTP/SSE 协议经实际使用稳定(至少 dogfooding 1 个月)。设计草稿见 [RESEARCH §4.4](./_archive/2026-07-20-remote-access-research.md#44-phase-3远期规划认证--跨设备远程访问)。
 
 **启动时再拆子阶段**(参考要点):
 - P3.1 配对码流程 + `devices` 表 + token 校验中间件

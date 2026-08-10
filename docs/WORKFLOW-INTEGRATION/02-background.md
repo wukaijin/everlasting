@@ -2,15 +2,15 @@
 
 ### 2.1 现状:零件齐了,缺"机制"把它们串成标准流程
 
-[ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) 显示工作流的 ~80% 零件已落地,但它们目前是**被 agent 随机使用**的——agent 想起就 dispatch_subagent、想不起就自己一把梭。缺的是一个**机制**:在 session 打开 workflow 后,自动驱动 agent 按固定标准使用这些零件。
+[ROADMAP §1.2](../ROADMAP.md#12-路线图外完成) 显示工作流的 ~80% 零件已落地,但它们目前是**被 agent 随机使用**的——agent 想起就 dispatch_subagent、想不起就自己一把梭。缺的是一个**机制**:在 session 打开 workflow 后,自动驱动 agent 按固定标准使用这些零件。
 
 | engine 能力 | 已有零件(可复用) | 缺口(机制) |
 |---|---|---|
 > 注:本表引用 `.trellis/spec/` 路径是过渡期(本项目用 Trellis 开发,现有 spec 在那)。`.everlasting/spec/`(Q7)起来后**过渡期两份共存**(各自管各自职责:Trellis spec 管工具用法,Everlasting spec 管项目代码规范),不是"现有引用逐步迁移"——两目录独立演进。
-| breadcrumb 注入 seam | [`build_instructions_blocks`](../.trellis/spec/backend/agent-loop-architecture.md) + [`memory_recall::inject_recall_into_turn`](../.trellis/spec/backend/memory.md)(append 到 messages[0],`cache_control: None`) | engine 读 plugin 配置 → 拼 breadcrumb → 注入 |
-| skill 规范 | [B4 skill](./ROADMAP.md)(`use_skill` + `.everlasting/skills/` 三层覆盖) | wf-* skill 包(plugin 自带 `.everlasting/workflow/dev/skills/`,见 §6.3) |
-| sub-agent 角色 | [B6 subagent](./ROADMAP.md) + [L3d loader](./ROADMAP.md)(`builtin_subagents()` 已有 researcher / general-purpose) | checker 角色 + state→角色映射(plugin 配置) |
-| 沉淀 | [V2 2 期自主记忆](./ROADMAP.md) + B5 指令文件 | task done 时把决策/教训升级进 `.everlasting/spec/` |
+| breadcrumb 注入 seam | [`build_instructions_blocks`](../../.trellis/spec/backend/agent-loop-architecture.md) + [`memory_recall::inject_recall_into_turn`](../../.trellis/spec/backend/memory.md)(append 到 messages[0],`cache_control: None`) | engine 读 plugin 配置 → 拼 breadcrumb → 注入 |
+| skill 规范 | [B4 skill](../ROADMAP.md)(`use_skill` + `.everlasting/skills/` 三层覆盖) | wf-* skill 包(plugin 自带 `.everlasting/workflow/dev/skills/`,见 §6.3) |
+| sub-agent 角色 | [B6 subagent](../ROADMAP.md) + [L3d loader](../ROADMAP.md)(`builtin_subagents()` 已有 researcher / general-purpose) | checker 角色 + state→角色映射(plugin 配置) |
+| 沉淀 | [V2 2 期自主记忆](../ROADMAP.md) + B5 指令文件 | task done 时把决策/教训升级进 `.everlasting/spec/` |
 | 协调模型 | L3b 并发 dispatch(`FuturesUnordered` + per-worker worktree) | (评审流用,见 §7) |
 
 ### 2.2 为什么必须 plugin 化(不只是"能")

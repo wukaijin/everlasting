@@ -194,8 +194,8 @@ message_stop
 
 - [spike-002](./spikes/002-reqwest-anthropic-sse.md) — 这些差异的来源 spike
 - [HACKING-wsl.md](./HACKING-wsl.md) — WSL 环境坑(配对文档)
-- [TECH §2 rig-core](./TECH.md#2-决策rig-core-作为-llm-抽象层) — 为什么 spike-002 决定手写 reqwest 不上 rig-core
-- [IMPLEMENTATION §2.1 步骤 1](./IMPLEMENTATION.md#21-步骤-1--骨架与-llm-直连-mvp) — LLM 客户端实施位置
+- [TECH §2 rig-core](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) — 为什么 spike-002 决定手写 reqwest 不上 rig-core
+- [IMPLEMENTATION §1 自研决策](./IMPLEMENTATION.md#1-决策自己写-agent-core不用-sdk-包装) — LLM 客户端实施位置
 
 ---
 
@@ -316,7 +316,7 @@ let model = model.unwrap_or_default();
 
 **验证**:`pnpm tauri dev` 时 F12 console 看到 `missing required key` 立刻检查是否传了 `null` 给 `Option` 字段。
 
-**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-5](../_archive/2026-06-3b-1/FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-5](./_archive/2026-06-3b-1/FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
 
 ---
 
@@ -344,7 +344,7 @@ let model = model.unwrap_or_default();
 
 **验证**:写 PR 时,在 `check.jsonl` 加"toPayloadContent / 对等函数按 role 分发 tool_result"作为硬约束。
 
-**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-6](../_archive/2026-06-3b-1/FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-6](./_archive/2026-06-3b-1/FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
 
 ---
 

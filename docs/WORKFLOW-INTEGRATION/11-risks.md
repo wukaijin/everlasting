@@ -19,7 +19,7 @@
 | task.json metadata(title/summary/state) | ~50 tokens | 0(同 messages[0] block append) |
 | delegation template(dispatch 时,见 §6.6.1) | ~200 tokens | 0(同上,仅 dispatch turn) |
 | checklist items(task.json.items,agent 主动 read_file) | 按需,不入常驻 | N/A |
-| memory recall(已有) | ≤[`RECALL_TOKEN_BUDGET`](../.trellis/spec/backend/memory.md) | 0(已有预算约束) |
+| memory recall(已有) | ≤[`RECALL_TOKEN_BUDGET`](../../.trellis/spec/backend/memory.md) | 0(已有预算约束) |
 
 **结论**:per-turn 注入(breadcrumb + task meta)~350-750 tokens,dispatch turn 额外 +200。全部 cache_control: None 不破坏 prompt cache breakpoint。可控,无需特殊预算机制。
 

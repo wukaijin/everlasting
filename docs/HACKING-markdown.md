@@ -162,5 +162,5 @@ const PURIFY_CONFIG: DOMPurify.Config = {
 | `app/src/components/chat/MessageItem.vue` | `v-html` 集成点 + 流式 debounce watch |
 | `app/package.json` | deps + scripts(`test` / `test:watch`) |
 | `app/pnpm-lock.yaml` | 精确版本锁 |
-| `.trellis/tasks/06-06-spike-005-follow-up/research/markdown-library.md` | 选型研究(为何选 marked + DOMPurify) |
-| `.trellis/tasks/06-06-pr6-markdown-render/prd.md` | PR6 需求 + Acceptance Criteria |
+| `.trellis/tasks/archive/2026-06/06-06-spike-005-follow-up/research/markdown-library.md` | 选型研究(为何选 marked + DOMPurify) |
+| `.trellis/tasks/archive/2026-06/06-06-pr6-markdown-render/prd.md` | PR6 需求 + Acceptance Criteria |

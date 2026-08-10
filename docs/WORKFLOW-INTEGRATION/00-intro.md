@@ -12,6 +12,6 @@
 >
 > **参考实现**:本项目用 [Trellis](https://github.com/mindfold-ai/Trellis) 管理开发,其整套 task 元数据 + state machine + skill + sub-agent + spec 沉淀架构都是借鉴对象。Trellis 本身就是"内容文件态可改"的 plugin 化设计——借鉴它 = 借鉴其可定制性。
 >
-> 需求边界见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),路线图归 [ROADMAP.md](./ROADMAP.md),决策追溯走 [IMPLEMENTATION.md §4](./IMPLEMENTATION/decisions.md)。
+> 需求边界见 [DESIGN.md](../DESIGN.md),架构见 [ARCHITECTURE.md](../ARCHITECTURE.md),路线图归 [ROADMAP.md](../ROADMAP.md),决策追溯走 [IMPLEMENTATION/decisions.md](../IMPLEMENTATION/decisions.md)。
 
 ---

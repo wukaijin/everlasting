@@ -69,12 +69,12 @@
 |------|------|------|
 | LLM 网络健壮性(A5+)| `app/src-tauri/src/llm/retry.rs` | `retry_open` wrapper(Full Jitter + 首字节前重试 + retry-after 解析);07-05 落地,**零新增依赖**(用既有 `tokio` + `reqwest` + `rand`) |
 | 后台 shell(L1a)| `app/src-tauri/src/background_shell/` | `BackgroundShellRegistry` trait + `InMemoryBackgroundShellRegistry` 进程内 impl;tokio `Child` + `tokio::select!`,**零新增依赖** |
-| Workflow 系统(B8)| `app/src-tauri/src/agent/workflow/` | workflow.json 外置 + builtin dev plugin + task 状态机 + breadcrumb + delegation;`create_task` / `request_task_state_transition` LLM tool;07-08~10 落地,**零新增依赖**(用既有 `serde` + `tokio::fs` + `notify`) |
+| Workflow 系统(B8)| `app/src-tauri/src/agent/workflow/` | workflow.json 外置 + builtin dev plugin + task 状态机 + breadcrumb + delegation;`create_task` / `request_task_state_transition` LLM tool;07-08~10 落地,**零新增依赖**(用既有 `serde` + `tokio::fs`;notify 已移除,freshness 走 mtime fence) |
 | 生成式 UI(B9)| `app/src-tauri/src/tools/use_ui.rs` | non-blocking execute + UiPrimitive registry;07-02 部分落地,推后期(button+action 白名单 / diff 应用 / session 开关) |
 | 自主记忆(V2 2 期)| `app/src-tauri/src/agent/{auto_reflect,memory_recall,memory_hygiene,remember}.rs` + `db::autonomous_memories` 表 | FTS5 + pitfall trigger_key + 状态机(candidate→active→verified)+ 异步卫生 job;06-29 落地,**零新增依赖**(用既有 `sqlx` FTS5) |
 
 **说明**:
-- `image`、`libheif-rs`、`nucleo`、`ignore`、`notify` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif)
+- `image`、`libheif-rs`、`nucleo`、`ignore` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif;`notify` 已移除,见上)
 - **`serde_yml` 已废弃(2026-06-16 发现)**:`serde_yml` + 前代 `serde_yaml` 均在 crates.io 标 "Deprecated"(`0.0.13` 仅 compat shim)。B3 `/command` 的 frontmatter(`name` / `description` / `argument-hint` 单行标量)改用**手写 parser**(`app/src-tauri/src/resource_loader.rs::parse_frontmatter`,~40 行,split `---` + `key:value`),零依赖。未来 Skill / Memory / Role frontmatter 字段复杂化(多行 / 数组)时再上 maintained fork(候选 `serde_yaml_neo`)——§5 共享 loader 契约仍成立(parser 隔在 `parse_frontmatter` 函数后,替换局部)。
 - 前端不引入 UI 框架(Element Plus / Vuetify 太重),自己攒 + 用 reka-ui / shadcn-vue primitives
 - **ECharts 替代 recharts 的理由**:recharts 纯 React,跨框架方案 ECharts + vue-echarts 更成熟,中文文档全
@@ -144,7 +144,7 @@
 | /command | 用户显式调      | 键盘 `/`        |
 | Role     | session 启动时  | UI 选           |
 
-> 完整加载机制、token 预算、四层 Memory 边界见 [BACKLOG.md §3 多层 Memory](./BACKLOG.md#3-多层-memory-与约束) 和 [BACKLOG.md §2 Agent Skill 系统](./BACKLOG.md#2-agent-skill-系统)。
+> 完整加载机制、token 预算、四层 Memory 边界见 [memory spec](../.trellis/spec/backend/memory.md) 和 [BACKLOG.md §2 Agent Skill 系统](./BACKLOG.md#2-agent-skill-系统)。
 
 **实现影响**:
 - 一个 `MarkdownResource` 通用数据结构

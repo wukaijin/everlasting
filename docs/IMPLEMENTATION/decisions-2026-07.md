@@ -1,6 +1,40 @@
+### 2026-07-28 — subagent resume (C1) + TaskStatus 自定义 plugin state (C0)
+
+- **Context**:review epic 前置基建两缺口:① review 用自定义 workflow plugin,但 `TaskStatus` 硬编码 builtin dev workflow 的四态(Planning/Implement/Check/Done),不支持 plugin 自定义状态;② subagent run 中断后无法续跑,长任务断点重跑成本高。
+- **决策 C0 — TaskStatus accommodate custom plugin state**:`TaskStatus` 扩展支持非 builtin workflow plugin 的自定义状态字符串(plugin 自带状态机定义)。
+- **决策 C1 — resume mechanism for worker runs**:中断的 subagent run 可续跑(保留 run_id + 已完成 turn 的 transcript,从中断点继续)。Merge `feat/subagent-resume-c1`(C0 `e1afa67` + C1 `703ab7d`)。
+
+
+### 2026-07-26 — C2 review-state 可视化 + lefthook pre-commit
+
+- **Context(Review 可视化)**:review plugin 产出 `.everlasting/outputs/review-state.json`(维度×发现矩阵 + 三态:pending/approved/rejected),但前端无可视化,用户只能读 JSON。
+- **决策 — 前端矩阵视图 + tool:call 路由刷新**:新增 4 组件(`<ReviewMatrix>` / `<ReviewMatrixGrid>` 维度×发现网格 / `<ReviewFindingDetail>` / `<ReviewDimensionCompare>`)+ `reviewState.ts` store(三态载荷);刷新机制复用 `streamController` 的 `tool:call` 路由(review plugin 写完 review-state.json 后调一个 tool 触发前端重读,无新 backend event)。后端 `commands/review.rs`(get_review_state + get_current_task_slug,3 IPC)+ `daemon/routes/review.rs` 双暴露。
+- **Context(lefthook)**:cargo fmt 未跑 / pnpm-lock.yaml 漂移反复进仓,CI 才发现。
+- **决策 — lefthook pre-commit 拦截**:引入 `lefthook.yml`,pre-commit 阶段跑 `cargo fmt --check` + lockfile 同步检查,堵问题进仓。spec 沉淀为强制约定(`.trellis/spec/`)。
+
+
+### 2026-07-26 — ask_user_question allow_custom + skip-semantics
+
+- **Context**:`ask_user_question` 原只能让用户在 LLM 给定的 options 里选,无法接受自由输入;且回灌语义不清(用户跳过 vs deny 都是 `is_error: true`)。
+- **决策 — allow_custom 选项 + skip-semantics**:加 `allow_custom` 字段(为 true 时用户除预设 options 外可自由输入文本);区分 skip(自由输入 / 跳过,`is_error: false`)vs deny(拒绝,`is_error: true`),让 LLM 能据语义决定下一步。任务 `07-29-ask-user-question-custom-input/`(archive)。
+
+
+### 2026-07-25 — daemon graceful shutdown 加固
+
+- **Context**:SIGTERM 硬终止 daemon 时,agent loop 可能还在跑(in-flight LLM 请求 + tool 执行),直接退出导致:SSE 长连接客户端卡住等 SIGKILL、agent loop 资源泄漏、sidecar 孤儿进程。
+- **决策 — 三层 graceful shutdown**:① `serve_daemon` 收到 shutdown signal 后主动 cancel + drain agent loop(等当前 turn 收口,而非立即死);② 主动关 SSE 长连接(`HttpSseSink` graceful,客户端立即感知断开而非超时);③ sidecar 孤儿进程清理(`RunEvent::Exit` 钩子兜底 kill)。修复 `serve_daemon` 3s 自杀回归(过早返回导致 sidecar 误判 daemon 已死)。另:`f95d5ff` 持 SIGNAL_TEST_MUTEX 防进程级信号竞争假性测试失败。
+
+
+### 2026-07-23/24 — 交错思考渲染(contentBlocks 真实流序)
+
+- **Context**:Anthropic Messages API 的 SSE 流里 thinking / text / tool_use block 按**真实到达序**交错出现,但旧实现落库时按"先 text 后 tool_use"分组,导致 thinking 块在中途消失 + 工具无法在思考之间穿插执行。
+- **决策 — 后端保留真实流序 + 前端 run 分组时间轴**:`chat_loop.rs` 落库时保留 BlockState 时间戳序(thinking/text/tool_use 按 SSE 到达序),前端按 run 分组 + contentBlocks 时间轴交错渲染。修复 Anthropic thinking 消失 + 实现真·工具穿插(工具在思考之间执行)。
+- **影响**:设计文档沉淀为 [docs/INTERLEAVED-THINKING-DESIGN.md](../INTERLEAVED-THINKING-DESIGN.md)(含评审 triage 修订)。3 commit:后端落库(`ba1eeca`)+ 前端 run 分组(`5b1fc81`)+ 实时流序交错渲染(`78d7ec7`)+ 修复 thinking 消失(`8daaf23`)。
+
+
 ### 2026-07-20 — Agent daemon 化 + HTTP/SSE transport(项目迄今最大架构变更)
 
-**Context**: 截至 2026-07-17,agent core(Tauri command handler + `AppState` + agent loop + SQLite pool)全跑在 Tauri GUI 进程内,前端唯一经 `invoke`/`listen` 直连。两件事把它顶到必须拆:(1) **远程访问 / 浏览器模式需求** —— WSL 跑 agent core、Windows 宿主浏览器访问,是本项目的核心使用场景,而 Tauri webview 绑死单进程,浏览器无法直连;(2) **agent core 与 GUI 解耦** —— GUI 崩溃/重启会带走在途 agent loop,且 GUI 二进制随 Tauri/WebKitGTK 体积庞大、启动慢。daemon 化把 agent core 拆成独立 `everlasting-daemon` 进程(axum HTTP + 同源 SSE + `ServeDir` 服务 SPA),前端引入 transport 抽象层(`httpTransport` 默认 / `tauriTransport` 逃生舱),新增 sidecar spawn + 浏览器模式。**这不是 B10 飞书触发的**(本节下方 2026-06-10 路线图快照把 B10 标「触发 daemon 化」是当时预期,实际触发源是远程访问需求,且已于 2026-07 落地)。commits `0dbc747`(transport 抽象,Phase 1)→ `5a212f0`(P2.1+P2.2 axum server)→ `f2a675b`(P2.3 SSE)→ `84d4689`(P2.4 sidecar+ServeDir+默认 httpTransport)→ `e6b7a2f`(P2.5 E2E)→ 手动测试修复 `ba41c1d`/`6581257`/`16548fd`/`df991a5`/`a2bd611`,~15K 行。任务档案 `.trellis/tasks/07-20-remote-access-daemon-split/`(design.md/implement.md/prd.md)+ `.trellis/tasks/archive/2026-07/07-20-remote-access-transport-abstraction/`。
+**Context**: 截至 2026-07-17,agent core(Tauri command handler + `AppState` + agent loop + SQLite pool)全跑在 Tauri GUI 进程内,前端唯一经 `invoke`/`listen` 直连。两件事把它顶到必须拆:(1) **远程访问 / 浏览器模式需求** —— WSL 跑 agent core、Windows 宿主浏览器访问,是本项目的核心使用场景,而 Tauri webview 绑死单进程,浏览器无法直连;(2) **agent core 与 GUI 解耦** —— GUI 崩溃/重启会带走在途 agent loop,且 GUI 二进制随 Tauri/WebKitGTK 体积庞大、启动慢。daemon 化把 agent core 拆成独立 `everlasting-daemon` 进程(axum HTTP + 同源 SSE + `ServeDir` 服务 SPA),前端引入 transport 抽象层(`httpTransport` 默认 / `tauriTransport` 逃生舱),新增 sidecar spawn + 浏览器模式。**这不是 B10 飞书触发的**(本节下方 2026-06-10 路线图快照把 B10 标「触发 daemon 化」是当时预期,实际触发源是远程访问需求,且已于 2026-07 落地)。commits `0dbc747`(transport 抽象,Phase 1)→ `5a212f0`(P2.1+P2.2 axum server)→ `f2a675b`(P2.3 SSE)→ `84d4689`(P2.4 sidecar+ServeDir+默认 httpTransport)→ `e6b7a2f`(P2.5 E2E)→ 手动测试修复 `ba41c1d`/`6581257`/`16548fd`/`df991a5`/`a2bd611`,~15K 行。任务档案 `.trellis/tasks/archive/2026-07/07-20-remote-access-daemon-split/`(design.md/implement.md/prd.md)+ `.trellis/tasks/archive/2026-07/07-20-remote-access-transport-abstraction/`。
 
 **关键决策(7 个,按"为什么")**:
 
@@ -10,7 +44,7 @@
 4. **为什么默认 httpTransport(而非保留 Tauri IPC 默认)**:前端 transport 抽象层 `isTauriWebview() ? tauriTransport : httpTransport`,GUI 默认 Thin 模式走 httpTransport(同源 sidecar)。逃生舱 `?transport=tauri` 强制 Full 模式 —— GUI 自己 `AppState::load` 开 pool,daemon 不 spawn,走原 in-process。理由:浏览器模式是核心场景,默认必须通;但 daemon 化初期不稳时需一键回退到验证过的 in-process 路径(dogfooding 2 周期,见 design §6.2)。**否决**「保留 Tauri IPC 默认」—— 那浏览器模式永远默认不通,违背拆 daemon 初衷。
 5. **为什么 ServeDir 同源(而非独立 nginx / 双端口)**:daemon `tower-http::services::ServeDir` 直接 serve `dist/`,API + SPA 同源(`http://localhost:7456`),浏览器零 CORS 配置。dev 模式才前后端分离(vite 1420 + `?daemonUrl=` 跨域,daemon `CorsLayer::very_permissive` 放行)。**否决**独立 nginx 反代(多一个进程 + 配置)+ 双端口(浏览器跨域 + cookie/SSE 复杂度)。`resolve_dist_dir()` 从 `current_exe()` 向上搜 `src-tauri/` 取兄弟 `dist/`(适配 sidecar binaries/、target/release、target/debug 三种二进制位置,commit `6581257`)。
 6. **为什么 handler 双暴露(IPC + HTTP,Q0 决议)**:79 个 `#[tauri::command]` 的业务逻辑抽成 `xxx_inner(state: &Arc<AppState>, ...)` 单份实现,Tauri 入口和 axum handler 都调 `_inner`,无 duplication。**否决**「Tauri 入口立即废弃」—— 双入口并行期(P2.1→P2.4)让每阶段可独立回滚,Full 模式逃生舱也依赖 Tauri 入口存活;待 dogfooding 稳定后再 archive。**否决**「强制抽 `crate::service::*` 层」—— 拿到复用又不付跨模块搬迁 + 多一层抽象成本,`_inner` 函数留在原 command 文件足够。
-7. **DB 路径对齐(Q0 + commit `16548fd`)**:daemon `resolve_data_dir()` = `dirs::data_dir().join(EVERLASTING_APP_IDENTIFIER)`,`EVERLASTING_APP_IDENTIFIER` 由 `build.rs` 从 `tauri.conf.json` 读出编译期 `env!()` 注入,与 Tauri `app.path().app_data_dir()`(= `dirs::data_dir().join(config.identifier)`)对齐到同一个 `dev.everlasting.app/everlasting.db`。**坑**:修前 daemon 用 `dirs::data_dir().join("everlasting")`(无 `dev.` 前缀),裸跑打开空 DB 丢失 GUI 的历史消息(孤儿 DB,详见 [DEBUG_DB §1.0](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步))。2 个单测锁住 identifier 拼接(`resolve_data_dir_ends_with_app_identifier` / `resolve_data_dir_not_legacy_hardcoded`)。(`resolve_data_dir_ends_with_app_identifier` / `resolve_data_dir_not_legacy_hardcoded`)。
+7. **DB 路径对齐(Q0 + commit `16548fd`)**:daemon `resolve_data_dir()` = `dirs::data_dir().join(EVERLASTING_APP_IDENTIFIER)`,`EVERLASTING_APP_IDENTIFIER` 由 `build.rs` 从 `tauri.conf.json` 读出编译期 `env!()` 注入,与 Tauri `app.path().app_data_dir()`(= `dirs::data_dir().join(config.identifier)`)对齐到同一个 `dev.everlasting.app/everlasting.db`。**坑**:修前 daemon 用 `dirs::data_dir().join("everlasting")`(无 `dev.` 前缀),裸跑打开空 DB 丢失 GUI 的历史消息(孤儿 DB,详见 [DEBUG_DB §1.0](../DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步))。2 个单测锁住 identifier 拼接(`resolve_data_dir_ends_with_app_identifier` / `resolve_data_dir_not_legacy_hardcoded`)。(`resolve_data_dir_ends_with_app_identifier` / `resolve_data_dir_not_legacy_hardcoded`)。
 
 **Consequences**:
 - 远程访问 / 浏览器模式打通:WSL 跑 daemon + Windows 宿主浏览器 `http://localhost:7456` 经 WSL 2 localhost forwarding 直达,完整功能(发消息 / 流式 / permission / subagent)。
@@ -20,11 +54,66 @@
 - 已知后续项:daemon graceful shutdown 在有浏览器 SSE 长连接时收到 SIGTERM 后挂起(等连接完成),靠 `scripts/daemon.sh` SIGTERM→8s→SIGKILL 兜底,不影响使用。
 - E4 手动 smoke + E5 dogfooding(≥2 周计时)留运行期验证。
 
-**关联**: PRD + design + implement `.trellis/tasks/07-20-remote-access-daemon-split/`;transport 抽象前置任务 `.trellis/tasks/archive/2026-07/07-20-remote-access-transport-abstraction/`;Phase 编排 `docs/REMOTE-ACCESS-ROADMAP.md`;调研 `docs/REMOTE-ACCESS-RESEARCH.md`;手动测试 `docs/MANUAL-TEST-P2.md`;WSL 部署 `docs/HACKING-wsl.md` §远程访问 daemon 部署;DB 路径 `docs/DEBUG_DB.md` §1.0。commits 见上 Context。
+**关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-20-remote-access-daemon-split/`;transport 抽象前置任务 `.trellis/tasks/archive/2026-07/07-20-remote-access-transport-abstraction/`;Phase 编排 `docs/REMOTE-ACCESS-ROADMAP.md`;调研 `docs/_archive/2026-07-20-remote-access-research.md`;手动测试 `docs/_archive/2026-07-23-manual-test-p2.md`;WSL 部署 `docs/HACKING-wsl.md` §远程访问 daemon 部署;DB 路径 `docs/DEBUG_DB.md` §1.0。commits 见上 Context。
+
+
+### 2026-07-14 — E2 turn-level harness trace viewer(后端 trace 管道 + 前端独立面板)
+
+- **Context**:ROADMAP 第三档 E2("per-turn 决策时间线 / harness 学习教具")。调研确认 4 维度(C3 压缩 / per-turn token / C2 soft hint / workflow breadcrumb)里只有"工具执行+延迟"有完整 per-turn 持久化,其余三维几乎零持久化 — C3 `CompactResult{tokens_before/after,dropped_count,degradation}` 只在 `tracing`;per-turn token `update_last_turn_usage` OVERWRITE session snapshot 列丢历史;C2 soft hint 1-2 连击无事件(仅 ≥3 intervention 落 `loop_intervention` 审计);breadcrumb `append_workflow_breadcrumb` 注入 `messages[0]` 后丢弃。加审计表无 `turn_seq` 列。核心矛盾 = scope(动不动后端 trace 管道)。
+
+- **决策 D1 — scope = 完整版**(否决"纯前端聚合 MVP" / "折中"):纯前端只覆盖 ~1.5 维,教具价值低对不起 E2 定位;完整版补全 4 维 + 审计 turn_seq。parent `07-14-e2-harness-trace-viewer` + 2 child(后端管道 child-1 先 / 前端面板 child-2 依赖 child-1 的 event+IPC+数据结构)。
+
+- **决策 D2 — viewer = 独立面板 live+回看**(否决"升级 AuditLogModal 事后刷新" / "侧栏 drawer"):教具定位要能看 harness 实时压缩/循环/工具调用;独立面板可常驻不挡 chat。约束后端:必须实时 emit ChatEvent(live)+ 必须落盘(回看)。
+
+- **决策 D3 — 落盘 = always-on + 清理入口**(否决 opt-in debug / emit-only):个人 SQLite 工作台写入开销可忽略;opt-in 痛点 = 出问题后才想回看但没开,违背调试器定位。emit always-on(live 面板随时可用)+ 落盘 always-on(回看任何历史 session)+ 清理入口兜底 DB 增长。
+
+- **决策 D4 — 新表 `turn_trace` 而非 messages 加列**:一个 turn 多维 trace(token/compaction/loop/breadcrumb)在不同写点到达,`UNIQUE(session_id,seq)` + UPSERT 累积各列;messages 是对话内容,trace 是观测,语义隔离不污染 messages schema 稳定性。
+
+- **决策 D5 — `record_audit_event` 加 `turn_seq` 参数(不取 thread-local 上下文)**:精确对齐是 viewer 核心价值;21 类调用点机械扩散,chat_loop 传 `Some(seq)` / IPC handler 传 None;编译器强制 + grep 防漏。漏传 → 审计行 `turn_seq` NULL 回看时游离(可接受,前端 UNGROUPED 虚拟 seq footer 兜底)。
+
+- **决策 D6 — trace 旁路观测,不动 agent 决策逻辑**:C3 仍按 `CompactResult` 降级/终止;C2 仍按 `loop_hit_count` 干预;breadcrumb 仍注入 prompt。trace 只在已有写点旁 emit + 落盘,不改决策分支。best-effort 落盘失败 `warn!` 吞不传播(同 `record_*_audit`)。worker gate 复用 `!skip_persist`(RULE-A-015),worker turn_trace 不冲 parent。
+
+- **决策 D7 — `request_mode_change`/`request_task_state_transition` 的 `execute_blocking` 补 seq 参数**:初版传 None(execute_blocking 签名无 seq);trellis-check 判断补 seq 简单(签名加 `turn_seq` + chat_loop 拦截调用点传 `Some(seq)`),让这两个 turn 内 LLM 触发的审计也归 turn。`record_message_resend_audit` 保持 None(pre-turn-loop 事件,seq 是下一个未开始 turn)。
+
+- **关键教训 —「文档状态表滞后是常态」**:代码先行(另一 session 完成 child-1/child-2 + commit + archive),文档(ROADMAP §2 状态行 / CLAUDE / STRUCTURE / frontend spec / IMPLEMENTATION §4)滞后,需独立 doc-sync follow-up。符合 memory `handoff-lags-behind-commits`。
+
+- **测试**:1539 后端(cargo test --lib,新增 7:`turn_trace` upsert 累积/顺序/清除/覆盖/空值/级联 + `turn_seq` 审计)+ 863 前端(vitest,含 `trace.test.ts` 8 + `traceStore.test.ts`)+ vue-tsc 0 err + cargo fmt clean。零回归(现有审计/C3/C2/breadcrumb 行为不变)。
+
+- **推后期**:筛选(按维度/turn/工具过滤)/ 导出(JSON)/ worker trace 隔离(`is_worker` 列,MVP 接受混入 parent session_id)/ C2 `loop_window` 滑动窗口中间态可视化(只 emit hit_count+verdict 摘要)/ workflow from→to hook 独立审计行(维持 `task.json.summary` marker)。
+
+
+### 2026-07-13 — B9+ 生成式 UI 收尾(D3 通用 button + D4 diff 应用)
+
+- **Context**:B9(07-02)落地只读(silent-allow `use_ui` + `<DiffPrimitive>` 复用 `DiffView` + `<CodeBlockPrimitive>` hljs + selector 复用 `ask_user_question`),parent PRD 把 D3 通用 button + D4 diff 应用 + D5 session 开关推迟。`use_ui` 当前是纯展示(零副作用);引入"用户动作 → 后端写"后,核心命门 = "应用动作"的权限归属 — 既不能破坏 plan 模式语义,也不能与 `edit_file` 形成"两种修改模型"冲突。
+
+- **决策 D-Q1 — D4 定位 = 用户确认 UI(LLM 提议 + 用户应用,不走 LLM tool 权限链)**:LLM 用 `diff`/`button` primitive 提议修改,用户点"应用"才写文件。应用动作是**用户触发的前端 IPC**(`apply_ui_diff`),**不是** LLM tool — 故不注册进 `builtin_tools()`、`filter_tools_for_mode` 看不见它 → plan 模式天然可用(plan 约束 LLM 不约束 user)。**vs `edit_file`**:`edit_file` = LLM 自主改(走 `builtin_tools()` + Tier/PermissionStore),`apply_ui_diff` = 用户拍板(走 IPC + `assert_within_root` + audit,无 Tier / 无 PermissionStore)。两类工具适用场景用 `use_ui::definition().description` 写清(`edit_file` 默认改 / `use_ui` 该让用户看的场景),LLM 自分流。
+
+- **决策 D-Q2a — action 模型 = 预定义枚举,不复用既有 tool 引用 / 不自定义 payload**:否决"action = 引用既有 LLM tool 名"(与 D-Q1 矛盾,会让用户点击触发 LLM tool 链)、否决"自定义 payload"(安全面过大,个人工具无必要)。**枚举首批边界 = `apply_diff`(后端 IPC 写文件) + `copy`(剪贴板) + `dismiss`(本地隐藏)**;`run_command` 等命令类动作**不在本批**(与 shell tool 重复触发路径,安全面陡增)。
+
+- **决策 D-Q2b — `apply_diff` 是 Tauri IPC,不弹 modal,做 boundary + 审计,不走 LLM tool 权限链**:用户点"应用"= 显式意图(同 `merge_worker_run` L3b PR3 前例)。`assert_within_root(worktree_path, path)`(同 `edit_file:116`)做项目边界校验;`AuditKind::UiDiffApplied`(payload `{files: [{path, added, removed}], total_files}`)落表;不弹权限 modal(DiffView 已展示变更预览)。
+
+- **决策 D-Q3 — scope = D4 + D3,不做 D5**:`D5` session `allow_generative_ui` 开关继续推迟(本批 D3+D4 已让 `use_ui` 从"只读展示"升"可交互提议",用户点击授权的语义边界够清晰;D5 是 product 决策不是架构缺口,留 follow-up)。`form` / `chart` / `table` primitive 同步推迟(无关本批安全面)。
+
+- **决策 D-Q4 — `apply_ui_diff` 权限形态**:不弹 modal + `assert_within_root` + 审计落表(详见 D-Q2b)。**写目标 = `session.worktree_path` ?? `session.current_cwd` fallback**(同 `edit_file` / `chat_loop` 既有约定;无 worktree 不拒绝,落到 project 原目录)。
+
+- **决策 D-Q5 — 手写 unified diff parser/applier,零新增依赖**(否决引入 `diffy` crate):TECH §1.4 "零新增依赖"硬约束;算法小(~250 LOC + 24 单测覆盖:parse / 多文件多 hunk / context 匹配 / 冲突 fail-fast / 行号偏移 / 空 diff / 无路径头);项目自研调性一致(对照 `read_file::cat_n_format`、`llm::sse` 手写状态机)。**行号语义**:`@@ -oldStart,oldLines +newStart,newLines @@` 中 `oldStart` 是**原始文件** 1-indexed 行号,apply 时跟踪 `cumulative_offset = Σ (newLines - oldLines)` over applied hunks,在 modified buffer 定位 `oldStart - 1 + cumulative_offset`。
+
+- **决策 D-Q6 — 失败语义 = 整失败不部分写**(design §2.3):parse 整 diff → 逐 FilePatch read → apply_to_file(纯函数 text→text)→ 全成功才 `tokio::fs::write` 任一文件。任一 hunk context 不匹配 → 全失败,前端 inline error,不写任何文件。**Audit 仅在写全部成功后落**(中间失败不污染审计表;失败次数可由前端日志追踪)。
+
+- **决策 D-Q7 — `use_ui` 始终 Silent Allow(Tier 5)+ `Risk::Low`**:展示本身无副作用未变;button 的"动作"由前端按 `action` 分发,`use_ui::execute` 不执行 action,仍返"已渲染 N 个 primitive"。**plan/edit/yolo 三档 mode 都不影响 use_ui 可见性**,只影响用户应用按钮 click 后的写路径(走 `apply_ui_diff` IPC,IPC 不进 LLM tool 链)。
+
+- **决策 D-Q8 — Raw fallback 形式(无 `---`/`+++` 头)禁用 Apply 按钮**:`DiffPrimitive` 加 `hasUnifiedHeaders` 谓词(/^--- /m + /^\+\+\+ /m),无头时 Apply 按钮 `disabled` + tooltip「该 diff 格式不可应用(需带 ---/+++ 路径头的标准 unified diff)」。后端 parser 二次兜底(无路径头 → `kind="parse"` 拒绝),前端禁用避免无意义 round-trip。
+
+- **关键教训 —「手写文本协议先期只测单一 case 易漏 corner」**:`diff_apply.rs` 写完第一版,parse 测试 `parse_missing_headers_returns_missing_header` 期望 `-old\n+new` 返 `MissingHeader`,实际返 `IncompleteHeader`(parser 优先看 `-old` 当 removed hunk line,无 hunk → IncompleteHeader)。两 variant 在 IPC 端都映射到 `kind="parse"`,UX 等价,但测试断言要 align 实际行为。**后续手写协议类(任何 text-based state machine)首版单测应枚举所有 4 corner + 接受真实分支**,而非"按 PRD 期望断言"。
+
+- **测试**:1531 后端(cargo test --lib)+ 842 前端(vitest)+ vue-tsc 0 err + cargo fmt clean。本批新增:24 `diff_apply::tests`(parse / apply / 多 hunk offset / context conflict / raw fallback)+ 4 `commands::ui::tests`(ParseError → IPC `kind` 映射 + 成功/失败结果序列化 + Mode enum import 守门)+ 7 `use_ui::tests::execute_button_*`(3 action 验证 + 缺 action / 未知 action / apply_diff 缺 diff_text / 空 diff_text 拒绝)+ 17 `DiffPrimitive.test.ts` B9+ D4 段(IPC invoke spy + 成功 toast + kind 文案 + raw fallback disabled + 无 session disabled + 异常错误归 `io` + reject 隐藏)+ 11 `ButtonPrimitive.test.ts`(3 action 分发 + 默认 label + 自定义 label override + apply_diff 走 IPC + copy 走 clipboard + dismiss 本地 + 无 session disabled + 未知 action defensive)。零回归。
+
+- **推后期**:D5 session `allow_generative_ui` 开关(产品决策非架构缺口)/ `run_command` 等命令类 button action(安全面陡增,follow-up 安全评估后单独立项)/ `form` / `chart` / `table` primitive(独立需求)/ patch 三方合并或 rename / 二进制 diff 探测 / 行级权限(n 行确认 vs 整文件)/ 多文件 diff 跨 project 边界(目前每个文件 boundary 单独校验)/ 文件创建(`oldLines=0` 暗示)/ App crash 恢复 pending apply / `apply_ui_diff` 进度流式报告(目前整批写完才返;长 diff 可走 L1a 同样的 handle + 通知模式)。
+
 
 ### 2026-07-10 — workflow task.json hardening(R1-R5):read_task lenient + `create_task` tool + 即时 resolve + 软推荐 hint
 
-**Context**: 跟随 07-08~07-10 workflow 集成(见 `2026-07-08 — workflow 系统总览`),`task.json` 作为 LLM 可写的普通文件但无 schema 保护 —— `create_task` 是 Tauri IPC 非 LLM tool,LLM 在 loop 内只能 `write_file`/`edit_file` 手写,实测两次把 task.json 写崩(planning 漏 `created_at` / implement 手改 `status:"in_progress"` 绕过 `update_checklist` 安全映射)。共同根因:读侧严格(derive Deserialize + 必填 `created_at`/`updated_at`),写侧无 guard,LLM 一次手写就致命,`resolve_current_task` 静默跳过 → `current_task=None` → `request_task_state_transition` 报 `no active workflow task`。任务 `.trellis/tasks/07-10-workflow-task-json-hardening/`。
+**Context**: 跟随 07-08~07-10 workflow 集成(见 `2026-07-08 — workflow 系统总览`),`task.json` 作为 LLM 可写的普通文件但无 schema 保护 —— `create_task` 是 Tauri IPC 非 LLM tool,LLM 在 loop 内只能 `write_file`/`edit_file` 手写,实测两次把 task.json 写崩(planning 漏 `created_at` / implement 手改 `status:"in_progress"` 绕过 `update_checklist` 安全映射)。共同根因:读侧严格(derive Deserialize + 必填 `created_at`/`updated_at`),写侧无 guard,LLM 一次手写就致命,`resolve_current_task` 静默跳过 → `current_task=None` → `request_task_state_transition` 报 `no active workflow task`。任务 `.trellis/tasks/archive/2026-07/07-10-workflow-task-json-hardening/`。
 
 **关键决策(5 个 R,按"为什么"而非时间序)**:
 
@@ -44,11 +133,12 @@
 - transition 拦截 + breadcrumb 都基于盘上最新状态,同 loop 后续 turn 立即反映新状态(原 ctx 冻结导致"以为没切成功,反复试"循环消失)。
 - 写入侧零约束,扩展性保留:未来 task.json 加字段 LLM 仍可手写,read_task lenient 自动受益。
 
-**关联**: PRD + design + implement `.trellis/tasks/07-10-workflow-task-json-hardening/`;commit `c6a983e fix(workflow): task.json 对 LLM 手写的健壮性加固 (R1-R5)`;Step 1(R1)/ Step 2(R3+R4)/ Step 3(R2)/ Step 4(R5) 各 commit 内部分拆;新 tool `create_task` 与 `filter_tools_for_workflow` 测试覆盖三场景(workflow / 非 workflow / worker);1348+ 后端 + 794+ 前端 tests passed(0 failed)。
+**关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-10-workflow-task-json-hardening/`;commit `c6a983e fix(workflow): task.json 对 LLM 手写的健壮性加固 (R1-R5)`;Step 1(R1)/ Step 2(R3+R4)/ Step 3(R2)/ Step 4(R5) 各 commit 内部分拆;新 tool `create_task` 与 `filter_tools_for_workflow` 测试覆盖三场景(workflow / 非 workflow / worker);1348+ 后端 + 794+ 前端 tests passed(0 failed)。
+
 
 ### 2026-07-09 — workflow chip merge:WorkflowToggle + PluginSelect 合并为单 chip + popover
 
-**Context**: Step 2.2(07-08)UI 落了两个并列 toggle:`WorkflowToggle`(启停 workflow plugin)和 `PluginSelect`(切具体 plugin 名)。两组件在顶栏占两个 chip 位 + 各自 popover,用户认知负担高 + 视觉碎片化。测试中用户多次把这两个控件当作"重复的开关"。任务 `.trellis/tasks/07-09-07-09-workflow-chip-merge/`。
+**Context**: Step 2.2(07-08)UI 落了两个并列 toggle:`WorkflowToggle`(启停 workflow plugin)和 `PluginSelect`(切具体 plugin 名)。两组件在顶栏占两个 chip 位 + 各自 popover,用户认知负担高 + 视觉碎片化。测试中用户多次把这两个控件当作"重复的开关"。任务 `.trellis/tasks/archive/2026-07/07-09-07-09-workflow-chip-merge/`。
 
 **关键决策(3 个,按"为什么"而非时间序)**:
 
@@ -63,11 +153,12 @@
 - toggle 与 select 联动更直观(同 popover 内,不再误判为重复控件)。
 - 底层组件可复用,未来若需"高级模式"(独立 toggle / select),回退成本低。
 
-**关联**: PRD + design + implement `.trellis/tasks/07-09-07-09-workflow-chip-merge/`;commit `5db27be refactor(workflow): 合并 WorkflowToggle + PluginSelect 为单 chip + popover`;前端 vitest 覆盖三态渲染 + popover 联动;vue-tsc 0 err;pnpm build 成功。
+**关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-09-07-09-workflow-chip-merge/`;commit `5db27be refactor(workflow): 合并 WorkflowToggle + PluginSelect 为单 chip + popover`;前端 vitest 覆盖三态渲染 + popover 联动;vue-tsc 0 err;pnpm build 成功。
+
 
 ### 2026-07-09 — 前端 `task_state_transition` 交互卡片
 
-**Context**: `request_task_state_transition` tool 在 IPC handler 改了 `task.json.status`(走 07-08 Step 3.1 `set_task_state` IPC),但前端无对应 UI 反馈 —— 用户看到 tool_use 出现,但不知道 transition 是否成功 / 当前 task 状态是什么,只能切到 settings 或文件树手动看。任务 `.trellis/tasks/07-09-workflow-transition-card/`。
+**Context**: `request_task_state_transition` tool 在 IPC handler 改了 `task.json.status`(走 07-08 Step 3.1 `set_task_state` IPC),但前端无对应 UI 反馈 —— 用户看到 tool_use 出现,但不知道 transition 是否成功 / 当前 task 状态是什么,只能切到 settings 或文件树手动看。任务 `.trellis/tasks/archive/2026-07/07-09-workflow-transition-card/`。
 
 **关键决策(3 个,按"为什么"而非时间序)**:
 
@@ -82,7 +173,8 @@
 - 卡片与 ask_user_question 视觉一致,UI 风格统一。
 - event-driven 零额外 IPC 负担。
 
-**关联**: PRD + design + implement `.trellis/tasks/07-09-workflow-transition-card/`;commit `969466b feat(workflow): 前端 task_state_transition 交互卡片`;前端 vitest 覆盖三态渲染 + event-driven 重渲染;vue-tsc 0 err;pnpm build 成功。
+**关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-09-workflow-transition-card/`;commit `969466b feat(workflow): 前端 task_state_transition 交互卡片`;前端 vitest 覆盖三态渲染 + event-driven 重渲染;vue-tsc 0 err;pnpm build 成功。
+
 
 ### 2026-07-08 — pending-indicator 跨 session 待处理交互 UI 三档提醒(角标 + 徽章 + toast)
 
@@ -104,15 +196,16 @@
 
 **关联**: 07-08 同期落地;commit `b95e8c5 feat(pending-indicator): 跨 session 待处理交互 UI 提醒(角标+徽章+toast 三档)`;前端 vitest 覆盖三档渲染 + session 切换触发 + 去重逻辑;vue-tsc 0 err;pnpm build 成功。
 
+
 ### 2026-07-08 — workflow 系统总览:workflow.json 外置 + builtin dev plugin + Step 0.1~3.3(task 状态机 / breadcrumb 注入 / delegation 模板 / archive IPC)
 
-**Context**: 项目从 2026-06-21 V2 第二档收尾后,B8(DAG workflow 编排层)一直列在 ROADMAP §2 第四档。本期(07-08 ~ 07-10 跨度 3 天,~25 commit)把 workflow 从"概念"推到"完整落地":workflow.json 外置(不再 hardcode 模板)、内置 dev workflow plugin(开箱即用,新项目零配置启动)、Step 0.1~3.3 完整 9 阶段管线(task 状态机 / breadcrumb 注入 / delegation 模板注入 / set_task_state IPC / archive_task IPC / spec 沉淀触发)、plugin skill loader、agent 自跟踪 checklist 与 task.json 同步。任务 `.trellis/tasks/07-08-workflow-integration/`(主)+ 07-09/07-10 多个延伸任务。
+**Context**: 项目从 2026-06-21 V2 第二档收尾后,B8(DAG workflow 编排层)一直列在 ROADMAP §2 第四档。本期(07-08 ~ 07-10 跨度 3 天,~25 commit)把 workflow 从"概念"推到"完整落地":workflow.json 外置(不再 hardcode 模板)、内置 dev workflow plugin(开箱即用,新项目零配置启动)、Step 0.1~3.3 完整 9 阶段管线(task 状态机 / breadcrumb 注入 / delegation 模板注入 / set_task_state IPC / archive_task IPC / spec 沉淀触发)、plugin skill loader、agent 自跟踪 checklist 与 task.json 同步。任务 `.trellis/tasks/archive/2026-07/07-08-workflow-integration/`(主)+ 07-09/07-10 多个延伸任务。
 
 **关键决策(9 个,按"为什么"而非时间序)**:
 
 1. **workflow.json 外置 + load_workflow + validate + fallback(Step 0.1~2.1)**:不再 hardcode 4 个 workflow state 模板在 Rust 代码里,改为 `.everlasting/workflow.json` 外置文件 + `load_workflow` 解析 + `validate`(schema + 引用完整性)+ `fallback`(文件缺失 / 解析失败 → 内存 default)。**否决** Rust 静态定义 —— 用户改 workflow 配置得重新编译;**否决**完全 freeform JSON 无 validate —— 改坏一个字段整 plugin 崩。`WorkflowDef` struct 强类型 + JSON 双向,改一个 state 名 typo 在 validate 阶段就报,而不是 chat_loop 跑起来才报。
 
-2. **builtin dev workflow plugin 开箱即用(07-09 builtin plugin task)**:默认 plugin 写在 `resources/workflows/dev-workflow.json`,跟应用一起 ship。新项目无 `.everlasting/` 目录也能跑,自动 fallback 到 builtin。**否决**"必须先建 workflow.json 才生效" —— onboarding 摩擦大,违背"开箱即用"目标。builtin plugin 不入 Git(用户改了就覆盖),只读默认。
+2. **builtin dev workflow plugin 开箱即用(07-09 builtin plugin task)**:默认 plugin 写在 `resources/builtin-workflow/dev/workflow.json`,跟应用一起 ship。新项目无 `.everlasting/` 目录也能跑,自动 fallback 到 builtin。**否决**"必须先建 workflow.json 才生效" —— onboarding 摩擦大,违背"开箱即用"目标。builtin plugin 不入 Git(用户改了就覆盖),只读默认。
 
 3. **Step 0.1~3.3 完整 9 阶段管线**:Step 0.1 sessions 表加 `workflow_enabled` 列;Step 0.2 顶栏 toggle UI;Step 0.3 `WorkflowDef` struct + 4 访问函数;Step 0.4 `task.json` 读写 + `create_task` IPC;Step 0.5 `chat_loop` 30 参 + per-turn breadcrumb 注入;Step 1.x plugin skill loader 4 步;Step 2.x delegation 模板 + role-gate;Step 3.x `set_task_state` / `archive_task` IPC + `TaskStatus::Completed`。每步独立 commit 独立验证,有问题单步 revert。
 
@@ -136,11 +229,12 @@
 - 9 个阶段 25 commit 独立可 revert,任何阶段出问题可回滚。
 - 07-10 task.json hardening(R1-R5)是本系统的稳态加固,非新功能。
 
-**关联**: 主任务 `.trellis/tasks/07-08-workflow-integration/`(9 阶段)+ 延伸 `.trellis/tasks/07-09-workflow-builtin-plugin/`(commit `7c22a6d`)+ `.trellis/tasks/07-09-workflow-transition-card/`(commit `969466b`)+ `.trellis/tasks/07-09-07-09-workflow-chip-merge/`(commit `5db27be`)+ `.trellis/tasks/07-10-workflow-task-json-hardening/`(commit `c6a983e`)+ pending-indicator(commit `b95e8c5`);spec 增量待建 `.trellis/spec/backend/workflow.md` + `.trellis/spec/backend/task-state-machine.md`(07-08 后续沉淀);1348+ 后端 + 794+ 前端 tests passed(0 failed,跨 25 commit 累积)。
+**关联**: 主任务 `.trellis/tasks/archive/2026-07/07-08-workflow-integration/`(9 阶段)+ 延伸 `.trellis/tasks/archive/2026-07/07-09-workflow-builtin-plugin/`(commit `7c22a6d`)+ `.trellis/tasks/archive/2026-07/07-09-workflow-transition-card/`(commit `969466b`)+ `.trellis/tasks/archive/2026-07/07-09-07-09-workflow-chip-merge/`(commit `5db27be`)+ `.trellis/tasks/archive/2026-07/07-10-workflow-task-json-hardening/`(commit `c6a983e`)+ pending-indicator(commit `b95e8c5`);spec 增量待建 `.trellis/spec/backend/workflow.md` + `.trellis/spec/backend/task-state-machine.md`(07-08 后续沉淀);1348+ 后端 + 794+ 前端 tests passed(0 failed,跨 25 commit 累积)。
+
 
 ### 2026-07-07 — `request_mode_change` tool:复用 `set_session_mode` IPC + 共用 `QuestionStore` + Yolo 二次 modal 双 IPC
 
-**Context**: LLM 在主 loop 里无工具申请 mode 切换,只能在 plan 模式返回 "please switch me to Edit mode",由用户手动按 `Shift+Tab` 切。新 tool `request_mode_change` 让 LLM 在 turn N 通过 `tool_use` 申请,用户 inline card 二选一,允许路径修改 `sessions.mode`。任务 `.trellis/tasks/07-07-07-07-request-mode-change-tool/`,完整 PRD + design 5 时序 + 11 单测 + 5 集成测试 + 5 IPC 测试 + 23 前端测试。
+**Context**: LLM 在主 loop 里无工具申请 mode 切换,只能在 plan 模式返回 "please switch me to Edit mode",由用户手动按 `Shift+Tab` 切。新 tool `request_mode_change` 让 LLM 在 turn N 通过 `tool_use` 申请,用户 inline card 二选一,允许路径修改 `sessions.mode`。任务 `.trellis/tasks/archive/2026-07/07-07-07-07-request-mode-change-tool/`,完整 PRD + design 5 时序 + 11 单测 + 5 集成测试 + 5 IPC 测试 + 23 前端测试。
 
 **关键决策(7 个,按"为什么"而非时间序)**:
 
@@ -185,7 +279,37 @@
 - `current_mode` 陈旧风险:LLM 在 turn N 申请切到 X,noop 判断时 `current_mode` 是 turn 0 快照;若 user 在同 LLM 响应前手动改了 mode(罕见),`current_mode` 已陈旧 → noop 误判。可接受(误判最多 1 次"误以为切了但没切",下 turn user 调 mode 后 LLM 看到正确)。改进可选 v2:每次 `execute_blocking` 实时 `load_session(...).mode` 做 noop 判断(避免陈旧)。
 - IPC-level 双重 resolve 兜底存在,但前端 `useQuestionCardsStore.resolveModeChange` 内部已 dedupe(返回前先 `if (pendingBySession.get(sid)?.kind === 'mode_change')` 守卫),IPC 端 `AlreadyResolved` 是防御性兜底,正常运行不会触发。
 
-**关联**: PRD + design + implement `.trellis/tasks/07-07-07-07-request-mode-change-tool/`;spec 增量 [tool-contract/11-request-mode-change.md §request_mode_change](../../.trellis/spec/backend/tool-contract/11-request-mode-change.md) + [permission-layer.md §5c](../../.trellis/spec/backend/permission-layer.md) + [agent-loop-architecture/pattern-worker-subagent.md §"Tool interception"](../../.trellis/spec/backend/agent-loop-architecture/pattern-worker-subagent.md) + [frontend/chat/request-mode-change.md §request_mode_change](../../.trellis/spec/frontend/chat/request-mode-change.md);1348 后端(`cargo test --lib`)+ 794 前端(`pnpm test`)+ vue-tsc 0 err + pnpm build 成功,4 commit(后端 / IPC + audit / 前端 / 集成测试)。
+**关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-07-07-07-request-mode-change-tool/`;spec 增量 [tool-contract/11-request-mode-change.md §request_mode_change](../../.trellis/spec/backend/tool-contract/11-request-mode-change.md) + [permission-layer.md §5c](../../.trellis/spec/backend/permission-layer.md) + [agent-loop-architecture/pattern-worker-subagent.md §"Tool interception"](../../.trellis/spec/backend/agent-loop-architecture/pattern-worker-subagent.md) + [frontend/chat/request-mode-change.md §request_mode_change](../../.trellis/spec/frontend/chat/request-mode-change.md);1348 后端(`cargo test --lib`)+ 794 前端(`pnpm test`)+ vue-tsc 0 err + pnpm build 成功,4 commit(后端 / IPC + audit / 前端 / 集成测试)。
+
+
+### 2026-07-07 — `request_mode_change` tool(LLM 申请切 mode)
+
+- **Context**:LLM 在主 loop 无工具申请 mode 切换,Plan 模式只能返回 "please switch me to Edit mode" 由 user 手动 `Shift+Tab` 切;反向同理(Edit 模式想切 Plan 提议架构)。本档补一个 LLM-driven mode 申请工具,user 通过 inline card 二选一授权,沿用现有 `set_session_mode` IPC 副作用链(DB + 审计 + Yolo 二次 modal + root guard)避免双路径漂移。
+
+- **决策 D1 — 工具名 `request_mode_change`(snake_case 风格跟 `ask_user_question` 对称)**:语义清晰(申请,非直接改)。`target_mode` ∈ `{edit, plan, yolo}` 3 档 user-facing(`background` enum 永远不暴露)。schema 硬编码 enum,不动 LLM 动态 build。
+
+- **决策 D2 — 卡片形态 = inline message card,非 modal**(沿用 `ask_user_question` 范式):AC10 红线明确:无 portal / 无遮罩 / 无 reka-ui Dialog。**唯一例外**:Yolo 二次确认 modal 沿用既有 `useChatStore.pendingYoloConfirm`,不新写 modal 组件。
+
+- **决策 D3 — "允许" 路径 = 前端触发 IPC + `resolve_mode_change` handler 调 `set_session_mode_internal` 落库**(关键变更,对比 PRD R4 初稿"tool 内部直接调 `db::update_session_mode`"):否决直接落库方案,改走 IPC 复用,理由:① **单一落库入口** —— user 主动切 mode / LLM 申请切 mode 两条路径行为必须完全一致,共用 `set_session_mode_internal` 纯函数(`set_session_mode` IPC handler 抽出的,逻辑 1:1 搬迁);② **Yolo 二次 modal 在前端触发**(`chatStore.requestSetMode` → `pendingYoloConfirm` modal → `confirmYolo` 调双 IPC);③ **审计一致** —— `mode_changed` audit 由 `db::update_session_mode` 自动产生,`resolve_mode_change` 调一遍 `set_session_mode_internal` 是幂等的(二次 UPDATE 无副作用)。
+
+- **决策 D4 — Yolo 二次 modal 守门通过 `chatStore.pendingResolveRequest` + `confirmYolo(pendingResolve)` hook**:card "允许" + `targetMode === "yolo"` → 不直接调 `resolveModeChange`,而是 `useChatStore.requestSetMode(sid, "yolo")` → modal 弹 → `confirmYolo` 成功 → `resolveModeChange(allow=true)` 解 oneshot;modal 取消 → `resolveModeChange(allow=false)` 走拒绝路径。`pendingResolve?: { sessionId, toolUseId, targetMode }` 是 `confirmYolo` / `cancelYolo` 的可选参数,**user 主动切 Yolo 路径(Shift+Tab / popover)ref 为 null,完全不动既有代码**。`is_running_as_root` 时 modal "确认"按钮 disabled + 红字 "Cannot enable Yolo as root",后端 `set_session_mode` IPC 兜底再守一道。
+
+- **决策 D5 — `QuestionStore` 升级为 `PendingInteraction` tagged enum(`Question \| ModeChange`)**:单 pending gate 跨 kind 互斥(同 session 不能并发 2 个待决交互)。`register` 接受 `PendingInteraction`,`resolve` 返 `PendingInteractionEntry { kind, payload }` 让 caller 知道 resolve 了哪种 kind(决定写哪个 audit)。新 IPC `get_pending_interaction` 统一查询,旧 `get_pending_question` 软弃用保留兼容(`#[deprecated]`,`#[allow(deprecated)]` 在 `lib.rs` 注册处抑制警告)。
+
+- **决策 D6 — 3 类新 audit kind 跟 `mode_changed` 不重复**:`mode_change_requested`(LLM 调 tool 触发,记录 target_mode + reason)/ `mode_change_allowed`(user 允许 + DB UPDATE 成功,记录 prev → new)/ `mode_change_denied`(user 拒绝 / Yolo guard 触发,记录 target + reason)。`mode_changed` 由 `db::update_session_mode` 自动产生,**不重复写**。AuditKind 17 → 20。
+
+- **决策 D7 — `noop` 短路(target_mode == current_mode)**:tool 立即返 `{"noop": true, "current_mode": "..."}`(`is_error: false`),不弹 card、不发 IPC 事件。减少 round-trip,LLM 看到 noop 自决。同时写 1 条 `mode_change_requested{noop: true}` audit 保留 LLM 申请痕迹。
+
+- **决策 D8 — Worker subagent 禁用**:`STRUCTURALLY_DISABLED` 加 `request_mode_change`(跟 `update_checklist` 同档)。Worker 想切 mode 必须回 parent。**并行 eligibility 走默认 false**(整批 Serial,跟 `ask_user_question` / `dispatch_subagent` 同档)—— 白名单机制自动生效,不加显式 branch。
+
+- **关键教训 —「测试装配 vs 设计意图」**:Phase E1 集成测试写时漏了 session-cancel 路径的 `token.cancel()` 触发器,`HangingThenCancel` MockProvider 是永远挂起的 stream,`run_chat_loop` 永久挂起死等 oneshot。修正 = 加 watcher `poll mock.call_count >= 1 → token.cancel()`,**对齐 `agent_loop_ask_user_question_session_cancel` 既有范式**(PR2 已有同款测试,新文件漏抄)。**抄模板时核对每行**,特别 cancel / session-switch / race-prone fixture。
+
+- **关键教训 —「`stop_reason` 决定 chat_loop 行为」**:Tests 2/4/5 初版用 `stop_reason=end_turn`,LLM 发 `tool_use` 但 chat_loop 直接 exit(`chat_loop.rs:2017` `should_continue = stop_reason == "tool_use" && !tool_calls.is_empty()`),工具完全没触发。修正 = Turn 1 `stop_reason=tool_use` + 加 Turn 2(text + end_turn)收口。**测试 fixture 必须反映真实 LLM 协议**,end_turn 不带 tool_use,tool_use 必须带 tool_use(否则 loop 提前退出)。
+
+- **测试**:1348 后端(cargo test --lib)+ 794 前端(vitest)+ vue-tsc 0 err + pnpm build 成功。Phase E1 集成测试 5/5(AC1/AC7/AC9/AC12/AC16)+ Phase E2 IPC 测试 4/4 + Phase E3 IPC 测试 5/5(含 Yolo root guard,gated on `is_running_as_root()`)。前端组件测试 23/23(RequestModeChangeCard)。零回归。
+
+- **推后期**:Timeout + auto-decide / 多 mode 排队合并 / 自由文本 reason 编辑 / 跨 session mode 同步 / LLM 申请切到 `background` / 切回 user 上次手动 mode / App crash 恢复 pending / `for turn in 1..=turn_limit` 重构 while 循环零消耗 / 多语言 reason / `Resolve<Option<PendingInteraction>>` 在 `message_history_replay` 接入以展示历史 mode change 卡片。spec 增量(tool-contract / permission-layer / agent-loop-architecture / frontend/chat)已在 ROADMAP §1.2 行引用,内容 follow-up 补。
+
 
 ### 2026-07-06/07 — B6+ B subagent dispatch 动态选模型(优先级链收口 `dispatch > DB > frontmatter > parent`)
 
@@ -207,9 +331,10 @@
 
 **关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-06-b6plus-b-dispatch-model-arg/`;代码 commit `996aa2e`(`dispatch.rs` +374 核心优先级接入 + `resolve_model_by_name_or_id` / `mod.rs` +142 schema `model` enum + `ForcedDispatch.model_id` + `ModelOption` / `chat_loop.rs` +49 / `chat.ts` +124 `@@ --model=` 解析 / `chat.test.ts` +182,7 文件 +852/-31)+ spec commit `dc3e422`(agent-loop 优先级表 row26 + tool-contract §B6+B + frontend/chat `@@ --model=` 解析);复用 A 的 `resolve_worker_provider` + C 的 `resolve_final_model`(两者签名零改动)。
 
+
 ### 2026-07-06 — V2-2+ 自主记忆可观测性 + 管理面板(A1-A11 后端 + B1-B5 前端)
 
-**Context**: V2 2 期自主记忆(06-29)全是 agent 自主闭环 —— 写(`remember`)/ 召回(FTS + pitfall)/ 反思(P4 auto-reflect)/ 提升(P5 状态机)/ 卫生(dedup + age-out)。用户面对的是黑盒:看不到命中、改不了内容、转不了状态、删不了过时项。V2-2+ 补**人**的入口。任务 `.trellis/tasks/07-06-am-observability-panel/`,PRD R1-R5 + design D1-D7。
+**Context**: V2 2 期自主记忆(06-29)全是 agent 自主闭环 —— 写(`remember`)/ 召回(FTS + pitfall)/ 反思(P4 auto-reflect)/ 提升(P5 状态机)/ 卫生(dedup + age-out)。用户面对的是黑盒:看不到命中、改不了内容、转不了状态、删不了过时项。V2-2+ 补**人**的入口。任务 `.trellis/tasks/archive/2026-07/07-06-am-observability-panel/`,PRD R1-R5 + design D1-D7。
 
 **决策(D1-D7 + 实施)**:
 
@@ -243,9 +368,10 @@
 - reka-ui Select popper 在 jsdom 不渲染 items 直到 open,矩阵逻辑改测导出常量(`LEGAL_STATUS_TRANSITIONS`)而非 DOM — 矩阵是 unit under test,Select 交互是 reka-ui 的责任。
 - IPC-level 合法/非法转换 roundtrip 测试缺失 — 项目惯例 IPC 层薄包裹、逻辑在 db 层测(矩阵已被现有 `update_status_*` 测试覆盖)。
 
-**关联**: PRD `.trellis/tasks/07-06-am-observability-panel/`(prd + design + implement)+ spec [backend/memory.md §V2-2+](../../.trellis/spec/backend/memory.md) + [frontend/memory-ui.md §V2-2+](../../.trellis/spec/frontend/memory-ui.md);1300 后端(`cargo test --lib`)+ 757 前端(`pnpm test`)+ vue-tsc 0 err + fmt 干净。2 commits(Phase A `08fb30a` / Phase B `a0c2c4f`),分支 `feat/am-observability-panel-phase-a`。
+**关联**: PRD `.trellis/tasks/archive/2026-07/07-06-am-observability-panel/`(prd + design + implement)+ spec [backend/memory.md §V2-2+](../../.trellis/spec/backend/memory.md) + [frontend/memory-ui.md §V2-2+](../../.trellis/spec/frontend/memory-ui.md);1300 后端(`cargo test --lib`)+ 757 前端(`pnpm test`)+ vue-tsc 0 err + fmt 干净。2 commits(Phase A `08fb30a` / Phase B `a0c2c4f`),分支 `feat/am-observability-panel-phase-a`。
 
-### 2026-07-06 — C2+ 循环检测主动干预(per-run-local count + QuestionStore 复用 + 三分支 + worker 直接 break)
+
+### 2026-07-06 — CI 测试自动化管线(双 job 并行 + cargo fmt gate + 预存 flaky 修复)
 
 **Context**: V2 第三档 E1。项目积累 1274 cargo + 718 vitest + vue-tsc 全靠手动跑(`PKG_CONFIG_PATH=... cargo test` + `pnpm test` + `vue-tsc`),无防回归;最近 A5+ 一轮(1274/718)已现手动验证摩擦,journal 记"1266 全绿不准,Step 5 后即 fail"——正是 CI 该堵的回归类型。DEBT.md 0 open items,纯前瞻性基建。
 
@@ -261,6 +387,7 @@
    - **loader mtime fence 精度**(测试侧修复 `memory/tests.rs`)— 两次连续 fs::write 间隔过短 FS mtime 精度不足区分(ext4 ns 但 overlay/tmpfs + 并行负载弱化 delta);原 sleep 15ms 在写 v2 之后对 v2 自身 mtime 无效(只保证落盘,不保证推进);改 spin until mtime 真推进(cap 2s,确定性,失败 panic = FS 精度不足本身是 fence-invalidating bug)。
 
 **结果**:CI 双 job 全绿(rust ~5min / frontend ~2min);drain race 修复 10/10 单跑 + 3x 全量 1274/1274 稳定;mtime fence 3x 全量稳定。clippy gate 记 follow-up(ROADMAP §2)。
+
 
 ### 2026-07-06 — C2+ 循环检测主动干预(per-run-local count + QuestionStore 复用 + 三分支 + worker 直接 break)
 
@@ -288,7 +415,8 @@
 - `Done.stop_reason` 三态:`loop_terminated` / `cancelled` / `end_turn`,前端 `WorkerTextTimeline.vue` 当 opaque 字符串渲染,无新 case。
 - `tests_agent_loop::agent_loop_max_turns_emits_done_marker` 加「继续」resolver 循环(200 连相同 list_dir 现在第 3 轮触发 C2+ 阻塞,这正是 C2+ 设计目的)。
 
-**关联**: PRD `.trellis/tasks/07-05-c2-loop-active-intervention/`(prd + design + implement)+ spec [tool-contract "C2+ loop intervention"](../../.trellis/spec/backend/tool-contract.md);1282 后端(`cargo test --lib`)+ 728 前端(`pnpm test`)+ vue-tsc 0 err;clippy gate 受预存 rustc 1.82 vs deps 1.85+ 环境阻塞(E1 follow-up,非 C2+ 引入)。
+**关联**: PRD `.trellis/tasks/archive/2026-07/07-05-c2-loop-active-intervention/`(prd + design + implement)+ spec [tool-contract "C2+ loop intervention"](../../.trellis/spec/backend/tool-contract.md);1282 后端(`cargo test --lib`)+ 728 前端(`pnpm test`)+ vue-tsc 0 err;clippy gate 受预存 rustc 1.82 vs deps 1.85+ 环境阻塞(E1 follow-up,非 C2+ 引入)。
+
 
 ### 2026-07-05 — A5+ LLM 网络健壮性(retry_open wrapper + Full Jitter + 首字节前重试 + headers 字段扩展)
 
@@ -313,7 +441,8 @@
 - `LlmError::RateLimit`/`Server` 变体加 headers 字段 — 所有构造点同步改,`From<LlmError> for AppError` 边界更新,既有测试断言同步。
 - Step 5 commit msg "1266 测试全绿"不准 — `agent_loop_ask_user_question_session_cancel` 实际在 Step 5 后即 fail(cancel 时序漂移),Step 6 收尾时修复(测试侧适配 retry_open 新 cancel 语义,非 retry_open bug)。
 
-**关联**: PRD `.trellis/tasks/07-04-a5plus-llm-network-resilience/`(prd + design + implement)+ 调研 `docs/research/llm-network-resilience-survey.md` + spec `.trellis/spec/backend/llm-contract.md` "Scenario: LLM Retry / Backoff (A5+)";commit `a26e7e0`(Step 1-4 基础设施)+ `dd00104`(Step 5 接入)+ 本日 Step 6-9 收尾;1274 后端 + 718 前端 tests passed(0 failed)。
+**关联**: PRD `.trellis/tasks/archive/2026-07/07-04-a5plus-llm-network-resilience/`(prd + design + implement)+ 调研 `docs/research/llm-network-resilience-survey.md` + spec `.trellis/spec/backend/llm-contract.md` "Scenario: LLM Retry / Backoff (A5+)";commit `a26e7e0`(Step 1-4 基础设施)+ `dd00104`(Step 5 接入)+ 本日 Step 6-9 收尾;1274 后端 + 718 前端 tests passed(0 failed)。
+
 
 ### 2026-07-04 — A2+ shell 精细判定(复合命令拆分取 max + grant 短路对结构元字符失效 + `>` 写重定向升 SideEffect)
 
@@ -338,7 +467,55 @@
 - **v1 接受的盲区**(design §7):`VAR=val cmd` env-prefix(段首 token=`VAR=val` 非 whitelist → 整条 Ask,远期 first-token 可剥前缀)/ 单 `&` 后台不拆 / 拆分器引号误判(靠 grant 前置 `contains` 兜底 + Tier 2 kill-list 兜底灾难性模式)/ `$var` 变量展开(静态不可知,P3 沙盒兜底)。
 - 七不变量全保持(grant schema 三 match_kind / Mode 三档 / 17 AuditKind / Tier 2 kill-list / Yolo bypass / shell.rs 执行层 / "不确定就 Ask");grant 表存量数据无需迁移(前置是代码层,grant 行不受影响,存量授权对单条命令仍生效)。
 
-**关联**: PRD `.trellis/tasks/07-04-a2-shell-p1p2-classify/prd.md` + design.md + implement.md;方案 `docs/A2-SHELL-CLASSIFICATION.md`(经双 review);spec `.trellis/spec/backend/tool-contract.md` "Compound command classification (A2+)" 段;commit 见 `git log --grep a2-shell-p1p2-classify`;1237 tests passed(0 failed,55 shell_trust 新增/重判 + 3 check grant 短路集成)。
+**关联**: PRD `.trellis/tasks/archive/2026-07/07-04-a2-shell-p1p2-classify/prd.md` + design.md + implement.md;方案 `docs/A2-SHELL-CLASSIFICATION.md`(经双 review);spec `.trellis/spec/backend/tool-contract.md` "Compound command classification (A2+)" 段;commit 见 `git log --grep a2-shell-p1p2-classify`;1237 tests passed(0 failed,55 shell_trust 新增/重判 + 3 check grant 短路集成)。
+
+
+### 2026-07-03 — B6+ C subagent per-agent 模型 UI(builtin DB override + 写回 frontmatter + card/drawer 可观测性)
+
+- **Context**:A 任务(`07-03-subagent-frontmatter-model`)已落地 frontmatter `model:` 声明 + 透传 + `[model: X]` wire 行,但留两块缺口:① 内置 agent(`researcher` / `general-purpose`)无 frontmatter 文件可配 model;② frontmatter 写 `models.id`(UUID)对人类极不友好。parent `07-03-subagent-per-agent-model-ui` + 4 child(0 DB / 1 优先级 / 1b 可观测性 / 2 写回 / 3 IPC / 4 前端 / 5 收尾)。
+- **决策 D1 — 优先级 `DB override > frontmatter > parent`,DB 作用域 global**:brainstorm 一轮收敛。UI 全局偏好直觉胜出(一处配即生效,无需关心文件)。DB global 简化 schema(无 project 归属),builtin agent 唯一可配置入口。失效 override(catalog miss)`resolve_worker_provider` 内 `warn!` + 降级 parent,UI 标红"model 已删除",不级联清表(留 follow-up)。
+- **决策 D2 — `resolve_final_model` 在 `run_subagent` 前置解析,`resolve_worker_provider` 本身不动**:`run_chat_loop` 24 参签名不变(25 行表新增 1 行为决策 D2 注释,无新 param)。A 任务的 6 个 `resolve_worker_provider` 单测零回归是本决策的关键 —— 优先级链与 catalog 解析在两个独立函数,后者只看到"已收敛的 Option<id>"。两层纯函数各自可单测。
+- **决策 D3 — frontmatter 写回走行级编辑,不引 YAML crate**:读原文件 → 定位 fence → 仅改 `model:` 行 → 原子写(`.tmp`+rename)。body / 注释 / 字段顺序 / 引号风格原样保留;round-trip 整个 frontmatter 会丢所有这些,得不偿失。无 fence 文件**返错**(loader 会因缺 `name` 拒收,正常路径必有 fence;不隐式补 fence 避免魔法改写用户文件结构)。`apply_model_line` 纯函数 + `write_frontmatter_model` IO 包装,前者单测覆盖 8 case,后者覆盖 5 case。
+- **决策 D4 — `subagent_runs.model_display` 直接取 `resolve_worker_provider` 第三项 `Option<String>`,catalog 命中写 `Some(name)`,parent 继承 / catalog miss 写 NULL**:与 `format_dispatch_result_with_model` 的 `[model:]` 行**完全一致**(`None` 同步省略行 + 写 NULL)。**不改 `run_subagent` 签名**(parent display 不在其入参,留 follow-up),thread 风险 + 测试同步成本不值;若要 parent 继承时也显示具体 model,需把 chat 入口 `ResolvedChatProvider.model_display_name` thread 到 `run_subagent`(A 任务 design §113/118 设想但**未落地**,已记入 subagents.md AC13 注释)。前端 card + drawer 据此显示 chip + inline model,`v-if` 隐藏 NULL(pre-C 旧 row / parent 继承 / catalog miss 降级 一律不报错)。
+- **决策 D5 — `workerSummaryPreview` 同时 strip `[status:]` + `[model:]` 行**:chip 已独立显示 model + status,文本里再出现是视觉噪声。regex 过滤而非 substring replace,应对 `[status: error]` / `[status: completed]` / `[model: Claude Test]` / `[model: <id>]` 各种值。`extractToolResultDisplay` 不动(它处理 envelope,不是本任务的负担)。
+- **决策 D6 — Settings UI 走 reactive Map per-row spinner 隔离**(仿 `subagentRuns.mergeStateByRunId`):多 agent 同时 set 互不阻塞;`finally` 清 spinner 防 stuck;`disabled` attribute 防双击 + store `if (spinnerByName.has(name))` 兜底(防 in-flight 期间 click 落 store)。
+- **关键教训 —「跨层类型加字段,fixture 同步很贵」**:`SubagentRunSummary` + `SubagentRunRow` 各加 `modelDisplay: string | null`,3 个测试文件(subagentRuns.test / SubagentDrawer.test / WorkerMergeControls.test / ToolCallCard.test)共 4 处 fixture literal 编译失败。**加新 IPC 字段前先 grep 全部 `SubagentRunSummary | SubagentRunRow` 字面量 + 同步补 fixture**,否则 vue-tsc 拉一个 fail 1 测试 + 改 4 文件,比写 1 个新 component 还累。已沉淀进 `frontend/state-management.md §Cross-layer drift traps`。
+- **关键教训 —「不引新 IPC 时 cargo test 时间 ~2min 拉到 1 个 6 字段 fixture 失败循环」**:`run_chat_loop` 不增参的决策 + `resolve_final_model` 在 `run_subagent` body 内现取 db 让 25 行表仅多 1 行注释(无新 param 同步 36+ agent_loop_* 测试),节省 20+ 行 fixture 同步成本 —— 是 D2 决策的"不增 param"设计正确的第二份证据。
+- **测试**:1205 Rust(`cargo test --lib`,含 5 个 `resolve_final_model` + 3 个 `subagent_runs` model_display + 13 个 `loader` apply_model_line + write_frontmatter_model + 6 个 `subagent_overrides` CRUD)+ 712 TS vitest(`vue-tsc 0 err`)+ vue-tsc strict 全绿,既有 1191 Rust + 711 vitest 零回归。AC1-15 测覆盖(priority 4 + DB CRUD 6 + write-back 5+8 + IPC 2 + model_display persistence 3 + UI strip 1 + per-row spinner 1)。
+- **推后期**:per-project 作用域 / model 删除级联清 override / parent display thread 到 run_subagent(完整 A 任务 design §113/118 落地) / dispatch 时动态选 model(`@@agent --model=`,B 任务) / `set_subagent_model` IPC 加 subagent cache list 缓存(`mtime-fenced` 已即时刷新,但 list 大时每次 set 重查 models N+1,小优化) / SubagentsTab 加"按 source 过滤"。
+
+
+### 2026-07-02 — B9 生成式 UI(部分落地:selector/diff/code_block,button 推后期)
+
+- **Context**:输出层生成式 UI。parent `07-02-b9-generative-ui` + 3 child(A use_ui 基础设施 / B code_block hljs / C diff 复用 DiffView)。brainstorm 收敛 6 决策(D1-D6),MVP 范围从"4 primitives 全做"缩到"selector 复用 + diff 只读 + code_block 高亮",button/diff应用/开关全推后期。
+- **决策 D1 — 承载机制 = `use_ui` 单 tool + primitives 数组**(否决 `ui_render` content block):现有所有结构化输出都走 tool_use 且管线成熟(权限⑨/审计/persist_turn 持久化/前端 tool_name dispatch);新增 ContentBlock 变体要改 Anthropic+OpenAI 两 Provider wire,且 Anthropic 不原生认 ui_render block。B9 primitive 本质是 agent 主动决定展示 UI,跟"决定调 tool"无别 —— content block 唯一独占的"自然输出"优势在此场景是空的。架构文档(§⑭)预留的 ui_render/use_ui/ui:render 全仓零实现,B9 从零设计承载机制。
+- **决策 D2 — 执行模型 = non-blocking 展示;selector 复用 ask_user_question**:use_ui 立即返 tool_result("已渲染 N 个"),不等用户交互。**selector 不重做,直接 = `ask_user_question`**(blocking oneshot 已 06-30 验证,语义 100% 重合)。前端 registry 统一 dispatch:`tool_name===ask_user_question`→AskUserQuestionCard;`tool_name===use_ui`→按 primitive.type 路由。
+- **决策 D3 — 独立 button primitive 推后期**:B9 最大安全面(action 白名单 + 高危 action 过权限⑨,DESIGN.md:70)。首批 80% 用例(询问=selector/展示=diff+code_block)已覆盖。
+- **决策 D4 — diff primitive MVP 只读 + 复制**(应用推后期):edit_file+权限⑨+DiffView 已覆盖"修改确认"全流程;diff primitive MVP 聚焦展示型,避免与 edit_file 并存两种修改模型造成 LLM 困惑。零新增安全面。
+- **决策 D5 — session 开关 MVP 不做**:use_ui non-blocking 展示型无副作用,Mode(edit/plan/yolo)已是更通用控制层。
+- **决策 D6 — code_block 高亮 = hljs `lib/common`**:最轻、marked-highlight 集成成熟。两入口共用 `renderCodeHtml`(markdown 代码块 + CodeBlockPrimitive),语言集永不分裂。
+- **关键教训 —「先查代码再问用户」避免重复造轮子**:brainstorm 前探索发现 selector 已实质落地(ask_user_question)、diff 渲染层已落地(DiffView 且在 ToolCallCard:635 内嵌)、code_block 半落地(markdown 无高亮)。**4 个 primitive 里 2.5 个已以特化形式存在**,真正从零做的只有 button + 统一 UiCard 模型。Evidence rule 在 parent brainstorm 阶段就砍掉了"selector 怎么做""diff 渲染怎么实现"两个伪问题。
+- **关键教训 —「registry 可扩展性」兑现于 Child B/C 零改动 dispatch**:Child A 设计 registry 为 `Record<type, Component>` Map + UiCard 遍历 dispatch,Child B/C 各自只改 registry 一行条目,UiCard/MessageItem dispatch 零改动。
+- **关键教训 — hljs 接入改变 markdown HTML 输出 → 测试断言要跟**:marked-highlight 让代码块从 `<code>print(1)</code>` 变成 `<span class="hljs-built_in">print</span>...`。markdown.test.ts / MarkdownDetailModal.test.ts 的 `toContain("print(1)")` 失效。**接入改变输出的库时,先 grep 现有断言看哪些 substring 匹配会破**。
+- **测试**:cargo test 1146+/use_ui 12 + vue-tsc 0 err + vitest 694/694(UiCard 8 + CodeBlockPrimitive 7 + DiffPrimitive 9 + 4 处断言适配 hljs)。端到端(tauri dev)待手动验收。
+- **推后期**:独立 button primitive + action 白名单(D3)/ diff 应用(D4)/ session allow_generative_ui 开关(D5)/ 自由式 UI / form/chart/table primitive。
+
+
+### 2026-07-02 — A5 错误处理完善(全栈错误契约:`AppCommandError` wire shape + 10 类型 `impl AppError` + 前端 errorBus)
+
+- **Context**:`error-handling.md` 是半成品模板(五章里三章 `To be filled`)+ spec drift(称 `LlmErrorKind`/`Protocol`,代码实际 `LlmError`/`InvalidRequest`);代码侧 10 个对外错误类型仅 `LlmError` 有 `category()/user_message()`,Tauri command 全为 `Result<T,String>`(~65 处)无结构化错误,前端错误散点 `.catch(console.error)` 静默吞。本期目标:spec 补活文档 + Rust `AppError` trait 统一 + `AppCommandError` wire shape 一次性全切 IPC + 前端 `useErrorBus` 按 category 路由。
+- **决策 D1 — IPC 错误 = `AppCommandError { category, kind, message, retryable, request_id }` 结构化 wire**(否决继续用 String):category 驱动前端路由,kind/message 供诊断与展示,request_id 关联 tracing。不带 stacktrace(IPC 体积 + 用户消息无 stack,stack 留 tracing log)。
+- **决策 D2 — `retryable` 默认按 category 派生,本期零 override**(否决每 variant 手填):Server/Network/RateLimit=true,Auth/InvalidRequest=false。初版设计曾用 `BackgroundShellError::Timeout` 当 override 唯一样板,review 发现该 variant 不存在,整个 override 机制本期无真实案例,删除。
+- **决策 D3 — 10 个领域 `From<E>` 手写 + `From<anyhow::Error>` 边界兜底**(否决 blanket `From<E: AppError>`):AppError impl 分散各类型文件,blanket 触发 coherence 冲突。anyhow 兜底必须,因 commands 大量 `?anyhow`,无此转换 PR-A5-3 编译失败(先 downcast 已知类型,未命中归 Server/`kind="Anyhow"`)。
+- **决策 D4 — 一次性全切 IPC,无 String 兼容层,A5-3/A5-5 同次发布**(否决双协议期):errorBus `parseAppCommandError` 容错 String rejection 降级 Server/Unknown,降低迁移期回归风险;但前后端签名必须同次发布,消除"后端返对象/前端按 String 解析"中间窗口。不留 `From<AppCommandError> for String` 临时兼容层。
+- **决策 D5 — 5 类 category 复用 LlmError**(否决 PermissionDenied/Cancelled/NotFound 独立类):LlmError 5 类已是成熟的 category 原型;其余 9 类型 variant 归并(典型 NotFound→InvalidRequest、Db→Server)。独立类后续按需扩。
+- **决策 D6 — `PreFlightError::EmptyApiKey/DecryptFailed` → Auth**(非统一 InvalidRequest):前端 Auth 路由正是"引导去 Settings 检查 API key",语义对齐;NoModel/ProviderMissing/BuildFailed 仍归 InvalidRequest。
+- **决策 D7 — 前端 `errors` 数组 `MAX_ERRORS=50` FIFO**(否决无限增长 / TTL):长会话 Server/Network 风暴防护;单条 dismiss / TTL 推 toast UI follow-up。
+- **关键教训 —「planning drift 比 spec drift 更贵」**:review 发现 design.md §5 映射表 6 个类型的 variant 名凭印象虚构(`GitError::NotFound/Conflict`、`BackgroundShellError::Timeout`、`ReflectError::Parse`、`WebFetchError::Http4xx/Http5xx`、`QuestionStoreError::Duplicate`、`StatusTransitionError` 漏 Db),且"11 个 thiserror"计数错(实际 10 对外,含 2 手写)+ 漏 `ValidationError`(`pub(crate)`)。**写 planning 前必须 `rg "pub enum .*Error" -g '*.rs'` + 逐 `#[error]` 行核对真实 variant 名**,否则实施连环返工。已沉淀进 `error-handling.md §Common Mistakes`。
+- **关键教训 —「trait 超类型约束的隐藏工作量要先核实」**:`trait AppError: std::error::Error` 对 `PreFlightError` 不成立(它无 Display 也无 Error impl,只有 `auth_message()/invalid_request_message()` 分方法)。PR-A5-2 必须先补两个 impl。三个类型(LlmError/PreFlightError/QuestionStoreError)现有对外接口形态各异,非"一刀切迁移"。
+- **测试**:进行中(PR-A5-2 ~ A5-5 完成后补:10 类型 ~41 variant `category()/user_message()` 快照 + `HttpStatus` 4xx/5xx 分流 + `From<anyhow::Error>` 兜底 + grep `Result<String>` 残留 + `parseAppCommandError` 容错 + cargo/pnpm 全绿)。
+- **推后期**:多语言 i18n `user_message` / 自动重试策略 / Telemetry Metrics(request_id→Sentry/OTel)/ PermissionDenied·Cancelled·NotFound 独立 category / legacy `.catch(console.error)` 全量替换 / toast UI 接 reka-ui + 单条 dismiss·TTL / `ValidationError`(`pub(crate)`)纳入 impl AppError。
+
 
 ### 2026-07-01 — read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list(+ `~` 展开)
 
@@ -361,4 +538,5 @@
 
 **两轮 review 各补一个盲区**:trellis-check 抓到 symlink escape(安全回归,已修);用户 review 抓到 `~` 不解析(allow-list 形同虚设,已修)。两者自验时都用"绝对路径测试"绕过。
 
-**关联**: PRD `.trellis/tasks/07-01-read-side-boundary-decouple/prd.md`;commit `87c91f0`;spec `.trellis/spec/backend/project-cwd-boundary.md` §5 + §7;1127 tests passed。
+**关联**: PRD `.trellis/tasks/archive/2026-07/07-01-read-side-boundary-decouple/prd.md`;commit `87c91f0`;spec `.trellis/spec/backend/project-cwd-boundary.md` §5 + §7;1127 tests passed。
+

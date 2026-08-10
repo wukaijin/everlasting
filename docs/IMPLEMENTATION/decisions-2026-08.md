@@ -20,3 +20,10 @@
 
 - **Context**:DB 取证(session d7fe451c)moderator 某轮发出 3 个 `read_file` tool_use,但 provider(Console Go,OpenAI 兼容)在 tool_calls-only 流上的 finish_reason 不是 `"tool_calls"`(`"stop"`→`"end_turn"` 或缺失)。旧判定 `should_continue = stop_reason == Some("tool_use") && !tool_calls.is_empty()` 不成立 → 直接 return:`assistant(tool_use)` 行已落库但工具未执行、`tool_result` 未落库 → 孤儿 tool_calls 违反 llm-contract §Pair Atomicity → 每次请求 400 → 群聊烧掉 `MAX_ORCHESTRATION_ROUNDS`(26 个连续错误 turn)。
 - **决策**:工具执行 gate 只看 `tool_calls` 本身 — 模型发出任何 tool_use 就必须执行并回灌结果;`stop_reason` 只决定终态 `Done` 值。spec 补 `llm-contract.md` §Pair Atomicity 执行侧契约(When this bites),回归测试 `agent_loop_tool_use_with_non_tool_use_stop_reason_still_executes`。
+
+### 2026-07-29~08-04 — 群聊 group chat(turn-taking 编排引擎 + 4 Phase)
+
+- **Context**:经典 chat 是单 agent 循环;多 agent 协作(如多视角 review / 多角色讨论)需要多个 LLM 参与者在同一 session 内轮流发言,旧架构无此能力。
+- **决策 — session_type 区分两种循环 + moderator 编排**:`sessions.session_type` 列区分 `'chat'`(经典单 agent,走 `chat_loop.rs`)/ `'group_chat'`(走新 `group_chat_loop.rs`)。群聊循环由 **moderator**(主持人)agent 协调多个**参与者**:moderator 用 `nominate_speaker` 工具点名下一发言者,参与者发言后回 moderator,任意参与者用 `end_discussion` 终止。每条 message 落库带 `speaker` 列(参与者标识),前端按 speaker 渲染独立气泡 + 实时发言人 chip。两个新工具 `nominate_speaker` / `end_discussion` 是 SIGNAL 工具(chat_loop 拦截记录信号,非真执行)。
+- **4 Phase 落地**:① 数据层 + wire 层 speaker 维度(`d2fca90`);② turn-taking 编排引擎(`80ab4bd`);③ speaker 落库/读取(`e065a12`~`a75aa37`);④ 创建群聊 session + 参与者配置 UI + 逐轮流式(`35e631c`~`2b6ab8a`)。
+- **08-04 编排重写**:入口持久化去重(防重复进入群聊循环)+ 参与者身份护栏(禁自名开头、允许 @点名别人)+ 终止/发言人事件 + 逐轮流式(群聊内容实时出现 + 发言人 chip 实时渲染)+ 人类抢占插话(send 在 group_chat streaming 时先 cancel 再发)。PRD 走 `.trellis/tasks/archive/2026-07/07-29-group-chat/`,08-04 重写见 `.trellis/tasks/archive/2026-08/08-04-group-chat-orchestration-rewrite/`。

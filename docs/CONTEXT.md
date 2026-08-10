@@ -1,7 +1,7 @@
 # CONTEXT.md
 
 > Everlasting 项目术语表(glossary)。
-> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION.md §4` 决策日志,本文件不重复。
+> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions.md` 决策日志,本文件不重复。
 
 ---
 
@@ -50,7 +50,7 @@ Anthropic Messages API 的 token 用量在 SSE 流的 `message_delta` 事件中�
 OpenAI Chat Completions 的 token 用量在流末尾携带(`usage: { prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details: { cached_tokens } }`),**仅在请求体发送 `stream_options: { include_usage: true }` 时**返回。
 
 ### Checklist (agent 自跟踪清单)
-> **实现状态**:**B12 已落地(2026-06-19)**。TodoWrite 式 `update_checklist` tool — 全量替换(单次调用覆盖完整清单,非增量 diff)+ 三态 `pending` / `in_progress` / `done` + 至多一 `in_progress` coerce(LLM 误标多个 in_progress 时收一)+ loop-local Vec(per-request,通过 `ToolContext` 传,不污染持久化 messages)+ 每轮 ephemeral **append** 注入请求副本(不入持久化,保 memory cache breakpoint 不断)。前端 `<ChecklistCard>` ChatPanel 浮层(展开 / 最小化悬浮球 + 焦点动效)+ checklist store(客户端复刻 coerce)。无新 DB 表(replay 从 DB history 还原,reload 按 `is_error` 过滤 cancel 合成 result)。PR1 `994db84` + PR2 `1896470` + PR3 spec;决策见 [IMPLEMENTATION §4 2026-06-18](../IMPLEMENTATION/decisions.md)。
+> **实现状态**:**B12 已落地(2026-06-19)**。TodoWrite 式 `update_checklist` tool — 全量替换(单次调用覆盖完整清单,非增量 diff)+ 三态 `pending` / `in_progress` / `done` + 至多一 `in_progress` coerce(LLM 误标多个 in_progress 时收一)+ loop-local Vec(per-request,通过 `ToolContext` 传,不污染持久化 messages)+ 每轮 ephemeral **append** 注入请求副本(不入持久化,保 memory cache breakpoint 不断)。前端 `<ChecklistCard>` ChatPanel 浮层(展开 / 最小化悬浮球 + 焦点动效)+ checklist store(客户端复刻 coerce)。无新 DB 表(replay 从 DB history 还原,reload 按 `is_error` 过滤 cancel 合成 result)。PR1 `994db84` + PR2 `1896470` + PR3 spec;决策见 [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION/decisions.md)。
 
 LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自己写、改、标记完成,用于不丢失自己的计划与进度。对齐 Claude Code 的 `TaskCreate/TaskList`、opencode 的 `todowrite`、Cline 的 plan-act。
 
@@ -112,7 +112,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 `MAX_TURNS=200` 仍是硬兜底。无 AuditKind 落表(§2.5.8)。token 切分纯 Rust `split_whitespace`(不复用 tiktoken)。实现见 `app/src-tauri/src/agent/loop_detection.rs`。
 
 ### AuditKind
-`session_audit_events.kind` 字符串枚举,**25 类**(演进:A2+B7 初版 17 → 06-24 resend_message + c2 系列增补 → 07-07 request_mode_change 三类 17→20 → 07-13 ui_diff_applied 等):`tool_executed` / `tool_allowed` / `tool_denied` / `tool_ask` / `mode_changed` / `grant_added` / `grant_revoked` / `resend_message` / `loop_intervention` / `mode_change_requested` / `mode_change_allowed` / `mode_change_denied` / `ui_diff_applied` 等(完整列表见 [ARCHITECTURE §2.5.8](../ARCHITECTURE.md) + `permissions/types.rs::AuditKind`)。每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选)。
+`session_audit_events.kind` 字符串枚举,**25 类**(演进:A2+B7 初版 17 → 06-24 resend_message + c2 系列增补 → 07-07 request_mode_change 三类 17→20 → 07-13 ui_diff_applied 等):`tool_executed` / `tool_allowed` / `tool_denied` / `tool_ask` / `mode_changed` / `grant_added` / `grant_revoked` / `resend_message` / `loop_intervention` / `mode_change_requested` / `mode_change_allowed` / `mode_change_denied` / `ui_diff_applied` 等(完整列表见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md) + `permissions/types.rs::AuditKind`)。每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选)。
 
 ### L1 / L2 / L3 命名约定
 路线图子档命名:
@@ -127,7 +127,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
-agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语。详见 [ARCHITECTURE §1/§4](../ARCHITECTURE.md)。
+agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语。详见 [ARCHITECTURE §1/§4](./ARCHITECTURE.md)。
 
 - **everlasting-daemon** — cargo bin target(`app/src-tauri/src/bin/everlasting-daemon.rs`),跑 agent core 的独立进程。axum HTTP server,监听 `0.0.0.0:7456`,持有 SQLite pool(WAL writer)。serve loop 见 `daemon/server.rs::serve_daemon`。
 - **sidecar** — GUI 进程(Tauri)把 daemon 作为子进程 spawn 出来的模式(`sidecar.rs::spawn_and_manage`,经 `tauri-plugin-shell`)。`RunEvent::Exit` 钩子 kill sidecar,无孤儿进程。spawn args:`--port` + `--data-dir`(对齐 GUI 的 `app_data_dir`,保证开同一个 SQLite)。
@@ -141,12 +141,12 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— 79 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— 91 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
 
 ---
 
 ## 相关决策
 
-- 设计决策走 [`docs/IMPLEMENTATION.md §4 决策日志`](../IMPLEMENTATION/decisions.md)(本文件不重复)
+- 设计决策走 [`docs/IMPLEMENTATION/decisions.md 决策日志`](./IMPLEMENTATION/decisions.md)(本文件不重复)
 - A4 Token 相关术语、Checklist(agent 自跟踪清单)均已落地(详见上文 Checklist 条目,B12 2026-06-19),作为术语定义保留
 - 跨层契约走 `.trellis/spec/backend/llm-contract.md` "Scenario: Token Usage Tracking" 段

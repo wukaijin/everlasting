@@ -1,6 +1,6 @@
 ## 9. 分阶段实施计划
 
-> 排期归 [ROADMAP.md](./ROADMAP.md)。本节是**功能落地依赖拓扑**,每阶段独立可验证。
+> 排期归 [ROADMAP.md](../ROADMAP.md)。本节是**功能落地依赖拓扑**,每阶段独立可验证。
 
 ### Phase 0:engine 骨架(state 注入 + workflow 开关)
 

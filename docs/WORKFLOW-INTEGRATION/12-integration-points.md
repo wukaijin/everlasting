@@ -3,13 +3,13 @@
 | 接入点 | 现有位置 | 本功能改动 |
 |---|---|---|
 | workflow 开关 | `sessions` 表 + 顶栏 | 加 `workflow_enabled` 列 + toggle(B7 mode 切换同级) |
-| state breadcrumb 注入 | [`memory_recall::inject_recall_into_turn`](../.trellis/spec/backend/agent-loop-architecture.md)(append messages[0]) | 复用 seam,加 workflow breadcrumb block |
+| state breadcrumb 注入 | [`memory_recall::inject_recall_into_turn`](../../.trellis/spec/backend/agent-loop-architecture.md)(append messages[0]) | 复用 seam,加 workflow breadcrumb block |
 | plugin 配置加载 | `resource_loader.rs`(B3)/ `skill/loader.rs`(B4)模式 | 加 workflow loader(同 mtime fence),读 `.everlasting/workflow/*/` |
 | task.json 加载 | `resource_loader.rs` / `subagent/loader.rs` 模式 | 加 task loader,读 `.everlasting/tasks/*/task.json` |
 | task artifact 读写 | `read_file`(读) + 专用 task tool(写) | 读零改动;**写用专用 tool 非裸 write_file**(小问题6):裸 write_file 写 task.json 可能产出损坏 JSON(agent 手写) + 绕过 items coerce。加 `update_task` tool(只允许改特定字段:status/items/summary/progress,内部 serde 序列化保证 JSON 合法 + items coerce 复用 B12 逻辑) |
 | task state 转移 | (新) | `set_task_state` 由确认门 resolve handler 自动调(M2,§8),非 agent tool |
 | 内置 skill | B4 `skill/loader.rs` | wf-* skill 随 plugin 分发(放 `.everlasting/workflow/dev/skills/`),非全局 builtin;loader 加 plugin skills 解析层 |
-| sub-agent 角色 | `builtin_subagents()`([`subagent/mod.rs:463`](../.trellis/spec/backend/agent-loop-architecture.md)) | plugin 自带 agents/(Q5);workflow session 里 plugin agents 优先于全局,builtin general-purpose/researcher 不动作 fallback |
+| sub-agent 角色 | `builtin_subagents()`([`subagent/mod.rs:463`](../../.trellis/spec/backend/agent-loop-architecture.md)) | plugin 自带 agents/(Q5);workflow session 里 plugin agents 优先于全局,builtin general-purpose/researcher 不动作 fallback |
 | state 门控 dispatch | `subagent/dispatch.rs::run_subagent` 内部(S-A 下沉) | 统一协商档(Q3+S3);三处调用点(串行~3286/并发~2937/测试~1000)都过;签名追加 `current_state` 参数 |
 | checklist 升格(S2) | `tools/update_checklist.rs`(B12 loop-local) | workflow session 内改写 task.json.items(非 loop-local Vec);B12 coerce 保留;非 workflow session 行为不变 |
 | state 转移 hook | (无现有 hook runner) | Phase 3 新建 Rust 固定逻辑(Q9 选 b) |
@@ -23,11 +23,11 @@
 
 - **本文件改动时机**:
   - Phase 0-3 任一落地 → 对应节标 ✅ + commit hash
-  - §14 Q1-Q9 任一改判 → 改本文 + [IMPLEMENTATION §4](./IMPLEMENTATION/decisions.md) 追 ADR
+  - §14 Q1-Q9 任一改判 → 改本文 + [IMPLEMENTATION §4](../IMPLEMENTATION/decisions.md) 追 ADR
   - 评审流(§7)立项 → 展开 §7 为独立设计节
   - 跟 B8 边界重划 → 改 §3.2 + ROADMAP §2 第四档
 - **不做的边界**:不列 commit/PR(走 git log);不做技术细节(走各 phase PRD + `.trellis/spec/backend/`);不做决策追溯(走 IMPLEMENTATION/decisions.md)
-- **ROADMAP 接入**:稳定后在 [ROADMAP §2 第三档](./ROADMAP.md) 加 "W1 Workflow 集成(工作流引擎 + plugin)" 条目
+- **ROADMAP 接入**:稳定后在 [ROADMAP §2 第三档](../ROADMAP.md) 加 "W1 Workflow 集成(工作流引擎 + plugin)" 条目
 
 ---
 
@@ -49,7 +49,7 @@
 
 ## 15. 附录 §A:dev plugin 完整示例
 
-> 本附录是 Phase 0-1 实施的参考物料。按 [问题 2 决定](#问题-2dev-workflow-有没有-templates-示例-skill-说明):workflow.json 完整填 + wf-overview 完整 body + 三角色 frontmatter + 其他 skill outline。复制 `.everlasting/workflow/dev/` 目录即整套流程。
+> 本附录是 Phase 0-1 实施的参考物料。按 [§14 Q2 决定](#14-待对齐汇总):workflow.json 完整填 + wf-overview 完整 body + 三角色 frontmatter + 其他 skill outline。复制 `.everlasting/workflow/dev/` 目录即整套流程。
 >
 > 注:这是**草稿样板**,实施时按项目实际调整。breadcrumb 文本 / delegation 模板 / skill body 都是建议,非强制。
 

@@ -20,7 +20,7 @@
 
 MVP 主体 + V2 路线图主体已落地；daemon 化（agent core 拆出独立进程，GUI 作为瘦客户端）已于 2026-07 收官，近期主线是**群聊（group chat）多参与者编排**与 review 可视化。
 
-完整路线 / 排期 / 维护承诺见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth）；决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。本文档不重复细节。
+完整路线 / 排期 / 维护承诺见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth）；决策历史见 [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md)。本文档不重复细节。
 
 ## 5 分钟上手
 
@@ -115,7 +115,7 @@ agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），两�
 | 看当前在哪步 / 下一步选项 | [docs/ROADMAP.md](./docs/ROADMAP.md) |
 | 写代码前看模块怎么分 / 调用怎么走 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) §2 16 关卡 |
 | 选库 / 做依赖决策 | [docs/TECH.md](./docs/TECH.md) |
-| 看"为什么这么做"的历史 ADR | [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志) |
+| 看"为什么这么做"的历史 ADR | [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md) |
 | 评估新功能技术细节 | [docs/BACKLOG.md](./docs/BACKLOG.md) |
 | daemon 化怎么分阶段落地 | [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) |
 | 撞 WSL / LLM API / markdown 渲染怪事 | [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) / [docs/HACKING-llm.md](./docs/HACKING-llm.md) / [docs/HACKING-markdown.md](./docs/HACKING-markdown.md) |

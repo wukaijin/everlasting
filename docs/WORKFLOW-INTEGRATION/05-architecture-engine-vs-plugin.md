@@ -13,7 +13,7 @@
 ### 5.2 engine 能力(engine 对所有 plugin 通用)
 
 1. **读 plugin 配置** → 拿到 states / transitions / breadcrumb 模板 / 角色映射 / 协调模型
-2. **注入**:task 元数据 + summary → append `messages[0]`(**per-turn,持久化不动**;非"常驻同步");state breadcrumb → append per-turn request clone(复用 [`inject_recall_into_turn`](../.trellis/spec/backend/memory.md) seam,`cache_control: None`)
+2. **注入**:task 元数据 + summary → append `messages[0]`(**per-turn,持久化不动**;非"常驻同步");state breadcrumb → append per-turn request clone(复用 [`inject_recall_into_turn`](../../.trellis/spec/backend/memory.md) seam,`cache_control: None`)
 3. **门控(统一协商档)**:dispatch 时按"当前 state→允许角色映射"校验;不允许时**不硬拒**,而是触发协商——engine 调 `ask_user_question` 问用户"允许这次破例 / 确认推进 state 吗"(Q3 + S3 决定:所有门控违规统一走协商,不分角色门控/state 转移)。**执行点下沉到 `run_subagent` 内部**(S-A 评审修正,见 §6.6.2)——三处调用点(串行/并发/测试)都过,避免并发 dispatch 绕过门控
 4. **state 转移**:用户确认门(agent 用 `ask_user_question` 发起,带 `purpose="task_state_transition"` 标记;前端路由到专用 IPC `resolve_task_state_transition` 自动调 `set_task_state`,M-A);转移触发 task.json 更新 + hook
 5. **task 文件 IO**:agent 通过专用 tool 写 task.json/prd/checklist/progress
@@ -70,7 +70,7 @@
 
 **跟现有四子系统的关系**:commands/agents/skills 是"人手写、高频读"的规范文件,保 frontmatter+body;workflow.json 是"低频手写、高频精确解析"的配置文件,选 JSON。两者不冲突,各自贴其使用模式。
 
-engine 读 JSON 用 `serde_json` 反序列化成 `WorkflowDef` struct(对标 [`SubagentDef`](../.trellis/spec/backend/agent-loop-architecture.md)),零自写解析。
+engine 读 JSON 用 `serde_json` 反序列化成 `WorkflowDef` struct(对标 [`SubagentDef`](../../.trellis/spec/backend/agent-loop-architecture.md)),零自写解析。
 
 ### 5.4 默认即 fallback + Phase 0 预留 plugin 接口
 

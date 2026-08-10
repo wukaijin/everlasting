@@ -1,7 +1,7 @@
 # A2+ Shell 命令只读/副作用精细判定方案
 
-> **状态**:草案 / proposal(未排期)
-> **日期**:2026-07-03
+> **状态**:✅ **已实施(P1+P2 于 2026-07-04 落地,见 [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md);P3 沙盒为远期独立任务)**。本文档降为方案回顾,实施细节以 `.trellis/spec/backend/tool-contract.md` 「Compound command classification (A2+)」段为准。
+> **日期**:2026-07-03(方案);P1+P2 2026-07-04 落地
 > **关联**:[ROADMAP §2 第三档 A2+](./ROADMAP.md)、模块 `app/src-tauri/src/agent/permissions/`(尤其 `shell_trust.rs` / `check.rs`)
 > **本文档职责**:讲清"为什么做、做什么、分几步、怎么和现有审批管线结合"。**不讲实现细节**(状态机、正则、函数签名留到实施时的 `prd.md` / `design.md`)。
 
@@ -225,7 +225,7 @@ Tier 6   审计                                         ── 不动(可加 rea
 
 ## 6. 落地指征(实施时该做什么)
 
-本方案是**登记性质**,未排期。实施时:
+本方案 P1+P2 已实施(2026-07-04),P3 未排期。若继续 P3,实施时:
 
 1. **建 Trellis 任务**(按阶段拆,P1+P2 可一个任务,P3 独立):`prd.md`(要解决的具体场景 + 不变量)+ `design.md`(拆分器的状态机、引号处理、取 max 的偏序、grant 短路新前置的精确条件)+ `implement.md`(分步 + 回归测试矩阵 + 回滚点)。
 2. **选型 ADR 记** [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION/decisions.md):自研拆分器 vs tree-sitter-bash vs 沙盒优先,讲清为什么先做 P1+P2 再 P3。

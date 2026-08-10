@@ -8,7 +8,7 @@
 | **(b) Rust 固定逻辑 hook**(Q9 选定) | state 转移时 Rust 跑固定动作(done 时触发沉淀、planning→implement 时自动前置检查) | 中 |
 | (c) 新建 hook runner | 仿 Trellis 配脚本,state 事件触发执行 | 高(新子系统+安全面) |
 
-> **Q9 决定(2026-07-07)**:选 **(b) Rust 固定逻辑 hook**。理由:(a) 太软,沉淀闭环(task done → 写 spec)是机制价值保证,不能靠 agent 自觉——agent 可能忘写 spec,闭环断;`wf-update-spec` skill 教 agent 怎么写,但"触发写"这个动作不能交给 agent 发挥。(c) 过重,脚本执行 = 任意代码执行,违背 [DESIGN.md "本地优先"](./DESIGN.md#22-关键约束) 不爱外部脚本执行;为几个固定动作造整个脚本 runner 杠杆不足。(b) 几个关键 state 转移动作写成 Rust 固定代码,改动作要改代码,但这几个动作低频稳定。
+> **Q9 决定(2026-07-07)**:选 **(b) Rust 固定逻辑 hook**。理由:(a) 太软,沉淀闭环(task done → 写 spec)是机制价值保证,不能靠 agent 自觉——agent 可能忘写 spec,闭环断;`wf-update-spec` skill 教 agent 怎么写,但"触发写"这个动作不能交给 agent 发挥。(c) 过重,脚本执行 = 任意代码执行,违背 [DESIGN.md "本地优先"](../DESIGN.md#22-关键约束) 不爱外部脚本执行;为几个固定动作造整个脚本 runner 杠杆不足。(b) 几个关键 state 转移动作写成 Rust 固定代码,改动作要改代码,但这几个动作低频稳定。
 >
 > **具体落点**:`task.json.status` 写入函数(state 转移 tool)里嵌固定 hook 分支:
 >

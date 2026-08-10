@@ -30,7 +30,7 @@
 
 ---
 
-##1.顶层结构
+## 1. 顶层结构
 
 ```
 everlasting/
@@ -51,7 +51,7 @@ everlasting/
 
 ---
 
-##2. 前端 `app/src/`树
+## 2. 前端 `app/src/` 树
 
 ```
 app/src/
@@ -144,7 +144,7 @@ App.vue
 
 ---
 
-##3. 后端 `app/src-tauri/src/`树
+## 3. 后端 `app/src-tauri/src/` 树
 
 ```
 app/src-tauri/src/
@@ -283,7 +283,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ---
 
-##4.关键模块依赖图
+## 4. 关键模块依赖图
 
 ###4.1前后端模块依赖
 
@@ -328,7 +328,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ---
 
-##5. Tauri IPC表面
+## 5. Tauri IPC 表面
 
 **总命令数**:91 个(2026-08 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08 续增 review/group_chat 相关 + question/permissions 扩展)。
 
@@ -362,7 +362,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ---
 
-##6.数据库 schema
+## 6. 数据库 schema
 
 **位置**: `app/src-tauri/src/db/mod.rs::run_migrations`
 
@@ -397,7 +397,7 @@ CREATE INDEX idx_session_audit_events_session_ts ON session_audit_events(session
 
 ---
 
-##7. Tauri IPC事件表面
+## 7. Tauri IPC 事件表面
 
 ###7.1 高频 payload事件(单事件名 + payload判别)
 
@@ -425,11 +425,11 @@ listen('tool:call', (e) => { /* ToolCallPayload */ });
 listen('tool:result', (e) => { /* ToolResultPayload */ });
 ```
 
-**设计决策**: 高频 token走 `chat-event`(避免 IPC调度开销);低频 tool call/result走独立事件名(前端可选择性 filter)。详见 `docs/IMPLEMENTATION.md §4决策日志`。
+**设计决策**: 高频 token走 `chat-event`(避免 IPC调度开销);低频 tool call/result走独立事件名(前端可选择性 filter)。详见 `docs/IMPLEMENTATION/decisions.md`。
 
 ---
 
-##8.关键设计模式
+## 8. 关键设计模式
 
 ###8.1 流式处理单源(前端)
 
@@ -562,7 +562,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-##12.依赖与第三方集成
+## 12. 依赖与第三方集成
 
 | 层 | 技术 | 版本 |锁定位置 |
 |----|------|------|---------|
@@ -596,7 +596,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-##13.文档地图 + 一页式 ASCII 全景
+## 13. 文档地图 + 一页式 ASCII 全景
 
 ###13.1文档地图
 
@@ -705,7 +705,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 |架构概念变化 | docs/ARCHITECTURE.md |
 |路线图变更 | docs/IMPLEMENTATION.md |
 |撞新坑 | docs/HACKING-*.md |
-|实施后决策变更 | docs/IMPLEMENTATION.md §4决策日志 |
+|实施后决策变更 | docs/IMPLEMENTATION/decisions.md |
 
 ---
 

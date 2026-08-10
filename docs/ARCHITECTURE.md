@@ -7,7 +7,7 @@
 
 ## 1. 系统架构
 
-> ✅ **当前状态(2026-07-23,daemon 化已落地)**:agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION.md §4](./IMPLEMENTATION.md)。
+> ✅ **当前状态(2026-07-23,daemon 化已落地)**:agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)。
 >
 > 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
@@ -141,7 +141,7 @@
 
 这一节把架构图展开成**具体的请求生命周期**。理解了这 16 关,就理解了 harness engineering 在做什么。
 
-> **演进说明**:早期版本是 14 道关卡,daemon 化(见 [§4](#4-决策agent-daemon-化为多-channel-接入铺路))和资源加载系统(见 [TECH.md §5](./TECH.md#5-决策skill--memory--role-共用-frontmatter-loader))扩展后变成 16 关。
+> **演进说明**:早期版本是 14 道关卡,daemon 化(见 [§4](#4-决策agent-daemon-化))和资源加载系统(见 [TECH.md §5](./TECH.md#5-决策skill--memory--role-共用-frontmatter-loader))扩展后变成 16 关。
 
 ### 2.1 全景图
 
@@ -293,7 +293,7 @@ daemon axum 路由 / Tauri command handler(同一份代码):
 
 - **关卡点**:context window 限制、token 预算、tool 白名单、prompt 注入、5a/5b/5c 加载顺序
 - **这是 harness 设计的最核心战场** —— 怎么在有限的 context window 里塞下有效信息
-- **5a-5c 详解见 [BACKLOG.md §3 多层 Memory](./BACKLOG.md#3-多层-memory-与约束) 和 [BACKLOG.md §2 Skill](./BACKLOG.md#2-agent-skill-系统) 和 [BACKLOG.md §4.1 Role](./BACKLOG.md#41-多角色role)**
+- **5a-5c 详解见 [memory spec](../.trellis/spec/backend/memory.md) 和 [BACKLOG.md §2 Skill](./BACKLOG.md#2-agent-skill-系统) 和 [ROADMAP §1.2 L3d](./ROADMAP.md#12-路线图外完成)**
 
 #### ⑥ LLM API 请求
 
@@ -356,13 +356,15 @@ for event in stream {
 | 纯 text           | 直接到 ⑭ 走 ChatToken                |
 | tool_use          | 进入 ⑨ 权限检查(5-tier) → ⑩ 执行             |
 | 混合(text + tool) | text 到 ⑭,tool 进 ⑨                  |
-| **ui_render**(新) | 到 ⑭ 走 UiCard(详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)) |
+| **ui_render**(新) | 到 ⑭ 走 UiCard(详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成)) |
 
 - **关卡点**:Mode 提前拦截(Plan 模式不能进 ⑨)、ui_render 跟 tool_use 区分开
 - **风险**:Mode 误判 → LLM 收到 "Plan 模式下不能执行",但它应该用 Plan 模式思考再用 Chat 模式执行
-- **详见 [BACKLOG.md §4.2 多模式](./BACKLOG.md#42-多模式mode)**
+- **详见 [permission-layer spec](../.trellis/spec/backend/permission-layer.md)**
 
-#### ⑨ Tool 权限检查(关键关卡,A2 + B7 落地,re-grill 2026-06-13,**已实施**)
+#### ⑨ Tool 权限检查
+
+> 关键关卡:A2 + B7 落地,re-grill 2026-06-13,**已实施**。
 
 **5-tier 决策顺序**(re-grill SOT,path-based 决策层):
 
@@ -458,7 +460,7 @@ DB schema 已在 06-12 落地(CHECK 约束支持 3 种),re-grill
 **详见** [permission-layer.md §4.1 "Re-grill update 2026-06-13: 5-tier 重排 + path-based 决策"](./../.trellis/spec/backend/permission-layer.md) +
 [project-cwd-boundary.md §6 "is_within_root"](./../.trellis/spec/backend/project-cwd-boundary.md) +
 [docs/_reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md](./_reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md) +
-[IMPLEMENTATION.md §4 "2026-06-13 Re-grill ADR"](./IMPLEMENTATION.md)。
+[IMPLEMENTATION/decisions-2026-06.md "2026-06-13 Re-grill ADR"](./IMPLEMENTATION/decisions-2026-06.md)。
 
 #### ⑩ Tool 执行
 
@@ -476,8 +478,8 @@ match tool_call.name {
     "list_dir"    => tokio::fs::read_dir, alphabetical + `/` suffix on dirs,
                      non-recursive,
     "use_skill"   => SkillCache 取 SKILL.md 正文 → tool_result 回填(L1,2026-06-18 落地,详见 [IMPLEMENTATION §4](./IMPLEMENTATION/decisions.md))
-    "use_memory"  => 读 / 写 runtime memory(详见 [BACKLOG §3](./BACKLOG.md#3-多层-memory-与约束))
-    "use_ui"      => 构造 UiCard 走 ⑭ 分支(详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关))
+    "use_memory"  => 读 / 写 runtime memory(详见 [memory spec](../.trellis/spec/backend/memory.md))
+    "use_ui"      => 构造 UiCard 走 ⑭ 分支(详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成))
     ...
 }
 ```
@@ -556,7 +558,7 @@ match tool_call.name {
 
 - **关键设计**:`ui_render` 不在 chat 流里走,单独的 UiCard 事件,前端用 component registry 渲染
 - **为什么混合模式**:高频 token 需要单 listener 低开销;低频 tool/permission 需要精确 filter。两种模式各取所长
-- **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)
+- **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成)
 - **交错思考渲染(2026-07-23/24)**:前端按 run 分组 + contentBlocks 时间轴交错渲染(thinking/text/tool_use 按到达序),与 ⑦ 后端落库的真实流序对齐,见 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)。
 
 #### ⑮ daemon 输出(HttpSseSink / Tauri event → client)
@@ -582,7 +584,7 @@ agent loop 结束(text-only response or max_turns reached):
   ├─ 更新 session.last_active
   ├─ 解禁前端输入框(经 SSE / Tauri event 通知;纯浏览器模式同样走 SSE)
   ├─ 更新 token 用量统计(进 SQLite,给用量分析用)
-  └─ 触发云端同步(若开启,详见 [BACKLOG §7](./BACKLOG.md#7-云端状态同步))
+  └─ 触发云端同步(若开启,详见 [BACKLOG §4](./BACKLOG.md#4-跨设备))
 ```
 
 - **关卡点**:解禁通知走 SSE/event、云端同步是可选副作用
@@ -715,15 +717,17 @@ agent loop 结束(text-only response or max_turns reached):
 - `detached`:用户 `detach_worktree(sessionId)`,worktree + branch 留盘但 session 不再绑定,工具 cwd 回退到 project.path
 - 物理销毁走 `delete_worktree(sessionId)`,跟 detach 分离(后悔药可分两步走)
 
-具体契约 + LLM 透明度(7 工具 cwd 字段 + system event 注入)见 `.trellis/tasks/06-07-step-4-follow-up-session-worktree-attach-detach-delete-git/prd.md`。
+具体契约 + LLM 透明度(7 工具 cwd 字段 + system event 注入)见 `.trellis/tasks/archive/2026-06/06-07-step-4-follow-up-session-worktree-attach-detach-delete-git/prd.md`。
 
 ---
 
-## 4. 决策:Agent Daemon 化(已实施,2026-07)
+## 4. 决策:Agent Daemon 化
+
+> **状态**:已实施(2026-07)。
 
 **核心变更**:agent core 从 Tauri 进程内拆出,变成独立 `everlasting-daemon` 进程。Tauri GUI 降级为瘦客户端(Thin 模式),与浏览器 client 并列,都经同源 HTTP/SSE 连同一 daemon。
 
-> 这条决策的完整动机与编排见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md);决策档案(为什么 axum / 为什么 sidecar / 为什么默认 httpTransport)见 [IMPLEMENTATION.md §4](./IMPLEMENTATION.md)。本节只讲架构本身。
+> 这条决策的完整动机与编排见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md);决策档案(为什么 axum / 为什么 sidecar / 为什么默认 httpTransport)见 [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)。本节只讲架构本身。
 
 **为什么必须**:
 - 远程/浏览器访问 —— agent core 要能脱离 Tauri webview 被浏览器触达(daemon 用 ServeDir 同源服务 SPA)
@@ -757,7 +761,7 @@ trait Channel: Send + Sync {
 
 **当初设想的实现**:
 - `TauriGuiChannel` — 走 Tauri event(✅ 当时已实现,步骤 1)
-- `FeishuChannel` — 走飞书 WebSocket(待 [BACKLOG.md §6](./BACKLOG.md#6-im-通道飞书) 实施)
+- `FeishuChannel` — 走飞书 WebSocket(B10 飞书 IM,待 [ROADMAP §2 第四档](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 实施)
 - `CliChannel` — 走 stdin/stdout(待后期实施)
 
 **实际落地的替代**:axum HTTP `/api/v1/*` 路由 + `HttpSseSink` SSE 广播(`daemon/server.rs` + `daemon/sse.rs`)。前端经 `httpTransport`(fetch + EventSource)统一接入;Full 模式逃生经 `tauriTransport`(Tauri event)。"多入口"的诉求目前由"多 client 连同一 HTTP daemon"(GUI + 浏览器)满足,不需要 trait。

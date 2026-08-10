@@ -34,7 +34,9 @@
 
 ---
 
-## 2. Agent Skill 系统 → 已落地 (B4 2026-06-18),详见 ROADMAP §1.2
+## 2. Agent Skill 系统
+
+**状态**:已落地 (B4 2026-06-18),详见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)。
 
 ---
 
@@ -138,7 +140,7 @@
 
 ## 5. 步骤 3b-1 实施后续(implementation follow-up)
 
-> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](../_archive/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机 + 实际落地状态。
+> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](./_archive/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机 + 实际落地状态。
 
 ### ~~5.1 cwd 简化为 `~/` ✅ 已落地~~ (已落地 2026-06-06)(2026-06-06,commit `ef7cea8`)
 
@@ -157,7 +159,7 @@
 - **关联**:FOLLOW-UP §FU-2(已决策,2026-06-07)。
 - **状态**:⏸ 保持现状,显式决策已记录。
 
-### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ⏸ 未实施(2026-06-07 状态;07-01 间接碰过)
+### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ⏸ 未实施(2026-06-07 状态;07-01 间接碰过;08-10 复核仍待做)
 
 - **现状**:Tauri native `pick_folder` dialog,WSLg 下走 GTK / xdg-desktop-portal,渲染是 linux GTK 风格。
 - **用户偏好**:"本来期望 dialog 是由前端渲染的"(2026-06-05 session)。希望自渲染:HTML 树形目录 + 搜索框 + 文件图标。
@@ -165,17 +167,17 @@
 - **工作量**:~150 行(frontend ~120 + backend `list_dir` ~30)。**中等优先**(UX 改善,不阻塞功能)。
 - **07-01 关联**:`fe91605 fix: 冷启动不再总是落到第一个项目` 间接碰过项目初始化路径(冷启动回退),但 dialog 仍未实施,留作下次碰项目创建流程时评估。
 - **关联**:PROPOSAL §5.4 (Q8v2 修正) + 用户偏好;FOLLOW-UP §FU-3。
-- **状态**:⏸ 未实施,下次碰 project 创建流程时评估。
+- **状态**:⏸ 未实施,下次碰 project 创建流程时评估。(2026-08-10 复核:daemon 化后 `pick_project_dir` 无 daemon route,浏览器模式项目添加走 fallback,状态不变)
 
 ### 5.4 trellis 流程 follow-up(非实施)
 
 - **FU-7**:PROPOSAL §9 给外部 LLM 的提问重写,改成"只读 PROPOSAL 就能答"形式。~30 行(下次发评审前一次性做)。
 - **FU-8**:`check.jsonl` 加 "Tauri command arg camelCase" + "TS interface 字段命名"作为 PR 验收硬约束。~10 行。
 
-> 💡 本节"实现"层面的 follow-up 跟 §1-§9"候选功能"性质不同 —— 那些是新功能,本节是已实施步骤的技术债。完整 follow-up 列表(含经验沉淀类的 4-6 条)见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+> 💡 本节"实现"层面的 follow-up 跟 §1-§9"候选功能"性质不同 —— 那些是新功能,本节是已实施步骤的技术债。完整 follow-up 列表(含经验沉淀类的 4-6 条)见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](./_archive/2026-06-3b-1/FOLLOW-UP.md)。
 
 ---
 
 ## 附录 A: 远期候选
 
-> 📦 **已归档**:本节内容(357 行,7 项远期候选技术评估)于 2026-06-25 归档到 [`docs/_archive/backlog-appendix-A.md`](../_archive/backlog-appendix-A.md)。**只读不改**。如远期候选进展,新评估直接在 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 中更新。
+> 📦 **已归档**:本节内容(357 行,7 项远期候选技术评估)于 2026-06-25 归档到 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md)。**只读不改**。如远期候选进展,新评估直接在 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 中更新。

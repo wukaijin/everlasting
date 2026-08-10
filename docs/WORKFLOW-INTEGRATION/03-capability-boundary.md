@@ -22,7 +22,7 @@
 | ❌ **强制全局 TDD** | per-checklist-item opt-in |
 | ❌ **workflow 绑定 Mode** | Mode 是权限旋钮,workflow 是流程旋钮,正交;state 不替用户切 Mode |
 | ❌ **新建 session 强制选 task** | session 创建不被 task 打断 |
-| ❌ **重写 agent core** | 复用 [`run_chat_loop`](../.trellis/spec/backend/agent-loop-architecture.md) 26 参;走注入 seam + tool 层 |
+| ❌ **重写 agent core** | 复用 [`run_chat_loop`](../../.trellis/spec/backend/agent-loop-architecture.md) 26 参;走注入 seam + tool 层 |
 | ❌ **第二个 plugin `review`(评审流)+ 新通讯架构**(本阶段) | 作为愿景写入 §7,延迟讨论 |
 
 ---

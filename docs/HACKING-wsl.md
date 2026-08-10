@@ -326,11 +326,11 @@ invoke("create_session", { projectId, initialCwd })  // 正确
 
 **特例**:单字参数(`path` / `id` / `fallback`)两种命名都接受,因为 snake_case / camelCase 形式一样。
 
-**影响范围**:本项目所有 multi-word 参数的 Tauri command —— `list_sessions(project_id)` / `create_session(project_id, initial_cwd)` / `update_project_path(id, new_path)` / `update_project_name(id, new_name)` 等。详见 [docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md](../_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md) §4.2 列表。
+**影响范围**:本项目所有 multi-word 参数的 Tauri command —— `list_sessions(project_id)` / `create_session(project_id, initial_cwd)` / `update_project_path(id, new_path)` / `update_project_name(id, new_name)` 等。详见 [docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md](./_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md) §4.2 列表。
 
 **验证**:写 PR 时,在 `check.jsonl` 加"Tauri command arg 是否 camelCase"作为验收硬约束。Spec 详见 [Tauri 2 命令参数命名约定](https://v2.tauri.app/develop/calling-rust/#optional-arguments)。
 
-**经验沉淀**:这是 3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #1)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-4](../_archive/2026-06-3b-1/FOLLOW-UP.md#fu-4--tauri-2-ipc-arg-默认-rename_all--camelcase)。
+**经验沉淀**:这是 3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #1)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-4](./_archive/2026-06-3b-1/FOLLOW-UP.md#fu-4--tauri-2-ipc-arg-默认-rename_all--camelcase)。
 
 ---
 
