@@ -258,3 +258,27 @@ daemon 浏览器模式手动测试 Session。按 `docs/MANUAL-TEST-P2.md` 验收
 ### Status
 
 [OK] **Completed**
+
+
+## Session 33: docs 过时审查收官 — 43 文档审计 + 断链/错卷/索引处置 + 归档
+
+**Date**: 2026-08-10
+**Task**: docs 过时审查收官 — 43 文档审计 + 断链/错卷/索引处置 + 归档
+**Branch**: `main`
+
+### Summary
+
+docs-staleness-audit 任务收官:43 个活文档逐行审计(design 误计 48,实测 43),处置 5 文档归档(_archive 日期前缀)+ 断链/死锚/相对路径修复(23+ 处)+ 错卷归位(06 卷尾部 12 条迁 07/08 卷)+ IMPLEMENTATION.md#4 锚点统一 + docs/README 索引补齐 + check-links.py 链接校验脚本 + docs 维护指南 spec。验收:38 文档链接扫描 0 失败,锚点/错卷 grep 归零。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8be89f` | (see git log) |
+| `5f5a9b6` | (see git log) |
+| `f948452` | (see git log) |
+| `2596b81` | (see git log) |
+
+### Status
+
+[OK] **Completed**
