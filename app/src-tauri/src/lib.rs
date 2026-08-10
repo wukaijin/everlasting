@@ -259,6 +259,12 @@ pub fn run() {
             // popover data source.
             commands::sessions::set_session_plugin_name,
             commands::sessions::list_workflow_plugins,
+            // 08-10-group-chat-cache-rate: per-speaker (participants
+            // + "moderator") latest-turn cache-usage read for the
+            // GroupChatConfigModal edit view. Read-only derived
+            // data (`turn_trace` ↔ `messages.speaker` join); the
+            // modal swallows failures and renders "—".
+            commands::sessions::group_chat_cache_rates,
             // C2 (review visualization view, 2026-07-26):
             // review-state.json read IPCs for the frontend
             // `<ReviewMatrix>` panel. `get_review_state`

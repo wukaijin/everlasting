@@ -19,10 +19,10 @@ use crate::agent::question_store::PendingInteractionEntry;
 use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, create_session_inner, delete_session_inner, diff_worktree_inner,
-    edit_user_message_inner, list_sessions_inner, load_session_inner, record_tool_duration_inner,
-    rename_session_inner, set_session_color_inner, set_session_plugin_name_inner,
-    set_session_workflow_enabled_inner, update_message_latency_inner,
-    update_session_metadata_inner,
+    edit_user_message_inner, group_chat_cache_rates_inner, list_sessions_inner, load_session_inner,
+    record_tool_duration_inner, rename_session_inner, set_session_color_inner,
+    set_session_plugin_name_inner, set_session_workflow_enabled_inner,
+    update_message_latency_inner, update_session_metadata_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;
@@ -286,6 +286,22 @@ pub async fn edit_user_message(
     Ok(Json(()))
 }
 
+/// `POST /api/v1/sessions/group_chat_cache_rates` — per-speaker
+/// (participants + "moderator") latest-turn cache-usage read for
+/// the group-chat edit modal (08-10-group-chat-cache-rate).
+#[derive(Debug, Deserialize)]
+pub struct GroupChatCacheRatesRequest {
+    pub session_id: String,
+}
+
+pub async fn group_chat_cache_rates(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GroupChatCacheRatesRequest>,
+) -> Result<Json<Vec<db::trace::SpeakerCacheUsage>>, AppCommandError> {
+    let result = group_chat_cache_rates_inner(&state, req.session_id).await?;
+    Ok(Json(result))
+}
+
 /// `POST /api/v1/sessions/list_workflow_plugins` — discover
 /// workflow plugins under `<project>/.everlasting/workflow/`.
 /// Phase 2.2 follow-up (2026-07-21): this handler was missing
@@ -326,5 +342,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/update_message_latency", post(update_message_latency))
         .route("/record_tool_duration", post(record_tool_duration))
         .route("/edit_user_message", post(edit_user_message))
+        .route("/group_chat_cache_rates", post(group_chat_cache_rates))
         .with_state(state)
 }

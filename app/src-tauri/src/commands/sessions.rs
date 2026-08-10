@@ -955,3 +955,31 @@ pub async fn edit_user_message(
 ) -> Result<(), AppCommandError> {
     edit_user_message_inner(&state, session_id, message_seq, new_content).await
 }
+
+// ---------------------------------------------------------------------------
+// Group-chat cache rates (08-10-group-chat-cache-rate)
+// ---------------------------------------------------------------------------
+
+/// Per-speaker latest-turn cache-usage read for the group-chat
+/// cache-rate display (edit-modal read-only rows). Derived data
+/// over `turn_trace` + `messages.speaker` — zero new storage. The
+/// frontend computes the percentage (`cache_read / context_input`)
+/// via `utils/tokenUsage.ts::cacheRatePercent`; `context_input = 0`
+/// (legacy rows) renders "—". Failure here is auxiliary-only: the
+/// modal swallows it and shows "—" (does not block editing).
+pub async fn group_chat_cache_rates_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+) -> Result<Vec<db::trace::SpeakerCacheUsage>, AppCommandError> {
+    db::trace::list_speaker_cache_usage(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("group_chat_cache_rates failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn group_chat_cache_rates(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::trace::SpeakerCacheUsage>, AppCommandError> {
+    group_chat_cache_rates_inner(&state, session_id).await
+}
