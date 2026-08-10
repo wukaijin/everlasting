@@ -9,7 +9,7 @@ metadata:
 
 # Project CWD Boundary Spec
 
-> 来源:[PROPOSAL §4.4 / Q6 / 评审消化 §11](../../../../docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md#44-chat-command--toolcontext-改造评审一致提)
+> 来源:[PROPOSAL §4.4 / Q6 / 评审消化 §11](../../../docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md#44-chat-command--toolcontext-改造评审一致提)
 > 实现位置:`src-tauri/src/projects/boundary.rs`
 > 调用方:`tools::execute_tool` 内 `shell` / `read_file` / `write_file`;`lib.rs::chat` 命令构造 `ToolContext`
 
@@ -122,8 +122,8 @@ let validated_cwd = boundary::assert_within_root(&ctx.project_root, effective_cw
 行为:
 - boundary 失败 → agent loop bail out, 不调 `permission::check` 也不
   调 `execute_tool`。这是 Tier 0 hard error (不是 ⑨ 关 Decision)。
-- boundary 成功 → 走 ⑨ 关 Tier 1-6,见 `tool-contract.md §"⑨ 关
-  Permission Decision Layer"`。
+- boundary 成功 → 走 ⑨ 关 Tier 1-6,见 `permission-layer.md §4
+  (⑨ 关 5-Tier Decision Order)`。
 - 这保留了 §2 的 7 个 edge case 合约(前缀陷阱、symlink、broken
   symlink、nonexistent 等) — boundary check 是不可绕过的最后一道
   关。

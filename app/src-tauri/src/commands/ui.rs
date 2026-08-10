@@ -23,7 +23,7 @@
 //! All errors return `{ok: false, error: String, kind: String}` with
 //! `kind ∈ {"boundary", "parse", "conflict", "io", "empty"}`. The
 //! frontend maps `kind` → inline error message (Chinese strings in
-//! `frontend/chat.md`). The mapping:
+//! `frontend/chat/generative-ui.md`). The mapping:
 //!
 //! - `empty`   — empty / whitespace-only `diffText`
 //! - `parse`   — `parse_unified_diff` returned an error (no headers,
@@ -299,7 +299,7 @@ mod tests {
     use crate::diff_apply::ParseError;
 
     /// smoke test: confirms the ParseError → IPC `kind` mapping string
-    /// (frontend text in `frontend/chat.md` mirrors this).
+    /// (frontend text in `frontend/chat/generative-ui.md` mirrors this).
     #[test]
     fn parse_error_kind_label_is_parse() {
         // The handler maps any ParseError to kind="parse".

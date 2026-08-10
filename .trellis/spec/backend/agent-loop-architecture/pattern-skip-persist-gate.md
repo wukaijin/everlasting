@@ -31,7 +31,7 @@ because gating them broke core worker / parent invariants:
 **Solution**: Both sites are now OUTSIDE the `if !skip_persist { ... }`
 gate. PR2a's actual gate count is **16**, not the 18 the PR1 spec said.
 The spec the implementation lives in (`agent-loop-architecture.md`
-"Signature" block, plus the `tool-contract.md` §"dispatch_subagent"
+"Signature" block, plus the `tool-contract/04-dispatch-subagent.md` §"dispatch_subagent"
 entry) updates the gate count from 18 to 16 in the same commit; this
 "Pattern" section is the design rationale.
 

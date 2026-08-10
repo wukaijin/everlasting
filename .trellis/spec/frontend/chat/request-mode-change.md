@@ -9,9 +9,9 @@ modal / portal / overlay(同 `AskUserQuestionCard` 红线)。**唯一例外**:
 Yolo 路径走既有的 `pendingYoloConfirm` modal(2026-06-13 落地,user
 主动切 Yolo 路径)做二次确认,LLM 申请 Yolo 路径**完全沿用**该 modal
 避免重复实现。后端契约详见
-[tool-contract.md §request_mode_change](../backend/tool-contract.md);
+[tool-contract/11-request-mode-change.md §request_mode_change](../../backend/tool-contract/11-request-mode-change.md);
 权限层 IPC 链见
-[permission-layer.md §5c](../backend/permission-layer.md)。
+[permission-layer.md §5c](../../backend/permission-layer.md)。
 
 ### 组件与红线
 

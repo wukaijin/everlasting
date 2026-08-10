@@ -359,7 +359,7 @@ async fn agent_loop_tool_use_with_non_tool_use_stop_reason_still_executes() {
     assert_eq!(
         emitter.tool_result_count(),
         1,
-        "tool_result must be emitted/persisted (pair atomicity, llm-contract §469)"
+        "tool_result must be emitted/persisted (pair atomicity, llm-contract §Pair Atomicity)"
     );
 }
 

@@ -17,7 +17,7 @@
 - **配置路径(唯一)**:DB catalog —— `providers` 表(`kind` / `base_url` / 加密 `api_key_enc`,见 RULE-D-001)+ `models` 表,UI Settings 里增删改。`seed_default_providers_and_models()`(`db/config.rs`)首启种入 Anthropic/OpenAI 官方 provider + 默认模型 `claude-sonnet-4-5`。
 - **协议**:Anthropic Messages API 兼容,header 用 `x-api-key` + `anthropic-version: 2023-06-01`。
 
-**多 Provider**(2026-06-08/09 落地):除 Anthropic 外,`OpenAIProvider` 走 OpenAI Chat Completions / 兼容协议。两个 provider 共用自研 `Provider` trait + `provider::wire` `WireMessage` 跨协议中间层,`strip_unsupported` 静默降级(`cache_creation_input_tokens` 等 Anthropic 专属字段归零 / `tool_choice` 类型映射)。完整设计见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction"。
+**多 Provider**(2026-06-08/09 落地):除 Anthropic 外,`OpenAIProvider` 走 OpenAI Chat Completions / 兼容协议。两个 provider 共用自研 `Provider` trait + `provider::wire` `WireMessage` 跨协议中间层,`strip_unsupported` 静默降级(`cache_creation_input_tokens` 等 Anthropic 专属字段归零 / `tool_choice` 类型映射)。完整设计见 `.trellis/spec/backend/multi-provider-contract.md` "Scenario: Multi-Provider Abstraction"。
 
 ### provider/model 配置
 
@@ -233,7 +233,7 @@ message_stop
 
 ## 差异 5:OpenAI Chat Completions 协议差异(2026-06,06-08-multi-model PR3)
 
-**场景**:PR3 起支持 OpenAI 官方 `https://api.openai.com/v1/chat/completions` 端点,以及所有 OpenAI-兼容(DeepSeek / GLM 原生 / OpenRouter 等)。协议与 Anthropic Messages API 差异较大,**单独实现 `OpenAIProvider` + WireMessage 中间层**做互转。详细 spec 见 `.trellis/spec/backend/llm-contract.md` "Scenario: OpenAI Chat Completions adapter + cross-protocol WireMessage (PR3)",本节只记实测坑点。
+**场景**:PR3 起支持 OpenAI 官方 `https://api.openai.com/v1/chat/completions` 端点,以及所有 OpenAI-兼容(DeepSeek / GLM 原生 / OpenRouter 等)。协议与 Anthropic Messages API 差异较大,**单独实现 `OpenAIProvider` + WireMessage 中间层**做互转。详细 spec 见 `.trellis/spec/backend/multi-provider-contract/scenario-openai-wire.md` "Scenario: OpenAI Chat Completions adapter + cross-protocol WireMessage (PR3)",本节只记实测坑点。
 
 **关键差异速查**(Anthropic → OpenAI):
 
@@ -440,7 +440,7 @@ function finalizeRequest(requestId: string, sessionId: string, _errored: boolean
 
 **验证**: 写 PR 时, 在 `check.jsonl` 加 "finalizeRequest 必须配对 evict + invalidateDiff / in-memory 跟 DB 必须 evict 后 re-load 才一致"作为硬约束。`streamController.test.ts` 的 `finalizeRequest` describe block 锁住 3 个 invariant(evict 单独、invalidateDiff 单独、配对 invariant)。
 
-**经验沉淀**: Step 4 follow-up (06-08) 修法。`app/src/stores/streamController.ts` `finalizeRequest` 改 + `app/src/stores/chat.ts` 新增 `invalidateDiff` action + `app/src/stores/streamController.test.ts` 加 3 个 vitest + `.trellis/spec/frontend/state-management.md` "Send completion invalidation" 章节 + `.trellis/spec/backend/llm-contract.md` Scenario 7 "In-memory must mirror DB on send completion" sub-section。
+**经验沉淀**: Step 4 follow-up (06-08) 修法。`app/src/stores/streamController.ts` `finalizeRequest` 改 + `app/src/stores/chat.ts` 新增 `invalidateDiff` action + `app/src/stores/streamController.test.ts` 加 3 个 vitest + `.trellis/spec/frontend/state-management.md` "Send completion invalidation" 章节 + `.trellis/spec/backend/worktree-contract.md` "In-memory must mirror DB on send completion" sub-section。
 
 
 ### 陷阱 5:OpenAI adapter `endpoint()` 重复拼 `/v1/` → 404 "path not found: /v1/v1/chat/completions" (2026-06-09 fix-session)
@@ -467,7 +467,7 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 # 修后: [Start, Delta("还没"), Delta("吃呢..."), Done { stop_reason: "end_turn" }]
 ```
 
-**修法**:`OpenAIConfig::endpoint()` 改成 `base_url + "/chat/completions"`(不重复加 `/v1/`),跟 `test_model` / `test_provider` 拼接方式对齐。同时更新 `.trellis/spec/backend/llm-contract.md` Protocol differences table 把 OpenAI URL 那行从 `"+ "/v1/chat/completions"` 改成 `"+ "/chat/completions"` + 新加一段 "`base_url` convention is per-protocol, NOT symmetric" 说明两种 protocol 的 seed base_url 形状。
+**修法**:`OpenAIConfig::endpoint()` 改成 `base_url + "/chat/completions"`(不重复加 `/v1/`),跟 `test_model` / `test_provider` 拼接方式对齐。同时更新 `.trellis/spec/backend/multi-provider-contract/scenario-openai-wire.md` Protocol differences table 把 OpenAI URL 那行从 `"+ "/v1/chat/completions"` 改成 `"+ "/chat/completions"` + 新加一段 "`base_url` convention is per-protocol, NOT symmetric" 说明两种 protocol 的 seed base_url 形状。
 
 **回归测试**:`openai::tests::endpoint_does_not_double_prefix_v1_when_base_url_includes_v1` 锁住 `base_url = "https://api.openai.com/v1"` 和 `"https://api.deepseek.com/v1"` 两种真实 base_url shape 都只拼一次 `/v1/`。同时把老的 `endpoint_trims_trailing_slash` / `endpoint_uses_provided_base_url` 测试用例的 base_url 从 `https://x.com/` / `https://x.com/openai`(无 /v1,触发旧 bug 行为)更新到 `https://x.com/v1/` / `https://x.com/openai/v1`(有 /v1,真实场景)。
 

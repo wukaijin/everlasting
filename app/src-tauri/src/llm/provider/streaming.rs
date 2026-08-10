@@ -105,7 +105,7 @@ pub(crate) fn build_tool_call_event(buf: &ToolCallBuf, _idx: u32) -> Option<Chat
 
 /// Parse OpenAI's `usage` payload into a protocol-agnostic
 /// [`TokenUsage`]. Schema mapping (per
-/// `backend/llm-contract.md` "Scenario: Token Usage Tracking"
+/// `backend/token-usage-tracking.md` "Scenario: Token Usage Tracking"
 /// §3 "OpenAI normalization"):
 ///
 /// - `prompt_tokens` → `input_tokens`

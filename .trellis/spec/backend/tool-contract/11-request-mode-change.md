@@ -381,7 +381,7 @@ agent loop 层依赖(`question_store` oneshot / `provider` + `db` worker
 `(name, input, ctx, guard, session_id, skill_cache, cancel)` 设计上是
 **纯 I/O** 接口(`read_file` / `shell` / `grep` 之类),把控制流依赖
 塞进去会越界(对齐 `dispatch_subagent` 的 rationale,见
-tool-contract.md §"Scenario: dispatch_subagent tool" §7)。
+tool-contract/04-dispatch-subagent.md §"Scenario: dispatch_subagent tool" §7)。
 
 ### 8. Design Decisions
 

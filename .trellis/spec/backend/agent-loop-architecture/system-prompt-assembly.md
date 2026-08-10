@@ -55,4 +55,4 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
 
 ---
 
-> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../docs/IMPLEMENTATION.md)
+> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../../../docs/IMPLEMENTATION.md)

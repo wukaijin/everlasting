@@ -348,8 +348,7 @@ for event in stream {
 - `filter_tools_for_mode(tools, mode)` → ② per-turn tool list 过滤
 - `check()` Tier 4 → ③ runtime intercept 兜底
 
-**详见** [tool-contract.md §"⑨ 关 Permission Decision Layer"](./../trellis/spec/backend/tool-contract.md) +
-[llm-contract.md §"Per-Session Mode + ⑨ 关 Permission Layer"](./../trellis/spec/backend/llm-contract.md)。
+**详见** [permission-layer.md §"Scenario: Per-Session Mode + ⑨ 关 Permission Layer"](./../.trellis/spec/backend/permission-layer.md)。
 
 **子步骤 8b — 内容类型分发**:
 | LLM 返回          | 走向                                  |
@@ -456,9 +455,9 @@ DB schema 已在 06-12 落地(CHECK 约束支持 3 种),re-grill
 - IPC bridge: `app/src-tauri/src/commands/permissions.rs::{set_session_mode, permission_response, grant_tool_permission}`
 - 前端消费: `app/src/stores/permissions.ts` + `app/src/components/chat/PermissionModal.vue`
 
-**详见** [tool-contract.md §"Scenario: Path-based Permission Layer"](./../trellis/spec/backend/tool-contract.md) +
-[project-cwd-boundary.md §6 "is_within_root"](./../trellis/spec/backend/project-cwd-boundary.md) +
-[docs/_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md](./_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md) +
+**详见** [permission-layer.md §4.1 "Re-grill update 2026-06-13: 5-tier 重排 + path-based 决策"](./../.trellis/spec/backend/permission-layer.md) +
+[project-cwd-boundary.md §6 "is_within_root"](./../.trellis/spec/backend/project-cwd-boundary.md) +
+[docs/_reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md](./_reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md) +
 [IMPLEMENTATION.md §4 "2026-06-13 Re-grill ADR"](./IMPLEMENTATION.md)。
 
 #### ⑩ Tool 执行

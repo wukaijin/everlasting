@@ -27,7 +27,7 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 |---|---|
 | `l3b_worker_with_isolation_runs_in_worker_worktree` | dispatch_subagent with isolation=true → worker's tool calls observe a different `ToolContext.worktree_path` than the parent's session row |
 | `l3b_worker_with_isolation_false_runs_in_parent_worktree` | dispatch_subagent with isolation=false → worker's tool calls run in parent session's worktree (legacy behavior preserved) |
-| `resolve_isolation_truth_table` | 4-row merge semantics from `tool-contract.md §dispatch_subagent isolation` table |
+| `resolve_isolation_truth_table` | 4-row merge semantics from `tool-contract/04-dispatch-subagent.md §dispatch_subagent isolation` table |
 
 ## Pattern: Forced dispatch — `@@` explicit dispatch (2026-06-30)
 
@@ -59,7 +59,7 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 
 返回 `OpenOutcome::Stream(first_byte chained with rest)` 或 `Cancelled` — chat_loop 拿到 Stream 后用既有 per-event select loop 消费,**select loop 零改动**。两个 select(首字节 await / backoff sleep)都 `biased` 第一位 `token.cancelled()`,sleep 中取消立即响应。
 
-完整契约(retryable 分类 / Full Jitter 公式 / retry-after 解析 / `LlmError` headers 字段扩展 / 前端 Retrying 事件 / 测试矩阵)见 [llm-contract.md Scenario: LLM Retry / Backoff (A5+)](./llm-contract.md)。决策见 [IMPLEMENTATION §4 2026-07-05](../../../docs/IMPLEMENTATION/decisions.md)。
+完整契约(retryable 分类 / Full Jitter 公式 / retry-after 解析 / `LlmError` headers 字段扩展 / 前端 Retrying 事件 / 测试矩阵)见 [llm-contract.md Scenario: LLM Retry / Backoff (A5+)](../llm-contract.md)。决策见 [IMPLEMENTATION §4 2026-07-05](../../../../docs/IMPLEMENTATION/decisions.md)。
 
 ---
 
@@ -73,8 +73,8 @@ hooks into 4 existing harness write points (NOT a separate agent
 loop). Each hook emits a `ChatEvent` for the live panel AND upserts
 the corresponding `turn_trace` column for history. The schema lives
 in [database-guidelines.md Pattern: per-turn trace UPSERT
-accumulation](./database-guidelines.md); the event shapes live in
-[llm-contract.md Scenario: E2 trace ChatEvent variants](./llm-contract.md).
+accumulation](../database-guidelines.md); the event shapes live in
+[llm-contract.md Scenario: E2 trace ChatEvent variants](../llm-contract.md).
 
 **The 4 write points** (all inside the turn loop, after the
 existing signal is produced):
@@ -171,7 +171,7 @@ run_chat_loop(/* … */ history, /* … */);
    are NOT shared — relayed only via text remarks). The moderator's
    arbitration pairs are just another "other speaker's tool pair" from
    a participant's view; the moderator keeps its own (跨轮连贯). The
-   strip is **atomic per pair** (llm-contract.md §469): no orphan
+   strip is **atomic per pair** (llm-contract.md §Pair Atomicity): no orphan
    `tool_use` / `tool_result` survives; persisted pairs are adjacent in
    `full` (one speaker turn), so a one-pass state machine suffices.
 2. **Scope via the shared turn-state**: participants pass

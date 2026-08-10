@@ -514,7 +514,7 @@ LLM either silently abstains (most common — predictive abstention) or interrup
 3. Tooling that mocks `check()` (e.g. `permissions::tests_check.rs`) now has to mock the pool too, blowing up the test surface.
 4. If recall fails, it now pollutes the `Decision` return — was previously a clean `Decision::Allow`, now it's `Result<Decision, ...>`.
 
-The recall is **information injection**, not a *decision*. It lives at the chat_loop seam (check → execute), not inside `check()`. See [permission-layer.md §4.2](./permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall).
+The recall is **information injection**, not a *decision*. It lives at the chat_loop seam (check → execute), not inside `check()`. See [permission-layer.md §4.2](../permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall).
 
 #### Bad: implementing verified soft-intercept in P3
 
@@ -531,7 +531,7 @@ P3 is **active-only footnote**, period. Verified soft-intercept is **P5 scope** 
 3. The "fire-and-forget" guarantee is lost — the user's tool result is delayed by reflection latency.
 4. If the LLM call hangs (network issue), the main loop hangs.
 
-P4's reflection is **fire-and-forget**: `tokio::spawn` wraps the entire `reflect_to_pitfall` call, the spawned `JoinHandle` is dropped (not `.await`ed), and any failure is absorbed at `tracing::warn!`. The main loop sees the original `is_error` / `content` signal and continues immediately. See [agent-loop-architecture.md front-matter "Per-tool auto-reflect seam (P4)"](./agent-loop-architecture.md#).
+P4's reflection is **fire-and-forget**: `tokio::spawn` wraps the entire `reflect_to_pitfall` call, the spawned `JoinHandle` is dropped (not `.await`ed), and any failure is absorbed at `tracing::warn!`. The main loop sees the original `is_error` / `content` signal and continues immediately. See [agent-loop-architecture.md front-matter "Per-tool auto-reflect seam (P4)"](../agent-loop-architecture.md).
 
 #### Bad: P4 bypasses P1's `insert_memory` and writes a raw `INSERT` (P4 anti-pattern)
 

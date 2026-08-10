@@ -185,7 +185,7 @@
 - `current_mode` 陈旧风险:LLM 在 turn N 申请切到 X,noop 判断时 `current_mode` 是 turn 0 快照;若 user 在同 LLM 响应前手动改了 mode(罕见),`current_mode` 已陈旧 → noop 误判。可接受(误判最多 1 次"误以为切了但没切",下 turn user 调 mode 后 LLM 看到正确)。改进可选 v2:每次 `execute_blocking` 实时 `load_session(...).mode` 做 noop 判断(避免陈旧)。
 - IPC-level 双重 resolve 兜底存在,但前端 `useQuestionCardsStore.resolveModeChange` 内部已 dedupe(返回前先 `if (pendingBySession.get(sid)?.kind === 'mode_change')` 守卫),IPC 端 `AlreadyResolved` 是防御性兜底,正常运行不会触发。
 
-**关联**: PRD + design + implement `.trellis/tasks/07-07-07-07-request-mode-change-tool/`;spec 增量 [tool-contract.md §request_mode_change](../.trellis/spec/backend/tool-contract.md) + [permission-layer.md §5c](../.trellis/spec/backend/permission-layer.md) + [agent-loop-architecture.md §"Tool interception"](../.trellis/spec/backend/agent-loop-architecture.md) + [frontend/chat.md §request_mode_change](../.trellis/spec/frontend/chat.md);1348 后端(`cargo test --lib`)+ 794 前端(`pnpm test`)+ vue-tsc 0 err + pnpm build 成功,4 commit(后端 / IPC + audit / 前端 / 集成测试)。
+**关联**: PRD + design + implement `.trellis/tasks/07-07-07-07-request-mode-change-tool/`;spec 增量 [tool-contract/11-request-mode-change.md §request_mode_change](../../.trellis/spec/backend/tool-contract/11-request-mode-change.md) + [permission-layer.md §5c](../../.trellis/spec/backend/permission-layer.md) + [agent-loop-architecture/pattern-worker-subagent.md §"Tool interception"](../../.trellis/spec/backend/agent-loop-architecture/pattern-worker-subagent.md) + [frontend/chat/request-mode-change.md §request_mode_change](../../.trellis/spec/frontend/chat/request-mode-change.md);1348 后端(`cargo test --lib`)+ 794 前端(`pnpm test`)+ vue-tsc 0 err + pnpm build 成功,4 commit(后端 / IPC + audit / 前端 / 集成测试)。
 
 ### 2026-07-06/07 — B6+ B subagent dispatch 动态选模型(优先级链收口 `dispatch > DB > frontmatter > parent`)
 
@@ -243,7 +243,7 @@
 - reka-ui Select popper 在 jsdom 不渲染 items 直到 open,矩阵逻辑改测导出常量(`LEGAL_STATUS_TRANSITIONS`)而非 DOM — 矩阵是 unit under test,Select 交互是 reka-ui 的责任。
 - IPC-level 合法/非法转换 roundtrip 测试缺失 — 项目惯例 IPC 层薄包裹、逻辑在 db 层测(矩阵已被现有 `update_status_*` 测试覆盖)。
 
-**关联**: PRD `.trellis/tasks/07-06-am-observability-panel/`(prd + design + implement)+ spec [backend/memory.md §V2-2+](../.trellis/spec/backend/memory.md) + [frontend/chat.md §V2-2+](../.trellis/spec/frontend/chat.md);1300 后端(`cargo test --lib`)+ 757 前端(`pnpm test`)+ vue-tsc 0 err + fmt 干净。2 commits(Phase A `08fb30a` / Phase B `a0c2c4f`),分支 `feat/am-observability-panel-phase-a`。
+**关联**: PRD `.trellis/tasks/07-06-am-observability-panel/`(prd + design + implement)+ spec [backend/memory.md §V2-2+](../../.trellis/spec/backend/memory.md) + [frontend/memory-ui.md §V2-2+](../../.trellis/spec/frontend/memory-ui.md);1300 后端(`cargo test --lib`)+ 757 前端(`pnpm test`)+ vue-tsc 0 err + fmt 干净。2 commits(Phase A `08fb30a` / Phase B `a0c2c4f`),分支 `feat/am-observability-panel-phase-a`。
 
 ### 2026-07-06 — C2+ 循环检测主动干预(per-run-local count + QuestionStore 复用 + 三分支 + worker 直接 break)
 
@@ -288,7 +288,7 @@
 - `Done.stop_reason` 三态:`loop_terminated` / `cancelled` / `end_turn`,前端 `WorkerTextTimeline.vue` 当 opaque 字符串渲染,无新 case。
 - `tests_agent_loop::agent_loop_max_turns_emits_done_marker` 加「继续」resolver 循环(200 连相同 list_dir 现在第 3 轮触发 C2+ 阻塞,这正是 C2+ 设计目的)。
 
-**关联**: PRD `.trellis/tasks/07-05-c2-loop-active-intervention/`(prd + design + implement)+ spec [tool-contract "C2+ loop intervention"](../.trellis/spec/backend/tool-contract.md);1282 后端(`cargo test --lib`)+ 728 前端(`pnpm test`)+ vue-tsc 0 err;clippy gate 受预存 rustc 1.82 vs deps 1.85+ 环境阻塞(E1 follow-up,非 C2+ 引入)。
+**关联**: PRD `.trellis/tasks/07-05-c2-loop-active-intervention/`(prd + design + implement)+ spec [tool-contract "C2+ loop intervention"](../../.trellis/spec/backend/tool-contract.md);1282 后端(`cargo test --lib`)+ 728 前端(`pnpm test`)+ vue-tsc 0 err;clippy gate 受预存 rustc 1.82 vs deps 1.85+ 环境阻塞(E1 follow-up,非 C2+ 引入)。
 
 ### 2026-07-05 — A5+ LLM 网络健壮性(retry_open wrapper + Full Jitter + 首字节前重试 + headers 字段扩展)
 

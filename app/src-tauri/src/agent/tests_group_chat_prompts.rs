@@ -280,7 +280,7 @@ mod tests {
 
     // -------------------------------------------------------------------
     // role_history unit tests (08-07-group-chat-role-history-isolation
-    // design §R1 + llm-contract.md §469) — replaces the 08-04
+    // design §R1 + llm-contract.md §Pair Atomicity) — replaces the 08-04
     // participant_view suite. Each test locks one rewrite rule of the
     // per-role isolation assembler.
     // -------------------------------------------------------------------
@@ -1005,7 +1005,7 @@ mod tests {
         })
     }
 
-    /// llm-contract.md §469 Pair Atomicity check: every ToolUse has a
+    /// llm-contract.md §Pair Atomicity check: every ToolUse has a
     /// matching ToolResult and vice versa (within the message list).
     fn no_orphan_pairs(msgs: &[ChatMessage]) -> bool {
         let mut use_ids = Vec::new();

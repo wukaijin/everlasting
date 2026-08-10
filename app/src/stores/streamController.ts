@@ -325,7 +325,7 @@ interface RecallHitWire {
 
 /** A4: 4-field token usage payload from the LLM. Mirrors Rust
  *  `llm::types::TokenUsage` (snake_case to match the existing
- *  IPC convention — see backend/llm-contract.md "Scenario: Token
+ *  IPC convention — see backend/token-usage-tracking.md "Scenario: Token
  *  Usage Tracking" §3). The frontend reads this in the `done`
  *  event handler to update the per-session totals displayed in
  *  the ChatInput hint. */

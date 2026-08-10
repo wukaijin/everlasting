@@ -70,7 +70,7 @@ mod tests {
         assert!(!caps.supports_reasoning_effort);
     }
 
-    // ---- orphan_tool_use_ids (Pair Atomicity guard, llm-contract.md §469) ----
+    // ---- orphan_tool_use_ids (Pair Atomicity guard, llm-contract.md §Pair Atomicity) ----
 
     #[test]
     fn orphan_tool_use_ids_flags_tool_use_without_matching_result() {

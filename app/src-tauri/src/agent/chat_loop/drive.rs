@@ -1121,7 +1121,7 @@ pub(crate) async fn drive_turn(
         // HTTP 400 "insufficient tool messages following
         // tool_calls" (OpenAI) / 2013 (Anthropic). Push one
         // synthetic is_error tool_result per emitted tool_use
-        // so the pair stays atomic (llm-contract.md §469).
+        // so the pair stays atomic (llm-contract.md §Pair Atomicity).
         // Persist is log-only (RULE-A-007 decision B): the
         // terminal Error already fired, a persist failure here
         // must not emit a second terminal.
@@ -1167,7 +1167,7 @@ pub(crate) async fn drive_turn(
     // return below — the assistant(tool_use) row was already
     // persisted, but the tools were never executed and no
     // tool_result was persisted → the next reload built a context
-    // with an orphan assistant(tool_calls) (llm-contract.md §469
+    // with an orphan assistant(tool_calls) (llm-contract.md §Pair Atomicity
     // violated) → every subsequent provider call 400'd with
     // "An assistant message with 'tool_calls' must be followed by
     // tool messages responding to each 'tool_call_id'" and the

@@ -7,7 +7,7 @@ use crate::llm::types::{ChatMessage, ChatRequest, ContentBlock, MessageContent, 
 use std::collections::HashSet;
 
 pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireRequest {
-    // Orphan guard (llm-contract.md §469 tool_use↔tool_result Pair
+    // Orphan guard (llm-contract.md §Pair Atomicity tool_use↔tool_result Pair
     // Atomicity): scan the Anthropic-shaped messages BEFORE fan-out
     // for any assistant `tool_use` whose `tool_use_id` has no matching
     // `tool_result` anywhere in history. Such an orphan makes the very
@@ -32,7 +32,7 @@ pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireReq
             orphan_count = orphans.len(),
             orphan_tool_use_ids = ?orphans,
             "wire: orphan tool_use detected — injecting synthetic tool_result(s) \
-             to satisfy Pair Atomicity (llm-contract.md §469). Root cause is \
+             to satisfy Pair Atomicity (llm-contract.md §Pair Atomicity). Root cause is \
              upstream (a tool_result that should have been persisted); this is \
              a defensive heal so the request doesn't 400."
         );
@@ -78,7 +78,7 @@ pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireReq
 /// matching `user(tool_result)` id anywhere in the same history.
 ///
 /// Non-empty return = the request is about to violate the
-/// tool_use↔tool_result Pair Atomicity invariant (llm-contract.md §469)
+/// tool_use↔tool_result Pair Atomicity invariant (llm-contract.md §Pair Atomicity)
 /// and the upstream provider will reject it. Pure read; no mutation.
 /// Used by [`chat_request_to_wire`] as a defensive diagnostic so the
 /// next orphan failure is grep-able instead of requiring fresh RCA.
@@ -119,7 +119,7 @@ pub(crate) fn orphan_tool_use_ids(messages: &[ChatMessage]) -> Vec<String> {
 /// followed by `role: "tool"` messages — one per `tool_call_id`, with
 /// no `role: "user"` / `role: "assistant"` message interleaved between
 /// the assistant(tool_calls) and its tool messages. Anthropic's same
-/// Pair Atomicity rule (llm-contract.md §469) tolerates the
+/// Pair Atomicity rule (llm-contract.md §Pair Atomicity) tolerates the
 /// `tool_result` blocks living inside a single `role: "user"` message
 /// regardless of any interleaved text block; OpenAI does NOT, and
 /// rejects with HTTP 400 "An assistant message with 'tool_calls' must

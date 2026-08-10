@@ -151,13 +151,13 @@ parallel tests). Production `execute` always passes `false`.
 ###5. Security notes (see `research/web-fetch-security.md`)
 
 - **T2a-c (SSRF)** — High severity, MVP MUST block. Implementation: hard-coded
-  IP blocklist in [`tools/web_fetch.rs`](../../../app/src-tauri/src/tools/web_fetch.rs)
+  IP blocklist in [`tools/web_fetch.rs`](../../../../app/src-tauri/src/tools/web_fetch.rs)
   §`is_blocked`. Cloud-metadata short-circuit for 169.254.169.254.
 - **T2e (DNS rebinding)** — Med severity, MVP accepted risk. Single-shot
   `lookup_host` + `ClientBuilder::resolve(domain, ip)` closes most of the
   window. Full socket-level re-validate is a follow-up.
 - **T2f (redirect to private IP)** — Med severity, **IMPLEMENTED** via
-  [`build_redirect_policy()`](../../../app/src-tauri/src/tools/web_fetch.rs)
+  [`build_redirect_policy()`](../../../../app/src-tauri/src/tools/web_fetch.rs)
   (RULE-E-003, 2026-06-14). A custom `redirect::Policy::custom` callback
   re-runs `resolve_and_check_sync` + `is_blocked` on every redirect hop and
   returns `Action::Stop` if the target IP is in the blocklist. The

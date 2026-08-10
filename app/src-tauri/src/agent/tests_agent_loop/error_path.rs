@@ -11,7 +11,7 @@ use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, ChatMessage, TokenUsage};
 use crate::llm::{MessageContent, Role};
 
-/// Error-path orphan fix (llm-contract.md §469 tool_use↔tool_result
+/// Error-path orphan fix (llm-contract.md §Pair Atomicity tool_use↔tool_result
 /// Pair Atomicity). When the LLM stream emits a `tool_use` and THEN
 /// errors mid-turn, the agent loop still pushes the `assistant(tool_use)`
 /// turn (RULE-A-007). Pre-fix the error path returned without appending

@@ -1546,7 +1546,7 @@ pub(crate) async fn finalize_turn(
     // with HTTP 400 "An assistant message with 'tool_calls' must be
     // followed by tool messages responding to each 'tool_call_id'"
     // (Anthropic has the same Pair Atomicity rule, see
-    // llm-contract.md §469 — but OpenAI enforces the *order*
+    // llm-contract.md §Pair Atomicity — but OpenAI enforces the *order*
     // strictly while Anthropic tolerates tool_results inside a user
     // message regardless of interleaving). Putting the hint at the
     // END yields `tool×N → user(text)`, which both protocols accept

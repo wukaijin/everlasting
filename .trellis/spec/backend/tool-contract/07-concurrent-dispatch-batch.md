@@ -12,7 +12,7 @@
   are all executable. Critically, the **3 race conditions** (permission:ask / token usage /
   cancellations) are provably dissolved by the existing architecture in the read-only scope — that
   proof is itself a load-bearing contract future edits must not violate (full derivation in
-  `agent-loop-architecture.md §"Pattern: Concurrent readonly dispatch"`).
+  `agent-loop-architecture/pattern-concurrent-dispatch.md §"Pattern: Concurrent isolated dispatch"`).
 
 ### 2. Signatures
 
@@ -82,7 +82,7 @@ per-worker worktree isolation (see "L3b PR2 update" below).
   its local `cancelled`.
 - **`run_subagent` single source of truth**: L3a adds the `force_readonly` param (4-line filter)
   rather than duplicating the ~450-line function — duplication is the faithful-port drift hazard
-  (`agent-loop-architecture.md §"Anti-pattern: faithful port as a drift hazard"`). Serial call site
+  (`agent-loop-architecture/pattern-production-test-entry.md §"Anti-pattern: faithful port as a drift hazard"`). Serial call site
   passes `false`; B6 single-dispatch behavior byte-for-byte unchanged. **L3b PR2 (2026-06-27)**:
   the concurrent call site **also** passes `false` now (was `true` under L3a) — per-worker
   worktree isolation (L3b PR1) is the new safety argument, not the read-only scope. The
@@ -147,7 +147,7 @@ let usage_mutex = Arc::new(Mutex::new(()));   // ← add_token_usage is col = CO
 ```
 
 The 3 race points are **dissolved by scope**, not by new synchronization (full derivation in
-`agent-loop-architecture.md §"Race dissolution by scope"`):
+`agent-loop-architecture/pattern-concurrent-dispatch.md §"Race dissolution by scope"`):
 1. `permission:ask` — worker `is_worker=true` → Tier 4 `ask` → `Decision::Deny` (no oneshot wait);
    read tools are low-Tier silent-allow. **No concurrent interactive ask can occur.**
 2. `token usage` — `add_token_usage` / `add_token_usage_streaming` are `col = COALESCE(col,0) + ?`
@@ -183,7 +183,7 @@ let result_blocks = result_slots.into_iter().flatten().collect();
 > **Invariant to preserve on any future edit (L3b PR2 update)**: post-PR2, the concurrent
 > branch **IS widened** to allow write-capable workers — the safety argument is per-worker
 > worktree isolation, not the read-only scope. The race-dissolution proof in
-> `agent-loop-architecture.md §"Pattern: Concurrent isolated dispatch (L3b PR2)"` is the new
+> `agent-loop-architecture/pattern-concurrent-dispatch.md §"Pattern: Concurrent isolated dispatch (L3b PR2)"` is the new
 > contract. If the worktree isolation is ever weakened (e.g. concurrent workers land on the
 > same `worker/<run_id>` branch, or `worktree_override` is bypassed), the proof breaks —
 > re-derive it before lifting the safety. **Do NOT add another "concurrent write" mechanism
@@ -231,7 +231,7 @@ isolation (L3b PR1) for the race-dissolution. `general-purpose` builtin defaults
 
 The race-dissolution proof in the preceding "Concurrent dispatch" scenario block has
 been **re-derived** against the new isolated-write scope and lives in
-`.trellis/spec/backend/agent-loop-architecture.md` §"Pattern: Concurrent isolated
+`.trellis/spec/backend/agent-loop-architecture/pattern-concurrent-dispatch.md` §"Pattern: Concurrent isolated
 dispatch (L3b PR2, 2026-06-27)". Net changes from the L3a proof:
 
 - **New row in the race table**: **worktree write race** — provably dissolved by

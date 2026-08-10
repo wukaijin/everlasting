@@ -34,7 +34,7 @@
 
 **验证发现 + 拆分**: 2026-06-25 手动验证(并发 3 researcher 搜外部项目更新)暴露 **worker 三层不能联网**(researcher 设计无 web_fetch + `force_readonly` 剥 web_fetch + worker is_worker 对 web_fetch 无授权→ask→Deny)。"subagent 联网"是独立工具/权限配置域,**非 L3a bug**(L3a 正确实现"本地只读并发",范围决策=只读不含联网),拆 task `06-25-subagent-web-access`。
 
-**关联**: spec `.trellis/spec/backend/tool-contract.md` §"Concurrent dispatch_subagent batch"(7节含 race dissolution Wrong/Correct) + `agent-loop-architecture.md` §"Pattern: Concurrent readonly dispatch"(race dissolution 表 + when/when-not);PRD `.trellis/tasks/06-24-l3a-readonly-concurrent/`;research `docs/research/subagent-{communication,scheduling-communication}-survey.md`。
+**关联**: spec `.trellis/spec/backend/tool-contract/07-concurrent-dispatch-batch.md` §"Concurrent dispatch_subagent batch"(7节含 race dissolution Wrong/Correct) + `agent-loop-architecture/pattern-concurrent-dispatch.md` §"Pattern: Concurrent isolated dispatch"(race dissolution 表 + when/when-not);PRD `.trellis/tasks/06-24-l3a-readonly-concurrent/`;research `docs/research/subagent-{communication,scheduling-communication}-survey.md`。
 
 ### 2026-06-19 — RULE-A-012 reqwest streaming 超时改 per-chunk `read_timeout` + 流错误补 tracing(响应 2026-06-18 17:56 静默中断事件)
 
@@ -341,7 +341,7 @@ PR3 收尾范围(本 ADR 锁定):
 - **反直觉 #2**:旧设计 Tier 4 Mode check 在 Tier 3 Ask 之后 → Plan + 写操作有"用户点始终允许,然后被 Mode 拒"的坏交互
 - **粒度不足**:PRD 原预留 3 种 `match_kind` schema(`tool` / `prefix` / `path`)但只 wire 了 `tool` → 用户想"信任 ~/Documents 整片"没辙
 
-re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md`](../.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md)。旧 06-12 PRD 加 Superseded 标记保留作历史档案,新实施以新 PRD 为准。
+re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md`](../../.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md)。旧 06-12 PRD 加 Superseded 标记保留作历史档案,新实施以新 PRD 为准。
 
 **Decision** (10 项,re-grill session 输出):
 
@@ -678,7 +678,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **后果**:机器绑定固有性质——`wsl --unregister`/重装重置 `/etc/machine-id` 旧密文不可解,靠 `PreFlightError::DecryptFailed` 兜底友好提示重粘(不防本机 root/进程内存,Out of Scope)
 - **决策**:前端永不持有明文 api_key —— `ProviderRow.api_key` 加 `#[serde(skip)]` 切断 IPC,`list_providers` 改返 `hasKey` 布尔;Settings 编辑留空覆盖(`None`=保持/`Some`=覆盖)+ 加密状态徽标
   - **原因**:彻底切断前端持明文路径,RULE-D-001 收益最大化;secret 输入业界标准 UX
-  - **依据**:[`.trellis/spec/backend/multi-provider-contract.md`](../.trellis/spec/backend/multi-provider-contract.md) ProviderRow wire
+  - **依据**:[`.trellis/spec/backend/multi-provider-contract.md`](../../.trellis/spec/backend/multi-provider-contract.md) ProviderRow wire
 - **决策**:加密改动原子合一个大 PR(db migration + 运行时解密 + IPC + 前端),不分拆
   - **原因**:四者强耦合——db 写密文后,运行时解密 + IPC 不返明文 + 前端留空覆盖必须同改,否则中间态双重加密(前端回填密文→再加密)或 chat 用密文发请求
   - **commit**:`576b2f4`(fix)+ `30a5eaf`(docs debt)
@@ -687,7 +687,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 ### 2026-06-24 — C2 agent loop ⑬ 循环检测(第三档收口)
 
 - **决策**:**分级触发**(L1 精确签名硬触发 `HARD_WINDOW=3` + L2 Jaccard 软提示 `SOFT_WINDOW=5`/`SOFT_THRESHOLD=0.85`),取代架构原文单一 `Jaccard > 0.9`
-  - **原因**:调研 [`similarity-algorithm-and-tokenizer.md`](../../.trellis/tasks/06-24-c2-loop-detection/research/similarity-algorithm-and-tokenizer.md) 指出单一阈值无法适配短/长 input —— `read_file` 只 1 个 path token 时 Jaccard 抖到 0.5 漏判,`shell` 长命令改 flag 仍 >0.9 误报;L1 精确签名对最高频死循环(read/grep/shell 同输入)零误报,L2 Jaccard 兜底近重复
+  - **原因**:调研 [`similarity-algorithm-and-tokenizer.md`](../../.trellis/tasks/archive/2026-06/06-24-c2-loop-detection/research/similarity-algorithm-and-tokenizer.md) 指出单一阈值无法适配短/长 input —— `read_file` 只 1 个 path token 时 Jaccard 抖到 0.5 漏判,`shell` 长命令改 flag 仍 >0.9 误报;L1 精确签名对最高频死循环(read/grep/shell 同输入)零误报,L2 Jaccard 兜底近重复
 - **决策**:命中动作选 **Approach A 两层软提示,无硬打断** —— hint 作为 `ContentBlock::Text` 插到 result message 的 `result_blocks[0]`,LLM 下一轮看到提示;不跳过执行、不终止 loop,MAX_TURNS=200 仍是硬兜底
   - **原因**:符合架构 §2.5.4「不强制打断」原意;无状态机最小侵入 `run_chat_loop`;与 RULE-A-010 cancel「一次即终止」MVP 简化风格一致;Approach B 升级硬打断留 follow-up(若线上观测到「软提示后仍循环」高频再上)
 - **决策**:`edit_file` 签名**含 old_string**(非 research caveat #3 说的「不含」)
@@ -755,7 +755,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   2. **未来 opt-in feature 兼容**:未来「`general-purpose` 单 dispatch 显式 read-only」(LLM 或 frontmatter 显式声明)可复用本参,无需新参。
   3. **PR2a 改回「拆 `force_readonly` 短路由」**:保留 `if force_readonly { isolated = false }` 分支作为 opt-in 出口 — L3a `force_readonly=true` 语义(读-only + 共享 cwd)在 serial 路径仍可达,作为「我不要 worktree 隔离」的显式信号。
 - **决策**:`run_chat_loop` 签名不变。concurrent 分支只调 `run_subagent` 的 `force_readonly=false`(由 chat_loop.rs `~line 1844-1851` 切换 — 之前 `true`),其他 25 参不动。`SubagentCache` / `app_data_dir` 已在 PR1 接线,本 PR 零新增参数。
-- **决策**:**race-dissolution proof 重导**(agent-loop-architecture.md §"Pattern: Concurrent isolated dispatch")。原 L3a 3 竞态(permission:ask / token 用量 / cancel)在新隔离面下重导:
+- **决策**:**race-dissolution proof 重导**(`agent-loop-architecture/pattern-concurrent-dispatch.md` §"Pattern: Concurrent isolated dispatch")。原 L3a 3 竞态(permission:ask / token 用量 / cancel)在新隔离面下重导:
   - **新增 worktree write race**:每个 worker 写自己的 `worker/<run_id>` branch,parent HEAD 不动。git worktree 本身支持任意数量 linked worktree(共享 `.git/`),concurrent add 序列化 metadata 写。**libgit2 自身并发安全**,无需应用层锁。
   - **改 permission:ask**:worker `is_worker=true` 不再塌缩 Tier 4 ask → Deny(post-2026-06-22 RULE-FrontSubagent-003 走 `WorkerAskBanner` round-trip)。**N concurrent worker 可各弹 N banner 接受现状**(L3a PRD §"L3a AC4" 预先记下此 trade-off;workaround:父 turn 预先 AllowAlways)。N banner 的 UI 复杂度由 SubagentDrawer 独立 PR 处理(本 PR 不动前端)。
   - **改 token 用量**:2026-06-26 reversal of RULE-A-015/PR2a — worker token 隔离到 `subagent_runs.token_usage_json`,**不** fold 进父 `sessions.last_*`。race-free by construction(无共享列)。

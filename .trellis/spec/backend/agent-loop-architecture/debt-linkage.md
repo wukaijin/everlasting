@@ -71,4 +71,4 @@ the new `v2` as the canonical entry point. Do not leave a "v1" around
 
 ---
 
-> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../docs/IMPLEMENTATION.md)
+> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../../../docs/IMPLEMENTATION.md)

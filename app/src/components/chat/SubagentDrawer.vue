@@ -456,7 +456,7 @@ const isRunning = computed<boolean>(() => status.value === "running");
  *  We re-parse `run.transcriptJson` directly to find it.
  *
  *  Extraction priority (4-level fallback chain — see R25 in
- *  `.trellis/spec/frontend/chat.md`):
+ *  `.trellis/spec/frontend/chat/subagent-drawer.md`):
  *    1. transcriptJson reverse-scan for the last chat_event with
  *       inner kind="error" → payload_json.message
  *    2. run.finalText (backend's `format_final_text` carries the

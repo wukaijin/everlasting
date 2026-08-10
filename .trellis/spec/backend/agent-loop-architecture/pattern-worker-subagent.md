@@ -89,9 +89,9 @@ naturally live.
 
 | Intercepted tool | Need that `execute_tool_inner` can't satisfy | What chat_loop does |
 |---|---|---|
-| `dispatch_subagent` | `provider` + `db` + `cancellations` + `session_active_request` + `read_guard` + `memory_cache` + `permission_asks` + `background_shells`(for nested `run_chat_loop`) | Calls `run_subagent(...)` recursively with 4 isolation flags + `system_prompt_override`; constructs `ContentBlock::ToolResult` with `[status: ...]` prefix from `format_dispatch_result` (see [tool-contract.md §dispatch_subagent §7](./tool-contract.md)) |
-| `ask_user_question` | `QuestionStore` oneshot + `current_session_id` (for `get_pending_question` IPC key) | Calls `ask_user_question::execute_blocking(...)` → `store.register` → `sink.emit_tool_question` → `tokio::select!{cancel, oneshot}` → constructs `ContentBlock::ToolResult` (see [tool-contract.md §ask_user_question](./tool-contract.md) + [chat/generative-ui.md §B9/AskUserQuestionCard](../../frontend/chat/generative-ui.md)) |
-| `request_mode_change` (2026-07-07) | `QuestionStore` extended to `PendingInteraction` (kind = `question` \| `mode_change`) + `current_mode` snapshot (for noop check) + `ChatEventSink::emit_mode_change_request` + `CancellationToken` (for `tokio::select!` oneshot wait) | Calls `request_mode_change::execute_blocking(input, session_id, tool_use_id, current_mode, question_store, sink, cancel)` → noop check → `store.register(PendingInteraction::ModeChange(...))` → `sink.emit_mode_change_request` → `tokio::select!{cancel, oneshot}` → constructs `ContentBlock::ToolResult` (see [tool-contract.md §request_mode_change §7](./tool-contract.md)) |
+| `dispatch_subagent` | `provider` + `db` + `cancellations` + `session_active_request` + `read_guard` + `memory_cache` + `permission_asks` + `background_shells`(for nested `run_chat_loop`) | Calls `run_subagent(...)` recursively with 4 isolation flags + `system_prompt_override`; constructs `ContentBlock::ToolResult` with `[status: ...]` prefix from `format_dispatch_result` (see [tool-contract/04-dispatch-subagent.md §7](../tool-contract/04-dispatch-subagent.md)) |
+| `ask_user_question` | `QuestionStore` oneshot + `current_session_id` (for `get_pending_question` IPC key) | Calls `ask_user_question::execute_blocking(...)` → `store.register` → `sink.emit_tool_question` → `tokio::select!{cancel, oneshot}` → constructs `ContentBlock::ToolResult` (see [tool-contract/11-request-mode-change.md §8 Design Decisions](../tool-contract/11-request-mode-change.md) + [chat/generative-ui.md §B9/AskUserQuestionCard](../../frontend/chat/generative-ui.md)) |
+| `request_mode_change` (2026-07-07) | `QuestionStore` extended to `PendingInteraction` (kind = `question` \| `mode_change`) + `current_mode` snapshot (for noop check) + `ChatEventSink::emit_mode_change_request` + `CancellationToken` (for `tokio::select!` oneshot wait) | Calls `request_mode_change::execute_blocking(input, session_id, tool_use_id, current_mode, question_store, sink, cancel)` → noop check → `store.register(PendingInteraction::ModeChange(...))` → `sink.emit_mode_change_request` → `tokio::select!{cancel, oneshot}` → constructs `ContentBlock::ToolResult` (see [tool-contract/11-request-mode-change.md §7](../tool-contract/11-request-mode-change.md)) |
 
 The interceptor builds a `ContentBlock::ToolResult` (with the
 `[status: completed|cancelled|error|incomplete]` prefix from
@@ -102,7 +102,7 @@ tool_use/tool_result pairing is preserved (same invariant as RULE-A-007).
 For non-completed terminal states, `format_dispatch_result` also appends a
 `Worker partial actions:` summary of the worker's executed tool_calls so
 the parent can do compensatory repair (RULE-BackSubagent-001, 2026-06-22;
-wire shape + 2 KiB head+tail cap in `tool-contract.md` §dispatch_subagent).
+wire shape + 2 KiB head+tail cap in `tool-contract/04-dispatch-subagent.md` §dispatch_subagent).
 
 **Common rationale** (`ask_user_question` / `request_mode_change`):
 both are **blocking** tools — the agent loop must wait for user

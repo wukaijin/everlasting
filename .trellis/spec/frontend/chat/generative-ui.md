@@ -99,7 +99,7 @@ out.parsed = out.hunks.length > 0;  // ❌→✅ 防御 parsed-but-empty
 
 - **jsdiff 空 hunks 不是空数组**:`patches.length === 0` 看着像合理守卫,实际只 catch 0 patch 的输入;LLM-style 不齐的 +/- 进去都是 1 个 patch + 0 hunks。**Lock**:测试两种空 fallback 输入("just some prose" → `[]`、LLM-style → `[{hunks:[]}]`)都得触发 raw 路径。
 - **`patchToText({hunks:[]})` 是字符串陷阱**:返回的 `"--- a\n+++ b"` 看似合法(unified-diff 头),但下游 re-parse 后得到 0 行,body 空白。永远不要从空 hunks round-trip。
-- **不在 frontend 强制 LLM 格式**:Schema 仅校验 `type`,不校验 `diff_text` 字段是不是真 unified-diff(避免误拒 + 与 `additionalProperties: true` 一致);渲染器承担兜底责任,LLM 契约写在 tool description 里(给 LLM 看,见 `tool-contract.md` §use_ui + `use_ui.rs` definition 的 `description`)。
+- **不在 frontend 强制 LLM 格式**:Schema 仅校验 `type`,不校验 `diff_text` 字段是不是真 unified-diff(避免误拒 + 与 `additionalProperties: true` 一致);渲染器承担兜底责任,LLM 契约写在 tool description 里(给 LLM 看,见 `tool-contract/09-use-ui.md` §use_ui + `use_ui.rs` definition 的 `description`)。
 
 #### Tests required(RULE-FrontDiff-001 锁定)
 
@@ -109,7 +109,7 @@ out.parsed = out.hunks.length > 0;  // ❌→✅ 防御 parsed-but-empty
 
 ### B9+ D3/D4 — `use_ui` 可交互升级(button primitive + diff 应用) (2026-07-13)
 
-> 完整任务 PRD 走 `.trellis/tasks/07-13-b9plus-generative-ui-followup/`;后端 IPC 契约见 [tool-contract.md §Scenario: `use_ui` `button` + `apply_ui_diff`](../backend/tool-contract.md)。本节锁定前端契约 + cross-ref 锚点。
+> 完整任务 PRD 走 `.trellis/tasks/07-13-b9plus-generative-ui-followup/`;后端 IPC 契约见 [tool-contract/13-use-ui-button-apply-ui-diff.md §Scenario: `use_ui` `button` + `apply_ui_diff`](../../backend/tool-contract/13-use-ui-button-apply-ui-diff.md)。本节锁定前端契约 + cross-ref 锚点。
 
 B9 (07-02) ship 时 `use_ui` 是纯展示(silent Allow Tier 5,零副作用)。B9+ 把"LLM 提议 → 用户拍板"的最后一公里闭环,核心命门 = "应用动作"的权限归属 — 既不能破坏 plan 模式语义,也不能与 `edit_file` 形成"两种修改模型"冲突。**三角色分离**是本批的根设计:
 
@@ -202,7 +202,7 @@ Tauri 自动把 JS `sessionId`/`diffText` 转 Rust `session_id`/`diff_text`,前�
 - **`DiffPrimitive.test.ts`**(B9+ D4 段,17 测试):IPC invoke spy / 成功 toast + 「已应用」 tag / kind → inline error / raw fallback disabled / 无 session disabled / 异常错误归 `io` / reject 隐藏卡
 - **`ButtonPrimitive.test.ts`**(11 测试):3 action 默认 label / 自定义 label override / `apply_diff` IPC 调用 / `copy` clipboard / `dismiss` 本地 / 无 session disabled / 未知 action defensive
 - **`UiCard.test.ts`**(增量):registry `button` entry 间接通过 DiffPrimitive / ButtonPrimitive 子组件覆盖;Pinia setup 必要(DiffPrimitive 用 `useChatStore`)
-- **后端 cross-ref**:24 `diff_apply::tests` + 7 `use_ui::tests::execute_button_*` + 4 `commands::ui::tests`(详见 [tool-contract.md §B9+ D3/D4](../backend/tool-contract.md) §6)
+- **后端 cross-ref**:24 `diff_apply::tests` + 7 `use_ui::tests::execute_button_*` + 4 `commands::ui::tests`(详见 [tool-contract/13-use-ui-button-apply-ui-diff.md §B9+ D3/D4](../../backend/tool-contract/13-use-ui-button-apply-ui-diff.md) §6)
 
 #### 关键决策(前端契约视角)
 

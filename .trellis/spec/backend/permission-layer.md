@@ -6,7 +6,7 @@
 >
 > **Cross-references**:
 > - Main LLM contract: [llm-contract.md](./llm-contract.md)
-> - ⑨ 关 tool-side contract (hard kill list + IPC + path-based): [tool-contract.md](./tool-contract.md) §"Scenario: Path-based Permission Layer"
+> - ⑨ 关 tool-side contract (hard kill list + IPC + path-based): 见本文 §4(5-Tier)+ §5(permission:ask IPC)(2026-06-21 从 tool-contract.md 迁入)
 
 ## Scenario: Per-Session Mode + ⑨ 关 Permission Layer (A2 + B7, 2026-06-13)
 
@@ -164,9 +164,8 @@ Tier 6. Audit           (写 session_audit_events)
 | `PermissionAskPayload` | rid + tool + input + risk + reason | + **`path: Option<String>`** (新, `skip_serializing_if`) |
 | `Risk` 字段 | 4 档 | 不变(4 档,UI 视觉) |
 
-详细 ⑨ 关 contract 见 `tool-contract.md §"Scenario: Path-based
-Permission Layer"`,包括 `shell_trust::classify_prefix` 的
-whitelist / asklist 完整表。
+详细 ⑨ 关 contract 见本文 §4(5-Tier);`shell_trust::classify_prefix` 的
+whitelist / asklist 完整表见 `app/src-tauri/src/agent/permissions/shell_trust.rs` 模块文档。
 
 #### 4.2. Tier 1 Hooks 实际实现路径 — P3 工具执行前召回(2026-06-29, 06-29-am-p3-tool-recall)
 
@@ -413,8 +412,8 @@ AuditKind 变体已加到 enum(forward-compat + round-trip test),但无 writer�
 user 通过 inline card 决策。**允许**路径必须复用 `set_session_mode`
 IPC 的副作用链(DB 持久化 + 审计 + Yolo 安全守门 + 模式 prefix
 切换),**不**在 tool 内部独立调 `db::update_session_mode` —— 避免
-双路径漂移(详见 `tool-contract.md §"Scenario: request_mode_change
-tool" §8 Decision`)。Tool 内部仅 `store.register`(oneshot 互斥)
+双路径漂移(详见 `tool-contract/11-request-mode-change.md §"Scenario: request_mode_change
+tool" §8 Design Decisions`)。Tool 内部仅 `store.register`(oneshot 互斥)
 + `emit_mode_change_request` + `tokio::select!{cancel, oneshot}` 等
 决策,**不直接落库**。
 
@@ -461,7 +460,7 @@ LLM 下一轮 system prompt 已是 Edit / Plan / Yolo
 
 **关键不变量**:`store.resolve` 必须在 `db::update_session_mode`
 **之后**调用,否则 agent loop 先收到 Allow 但 DB 未落库,出现
-不一致(详见 `tool-contract.md §request_mode_change §7.2` 风险段)。
+不一致(详见 `tool-contract/11-request-mode-change.md §8 Design Decisions` 风险段)。
 
 #### Yolo 二段路径(双 IPC 顺序的特殊性)
 
@@ -523,7 +522,7 @@ root"。点击无效 → 等价走 2b 路径(audit `mode_change_denied
 
 `commands/tests_resolve_mode_change.rs`(5 个)+ `commands/tests_get_pending_interaction.rs`(4 个)+
 `permissions/tests_audit.rs` round-trip(ModeChangeRequested / Allowed / Denied 3 类)+ `permissions/tests_request_mode_change.rs`(11 个单测)。详见
-[tool-contract.md §"Scenario: request_mode_change tool" §6](./tool-contract.md)
+[tool-contract/11-request-mode-change.md §"Scenario: request_mode_change tool" §6](./tool-contract/11-request-mode-change.md)
 完整测试矩阵 + PRD `.trellis/tasks/07-07-07-07-request-mode-change-tool/`。
 
 ### 6. Audit (`session_audit_events`) — 20 类 AuditKind(2026-07-07 +3 增)

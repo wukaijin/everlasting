@@ -249,7 +249,7 @@ The cap's role is to prevent a single bad worker from blowing up
 the DB while still landing a degraded-but-non-empty transcript. The
 `transcript_truncated=1` flag gives PR3's expand UI a signal to
 display "transcript truncated, show full via..." (UX detail left to
-PR3). See `tool-contract.md §"subagent_runs persistence" §8 Design
+PR3). See `tool-contract/05-subagent-runs-persistence.md §"subagent_runs persistence" §8 Design
 Decisions` for the full size-selection rationale.
 
 ### Audit invariant: subagent_runs writes do NOT contaminate session_audit_events

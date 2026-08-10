@@ -135,7 +135,7 @@ pairing, `is_error` semantics, and envelope wrap (`{result, cwd}`) are all
 preserved. The frontend's lenient parser (`utils/messageFormat.ts
 extractToolResultDisplay`) returns the `result` string verbatim, so the
 footnote renders to the user as part of the tool output. See
-[memory.md §Scenario 2 / Pre-tool pitfall recall contract](./memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall)
+[memory.md §Scenario 2 / Pre-tool pitfall recall contract](../memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall)
 for the recall contract.
 
 **P4 is_error consumption (2026-06-29, 06-29-am-p4-event-reflect)**: the
@@ -150,7 +150,7 @@ the **write-side counterpart** of P3's read-side footnote injection:
 P3 prepends a recall hint before tool execution; P4 records a new
 pitfall after tool execution. They close the loop (P4 writes → P3
 recalls → agent avoids the pitfall next time). See
-[memory.md §Scenario 2 / Event-driven bypass reflection contract (P4)](./memory.md#event-driven-bypass-reflection-contract-p4-write-side-of-the-loop--2026-06-29-06-29-am-p4-event-reflect)
+[memory.md §Scenario 2 / Event-driven bypass reflection contract (P4)](../memory.md#event-driven-bypass-reflection-contract-p4-write-side-of-the-loop--2026-06-29-06-29-am-p4-event-reflect)
 for the write contract.
 
 #### Environment keys

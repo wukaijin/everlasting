@@ -2,7 +2,7 @@
 
 > **基线**:2026-06-10 (B5 PR2, frontend)
 > **同源文档**:
-> - [llm-contract.md](./llm-contract.md) — backend `read_memory_layers` / `read_memory_content` / `open_memory_in_editor` IPC contract
+> - [llm-contract.md](../backend/memory/scenario-two-layer-memory-injection.md) — backend `read_memory_layers` / `read_memory_content` / `open_memory_in_editor` IPC contract
 > - [state-management.md](./state-management.md) — Pinia store patterns + listener registration
 > - [reka-ui-usage.md](./reka-ui-usage.md) — reka-ui Tab / popover conventions
 > - [design-tokens.md](./design-tokens.md) — color / spacing / typography tokens

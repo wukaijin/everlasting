@@ -340,7 +340,7 @@ impl OpenAIProvider {
         // the SSE stream. Without this, OpenAI omits the
         // `usage` field on all chunks and the agent loop has
         // no per-turn token counts. See
-        // backend/llm-contract.md "Scenario: Token Usage
+        // backend/token-usage-tracking.md "Scenario: Token Usage
         // Tracking" for the schema mapping
         // (`prompt_tokens` → `input_tokens` etc).
         body["stream_options"] = json!({ "include_usage": true });
@@ -559,7 +559,7 @@ impl Provider for OpenAIProvider {
                 "wire: orphan tool_call order detected — an assistant(tool_calls) wire \
                  message is not immediately followed by role:tool messages; this request \
                  will fail upstream with OpenAI 400 \"insufficient tool messages following \
-                 tool_calls\". See llm-contract.md §469 Pair Atomicity."
+                 tool_calls\". See llm-contract.md §Pair Atomicity."
             );
         }
 

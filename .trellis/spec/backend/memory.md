@@ -7,7 +7,7 @@
 > - V2 1 期 B5 Memory 任务后端模块 — `## Scenario: Two-Layer Memory Injection`(本文 §Scenario 1)
 > - V2 2 期 自主记忆 epic — `## Scenario: Autonomous Memories (V2 2 期)`(本文 §Scenario 2)
 > **同源文档**:
-> - [llm-contract.md](./llm-contract.md) — system prompt + synthetic user message 注入(两个 scenario 都引用其 §2 协议映射)
+> - [agent-loop-architecture.md](./agent-loop-architecture.md) — system prompt + synthetic user message 注入(⑤a per-turn context construction)
 > - [tool-contract.md](./tool-contract.md) — ReadGuard 失败兜底模式 + `remember` 工具 silent-allow 权限模型
 > - [error-handling.md](./error-handling.md) — tracing::warn! 模式
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider 抽象隔离
