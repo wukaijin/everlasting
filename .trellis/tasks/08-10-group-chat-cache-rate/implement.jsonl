@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "缓存率核心语义:TokenUsage 字段定义与跨 provider 归一化(分母必须用 context_input_tokens)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "db 层函数与测试规范(新查询函数要符合的项目惯例)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "聊天组件规范(GroupChatConfigModal 所在层)"}
