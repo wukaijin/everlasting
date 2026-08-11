@@ -11,7 +11,8 @@
 //! - [`config`]:CLI + env 解析(CLI > env > default;secret 必传)
 //! - [`error`]:HTTP 错误契约(5 变体 `ErrorCategory` + `AppError`)
 //! - [`server`]:router 装配 + serve loop + ServeDir 静态托管
-//! - [`routes`]:`/api/v1/*` 领域路由(Step 2 只 health)
+//! - [`routes`]:`/api/v1/*` 领域路由 + `/ws` WSS 入口
+//! - [`tunnel_registry`]:node_id → 隧道连接注册表(Step 5)
 
 // 见 daemon lib.rs 同名 allow:clippy 1.96 对自然语言 doc 注释的误报。
 #![allow(clippy::doc_lazy_continuation)]
@@ -23,3 +24,4 @@ pub mod db;
 pub mod error;
 pub mod routes;
 pub mod server;
+pub mod tunnel_registry;

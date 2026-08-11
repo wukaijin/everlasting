@@ -7,7 +7,7 @@
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use crate::db::{now_ms, Device, Node, NODE_STATUS_ONLINE};
+use crate::db::{now_ms, Device, Node, NODE_STATUS_OFFLINE, NODE_STATUS_ONLINE};
 
 // =========================================================================
 // nodes
@@ -80,6 +80,20 @@ pub async fn get_node(pool: &SqlitePool, node_id: &str) -> Result<Option<Node>, 
     .bind(node_id)
     .fetch_optional(pool)
     .await
+}
+
+/// 全量置 offline(RemoteState::load 启动时调)。
+///
+/// boot 不变量:remote 重启后**没有任何**隧道连接,所有节点的状态
+/// 都是陈旧值 —— 在下次 WSS 连接(upsert 置 online)之前必须全部视为
+/// 离线,否则 Step 8 的节点 API 会对已断开的 PC 误报 online。
+pub async fn mark_all_offline(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE nodes SET status = ? WHERE status = ?")
+        .bind(NODE_STATUS_OFFLINE)
+        .bind(NODE_STATUS_ONLINE)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 // =========================================================================
@@ -399,6 +413,27 @@ mod tests {
     async fn get_node_missing_returns_none() {
         let db = test_db().await;
         assert!(get_node(&db.pool, "nope").await.unwrap().is_none());
+    }
+
+    /// boot 不变量:mark_all_offline 只把 online 置 offline,offline
+    /// 保持原状。
+    #[tokio::test]
+    async fn mark_all_offline_flips_online_only() {
+        let db = test_db().await;
+        upsert_node(&db.pool, "pc-1", "PC").await.unwrap(); // online
+        upsert_node(&db.pool, "pc-3", "PC").await.unwrap();
+        update_node_status(&db.pool, "pc-3", NODE_STATUS_OFFLINE, now_ms())
+            .await
+            .expect("offline");
+
+        mark_all_offline(&db.pool).await.expect("mark_all_offline");
+
+        // pc-1:online → offline
+        let n1 = get_node(&db.pool, "pc-1").await.unwrap().unwrap();
+        assert_eq!(n1.status, NODE_STATUS_OFFLINE);
+        // pc-3:本就 offline,WHERE status='online' 过滤,不受影响
+        let n3 = get_node(&db.pool, "pc-3").await.unwrap().unwrap();
+        assert_eq!(n3.status, NODE_STATUS_OFFLINE);
     }
 
     // ---- devices ----

@@ -14,6 +14,8 @@ use std::sync::Arc;
 use clap::Parser;
 use sqlx::SqlitePool;
 
+use crate::tunnel_registry::{HeartbeatConfig, TunnelRegistry};
+
 /// 默认监听端口(design §3.6;`7457` 与 daemon 的 7456 错开)。
 pub const DEFAULT_REMOTE_PORT: u16 = 7457;
 
@@ -63,23 +65,33 @@ pub struct RemoteConfig {
 /// 字段按 step 演进添加(design-step3.md §6,与 implement.md 字面的
 /// `{ db, shared_secret, node_connections, pending }` 最终形态一致):
 /// - Step 3 落地:`db` + `shared_secret`
-/// - Step 5 加:`node_connections: Arc<DashMap<String, TunnelConn>>`
-/// - Step 6 加:`pending: DashMap<u64, PendingReply>`
+/// - Step 5 加:`node_connections`(WSS 注册表)+ `heartbeat`(心跳参数)
+/// - Step 6 加:`pending`(request_id → PendingReply)
 #[derive(Debug)]
 pub struct RemoteState {
     pub db: SqlitePool,
     pub shared_secret: String,
+    /// `node_id → 隧道连接` 注册表(design §2.1;Step 5 加)。
+    pub node_connections: Arc<TunnelRegistry>,
+    /// 心跳参数(design §2.4:30s ping / 90s 判离线)。放 state 而非
+    /// 模块 const:测试用小间隔构造 state,生产走 `Default`。
+    pub heartbeat: HeartbeatConfig,
 }
 
 impl RemoteState {
-    /// 单点初始化:开 pool(WAL/busy_timeout)→ 跑幂等 migration → 包 Arc。
-    /// `main.rs` 唯一调用;失败即 panic(DB 不可用无意义继续)。
+    /// 单点初始化:开 pool(WAL/busy_timeout)→ 跑幂等 migration →
+    /// 全量置 offline(boot 不变量:重启后无任何隧道连接,陈旧 online
+    /// 会让节点 API 误报)→ 包 Arc。`main.rs` 唯一调用;失败即 panic
+    /// (DB 不可用无意义继续)。
     pub async fn load(config: &RemoteConfig) -> Result<Arc<Self>, sqlx::Error> {
         let db = crate::db::pool::init_pool(&config.db_path).await?;
         crate::db::schema::run_migrations(&db).await?;
+        crate::db::crud::mark_all_offline(&db).await?;
         Ok(Arc::new(Self {
             db,
             shared_secret: config.shared_secret.clone(),
+            node_connections: Arc::new(TunnelRegistry::new()),
+            heartbeat: HeartbeatConfig::default(),
         }))
     }
 }

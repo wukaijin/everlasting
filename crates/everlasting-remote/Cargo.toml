@@ -19,6 +19,9 @@ everlasting-remote-protocol = { path = "../everlasting-remote-protocol" }
 
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "net", "sync"] }
+# Step 5:axum ws 的 `WebSocket::split()` 需要 futures-util 的 StreamExt/SinkExt
+# (axum 自身不 re-export;futures-util 已在 lockfile 里,axum 传递依赖,零新增编译)。
+futures-util = "0.3"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -40,3 +43,6 @@ uuid = { version = "1", features = ["v4"] }
 # needs it in tests).
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+# Step 5 ws 集成测试:真实 WebSocket 客户端连本地起的 server。
+# 版本与 axum 0.7 内部用的 tokio-tungstenite 0.24 对齐(lockfile 已有,零新增编译)。
+tokio-tungstenite = "0.24"

@@ -96,16 +96,31 @@ pub fn resolve_dist_dir() -> Option<PathBuf> {
 ///
 /// # Graceful shutdown
 ///
-/// 收到 Ctrl+C (SIGINT) 或 SIGTERM (POSIX) 后,`shutdown_signal` 返回,
-/// axum drain 所有 in-flight 请求。Step 2 无长连接(SSE/WSS 都未落地),
-/// drain 亚秒完成。Step 5 在此处加 `tunnel_registry` 主动断开 PC 连接。
+/// 收到 Ctrl+C (SIGINT) 或 SIGTERM (POSIX) 后,`shutdown_signal` 返回:
+/// 先经 `tunnel_registry.close_all()` 主动断开所有 PC 隧道连接(发
+/// Close + 清注册表),再让 axum drain 其余 in-flight 请求 —— 顺序
+/// 反过来的话,长连接 WSS 不被 axum 跟踪,drain 会等它们自然超时
+/// (daemon SSE drain 的教训,见模块头注释)。
+///
+/// `into_make_service_with_connect_info`:`/ws` handler 提取客户端 IP
+/// 用于 `shared_secret_rejected` 告警日志(design §6)。
 pub async fn serve_remote(state: Arc<RemoteState>, port: u16) -> std::io::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(addr = %addr, "everlasting-remote listening");
 
+    let registry = state.node_connections.clone();
     let router = build_router(state);
-    let serve = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
+    let shutdown = async move {
+        shutdown_signal().await;
+        tracing::info!(
+            tunnels = registry.len(),
+            "closing PC tunnel connections before drain"
+        );
+        registry.close_all().await;
+    };
+    let serve = axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown);
 
     serve.await?;
     tracing::info!("everlasting-remote shutdown complete");
