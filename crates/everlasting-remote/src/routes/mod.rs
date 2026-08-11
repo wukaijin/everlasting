@@ -19,6 +19,7 @@ use axum::Router;
 use crate::config::RemoteState;
 
 pub mod health;
+pub mod nodes;
 pub mod pairing;
 pub mod proxy;
 pub mod ws;
@@ -40,5 +41,6 @@ pub fn router(state: Arc<RemoteState>) -> Router {
     Router::new()
         .merge(ws::router(state.clone()))
         .merge(proxy::router(state.clone()))
-        .merge(pairing::router(state))
+        .merge(pairing::router(state.clone()))
+        .merge(nodes::router(state))
 }
