@@ -17,6 +17,7 @@
 #![allow(clippy::doc_lazy_continuation)]
 #![allow(clippy::doc_overindented_list_items)]
 
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
