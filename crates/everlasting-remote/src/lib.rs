@@ -23,6 +23,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod pending;
+pub mod ratelimit;
 pub mod routes;
 pub mod server;
 pub mod tunnel_registry;

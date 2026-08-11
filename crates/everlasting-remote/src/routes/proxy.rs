@@ -228,6 +228,10 @@ mod tests {
             node_connections: Arc::new(crate::tunnel_registry::TunnelRegistry::new()),
             heartbeat,
             pending: Arc::new(PendingTable::new(pending_timeout)),
+            pairing_ratelimit: Arc::new(crate::ratelimit::RateLimiter::new(
+                1000,
+                Duration::from_secs(60),
+            )),
         });
         let router = crate::server::build_router(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

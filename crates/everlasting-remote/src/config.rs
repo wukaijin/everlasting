@@ -15,6 +15,7 @@ use clap::Parser;
 use sqlx::SqlitePool;
 
 use crate::pending::PendingTable;
+use crate::ratelimit::RateLimiter;
 use crate::tunnel_registry::{HeartbeatConfig, TunnelRegistry};
 
 /// 默认监听端口(design §3.6;`7457` 与 daemon 的 7456 错开)。
@@ -80,6 +81,9 @@ pub struct RemoteState {
     /// 在途请求表(design §3.2.1;Step 6 加)—— proxy 登记,
     /// ws 接收循环按 Response 帧 id 路由回来。
     pub pending: Arc<PendingTable>,
+    /// redeem per-IP 限速(design §2.3 P2-3;Step 7 加)—— 防 6 位码
+    /// 暴力扫。窗口参数放 state 而非模块 const:测试用小值。
+    pub pairing_ratelimit: Arc<RateLimiter>,
 }
 
 impl RemoteState {
@@ -97,6 +101,10 @@ impl RemoteState {
             node_connections: Arc::new(TunnelRegistry::new()),
             heartbeat: HeartbeatConfig::default(),
             pending: Arc::new(PendingTable::new(crate::routes::proxy::PENDING_TIMEOUT)),
+            pairing_ratelimit: Arc::new(RateLimiter::new(
+                crate::routes::pairing::REDEEM_RATE_LIMIT_MAX,
+                crate::routes::pairing::REDEEM_RATE_LIMIT_WINDOW,
+            )),
         }))
     }
 }

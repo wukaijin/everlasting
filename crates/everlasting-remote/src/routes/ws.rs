@@ -223,10 +223,17 @@ async fn receive_loop(
 /// - internal RPC(Step 7)/ Stream SSE 桥接(S3)各自把分支升级为真实实现
 async fn dispatch_frame(state: &Arc<RemoteState>, handle: &Arc<ConnHandle>, frame: Frame) {
     match frame {
-        Frame::Request { id, path, .. } => {
+        Frame::Request { id, path, body, .. } => {
             if path.starts_with(everlasting_remote_protocol::INTERNAL_PREFIX) {
-                // Step 7 实现:handle_internal_rpc(path, body) → Response 帧回发
-                tracing::warn!(node_id = %handle.node_id, id, path = %path, "internal RPC 未实现(Step 7)");
+                // internal RPC(design §2.3.1 P3-2):配对码生成等,
+                // 结果以 Response 帧回 PC
+                if let Some(reply) =
+                    crate::routes::pairing::handle_internal_rpc(state, &handle.node_id, id, &path, &body).await
+                {
+                    if let Err(e) = handle.send_frame(&reply).await {
+                        tracing::warn!(node_id = %handle.node_id, error = %e, "internal RPC reply send failed");
+                    }
+                }
             } else {
                 tracing::debug!(node_id = %handle.node_id, id, path = %path, "ignore PC-originated Request(S1 无此方向)");
             }
@@ -254,6 +261,7 @@ mod tests {
     use crate::db::pool;
     use crate::db::schema;
     use crate::pending::PendingTable;
+    use crate::ratelimit::RateLimiter;
     use crate::tunnel_registry::HeartbeatConfig;
     use std::net::SocketAddr;
     use std::time::Duration;
@@ -282,6 +290,7 @@ mod tests {
             node_connections: Arc::new(TunnelRegistry::new()),
             heartbeat,
             pending: Arc::new(PendingTable::new(Duration::from_secs(60))),
+            pairing_ratelimit: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
         });
         let router = crate::server::build_router(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -534,5 +543,59 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(state.node_connections.len(), 1);
         let _ = ws.close(None).await;
+    }
+
+    // ---- internal RPC 全链路(Step 7)----
+
+    /// PC 经 WSS 发 `/internal/pairing/generate` → 收 Response 帧含
+    /// 6 位码 → 手机 redeem 成功(码绑定该 PC)。
+    #[tokio::test]
+    async fn pairing_generate_via_ws_then_redeem() {
+        let (port, state) = start_server(HeartbeatConfig::default()).await;
+        let mut pc = connect(port, "?secret=test&node_id=pc-1&display_name=公司PC")
+            .await
+            .expect("pc connect");
+        // 等注册(配对码绑定 node_id,node 必须已 upsert)
+        wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
+
+        // PC 发 internal RPC(design §2.3:生成动作由 PC 触发)
+        let req = Frame::Request {
+            id: 1,
+            method: "POST".into(),
+            path: "/internal/pairing/generate".into(),
+            headers: vec![],
+            body: vec![],
+        };
+        pc.send(ClientMessage::Text(serde_json::to_string(&req).unwrap()))
+            .await
+            .expect("send internal rpc");
+
+        // PC 收 Response 帧
+        let msg = tokio::time::timeout(Duration::from_secs(2), pc.next())
+            .await
+            .expect("reply frame")
+            .expect("message")
+            .expect("no error");
+        let ClientMessage::Text(text) = msg else { panic!("expected text") };
+        let Frame::Response { id, status, body, .. } = serde_json::from_str(&text).expect("parse")
+        else {
+            panic!("expected Response frame");
+        };
+        assert_eq!(id, 1);
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        let code = json["code"].as_str().expect("code").to_string();
+        assert_eq!(code.len(), 6);
+        assert_eq!(json["expires_in"], 60);
+
+        // 手机 redeem(crud 层;HTTP 层映射已在 pairing::tests 覆盖)
+        let redeemed = crate::db::crud::redeem_pairing_code(&state.db, &code, "test phone")
+            .await
+            .expect("redeem");
+        assert_eq!(redeemed.node_id, "pc-1");
+        assert_eq!(redeemed.node_display_name, "公司PC");
+        assert_eq!(redeemed.device_token.len(), 64);
+
+        let _ = pc.close(None).await;
     }
 }
