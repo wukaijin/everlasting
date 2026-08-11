@@ -164,6 +164,9 @@ percent-encoding = "2"
 
 [dev-dependencies]
 tempfile = "3"
+# S3 e2e harness:true remote daemon in-process(dev-only,不进 release
+# 依赖图——S3 Step 2 验证:release lib build 保持 0 警告)。
+everlasting-remote = { path = "../../crates/everlasting-remote" }
 # Mock HTTP server for `web_fetch` integration tests. Spin up a
 # localhost mock at runtime; assert on the request the tool sent
 # (URL, headers, redirect chain, etc.) and serve canned responses.

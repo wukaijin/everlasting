@@ -77,10 +77,11 @@ pub async fn proxy_handler(
         .get(&device.node_id)
         .ok_or_else(|| AppError::network("node_offline"))?;
 
-    // 2. request_id + pending 占位(Oneshot;Stream 分支 S3 才用)
+    // 2. request_id + pending 占位(Oneshot;conn_id 供 S3 离线清理
+    //    按连接精确匹配,P1-2)
     let id = state.pending.next_id();
     let (tx, rx) = oneshot::channel();
-    state.pending.insert(id, PendingReply::Oneshot(tx));
+    state.pending.insert(id, conn.conn_id, PendingReply::Oneshot(tx));
 
     // 3. 构造 Request 帧(path 剥 token / headers 剥认证,P2-1)
     let frame = Frame::Request {
