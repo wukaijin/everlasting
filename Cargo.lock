@@ -1530,6 +1530,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "everlasting-remote"
+version = "0.1.0"
+dependencies = [
+ "everlasting-remote-protocol",
+]
+
+[[package]]
+name = "everlasting-remote-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

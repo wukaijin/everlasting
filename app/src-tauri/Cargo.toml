@@ -157,13 +157,3 @@ httpmock = "0.7"
 # a valid gzip body on the mock side to exercise that path). Uses
 # the miniz_oxide backend — no C dependency.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-
-[profile.dev]
-incremental = true
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-panic = "abort"
-strip = true

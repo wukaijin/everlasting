@@ -1,0 +1,13 @@
+[package]
+name = "everlasting-remote"
+version = "0.1.0"
+edition = "2021"
+description = "Edge daemon for the remote-control epic: WSS server + device table + reverse proxy to PC daemons over WSS tunnels."
+
+# Stub for workspace resolution — Step 2 fills in the real binary + deps.
+[dependencies]
+everlasting-remote-protocol = { path = "../everlasting-remote-protocol" }
+
+[lib]
+name = "everlasting_remote"
+path = "src/lib.rs"
