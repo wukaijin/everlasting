@@ -39,7 +39,7 @@ use tokio::sync::oneshot;
 use crate::auth::AuthenticatedDevice;
 use crate::config::RemoteState;
 use crate::error::AppError;
-use crate::pending::{PendingReply, PendingTable};
+use crate::pending::PendingReply;
 
 /// 单条在途请求的等待超时(design §3.2.1 P2-2:60s,超时 502 Network)。
 pub const PENDING_TIMEOUT: Duration = Duration::from_secs(60);
@@ -198,6 +198,7 @@ mod tests {
     use crate::config::RemoteConfig;
     use crate::db::pool;
     use crate::db::schema;
+    use crate::pending::PendingTable;
     use crate::tunnel_registry::HeartbeatConfig;
     use axum::http::StatusCode as HttpStatus;
     use futures_util::{SinkExt, StreamExt};

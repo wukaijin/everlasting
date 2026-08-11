@@ -32,7 +32,6 @@ use crate::config::RemoteState;
 use crate::db::crud::{self, RedeemError};
 use crate::db::now_ms;
 use crate::error::AppError;
-use crate::ratelimit::RateLimiter;
 
 /// redeem 限速(design §2.3 P2-3:10 次/分钟)。
 pub const REDEEM_RATE_LIMIT_MAX: u32 = 10;
@@ -157,6 +156,7 @@ mod tests {
     use crate::db::pool;
     use crate::db::schema;
     use crate::pending::PendingTable;
+    use crate::ratelimit::RateLimiter;
     use crate::tunnel_registry::{HeartbeatConfig, TunnelRegistry};
     use axum::http::StatusCode;
     use sqlx::Row;
