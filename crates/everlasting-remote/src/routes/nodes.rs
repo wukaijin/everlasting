@@ -117,7 +117,10 @@ mod tests {
         token
     }
 
-    async fn list(state: &Arc<RemoteState>, token: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn list(
+        state: &Arc<RemoteState>,
+        token: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         let app = router(state.clone());
         let mut req = axum::http::Request::builder()
             .method("GET")
@@ -125,8 +128,10 @@ mod tests {
             .body(axum::body::Body::empty())
             .expect("build");
         if let Some(t) = token {
-            req.headers_mut()
-                .insert("authorization", format!("Bearer {t}").parse().expect("header"));
+            req.headers_mut().insert(
+                "authorization",
+                format!("Bearer {t}").parse().expect("header"),
+            );
         }
         let resp = app.oneshot(req).await.expect("oneshot");
         let status = resp.status();

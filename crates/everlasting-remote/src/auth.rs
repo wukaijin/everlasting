@@ -49,7 +49,10 @@ pub fn device_token_from_request(headers: &HeaderMap, uri: &Uri) -> Option<Strin
 /// `Authorization: Bearer <token>`;大小写/空白容忍(`Bearer` 大小写
 /// 敏感是 HTTP 惯例,直接按字面匹配)。
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     value
         .strip_prefix("Bearer ")
         .map(str::trim)
@@ -86,7 +89,9 @@ pub async fn require_device_token(
     next: Next,
 ) -> Result<Response, AppError> {
     let token = device_token_from_request(req.headers(), req.uri()).ok_or_else(|| {
-        AppError::auth("missing device token:需要 Authorization: Bearer <token> 或 ?access_token=<token>")
+        AppError::auth(
+            "missing device token:需要 Authorization: Bearer <token> 或 ?access_token=<token>",
+        )
     })?;
 
     let device = db::crud::get_device_by_token(&state.db, &token)
@@ -112,7 +117,7 @@ mod tests {
     use super::*;
     use axum::http::{Method, StatusCode};
     use axum::routing::get;
-    use axum::{Extension, Json, Router, middleware};
+    use axum::{middleware, Extension, Json, Router};
     use tower::ServiceExt;
 
     /// 回显 extension 里的 `AuthenticatedDevice`(验证中间件注入成功)。
@@ -137,7 +142,9 @@ mod tests {
     /// 预置一个 node + 一个未吊销设备,返回 (state, token, node_id)。
     async fn seed_device() -> (Arc<RemoteState>, String, String) {
         let state = test_state().await;
-        db::crud::upsert_node(&state.db, "pc-1", "公司 PC").await.unwrap();
+        db::crud::upsert_node(&state.db, "pc-1", "公司 PC")
+            .await
+            .unwrap();
         let token = "a".repeat(64);
         db::crud::insert_device(&state.db, &token, "pc-1", Some("test phone"))
             .await
@@ -172,7 +179,10 @@ mod tests {
 
     // ---- device_token_from_request ----
 
-    fn req_with(headers: Option<(&'static str, &'static str)>, query: Option<&'static str>) -> (HeaderMap, Uri) {
+    fn req_with(
+        headers: Option<(&'static str, &'static str)>,
+        query: Option<&'static str>,
+    ) -> (HeaderMap, Uri) {
         let mut h = HeaderMap::new();
         if let Some((k, v)) = headers {
             h.insert(k, v.parse().unwrap());
@@ -198,7 +208,10 @@ mod tests {
 
     #[test]
     fn header_wins_over_query() {
-        let (h, u) = req_with(Some(("authorization", "Bearer from-header")), Some("access_token=from-query"));
+        let (h, u) = req_with(
+            Some(("authorization", "Bearer from-header")),
+            Some("access_token=from-query"),
+        );
         assert_eq!(
             device_token_from_request(&h, &u).as_deref(),
             Some("from-header")
@@ -244,10 +257,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(res.into_body(), 1024).await.unwrap(),
-        )
-        .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1024).await.unwrap())
+                .unwrap();
         assert_eq!(body["node_id"], node_id);
         assert_eq!(body["token"], token);
     }
@@ -268,10 +280,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(res.into_body(), 1024).await.unwrap(),
-        )
-        .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1024).await.unwrap())
+                .unwrap();
         assert_eq!(body["node_id"], node_id);
     }
 
@@ -292,10 +303,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(res.into_body(), 1024).await.unwrap(),
-        )
-        .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1024).await.unwrap())
+                .unwrap();
         assert_eq!(body["category"], "Auth");
     }
 
@@ -340,10 +350,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(res.into_body(), 1024).await.unwrap(),
-        )
-        .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1024).await.unwrap())
+                .unwrap();
         assert_eq!(body["category"], "Auth");
     }
 }

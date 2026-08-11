@@ -171,9 +171,7 @@ pub async fn insert_pairing_code(
     .await
     {
         Ok(_) => Ok(()),
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            Err(PairingCodeError::Conflict)
-        }
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Err(PairingCodeError::Conflict),
         Err(e) => Err(PairingCodeError::Db(e)),
     }
 }
@@ -236,13 +234,12 @@ pub async fn redeem_pairing_code(
     let mut tx = pool.begin().await.map_err(RedeemError::Db)?;
 
     // 1. 取码行(不存在 → InvalidOrExpired)
-    let row = sqlx::query(
-        "SELECT code, node_id, expires_at, used FROM pairing_codes WHERE code = ?",
-    )
-    .bind(code)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(RedeemError::Db)?;
+    let row =
+        sqlx::query("SELECT code, node_id, expires_at, used FROM pairing_codes WHERE code = ?")
+            .bind(code)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(RedeemError::Db)?;
     let Some(row) = row else {
         return Err(RedeemError::InvalidOrExpiredCode);
     };
@@ -370,10 +367,17 @@ mod tests {
     async fn upsert_node_inserts_then_updates_without_duplicate() {
         let db: TestDb = test_db().await;
 
-        upsert_node(&db.pool, "pc-1", "公司 PC").await.expect("insert");
-        upsert_node(&db.pool, "pc-1", "公司 PC 改名").await.expect("upsert");
+        upsert_node(&db.pool, "pc-1", "公司 PC")
+            .await
+            .expect("insert");
+        upsert_node(&db.pool, "pc-1", "公司 PC 改名")
+            .await
+            .expect("upsert");
 
-        let node = get_node(&db.pool, "pc-1").await.expect("query").expect("exists");
+        let node = get_node(&db.pool, "pc-1")
+            .await
+            .expect("query")
+            .expect("exists");
         assert_eq!(node.display_name, "公司 PC 改名");
         assert_eq!(node.status, NODE_STATUS_ONLINE);
         assert!(node.last_seen_at > 0);
@@ -390,7 +394,11 @@ mod tests {
     async fn update_node_status_offline_keeps_last_seen_at() {
         let db = test_db().await;
         upsert_node(&db.pool, "pc-1", "PC").await.expect("insert");
-        let last_seen = get_node(&db.pool, "pc-1").await.unwrap().unwrap().last_seen_at;
+        let last_seen = get_node(&db.pool, "pc-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .last_seen_at;
 
         // offline:只改 status,last_seen_at 保留最后在线时刻。
         update_node_status(&db.pool, "pc-1", NODE_STATUS_OFFLINE, last_seen + 1000)
@@ -456,7 +464,10 @@ mod tests {
         assert_eq!(device.revoked, 0);
 
         // 未知 token → None
-        assert!(get_device_by_token(&db.pool, "nope").await.unwrap().is_none());
+        assert!(get_device_by_token(&db.pool, "nope")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     // ---- pairing_codes ----
@@ -551,7 +562,9 @@ mod tests {
             .await
             .unwrap();
 
-        redeem_pairing_code(&db.pool, &code, "dev-1").await.expect("first");
+        redeem_pairing_code(&db.pool, &code, "dev-1")
+            .await
+            .expect("first");
         let err = redeem_pairing_code(&db.pool, &code, "dev-2")
             .await
             .expect_err("second redeem must fail");

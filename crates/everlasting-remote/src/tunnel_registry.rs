@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use dashmap::DashMap;
-use futures_util::{SinkExt, stream::SplitSink};
+use futures_util::{stream::SplitSink, SinkExt};
 use tokio::sync::Mutex;
 
 use crate::db::now_ms;
@@ -46,7 +46,10 @@ pub struct ConnHandle {
 impl ConnHandle {
     /// 发一帧(JSON Text)。写失败 = 连接已死,调用方自行决定处理
     /// (心跳退出 / 代理返 502)。
-    pub async fn send_frame(&self, frame: &everlasting_remote_protocol::Frame) -> Result<(), axum::Error> {
+    pub async fn send_frame(
+        &self,
+        frame: &everlasting_remote_protocol::Frame,
+    ) -> Result<(), axum::Error> {
         let text = serde_json::to_string(frame).expect("Frame 序列化不可能失败");
         self.sink.lock().await.send(Message::Text(text)).await
     }
@@ -118,7 +121,9 @@ impl TunnelRegistry {
     /// 仅当注册表里的连接仍是 `conn_id` 时移除 —— 清理路径专用,
     /// 防止旧连接退出时误删被新连接占用的条目。
     pub fn remove_if_current(&self, node_id: &str, conn_id: u64) -> Option<Arc<ConnHandle>> {
-        self.conns.remove_if(node_id, |_, h| h.conn_id == conn_id).map(|(_, h)| h)
+        self.conns
+            .remove_if(node_id, |_, h| h.conn_id == conn_id)
+            .map(|(_, h)| h)
     }
 
     /// 无条件移除(当前无并发替换场景需要它;保留给诊断/测试)。

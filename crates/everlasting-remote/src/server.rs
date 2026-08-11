@@ -119,8 +119,11 @@ pub async fn serve_remote(state: Arc<RemoteState>, port: u16) -> std::io::Result
         );
         registry.close_all().await;
     };
-    let serve = axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown);
+    let serve = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown);
 
     serve.await?;
     tracing::info!("everlasting-remote shutdown complete");

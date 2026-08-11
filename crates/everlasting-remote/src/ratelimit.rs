@@ -40,10 +40,10 @@ impl RateLimiter {
     /// 超限返回 false(调用方返 429)。
     pub fn allow(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
-        let mut entry = self
-            .inner
-            .entry(ip)
-            .or_insert_with(|| Window { start: now, count: 0 });
+        let mut entry = self.inner.entry(ip).or_insert_with(|| Window {
+            start: now,
+            count: 0,
+        });
         if now.duration_since(entry.start) >= self.window {
             // 窗口过期:滚动新窗口
             entry.start = now;

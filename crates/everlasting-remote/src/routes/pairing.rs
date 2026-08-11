@@ -128,7 +128,11 @@ pub async fn handle_internal_rpc(
                 }
                 Err(e) => {
                     tracing::error!(node_id, error = %e, "pairing code generation failed");
-                    Some(rpc_response(id, 500, serde_json::json!({ "error": e.to_string() })))
+                    Some(rpc_response(
+                        id,
+                        500,
+                        serde_json::json!({ "error": e.to_string() }),
+                    ))
                 }
             }
         }
@@ -257,18 +261,26 @@ mod tests {
         let state = test_state(RateLimiter::new(100, Duration::from_secs(60))).await;
 
         // 不存在的码
-        let (status, body) =
-            redeem_request(&state, serde_json::json!({ "code": "999999", "device_name": "d" }))
-                .await;
+        let (status, body) = redeem_request(
+            &state,
+            serde_json::json!({ "code": "999999", "device_name": "d" }),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["message"], "invalid_or_expired_code");
 
         // 重复 redeem(先成功一次)
         let code = seed_code(&state).await;
-        redeem_request(&state, serde_json::json!({ "code": code, "device_name": "d" }))
-            .await;
-        let (status, _) =
-            redeem_request(&state, serde_json::json!({ "code": code, "device_name": "d" })).await;
+        redeem_request(
+            &state,
+            serde_json::json!({ "code": code, "device_name": "d" }),
+        )
+        .await;
+        let (status, _) = redeem_request(
+            &state,
+            serde_json::json!({ "code": code, "device_name": "d" }),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
 
         // 过期码
@@ -292,18 +304,24 @@ mod tests {
     async fn redeem_rate_limited_after_max_attempts() {
         let state = test_state(RateLimiter::new(2, Duration::from_secs(60))).await;
         // 前 2 次:码无效(400)也消耗配额 —— 限速在码校验之前
-        let (s1, _) =
-            redeem_request(&state, serde_json::json!({ "code": "000000", "device_name": "d" }))
-                .await;
-        let (s2, _) =
-            redeem_request(&state, serde_json::json!({ "code": "000000", "device_name": "d" }))
-                .await;
+        let (s1, _) = redeem_request(
+            &state,
+            serde_json::json!({ "code": "000000", "device_name": "d" }),
+        )
+        .await;
+        let (s2, _) = redeem_request(
+            &state,
+            serde_json::json!({ "code": "000000", "device_name": "d" }),
+        )
+        .await;
         assert_eq!(s1, StatusCode::BAD_REQUEST);
         assert_eq!(s2, StatusCode::BAD_REQUEST);
 
-        let (s3, body) =
-            redeem_request(&state, serde_json::json!({ "code": "000000", "device_name": "d" }))
-                .await;
+        let (s3, body) = redeem_request(
+            &state,
+            serde_json::json!({ "code": "000000", "device_name": "d" }),
+        )
+        .await;
         assert_eq!(s3, StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(body["category"], "RateLimit");
     }
@@ -320,7 +338,9 @@ mod tests {
                     .method("POST")
                     .uri("/api/v1/pairing/redeem")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(r#"{"code":"000000","device_name":"d"}"#))
+                    .body(axum::body::Body::from(
+                        r#"{"code":"000000","device_name":"d"}"#,
+                    ))
                     .expect("build");
                 let mut req = req;
                 req.extensions_mut().insert(ConnectInfo::<SocketAddr>(ip));
@@ -331,7 +351,11 @@ mod tests {
         let ip_b = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 1);
         assert_eq!(send(ip_a).await, StatusCode::BAD_REQUEST);
         assert_eq!(send(ip_a).await, StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(send(ip_b).await, StatusCode::BAD_REQUEST, "其他 IP 独立配额");
+        assert_eq!(
+            send(ip_b).await,
+            StatusCode::BAD_REQUEST,
+            "其他 IP 独立配额"
+        );
     }
 
     // ---- internal RPC ----
@@ -347,7 +371,10 @@ mod tests {
         let frame = handle_internal_rpc(&state, "pc-1", 7, "/internal/pairing/generate", b"")
             .await
             .expect("known rpc returns response");
-        let Frame::Response { id, status, body, .. } = frame else {
+        let Frame::Response {
+            id, status, body, ..
+        } = frame
+        else {
             panic!("expected Response frame");
         };
         assert_eq!(id, 7);

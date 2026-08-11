@@ -71,7 +71,9 @@ mod tests {
     #[tokio::test]
     async fn run_migrations_is_idempotent() {
         let db: TestDb = test_db().await;
-        run_migrations(&db.pool).await.expect("second run must succeed");
+        run_migrations(&db.pool)
+            .await
+            .expect("second run must succeed");
     }
 
     /// 三表 + 索引都建出来了。
