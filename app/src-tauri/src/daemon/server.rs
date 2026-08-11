@@ -27,7 +27,7 @@
 //! `PermissionStore`, etc. are all `Arc`-internal and safe to share.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,20 +109,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 ///
 /// Resolution order:
 /// 1. `EVERLASTING_DIST_DIR` env var (operator / test override; absolute).
-/// 2. Default: walk up from the *daemon executable* until we find a
-///    directory whose name is `src-tauri`, then take its sibling `../dist`.
-///    This matches the Tauri layout where `app/src-tauri/` holds the
-///    Rust crate and `app/dist/` holds the vite build output. Walking up
-///    (rather than hard-coding `../../dist`) is required because the
-///    daemon binary lives at different depths across build modes:
-///    - sidecar (P2.4 staging): `app/src-tauri/binaries/everlasting-daemon-<triple>`
-///      → one `..` to `src-tauri`, then `../dist`
-///    - `cargo build --release` (manual test / dogfood):
-///      `app/src-tauri/target/release/everlasting-daemon`
-///      → three `..` to `src-tauri`, then `../dist`
-///    - `cargo build` (debug): `app/src-tauri/target/debug/...`
-///    Using `current_exe()` (not `env!("CARGO_MANIFEST_DIR")`) keeps
-///    production single-binary deploys working regardless of install layout.
+/// 2. Default: walk up from the *daemon executable* to locate `app/dist`
+///    ([`find_dist_dir`]). Walking up (rather than hard-coding a relative
+///    path) is required because the daemon binary lives at different
+///    depths across build modes — see [`find_dist_dir`] for the layout
+///    table. Using `current_exe()` (not `env!("CARGO_MANIFEST_DIR")`)
+///    keeps production single-binary deploys working regardless of
+///    install layout.
 ///
 /// Returns `None` when nothing resolves — callers treat that as
 /// "API-only mode" (no frontend built, or daemon-only deployment).
@@ -137,22 +130,42 @@ pub fn resolve_dist_dir() -> Option<PathBuf> {
             "EVERLASTING_DIST_DIR set but not a directory; ignoring"
         );
     }
-    // Default: walk up from the daemon executable looking for a `src-tauri`
-    // directory (the crate root). `current_exe()` is the canonical
-    // cross-platform way to locate co-bundled assets; CARGO_MANIFEST_DIR
-    // only exists at build time. Walk at most 10 levels to bound the scan.
-    let exe = std::env::current_exe().ok()?;
+    find_dist_dir(&std::env::current_exe().ok()?)
+}
+
+/// Locate `app/dist` by walking up from a daemon executable path.
+/// `current_exe()` is the canonical cross-platform way to locate
+/// co-bundled assets; CARGO_MANIFEST_DIR only exists at build time.
+/// Walk at most 10 levels to bound the scan.
+///
+/// Two layouts are recognized:
+/// 1. **Tauri crate-root layout** (sidecar staging + pre-workspace
+///    cargo): an ancestor named `src-tauri` → sibling `dist`.
+///    - sidecar (P2.4 staging): `app/src-tauri/binaries/everlasting-daemon-<triple>`
+///      → one `..` to `src-tauri`, then `../dist`
+///    - pre-workspace `cargo build --release`:
+///      `app/src-tauri/target/release/everlasting-daemon`
+///      → three `..` to `src-tauri`, then `../dist`
+/// 2. **Workspace layout** (2026-08-11 flip): the daemon binary now
+///    lands at `<workspace>/target/<profile>/everlasting-daemon`, with
+///    no `src-tauri` ancestor on the way up. Detect the workspace root
+///    via its `app/src-tauri` child and take `app/dist`.
+///
+/// When layout 1's `src-tauri` is found but its sibling `dist` is
+/// missing, the search stops (never falls through to an unrelated
+/// `dist` higher up — the original P2.4 D4 guard).
+fn find_dist_dir(exe: &Path) -> Option<PathBuf> {
     let mut dir = exe.parent()?;
     for _ in 0..10 {
         if dir.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
-            // Found crate root; `dist` is a sibling of `src-tauri`.
+            // Layout 1: `dist` is a sibling of the crate root.
             let dist = dir.parent()?.join("dist");
-            if let Some(c) = dist.canonicalize().ok().filter(|p| p.is_dir()) {
-                return Some(c);
-            }
-            // `src-tauri` found but no sibling `dist` — stop searching so
-            // we don't accidentally pick up an unrelated `dist` higher up.
-            return None;
+            return dist.canonicalize().ok().filter(|p| p.is_dir());
+        }
+        if dir.join("app/src-tauri").is_dir() {
+            // Layout 2: workspace root — `dist` lives under `app/`.
+            let dist = dir.join("app/dist");
+            return dist.canonicalize().ok().filter(|p| p.is_dir());
         }
         dir = dir.parent()?;
     }
@@ -382,6 +395,65 @@ mod tests {
         // Must not panic; result is host-dependent (default path).
         let _ = resolve_dist_dir();
         std::env::remove_var("EVERLASTING_DIST_DIR");
+    }
+
+    // ---- find_dist_dir:纯路径单测(不碰 env / current_exe,并行安全)----
+
+    /// Layout 1(pre-workspace / sidecar):exe 在 `src-tauri/target/...`
+    /// 之下 → 找到 src-tauri 的兄弟 `dist`。
+    #[test]
+    fn find_dist_dir_pre_workspace_layout() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let src_tauri = tmp.path().join("src-tauri");
+        let dist = tmp.path().join("dist");
+        std::fs::create_dir_all(src_tauri.join("target/release")).unwrap();
+        std::fs::create_dir_all(&dist).unwrap();
+        let exe = src_tauri.join("target/release/everlasting-daemon");
+
+        assert_eq!(find_dist_dir(&exe), Some(dist.canonicalize().unwrap()));
+    }
+
+    /// Layout 2(2026-08-11 workspace 翻转):exe 在 `<workspace>/target/...`
+    /// 之下,祖先里没有 `src-tauri` → 靠 `app/src-tauri` 标记定位
+    /// workspace 根,取 `app/dist`。这是 daemon.sh 指向根 target 后
+    /// 浏览器模式必须命中的路径。
+    #[test]
+    fn find_dist_dir_workspace_layout() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let app = tmp.path().join("app");
+        std::fs::create_dir_all(app.join("src-tauri")).unwrap();
+        std::fs::create_dir_all(app.join("dist")).unwrap();
+        let exe = tmp.path().join("target/release/everlasting-daemon");
+
+        assert_eq!(
+            find_dist_dir(&exe),
+            Some(app.join("dist").canonicalize().unwrap()),
+            "workspace layout must resolve to app/dist"
+        );
+    }
+
+    /// Layout 1 命中 `src-tauri` 但兄弟 `dist` 缺失 → 停(不上溯),
+    /// 即使 src-tauri 之上还有无关的 `dist`(P2.4 D4 的防串味守卫)。
+    #[test]
+    fn find_dist_dir_stops_at_src_tauri_without_dist() {
+        let outer = tempfile::tempdir().expect("create outer tempdir");
+        // 无关 dist 放在 src-tauri 之上(外层);inner 里 src-tauri 的
+        // 兄弟没有 dist —— 必须返回 None,不能上溯命中 outer/dist。
+        std::fs::create_dir_all(outer.path().join("dist")).unwrap();
+        let inner = outer.path().join("inner");
+        std::fs::create_dir_all(inner.join("src-tauri/target/release")).unwrap();
+        let exe = inner.join("src-tauri/target/release/everlasting-daemon");
+
+        assert_eq!(find_dist_dir(&exe), None);
+    }
+
+    /// 什么布局都不命中 → None(纯 API 模式)。
+    #[test]
+    fn find_dist_dir_none_when_no_layout_matches() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        std::fs::create_dir_all(tmp.path().join("target/release")).unwrap();
+        let exe = tmp.path().join("target/release/everlasting-daemon");
+        assert_eq!(find_dist_dir(&exe), None);
     }
 
     /// Graceful shutdown 端到端:有活跃 SSE 长连接时,daemon 收到

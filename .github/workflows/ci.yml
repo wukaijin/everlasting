@@ -52,9 +52,12 @@ jobs:
           components: rustfmt
 
       # rust-cache 兜住 vendored-libgit2 的 C 编译产物 (~60s/次)
+      # 2026-08-11 workspace 翻转(task 08-11-remote-daemon-core)后
+      # Cargo.lock 与产物 target/ 都在 workspace 根 —— 缓存键必须跟着
+      # 移到根,否则每次 CI 全量编译(P3-3 修订)。
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: 'app/src-tauri'
+          workspaces: '.'
 
       - name: cargo fmt --check
         run: cargo fmt --check

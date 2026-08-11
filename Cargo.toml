@@ -14,8 +14,12 @@ resolver = "2"
 
 # Avoid pulling Tauri's heavy compile graph when someone runs a bare
 # `cargo build` at the repo root. The daemon + GUI must be built
-# explicitly (`cargo build -p everlasting` / `--bin everlasting-daemon`)
-# — behavior unchanged from pre-workspace days.
+# explicitly: from the repo root `cargo build -p everlasting [--bin
+# everlasting-daemon]`, or from inside `app/src-tauri/` (where daemon.sh
+# and CI run) plain `cargo build --bin everlasting-daemon` — the member
+# directory makes that package the current one, so `--bin` resolves
+# without `-p`. Note: `--bin` WITHOUT `-p` at the repo root only looks
+# in the default members, so it cannot see the daemon.
 default-members = [
     "crates/everlasting-remote",
     "crates/everlasting-remote-protocol",
