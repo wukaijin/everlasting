@@ -4,10 +4,39 @@ version = "0.1.0"
 edition = "2021"
 description = "Edge daemon for the remote-control epic: WSS server + device table + reverse proxy to PC daemons over WSS tunnels."
 
-# Stub for workspace resolution — Step 2 fills in the real binary + deps.
+# Step 2 (task 08-11-remote-daemon-core): full dep set declared up front so
+# Steps 3-8 (DB / auth / WSS / proxy / pairing / nodes) only write code and
+# never touch Cargo.toml. Zero system-library deps (no libgit2 / Tauri /
+# agent core) — must produce a plain ubuntu ELF via `cargo build --release`.
+#
+# - axum `ws` feature (not default in 0.7): WSS upgrade for PC-daemon
+#   outbound connections (design §1.2). We use axum's `extract::ws`
+#   abstraction directly (Ping frames etc. are constructible via
+#   `Message::Ping`), so no direct tokio-tungstenite dep — axum already
+#   pulls it internally (0.24). Declaring our own would duplicate the copy.
 [dependencies]
 everlasting-remote-protocol = { path = "../everlasting-remote-protocol" }
 
-[lib]
-name = "everlasting_remote"
-path = "src/lib.rs"
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "net", "sync"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dashmap = "6"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.6", features = ["fs"] }
+subtle = "2"
+clap = { version = "4", features = ["derive"] }
+hostname = "0.4"
+# per-process `remote_id` in the health response (same pattern as daemon
+# `HealthResponse.daemon_id`); pure-Rust, already in the daemon's lockfile.
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+# oneshot router tests (`ServiceExt::oneshot`) — same pattern as daemon
+# `routes::tests` (app/src-tauri has tower as a runtime dep; remote only
+# needs it in tests).
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
