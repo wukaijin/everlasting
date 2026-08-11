@@ -19,6 +19,7 @@ use axum::Router;
 use crate::config::RemoteState;
 
 pub mod health;
+pub mod proxy;
 pub mod ws;
 
 /// 装配 remote 的领域路由(design §1.2 / §3.1)。签名带
@@ -35,5 +36,7 @@ pub mod ws;
 /// `/health` + `/api/v1/health` 都挂在 `server::build_router`,这里
 /// 再挂会撞 axum 的 overlapping route panic)。
 pub fn router(state: Arc<RemoteState>) -> Router {
-    Router::new().merge(ws::router(state))
+    Router::new()
+        .merge(ws::router(state.clone()))
+        .merge(proxy::router(state))
 }

@@ -34,6 +34,7 @@ use crate::auth;
 use crate::config::RemoteState;
 use crate::db::{self, NODE_STATUS_OFFLINE, NODE_STATUS_ONLINE};
 use crate::error::AppError;
+use crate::pending::PendingReply;
 use crate::tunnel_registry::{ConnHandle, HeartbeatConfig, TunnelRegistry};
 
 /// WSS 握手 query 参数(design §2.1)。Query 提取器自动 percent-decode
@@ -218,8 +219,9 @@ async fn receive_loop(
 }
 
 /// 帧分派(P3-2):internal RPC / 普通 Request / Response / Stream。
-/// Step 6/7 各自把 TODO 分支升级为真实实现。
-async fn dispatch_frame(_state: &Arc<RemoteState>, handle: &Arc<ConnHandle>, frame: Frame) {
+/// - `Response` → pending 表按 id 路由回等待方(Step 6 落地)
+/// - internal RPC(Step 7)/ Stream SSE 桥接(S3)各自把分支升级为真实实现
+async fn dispatch_frame(state: &Arc<RemoteState>, handle: &Arc<ConnHandle>, frame: Frame) {
     match frame {
         Frame::Request { id, path, .. } => {
             if path.starts_with(everlasting_remote_protocol::INTERNAL_PREFIX) {
@@ -229,9 +231,18 @@ async fn dispatch_frame(_state: &Arc<RemoteState>, handle: &Arc<ConnHandle>, fra
                 tracing::debug!(node_id = %handle.node_id, id, path = %path, "ignore PC-originated Request(S1 无此方向)");
             }
         }
-        Frame::Response { id, .. } | Frame::Stream { id, .. } => {
-            // Step 6 实现:pending 表路由(oneshot / stream channel)
-            tracing::debug!(node_id = %handle.node_id, id, "Response/Stream 帧:pending 路由未实现(Step 6)");
+        Frame::Response { id, .. } => {
+            // 非流式回复:路由回 proxy 的 oneshot 等待方。未知 id →
+            // 协议异常(warn,不关闭连接 —— 单条丢弃)。
+            if let Some(PendingReply::Oneshot(tx)) = state.pending.remove(id) {
+                let _ = tx.send(frame);
+            } else {
+                tracing::warn!(node_id = %handle.node_id, id, "Response for unknown/unmatched request id");
+            }
+        }
+        Frame::Stream { id, .. } => {
+            // S3:SSE 桥接 —— Chunk/End/Error 经 mpsc 送手机 SSE 连接
+            tracing::debug!(node_id = %handle.node_id, id, "Stream 帧:SSE 桥接留 S3");
         }
     }
 }
@@ -242,6 +253,7 @@ mod tests {
     use crate::config::RemoteConfig;
     use crate::db::pool;
     use crate::db::schema;
+    use crate::pending::PendingTable;
     use crate::tunnel_registry::HeartbeatConfig;
     use std::net::SocketAddr;
     use std::time::Duration;
@@ -269,6 +281,7 @@ mod tests {
             shared_secret: config.shared_secret,
             node_connections: Arc::new(TunnelRegistry::new()),
             heartbeat,
+            pending: Arc::new(PendingTable::new(Duration::from_secs(60))),
         });
         let router = crate::server::build_router(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

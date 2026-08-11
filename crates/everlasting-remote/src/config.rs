@@ -14,6 +14,7 @@ use std::sync::Arc;
 use clap::Parser;
 use sqlx::SqlitePool;
 
+use crate::pending::PendingTable;
 use crate::tunnel_registry::{HeartbeatConfig, TunnelRegistry};
 
 /// 默认监听端口(design §3.6;`7457` 与 daemon 的 7456 错开)。
@@ -66,7 +67,7 @@ pub struct RemoteConfig {
 /// `{ db, shared_secret, node_connections, pending }` 最终形态一致):
 /// - Step 3 落地:`db` + `shared_secret`
 /// - Step 5 加:`node_connections`(WSS 注册表)+ `heartbeat`(心跳参数)
-/// - Step 6 加:`pending`(request_id → PendingReply)
+/// - Step 6 加:`pending`(request_id → PendingReply,在途请求表)
 #[derive(Debug)]
 pub struct RemoteState {
     pub db: SqlitePool,
@@ -76,6 +77,9 @@ pub struct RemoteState {
     /// 心跳参数(design §2.4:30s ping / 90s 判离线)。放 state 而非
     /// 模块 const:测试用小间隔构造 state,生产走 `Default`。
     pub heartbeat: HeartbeatConfig,
+    /// 在途请求表(design §3.2.1;Step 6 加)—— proxy 登记,
+    /// ws 接收循环按 Response 帧 id 路由回来。
+    pub pending: Arc<PendingTable>,
 }
 
 impl RemoteState {
@@ -92,6 +96,7 @@ impl RemoteState {
             shared_secret: config.shared_secret.clone(),
             node_connections: Arc::new(TunnelRegistry::new()),
             heartbeat: HeartbeatConfig::default(),
+            pending: Arc::new(PendingTable::new(crate::routes::proxy::PENDING_TIMEOUT)),
         }))
     }
 }
