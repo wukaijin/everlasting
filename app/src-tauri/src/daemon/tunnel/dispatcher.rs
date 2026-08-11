@@ -1,4 +1,4 @@
-//! loopback 转发(design §2.2 / implement.md Step 4)。
+//! loopback 转发(design §2.2 / implement.md Step 4 / S3 Step 4)。
 //!
 //! 收到 remote 的 `Frame::Request { id, method, path, headers, body }`:
 //! 1. reqwest 打 `http://localhost:{local_port}{path}`(Q-T6:端口由
@@ -6,7 +6,8 @@
 //!    函数、不绕过 axum —— Q7 决策)
 //! 2. 非流式 → 读完 body → `Frame::Response { id, status, headers, body }`
 //! 3. 流式(`Content-Type: text/event-stream`)→ [`sse_bridge`] 逐 chunk
-//!    转 `Stream::Chunk` → `End` / `Error`
+//!    转 `Stream::Chunk` → `End` / `Error`;转发前
+//!    `manager.register_stream_cancel(id)`(S3:remote 发 End 时取消)
 //!
 //! header 透传规则(design §2.2):
 //! - `Authorization` / `?access_token=` 由 **remote 侧**剥净(S1 契约单源,
@@ -21,8 +22,10 @@
 use axum::http::{HeaderName, HeaderValue, Method};
 use everlasting_remote_protocol::Frame;
 use reqwest::header::CONTENT_TYPE;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use super::manager::TunnelManager;
 use crate::daemon::tunnel::{sse_bridge, TUNNEL_TARGET};
 
 /// 单请求转发(serve loop 每收一个 `Frame::Request` spawn 一个)。
@@ -36,6 +39,7 @@ pub async fn dispatch_one(
     local_port: u16,
     client: reqwest::Client,
     tx: mpsc::UnboundedSender<Frame>,
+    manager: Arc<TunnelManager>,
 ) {
     tracing::info!(target: TUNNEL_TARGET, id, method = %method, path = %path, "tunnel_request");
 
@@ -92,8 +96,12 @@ pub async fn dispatch_one(
         .unwrap_or(false);
 
     if is_sse {
-        // SSE 流式路径(design §2.3):纯字节透传,不解析 SSE 语义
-        sse_bridge::forward_stream(id, resp, tx).await;
+        // SSE 流式路径(design §2.3):纯字节透传,不解析 SSE 语义。
+        // 注册取消令牌 —— remote 发 End(手机断 SSE / node 离线)时
+        // sse_bridge select! 退出停转发(S3,D1:agent 不停)。
+        let token = manager.register_stream_cancel(id);
+        sse_bridge::forward_stream(id, resp, tx, token).await;
+        manager.stream_cancel_finish(id);
     } else {
         let headers = response_headers(resp.headers());
         match resp.bytes().await {

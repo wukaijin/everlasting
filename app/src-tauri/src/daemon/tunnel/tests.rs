@@ -27,7 +27,9 @@ use tokio_tungstenite::tungstenite::Message;
 use super::manager::TunnelManager;
 use super::TunnelConfig;
 
-fn test_cfg(remote_port: u16) -> TunnelConfig {
+/// 下面几个 helper 同时被 S3 e2e harness(`e2e_tests.rs`)复用
+/// (implement P2-2 2a:lib 内 `#[cfg(test)]` 可见私有 helper,零复制)。
+pub(super) fn test_cfg(remote_port: u16) -> TunnelConfig {
     TunnelConfig {
         remote_url: format!("ws://127.0.0.1:{remote_port}"),
         shared_secret: "test-secret".into(),
@@ -39,7 +41,7 @@ fn test_cfg(remote_port: u16) -> TunnelConfig {
 /// fake loopback daemon(模拟 PC daemon 自己的 axum):
 /// - `GET /api/v1/health` → 200 `{"ok":true}`
 /// - `GET /api/v1/stream` → SSE(2 个 chunk)
-async fn spawn_fake_loopback() -> u16 {
+pub(super) async fn spawn_fake_loopback() -> u16 {
     async fn health() -> axum::Json<serde_json::Value> {
         axum::Json(serde_json::json!({ "ok": true }))
     }
@@ -70,7 +72,7 @@ async fn spawn_fake_loopback() -> u16 {
 }
 
 /// 轮询 manager 状态直到 connected。
-async fn wait_for_connected(manager: &Arc<TunnelManager>, timeout: Duration) {
+pub(super) async fn wait_for_connected(manager: &Arc<TunnelManager>, timeout: Duration) {
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
         if manager.status().connected {
@@ -82,7 +84,9 @@ async fn wait_for_connected(manager: &Arc<TunnelManager>, timeout: Duration) {
 }
 
 /// 从 fake remote 侧读下一个文本帧并解析成 `Frame`。
-async fn next_frame(ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Frame {
+pub(super) async fn next_frame(
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+) -> Frame {
     let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
         .await
         .expect("frame timeout")
@@ -441,6 +445,164 @@ async fn remote_drop_triggers_backoff_reconnect() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
+    manager.stop();
+}
+
+// ---------------------------------------------------------------------------
+// 6. S3 取消接收:remote 发 End → sse_bridge 停转发 → loopback 订阅断
+// ---------------------------------------------------------------------------
+
+/// fake loopback 的**持续流**版本:每 20ms 发一个 chunk,永不自闭;
+/// 通过 `active` 计数器暴露当前 SSE 订阅数(body stream 被 drop =
+/// 客户端断开 → unfold 的 guard drop → 计数减一)。
+async fn spawn_endless_loopback() -> (u16, Arc<AtomicUsize>) {
+    use axum::extract::State;
+
+    struct ConnGuard(Arc<AtomicUsize>);
+    impl Drop for ConnGuard {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    async fn sse_endless(State(active): State<Arc<AtomicUsize>>) -> axum::response::Response {
+        active.fetch_add(1, Ordering::SeqCst);
+        let guard = ConnGuard(active.clone());
+        let stream = futures_util::stream::unfold(guard, |guard| async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Some((
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"data:ping\n\n")),
+                guard,
+            ))
+        });
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from_stream(stream))
+            .expect("build sse body")
+    }
+
+    let active = Arc::new(AtomicUsize::new(0));
+    async fn health() -> axum::Json<serde_json::Value> {
+        axum::Json(serde_json::json!({ "ok": true }))
+    }
+    let router = axum::Router::new()
+        .route("/api/v1/stream", get(sse_endless))
+        .route("/api/v1/health", get(health))
+        .with_state(active.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let port = listener.local_addr().expect("local_addr").port();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve loopback");
+    });
+    (port, active)
+}
+
+/// S3 取消接收:remote 发 `Stream{End}`(取消信号,D3)→ client.rs →
+/// `cancel_stream` → sse_bridge select! 退出 → drop resp → **loopback
+/// SSE 订阅断**(`active` 计数器归零)。连接与后续新请求不受影响
+/// (stream_cancels 无泄漏)。
+#[tokio::test]
+async fn remote_cancel_stops_stream_forwarding() {
+    let (loopback_port, active) = spawn_endless_loopback().await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind remote");
+    let remote_port = listener.local_addr().expect("local_addr").port();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut ws = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+
+        // remote → PC:SSE 请求(持续流)
+        let req = Frame::Request {
+            id: 88,
+            method: "GET".into(),
+            path: "/api/v1/stream".into(),
+            headers: vec![("Accept".into(), "text/event-stream".into())],
+            body: vec![],
+        };
+        ws.send(Message::Text(serde_json::to_string(&req).unwrap()))
+            .await
+            .expect("send sse request");
+
+        // 等转发建立:loopback 出现 1 个订阅者(active 0 → 1)
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if active.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "loopback 订阅未建立(active={})",
+                active.load(Ordering::SeqCst)
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // remote 发取消信号(手机断 SSE → 停转发)
+        ws.send(Message::Text(
+            serde_json::to_string(&Frame::Stream {
+                id: 88,
+                event: everlasting_remote_protocol::StreamEvent::End,
+            })
+            .unwrap(),
+        ))
+        .await
+        .expect("send cancel");
+
+        // 断言:sse_bridge 退出 → drop resp → loopback SSE 订阅断(归零)。
+        // 这是"停转发"的可观测落点 —— 持续流若不取消,订阅数恒为 1。
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if active.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "取消后 loopback 订阅必须断开(active={})",
+                active.load(Ordering::SeqCst)
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // 连接仍活:新请求(id 89,非流式)正常往返
+        let req2 = Frame::Request {
+            id: 89,
+            method: "GET".into(),
+            path: "/api/v1/health".into(),
+            headers: vec![],
+            body: vec![],
+        };
+        ws.send(Message::Text(serde_json::to_string(&req2).unwrap()))
+            .await
+            .expect("send health request");
+        let frame = next_frame(&mut ws).await;
+        let Frame::Response {
+            id, status, body, ..
+        } = frame
+        else {
+            panic!("expected Response, got {frame:?}");
+        };
+        assert_eq!(id, 89);
+        assert_eq!(status, 200);
+        assert_eq!(body, br#"{"ok":true}"#);
+
+        let _ = ws.close(None).await;
+    });
+
+    let manager = TunnelManager::new();
+    manager.set_local_port(loopback_port);
+    manager.start();
+    manager.set_config(Some(test_cfg(remote_port)));
+    wait_for_connected(&manager, Duration::from_secs(5)).await;
+
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .expect("fake remote completed")
+        .expect("fake remote panicked");
 
     manager.stop();
 }

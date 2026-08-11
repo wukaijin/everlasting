@@ -79,6 +79,10 @@ pub struct TunnelManager {
     conn: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// 等待 `Frame::Response` 的 RPC 等待方(id → oneshot)。
     pending: Mutex<HashMap<u64, oneshot::Sender<Frame>>>,
+    /// 在途 SSE 流的取消令牌(id → token,S3)。dispatcher 的 SSE 分支
+    /// 注册,client.rs 收到 remote 的 `Stream::End/Error`(取消信号,
+    /// D3)时 `cancel_stream`;转发结束后 dispatcher 清理。
+    stream_cancels: Mutex<HashMap<u64, CancellationToken>>,
     /// RPC 帧 id 分配器(进程内单调)。
     next_rpc_id: AtomicU64,
     /// 状态快照(`get_tunnel_status` 读)。
@@ -97,6 +101,7 @@ impl TunnelManager {
             local_port: AtomicU16::new(crate::daemon::server::DEFAULT_DAEMON_PORT),
             conn: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
+            stream_cancels: Mutex::new(HashMap::new()),
             next_rpc_id: AtomicU64::new(1),
             status: Mutex::new(TunnelStatus::default()),
         })
@@ -189,6 +194,39 @@ impl TunnelManager {
     /// 取出并消费 id 对应的等待方(client serve loop 收到 Response 时调)。
     pub fn pending_remove(&self, id: u64) -> Option<oneshot::Sender<Frame>> {
         self.pending.lock().unwrap().remove(&id)
+    }
+
+    /// dispatcher 的 SSE 分支调用:注册流 id 的取消令牌,转发期间可被
+    /// [`Self::cancel_stream`] 取消。id 来自 remote 的 request_id
+    /// (全局单调,不会重复)。返回的 token 传给
+    /// `sse_bridge::forward_stream`,select! 监听它退出。
+    pub fn register_stream_cancel(&self, id: u64) -> CancellationToken {
+        let token = CancellationToken::new();
+        self.stream_cancels
+            .lock()
+            .unwrap()
+            .insert(id, token.clone());
+        token
+    }
+
+    /// client.rs 收到 remote → PC 的 `Stream::End/Error`(取消信号,
+    /// D3 不加新帧)时调用:取消该流的转发(sse_bridge select! 退出 →
+    /// drop reqwest resp → loopback SSE 订阅断;**agent 不停**,
+    /// SseRegistry 是 broadcast,D1)。未知 id 忽略(幂等,与转发结束
+    /// 竞态安全)。
+    pub fn cancel_stream(&self, id: u64) {
+        if let Some(token) = self.stream_cancels.lock().unwrap().remove(&id) {
+            token.cancel();
+            tracing::debug!(target: TUNNEL_TARGET, id, "stream_cancelled reason=client_gone");
+        } else {
+            tracing::debug!(target: TUNNEL_TARGET, id, "cancel_stream for unknown id (already finished)");
+        }
+    }
+
+    /// 流转发正常结束后清理令牌(dispatcher 调)。与 `cancel_stream`
+    /// 的 remove 竞态安全 —— 谁先移除谁生效,cancel 已生效则此处 no-op。
+    pub fn stream_cancel_finish(&self, id: u64) {
+        self.stream_cancels.lock().unwrap().remove(&id);
     }
 
     fn next_rpc_id(&self) -> u64 {

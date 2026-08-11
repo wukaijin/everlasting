@@ -12,8 +12,9 @@
 //!   auth 类错误)→ **停止重连**(配置错误,重连无意义,design §6.2)。
 //! - 收到 `Frame::Request` → spawn `dispatcher::dispatch_one` 打 loopback。
 //! - 收到 `Frame::Response` → 路由 `TunnelManager` 的 pending 表(配对 RPC)。
-//! - 收到 `Frame::Stream` → remote → PC 方向,SSE 桥接 + 取消传播留 S3
-//!   联调(Q-T3,S2 只 log)。
+//! - 收到 `Frame::Stream` → remote → PC 方向的**取消信号**(S3,D3 不加
+//!   新帧):remote 侧手机断 SSE / node 离线 → 发 `End/Error` →
+//!   `manager.cancel_stream(id)` → sse_bridge 停转发;agent 不停。
 //!
 //! 日志 target `everlasting::daemon::tunnel`(design §6.1 文案)。
 
@@ -270,8 +271,12 @@ async fn serve_loop(
                                 // 这里不重复打日志。
                                 let tx = frame_tx.clone();
                                 let client = client.clone();
+                                let manager = manager.clone();
                                 tokio::spawn(async move {
-                                    dispatcher::dispatch_one(id, method, path, headers, body, local_port, client, tx).await;
+                                    dispatcher::dispatch_one(
+                                        id, method, path, headers, body, local_port, client, tx, manager,
+                                    )
+                                    .await;
                                 });
                             }
                             Ok(frame @ Frame::Response { id, .. }) => {
@@ -282,10 +287,22 @@ async fn serve_loop(
                                     tracing::warn!(target: TUNNEL_TARGET, id, "Response for unknown/unmatched request id");
                                 }
                             }
-                            Ok(Frame::Stream { id, .. }) => {
-                                // remote → PC 的 Stream 帧:SSE 桥接 + 取消
-                                // 传播留 S3 联调(Q-T3,S2 只 log 不动作)
-                                tracing::debug!(target: TUNNEL_TARGET, id, "Stream frame from remote (SSE bridge lands in S3)");
+                            Ok(Frame::Stream { id, event }) => {
+                                // remote → PC 的 Stream 帧 = **取消信号**
+                                // (S3,D3 不加新帧):remote 侧手机断 SSE /
+                                // node 离线清理 → 发 End/Error → 停转发。
+                                // 不存在该 id 则忽略(log,cancel_stream 幂等)。
+                                match event {
+                                    everlasting_remote_protocol::StreamEvent::End
+                                    | everlasting_remote_protocol::StreamEvent::Error { .. } => {
+                                        manager.cancel_stream(id);
+                                    }
+                                    everlasting_remote_protocol::StreamEvent::Chunk { .. } => {
+                                        // PC 不消费 remote 推的 Chunk(协议上
+                                        // 无此方向)—— 异常,只 log
+                                        tracing::warn!(target: TUNNEL_TARGET, id, "unexpected Stream::Chunk from remote");
+                                    }
+                                }
                             }
                             Err(e) => {
                                 tracing::warn!(target: TUNNEL_TARGET, error = %e, "dropping unparseable frame");
