@@ -616,7 +616,7 @@ ss -tlnp | grep 7456
 
 ```bash
 ./scripts/daemon.sh start   [--port N]   # 编译 release + 前台启动(日志直接输出)
-./scripts/daemon.sh bg      [--port N]   # 同上,但后台跑 + 日志写 /tmp/everlasting-daemon.log
+./scripts/daemon.sh bg      [--port N]   # ⚠️ 暂不可用,见下方「bg 模式失效」说明
 ./scripts/daemon.sh stop                 # 停 daemon(读 PID 文件,SIGTERM→15s→SIGKILL 兜底)
 ./scripts/daemon.sh restart [--port N]   # stop + start(改完前端重新 serve dist)
 ./scripts/daemon.sh rebuild              # 只重新编译 release 二进制(不重启)
@@ -624,9 +624,17 @@ ss -tlnp | grep 7456
 ./scripts/daemon.sh logs                 # 跟踪日志(bg 模式的日志文件)
 ```
 
+> ⚠️ **bg 模式失效(2026-08-11 核查)**:自 `928bdc3`(2026-07-27)daemon bin 加
+> `prctl(PR_SET_PDEATHSIG)` 孤儿守卫后,`daemon.sh bg` 即坏 —— 脚本的 bash
+> 进程退出(脚本跑完)时,PDEATHSIG 给 daemon 发 SIGTERM,后台 daemon 1-2s 内
+> 被杀。要后台跑,先 `start --no-build` 前台起,再 `Ctrl+Z` + `bg`(父 shell 存活),
+> 或用 `nohup` 时给 daemon 设孤儿守卫 opt-out(需 daemon bin 支持,见
+> [daemon-server.md](../.trellis/spec/backend/daemon-server.md) 的孤儿守卫条款)。
+> 修复(daemon bin 加 opt-out env)单开 task 中。
+
 脚本细节:用 **PID 文件**(`.everlasting-daemon.pid`)管理进程,避免 `pkill -f everlasting-daemon` 自匹配(脚本命令行含 daemon 名会被自己误杀);自动注入 `PKG_CONFIG_PATH`(WSL 编译 Rust 前置,见坑 1);`--no-build` 跳过编译用现有二进制。设计文档与本节对应;脚本头注释是权威。
 
-> ⚠️ **多实例反模式(Q1)**:**不要同时跑两个 daemon**(比如一个 `scripts/daemon.sh bg` + 一个裸 `everlasting-daemon --port 7457`)。两个 daemon 各自打开(或试图打开)同一个 SQLite,会出现:① 写竞争 / `SQLITE_BUSY`;② 各自 `reap_orphaned_runs` 互踩;③ 如果落到不同 `data_dir`(见 [DEBUG_DB §1.0 孤儿 DB 坑](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步)),数据分裂成两份历史。要换端口做 A/B,先 `stop` 旧的。`scripts/daemon.sh` 用单 PID 文件做了防多实例,裸跑没有这层保护。
+> ⚠️ **多实例反模式(Q1)**:**不要同时跑两个 daemon**(比如一个 `scripts/daemon.sh start` + 一个裸 `everlasting-daemon --port 7457`)。两个 daemon 各自打开(或试图打开)同一个 SQLite,会出现:① 写竞争 / `SQLITE_BUSY`;② 各自 `reap_orphaned_runs` 互踩;③ 如果落到不同 `data_dir`(见 [DEBUG_DB §1.0 孤儿 DB 坑](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步)),数据分裂成两份历史。要换端口做 A/B,先 `stop` 旧的。`scripts/daemon.sh` 用单 PID 文件做了防多实例,裸跑没有这层保护。
 
 ### 生产模式(裸二进制,手动部署)
 
@@ -637,10 +645,14 @@ daemon 自己 serve 前端 + API,同源无 CORS,Windows 宿主浏览器 `http://
 cd app && pnpm build
 
 # 2. 构建 daemon release 二进制(含 sidecar staging)
-cd src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo build --release --bin everlasting-daemon
+#    2026-08-11 workspace 翻转后,产物统一落在**仓库根** target/release/
+#    (不再在 app/src-tauri/target/)。根目录裸 `--bin` 只搜默认 member,
+#    daemon 必须 `-p everlasting`(或在 app/src-tauri/ 内跑裸 `--bin`)。
+PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo build --release -p everlasting --bin everlasting-daemon
 
-# 3. 启 daemon(监听 0.0.0.0:7456,Windows 宿主经 WSL 2 localhost forwarding 可达)
+# 3. 启 daemon(监听 0.0.0.0:7456,Windows 宿主经 WSL 2 localhost forwarding 可达;
+#    从仓库根跑,`resolve_dist_dir` 会沿 `app/src-tauri` 标记找到 app/dist 伺服前端)
 ./target/release/everlasting-daemon --port 7456
 ```
 
@@ -766,9 +778,10 @@ done
 
 ```bash
 # 单线程逐用例计时(无 nextest 时的 fallback;lib binary hash 随编译变,先 --no-run 拿到)
-cd app/src-tauri && \
-  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo test --lib --no-run  # 得到 target/debug/deps/everlasting_lib-<hash>
+# 2026-08-11 workspace 翻转后 test 产物在**仓库根** target/debug/deps,必须
+# 从根跑 + `-p everlasting`(根目录裸 `--lib` 只测 default members,测不到 daemon)。
+PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo test -p everlasting --lib --no-run  # 得到 target/debug/deps/everlasting_lib-<hash>
 BIN=target/debug/deps/everlasting_lib-<hash>
 "$BIN" --test-threads=1 2>&1 | awk '
   /^test .* \.\.\. (ok|FAILED|ignored)/ {
