@@ -140,6 +140,7 @@
 | ~~A2+~~ | ~~shell 命令只读/副作用精细判定~~ | ✅ 07-04 落地(P1+P2 同 PR),见 §1.2 |
 | ~~B6+~~ | ~~subagent 多模型支持（A frontmatter / B 动态选模型 / C UI+DB override）~~ | ✅ A 07-03 / C 07-03 / **B 07-06 全落地**，优先级链 `dispatch > DB > frontmatter > parent`，见 §1.2 |
 | ~~L3b PR1~~ | ~~worker worktree 隔离核心(PR1 落地,见 §1.2)~~ | 06-27 PR1 已落地,见 §1.2;PR2-4 拆为 follow-up tasks |
+| **C7** | 工具上下文渐进式披露(tools[] token 治理) | 每 turn 全量下发 ~21 个 builtin tool schema(`chat_loop/drive.rs:504`),过滤链只有静态黑白名单(mode/workflow/worker-nesting)。messages 层 cache 治理已 90 分(C3/ephemeral 断点/cache 率),`tools[]` 是 0 分的请求前缀段。**先量后优化**:Path 0 给 `turn_tool_defs` 加 tools token 估算(复用 `memory::tokens::count_tokens`,落 turn_trace)拿到真实占比 → 视数据决定是否上 Stub 注册(帖子方向 ②,stub 工具名 + 万能外壳 + `load_tool_schemas` 按需展开,与现有 cache 策略天然兼容)。启示与四方向(① Anthropic Tool Search / ② Stub / ③ invoke_tool 黑盒 / ④ Moonshot 动态加载)适用度判定见 [docs/research/tool-context-progressive-disclosure.md](./research/tool-context-progressive-disclosure.md)。来源:linux.do/t/topic/2708576 |
 
 > **已实施的 21 项**(B6 / B6+ / B8 / B12 / B4 / C2 / C2+ / A7 / L2 / L1 / L3a / L3b PR1 / L3b PR2 / L3b PR3 / L3c / L3d / A2+ / A5+ / E1 / V2-2+ / E2)已从第三档或第四档移到 §1.2 已实施列表。
 
