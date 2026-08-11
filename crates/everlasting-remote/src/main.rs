@@ -24,7 +24,7 @@
 
 use clap::Parser;
 
-use everlasting_remote::config::{Cli, ConfigError, RemoteConfig};
+use everlasting_remote::config::{Cli, ConfigError, RemoteConfig, RemoteState};
 use everlasting_remote::server;
 
 #[tokio::main]
@@ -54,7 +54,13 @@ async fn main() {
         "everlasting-remote starting"
     );
 
-    if let Err(e) = server::serve_remote(config.port).await {
+    // Step 3:开 remote.db(WAL pool + 幂等 migration)。DB 不可用无意义
+    // 继续 —— fail loud(与 Q-S1 同哲学)。
+    let state = RemoteState::load(&config)
+        .await
+        .unwrap_or_else(|e| panic!("remote.db 初始化失败: {e}"));
+
+    if let Err(e) = server::serve_remote(state, config.port).await {
         tracing::error!(error = %e, "everlasting-remote failed");
         std::process::exit(1);
     }

@@ -18,12 +18,14 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::{routing::get, Router};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::config::RemoteState;
 use crate::routes;
 
 /// Build the un-mounted remote router。`health` 在顶层(design §3.1
@@ -31,13 +33,19 @@ use crate::routes;
 /// 落到 ServeDir 的 SPA fallback(P1-3 —— remote 伺服 PWA 静态文件,
 /// PC daemon 的 ServeDir 在 NAT 后手机够不到)。
 ///
+/// 共享 state 的注入方式与 daemon 一致:**`routes::router(state)` 参数
+/// 传入**,domain 模块内部 `.with_state(state.clone())`(顶层 `Router<()>`
+/// 不能 `with_state`,health / ServeDir fallback 都是无状态服务)。
+/// Step 5/6 给 `RemoteState` 加 node_connections / pending 后,handler
+/// 直接 `State<Arc<RemoteState>>` 提取,router 装配不再改动。
+///
 /// 无 `CorsLayer`(对比 daemon):手机 PWA 由 remote 自己伺服,同源,
 /// 无跨域需求;nginx 反代也不引入跨域。若未来前端独立部署再补。
-pub fn build_router() -> Router {
+pub fn build_router(state: Arc<RemoteState>) -> Router {
     let mut router = Router::new()
         .route("/health", get(routes::health::health))
         .route("/api/v1/health", get(routes::health::health))
-        .merge(routes::router());
+        .merge(routes::router(state));
 
     // P1-3:SPA history-mode fallback(`ServeDir` + `not_found_service` 指向
     // index.html),与 daemon P2.4 D4 同款。dist 缺失时退化为纯 API 服务
@@ -91,12 +99,12 @@ pub fn resolve_dist_dir() -> Option<PathBuf> {
 /// 收到 Ctrl+C (SIGINT) 或 SIGTERM (POSIX) 后,`shutdown_signal` 返回,
 /// axum drain 所有 in-flight 请求。Step 2 无长连接(SSE/WSS 都未落地),
 /// drain 亚秒完成。Step 5 在此处加 `tunnel_registry` 主动断开 PC 连接。
-pub async fn serve_remote(port: u16) -> std::io::Result<()> {
+pub async fn serve_remote(state: Arc<RemoteState>, port: u16) -> std::io::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(addr = %addr, "everlasting-remote listening");
 
-    let router = build_router();
+    let router = build_router(state);
     let serve = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
 
     serve.await?;
@@ -176,7 +184,18 @@ mod tests {
         let port = listener.local_addr().expect("local_addr").port();
         drop(listener);
 
-        let mut serve_handle = tokio::spawn(serve_remote(port));
+        // Step 3:serve_remote 需要 `Arc<RemoteState>`(tempdir db + migration)。
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let config = crate::config::RemoteConfig {
+            port: 0,
+            db_path: dir.path().join("remote.db"),
+            shared_secret: "test".into(),
+        };
+        let state = crate::config::RemoteState::load(&config)
+            .await
+            .expect("state loads");
+
+        let mut serve_handle = tokio::spawn(serve_remote(state, port));
 
         // 等 remote 起来(轮询 health)。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

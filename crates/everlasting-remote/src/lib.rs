@@ -18,6 +18,7 @@
 #![allow(clippy::doc_overindented_list_items)]
 
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod routes;
 pub mod server;

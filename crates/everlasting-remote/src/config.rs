@@ -9,8 +9,10 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
+use sqlx::SqlitePool;
 
 /// 默认监听端口(design §3.6;`7457` 与 daemon 的 7456 错开)。
 pub const DEFAULT_REMOTE_PORT: u16 = 7457;
@@ -54,6 +56,32 @@ pub struct RemoteConfig {
     pub port: u16,
     pub db_path: PathBuf,
     pub shared_secret: String,
+}
+
+/// axum 共享运行状态(对应 daemon `AppState` 角色;design §7 对齐)。
+///
+/// 字段按 step 演进添加(design-step3.md §6,与 implement.md 字面的
+/// `{ db, shared_secret, node_connections, pending }` 最终形态一致):
+/// - Step 3 落地:`db` + `shared_secret`
+/// - Step 5 加:`node_connections: Arc<DashMap<String, TunnelConn>>`
+/// - Step 6 加:`pending: DashMap<u64, PendingReply>`
+#[derive(Debug)]
+pub struct RemoteState {
+    pub db: SqlitePool,
+    pub shared_secret: String,
+}
+
+impl RemoteState {
+    /// 单点初始化:开 pool(WAL/busy_timeout)→ 跑幂等 migration → 包 Arc。
+    /// `main.rs` 唯一调用;失败即 panic(DB 不可用无意义继续)。
+    pub async fn load(config: &RemoteConfig) -> Result<Arc<Self>, sqlx::Error> {
+        let db = crate::db::pool::init_pool(&config.db_path).await?;
+        crate::db::schema::run_migrations(&db).await?;
+        Ok(Arc::new(Self {
+            db,
+            shared_secret: config.shared_secret.clone(),
+        }))
+    }
 }
 
 /// 配置解析错误。当前只有一个变体;后续(如 db-path 校验)加变体即可。
