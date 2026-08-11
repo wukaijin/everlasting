@@ -1,4 +1,4 @@
-//! PC daemon WSS 入口(design §2.1 / implement.md Step 5)。
+//! PC daemon WSS 入口(design §2.1 / implement.md Step 5 / S3 Step 3)。
 //!
 //! - `GET /ws?secret=<shared_secret>&node_id=<id>&display_name=<名>`
 //! - 握手校验:`auth::verify_shared_secret` 常时比较(P3-4),失败 401
@@ -10,13 +10,17 @@
 //! 接收循环分派(P3-2):
 //! - `Message::Pong` → 续 `last_pong_ms` + `nodes.last_seen_at`(design §2.4)
 //! - `Frame::Request` path 以 `INTERNAL_PREFIX` 开头 → internal RPC
-//!   (**Step 7 实现**,当前 warn + 忽略);否则 log + 忽略
-//!   (S1 阶段 PC 不应主动发普通请求,那是 remote → PC 方向)
-//! - `Frame::Response / Stream` → 路由 pending 表(**Step 6 实现**,
-//!   当前 debug + 忽略)
+//!   (配对码生成);否则 log + 忽略(S1 阶段 PC 不应主动发普通请求)
+//! - `Frame::Response` → 路由 pending 表;命中 `Stream` 条目(P2-3,
+//!   流式请求收到非流式回复)→ 转 Error 送 body 关闭
+//! - `Frame::Stream` → SSE 桥接(S3):`Chunk` 用 **try_send**(P1-1,
+//!   满/断 → 剔除 + 发 End 给 PC 取消信号);`End/Error` → 移除条目 +
+//!   送 mpsc 结束手机 body
 //!
 //! 心跳超时 / 连接断开 → `remove_if_current` + `nodes.status=offline`
-//! (只动自己的连接,不误伤同 node_id 的新连接)。
+//! (只动自己的连接,不误伤同 node_id 的新连接)+
+//! `pending.cancel_streams_for_conn`(P1-2:按 conn_id 清该连接的
+//! 在途流,手机 SSE body 收 `Error{node_offline}` 关闭)。
 
 use std::sync::Arc;
 
@@ -25,7 +29,7 @@ use axum::extract::{ConnectInfo, Query, State};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
-use everlasting_remote_protocol::Frame;
+use everlasting_remote_protocol::{Frame, StreamEvent};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -74,12 +78,13 @@ pub async fn ws_handler(
     let Some(node_id) = params.node_id.filter(|s| !s.is_empty()) else {
         return Err(AppError::auth("missing node_id query param"));
     };
-    let display_name = params.display_name.filter(|s| !s.is_empty()).unwrap_or_else(|| node_id.clone());
+    let display_name = params
+        .display_name
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| node_id.clone());
 
     tracing::info!(ip = %addr, node_id = %node_id, "PC daemon handshake ok, upgrading");
-    Ok(ws.on_upgrade(move |socket| {
-        handle_ws_connection(state, node_id, display_name, socket)
-    }))
+    Ok(ws.on_upgrade(move |socket| handle_ws_connection(state, node_id, display_name, socket)))
 }
 
 /// 升级后的连接生命周期:注册 → 心跳 → 接收循环 → 退出清理。
@@ -127,11 +132,7 @@ async fn handle_ws_connection(
 /// 超时路径(design §2.4):PC 网络分区时 TCP 可能不报错(收不到 FIN),
 /// 接收循环会一直阻塞 —— 只有心跳能判死。发送 Ping 失败说明连接已
 /// 死,交给接收循环清理。
-async fn heartbeat_loop(
-    state: Arc<RemoteState>,
-    handle: Arc<ConnHandle>,
-    cfg: HeartbeatConfig,
-) {
+async fn heartbeat_loop(state: Arc<RemoteState>, handle: Arc<ConnHandle>, cfg: HeartbeatConfig) {
     let timeout_ms = cfg.timeout.as_millis() as i64;
     let mut ticker = tokio::time::interval(cfg.ping_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -154,7 +155,19 @@ async fn heartbeat_loop(
                 .node_connections
                 .remove_if_current(&handle.node_id, handle.conn_id)
             {
-                let _ = db::crud::update_node_status(&state.db, &handle.node_id, NODE_STATUS_OFFLINE, db::now_ms()).await;
+                let _ = db::crud::update_node_status(
+                    &state.db,
+                    &handle.node_id,
+                    NODE_STATUS_OFFLINE,
+                    db::now_ms(),
+                )
+                .await;
+                // S3:清该连接的在途流(P1-2 按 conn_id)—— 手机 SSE body
+                // 收 Error{node_offline} 关闭;EventSource 重连见 design §6.2
+                let count = state.pending.cancel_streams_for_conn(handle.conn_id);
+                if count > 0 {
+                    tracing::warn!(node_id = %handle.node_id, count, "node_offline_streams_cancelled");
+                }
                 let _ = removed.close().await;
             }
             break;
@@ -212,23 +225,38 @@ async fn receive_loop(
 
     // 退出清理:只动自己的连接(remove_if_current)。
     if let Some(removed) = registry.remove_if_current(&handle.node_id, handle.conn_id) {
-        let _ = db::crud::update_node_status(&state.db, &handle.node_id, NODE_STATUS_OFFLINE, db::now_ms()).await;
+        let _ = db::crud::update_node_status(
+            &state.db,
+            &handle.node_id,
+            NODE_STATUS_OFFLINE,
+            db::now_ms(),
+        )
+        .await;
+        // S3:清该连接的在途流(心跳超时路径同款,见 heartbeat_loop)。
+        let count = state.pending.cancel_streams_for_conn(handle.conn_id);
+        if count > 0 {
+            tracing::warn!(node_id = %handle.node_id, count, "node_offline_streams_cancelled");
+        }
         tracing::info!(node_id = %handle.node_id, "tunnel disconnected, node offline");
         drop(removed); // 释放 sink
     }
 }
 
 /// 帧分派(P3-2):internal RPC / 普通 Request / Response / Stream。
-/// - `Response` → pending 表按 id 路由回等待方(Step 6 落地)
-/// - internal RPC(Step 7)/ Stream SSE 桥接(S3)各自把分支升级为真实实现
 async fn dispatch_frame(state: &Arc<RemoteState>, handle: &Arc<ConnHandle>, frame: Frame) {
     match frame {
         Frame::Request { id, path, body, .. } => {
             if path.starts_with(everlasting_remote_protocol::INTERNAL_PREFIX) {
                 // internal RPC(design §2.3.1 P3-2):配对码生成等,
                 // 结果以 Response 帧回 PC
-                if let Some(reply) =
-                    crate::routes::pairing::handle_internal_rpc(state, &handle.node_id, id, &path, &body).await
+                if let Some(reply) = crate::routes::pairing::handle_internal_rpc(
+                    state,
+                    &handle.node_id,
+                    id,
+                    &path,
+                    &body,
+                )
+                .await
                 {
                     if let Err(e) = handle.send_frame(&reply).await {
                         tracing::warn!(node_id = %handle.node_id, error = %e, "internal RPC reply send failed");
@@ -238,18 +266,70 @@ async fn dispatch_frame(state: &Arc<RemoteState>, handle: &Arc<ConnHandle>, fram
                 tracing::debug!(node_id = %handle.node_id, id, path = %path, "ignore PC-originated Request(S1 无此方向)");
             }
         }
-        Frame::Response { id, .. } => {
-            // 非流式回复:路由回 proxy 的 oneshot 等待方。未知 id →
-            // 协议异常(warn,不关闭连接 —— 单条丢弃)。
-            if let Some(PendingReply::Oneshot(tx)) = state.pending.remove(id) {
-                let _ = tx.send(frame);
-            } else {
-                tracing::warn!(node_id = %handle.node_id, id, "Response for unknown/unmatched request id");
+        Frame::Response { id, status, .. } => {
+            match state.pending.remove(id) {
+                Some(PendingReply::Oneshot(tx)) => {
+                    // 非流式回复:路由回 proxy 的 oneshot 等待方。
+                    let _ = tx.send(frame);
+                }
+                Some(PendingReply::Stream(tx)) => {
+                    // P2-3:流式请求收到非流式 Response(PC loopback 回
+                    // 非 SSE,如 404/401)→ 手机已拿 200 无法改状态码,
+                    // 转 Error 送 body 关闭 + 正确日志(非误导的
+                    // "unknown id"),错误体不静默丢失。
+                    tracing::warn!(node_id = %handle.node_id, id, status, "stream got non-stream response");
+                    let _ = tx.try_send(StreamEvent::Error {
+                        message: format!("status={status}"),
+                    });
+                }
+                None => {
+                    tracing::warn!(node_id = %handle.node_id, id, "Response for unknown/unmatched request id");
+                }
             }
         }
-        Frame::Stream { id, .. } => {
-            // S3:SSE 桥接 —— Chunk/End/Error 经 mpsc 送手机 SSE 连接
-            tracing::debug!(node_id = %handle.node_id, id, "Stream 帧:SSE 桥接留 S3");
+        Frame::Stream { id, event } => {
+            // S3 SSE 桥接(替换占位):按 id 路由到流式 pending 的 mpsc,
+            // 手机 body 经 proxy 的 ReceiverStream 输出。
+            let Some(entry) = state.pending.get(id) else {
+                // 流已结束/被剔除/首帧超时后 PC 迟到的帧 → 忽略
+                tracing::debug!(node_id = %handle.node_id, id, "Stream frame for unknown request id (already closed)");
+                return;
+            };
+            let PendingReply::Stream(tx) = &entry.reply else {
+                // 协议异常:非流式请求收到 Stream 帧。移除条目让
+                // oneshot 等待方的 rx drop → proxy 立即 502,不占槽
+                tracing::warn!(node_id = %handle.node_id, id, "Stream frame for non-streaming pending");
+                drop(entry);
+                state.pending.remove(id);
+                return;
+            };
+            match event {
+                StreamEvent::Chunk { bytes } => {
+                    // P1-1:try_send **同步**,接收循环永不被单条慢流
+                    // 拖住(Pong 续期 / 配对 RPC 不 HoL 阻塞;daemon 侧
+                    // SseRegistry 同款语义)。满(慢手机)/断(手机已断)
+                    // 统一走剔除:remove + 发 End 给 PC(取消信号,D3)
+                    // + drop tx → 手机 body 结束。
+                    if tx.try_send(StreamEvent::Chunk { bytes }).is_err() {
+                        tracing::debug!(node_id = %handle.node_id, id, "sse_client_gone(slow or disconnected), dropping stream");
+                        drop(entry);
+                        state.pending.remove(id);
+                        let _ = handle
+                            .send_frame(&Frame::Stream {
+                                id,
+                                event: StreamEvent::End,
+                            })
+                            .await;
+                    }
+                }
+                StreamEvent::End | StreamEvent::Error { .. } => {
+                    // 流结束(loopback SSE 关)/ PC 读错:送进 mpsc 让
+                    // 手机 body 收尾,条目移除。
+                    let _ = tx.try_send(event);
+                    drop(entry);
+                    state.pending.remove(id);
+                }
+            }
         }
     }
 }
@@ -312,31 +392,53 @@ mod tests {
 
     /// 连 /ws,返回握手结果。`Error` 在 0.24 是 tungstenite::Error
     /// (tokio-tungstenite re-export 整个 tungstenite)。
-    async fn connect(port: u16, query: &str) -> Result<ClientWs, tokio_tungstenite::tungstenite::Error> {
+    async fn connect(
+        port: u16,
+        query: &str,
+    ) -> Result<ClientWs, tokio_tungstenite::tungstenite::Error> {
         let url = format!("ws://127.0.0.1:{port}/ws{query}");
-        tokio_tungstenite::connect_async(url).await.map(|(ws, _)| ws)
+        tokio_tungstenite::connect_async(url)
+            .await
+            .map(|(ws, _)| ws)
     }
 
     async fn wait_for_node(state: &RemoteState, node_id: &str, timeout: Duration) -> db::Node {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            if let Some(node) = db::crud::get_node(&state.db, node_id).await.expect("get_node") {
+            if let Some(node) = db::crud::get_node(&state.db, node_id)
+                .await
+                .expect("get_node")
+            {
                 return node;
             }
-            assert!(tokio::time::Instant::now() < deadline, "node {node_id} 未在 {timeout:?} 内注册");
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "node {node_id} 未在 {timeout:?} 内注册"
+            );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
-    async fn wait_for_status(state: &RemoteState, node_id: &str, status: &str, timeout: Duration) -> db::Node {
+    async fn wait_for_status(
+        state: &RemoteState,
+        node_id: &str,
+        status: &str,
+        timeout: Duration,
+    ) -> db::Node {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            if let Some(node) = db::crud::get_node(&state.db, node_id).await.expect("get_node") {
+            if let Some(node) = db::crud::get_node(&state.db, node_id)
+                .await
+                .expect("get_node")
+            {
                 if node.status == status {
                     return node;
                 }
             }
-            assert!(tokio::time::Instant::now() < deadline, "node {node_id} 未在 {timeout:?} 内变为 {status}");
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "node {node_id} 未在 {timeout:?} 内变为 {status}"
+            );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
@@ -353,9 +455,13 @@ mod tests {
     #[tokio::test]
     async fn wrong_secret_rejected_401() {
         let (port, _state) = start_server(HeartbeatConfig::default()).await;
-        let err = connect(port, "?secret=wrong&node_id=pc-1").await.expect_err("wrong secret must fail");
+        let err = connect(port, "?secret=wrong&node_id=pc-1")
+            .await
+            .expect_err("wrong secret must fail");
         match err {
-            tokio_tungstenite::tungstenite::Error::Http(resp) => assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED),
+            tokio_tungstenite::tungstenite::Error::Http(resp) => {
+                assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED)
+            }
             other => panic!("expected Http(401), got {other:?}"),
         }
     }
@@ -363,15 +469,25 @@ mod tests {
     #[tokio::test]
     async fn missing_secret_rejected_401() {
         let (port, _state) = start_server(HeartbeatConfig::default()).await;
-        let err = connect(port, "?node_id=pc-1").await.expect_err("missing secret must fail");
-        assert!(matches!(err, tokio_tungstenite::tungstenite::Error::Http(_)));
+        let err = connect(port, "?node_id=pc-1")
+            .await
+            .expect_err("missing secret must fail");
+        assert!(matches!(
+            err,
+            tokio_tungstenite::tungstenite::Error::Http(_)
+        ));
     }
 
     #[tokio::test]
     async fn missing_node_id_rejected_401() {
         let (port, _state) = start_server(HeartbeatConfig::default()).await;
-        let err = connect(port, "?secret=test").await.expect_err("missing node_id must fail");
-        assert!(matches!(err, tokio_tungstenite::tungstenite::Error::Http(_)));
+        let err = connect(port, "?secret=test")
+            .await
+            .expect_err("missing node_id must fail");
+        assert!(matches!(
+            err,
+            tokio_tungstenite::tungstenite::Error::Http(_)
+        ));
     }
 
     // ---- 注册 ----
@@ -379,7 +495,9 @@ mod tests {
     #[tokio::test]
     async fn valid_secret_registers_node_online() {
         let (port, state) = start_server(HeartbeatConfig::default()).await;
-        let mut ws = connect(port, "?secret=test&node_id=pc-1&display_name=TestPC").await.expect("connect");
+        let mut ws = connect(port, "?secret=test&node_id=pc-1&display_name=TestPC")
+            .await
+            .expect("connect");
 
         let node = wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
         assert_eq!(node.status, NODE_STATUS_ONLINE);
@@ -394,7 +512,9 @@ mod tests {
     #[tokio::test]
     async fn display_name_defaults_to_node_id() {
         let (port, state) = start_server(HeartbeatConfig::default()).await;
-        let mut ws = connect(port, "?secret=test&node_id=pc-2").await.expect("connect");
+        let mut ws = connect(port, "?secret=test&node_id=pc-2")
+            .await
+            .expect("connect");
         let node = wait_for_node(&state, "pc-2", Duration::from_secs(2)).await;
         assert_eq!(node.display_name, "pc-2");
         let _ = ws.close(None).await;
@@ -405,23 +525,33 @@ mod tests {
     #[tokio::test]
     async fn duplicate_node_id_kicks_old_conn() {
         let (port, state) = start_server(HeartbeatConfig::default()).await;
-        let mut old_ws = connect(port, "?secret=test&node_id=pc-1").await.expect("first connect");
+        let mut old_ws = connect(port, "?secret=test&node_id=pc-1")
+            .await
+            .expect("first connect");
         wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
 
-        let mut new_ws = connect(port, "?secret=test&node_id=pc-1&display_name=新PC").await.expect("second connect");
+        let mut new_ws = connect(port, "?secret=test&node_id=pc-1&display_name=新PC")
+            .await
+            .expect("second connect");
         // 旧连接应收到 Close
         let msg = tokio::time::timeout(Duration::from_secs(2), old_ws.next())
             .await
             .expect("old conn should be closed")
             .expect("some message")
             .expect("no error");
-        assert!(matches!(msg, ClientMessage::Close(_)), "expected Close, got {msg:?}");
+        assert!(
+            matches!(msg, ClientMessage::Close(_)),
+            "expected Close, got {msg:?}"
+        );
 
         // 注册表只有新连接;等第二次 upsert 落库(display_name 刷新,
         // 与状态断言分离 —— 避免竞态),status 仍 online
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         let node = loop {
-            if let Some(n) = db::crud::get_node(&state.db, "pc-1").await.expect("get_node") {
+            if let Some(n) = db::crud::get_node(&state.db, "pc-1")
+                .await
+                .expect("get_node")
+            {
                 if n.display_name == "新PC" {
                     break n;
                 }
@@ -445,7 +575,9 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_ping_pong_keeps_node_online() {
         let (port, state) = start_server(small_heartbeat()).await;
-        let mut ws = connect(port, "?secret=test&node_id=pc-1").await.expect("connect");
+        let mut ws = connect(port, "?secret=test&node_id=pc-1")
+            .await
+            .expect("connect");
         let node = wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
         let seen_before = node.last_seen_at;
 
@@ -473,7 +605,8 @@ mod tests {
             "last_seen_at 应随 pong 刷新:before={seen_before} after={last_pong_at}"
         );
         assert_eq!(state.node_connections.len(), 1);
-        let node = wait_for_status(&state, "pc-1", NODE_STATUS_ONLINE, Duration::from_secs(1)).await;
+        let node =
+            wait_for_status(&state, "pc-1", NODE_STATUS_ONLINE, Duration::from_secs(1)).await;
         assert_eq!(node.status, NODE_STATUS_ONLINE);
 
         let _ = ws.close(None).await;
@@ -484,7 +617,9 @@ mod tests {
     async fn heartbeat_timeout_marks_node_offline() {
         let (port, state) = start_server(small_heartbeat()).await;
         // 保持 socket 打开但不读 —— 不发 pong,ping 打进 TCP 缓冲
-        let _ws = connect(port, "?secret=test&node_id=pc-1").await.expect("connect");
+        let _ws = connect(port, "?secret=test&node_id=pc-1")
+            .await
+            .expect("connect");
         wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
         assert_eq!(state.node_connections.len(), 1);
 
@@ -497,7 +632,9 @@ mod tests {
     #[tokio::test]
     async fn clean_disconnect_marks_offline() {
         let (port, state) = start_server(HeartbeatConfig::default()).await;
-        let mut ws = connect(port, "?secret=test&node_id=pc-1").await.expect("connect");
+        let mut ws = connect(port, "?secret=test&node_id=pc-1")
+            .await
+            .expect("connect");
         wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
 
         let _ = ws.close(None).await;
@@ -511,7 +648,9 @@ mod tests {
     #[tokio::test]
     async fn non_internal_request_ignored_conn_stays_alive() {
         let (port, state) = start_server(HeartbeatConfig::default()).await;
-        let mut ws = connect(port, "?secret=test&node_id=pc-1").await.expect("connect");
+        let mut ws = connect(port, "?secret=test&node_id=pc-1")
+            .await
+            .expect("connect");
         wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
 
         let frame = Frame::Request {
@@ -536,10 +675,14 @@ mod tests {
     #[tokio::test]
     async fn unparseable_frame_ignored_conn_stays_alive() {
         let (port, state) = start_server(HeartbeatConfig::default()).await;
-        let mut ws = connect(port, "?secret=test&node_id=pc-1").await.expect("connect");
+        let mut ws = connect(port, "?secret=test&node_id=pc-1")
+            .await
+            .expect("connect");
         wait_for_node(&state, "pc-1", Duration::from_secs(2)).await;
 
-        ws.send(ClientMessage::Text("{not json".into())).await.expect("send");
+        ws.send(ClientMessage::Text("{not json".into()))
+            .await
+            .expect("send");
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(state.node_connections.len(), 1);
         let _ = ws.close(None).await;
@@ -576,8 +719,12 @@ mod tests {
             .expect("reply frame")
             .expect("message")
             .expect("no error");
-        let ClientMessage::Text(text) = msg else { panic!("expected text") };
-        let Frame::Response { id, status, body, .. } = serde_json::from_str(&text).expect("parse")
+        let ClientMessage::Text(text) = msg else {
+            panic!("expected text")
+        };
+        let Frame::Response {
+            id, status, body, ..
+        } = serde_json::from_str(&text).expect("parse")
         else {
             panic!("expected Response frame");
         };

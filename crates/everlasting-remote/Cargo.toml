@@ -46,3 +46,6 @@ tempfile = "3"
 # Step 5 ws 集成测试:真实 WebSocket 客户端连本地起的 server。
 # 版本与 axum 0.7 内部用的 tokio-tungstenite 0.24 对齐(lockfile 已有,零新增编译)。
 tokio-tungstenite = "0.24"
+# S3 流式测试:手机 body 增量读取(`BodyExt::into_data_stream`)。axum
+# 0.7 已依赖 http-body-util,lockfile 已有,零新增编译。
+http-body-util = "0.1"

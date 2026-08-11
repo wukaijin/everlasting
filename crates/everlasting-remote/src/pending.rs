@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn cancel_streams_for_conn_scoped_to_conn_and_stream() {
         let t = PendingTable::new(Duration::from_secs(60));
-        let (_tx1, rx1) = mpsc::channel::<StreamEvent>(4);
+        let (_tx1, _rx1) = mpsc::channel::<StreamEvent>(4);
         t.insert(1, 7, PendingReply::Stream(_tx1));
         let (_tx2, _rx2) = mpsc::channel::<StreamEvent>(4);
         t.insert(2, 8, PendingReply::Stream(_tx2)); // 别的 conn
