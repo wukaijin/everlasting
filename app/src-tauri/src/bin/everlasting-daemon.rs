@@ -143,6 +143,39 @@ async fn main() -> ExitCode {
     // skipped (no AppHandle available; P2.3 wires the SSE sink).
     let state = server::load_daemon_state(data_dir.clone()).await;
 
+    // S2 tunnel client (2026-08-11, task `08-11-tunnel-client`,design §2.4
+    // / §4.2 P1-1 修订):**只有这里** spawn tunnel —— lib.rs 零改动,
+    // Tauri GUI(Thin/Full)持有空壳 manager 但从不 start()。双进程同
+    // node_id 会互踢 flapping,故绝不能双 spawn。
+    //
+    // 不配 remote_url(或 key 缺失)→ `load_remote_config` 返 None →
+    // `set_config(None)` 不 spawn 任何 task → daemon 行为与现状完全一致
+    // (本地功能零依赖 remote,硬约束 2)。
+    state.tunnel_manager.set_local_port(port);
+    state.tunnel_manager.start();
+    match everlasting_lib::daemon::tunnel::config::load_remote_config(&state.db).await {
+        Ok(Some(cfg)) => {
+            tracing::info!(
+                target: everlasting_lib::daemon::tunnel::TUNNEL_TARGET,
+                remote = %cfg.remote_url,
+                node_id = %cfg.node_id,
+                "remote tunnel configured, starting tunnel client"
+            );
+            state.tunnel_manager.set_config(Some(cfg));
+        }
+        Ok(None) => {
+            tracing::debug!(
+                "no remote_url configured; tunnel client not started (pure local mode)"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "load_remote_config failed; tunnel client not started (pure local mode)"
+            );
+        }
+    }
+
     match server::serve_daemon(state, port).await {
         Ok(()) => {
             tracing::info!("everlasting-daemon exited cleanly");

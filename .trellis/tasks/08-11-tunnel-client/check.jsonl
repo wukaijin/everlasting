@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验提交前检查约定(fmt/测试)是否被遵守"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "核验 tunnel 集成不破坏 serve/shutdown 现有行为"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "核验改动符合项目的 diff/commit 约定"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核验是否重复造轮子(config KV 复用、reqwest 复用等)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核验 IPC 三层 + 前端 CMD_TO_DOMAIN 跨层一致性"}
+{"file": ".trellis/tasks/08-11-remote-daemon-core/design.md", "reason": "核验 S2 实现与 S1 契约(ws 握手/配对 RPC/帧协议)一致"}

@@ -221,6 +221,15 @@ pub fn run() {
             commands::cancel::cancel_chat,
             commands::config::get_llm_config,
             commands::config::get_home_dir,
+            // S2 remote tunnel 配置(2026-08-11, task `08-11-tunnel-client`):
+            // 注册但不改 sidecar/双模式逻辑(P1-1 —— tunnel 只由 daemon bin
+            // spawn;这些 command 在 Thin 模式不会被调用,Tauri Full 逃生通道
+            // 下写入 DB + 通知空壳 manager,行为安全)。
+            commands::config::get_remote_config,
+            commands::config::set_remote_config,
+            commands::config::get_tunnel_status,
+            // S2 配对码生成(经 tunnel WSS 调 remote 内部 RPC)
+            commands::pairing::generate_pairing_code,
             // Providers / models / default model
             commands::providers::list_providers,
             commands::providers::add_provider,

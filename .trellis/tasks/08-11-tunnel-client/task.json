@@ -3,7 +3,7 @@
   "name": "tunnel-client",
   "title": "S2 PC daemon tunnel client:tunnel 模块 + WSS 长连接 + loopback 转发",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -320,6 +320,13 @@ async fn shutdown_signal(state: Arc<AppState>) {
     // graceful_shutdown 之前,让 drain 不被永不完成的 SSE 连接卡住。
     state.sse.shutdown();
 
+    // 步骤 1.5(S2, 2026-08-11, task `08-11-tunnel-client`):停 tunnel
+    // 客户端。先停 tunnel 再 drain —— WSS 连接主动关闭(发 Close 帧),
+    // remote 立刻感知节点离线;tunnel 是独立 task,失败/断线从不影响
+    // daemon,这里只是给它一个明确的 shutdown 信号(design §7 对齐:
+    // 与现有 serve 行为正交,只加通知,不改 drain 语义)。
+    state.tunnel_manager.stop();
+
     // 步骤 2:cancel + drain 所有活跃 agent loop。必须排在 sse.shutdown
     // 之后(先断流、再停处理,语义更干净;且 SSE 关后前端不再收到新事件,
     // 也不会有新 chat request 到达)。这一步让 in-flight tool 跑完

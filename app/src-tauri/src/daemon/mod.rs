@@ -39,3 +39,6 @@ pub mod error;
 pub mod routes;
 pub mod server;
 pub mod sse;
+// S2 (2026-08-11, task `08-11-tunnel-client`): PC daemon → remote daemon
+// 的 opt-in WSS 隧道客户端。不配 remote_url 时不 spawn,本地功能零回归。
+pub mod tunnel;

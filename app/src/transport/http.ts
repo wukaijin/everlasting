@@ -58,6 +58,14 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   // config
   get_llm_config: "config",
   get_home_dir: "config",
+  // S2 remote tunnel(2026-08-11, task `08-11-tunnel-client`,design §3.1
+  // 清单第 6 条):缺这 3 行时 sidecar/浏览器模式报
+  // `unknown cmd "get_remote_config"`(Tauri Full 模式侥幸走 IPC)。
+  get_remote_config: "config",
+  set_remote_config: "config",
+  get_tunnel_status: "config",
+  // S2 配对码生成(新 domain pairing)
+  generate_pairing_code: "pairing",
   // files
   list_files: "files",
   list_files_at: "files",
