@@ -44,6 +44,8 @@ pub mod sse_bridge;
 pub use manager::TunnelManager;
 
 #[cfg(test)]
+mod e2e_tests;
+#[cfg(test)]
 mod tests;
 
 /// tracing target:所有 tunnel 日志走这里,`RUST_LOG` 可单独调级别
