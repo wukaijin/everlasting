@@ -14,6 +14,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [Transport Modes & PWA Navigation](./transport-and-pwa-modes.md) | How the SPA distinguishes daemon/remote/tauri contexts; token vs health-probe signals; 401 handling; wire casing | ✅ Filled (S4) |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
