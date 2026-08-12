@@ -79,5 +79,26 @@ function detectTransportMode(): 'tauri' | 'pwa-remote' | 'browser-local' {
 
 - **token 存 localStorage 是 XSS 风险点**,MVP 接受(单用户 + 自己的 PWA + 自己的 remote)。V2 评估 httpOnly cookie 方案(需要 remote 侧 session 化,工作量大)。
 - 家里电脑浏览器场景**白嫖**:大屏直接用现有三栏布局,不需要 S5 的移动端适配。S5 只针对手机宽度。
-- transport 检测要稳健:`isStandalonePWA()` 检查 `window.matchMedia('(display-mode: standalone)')` 或 `navigator.standalone`。
 - 配对码 60s 倒计时 UI 要清晰,过期了引导重新生成。
+
+## 实施前决策与探查结论(2026-08-12,design 前 + review 后修订)
+
+基于前端骨架探查(Vue3/Pinia/reka-ui)+ remote crate 代码核验(S1-S3),裁决如下。详见 [design.md §0](./design.md)。
+
+| # | 问题 | 裁决 | 依据 |
+|---|---|---|---|
+| **D1** | PWA 多视图导航方式 | **vue-router**:三路由 `/pairing` `/nodes` `/chat` + 守卫查 token | 用户决策(URL 状态 + 后退键 + 深链);现有零路由 SPA 需引入路由依赖 |
+| **D2** | PWA tooling | **vite-plugin-pwa**:manifest + SW 自动生成,app-shell precache | Vite PWA 事实标准;手写 SW 无 MVP 收益 |
+| **D3** | transport 模式检测 | **`hasDeviceToken()`**(localStorage 存在 token = pwa-remote 模式) | 探查:`daemonBase()` 在 PROD 恒为 `location.origin`,tauri/browser-local/pwa-remote 三者 baseURL 无差异 —— 真实差异是 auth 注入 + proxy 前缀,而这两者都以"有 token"为前提 |
+| **D4** | remote-native vs proxied 命令路由 | **pairing/nodes 用直接 `fetch`**(remote 自身端点);**其余走 `transport.invoke`**(pwa-remote 时加 `/api/v1/proxy` 前缀) | remote 只挂 `/api/v1/proxy/*path` 透传 + `/api/v1/pairing` + `/api/v1/nodes`;daemon 命令(sessions/chat…)经 proxy 透传到 PC |
+| **D5** | token 存储 | **localStorage**(PRD 已定,MVP 接受 XSS 风险) | 单用户 + 自己的 PWA + 自己的 remote;V2 评估 httpOnly cookie |
+| **D6** | 路由守卫的"需配对"判定 | **`isRemoteContext()`**:bootstrap health body 有 `remoteId` = remote 伺服(需配对);daemon 返 `daemonId` = daemon/Tauri(直放) | P1-1 修订:守卫不能只查 token —— browser-local/Tauri Thin 永远无 token 却不需配对;daemon 无 redeem 路由,强制跳 /pairing = 死局 |
+
+**已核验的代码库事实**(无需再探查):
+
+- **PC 端 4 个 IPC 已就绪**:`get_remote_config` / `set_remote_config` / `get_tunnel_status` / `generate_pairing_code` 已在 `lib.rs::generate_handler!` + daemon HTTP 路由 + `CMD_TO_DOMAIN` 注册 —— RemoteTab 是纯 UI 工作。
+- **remote 已伺服 PWA 静态文件**:`server.rs:53` `ServeDir + not_found_service(index.html)` SPA fallback —— PWA 同源托管在 remote,`daemonBase()` 的 `location.origin` 分支天然指向 remote。
+- **remote health 兼容协议门禁**:`health.rs:26` `apiVersions: ["v1"]`(camelCase shape 对齐 daemon)—— `awaitDaemonHealthy()` 在 pwa-remote 模式天然通过,bootstrap 无需特殊处理。
+- **auth 双通道已就绪**:`auth.rs` `Authorization: Bearer`(fetch)+ `?access_token=`(EventSource 无法设 header 的 SSE 通道)。
+- **transport 当前零 auth**:`http.ts:278` fetch 无 Authorization 头,`http.ts:247` EventSource URL 无 token query —— S4 核心改动点。
+- **无 router / 无 PWA / 无 auth 层**:全为 greenfield(100% 新写)。

@@ -3,7 +3,7 @@
   "name": "pairing-and-pwa",
   "title": "S4 配对流程 + PWA 壳:配对码 UI + PWA manifest/service worker + 节点列表 + transport 切换",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
