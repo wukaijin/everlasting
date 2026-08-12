@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "check 阶段前端层入口"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "核验:媒体查询内未硬编码 px/hex,断点 token(--app-height)用法正确,桌面样式块零改动(回归不变量)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "核验:7 个 reka-ui Dialog + 2 手搓 modal 改造符合封装规范;5 个 min-width 硬 bug 全修(选择器类名正确,非原 design 的 .grant-modal__content/.md-detail-modal 误名,照抄会静默失效);无破坏性 props 变更"}
+{"file": ".trellis/spec/guides/index.md", "reason": "cross-layer 一致性 + AI review 核验规则(每条 CRITICAL/WARNING 须对原码独立验证)"}
