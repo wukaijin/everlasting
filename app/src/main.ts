@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import "./style.css";
+import { router } from "./router";
 import { useErrorBus } from "./utils/useErrorBus";
 import { transport } from "./transport";
 import { tauriTransport } from "./transport/tauri";
@@ -9,6 +10,7 @@ import { awaitDaemonHealthy, type DaemonHealth } from "./transport/health";
 
 const app = createApp(App);
 app.use(createPinia());
+app.use(router);
 
 // A5(2026-07-02)全局未捕错误器:`invoke()` 未 `.catch` 的 rejection + 任意
 // 运行时 JS 错误,统一入错误总线。`parseAppCommandError` 容错 3 种输入

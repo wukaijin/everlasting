@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import tailwindcss from "@tailwindcss/vite";
+import { VitePWA } from "vite-plugin-pwa";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -54,7 +55,51 @@ function viteOnwarn(warning: unknown, defaultHandler: (w: unknown) => void) {
 }
 
 export default defineConfig(async () => ({
-  plugins: [vue(), tailwindcss()],
+  plugins: [
+    vue(),
+    tailwindcss(),
+    // S4 PWA shell (design §4): manifest + app-shell precache SW.
+    // - registerType autoUpdate: new SW takes over on controllerchange.
+    // - injectRegister auto: vite-plugin-pwa injects the SW registration
+    //   script into index.html at build time (no manual register code).
+    // - workbox precaches static assets (js/css/html/fonts/icons) for
+    //   offline app-shell load; data (API/SSE) is always network-only
+    //   (runtimeCaching empty — the app is fundamentally online).
+    // - navigateFallbackDenylist excludes /api so 404s return real
+    //   errors instead of being silently rewritten to index.html.
+    // - devOptions disabled: dev server must not register a SW (would
+    //   cache-break HMR). SW only exists in production builds.
+    VitePWA({
+      registerType: "autoUpdate",
+      injectRegister: "auto",
+      manifest: {
+        name: "Everlasting",
+        short_name: "Everlasting",
+        description: "远程遥控你的 AI agent",
+        theme_color: "#1a1a1a",
+        background_color: "#1a1a1a",
+        display: "standalone",
+        start_url: "/",
+        icons: [
+          { src: "/icons/192.png", sizes: "192x192", type: "image/png" },
+          { src: "/icons/512.png", sizes: "512x512", type: "image/png" },
+          {
+            src: "/icons/512-maskable.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ["**/*.{js,css,html,woff2,png,svg}"],
+        navigateFallback: "/index.html",
+        navigateFallbackDenylist: [/^\/api\//],
+        runtimeCaching: [],
+      },
+      devOptions: { enabled: false },
+    }),
+  ],
 
   // P2.4 D3.3: inject the app build version so `health.ts` can
   // warn on daemon/frontend build drift (Q5 warn-only check). Read

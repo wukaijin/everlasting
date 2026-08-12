@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// SettingsModal — full-viewport overlay with 3 tabs (Providers, Models,
-// Default). Uses reka-ui DialogRoot/DialogContent for overlay + focus trap
-// and TabsRoot/TabsList/TabsTrigger/TabsContent for the tab switcher.
-// Receives v-model:open from the parent (Sidebar footer button).
+// SettingsModal — full-viewport overlay with 6 tabs (Providers, Models,
+// Default, Memory, Subagents, Remote). Uses reka-ui DialogRoot/DialogContent
+// for overlay + focus trap and TabsRoot/TabsList/TabsTrigger/TabsContent for
+// the tab switcher. Receives v-model:open from the parent (Sidebar footer
+// button).
 
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogClose } from "reka-ui";
 import { TabsRoot, TabsList, TabsTrigger, TabsContent } from "reka-ui";
@@ -12,6 +13,7 @@ import ModelsTab from "./ModelsTab.vue";
 import DefaultTab from "./DefaultTab.vue";
 import MemoryTab from "./MemoryTab.vue";
 import SubagentsTab from "./SubagentsTab.vue";
+import RemoteTab from "./RemoteTab.vue";
 
 const open = defineModel<boolean>("open", { required: true });
 </script>
@@ -47,6 +49,9 @@ const open = defineModel<boolean>("open", { required: true });
             <TabsTrigger value="subagents" class="settings-modal__tab">
               Subagents
             </TabsTrigger>
+            <TabsTrigger value="remote" class="settings-modal__tab">
+              Remote
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="providers" class="settings-modal__content">
@@ -63,6 +68,9 @@ const open = defineModel<boolean>("open", { required: true });
           </TabsContent>
           <TabsContent value="subagents" class="settings-modal__content">
             <SubagentsTab />
+          </TabsContent>
+          <TabsContent value="remote" class="settings-modal__content">
+            <RemoteTab />
           </TabsContent>
         </TabsRoot>
       </DialogContent>
