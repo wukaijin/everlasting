@@ -104,6 +104,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 import { registerShiftTabCycle } from "../../utils/useKeyboard";
+import { useMobileKeyboard } from "../../composables/useMobileKeyboard";
 
 /** B4 (Stretch 2) merged `/`-trigger panel (2026-06-18): wire DTO
  *  from the Rust `commands::panel::PanelItem`. The `source` field is
@@ -198,6 +199,11 @@ const inputRowStyle = computed(() => {
 //     Tauri `invoke` directly).
 
 const host = ref<HTMLDivElement | null>(null);
+
+// S5 移动端软键盘适配:监听 visualViewport 写 --visual-viewport-height CSS
+// 变量,AppShell 移动端 height 引用它,软键盘弹起时缩到键盘上方。iOS only
+// 机制(Android resize layout viewport,本调用对 Android 无害)。见 design §4.1。
+useMobileKeyboard();
 
 const cm = useChatInputCodeMirror({
   host,
@@ -913,5 +919,23 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
 
 .chat-input__file-row :deep(svg) {
   flex: 0 0 auto;
+}
+/* S5 移动端 ChatInput 适配(08-11-mobile-adaptation, Step 6)。桌面样式
+   块零改动(全在 @media max-width:767px 内)。 */
+@media (max-width: 767px) {
+  /* safe-area:底部 padding 叠加 Home Indicator 高度(env() 桌面=0 无害)。
+     原 padding 12px 20px 16px 的 16px 底部保留,加 safe-area-bottom。 */
+  .chat-input {
+    padding-bottom: calc(16px + var(--safe-area-bottom));
+  }
+  /* iOS Safari 字号 <16px 触发整页自动缩放。CodeMirror host 必须 16px。 */
+  :deep(.chat-input__field .cm-editor) {
+    font-size: 16px;
+  }
+  /* send / stop 按钮触摸目标放大(Apple HIG 44px)。原 32×32 桌面不动。 */
+  .chat-input__action {
+    width: 44px;
+    height: 44px;
+  }
 }
 </style>

@@ -28,12 +28,18 @@ import AppHeader from "./AppHeader.vue";
 import Sidebar from "./Sidebar.vue";
 import TracePanel from "../trace/TracePanel.vue";
 import ToastProvider from "../common/ToastProvider.vue";
+import { useMobileNav } from "../../composables/useMobileNav";
 
 const projectsStore = useProjectsStore();
 const chatStore = useChatStore();
 const showSidebar = computed<boolean>(
   () => projectsStore.currentProjectId !== null,
 );
+// S5 移动端抽屉导航(module-level 单例 composable,与 useToast 同构):AppHeader
+// 汉堡 toggle,Sidebar 读 mobileNavOpen + 选 session 自动 close,本组件渲染
+// 遮罩(@click close)。桌面下 open 状态被 CSS 忽略(Sidebar 常驻,fixed 定位
+// 只在 @media max-width:767px 生效)。
+const { mobileNavOpen, close: closeMobileNav } = useMobileNav();
 
 /** Toast click handler. For cross-session pending-interaction
  *  toasts (`sessionId` set): if the target session belongs to the
@@ -63,6 +69,17 @@ async function onToastClick(): Promise<void> {
         <slot />
       </main>
     </div>
+
+    <!-- S5 移动端抽屉遮罩:仅 @media (max-width:767px) 显示(CSS display:none
+         桌面)。v-if 双绑 showSidebar —— 无项目时 Sidebar 不存在,遮罩也不该
+         出现(汉堡那时也隐藏,双保险)。 -->
+    <transition name="sidebar-overlay">
+      <div
+        v-if="mobileNavOpen && showSidebar"
+        class="app-shell__sidebar-overlay"
+        @click="closeMobileNav"
+      />
+    </transition>
 
     <!-- E2 (harness trace pipeline, 2026-07-14): trace-viewer
          drawer. Mounts at the AppShell level (sibling of the
@@ -101,6 +118,40 @@ async function onToastClick(): Promise<void> {
   background: var(--color-bg-app);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
+}
+
+/* S5 移动端:URL bar 伸缩用 dvh(桌面 height:100vh 基线不动)。
+   iOS Safari 100vh = large viewport(地址栏收起态),地址栏出现时底部被遮;
+   100dvh 随 URL bar 自动收缩。见 design §4.1。 */
+@media (max-width: 767px) {
+  .app-shell {
+    /* --visual-viewport-height 由 useMobileKeyboard 写入(Step 6):软键盘
+       弹起时 = visualViewport.height(键盘上方),否则回退 --app-height(dvh)。 */
+    height: var(--visual-viewport-height, var(--app-height));
+  }
+}
+
+/* S5 移动端抽屉遮罩。桌面 display:none(零回归)。z-index 105:低于 Sidebar
+   抽屉(110,盖住遮罩),高于 TracePanel(100)。 */
+.app-shell__sidebar-overlay {
+  display: none;
+}
+@media (max-width: 767px) {
+  .app-shell__sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 105;
+  }
+}
+.sidebar-overlay-enter-active,
+.sidebar-overlay-leave-active {
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+.sidebar-overlay-enter-from,
+.sidebar-overlay-leave-to {
+  opacity: 0;
 }
 
 .app-shell__body {

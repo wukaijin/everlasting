@@ -31,15 +31,26 @@
 // changes to the chat store's API don't ripple into the project-tab
 // UI.
 
+import { computed } from "vue";
 import { useStreamControllerStore } from "../../stores/streamController";
+import { useProjectsStore } from "../../stores/projects";
 import { isTauriWebview } from "../../transport/env";
 import TitleBar from "./TitleBar.vue";
 import BrowserHeader from "./BrowserHeader.vue";
 import ProjectTabs from "../ProjectTabs.vue";
 import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
 import PendingBadge from "./PendingBadge.vue";
+import Icon from "../Icon.vue";
+import { useMobileNav } from "../../composables/useMobileNav";
 
 const streamController = useStreamControllerStore();
+const projectsStore = useProjectsStore();
+const { mobileNavOpen, toggle: toggleMobileNav } = useMobileNav();
+// S5: 无项目时隐藏汉堡(与 Sidebar v-if="showSidebar" 对称,review P3-3)。
+// 空状态本身有"+ 添加项目"入口,汉堡点了也没东西弹。
+const showHamburger = computed(
+  () => projectsStore.currentProjectId !== null,
+);
 
 // Resolve the shell component once at setup. `<component :is>` below
 // picks TitleBar or BrowserHeader; both expose the same default slot
@@ -50,7 +61,22 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
 <template>
   <header class="app-header">
     <component :is="shell">
-      <ProjectTabs :streaming-project-ids="streamController.streamingProjectIds" />
+      <!-- S5 移动端汉堡(桌面 .app-header__menu-toggle display:none,
+           移动端 inline-flex)。无项目时 v-if 隐藏(review P3-3)。 -->
+      <button
+        v-if="showHamburger"
+        class="app-header__menu-toggle"
+        type="button"
+        aria-label="打开导航"
+        :aria-expanded="mobileNavOpen"
+        @click="toggleMobileNav"
+      >
+        <Icon name="bars-3" :size="20" />
+      </button>
+      <ProjectTabs
+        :streaming-project-ids="streamController.streamingProjectIds"
+        class="app-header__project-tabs"
+      />
       <!-- RULE-FrontProj-001 fix: surfaces a "已隐藏项目" entry
            in the main UI (not just the empty state). Mounts only
            when at least one hidden project exists; the menu itself
@@ -78,5 +104,39 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
   background: var(--color-bg-surface);
   border-bottom: 1px solid var(--color-bg-border);
   z-index: 10;
+}
+
+/* S5 移动端汉堡按钮。桌面 display:none(零回归);移动端 inline-flex,
+   触摸目标 44×44(Apple HIG)。 */
+.app-header__menu-toggle {
+  display: none;
+}
+@media (max-width: 767px) {
+  .app-header__menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 100%;
+    min-height: 44px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    font-family: inherit;
+    transition: background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+  .app-header__menu-toggle:hover {
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
+  }
+  /* S5:AppHeader 的 ProjectTabs 移动端隐藏(挪进 Sidebar 抽屉顶部,见
+       .sidebar__project-tabs)。桌面常驻不动。 */
+  .app-header__project-tabs {
+    display: none;
+  }
 }
 </style>
