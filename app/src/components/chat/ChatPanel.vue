@@ -629,7 +629,7 @@ onUnmounted(() => reviewStateStore.stop());
         </button>
         <span
           v-if="showGitChip"
-          class="chat-panel__chip chat-panel__chip--git"
+          class="chat-panel__chip chat-panel__chip--git mobile-hide-git"
           :title="gitBranchTooltip"
         >
           <Icon name="refresh" :size="12" />
@@ -637,7 +637,7 @@ onUnmounted(() => reviewStateStore.stop());
         </span>
         <span
           v-if="chatStore.simplifiedCwd"
-          class="chat-panel__chip chat-panel__chip--cwd"
+          class="chat-panel__chip chat-panel__chip--cwd mobile-hide-cwd"
           :title="chatStore.simplifiedCwd"
         >
           <Icon name="folder" :size="12" />
@@ -652,6 +652,7 @@ onUnmounted(() => reviewStateStore.stop());
                 -->
         <WorktreeChip
           v-if="showWorktreeChip"
+          class="mobile-hide-worktree"
           :state="worktreeState"
           :chip-label="worktreeChipLabel"
           :chip-title="worktreeChipTitle"
@@ -1491,5 +1492,48 @@ onUnmounted(() => reviewStateStore.stop());
   border: 1px solid var(--color-status-warn, #f59e0b);
   border-radius: var(--radius-md, 8px);
   box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
+}
+
+/* S6a 主聊天视图 header 瘦身(08-13-mobile-chat-view)。桌面样式块零改动,
+   全部移动端规则放 @media (max-width: 767px) 内 + 新增 <360px 降级档。
+   对应 prd A1/A2/D1/D2/D4/D5:
+   - cwd chip / git chip / WorktreeChip 手机端无场景(DEC-2),display:none
+     隐藏(不动 showGitChip/showWorktreeChip script 逻辑,桌面还要用)。
+     隐藏类用单类选择器;WorktreeChip 是子组件根节点,scoped 下用 :deep()
+     命中(见 .trellis/spec/frontend/reka-ui-usage.md scoped/portal 约定)。
+   - 标题行 flex-wrap:wrap 在窄屏堆成三层(D1)→ nowrap + 标题 ellipsis,
+     标题不再被挤到行首贴边(D4)。
+   - 4 图标按钮(memory/audit/trace/grants)44px 触摸目标(Apple HIG)+ 行内
+     gap 收紧;header 高度 40px→48px 容纳(桌面不动)。 */
+@media (max-width: 767px) {
+  .chat-panel__header {
+    padding: 0 12px;
+    height: 48px;
+  }
+  .chat-panel__title-row {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+  .mobile-hide-cwd,
+  .mobile-hide-git,
+  :deep(.mobile-hide-worktree) {
+    display: none;
+  }
+  .chat-panel__memory-btn,
+  .chat-panel__audit-btn,
+  .chat-panel__trace-btn,
+  .chat-panel__grants-btn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* S6a 窄屏再降级(D8/D9):360px 以下主占位问题已由 767px 档解决,这里只做
+   A 组已有改动的强化档 —— 标题字号再收紧(design §3.5)。写在 767px 档之后
+   (后者优先,天然覆盖,单类选择器无特异性冲突)。 */
+@media (max-width: 359px) {
+  .chat-panel__title {
+    font-size: var(--text-sm);
+  }
 }
 </style>

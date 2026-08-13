@@ -938,4 +938,29 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
     height: 44px;
   }
 }
+
+/* S6a 底部输入区重排(08-13-mobile-chat-view)。prd A6/D6:Edit/wf 标签
+   缩窄不抢 1/3 横向,输入框(flex:1)在窄屏获得主宽度;占位文案不换行。
+   桌面块零改动;chip 是子组件根节点(ModeSelect/PluginSelect),用 :deep()
+   命中。DEC-3:Edit/wf 标签保留但缩小,不做"折叠进 + 菜单"。 */
+@media (max-width: 767px) {
+  .chat-input__row {
+    gap: 6px;
+    padding: 6px 6px 6px 10px;
+  }
+  :deep(.mode-select__trigger),
+  :deep(.plugin-select__chip) {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  :deep(.plugin-select__chip) {
+    margin-left: 2px;
+  }
+  /* 占位文案窄屏不换行(ellipsis 截断),避免 D6 里占位换行的怪观感。 */
+  :deep(.chat-input__field .cm-editor .cm-placeholder) {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
 </style>

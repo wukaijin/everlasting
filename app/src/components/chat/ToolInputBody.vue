@@ -78,4 +78,17 @@ defineProps<{
   color: var(--color-text-primary);
   font-family: var(--font-mono);
 }
+
+/* S6a 折叠块移动端紧凑(08-13-mobile-chat-view)。prd A3:summary 行移动端
+   padding 收紧、内容容器横向可滚(长代码/长行横向滚动不撑破布局)。
+   桌面块零改动;不改字号(design §3.4 只约定 padding + overflow-x,
+   10px mono 在 320px 反而伤可读性)。 */
+@media (max-width: 767px) {
+  .tool-input-body summary {
+    padding: 4px 2px;
+  }
+  .tool-input-body__pre {
+    overflow-x: auto;
+  }
+}
 </style>

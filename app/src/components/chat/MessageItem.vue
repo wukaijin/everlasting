@@ -1122,4 +1122,37 @@ const showEditedLabel = computed<boolean>(
   background: var(--color-bg);
   font-weight: var(--weight-semibold);
 }
+
+/* S6a 消息气泡移动端微调(08-13-mobile-chat-view)。prd A5/C3:窄屏下大段
+   纯文本缺视觉层次 → 气泡内 padding 收紧 + 段落间距/行高保持(正文行高
+   已 1.6,见 .msg__bubble line-height:var(--leading-relaxed));气泡宽度上限
+   从 75% 放宽到 88%,320px 下不至于太窄不可读。对比度不动设计 token
+   (design §3.4:只让"段落间距 + 行高"拉开视觉层次)。桌面块零改动。 */
+@media (max-width: 767px) {
+  .msg {
+    max-width: 88%;
+  }
+  .msg--user {
+    margin-right: 8px;
+  }
+  .msg__bubble {
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    line-height: var(--leading-relaxed);
+  }
+  /* 时间轴 text 块是"连续文本流"(无边框、收紧 margin 的设计意图,
+     见 .msg__bubble--timeline 注释),不受上面 margin-bottom 6px 影响 ——
+     同特异性下源序靠后者胜,这里显式恢复 2px,保持交错思考时段的流动感。 */
+  .msg__bubble--timeline {
+    margin-bottom: 2px;
+  }
+}
+
+/* S6a 窄屏再降级(D8/D9):360px 以下气泡 padding 再收紧(design §3.5,
+   写在 767px 档之后,后者优先,天然覆盖)。 */
+@media (max-width: 359px) {
+  .msg__bubble {
+    padding: 6px 10px;
+  }
+}
 </style>
