@@ -306,3 +306,34 @@ docs-staleness-audit 任务收官:43 个活文档逐行审计(design 误计 48,�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 35: remote epic S1–S5 归档收尾 + S6 打磨任务立项
+
+**Date**: 2026-08-13
+**Task**: remote epic S1–S5 归档收尾 + S6 打磨任务立项
+**Branch**: `feat/remote-control-epic-s1`
+
+### Summary
+
+S5 移动端适配简单测试通过,但 UI 适配一般。按 S5 PRD 自限边界(可用不追求好用)判定合同达成,归档 S5 并顺带收尾 S1–S4(全部完成但未归档);新开 S6 08-13-mobile-polish 承接紧凑消息视图/触控手感/动效等推后项。
+
+### Main Changes
+
+- 归档 S1–S5(5 个 chore(task): archive 提交,epic [5/6 done])
+- 创建 08-13-mobile-polish(S6 移动端体验打磨,planning,挂 epic 下)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b25c597` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- S6 进入 planning:brainstorm 紧凑消息视图/触控手感/动效的验收标准
+- epic 剩 S6 + 最终集成验收,完成后归档 parent
