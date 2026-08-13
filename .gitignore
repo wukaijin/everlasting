@@ -42,6 +42,9 @@ desktop.ini
 .env.*.local
 .envrc.local
 
+# deploy-remote.sh 本地配置(真实 ssh host/URL,不入库;模板见 .deploy-remote.env.example)
+scripts/.deploy-remote.env
+
 # 本地开发临时目录(早期 pip install fonttools 测试残留,现改用 Node 工具链)
 .venv/
 scripts-tmp-node_modules/

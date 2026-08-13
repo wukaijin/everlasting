@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "响应式/断点/overlay 约定的 SoT,S6a 全部改动遵循"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Dialog/Tooltip portal 陷阱,消息流组件可能触及"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件级样式/命名约定"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend spec 入口 + 质量检查"}

@@ -24,14 +24,29 @@
 //   AND so the SessionList renders with the matching modifier
 //   class.
 
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
 import SessionList from "../SessionList.vue";
 import SettingsModal from "../settings/SettingsModal.vue";
 import GroupChatConfigModal from "../chat/GroupChatConfigModal.vue";
+import ProjectTabs from "../ProjectTabs.vue";
 import Icon from "../Icon.vue";
+import { useMobileNav } from "../../composables/useMobileNav";
+import { useStreamControllerStore } from "../../stores/streamController";
 
 const chat = useChatStore();
+const streamController = useStreamControllerStore();
+// S5 移动端抽屉:读 mobileNavOpen 绑 :class,选 session 自动 close。
+// 桌面下 mobileNavOpen 被 CSS 忽略(fixed 只在 @media max-width:767px 生效)。
+const { mobileNavOpen, close: closeMobileNav } = useMobileNav();
+// S5: 选 session 后自动关抽屉(移动端)。currentSessionId 变化即 close。
+// 桌面下 mobileNavOpen 本就被 CSS 忽略,close 无副作用。
+watch(
+  () => chat.currentSessionId,
+  () => {
+    closeMobileNav();
+  },
+);
 
 function onNew() {
   void chat.createNewSession();
@@ -96,7 +111,14 @@ function onSearchClear() {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside :class="['sidebar', { 'sidebar--open': mobileNavOpen }]">
+    <!-- S5 移动端:项目 tabs 收纳进抽屉顶部(桌面 .sidebar__project-tabs
+         display:none)。桌面时项目 tabs 仍在 AppHeader 顶部常驻。双实例共享
+         Pinia store,无 useId/teleport 冲突(design §3.3 已核验)。 -->
+    <ProjectTabs
+      :streaming-project-ids="streamController.streamingProjectIds"
+      class="sidebar__project-tabs"
+    />
     <!--
       2026-06-27 sidebar header 改造: title row + 3 icon buttons.
       When search is active, the buttons collapse to just the
@@ -199,6 +221,41 @@ function onSearchClear() {
      from bg-app and reads consistently in every capture. */
   border-right: 1px solid var(--color-bg-border-strong);
   overflow: hidden;
+}
+
+/* S5 移动端抽屉化:fixed 全屏 overlay,默认 translateX(-100%) 隐藏,
+   .sidebar--open 时滑入。z-index 110 高于遮罩(105) + TracePanel(100)。
+   padding-top 避开刘海(safe-area)。transition 用 --duration-base(原 design
+   误写 --duration-normal 不存在,review P2-1)。桌面 .sidebar 基线不动。
+
+   真机迭代(2026-08-13):width 100vw → min(88vw, 320px)。原来抽屉全屏
+   盖住遮罩(遮罩 z-index 105 低于抽屉 110,点不到),用户必须选 session/
+   项目才能关抽屉 —— 手动收起变成不可能。露出右侧 12% 遮罩条(点击即
+   closeMobileNav),且 320px 上限保证 430px 屏不显得过宽。 */
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    inset: 0;
+    z-index: 110;
+    width: min(88vw, 320px);
+    padding-top: var(--safe-area-top);
+    transform: translateX(-100%);
+    transition: transform var(--duration-base) var(--ease-out);
+    border-right: none;
+  }
+  .sidebar--open {
+    transform: none;
+  }
+}
+
+/* S5:抽屉顶部的项目 tabs(移动端显示,桌面隐藏)。 */
+.sidebar__project-tabs {
+  display: none;
+}
+@media (max-width: 767px) {
+  .sidebar__project-tabs {
+    display: flex;
+  }
 }
 
 /* 2026-06-27 top-tab-bar boundary fix: header height locked to 40px

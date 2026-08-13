@@ -137,4 +137,20 @@ const durationLabel = computed<string>(() => {
   border-color: var(--color-tool-error);
   color: var(--color-tool-error);
 }
+
+/* S6a 折叠块移动端紧凑(08-13-mobile-chat-view)。prd A3:展开后空内容占满
+   一屏 → summary 行移动端 padding 收紧、内容容器横向可滚(长代码/长行横向
+   滚动不撑破布局)。桌面块零改动;不改字号(design §3.4 只约定 padding +
+   overflow-x,10px mono 在 320px 反而伤可读性)。 */
+@media (max-width: 767px) {
+  .tool-output-body {
+    margin-top: 2px;
+  }
+  .tool-output-body summary {
+    padding: 0 2px;
+  }
+  .tool-output-body__pre {
+    overflow-x: auto;
+  }
+}
 </style>

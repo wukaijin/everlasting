@@ -200,6 +200,13 @@ pub struct AppState {
     /// 直发 IPC),所以给 Tauri 进程也初始化一个空 registry 是无害的
     /// ——它只是没人 emit、没人 subscribe 的空壳。
     pub sse: Arc<crate::daemon::sse::SseRegistry>,
+    /// S2 (2026-08-11, task `08-11-tunnel-client`):remote 隧道管理器
+    /// (design §2.4 Q-T4)。**只有 daemon bin 的 main 调 `start()`**——
+    /// Tauri GUI(Thin/Full)只持有空壳,不 spawn 任何 tunnel task(P1-1
+    /// 修订:双进程同 node_id 会互踢 flapping)。IPC
+    /// (`set_remote_config` / `get_tunnel_status` / `generate_pairing_code`)
+    /// 经它统一管 config 变更 / shutdown / 状态 / RPC 通道。
+    pub tunnel_manager: Arc<crate::daemon::tunnel::TunnelManager>,
 }
 
 impl AppState {
@@ -405,6 +412,9 @@ impl AppState {
             // P2.3 C4: 进程级 SSE 分发中心。daemon 路径用它构造
             // HttpSseSink + /api/v1/stream subscribe;Tauri 路径留空。
             sse: Arc::new(crate::daemon::sse::SseRegistry::new()),
+            // S2: tunnel 管理器空壳。daemon bin main 调 start() 才 spawn
+            // tunnel task(Tauri 路径永不 start —— P1-1)。
+            tunnel_manager: crate::daemon::tunnel::TunnelManager::new(),
         }
     }
 

@@ -14,7 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::db;
-use crate::error::AppCommandError;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
 
 /// Frontend-safe view of the LLM config (returned by
@@ -126,4 +126,140 @@ pub fn get_home_dir(app: AppHandle) -> Option<String> {
     // parity with the pre-refactor signature.
     let _ = app.path().home_dir(); // keep the SideEffect-equivalent path for completeness
     get_home_dir_inner()
+}
+
+// ---------------------------------------------------------------------------
+// S2 remote tunnel 配置(2026-08-11, task `08-11-tunnel-client`,design §3.1)
+//
+// 三层模式(`_inner` + `#[tauri::command]` + daemon route):业务逻辑全在
+// `_inner`,Tauri 与 axum 两条路径共用。配置存 `app_config` KV
+// (零 migration,design §3.2),key 常量单源在
+// `daemon::tunnel::config`(load_remote_config 等共用)。
+// ---------------------------------------------------------------------------
+
+/// `get_remote_config` 返回体(design §3.1:`{remoteUrl, sharedSecret} | null`)。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteConfigPayload {
+    pub remote_url: String,
+    pub shared_secret: String,
+}
+
+/// `get_tunnel_status` 返回体(design §3.1:
+/// `{connected, remoteUrl, nodeId} | null`;`lastError` 为附加诊断字段)。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelStatusPayload {
+    pub connected: bool,
+    pub remote_url: String,
+    pub node_id: String,
+    pub last_error: Option<String>,
+}
+
+/// 读 remote 配置。`remote_url` key 缺失或为空 → `None`(未配置)。
+pub async fn get_remote_config_inner(
+    state: &Arc<AppState>,
+) -> Result<Option<RemoteConfigPayload>, AppCommandError> {
+    let Some(remote_url) =
+        db::get_config_value(&state.db, crate::daemon::tunnel::config::KEY_REMOTE_URL)
+            .await
+            .map_err(|e| anyhow::anyhow!("get_remote_config failed: {}", e))?
+    else {
+        return Ok(None);
+    };
+    let remote_url = remote_url.trim().to_string();
+    if remote_url.is_empty() {
+        return Ok(None);
+    }
+    let shared_secret =
+        db::get_config_value(&state.db, crate::daemon::tunnel::config::KEY_SHARED_SECRET)
+            .await
+            .map_err(|e| anyhow::anyhow!("get_remote_config failed: {}", e))?
+            .unwrap_or_default();
+    Ok(Some(RemoteConfigPayload {
+        remote_url,
+        shared_secret,
+    }))
+}
+
+#[tauri::command]
+pub async fn get_remote_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<RemoteConfigPayload>, AppCommandError> {
+    get_remote_config_inner(&state).await
+}
+
+/// 写 remote 配置 + 触发 tunnel 实时重连(design §2.4)。
+///
+/// P2-2 校验:scheme 必须 `wss://`(本地调试允许 `ws://`)、去尾斜杠、
+/// 拒绝 query/fragment;失败返 `InvalidRequest`,**不写库**。
+/// `remote_url` 为空串 = 停用 tunnel(回到纯本地,design §4.1)。
+pub async fn set_remote_config_inner(
+    state: &Arc<AppState>,
+    remote_url: String,
+    shared_secret: String,
+) -> Result<(), AppCommandError> {
+    use crate::daemon::tunnel::config::{build_tunnel_config, normalize_remote_url};
+    use crate::daemon::tunnel::TunnelConfig;
+
+    let normalized = if remote_url.trim().is_empty() {
+        String::new()
+    } else {
+        normalize_remote_url(&remote_url)
+            .map_err(|msg| AppCommandError::new(ErrorCategory::InvalidRequest, msg))?
+    };
+    db::set_config_value(
+        &state.db,
+        crate::daemon::tunnel::config::KEY_REMOTE_URL,
+        &normalized,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("set_remote_config failed: {}", e))?;
+    db::set_config_value(
+        &state.db,
+        crate::daemon::tunnel::config::KEY_SHARED_SECRET,
+        &shared_secret,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("set_remote_config failed: {}", e))?;
+
+    let cfg: Option<TunnelConfig> = if normalized.is_empty() {
+        None
+    } else {
+        Some(build_tunnel_config(&state.db, normalized, shared_secret).await)
+    };
+    state.tunnel_manager.set_config(cfg);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_remote_config(
+    state: State<'_, Arc<AppState>>,
+    remote_url: String,
+    shared_secret: String,
+) -> Result<(), AppCommandError> {
+    set_remote_config_inner(&state, remote_url, shared_secret).await
+}
+
+/// tunnel 状态查询。未配置 remote → `None`;已配置 → 状态快照。
+pub async fn get_tunnel_status_inner(
+    state: &Arc<AppState>,
+) -> Result<Option<TunnelStatusPayload>, AppCommandError> {
+    if state.tunnel_manager.current_config().is_none() {
+        return Ok(None);
+    }
+    let status = state.tunnel_manager.status();
+    Ok(Some(TunnelStatusPayload {
+        connected: status.connected,
+        remote_url: status.remote_url.unwrap_or_default(),
+        node_id: status.node_id.unwrap_or_default(),
+        last_error: status.last_error,
+    }))
+}
+
+#[tauri::command]
+pub async fn get_tunnel_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<TunnelStatusPayload>, AppCommandError> {
+    get_tunnel_status_inner(&state).await
 }

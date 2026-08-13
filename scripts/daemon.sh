@@ -26,7 +26,12 @@ set -euo pipefail
 # ── 路径常量(脚本可移植,不硬编码绝对路径) ──────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_TAURI="$REPO_ROOT/app/src-tauri"
-DAEMON_BIN="$SRC_TAURI/target/release/everlasting-daemon"
+# 2026-08-11 workspace 翻转(task 08-11-remote-daemon-core)后,cargo 把
+# 成员 crate 的产物统一落在 workspace 根 `target/`(不再是
+# `app/src-tauri/target/`)。daemon.sh 必须指向根 target,否则干净
+# checkout 上 rebuild 出的新二进制在根 target、脚本却拉旧路径的陈旧
+# 产物(S2 给 daemon 加 tunnel client 后这会让脚本一直跑旧 daemon)。
+DAEMON_BIN="$REPO_ROOT/target/release/everlasting-daemon"
 PID_FILE="$REPO_ROOT/.everlasting-daemon.pid"
 LOG_FILE="/tmp/everlasting-daemon.log"
 DEFAULT_PORT=7456

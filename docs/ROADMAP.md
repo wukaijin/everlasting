@@ -149,7 +149,7 @@
 | 编号 | 功能 | 备注 |
 |------|------|------|
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
-| B11  | 云端同步(Cloudflare Workers + D1) | 个人远程遥控通道 |
+| B11  | 远程遥控通道(原"云端同步 Cloudflare Workers + D1") | 个人远程遥控通道。方案已变更:中继节点从 Cloudflare 换成**国内 2C2G 服务器 + 自研 Rust remote daemon**。epic 已立项 `.trellis/tasks/08-11-remote-control-epic/`(5 子任务 S1-S5:remote daemon core / tunnel client / e2e 隧道管线 / 配对+PWA / 移动端适配),推进 [REMOTE-ACCESS-ROADMAP Phase 3](./REMOTE-ACCESS-ROADMAP.md) 从远期进入实施。不做主动推送、不做多用户、不做跨节点同步 |
 | A2+ P3 | shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail) | A2+ P1+P2 **判定层** 07-04 落地(见 §1.2);P3 是判定层之下的独立**限损层** — 判定错了也限损(盲区 `VAR=val cmd` / `$var` 展开 / 拆分器引号极端误判靠它兜底)。前置 WSL userns spike。拆自 parent `07-04-a2-shell-classification`(已 archive,P1+P2 收口)。源方案 [docs/A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) §4 远期候选 |
 
 ---

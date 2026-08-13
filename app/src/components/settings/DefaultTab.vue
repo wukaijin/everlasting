@@ -224,4 +224,55 @@ function selectDefault(modelId: string) {
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
+
+/* --- S6b 移动端适配(08-13-mobile-settings, 320-430px) ---
+ * 桌面样式块零改动,以下全部放 @media (max-width: 767px) 内。 */
+@media (max-width: 767px) {
+  /* B9:模型条目 name/id/tag 分层不挤,允许换行 */
+  .default-tab__option-info {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .default-tab__option-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* B10:分组标题 `CARLOS-API-XXX` 对比度提升(muted → secondary + 放大) */
+  .default-tab__group-header {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+  }
+
+  /* 真机迭代(2026-08-13 第二轮):选中行(name+id+thinking)换行后第二行
+     id 与 badge 视觉重复感强 → 缩小 id 字号 + 弱化颜色,与 name 拉开
+     层次;允许 name 在一行占满(选中项有 inset accent bar 标识可辨)。 */
+  .default-tab__option-name {
+    font-size: var(--text-base);
+    flex-basis: 100%;
+  }
+  .default-tab__option-id {
+    font-size: var(--text-2xs);
+  }
+
+  /* B11:选中态左侧 accent 条,窄屏一眼可辨(桌面圆点+边框保留,叠加 inset 条) */
+  .default-tab__option--selected {
+    border-color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent);
+  }
+
+  /* 真机迭代(2026-08-13 第二轮):全局 44px 规则(.settings-modal button,
+     含 min-height:44px 和 min-width:44px)把 radio (RadioGroupItem 默认
+     button,桌面 14px 圆点)撑成 44px 大圆点。上一轮只覆盖了 width/height,
+     min-width:44px 仍是胜者 → 必须同时覆盖 min-*。触摸目标仍由整行
+     option(label)承担,radio 只是视觉指示,不需要 44px。 */
+  .default-tab__radio {
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+  }
+}
 </style>

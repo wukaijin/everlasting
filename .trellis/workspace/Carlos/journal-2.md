@@ -306,3 +306,68 @@ docs-staleness-audit 任务收官:43 个活文档逐行审计(design 误计 48,�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 35: remote epic S1–S5 归档收尾 + S6 打磨任务立项
+
+**Date**: 2026-08-13
+**Task**: remote epic S1–S5 归档收尾 + S6 打磨任务立项
+**Branch**: `feat/remote-control-epic-s1`
+
+### Summary
+
+S5 移动端适配简单测试通过,但 UI 适配一般。按 S5 PRD 自限边界(可用不追求好用)判定合同达成,归档 S5 并顺带收尾 S1–S4(全部完成但未归档);新开 S6 08-13-mobile-polish 承接紧凑消息视图/触控手感/动效等推后项。
+
+### Main Changes
+
+- 归档 S1–S5(5 个 chore(task): archive 提交,epic [5/6 done])
+- 创建 08-13-mobile-polish(S6 移动端体验打磨,planning,挂 epic 下)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b25c597` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- S6 进入 planning:brainstorm 紧凑消息视图/触控手感/动效的验收标准
+- epic 剩 S6 + 最终集成验收,完成后归档 parent
+
+
+## Session 36: S6a+S6b 移动端打磨完成(主聊天视图+Settings 面板+三轮真机迭代)
+
+**Date**: 2026-08-13
+**Task**: S6a+S6b 移动端打磨完成(主聊天视图+Settings 面板+三轮真机迭代)
+**Branch**: `feat/remote-control-epic-s1`
+
+### Summary
+
+S6 子任务全部归档。基于 S5 真机截图 30 个痛点(A/B/C/D 组)收敛到 DEC-1~7。S6a:header 瘦身(去 worktree)、输入区+状态条紧凑、消息流组件移动端适配、窄屏降级档(<360px)、mode 菜单动态翻转。S6b:tab 横向滚动+背景 pill、卡片信息密度降级、选中态 accent 条、关闭按钮 Done 语义、sidebar 手动可收起。三轮真机迭代修正 20+ 处(icon 32px、按钮误伤 min-width:44px、radios 14px、mask 双侧、双行布局等)。所有 4 宽度 body 零溢出,1035 tests + build 全绿。
+
+### Main Changes
+
+- feat(settings) S6b Settings 面板移动端适配(tab 滚动+pill+卡片密度)
+- fix(mobile) S6b 真机三轮迭代(按钮宽度/sidebar 关闭/radio 缩放/id 字号/双行布局/双侧 mask)
+- docs(spec) DEC-7 移动端设置面板+触控目标策略更新
+- S6a+S6b 子任务归档(5+11 个 commits 全部落到 origin)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `acb8284` | (see git log) |
+| `5ea3647` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- S6 跨子任务验收:Settings 主聊天视图 320-430px 真机最终确认
+- S6 完毕,remote epic [5/6 done] 剩 parent 归档收尾

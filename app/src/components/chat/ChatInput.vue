@@ -104,6 +104,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 import { registerShiftTabCycle } from "../../utils/useKeyboard";
+import { useMobileKeyboard } from "../../composables/useMobileKeyboard";
 
 /** B4 (Stretch 2) merged `/`-trigger panel (2026-06-18): wire DTO
  *  from the Rust `commands::panel::PanelItem`. The `source` field is
@@ -198,6 +199,11 @@ const inputRowStyle = computed(() => {
 //     Tauri `invoke` directly).
 
 const host = ref<HTMLDivElement | null>(null);
+
+// S5 移动端软键盘适配:监听 visualViewport 写 --visual-viewport-height CSS
+// 变量,AppShell 移动端 height 引用它,软键盘弹起时缩到键盘上方。iOS only
+// 机制(Android resize layout viewport,本调用对 Android 无害)。见 design §4.1。
+useMobileKeyboard();
 
 const cm = useChatInputCodeMirror({
   host,
@@ -913,5 +919,55 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
 
 .chat-input__file-row :deep(svg) {
   flex: 0 0 auto;
+}
+/* S5 移动端 ChatInput 适配(08-11-mobile-adaptation, Step 6)。桌面样式
+   块零改动(全在 @media max-width:767px 内)。 */
+@media (max-width: 767px) {
+  /* safe-area:底部 padding 叠加 Home Indicator 高度(env() 桌面=0 无害)。
+     原 padding 12px 20px 16px 的 16px 底部保留,加 safe-area-bottom。 */
+  .chat-input {
+    padding-bottom: calc(16px + var(--safe-area-bottom));
+  }
+  /* iOS Safari 字号 <16px 触发整页自动缩放。CodeMirror host 必须 16px。 */
+  :deep(.chat-input__field .cm-editor) {
+    font-size: 16px;
+  }
+  /* send / stop 按钮触摸目标放大(Apple HIG 44px)。原 32×32 桌面不动。 */
+  .chat-input__action {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* S6a 底部输入区重排(08-13-mobile-chat-view)。prd A6/D6:Edit/wf 标签
+   缩窄不抢 1/3 横向,输入框(flex:1)在窄屏获得主宽度;占位文案不换行。
+   桌面块零改动;chip 是子组件根节点(ModeSelect/PluginSelect),用 :deep()
+   命中。DEC-3:Edit/wf 标签保留但缩小,不做"折叠进 + 菜单"。 */
+@media (max-width: 767px) {
+  .chat-input__row {
+    gap: 6px;
+    padding: 6px 6px 6px 10px;
+  }
+  :deep(.mode-select__trigger),
+  :deep(.plugin-select__chip) {
+    /* 真机迭代(2026-08-13):两 chip 固定高 32px + padding 归零,高度一致
+       (桌面靠 3px 8px 内边距撑高,高度 ~23px 参差)。字号保持 13px
+       (--text-base);CM 16px 是 iOS 防缩放底线不动,发送 44px 是 DEC-6
+       主操作底线不动 → 三元素高度成 32/24/44 梯级,不再参差。 */
+    height: 32px;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  :deep(.plugin-select__chip) {
+    margin-left: 2px;
+  }
+  /* 占位文案窄屏不换行(ellipsis 截断),避免 D6 里占位换行的怪观感。 */
+  :deep(.chat-input__field .cm-editor .cm-placeholder) {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 </style>

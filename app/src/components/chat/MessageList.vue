@@ -400,4 +400,17 @@ onUnmounted(() => {
 .scroll-to-bottom:active {
   transform: scale(0.94);
 }
+
+/* S6a 悬浮 ↓ 移动端避让(08-13-mobile-chat-view)。prd C2:与滚动条区域重叠
+   易误触 → 右 8px / 下 64px 显式避让滚动条 + 输入区(design §3.4,保留
+   "跳到底部"能力,流式输出仍需要);顺手放大触摸目标到 44px(项目 HIG
+   约定,见 responsive-mobile.md §6)。桌面块零改动。 */
+@media (max-width: 767px) {
+  .scroll-to-bottom {
+    right: 8px;
+    bottom: 64px;
+    width: 44px;
+    height: 44px;
+  }
+}
 </style>

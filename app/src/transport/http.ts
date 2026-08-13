@@ -40,6 +40,7 @@
 //   TS 类型(渐进,先 SSE + chat 精确,其余 `unknown`)。
 
 import type { Transport, UnlistenFn } from "./types";
+import { getDeviceToken, clearDeviceToken } from "./auth";
 
 // ---------------------------------------------------------------------------
 // cmd → domain 映射(81 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
@@ -58,6 +59,14 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   // config
   get_llm_config: "config",
   get_home_dir: "config",
+  // S2 remote tunnel(2026-08-11, task `08-11-tunnel-client`,design §3.1
+  // 清单第 6 条):缺这 3 行时 sidecar/浏览器模式报
+  // `unknown cmd "get_remote_config"`(Tauri Full 模式侥幸走 IPC)。
+  get_remote_config: "config",
+  set_remote_config: "config",
+  get_tunnel_status: "config",
+  // S2 配对码生成(新 domain pairing)
+  generate_pairing_code: "pairing",
   // files
   list_files: "files",
   list_files_at: "files",
@@ -235,7 +244,14 @@ let eventSource: EventSource | null = null;
 
 function ensureEventSource(): void {
   if (eventSource) return;
-  const url = `${daemonBase()}/api/v1/stream`;
+  const base = daemonBase();
+  const token = getDeviceToken();
+  // S4 pwa-remote(token 存在):SSE 经 proxy + access_token query。
+  // EventSource 不能设 header,走 remote `auth.rs` 的 query 通道。
+  // browser-local(无 token):直连 daemon(现状不变)。
+  const url = token
+    ? `${base}/api/v1/proxy/api/v1/stream?access_token=${encodeURIComponent(token)}`
+    : `${base}/api/v1/stream`;
   eventSource = new EventSource(url);
   // 具名 event 的 listener 在首个 listen(event) 时按需 addEventListener
   // (见 listen 实现)。这里只持有 EventSource 实例 + 错误日志。
@@ -244,6 +260,35 @@ function ensureEventSource(): void {
     // 按 Last-Event-ID 回放,store 自然恢复。
     console.warn("[httpTransport] EventSource error (will auto-reconnect)", e);
   };
+}
+
+/// 关闭并清空当前 EventSource 引用。供配对成功(无 token→有 token)或
+/// 登出 / 401(有 token→无 token)后调用:下一次 `listen` 会用新的 token
+/// 状态重建 EventSource(pwa-remote 走 proxy + query,local 直连)。
+///
+/// 不清 `handlersByEvent` —— 已注册的 handler 仍保留(其 unlisten 闭包
+/// 持引用)。重建后的 EventSource 会按需重新 addEventListener(首个
+/// `listen(newEvent)` 触发);MVP 配对/登出后通常伴随视图卸载重建,
+/// store 重新 `start()` 注册新 handler(详见 design §6)。
+export function resetEventSource(): void {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 401 全局处理(P2-1,design §6.2):transport.invoke 是所有 app 命令的
+// 唯一 choke point,调用方系统性 try/catch+swallow 会让 401 静默(errorBus
+// 只收未捕获异常,收不到)。故在 invoke 的 `!resp.ok` 分支拦 401:清 token
+// + 关 EventSource + 触发模块级回调(Step 5 由 App 注册
+// `router.push("/pairing")`)。
+//
+// 模块级回调通过 setOnAuthFailed 注册;App.vue 挂载时设置,生命周期内常驻。
+export let onAuthFailed: (() => void) | null = null;
+
+export function setOnAuthFailed(cb: (() => void) | null): void {
+  onAuthFailed = cb;
 }
 
 function parsePayload(data: string): unknown {
@@ -266,13 +311,32 @@ export const httpTransport: Transport = {
         `unknown cmd "${cmd}" — no domain mapping in httpTransport (sync CMD_TO_DOMAIN with daemon routes)`,
       );
     }
-    const url = `${daemonBase()}/api/v1/${domain}/${cmd}`;
+    const base = daemonBase();
+    // S4 pwa-remote 模式(D3):有 token → app 命令经 remote proxy 透传到
+    // 绑定的 PC 节点(加 `/api/v1/proxy` 前缀 + Bearer auth);无 token →
+    // browser-local 直连 daemon(现状不变,proxyPrefix 为空 + 无 auth 头)。
+    const token = getDeviceToken();
+    const proxyPrefix = token ? "/api/v1/proxy" : "";
+    const url = `${base}${proxyPrefix}/api/v1/${domain}/${cmd}`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const resp = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(transformArgsTopLevel(args)),
     });
     if (!resp.ok) {
+      // P2-1(design §6.2):token 失效(吊销/过期)remote 返 401。在抛
+      // TransportError 前先做副作用 —— 清 token(回退 browser-local)+ 关
+      // EventSource(下次重建无 auth)+ 触发 App 注册的跳转回调(→ /pairing)。
+      // 调用方 catch 与否都必过此处,避免 401 静默。
+      if (resp.status === 401 && getDeviceToken()) {
+        clearDeviceToken();
+        resetEventSource();
+        onAuthFailed?.();
+      }
       let body: TransportErrorBody | string;
       try {
         body = (await resp.json()) as TransportErrorBody;

@@ -14,6 +14,13 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [Transport Modes & PWA Navigation](./transport-and-pwa-modes.md) | How the SPA distinguishes daemon/remote/tauri contexts; token vs health-probe signals; 401 handling; wire casing | ✅ Filled (S4) |
+| [Responsive & Mobile](./responsive-mobile.md) | Breakpoints (native @media, desktop-first overlay), drawer nav, iOS keyboard (visualViewport), safe-area, Dialog full-screen, touch targets | ✅ Filled (S5) |
+| [Design Tokens](./design-tokens.md) | CSS variable system (color/spacing/radius/motion tokens); never hardcode hex/px | ✅ Filled |
+| [Reka-UI Usage](./reka-ui-usage.md) | reka-ui 2.9.9 primitives, wrapper classes, version-pinned constraints | ✅ Filled |
+| [Popover Pattern](./popover-pattern.md) | Hand-rolled onDocumentClick + Esc close dropdowns/popovers | ✅ Filled |
+| [Chat Components](./chat.md) | Chat panel, message rendering, tool cards | ✅ Filled |
+| [Memory UI](./memory-ui.md) | Memory modal / preview components | ✅ Filled |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |

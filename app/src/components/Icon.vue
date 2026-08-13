@@ -56,6 +56,7 @@ import {
   ClockIcon,
   MagnifyingGlassIcon,
   UserGroupIcon,
+  Bars3Icon,
 } from "@heroicons/vue/24/outline";
 import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink } from "@lucide/vue";
 
@@ -76,6 +77,7 @@ const props = withDefaults(
 const map = {
   "arrow-down": ArrowDownIcon,
   "arrow-up": ArrowUpIcon,
+  "bars-3": Bars3Icon,
   "check": CheckIcon,
   "x": XMarkIcon,
   "document": DocumentTextIcon,

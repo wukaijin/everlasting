@@ -294,6 +294,33 @@ textarea {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Mobile viewport tokens (S5 08-11-mobile-adaptation, Step 1)               *
+ * ------------------------------------------------------------------------- *
+ * --app-height: dynamic viewport height. iOS Safari 15.4+ shrinks 100dvh   *
+ * as the URL bar collapses/expands; @supports falls back to 100vh for      *
+ * older browsers. NOTE: dvh handles the URL bar ONLY — the iOS software    *
+ * keyboard is an overlay that does NOT resize the layout viewport, so      *
+ * ChatInput keyboard handling uses the Visual Viewport API (design §4.1 /  *
+ * implement Step 6, useMobileKeyboard composable). Desktop AppShell keeps  *
+ * height:100vh (does not consume --app-height), so this token is           *
+ * mobile-only in practice.                                                 *
+ *                                                                           *
+ * --safe-area-{top,bottom}: env(safe-area-inset-*). Requires viewport-fit  *
+ * =cover on the <meta viewport> (set in index.html) — without it env() is  *
+ * always 0. Zero on desktop / non-notch devices, harmless.                 *
+ * ------------------------------------------------------------------------- */
+:root {
+    --app-height: 100dvh;
+    --safe-area-top: env(safe-area-inset-top);
+    --safe-area-bottom: env(safe-area-inset-bottom);
+}
+@supports not (height: 100dvh) {
+    :root {
+        --app-height: 100vh;
+    }
+}
+
+/* ------------------------------------------------------------------------- *
  * Theme switching extension point (added 2026-06-27 PR5b)                    *
  * ------------------------------------------------------------------------- *
  * The app is DARK-ONLY today. All color tokens above are defined once in    *
@@ -314,4 +341,80 @@ textarea {
          --color-bg-surface: #ffffff;
          --color-text-primary: #1e293b;
          ... (every --color-* / state tint) */
+}
+
+/* ------------------------------------------------------------------------- *
+ * S5 移动端 Dialog 全屏化(08-11-mobile-adaptation, Step 5)                  *
+ * ------------------------------------------------------------------------- *
+ * 5 个硬 bug:PermissionGrantsModal / MarkdownDetailModal / RuntimeMemory-  *
+ * Modal / MemoryModal / AuditLogModal 的 min-width(560-640px)在 375px 视口 *
+ * 横向溢出。统一块用 DialogContent 真实根类覆盖(review P1-1:原 design 误写  *
+ * .grant-modal__content / .md-detail-modal 均不存在,照抄会静默失效)。      *
+ * SettingsModal / GroupChatConfigModal 本不溢出,一并全屏化保持观感一致。   *
+ *                                                                           *
+ * 写在全局 style.css(非 scoped):reka-ui DialogPortal teleport 到 body,     *
+ * scoped style 选不中 teleport 出去的节点。                                *
+ *                                                                           *
+ * inset:0 + transform:none 覆盖桌面 `top:50%;left:50%;transform:translate  *
+ * (-50%,-50%)` 居中 —— 不覆盖的话,100vw 元素被 translate 推出视口左边。    *
+ * ------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  .settings-modal,
+  .grant-modal,
+  .markdown-detail-modal,
+  .runtime-memory-modal,
+  .memory-modal,
+  .audit-modal,
+  .gcfg-content {
+    width: 100vw !important;
+    min-width: 0 !important;
+    max-width: 100vw !important;
+    height: var(--app-height);
+    max-height: var(--app-height);
+    inset: 0 !important;
+    transform: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* 按钮触摸目标放大(Apple HIG 44px)。覆盖 7 个 reka-ui Dialog + 2 个手搓
+     modal(YoloConfirmModal / ConfirmDialog)内的 button。手搓 modal 非 reka,
+     不走上面的全屏块(本就 width:100% 不溢出),但按钮触摸目标一并放大。 */
+  .settings-modal button,
+  .grant-modal button,
+  .markdown-detail-modal button,
+  .runtime-memory-modal button,
+  .memory-modal button,
+  .audit-modal button,
+  .gcfg-content button,
+  .yolo-confirm-modal button,
+  .confirm-modal button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * S6a 窄屏降级断点约定(08-13-mobile-chat-view, DEC-5)                        *
+ * ------------------------------------------------------------------------- *
+ * 断点策略沿用 S5 的 desktop-first overlay:桌面样式块为基线,移动端全部放 *
+ * `@media (max-width: 767px)` 内,桌面零改动。本任务新增一档窄屏降级:      *
+ * `@media (max-width: 359px)` —— 只用于"隐藏/收紧次要元素"级的进一步降级, *
+ * 与 767 正交,不放 CSS 变量、不做多档 ladder(S5 V2 项,当前只加一档)。    *
+ * 359px 规则必须写在 767px 规则之后(后者优先,天然覆盖,单类选择器无特异  *
+ * 性冲突)。                                                                 *
+ *                                                                           *
+ * WordBreak 全局兜底:360px 以下若仍有横向溢出(超长无空格 token / URL /    *
+ * base64 字符串),由下面这条全局规则兜底 —— 消息正文 + thinking 正文里的  *
+ * 超长串按词断行,不撑破移动端横向布局。组件内已有的 word-break 规则不受   *
+ * 影响(重复声明同值无害);作用范围用类名限定,不碰第三方 portal 内容。     *
+ * ------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  .msg__markdown p,
+  .msg__markdown li,
+  .msg__markdown blockquote,
+  .thinking__body {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 }

@@ -1,0 +1,1 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "check 阶段:cross-layer 一致性 + AI review 核验规则(每条 CRITICAL/WARNING 须对原码独立验证,~35% 误报预算)"}

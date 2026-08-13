@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量约定:cargo fmt 提交前拦截、禁止模式等"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon server 层现有约定(serve/graceful shutdown/路由组装)"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "模块组织约定,新增 daemon/tunnel/ 的放置规则"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "commit/diff 风格与提交约定(Phase 3.4 前必读)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "新增 IPC/常量前的 Pre-Modification Rule(先 grep 再改)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "IPC 三层(commands/daemon routes/前端 transport)跨层一致"}
+{"file": ".trellis/tasks/08-11-remote-daemon-core/design.md", "reason": "S1↔S2 跨任务契约:ws 握手 query、/internal/pairing/generate RPC、PendingReply、心跳方向"}

@@ -1,0 +1,40 @@
+[workspace]
+# 2026-08-11 (task 08-11-remote-daemon-core): flipped to a Cargo workspace
+# to host the new `everlasting-remote` crate (independent of the daemon's
+# heavy deps like libgit2/Tauri/agent core). The original single-crate
+# `everlasting` (app/src-tauri) stays a member unchanged — its build.rs,
+# `EVERLASTING_APP_IDENTIFIER` injection, and Tauri sidecar staging all
+# keep working because CARGO_MANIFEST_DIR is still app/src-tauri.
+members = [
+    "app/src-tauri",
+    "crates/everlasting-remote",
+    "crates/everlasting-remote-protocol",
+]
+resolver = "2"
+
+# Avoid pulling Tauri's heavy compile graph when someone runs a bare
+# `cargo build` at the repo root. The daemon + GUI must be built
+# explicitly: from the repo root `cargo build -p everlasting [--bin
+# everlasting-daemon]`, or from inside `app/src-tauri/` (where daemon.sh
+# and CI run) plain `cargo build --bin everlasting-daemon` — the member
+# directory makes that package the current one, so `--bin` resolves
+# without `-p`. Note: `--bin` WITHOUT `-p` at the repo root only looks
+# in the default members, so it cannot see the daemon.
+default-members = [
+    "crates/everlasting-remote",
+    "crates/everlasting-remote-protocol",
+]
+
+# Profile settings lifted from app/src-tauri/Cargo.toml when the workspace
+# was flipped (2026-08-11). Profiles MUST live at the workspace root; member
+# `[profile.*]` is silently ignored by cargo.
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+

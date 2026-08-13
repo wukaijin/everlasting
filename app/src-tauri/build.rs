@@ -43,7 +43,7 @@
 //!    as a generic compile-time env (only as an Android package-name
 //!    derivative), so we read it ourselves here.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     // Stage the daemon sidecar FIRST — `tauri_build::build()` (below)
@@ -125,6 +125,30 @@ fn emit_app_identifier() {
     println!("cargo:rustc-env=EVERLASTING_APP_IDENTIFIER={}", identifier);
 }
 
+/// Walk up from `dir` to the Cargo workspace root (the nearest ancestor
+/// whose `Cargo.toml` declares a `[workspace]` section) and return its
+/// `target/` directory. Returns `None` when no workspace root is found
+/// (standalone crate outside a workspace) — the caller then falls back
+/// to the pre-workspace `<manifest_dir>/target` layout.
+///
+/// Added 2026-08-11 (task 08-11-remote-daemon-core workspace flip):
+/// cargo stopped writing member artifacts next to the member manifest
+/// (`app/src-tauri/target`) and now uses the workspace root `target/`.
+/// The previous `<manifest_dir>/target` fallback silently missed the
+/// daemon binary → staged a 0-byte sidecar on clean checkouts.
+fn workspace_target_dir(mut dir: &Path) -> Option<PathBuf> {
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.is_file() {
+            let content = std::fs::read_to_string(&cargo_toml).ok()?;
+            if content.contains("[workspace]") {
+                return Some(dir.join("target"));
+            }
+        }
+        dir = dir.parent()?;
+    }
+}
+
 /// Copy `target/<profile>/everlasting-daemon` →
 /// `src-tauri/binaries/everlasting-daemon-<target-triple>`.
 ///
@@ -142,16 +166,20 @@ fn stage_daemon_sidecar() -> std::io::Result<()> {
         ));
     }
 
-    // Resolve the manifest dir (where this build.rs runs) and walk up
-    // to the workspace target dir. `CARGO_MANIFEST_DIR` is the
+    // Resolve the cargo target dir. `CARGO_MANIFEST_DIR` is the
     // `src-tauri/` dir; the cargo target dir is exposed via
-    // `OUT_DIR`'s ancestor or `CARGO_TARGET_DIR`. We use
-    // `CARGO_TARGET_DIR` if set, else fall back to
-    // `<manifest_dir>/target`.
+    // `CARGO_TARGET_DIR`, else (2026-08-11 workspace flip) it lives at
+    // the workspace root `<workspace>/target` — **not** `<manifest_dir>/target`.
+    // `workspace_target_dir` walks up to the nearest ancestor whose
+    // Cargo.toml declares `[workspace]`; a standalone (non-workspace)
+    // build falls back to the old `<manifest_dir>/target` layout.
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let target_dir = std::env::var("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| manifest_dir.join("target"));
+    let target_dir = match std::env::var("CARGO_TARGET_DIR") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => {
+            workspace_target_dir(&manifest_dir).unwrap_or_else(|| manifest_dir.join("target"))
+        }
+    };
 
     // Profile: `debug` or `release`. Derived from `OUT_DIR`'s path
     // segment (the 3rd-from-last component is the profile name in

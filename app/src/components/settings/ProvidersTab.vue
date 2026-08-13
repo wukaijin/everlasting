@@ -193,9 +193,16 @@ function protocolBadgeClass(protocol: string): string {
             {{ p.protocol }}
           </span>
           <span class="providers-tab__url">{{ p.baseUrl }}</span>
-          <span class="providers-tab__key-hint">
+          <span
+            class="providers-tab__key-hint"
+            :aria-label="keyStatusLabel(p.hasKey)"
+          >
             <Icon name="key" :size="12" />
-            {{ keyStatusLabel(p.hasKey) }}
+            <!-- S6b: 文字包一层 span,移动端隐藏只留 key 图标(见下方移动端块)。
+                 aria-label 补回 a11y:图标本身 aria-hidden,文字隐藏后 SR
+                 仍能读出 已加密保存/未设置(design §4 风险表声称"图标+组件
+                 语义"已保留 —— 不成立,Icon.vue 的图标全部 aria-hidden)。 -->
+            <span class="providers-tab__key-hint-text">{{ keyStatusLabel(p.hasKey) }}</span>
           </span>
         </div>
         <div class="providers-tab__row-actions">
@@ -697,5 +704,73 @@ function protocolBadgeClass(protocol: string): string {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* --- S6b 移动端适配(08-13-mobile-settings, 320-430px) ---
+ * 桌面样式块零改动,以下全部放 @media (max-width: 767px) 内。 */
+@media (max-width: 767px) {
+  /* B6/B7/B8:Provider 卡片信息密度降级 —— 允许两行堆叠 */
+  .providers-tab__row {
+    flex-wrap: wrap; /* 卡片允许两行 */
+  }
+  .providers-tab__row-info {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  /* B6:name 整词不拆(`Carlos-Api-OpenAI` 不被 `-` 断成三行),超出省略 */
+  .providers-tab__name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* B7:URL 完整可读 —— 桌面 nowrap+ellipsis 截断,移动端换行不截断 */
+  .providers-tab__url {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+  }
+
+  .providers-tab__key-hint {
+    gap: 2px;
+  }
+  /* B8:key-hint 只留 key 图标,隐藏 "已加密保存" 文字(状态示意不丢) */
+  .providers-tab__key-hint-text {
+    display: none;
+  }
+
+  /* 真机迭代(2026-08-13):全局 44px 规则(.settings-modal button)把编辑/删除
+     icon 按钮撑成 44px,挤爆卡片。scoped 覆盖回 32px —— 卡片内 icon 操作是
+     低频次要操作,32px 足够(DEC-6 精神:44px 只给主操作)。
+     用 --ghost 修饰类限定,避免误伤 .--primary 的 Add Provider 按钮
+     (后者需要 full-width 撑开 "Add Provider" 文字,32px 会把文字截断)。 */
+  .providers-tab__btn--ghost {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  /* 真机迭代第二轮(2026-08-13):Add Provider 按钮 ("+ Add Provider") 在
+     窄屏换行成 3 行,挤压布局 —— nowrap + 收紧 padding;header 行允许
+     wrap 让标题与按钮分开。第二轮修正(2026-08-13):默认 min-width:44px
+     全局规则会撑住按钮最小宽度,这里必须显式 min-width: 0 让内容决定
+     宽度;同时去掉 min-height 让 padding 决定高度(之前 32px 把按钮压扁,
+     icon 与文字居中被挤)。 */
+  .providers-tab__header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .providers-tab__btn--primary {
+    white-space: nowrap;
+    padding: 5px 10px;
+    min-height: 32px;
+    min-width: 0; /* 显式覆盖全局 .settings-modal button 的 min-width:44px */
+    height: auto; /* 让 padding 撑高,不被固定 32px 压扁 */
+  }
 }
 </style>

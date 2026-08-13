@@ -1,0 +1,16 @@
+[package]
+name = "everlasting-remote-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Wire-frame types shared between everlasting-remote (edge daemon) and the everlasting-daemon tunnel client. Pure types, zero system-library deps."
+
+[dependencies]
+# Serialization only — this crate is intentionally dependency-light so both
+# the remote crate and the daemon crate can depend on it without pulling in
+# each other's heavy graphs (axum / Tauri / libgit2 / agent core).
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Tests assert JSON wire-shape round-trip. serde_json is test-only so the
+# crate stays zero-runtime-deps apart from `serde` itself for consumers.
+serde_json = "1"

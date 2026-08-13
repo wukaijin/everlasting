@@ -113,8 +113,41 @@ const currentModeLabel = computed<string>(() => {
   return m?.label ?? "Edit";
 });
 
+/** 菜单打开方向(真机迭代 2026-08-13):菜单默认向上弹(底部输入区),
+ *  但窄屏下上方空间不足时会被遮挡/超出可视区 → 打开瞬间测量可用空间,
+ *  动态选择向上或向下。只在移动端(<768px)启用,桌面保持固定向上
+ *  (零回归)。见 .mode-select__menu--down。 */
+const menuOpenUp = ref(true);
+
+/** 菜单水平对齐(真机迭代 2026-08-13):菜单默认右对齐 trigger
+ *  (`right: 0`,向左侧展开)。Edit chip 在输入行左侧时,窄屏下左边
+ *  空间不足 → 菜单伸出屏幕左缘被裁。→ 动态测量:左侧空间 < 菜单宽
+ *  且右侧空间足够时改左对齐(`left: 0`,向右展开)。见
+ *  .mode-select__menu--left。 */
+const menuAlignLeft = ref(false);
+
 function toggleMenu() {
-  menuOpen.value = !menuOpen.value;
+  if (menuOpen.value) {
+    closeMenu();
+    return;
+  }
+  // jsdom 测试环境(window.matchMedia 未实现)/极端 webview 下跳过方向测量,
+  // 退回默认向上弹(不 crash)。真实浏览器命中 matchMedia。
+  if (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 767px)").matches &&
+    menuRoot.value
+  ) {
+    const r = menuRoot.value.getBoundingClientRect();
+    // 垂直:优先弹出空间大的一侧;上方空间不足(菜单 ~44px×3 项)时向下弹。
+    menuOpenUp.value = r.top >= window.innerHeight - r.bottom;
+    // 水平:右对齐需左侧 ≥220px;不足且右侧够则左对齐(向右展开)。
+    const MENU_W = 220;
+    const rightAlignedFits = r.left >= MENU_W;
+    const leftAlignedFits = window.innerWidth - r.right >= MENU_W;
+    menuAlignLeft.value = !rightAlignedFits && leftAlignedFits;
+  }
+  menuOpen.value = true;
 }
 
 function closeMenu() {
@@ -245,6 +278,7 @@ async function onYoloConfirm() {
       <div
         v-if="menuOpen"
         class="mode-select__menu"
+        :class="{ 'mode-select__menu--down': !menuOpenUp, 'mode-select__menu--left': menuAlignLeft }"
         role="menu"
       >
         <button
@@ -368,6 +402,20 @@ async function onYoloConfirm() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* 真机迭代(2026-08-13):上方空间不足时向下弹(script 动态计算,
+   menuOpenUp=false)。桌面固定向上,此修饰类仅移动端触发。 */
+.mode-select__menu--down {
+  bottom: auto;
+  top: calc(100% + 4px);
+}
+
+/* 真机迭代(2026-08-13):左侧空间不足(trigger 靠左)时改左对齐,
+   向右展开(script 动态计算 menuAlignLeft=true)。默认右对齐。 */
+.mode-select__menu--left {
+  right: auto;
+  left: 0;
 }
 
 .mode-select__item {

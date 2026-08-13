@@ -364,4 +364,26 @@ function openDeleteConfirm(m: ModelWithProvider) {
 .models-tab__btn--primary:hover:not(:disabled) {
     background: var(--color-accent-hover);
 }
+
+/* --- S6b 真机迭代 2(08-13,320-430px):Add Model 按钮不换行、tab 行内
+ *  撑得过宽时标题与按钮换行 ---- 桌面样式块零改动。 */
+@media (max-width: 767px) {
+  /* 真机迭代第二轮(2026-08-13):header 行允许换行,Add 按钮独占一行时
+     不会把标题挤出;button 本身 nowrap 防文字断行("+ Add Model" →
+     "+ Add / Model")。 */
+  .models-tab__header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  /* 真机迭代第三轮(2026-08-13):default --primary 走基础类,默认继承
+     32px 把 "+ Add Model" 文字挤断。同 ProvidersTab 修复:primary 加
+     min-width: 0 + height: auto + 明确 padding,不再依赖固定高度。 */
+  .models-tab__btn--primary {
+    white-space: nowrap;
+    padding: 5px 10px;
+    min-height: 32px;
+    min-width: 0;
+    height: auto;
+  }
+}
 </style>

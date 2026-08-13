@@ -19,7 +19,9 @@ pre-commit:
     - name: cargo-fmt
       glob: "*.rs"
       glob_exclude:
+        # workspace 翻转(2026-08-11)后产物在根 target/,两处都要排除。
         - "app/src-tauri/target/**"
+        - "target/**"
       run: |
         # lefthook 把 {staged_files} 展开成相对仓库根的、空格分隔的暂存文件列表。
         # 只要有任意一个暂存的 .rs 不符合 fmt,就拦下提交。

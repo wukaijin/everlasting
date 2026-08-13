@@ -170,4 +170,16 @@ const headerLabel = computed(() => {
 .thinking__body::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* S6a ThinkingBlock 移动端紧凑(08-13-mobile-chat-view)。prd A4:padding
+   收紧、label 字号保持;位置不动(V2 才处理 thinking 语义位置问题,
+   design §3.4)。桌面块零改动。 */
+@media (max-width: 767px) {
+  .thinking__summary {
+    padding: 4px 10px;
+  }
+  .thinking__body {
+    padding: 8px 10px;
+  }
+}
 </style>

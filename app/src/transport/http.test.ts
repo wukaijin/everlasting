@@ -260,3 +260,156 @@ describe("httpTransport.listen", () => {
     expect(seen).toEqual(["a", "b", "c", "a", "c"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S4 pwa-remote 模式(design §2.2 / D3):localStorage 有 device token →
+// invoke 加 `/api/v1/proxy` 前缀 + Bearer 头;EventSource 加 proxy + query。
+// 无 token → 行为完全不变(回归)。401 + token → 清 token + 关 ES + 回调。
+// ---------------------------------------------------------------------------
+describe("httpTransport pwa-remote mode (device token)", () => {
+  const TOKEN_KEY = "everlasting_device_token";
+
+  beforeEach(() => {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // jsdom always has localStorage; defensive.
+    }
+  });
+
+  afterEach(() => {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // fail silently
+    }
+  });
+
+  it("with token: invoke URL gets /api/v1/proxy prefix + Authorization header", async () => {
+    localStorage.setItem(TOKEN_KEY, "tok-123");
+    const t = await loadTransport();
+    await t.invoke("list_sessions");
+
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/proxy/api/v1/sessions/list_sessions",
+    );
+    expect(lastFetchCall?.init.method).toBe("POST");
+    expect(lastFetchCall?.init.headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer tok-123",
+    });
+    // body transform unaffected by token
+    expect(JSON.parse(lastFetchCall!.init.body as string)).toEqual({});
+  });
+
+  it("without token: invoke URL has no proxy prefix and no Authorization (regression)", async () => {
+    const t = await loadTransport();
+    await t.invoke("list_sessions");
+
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/sessions/list_sessions",
+    );
+    expect(lastFetchCall?.init.headers).toEqual({
+      "Content-Type": "application/json",
+    });
+  });
+
+  it("with token: invoke still applies camelCase→snake_case top-level keys", async () => {
+    localStorage.setItem(TOKEN_KEY, "tok");
+    const t = await loadTransport();
+    await t.invoke("chat", { requestId: "r1", sessionId: "s1" });
+
+    expect(JSON.parse(lastFetchCall!.init.body as string)).toEqual({
+      request_id: "r1",
+      session_id: "s1",
+    });
+  });
+
+  it("with token: EventSource URL has proxy prefix + access_token query (encoded)", async () => {
+    localStorage.setItem(TOKEN_KEY, "tok secret"); // space exercises encoding
+    const t = await loadTransport();
+    await t.listen("chat-event", () => {});
+
+    expect(MockEventSource.last?.url).toBe(
+      "http://localhost:7456/api/v1/proxy/api/v1/stream?access_token=tok%20secret",
+    );
+  });
+
+  it("without token: EventSource URL unchanged (regression)", async () => {
+    const t = await loadTransport();
+    await t.listen("chat-event", () => {});
+
+    expect(MockEventSource.last?.url).toBe(
+      "http://localhost:7456/api/v1/stream",
+    );
+  });
+
+  it("on 401 + token: clears device token, closes EventSource, fires onAuthFailed, still throws", async () => {
+    localStorage.setItem(TOKEN_KEY, "tok-123");
+    const mod = await import("./http");
+    const t = mod.httpTransport;
+
+    const fired: number[] = [];
+    mod.setOnAuthFailed(() => fired.push(1));
+
+    // Start an EventSource first so resetEventSource has something to close.
+    await t.listen("chat-event", () => {});
+    const es = MockEventSource.last;
+    expect(es).not.toBeNull();
+    const closeSpy = vi.spyOn(es!, "close");
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ kind: "Auth", message: "invalid token" }),
+      text: async () => '{"kind":"Auth","message":"invalid token"}',
+    } as Response);
+
+    await expect(t.invoke("list_sessions")).rejects.toMatchObject({
+      name: "TransportError",
+      status: 401,
+    });
+
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    expect(closeSpy).toHaveBeenCalled();
+    expect(fired).toEqual([1]);
+
+    mod.setOnAuthFailed(null);
+  });
+
+  it("on 401 without token: does NOT fire onAuthFailed (browser-local, no token to invalidate)", async () => {
+    const mod = await import("./http");
+    const t = mod.httpTransport;
+
+    const fired: number[] = [];
+    mod.setOnAuthFailed(() => fired.push(1));
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ kind: "Auth", message: "no" }),
+      text: async () => '{"kind":"Auth","message":"no"}',
+    } as Response);
+
+    await expect(t.invoke("list_sessions")).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(fired).toEqual([]);
+    mod.setOnAuthFailed(null);
+  });
+
+  it("resetEventSource() closes the current EventSource and clears the ref", async () => {
+    const t = await loadTransport();
+    await t.listen("chat-event", () => {});
+    const first = MockEventSource.last;
+    const closeSpy = vi.spyOn(first!, "close");
+
+    const mod = await import("./http");
+    mod.resetEventSource();
+
+    expect(closeSpy).toHaveBeenCalled();
+    // next listen rebuilds a fresh EventSource (different instance)
+    await t.listen("tool:call", () => {});
+    expect(MockEventSource.last).not.toBe(first);
+  });
+});

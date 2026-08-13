@@ -248,4 +248,23 @@ defineProps<{
     transform: translateY(0);
   }
 }
+
+/* S6a 状态条折叠(08-13-mobile-chat-view)。prd A7/D7 + DEC-3:LLM 延迟
+   chip + token 用量 chip 是开发者调试信息,手机端隐藏;ModelSelect 保留
+   (模型选择是普通用户主操作)。桌面块零改动。
+   延迟 chip 根节点是子组件根(.chat-input__latency),scoped 下用 :deep()
+   命中;token chip 是本组件模板内 span,单类选择器即可。隐藏后整行只剩
+   ModelSelect,justify-content 从 space-between 改 flex-end 让它靠右,
+   margin-top 4px 收紧行高(design §3.3)。 */
+@media (max-width: 767px) {
+  :deep(.chat-input__latency),
+  .chat-input__token-usage {
+    display: none;
+  }
+  .chat-input__hint {
+    margin-top: 4px;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+}
 </style>

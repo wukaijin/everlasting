@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端层 spec 入口(目录结构/约定指针)。注意:index 的 Guidelines Index 表过时,实际已 filled 的 design-tokens/reka-ui-usage/popover-pattern/chat 等未列入"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "S5 大量用 CSS 变量做媒体查询覆盖 + Step 1 加断点 token(--app-height dvh);token 定义在 style.css,组件用 var(--name),不得硬编码 px/hex"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Step 5 改造 7 个 reka-ui Dialog(Settings/PermissionGrants/MarkdownDetail/RuntimeMemory/Memory/Audit/GroupChatConfig) + 2 个手搓 modal(YoloConfirm/ConfirmDialog);5 个 min-width 硬 bug(原 design 只列 3 个,漏 Memory/Audit)。统一全屏化块选择器须用 DialogContent 真实根类(grant-modal/markdown-detail-modal/memory-modal/audit-modal 等,原 design 误写 grant-modal__content/md-detail-modal),遵循项目 Dialog 封装类与 props 规范"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "抽屉遮罩 click-outside + Esc 关闭交互参考此手搓 onDocumentClick 模式;虽非 popover 但关闭行为同源"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "移动端 PWA 走 pwa-remote transport context(isTauri=false→AppHeader 必走 BrowserHeader 分支);抽屉/汉堡改造需确认走的渲染分支"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "Step 7 chat 内容区改造(代码块横向滚动 / tool_use 卡片 max-width)参考 chat 组件规范"}
