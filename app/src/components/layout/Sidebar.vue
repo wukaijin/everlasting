@@ -226,13 +226,18 @@ function onSearchClear() {
 /* S5 移动端抽屉化:fixed 全屏 overlay,默认 translateX(-100%) 隐藏,
    .sidebar--open 时滑入。z-index 110 高于遮罩(105) + TracePanel(100)。
    padding-top 避开刘海(safe-area)。transition 用 --duration-base(原 design
-   误写 --duration-normal 不存在,review P2-1)。桌面 .sidebar 基线不动。 */
+   误写 --duration-normal 不存在,review P2-1)。桌面 .sidebar 基线不动。
+
+   真机迭代(2026-08-13):width 100vw → min(88vw, 320px)。原来抽屉全屏
+   盖住遮罩(遮罩 z-index 105 低于抽屉 110,点不到),用户必须选 session/
+   项目才能关抽屉 —— 手动收起变成不可能。露出右侧 12% 遮罩条(点击即
+   closeMobileNav),且 320px 上限保证 430px 屏不显得过宽。 */
 @media (max-width: 767px) {
   .sidebar {
     position: fixed;
     inset: 0;
     z-index: 110;
-    width: 100vw;
+    width: min(88vw, 320px);
     padding-top: var(--safe-area-top);
     transform: translateX(-100%);
     transition: transform var(--duration-base) var(--ease-out);

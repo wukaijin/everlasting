@@ -131,7 +131,13 @@ function toggleMenu() {
     closeMenu();
     return;
   }
-  if (window.matchMedia("(max-width: 767px)").matches && menuRoot.value) {
+  // jsdom 测试环境(window.matchMedia 未实现)/极端 webview 下跳过方向测量,
+  // 退回默认向上弹(不 crash)。真实浏览器命中 matchMedia。
+  if (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 767px)").matches &&
+    menuRoot.value
+  ) {
     const r = menuRoot.value.getBoundingClientRect();
     // 垂直:优先弹出空间大的一侧;上方空间不足(菜单 ~44px×3 项)时向下弹。
     menuOpenUp.value = r.top >= window.innerHeight - r.bottom;
