@@ -256,6 +256,44 @@ pub fn filter_tools_for_workflow(tools: Vec<ToolDef>, workflow_enabled: bool) ->
         .collect()
 }
 
+/// C7 (2026-08-14, R3): strip group-chat-only tools from non-group-
+/// chat sessions so classic chat never advertises tools it can't use.
+///
+/// Group-chat-only tools: `nominate_speaker` + `end_discussion` —
+/// the moderator's turn-control SIGNAL tools. They are meaningless
+/// outside a group_chat session; the chat_loop interception already
+/// no-ops them with an error tool_result in classic chat (see the
+/// `builtin_tools` registration comment at the bottom of this list).
+/// This filter realises that comment's "Phase 4 may filter by
+/// session_type" intent: filtering at the schema layer (rather than
+/// relying on the runtime no-op) keeps the classic-chat tool list
+/// clean and trims the dead schema (~465 tok/turn) from the context
+/// window — provider-agnostic, applied before the provider sees
+/// `tools[]` (same layer as `filter_tools_for_mode` / `_workflow`).
+///
+/// `is_group_chat = true` is a **no-op** (returns `tools` unchanged):
+/// group chat builds its list via the `group_chat_tool_defs` whitelist
+/// (`group_chat_prompts.rs`, which includes the arbitration tools for
+/// the moderator and excludes them for participants). This filter must
+/// not second-guess that whitelist, so it stays out of the way for
+/// group_chat sessions. Mirrors [`filter_tools_for_workflow`]'s pure
+/// `Vec<ToolDef>` filter shape, chained at the same turn-tool-build
+/// site (`drive.rs`, right next to the workflow filter).
+///
+/// Cache stability (prd R3.2): within one session the `session_type`
+/// is fixed, so the pruned set is stable across consecutive turns —
+/// OpenAI's automatic prefix cache and any future Anthropic tools
+/// breakpoint see a stable `tools[]` prefix within a mode segment.
+pub fn filter_tools_for_session_type(tools: Vec<ToolDef>, is_group_chat: bool) -> Vec<ToolDef> {
+    if is_group_chat {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| !matches!(t.name.as_str(), "nominate_speaker" | "end_discussion"))
+        .collect()
+}
+
 /// Per-turn context passed to every tool execution. Built once per
 /// agent turn (in `lib.rs::chat`) from the active project / session
 /// state, then handed (immutably) to each tool call.
@@ -576,5 +614,53 @@ async fn execute_tool_inner(
             ToolContextUpdate::default(),
             None,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests_session_type_filter {
+    // C7 (2026-08-14, R3): lock the static group-chat-only tool
+    // pruning. Mirrors `permissions::tests_mode`'s shape (minimal
+    // `ToolDef::new_for_test` vecs + name-set assertions).
+
+    use super::filter_tools_for_session_type;
+    use crate::llm::ToolDef;
+
+    fn sample() -> Vec<ToolDef> {
+        vec![
+            ToolDef::new_for_test("read_file"),
+            ToolDef::new_for_test("nominate_speaker"),
+            ToolDef::new_for_test("end_discussion"),
+            ToolDef::new_for_test("shell"),
+        ]
+    }
+
+    fn names(t: &[ToolDef]) -> Vec<&str> {
+        t.iter().map(|x| x.name.as_str()).collect()
+    }
+
+    #[test]
+    fn classic_chat_strips_group_chat_only_tools() {
+        let filtered = filter_tools_for_session_type(sample(), false);
+        let n = names(&filtered);
+        assert!(n.contains(&"read_file"), "通用工具保留");
+        assert!(n.contains(&"shell"));
+        assert!(
+            !n.contains(&"nominate_speaker"),
+            "群聊专属工具应被裁掉(classic chat)"
+        );
+        assert!(!n.contains(&"end_discussion"));
+    }
+
+    #[test]
+    fn group_chat_is_a_noop() {
+        // group chat builds its list via `group_chat_tool_defs`
+        // (which adds the arbitration tools for the moderator);
+        // this filter must not second-guess that whitelist.
+        let filtered = filter_tools_for_session_type(sample(), true);
+        assert_eq!(filtered.len(), 4, "group chat keeps all tools");
+        let n = names(&filtered);
+        assert!(n.contains(&"nominate_speaker"));
+        assert!(n.contains(&"end_discussion"));
     }
 }

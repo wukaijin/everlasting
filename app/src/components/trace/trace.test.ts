@@ -111,6 +111,53 @@ describe("TurnCard — render", () => {
     const segments = w.findAll(".turn-card__token-segment");
     expect(segments.length).toBeGreaterThan(0);
   });
+
+  it("renders the C7 tools[] estimate cell with its context share", () => {
+    // C7 (R1.4): when both tokenUsage (with context_input) and
+    // toolsToken are present, the card surfaces a separate `tools`
+    // legend cell (NOT a bar segment) plus a share-of-context
+    // tooltip. Formula is tools_token / context_input (7000/10000 =
+    // 70%) — the double-count trap is covered by the design.
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          toolsToken: 7000,
+          tokenUsage: {
+            input_tokens: 3000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 10000,
+          },
+        }),
+      },
+    });
+    const toolsCell = w.find(".turn-card__token-cell--tools");
+    expect(toolsCell.exists()).toBe(true);
+    expect(toolsCell.text()).toContain("tools 7K");
+    // Tooltip carries the share-of-context percentage.
+    expect(toolsCell.attributes("title")).toContain("70%");
+  });
+
+  it("omits the tools[] cell when toolsToken is absent", () => {
+    // Live path / pre-column rows: toolsToken is undefined → no
+    // tools cell renders (the card does not fabricate a "—" here,
+    // matching the existing tokenUsage-absent behavior).
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          tokenUsage: {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 1000,
+          },
+        }),
+      },
+    });
+    expect(w.find(".turn-card__token-cell--tools").exists()).toBe(false);
+  });
 });
 
 describe("TraceEventItem — critical highlighting", () => {

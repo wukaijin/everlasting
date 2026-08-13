@@ -157,3 +157,27 @@ pub(crate) async fn add_session_audit_events_column_if_missing(
     }
     Ok(())
 }
+
+/// Add a column to `turn_trace` if it doesn't already exist. Mirrors
+/// [`add_session_column_if_missing`]. Added for C7 (tools[] token
+/// governance, 2026-08-14) — the `tools_token` column that records
+/// the per-turn estimated token cost of the serialized `tools[]`
+/// array (a separately-measured dimension of context usage that is
+/// NOT folded into the cache-rate; see `db::trace` + design §R1).
+pub(crate) async fn add_turn_trace_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('turn_trace') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!("ALTER TABLE turn_trace ADD COLUMN {} {}", column, decl);
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}

@@ -156,6 +156,46 @@ const contextLevel = computed<"ok" | "warn" | "alert" | "none">(() => {
   return tokenUsageLevel(pct);
 });
 
+/** C7 (2026-08-14): tools[] estimated tokens as a share of the
+ *  turn's context_input. Per design §R1 the formula is
+ *  `tools_token / context_input_tokens` — NOT
+ *  `tools_token / (context_input + tools_token)`, which would
+ *  double-count (context_input already contains tools). `null`
+ *  when tools_token was never written (pre-column / worker rows)
+ *  or context_input is 0/absent. */
+const toolsPct = computed<number | null>(() => {
+  const tools = props.trace.toolsToken;
+  const t = props.trace.tokenUsage;
+  if (tools == null || !t) return null;
+  const ctx = t.context_input_tokens || 0;
+  if (ctx <= 0) return null;
+  return (tools / ctx) * 100;
+});
+
+/** Tooltip string for the whole token block. Joins the 5-field
+ *  breakdown with the tools[] estimate (C7) when present. */
+const tokensTitle = computed<string>(() => {
+  const t = props.trace.tokenUsage;
+  const parts: string[] = [];
+  if (t) {
+    parts.push(`Input ${abbreviateTokens(t.input_tokens)}`);
+    parts.push(
+      `Cache Create ${abbreviateTokens(t.cache_creation_input_tokens)}`,
+    );
+    parts.push(`Cache Read ${abbreviateTokens(t.cache_read_input_tokens)}`);
+    parts.push(`Output ${abbreviateTokens(t.output_tokens)}`);
+  }
+  if (props.trace.toolsToken != null) {
+    const tok = abbreviateTokens(props.trace.toolsToken);
+    parts.push(
+      toolsPct.value != null
+        ? `Tools[] ≈${tok} (${toolsPct.value.toFixed(0)}% of context)`
+        : `Tools[] ≈${tok}`,
+    );
+  }
+  return parts.join(" · ");
+});
+
 /** True when the compaction sub-card should render with the
  *  red "critical" border. The trigger is
  *  `degradation === "still_over"` (the C3 hard-kill branch:
@@ -228,11 +268,11 @@ const ungroupedLabel = computed<string>(() =>
       </span>
     </header>
 
-    <!-- Token 5-field mini bar -->
+    <!-- Token 5-field mini bar (+ C7 tools[] estimate cell) -->
     <div
       v-if="trace.tokenUsage"
       class="turn-card__tokens"
-      :title="`Input ${abbreviateTokens(trace.tokenUsage.input_tokens)} · Cache Create ${abbreviateTokens(trace.tokenUsage.cache_creation_input_tokens)} · Cache Read ${abbreviateTokens(trace.tokenUsage.cache_read_input_tokens)} · Output ${abbreviateTokens(trace.tokenUsage.output_tokens)}`"
+      :title="tokensTitle"
     >
       <div class="turn-card__token-bar" aria-hidden="true">
         <div
@@ -258,6 +298,20 @@ const ungroupedLabel = computed<string>(() =>
         </span>
         <span class="turn-card__token-cell">
           out {{ abbreviateTokens(trace.tokenUsage.output_tokens) }}
+        </span>
+        <!-- C7: separately-measured tools[] token estimate (NOT a
+             bar segment — it's a slice already inside context_input,
+             shown only as a count + share-of-context tooltip). -->
+        <span
+          v-if="trace.toolsToken != null"
+          class="turn-card__token-cell turn-card__token-cell--tools"
+          :title="
+            toolsPct != null
+              ? `tools[] 估算 ≈${abbreviateTokens(trace.toolsToken)}(约 context 的 ${toolsPct.toFixed(0)}%)`
+              : `tools[] 估算 ≈${abbreviateTokens(trace.toolsToken)}`
+          "
+        >
+          tools {{ abbreviateTokens(trace.toolsToken) }}
         </span>
       </div>
     </div>
@@ -464,6 +518,16 @@ const ungroupedLabel = computed<string>(() =>
 
 .turn-card__token-cell {
   white-space: nowrap;
+}
+
+/* C7: tools[] is a separately-measured slice of context (not one of
+   the 4 bar segments), so it gets a faint border to read as its own
+   dimension rather than a 5th segment of the bar. */
+.turn-card__token-cell--tools {
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  color: var(--color-tool-thinking);
 }
 
 .turn-card__sub {

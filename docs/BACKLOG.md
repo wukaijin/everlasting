@@ -58,6 +58,8 @@
 - 关卡 ⑤ (context 构造) 做硬卡
 - 超限按优先级裁剪
 
+> 📌 **待办(2026-08-14,源自 C7 brainstorm):memory 指令块(CLAUDE.md/AGENTS.md)窗口治理** — 与 `tools[]` 并列的窗口大头,但走不同路径。本仓库实测 CLAUDE.md 27KB≈6-7k token + AGENTS.md ~1k(`memory/loader.rs:204` 的 `load_for_session` 最多叠 4 层:用户/项目 × CLAUDE.md/AGENTS.md);挂了 `cache_control`(省钱)但**不省窗口**。等 C7(`.trellis/tasks/08-14-c7-tools-token-governance/`)的 tools 占比度量数据产出后,评估 memory 块治理优先级(手段是按相关性裁剪/分段加载,而非全量注入 — 与 tools 裁剪不同)。不纳入 C7(不同治理对象 + 不同手段)。
+
 ### 3.2 状态管理复杂度
 - 多 channel 共享 session 状态 → 集中到 agent daemon(daemon 化 2026-07 已落地,GUI + 浏览器共享同一 `everlasting-daemon` 进程的 session 池)
 - 多 role/mode 切换 → 状态机

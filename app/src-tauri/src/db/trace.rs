@@ -38,6 +38,14 @@ pub struct TurnTraceRow {
     pub compaction_json: Option<String>,
     pub loop_hint_json: Option<String>,
     pub breadcrumb_json: Option<String>,
+    /// C7 (2026-08-14): per-turn estimated token cost of the
+    /// serialized `tools[]` array. `None` for rows written before
+    /// the column existed, and for turns that skipped the estimate
+    /// (worker `skip_persist` path). Serialized as `toolsToken` on
+    /// the wire (camelCase via the struct-level rename). NOT folded
+    /// into the cache-rate — it's a separately-measured slice of
+    /// `context_input_tokens` (see design §R1, prd R1.3).
+    pub tools_token: Option<i64>,
     pub created_at: String,
 }
 
@@ -52,24 +60,35 @@ pub struct TurnTraceRow {
 ///
 /// The JSON payload is the serialized `TokenUsage` (5-field shape
 /// mirroring `ChatEvent::Done.usage`).
+///
+/// C7 (2026-08-14): `tools_token` is the cl100k estimate of the
+/// serialized `tools[]` array for this turn, written in the same
+/// upsert because both originate from the same `Done`-event write
+/// point. On a `UNIQUE(session_id, seq)` conflict both columns are
+/// rewritten together (a retry re-estimates tools_token from the
+/// same turn's tool list). Other dimensions (compaction / loop_hint
+/// / breadcrumb) are untouched — they have their own upserts.
 pub async fn upsert_turn_trace_token(
     pool: &SqlitePool,
     session_id: &str,
     seq: i64,
     usage: &TokenUsage,
+    tools_token: Option<u32>,
 ) -> Result<(), sqlx::Error> {
     let json = serde_json::to_string(usage).unwrap_or_else(|_| "{}".to_string());
     sqlx::query(
         r#"
-        INSERT INTO turn_trace (session_id, seq, token_usage_json)
-        VALUES (?, ?, ?)
+        INSERT INTO turn_trace (session_id, seq, token_usage_json, tools_token)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(session_id, seq)
-        DO UPDATE SET token_usage_json = excluded.token_usage_json
+        DO UPDATE SET token_usage_json = excluded.token_usage_json,
+                      tools_token = excluded.tools_token
         "#,
     )
     .bind(session_id)
     .bind(seq)
     .bind(&json)
+    .bind(tools_token.map(|t| t as i64))
     .execute(pool)
     .await?;
     Ok(())
@@ -259,7 +278,7 @@ pub async fn list_turn_traces(
     let rows = sqlx::query(
         r#"
         SELECT id, session_id, seq, token_usage_json, compaction_json,
-               loop_hint_json, breadcrumb_json, created_at
+               loop_hint_json, breadcrumb_json, tools_token, created_at
         FROM turn_trace
         WHERE session_id = ?
         ORDER BY seq ASC
@@ -278,6 +297,7 @@ pub async fn list_turn_traces(
                 compaction_json: r.try_get("compaction_json")?,
                 loop_hint_json: r.try_get("loop_hint_json")?,
                 breadcrumb_json: r.try_get("breadcrumb_json")?,
+                tools_token: r.try_get("tools_token")?,
                 created_at: r.try_get("created_at")?,
             })
         })
@@ -351,7 +371,7 @@ mod tests {
             cache_read_input_tokens: 20,
             context_input_tokens: 130,
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, Some(7000))
             .await
             .unwrap();
 
@@ -391,6 +411,10 @@ mod tests {
         assert!(rows[0].loop_hint_json.is_some());
         assert!(rows[0].breadcrumb_json.is_some());
 
+        // C7: tools_token round-trips (written by the same upsert
+        // as token_usage_json).
+        assert_eq!(rows[0].tools_token, Some(7000));
+
         // Verify the JSON content round-trips.
         let token_json: serde_json::Value =
             serde_json::from_str(rows[0].token_usage_json.as_deref().unwrap()).unwrap();
@@ -410,7 +434,7 @@ mod tests {
         // Write out of order (seq=3, 1, 2).
         for seq in [3i64, 1, 2] {
             let usage = TokenUsage::default();
-            upsert_turn_trace_token(&pool, &sid, seq, &usage)
+            upsert_turn_trace_token(&pool, &sid, seq, &usage, None)
                 .await
                 .unwrap();
         }
@@ -428,10 +452,10 @@ mod tests {
         let sid = seed_session(&pool).await;
 
         let usage = TokenUsage::default();
-        upsert_turn_trace_token(&pool, &sid, 1, &usage)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, None)
             .await
             .unwrap();
-        upsert_turn_trace_token(&pool, &sid, 2, &usage)
+        upsert_turn_trace_token(&pool, &sid, 2, &usage, None)
             .await
             .unwrap();
 
@@ -453,7 +477,7 @@ mod tests {
             input_tokens: 100,
             ..Default::default()
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage1)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage1, Some(111))
             .await
             .unwrap();
 
@@ -461,7 +485,7 @@ mod tests {
             input_tokens: 200,
             ..Default::default()
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage2)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage2, Some(222))
             .await
             .unwrap();
 
@@ -477,6 +501,50 @@ mod tests {
             json["input_tokens"], 200,
             "second write must overwrite the first"
         );
+        // C7: tools_token must be rewritten alongside token_usage_json
+        // on conflict (a retry re-estimates from the same turn's tool
+        // list). Locking the second-writer-wins contract for the new
+        // column — a bug that left it at the first value (Some(111))
+        // or dropped it (None) would silently corrupt the trace.
+        assert_eq!(
+            rows[0].tools_token,
+            Some(222),
+            "tools_token must be overwritten on conflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_token_defaults_null_for_legacy_or_worker_rows() {
+        // C7 (AC4): a turn_trace row written WITHOUT tools_token
+        // (a pre-column legacy row, or a worker/skip-estimate turn)
+        // must read back as `None`, never panic or coerce to 0. The
+        // `insert_trace_token_json` helper does a raw INSERT that
+        // omits the column entirely, mirroring a pre-C7 row.
+        let pool = test_pool().await;
+        let sid = seed_session(&pool).await;
+        insert_trace_token_json(
+            &pool,
+            &sid,
+            1,
+            Some(r#"{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"context_input_tokens":10}"#),
+        )
+        .await;
+        // The same row can be augmented later with a tools_token
+        // estimate via the production upsert without losing the
+        // token_usage_json written first.
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 1,
+            ..Default::default()
+        };
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, Some(425))
+            .await
+            .unwrap();
+
+        let rows = list_turn_traces(&pool, &sid).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tools_token, Some(425));
+        assert!(rows[0].token_usage_json.is_some());
     }
 
     #[tokio::test]
@@ -496,7 +564,7 @@ mod tests {
         let sid = seed_session(&pool).await;
 
         let usage = TokenUsage::default();
-        upsert_turn_trace_token(&pool, &sid, 1, &usage)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, None)
             .await
             .unwrap();
         assert_eq!(list_turn_traces(&pool, &sid).await.unwrap().len(), 1);

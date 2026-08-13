@@ -52,6 +52,7 @@ function makeTurnTraceRow(
     compactionJson: null,
     loopHintJson: null,
     breadcrumbJson: null,
+    toolsToken: null,
     createdAt: "2026-07-14 12:00:00",
     ...overrides,
   };

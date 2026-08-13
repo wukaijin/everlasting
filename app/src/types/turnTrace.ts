@@ -119,6 +119,14 @@ export interface TurnTraceRow {
   compactionJson: string | null;
   loopHintJson: string | null;
   breadcrumbJson: string | null;
+  /** C7 (2026-08-14): cl100k estimate of the serialized `tools[]`
+   *  array for this turn. Mirrors Rust `TurnTraceRow.tools_token`
+   *  (`#[serde(rename_all = "camelCase")]` → `toolsToken`). `null`
+   *  for rows written before the column existed or turns that
+   *  skipped the estimate. NOT part of the cache-rate — a
+   *  separately-measured slice already inside
+   *  `context_input_tokens` (see design §R1). */
+  toolsToken: number | null;
   createdAt: string;
 }
 
@@ -143,6 +151,12 @@ export interface TurnTrace {
   compaction?: CompactionPayload;
   loopHint?: LoopHintPayload;
   breadcrumb?: BreadcrumbPayload;
+  /** C7 (2026-08-14): per-turn estimated token cost of the
+   *  serialized `tools[]` array (cl100k of the post-filter
+   *  ToolDef JSON). `undefined` when the backend wrote no value
+   *  (pre-column rows / skipped estimate). The card renders it
+   *  as a `tools` legend cell plus its share of context_input. */
+  toolsToken?: number;
   /** Audit events whose `turnSeq === this.seq` (populated only
    *  on the 回看 path — the live path doesn't carry audit
    *  events; the audit row store handles those). The card
@@ -218,6 +232,9 @@ export function parseTurnTraceRow(row: TurnTraceRow): TurnTrace {
     out.breadcrumb = parseJsonField<BreadcrumbPayload>(
       row.breadcrumbJson,
     );
+  }
+  if (row.toolsToken != null) {
+    out.toolsToken = row.toolsToken;
   }
   return out;
 }

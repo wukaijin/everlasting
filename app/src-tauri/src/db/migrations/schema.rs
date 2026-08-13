@@ -11,7 +11,7 @@ use super::columns::{
     add_autonomous_memories_column_if_missing, add_messages_column_if_missing,
     add_project_column_if_missing, add_provider_column_if_missing,
     add_session_audit_events_column_if_missing, add_session_column_if_missing,
-    add_subagent_runs_column_if_missing,
+    add_subagent_runs_column_if_missing, add_turn_trace_column_if_missing,
 };
 use super::schema_helpers::{
     home_dir_or_dot, migrate_provider_api_keys_to_encrypted,
@@ -948,6 +948,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             compaction_json   TEXT,
             loop_hint_json    TEXT,
             breadcrumb_json   TEXT,
+            -- C7 (2026-08-14): per-turn estimated token cost of the
+            -- serialized `tools[]` array (cl100k estimate of the
+            -- post-filter ToolDef JSON). A separately-measured slice
+            -- of context that is already inside context_input_tokens
+            -- but never counted alone before — surfaced so the trace
+            -- viewer can show tools[]'s window share. Nullable: NULL
+            -- for rows written before this column existed, and for
+            -- turns where the estimate was skipped (worker path).
+            tools_token       INTEGER,
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, seq)
@@ -965,6 +974,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
     add_session_audit_events_column_if_missing(pool, "turn_seq", "INTEGER").await?;
+    // C7 (2026-08-14): `turn_trace.tools_token` — backfills the new
+    // per-turn tools[] token-estimate column on existing turn_trace
+    // tables. No-op for greenfield DBs (the CREATE TABLE above
+    // already declares it). Idempotent via the PRAGMA probe.
+    add_turn_trace_column_if_missing(pool, "tools_token", "INTEGER").await?;
 
     // --- PR1 of multi-model task: seed default providers + models
     // if the catalog is empty. Idempotent:0-row check skips the

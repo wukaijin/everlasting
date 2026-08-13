@@ -501,9 +501,19 @@ pub(crate) async fn drive_turn(
         req
     };
 
-    let mut turn_tool_defs = crate::tools::filter_tools_for_workflow(
-        permissions::filter_tools_for_mode(tool_defs.clone(), session_mode),
-        workflow_ctx.is_some(),
+    // Turn-tool filter chain (provider-agnostic, applied before the
+    // provider sees `tools[]`): mode → workflow → session_type. Each
+    // ring is a pure `Vec<ToolDef>` filter. The chain order matters
+    // only for readability (all three are independent set-subtractions);
+    // `session_type` is read from the loaded session row at zero cost
+    // (no DB round-trip — design §R3 / 评审 P2-1).
+    let is_group_chat = loaded_session.session.session_type == crate::db::SessionType::GroupChat;
+    let mut turn_tool_defs = crate::tools::filter_tools_for_session_type(
+        crate::tools::filter_tools_for_workflow(
+            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode),
+            workflow_ctx.is_some(),
+        ),
+        is_group_chat,
     );
     // L3d (2026-06-25): append the dynamic `dispatch_subagent`
     // ToolDef so the enum reflects builtin + user + project
@@ -548,6 +558,23 @@ pub(crate) async fn drive_turn(
         turn_tool_defs.push(dispatch_def);
     }
     let turn_tool_defs = turn_tool_defs;
+    // C7 (2026-08-14, R1): estimate the per-turn `tools[]` token cost
+    // for the trace viewer. Serialized AFTER the full filter chain
+    // (mode/workflow/session_type below) + the dispatch_subagent
+    // append, so the estimate reflects the exact ToolDef set sent on
+    // the wire this turn. cl100k_base (`memory/tokens.rs`); the BPE
+    // encode is µs–low-ms for the ~31k-char JSON, safe inline (the
+    // encoder is guarded by a `tokio::sync::Mutex`, not the runtime's
+    // blocking pool). Best-effort: a serialization failure yields an
+    // empty string → 0 tokens, never blocks the turn. The value is
+    // NOT folded into the cache-rate (`context_input_tokens` already
+    // contains tools); it's a separately-measured slice persisted to
+    // `turn_trace.tools_token` for the trace viewer (see design §R1).
+    // Computed before `turn_tool_defs` is moved into `retry_open`
+    // below; `tools_token` is `Copy` (`u32`) so it stays in scope at
+    // the `Done`-event upsert write point.
+    let tools_json = serde_json::to_string(&turn_tool_defs).unwrap_or_default();
+    let tools_token = crate::memory::tokens::count_tokens(&tools_json).await;
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
     let mut finalized_thinking: Vec<(String, String)> = Vec::new();
@@ -798,7 +825,7 @@ pub(crate) async fn drive_turn(
                                 // token usage to turn_trace (worker-gated
                                 // by !skip_persist, same as
                                 // update_last_turn_usage — RULE-A-015).
-                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t).await {
+                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token)).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
                             }
