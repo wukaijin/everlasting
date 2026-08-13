@@ -319,3 +319,41 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 ### Next Steps
 
 - D2 跨 session 全文搜索(用户驱动 MVP 单 PR + Agent 驱动 search_history tool)
+
+
+## Session 98: C7 tools[] 上下文 token 治理:R1 度量 + R3 静态裁剪
+
+**Date**: 2026-08-14
+**Task**: C7 tools[] 上下文 token 治理:R1 度量 + R3 静态裁剪
+**Branch**: `feat/c7-tools-token-governance`
+
+### Summary
+
+把 tools[] 当作与 messages 并列的上下文治理对象。R1:turn_trace.tools_token 列 + drive.rs cl100k 估算 + TracePanel tools cell(占比 = tools/context_input,禁 double-count)。R3:filter_tools_for_session_type 经典聊天裁 nominate_speaker/end_discussion。R2/D 降级 Phase 2。
+
+### Main Changes
+
+- R1:turn_trace.tools_token 列(add_turn_trace_column_if_missing migration + upsert/list CRUD)+ drive.rs freeze 后 cl100k 估算 post-filter ToolDef JSON + TracePanel TurnCard tools cell
+- R3:filter_tools_for_session_type 经典聊天砍 nominate_speaker/end_discussion(~465 tok/轮),group_chat no-op(白名单优先);drive.rs 过滤链加第三环 mode→workflow→session_type
+- spec:token-usage-tracking.md 加 C7 scenario(7 段 code-spec + cache 率 no-double-count Wrong/Correct)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `10ad4f8` | (see git log) |
+
+### Testing
+
+- [OK] cargo test -p everlasting --lib 1692(1 个无关 daemon tunnel timing flake,隔离通过)
+- [OK] pnpm test 1037 + pnpm vue-tsc clean + cargo clippy clean
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Phase 2 ①:R1 度量数据 tools[] 占 context 窗口 >15% → 启动 D(Stub 注册)
+- Phase 2 ②:配原生 Anthropic provider 后重启 R2(cache 断点;relay 实测 cache_creation=0 零收益)
+- live AC1 烟测:重编 release + 重启 :7456 daemon(用 pid kill,别用 pkill -f 端口串)+ 跑一轮看 TracePanel tools_token ≈ 7-8k
