@@ -294,3 +294,28 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 ### Next Steps
 
 - 可选:拆 db/subagent_runs_tests.rs 1219(沿用 tests_* 目录化模式,另立任务)
+
+
+## Session 97: remote-control epic 收尾归档 + 下一任务推荐
+
+**Date**: 2026-08-14
+**Task**: remote-control epic 收尾归档 + 下一任务推荐
+**Branch**: `main`
+
+### Summary
+
+08-13 合入 main 的 remote-control epic(94828cb)任务树收尾:归档 08-13-mobile-polish + 08-11-remote-control-epic;依据 ROADMAP/DEBT 推荐下一任务:D2 跨 session 全文搜索(首选)/ C7 tools[] token 治理 / L1b 真 PTY / A4+ 成本聚合
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0141a44` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- D2 跨 session 全文搜索(用户驱动 MVP 单 PR + Agent 驱动 search_history tool)
