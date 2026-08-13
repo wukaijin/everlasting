@@ -1,6 +1,6 @@
 # HACKING-wsl: WSL + Ubuntu 22.04 环境坑笔记
 
-> **本机环境**(截至 **2026-07-10** 验证):WSL 2 (`6.6.114.1-microsoft-standard-WSL2`) + Ubuntu 22.04.2 LTS,linuxbrew 装在 `/home/linuxbrew/`,以 `carlos` 用户运行(`root` 是 sudo 临时升的)。
+> **本机环境**(截至 **2026-08-11** 更新):WSL 2 (`6.6.114.1-microsoft-standard-WSL2`) + Ubuntu 22.04.2 LTS,linuxbrew 装在 `/home/linuxbrew/`,以 `carlos` 用户运行(`root` 是 sudo 临时升的)。
 >
 > 写给未来的自己(或下个 session),撞到类似问题能 30 秒定位。
 >
@@ -466,7 +466,7 @@ fc-match "sans-serif:lang=zh-cn"  # 同上
 
 ---
 
-## 一次性环境脚本(把上面 10 个坑打包)
+## 一次性环境脚本(把上面 11 个坑打包)
 
 新 WSL 机器 / 重装时:
 
@@ -749,13 +749,13 @@ ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
 
 ## 测试性能(WSL 后端 cargo test)
 
-> **背景**:本机 12 核 / 11G 内存(WSL 2 swap 常满),`--lib` 套件 1635 个用例。实测基线(2026-08-05,rustc 1.96):
+> **背景**:本机 12 核 / 11G 内存(WSL 2 swap 常满)。`--lib` 套件用例数**随测试增涨**(remote epic 又新增 tunnel 单元 + e2e 测试),**以 `cargo test` 输出为准**;下表耗时是 2026-08-05 的实测基线(rustc 1.96):
 
 | 阶段 | 耗时 | 备注 |
 |---|---|---|
 | `cargo test --no-run`(冷编译) | ~1m37s | 全量编 4 个 test binary |
 | `cargo test --no-run`(增量) | ~11s | 改完代码重测的实际成本 |
-| `cargo test --lib`(默认多线程 ≈ 6 线程) | **26.3s** | 1635 用例全过 |
+| `cargo test --lib`(默认多线程 ≈ 6 线程) | **26.3s** | 全量用例通过(数量随测试增涨,以 `cargo test` 输出为准) |
 | `cargo test --lib`(`--test-threads=1`) | **72.1s** | 仅用于逐用例计时 |
 | `cargo test --test e2e` | 4.2s 跑测 / 26.7s 含编译 | 10 个 e2e |
 
@@ -814,5 +814,8 @@ BIN=target/debug/deps/everlasting_lib-<hash>
 - [spike-001](./spikes/001-wsl-tauri-window.md) — 这些坑的来源 spike
 - [HACKING-llm.md](./HACKING-llm.md) — LLM API 兼容层差异(配对文档)
 - [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) — daemon 拆分 / 远程访问实施路线图(Phase 1/2/3)
+- [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) — 云端 `everlasting-remote` 部署手册(systemd + nginx + 配对)
+- [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) — remote E2E 验收手册(配对 / PWA 手机访问)
 - [`scripts/daemon.sh`](../scripts/daemon.sh) — 浏览器模式 daemon 管理脚本(start/bg/stop/restart/rebuild/status/logs),本节「推荐方式」的底层实现
+- [`scripts/remote.sh`](../scripts/remote.sh) — remote 服务端管理脚本(本地起 / 状态,`deploy-remote.sh` 部署到国内 2C2G 服务器)
 - [DEBUG_DB.md](./DEBUG_DB.md) — SQLite 直连调试;§1.0 有 daemon 视角的三条 DB 路径解析 + 孤儿 DB 坑

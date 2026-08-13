@@ -27,3 +27,16 @@
 - **决策 — session_type 区分两种循环 + moderator 编排**:`sessions.session_type` 列区分 `'chat'`(经典单 agent,走 `chat_loop.rs`)/ `'group_chat'`(走新 `group_chat_loop.rs`)。群聊循环由 **moderator**(主持人)agent 协调多个**参与者**:moderator 用 `nominate_speaker` 工具点名下一发言者,参与者发言后回 moderator,任意参与者用 `end_discussion` 终止。每条 message 落库带 `speaker` 列(参与者标识),前端按 speaker 渲染独立气泡 + 实时发言人 chip。两个新工具 `nominate_speaker` / `end_discussion` 是 SIGNAL 工具(chat_loop 拦截记录信号,非真执行)。
 - **4 Phase 落地**:① 数据层 + wire 层 speaker 维度(`d2fca90`);② turn-taking 编排引擎(`80ab4bd`);③ speaker 落库/读取(`e065a12`~`a75aa37`);④ 创建群聊 session + 参与者配置 UI + 逐轮流式(`35e631c`~`2b6ab8a`)。
 - **08-04 编排重写**:入口持久化去重(防重复进入群聊循环)+ 参与者身份护栏(禁自名开头、允许 @点名别人)+ 终止/发言人事件 + 逐轮流式(群聊内容实时出现 + 发言人 chip 实时渲染)+ 人类抢占插话(send 在 group_chat streaming 时先 cancel 再发)。PRD 走 `.trellis/tasks/archive/2026-07/07-29-group-chat/`,08-04 重写见 `.trellis/tasks/archive/2026-08/08-04-group-chat-orchestration-rewrite/`。
+
+### 2026-08-11~13 — remote-control epic S1~S6b(PC daemon 一等公民 + 手机远程通道,merge `94828cb` 于 08-13 合入 main)
+
+- **Context**:大合并(feat/remote-control-epic-s1 合入 main,merge commit `94828cb`,2026-08-13)带来远程控制 epic + Cargo workspace 翻转。remote daemon(`crates/everlasting-remote`)跑国内 2C2G 服务器,仅中继不存 agent 数据;daemon 与 remote **两套独立 SQLite**(remote 存 nodes / devices / pairing_codes)。本节补齐 08-11~13 的 9 个决策点。
+- **决策 ① — 中继方案变更:Cloudflare Workers + D1 → 自研 Rust remote daemon**:原定 Cloudflare Workers + D1 (SQLite) 中继被推翻并已落地为**国内 2C2G 服务器 + 自研 Rust remote daemon**(`crates/everlasting-remote`:axum 0.7 含 ws feature + sqlx + dashmap + subtle,**零系统库依赖**);HTTPS 由用户自理(nginx 反代),**非 Cloudflare Tunnel**。部署见 [docs/REMOTE-DEPLOY.md](../REMOTE-DEPLOY.md)。
+- **决策 ② — Cargo workspace 翻转(2026-08-11)**:根 `Cargo.toml` 的 `members` 扩为 `app/src-tauri` + `crates/everlasting-remote` + `crates/everlasting-remote-protocol`;`default-members` **只含两个 remote crate**(根目录裸 cargo 不拉 Tauri 重依赖);`profiles` 上移;`Cargo.lock` 移到根;daemon 入口 `cargo build -p everlasting --bin everlasting-daemon`。
+- **决策 ③ — 自研 WSS 隧道协议(Frame/StreamEvent)**:不用 frp / rathole / yamux,自研 WSS 隧道(PC 侧 tokio-tungstenite 0.24)。
+- **决策 ④ — 安全模型**:配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分)+ `device_token`(64-hex)+ `shared_secret`;MVP 阶段 token 存 localStorage(V2 评估 httpOnly cookie)。不做多用户、不做跨节点同步。
+- **决策 ⑤ — 反向代理传 HTTP 原文、PC 打 loopback → agent core 零改动**:remote 侧转发层不侵入 agent 循环,PC daemon 侧把请求打到 loopback 即复用既有 handler。
+- **决策 ⑥ — SSE 按 request_id 过滤 + 取消只停转发**:`sse_bridge` 用 `select!` 实现,取消只停转发不停 agent(commit `0485b73`)。
+- **决策 ⑦ — PC daemon 一等公民 + 永久不做主动推送**:远程是 opt-in 附加层,不反过来绑架 PC 架构;主动推送永久不做。
+- **决策 ⑧ — 移动端中限适配(DEC-1~7)**:滚动 tab / pill / 触控目标等适配,不引入 Tailwind。
+- **决策 ⑨ — 测试专用 import 移入 `cfg(test)`**:commit `2a482eb`,release lib 构建 0 警告。

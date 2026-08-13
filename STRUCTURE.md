@@ -1,8 +1,10 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-08-05 commit `6449f16`(在 2026-07-23 `3307d93` 基础上 + 07-23/24 交错思考 + 07-25 daemon graceful shutdown 加固 + 07-26 C2 review-viz + lefthook + ask_user_question allow_custom + 07-28 subagent resume C0/C1 + 07-29~08-04 群聊 group chat)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊
+> **基线**:2026-08-13 commit `94828cb`(在 2026-08-05 `6449f16` 基础上 + 08-11 workspace 翻转 + 08-11~13 remote-control-epic-s1 远程控制 epic S1~S6b)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转
 > **状态**: 由 CLAUDE.md §Architecture 段引用
+>
+> **2026-08-13 同步**:remote-control-epic-s1 合入(merge `94828cb`)+ workspace 翻转(08-11)。§1 顶层结构改 3-crate workspace(根 `Cargo.toml` / `Cargo.lock` / `crates/`);§2 前端补 router/views/stores/transport/auth + PWA;§3 后端补 `daemon/tunnel/` + `commands/pairing.rs` + config.rs tunnel 命令;§5 IPC 表 91→97;§10.2/§12 补根 workspace 构建与 Cargo.lock 位置。
 >
 > **2026-08-05 同步**:补群聊(`agent/group_chat.rs` + `group_chat_loop.rs` + `nominate_speaker`/`end_discussion` 工具 + `GroupChatConfigModal.vue` + sessions/messages 群聊列)+ C2 review-viz(`commands/review.rs` + `ReviewMatrix*` 4 组件 + `reviewState.ts` store)+ 交错思考(ARCHITECTURE ⑦⑭)。§2/§3 目录树补新模块;§5 IPC 表 79→91 + Review 域;§6 表 8→12(补 `subagent_model_overrides`/`autonomous_memories`/`turn_trace` + 群聊列);stores/commands 清单补漏。下次重大重构后再次校准。
 >
@@ -39,15 +41,20 @@ everlasting/
 ├── README.md # 项目一句话 +链接
 ├── STRUCTURE.md # ← 本文件(8-PR5 创建,根目录显眼位置)
 ├── THIRD_PARTY_LICENSES.md #第三方许可清单
+├── Cargo.toml # ★ workspace(08-11 翻转) — members = app/src-tauri + crates/everlasting-remote + crates/everlasting-remote-protocol;default-members 只含两 remote crate
+├── Cargo.lock # ★ 根锁文件(08-11 自 app/src-tauri/ 上移,锁定全 workspace)
+├── crates/ # ★ NEW (08-11 remote epic) — 独立 Rust crate(workspace 成员)
+│ ├── everlasting-remote/ # 云服务端(auth/配对码/WSS 隧道/反向代理/SSE 桥/限速/DB;零系统库依赖)
+│ └── everlasting-remote-protocol/ # 隧道帧协议定义
 ├── docs/ # 设计文档(全中文)
-├── scripts/ # ★ NEW (07-23) — daemon.sh(daemon 浏览器模式管理脚本)
-├── app/ #唯一应用包(单仓模式)
-│ ├── src/ # Vue3 前端(含 ★ transport/ 抽象层,07-20)
-│ └── src-tauri/ # Rust 后端(Tauri2;daemon 化后含 ★ daemon/ + bin/ + sidecar.rs)
+├── scripts/ # ★ (07-23 daemon.sh;08-11 补 remote.sh + deploy-remote.sh + remote-e2e-smoke.mjs)
+├── app/ #唯一前端应用包(单仓模式;Rust 侧为 workspace 成员)
+│ ├── src/ # Vue3 前端(含 ★ transport/ 抽象层,07-20;router/views/stores + PWA,08-11)
+│ └── src-tauri/ # Rust 后端(Tauri2;daemon 化后含 ★ daemon/ + bin/ + sidecar.rs + tunnel/)
 └── .trellis/ # Trellis 工作流 + spec + tasks + workspace
 ```
 
-**单包结构**:根无 `package.json`,实际只有1 个包 `app/`。spec `backend` / `frontend` 是逻辑分层,不是物理包。
+**3-crate workspace + 单前端包**(08-11 workspace 翻转):根 `Cargo.toml` 是 workspace(非 package),members = `app/src-tauri`(everlasting)+ `crates/everlasting-remote` + `crates/everlasting-remote-protocol`;`default-members` 只含两个 remote crate,故根目录裸 `cargo build/test` 只编译 remote 两 crate,app 需 `-p everlasting`(或 cd app/src-tauri 后裸命令)。根无 `package.json`,前端只有 1 个包 `app/`;spec `backend` / `frontend` 是逻辑分层,不是物理包。
 
 ---
 
@@ -56,6 +63,8 @@ everlasting/
 ```
 app/src/
 ├── main.ts #入口
+├── router/ # ★ NEW (08-11 remote) — vue-router 4(index.ts:/chat + /pairing + /nodes + isRemoteContext() 守卫)
+├── views/ # ★ NEW (08-11 remote) — ChatView / PairingView(配对码兑换) / NodeListView(节点列表)
 ├── App.vue #根组件(KeepAlive +全局 dialog)
 ├── style.css # Tailwind基础 +全局 CSS变量(设计令牌)
 ├── components/
@@ -89,6 +98,7 @@ app/src/
 │ │ ├── ModelsTab.vue # ★容器(364 行,954→364)
 │ │ ├── ModelRow.vue # ★ NEW (8-PR3拆出)
 │ │ ├── ModelForm.vue # ★ NEW (8-PR3拆出)
+│ │ ├── RemoteTab.vue # ★ NEW (08-11 remote) — 远程隧道配置(tunnel 状态 + remote 配置 + 配对入口)
 │ │ └── DeleteModelConfirm.vue # ★ NEW (8-PR3拆出)
 │ └── layout/ # (Opus §4.1漏看,8-PR4阶段补)
 │ ├── AppShell.vue / AppHeader.vue / AppLogo.vue
@@ -108,6 +118,9 @@ app/src/
 │ ├── subagents.ts # ★ NEW (07-03 B6+ C) — subagent 模型 override UI store
 │ ├── traceStore.ts # ★ NEW (07-14 E2) — harness trace store (live+回看同构 TurnTrace)
 │ ├── reviewState.ts # ★ NEW (07-26 C2) — review-state 矩阵视图 store(三态载荷)
+│ ├── nodes.ts # ★ NEW (08-11 remote) — 远程节点列表 store
+│ ├── pairing.ts # ★ NEW (08-11 remote) — 配对码兑换 device_token 流
+│ ├── remoteConfig.ts # ★ NEW (08-11 remote) — remote 隧道配置 store(RemoteTab 数据源)
 │ └── traceStore.test.ts
 └── utils/ # (Opus §4.2漏看,8-PR4阶段补;06-23 加 chatInputCodeMirror)
  ├── lru.ts + .test.ts / markdown.ts + .test.ts
@@ -116,7 +129,8 @@ app/src/
  └── duration.ts / tokenUsage.ts / audit.ts / colorTag.ts / useKeyboard.ts
 transport/ # ★ NEW (07-20 remote-access) — 前端 transport 抽象层(invoke/listen 与载体解耦)
 ├── index.ts # resolveTransport():默认 httpTransport;?transport=tauri 逃生 → tauriTransport
-├── http.ts # httpTransport(fetch POST + SSE EventSource → everlasting-daemon 同源)
+├── http.ts # httpTransport(fetch POST + SSE EventSource → everlasting-daemon 同源;pwa-remote 模式走 /api/v1/proxy 前缀 + Bearer)
+├── auth.ts # ★ NEW (08-11 remote) — pwa-remote 模式 device_token 注入(isRemoteContext 检测 + access_token 通道)
 ├── tauri.ts # tauriTransport(@tauri-apps/api 透传,Full 模式逃生舱)
 ├── health.ts # daemon health 轮询 + 自动降级
 ├── env.ts # isTauriWebview():Tauri webview vs 纯浏览器检测
@@ -124,9 +138,12 @@ transport/ # ★ NEW (07-20 remote-access) — 前端 transport 抽象层(invoke
 └── *.test.ts # http / health / transport / transport-parity 4 个测试
 ```
 
+**PWA(08-11 remote)**:`vite-plugin-pwa`(manifest + app-shell precache SW,配在 `app/vite.config.ts`)+ 图标 `app/public/icons/`(192/512/maskable),移动端可安装,经 remote 服务端 + WSS 隧道反向访问 PC daemon。
+
 **关键组件依赖**:
 ```
 App.vue
+├── router/index.ts (★ 08-11 vue-router 4) → views/{ChatView, NodeListView, PairingView}(PWA 远程入口)
 └── ProjectTabs.vue
  └── ChatWindow.vue
  ├── SessionList.vue
@@ -137,10 +154,11 @@ App.vue
  ├── DeleteWorktreeConfirm / EmptyProjectState (条件)
  └── SettingsModal (按需)
  ├── ProvidersTab
- └── ModelsTab → ModelRow + ModelForm + DeleteModelConfirm (NEW)
+ ├── ModelsTab → ModelRow + ModelForm + DeleteModelConfirm (NEW)
+ └── RemoteTab (★ 08-11,远程隧道配置)
 ```
 
-**Store依赖**(单源流): `streamController` (唯一 SSE listener) → `chat` → `config` / `projects` / `models` / `providers`。
+**Store依赖**(单源流): `streamController` (唯一 SSE listener) → `chat` → `config` / `projects` / `models` / `providers`。remote 侧(08-11)独立成链:`nodes` / `pairing` / `remoteConfig` 走 `transport/auth.ts` 的 device_token 认证(pwa-remote 模式),不挂 chat 主链。
 
 ---
 
@@ -208,7 +226,7 @@ app/src-tauri/src/
 │ ├── tests_common.rs / tests_cancellation.rs / tests_envelope.rs # ★ (06-23 拆 tests.rs → 6 文件)
 │ ├── tests_prompts.rs / tests_agent_loop.rs / tests_subagent.rs
 ├── commands/ # ★ NEW (8-PR1) — Tauri commands按域拆(07-03/07/08 加 task/subagents/question)
-│ ├── mod.rs / cancel.rs / config.rs
+│ ├── mod.rs / cancel.rs / config.rs(★ 08-11 加 get_remote_config/set_remote_config/get_tunnel_status)
 │ ├── providers.rs (Provider/Model CRUD + test_provider + test_model)
 │ ├── sessions.rs (Session CRUD + diff_worktree)
 │ ├── worktree.rs (attach/detach/delete + cancel_inflight)
@@ -218,6 +236,7 @@ app/src-tauri/src/
 │ ├── subagents.rs # ★ (07-03) — subagent model override IPC(list_subagents_with_model + set_subagent_model)
 │ ├── question.rs # ★ (07-07) — get_pending_interaction + resolve_mode_change(QuestionStore 升级)
 │ ├── review.rs # ★ (07-26 C2) — get_review_state + get_current_task_slug(review-state.json 三态载荷)
+│ ├── pairing.rs # ★ NEW (08-11 remote) — generate_pairing_code(配对码,远端 PWA 兑换 device_token)
 │ └── ui.rs # ★ (07-13 B9+) — apply_ui_diff(生成式 UI diff 应用)
 ├── tools/ # 内置工具 (24 个 builtin;07-08~10 加 workflow + B6+ 等;07-29 加群聊 nominate_speaker/end_discussion)
 │ ├── mod.rs (builtin_tools + execute_tool 分发 + filter_tools_for_mode/subagent/workflow)
@@ -249,7 +268,13 @@ app/src-tauri/src/
 │ ├── server.rs (build_router + serve_daemon:TcpListener 0.0.0.0:7456 + ServeDir 同源 SPA fallback + graceful shutdown)
 │ ├── sse.rs (HttpSseSink — agent loop 的 SSE 事件流广播)
 │ ├── error.rs (DaemonError → axum IntoResponse)
-│ └── routes/ # 91 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│ ├── tunnel/ # ★ NEW (08-11 remote) — PC 侧 WSS tunnel client(连 crates/everlasting-remote,loopback 转发到本机 daemon)
+│ │ ├── mod.rs / client.rs (WSS 长连接:shared_secret + node_id + 心跳)
+│ │ ├── config.rs (tunnel 配置:remote_url/shared_secret 等,存 app_config)
+│ │ ├── manager.rs / dispatcher.rs (TunnelManager + 请求分发 loopback 转发)
+│ │ ├── node_id.rs / sse_bridge.rs (节点 id + SSE 桥接,取消只停转发)
+│ │ └── tests.rs / e2e_tests.rs (单元 + 端到端隧道测试)
+│ └── routes/ # 97 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
 │ ├── mod.rs / health.rs / stream.rs(SSE)
 │ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
 │ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs / review.rs
@@ -268,7 +293,8 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ├── main.rs (entry + init_tracing)
  ├── state (共享状态 + Cancellation;daemon 侧 load_from_dir 复用)
  ├── sidecar (GuiMode{Thin,Full} + spawn_and_manage daemon 子进程)
- ├── daemon/* (axum router + HttpSseSink + routes/;bin/everlasting-daemon 入口调 serve_daemon)
+ ├── daemon/* (axum router + HttpSseSink + routes/;★ tunnel/ remote client;bin/everlasting-daemon 入口调 serve_daemon)
+ │   └── tunnel/* (client/config/dispatcher/manager/node_id/sse_bridge → WSS 连 crates/everlasting-remote)
  ├── db/* (CRUD by域 + 6 tests_*.rs)
  ├── llm/provider::* → llm::client (BlockState) → types/sse/error
  ├── agent::* (chat + chat_loop + subagent/* + provider + system_prompt + thinking + helpers + permissions/* + 6 tests_*.rs)
@@ -303,7 +329,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ▼
 ┌─────────────────────────── 后端 ────────────────────────────┐
 │ everlasting-daemon(axum,独立进程) / 或 Full 模式 GUI 进程 │
-│ daemon/server.rs::build_router (91 个 command 镜像 REST 路由)│
+│ daemon/server.rs::build_router (97 个 command 镜像 REST 路由)│
 │ ├─ commands/* + daemon/routes/* (同一 handler 双暴露 IPC+HTTP)│
 │ ├─ agent/* → llm::provider::* → wire.rs + client.rs │
 │ ├─ tools/* (24 个 builtin + read_guard) │
@@ -330,9 +356,9 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ## 5. Tauri IPC 表面
 
-**总命令数**:91 个(2026-08 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08 续增 review/group_chat 相关 + question/permissions 扩展)。
+**总命令数**:97 个(2026-08-13 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 6 个,含 1 个测试命令 tests_resolve_mode_change.rs)。
 
-> **daemon 化后双暴露(07-20 Q0 决策)**:这 91 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
+> **daemon 化后双暴露(07-20 Q0 决策)**:这 97 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
@@ -357,6 +383,8 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 | Checklist (B12) |1 | `commands/checklist.rs`(随 B12) |
 | Files |1 | `commands/files.rs` (list_files 供 @ 触发) |
 | Review (C2) |3 | `commands/review.rs` (get_review_state + get_current_task_slug + 1) |
+| Remote pairing |1 | `commands/pairing.rs` (generate_pairing_code,08-11) |
+| Remote tunnel config |3 | `commands/config.rs` (get_remote_config + set_remote_config + get_tunnel_status,08-11) |
 
 **IPC命名**: Rust snake_case → Tauri2自动 camelCase转换给前端。
 
@@ -366,7 +394,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 **位置**: `app/src-tauri/src/db/mod.rs::run_migrations`
 
-**12 张表**(2026-08 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace`):
+**12 张表**(2026-08 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace`;08-11 remote 配置走 `app_config` KV,零 migration):
 
 | 表 | 主键 |关键字段 |
 |----|------|---------|
@@ -539,11 +567,17 @@ LLM 返回 tool_use → emit('tool:call') → 前端 ToolCallCard显示
 | `cd app/src-tauri && cargo check` |快速 Rust编译检查 |
 | `cd app/src-tauri && cargo test --lib` | Rust单元测试 |
 | `cd app/src-tauri && cargo build --bin everlasting-daemon` | ★ 只编译 daemon bin(GUI sidecar 模式由 build.rs 自动 staging) |
+| `cargo build -p everlasting --bin everlasting-daemon`(根) | ★ workspace(08-11)根目录构建 daemon(等价 cd app/src-tauri 后裸 `cargo build --bin everlasting-daemon`) |
+| `cargo check` / `cargo test`(根,裸) | ★ 只作用于 default-members(remote 两 crate,不会碰 app) |
+| `cargo check -p everlasting` / `cargo test -p everlasting --lib`(根) | 显式指定 app crate(等价 cd app/src-tauri 后裸命令;WSL 下 PKG_CONFIG_PATH 仍需) |
 | `./scripts/daemon.sh start\|bg\|stop\|restart\|status\|logs` | ★ daemon 浏览器模式管理(详见 HACKING-wsl.md) |
+| `./scripts/remote.sh start\|status` / `./scripts/deploy-remote.sh` / `./scripts/remote-e2e-smoke.mjs` | ★ NEW (08-11/13) — remote 服务端本地管理 / 云端部署 / E2E 冒烟(详见 REMOTE-DEPLOY.md + REMOTE-ACCESS-E2E.md) |
+
+**Cargo.lock / target 位置(08-11 翻转)**:Cargo.lock 在仓库根(自 `app/src-tauri/Cargo.lock` 上移,锁定全 workspace);cargo 产物 `target/` 在仓库根。
 
 ###10.3 WSL特殊性
 
-linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统库、CJK字体 HarmonyOS Sans SC 子集打包。详见 `docs/HACKING-wsl.md`。
+linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统库、CJK字体 HarmonyOS Sans SC 子集打包。详见 `docs/HACKING-wsl.md`。remote 两 crate(`crates/everlasting-remote*`)零系统库依赖(纯 Rust,无 gtk/webkit),无需 PKG_CONFIG_PATH,`cargo test -p everlasting-remote` 在 WSL 直接可跑。
 
 ---
 
@@ -585,6 +619,12 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 |日志 | tracing |0.1 | `app/src-tauri/Cargo.toml` |
 | Markdown | marked |18.0.5(锁精确) | `app/package.json` |
 | Markdown 安全 | DOMPurify |3.4.8(锁精确) | `app/package.json` |
+| 前端路由 | vue-router |4 | `app/package.json`(★ 08-11 remote) |
+| PWA | vite-plugin-pwa |1.3.0 | `app/package.json`(★ 08-11 remote,manifest + SW) |
+| 远程服务端 | everlasting-remote |(workspace 内) | `crates/everlasting-remote/Cargo.toml`(★ 08-11,零系统库依赖) |
+| 远程协议 | everlasting-remote-protocol |(workspace 内) | `crates/everlasting-remote-protocol/Cargo.toml`(★ 08-11) |
+
+**锁定位置说明(08-11 workspace 翻转)**:Rust 依赖锁定在根 `Cargo.lock`(自 `app/src-tauri/Cargo.lock` 上移);`app/src-tauri/Cargo.toml` 仍是 app crate manifest,新 crate 依赖在 `crates/*/Cargo.toml`;前端依赖仍在 `app/package.json`。
 
 **已评估不引入**:
 - ❌ `eventsource-stream`(手写 SSE,spike-002验证)
@@ -612,6 +652,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ ├── IMPLEMENTATION.md #8步路线图 +决策日志
 │ ├── DESIGN.md / TECH.md / BACKLOG.md
 │ ├── HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md
+│ ├── REMOTE-DEPLOY.md / REMOTE-ACCESS-E2E.md # ★ (08-11/13) — remote 服务端部署 + E2E 验收
 │ ├── _archive/ / _reviews/ / spikes/
 └── .trellis/
  ├── workflow.md
@@ -646,7 +687,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ │ Vue3 Frontend │ http(默认) │ everlasting-daemon │ │
 │ │ (app/src/) │ /tauri(逃生)│ (axum,app/src-tauri/ │ │
 │ │ · Pinia(18 stores) │◄─────────►│ src/daemon/ + bin/) │ │
-│ │ · transport/ 抽象 │ │ ·91 commands→REST 路由 │ │
+│ │ · transport/ 抽象 │ │ ·97 commands→REST 路由 │ │
 │ │ · stream1 source │ │ · Provider trait │ │
 │ │ · reka-ui2.9.9 │ │ (Anthropic/OpenAI) │ │
 │ │ · marked+DOMPurify │ │ · Tool registry (24) │ │
@@ -654,6 +695,9 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ │ · BrowserHeader │ │ · sqlx + SQLite │ │
 │ │ (浏览器模式) │ │ · HttpSseSink + ServeDir │ │
 │ └────────────────────┘ └──────────────────────────┘ │
+│ ▼ WSS 隧道(tunnel/,08-11) → crates/everlasting-remote 云服务端 │
+│ (配对码 + auth + 反向代理 + SSE 桥 + 限速 + DB;移动 PWA 经 │
+│ /api/v1/proxy + device_token 反向访问 PC daemon) │
 │ sidecar.rs: GUI Thin 模式 spawn daemon;RunEvent::Exit 回收 │
 │ │ │
 │ ▼ │
@@ -663,7 +707,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ └──────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
 
-代码: app/ 单包(src前端 + src-tauri后端含 daemon/) + scripts/daemon.sh
+代码: 3-crate workspace(根 Cargo.toml + Cargo.lock;app/ 前端 + src-tauri 后端含 daemon/ + tunnel/ + crates/everlasting-remote*) + scripts/(daemon.sh + remote.sh + deploy-remote.sh + remote-e2e-smoke.mjs)
 文档: docs/ 设计文档 + .trellis/spec/ AI规约
 任务: .trellis/tasks/任务 + archive
 ```
@@ -709,4 +753,4 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考)。下次重大重构后再次校准。*
+*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考);2026-08-13 同步至 `94828cb`(remote-control-epic-s1 + workspace 翻转)。下次重大重构后再次校准。*

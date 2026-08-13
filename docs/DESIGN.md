@@ -82,13 +82,16 @@
 - **B9** 生成式 UI(部分落地:selector / diff / code_block):`use_ui` tool + `<UiCard>` + component registry + `WorkerBranchBadge` / `WorkerMergeControls` for L3b PR4
 - **RULE-D-001** provider api_key 加密存储:AES-256-GCM + HKDF(machine-id),`api_key_enc` 列 + `key_migrated_at` 哨兵,IPC 切断明文
 - **B8** Workflow 编排层(07-08~10 完整落地):`workflow.json` 外置(`.everlasting/workflow.json` + `load_workflow` + `validate` + `fallback`)+ builtin dev workflow plugin(`resources/builtin-workflow/dev/workflow.json` 开箱即用)+ 任务状态机(Planning → Implement → Check → Done 四态单向)+ per-turn breadcrumb 注入(synthetic user message + `cache_control: ephemeral`)+ delegation 模板(`run_subagent` 时注入 worker)+ Step 0.1~3.3 完整 9 阶段管线(`workflow_enabled` 列 / 顶栏 toggle / `WorkflowDef` struct / `task.json` 读写 / `create_task` IPC / plugin skill loader / `set_task_state` + `archive_task` IPC)+ plugin agents/ 落点(`SubagentSource::Plugin`)+ `B12 Checklist → task.json.items` 同步 + `TaskStatus → Done` 触发 `trigger_spec_distillation` 沉淀 spec 到 `.everlasting/spec/`
+- **daemon 化**(07-20~23,remote-access epic):agent core 拆出独立 `everlasting-daemon` 进程 + 前端 transport 抽象(httpTransport 默认)+ 纯浏览器模式(详见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md))
+- **远程遥控通道**(08-11~13,remote-control epic S1~S6b):`crates/everlasting-remote` 云中继(仅转发不存 agent 数据)+ PC tunnel client(WSS 长连接 + loopback 转发,agent core 零改动)+ 手机 PWA 配对/节点/远程操作 + 移动端适配;Cargo workspace 翻转(详见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) + [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md))
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
-- 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成,见 [decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md))/ `B11` 云端同步(Cloudflare Workers + D1,个人远程遥控通道)
+- 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成,见 [decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md))/ ~~`B11` 远程遥控通道~~ **✅ 2026-08-11~13 已实施**(remote-control epic S1~S6b,合并 `94828cb`):中继方案变更为国内 2C2G 服务器 + 自研 Rust remote daemon,PC daemon 权威 + 云端仅中继;详见 [ROADMAP §1.2](./ROADMAP.md))
 - 安全:`A2+ P3` shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail,前置 WSL userns spike;详见 [A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) §4)
 
 > **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项 + A2+ P3 归 ROADMAP §2 第四档。
+> **2026-08-13 同步**:`B11` 远程遥控通道已由 remote-control epic(S1~S6b)实施,从"未做"移除。
 
 ### 3.2 明确不做(硬约束)
 
@@ -98,20 +101,20 @@
 - ❌ **不包装 Claude Code SDK / Codex SDK** — 违背学习目标(详见 [IMPLEMENTATION.md §1](./IMPLEMENTATION.md#1-决策自己写-agent-core不用-sdk-包装))
 - ❌ **不做通用 agent 框架** — Cline / OpenHands 已经在做
 - ❌ **不做 Windows 端优化** — WSL 跑得好就行(详见下文 §4 WSL 优先)
-- ❌ **不做云端部署** — 本地优先,agent 进程不出本机
-- ❌ **不做移动端 / Web 版** — 桌面应用
+- ❌ **不做云端部署 agent core** — 本地优先,agent 进程不出本机。**例外(2026-08 起)**:云端只跑轻量中继 `everlasting-remote`(remote daemon,不持文件、不存 agent 数据,仅转发;见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md))
+- ❌ **不做原生移动 App** — 桌面为主;**移动端以 PWA 形态提供**(2026-08 起,配对 + 节点 + 远程查看/操作通道,见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md))
 
 **范围守护**(避免后期蔓延):
 - ❌ **不做 Yolo 模式默认开** — Yolo(无任何确认)必须显式开启,默认拒绝(详见 [权限层 spec](../.trellis/spec/backend/permission-layer.md))
-- ❌ **不做云端触发器** — 定时/事件触发源必须在本地(系统时间、fs 事件、本地 webhook);Cloudflare Cron Trigger 之类不接
+- ❌ **不做云端触发器** — 定时/事件触发源必须在本地(系统时间、fs 事件、本地 webhook);Cloudflare Cron Trigger 之类不接(用户经 PWA **主动发起**的远程会话是例外,见下条)
 - ❌ **不做 in-app 自动升级** — 新版本走包管理器或手动下二进制,降低供应链攻击面和复杂度
-- ❌ **不做云端触发回写本机** — agent 不接受"从云端推下来"的任务,主动权必须在本地用户
+- ❌ **不做云端自动推送任务回写本机** — agent 不接受"云端自动/定时/事件推下来"的任务,主动权必须在本地用户;**排除的是自动推送**,用户经 PWA 主动发起的远程会话是已实施例外(remote-control epic,2026-08)
 
 **关于"云端"语义**:
-> - **云端部署**:把 agent 跑在云服务器上 ❌ 不做
-> - **云端同步**:用云服务做"状态镜像 / 远程遥控通道" ✅ 远期考虑
+> - **云端部署**:把 agent 跑在云服务器上 ❌ 不做(agent core 仍在 PC daemon)
+> - **云端同步**:用云服务做"状态镜像 / 远程遥控通道" — 远程遥控通道 **✅ 已实施(2026-08)**:`everlasting-remote` 中继 + WSS 隧道 + PWA 配对,实时转发不落盘;"状态镜像 / 数据同步"仍未做(各 PC 数据隔离,不做跨节点同步)
 >
-> 这两项**不矛盾**,前者是"agent 跑哪",后者是"数据镜像到哪"。详见 [BACKLOG §4 跨设备](./BACKLOG.md#4-跨设备)。
+> 这两项**不矛盾**,前者是"agent 跑哪",后者是"数据镜像到哪"。已实施部分见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) + [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md),剩余跨设备同步候选见 [BACKLOG §4 跨设备](./BACKLOG.md#4-跨设备)。
 
 **V2 重排后新增的"不做"**(2026-06-10 决策):
 - ❌ **不做 xterm.js 嵌入式终端** — `shell` tool + 30K 落盘已覆盖"看 agent 在跑啥"的需求
@@ -169,9 +172,9 @@
 - 任何一项发现比预期难,砍掉,不要延期
 
 **本地 vs 云端**:
-- Agent 进程 100% 本地,数据不出本机
-- 不考虑自建 LLM 网关(除非后期多设备用)
-- 远期"云端同步"只 push 摘要(详见 BACKLOG.md §7)
+- Agent 进程 100% 本地,数据不出本机(remote 中继流经不落盘,只存 token/节点/配对码)
+- 不考虑自建 LLM 网关(多设备远程已落地但仍是单用户直连各 PC 的 LLM 配置,网关仍未做)
+- 远程遥控 = **实时隧道通道**(2026-08 已实施),非"push 摘要"式同步(旧设想见 [BACKLOG.md §4](./BACKLOG.md#4-跨设备))
 
 ### 5.3 不可控因素
 

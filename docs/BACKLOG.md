@@ -1,6 +1,7 @@
 # BACKLOG — 候选功能与技术选型
 
 > 7 个新功能方向(图片 / @ / command、Skill、Memory、角色/模式/编排、生成式 UI、飞书 IM、云端同步)的完整技术评估。
+> **注**:飞书(§6 IM 通道)/ 云端同步(§7 云端状态同步)两节已于 2026-06-25 随附录 A 归档,见 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md);本文档正文不再包含这两节,下文相关引用均指向归档。
 > **优先级 / 排期归 [ROADMAP.md](./ROADMAP.md),本文档只做技术评估**。
 >
 > 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md)。
@@ -24,6 +25,8 @@
 │ 输入层  §1 图片 / @文件 / /command                   │  ← 用户怎么表达意图
 └─────────────────────────────────────────────────────┘
 ```
+
+> **注**:图中 §6 飞书 / §7 云端同步两节已于 2026-06-25 随附录 A 归档(见 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md) §6/§7),本文档正文不再展开。
 
 **建议实施顺序(从下到上)**:下层先做、上层后做,后者依赖前者的稳定。**跨层都需要关注:token 预算、安全边界、状态管理**(见 §8)。
 
@@ -71,7 +74,7 @@
 | Memory      | 改文件不通知                    | banner 提示                   |
 | 生成式 UI   | 按钮 action 越权            | B9 当前落地范围:selector(复用 ask_user_question)/ code_block(hljs + 复制)/ diff(复用 DiffView),**无独立 button + action surface**;独立 button + action 白名单推 D3 后期 |
 | 飞书        | 消息内容外泄                    | 不在飞书存 session 历史       |
-| 云端        | 第三方数据托管                  | 只 push 摘要 + 端到端鉴权     |
+| 云端        | 请求流经中继(remote epic)      | 流经不落盘 + 配对码 60s 一次性 + device_token + shared_secret + per-IP 限速(10 次/分) |
 
 ### 3.4 实施顺序(供参考,排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排))
 
@@ -85,7 +88,7 @@
   §4 多角色 / 多模式(无编排)
                           ↓
 上层:
-  §5 生成式 UI → §6 飞书 → §7 云端 → §4 可编排
+  §5 生成式 UI → §6 飞书 → §7 云端 → §4 可编排(§6/§7 已归档,见附录 A)
 ```
 
 ---
@@ -97,12 +100,13 @@
 **定位**(重要):
 - **不是**多端协作(明确不做)
 - **是**个人多设备使用(家里电脑、公司电脑、手机)
-- 跟 §6 飞书的关系:飞书 = 消息通道;跟 §7 云端的关系:云端 = 状态镜像
+- 跟 §6 飞书的关系:飞书 = 消息通道;跟 §7 云端的关系:云端 = 状态镜像(§6/§7 章节已归档到 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md) §6/§7,此处仅沿用其概念)
 - 本节 = "在另一台机器接着干"
 
 **形态**:
 - **本地 daemon 化(✅ 已落地,2026-07,见 [ROADMAP §1.2 "daemon 化"](./ROADMAP.md#12-路线图外完成))**:agent core 已拆为独立 `everlasting-daemon` 进程(axum HTTP),Tauri GUI 作为瘦客户端 + 纯浏览器模式共享同一 agent core。这是跨设备的**基础**,但不等于跨设备 —— 本节未完成部分指**跨机器**接续。
-- **VPS 跨设备(❌ 未做,本节主范围)**:VPS 自托管 daemon(用户已有国内 VPS,直连,不走 Cloudflare Tunnel)+ 集中式(VPS daemon 是唯一权威,本机 GUI 是 client)+ 跨机器接续(worktree 走 git push/pull,不依赖 VPS 中转)
+- **VPS 中继 + 手机访问(✅ 已落地,remote epic S1~S6b,2026-08-11~08-13,merge `94828cb`)**:落地模型与早期计划(集中式"VPS daemon 唯一权威")不同 —— **PC daemon 是权威**(持全部 agent 数据/文件),云端 `everlasting-remote` **仅中继**(不持文件、不存 agent 数据,只存 nodes/devices/pairing_codes)。已交付:VPS 中继 + 配对 + PWA 手机访问(含移动端适配,08-13-mobile-chat-view / mobile-settings / mobile-polish),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)
+- **跨机器接续(❌ 未做,本节剩余主范围)**:worktree 迁移 / 多设备 session 同步仍未做 —— 数据仍只在 PC,手机经隧道访问的是 PC daemon
 
 **daemon 化已提供的基础(本地)**:
 - transport 抽象层(httpTransport 默认 / tauriTransport 逃生,`app/src/transport/`)—— 载体无关,跨设备时 VPS 远程也是 HTTP
@@ -117,16 +121,16 @@
   - daemon 不自动 commit(避免过度设计),迁移时强制 commit + push
 
 **实施范围**(技术细节,排期归 [ROADMAP §2 第四档](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
-- VPS daemon 部署文档(系统级 systemd,配置文件)
-- 跨机器 session 列表同步(只读)
-- "工作树迁移"流程(GUI 按钮)
-- 多设备消息历史(只在源机器)
-- 配置文件跨设备同步
+- ✅ **VPS 中继部署文档(systemd + nginx,已交付)**:[REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) + [`scripts/remote.sh`](../scripts/remote.sh) / [`scripts/deploy-remote.sh`](../scripts/deploy-remote.sh);E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)
+- ❌ 跨机器 session 列表同步(只读)
+- ❌ "工作树迁移"流程(GUI 按钮)
+- ❌ 多设备消息历史(只在源机器)
+- ❌ 配置文件跨设备同步
 
 **不做**:
 - ❌ 多端同时编辑同一 session(冲突解决不做)
 - ❌ VPS 持有 worktree 文件副本(隐私 + 存储)
-- ❌ Cloudflare Tunnel / 第三方中转(国内 VPS 直连足够)
+- ❌ Cloudflare Tunnel / 第三方中转(国内 VPS 自建中继足够;此处排除的是**第三方**隧道服务,remote epic 中"VPS 即请求流中转"是自建中继,不在此列 —— 见上方形态)
 - ❌ 实时同步(只在显式触发时同步)
 
 **风险**(提前识别):

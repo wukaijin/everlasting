@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-**进程模型（2026-07-20 daemon 化后）**：agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），Tauri GUI 进程作为瘦客户端，spawn daemon 为 sidecar 并经同源 HTTP/SSE 通信（默认 `httpTransport`，daemon 同时用 ServeDir 服务前端 SPA）。前端也可脱离 Tauri 用纯浏览器访问 daemon（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障时的逃生舱（回退到一体化 Tauri IPC）。详见 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) + [docs/ARCHITECTURE.md §1](./docs/ARCHITECTURE.md)。
+**进程模型（2026-07-20 daemon 化后）**：agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），Tauri GUI 进程作为瘦客户端，spawn daemon 为 sidecar 并经同源 HTTP/SSE 通信（默认 `httpTransport`，daemon 同时用 ServeDir 服务前端 SPA）。前端也可脱离 Tauri 用纯浏览器访问 daemon（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障时的逃生舱（回退到一体化 Tauri IPC）。**2026-08-11 起增加第三进程**：云端 `everlasting-remote` 服务端（独立 crate，跑国内 2C2G 服务器，仅中继不存 agent 数据），手机 PWA 经它 + WSS 隧道反向访问 PC daemon。详见 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) + [docs/ARCHITECTURE.md §1](./docs/ARCHITECTURE.md)。
 
-**当前状态**:MVP 主体 + V2 路线图主体已落地（多 Provider、memory/指令文件系统、context 压缩、权限系统、subagent、workflow、自主记忆、生成式 UI、harness trace viewer、交错思考渲染、review 可视化等）；daemon 化（agent core 拆出独立 `everlasting-daemon` 进程，GUI 作为瘦客户端）已于 2026-07 收官，近期主线是**群聊（group chat）多参与者编排**。完整路线 / 排期见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth），决策历史见 [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md)。
+**当前状态**:MVP 主体 + V2 路线图主体已落地（多 Provider、memory/指令文件系统、context 压缩、权限系统、subagent、workflow、自主记忆、生成式 UI、harness trace viewer、交错思考渲染、review 可视化等）；daemon 化（agent core 拆出独立 `everlasting-daemon` 进程，GUI 作为瘦客户端）已于 2026-07 收官；**远程控制 epic（remote daemon）已于 2026-08-11~13 落地（S1~S6b，合并 `94828cb`）**：`crates/everlasting-remote` 云服务端 + PC daemon tunnel client + 手机配对/PWA 反向代理 + 移动端适配，近期主线已转为此方向。完整路线 / 排期见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth），决策历史见 [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md)。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md)。
 
@@ -25,9 +25,13 @@ cd app && pnpm tauri build      # 前端 type-check + build，然后 Rust 编译
 cd app && pnpm dev              # 只跑 Vite dev server（无 Tauri）
 cd app && pnpm build            # vue-tsc --noEmit + vite build
 
-# Rust（必须 cd 到 app/src-tauri，项目根目录没有 Cargo.toml）
-cd app/src-tauri && cargo check # 快速编译检查
-cd app/src-tauri && cargo test  # 运行 Rust 单元测试（sse.rs / error.rs 有 #[cfg(test)]）
+# Rust（2026-08-11 workspace 翻转后：根目录有 workspace Cargo.toml，members = app/src-tauri + crates/everlasting-remote(-protocol)；
+# 根目录裸 cargo build/test 只作用于 default-members（两个 remote crate），不会碰 app）
+cargo check -p everlasting          # 从根目录快速编译检查 app（等价 cd app/src-tauri && cargo check）
+cargo test -p everlasting --lib     # 运行 app 的 Rust 单元测试
+cargo test -p everlasting-remote    # remote crate 测试（零系统库依赖，无需 PKG_CONFIG_PATH）
+cd app/src-tauri && cargo check     # 或 cd 进成员目录后裸命令（--bin 可解析到 daemon）
+cd app/src-tauri && cargo build --bin everlasting-daemon  # 构建 daemon（根目录则用 cargo build -p everlasting --bin everlasting-daemon）
 
 # WSL 环境（linuxbrew pkg-config 覆盖系统路径——见 HACKING-wsl 坑 1）：
 # cargo check / cargo test 撞到 gdk-pixbuf-2.0 / webkit2gtk-4.1 等"系统库 not found"
@@ -36,7 +40,8 @@ cd app/src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/sh
 cd app/src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo test
 cd app/src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo test --lib
 # 注：完整 gtk/webkit 依赖（Tauri runtime）需要 `pnpm tauri dev/build` 走 .cargo/config 路径，
-#     `cargo test` 和 `cargo test --lib` 都需要 PKG_CONFIG_PATH，否则撞 gdk-pixbuf not found。
+#     `cargo test` 和 `cargo test --lib` 都需要 PKG_CONFIG_PATH，否则撞 gdk-pixbuf not found；
+#     remote 两 crate 零系统库依赖，不需要 PKG_CONFIG_PATH。
 
 # 日志控制
 RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
@@ -52,6 +57,12 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 # GUI sidecar 模式：正常 `pnpm tauri dev/build` 即可，GUI 进程自动 spawn daemon 子进程并经 httpTransport 通信。
 # 逃生舱：URL 加 ?transport=tauri + GUI 在 Full 模式（EVERLASTING_GUI_FULL_STATE=1）回退到一体化 Tauri IPC。
 # ⚠️ 不要同时跑两个 daemon（会撞端口 + 数据分裂；sidecar 模式由 RunEvent::Exit 钩子自动回收）。
+
+# Remote daemon（everlasting-remote，云服务器端；本地开发/联调用 remote.sh 管理）
+./scripts/remote.sh start   # 本地起 remote 服务端（默认端口 7457，--shared-secret 必传；零系统库依赖）
+./scripts/remote.sh status  # 进程状态 + health
+# 部署：scripts/deploy-remote.sh（国内 2C2G 服务器，见 docs/REMOTE-DEPLOY.md）
+# E2E 冒烟：scripts/remote-e2e-smoke.mjs（remote 链路端到端验证，见 docs/REMOTE-ACCESS-E2E.md）
 ```
 
 前端测试用 **vitest**（`app/vitest.config.ts`，覆盖 `app/src/**/*.test.ts`：streamController / lru / markdown / messageFormat / path / permissions / chatMode / duration / useKeyboard 等 store 与 utils）；类型安全另靠 `vue-tsc --noEmit`。Rust 单元测试走 `cargo test`（`#[cfg(test)]` 内联于各模块）。
@@ -67,12 +78,14 @@ app/
 │   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo / BrowserHeader(浏览器模式顶栏)
 │   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer / UiCard(生成式 UI)/ WorkerBranchBadge + WorkerMergeControls / GroupChatConfigModal(群聊配置,07-29)/ ReviewMatrix + ReviewMatrixGrid + ReviewFindingDetail + ReviewDimensionCompare(C2 review 矩阵视图,07-26) 等
 │   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
-│   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
+│   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab / RemoteTab(远程隧道配置,08-11) 等
 │   │   ├── audit/          # 审计日志查询 UI (AuditLogModal / AuditLogItem)
 │   │   ├── trace/          # harness trace viewer (TracePanel / TurnTimeline / TurnCard / TraceEventItem)
 │   │   ├── common/         # 通用组件 (TriggerMenu 等 @文件/命令触发器)
 │   │   ├── ChatWindow.vue  # 顶层容器(纯组合)
 │   │   ├── SessionList.vue / ProjectTabs.vue / Icon.vue
+│   ├── router/             # vue-router(index.ts：/chat /pairing /nodes + isRemoteContext() 守卫)
+│   ├── views/              # ChatView / PairingView(配对码兑换) / NodeListView(节点列表) (08-11, PWA 远程)
 │   ├── stores/             # Pinia stores
 │   │   ├── chat.ts         # facade: sessions 列表 + currentSessionId + currentCwd + CRUD 委托
 │   │   ├── chat.types.ts   # ~310 行纯类型 + 强绑定 const(MODE_CYCLE 等)
@@ -89,13 +102,17 @@ app/
 │   │   ├── audit.ts        # 审计日志查询 store
 │   │   ├── traceStore.ts   # harness trace store (live+回看同构 TurnTrace)
 │   │   ├── reviewState.ts  # C2 review-state 矩阵视图 store(review-state.json 三态载荷)
-│   │   └── checklist.ts    # agent 自跟踪 checklist store
+│   │   ├── checklist.ts    # agent 自跟踪 checklist store
+│   │   ├── nodes.ts        # 远程节点列表 store(08-11)
+│   │   ├── pairing.ts      # 配对码兑换 device_token 流(08-11)
+│   │   └── remoteConfig.ts # remote 隧道配置 store(RemoteTab 数据源,08-11)
 │   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard / chatInputCodeMirror
 ├── transport/              # 前端 transport 抽象层(invoke/listen 与载体解耦)
 │   ├── index.ts           # resolveTransport():默认 httpTransport;?transport=tauri 逃生 → tauriTransport
-│   ├── http.ts            # httpTransport(fetch POST + SSE EventSource,连 everlasting-daemon 同源)
+│   ├── http.ts            # httpTransport(fetch POST + SSE EventSource,连 everlasting-daemon 同源;pwa-remote 模式走 /api/v1/proxy 前缀 + Bearer)
 │   ├── tauri.ts           # tauriTransport(@tauri-apps/api invoke/listen 透传,Full 模式逃生舱)
 │   ├── health.ts          # daemon health 轮询 + 自动降级(httpTransport ↔ tauriTransport)
+│   ├── auth.ts            # pwa-remote 模式 device_token 注入(08-11:isRemoteContext 检测 + access_token 通道)
 │   ├── env.ts             # isTauriWebview():Tauri webview vs 纯浏览器检测(浏览器无 Tauri runtime)
 │   └── types.ts           # Transport trait(invoke/listen 签名)+ UnlistenFn
 ├── src-tauri/              # Rust 后端
@@ -149,12 +166,18 @@ app/
 │       │   ├── server.rs   # build_router + serve_daemon(TcpListener 0.0.0.0:7456 + ServeDir 同源 SPA fallback + graceful shutdown)
 │       │   ├── sse.rs      # HttpSseSink — agent loop 的 SSE 事件流广播(chat-event/tool:call/tool:result)
 │       │   ├── error.rs    # DaemonError(axum IntoResponse)
+│       │   ├── tunnel/     # ★ 远程隧道 client(08-11) — WSS 长连接 + loopback 转发
+│       │   │   ├── mod.rs / client.rs     # WSS tunnel client(shared_secret + node_id + 心跳)
+│       │   │   ├── config.rs              # tunnel 配置(remote_url/shared_secret/… 存 app_config)
+│       │   │   ├── manager.rs / dispatcher.rs # TunnelManager + 请求分发(loopback 转发)
+│       │   │   ├── node_id.rs / sse_bridge.rs # 节点 id + SSE 桥接(取消只停转发)
+│       │   │   └── tests.rs / e2e_tests.rs    # 单元 + 端到端隧道测试
 │       │   └── routes/     # #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
-│       │       └── sessions/projects/config/providers/memory/permissions/.../stream(SSE)/health 等 20 文件
+│       │       └── sessions/projects/config/providers/memory/permissions/pairing/.../stream(SSE)/health 等 21 文件
 │       ├── bin/            # cargo bin targets
 │       │   └── everlasting-daemon.rs  # daemon 进程入口(resolve_data_dir + clap --port/--data-dir + serve_daemon)
 │       ├── skill/          # Skill 系统(资源加载 + 注册,/skill + use_skill tool)
-│       ├── commands/       # Tauri commands(sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist/task/subagents/question/review/ui)
+│       ├── commands/       # Tauri commands(sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist/task/subagents/question/review/ui/pairing)  # 97 个 #[tauri::command]
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
 │       └── tools/          # Tool 定义与执行(24 个 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
@@ -173,12 +196,20 @@ app/
 │           ├── request_mode_change.rs  # LLM 申请切 mode(用户 inline card 授权)
 │           ├── nominate_speaker.rs / end_discussion.rs  # 群聊发言控制(SIGNAL 工具,仅 group_chat session 生效;chat_loop 拦截记录提名/终止信号)
 │           └── read_guard.rs  # session 隔离的已读文件校验(edit_file 前置 3 道 check)
+crates/                     # Rust workspace 子 crate(2026-08-11 workspace 翻转)
+├── everlasting-remote/     # ★ 远程控制云服务端(08-11) — axum 0.7(ws) + sqlx + dashmap + subtle
+│   └── src/                # auth(shared_secret + device_token)/ config / db(nodes/devices/pairing_codes 三表)
+│                           # pending / ratelimit(per-IP 10 次/分)/ server / tunnel_registry
+│                           # routes/{health,nodes,pairing,proxy(反代),ws(WSS 隧道)}
+└── everlasting-remote-protocol/  # 远程隧道帧定义(Frame/StreamEvent)
 docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非项目根)
 ```
 
 ### 核心数据流
 
 前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → `transport.invoke("chat", { requestId, sessionId, messages })`（**默认 `httpTransport`**：fetch POST 到 daemon `/api/v1/...`；`?transport=tauri` 逃生时走 Tauri IPC 同进程）→ Rust `chat` handler（daemon 进程的 axum 路由，或 Full 模式下的 Tauri command；两者共享同一 `#[tauri::command]`/REST 双暴露 handler）→ **Agent Loop**（max 200 turns）→ 每轮开头通过 `build_instructions_blocks()` 构造带 `cache_control` 的 synthetic user message（4 个指令文件: User CLAUDE.md / User AGENTS.md / Project CLAUDE.md / Project AGENTS.md）+ 工具前 `memory_recall` 召回 + context 压缩降级 → `chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 经 daemon 的 `HttpSseSink`（`daemon/sse.rs`）同源 SSE 广播给前端（Full 模式则经 Tauri event）→ 只读工具集 `FuturesUnordered` 批量执行 + 写类 / shell 串行 → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite（daemon 进程持有 DB pool），session 列表从 DB 读。前端 Pinia store 多 listener 监听（`transport.listen`），增量更新消息 + 工具卡片。
+
+**远程链路（remote-control epic, 2026-08-11）**：手机 PWA → HTTPS → `everlasting-remote` 云服务端（配对码 redeem 换 device_token → 反向代理 `proxy.rs` 转发请求原文）→ WSS 隧道（`tunnel_registry` + PC 侧 `daemon/tunnel/client.rs` 长连接）→ PC daemon **loopback 转发**（`dispatcher.rs` 打本地 agent core，agent 零改动）→ 流式响应经 `sse_bridge.rs` 桥回 remote 再回手机。前端 `transport/auth.ts` 注入 device_token（`/api/v1/proxy` 前缀 + Bearer；SSE 走 `?access_token=`），配对流由 `stores/pairing.ts` 驱动，vue-router `isRemoteContext()` 守卫仅在 remote-served 语境 gate 配对页。
 
 ### 关键架构决策
 
@@ -188,12 +219,15 @@ docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非
 - **16 阶段请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`
 - **Memory/指令文件系统**：4 个指令文件（User/Project × CLAUDE.md/AGENTS.md）固定路径加载 + mtime fence 新鲜度校验（RULE-C-001,notify 已移除）+ `build_instructions_blocks()` 构造带 `cache_control: ephemeral` 的 synthetic user message，实现 prompt caching（2026-06-11 B5 重构落地）
 - **daemon 化（已落地，2026-07-20~23 remote-access Phase 2）**：agent core 从 Tauri GUI 进程拆出为独立 `everlasting-daemon` 进程（axum HTTP server），GUI 作为瘦客户端 spawn daemon 为 sidecar，经**同源 HTTP + SSE** 通信（`httpTransport` 默认）；daemon 用 `tower-http::ServeDir` 同源服务前端 SPA，支持纯浏览器访问（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障逃生舱（回退一体化 Tauri IPC）。决策动机见 [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md)，编排放 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md)
+- **远程控制（已落地，2026-08-11~13 remote-control epic S1~S6b，合并 `94828cb`）**：Cargo workspace 翻转（根 `Cargo.toml`，default-members 只含 remote 两 crate）；新增 `everlasting-remote` 云服务端（axum 0.7 ws + 自研 WSS 隧道协议 + 配对码 60s 一次性 + per-IP 限速 + 反向代理，**仅中继不存 agent 数据**，PC daemon 权威不变）；PC daemon 增加 tunnel client（WSS 长连接 + loopback 转发，**agent core 零改动**）；前端 vue-router + PWA 壳 + 配对/节点视图 + pwa-remote transport 模式；移动端适配（S5/S6a/S6b 含真机迭代）。HTTPS 用户自理（nginx），不做主动推送/多用户/跨节点同步。部署见 [docs/REMOTE-DEPLOY.md](./docs/REMOTE-DEPLOY.md)，E2E 验收见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md)
 
 ## Environment Variables
 
 项目**不读任何 LLM 相关 env 变量**。provider / model / api_key / base_url 全部通过 UI Settings 配置，落盘到 DB catalog（`providers` / `models` / `app_config` 表）。历史上曾有 `ANTHROPIC_API_KEY` / `LLM_MODEL` 等 env 兜底路径，已在多 Provider catalog 架构落地后移除。
 
 `ANTHROPIC_API_KEY` 仍作为**敏感变量名**出现在 `tools/shell.rs` 的 shell 命令环境变量脱敏清单里（执行 shell 命令前擦除），与 LLM 配置无关。
+
+**例外（remote crate，2026-08-11 起）**：`crates/everlasting-remote` 是独立服务端，读自己的 env（`EVERLASTING_REMOTE_PORT` / `EVERLASTING_REMOTE_DB_PATH` / `EVERLASTING_REMOTE_SECRET`，见 `crates/everlasting-remote/src/config.rs`），与 LLM 配置同样无关。GUI/daemon 进程仍不读任何 LLM env。
 
 ## WSL 环境注意
 
@@ -204,10 +238,11 @@ docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非
 | 层 | 技术 |
 |---|---|
 | 桌面框架 | Tauri 2（GUI 进程；daemon 化后为瘦客户端，agent core 已拆出） |
-| 前端 | Vue 3 (`<script setup>`) + Vite + Pinia + reka-ui |
-| 后端 | Rust (edition 2021) + tokio |
+| 前端 | Vue 3 (`<script setup>`) + Vite + Pinia + reka-ui + vue-router 4 + vite-plugin-pwa（PWA 壳，远程手机访问） |
+| 后端 | Rust (edition 2021) + tokio（Cargo workspace：app/src-tauri + crates/everlasting-remote(-protocol)） |
 | Agent daemon | axum 0.7 + tower 0.5 + tower-http 0.6（ServeDir 同源 SPA）+ clap；`everlasting-daemon` bin，GUI 经 tauri-plugin-shell spawn 为 sidecar，默认 `httpTransport`（同源 HTTP/SSE）|
-| 前端 transport 抽象 | `app/src/transport/`（httpTransport 默认 / tauriTransport `?transport=tauri` 逃生）|
+| Remote daemon（云） | `crates/everlasting-remote`：axum 0.7（ws feature）+ sqlx + dashmap + subtle + 自研 WSS 隧道协议（tokio-tungstenite 0.24）；零系统库依赖；独立 SQLite（nodes/devices/pairing_codes）|
+| 前端 transport 抽象 | `app/src/transport/`（httpTransport 默认 / tauriTransport `?transport=tauri` 逃生 / pwa-remote 模式 auth.ts）|
 | HTTP/LLM | reqwest + 手写 SSE + 自研 Provider trait (Anthropic / OpenAI) |
 | 错误处理 | anyhow（边界）+ thiserror（领域） |
 | 日志 | tracing + tracing-subscriber |
@@ -221,6 +256,9 @@ docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非
 - `DESIGN.md` — 项目能力边界 + 硬约束(明确不做)
 - `TECH.md` — 技术选型决策（锁定/候选/不用）
 - `IMPLEMENTATION.md` — 决策档案(§1 自研 agent core 决策 + §4 ADR 决策日志)
+- `REMOTE-ACCESS-ROADMAP.md` — 远程访问实施路线图（Phase 1/2 已落地；Phase 3 已由 remote-control epic 实施）
+- `REMOTE-DEPLOY.md` — remote 云服务器部署手册（国内 2C2G + nginx + remote.sh/deploy-remote.sh）
+- `REMOTE-ACCESS-E2E.md` — 远程访问 E2E 部署与验收手册
 - `HACKING-llm.md` — LLM API 兼容层笔记
 - `HACKING-wsl.md` — WSL 环境坑笔记
 - `BACKLOG.md` — 候选功能技术评估(排期归 ROADMAP)

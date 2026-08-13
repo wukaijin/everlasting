@@ -18,10 +18,10 @@
 │ 云服务器 remote       │◄──────────┤ PC daemon(tunnel client)
 │ everlasting-remote   │  ② PC 主动│  - agent core + 本地 SQLite
 │  - WSS 服务端         │   outbound│  - 本地功能零依赖 remote
-│  - 配对码 + devices  │   穿 NAT  │  - 跑 API :7456 + 前端
+│  - nodes/devices/配对码│   穿 NAT  │  - 跑 API :7456 + 前端
 │  - 反向代理 + SSE 桥 │           │
 │  - ServeDir 伺服 PWA │    HTTP   │
-│  - SQLite(只存 token)│──────────►│ ③ 手机请求经 WSS 转发
+│  - SQLite(nodes/devices/配对码)│──────────►│ ③ 手机请求经 WSS 转发
 └──────────────────────┘ ④ proxy   │   → daemon loopback :7456
                           到 PC    │   → agent 响应 → SSE 回流手机
 ```
@@ -135,7 +135,7 @@ export EVERLASTING_REMOTE_DIST_DIR="/opt/everlasting/dist"   # 指向前端产�
 | `--shared-secret` / `EVERLASTING_REMOTE_SECRET` | **是** | PC 连 WSS 的握手密钥;缺了启动直接 panic(防裸跑) |
 | `EVERLASTING_REMOTE_DIST_DIR` | 否(但 E2E 必设) | 前端 dist 路径;不设则找 CWD 下 `./dist`;都没有则纯 API(手机空白) |
 | `--port` | 否(默认 7457) | nginx 反代到此端口 |
-| `--db-path` | 否(默认 `~/.local/share/dev.everlasting.remote/remote.db`) | remote 的 SQLite,只存 token/devices/配对码 |
+| `--db-path` | 否(默认 `~/.local/share/dev.everlasting.remote/remote.db`) | remote 的 SQLite,只存 nodes/devices/配对码三张表 |
 
 ### 2.4 验证 remote 起来了
 
@@ -162,7 +162,11 @@ curl https://remote.yourdomain.com/
 
 ```bash
 # 方式 A:release daemon(serve 前端 + API,生产形态)
-./scripts/daemon.sh bg              # 编译 release + 后台跑,默认 :7456
+./scripts/daemon.sh start --no-build   # 前台起 release daemon,默认 :7456
+#   ⚠️ 别用 daemon.sh bg —— 已失效:daemon bin 带 prctl(PDEATHSIG)孤儿守卫,
+#   脚本退出后 1-2s 内后台 daemon 被 SIGTERM 杀。要后台化:先 start --no-build
+#   前台起,再 Ctrl+Z 挂起 → bg 放后台(父 shell 存活);详见
+#   [HACKING-wsl.md](./HACKING-wsl.md) 的「bg 模式失效」。
 
 # 方式 B:dev 模式(vite HMR 前端 + daemon API,开发态)
 cd app && pnpm dev:all              # vite(:1420) + daemon(:7456) 并行
@@ -308,7 +312,7 @@ https://remote.yourdomain.com
 | 手机打开 remote 域名**直接进 /chat 不跳 /pairing** | health 探测没拿到 remoteId(isRemoteContext 判 false) | 手机 `curl https://remote.dom/health` 看响应有没有 `remoteId` 字段 |
 | 手机**一直转圈**进不去 | health 探测超时 / nginx 没放行 /health | 浏览器 devtools Network 看 /health 请求;服务器看 remote 日志 |
 | PC 连接状态**认证失败** 🔴 | shared_secret 两端不一致 | 核对 PC RemoteTab 填的 secret vs 服务器 `EVERLASTING_REMOTE_SECRET` |
-| PC 连接状态**重连中** 🟡 不绿 | WSS 握手失败 / nginx /ws location 配错 | 服务器 `curl -i https://remote.dom/ws`（期望 426 Upgrade Required 或 400，不是 502/404）；检查 nginx /ws 有没有 Upgrade 头透传 |
+| PC 连接状态**重连中** 🟡 不绿 | WSS 握手失败 / nginx /ws location 配错 | 服务器 `curl -i https://remote.dom/ws`（期望 426 Upgrade Required 或 401，不是 502/404）；检查 nginx /ws 有没有 Upgrade 头透传 |
 | **生成配对码**按钮灰的 | 连接状态未配置/未连 | 先把状态弄绿（§3.3） |
 | 配对码**已过期** | 60s 一次性,超了 | PC 重新生成（别拖） |
 | 手机配对**"无效或过期"** | 码输错 / 过期 / 已用过 | 重新生成新码（一次性,不能复用） |
@@ -354,7 +358,7 @@ sqlite3 ~/.local/share/dev.everlasting.remote/remote.db
 ./scripts/remote.sh bg --secret <S>   # 重启
 ```
 
-remote.db 保留(token/devices 不丢)。手机无需重新配对。
+remote.db 保留(nodes/devices/配对码不丢)。手机无需重新配对。
 
 ### 换 shared_secret
 

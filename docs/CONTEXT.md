@@ -141,7 +141,13 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— 91 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— 97 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分);WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
+- **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
+- **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。
+- **配对码 / device_token** — bootstrap 凭据:PC Remote tab 生成 6 位配对码(60s 一次性),手机 PWA redeem 后换 64-hex `device_token`(`transport/auth.ts` 的 `everlasting_device_token`);此后经 `Authorization: Bearer` + SSE `?access_token=` 访问。
+- **pwa-remote 模式** — `httpTransport` 内部第三态:前端持有 `device_token` 时(`transport/auth.ts` 的 `isRemoteContext()`)请求加 `/api/v1/proxy` 前缀 + Bearer,SSE 带 `access_token`(`http.ts`);vue-router 守卫(`app/src/router/index.ts`)仅 remote-served 语境 gate 配对页,daemon / Tauri 语境直进 `/chat`。PWA 壳:vite-plugin-pwa + `public/icons/`。
+- **Settings RemoteTab / remoteConfig store** — 前端远程设置入口(`app/src/components/settings/RemoteTab.vue` + `stores/remoteConfig.ts`),GUI 侧配置 remote 隧道相关状态。
 
 ---
 

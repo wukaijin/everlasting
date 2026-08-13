@@ -21,12 +21,14 @@
 **自研的边界**:
 - ✅ 自己写:Agent Loop、消息管理、tool 注册、流式解析、权限检查
 - ✅ 自己写:Tauri IPC 事件协议、session 持久化、worktree 管理
+- ✅ 自己写:WSS 隧道协议(Frame/StreamEvent,remote epic)—— 不用 frp / rathole / yamux
 - ❌ 不自己写:LLM HTTP 协议(用 rig)、SSE 解析(用 rig)、MCP 协议(用 rmcp)
 - ❌ 不自己写:GUI 框架(Tauri 已有)、Diff 算法(用前端库)
 
-> **演进注记(2026-07 daemon 化后,见 §4 2026-07-20 ADR)**:上面是 2026-06 项目启动期的快照,两点已演进 ——
+> **演进注记(2026-07 daemon 化后,见 §4 2026-07-20 ADR)**:上面是 2026-06 项目启动期的快照,三点已演进 ——
 > 1. **「Tauri IPC 事件协议」已非唯一入口**:2026-07-20~23 daemon 化后,同一批 handler 双暴露为 axum HTTP(`/api/v1/*`)+ 同源 SSE(`/api/v1/stream`),前端经 transport 抽象层默认走 `httpTransport`(浏览器模式 + Thin 模式 GUI),`tauriTransport`(`?transport=tauri`)退为 Full 模式逃生舱。核心自研的「事件协议」语义不变,只是物理通道从「单 Tauri 进程内 invoke/emit」扩到「GUI ↔ daemon 跨进程 HTTP/SSE」。详见决策日志 [2026-07-20 — Agent daemon 化 + HTTP/SSE transport](./IMPLEMENTATION/decisions-2026-07.md)。
 > 2. **rig / rmcp 早已废弃**:rig-core 于 2026-06-09 弃用(TECH §2)、rmcp 于 2026-06-10 移除(TECH §3)。上面「用 rig 做 LLM HTTP / SSE」「用 rmcp 做 MCP」是**当时**的真实决策,但现状是 LLM HTTP/SSE 自研(`llm/provider/{anthropic,openai}.rs` + 自写 SSE parser)、MCP 工具走自有 `tools/` 注册(非 rmcp)。保留原文是 ADR 性质的历史档案,不代表当前做法。
+> 3. **remote-control epic(2026-08-11~13,PC daemon 一等公民)**:PC daemon 是**一等公民**;远程控制是 **opt-in 附加层**——`crates/everlasting-remote`(自研 Rust remote daemon,axum 0.7 ws)+ tunnel client(自研 WSS 隧道,tokio-tungstenite 0.24)+ 移动端 PWA(vue-router + vite-plugin-pwa)。通道扩为「手机 PWA ↔ remote daemon(WSS)↔ PC loopback」,反向代理传 HTTP 原文、PC 打 loopback,**agent core 零改动**;不做主动推送 / 多用户 / 跨节点同步。详见决策日志 [2026-08-11~13 — remote-control epic](./IMPLEMENTATION/decisions-2026-08.md)。
 
 ---
 

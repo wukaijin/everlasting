@@ -29,12 +29,15 @@ cd app && pnpm test            # run all *.test.ts under app/src
 cd app && pnpm test -- --ui    # interactive watch mode
 ```
 
-**Backend** (Rust `cargo test`, in `app/src-tauri/`). On WSL you must export `PKG_CONFIG_PATH` or system libs (gdk-pixbuf / webkit2gtk) won't be found — see [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) 坑 1:
+**Backend** (Rust `cargo test`). 2026-08-11 workspace 翻转后根目录有 `Cargo.toml`(members = app/src-tauri + crates/everlasting-remote(-protocol);default-members 只含 remote 两 crate)——**根目录裸 `cargo test` 只跑 default-members(remote 两 crate,不会跑 app)**;app 的测试需显式 `-p everlasting`,或 cd app/src-tauri 后裸命令。On WSL you must export `PKG_CONFIG_PATH` or system libs (gdk-pixbuf / webkit2gtk) won't be found — see [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) 坑 1:
 
 ```bash
 cd app/src-tauri && \
   PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo test --lib             # ~1657 unit tests; default is multi-threaded (= nproc)
+  cargo test --lib             # ~1689 unit tests (2026-08-13 实测);default is multi-threaded (= nproc)
+# 根 workspace 等价写法(推荐从根跑):
+cargo test -p everlasting --lib               # 结果同 cd app/src-tauri && cargo test --lib(PKG_CONFIG_PATH 仍需)
+cargo test -p everlasting-remote              # remote crate:零系统库依赖,无需 PKG_CONFIG_PATH,远快于 everlasting
 ```
 
 Notes:
@@ -42,3 +45,4 @@ Notes:
 - Scope a smoke run with a filter inside one `cargo test` call, e.g. `cargo test --lib "agent::tests_agent_loop::"`. Avoid looping `cargo test <module>` per module — each invocation pays ~11s relink + spawn tax and skews timing.
 - To profile slow tests, prefer [`cargo-nextest`](https://nexte.st) (`cargo nextest run --lib`, per-test timings); otherwise see the timestamp fallback in [HACKING-wsl.md §测试性能](./docs/HACKING-wsl.md#测试性能wsl-后端-cargo-test).
 - Cold compile `--no-run` ≈ 1m37s; incremental ≈ 11s.
+- Remote 链路 E2E 冒烟:`node scripts/remote-e2e-smoke.mjs`(需本地 remote 服务端在跑,见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md))。

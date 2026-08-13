@@ -1,21 +1,22 @@
 # 远程访问 / 多通道改造 — 实施路线图
 
 > **状态**:实施路线图(2026-07-20)。本文档是 [REMOTE-ACCESS-RESEARCH.md](./_archive/2026-07-20-remote-access-research.md) 调研评估的**可执行版本**,把 Phase 1/2/3 拆成可独立验证、独立交付的子阶段。
+> **进度(2026-08-13 同步)**:Phase 1/2 已于 2026-07 实施;Phase 3 已由 **remote-control epic(S1~S6b)** 于 2026-08-11~13 落地(merge `94828cb` 合入 main)。本文档转为"历史规划 + 已实施对照"。
 > **定位**:RESEARCH.md 是"为什么这么做",本文是"具体怎么做、怎么验证"。每个子阶段都满足三个条件:① 能独立提交 ② 有明确的验证标准 ③ Tauri 版始终可用(不破坏现状)。
-> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正)
+> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10/B11](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正) / Phase 3 权威对照见 epic PRD `.trellis/tasks/08-11-remote-control-epic/prd.md`
 
 ---
 
 ## 0. 总览
 
 ```
-近期(可立即启动)                          远期(协议稳定后)
-┌─────────────────────────────────┐     ┌──────────────────────┐
-│  Phase 1: transport 抽象         │     │  Phase 3: 认证 + 远程 │
-│  ├─ P1.1 Transport interface     │     │  (设计草稿见         │
-│  ├─ P1.2 TauriTransport + 迁移   │     │   RESEARCH §4.4)     │
-│  └─ P1.3 后端 emit 散点收敛      │     └──────────────────────┘
-├─────────────────────────────────┤
+已实施(2026-07)                            已实施(2026-08,remote-control epic)
+┌─────────────────────────────────┐     ┌──────────────────────────────────┐
+│  Phase 1: transport 抽象         │     │  Phase 3: 认证 + 远程             │
+│  ├─ P1.1 Transport interface     │     │  (crates/everlasting-remote       │
+│  ├─ P1.2 TauriTransport + 迁移   │     │   云服务端 + PC tunnel client     │
+│  └─ P1.3 后端 emit 散点收敛      │     │   + PWA 配对/节点, S1~S6b)        │
+├─────────────────────────────────┤     └──────────────────────────────────┘
 │  Phase 2: daemon 拆分            │     可选
 │  ├─ P2.1 AppState::load 去 AppHandle│   ┌──────────────────────┐
 │  ├─ P2.2 axum HTTP server + 79 handler│ │  Phase 4: Electron   │
@@ -141,14 +142,14 @@ grep -rn '\.emit(' app/src-tauri/src/agent/ | grep -v 'test'
 
 ---
 
-### Phase 1 整体验收
+### Phase 1 整体验收(✅ 2026-07-20 完成)
 
-- [ ] P1.1 / P1.2 / P1.3 全部完成
-- [ ] `pnpm vitest run` 全绿(22 测试文件 mock 改造)
-- [ ] `cargo test` 全绿(后端散点收敛)
-- [ ] `pnpm tauri dev` 零行为变化(手动 smoke test 全过)
-- [ ] grep 确认:前端无非 transport 模块的 `@tauri-apps/api/core` import;后端 agent 模块无裸 `.emit(` 调用
-- [ ] **此时 Tauri 版完全可用,Phase 2 可启动**
+- [x] P1.1 / P1.2 / P1.3 全部完成
+- [x] `pnpm vitest run` 全绿(22 测试文件 mock 改造)
+- [x] `cargo test` 全绿(后端散点收敛)
+- [x] `pnpm tauri dev` 零行为变化(手动 smoke test 全过)
+- [x] grep 确认:前端无非 transport 模块的 `@tauri-apps/api/core` import;后端 agent 模块无裸 `.emit(` 调用
+- [x] **此时 Tauri 版完全可用,Phase 2 可启动**
 
 ---
 
@@ -197,7 +198,7 @@ pnpm tauri dev
 - handler 映射规则:每个 `#[tauri::command]` 对应一个 axum handler,`State<'_, Arc<AppState>>` → axum `Extension<Arc<AppState>>`
 - 协议:REST 风格,body 字段保持现有 snake_case(与 `AppCommandError` 一致);URL `/api/v1/...`(加版本号)
 - **此阶段前端不改**(httpTransport 仍是 stub,前端走 tauriTransport)
-- 新增 `src-tauri/src/daemon/auth.rs` 的 stub(Phase 2 本地无认证,Phase 3 填充)
+- 新增 `src-tauri/src/daemon/auth.rs` 的 stub(Phase 2 本地无认证,Phase 3 填充) —— **计划未执行**:该文件从未创建,Phase 3 认证落在独立 crate `crates/everlasting-remote/src/auth.rs`(shared_secret + device_token)
 
 **关键**:`ts-rs` codegen 验证 —— 确认能覆盖 `ChatEvent` 这种 `#[serde(tag = "type")]` 的内部 tagged enum,生成 TS 类型供前端用。
 
@@ -355,22 +356,22 @@ cargo test --package everlasting-daemon --test e2e large_payload
 - [ ] 10 类 SSE 事件 + 4 类 round-trip 端到端验证通过 —— E1a chat happy-path 就绪;完整 10 类事件序列留 GUI 运行时
 - [x] 无 dual-pool 写竞争(GUI 瘦客户端不开 db,WAL + busy_timeout=5s 就绪;`lsof` 验证留手动)
 - [x] daemon 单二进制部署可用(ServeDir 兜底挂 `/`,前端 + API 同源)—— 代码就绪,实跑留手动
-- [ ] **dogfooding ≥ 2 周无 P0/P1** —— Phase 3 启动前置条件,计时未起
+- [ ] **dogfooding ≥ 2 周无 P0/P1** —— Phase 3 启动前置条件,计时未起 —— **偏差记录(2026-08)**:Phase 3 在该前置条件未满足时由 remote-control epic 直接启动并完成(2026-08-11~13),实际使用中继续观察
 
-**Phase 3 仍定为远期**:前置条件是 Phase 2 实跑稳定(至少 dogfooding 1 个月)。当前仅代码就绪,不启动 Phase 3。
+**Phase 3 已由 remote-control epic 实施(2026-08-11~13,S1~S6b,merge `94828cb`)**;原"dogfooding 1 个月"前置条件未满足即启动,记录为决策偏差(见 [IMPLEMENTATION §4 2026-08-11~13](./IMPLEMENTATION/decisions-2026-08.md))。
 
 ---
 
-## Phase 3:认证 + 跨设备远程(远期,1 周+)
+## Phase 3:认证 + 跨设备远程(✅ 已实施 2026-08,remote-control epic)
 
-> 📌 **本阶段定为远期规划**,不在近期实施范围。前置条件:Phase 2 本机访问跑通 + HTTP/SSE 协议经实际使用稳定(至少 dogfooding 1 个月)。设计草稿见 [RESEARCH §4.4](./_archive/2026-07-20-remote-access-research.md#44-phase-3远期规划认证--跨设备远程访问)。
+> 📌 **已落地(2026-08-11~13,remote-control epic S1~S6b,merge `94828cb`)**。原"远期规划"前置条件(dogfooding 1 个月)未满足即启动,记录为决策偏差。权威实施对照见 epic PRD `.trellis/tasks/08-11-remote-control-epic/prd.md`(其中"与 ROADMAP 的关系"表),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)。
 
-**启动时再拆子阶段**(参考要点):
-- P3.1 配对码流程 + `devices` 表 + token 校验中间件
-- P3.2 HTTPS(自签/Let's Encrypt/Cloudflare Tunnel)
-- P3.3 读写不对称(远程 client 默认只读,写操作需 grant;`Transport.isLocal` 属性区分)
-- P3.4 token 存储 XSS 防护评估(localStorage vs httpOnly cookie)
-- P3.5 Cloudflare Tunnel / Tailscale Funnel 部署文档(两套并存)
+**落地时拆的子阶段与实际状态**:
+- P3.1 配对码流程 + `devices` 表 + token 校验中间件 → ✅ **已落地**:配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分),redeem 换 64-hex device_token;`crates/everlasting-remote/src/routes/pairing.rs` + `db/schema.rs` 的 `nodes/devices/pairing_codes` 三表 + `auth.rs`(shared_secret + device_token 双通道);PC 侧 `daemon/routes/pairing.rs` + `commands/pairing.rs` 镜像
+- P3.2 HTTPS(自签/Let's Encrypt/Cloudflare Tunnel) → ⚠️ **部分落地**:HTTPS 由用户自理(nginx 反代 + 证书,epic Q9),**非 Cloudflare Tunnel**
+- P3.3 读写不对称(远程 client 默认只读,写操作需 grant;`Transport.isLocal` 属性区分) → ❌ **推后**:PWA 等权(epic Q11),transport 层无 `isLocal`
+- P3.4 token 存储 XSS 防护评估(localStorage vs httpOnly cookie) → ✅ **MVP 接受 localStorage**(`transport/auth.ts`),V2 再评估 httpOnly cookie
+- P3.5 Cloudflare Tunnel / Tailscale Funnel 部署文档(两套并存) → ❌ **替换**:国内 2C2G 服务器 + 自研 WSS 隧道(`scripts/deploy-remote.sh` + `docs/REMOTE-DEPLOY.md`)
 
 ---
 
@@ -389,7 +390,7 @@ P1.1 ─┬─> P1.2 ──> P1.3 ──┬─> P2.1 ──> P2.2 ──> P2.3 �
       │                    │
       └─(独立,可并行)      └─(Phase 1 验收后才能启动 Phase 2)
 
-Phase 3 ── 依赖 Phase 2 协议稳定(dogfooding 1 个月+) ── 远期
+Phase 3 ── ✅ 已实施(remote-control epic,2026-08,S1~S6b;原 dogfooding 前置未满足即启动,记录为偏差)
 Phase 4 ── 依赖 Phase 2 httpTransport ── 可选
 ```
 

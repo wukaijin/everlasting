@@ -15,16 +15,20 @@
 | 前端       | **Vue 3.4+** + Vite     | `<script setup>` 组合式 API + Pinia + reka-ui / shadcn-vue |
 | 后端语言   | Rust 1.75+              | edition 2021                             |
 | 异步运行时 | tokio                   | Tauri 已经用 tokio                       |
-| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions.md) |
+| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions-2026-06.md) |
 | MCP        | **(已移除)** ~~rmcp 0.16.0~~ | A3 MCP 外暴露 2026-06-10 V2 重排移除,rmcp 从 Cargo.toml 删除(详见 §3) |
 | Git 操作   | **git2-rs**             | libgit2 绑定,worktree / diff / commit   |
-| 数据库     | **sqlx** + SQLite       | 编译期 SQL 检查,async 友好               |
+| 数据库     | **sqlx** + SQLite       | 编译期 SQL 检查,async 友好;**现为 daemon / remote 两套独立 SQLite**(remote 存 nodes / devices / pairing_codes) |
 | 序列化     | serde + serde_json      | 标准选择                                 |
 | 错误处理   | anyhow + thiserror      | 边界用 anyhow,领域用 thiserror           |
 | HTTP       | reqwest                 | 直接用,自研 Provider trait 内部也走 reqwest |
 | 前端 diff  | `diff` (jsdiff) + 自渲染 | 框架无关,Vue 包装;`app/src/components/chat/DiffView.vue` 用 `parsePatch`(B9 复用只读展示) |
 | 后台 shell | `tokio::process::Child` | L1a(2026-06-19 落地,**不带 PTY**);`BackgroundShellRegistry` trait + 进程内 impl;session-scoped,默认 `max_runtime_ms` 24h。`portable-pty` / `xterm.js` 留 L1b follow-up |
 | 模糊搜索(前端) | `fuzzysort` ^3.1.0 | @文件补全 B2 PR1(替代 `nucleo`,极轻量 TS 库) |
+| 服务端框架(daemon / remote 复用) | **axum 0.7** | 含 ws feature;`everlasting-daemon` 与 remote daemon 共用(remote epic 08-11~13) |
+| WSS 隧道 | **tokio-tungstenite 0.24**(PC 侧) | 自研 WSS 隧道协议(Frame/StreamEvent),不用 frp / rathole / yamux |
+| 前端路由 | **vue-router 4** | `/pairing` / `/nodes` / `/chat`(remote epic 移动端 PWA) |
+| PWA 壳 | **vite-plugin-pwa** | 移动端 PWA 壳(remote epic) |
 
 ### 1.2 候选但暂不锁定
 
@@ -39,6 +43,9 @@
 - ❌ **LangChain / LangGraph (Python)** — Rust 自己写,DAG 调度几百行代码就够
 - ❌ **dspy-rs** — 还不成熟
 - ❌ **Anthropic Agent SDK / Codex SDK** — 学习目标要求自研
+- ❌ **frp / rathole / yamux** — 隧道自研 WSS(tokio-tungstenite 0.24),见 §1.1
+- ❌ **Cloudflare Tunnel / Tailscale Funnel** — remote 中继落定为国内 2C2G 服务器 + 自研 Rust remote daemon(HTTPS 用户自理 nginx 反代,非 Tunnel)
+- ❌ **主动推送** — 永久不做(PC daemon 一等公民,远程为 opt-in 附加层)
 
 ### 1.4 扩展功能新增依赖(随候选功能引入)
 
@@ -61,7 +68,7 @@
 | 表单(前端) | `vee-validate` | 生成式 UI form | BACKLOG §5(**B9 当前未引入**) |
 | 后台 shell 实现 | `tokio::process::Child` + `BackgroundShellRegistry` trait | L1a(进程内 impl,daemon 化换 impl 不动调用点) | L1a 2026-06-19 落地 |
 | 工作流可视化 | `@vue-flow/core` | DAG 编辑器(后期再加) | BACKLOG §4 编排 |
-| 云端 | Cloudflare Workers + D1 (SQLite) | REST API + 状态存储 | BACKLOG §7 |
+| 云端(remote 中继) | ~~Cloudflare Workers + D1 (SQLite)~~ → **自研 Rust remote daemon**(`crates/everlasting-remote`:axum 0.7 含 ws feature + sqlx + dashmap + subtle,**零系统库依赖**) | 国内 2C2G 服务器,HTTPS 用户自理(nginx 反代,非 Cloudflare Tunnel);REST API + 状态存储 | remote epic 已落地(08-11~13),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) |
 
 **已落地但不引入新 crate 的基础设施模块**(07-02~07-10):
 
@@ -83,12 +90,12 @@
 
 ## 2. 决策:rig-core 弃用(2026-06-09),改自研 Provider trait
 
-**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-04 段](./IMPLEMENTATION/decisions.md))。理由:
+**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-04 段](./IMPLEMENTATION/decisions-2026-06.md))。理由:
 - 20+ provider 支持,后期切 OpenAI / 本地模型无痛
 - 自带 `Agent<M>` 抽象,省掉"消息 → tool call → 循环"样板
 - 自带 `MessageStore` trait,接 SQLite 顺
 
-**弃用原因**(2026-06-09 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-09 段](./IMPLEMENTATION/decisions.md)):
+**弃用原因**(2026-06-09 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-09 段](./IMPLEMENTATION/decisions-2026-06.md)):
 - 学习价值:自研 Provider trait 比用 rig 学到更多 harness 细节
 - 控制粒度:rig 帮你做了"消息流 → tool call → 循环",自研可以插自定义逻辑(权限、审计、统计)
 - 风险:rig 预 1.0,breaking change 风险,锁版本治标不治本

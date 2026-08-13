@@ -21,10 +21,12 @@
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + 决策日志(ADR 性质,只追加,按月分卷,见 [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)) | 想看"为什么这么做"的历史 ADR |
 | [WORKFLOW-INTEGRATION.md](./WORKFLOW-INTEGRATION.md) | workflow 集成需求设计(hub) | workflow engine/plugin 拆分设计,13 个 part 见 [WORKFLOW-INTEGRATION/](./WORKFLOW-INTEGRATION/) | 了解 workflow 引擎 / dev·review plugin 设计时 |
 | [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) | daemon 化编排 | remote-access epic(transport 抽象 / axum daemon / sidecar / httpTransport / ServeDir)的 Phase 编排 + 状态 | 看 daemon 化怎么分阶段落地 / 当前到哪个 Phase |
+| [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) | remote 云服务器部署手册 | everlasting-remote 服务端部署(国内 2C2G 服务器 + nginx + remote.sh / deploy-remote.sh) | 部署 remote daemon / 排查部署问题时 |
+| [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) | 远程访问 E2E 部署与验收手册 | S1+S2+S4+S5 全链路(E2E 隧道管线 / 配对 / PWA)逐场景验收步骤 | 端到端验证远程访问 / 回滚排查时 |
 | [REMOTE-ACCESS-RESEARCH.md](./_archive/2026-07-20-remote-access-research.md) | daemon 化调研(已消费) | 调研结论已由 Phase 1/2 落地消化,归档保留 | 历史参考(评估 daemon 化选型回顾) |
 | [MANUAL-TEST-P2.md](./_archive/2026-07-23-manual-test-p2.md) | daemon 手动测试(已消费) | daemon 化 Phase 2 手动测试指南,归档保留 | 历史参考(手动验证 daemon 行为回顾) |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
-| [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 10 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
+| [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 11 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
 | [HACKING-markdown.md](./HACKING-markdown.md) | 前端 markdown 渲染陷阱 | marked v18 + DOMPurify 的 XSS / 协议白名单 / 测试 fixture | 改前端 markdown 渲染 / 加 vitest fixture 时 |
 | [DEBUG_DB.md](./DEBUG_DB.md) | SQLite 直连调试指引 | DB 路径 / schema / sqlite3 速查 | 直连查 DB / 排查数据问题时 |
