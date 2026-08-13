@@ -10,7 +10,9 @@
 
 Filled (2026-08-12, S5 `08-11-mobile-adaptation`). Applies to the PWA
 remote-access flow; desktop/Tauri layout is unchanged (regression-free
-by structure — see §1.2).
+by structure — see §1.2). Extended 2026-08-13 (S6a
+`08-13-mobile-chat-view`) with the narrow-screen (<360px) downgrade
+tier + hide-class naming convention (§1.3).
 
 ---
 
@@ -60,6 +62,46 @@ without touching desktop blocks.
 rule of equal specificity, prefer escalating selector specificity over
 `!important`. `!important` is acceptable only when overriding
 third-party (reka-ui) inline styles, and should be centralized (see §5).
+
+### 1.3 Narrow-screen downgrade tier (<360px) — S6a
+
+S5's single 767px breakpoint is not enough below 360px (320–430px is
+the supported PWA range). S6a added one extra tier:
+
+```css
+/* tier 1 — everything mobile */
+@media (max-width: 767px) { .chat-panel__title { font-size: var(--text-base); } }
+/* tier 2 — narrow-screen downgrade; MUST come after the 767px block */
+@media (max-width: 359px) { .chat-panel__title { font-size: var(--text-sm); } }
+```
+
+Rules:
+- `@media (max-width: 359px)` is orthogonal to 767px — used ONLY for
+  "hide / tighten secondary elements" grade downgrades (title size,
+  bubble padding). No new interactions, no CSS variables, no multi-rung
+  ladder (a multi-rung ladder is a V2 concern).
+- The 359px block must be written AFTER the 767px block in the same
+  `<style scoped>` (later wins at equal specificity; both use single
+  class selectors, so there is no specificity conflict).
+- Comment both blocks with the `/* S6a … */` task tag convention.
+
+### 1.4 Mobile-hide class convention (S6a)
+
+Hide desktop-only elements with CSS `display: none`, NOT with script
+logic (`v-if` driven by viewport detection is forbidden — see the
+Forbidden patterns below). Naming: `mobile-hide-<what>` single class,
+scoped to the component that renders the element.
+
+- Elements in the component's own template get a plain scoped class:
+  `<span class="chat-panel__chip chat-panel__chip--cwd mobile-hide-cwd">`
+  → `@media (max-width: 767px) { .mobile-hide-cwd { display: none } }`
+- Child-component roots (e.g. `<WorktreeChip class="mobile-hide-worktree">`)
+  inherit the class onto their root node; scoped CSS must reach it via
+  `:deep(.mobile-hide-worktree)` (Vue 3.5 empirically also propagates
+  `data-v-*` to child roots, but `:deep()` is the safe default per
+  `reka-ui-usage.md`).
+- The `showGitChip` / `showWorktreeChip` script computed keep working
+  for desktop — never gate them on mobile state.
 
 ---
 
@@ -306,7 +348,22 @@ uplift.
 ```
 
 ChatInput's send/stop buttons go from 32×32 (desktop) to 44×44 (mobile)
-in the component's own scoped mobile block.
+in the component's own scoped mobile block. S6a extends the same rule
+to the ChatPanel header icon buttons (memory/audit/trace/grants:
+24×22 → 44×44, plus a 40px→48px header height to fit them) and the
+`MessageList` scroll-to-bottom button (32×32 → 44×44, repositioned to
+`right: 8px; bottom: 64px` so it clears the message-list scrollbar and
+the input area).
+
+**44px 只给主操作(DEC-6, 2026-08-13 S6a review 定)**:移动端 44px
+触摸目标只应用于**主操作**——发送/停止按钮、ChatPanel header 4 个
+图标按钮、MessageList 悬浮↓、modal 内按钮。**紧凑 chip 保持紧凑**
+(~22-25px,不拉高):ModeSelect(Edit/Plan/Yolo)、PluginSelect(wf)、
+ChatPanel 的 `--chip` 家族(群聊/git/cwd/worktree)在窄屏反而靠
+"小 chip + 缩小 padding"省空间。理由:chip 是"状态标签 + 次要切换",
+点击频率低,拉高 44px 会把输入行/标题行重新挤回 A6/D6 的痛点;
+主操作才是高频触摸。验收解读:**"Edit/wf 可点" = chip 可见可点,不要求
+44px**。
 
 ---
 
