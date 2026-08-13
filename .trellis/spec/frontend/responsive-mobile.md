@@ -355,15 +355,21 @@ to the ChatPanel header icon buttons (memory/audit/trace/grants:
 `right: 8px; bottom: 64px` so it clears the message-list scrollbar and
 the input area).
 
+**真机修正(2026-08-13, S6a 部署后)**:ChatPanel header 4 个图标按钮
+移动端从 44×44 调回 **32×32**,header 高度 48→40px。理由:真机反馈
+44px 图标视觉过大(是低频查看入口,非高频主操作),32px 是桌面 24px
+的合理放大;header 回归桌面高度,整体瘦身。**主操作 44px 底线不动**
+(send/stop、modal 按钮、悬浮↓ 仍 44px)。
+
 **44px 只给主操作(DEC-6, 2026-08-13 S6a review 定)**:移动端 44px
-触摸目标只应用于**主操作**——发送/停止按钮、ChatPanel header 4 个
-图标按钮、MessageList 悬浮↓、modal 内按钮。**紧凑 chip 保持紧凑**
-(~22-25px,不拉高):ModeSelect(Edit/Plan/Yolo)、PluginSelect(wf)、
-ChatPanel 的 `--chip` 家族(群聊/git/cwd/worktree)在窄屏反而靠
-"小 chip + 缩小 padding"省空间。理由:chip 是"状态标签 + 次要切换",
-点击频率低,拉高 44px 会把输入行/标题行重新挤回 A6/D6 的痛点;
-主操作才是高频触摸。验收解读:**"Edit/wf 可点" = chip 可见可点,不要求
-44px**。
+触摸目标只应用于**主操作**——发送/停止按钮、MessageList 悬浮↓、
+modal 内按钮、以及"高频"的 header 图标按钮(如本例调回 32px 说明
+低频入口可视情况放宽)。**紧凑 chip 保持紧凑**(~22-25px,不拉高):
+ModeSelect(Edit/Plan/Yolo)、PluginSelect(wf)、ChatPanel 的 `--chip`
+家族(群聊/git/cwd/worktree)在窄屏反而靠"小 chip + 缩小 padding"
+省空间。理由:chip 是"状态标签 + 次要切换",点击频率低,拉高 44px
+会把输入行/标题行重新挤回 A6/D6 的痛点;主操作才是高频触摸。
+验收解读:**"Edit/wf 可点" = chip 可见可点,不要求 44px**。
 
 ---
 
