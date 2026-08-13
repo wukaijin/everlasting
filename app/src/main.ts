@@ -10,7 +10,11 @@ import { awaitDaemonHealthy, type DaemonHealth } from "./transport/health";
 
 const app = createApp(App);
 app.use(createPinia());
-app.use(router);
+// NOTE(router 时序):app.use(router) **不**放这——它会在 module load 时触发
+// initial navigation(async microtask),在 bootstrap 的 `await awaitDaemonHealthy()`
+// 期间 resolve,此时 __DAEMON_HEALTH__ 还没设 → isRemoteContext() 误判 false →
+// 手机进 /chat 不跳 /pairing(S4 bug,E2E 暴露)。router 改到 bootstrap 内、health
+// 设后 mount 前注册,确保 initial navigation 读到 __DAEMON_HEALTH__。
 
 // A5(2026-07-02)全局未捕错误器:`invoke()` 未 `.catch` 的 rejection + 任意
 // 运行时 JS 错误,统一入错误总线。`parseAppCommandError` 容错 3 种输入
@@ -40,6 +44,7 @@ if (typeof window !== "undefined") {
 async function bootstrap(): Promise<void> {
   if (transport === tauriTransport) {
     // 逃生模式:Rust Full GUI 模式,无 sidecar,直接挂载。
+    app.use(router);
     app.mount("#app");
     return;
   }
@@ -48,6 +53,9 @@ async function bootstrap(): Promise<void> {
     const health = await awaitDaemonHealthy();
     (window as unknown as { __DAEMON_HEALTH__?: DaemonHealth }).__DAEMON_HEALTH__ =
       health;
+    // router 在 health 设后注册——initial navigation(mount 触发)此时能读到
+    // __DAEMON_HEALTH__,isRemoteContext() 正确判 remote → 跳 /pairing。
+    app.use(router);
     app.mount("#app");
   } catch (e) {
     // Fail-loud:渲染全屏错误覆盖层。不 mount app(避免半渲染无功能 UI)。
