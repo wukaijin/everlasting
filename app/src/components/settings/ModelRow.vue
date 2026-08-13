@@ -255,4 +255,58 @@ const testTitle = computed<string>(() =>
 .model-row__btn--danger:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.15);
 }
+
+/* --- S6b 移动端适配(08-13-mobile-settings, 320-430px) ---
+ * Models tab 溢出检查:行内 3 个操作按钮被 44px 全局块放大后,长
+ * provider/model 名在窄屏被挤爆 —— 轻量补 name ellipsis 守卫,不改布局。 */
+@media (max-width: 767px) {
+    /* 真机迭代第三轮(2026-08-13):"放不下就弄两行"。
+       桌面 model-row 单行: name + id + thinking-badge + token-badge + test-badge
+       + 3 个 actions。在 360px 单行根本塞不下,且 actions 已 32px,
+       信息堆叠反而看不出主信息。 → 移动端分两行:
+         Row 1: name(可缩略) + actions(右靠)
+         Row 2: id + thinking + token + test(muted 一行小字,辅助信息)
+       name 单独一行 + actions 单独靠右,信息层级清晰。 */
+    .model-row {
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .model-row__info {
+        flex-wrap: wrap;
+        row-gap: 4px;
+        /* name 占第一行;id+tag+test 占第二行 */
+    }
+    .model-row__name {
+        flex-basis: 100%;
+        order: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+    }
+    .model-row__model-id,
+    .model-row__tag,
+    .model-row__test {
+        order: 1;
+    }
+    .model-row__model-id {
+        font-size: var(--text-2xs);
+        /* id 在第二行可换行(不受 nowrap 限制) */
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    /* 真机迭代第二轮(2026-08-13):3 个 action 按钮被全局 44px 撑成
+       132px,把 name/info 区挤到 0 宽(name 截成 "Min…")。回缩到
+       32px,与 ProvidersTab 卡片内 actions 风格一致(DEC-6 精神:
+       44px 只给主操作,卡片内低频 icon 操作 32px)。
+       actions 单独靠右,自然换行;name 宽度不受其影响。 */
+    .model-row__btn {
+        width: 32px;
+        height: 32px;
+        min-width: 32px;
+        min-height: 32px;
+        padding: 0;
+        justify-content: center;
+    }
+}
 </style>
