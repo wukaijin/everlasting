@@ -143,8 +143,11 @@ const durationLabel = computed<string>(() => {
    滚动不撑破布局)。桌面块零改动;不改字号(design §3.4 只约定 padding +
    overflow-x,10px mono 在 320px 反而伤可读性)。 */
 @media (max-width: 767px) {
+  .tool-output-body {
+    margin-top: 2px;
+  }
   .tool-output-body summary {
-    padding: 4px 2px;
+    padding: 0 2px;
   }
   .tool-output-body__pre {
     overflow-x: auto;

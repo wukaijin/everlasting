@@ -939,4 +939,14 @@ watch(
     animation: none;
   }
 }
+
+/* S6a 真机迭代(08-13,部署后反馈):tool card 高度紧凑 —— 卡片内 padding
+   桌面 8px 12px 在手机偏大,移动端收紧为 6px 10px;input/output 之间的
+   间隔由各自组件移动端块收窄(margin-top 2px,见 ToolInputBody/ToolOutputBody
+   的 S6a 块)。桌面块零改动。 */
+@media (max-width: 767px) {
+  .tool-card {
+    padding: 6px 10px;
+  }
+}
 </style>

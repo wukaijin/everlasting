@@ -84,8 +84,11 @@ defineProps<{
    桌面块零改动;不改字号(design §3.4 只约定 padding + overflow-x,
    10px mono 在 320px 反而伤可读性)。 */
 @media (max-width: 767px) {
+  .tool-input-body {
+    margin-top: 2px;
+  }
   .tool-input-body summary {
-    padding: 4px 2px;
+    padding: 0 2px;
   }
   .tool-input-body__pre {
     overflow-x: auto;

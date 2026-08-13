@@ -664,6 +664,7 @@ onUnmounted(() => reviewStateStore.stop());
           @detach-click="onDetach"
           @delete-click="onDeleteClick"
         />
+        <div class="chat-panel__title-actions">
         <button
           v-if="projectsStore.currentProjectId"
           class="chat-panel__memory-btn"
@@ -744,6 +745,7 @@ onUnmounted(() => reviewStateStore.stop());
                   asks are pending for this session.
                 -->
         <WorkerAskBanner />
+        </div>
       </div>
     </header>
 
@@ -1117,6 +1119,18 @@ onUnmounted(() => reviewStateStore.stop());
   min-width: 0;
   flex: 1;
   flex-wrap: wrap;
+}
+
+.chat-panel__title-actions {
+  /* S6a 真机迭代:把 4 个 icon 按钮 + WorkerAskBanner 包进不缩容器,
+     防止它们挤压标题文本(title 已有 max-width:50vw + ellipsis,
+     但按钮作为 flex item 默认可被压缩,长标题时按钮变窄挤 text)。
+     gap 8px 对齐 title-row 的桌面间距(桌面布局不变)。 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .chat-panel__title {
@@ -1503,16 +1517,33 @@ onUnmounted(() => reviewStateStore.stop());
      命中(见 .trellis/spec/frontend/reka-ui-usage.md scoped/portal 约定)。
    - 标题行 flex-wrap:wrap 在窄屏堆成三层(D1)→ nowrap + 标题 ellipsis,
      标题不再被挤到行首贴边(D4)。
-   - 4 图标按钮(memory/audit/trace/grants)44px 触摸目标(Apple HIG)+ 行内
-     gap 收紧;header 高度 40px→48px 容纳(桌面不动)。 */
+   - 4 图标按钮(memory/audit/trace/grants)移动端 32px(真机反馈 44px
+     视觉过大;低频按钮 32px 足够,桌面 24px 的合理放大);header 高度
+     40px(桌面同高,紧凑)。见 .trellis/spec/frontend/responsive-mobile.md
+     §6 DEC-6 修正。 */
 @media (max-width: 767px) {
   .chat-panel__header {
-    padding: 0 12px;
-    height: 48px;
+    padding: 0 8px;
+    height: 40px;
   }
   .chat-panel__title-row {
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 4px;
+  }
+  .chat-panel__title-actions {
+    gap: 0;
+  }
+  /* 真机迭代(2026-08-13):移动端去掉 max-width:50vw —— 桌面靠 50vw
+     上限控制标题宽度,但手机端 actions 已 flex-shrink:0 不缩,标题
+     自然占满剩余宽度再 ellipsis(overflow:hidden + nowrap 在桌面块
+     已有)。max-width 拿掉让标题在窄屏获得更充分的展示宽度。 */
+  .chat-panel__title {
+    max-width: none;
+  }
+  /* 真机反馈:桌面 20px 左右边距在手机过宽 → 收窄为 12px 12px 8px
+     (消息气泡 max-width 88%,左右 12px 让内容区更贴近屏幕边缘)。 */
+  .chat-panel__main {
+    padding: var(--space-3) var(--space-3) var(--space-2);
   }
   .mobile-hide-cwd,
   .mobile-hide-git,
@@ -1523,8 +1554,8 @@ onUnmounted(() => reviewStateStore.stop());
   .chat-panel__audit-btn,
   .chat-panel__trace-btn,
   .chat-panel__grants-btn {
-    width: 44px;
-    height: 44px;
+    width: 32px;
+    height: 32px;
   }
 }
 

@@ -1136,12 +1136,12 @@ const showEditedLabel = computed<boolean>(
     margin-right: 8px;
   }
   .msg__bubble {
-    padding: 8px 12px;
-    margin-bottom: 6px;
+    padding: 6px 10px;
+    margin-bottom: 4px;
     line-height: var(--leading-relaxed);
   }
   /* 时间轴 text 块是"连续文本流"(无边框、收紧 margin 的设计意图,
-     见 .msg__bubble--timeline 注释),不受上面 margin-bottom 6px 影响 ——
+     见 .msg__bubble--timeline 注释),不受上面 margin-bottom 4px 影响 ——
      同特异性下源序靠后者胜,这里显式恢复 2px,保持交错思考时段的流动感。 */
   .msg__bubble--timeline {
     margin-bottom: 2px;
@@ -1152,7 +1152,7 @@ const showEditedLabel = computed<boolean>(
    写在 767px 档之后,后者优先,天然覆盖)。 */
 @media (max-width: 359px) {
   .msg__bubble {
-    padding: 6px 10px;
+    padding: 5px 8px;
   }
 }
 </style>

@@ -950,8 +950,15 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   }
   :deep(.mode-select__trigger),
   :deep(.plugin-select__chip) {
-    padding-left: 6px;
-    padding-right: 6px;
+    /* 真机迭代(2026-08-13):两 chip 固定高 32px + padding 归零,高度一致
+       (桌面靠 3px 8px 内边距撑高,高度 ~23px 参差)。字号保持 13px
+       (--text-base);CM 16px 是 iOS 防缩放底线不动,发送 44px 是 DEC-6
+       主操作底线不动 → 三元素高度成 32/24/44 梯级,不再参差。 */
+    height: 32px;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 0;
+    padding-bottom: 0;
   }
   :deep(.plugin-select__chip) {
     margin-left: 2px;
