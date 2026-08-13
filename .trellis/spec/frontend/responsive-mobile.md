@@ -386,6 +386,51 @@ mobile-only in practice.
 
 ---
 
+## 8. Horizontal-scrollable tabs + pill highlight (S6b — Settings modal)
+
+S6b (`08-13-mobile-settings`) introduced the first horizontal-scroll tab
+navigation (SettingsModal's 6 tabs on ≤767px). Pattern, all inside
+`@media (max-width: 767px)`:
+
+```css
+.settings-modal__tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 88%, transparent 100%);
+  mask-image: linear-gradient(to right, #000 88%, transparent 100%);
+}
+.settings-modal__tab {
+  flex-shrink: 0;          /* 不被压缩成一团 */
+  white-space: nowrap;
+  border-bottom-width: 0;  /* 下划线让位给 pill */
+}
+.settings-modal__tab[data-state="active"] {
+  background: var(--color-accent-muted);
+  color: var(--color-accent);
+  border-radius: var(--radius-md);
+}
+```
+
+Conventions:
+
+- **Pill highlight replaces the desktop underline** via reka-ui's
+  `data-state="active"` selector, mobile-only (desktop block untouched).
+- **Edge-fade scroll hint via `mask-image`** (right edge `#000 88% →
+  transparent 100%`), double-written `-webkit-mask-image` + `mask-image`.
+  Accepted trade-off (S6b design): the mask is static, so at viewports
+  where all 6 tabs fit (≈602–767px) it also fades the strip's right
+  edge — cosmetic, outside the supported phone range (320–430px). A
+  scrollable-state-aware mask would need JS; deferred.
+- **`-webkit-overflow-scrolling: touch` — removed in review**: the S6b
+  design (§2.1) originally specified this property, but it is deprecated
+  since iOS 13 (momentum scrolling is the default) and is a no-op on
+  modern browsers. The forbidden-patterns rule below bans it, so the
+  S6b review removed it from both the code and this pattern. Do NOT
+  re-add it in new scrollable-row work; `overflow-x: auto` alone is
+  sufficient.
+
+---
+
 ## Forbidden patterns
 
 - ❌ Tailwind utility classes (`md:`, `lg:`) in templates — project is
