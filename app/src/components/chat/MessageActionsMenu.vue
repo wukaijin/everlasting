@@ -436,4 +436,28 @@ async function onCopy() {
   background: var(--color-bg-border);
   margin: 4px 2px;
 }
+
+/* 08-14 ux-polish-r1 WP1(评审 A2):移动端触控目标 ≥44px。
+   - 触发按钮视觉保持 22×22(桌面同尺寸),通过 ::after 透明外扩
+     inset -11px(22+11×2=44)扩 hit area。该按钮每条消息只有一个,
+     无相邻元素,外扩区不会像 ChatPanel 顶栏那样互相重叠。
+   - 下拉菜单项(teleport 到 body 的 reka-ui DropdownMenu,沿用现有
+     :deep 通道)提升到 44px 行高——与 style.css 移动端 modal 按钮
+     44px 规范(spec responsive-mobile.md §6)同一档次。
+   桌面样式块零改动。 */
+@media (max-width: 767px) {
+  .msg-actions__trigger {
+    position: relative;
+  }
+  .msg-actions__trigger::after {
+    content: "";
+    position: absolute;
+    /* 22px 视觉 + 11px 透明外扩 ×2 = 44px 命中区(11 是 22→44 的唯一解,
+       不入 spacing scale,见 design-tokens.md 半步值例外条款) */
+    inset: -11px;
+  }
+  :deep(.msg-actions__item) {
+    min-height: 44px;
+  }
+}
 </style>

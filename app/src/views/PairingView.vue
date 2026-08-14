@@ -157,7 +157,7 @@ async function submit() {
   margin: 0;
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
-  line-height: 1.6;
+  line-height: var(--leading-relaxed);
   text-align: center;
 }
 
@@ -184,8 +184,12 @@ async function submit() {
   color: var(--color-text-secondary);
 }
 
+/* 08-14 ux-polish-r1 WP1 1.5(评审 A5):两个输入框统一为同一视觉规格 ——
+   同 padding / border / radius / 背景 / focus 表现(border-accent +
+   --shadow-ring 焦点环,对齐全局表单焦点约定)。配对码保留 mono + 大字号
+   + accent 作为 hero 强调(功能性差异),边框规格与设备名完全一致。 */
 .pairing-card__input {
-  padding: 8px 10px;
+  padding: 10px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-sm);
@@ -198,6 +202,16 @@ async function submit() {
 .pairing-card__input:focus {
   outline: none;
   border-color: var(--color-accent);
+  box-shadow: var(--shadow-ring);
+}
+
+/* 占位符统一降一档 muted(评审 A5:占位符与已输入状态难区分 —— 原来继承
+   输入框 color,配对码占位符是 accent、几乎与已输入态同亮)。muted 后
+   "空的"与"填了"一眼可辨。 */
+.pairing-card__input::placeholder,
+.pairing-card__code-input::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
 }
 
 .pairing-card__code-input {
@@ -220,12 +234,13 @@ async function submit() {
 .pairing-card__code-input:focus {
   outline: none;
   border-color: var(--color-accent);
+  box-shadow: var(--shadow-ring);
 }
 
 .pairing-card__btn {
   padding: 9px 16px;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-text-on-accent);
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-sm);
   font-size: var(--text-base);
@@ -247,7 +262,7 @@ async function submit() {
   margin: 0;
   padding: 6px 10px;
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--leading-normal);
   color: var(--color-tool-error);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 3px solid var(--color-tool-error);

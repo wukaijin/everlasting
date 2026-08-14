@@ -617,7 +617,7 @@ onUnmounted(() => reviewStateStore.stop());
         -->
         <button
           v-if="isGroupChat"
-          class="chat-panel__chip chat-panel__chip--group-chat"
+          class="chat-panel__chip chat-panel__chip--group-chat mobile-hide-group-chat"
           type="button"
           title="编辑参与者"
           aria-label="编辑群聊参与者"
@@ -675,6 +675,20 @@ onUnmounted(() => reviewStateStore.stop());
         >
           <Icon name="brain" :size="14" />
         </button>
+        <!--
+                  08-14 ux-polish-r1 WP3 3.3(评审 C2):图标区按作用域分组
+                  —— memory 是项目级入口,gated on currentProjectId;后面
+                  audit/trace/grants 是会话级 inspector 组,gated on
+                  currentSessionId(各自的 v-if 注释里已写明)。两者之间放
+                  1px 竖分隔线。v-if 要求两端都渲染,避免无项目/无会话时
+                  悬空一条线。移动端分组逻辑不变,分隔线保留(与 WP1 收纳
+                  规则无冲突:收纳只隐藏 chips,不动图标区)。
+                -->
+        <span
+          v-if="projectsStore.currentProjectId && chatStore.currentSessionId"
+          class="chat-panel__action-divider"
+          aria-hidden="true"
+        />
         <!--
                   C4 audit-log entry (2026-06-14 PR2). Sits next to
                   the Memory button but is gated on the CURRENT
@@ -1133,6 +1147,19 @@ onUnmounted(() => reviewStateStore.stop());
   min-width: 0;
 }
 
+/* 08-14 ux-polish-r1 WP3 3.3(评审 C2):图标区功能分组分隔线 ——
+   memory(项目级)与 audit/trace/grants(会话级)之间。1px 竖线、高度
+   低于按钮(16px vs 22px),轻量不抢焦点;作为 flex item 吃 title-actions
+   的 gap(桌面 8px → 分组断口 17px,移动端 12px → 25px,断口天然大于
+   组内间距,分组语义可读)。 */
+.chat-panel__action-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--color-bg-border);
+  align-self: center;
+  flex-shrink: 0;
+}
+
 .chat-panel__title {
   margin: 0;
   font-size: var(--text-base);
@@ -1483,7 +1510,9 @@ onUnmounted(() => reviewStateStore.stop());
   min-width: 0;
 }
 .chat-panel__recall-item {
-  font-size: var(--text-2xs);
+  /* 08-14 ux-polish-r1 WP2(评审 B3):召回标题是常驻信息型文字(非角标),
+     10px muted 低对比 → 升 --text-xs。 */
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1517,10 +1546,18 @@ onUnmounted(() => reviewStateStore.stop());
      命中(见 .trellis/spec/frontend/reka-ui-usage.md scoped/portal 约定)。
    - 标题行 flex-wrap:wrap 在窄屏堆成三层(D1)→ nowrap + 标题 ellipsis,
      标题不再被挤到行首贴边(D4)。
-   - 4 图标按钮(memory/audit/trace/grants)移动端 32px(真机反馈 44px
-     视觉过大;低频按钮 32px 足够,桌面 24px 的合理放大);header 高度
-     40px(桌面同高,紧凑)。见 .trellis/spec/frontend/responsive-mobile.md
-     §6 DEC-6 修正。 */
+   - 4 图标按钮(memory/audit/trace/grants)视觉 32px(真机反馈 44px 视觉
+     过大;低频按钮 32px 足够,桌面 24px 的合理放大);header 高度 40px
+     (桌面同高,紧凑)。见 .trellis/spec/frontend/responsive-mobile.md
+     §6 DEC-6 修正。
+   08-14 ux-polish-r1 WP1(评审 A1/A3):
+   - 4 图标按钮触控目标 ≥44px:视觉仍是 32×32,通过 ::after 透明外扩
+     (inset -6px,32+6×2=44)把 hit area 撑到 44px(DEC-6 "44px 只给主
+     操作"的修正——不动视觉,只扩命中区,两者不再冲突)。
+   - title-actions gap 0→12px:相邻按钮的 44px 外扩区不再互相重叠
+     (重叠时后 DOM 的 ::after 盖住前者,实际命中退化回 ~32px)。
+   - 群聊 chip(编辑参与者入口,低频)移动端隐藏(mobile-hide-group-chat,
+     §1.4 约定);编辑参与者回桌面端操作。桌面块零改动。 */
 @media (max-width: 767px) {
   .chat-panel__header {
     padding: 0 8px;
@@ -1531,7 +1568,7 @@ onUnmounted(() => reviewStateStore.stop());
     gap: 4px;
   }
   .chat-panel__title-actions {
-    gap: 0;
+    gap: 12px;
   }
   /* 真机迭代(2026-08-13):移动端去掉 max-width:50vw —— 桌面靠 50vw
      上限控制标题宽度,但手机端 actions 已 flex-shrink:0 不缩,标题
@@ -1547,6 +1584,7 @@ onUnmounted(() => reviewStateStore.stop());
   }
   .mobile-hide-cwd,
   .mobile-hide-git,
+  .mobile-hide-group-chat,
   :deep(.mobile-hide-worktree) {
     display: none;
   }
@@ -1556,6 +1594,19 @@ onUnmounted(() => reviewStateStore.stop());
   .chat-panel__grants-btn {
     width: 32px;
     height: 32px;
+    /* ::after 外扩锚点(桌面块保持 static,零改动) */
+    position: relative;
+  }
+  /* 触控命中区 ≥44px(32px 视觉 + 6px 透明外扩 ×2)。-6px 是 32→44 的
+     唯一解,不入 spacing scale(半步值,见 design-tokens.md "Don't add
+     --space-1-5" 例外条款)。 */
+  .chat-panel__memory-btn::after,
+  .chat-panel__audit-btn::after,
+  .chat-panel__trace-btn::after,
+  .chat-panel__grants-btn::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
   }
 }
 

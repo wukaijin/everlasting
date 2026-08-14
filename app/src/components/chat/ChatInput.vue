@@ -939,29 +939,64 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   }
 }
 
-/* S6a 底部输入区重排(08-13-mobile-chat-view)。prd A6/D6:Edit/wf 标签
-   缩窄不抢 1/3 横向,输入框(flex:1)在窄屏获得主宽度;占位文案不换行。
-   桌面块零改动;chip 是子组件根节点(ModeSelect/PluginSelect),用 :deep()
-   命中。DEC-3:Edit/wf 标签保留但缩小,不做"折叠进 + 菜单"。 */
+/* S6a 底部输入区移动端适配(08-13-mobile-chat-view)+ 08-14 ux-polish-r1
+   WP1 1.4(评审 A4:Edit/wf chips 挤压输入区)。
+   重排:移动端 row 切 grid,ModeSelect / PluginSelect 两 chip 移到
+   编辑框上方独立一行(桌面 flex 同行布局零改动)。
+   - grid 三列 auto/1fr/auto:chips 行 = col1+col2(start 对齐、随内容宽),
+     编辑框 = r2 c1/c3 跨两列,发送/停止按钮 = r2 c3(align-self:end 与
+     桌面 flex-end 对齐习惯一致)。
+   - chips 行间距用 margin-bottom(而非 row-gap):无 session 时两 chip 根
+     节点 v-if 不渲染,但 field 显式落在行 2 仍会让 grid 建出行 1(空行,
+     高度 0)—— 任何 row-gap 都会在编辑框上方垫出幽灵行距;margin 只挂在
+     chip 上,不渲染即不产生。
+   - 横向间距走 column-gap 8px(与桌面 flex gap 同值):编辑框(r2 跨
+     c1-c2)与发送/停止按钮(r2 c3)之间、chips 行 c1/c2 之间都由它提供
+     (plugin-select 无需再 margin-left)。
+   - TriggerMenu 关闭时 v-if 无 DOM,打开时 position:absolute 脱离
+     grid 流,不占 cell,锚定行为不受影响(row 仍是 offsetParent)。
+   - chip 保持 32px 高紧凑档(DEC-6:chip 不拉 44px,上移只是为了把
+     编辑框让出来);CM 16px 是 iOS 防缩放底线,发送/停止 44px 是主操作
+   底线,均不动。 */
 @media (max-width: 767px) {
   .chat-input__row {
-    gap: 6px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: end;
+    /* row-gap 归零(空 grid 行 1 也会垫出幽灵行距,见上方注释;行间距由
+       chips 的 margin-bottom 提供),column-gap 8px 承担全部横向间距 ——
+       修复:gap 整体归零时编辑框与发送按钮 0px 贴死(桌面/S6a 是 8/6px)。
+       padding 沿用 S6a 的移动端收窄值。 */
+    row-gap: 0;
+    column-gap: var(--space-2);
     padding: 6px 6px 6px 10px;
+  }
+  :deep(.mode-select) {
+    grid-area: 1 / 1;
+    margin-bottom: var(--space-2);
+  }
+  :deep(.plugin-select) {
+    grid-area: 1 / 2;
+    justify-self: start;
+    margin-bottom: var(--space-2);
+  }
+  .chat-input__field {
+    grid-area: 2 / 1 / 3 / 3;
+  }
+  .chat-input__action {
+    grid-area: 2 / 3;
+    align-self: end;
   }
   :deep(.mode-select__trigger),
   :deep(.plugin-select__chip) {
     /* 真机迭代(2026-08-13):两 chip 固定高 32px + padding 归零,高度一致
        (桌面靠 3px 8px 内边距撑高,高度 ~23px 参差)。字号保持 13px
-       (--text-base);CM 16px 是 iOS 防缩放底线不动,发送 44px 是 DEC-6
-       主操作底线不动 → 三元素高度成 32/24/44 梯级,不再参差。 */
+       (--text-base)。 */
     height: 32px;
     padding-left: 8px;
     padding-right: 8px;
     padding-top: 0;
     padding-bottom: 0;
-  }
-  :deep(.plugin-select__chip) {
-    margin-left: 2px;
   }
   /* 占位文案窄屏不换行(ellipsis 截断),避免 D6 里占位换行的怪观感。 */
   :deep(.chat-input__field .cm-editor .cm-placeholder) {

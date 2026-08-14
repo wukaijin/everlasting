@@ -196,19 +196,26 @@ function protocolBadgeClass(protocol: string): string {
           <span
             class="providers-tab__key-hint"
             :aria-label="keyStatusLabel(p.hasKey)"
+            :title="keyStatusLabel(p.hasKey)"
           >
             <Icon name="key" :size="12" />
             <!-- S6b: 文字包一层 span,移动端隐藏只留 key 图标(见下方移动端块)。
                  aria-label 补回 a11y:图标本身 aria-hidden,文字隐藏后 SR
                  仍能读出 已加密保存/未设置(design §4 风险表声称"图标+组件
-                 语义"已保留 —— 不成立,Icon.vue 的图标全部 aria-hidden)。 -->
-            <span class="providers-tab__key-hint-text">{{ keyStatusLabel(p.hasKey) }}</span>
+                 语义"已保留 —— 不成立,Icon.vue 的图标全部 aria-hidden)。
+                 08-14 ux-polish-r1 WP3 3.3(评审 C4):"已加密保存"是逐行
+                 常驻的状态噪音,桌面也降级为 title tooltip(移动端文字本就
+                 隐藏,补 title 后 hover/长按可查);"未设置"是可行动的警告,
+                 保留可见文字(桌面)。 -->
+            <span v-if="!p.hasKey" class="providers-tab__key-hint-text">未设置</span>
           </span>
         </div>
         <div class="providers-tab__row-actions">
           <button
             type="button"
             class="providers-tab__btn providers-tab__btn--ghost"
+            title="编辑"
+            aria-label="编辑 provider"
             @click="startEdit(p)"
           >
             <Icon name="pencil" :size="12" />
@@ -216,6 +223,8 @@ function protocolBadgeClass(protocol: string): string {
           <button
             type="button"
             class="providers-tab__btn providers-tab__btn--ghost providers-tab__btn--danger"
+            title="删除"
+            aria-label="删除 provider"
             @click="deleteConfirmId = p.id"
           >
             <Icon name="trash" :size="12" />
@@ -294,6 +303,7 @@ function protocolBadgeClass(protocol: string): string {
             type="button"
             class="providers-tab__btn providers-tab__btn--ghost"
             :title="showApiKey ? 'Hide' : 'Show'"
+            :aria-label="showApiKey ? 'Hide API key' : 'Show API key'"
             @click="showApiKey = !showApiKey"
           >
             <Icon :name="showApiKey ? 'eye-slash' : 'eye'" :size="14" />
@@ -434,6 +444,9 @@ function protocolBadgeClass(protocol: string): string {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  /* 08-14 ux-polish-r1 WP3 3.3:状态降级为 title tooltip 后,help 光标
+     提示"可悬停"——否则一行小图标看不出藏着信息。 */
+  cursor: help;
 }
 
 .providers-tab__row-actions {
@@ -736,7 +749,8 @@ function protocolBadgeClass(protocol: string): string {
   .providers-tab__key-hint {
     gap: 2px;
   }
-  /* B8:key-hint 只留 key 图标,隐藏 "已加密保存" 文字(状态示意不丢) */
+  /* B8:key-hint 移动端只留 key 图标(文字隐藏;桌面文字也只剩"未设置"
+     警告,见模板 08-14 注释)。状态信息由 title tooltip + aria-label 兜住。 */
   .providers-tab__key-hint-text {
     display: none;
   }
