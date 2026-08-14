@@ -13,6 +13,7 @@
 - [generative-ui](./chat/generative-ui.md) — B9 `use_ui` primitive registry(diff/code_block/button + DiffPrimitive raw fallback RULE-FrontDiff-001 + B9+ D3/D4 apply)
 - [request-mode-change](./chat/request-mode-change.md) — `request_mode_change` inline card(3 状态机 + Yolo 二次 modal 双 IPC)
 - [streamcontroller-routing](./chat/streamcontroller-routing.md) — streamController.handleToolCall → feature store 按 tool name 路由(B12 / C2)
+- [message-list-and-markdown](./chat/message-list-and-markdown.md) — MessageList TransitionGroup enter 动画契约 + `.msg__markdown` 跨组件复用节奏镜像(2026-08-14 两个静默失效 bug 沉淀)
 - [memory-ui.md §V2-2+](./memory-ui.md) — 自主记忆可观测性(recall chip + RuntimeMemoryModal,2026-08-10 从本文挪入)
 
 ---
@@ -23,4 +24,5 @@
 > - 改 `use_ui` / `UiCard` / `DiffPrimitive` / `ButtonPrimitive` → `chat/generative-ui.md`
 > - 改 `RequestModeChangeCard` / mode 切换 IPC → `chat/request-mode-change.md`
 > - 改 streamController `handleToolCall` tool-name 路由 → `chat/streamcontroller-routing.md`
+> - 改 MessageList 结构 / run-group / enter 动画 / markdown 容器样式 → `chat/message-list-and-markdown.md`
 > - 改 recall chip / RuntimeMemoryModal → [memory-ui.md §V2-2+](./memory-ui.md)

@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "所有样式改动必须走 token;新增值先入 style.css 再消费"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "desktop-first overlay 模式(桌面零回归)+ §6 触控 44px 既有机制,WP1 直接沿用扩展"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "ChatPanel/MessageItem/ChatInput 组件结构与样式约定,WP1/WP2 改动的主战场"}
+{"file": ".trellis/tasks/08-14-frontend-ux-polish-r1/research/vlm-findings-map.md", "reason": "评审发现→代码定位表(含真伪验证),实现的直接输入"}
+{"file": ".trellis/tasks/08-14-frontend-ux-polish-r1/research/vlm-report-20260814.md", "reason": "逐图 VLM 原始评审,验收对照时核对缺陷原文"}

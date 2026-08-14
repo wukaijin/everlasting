@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "AC6:diff 内不得新增硬编码 hex/px 字号"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "AC3:桌面零回归 + 移动端改动符合 overlay 模式"}
+{"file": ".trellis/tasks/08-14-frontend-ux-polish-r1/research/vlm-findings-map.md", "reason": "AC2:按发现清单核对缺陷收敛"}

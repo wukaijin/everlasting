@@ -371,6 +371,27 @@ ModeSelect(Edit/Plan/Yolo)、PluginSelect(wf)、ChatPanel 的 `--chip`
 会把输入行/标题行重新挤回 A6/D6 的痛点;主操作才是高频触摸。
 验收解读:**"Edit/wf 可点" = chip 可见可点,不要求 44px**。
 
+**Hit-area 外扩模式(DEC-6 之后, 2026-08-14)**:视觉尺寸与触控目标解耦——
+低/中频图标按钮(DEC-6 说视觉 44 过大)用透明 `::after` 外扩 hit area 到
+44px,视觉保持 32px。既守住真机反馈的视觉瘦身,又提升命中容错:
+
+```css
+@media (max-width: 767px) {
+  .chat-panel__btn {
+    position: relative;
+    /* 视觉 32px + 上下各外扩 6px = 44px 命中 */
+    &::after { content: ""; position: absolute; inset: -6px; }
+  }
+}
+```
+
+两条硬约束:
+1. **相邻外扩区不得重叠**——同排按钮间 gap ≥ 2× 外扩量(6px 外扩 → gap
+   ≥12px)。否则后 DOM 的伪元素盖住前者边缘,实际命中退化回视觉尺寸
+   (08-14 实测踩坑)。
+2. **祖先 overflow 会裁剪外扩区**——放置前查最近的 overflow 祖先(滚动
+   容器边缘的内侧外扩会被裁,可接受;`overflow: hidden` 的卡片内则整个失效)。
+
 ---
 
 ## 7. Viewport height tokens (recap)
