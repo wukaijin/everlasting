@@ -418,3 +418,39 @@ textarea {
     word-break: break-word;
   }
 }
+
+/* ------------------------------------------------------------------------- *
+ * 中英混排间距(盘古之白)— 08-14 ux-polish-r1 WP2 2.4(评审 B4)            *
+ * ------------------------------------------------------------------------- *
+ * `text-autospace: ideograph-alpha` 在 CJK 表意文字与拉丁/数字之间插入
+ * 1/8em 间距。支持度(2026-08 核实,caniuse/MDN):
+ *   - Chromium ≥140 已默认支持(Android Chrome PWA、Windows WebView2、
+ *     ui-review.sh 的 headless Chromium)
+ *   - WebKit(WKWebView / WebKitGTK / iOS Safari)与 Firefox 不支持
+ * 不支持的引擎忽略该声明,零风险降级 —— 按渐进增强全局开启,不做 JS 兜底
+ * (JS 方案需改 markdown 渲染管线,成本/收益不划算,本轮不做)。
+ * 作用面:chat 消息气泡 + 讨论总结共用的 .msg__markdown;详情 modal 与
+ * subagent drawer 的 markdown 容器在各自组件内声明同一属性保持一致。
+ * `text-spacing-trim`(全角标点压缩)是另一特性,会改变标点宽度、排版
+ * 影响更大,本轮不启用。 */
+.msg__markdown {
+  text-autospace: ideograph-alpha;
+}
+
+/* ------------------------------------------------------------------------- *
+ * 路由切换 fade(08-14 ux-polish-r1 WP4 4.1,评审 D1)                         *
+ * ------------------------------------------------------------------------- *
+ * App.vue 的 router-view 用 v-slot + <Transition name="route-fade" mode=
+ * "out-in"> 包裹,类定义放全局(视图根节点无组件级公共样式挂点)。
+ * 150ms(--duration-base)+ --ease-decelerate(先快后缓的减速曲线,
+ * 与 subagent drawer 同款)。仅动 opacity(合成器属性,不触布局)。
+ * prefers-reduced-motion:顶层 @media 的 `*` + !important 会把这里的
+ * transition-duration 压到 0.01ms —— 路由切换退化为瞬时,无动画。 */
+.route-fade-enter-active,
+.route-fade-leave-active {
+  transition: opacity var(--duration-base) var(--ease-decelerate);
+}
+.route-fade-enter-from,
+.route-fade-leave-to {
+  opacity: 0;
+}

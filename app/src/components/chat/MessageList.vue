@@ -249,9 +249,10 @@ onUnmounted(() => {
       <!--
         交错思考: 按 agent run 分组(见 renderGroups)。每个 run 用
         `<li class="run-group">` 容器包裹同 run 的多条 MessageItem,
-        视觉上连成一条流。TransitionGroup 的直接子节点仍是 MessageItem
-        (内层 v-for 展开),enter 动画的 key/name 不变 —— run-group 容器
-        只提供视觉连续性(CSS 连接边框 + 紧凑间距),不接管动画。
+        视觉上连成一条流。run-group li 是 TransitionGroup 的直接子节点,
+        enter/leave 类落在它身上(不是内层 MessageItem)—— 下方
+        .msg-enter-* 样式即以它为动画目标(整 run 划入;08-14 修复,
+        详见该样式块注释)。
       -->
       <li
         v-for="g in renderGroups"
@@ -318,9 +319,10 @@ onUnmounted(() => {
    (gap 小于 run 之间的 12px),让同一 run 的 think/tool/result/文本
    在视觉上"连成一条流",而不同 run 之间有清晰间隔。
 
-   不接管 enter 动画 —— TransitionGroup 的动画仍挂在内层的 MessageItem
-   上(key + name 不变),run-group 只是布局容器。内部 MessageItem 的
-   align-self(msg--user 靠右 / msg--assistant 靠左)保持各自对齐。 */
+   run-group li 同时是 TransitionGroup 的直接子节点 —— enter 动画挂
+   在它身上(整 run 划入,见下方 .msg-enter-* 块;08-14 修复)。
+   内部 MessageItem 的 align-self(msg--user 靠右 / msg--assistant
+   靠左)保持各自对齐。 */
 .run-group {
   list-style: none;
   display: flex;
@@ -328,44 +330,47 @@ onUnmounted(() => {
   gap: 6px;
 }
 
-/* PR3 (2026-06-27): new-message enter animation. Only fires when an
-   element is ADDED to the already-mounted list (a streaming new turn)
-   — TransitionGroup's `appear` defaults to off, so the full-list
-   remount on session switch does NOT animate (the list just appears).
-   Uses `transform: translateY` (not a layout property) so it never
-   perturbs scrollHeight and the stick-to-bottom loop stays correct.
-   `prefers-reduced-motion` collapses this to ~instant via the
-   top-level @media in style.css.
+/* PR3 (2026-06-27): new-message enter animation, restored 2026-08-14
+   (08-14 ux-polish-r1 WP4 4.2,评审 D2). Only fires when an element is
+   ADDED to the already-mounted list (a streaming new run) — plus the
+   `appear` on <TransitionGroup> covers the full-list remount on session
+   switch / first mount. Uses `transform: translateX` (not a layout
+   property) so it never perturbs scrollHeight and the stick-to-bottom
+   loop stays correct. `prefers-reduced-motion` collapses this to
+   ~instant via the top-level @media in style.css.
+
+   修复说明:5b1fc81(2026-07-30 交错思考 run 分组)把 TransitionGroup
+   的直接子节点从 MessageItem <li> 换成了 run-group <li> 后,
+   enter/leave 类落在 run-group 上,而旧选择器 `.msg--user/
+   .msg--assistant.msg-enter-from` 要求方向类与 enter 类在同一元素
+   —— 从此匹配不上,enter 动画静默失效(新消息无划入、切会话重挂载
+   无 appear 动画),这正是评审 D2 "切换硬切"的根因。本轮把 from 态
+   重定向到真实子节点(run-group li):每个 run 由真实用户消息开启,
+   整组从用户侧(+24px,沿用原 user 方向词汇)划入;流式中追加的
+   assistant turn 归入已有 run(key 不变),不重复触发 enter,符合
+   5b1fc81 "run 连成一条流"的分组语义。
 
    :deep() is required because the `msg-enter-*` classes are added by
-   TransitionGroup to MessageItem's root <li> (a CHILD component root);
-   a scoped `.msg-enter-active` compiles to `.msg-enter-active[data-v-ML]`
-   which doesn't reliably match the class on the child's root element.
-   :deep() drops the attribute selector so the transition reaches the li. */
-/* !important: MessageItem 的 `.msg:not(.msg--editing):not(.msg--err)` 特异性
-   (0,4,0) 高于本 :deep (0,2,0)，其 `transition: background-color` 会整体
-   覆盖这里的 opacity/transform transition（transition 是属性级覆盖，非按
-   property 合并），导致 enter 无渐显 + 划入瞬间不可见。!important 强制
-   enter 期间的 transition；enter 期间无 hover，丢掉 background-color
-   transition 无影响。 */
+   TransitionGroup to its direct child (the run-group <li> inside this
+   component's slot); a scoped `.msg-enter-active` compiles to
+   `.msg-enter-active[data-v-ML]`, and the classes arrive at runtime
+   (post-compile) on elements Vue patches — :deep() drops the attribute
+   selector requirement so the transition reliably reaches the li.
+   `!important`(PR3 用来压 MessageItem `.msg` 的 background-color
+   transition)不再需要:当时争的是同一个元素;现在被动画的元素是
+   run-group li,其上没有其它 transition 声明与之竞争。 */
 :deep(.msg-enter-active) {
   transition: opacity var(--duration-slow) var(--ease-out),
-    transform var(--duration-slow) var(--ease-out) !important;
+    transform var(--duration-slow) var(--ease-out);
 }
-/* PR3: 划入方向 —— user 从右划入（translateX +16→0）、assistant 从左
-   划入（translateX -16→0），各从自己的对齐侧"外侧"出来。位移走外侧
-   （user 右边界外、assistant 左边界外）：.messages 的 overflow-y:auto
-   使 overflow-x 隐式 auto，外侧偏移的超出部分会被裁剪，但 transition
-   工作时气泡主体的位移仍清晰可见，正是"从外侧划出"的观感。translateX
-   不参与布局，不扰动 scrollHeight / stick-to-bottom；reduced-motion 由
-   顶层 @media 兜底。 */
-:deep(.msg--user.msg-enter-from) {
+/* 划入方向:整 run 从用户侧(+24px)划入。位移走外侧:.messages 的
+   overflow-y:auto 使 overflow-x 隐式 auto,外侧偏移的超出部分会被
+   overflow-x: hidden 裁剪(不冒水平滚动条),但 transition 期间气泡
+   主体的位移仍清晰可见。translateX 不参与布局,不扰动 scrollHeight /
+   stick-to-bottom;reduced-motion 由顶层 @media 兜底。 */
+:deep(.msg-enter-from) {
   opacity: 0;
   transform: translateX(24px);
-}
-:deep(.msg--assistant.msg-enter-from) {
-  opacity: 0;
-  transform: translateX(-24px);
 }
 
 /* Floating "back to bottom" button — appears only when the user has

@@ -36,5 +36,21 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <router-view />
+  <!--
+    08-14 ux-polish-r1 WP4 4.1(评审 D1):路由切换 fade 过渡。
+    - v-slot + <Transition mode="out-in">:旧视图先淡出、新视图再淡入,
+      避免两个视图同时半透明叠层(ChatView 的 AppShell 是全屏布局,
+      in-out 同帧叠加会穿帮)。
+    - 三个 view(ChatView/NodeListView/PairingView)均为单根节点,
+      Transition 可用;`:is="Component"` 切换即触发。
+    - 过渡类 .route-fade-* 定义在全局 style.css(--duration-base +
+      --ease-decelerate);prefers-reduced-motion 由 style.css 顶层的
+      `* { transition-duration: 0.01ms !important }` 兜底 —— 该选择器
+      覆盖任何元素上携带 .route-fade-*-active 的 transition,验证过写法。
+  -->
+  <router-view v-slot="{ Component }">
+    <Transition name="route-fade" mode="out-in">
+      <component :is="Component" />
+    </Transition>
+  </router-view>
 </template>
