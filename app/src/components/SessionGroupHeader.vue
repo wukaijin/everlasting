@@ -87,7 +87,9 @@ defineEmits<{
 }
 
 .session-group-header__label {
-  font-size: var(--text-2xs);
+  /* 08-14 ux-polish-r1 WP2(评审 B3):侧栏分组标题是常驻信息型文字,
+     与 Sidebar "SESSIONS" 头(--text-xs)同族,10px → 11px。 */
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   color: var(--color-text-muted);
   text-transform: uppercase;
@@ -99,7 +101,7 @@ defineEmits<{
 
 .session-group-header__count {
   flex-shrink: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;

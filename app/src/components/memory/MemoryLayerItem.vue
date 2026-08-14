@@ -372,7 +372,8 @@ function onOpenEditor() {
 
 .memory-layer__path {
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  /* 08-14 ux-polish-r1 WP2(评审 B3):常驻信息型路径文字 10px → 11px。 */
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;

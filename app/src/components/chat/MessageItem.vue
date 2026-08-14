@@ -993,13 +993,21 @@ const showEditedLabel = computed<boolean>(
    scoped classes, so every selector below uses :deep() to reach into
    the rendered output. Keep the list focused on elements marked
    actually produces — avoid hypothetical selectors that will never
-   match and just become dead code. */
+   match and just become dead code.
+
+   08-14 ux-polish-r1 WP2 2.1(评审 B1/B2"密集感"):正文行高已 1.6
+   (--leading-relaxed,research B1 验证结论,不动),密集感来自块级元素
+   的垂直节奏 —— p 8px / 列表 6px / li 2px 过紧。本组规则把节奏打开一
+   档并全部走 spacing token:
+     p 8→12,li 2→4,ul/ol 6→4/12(尾元素清零),h* 12/6→16/4,
+     blockquote 8→8/12(内 padding 4/12 走 token)。
+   pre/table/hr 保持原值仅 token 化(代码块/表格不是密集感来源)。 */
 .msg__markdown {
   display: block;
 }
 
 .msg__markdown :deep(p) {
-  margin: 0 0 8px 0;
+  margin: 0 0 var(--space-3) 0;
 }
 
 .msg__markdown :deep(p:last-child) {
@@ -1012,7 +1020,7 @@ const showEditedLabel = computed<boolean>(
 .msg__markdown :deep(h4),
 .msg__markdown :deep(h5),
 .msg__markdown :deep(h6) {
-  margin: 12px 0 6px 0;
+  margin: var(--space-4) 0 var(--space-1) 0;
   font-weight: var(--weight-semibold);
   line-height: 1.3;
 }
@@ -1039,12 +1047,21 @@ const showEditedLabel = computed<boolean>(
 
 .msg__markdown :deep(ul),
 .msg__markdown :deep(ol) {
-  margin: 6px 0;
-  padding-left: 24px;
+  margin: var(--space-1) 0 var(--space-3) 0;
+  padding-left: var(--space-6);
+}
+
+.msg__markdown :deep(ul:last-child),
+.msg__markdown :deep(ol:last-child) {
+  margin-bottom: 0;
 }
 
 .msg__markdown :deep(li) {
-  margin: 2px 0;
+  margin: var(--space-1) 0;
+}
+
+.msg__markdown :deep(li:last-child) {
+  margin-bottom: 0;
 }
 
 .msg__markdown :deep(strong) {
@@ -1065,7 +1082,7 @@ const showEditedLabel = computed<boolean>(
 }
 
 .msg__markdown :deep(pre) {
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   padding: 10px 12px;
   background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   border: 1px solid var(--color-bg-border-strong);
@@ -1089,8 +1106,8 @@ const showEditedLabel = computed<boolean>(
 }
 
 .msg__markdown :deep(blockquote) {
-  margin: 8px 0;
-  padding: 4px 12px;
+  margin: var(--space-2) 0 var(--space-3) 0;
+  padding: var(--space-1) var(--space-3);
   border-left: 3px solid var(--color-bg-border);
   color: var(--color-text-secondary);
   font-style: italic;
@@ -1099,12 +1116,12 @@ const showEditedLabel = computed<boolean>(
 .msg__markdown :deep(hr) {
   border: 0;
   border-top: 1px solid var(--color-bg-border);
-  margin: 12px 0;
+  margin: var(--space-3) 0;
 }
 
 .msg__markdown :deep(table) {
   border-collapse: collapse;
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   font-size: 0.95em;
 }
 

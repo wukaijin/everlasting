@@ -80,7 +80,9 @@ defineProps<{
   margin: 0;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  line-height: 1.5;
+  /* 08-14 ux-polish-r1 WP2:mono 错误文本非 prose 阅读面,仅 token 化同值
+     (--leading-normal = 1.5)。 */
+  line-height: var(--leading-normal);
   color: var(--color-text-primary);
   word-break: break-word;
   white-space: pre-wrap;

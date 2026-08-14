@@ -1032,17 +1032,40 @@ function isPermissionAskLive(rid: string): boolean {
 
 .subagent-drawer__reply-markdown {
   font-size: var(--text-base);
-  line-height: 1.55;
+  /* 08-14 ux-polish-r1 WP2:1.55 → --leading-relaxed,与消息气泡/详情
+     modal 的 markdown 排版统一;ul/li 节奏同步 MessageItem 改版;
+     text-autospace 同款(Chromium ≥140 生效,WebKit 忽略)。 */
+  line-height: var(--leading-relaxed);
+  text-autospace: ideograph-alpha;
   color: var(--color-text-primary);
   max-height: 320px;
   overflow-y: auto;
 }
 
 .subagent-drawer__reply-markdown :deep(p) {
-  margin: 0 0 8px 0;
+  margin: 0 0 var(--space-3) 0;
 }
 
 .subagent-drawer__reply-markdown :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.subagent-drawer__reply-markdown :deep(ul),
+.subagent-drawer__reply-markdown :deep(ol) {
+  margin: 0 0 var(--space-3) 0;
+  padding-left: var(--space-6);
+}
+
+.subagent-drawer__reply-markdown :deep(ul:last-child),
+.subagent-drawer__reply-markdown :deep(ol:last-child) {
+  margin-bottom: 0;
+}
+
+.subagent-drawer__reply-markdown :deep(li) {
+  margin-bottom: var(--space-1);
+}
+
+.subagent-drawer__reply-markdown :deep(li:last-child) {
   margin-bottom: 0;
 }
 

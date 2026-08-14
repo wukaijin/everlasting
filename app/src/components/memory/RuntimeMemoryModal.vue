@@ -666,7 +666,8 @@ watch(
   min-width: 0;
 }
 .runtime-memory-modal__stat-label {
-  font-size: var(--text-2xs);
+  /* 08-14 ux-polish-r1 WP2(评审 B3):统计标签常驻可见,10px → 11px。 */
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }

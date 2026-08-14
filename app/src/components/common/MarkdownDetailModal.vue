@@ -328,16 +328,21 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 
 .markdown-detail-modal__markdown {
   font-size: var(--text-base);
-  line-height: 1.55;
+  line-height: var(--leading-relaxed);
   color: var(--color-text-primary);
+  /* 08-14 ux-polish-r1 WP2 2.4:中英混排间距,Chromium ≥140 生效,
+     WebKit 忽略(style.css .msg__markdown 同款注释)。 */
+  text-autospace: ideograph-alpha;
   /* Reuse the bubble typography — the project doesn't have a
      shared `.markdown-body` class; the rules below mirror the
      MessageItem bubble's content styling so markdown looks
-     consistent across main chat + drawer modal. */
+     consistent across main chat + drawer modal.
+     08-14 ux-polish-r1 WP2:行高 1.55 → --leading-relaxed,块级 margin
+     同步 MessageItem 的节奏改版(p 8→12 / li 2→4 / 列表尾距 8→12)。 */
 }
 
 .markdown-detail-modal__markdown :deep(p) {
-  margin: 0 0 8px 0;
+  margin: 0 0 var(--space-3) 0;
 }
 
 .markdown-detail-modal__markdown :deep(p:last-child) {
@@ -347,7 +352,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 .markdown-detail-modal__markdown :deep(h1),
 .markdown-detail-modal__markdown :deep(h2),
 .markdown-detail-modal__markdown :deep(h3) {
-  margin: 16px 0 8px 0;
+  margin: var(--space-4) 0 var(--space-1) 0;
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
@@ -364,12 +369,21 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 
 .markdown-detail-modal__markdown :deep(ul),
 .markdown-detail-modal__markdown :deep(ol) {
-  margin: 0 0 8px 0;
+  margin: 0 0 var(--space-3) 0;
   padding-left: 20px;
 }
 
+.markdown-detail-modal__markdown :deep(ul:last-child),
+.markdown-detail-modal__markdown :deep(ol:last-child) {
+  margin-bottom: 0;
+}
+
 .markdown-detail-modal__markdown :deep(li) {
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
+}
+
+.markdown-detail-modal__markdown :deep(li:last-child) {
+  margin-bottom: 0;
 }
 
 .markdown-detail-modal__markdown :deep(code) {

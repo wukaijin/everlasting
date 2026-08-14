@@ -83,7 +83,104 @@ const pending = computed<boolean>(() => !props.result);
 .discussion-summary__body {
   font-size: var(--text-sm);
   color: var(--color-text-primary);
-  line-height: 1.6;
+  line-height: var(--leading-relaxed);
   white-space: normal;
+}
+
+/* 08-14 ux-polish-r1 WP2 2.1(评审 B2):总结正文的 markdown 节奏。
+   组件里 `<span class="msg__markdown">` 只是复用了 MessageItem 的类名,
+   MessageItem 的 :deep 规则带 data-v 属性选择器,在本组件作用域外不生效
+   (Tailwind preflight 已把 p/ul/li 的 margin 清零)—— 之前总结全文的段
+   落/列表之间是零间距,是"密集感"的真实来源之一。这里镜像 MessageItem
+   的 markdown 垂直节奏(p 12 / li 4 / 列表 4+12 / h* 16+4,尾元素清零),
+   两处 markdown 观感保持一致;后续如再加 markdown 渲染面,考虑抽全局
+   `.markdown-body` 类。 */
+.discussion-summary__body :deep(p) {
+  margin: 0 0 var(--space-3) 0;
+}
+
+.discussion-summary__body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.discussion-summary__body :deep(h1),
+.discussion-summary__body :deep(h2),
+.discussion-summary__body :deep(h3),
+.discussion-summary__body :deep(h4),
+.discussion-summary__body :deep(h5),
+.discussion-summary__body :deep(h6) {
+  margin: var(--space-4) 0 var(--space-1) 0;
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.discussion-summary__body :deep(h1:first-child),
+.discussion-summary__body :deep(h2:first-child),
+.discussion-summary__body :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.discussion-summary__body :deep(ul),
+.discussion-summary__body :deep(ol) {
+  margin: var(--space-1) 0 var(--space-3) 0;
+  padding-left: var(--space-6);
+}
+
+.discussion-summary__body :deep(ul:last-child),
+.discussion-summary__body :deep(ol:last-child) {
+  margin-bottom: 0;
+}
+
+.discussion-summary__body :deep(li) {
+  margin: var(--space-1) 0;
+}
+
+.discussion-summary__body :deep(li:last-child) {
+  margin-bottom: 0;
+}
+
+.discussion-summary__body :deep(strong) {
+  font-weight: var(--weight-semibold);
+}
+
+.discussion-summary__body :deep(code) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  border: 1px solid var(--color-bg-border-strong);
+}
+
+.discussion-summary__body :deep(pre) {
+  margin: var(--space-2) 0;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  border: 1px solid var(--color-bg-border-strong);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+.discussion-summary__body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  font-size: 0.9em;
+  white-space: pre;
+}
+
+.discussion-summary__body :deep(a) {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.discussion-summary__body :deep(blockquote) {
+  margin: var(--space-2) 0 var(--space-3) 0;
+  padding: var(--space-1) var(--space-3);
+  border-left: 3px solid var(--color-bg-border);
+  color: var(--color-text-secondary);
+  font-style: italic;
 }
 </style>

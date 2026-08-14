@@ -151,7 +151,8 @@ async function openSource(): Promise<void> {
   border-radius: 6px;
   background: var(--bg-elevated, rgba(0, 0, 0, 0.02));
   font-size: 12px;
-  line-height: 1.5;
+  /* 08-14 ux-polish-r1 WP2:finding 详情是多行 prose 阅读面 → --leading-relaxed */
+  line-height: var(--leading-relaxed);
   display: flex;
   flex-direction: column;
   gap: 6px;

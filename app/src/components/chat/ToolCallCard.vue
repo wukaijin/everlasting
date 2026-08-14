@@ -847,7 +847,8 @@ watch(
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
-  line-height: 1.5;
+  /* 08-14 ux-polish-r1 WP2:多行摘要正文走 --leading-relaxed(长文容器) */
+  line-height: var(--leading-relaxed);
   white-space: pre-wrap;
   word-break: break-word;
 }

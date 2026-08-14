@@ -806,7 +806,10 @@ function formatTimestamp(rfc3339: string): string {
 }
 
 .runtime-memory__timestamp {
-  font-size: var(--text-2xs);
+  /* 08-14 ux-polish-r1 WP2(评审 B3:时间戳 10px + muted 低对比):常驻
+     信息型时间戳升 --text-xs。显示的已是完整绝对时间(非相对时间截断),
+     无需再补 title 展开。 */
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-muted);
 }

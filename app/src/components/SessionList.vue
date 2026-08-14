@@ -730,7 +730,9 @@ watch(() => props.searchActive, (active) => {
 }
 
 .session-list--compact .session-item__meta {
-  font-size: var(--text-2xs);
+  /* 08-14 ux-polish-r1 WP2(评审 B3):compact 模式 meta(时间戳等常驻
+     信息)10px → 11px,保持 compact 密度但可读。 */
+  font-size: var(--text-xs);
 }
 
 .session-list--compact .session-item__dot {
