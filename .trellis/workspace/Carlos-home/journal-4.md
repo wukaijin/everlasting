@@ -416,3 +416,24 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 ### Next Steps
 
 - 下一任务仍待定:D(Stub 注册,38.5% > 15% 触发线已过)vs memory 指令块治理(BACKLOG §3.1)
+
+
+## Session 99: 前端样式优化 R1:VLM 评审流水线 + WP1-4 实施
+
+**Date**: 2026-08-14
+**Task**: 前端样式优化 R1:VLM 评审流水线 + WP1-4 实施
+**Branch**: `main`
+
+### Summary
+
+固化 scripts/ui-review.sh(headless 截图 + mmx vision 评审,含方法局限提示);建 frontend-ux-polish-r1 任务,子代理实施 WP1-4:移动端 44px hit-area(::after 外扩)/顶栏收纳/markdown 节奏/微字号/盘古之白/路由 fade;check 复查修 1 bug。顺手修 3 个真实 bug:DiscussionSummaryCard scoped 零间距、MessageList enter 动画失效(5b1fc81 回归)、ChatInput 移动端 0px gap。拦 2 条 VLM 误判(侧栏选中态/Tab 下划线已存在)。spec 沉淀:message-list-and-markdown.md 新增 + responsive-mobile hit-area 模式 + AGENTS.md 速查。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e24c616` | (see git log) |
+
+### Status
+
+[OK] **Completed**
