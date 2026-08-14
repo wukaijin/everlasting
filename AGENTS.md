@@ -51,3 +51,4 @@ Notes:
 
 - **SQLite DB(daemon + GUI 共用)**:`~/.local/share/dev.everlasting.app/everlasting.db`(WSL/Linux;macOS `~/Library/Application Support/...`,见 [docs/DEBUG_DB.md](./docs/DEBUG_DB.md) §1,schema 索引 + 常用查询都在那)。**WAL writer 是 daemon 进程** — `sqlite3 -readonly` 查询随时安全;直连写要先 `./scripts/daemon.sh stop`(GUI Thin 模式不开 pool,不影响)。
 - **单轮烟测**:`scripts/turn-smoke.sh` — 经 daemon HTTP API(`:7456`)建临时 session 实跑一轮 LLM,轮询 `turn_trace` 报 per-turn token(tools_token / context_input / 占比),跑完自动删 session。改了 agent loop / trace / tools 链路后用它做 live 验证,别手翻 DB。
+- **UI 视觉评审**:`scripts/ui-review.sh` — daemon serve dist 后 headless Chromium 截 7 界面(桌面/移动/弹窗)逐张过 mmx vision(MiniMax VLM)出评审报告到 `out/ui-review/<ts>/`;改样式后跑它对照缺陷收敛。`--screenshots-only` 不花 VLM quota。注意方法局限:静态截图**看不见**透明 hit area / hover / 动效 / 折叠分组内的状态,VLM 的触控与行高结论需代码级复核(实证:正文 1.6 连续两轮被判"行高过低")。
