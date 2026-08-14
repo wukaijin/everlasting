@@ -388,3 +388,31 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 
 - **下一任务二选一**:① C7 Phase 2 之 D(Stub 注册,tools 38.5% > 15% 触发线已过,省窗口大头 use_ui/ask_user_question 静态裁不动只能 Stub 治);② memory 指令块治理(BACKLOG §3.1,~7-8k ≈ 42%,手段 = 按相关性裁剪/分段加载)
 - R2(Anthropic cache 断点)继续挂起,等原生 Anthropic provider
+
+## Session 100: turn-smoke.sh 单轮烟测脚本沉淀 + AGENTS.md DB 速查
+
+**Date**: 2026-08-14
+**Task**: 把 Session 99 的手工烟测流程(daemon API 建会话 → 单轮 → 查 turn_trace → 删会话)沉淀为脚本;AGENTS.md 补 DB 位置(用户建议,省下次找 DB 的弯路)
+**Branch**: `main`
+
+### Summary
+
+`scripts/turn-smoke.sh`:health 预检 → list_projects 按路径解析 project_id(查不到自动 create_project)→ 建临时 session → /api/v1/agent/chat 单轮 → 每 5s 轮询 turn_trace(默认 180s 超时;tools_token 列缺失 = 二进制早于 C7 R1 的明确报错)→ 报 seq/tools_token/input/ctx/占比 → EXIT trap 自动删 session(--keep 保留)。实跑验证 tools_token=6773 / ctx=17603 = 38%,与手工一致。AGENTS.md 加「DB / 单轮烟测速查」节(everlasting.db 路径 + WAL writer 注意 + 脚本入口)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dcb3f9a` | chore(scripts): turn-smoke.sh 单轮烟测自动化 + AGENTS.md 补 DB 位置速查 |
+
+### Testing
+
+- [OK] bash -n 语法检查 + 端到端实跑(真实 LLM 一轮,session 自动清理)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 下一任务仍待定:D(Stub 注册,38.5% > 15% 触发线已过)vs memory 指令块治理(BACKLOG §3.1)
