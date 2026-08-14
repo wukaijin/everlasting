@@ -46,3 +46,8 @@ Notes:
 - To profile slow tests, prefer [`cargo-nextest`](https://nexte.st) (`cargo nextest run --lib`, per-test timings); otherwise see the timestamp fallback in [HACKING-wsl.md §测试性能](./docs/HACKING-wsl.md#测试性能wsl-后端-cargo-test).
 - Cold compile `--no-run` ≈ 1m37s; incremental ≈ 11s.
 - Remote 链路 E2E 冒烟:`node scripts/remote-e2e-smoke.mjs`(需本地 remote 服务端在跑,见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md))。
+
+## DB / 单轮烟测速查
+
+- **SQLite DB(daemon + GUI 共用)**:`~/.local/share/dev.everlasting.app/everlasting.db`(WSL/Linux;macOS `~/Library/Application Support/...`,见 [docs/DEBUG_DB.md](./docs/DEBUG_DB.md) §1,schema 索引 + 常用查询都在那)。**WAL writer 是 daemon 进程** — `sqlite3 -readonly` 查询随时安全;直连写要先 `./scripts/daemon.sh stop`(GUI Thin 模式不开 pool,不影响)。
+- **单轮烟测**:`scripts/turn-smoke.sh` — 经 daemon HTTP API(`:7456`)建临时 session 实跑一轮 LLM,轮询 `turn_trace` 报 per-turn token(tools_token / context_input / 占比),跑完自动删 session。改了 agent loop / trace / tools 链路后用它做 live 验证,别手翻 DB。
