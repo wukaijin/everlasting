@@ -85,6 +85,7 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -290,6 +291,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -413,6 +415,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -594,6 +597,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -771,6 +775,7 @@ async fn agent_loop_persist_failure_emits_error() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -950,6 +955,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
     cancel_handle.await.unwrap();

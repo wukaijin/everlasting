@@ -171,6 +171,7 @@ async fn run_loop(
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 }

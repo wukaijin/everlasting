@@ -125,6 +125,7 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -283,6 +284,7 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
     let _ = cancel_task.await;
@@ -423,6 +425,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -571,6 +574,7 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

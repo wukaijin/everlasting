@@ -7,7 +7,7 @@
 
 #![allow(unused_imports)]
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use crate::agent::helpers::{emit_chat_event_via_sink, persist_turn_cwd};
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::subagent::SubagentEventSink;
 use crate::background_shell::BackgroundShellRegistry;
-use crate::llm::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Provider, Role};
+use crate::llm::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Provider, Role, ToolDef};
 use crate::memory::MemoryCache;
 use crate::skill::loader::SkillCache;
 use crate::state::{ChatEventSink, ProviderCatalog};
@@ -76,6 +76,13 @@ pub(crate) async fn dispatch_tool_calls(
     soft_blocked: Arc<Mutex<std::collections::HashSet<String>>>,
     seq: i64,
     skip_persist: bool,
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 开关 +
+    // stub registry,供 serial 顶部拦截(`load_tool_schemas` / 直呼
+    // 自愈)读写。gate 信号从既有参数取:`permission_ctx.is_worker`
+    // (worker 不 stub 也不拦截)、`group_chat_state.is_some()`
+    // (群聊不 stub 不拦截 — 与 drive 侧 stubify/append gate 同源)。
+    stub_on: bool,
+    stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
 ) -> DispatchOutcome {
     let mut cancelled = cancelled;
     let mut current_ctx = current_ctx;
@@ -781,6 +788,137 @@ pub(crate) async fn dispatch_tool_calls(
             DispatchBatch::Serial => {
                 // Regular serial path (existing behavior, unchanged).
                 for (id, name, input) in &tool_calls {
+                    // D (2026-08-14, `08-14-c7d-tools-stub-registration`):
+                    // stub 元工具拦截 — `load_tool_schemas` + 直呼自愈。
+                    // 放在 5 层权限 check 之前(先于 :857 ask_user_question
+                    // / :1011 request_mode_change / :1099
+                    // request_task_state_transition 既有拦截),统一在
+                    // serial 路径顶部拦截。
+                    //
+                    // gate 与 drive.rs stubify/append gate 同源
+                    // (开关 && !worker && !群聊):`permission_ctx.is_worker`
+                    // (worker 不 stub 也不拦 — 自主可靠性优先)、
+                    // `group_chat_state.is_none()`(群聊白名单含候选
+                    // `web_fetch` — gate 是唯一防线,评审 P1-1)。
+                    // 并行路径(L2)无需拦:候选 ∩ 并行白名单 = ∅
+                    // (stub.rs 不变量单测固化,评审 P1-2)。
+                    if stub_on && !permission_ctx.is_worker && group_chat_state.is_none() {
+                        // ---- load_tool_schemas:按需拉取完整 schema ----
+                        if name == "load_tool_schemas" {
+                            let tool_exec_start = Instant::now();
+                            let (content, is_error) =
+                                load_stub_schemas(&session_id, input, &stub_loaded).await;
+                            let duration_ms = tool_exec_start.elapsed().as_millis();
+                            if token.is_cancelled() {
+                                cancelled = true;
+                            } else if !skip_persist {
+                                if let Err(e) = permissions::record_tool_executed_audit(
+                                    &db,
+                                    &session_id,
+                                    name,
+                                    input,
+                                    duration_ms,
+                                    None,
+                                    Some(seq),
+                                )
+                                .await
+                                {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "chat: record_tool_executed_audit failed for load_tool_schemas (non-fatal)"
+                                    );
+                                }
+                            }
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
+                            if cancelled {
+                                break;
+                            }
+                            continue;
+                        }
+                        // ---- 直呼自愈:模型未 load 就直呼 stub 工具 ----
+                        // 回灌完整 schema + 写 loaded-set,模型下一轮重试
+                        // (schema now loaded)。已 loaded 则放行 — 粘性
+                        // 已让本 turn 全量下发,走正常执行。
+                        if crate::tools::stub::STUB_CANDIDATES.contains(&name.as_str()) {
+                            let loaded = stub_loaded.get(&session_id).await;
+                            if !loaded.contains(name.as_str()) {
+                                let tool_exec_start = Instant::now();
+                                let full_def = crate::tools::builtin_tools()
+                                    .into_iter()
+                                    .find(|t| t.name == *name)
+                                    .unwrap_or_else(|| ToolDef {
+                                        name: name.clone(),
+                                        description: None,
+                                        input_schema: serde_json::json!({"type": "object"}),
+                                    });
+                                let schema_json =
+                                    serde_json::to_string_pretty(&full_def).unwrap_or_default();
+                                stub_loaded
+                                    .extend(&session_id, std::iter::once(name.clone()))
+                                    .await;
+                                let content = format!(
+                                    "{}: schema now loaded — retry with the correct arguments.\n\n\
+                                     Full schema:\n{}",
+                                    name, schema_json
+                                );
+                                let duration_ms = tool_exec_start.elapsed().as_millis();
+                                if token.is_cancelled() {
+                                    cancelled = true;
+                                } else if !skip_persist {
+                                    if let Err(e) = permissions::record_tool_executed_audit(
+                                        &db,
+                                        &session_id,
+                                        name,
+                                        input,
+                                        duration_ms,
+                                        None,
+                                        Some(seq),
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "chat: record_tool_executed_audit failed for stubbed tool direct-call (non-fatal)"
+                                        );
+                                    }
+                                }
+                                let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                    &content,
+                                    &current_ctx.worktree_path,
+                                );
+                                sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                    request_id: rid.clone(),
+                                    tool_use_id: id.clone(),
+                                    content: envelope_str.clone(),
+                                    is_error: true,
+                                });
+                                result_blocks.push(ContentBlock::ToolResult {
+                                    tool_use_id: id.clone(),
+                                    content: envelope_str,
+                                    is_error: true,
+                                });
+                                if cancelled {
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
                     // Run the full 5-tier permission check (matches
                     // production). Tests that want a clean
                     // tool-execute-and-continue path should pre-load
@@ -1645,4 +1783,62 @@ pub(crate) async fn finalize_turn(
     }
     messages.push(tool_result_msg);
     Ok(())
+}
+
+/// D (2026-08-14, `08-14-c7d-tools-stub-registration`): `load_tool_schemas`
+/// 拦截的纯逻辑 — 解析 `tool_names`(未知名字以 error 文本列出合法名;
+/// `"all"` = 候选集全量)→ 写 registry(粘性)→ 返回完整 schema JSON
+/// 文本。纯读 + registry 写,无 Tier 4 语义(Tier 5 静默 Allow,同
+/// `remember`)。
+async fn load_stub_schemas(
+    session_id: &str,
+    input: &serde_json::Value,
+    stub_loaded: &std::sync::Arc<crate::tools::stub::StubRegistry>,
+) -> (String, bool) {
+    let names: Vec<String> = input
+        .get("tool_names")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let valid: HashSet<&str> = crate::tools::stub::STUB_CANDIDATES
+        .iter()
+        .copied()
+        .collect();
+    let targets: Vec<String> = if names.iter().any(|n| n == "all") {
+        crate::tools::stub::STUB_CANDIDATES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        names
+    };
+    let unknown: Vec<&str> = targets
+        .iter()
+        .filter(|n| !valid.contains(n.as_str()))
+        .map(|s| s.as_str())
+        .collect();
+    if !unknown.is_empty() {
+        let legal = crate::tools::stub::STUB_CANDIDATES.join(", ");
+        return (
+            format!(
+                "Unknown tool name(s): {}. Valid stub tools: {}.",
+                unknown.join(", "),
+                legal
+            ),
+            true,
+        );
+    }
+    stub_loaded
+        .extend(session_id, targets.iter().cloned())
+        .await;
+    let full_defs: Vec<ToolDef> = crate::tools::builtin_tools()
+        .into_iter()
+        .filter(|t| targets.contains(&t.name))
+        .collect();
+    let json = serde_json::to_string_pretty(&full_defs).unwrap_or_default();
+    (json, false)
 }

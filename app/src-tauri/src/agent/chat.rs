@@ -244,6 +244,12 @@ pub(crate) async fn chat_inner(
     // can capture it by value (state is borrowed — the closure
     // must not borrow from it).
     let app_data_dir = state.app_data_dir.clone();
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): clone the
+    // session-keyed stub loaded-set registry for the spawn closure.
+    // The classic-chat path's `run_chat_loop` uses it for stubify
+    // (第 4 环) + the load_tool_schemas / 直呼自愈 interception
+    // (跨 request 粘性 — AC4)。
+    let stub_loaded = state.stub_loaded.clone();
     let rid = request_id;
     let sink_for_spawn = sink.clone();
 
@@ -570,6 +576,9 @@ pub(crate) async fn chat_inner(
                 // `Some("moderator")` / `Some(participant.name)` for
                 // its own dispatch sites.
                 None,
+                // D (2026-08-14): thread the stub loaded-set registry
+                // (classic-chat path — stubify + interception use it).
+                stub_loaded,
             )
             .await;
         } // end else (classic-chat path)

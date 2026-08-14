@@ -107,6 +107,12 @@ pub(crate) async fn drive_turn(
     skip_persist: bool,
     current_speaker: &Option<String>,
     question_store: &crate::agent::question_store::QuestionStore,
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 开关
+    // (每 request 读一次,best-effort 缺省 on)+ stub registry。
+    // stubify 是第 4 环,gate `开关 && !effective_is_worker &&
+    // !is_group_chat`;registry 决定候选工具是 stub 还是全量(粘性)。
+    stub_on: bool,
+    stub_loaded: &crate::tools::stub::StubRegistry,
 ) -> Result<DriveTurnOutcome, ()> {
     let mut messages = messages;
     let mut seq = seq;
@@ -515,6 +521,23 @@ pub(crate) async fn drive_turn(
         ),
         is_group_chat,
     );
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 第 4 环
+    // stubify。开关开 && 非 worker && 非群聊时,候选集内未 loaded
+    // 的工具原地替换为 stub(真名 + 一句话摘要 + 宽松外壳 schema,
+    // 保序 — tools[] 顺序稳定是前缀缓存前提,C7 R3.2)。
+    //
+    // **gate 是唯一防线**:群聊复用同一 `run_chat_loop`(`group_chat_
+    // loop.rs:286/:478`)且其白名单含候选 `web_fetch` — 若缺
+    // `!is_group_chat`,群聊每轮 `web_fetch` 会被 stub 且
+    // `load_tool_schemas` 被 append 进 speaker turn defs,污染白名单
+    // 语义(评审 P1-1);worker 自主可靠性优先不 stub(与
+    // `dispatch_subagent` append 的 `!effective_is_worker` gate 同款,
+    // drive.rs:546 先例)。`loaded` 集合读自 session-keyed registry
+    // (粘性 — 加载后不回退,AC4)。
+    if stub_on && !effective_is_worker && !is_group_chat {
+        let loaded = stub_loaded.get(&session_id).await;
+        turn_tool_defs = crate::tools::stub::stubify(turn_tool_defs, &loaded);
+    }
     // L3d (2026-06-25): append the dynamic `dispatch_subagent`
     // ToolDef so the enum reflects builtin + user + project
     // subagents merged by `SubagentCache` (mtime-fenced scan).
@@ -556,6 +579,15 @@ pub(crate) async fn drive_turn(
         )
         .await;
         turn_tool_defs.push(dispatch_def);
+    }
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 同侧
+    // append `load_tool_schemas` 元工具 def(dispatch append 之后,
+    // 与现有 append 同侧 — 避免无谓的顺序扰动,评审 P2-3)。**不进**
+    // `builtin_tools()`(那会渗入 worker 种子集 `prepare_worker` 与
+    // 群聊前的全集);gate 与 stubify 同源(开关 && !worker && !群聊)。
+    // 群聊 speaker 绝不带它 — 群聊白名单语义不被污染(评审 P1-1)。
+    if stub_on && !effective_is_worker && !is_group_chat {
+        turn_tool_defs.push(crate::tools::stub::load_tool_schemas_def());
     }
     let turn_tool_defs = turn_tool_defs;
     // C7 (2026-08-14, R1): estimate the per-turn `tools[]` token cost

@@ -579,6 +579,18 @@ pub async fn run_chat_loop(
     // (~58 callsites) + 4 production callsites pass `None`; the
     // two `run_group_chat_loop` dispatch sites pass `Some(name)`.
     current_speaker: Option<String>,
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): the
+    // session → loaded-set stub registry (渐进式披露 D 的粘性
+    // loaded-set). `drive_turn` 的第 4 环 stubify 读它(候选未
+    // loaded → stub,已 loaded → 全量);`chat_loop/tools.rs` 的
+    // `load_tool_schemas` / 直呼自愈拦截写它。跨 request 存活
+    // (registry 挂 `AppState`,AC4 粘性)。
+    //
+    // 生产(chat.rs / group_chat_loop.rs)传 `state.stub_loaded`;
+    // worker 嵌套调用(`run_subagent` → `dispatch/drive.rs`)传
+    // 每次新建的空 registry — worker 永不 stub(gate
+    // `!effective_is_worker`),registry 只是签名占位,不会被读写。
+    stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -596,6 +608,16 @@ pub async fn run_chat_loop(
         // `skip_session_active: true` to avoid evicting the parent's
         // entry.
         skip_session_active,
+    };
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 每
+    // request 读一次 `tools_stub_enabled`(best-effort,缺省 = 开;
+    // `"false"` 才关 — fail-open 语义安全,stub 不删能力只延迟披露)。
+    // 单行 kv 读,μs 级;与 `workflow_enabled`(session 列)同数量级。
+    // 关 → drive.rs 第 4 环直通 + 不 append `load_tool_schemas`
+    // (回滚通道,AC5)。
+    let stub_on = match crate::db::config::get_config_value(&db, "tools_stub_enabled").await {
+        Ok(Some(v)) => v != "false",
+        _ => true,
     };
     let init = match prepare_loop_state(
         db.clone(),
@@ -907,6 +929,9 @@ pub async fn run_chat_loop(
             skip_persist,
             &current_speaker,
             &question_store,
+            // D (2026-08-14): stubify 开关 + session 粘性 loaded-set。
+            stub_on,
+            &stub_loaded,
         )
         .await
         {
@@ -962,6 +987,10 @@ pub async fn run_chat_loop(
             soft_blocked.clone(),
             seq,
             skip_persist,
+            // D (2026-08-14): stub 开关 + registry,供 serial 顶部
+            // 拦截(load_tool_schemas / 直呼自愈)使用。
+            stub_on,
+            stub_loaded.clone(),
         )
         .await;
         // Write the mutated fields back to their function/turn-loop bindings

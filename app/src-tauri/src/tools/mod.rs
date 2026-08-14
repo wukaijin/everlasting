@@ -35,6 +35,7 @@ pub mod run_background_shell;
 pub mod shell;
 pub mod shell_kill;
 pub mod shell_status;
+pub mod stub;
 pub mod tests_merge_worker;
 pub mod tests_shell;
 pub mod tests_web_fetch;

@@ -14,6 +14,7 @@ mod notifications;
 mod parallel_dispatch;
 mod recall;
 mod resilience;
+mod stub;
 
 /// Helper: flatten a `Vec<ChatMessage>` into a single string for
 /// substring assertions. Concatenates every text block in every

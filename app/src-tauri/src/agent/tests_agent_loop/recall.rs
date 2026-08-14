@@ -113,6 +113,7 @@ async fn agent_loop_emits_recall_on_fts_hit() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -267,6 +268,7 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

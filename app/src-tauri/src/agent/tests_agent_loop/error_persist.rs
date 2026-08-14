@@ -131,6 +131,7 @@ async fn agent_loop_error_persists_partial_text() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -252,6 +253,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -367,6 +369,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -516,6 +519,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -633,6 +637,7 @@ async fn agent_loop_error_emits_turn_complete() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

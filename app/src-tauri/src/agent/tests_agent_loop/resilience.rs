@@ -132,6 +132,7 @@ async fn agent_loop_p5_soft_block_short_circuits_execute() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -268,6 +269,7 @@ async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -403,6 +405,7 @@ async fn a5plus_retry_does_not_double_count_token_usage() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -508,6 +511,7 @@ async fn a5plus_retry_emits_retrying_chat_events() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -618,6 +622,7 @@ async fn a5plus_retry_terminal_state_matches_no_retry_path() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

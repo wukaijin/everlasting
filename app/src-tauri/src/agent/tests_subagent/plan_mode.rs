@@ -197,6 +197,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 // group_chat_state = None (tests don't exercise group chat).
                 None,
                 None,
+                // D (2026-08-14): stub loaded-set registry(测试默认
+                // 开关 off 路径不 stub;interception 测试用 harness 的)。
+                h.stub_loaded.clone(),
             ),
         ),
     )

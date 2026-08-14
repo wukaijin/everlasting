@@ -272,6 +272,12 @@ pub(crate) async fn drive_worker(
         // anyway. Pass `None` for symmetry with the parent's
         // classic-chat call site.
         None,
+        // D (2026-08-14, `08-14-c7d-tools-stub-registration`):
+        // worker 嵌套调用传新建空 registry — worker 永不 stub
+        // (stubify/append gate `!effective_is_worker` 挡掉,拦截
+        // gate `permission_ctx.is_worker` 挡掉),registry 不会被
+        // 读写,只作签名占位。
+        std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
     ))
     .await;
 }

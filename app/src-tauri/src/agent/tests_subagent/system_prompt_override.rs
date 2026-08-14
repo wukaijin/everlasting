@@ -113,6 +113,7 @@ async fn system_prompt_override_worker_path_sends_override() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -209,6 +210,7 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

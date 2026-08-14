@@ -143,6 +143,7 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -329,6 +330,7 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -468,6 +470,7 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -594,6 +597,7 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

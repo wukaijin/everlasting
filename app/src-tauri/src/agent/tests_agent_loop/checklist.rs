@@ -139,6 +139,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -330,6 +331,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -501,6 +503,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
     cancel_handle.await.unwrap();

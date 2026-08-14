@@ -127,6 +127,7 @@ async fn run_loop(
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 }
@@ -842,6 +843,7 @@ async fn c2plus_worker_breaks_and_notifies_parent() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 

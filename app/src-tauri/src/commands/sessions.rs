@@ -355,6 +355,13 @@ pub async fn delete_session_inner(
         );
     }
 
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): clear the
+    // session's stub loaded-set(渐进式披露 D 的粘性 registry 清理)。
+    // 对齐 `kill_all_for_session` 接线点 — 删除 session 后其 loaded-set
+    // 必须清空,否则 session_id 复用(新建同名/复用 UUID)会拿到残留的
+    // 「已 load」状态。纯内存操作,同步完成。
+    state.stub_loaded.clear(&session_id).await;
+
     // Step 4 follow-up: best-effort worktree + branch cleanup.
     // Triggered when the session's `worktree_state` is `active`
     // (NOT `detached` — a detached session's worktree was already

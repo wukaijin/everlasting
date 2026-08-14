@@ -77,6 +77,7 @@ async fn run_loop_with_sink(
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 }

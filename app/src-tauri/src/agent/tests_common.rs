@@ -224,6 +224,12 @@ pub(crate) struct TestHarness {
     /// isolation (most) never read this — the tempdir just exists
     /// alongside the project tempdir and is cleaned up on drop.
     pub(crate) app_data_dir: std::path::PathBuf,
+    /// D (2026-08-14, `08-14-c7d-tools-stub-registration`): fresh
+    /// stub loaded-set registry per test for isolation (no
+    /// cross-test loaded-set leak). Threads through `run_chat_loop`'s
+    /// trailing `stub_loaded` parameter; tests that exercise the
+    /// stub interception reach into it to assert loaded-set writes.
+    pub(crate) stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
     /// TempDir guard — kept alive for the duration of the test so
     /// the project_path directory remains on disk while the agent
     /// loop's pre-flight canonicalizes it. See struct docstring.
@@ -272,6 +278,16 @@ pub(crate) async fn make_harness() -> TestHarness {
     .await
     .expect("create_session");
 
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 既有测试
+    // 默认**关** stub — 它们用 MockProvider 让模型直呼
+    // `update_checklist` / `request_mode_change` / background-shell
+    // 等候选工具并断言真实执行,若缺省开(生产语义),直呼自愈拦截
+    // 会把它们当 stub 直呼劫持成 error。stub 专项测试显式
+    // `set_config_value("tools_stub_enabled", "true")` 覆盖本默认。
+    db::config::set_config_value(&pool, "tools_stub_enabled", "false")
+        .await
+        .expect("set tools_stub_enabled=false");
+
     TestHarness {
         db: pool,
         project_id,
@@ -290,6 +306,8 @@ pub(crate) async fn make_harness() -> TestHarness {
         question_store: crate::agent::question_store::QuestionStore::new(),
         background_shells: crate::background_shell::default_registry(),
         subagent_cache: crate::agent::subagent::SubagentCache::arc(),
+        // D (2026-08-14): fresh stub loaded-set registry per test.
+        stub_loaded: std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
         // L3b (2026-06-27): fresh tempdir for the app data dir.
         // Worker worktrees (when a test exercises isolation) land
         // under `<app_data_dir>/worktrees/<project_uuid>/worker/

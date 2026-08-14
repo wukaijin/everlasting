@@ -342,6 +342,12 @@ pub async fn run_group_chat_loop(
                 // from the same column so cross-turn visibility is
                 // preserved.
                 Some("moderator".to_string()),
+                // D (2026-08-14, `08-14-c7d-tools-stub-registration`):
+                // 群聊传空 registry — stubify/append gate
+                // `!is_group_chat` 与拦截 gate(`group_chat_state.
+                // is_some()`)都会挡掉本路径,registry 不会被读写,
+                // 只作签名占位。
+                std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
             )
             .await;
         }
@@ -547,6 +553,9 @@ pub async fn run_group_chat_loop(
             // speaker's view so every participant sees the full
             // transcript with the correct attribution.
             Some(participant.name.clone()),
+            // D (2026-08-14): 群聊传空 registry(同 moderator 调用点 —
+            // gate 挡掉,只作占位)。
+            std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
         )
         .await;
 

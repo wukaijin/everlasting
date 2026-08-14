@@ -369,6 +369,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -570,6 +571,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
 
@@ -791,6 +793,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         None,
         None,
         None,
+        h.stub_loaded.clone(),
     )
     .await;
     cancel_handle.await.unwrap();

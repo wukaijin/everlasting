@@ -193,6 +193,20 @@ pub struct AppState {
     /// `AppState::load` (per L1 PRD Q1 decision C).
     pub background_shells: crate::background_shell::DefaultRegistry,
 
+    /// D (2026-08-14, `08-14-c7d-tools-stub-registration`): session →
+    /// 已 load 完整 schema 的工具名注册表(渐进式披露 D 的粘性
+    /// loaded-set)。`drive.rs` 第 4 环 stubify 时查询:候选集内未
+    /// loaded → stub 下发,已 loaded → 全量保持;`chat_loop/tools.rs`
+    /// 拦截 `load_tool_schemas` / 直呼自愈时写入。跨 request 存活
+    /// (同一 session 第二条用户消息后已 loaded 工具仍全量下发 —
+    /// AC4);`delete_session` 清空;daemon 重启自然清空(prd R5 接受:
+    /// 下一条消息重新按需 load,一轮往返成本)。
+    ///
+    /// 不塞进 `ToolContext`(拦截不走 `execute_tool_inner`);经
+    /// `run_chat_loop` 参数穿入(同 `subagent_cache` / `group_chat_state`
+    /// 的穿参模式)。
+    pub stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
+
     /// P2.3 C4 (2026-07-21, task `07-20-remote-access-daemon-split`):
     /// 进程级 SSE 分发中心(`daemon::sse::SseRegistry`)。daemon 路径
     /// 的 chat handler(C5)从这里构造 `HttpSseSink`,`GET /api/v1/stream`
@@ -409,6 +423,11 @@ impl AppState {
             // from the `RunEvent::Exit` hook so app shutdown
             // doesn't leak process groups.
             background_shells: crate::background_shell::default_registry(),
+            // D (2026-08-14): fresh in-memory stub loaded-set registry.
+            // Lives for the process lifetime; `delete_session` clears
+            // the session's entry (`delete_session_inner`, aligned with
+            // `kill_all_for_session`). daemon 重启自然清空。
+            stub_loaded: std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
             // P2.3 C4: 进程级 SSE 分发中心。daemon 路径用它构造
             // HttpSseSink + /api/v1/stream subscribe;Tauri 路径留空。
             sse: Arc::new(crate::daemon::sse::SseRegistry::new()),
