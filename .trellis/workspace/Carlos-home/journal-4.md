@@ -357,3 +357,34 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 - Phase 2 ①:R1 度量数据 tools[] 占 context 窗口 >15% → 启动 D(Stub 注册)
 - Phase 2 ②:配原生 Anthropic provider 后重启 R2(cache 断点;relay 实测 cache_creation=0 零收益)
 - live AC1 烟测:重编 release + 重启 :7456 daemon(用 pid kill,别用 pkill -f 端口串)+ 跑一轮看 TracePanel tools_token ≈ 7-8k
+
+## Session 99: C7 live 烟测(AC1 验证)+ Phase 2 触发判定 + 归档
+
+**Date**: 2026-08-14
+**Task**: C7 tools[] token 治理收尾(live AC1 烟测 → 数据判定 → 归档)
+**Branch**: `main`
+
+### Summary
+
+用户重编 release + 重启 :7456 daemon 后,经 daemon HTTP API(create_session + /api/v1/agent/chat 单轮"早上好")实跑 live 烟测:`turn_trace.tools_token=6773` / `context_input=17602` = **38.5%**,AC1 验证通过(≈7-8k 预期带内,R3 已裁 ~465)。**Phase 2 判定:D(Stub 注册)触发线(>15%)已过**;同轮 memory 指令块估算 ~7-8k(≈42%,CLAUDE.md 27.8KB + AGENTS.md 3.2KB 复核)→ BACKLOG §3.1 评估结论:memory 块治理确认值得排期。烟测 session 已删,ROADMAP(C7 → §1.2,22 项)+ BACKLOG §3.1(评估结论)同步,task.py archive 归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `88853eb` | docs: C7 live 烟测数据(tools 38.5% → D 触发线已过)+ ROADMAP/BACKLOG 同步 |
+| `099e699` | chore(task): archive 08-14-c7-tools-token-governance |
+
+### Testing
+
+- [OK] live:daemon API 建会话 + 单轮 chat,messages 落库(seq 0/1)+ turn_trace seq=1 落 tools_token=6773(列由 migration 幂等添加)
+- [OK] smoke session 经 delete_session API 清理;docs/archive 提交过 lefthook pre-commit
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- **下一任务二选一**:① C7 Phase 2 之 D(Stub 注册,tools 38.5% > 15% 触发线已过,省窗口大头 use_ui/ask_user_question 静态裁不动只能 Stub 治);② memory 指令块治理(BACKLOG §3.1,~7-8k ≈ 42%,手段 = 按相关性裁剪/分段加载)
+- R2(Anthropic cache 断点)继续挂起,等原生 Anthropic provider
