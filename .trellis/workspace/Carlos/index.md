@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 36
-- **Last Active**: 2026-08-13
+- **Total Sessions**: 37
+- **Last Active**: 2026-08-14
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~373 | Active |
+| `journal-2.md` | ~394 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-08-14 | C7D tools Stub 注册:实施检查 + 部署漂移修复 + 归档 | `bcf4187` | `main` |
 | 36 | 2026-08-13 | S6a+S6b 移动端打磨完成(主聊天视图+Settings 面板+三轮真机迭代) | `acb8284`, `5ea3647` | `feat/remote-control-epic-s1` |
 | 35 | 2026-08-13 | remote epic S1–S5 归档收尾 + S6 打磨任务立项 | `b25c597` | `feat/remote-control-epic-s1` |
 | 34 | 2026-08-10 | 群聊参与者/主持人缓存率显示 + 上下文占用缓存率讨论 | `0da5705`, `355a57b`, `bfb0d8c`, `607d5b7` | `main` |

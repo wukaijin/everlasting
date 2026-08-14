@@ -371,3 +371,24 @@ S6 子任务全部归档。基于 S5 真机截图 30 个痛点(A/B/C/D 组)收�
 
 - S6 跨子任务验收:Settings 主聊天视图 320-430px 真机最终确认
 - S6 完毕,remote epic [5/6 done] 剩 parent 归档收尾
+
+
+## Session 37: C7D tools Stub 注册:实施检查 + 部署漂移修复 + 归档
+
+**Date**: 2026-08-14
+**Task**: C7D tools Stub 注册:实施检查 + 部署漂移修复 + 归档
+**Branch**: `main`
+
+### Summary
+
+对另一 session 实施的 C7D(10 工具 stub 化 + load_tool_schemas 拦截 + session 粘性 registry + 开关)做 trellis-check:红线逐条核验(双 gate 同源 init.rs:306-311 / 候选∩并行白名单=∅ / 保序 / registry 生命周期),cargo test --lib 1704 绿(1 预存 tunnel flaky 隔离过;clippy 1 warning 预存 blame 08-10)。独立 live 复验 AC1=3677(基线 6773,-45.7%,占比 38.5%→26%)两次一致;发现实施 session 17:07 重编后又改源码才 commit 的部署漂移(daemon 跑中间版),重编终版+重启+复测一致后闭环。非阻断记录:PARALLEL_WHITELIST 副本分叉风险(注释已声明)、同 turn 同名直呼二次放行边角。AC1 阈值 3000→3700 校准链(dispatch def 984 不可省)复核认可。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bcf4187` | (see git log) |
+
+### Status
+
+[OK] **Completed**
