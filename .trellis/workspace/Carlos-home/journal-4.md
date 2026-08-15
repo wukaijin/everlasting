@@ -437,3 +437,24 @@ db/sessions_tests.rs(1493 行 / 35 测)按被测功能簇拆为 sessions_tests/ 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 100: memory 指令块窗口治理:WP1 度量 + WP2 分级注入 digest 落地
+
+**Date**: 2026-08-15
+**Task**: memory 指令块窗口治理:WP1 度量 + WP2 分级注入 digest 落地
+**Branch**: `feat/memory-block-governance`
+
+### Summary
+
+BACKLOG §3.1 治理落地:WP1 turn_trace.memory_token 列(与 tools_token 同写点/契约)+ TurnCard mem cell + turn-smoke memory 列与 --turns N;WP2 memory/digest.rs fence-aware 切节 + CLAUDE.md(reference)目录化、AGENTS.md(primary)全量、≤600 小层豁免,load_memory_sections 元工具(banner label 寻址,serial 顶部拦截,独立 stub gate),MemoryDigestRegistry OnceLock 单例粘性(免 72 个 run_chat_loop 穿参),delete_session_inner 清理,gate=开关(缺省 on fail-open)&&!worker&&!群聊(prompt.rs 一行不动,digest_off 逐字节一致单测锁)。live 实测:memory 10124→2080(-79.5%),首轮 context -47%,双轮 cache 99.8% vs off 99.7% 不劣化,Tech Stack 探针确认模型主动拉节遵循。1722 后端(1 预存 flake,main worktree 复现同挂)+1039 前端绿。坑:Bash 工具进程组会杀 daemon 子进程(setsid 无效,需 run_in_background 常驻任务承载);8-14 旧 daemon 残留占 7456 需 pid kill。spec:memory/decisions + token-usage-tracking 新 Scenario。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `be873d4 8dafc71` | (see git log) |
+
+### Status
+
+[OK] **Completed**

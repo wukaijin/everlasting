@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 99
-- **Last Active**: 2026-08-14
+- **Total Sessions**: 100
+- **Last Active**: 2026-08-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~439 | Active |
+| `journal-4.md` | ~460 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 100 | 2026-08-15 | memory 指令块窗口治理:WP1 度量 + WP2 分级注入 digest 落地 | `be873d4` `8dafc71` | `feat/memory-block-governance` |
 | 99 | 2026-08-14 | 前端样式优化 R1:VLM 评审流水线 + WP1-4 实施 | `e24c616` | `main` |
 | 98 | 2026-08-14 | C7 tools[] 上下文 token 治理:R1 度量 + R3 静态裁剪 | `10ad4f8` | `feat/c7-tools-token-governance` |
 | 97 | 2026-08-14 | remote-control epic 收尾归档 + 下一任务推荐 | `0141a44` | `main` |
