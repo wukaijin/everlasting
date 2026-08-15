@@ -1,0 +1,7 @@
+{
+  "content": "## 1) 11px 小字吃力(严重度排序)\n\n| 排名 | 文字色 × 背景 | 比值 | 严重度 |\n|---|---|---|---|\n| 1 | text-muted × app | 2.94 | 红牌,几乎不可读 |\n| 2 | text-secondary × app | 2.42 | 红牌,严重发灰 |\n| 3 | text-muted × --color-accent-muted | 4.41 | 橙牌,刚过 3 |\n| 4 | text-muted × surface | 3.08 | 橙牌,临界 |\n| 5 | text-secondary × --color-accent-muted | 5.36 | 蓝牌,但仍偏暗 |\n\n第二行 11px 等宽小字在 app 底上最灰(2.42 / 2.94),因为小字号缺乏字重补偿,同样的对比度损失感受比 13px 更强烈。\n\n## 2) 同一文字色四档背景对比\n\n**app 底最吃力**,三档文字色全部垫底:\n\n- text-primary: 13.98(app) → elevated 1.11(异常,疑似黑底黑字)/ accent-muted 1.08(异常)→ surface 14.63\n- text-secondary: 2.42(app) < 2.53(surface) < 5.36(accent-muted) < 6.42(elevated)\n- text-muted: 2.94(app) < 3.08(surface) < 4.41(accent-muted) < 5.27(elevated)\n\nelevated 反而最亮,推测其底色更浅;accent-muted(深蓝)居中。**text-primary × elevated 与 × accent-muted 出现 1.0x 级别比值,属配色异常,需排查 token 覆盖**。\n\n## 3) 11px vs 13px 衰减最明显的档位\n\n**text-muted 衰减最大**。同背景从 13px 降到 11px,主观可读性跳水最明显:\n\n- text-muted × surface:2.94 → 3.08(小字)实际感受比 13px 的 2.94 还要费劲,因为字号小、字重不变,边界模糊感被放大\n- text-secondary × app:13px 2.42 → 11px 仍 2.42,但小字笔画更细,等效对比度体感降一档\n- text-primary 全程 13+,字号影响可忽略\n\n**结论**:在已偏低的 secondary/muted 档位,小字号的视觉衰减最致命;mute 档应避免用于 11px 元信息,改用 secondary 兜底。",
+  "base_resp": {
+    "status_code": 0,
+    "status_msg": "success"
+  }
+}

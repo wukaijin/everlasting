@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "token 规则源头:新增色先入 style.css 再消费;Decision 段落惯例(WP6 沉淀目标)"}
+{"file": ".agents/skills/ui-review/SKILL.md", "reason": "AC2/AC3 复跑方法:样本页 Flow B + WCAG 数值单行命令;VLM 数值不可信原则"}
+{"file": ".trellis/tasks/08-15-contrast-color-r1/research/contrast-report-20260815.md", "reason": "评审证据:候选值、FAIL 数值、D 章裁决与冲突校正表"}

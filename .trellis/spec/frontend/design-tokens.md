@@ -44,6 +44,7 @@ contrast.
 | `--color-text-secondary` | `#9aa3b8` | Less important text (captions, labels) — bumped 2026-08-05 from `#8b95a7` (slate-350, +6% luminance) |
 | `--color-text-muted` | `#8a93a8` | Subtitles, status bar, sidebar headers, hint text — bumped 2026-08-05 from `#7c8aa0` (slate-400) in step with `--color-text-secondary` to preserve the 7% luminance gap |
 | `--color-text-on-accent` | `#ffffff` | Pure white for text on saturated accent / tool-error backgrounds (buttons, toasts, counts) where `--color-text-primary` reads dirty. Added 2026-06-27 PR2 (14 ad-hoc `#ffffff` swept). |
+| `--color-accent-text` | `#7c9aff` | Accent as **ink** (text / icons) on dark backgrounds — 6.71:1 on surface, AA. `--color-accent` (#3b5bdb) as text is only 3.14:1 (graphics-only); see "填充 500 / 文字 400" principle below. Added 2026-08-15 (contrast-color-r1). |
 
 **Token gap rules**:
 
@@ -74,8 +75,16 @@ contrast.
 | `--color-tool-read` | `#06b6d4` | `read_file` — cyan |
 | `--color-tool-write` | `#10b981` | `write_file` — emerald |
 | `--color-tool-shell` | `#f59e0b` | `shell` — amber |
-| `--color-tool-error` | `#ef4444` | Errors — red |
+| `--color-tool-error` | `#ef4444` | Errors — red. **Graphics only** (left bars, fills, icon backgrounds; 3:1 ok) |
+| `--color-tool-error-text` | `#f87171` | Error **copy** (error message text, error badge text) — 5.87:1 on elevated vs `#ef4444`'s 4.32 FAIL. Added 2026-08-15 (contrast-color-r1) |
 | `--color-tool-thinking` | `#a78bfa` | Extended thinking blocks — violet |
+
+**Principle: 填充 500 档 / 文字 400 档** (2026-08-15). Tailwind-500-range
+colors work as fills / left bars / rings on the dark backgrounds (graphics
+need only 3:1) but underserve as text (AA needs 4.5:1). When a saturated
+token is needed as ink, add / reach for a 400-range sibling token
+(`--color-accent-text`, `--color-tool-error-text`), never reuse the fill
+token for text.
 
 These map 1:1 with the LLM tool categories the agent
 executes. New tool categories should pick a new color from
@@ -122,11 +131,11 @@ path-range risk, not success/warn outcome.
 
 | Token | Value | Use |
 |---|---|---|
-| `--color-bg-hover` | `color-mix(in srgb, var(--color-text-primary) 6%, transparent)` | List item / nav / chip hover — 6% primary wash, reads as "interactive but not pressed" |
-| `--color-bg-active` | `color-mix(in srgb, var(--color-text-primary) 10%, transparent)` | `:active` press feedback — slightly stronger than hover (10% vs 6%) to confirm the click registered |
+| `--color-bg-hover` | `color-mix(in srgb, var(--color-text-primary) 10%, transparent)` | List item / nav / chip hover — 10% primary wash (was 6% until 2026-08-15; the 6% wash was specimen-verified as indistinguishable from default, see the 2026-08-15 Decision below) |
+| `--color-bg-active` | `color-mix(in srgb, var(--color-text-primary) 14%, transparent)` | `:active` press feedback — slightly stronger than hover (14% vs 10%) to confirm the click registered |
 | `--color-bg-selected` | `color-mix(in srgb, var(--color-accent) 12%, transparent)` | Selected list item / active nav state — 12% accent tint, distinct from hover (which is primary wash) so the two states don't blur together |
 
-**Convention**: the wash concentration (6% → 10% → 12% →
+**Convention**: the wash concentration (10% → 14% → 12% →
 16%) gives a clean 4-state read: `default → hover → pressed
 → selected`. The 16% selected+hover wash is composed inline
 as `color-mix(in srgb, var(--color-accent) 16%, transparent)`
@@ -227,6 +236,46 @@ it up would compress the gap to the primary tier.
   to `#d1d8e3` (slate-280) — but only if a real readability
   audit (e.g. axe-core WCAG AA pass on body text) flags
   primary itself. Don't lift primary speculatively.
+
+---
+
+## Decision: 填充 500 / 文字 400 拆分 + 彩底文字规则 + hover 提强(2026-08-15, contrast-color-r1)
+
+**Context**: 对比度专项评审(token 样本页 + mmx vision + WCAG 数值三方交叉,
+方法见 `.agents/skills/ui-review/`,证据见 `.trellis/tasks/08-15-contrast-color-r1/research/`)
+发现灰阶文字全过 AA,但"彩色当文字用"存在系统性 FAIL:accent #3b5bdb 作文字
+3.14:1(surface)、tool-error #ef4444 作文字 4.32(elevated)/3.60(accent-muted)。
+另发现 hover 6% 叠加与 default 肉眼不可辨(此前被误归因为静态截图盲区)。
+
+**Decision**:
+
+1. 新增 `--color-accent-text: #7c9aff` 与 `--color-tool-error-text: #f87171`。
+   **原则:填充 500 档 / 文字 400 档** — Tailwind-500 量级的饱和色在暗底上够
+   图形对比(3:1)但不够文字(AA 4.5:1);彩色 token 作 ink 一律用 400 档兄弟
+   token,禁止把填充 token 复用作文字色。
+2. **彩底文字规则**:彩色/低亮度底(accent-muted、tool 色块底)上文字最低
+   `--color-text-secondary`(muted 在 accent-muted 上仅 4.41),且禁同色系
+   文字:accent 蓝字在 accent-muted 上 2.39、紫字(thinking)4.98 过线但与
+   蓝底同色相"沉底"(亮度算不出的色相贴近问题,VLM 观感证实)。
+3. `--color-bg-hover` 6%→10%、`--color-bg-active` 10%→14%,并立**最小可辨
+   ΔL 规范**:交互态叠加必须相对 default 产生可辨亮度差,目标 hover≈1.2:1
+   相对底色;当前 10%(≈1.2)在静态截图下仍被判"可辨但极弱",以真机裁决
+   (R4.2),过弱上调 12%/16%,过强回落 8%/12%。
+4. 11px mono 高频元数据位(侧栏分组头、消息耗时、memory 卡时间戳、常驻
+   提示)由 muted 升 secondary——"字号惩罚"真实存在(数值过 AA 但小字感知
+   发灰,双 VLM 独立判读);muted 保留给一次性角标,禁止 blanket replace。
+
+**Rationale**: 三方证据链(数值 FAIL + VLM 点名 + 截图目验)成立才动 token;
+VLM 对比度"估算值"不可信(实测把 7:1 判成 <3:1),裁决一律"数值管亮度、
+VLM 管色相观感"。灰阶三档不动(2026-08-05 刚调,层级锚点)。
+
+**When to revisit**:
+
+- 真机复核 R2.3(error-text 纯深底荧光感)与 R4.2(hover 10% 强度),量级
+  可在上述区间微调。
+- elevated/border 层级感知(border × elevated 仅 1.05:1)与"填充色暗底"
+  图形对比(accent 填充在 elevated 2.87 < 3:1,trace 进度条被点名)另立
+  专题,未在本轮处理。
 
 ---
 

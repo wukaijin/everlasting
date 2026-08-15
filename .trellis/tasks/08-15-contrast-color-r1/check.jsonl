@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "AC4/AC6 检查口径:无硬编码 hex、token 边界、Decision 段落"}
+{"file": ".trellis/tasks/08-15-contrast-color-r1/research/baseline-full-20260815-151036.md", "reason": "AC3 缺陷收敛对比基线(01 侧栏对比度/03 解析徽章/hover 反馈)"}

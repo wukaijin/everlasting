@@ -1,0 +1,7 @@
+{
+  "content": "1) **可辨，但极弱**：hover 与 default 的差异肉眼几乎不可察觉，仅在强光/贴近时才能感知到一丝变亮，对真实交互中的快速识别几乎没有意义。\n\n2) **两对易混淆**：\n   - default ↔ hover（叠加透明度太低，色差接近零）\n   - default ↔ active（同上，active 几乎不表现出\"按压\"反馈）\n\n3) **selected 区分度尚可**：作为唯一带色相（淡蓝）的层级，selected 与其它三行能稳定拉开距离，可作为唯一的强锚点。但仅靠它一个层级承担全部状态区分，会让 hover/active 沦为\"摆设\"。",
+  "base_resp": {
+    "status_code": 0,
+    "status_msg": "success"
+  }
+}

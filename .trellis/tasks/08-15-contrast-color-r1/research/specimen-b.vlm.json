@@ -1,0 +1,7 @@
+{
+  "content": "1) 相当。这两行在 surface/elevated/--color-accent-muted 三档底上的亮度观感与 tool-read/tool-write/tool-shell 几行处于同一水平,不再明显偏暗。\n\n2) tool-thinking(紫)与 tool-shell(黄)在 deep elevated/--color-accent-muted 深底上略偏暗,字与底反差稍弱,长段阅读时略需多看一眼;其余各行均可读。\n\n3) 无。status-success(绿)在 elevated 上亮度最高,但仍属中等明度,未见荧光或刺眼。",
+  "base_resp": {
+    "status_code": 0,
+    "status_msg": "success"
+  }
+}
