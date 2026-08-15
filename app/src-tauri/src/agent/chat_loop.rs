@@ -668,6 +668,7 @@ pub async fn run_chat_loop(
         model_briefs,
         mut head_sha,
         mut system_prompt,
+        memory_token,
     } = init;
 
     // -----------------------------------------------------------------
@@ -932,6 +933,10 @@ pub async fn run_chat_loop(
             // D (2026-08-14): stubify 开关 + session 粘性 loaded-set。
             stub_on,
             &stub_loaded,
+            // memory-block-governance WP1 (2026-08-15): per-request
+            // memory injection estimate (LoopInit), consumed at the
+            // Done-event trace upsert alongside tools_token.
+            memory_token,
         )
         .await
         {

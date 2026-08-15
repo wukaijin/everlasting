@@ -113,6 +113,12 @@ pub(crate) async fn drive_turn(
     // !is_group_chat`;registry 决定候选工具是 stub 还是全量(粘性)。
     stub_on: bool,
     stub_loaded: &crate::tools::stub::StubRegistry,
+    // memory-block-governance WP1 (2026-08-15): cl100k estimate of
+    // the memory instruction blocks injected this request (computed
+    // once in `prepare_loop_state`, threaded via `LoopInit`). A
+    // per-request constant — written to every turn row at the Done
+    // event. `None` = no memory layers (fresh install).
+    memory_token: Option<u32>,
 ) -> Result<DriveTurnOutcome, ()> {
     let mut messages = messages;
     let mut seq = seq;
@@ -857,7 +863,10 @@ pub(crate) async fn drive_turn(
                                 // token usage to turn_trace (worker-gated
                                 // by !skip_persist, same as
                                 // update_last_turn_usage — RULE-A-015).
-                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token)).await {
+                                // WP1 (2026-08-15): memory_token rides the
+                                // same write point — per-request constant,
+                                // identical across the request's turn rows.
+                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token), memory_token).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
                             }

@@ -53,6 +53,7 @@ function makeTurnTraceRow(
     loopHintJson: null,
     breadcrumbJson: null,
     toolsToken: null,
+    memoryToken: null,
     createdAt: "2026-07-14 12:00:00",
     ...overrides,
   };

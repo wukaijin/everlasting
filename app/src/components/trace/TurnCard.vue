@@ -172,6 +172,21 @@ const toolsPct = computed<number | null>(() => {
   return (tools / ctx) * 100;
 });
 
+/** memory-block-governance WP1 (2026-08-15): memory instruction
+ *  blocks' estimated tokens as a share of the turn's
+ *  context_input. Same no-double-count formula as `toolsPct`
+ *  (context_input already contains the memory blocks). `null`
+ *  when memoryToken was never written (pre-column / worker rows)
+ *  or context_input is 0/absent. */
+const memoryPct = computed<number | null>(() => {
+  const mem = props.trace.memoryToken;
+  const t = props.trace.tokenUsage;
+  if (mem == null || !t) return null;
+  const ctx = t.context_input_tokens || 0;
+  if (ctx <= 0) return null;
+  return (mem / ctx) * 100;
+});
+
 /** Tooltip string for the whole token block. Joins the 5-field
  *  breakdown with the tools[] estimate (C7) when present. */
 const tokensTitle = computed<string>(() => {
@@ -191,6 +206,14 @@ const tokensTitle = computed<string>(() => {
       toolsPct.value != null
         ? `Tools[] ≈${tok} (${toolsPct.value.toFixed(0)}% of context)`
         : `Tools[] ≈${tok}`,
+    );
+  }
+  if (props.trace.memoryToken != null) {
+    const tok = abbreviateTokens(props.trace.memoryToken);
+    parts.push(
+      memoryPct.value != null
+        ? `Memory ≈${tok} (${memoryPct.value.toFixed(0)}% of context)`
+        : `Memory ≈${tok}`,
     );
   }
   return parts.join(" · ");
@@ -312,6 +335,19 @@ const ungroupedLabel = computed<string>(() =>
           "
         >
           tools {{ abbreviateTokens(trace.toolsToken) }}
+        </span>
+        <!-- WP1 (2026-08-15): memory instruction blocks estimate —
+             same slice-of-context treatment as the tools[] cell. -->
+        <span
+          v-if="trace.memoryToken != null"
+          class="turn-card__token-cell turn-card__token-cell--memory"
+          :title="
+            memoryPct != null
+              ? `memory 指令块估算 ≈${abbreviateTokens(trace.memoryToken)}(约 context 的 ${memoryPct.toFixed(0)}%)`
+              : `memory 指令块估算 ≈${abbreviateTokens(trace.memoryToken)}`
+          "
+        >
+          mem {{ abbreviateTokens(trace.memoryToken) }}
         </span>
       </div>
     </div>
@@ -528,6 +564,15 @@ const ungroupedLabel = computed<string>(() =>
   border-radius: var(--radius-sm);
   padding: 0 4px;
   color: var(--color-tool-thinking);
+}
+
+/* WP1 (2026-08-15): memory instruction-block estimate — same
+ * pill treatment, accent-tinted to distinguish from tools. */
+.turn-card__token-cell--memory {
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  color: var(--color-accent-text);
 }
 
 .turn-card__sub {

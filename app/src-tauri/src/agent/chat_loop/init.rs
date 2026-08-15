@@ -46,6 +46,15 @@ pub(crate) struct LoopInit {
     pub(crate) model_briefs: Vec<crate::agent::subagent::ModelBrief>,
     pub(crate) head_sha: String,
     pub(crate) system_prompt: String,
+    /// memory-block-governance WP1 (2026-08-15): cl100k estimate
+    /// of the memory instruction blocks actually injected into
+    /// `messages` this request (banner + wrappers + layer bodies).
+    /// Per-request constant — every turn_trace row of the request
+    /// carries the same value via the Done-event upsert. `None`
+    /// when no layers loaded (fresh install). Worker path note:
+    /// workers inject via `subagent/prompt.rs` instead and never
+    /// populate this (design §3.5a).
+    pub(crate) memory_token: Option<u32>,
 }
 
 /// run_chat_loop 初始化段(L591–1262):CancellationGuard 构造之后、
@@ -378,6 +387,25 @@ pub(crate) async fn prepare_loop_state(
     let memory_layers = load_for_session(&memory_cache, &project.id, &project.path).await;
     let instructions_blocks = crate::memory::loader::build_instructions_blocks(&memory_layers);
     let has_memory = !instructions_blocks.is_empty();
+    // memory-block-governance WP1 (2026-08-15): cl100k estimate of
+    // the blocks actually injected below — banner + wrappers +
+    // bodies, i.e. slightly above the banner's per-file token sums
+    // (wrapper overhead). Computed once per request; threaded to
+    // the Done-event `upsert_turn_trace_token` via `LoopInit` /
+    // `drive_turn` (same write point as `tools_token`).
+    let memory_token = if instructions_blocks.is_empty() {
+        None
+    } else {
+        let joined = instructions_blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::llm::types::ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(crate::memory::tokens::count_tokens(&joined).await)
+    };
     if !instructions_blocks.is_empty() {
         messages.insert(
             0,
@@ -765,5 +793,6 @@ pub(crate) async fn prepare_loop_state(
         model_briefs,
         head_sha,
         system_prompt,
+        memory_token,
     })
 }

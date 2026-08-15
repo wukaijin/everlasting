@@ -7,6 +7,10 @@
 # 删 session。以后任何"改了 agent loop / trace / tools 链路,想实跑一轮
 # 看真实落库"的场景都可以用它,不必手翻 DB。
 #
+# memory-block-governance WP1(08-15):报告加 memory_token / mem_pct 列;
+# 新增 --turns N(同 session 连发 N 条消息)——AC4 的"第二轮起 cache_read
+# 率"对比依赖双轮(--turns 2)。
+#
 # 前置:
 #   - daemon 在跑(默认 :7456;`./scripts/daemon.sh bg` 可拉起)
 #   - 默认 model 已配好 key(跑一轮真实 LLM 调用,input ~1 万多 token)
@@ -17,6 +21,7 @@
 #   ./scripts/turn-smoke.sh --port 7457         # 指定 daemon 端口
 #   ./scripts/turn-smoke.sh --project-path /x   # 指定 project(不在列表则自动创建)
 #   ./scripts/turn-smoke.sh --message "..."     # 自定义消息
+#   ./scripts/turn-smoke.sh --turns 2           # 同 session 连发 2 轮(cache 对比)
 #   ./scripts/turn-smoke.sh --keep              # 保留烟测 session(默认跑完即删)
 #   ./scripts/turn-smoke.sh --timeout 300       # 等 turn_trace 的超时秒数(默认 180)
 #
@@ -26,6 +31,8 @@ set -euo pipefail
 PORT=7456
 PROJECT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MESSAGE="早上好,请只回一句问候,不要调用任何工具"
+FOLLOWUP_MESSAGE="继续,仍然只回一句,不要调用任何工具"
+TURNS=1
 TIMEOUT=180
 KEEP=0
 while [ $# -gt 0 ]; do
@@ -33,6 +40,7 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2 ;;
     --project-path) PROJECT_PATH="$2"; shift 2 ;;
     --message) MESSAGE="$2"; shift 2 ;;
+    --turns) TURNS="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -73,46 +81,67 @@ if [ -z "$PROJ_ID" ]; then
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 fi
 
-# ── 2. 建临时 session + 发单轮 ────────────────────────────────────────
+# ── 2. 建临时 session + 发 N 轮(每轮:发消息 → 轮询新 turn_trace 行) ──
 SID="$(curl -sf -X POST "$BASE/api/v1/sessions/create_session" \
   -H 'Content-Type: application/json' \
   -d "{\"project_id\":\"$PROJ_ID\",\"initial_cwd\":\"$PROJECT_PATH\"}" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "session: $SID"
 
-REQ_ID="turn-smoke-$(date +%s)"
-BODY="$(MESSAGE="$MESSAGE" REQ_ID="$REQ_ID" SID="$SID" python3 -c '
+max_seq() {
+  sqlite3 -readonly "$DB_PATH" \
+    "SELECT COALESCE(MAX(seq),-1) FROM turn_trace WHERE session_id='$SID';" 2>/dev/null || echo -1
+}
+
+send_and_wait() {
+  # $1 = 消息文本;发一条 user 消息,轮询直到出现 seq 更大的 turn_trace 行。
+  local MSG="$1" BEFORE_SEQ ELAPSED=0
+  BEFORE_SEQ="$(max_seq)"
+  local REQ_ID="turn-smoke-$(date +%s)-$BEFORE_SEQ"
+  local BODY
+  BODY="$(MESSAGE="$MSG" REQ_ID="$REQ_ID" SID="$SID" python3 -c '
 import json,os
 print(json.dumps({"request_id":os.environ["REQ_ID"],"session_id":os.environ["SID"],
                   "messages":[{"role":"user","content":os.environ["MESSAGE"]}]}))
 ')"
-curl -sf -X POST "$BASE/api/v1/agent/chat" -H 'Content-Type: application/json' -d "$BODY" >/dev/null
-echo "turn sent (request_id=$REQ_ID), polling turn_trace..."
+  curl -sf -X POST "$BASE/api/v1/agent/chat" -H 'Content-Type: application/json' -d "$BODY" >/dev/null
+  echo "turn sent (request_id=$REQ_ID), polling turn_trace..."
+  while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+    [ "$(max_seq)" -gt "$BEFORE_SEQ" ] && return 0
+    sleep 5; ELAPSED=$((ELAPSED+5))
+  done
+  echo "ERR: no new turn_trace row after ${TIMEOUT}s (check daemon logs: ./scripts/daemon.sh logs)" >&2
+  return 1
+}
 
-# ── 3. 轮询 turn_trace(工具列缺失 = daemon 二进制早于 C7 R1) ──────────
-ELAPSED=0; INTERVAL=5
-while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-  ROW="$(sqlite3 -readonly "$DB_PATH" \
-    "SELECT seq FROM turn_trace WHERE session_id='$SID' ORDER BY seq DESC LIMIT 1;" 2>/dev/null || true)"
-  [ -n "$ROW" ] && break
-  sleep "$INTERVAL"; ELAPSED=$((ELAPSED+INTERVAL))
+TURN_MSG="$MESSAGE"
+T=1
+while [ "$T" -le "$TURNS" ]; do
+  [ "$T" -gt 1 ] && TURN_MSG="$FOLLOWUP_MESSAGE"
+  send_and_wait "$TURN_MSG"
+  T=$((T+1))
 done
 
+# ── 3. 列存在性检查(缺失 = daemon 二进制早于对应任务) ─────────────────
 if ! sqlite3 -readonly "$DB_PATH" "SELECT tools_token FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then
   echo "ERR: turn_trace has no tools_token column — daemon binary predates C7 R1 (rebuild)" >&2; exit 1
 fi
-if [ -z "${ROW:-}" ]; then
-  echo "ERR: no turn_trace row after ${TIMEOUT}s (check daemon logs: ./scripts/daemon.sh logs)" >&2; exit 1
+if ! sqlite3 -readonly "$DB_PATH" "SELECT memory_token FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then
+  echo "ERR: turn_trace has no memory_token column — daemon binary predates memory-block-governance WP1 (rebuild)" >&2; exit 1
+fi
+if [ "$(max_seq)" -lt 0 ]; then
+  echo "ERR: no turn_trace rows for session (check daemon logs: ./scripts/daemon.sh logs)" >&2; exit 1
 fi
 
 # ── 4. 报告 ───────────────────────────────────────────────────────────
 sqlite3 -readonly -header -column "$DB_PATH" \
-  "SELECT seq, tools_token,
+  "SELECT seq, tools_token, memory_token,
           json_extract(token_usage_json,'\$.input_tokens')      AS input_tok,
           json_extract(token_usage_json,'\$.output_tokens')     AS output_tok,
           json_extract(token_usage_json,'\$.cache_read_input_tokens') AS cache_read,
           json_extract(token_usage_json,'\$.context_input_tokens')    AS ctx_input,
-          CAST(ROUND(100.0*tools_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS tools_pct
+          CAST(ROUND(100.0*tools_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS tools_pct,
+          CAST(ROUND(100.0*memory_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS mem_pct
    FROM turn_trace WHERE session_id='$SID' ORDER BY seq;"
 MSG_COUNT="$(sqlite3 -readonly "$DB_PATH" "SELECT COUNT(*) FROM messages WHERE session_id='$SID';")"
 echo "messages persisted: $MSG_COUNT (user+assistant)"

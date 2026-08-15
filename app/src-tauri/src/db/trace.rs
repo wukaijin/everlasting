@@ -46,6 +46,14 @@ pub struct TurnTraceRow {
     /// into the cache-rate — it's a separately-measured slice of
     /// `context_input_tokens` (see design §R1, prd R1.3).
     pub tools_token: Option<i64>,
+    /// memory-block-governance WP1 (2026-08-15): cl100k estimate of
+    /// the memory instruction blocks actually injected this request
+    /// (banner + wrappers + layer bodies). Same slice semantics as
+    /// `tools_token` — already inside `context_input_tokens`, never
+    /// counted alone before. `None` for pre-column rows and worker
+    /// turns (worker injection lives in `subagent/prompt.rs`, out of
+    /// scope — task design §3.5a). Serialized as `memoryToken`.
+    pub memory_token: Option<i64>,
     pub created_at: String,
 }
 
@@ -68,27 +76,36 @@ pub struct TurnTraceRow {
 /// rewritten together (a retry re-estimates tools_token from the
 /// same turn's tool list). Other dimensions (compaction / loop_hint
 /// / breadcrumb) are untouched — they have their own upserts.
+///
+/// memory-block-governance WP1 (2026-08-15): `memory_token` rides
+/// the same write point — it is a per-request constant (the memory
+/// blocks are assembled once in `prepare_loop_state`), so every
+/// turn row of the request carries the same value. `None` for
+/// worker turns (their injection path is out of scope, §3.5a).
 pub async fn upsert_turn_trace_token(
     pool: &SqlitePool,
     session_id: &str,
     seq: i64,
     usage: &TokenUsage,
     tools_token: Option<u32>,
+    memory_token: Option<u32>,
 ) -> Result<(), sqlx::Error> {
     let json = serde_json::to_string(usage).unwrap_or_else(|_| "{}".to_string());
     sqlx::query(
         r#"
-        INSERT INTO turn_trace (session_id, seq, token_usage_json, tools_token)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO turn_trace (session_id, seq, token_usage_json, tools_token, memory_token)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(session_id, seq)
         DO UPDATE SET token_usage_json = excluded.token_usage_json,
-                      tools_token = excluded.tools_token
+                      tools_token = excluded.tools_token,
+                      memory_token = excluded.memory_token
         "#,
     )
     .bind(session_id)
     .bind(seq)
     .bind(&json)
     .bind(tools_token.map(|t| t as i64))
+    .bind(memory_token.map(|t| t as i64))
     .execute(pool)
     .await?;
     Ok(())
@@ -278,7 +295,7 @@ pub async fn list_turn_traces(
     let rows = sqlx::query(
         r#"
         SELECT id, session_id, seq, token_usage_json, compaction_json,
-               loop_hint_json, breadcrumb_json, tools_token, created_at
+               loop_hint_json, breadcrumb_json, tools_token, memory_token, created_at
         FROM turn_trace
         WHERE session_id = ?
         ORDER BY seq ASC
@@ -298,6 +315,7 @@ pub async fn list_turn_traces(
                 loop_hint_json: r.try_get("loop_hint_json")?,
                 breadcrumb_json: r.try_get("breadcrumb_json")?,
                 tools_token: r.try_get("tools_token")?,
+                memory_token: r.try_get("memory_token")?,
                 created_at: r.try_get("created_at")?,
             })
         })
@@ -371,7 +389,7 @@ mod tests {
             cache_read_input_tokens: 20,
             context_input_tokens: 130,
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage, Some(7000))
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, Some(7000), Some(8000))
             .await
             .unwrap();
 
@@ -414,6 +432,8 @@ mod tests {
         // C7: tools_token round-trips (written by the same upsert
         // as token_usage_json).
         assert_eq!(rows[0].tools_token, Some(7000));
+        // WP1 (2026-08-15): memory_token round-trips the same way.
+        assert_eq!(rows[0].memory_token, Some(8000));
 
         // Verify the JSON content round-trips.
         let token_json: serde_json::Value =
@@ -434,7 +454,7 @@ mod tests {
         // Write out of order (seq=3, 1, 2).
         for seq in [3i64, 1, 2] {
             let usage = TokenUsage::default();
-            upsert_turn_trace_token(&pool, &sid, seq, &usage, None)
+            upsert_turn_trace_token(&pool, &sid, seq, &usage, None, None)
                 .await
                 .unwrap();
         }
@@ -452,10 +472,10 @@ mod tests {
         let sid = seed_session(&pool).await;
 
         let usage = TokenUsage::default();
-        upsert_turn_trace_token(&pool, &sid, 1, &usage, None)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, None, None)
             .await
             .unwrap();
-        upsert_turn_trace_token(&pool, &sid, 2, &usage, None)
+        upsert_turn_trace_token(&pool, &sid, 2, &usage, None, None)
             .await
             .unwrap();
 
@@ -477,7 +497,7 @@ mod tests {
             input_tokens: 100,
             ..Default::default()
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage1, Some(111))
+        upsert_turn_trace_token(&pool, &sid, 1, &usage1, Some(111), Some(11))
             .await
             .unwrap();
 
@@ -485,7 +505,7 @@ mod tests {
             input_tokens: 200,
             ..Default::default()
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage2, Some(222))
+        upsert_turn_trace_token(&pool, &sid, 1, &usage2, Some(222), Some(22))
             .await
             .unwrap();
 
@@ -510,6 +530,13 @@ mod tests {
             rows[0].tools_token,
             Some(222),
             "tools_token must be overwritten on conflict"
+        );
+        // WP1 (2026-08-15): memory_token follows the same
+        // second-writer-wins contract on conflict.
+        assert_eq!(
+            rows[0].memory_token,
+            Some(22),
+            "memory_token must be overwritten on conflict"
         );
     }
 
@@ -537,13 +564,16 @@ mod tests {
             output_tokens: 1,
             ..Default::default()
         };
-        upsert_turn_trace_token(&pool, &sid, 1, &usage, Some(425))
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, Some(425), None)
             .await
             .unwrap();
 
         let rows = list_turn_traces(&pool, &sid).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].tools_token, Some(425));
+        // WP1: passing None leaves memory_token NULL (pre-column /
+        // worker semantics), never coerced to 0.
+        assert_eq!(rows[0].memory_token, None);
         assert!(rows[0].token_usage_json.is_some());
     }
 
@@ -564,7 +594,7 @@ mod tests {
         let sid = seed_session(&pool).await;
 
         let usage = TokenUsage::default();
-        upsert_turn_trace_token(&pool, &sid, 1, &usage, None)
+        upsert_turn_trace_token(&pool, &sid, 1, &usage, None, None)
             .await
             .unwrap();
         assert_eq!(list_turn_traces(&pool, &sid).await.unwrap().len(), 1);

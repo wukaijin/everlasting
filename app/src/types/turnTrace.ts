@@ -127,6 +127,14 @@ export interface TurnTraceRow {
    *  separately-measured slice already inside
    *  `context_input_tokens` (see design §R1). */
   toolsToken: number | null;
+  /** memory-block-governance WP1 (2026-08-15): cl100k estimate of
+   *  the memory instruction blocks injected this request (banner +
+   *  wrappers + layer bodies). Mirrors Rust
+   *  `TurnTraceRow.memory_token` → `memoryToken`. Same slice
+   *  semantics as `toolsToken`; a per-request constant across the
+   *  request's turn rows. `null` for pre-column rows and worker
+   *  turns (worker injection lives in subagent/prompt.rs). */
+  memoryToken: number | null;
   createdAt: string;
 }
 
@@ -157,6 +165,11 @@ export interface TurnTrace {
    *  (pre-column rows / skipped estimate). The card renders it
    *  as a `tools` legend cell plus its share of context_input. */
   toolsToken?: number;
+  /** memory-block-governance WP1 (2026-08-15): cl100k estimate of
+   *  the memory instruction blocks injected this request. Same
+   *  render treatment as `toolsToken` (`mem` legend cell +
+   *  share-of-context tooltip); per-request constant. */
+  memoryToken?: number;
   /** Audit events whose `turnSeq === this.seq` (populated only
    *  on the 回看 path — the live path doesn't carry audit
    *  events; the audit row store handles those). The card
@@ -235,6 +248,9 @@ export function parseTurnTraceRow(row: TurnTraceRow): TurnTrace {
   }
   if (row.toolsToken != null) {
     out.toolsToken = row.toolsToken;
+  }
+  if (row.memoryToken != null) {
+    out.memoryToken = row.memoryToken;
   }
   return out;
 }

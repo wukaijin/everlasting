@@ -957,6 +957,17 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             -- for rows written before this column existed, and for
             -- turns where the estimate was skipped (worker path).
             tools_token       INTEGER,
+            -- memory-block-governance WP1 (2026-08-15): cl100k
+            -- estimate of the memory instruction blocks actually
+            -- injected this request (banner + wrappers + layer
+            -- bodies; digest-mode bodies when WP2 lands). Same
+            -- separately-measured-slice semantics as tools_token:
+            -- already inside context_input_tokens, surfaced so the
+            -- trace viewer can show memory's window share. NULL for
+            -- pre-column rows and worker turns (worker injection
+            -- lives in subagent/prompt.rs, out of scope here —
+            -- design §3.5a).
+            memory_token      INTEGER,
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, seq)
@@ -979,6 +990,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // tables. No-op for greenfield DBs (the CREATE TABLE above
     // already declares it). Idempotent via the PRAGMA probe.
     add_turn_trace_column_if_missing(pool, "tools_token", "INTEGER").await?;
+    // memory-block-governance WP1 (2026-08-15):
+    // `turn_trace.memory_token` — same idempotent backfill pattern
+    // as tools_token above; no-op for greenfield DBs (declared in
+    // the CREATE TABLE above).
+    add_turn_trace_column_if_missing(pool, "memory_token", "INTEGER").await?;
 
     // --- PR1 of multi-model task: seed default providers + models
     // if the catalog is empty. Idempotent:0-row check skips the

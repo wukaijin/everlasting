@@ -158,6 +158,55 @@ describe("TurnCard — render", () => {
     });
     expect(w.find(".turn-card__token-cell--tools").exists()).toBe(false);
   });
+
+  it("renders the WP1 memory estimate cell with its context share", () => {
+    // memory-block-governance WP1: same slice-of-context treatment
+    // as the tools[] cell — memoryToken + context_input present →
+    // `mem` cell + share tooltip. Formula memory_token /
+    // context_input (4000/10000 = 40%), same no-double-count rule.
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          toolsToken: 1500,
+          memoryToken: 4000,
+          tokenUsage: {
+            input_tokens: 3000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 10000,
+          },
+        }),
+      },
+    });
+    const memCell = w.find(".turn-card__token-cell--memory");
+    expect(memCell.exists()).toBe(true);
+    expect(memCell.text()).toContain("mem 4K");
+    expect(memCell.attributes("title")).toContain("40%");
+    // Both slices coexist as independent cells.
+    expect(w.find(".turn-card__token-cell--tools").exists()).toBe(true);
+  });
+
+  it("omits the memory cell when memoryToken is absent", () => {
+    // Pre-column rows / worker turns: memoryToken undefined → no
+    // mem cell, but the tools[] cell still renders.
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          toolsToken: 7000,
+          tokenUsage: {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 1000,
+          },
+        }),
+      },
+    });
+    expect(w.find(".turn-card__token-cell--memory").exists()).toBe(false);
+    expect(w.find(".turn-card__token-cell--tools").exists()).toBe(true);
+  });
 });
 
 describe("TraceEventItem — critical highlighting", () => {
