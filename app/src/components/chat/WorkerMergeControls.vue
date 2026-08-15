@@ -324,7 +324,7 @@ async function doDiscard(): Promise<void> {
 }
 
 .worker-merge-controls__btn--discard {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
 }
 
@@ -369,7 +369,7 @@ async function doDiscard(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);

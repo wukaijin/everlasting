@@ -152,7 +152,7 @@ async function onLoadHidden() {
 }
 
 .empty-state__icon-glyph {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .empty-state__title {
@@ -214,7 +214,7 @@ async function onLoadHidden() {
 }
 
 .empty-state__load-hidden:hover {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .hidden-projects {
@@ -335,7 +335,7 @@ async function onLoadHidden() {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-sm);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);

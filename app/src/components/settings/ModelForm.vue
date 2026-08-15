@@ -403,7 +403,7 @@ const emit = defineEmits<{
 }
 
 :deep(.model-form__option[data-state="checked"]) {
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 
 .model-form__actions {

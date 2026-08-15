@@ -230,7 +230,7 @@ onMounted(refresh);
   margin: 0;
   padding: 8px 12px;
   font-size: var(--text-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 3px solid var(--color-tool-error);
   border-radius: var(--radius-sm);
@@ -246,7 +246,7 @@ onMounted(refresh);
   background: transparent;
   border: 1px solid var(--color-tool-error);
   border-radius: var(--radius-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: var(--text-xs);
   cursor: pointer;
 }

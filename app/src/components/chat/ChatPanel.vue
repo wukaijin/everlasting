@@ -1202,7 +1202,7 @@ onUnmounted(() => reviewStateStore.stop());
 }
 
 .chat-panel__chip--git {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-color: var(--color-accent-muted);
   /* Same flex-shrink rationale as the title: the git branch chip is
      short ("main", "feature/foo") so it normally doesn't need to
@@ -1243,7 +1243,7 @@ onUnmounted(() => reviewStateStore.stop());
 }
 .chat-panel__chip--group-chat:hover {
   background: var(--color-bg-hover);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 /* Memory entry button (2026-06-11). Sits to the right of the
@@ -1271,7 +1271,7 @@ onUnmounted(() => reviewStateStore.stop());
 .chat-panel__memory-btn:hover {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .chat-panel__memory-btn:active {
@@ -1301,7 +1301,7 @@ onUnmounted(() => reviewStateStore.stop());
 .chat-panel__audit-btn:hover {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .chat-panel__audit-btn:active {
@@ -1331,7 +1331,7 @@ onUnmounted(() => reviewStateStore.stop());
 .chat-panel__grants-btn:hover {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .chat-panel__grants-btn:active {
@@ -1362,7 +1362,7 @@ onUnmounted(() => reviewStateStore.stop());
 .chat-panel__trace-btn:hover {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .chat-panel__trace-btn:active {
@@ -1412,7 +1412,7 @@ onUnmounted(() => reviewStateStore.stop());
   align-items: center;
   justify-content: center;
   margin-bottom: var(--space-3);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .chat-panel__empty-title {
@@ -1465,7 +1465,7 @@ onUnmounted(() => reviewStateStore.stop());
   padding: 4px 16px;
   border: none;
   background: transparent;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   cursor: pointer;
   font-size: var(--text-xs);
   font-family: inherit;
@@ -1493,11 +1493,11 @@ onUnmounted(() => reviewStateStore.stop());
   line-height: 1.5;
 }
 .chat-panel__recall-source--fts {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 .chat-panel__recall-source--pitfall {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
 }
 .chat-panel__recall-list {

@@ -287,7 +287,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 
 .markdown-detail-modal__source-chip[data-source="prompt"] {
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .markdown-detail-modal__source-chip[data-source="reply"] {
@@ -421,7 +421,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 }
 
 .markdown-detail-modal__markdown :deep(a) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-decoration: none;
 }
 

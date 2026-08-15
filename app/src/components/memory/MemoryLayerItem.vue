@@ -284,7 +284,7 @@ function onOpenEditor() {
 }
 
 .memory-layer__error-text {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .memory-layer__markdown {
@@ -346,7 +346,7 @@ function onOpenEditor() {
 }
 
 .memory-layer__markdown :deep(a) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-decoration: underline;
 }
 

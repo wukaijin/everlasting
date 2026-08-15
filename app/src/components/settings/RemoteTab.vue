@@ -481,7 +481,7 @@ onUnmounted(() => {
   font-size: 2rem;
   font-weight: var(--weight-bold);
   letter-spacing: 0.4em;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   padding-left: 0.4em; /* offset letter-spacing on the last char */
 }
 
@@ -501,7 +501,7 @@ onUnmounted(() => {
 .remote-tab__hint code {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
   border-radius: 3px;
@@ -536,7 +536,7 @@ onUnmounted(() => {
   line-height: 1.5;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 2px solid var(--color-tool-error);
 }

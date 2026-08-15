@@ -198,7 +198,7 @@ defineProps<{
   gap: 3px;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   padding: 1px 6px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
@@ -236,7 +236,7 @@ defineProps<{
   word-break: break-word;
 }
 .subagent-drawer__banner--error {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 .subagent-drawer__banner--warning {
   color: var(--color-tool-shell);

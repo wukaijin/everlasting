@@ -105,7 +105,7 @@ const emit = defineEmits<{
 }
 
 .delete-model-confirm__btn--danger {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
 }
 
 .delete-model-confirm__btn--danger:hover:not(:disabled) {

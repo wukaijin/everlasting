@@ -268,7 +268,7 @@ function onDelete() {
     gap: 4px;
     font-size: var(--text-xs);
     background: var(--color-accent-muted);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     border: 1px solid var(--color-accent);
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
@@ -297,7 +297,7 @@ function onDelete() {
 
 .worktree-chip__toggle {
     background: var(--color-accent-muted);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     border: 1px solid var(--color-accent);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
@@ -357,7 +357,7 @@ function onDelete() {
 }
 
 .worktree-chip__menu-item--danger {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
 }
 
 .worktree-chip__menu-item--danger:hover:not(:disabled) {

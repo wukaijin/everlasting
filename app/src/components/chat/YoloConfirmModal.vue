@@ -219,7 +219,7 @@ watch(
 }
 
 .yolo-confirm-modal__icon {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .yolo-confirm-modal__close {

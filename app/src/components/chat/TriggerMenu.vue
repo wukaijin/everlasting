@@ -429,7 +429,7 @@ defineExpose({
 
 .trigger-menu__header-filter {
   margin-left: auto;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-transform: none;
   letter-spacing: 0;
   font-weight: var(--weight-medium);
@@ -507,7 +507,7 @@ defineExpose({
 }
 
 .trigger-menu__row-trigger {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   margin-right: 1px;
 }
 
@@ -558,7 +558,7 @@ defineExpose({
 
 /* Builtins use the accent (system / always-available). */
 .trigger-menu__row-source--builtin {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }

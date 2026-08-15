@@ -476,7 +476,7 @@ const ungroupedLabel = computed<string>(() =>
 }
 
 .turn-card__ctx--alert {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 35%, transparent);
 }
 
@@ -558,7 +558,7 @@ const ungroupedLabel = computed<string>(() =>
 }
 
 .turn-card__sub--critical .turn-card__sub-icon {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .turn-card__sub--warn .turn-card__sub-icon {

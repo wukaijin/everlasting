@@ -367,13 +367,13 @@ async function onYoloConfirm() {
    - yolo (no-ask, 危险)      → 红色 tool-error
    hover 态不变， 仍走 text-primary; mode color 主要用于 idle 态。 */
 .mode-select__trigger--edit {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 .mode-select__trigger--plan {
   color: var(--color-tool-read);
 }
 .mode-select__trigger--yolo {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .mode-select__label {
@@ -441,7 +441,7 @@ async function onYoloConfirm() {
 }
 
 .mode-select__item--active {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-weight: var(--weight-medium);
 }
 
@@ -467,7 +467,7 @@ async function onYoloConfirm() {
 }
 
 .mode-select__item-check {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-size: var(--text-2xs);
   flex-shrink: 0;
   align-self: center;

@@ -52,12 +52,24 @@
     --color-accent: #3b5bdb;
     --color-accent-hover: #4263eb;
     --color-accent-muted: #1e2a5e;
+    /* Accent 作"墨色"(文字/图标)专用档。#3b5bdb 在 surface 上仅 3.14:1,
+       作正文/链接文字不达 AA(4.5),仅够图形 3:1;暗色 UI 惯例是填充用 500
+       档、墨色用 400 档。#7c9aff on surface 6.71 / elevated 6.05 / app
+       7.35,全过 AA。填充背景(focus ring、selected tint、按钮底)继续用
+       --color-accent。来源:task 08-15-contrast-color-r1(2026-08-15 对比度
+       专项评审,数值与裁决见任务 research/)。 */
+    --color-accent-text: #7c9aff;
 
     /* Tool type colors (left bar on tool cards) */
     --color-tool-read: #06b6d4; /* cyan - read_file */
     --color-tool-write: #10b981; /* emerald - write_file */
     --color-tool-shell: #f59e0b; /* amber - shell */
     --color-tool-error: #ef4444; /* red - errors */
+    /* 错误"文案"专用档:tool-error #ef4444 作文字在 elevated 上 4.32、
+       accent-muted 彩底上 3.60,不达 AA;左色条/填充/图标底等图形用途
+       (3:1 达标)继续用 --color-tool-error。#f87171 on surface 6.43 /
+       elevated 5.87 / accent-muted 4.91。同 task 08-15-contrast-color-r1。 */
+    --color-tool-error-text: #f87171; /* red-400 */
     --color-tool-thinking: #a78bfa; /* violet - extended thinking blocks */
 
     /* Status colors (success / warn feedback). Added 2026-06-27 PR2:
@@ -82,9 +94,13 @@
        list items, buttons, chips, nav items, reka-ui SelectItem
        hover). color-mix resolves at use time, so the var() refs
        below are safe even though --color-text-primary and
-       --color-accent appear later in this block. */
-    --color-bg-hover: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-    --color-bg-active: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+       --color-accent appear later in this block.
+       2026-08-15 hover 6%→10% / active 10%→14% (task 08-15-contrast-
+       color-r1 WP4):样本页 C 章复现 default↔hover 肉眼不可辨(此前被
+       归因于静态截图盲区,实为叠加过弱);10%/14% 是"可辨但不脏"的
+       起点量级,真机复核后可回落 8%/12%。 */
+    --color-bg-hover: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+    --color-bg-active: color-mix(in srgb, var(--color-text-primary) 14%, transparent);
     --color-bg-selected: color-mix(in srgb, var(--color-accent) 12%, transparent);
 
     /* Spacing scale (4-based, Linear-style). 0/1/2/3/4/5/6/7/8 ladder

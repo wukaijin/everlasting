@@ -157,7 +157,7 @@ watch(
 }
 
 .confirm-modal__icon {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .confirm-modal__close {

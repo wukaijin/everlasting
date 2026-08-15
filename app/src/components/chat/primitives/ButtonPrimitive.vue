@@ -177,7 +177,7 @@ async function onClick() {
   color: var(--color-text-muted);
 }
 .ui-prim__btn--dismiss:hover:not(:disabled) {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, var(--color-bg-border));
 }
 .ui-prim__btn:disabled {
@@ -186,7 +186,7 @@ async function onClick() {
 }
 .ui-prim__error {
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   padding: 2px 0;
 }
 </style>

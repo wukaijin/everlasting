@@ -585,7 +585,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
 
 .ask-card__head-icon {
   display: inline-flex;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   flex-shrink: 0;
 }
 
@@ -611,7 +611,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
 }
 
 .ask-card__state--cancelled {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .ask-card__sections {
@@ -752,7 +752,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
 
 .ask-card__option-preview-summary {
   cursor: pointer;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   user-select: none;
   padding: 2px 0;
 }
@@ -863,7 +863,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
   flex: 1;
   margin: 0;
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-family: var(--font-mono);
 }
 
@@ -915,7 +915,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
   font-size: var(--text-2xs);
   padding: 1px 6px;
   border: 1px solid var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-radius: var(--radius-pill);
   background: var(--color-accent-muted);
 }
@@ -930,7 +930,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
 
 .ask-card__cancelled-note {
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-style: italic;
 }
 </style>

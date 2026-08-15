@@ -91,7 +91,7 @@ defineEmits<{
      与 Sidebar "SESSIONS" 头(--text-xs)同族,10px → 11px。 */
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-family: var(--font-mono);
@@ -103,7 +103,7 @@ defineEmits<{
   flex-shrink: 0;
   font-size: var(--text-xs);
   font-family: var(--font-mono);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 

@@ -99,7 +99,7 @@ function selectDefault(modelId: string) {
 }
 
 .default-tab__current strong {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .default-tab__empty {
@@ -220,7 +220,7 @@ function selectDefault(modelId: string) {
   padding: 1px 6px;
   border-radius: 3px;
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-family: var(--font-mono);
   flex-shrink: 0;
 }

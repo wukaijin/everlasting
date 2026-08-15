@@ -156,7 +156,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .session-search:focus-within .session-search__icon {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .session-search__input {

@@ -139,7 +139,7 @@ const props = withDefaults(
 }
 
 .tool-call-header--error .tool-call-header__icon {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .tool-call-header__name {
@@ -148,7 +148,7 @@ const props = withDefaults(
 }
 
 .tool-call-header--error .tool-call-header__name {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .tool-call-header__path {
@@ -195,13 +195,13 @@ const props = withDefaults(
 }
 
 .tool-call-header--error .tool-call-header__status {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 /* Permission interactive：status 用 accent 色吸引用户注意（原
    .drawer-permission-ask-card--interactive .status 规则）。 */
 .tool-call-header--status-accent .tool-call-header__status {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-weight: var(--weight-semibold);
 }
 
@@ -217,6 +217,6 @@ const props = withDefaults(
 }
 
 .tool-call-header--error .tool-call-header__duration {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 </style>

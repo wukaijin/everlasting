@@ -71,7 +71,7 @@ import AppLogo from "./AppLogo.vue";
 }
 
 .browser-header__logo-svg {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 /* Slot region — same flex contract as TitleBar's `__content`. */

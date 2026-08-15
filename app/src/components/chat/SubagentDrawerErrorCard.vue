@@ -63,7 +63,7 @@ defineProps<{
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .subagent-drawer__error-icon {
@@ -73,7 +73,7 @@ defineProps<{
 }
 
 .subagent-drawer__error-title {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .subagent-drawer__error-message {

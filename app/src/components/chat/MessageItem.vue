@@ -1100,7 +1100,7 @@ const showEditedLabel = computed<boolean>(
 }
 
 .msg__markdown :deep(a) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

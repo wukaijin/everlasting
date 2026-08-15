@@ -85,7 +85,7 @@ function onClick(): void {
   border: none;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;

@@ -269,7 +269,7 @@ watch(
 }
 
 .trace-panel__title-icon {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .trace-panel__subtitle {
@@ -313,7 +313,7 @@ watch(
 }
 
 .trace-panel__btn--clear:not(:disabled):hover {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 35%, transparent);
 }
 

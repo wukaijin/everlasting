@@ -125,7 +125,9 @@ const allowAlwaysLabel = computed<string>(() =>
  *  `--color-*` tokens):
  *    - allow  → `--color-tool-write` (emerald — same as
  *               `write_file` success / "仓库内" badge).
- *    - deny   → `--color-tool-error` (red — standard error).
+ *    - deny   → text `--color-tool-error-text` / border `--color-tool-error`
+ *               (red — standard error; 400 档文字 + 500 档边框,
+ *               task 08-15-contrast-color-r1).
  *    - timeout / cancel → `--color-text-muted` (neutral muted —
  *               these are soft-terminal states the user did not
  *               actively choose; muted avoids implying user
@@ -133,12 +135,12 @@ const allowAlwaysLabel = computed<string>(() =>
  */
 const OUTCOME_META: Record<
   "allow" | "deny" | "timeout" | "cancel",
-  { label: string; color: string }
+  { label: string; color: string; borderColor: string }
 > = {
-  allow: { label: "✓ 已允许", color: "var(--color-tool-write)" },
-  deny: { label: "✗ 已拒绝", color: "var(--color-tool-error)" },
-  timeout: { label: "⏱ 已超时", color: "var(--color-text-muted)" },
-  cancel: { label: "⊘ 已取消", color: "var(--color-text-muted)" },
+  allow: { label: "✓ 已允许", color: "var(--color-tool-write)", borderColor: "var(--color-tool-write)" },
+  deny: { label: "✗ 已拒绝", color: "var(--color-tool-error-text)", borderColor: "var(--color-tool-error)" },
+  timeout: { label: "⏱ 已超时", color: "var(--color-text-muted)", borderColor: "var(--color-text-muted)" },
+  cancel: { label: "⊘ 已取消", color: "var(--color-text-muted)", borderColor: "var(--color-text-muted)" },
 };
 
 /** Outcome metadata for the current `outcome` prop. `null` when
@@ -291,7 +293,7 @@ function cancelFeedback(): void {
       <span
         v-if="outcomeMeta"
         class="permission-ask-body__outcome-badge"
-        :style="{ color: outcomeMeta.color, borderColor: outcomeMeta.color }"
+        :style="{ color: outcomeMeta.color, borderColor: outcomeMeta.borderColor }"
       >{{ outcomeMeta.label }}</span>
       <p class="permission-ask-body__historical-note">
         worker asked for {{ ask.toolName || "this tool" }}<span v-if="ask.path"> at {{ ask.path }}</span><span v-if="ask.workerRunId"> · worker</span>
@@ -405,7 +407,7 @@ function cancelFeedback(): void {
 }
 
 .permission-ask-body__btn--deny {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: var(--color-tool-error);
 }
 

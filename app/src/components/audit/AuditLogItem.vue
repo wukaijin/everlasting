@@ -452,13 +452,13 @@ const isCritical = computed<boolean>(() => {
 }
 
 .audit-item__exit--fail {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 35%, transparent);
 }
 
 .audit-item__reason {
   font-size: var(--text-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   line-height: 1.4;
   word-break: break-word;
 }

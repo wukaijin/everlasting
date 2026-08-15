@@ -317,7 +317,7 @@ async function onDeny(): Promise<void> {
 .wf-state-card__head-icon {
   display: inline-flex;
   flex-shrink: 0;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .wf-state-card__head-title {
@@ -340,7 +340,7 @@ async function onDeny(): Promise<void> {
 }
 
 .wf-state-card__state--denied {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .wf-state-card__reason {
@@ -372,7 +372,7 @@ async function onDeny(): Promise<void> {
   padding: 1px 6px;
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .wf-state-card__compare-arrow {
@@ -436,14 +436,14 @@ async function onDeny(): Promise<void> {
   flex: 1;
   margin: 0;
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-family: var(--font-mono);
 }
 
 .wf-state-card__denied-note {
   margin: 0;
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-style: italic;
 }
 </style>

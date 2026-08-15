@@ -307,7 +307,7 @@ function rejectDiff() {
   opacity: 0.5;
 }
 .ui-prim__reject:hover {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, var(--color-bg-border));
 }
 .ui-prim__copy:hover {
@@ -317,7 +317,7 @@ function rejectDiff() {
   padding: 6px 10px;
   background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--color-tool-error) 35%, transparent);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: var(--text-xs);
   line-height: 1.4;
 }

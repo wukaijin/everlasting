@@ -555,18 +555,20 @@ describe("PermissionAskBody historical mode", () => {
     it("binds the outcome color token to the badge style (per-outcome)", () => {
       // Sanity: each outcome maps to its documented color token.
       // allow → --color-tool-write (emerald).
-      // deny  → --color-tool-error (red).
+      // deny  → text --color-tool-error-text / border --color-tool-error
+      //         (400 档文字 + 500 档边框, task 08-15-contrast-color-r1).
       // timeout / cancel → --color-text-muted (neutral).
       const cases: Array<{
         outcome: "allow" | "deny" | "timeout" | "cancel";
         expectedColor: string;
+        expectedBorderColor?: string;
       }> = [
         { outcome: "allow", expectedColor: "var(--color-tool-write)" },
-        { outcome: "deny", expectedColor: "var(--color-tool-error)" },
+        { outcome: "deny", expectedColor: "var(--color-tool-error-text)", expectedBorderColor: "var(--color-tool-error)" },
         { outcome: "timeout", expectedColor: "var(--color-text-muted)" },
         { outcome: "cancel", expectedColor: "var(--color-text-muted)" },
       ];
-      for (const { outcome, expectedColor } of cases) {
+      for (const { outcome, expectedColor, expectedBorderColor = expectedColor } of cases) {
         const w = mount(PermissionAskBody, {
           props: {
             mode: "historical",
@@ -578,7 +580,7 @@ describe("PermissionAskBody historical mode", () => {
         const badge = w.get(".permission-ask-body__outcome-badge");
         const style = badge.attributes("style") ?? "";
         expect(style).toContain(`color: ${expectedColor}`);
-        expect(style).toContain(`border-color: ${expectedColor}`);
+        expect(style).toContain(`border-color: ${expectedBorderColor}`);
       }
     });
   });

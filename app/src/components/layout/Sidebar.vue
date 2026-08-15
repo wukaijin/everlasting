@@ -277,7 +277,7 @@ function onSearchClear() {
 .sidebar__title {
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -310,7 +310,7 @@ function onSearchClear() {
 
 .sidebar__action:hover {
   background: var(--color-bg-elevated);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .sidebar__add {
@@ -331,7 +331,7 @@ function onSearchClear() {
 
 .sidebar__add:hover {
   background: var(--color-bg-elevated);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 /* PR5: bottom-of-sidebar footer that holds the Settings entry.

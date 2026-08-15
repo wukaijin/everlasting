@@ -452,13 +452,13 @@ async function onDeny(): Promise<void> {
   flex-shrink: 0;
 }
 .mode-card--edit .mode-card__head-icon {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 .mode-card--plan .mode-card__head-icon {
   color: var(--color-tool-read);
 }
 .mode-card--yolo .mode-card__head-icon {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .mode-card__head-title {
@@ -479,7 +479,7 @@ async function onDeny(): Promise<void> {
   color: var(--color-tool-write);
 }
 .mode-card__state--denied {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .mode-card__reason {
@@ -514,13 +514,13 @@ async function onDeny(): Promise<void> {
   border-radius: var(--radius-sm);
 }
 .mode-card--edit .mode-card__compare-to {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 .mode-card--plan .mode-card__compare-to {
   color: var(--color-tool-read);
 }
 .mode-card--yolo .mode-card__compare-to {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .mode-card__compare-arrow {
@@ -605,14 +605,14 @@ async function onDeny(): Promise<void> {
   flex: 1;
   margin: 0;
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-family: var(--font-mono);
 }
 
 .mode-card__denied-note {
   margin: 0;
   font-size: var(--text-xs);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-style: italic;
 }
 </style>

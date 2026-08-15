@@ -137,7 +137,7 @@ async function onUnhide(id: string): Promise<void> {
 
 .hidden-menu__trigger:hover {
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .hidden-menu__icon {
@@ -251,7 +251,7 @@ async function onUnhide(id: string): Promise<void> {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-sm);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);

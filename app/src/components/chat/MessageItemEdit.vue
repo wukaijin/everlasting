@@ -250,7 +250,7 @@ function onSave() {
   align-items: center;
   gap: 6px;
   font-size: var(--text-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-tool-error) 40%, transparent);
   border-radius: var(--radius-sm);

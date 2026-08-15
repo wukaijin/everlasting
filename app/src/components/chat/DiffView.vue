@@ -365,7 +365,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
 }
 .diff-file__status--modified {
     background: var(--color-accent-muted);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 .diff-file__status--renamed {
     background: var(--color-tool-read);
@@ -384,7 +384,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     color: var(--color-tool-write);
 }
 .diff-file__del {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
 }
 
 .diff-file__body {
@@ -447,7 +447,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     color: var(--color-tool-write);
 }
 .diff-line--del .diff-line__prefix {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
 }
 
 .diff-line__text {

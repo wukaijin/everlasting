@@ -174,7 +174,7 @@ const testTitle = computed<string>(() =>
     padding: 1px 6px;
     border-radius: 3px;
     background: var(--color-accent-muted);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     font-family: var(--font-mono);
     flex-shrink: 0;
 }
@@ -204,7 +204,7 @@ const testTitle = computed<string>(() =>
 }
 
 .model-row__test--fail {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -249,7 +249,7 @@ const testTitle = computed<string>(() =>
 }
 
 .model-row__btn--danger {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
 }
 
 .model-row__btn--danger:hover:not(:disabled) {

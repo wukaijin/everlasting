@@ -802,7 +802,7 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
    design tokens (design-tokens.md: "Don't add a new `--color-*`
    token for a one-off use"). */
 :deep(.chat-input__field .cm-editor .cm-content .cm-token-command) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-weight: var(--weight-semibold);
 }
 

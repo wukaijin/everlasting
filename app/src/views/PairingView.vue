@@ -219,7 +219,7 @@ async function submit() {
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-sm);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-family: var(--font-mono);
   font-size: 1.75rem;
   font-weight: var(--weight-bold);
@@ -263,7 +263,7 @@ async function submit() {
   padding: 6px 10px;
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 3px solid var(--color-tool-error);
   border-radius: var(--radius-sm);

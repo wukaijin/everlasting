@@ -164,6 +164,6 @@ const hasValue = computed<boolean>(() => props.row.matchValue !== null);
 .grant-item__revoke:hover {
   background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
   border-color: var(--color-tool-error);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 </style>

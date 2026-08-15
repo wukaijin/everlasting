@@ -746,7 +746,7 @@ watch(
   gap: 3px;
   padding: 2px 8px;
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-sm);
   font: inherit;
@@ -780,7 +780,7 @@ watch(
 }
 
 .tool-card__diff-error {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 /* B6 PR3: dispatch_subagent collapsed card → click opens drawer.
@@ -903,7 +903,7 @@ watch(
   gap: 3px;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   padding: 1px 6px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);

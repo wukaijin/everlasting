@@ -399,7 +399,7 @@ onUnmounted(() => {
 .scroll-to-bottom:hover {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .scroll-to-bottom:active {

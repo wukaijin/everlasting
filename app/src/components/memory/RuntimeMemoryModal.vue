@@ -594,11 +594,11 @@ watch(
   line-height: 1.4;
 }
 .runtime-memory-modal__chip--kind-pitfall {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
 }
 .runtime-memory-modal__chip--kind-preference {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 .runtime-memory-modal__chip--edited {
@@ -633,7 +633,7 @@ watch(
   margin: 0;
   padding: 8px 20px;
   font-size: var(--text-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-bottom: 1px solid
     color-mix(in srgb, var(--color-tool-error) 20%, transparent);
@@ -748,7 +748,7 @@ watch(
   background: var(--color-bg-surface);
 }
 :deep(.runtime-memory-modal__status-option[data-state="checked"]) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .runtime-memory-modal__demote-reason {
@@ -866,7 +866,7 @@ watch(
   filter: brightness(1.1);
 }
 .runtime-memory-modal__btn--danger {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
 }
 .runtime-memory-modal__btn--danger:hover:not(:disabled) {

@@ -69,7 +69,7 @@ const pending = computed<boolean>(() => !props.result);
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   background: var(--color-accent-muted);
   border-radius: var(--radius-sm);
   padding: 2px 8px;
@@ -171,7 +171,7 @@ const pending = computed<boolean>(() => !props.result);
 }
 
 .discussion-summary__body :deep(a) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

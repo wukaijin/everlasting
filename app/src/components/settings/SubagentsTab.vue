@@ -444,7 +444,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
 }
 .subagents-tab__source-chip[data-source="user"] {
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 .subagents-tab__source-chip[data-source="project"] {
   border-color: var(--color-tool-shell);
@@ -458,7 +458,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
   font-family: var(--font-mono);
   border-radius: 999px;
   border: 1px solid var(--color-tool-error);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   cursor: help;
 }
@@ -516,7 +516,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
   cursor: not-allowed;
 }
 .subagents-tab__trigger--invalid {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: var(--color-tool-error);
 }
 
@@ -575,7 +575,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
 }
 
 :deep(.subagents-tab__option[data-state="checked"]) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 :deep(.subagents-tab__option-provider) {
@@ -617,14 +617,14 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
 }
 
 .subagents-tab__invalid {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 2px solid var(--color-tool-error);
   font-family: var(--font-mono);
 }
 
 .subagents-tab__error {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 2px solid var(--color-tool-error);
 }

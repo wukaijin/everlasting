@@ -238,7 +238,7 @@ const open = defineModel<boolean>("open", { required: true });
   /* B3:当前 tab 背景 pill(替代下划线),对比度明显 */
   .settings-modal__tab[data-state="active"] {
     background: var(--color-accent-muted);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     border-radius: var(--radius-md);
   }
 

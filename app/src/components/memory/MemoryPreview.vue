@@ -539,7 +539,7 @@ function formatTimestamp(rfc3339: string): string {
 .memory-preview__hint {
   margin: 0;
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-mono);
 }
 
@@ -604,7 +604,7 @@ function formatTimestamp(rfc3339: string): string {
   background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-tool-error) 40%, transparent);
   border-radius: var(--radius-md);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: var(--text-sm);
 }
 
@@ -626,7 +626,7 @@ function formatTimestamp(rfc3339: string): string {
   margin-top: 4px;
   padding-top: 8px;
   border-top: 1px solid var(--color-bg-border);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: var(--text-xs);
 }
 
@@ -762,11 +762,11 @@ function formatTimestamp(rfc3339: string): string {
    surface. Each kind gets its own hue from the project's existing
    color tokens. */
 .runtime-memory__badge--kind-pitfall {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
 }
 .runtime-memory__badge--kind-preference {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 .runtime-memory__badge--kind-fact {
@@ -811,13 +811,13 @@ function formatTimestamp(rfc3339: string): string {
      无需再补 title 展开。 */
   font-size: var(--text-xs);
   font-family: var(--font-mono);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 .runtime-memory__tag {
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 /* 07-06 (am-observability-panel B2/AC1): recall-stats chip (hit
@@ -829,7 +829,7 @@ function formatTimestamp(rfc3339: string): string {
   gap: 3px;
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   opacity: 0.85;
 }
 
@@ -868,6 +868,6 @@ function formatTimestamp(rfc3339: string): string {
 .runtime-memory__delete:hover {
   background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 </style>

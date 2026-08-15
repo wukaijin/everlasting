@@ -45,6 +45,6 @@ import MemoryPreview from "../memory/MemoryPreview.vue";
   padding: 0 4px;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 </style>

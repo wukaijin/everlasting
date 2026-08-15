@@ -935,7 +935,7 @@ function isPermissionAskLive(rid: string): boolean {
   border-radius: 999px;
   border: 1px solid var(--color-accent);
   background: var(--color-bg-surface);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
@@ -993,7 +993,7 @@ function isPermissionAskLive(rid: string): boolean {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   margin-bottom: var(--space-1);
   animation: subagent-drawer-empty-spin 1.2s linear infinite;
 }
@@ -1098,7 +1098,7 @@ function isPermissionAskLive(rid: string): boolean {
   align-self: flex-start;
   background: transparent;
   border: 0;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   cursor: pointer;
   font: inherit;
   font-family: var(--font-sans);

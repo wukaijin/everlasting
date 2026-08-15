@@ -382,7 +382,7 @@ const titleText = computed<string>(() =>
 }
 
 .plugin-select__chip--on {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-color: var(--color-accent);
 }
 
@@ -392,13 +392,13 @@ const titleText = computed<string>(() =>
      reasoning as the deleted WorkflowToggle's --on:hover
      rule). */
   background: var(--color-bg-elevated);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .plugin-select__chip--open {
   background: var(--color-bg-elevated);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .plugin-select__prefix,
@@ -563,7 +563,7 @@ const titleText = computed<string>(() =>
 }
 
 .plugin-select__item--active {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .plugin-select__item-name {

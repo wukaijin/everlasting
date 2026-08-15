@@ -525,7 +525,7 @@ async function onRefresh(): Promise<void> {
 }
 
 :deep(.audit-modal__select-option[data-state="checked"]) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 /* Container for the "仅 critical" checkbox + caption. Was a `<label>`
@@ -616,7 +616,7 @@ async function onRefresh(): Promise<void> {
 .audit-modal__refresh:hover:not(:disabled) {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .audit-modal__refresh:disabled {
@@ -633,7 +633,7 @@ async function onRefresh(): Promise<void> {
 
 .audit-modal__error {
   padding: 16px;
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: var(--text-sm);
   text-align: center;
 }

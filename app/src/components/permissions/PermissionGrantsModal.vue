@@ -262,7 +262,7 @@ function onRevoke(row: PermissionGrantRow): void {
 .grant-modal__refresh:hover:not(:disabled) {
   background: var(--color-accent-muted);
   border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .grant-modal__refresh:disabled {
@@ -279,7 +279,7 @@ function onRevoke(row: PermissionGrantRow): void {
 
 .grant-modal__error {
   padding: 16px;
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: var(--text-sm);
   text-align: center;
 }

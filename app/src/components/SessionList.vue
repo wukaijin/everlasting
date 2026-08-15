@@ -871,7 +871,7 @@ watch(() => props.searchActive, (active) => {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   animation: pulseDot 1.5s ease-in-out infinite;
 }
 
@@ -921,7 +921,7 @@ watch(() => props.searchActive, (active) => {
 }
 
 .session-empty > .icon {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   margin-bottom: var(--space-1);
 }
 
@@ -1011,7 +1011,7 @@ watch(() => props.searchActive, (active) => {
 .ctx-menu__item--danger:hover,
 .ctx-menu__item--danger[data-highlighted] {
   background: rgba(220, 53, 69, 0.12);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .ctx-menu__separator {

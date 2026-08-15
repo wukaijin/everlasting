@@ -336,7 +336,7 @@ async function onModelPick(modelId: string) {
 }
 
 .model-select__item--active {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-weight: var(--weight-medium);
 }
 
@@ -347,7 +347,7 @@ async function onModelPick(modelId: string) {
 }
 
 .model-select__item-check {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-size: var(--text-2xs);
   flex-shrink: 0;
 }

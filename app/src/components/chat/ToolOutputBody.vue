@@ -135,7 +135,7 @@ const durationLabel = computed<string>(() => {
 
 .tool-output-body__pre--error {
   border-color: var(--color-tool-error);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 /* S6a 折叠块移动端紧凑(08-13-mobile-chat-view)。prd A3:展开后空内容占满

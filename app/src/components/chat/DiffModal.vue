@@ -167,7 +167,7 @@ const emit = defineEmits<{
 }
 
 .diff-modal__error {
-    color: var(--color-tool-error);
+    color: var(--color-tool-error-text);
 }
 
 /* R4 popup animation: 仅 content 做 scale 0.96→1 + opacity 过渡；

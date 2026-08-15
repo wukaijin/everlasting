@@ -268,7 +268,7 @@ function onRetryClick(): void {
   margin-top: 4px;
   padding: 0 14px;
   font-size: var(--text-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .msg__error-icon {
@@ -293,7 +293,7 @@ function onRetryClick(): void {
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--color-tool-error) 50%, transparent);
   border-radius: var(--radius-sm);
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: var(--text-xs);
   font-family: inherit;
   cursor: pointer;
@@ -335,7 +335,7 @@ function onRetryClick(): void {
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   font-weight: var(--weight-semibold);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   cursor: help;
   border-radius: var(--radius-sm);
   user-select: none;

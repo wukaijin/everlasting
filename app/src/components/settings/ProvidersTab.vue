@@ -420,7 +420,7 @@ function protocolBadgeClass(protocol: string): string {
 
 .providers-tab__badge--anthropic {
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .providers-tab__badge--openai {
@@ -581,7 +581,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 :deep(.providers-tab__option[data-state="checked"]) {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .providers-tab__key-input {
@@ -609,7 +609,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__test-fail {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -675,7 +675,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__btn--danger {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 .providers-tab__btn--danger:hover:not(:disabled) {

@@ -282,7 +282,7 @@ function tabTooltip(p: {
 }
 
 .tab__streaming {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   font-size: 9px;
   flex-shrink: 0;
   line-height: 1;
@@ -341,7 +341,7 @@ function tabTooltip(p: {
 
 .tabs__add:hover {
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 /* P2.4 D6: browser-mode manual-path entry. */
@@ -391,7 +391,7 @@ function tabTooltip(p: {
 
 .manual-path__btn:hover:not(:disabled) {
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .manual-path__btn:disabled {

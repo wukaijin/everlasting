@@ -278,7 +278,7 @@ async function onClose() {
 }
 
 .titlebar__logo-svg {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 
 .titlebar__mac-spacer {

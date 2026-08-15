@@ -135,7 +135,7 @@ const headerLabel = computed(() => {
 
 .thinking__streaming {
   margin-left: 2px;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-weight: var(--weight-medium);
 }
 

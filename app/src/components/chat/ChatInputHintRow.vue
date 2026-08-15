@@ -155,7 +155,7 @@ defineProps<{
   margin-top: 8px;
   padding: 0 6px;
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   user-select: none;
   display: flex;
   align-items: center;
@@ -194,7 +194,7 @@ defineProps<{
 }
 
 .chat-input__token-usage--alert {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
 /* Tooltip content (reka-ui `TooltipContent` portal to body

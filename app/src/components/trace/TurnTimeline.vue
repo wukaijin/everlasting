@@ -142,7 +142,7 @@ async function onRetry(): Promise<void> {
 }
 
 .turn-timeline__error-icon {
-  color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
   flex-shrink: 0;
 }
 
