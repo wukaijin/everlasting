@@ -25,7 +25,7 @@ import AppLogo from "./AppLogo.vue";
 <template>
   <!-- Same 40px row + flex layout as TitleBar, minus Tauri chrome. -->
   <div class="browser-header">
-    <!-- AppLogo monogram at the far left, matching TitleBar. -->
+    <!-- AppLogo brand mark at the far left, matching TitleBar. -->
     <div class="browser-header__logo">
       <AppLogo :size="20" class="browser-header__logo-svg" />
     </div>
@@ -58,7 +58,8 @@ import AppLogo from "./AppLogo.vue";
 
 /* AppLogo wrapper — identical dimensions to TitleBar's so the slot
    content starts at the same x-offset in both modes (no layout shift
-   when the same user switches between Tauri and browser). */
+   when the same user switches between Tauri and browser). The mark
+   carries its own brand colors (see AppLogo.vue). */
 .browser-header__logo {
   flex-shrink: 0;
   display: inline-flex;
@@ -68,10 +69,6 @@ import AppLogo from "./AppLogo.vue";
   padding-left: 8px;
   padding-right: 12px;
   box-sizing: border-box;
-}
-
-.browser-header__logo-svg {
-  color: var(--color-accent-text);
 }
 
 /* Slot region — same flex contract as TitleBar's `__content`. */

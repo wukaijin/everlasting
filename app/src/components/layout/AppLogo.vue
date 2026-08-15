@@ -1,15 +1,16 @@
 <script setup lang="ts">
-// AppLogo — the small monogram shown at the far left of the custom
-// title bar. Inline SVG (no external file) so it inherits `currentColor`
-// from its parent — by default we use `var(--color-accent)` for the
-// fill, but the parent can override it by setting `color:` on the
-// wrapper.
+// AppLogo — the brand mark (interlocked double loops) shown at the far
+// left of the title bar (TitleBar) and the browser header
+// (BrowserHeader). Inline SVG (no external file) so it ships with the
+// app shell and stays crisp at any size.
 //
-// D6: added per user request "顶栏最左侧放一个 app logo (没有就随便
-// 找一个或画一个 svg)". The shape is a stylised capital "E" with
-// two horizontal "code bar" cuts (the middle bar is shorter, giving
-// the look of an abstract terminal/code window). Size 20×20 by default
-// to match the rest of the chrome.
+// 2026-08-16: replaced the D6 placeholder monogram ("E" with code-bar
+// cuts) with the real mark from `brand/logo-mark.svg`. Rendered at
+// 16–24px we must use the favicon variant geometry — stroke 48 instead
+// of 30, no center spark (unreadable below ~24px; brand README 尺寸
+// 阶梯). Palette is the dark-surface one (cyan/amber); brand colors
+// are fixed and do NOT follow --color-accent — the logo does not
+// re-theme with the UI.
 
 withDefaults(
   defineProps<{
@@ -23,21 +24,21 @@ withDefaults(
   <svg
     :width="size"
     :height="size"
-    viewBox="0 0 24 24"
+    viewBox="0 0 512 512"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
     :class="$attrs.class"
   >
-    <!--
-      Stylised "E" monogram: outer frame plus two inner cuts.
-      Drawn as a single path so it stays crisp at any size and the
-      accent fill works in both light and dark themes.
-    -->
-    <path
-      d="M4 4 H20 V8 H8 V10 H17 V14 H8 V16 H20 V20 H4 Z"
-      fill="currentColor"
-      opacity="0.95"
-    />
+    <g stroke-width="48" stroke-linecap="round">
+      <path
+        d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+        stroke="#22d3ee"
+      />
+      <path
+        d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+        stroke="#fbbf24"
+      />
+    </g>
   </svg>
 </template>

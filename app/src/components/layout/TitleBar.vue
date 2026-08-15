@@ -23,7 +23,7 @@
 // traffic lights via the `titleBarStyle: "Overlay"` config field (which
 // takes precedence on macOS).
 //
-// D6 polish: the AppLogo SVG monogram is rendered at the FAR LEFT of
+// D6 polish: the AppLogo brand mark is rendered at the FAR LEFT of
 // the bar (before the macOS spacer, before the slot). It opts out of
 // the drag region so it's clickable in the future. Window control
 // buttons now use heroicons instead of the old ー/□/❐/✕ typography.
@@ -147,7 +147,7 @@ async function onClose() {
     data-tauri-drag-region
   >
     <!--
-      App logo (D6): a small monogram at the far left. It opts
+      App logo (D6): the brand mark at the far left. It opts
       out of the drag region so future click handlers don't have
       to fight the parent. Wrapped in a fixed-width cell so the
       slot content never shifts when this element changes size.
@@ -262,10 +262,9 @@ async function onClose() {
 }
 
 /* AppLogo wrapper: fixed-width cell at the far left, with a small
-   left padding so the monogram doesn't touch the window edge and
+   left padding so the mark doesn't touch the window edge and
    a right margin so it doesn't crowd the slot content (project
-   tabs). The SVG itself uses `currentColor` so we paint it in the
-   accent hue here. */
+   tabs). The mark carries its own brand colors (see AppLogo.vue). */
 .titlebar__logo {
   flex-shrink: 0;
   display: inline-flex;
@@ -275,10 +274,6 @@ async function onClose() {
   padding-left: 8px;
   padding-right: 12px;
   box-sizing: border-box;
-}
-
-.titlebar__logo-svg {
-  color: var(--color-accent-text);
 }
 
 .titlebar__mac-spacer {
