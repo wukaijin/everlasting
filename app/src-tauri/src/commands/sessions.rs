@@ -362,6 +362,14 @@ pub async fn delete_session_inner(
     // 「已 load」状态。纯内存操作,同步完成。
     state.stub_loaded.clear(&session_id).await;
 
+    // memory-block-governance WP2 (2026-08-15): clear the session's
+    // memory digest loaded-set(粘性 registry 清理,同上 — session_id
+    // 复用不得拿到残留的「已加载节」状态)。进程级 OnceLock 单例,不
+    // 经 AppState(72 个 run_chat_loop 调用点零穿参,见 digest.rs 模块
+    // 注释);本 inner 函数是 Tauri command 与 daemon route 的共用路径,
+    // 一处清理两边生效。
+    crate::memory::digest::registry().clear(&session_id).await;
+
     // Step 4 follow-up: best-effort worktree + branch cleanup.
     // Triggered when the session's `worktree_state` is `active`
     // (NOT `detached` — a detached session's worktree was already

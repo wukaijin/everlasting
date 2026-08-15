@@ -119,6 +119,9 @@ pub(crate) async fn drive_turn(
     // per-request constant — written to every turn row at the Done
     // event. `None` = no memory layers (fresh install).
     memory_token: Option<u32>,
+    // WP2: digest gate(注入同源,经 LoopInit 穿入)— 决定是否侧挂
+    // `load_memory_sections` 元工具 def。
+    digest_on: bool,
 ) -> Result<DriveTurnOutcome, ()> {
     let mut messages = messages;
     let mut seq = seq;
@@ -594,6 +597,14 @@ pub(crate) async fn drive_turn(
     // 群聊 speaker 绝不带它 — 群聊白名单语义不被污染(评审 P1-1)。
     if stub_on && !effective_is_worker && !is_group_chat {
         turn_tool_defs.push(crate::tools::stub::load_tool_schemas_def());
+    }
+    // memory-block-governance WP2 (2026-08-15): 同侧 append
+    // `load_memory_sections` 元工具 def。gate 与注入同源(LoopInit 的
+    // digest_on = 开关 && !worker && !群聊,init.rs 已含 worker/群聊
+    // 豁免);tools_token 估算在下方序列化点之后,自动计入此 def 的
+    // ~百余 tok 成本(净收益按 memory 降幅计,AC2 口径)。
+    if digest_on {
+        turn_tool_defs.push(crate::memory::digest::load_memory_sections_def());
     }
     let turn_tool_defs = turn_tool_defs;
     // C7 (2026-08-14, R1): estimate the per-turn `tools[]` token cost

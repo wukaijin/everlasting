@@ -46,6 +46,10 @@ pub(crate) struct LoopInit {
     pub(crate) model_briefs: Vec<crate::agent::subagent::ModelBrief>,
     pub(crate) head_sha: String,
     pub(crate) system_prompt: String,
+    /// memory-block-governance WP2 (2026-08-15): digest gate 结果
+    /// (`开关 && !worker && !群聊`)。drive_turn 依此侧挂
+    /// `load_memory_sections` 元工具 def(与注入 gate 同源)。
+    pub(crate) digest_on: bool,
     /// memory-block-governance WP1 (2026-08-15): cl100k estimate
     /// of the memory instruction blocks actually injected into
     /// `messages` this request (banner + wrappers + layer bodies).
@@ -385,7 +389,28 @@ pub(crate) async fn prepare_loop_state(
     // temp project dir). Skip the synthetic user/assistant
     // inserts when `load_for_session` returns no layers.
     let memory_layers = load_for_session(&memory_cache, &project.id, &project.path).await;
-    let instructions_blocks = crate::memory::loader::build_instructions_blocks(&memory_layers);
+    // memory-block-governance WP2 (2026-08-15): digest gate — 开关
+    // (best-effort 缺省 on,`"false"` 才关,fail-open 同 `tools_stub_enabled`)
+    // && 非 worker && 非群聊(与 C7D gate 同款豁免口径;worker 注入走
+    // `subagent/prompt.rs` 本就不经过这里,群聊参与者在 init 路径上被
+    // 短路)。已加载节从进程级 registry 现取(mtime fence 保证层内容
+    // 新鲜,registry 只管粘性)。
+    let is_group_chat = loaded_session.session.session_type == crate::db::SessionType::GroupChat;
+    let digest_on = match crate::db::config::get_config_value(&db, "memory_digest_enabled").await {
+        Ok(Some(v)) => v != "false",
+        _ => true,
+    } && !effective_is_worker
+        && !is_group_chat;
+    let instructions_blocks = if digest_on {
+        let loaded_sections = crate::memory::digest::registry().get(&session_id).await;
+        crate::memory::loader::build_instructions_blocks_with_digest(
+            &memory_layers,
+            true,
+            &loaded_sections,
+        )
+    } else {
+        crate::memory::loader::build_instructions_blocks(&memory_layers)
+    };
     let has_memory = !instructions_blocks.is_empty();
     // memory-block-governance WP1 (2026-08-15): cl100k estimate of
     // the blocks actually injected below — banner + wrappers +
@@ -794,5 +819,6 @@ pub(crate) async fn prepare_loop_state(
         head_sha,
         system_prompt,
         memory_token,
+        digest_on,
     })
 }

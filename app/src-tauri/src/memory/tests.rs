@@ -19,7 +19,8 @@ use crate::llm::types::{CacheControl, ContentBlock};
 #[allow(unused_imports)]
 use crate::memory::file::{load_file, load_layer};
 use crate::memory::loader::{
-    all_paths, build_banner, build_instructions_blocks, load_for_session, MemoryCache,
+    all_paths, build_banner, build_instructions_blocks, build_instructions_blocks_with_digest,
+    load_for_session, MemoryCache,
 };
 use crate::memory::tokens::{count_tokens, ensure_initialized};
 use crate::memory::types::{LayerStatus, MemoryKind, MemorySource};
@@ -568,6 +569,122 @@ fn loaded_layer(
 // when the test is compiled in isolation.
 
 // ---- build_instructions_blocks (B5 cache_control refactor) ----
+
+// ---- build_instructions_blocks_with_digest (08-15-memory-block-governance WP2) ----
+
+/// AC5(字节级回滚通道):`digest_on=false` 时 digest 变体输出与 legacy
+/// 入口**逐字节一致** — worker 路径(`subagent/prompt.rs` 调 legacy)与
+/// 关开关回滚的等价性由这一条锁死。
+#[test]
+fn digest_off_is_byte_identical_to_legacy() {
+    let layers = vec![
+        loaded_layer(
+            MemoryKind::User,
+            MemorySource::Claude,
+            "user claude body",
+            900,
+        ),
+        loaded_layer(
+            MemoryKind::Project,
+            MemorySource::Agents,
+            "project agents body",
+            500,
+        ),
+        loaded_layer(
+            MemoryKind::Project,
+            MemorySource::Claude,
+            "## Alpha\nalpha body\n## Beta\nbeta body",
+            2000,
+        ),
+    ];
+    let legacy = build_instructions_blocks(&layers);
+    let off =
+        build_instructions_blocks_with_digest(&layers, false, &std::collections::HashSet::new());
+    assert_eq!(legacy.len(), off.len());
+    for (a, b) in legacy.iter().zip(off.iter()) {
+        assert_eq!(a, b, "digest_on=false must be byte-identical to legacy");
+    }
+}
+
+/// digest_on 时:banner 块不变(唯一 cache 断点,I1);AGENTS 层逐字节
+/// 不变(primary 永不 digest);大 CLAUDE 层 body 换目录且仍在
+/// `<reference>` 包裹内(I3);≤600 tok 的小 CLAUDE 层不 digest。
+#[test]
+fn digest_on_swaps_only_large_claude_body() {
+    let layers = vec![
+        // 小 CLAUDE(≤600)→ 全量豁免。
+        loaded_layer(MemoryKind::User, MemorySource::Claude, "tiny claude", 10),
+        missing_layer(MemoryKind::User, MemorySource::Agents),
+        // 大 CLAUDE(>600)→ digest。
+        loaded_layer(
+            MemoryKind::Project,
+            MemorySource::Claude,
+            "## Alpha\nFIRST-LINE\nDEEP-CONTENT-XYZ\n\n## Beta\nbeta line\nDEEP-BETA-XYZ",
+            2000,
+        ),
+        // AGENTS(任意大小)→ primary 永不 digest。
+        loaded_layer(
+            MemoryKind::Project,
+            MemorySource::Agents,
+            "agents full body",
+            1500,
+        ),
+    ];
+    let legacy = build_instructions_blocks(&layers);
+    let digested =
+        build_instructions_blocks_with_digest(&layers, true, &std::collections::HashSet::new());
+    assert_eq!(legacy.len(), digested.len());
+
+    // banner 块(byte-identical)。
+    assert_eq!(legacy[0], digested[0]);
+
+    let body_text = |blocks: &[ContentBlock], i: usize| match &blocks[i] {
+        ContentBlock::Text { text, .. } => text.clone(),
+        other => panic!("expected Text block, got {:?}", other),
+    };
+
+    // 小 CLAUDE 块逐字节一致。
+    assert_eq!(body_text(&legacy, 1), body_text(&digested, 1));
+
+    // 大 CLAUDE 块:包裹仍在,目录进来了,深层正文没了。
+    let claude_digest = body_text(&digested, 2);
+    assert!(claude_digest.starts_with("<reference>"));
+    assert!(claude_digest.contains("[digest — 2 sections"));
+    assert!(claude_digest.contains("FIRST-LINE"));
+    assert!(!claude_digest.contains("DEEP-CONTENT-XYZ"));
+    // label 行保留(banner label 与 load_memory_sections 寻址命名空间一致)。
+    assert!(claude_digest.contains("[Project CLAUDE.md]"));
+
+    // AGENTS 块逐字节一致。
+    assert_eq!(body_text(&legacy, 3), body_text(&digested, 3));
+}
+
+/// 粘性:registry 已加载的节在 digest_on 下全文出现在该层块内
+/// (目录之后 — digest.rs 单测已锁顺序,这里锁"注入块里看得到")。
+#[test]
+fn digest_on_includes_loaded_section_full_text() {
+    let layers = vec![loaded_layer(
+        MemoryKind::Project,
+        MemorySource::Claude,
+        "## Alpha\nFIRST-LINE\nDEEP-CONTENT-XYZ",
+        2000,
+    )];
+    let loaded: std::collections::HashSet<String> = [crate::memory::digest::section_key(
+        "Project CLAUDE.md",
+        "Alpha",
+    )]
+    .into_iter()
+    .collect();
+    let blocks = build_instructions_blocks_with_digest(&layers, true, &loaded);
+    let text = match &blocks[1] {
+        ContentBlock::Text { text, .. } => text.clone(),
+        other => panic!("expected Text block, got {:?}", other),
+    };
+    assert!(
+        text.contains("DEEP-CONTENT-XYZ"),
+        "loaded section must be inlined"
+    );
+}
 
 /// When no layer is loaded, the builder returns an empty vec so
 /// the agent loop can skip the synthetic instructions message

@@ -345,15 +345,32 @@ pub fn build_banner(layers: &[MemoryLayer]) -> String {
 /// caller skips the synthetic message entirely on a fresh
 /// install.
 pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock> {
-    let loaded: Vec<&MemoryLayer> = layers
+    build_instructions_blocks_with_digest(layers, false, &std::collections::HashSet::new())
+}
+
+/// Digest 变体(08-15-memory-block-governance WP2):`digest_on` 时
+/// digest 层(仅 CLAUDE.md 且 tokens > 阈值,见 [`digest::is_digest_layer`])
+/// 的 body 换为章节目录 + 已加载节全文;其余层与 banner / 块序 /
+/// `<primary>`/`<reference>` 包裹语义逐字节同 legacy — banner 仍是唯一
+/// cache 断点(不变量 I1/I3)。
+///
+/// `digest_on=false` 走纯 legacy 路径(AC5:与 `build_instructions_blocks`
+/// 输出逐字节一致 — worker 路径 `subagent/prompt.rs` 继续调 legacy 入口,
+/// 一行不动)。
+pub fn build_instructions_blocks_with_digest(
+    layers: &[MemoryLayer],
+    digest_on: bool,
+    loaded: &std::collections::HashSet<String>,
+) -> Vec<ContentBlock> {
+    let loaded_layers: Vec<&MemoryLayer> = layers
         .iter()
         .filter(|l| matches!(l.status, LayerStatus::Loaded))
         .collect();
-    if loaded.is_empty() {
+    if loaded_layers.is_empty() {
         return Vec::new();
     }
 
-    let mut out: Vec<ContentBlock> = Vec::with_capacity(loaded.len() + 1);
+    let mut out: Vec<ContentBlock> = Vec::with_capacity(loaded_layers.len() + 1);
 
     // Block 0: banner + cache_control: ephemeral. This is the
     // cache breakpoint on subsequent turns.
@@ -364,10 +381,21 @@ pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock> {
 
     // Blocks 1..N: per-layer file body, with AGENTS.md / CLAUDE.md
     // priority wrapping per the B5 review §3 Q4 decision.
-    for layer in loaded {
+    for layer in loaded_layers {
         let section = match layer.render_prompt_section() {
             Some(s) => s,
             None => continue, // defensive; the `Loaded` filter above already excludes this
+        };
+        let section = if digest_on && crate::memory::digest::is_digest_layer(layer) {
+            // digest 层:body 换目录(+已加载节),label 行保留 — banner
+            // label 与 load_memory_sections 寻址命名空间一致。
+            format!(
+                "{}\n{}",
+                layer.label(),
+                crate::memory::digest::digest_body(layer, loaded)
+            )
+        } else {
+            section
         };
         let text = match layer.source {
             MemorySource::Agents => {

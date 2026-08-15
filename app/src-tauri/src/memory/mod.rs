@@ -41,6 +41,7 @@
 //!   `crate::commands::memory`).
 //! - [`tests`] — `#[cfg(test)]` integration tests (≥15 cases).
 
+pub mod digest;
 pub mod file;
 pub mod loader;
 pub mod tokens;

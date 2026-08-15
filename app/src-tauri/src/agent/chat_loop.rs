@@ -669,6 +669,7 @@ pub async fn run_chat_loop(
         mut head_sha,
         mut system_prompt,
         memory_token,
+        digest_on,
     } = init;
 
     // -----------------------------------------------------------------
@@ -937,6 +938,8 @@ pub async fn run_chat_loop(
             // memory injection estimate (LoopInit), consumed at the
             // Done-event trace upsert alongside tools_token.
             memory_token,
+            // WP2: digest gate(注入与元工具 append 同源)。
+            digest_on,
         )
         .await
         {

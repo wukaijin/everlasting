@@ -788,6 +788,75 @@ pub(crate) async fn dispatch_tool_calls(
             DispatchBatch::Serial => {
                 // Regular serial path (existing behavior, unchanged).
                 for (id, name, input) in &tool_calls {
+                    // memory-block-governance WP2 (2026-08-15):
+                    // `load_memory_sections` 元工具拦截 — 与 load_tool_schemas
+                    // 同款 serial 顶部拦截,但**独立于 stub gate**(两个开关
+                    // 正交:tools_stub_enabled=false 时 def 仍在 digest_on 下
+                    // append,拦截不能失效成"未知工具")。def 只在 digest
+                    // gate 下出现,正常路径模型只会经目录指引调它;残留直呼
+                    // (跨 session 复述)按自愈语义服务。read-only 自有数据,
+                    // 不走权限链。
+                    if name == "load_memory_sections" {
+                        let tool_exec_start = Instant::now();
+                        // project 主路径从 DB 解析(worktree 会话的 memory
+                        // 层锚定主项目根,与 init.rs 注入口径一致)。
+                        let project_path =
+                            match crate::db::projects::get_project(&db, &current_ctx.project_id)
+                                .await
+                            {
+                                Ok(Some(p)) => p.path,
+                                _ => current_ctx.worktree_path.to_string_lossy().to_string(),
+                            };
+                        let (content, is_error) =
+                            crate::memory::digest::execute_load_memory_sections(
+                                &memory_cache,
+                                &current_ctx.project_id,
+                                &project_path,
+                                &session_id,
+                                input,
+                            )
+                            .await;
+                        let duration_ms = tool_exec_start.elapsed().as_millis();
+                        if token.is_cancelled() {
+                            cancelled = true;
+                        } else if !skip_persist {
+                            if let Err(e) = permissions::record_tool_executed_audit(
+                                &db,
+                                &session_id,
+                                name,
+                                input,
+                                duration_ms,
+                                None,
+                                Some(seq),
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    "chat: record_tool_executed_audit failed for load_memory_sections (non-fatal)"
+                                );
+                            }
+                        }
+                        let envelope_str = crate::agent::helpers::tool_result_envelope(
+                            &content,
+                            &current_ctx.worktree_path,
+                        );
+                        sink.emit_tool_result(&crate::state::ToolResultPayload {
+                            request_id: rid.clone(),
+                            tool_use_id: id.clone(),
+                            content: envelope_str.clone(),
+                            is_error,
+                        });
+                        result_blocks.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: envelope_str,
+                            is_error,
+                        });
+                        if cancelled {
+                            break;
+                        }
+                        continue;
+                    }
                     // D (2026-08-14, `08-14-c7d-tools-stub-registration`):
                     // stub 元工具拦截 — `load_tool_schemas` + 直呼自愈。
                     // 放在 5 层权限 check 之前(先于 :857 ask_user_question
