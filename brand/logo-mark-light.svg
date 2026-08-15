@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting logo">
+  <!-- Light-surface variant: 600-level cyan/amber (Tailwind cyan-600 #0891b2 / amber-600 #d97706), spark #1e293b. -->
+  <g fill="none" stroke-width="30" stroke-linecap="round">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#0891b2"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#d97706"/>
+  </g>
+  <circle cx="256" cy="256" r="13" fill="#1e293b"/>
+</svg>

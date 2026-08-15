@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Everlasting Brand — Final QA</title>
+<style>
+  @font-face {
+    font-family: "HarmonyOS Sans SC";
+    src: url("../app/src/assets/fonts/HarmonyOSSansSC-Regular.subset.woff2") format("woff2");
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #06090d; color: #cbd5e1; font-family: "HarmonyOS Sans SC", system-ui, sans-serif; padding: 40px; }
+  h1 { font-size: 18px; color: #fff; margin-bottom: 4px; }
+  h2 { font-size: 13px; margin: 30px 0 10px; color: #fbbf24; }
+  p { font-size: 12px; color: #8a93a8; margin-bottom: 14px; }
+  .row { display: flex; align-items: flex-end; gap: 26px; flex-wrap: wrap; padding: 22px;
+         background: #0a0e14; border: 1px solid #1e2530; border-radius: 12px; margin-bottom: 10px; }
+  .row.light { background: #f8fafc; border-color: #e2e8f0; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .cell span { font-size: 10px; color: #64748b; }
+  img { display: block; }
+  .mono-wrap { color: #cbd5e1; }
+  .mono-wrap.c2 { color: #22d3ee; }
+</style>
+</head>
+<body>
+<h1>Everlasting · 品牌最终稿 QA(引用真实文件)</h1>
+<p>mark / light / mono / app-icon / maskable / favicon / wordmark</p>
+
+<h2>mark(暗面)</h2>
+<div class="row">
+  <div class="cell"><img src="logo-mark.svg" width="200" height="200"><span>200</span></div>
+  <div class="cell"><img src="logo-mark.svg" width="64" height="64"><span>64</span></div>
+  <div class="cell"><img src="logo-mark.svg" width="32" height="32"><span>32</span></div>
+  <div class="cell"><img src="logo-mark.svg" width="24" height="24"><span>24</span></div>
+  <div class="cell"><img src="logo-mark.svg" width="16" height="16"><span>16(mark·含点)</span></div>
+  <div class="cell"><img src="logo-favicon.svg" width="16" height="16"><span>16(favicon·粗)</span></div>
+  <div class="cell"><img src="logo-favicon.svg" width="32" height="32"><span>32(favicon)</span></div>
+</div>
+
+<h2>light(亮面)</h2>
+<div class="row light">
+  <div class="cell"><img src="logo-mark-light.svg" width="128" height="128"><span>128</span></div>
+  <div class="cell"><img src="logo-mark-light.svg" width="32" height="32"><span>32</span></div>
+</div>
+
+<h2>mono(currentColor)</h2>
+<div class="row">
+  <div class="cell mono-wrap"><img src="logo-mark-mono.svg" width="96" height="96"><span>slate-300</span></div>
+  <div class="cell mono-wrap c2"><img src="logo-mark-mono.svg" width="96" height="96"><span>cyan-400</span></div>
+</div>
+
+<h2>app icon</h2>
+<div class="row">
+  <div class="cell"><img src="logo-app-icon.svg" width="192" height="192"><span>192</span></div>
+  <div class="cell"><img src="logo-app-icon.svg" width="64" height="64"><span>64</span></div>
+  <div class="cell"><img src="logo-app-icon.svg" width="32" height="32"><span>32</span></div>
+  <div class="cell"><img src="logo-app-icon-maskable.svg" width="96" height="96" style="border-radius:22%"><span>maskable 96</span></div>
+</div>
+
+<h2>wordmark</h2>
+<div class="row">
+  <div class="cell"><img src="logo-wordmark.svg" height="72"><span>lockup</span></div>
+</div>
+
+</body>
+</html>

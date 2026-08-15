@@ -76,8 +76,8 @@ export default defineConfig(async () => ({
         name: "Everlasting",
         short_name: "Everlasting",
         description: "远程遥控你的 AI agent",
-        theme_color: "#1a1a1a",
-        background_color: "#1a1a1a",
+        theme_color: "#0a0e14",
+        background_color: "#0a0e14",
         display: "standalone",
         start_url: "/",
         icons: [

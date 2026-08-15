@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting app icon">
+  <!-- App icon — squircle on app bg token #0a0e14 with subtle radial sheen, mark at 66%.
+       rx=114 ≈ 22.3% (Apple-ish squircle approximation; Tauri/desktop platforms mask PNGs anyway). -->
+  <defs>
+    <radialGradient id="sheen" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="114" fill="url(#sheen)"/>
+  <rect x="1" y="1" width="510" height="510" rx="113" fill="none" stroke="#2a3850" stroke-width="2" opacity="0.6"/>
+  <g transform="translate(87 87) scale(0.66)">
+    <g fill="none" stroke-width="30" stroke-linecap="round">
+      <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+      <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+    </g>
+    <circle cx="256" cy="256" r="13" fill="#f8fafc"/>
+  </g>
+</svg>

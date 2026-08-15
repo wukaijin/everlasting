@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting logo">
+  <!-- Monochrome variant — inherits CSS color via currentColor (both loops + spark). -->
+  <g fill="none" stroke="currentColor" stroke-width="30" stroke-linecap="round">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"/>
+  </g>
+  <circle cx="256" cy="256" r="13" fill="currentColor"/>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 300" width="1160" height="300" role="img" aria-label="Everlasting wordmark">
+  <!-- Horizontal lockup — mark + "Everlasting" in HarmonyOS Sans SC Regular (bundled app font).
+       NOTE: text is live <text>, not outlined — keep the font available or outline for external use.
+       Optical alignment: mark visual center (y = -52.24 + 256×0.79 = 150) ≈ text cap-height center (~151). -->
+  <g transform="translate(24 -52.24) scale(0.79)">
+    <g fill="none" stroke-width="30" stroke-linecap="round">
+      <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+      <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+    </g>
+    <circle cx="256" cy="256" r="13" fill="#f8fafc"/>
+  </g>
+  <text x="430" y="197" font-family="HarmonyOS Sans SC, PingFang SC, Noto Sans SC, sans-serif"
+        font-size="128" letter-spacing="6" fill="#e6edf6">Everlasting</text>
+</svg>
