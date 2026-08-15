@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/memory.md", "reason": "验收红线:banner 块唯一 cache 断点 / load_for_session 恒返 4 元素 / mtime fence 语义——digest 改造后逐一核验(design 不变量 I1-I3)"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "验收口径:memory_token 占比 no-double-count(分母 context_input 不加 memory)、cache_read 率交叉核验(AC4)"}
+{"file": ".trellis/tasks/08-15-memory-block-governance/research/code-map-20260815.md", "reason": "行号基线与 fence 陷阱(Common Commands 内 shell 注释会伪切节)——check 时复核实现是否踩坑"}

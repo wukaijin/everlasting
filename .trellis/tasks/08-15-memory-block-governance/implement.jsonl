@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/08-15-memory-block-governance/research/code-map-20260815.md", "reason": "注入链路 + C7/C7D 可复刻模式实测行号基线(loader/init/drive/stub/trace 全量行号,design/implement 的事实依据;代码路径不进清单,行号看这里)"}
+{"file": "docs/BACKLOG.md", "reason": "§3.1 待办与 08-14 评估结论(memory ~42% 数据来源)+ 08-15 进展注记"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "C7 度量模式契约(tools_token 列 + snapshot 语义 + no-double-count 口径),WP1 直接复刻(文件较大,注入截断时优先读 §Signatures/§Contracts)"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "Scenario 1 静态注入契约:banner/4 元素/mtime fence/包裹语义——WP2 不可破坏的 I1-I3 不变量来源"}
+{"file": "scripts/turn-smoke.sh", "reason": "live 烟测入口,WP1 要扩 memory_token 输出(执行参照,非 spec)"}
+{"file": "docs/research/tool-context-progressive-disclosure.md", "reason": "渐进披露方向②取舍分析,WP2 load_memory_sections 设计参照"}

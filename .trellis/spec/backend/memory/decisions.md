@@ -132,6 +132,48 @@ just don't get hot-reload.
 
 ---
 
+## Decision: CLAUDE.md 层 digest 化(分级注入 + load_memory_sections,2026-08-15)
+
+**Context**: 4 层全量注入实测 memory 块 ~10k tok,占首轮 context 72%
+(C7D 治完 tools 后反超为最大单项)。memory 是行为指导不能机械压缩,
+但 CLAUDE.md(`<reference>` 语义,Claude-Code interop 文件)与 AGENTS.md
+(`<primary>`)本就是两个等级。任务 `08-15-memory-block-governance`。
+
+**Decision**(`memory/digest.rs`):
+- **Tier 规则**:AGENTS.md 永不 digest(primary,always-on 主指令);
+  CLAUDE.md 且 tokens > 600(`DIGEST_THRESHOLD_TOKENS`)才 digest;
+  ≤600 小层全量豁免(user CLAUDE.md 36B 自然落入)。
+- **digest 形态**:fence-aware 切节(``` 状态机,code block 内 `# 注释`
+  不切节)+ 目录(节标题 + ≤120 chars 首句;纯 fence 节回退取节内首个
+  非空行)。纯机械生成,同输入同输出 — **禁止 LLM 生成摘要**(非确定性
+  会打爆 session 内前缀稳定)。
+- **寻址**:banner label 命名空间(`Project CLAUDE.md#节标题`),匹配
+  = 精确 → 唯一前缀 → 唯一子串(标题是自然语言,需容错);错误消息附
+  可用清单自愈。
+- **粘性**:进程级 `OnceLock` 单例 `MemoryDigestRegistry`(对标
+  `memory/tokens.rs` ENCODER 先例,**不走 AppState/run_chat_loop 穿参**
+  — 那条路要动 72 个调用点);已加载节全文**追加在目录之后**(保住目录
+  段前缀缓存);`delete_session_inner` 清理(Tauri + daemon 共用路径)。
+- **`load_memory_sections` 元工具**:drive.rs 侧挂 append(gate =
+  `memory_digest_enabled`(缺省 on,fail-open)&& !worker && !群聊,与
+  注入同源);执行在 `chat_loop/tools.rs` serial 顶部按名拦截,**独立于
+  stub gate**(两开关正交 — stub off 时不能变成未知工具)。read-only
+  自有数据,不走权限链。
+- **不变量**:banner 块仍是唯一 cache 断点;`load_for_session` 恒返 4
+  元素;worker 注入路径 `subagent/prompt.rs` 一行不动(继续调 legacy
+  `build_instructions_blocks`);digest_off 与 legacy 逐字节一致(单测锁)。
+
+**Consequences**:
+- ✅ live 实测(2026-08-15):memory 10124→2080(-79.5%),首轮 context
+  -47%;双轮 cache 率 99.8%(不劣化于 off 的 99.7%);定向探针确认模型
+  会按目录主动拉节并遵循。
+- ⚠️ 模型不拉节时只看目录(标题 + 首句)—— 目录质量决定可发现性;
+  Phase 2 候选:节级 summary frontmatter 约定。
+- ⚠️ 拉取节当轮有一次 prefix miss(内容变长),粘性后重新稳定 — 设计
+  接受,cache 率度量裁决。
+
+---
+
 ## Common Mistakes
 
 ### Mistake: Treating `MemoryKind::Session` / `Runtime` as live
