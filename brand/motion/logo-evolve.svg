@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 演化 Loading">
+  <title>Everlasting — 演化 Loading(Evolve)</title>
+  <desc>演化生命周期 loading,8s 一轮回,全部动画共用 8s 时钟(纯 keyTimes 编排,天然无缝循环):
+    [0–25%] 星尘聚合——点阵环从放大 1.22 倍、旋转 -24° 的散乱状态收敛到位;
+    [25–40%] 结晶——点阵淡出,实线弧自绘成形;
+    [40–47%] 点燃——spark 弹出并放出一圈涟漪;
+    [45–78%] 运转——双彗星同向巡游恰一圈后淡出;
+    [80–90%] 回收——实线熄灭、坍缩冲击环向中心内陷、点阵反向散开;
+    [90–100%] 静默——只剩轮廓底稿与中心一粒种子微光,等待下一轮。
+    点阵环技巧:stroke-dasharray "0.01 7.6823"(周期恰 100/13)× round 端帽 = 13 颗圆点。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 轮廓底稿(全程常在) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.12">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+  </g>
+
+  <!-- 种子微光(静默期的火种) -->
+  <circle cx="256" cy="256" r="4.5" fill="#f8fafc" opacity="0">
+    <animate attributeName="opacity" values="0;0;0.75;0.75;0" keyTimes="0;0.90;0.93;0.98;1"
+             dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 点阵环:聚合进场 / 散开退场(绕中心 256,256 旋转缩放) -->
+  <g transform="translate(256 256)">
+    <g>
+      <animateTransform attributeName="transform" type="rotate"
+                        values="-24;0;0;20" keyTimes="0;0.25;0.80;1"
+                        dur="8s" repeatCount="indefinite"/>
+      <g>
+        <animateTransform attributeName="transform" type="scale"
+                          values="1.22;1;1;1.22;1.22" keyTimes="0;0.25;0.80;0.88;1"
+                          dur="8s" repeatCount="indefinite"/>
+        <g transform="translate(-256 -256)">
+          <g fill="none" stroke-width="16" stroke-linecap="round" opacity="0">
+            <animate attributeName="opacity" values="0;1;1;0;0.6;0;0"
+                     keyTimes="0;0.05;0.30;0.40;0.80;0.88;1" dur="8s" repeatCount="indefinite"/>
+            <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+                  stroke="#22d3ee" stroke-dasharray="0.01 7.6823"/>
+            <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+                  stroke="#fbbf24" stroke-dasharray="0.01 7.6823"/>
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- 实线弧:结晶自绘 → 运转 → 熄灭 -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.25;0.28;0.80;0.90;1"
+             dur="8s" repeatCount="indefinite"/>
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="100 100" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.25;0.40;1"
+               calcMode="spline" keySplines="0 0 1 1;0.3 0 0.2 1;0 0 1 1" dur="8s" repeatCount="indefinite"/>
+    </path>
+    <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+          stroke="#fbbf24" stroke-dasharray="100 100" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.25;0.40;1"
+               calcMode="spline" keySplines="0 0 1 1;0.3 0 0.2 1;0 0 1 1" dur="8s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <!-- 点燃涟漪 -->
+  <circle cx="256" cy="256" r="8" fill="none" stroke="#dff6ff" stroke-width="4" opacity="0">
+    <animate attributeName="r" values="8;8;64;64" keyTimes="0;0.40;0.52;1" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0;0.9;0;0" keyTimes="0;0.40;0.415;0.52;1"
+             dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 坍缩回收环 -->
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#22d3ee" stroke-width="3" opacity="0">
+    <animate attributeName="r" values="150;150;10;10" keyTimes="0;0.80;0.90;1" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0;0.5;0;0" keyTimes="0;0.80;0.81;0.90;1"
+             dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- spark 生命周期 -->
+  <circle cx="256" cy="256" r="0" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="0;0;15;13;13;0;0" keyTimes="0;0.40;0.44;0.47;0.80;0.86;1"
+             dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 彗星运转窗口(2.16s 恰一圈) -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.45;0.48;0.75;0.78;1"
+             dur="8s" repeatCount="indefinite"/>
+    <g fill="none" stroke-width="30" stroke-linecap="round" filter="url(#glowTrack)">
+      <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+            stroke="#22d3ee" stroke-dasharray="16 84" stroke-dashoffset="16">
+        <animate attributeName="stroke-dashoffset" values="16;-84" dur="2.16s" repeatCount="indefinite"/>
+      </path>
+      <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+            stroke="#fbbf24" stroke-dasharray="16 84" stroke-dashoffset="16">
+        <animate attributeName="stroke-dashoffset" values="16;-84" dur="2.16s" begin="-1.08s" repeatCount="indefinite"/>
+      </path>
+    </g>
+    <g filter="url(#glowDot)">
+      <circle r="9.5" fill="#eaffff">
+        <animateMotion dur="2.16s" repeatCount="indefinite"><mpath href="#evC"/></animateMotion>
+      </circle>
+      <circle r="9.5" fill="#fff6dd">
+        <animateMotion dur="2.16s" begin="-1.08s" repeatCount="indefinite"><mpath href="#evA"/></animateMotion>
+      </circle>
+    </g>
+  </g>
+  <path id="evC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="none"/>
+  <path id="evA" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64" fill="none" stroke="none"/>
+</svg>

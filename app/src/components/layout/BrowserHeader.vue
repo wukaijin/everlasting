@@ -65,9 +65,8 @@ import AppLogo from "./AppLogo.vue";
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
   padding-left: 8px;
-  padding-right: 12px;
+  padding-right: 8px;
   box-sizing: border-box;
 }
 

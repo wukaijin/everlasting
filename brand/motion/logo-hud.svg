@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案六:HUD 刻度环">
+  <title>Everlasting — HUD 刻度环(Gauge Sweep)</title>
+  <desc>仪表盘/HUD 风:双环切成 10 段刻度(butt 端帽,棱角分明),每环一道亮色游标(前缘锐利)
+    带长余辉扫过;外圈 24 根径向刻度线 + 细虚线环;四角取景框括号;中心十字准星 + spark;
+    底部 8 格状态灯依次点亮(离散跳变,充满即重置)。纯 SMIL,无 JS/CSS。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 外圈刻度环(每 15° 一根,45° 倍数为长刻度) -->
+  <g stroke="#22d3ee" stroke-width="2">
+    <line x1="448.0" y1="256.0" x2="462.0" y2="256.0" opacity="0.55"/>
+    <line x1="445.3" y1="306.7" x2="453.0" y2="308.8" opacity="0.25"/>
+    <line x1="425.7" y1="354.0" x2="432.7" y2="358.0" opacity="0.25"/>
+    <line x1="391.8" y1="391.8" x2="401.7" y2="401.7" opacity="0.55"/>
+    <line x1="354.0" y1="425.7" x2="358.0" y2="432.7" opacity="0.25"/>
+    <line x1="306.7" y1="445.3" x2="308.8" y2="453.0" opacity="0.25"/>
+    <line x1="256.0" y1="448.0" x2="256.0" y2="462.0" opacity="0.55"/>
+    <line x1="205.3" y1="445.3" x2="203.2" y2="453.0" opacity="0.25"/>
+    <line x1="158.0" y1="425.7" x2="154.0" y2="432.7" opacity="0.25"/>
+    <line x1="120.2" y1="391.8" x2="110.3" y2="401.7" opacity="0.55"/>
+    <line x1="86.3" y1="354.0" x2="79.3" y2="358.0" opacity="0.25"/>
+    <line x1="66.7" y1="306.7" x2="59.0" y2="308.8" opacity="0.25"/>
+    <line x1="64.0" y1="256.0" x2="50.0" y2="256.0" opacity="0.55"/>
+    <line x1="66.7" y1="205.3" x2="59.0" y2="203.2" opacity="0.25"/>
+    <line x1="86.3" y1="158.0" x2="79.3" y2="154.0" opacity="0.25"/>
+    <line x1="120.2" y1="120.2" x2="110.3" y2="110.3" opacity="0.55"/>
+    <line x1="158.0" y1="86.3" x2="154.0" y2="79.3" opacity="0.25"/>
+    <line x1="205.3" y1="66.7" x2="203.2" y2="59.0" opacity="0.25"/>
+    <line x1="256.0" y1="64.0" x2="256.0" y2="50.0" opacity="0.55"/>
+    <line x1="306.7" y1="66.7" x2="308.8" y2="59.0" opacity="0.25"/>
+    <line x1="354.0" y1="86.3" x2="358.0" y2="79.3" opacity="0.25"/>
+    <line x1="391.8" y1="120.2" x2="401.7" y2="110.3" opacity="0.55"/>
+    <line x1="425.7" y1="158.0" x2="432.7" y2="154.0" opacity="0.25"/>
+    <line x1="445.3" y1="205.3" x2="453.0" y2="203.2" opacity="0.25"/>
+  </g>
+  <circle cx="256" cy="256" r="188" fill="none" stroke="#22d3ee" stroke-width="1.5"
+          stroke-dasharray="1 5" opacity="0.18"/>
+
+  <!-- 四角取景括号 -->
+  <g fill="none" stroke="#22d3ee" stroke-width="2.5" opacity="0.6">
+    <path d="M 36 62 L 36 36 L 62 36"/>
+    <path d="M 450 36 L 476 36 L 476 62"/>
+    <path d="M 476 450 L 476 476 L 450 476"/>
+    <path d="M 62 476 L 36 476 L 36 450"/>
+  </g>
+
+  <!-- 分段刻度环底座(butt 端帽 = 棱角) -->
+  <g fill="none" stroke-width="30" stroke-linecap="butt" opacity="0.38">
+    <path id="loopC" pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="6 4"/>
+    <path id="loopA" pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+          stroke="#fbbf24" stroke-dasharray="6 4"/>
+  </g>
+  <path id="motA" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64" fill="none" stroke="none"/>
+
+  <!-- 游标余辉 + 锐利游标(同向逆时针,相差半圈) -->
+  <g fill="none" stroke-width="30">
+    <g stroke-linecap="butt" opacity="0.3">
+      <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+            stroke="#22d3ee" stroke-dasharray="24 76" stroke-dashoffset="24">
+        <animate attributeName="stroke-dashoffset" values="24;-76" dur="3s" repeatCount="indefinite"/>
+      </path>
+      <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+            stroke="#fbbf24" stroke-dasharray="24 76" stroke-dashoffset="24">
+        <animate attributeName="stroke-dashoffset" values="24;-76" dur="3s" begin="-1.5s" repeatCount="indefinite"/>
+      </path>
+    </g>
+    <g stroke-linecap="round">
+      <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+            stroke="#9ff3ff" stroke-dasharray="6 94" stroke-dashoffset="6">
+        <animate attributeName="stroke-dashoffset" values="6;-94" dur="3s" repeatCount="indefinite"/>
+      </path>
+      <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+            stroke="#ffe3a3" stroke-dasharray="6 94" stroke-dashoffset="6">
+        <animate attributeName="stroke-dashoffset" values="6;-94" dur="3s" begin="-1.5s" repeatCount="indefinite"/>
+      </path>
+    </g>
+  </g>
+
+  <!-- 十字准星 + spark -->
+  <g stroke="#e6f0ff" stroke-width="2" opacity="0.55">
+    <line x1="234" y1="256" x2="240" y2="256"/>
+    <line x1="272" y1="256" x2="278" y2="256"/>
+    <line x1="256" y1="234" x2="256" y2="240"/>
+    <line x1="256" y1="272" x2="256" y2="278"/>
+  </g>
+  <circle cx="256" cy="256" r="11" fill="#f8fafc" filter="url(#glowDot)"/>
+
+  <!-- 底部状态灯:依次点亮,满格重置(离散跳变) -->
+  <g fill="#22d3ee">
+    <rect x="200" y="444" width="10" height="10" rx="2" opacity="0.9"/>
+    <rect x="216" y="444" width="10" height="10" rx="2" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;0.9" keyTimes="0;0.125" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+    <rect x="232" y="444" width="10" height="10" rx="2" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;0.9" keyTimes="0;0.25" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+    <rect x="248" y="444" width="10" height="10" rx="2" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;0.9" keyTimes="0;0.375" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+    <rect x="264" y="444" width="10" height="10" rx="2" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;0.9" keyTimes="0;0.5" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+    <rect x="280" y="444" width="10" height="10" rx="2" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;0.9" keyTimes="0;0.625" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+    <rect x="296" y="444" width="10" height="10" rx="2" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;0.9" keyTimes="0;0.75" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+    <rect x="312" y="444" width="10" height="10" rx="2" fill="#fbbf24" opacity="0.15">
+      <animate attributeName="opacity" values="0.15;1" keyTimes="0;0.875" dur="3.2s"
+               calcMode="discrete" repeatCount="indefinite"/>
+    </rect>
+  </g>
+</svg>

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案二:脉冲雷达">
+  <title>Everlasting — 脉冲雷达(Pulse Radar)</title>
+  <desc>spark 以 1.2s 心跳一次,每次跳动释放一圈青色声纳波纹(三圈错相循环,3.6s 生命周期);
+    双环各自轻微呼吸且相位相反。纯 SMIL,无 JS/CSS,可直接 &lt;img&gt; 引用或内联。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 双环反相呼吸 -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" filter="url(#glowTrack)">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee">
+      <animate attributeName="opacity" values="0.8;1;0.8" dur="3s" repeatCount="indefinite"
+               calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    </path>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24">
+      <animate attributeName="opacity" values="1;0.8;1" dur="3s" repeatCount="indefinite"
+               calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    </path>
+  </g>
+
+  <!-- 声纳波纹:每 1.2s 发射一圈,三圈共存 -->
+  <g fill="none" stroke="#22d3ee">
+    <circle cx="256" cy="256" r="13" stroke-width="6" opacity="0">
+      <animate attributeName="r" values="13;190" dur="3.6s" begin="0s" repeatCount="indefinite"
+               calcMode="spline" keySplines="0.1 0.6 0.35 1"/>
+      <animate attributeName="opacity" values="0.55;0" dur="3.6s" begin="0s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-width" values="6;1.5" dur="3.6s" begin="0s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="256" cy="256" r="13" stroke-width="6" opacity="0">
+      <animate attributeName="r" values="13;190" dur="3.6s" begin="-1.2s" repeatCount="indefinite"
+               calcMode="spline" keySplines="0.1 0.6 0.35 1"/>
+      <animate attributeName="opacity" values="0.55;0" dur="3.6s" begin="-1.2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-width" values="6;1.5" dur="3.6s" begin="-1.2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="256" cy="256" r="13" stroke-width="6" opacity="0">
+      <animate attributeName="r" values="13;190" dur="3.6s" begin="-2.4s" repeatCount="indefinite"
+               calcMode="spline" keySplines="0.1 0.6 0.35 1"/>
+      <animate attributeName="opacity" values="0.55;0" dur="3.6s" begin="-2.4s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-width" values="6;1.5" dur="3.6s" begin="-2.4s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- spark 心跳(与波纹发射同频) -->
+  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;17;13" dur="1.2s" repeatCount="indefinite"
+             calcMode="spline" keySplines="0.2 0 0.4 1;0.4 0 0.7 1"/>
+    <animate attributeName="opacity" values="0.88;1;0.88" dur="1.2s" repeatCount="indefinite"/>
+  </circle>
+</svg>

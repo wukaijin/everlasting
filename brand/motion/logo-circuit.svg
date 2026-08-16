@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案七:电路走线">
+  <title>Everlasting — 电路走线(Circuit Trace)</title>
+  <desc>PCB 风:暗格网点阵底 + 细双股走线(r=109/127 副线)夹持主线;
+    四个断口端点为圆形焊盘、两个交叉点为菱形节点。电流脉冲(亮头+拖尾)沿走线环流,
+    每当脉冲抵达节点,节点背后的辉光会应答闪烁。脉冲到达相位 = 弧长 7.25%/92.75%。
+    纯 SMIL,无 JS/CSS。副线端点坐标:cos20°×R±中心,320° 弧与主线同构。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 H 0 V 32" fill="none" stroke="#131c30" stroke-width="1"/>
+    </pattern>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect width="512" height="512" rx="72" fill="url(#grid)" opacity="0.8"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 副走线(细,两侧) -->
+  <g fill="none" stroke-width="2.5" opacity="0.3">
+    <path d="M 272.44 218.70 A 109 109 0 1 0 272.44 293.30" stroke="#22d3ee"/>
+    <path d="M 289.34 212.56 A 127 127 0 1 0 289.34 299.44" stroke="#22d3ee"/>
+    <path d="M 239.56 218.70 A 109 109 0 1 1 239.56 293.30" stroke="#fbbf24"/>
+    <path d="M 222.66 212.56 A 127 127 0 1 1 222.66 299.44" stroke="#fbbf24"/>
+  </g>
+
+  <!-- 主走线 + 焊盘 -->
+  <g fill="none" stroke-width="9" opacity="0.95">
+    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+  </g>
+  <g fill="#0a0e14" stroke-width="2.5">
+    <circle cx="280.88" cy="215.64" r="6.5" stroke="#22d3ee"/>
+    <circle cx="280.88" cy="296.36" r="6.5" stroke="#22d3ee"/>
+    <circle cx="231.12" cy="215.64" r="6.5" stroke="#fbbf24"/>
+    <circle cx="231.12" cy="296.36" r="6.5" stroke="#fbbf24"/>
+  </g>
+
+  <!-- 交叉节点:菱形 + 应答辉光(脉冲抵达相位 0.07/0.43/0.56/0.91 时闪烁) -->
+  <g>
+    <circle cx="256" cy="175.2" r="20" fill="#9ff3ff" opacity="0.08">
+      <animate attributeName="opacity"
+               values="0.08;0.08;0.75;0.08;0.08;0.75;0.08;0.08;0.75;0.08;0.08;0.75;0.08;0.08"
+               keyTimes="0;0.07;0.09;0.11;0.43;0.45;0.47;0.56;0.58;0.60;0.91;0.93;0.95;1"
+               dur="2.8s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="256" cy="336.8" r="20" fill="#ffd9a0" opacity="0.08">
+      <animate attributeName="opacity"
+               values="0.08;0.08;0.75;0.08;0.08;0.75;0.08;0.08;0.75;0.08;0.08;0.75;0.08;0.08"
+               keyTimes="0;0.07;0.09;0.11;0.43;0.45;0.47;0.56;0.58;0.60;0.91;0.93;0.95;1"
+               dur="2.8s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M 256 167.4 L 263.8 175.2 L 256 183 L 248.2 175.2 Z"
+          fill="#0a0e14" stroke="#9ff3ff" stroke-width="2.5"/>
+    <path d="M 256 329 L 263.8 336.8 L 256 344.6 L 248.2 336.8 Z"
+          fill="#0a0e14" stroke="#ffd9a0" stroke-width="2.5"/>
+  </g>
+
+  <!-- 电流脉冲:拖尾 + 亮头(双环反向环流,相位差半程) -->
+  <g fill="none" stroke-width="12" opacity="0.5">
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="12 88" stroke-dashoffset="12">
+      <animate attributeName="stroke-dashoffset" values="12;-88" dur="2.8s" repeatCount="indefinite"/>
+    </path>
+    <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+          stroke="#fbbf24" stroke-dasharray="12 88" stroke-dashoffset="12">
+      <animate attributeName="stroke-dashoffset" values="12;-88" dur="2.8s" begin="-1.4s" repeatCount="indefinite"/>
+    </path>
+  </g>
+  <g filter="url(#glowDot)">
+    <circle r="5.5" fill="#dffbff">
+      <animateMotion dur="2.8s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
+    </circle>
+    <circle r="5.5" fill="#fff0d0">
+      <animateMotion dur="2.8s" begin="-1.4s" repeatCount="indefinite"><mpath href="#loopA"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- spark:常亮电源 -->
+  <circle cx="256" cy="256" r="12" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="opacity" values="0.9;1;0.9" dur="1.6s" repeatCount="indefinite"/>
+  </circle>
+</svg>

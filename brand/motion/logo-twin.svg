@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案五:双子对流">
+  <title>Everlasting — 双子对流(Twin Exchange)</title>
+  <desc>叙事循环(6s/回合):青/琥珀两道光自上方交叉点同时反向出发,各走长弧 273.4°,
+    于 5.565s(相位 0.9275)在下方交叉点交汇——交汇瞬间爆出一圈冲击波、spark 同步放大;
+    随后双双经短弧跳回上方出发点,再次启程。上下交叉点各有一枚常驻微光"端口"。
+    纯 SMIL,无 JS/CSS。相位推导:交叉点位于弧长 7.25%(上)与 92.75%(下);
+    彗星与彗头统一只靠 begin=-0.435s(=7.25%×6s) 前移相位(dash 仍为 18→-82),
+    于是墙钟 t=0 恰为出发瞬间,交汇发生在墙钟相位 0.855(t=5.13s),t=6s 回到出发点。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <radialGradient id="port" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#dff6ff" stop-opacity="0.9"/>
+      <stop offset="0.5" stop-color="#8fe8f7" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#8fe8f7" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 底层轨道(暗态) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.26">
+    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+  </g>
+
+  <!-- 交叉点端口微光(上=出发点,下=交汇点) -->
+  <circle cx="256" cy="175.2" r="26" fill="url(#port)" opacity="0.2"/>
+  <circle cx="256" cy="336.8" r="26" fill="url(#port)" opacity="0.2">
+    <animate attributeName="opacity" values="0.2;0.2;0.85;0.2" keyTimes="0;0.855;0.87;1"
+             dur="6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 双彗星:青走自然方向(逆时针),琥珀走自然方向(顺时针),从上交叉点同时出发 -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" filter="url(#glowTrack)">
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="18 82" stroke-dashoffset="10.75">
+      <animate attributeName="stroke-dashoffset" values="18;-82" dur="6s" begin="-0.435s" repeatCount="indefinite"/>
+    </path>
+    <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+          stroke="#fbbf24" stroke-dasharray="18 82" stroke-dashoffset="10.75">
+      <animate attributeName="stroke-dashoffset" values="18;-82" dur="6s" begin="-0.435s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <!-- 彗头亮点(与拖尾前缘同步) -->
+  <g filter="url(#glowDot)">
+    <circle r="10" fill="#eaffff">
+      <animateMotion dur="6s" begin="-0.435s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
+    </circle>
+    <circle r="10" fill="#fff6dd">
+      <animateMotion dur="6s" begin="-0.435s" repeatCount="indefinite"><mpath href="#loopA"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- 出发闪光(上交叉点,每回合开头) -->
+  <circle cx="256" cy="175.2" r="13" fill="none" stroke="#9ff3ff" stroke-width="3">
+    <animate attributeName="r" values="13;42;42" keyTimes="0;0.055;1" dur="6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.85;0;0" keyTimes="0;0.055;1" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <!-- 交汇冲击波(下交叉点,墙钟相位 0.855) -->
+  <circle cx="256" cy="336.8" r="13" fill="none" stroke="#ffe9b8" stroke-width="4">
+    <animate attributeName="r" values="13;13;48" keyTimes="0;0.855;1" dur="6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0;0.95;0" keyTimes="0;0.855;0.862;1" dur="6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- spark:交汇瞬间同步暴胀 -->
+  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;13;18.5;13" keyTimes="0;0.855;0.87;1"
+             dur="6s" repeatCount="indefinite"/>
+  </circle>
+</svg>

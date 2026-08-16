@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案四:全息扫描">
+  <title>Everlasting — 全息扫描(Holo Scan,启动式)</title>
+  <desc>一段式启动动画:0.3s 起双环依次自绘(青先琥珀后)→ 1.7s spark 弹出并放出一圈涟漪 →
+    2.3s 双彗星淡入开始循环流动 → 3.2s 起一道全息扫描光带每 5.5s 自上而下掠过,
+    扫过处描边被点亮(用 mask 把光带限制在笔画内)。之后扫描 + 流光无限循环。
+    纯 SMIL,无 JS/CSS。适合应用启动页 / 加载态。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <linearGradient id="scanGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a0f0ff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#e6faff" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#a0f0ff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <mask id="holo" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <g fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round">
+        <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"/>
+        <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"/>
+      </g>
+      <circle cx="256" cy="256" r="13" fill="#fff"/>
+    </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 蓝图底稿(全程隐约可见) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.12">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+  </g>
+
+  <!-- 自绘:青 0.3s 起,琥珀 0.8s 起 -->
+  <g fill="none" stroke-width="30" stroke-linecap="round">
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="100 100" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" from="100" to="0" begin="0.3s" dur="1.1s"
+               fill="freeze" calcMode="spline" keySplines="0.3 0 0.25 1"/>
+    </path>
+    <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+          stroke="#fbbf24" stroke-dasharray="100 100" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" from="100" to="0" begin="0.8s" dur="1.1s"
+               fill="freeze" calcMode="spline" keySplines="0.3 0 0.25 1"/>
+    </path>
+  </g>
+  <path id="motA" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64" fill="none" stroke="none"/>
+
+  <!-- spark 弹出 + 涟漪 -->
+  <circle cx="256" cy="256" r="0" fill="#f8fafc" opacity="0.95" filter="url(#glowDot)">
+    <animate attributeName="r" values="0;16;13" keyTimes="0;0.7;1" begin="1.7s" dur="0.5s"
+             fill="freeze" calcMode="spline" keySplines="0.2 0.8 0.3 1;0.4 0 0.6 1"/>
+  </circle>
+  <circle cx="256" cy="256" r="10" fill="none" stroke="#22d3ee" stroke-width="3" opacity="0">
+    <animate attributeName="r" values="10;78" begin="1.7s" dur="0.7s" fill="freeze"
+             calcMode="spline" keySplines="0.1 0.6 0.3 1"/>
+    <animate attributeName="opacity" values="0.8;0" begin="1.7s" dur="0.7s" fill="freeze"/>
+  </circle>
+
+  <!-- 彗星循环(2.3s 淡入;琥珀提前 2.25s 起,呈对相位) -->
+  <g opacity="0">
+    <animate attributeName="opacity" from="0" to="1" begin="2.3s" dur="0.5s" fill="freeze"/>
+    <g fill="none" stroke-width="30" stroke-linecap="round" filter="url(#glowTrack)">
+      <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+            stroke="#22d3ee" stroke-dasharray="14 86" stroke-dashoffset="14">
+        <animate attributeName="stroke-dashoffset" values="14;-86" dur="4.5s" begin="2.3s" repeatCount="indefinite"/>
+      </path>
+      <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+            stroke="#fbbf24" stroke-dasharray="14 86" stroke-dashoffset="14">
+        <animate attributeName="stroke-dashoffset" values="14;-86" dur="4.5s" begin="0.05s" repeatCount="indefinite"/>
+      </path>
+    </g>
+    <g filter="url(#glowDot)">
+      <circle r="9" fill="#eaffff">
+        <animateMotion dur="4.5s" begin="2.3s" repeatCount="indefinite"><mpath href="#motC"/></animateMotion>
+      </circle>
+      <circle r="9" fill="#fff6dd">
+        <animateMotion dur="4.5s" begin="0.05s" repeatCount="indefinite"><mpath href="#motA"/></animateMotion>
+      </circle>
+    </g>
+  </g>
+  <!-- 青环运动参考(不可见,无 pathLength) -->
+  <path id="motC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="none"/>
+
+  <!-- 全息扫描光带:每 5.5s 掠过一次(前 40% 时间扫动,其余停在画外) -->
+  <g mask="url(#holo)">
+    <rect x="-40" y="-160" width="592" height="136" fill="url(#scanGrad)" opacity="0.95">
+      <animateTransform attributeName="transform" type="translate"
+                        values="0 0;0 672;0 672" keyTimes="0;0.4;1"
+                        begin="3.2s" dur="5.5s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+</svg>

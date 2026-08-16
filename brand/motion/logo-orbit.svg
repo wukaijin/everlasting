@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案三:轨道粒子">
+  <title>Everlasting — 轨道粒子(Orbit Particles)</title>
+  <desc>六枚光珠(青环三枚 + 琥珀环三枚,相位交错 60°)沿环公转,各自拖一缕 14% 长的暗淡尾迹;
+    外加两圈反向旋转的虚线星环装饰。纯 SMIL,无 JS/CSS,可直接 &lt;img&gt; 引用或内联。
+    尾迹用 dasharray "14 19.333" 一条 path 同时生成三段等距彗尾,与三枚粒子精确同步。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 装饰星环:反向慢旋 -->
+  <circle cx="256" cy="256" r="162" fill="none" stroke="#22d3ee" stroke-width="2"
+          stroke-dasharray="2 7" opacity="0.10">
+    <animateTransform attributeName="transform" type="rotate" from="0 256 256" to="360 256 256"
+                      dur="70s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#fbbf24" stroke-width="2"
+          stroke-dasharray="1.5 6" opacity="0.08">
+    <animateTransform attributeName="transform" type="rotate" from="0 256 256" to="-360 256 256"
+                      dur="48s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 底层轨道(暗态) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.2">
+    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+  </g>
+  <path id="motA" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64" fill="none" stroke="none"/>
+
+  <!-- 三段等距暗尾(每环一条 path) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.16">
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="14 19.333" stroke-dashoffset="14">
+      <animate attributeName="stroke-dashoffset" values="14;-86" dur="8s" repeatCount="indefinite"/>
+    </path>
+    <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+          stroke="#fbbf24" stroke-dasharray="14 19.333" stroke-dashoffset="14">
+      <animate attributeName="stroke-dashoffset" values="14;-86" dur="8s" begin="-1.3333s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <!-- 光珠:青环 0°/120°/240°,琥珀环错开 60° -->
+  <g filter="url(#glowDot)">
+    <circle r="6.5" fill="#c9fbff">
+      <animateMotion dur="8s" begin="0s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
+    </circle>
+    <circle r="7.5" fill="#c9fbff">
+      <animateMotion dur="8s" begin="-2.6667s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
+    </circle>
+    <circle r="6" fill="#c9fbff">
+      <animateMotion dur="8s" begin="-5.3333s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
+    </circle>
+    <circle r="6" fill="#fff1cf">
+      <animateMotion dur="8s" begin="-1.3333s" repeatCount="indefinite"><mpath href="#motA"/></animateMotion>
+    </circle>
+    <circle r="6.5" fill="#fff1cf">
+      <animateMotion dur="8s" begin="-4s" repeatCount="indefinite"><mpath href="#motA"/></animateMotion>
+    </circle>
+    <circle r="7.5" fill="#fff1cf">
+      <animateMotion dur="8s" begin="-6.6667s" repeatCount="indefinite"><mpath href="#motA"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- spark 慢呼吸 -->
+  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;15.5;13" dur="4s" repeatCount="indefinite"
+             calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    <animate attributeName="opacity" values="0.85;1;0.85" dur="4s" repeatCount="indefinite"/>
+  </circle>
+</svg>

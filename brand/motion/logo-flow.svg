@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案一:能量流光">
+  <title>Everlasting — 能量流光(Comet Flow)</title>
+  <desc>两枚发光彗星分别沿青/琥珀环逆时针循环流动,白色亮头领先,光晕拖尾随后;
+    spark 以 2.5s 呼吸。纯 SMIL,无 JS/CSS,可直接 &lt;img&gt; 引用或内联。
+    同步原理:overlay path 设 pathLength=100,dashoffset 从 L 到 L-100 线性递减,
+    彗头(拖尾前缘)恰好落在弧长百分比 100f 处,与 animateMotion(paced 匀速)的亮头圆重合。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 底层轨道(暗态) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.28">
+    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+  </g>
+  <!-- 琥珀环的逆向几何(供彗头 animateMotion 用,不可见) -->
+  <path id="motA" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64" fill="none" stroke="none"/>
+
+  <!-- 彗星拖尾(青,自然方向;琥珀,逆向;两者相差半圈) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" filter="url(#glowTrack)">
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#22d3ee" stroke-dasharray="18 82" stroke-dashoffset="18">
+      <animate attributeName="stroke-dashoffset" values="18;-82" dur="5s" repeatCount="indefinite"/>
+    </path>
+    <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+          stroke="#fbbf24" stroke-dasharray="18 82" stroke-dashoffset="18">
+      <animate attributeName="stroke-dashoffset" values="18;-82" dur="5s" begin="-2.5s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <!-- 彗头亮点 -->
+  <g filter="url(#glowDot)">
+    <circle r="9.5" fill="#eaffff">
+      <animateMotion dur="5s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
+    </circle>
+    <circle r="9.5" fill="#fff6dd">
+      <animateMotion dur="5s" begin="-2.5s" repeatCount="indefinite"><mpath href="#motA"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- 中心 spark 呼吸 -->
+  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;15;13" dur="2.5s" repeatCount="indefinite"
+             calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    <animate attributeName="opacity" values="0.85;1;0.85" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+</svg>
