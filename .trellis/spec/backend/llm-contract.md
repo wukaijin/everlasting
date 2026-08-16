@@ -362,3 +362,16 @@ provider rewrite), the SSE consumer would otherwise panic on a
 `match` fallthrough. The `warn!` + drop pattern keeps the agent
 loop resilient without affecting the trace pipeline.
 
+
+## Scenario: Image Blocks — dual-form lifecycle (B1, 2026-08-17)
+
+`ContentBlock` 两个图片变体(`08-16-b1-image-multimodal` PR2):
+
+- **`ImageRef { file, media_type }`** — 稳定引用形态(serde tag `image_ref`,内部专用,永不进 provider wire)。存在于历史/role_history clone/C3 估算;`drive.rs` 在 retry_open 前调 `attachments::resolve_image_refs`(每轮每图一次读盘)换成 resolved 形态。**resolve 带不上 session 上下文就会降级占位**——签名显式收 `app_data_dir + session_id`,勿让块脱离请求上下文独立 resolve。
+- **`Image { source: ImageSource }`** — resolved 预发形态(serde 即 Anthropic 原生 `{"type":"image","source":{"type":"base64",…}}`,Anthropic adapter serde 直发零转换;OpenAI adapter 映射 `image_url` data URL)。
+
+**Pair Atomicity 不变**:图片只进 user 消息;assistant 消息里的图(防御路径)在 to_wire 降级为文本占位。
+
+**caps 降级(R3)**:`WireCapabilities.supports_images=false` 时 `strip_unsupported` 对 UserBlocks 内 Image **替换**(非丢弃)为 `[image: {label} — 当前模型不支持图片,未发送]` 文本——模型必须知道有图未发,防幻觉。live 实证(08-17,MiniMax-M3):模型读到占位后明确拒答"图片没有送达"。
+
+**When this bites**:① user 消息含图强制 UserBlocks 路径(图不能进 `User{content: String}`);② OpenAI 侧含图 content 必须是数组(text + image_url 混排),无图时保持历史字符串形状(回归锁测试);③ C3 估算对图块用固定 ~1600 tok 垫板(base64 字符串会百倍高估);④ Anthropic cache 断点在首块 text,Image 追加在 user 消息尾部不耦合。

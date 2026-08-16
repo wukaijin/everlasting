@@ -45,3 +45,14 @@
 
 - **Context**:REMOTE-ACCESS-ROADMAP P3.3 原规划"远程 client 默认只读、写操作需显式 grant + `Transport.isLocal` 属性区分本地/远程连接",epic 期间由 Q11 决策推后(PWA 全权、不做权限分层),2026-08-16 用户决策正式取消,不再作为候选。
 - **决策**:PWA 全权模型接受为**最终形态**——远程设备(手机)与桌面 GUI 权限完全相同,不做远程只读档/写授权分层,`Transport.isLocal` 不引入。远程通道安全边界维持既有机制:配对码 60s 一次性 + per-IP 限速 + device_token + shared_secret + HTTPS(nginx 自理),token 存 localStorage(P3.4 MVP 决策不变)。`docs/REMOTE-ACCESS-ROADMAP.md` P3.3 状态同步为"取消"。
+
+### 2026-08-16/17 — B1 图片支持(multimodal,5 PR)
+
+- **Context**:输入层从纯文本升级图片通道。议程 8 决议 + 外部评审(1 P0 口径 + 4 P1 + 4 P2,含一项修法驳回)全部落 PRD/design/implement;5 PR 提交在 `feat/b1-image-multimodal`。
+- **决策 — DB 只存文本 + metadata 引用,Image 块每轮磁盘即时物化**:`ContentBlock` 双形态(ImageRef 引用形态 tag `image_ref` 全管线轻量;Image resolved 形态 serde 即 Anthropic 原生 image 块,adapter 零转换)。resolve 在 `drive.rs` retry_open 前、per-turn 请求 clone 上(每图每轮一次读盘,主 Vec 保持轻量)。
+- **决策 — 当轮新图与历史图统一走 `ChatMessage.attachments` 字段**(design §4.1 的 ChatRequest 独立参数取消):经典 chat 历史经前端回传(metadata.attachments → wire attachments),群聊经 `reload_messages` 从 metadata 重建——单一机制双路径。
+- **决策 — 占位降级非静默丢弃(R3)**:caps=false 时 strip 对 UserBlocks 内 Image **替换**为 `[image: … 不支持图片,未发送]`;live 实证模型读到占位后明确拒答"图片没有送达",防幻觉达成。评审 P1-4 的">10 一刀切"修法被驳回(历史图累积误伤),改两级闸:新图/轮 ≤10 + 请求总量 ≤20(chat_inner 入口清晰报错)。
+- **决策 — 顺手闭合 DOMPurify 外链图缺口**:原 `USE_PROFILES:{html:true}` 放行任意 `<img>`,LLM 输出外链图即发请求(tracker/IP 泄露)——BACKLOG §3.3"不渲染 LLM 之外的图"此前并不成立。现三前缀放行(相对 / 绝对 daemonBase / pwa-remote proxy+token),外链图降级 `[图片]` 链接。
+- **决策 — images_token 口径 = 请求内全部 Image 块(含历史重建)**:评审 P0-1;@图 w/h 由后端 `imagesize` crate 读文件头(纯 Rust 非像素解析),粘贴图前端 FileReader。
+- **偏差记录**:① 批量改 109 处 ChatMessage 字面量的脚本两轮误伤(`{` 丢失 / fn 返回类型括号错配),全部修复后全绿——此类机械改动应优先编译器反馈循环;② 正向视觉路径 live 未终验——catalog 无真实 vision 模型(MiniMax-M3 经 wukaijin 对 image 块静默忽略,in_tok=26 记账异常),降级路径 live 全验证;③ PR4 提交遗漏根 Cargo.lock(imagesize 锁),PR5 补上。
+- 任务:`08-16-b1-image-multimodal`。spec:llm-contract "Image Blocks" + token-usage-tracking "images_token"。
