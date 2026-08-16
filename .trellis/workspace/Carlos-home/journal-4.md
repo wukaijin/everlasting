@@ -458,3 +458,23 @@ BACKLOG §3.1 治理落地:WP1 turn_trace.memory_token 列(与 tools_token 同�
 ### Status
 
 [OK] **Completed**
+
+## Session 101: B1 图片支持(multimodal)全程落地
+
+**Date**: 2026-08-16/17
+**Task**: `.trellis/tasks/archive/2026-08/08-16-b1-image-multimodal`
+**Branch**: `feat/b1-image-multimodal`
+
+### Summary
+
+议程 8 决议(粘贴+@双入口/占位降级/文件系统存储/双 adapter/token 切片/DOMPurify 收紧/群聊支持/交互细节)→ 评审独立核验(1 P0 口径修正 + P1-4 修法驳回改两级闸)→ 5 PR 实施(数据列/wire 双形态/附件存储+首个 GET 二进制路由/chat 链路+images_token/前端全套,前后端 2815 测试绿)→ live 验证(turn-smoke + 降级路径模型正确拒答)→ 收口归档。用户实测暴露两笔 hotfix(CMD_TO_DOMAIN 漏域映射;路由名不合"命令名即路径段"惯例,curl 直测掩盖)——已修并确认全链路可用。顺手:P3.3 读写不对称正式取消。教训两则:机械改 109 处字面量的脚本必须以编译器反馈闭环;live 验证必须走 transport 真实 URL 形态而非手拼 curl。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2b647c0..0191947` | 11 commits(PR1-5 + 收口 + 归档 + 2 hotfix,见 git log) |
+
+### Status
+
+[OK] **Completed**(正向视觉路径待真实 vision 模型;三切片齐备,统一 token 预算表可排期)

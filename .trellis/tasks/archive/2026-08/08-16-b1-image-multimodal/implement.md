@@ -65,3 +65,9 @@
 - `agent/chat_loop/init.rs`(群聊 dedup 守卫敏感区,改动只加不改)
 - `llm/provider/wire/to_wire.rs`(两 protocol 契约核心,新分支隔离)
 - 回退:PR2 独立回退 = 全量占位降级(等价现状);PR5 回退 = 前端无图入口,后端列/路由无害残留
+
+## 合并前 hotfix(2026-08-17,用户 live 实测暴露)
+
+- `c88f72f` save_attachment 漏加 CMD_TO_DOMAIN(transport 报 unknown cmd;parity 测试是场景式 mock 不查表完整性——可加表↔路由对齐断言,follow-up)
+- `0191947` 路由 /save → /save_attachment(命令名即路径段惯例;curl 直测 /save 侥幸通过掩盖了偏差——教训:live 验证要走 transport 真实 URL 形态)
+- 用户实测确认:贴图 → 暂存 → 发送 → 缩略图渲染,全链路 OK
