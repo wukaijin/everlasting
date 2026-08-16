@@ -353,6 +353,7 @@ pub(crate) fn test_messages() -> Vec<ChatMessage> {
         role: Role::User,
         content: MessageContent::Text("hello".to_string()),
         speaker: None,
+        attachments: None,
     }]
 }
 

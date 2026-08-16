@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验收对照:Image 块 serde round-trip、caps=false 占位降级、两 adapter payload 形状、Pair Atomicity 不破坏"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "验收对照:images_token 列幂等、口径含历史图、TurnCard cell、turn-smoke 报告列"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验收对照:migration 幂等重跑、既有行默认值零行为变化"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "验收对照:暂存列表交互、纯图发送、缩略图行、vision tag 接线"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "验收对照:attachmentUrl 三模式(PROD 相对/DEV daemonBase/pwa-remote proxy+token)与 GET binary 实测"}

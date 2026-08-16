@@ -9,7 +9,7 @@ use crate::projects::DEFAULT_PROJECT_ID;
 
 use super::columns::{
     add_autonomous_memories_column_if_missing, add_messages_column_if_missing,
-    add_project_column_if_missing, add_provider_column_if_missing,
+    add_models_column_if_missing, add_project_column_if_missing, add_provider_column_if_missing,
     add_session_audit_events_column_if_missing, add_session_column_if_missing,
     add_subagent_runs_column_if_missing, add_turn_trace_column_if_missing,
 };
@@ -219,6 +219,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  max_tokens INTEGER,
  thinking_effort TEXT,
  supports_thinking INTEGER NOT NULL DEFAULT 0,
+ supports_images INTEGER NOT NULL DEFAULT 0,
  context_window INTEGER NOT NULL,
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL
@@ -968,6 +969,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             -- lives in subagent/prompt.rs, out of scope here —
             -- design §3.5a).
             memory_token      INTEGER,
+            -- B1 (2026-08-16): request-total image-token estimate
+            -- (all image blocks incl. history rebuilds). Same slice
+            -- semantics as tools_token / memory_token. NULL for
+            -- pre-column rows, worker turns, imageless requests.
+            images_token      INTEGER,
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, seq)
@@ -995,6 +1001,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // as tools_token above; no-op for greenfield DBs (declared in
     // the CREATE TABLE above).
     add_turn_trace_column_if_missing(pool, "memory_token", "INTEGER").await?;
+    // B1 PR4 (2026-08-16): `turn_trace.images_token` — request-total
+    // image-token estimate (incl. history rebuilds). Same idempotent
+    // backfill pattern as tools_token / memory_token.
+    add_turn_trace_column_if_missing(pool, "images_token", "INTEGER").await?;
+    // B1 (2026-08-16): `models.supports_images` — capability flag for
+    // the image-multimodal channel. No-op for greenfield DBs (declared
+    // in the CREATE TABLE above); existing rows default to 0 (text
+    // placeholder degradation = pre-B1 behavior).
+    add_models_column_if_missing(pool, "supports_images", "INTEGER NOT NULL DEFAULT 0").await?;
 
     // --- PR1 of multi-model task: seed default providers + models
     // if the catalog is empty. Idempotent:0-row check skips the

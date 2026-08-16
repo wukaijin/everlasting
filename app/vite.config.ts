@@ -120,6 +120,10 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // B1: DEV 浏览器模式兜底 —— 相对 /api 请求(如附件 GET)代理到本地 daemon。
+    proxy: {
+      "/api": { target: "http://localhost:7456", changeOrigin: true },
+    },
     hmr: host
       ? {
           protocol: "ws",

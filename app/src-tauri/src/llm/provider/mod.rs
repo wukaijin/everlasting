@@ -160,6 +160,7 @@ pub fn build_provider(
                 api_key: provider_row.api_key.clone(),
                 max_tokens,
                 thinking_effort,
+                supports_images: model_row.supports_images,
             };
             Ok(Box::new(AnthropicProvider::new(config)))
         }
@@ -185,6 +186,7 @@ pub fn build_provider(
                 api_key: provider_row.api_key.clone(),
                 max_tokens,
                 reasoning_effort,
+                supports_images: model_row.supports_images,
             };
             Ok(Box::new(OpenAIProvider::new(config)))
         }
@@ -249,6 +251,7 @@ mod tests {
             max_tokens,
             thinking_effort: thinking_effort.map(str::to_string),
             supports_thinking: true,
+            supports_images: false,
             context_window: 200_000,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),

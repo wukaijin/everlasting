@@ -158,10 +158,23 @@ async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> 
             };
             let content: MessageContent =
                 serde_json::from_value(m.content).unwrap_or(MessageContent::Text(m.text.clone()));
+            // B1 (2026-08-16): reconstruct image-attachment refs from
+            // `messages.metadata.attachments` so every participant's
+            // request rebuilds the history's ImageRef blocks (the
+            // per-speaker `run_chat_loop` attach pass consumes this
+            // field). Classic chat rides the same manifest through the
+            // frontend history instead.
+            let attachments: Option<Vec<crate::llm::types::AttachmentRef>> = m
+                .metadata
+                .as_ref()
+                .and_then(|md| md.get("attachments").cloned())
+                .and_then(|v| serde_json::from_value(v).ok())
+                .filter(|v: &Vec<crate::llm::types::AttachmentRef>| !v.is_empty());
             ChatMessage {
                 role,
                 content,
                 speaker: m.speaker,
+                attachments,
             }
         })
         .collect()

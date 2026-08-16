@@ -169,6 +169,17 @@ pub enum InjectionAction {
     /// their full line count here). Drives the hint row
     /// `· <path>  ✓ 注入 <lines> 行`.
     Injected { lines: usize },
+    /// B1 (2026-08-16): image file was COPIED into the session's
+    /// attachments dir and injected as a real image block. `file`
+    /// is the server-generated attachment name (frontend renders
+    /// the thumbnail via the GET attachments route + this manifest
+    /// entry); `tokens_est` is the `(w×h)/750` estimate feeding
+    /// `turn_trace.images_token`.
+    InjectedImage {
+        file: String,
+        media_type: String,
+        tokens_est: Option<u32>,
+    },
     /// Non-text file (image / PDF / Office / binary) — placeholder
     /// was injected. The inner `file_kind` is snake_case
     /// (`"image"` / `"pdf"` / `"office"` / `"binary"`) to
@@ -280,6 +291,7 @@ fn is_control_char(b: u8) -> bool {
 pub async fn inject_at_tokens(
     messages: &mut [ChatMessage],
     ctx: &ToolContext,
+    session_id: &str,
 ) -> (Option<String>, Vec<InjectionRecord>) {
     let mut last_expanded: Option<String> = None;
     let mut last_records: Vec<InjectionRecord> = Vec::new();
@@ -288,9 +300,35 @@ pub async fn inject_at_tokens(
             continue;
         }
         if let MessageContent::Text(text) = &msg.content {
-            let (expanded, records) = expand_at_tokens(text, ctx).await;
-            if expanded != *text {
-                msg.content = MessageContent::Text(expanded.clone());
+            let (expanded, records) = expand_at_tokens(text, ctx, session_id).await;
+            // B1 (2026-08-16): an injected image is more than a text
+            // marker — append `ImageRef` blocks so the request carries
+            // the real image (converted Text → Blocks; the DB row was
+            // already persisted text-only above, source of truth
+            // intact).
+            let image_refs: Vec<crate::llm::types::ContentBlock> = records
+                .iter()
+                .filter_map(|r| match &r.action {
+                    InjectionAction::InjectedImage {
+                        file, media_type, ..
+                    } => Some(crate::llm::types::ContentBlock::ImageRef {
+                        file: file.clone(),
+                        media_type: media_type.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect();
+            if image_refs.is_empty() {
+                if expanded != *text {
+                    msg.content = MessageContent::Text(expanded.clone());
+                }
+            } else {
+                let mut blocks = vec![crate::llm::types::ContentBlock::Text {
+                    text: expanded.clone(),
+                    cache_control: None,
+                }];
+                blocks.extend(image_refs);
+                msg.content = MessageContent::Blocks(blocks);
             }
             // Only the LAST user text message is reported — the
             // manifest is appended to the user row that was just
@@ -313,7 +351,11 @@ pub async fn inject_at_tokens(
 /// verbatim. Returns the rewritten string plus the per-token injection
 /// manifest (one `InjectionRecord` per `@relpath` token, in document
 /// order).
-async fn expand_at_tokens(text: &str, ctx: &ToolContext) -> (String, Vec<InjectionRecord>) {
+async fn expand_at_tokens(
+    text: &str,
+    ctx: &ToolContext,
+    session_id: &str,
+) -> (String, Vec<InjectionRecord>) {
     let re = at_token_regex();
     let mut out = String::with_capacity(text.len());
     let mut last_end = 0;
@@ -322,7 +364,7 @@ async fn expand_at_tokens(text: &str, ctx: &ToolContext) -> (String, Vec<Injecti
         out.push_str(&text[last_end..m.start()]);
         // m.as_str() includes the leading `@`; skip it for the path.
         let path_str = &m.as_str()[1..];
-        match expand_single(path_str, ctx).await {
+        match expand_single(path_str, ctx, session_id).await {
             (Some(expanded), action) => {
                 records.push(InjectionRecord {
                     path: path_str.to_string(),
@@ -352,7 +394,11 @@ async fn expand_at_tokens(text: &str, ctx: &ToolContext) -> (String, Vec<Injecti
 ///   missing / unreadable so the caller leaves the original
 ///   `@token` untouched but still records the failure in the
 ///   manifest.
-async fn expand_single(rel_path: &str, ctx: &ToolContext) -> (Option<String>, InjectionAction) {
+async fn expand_single(
+    rel_path: &str,
+    ctx: &ToolContext,
+    session_id: &str,
+) -> (Option<String>, InjectionAction) {
     let raw = Path::new(rel_path);
     let resolved: PathBuf = if raw.is_absolute() {
         raw.to_path_buf()
@@ -406,6 +452,17 @@ async fn expand_single(rel_path: &str, ctx: &ToolContext) -> (Option<String>, In
         }
     };
     let kind = classify(&resolved, &bytes);
+    // B1 (2026-08-16): a whitelisted, in-cap image is copied into the
+    // session's attachments dir and injected as a REAL image block.
+    // Anything else (gif/bmp/heic, >5 MiB) falls through to the
+    // Degraded placeholder — same B2 兜底 shape (review P1-2).
+    if kind == FileKind::Image {
+        if let Some((marker, action)) =
+            try_inject_image(rel_path, &resolved, &bytes, ctx, session_id).await
+        {
+            return (Some(marker), action);
+        }
+    }
     (
         Some(expand_for_kind(rel_path, kind, &bytes)),
         match kind {
@@ -417,6 +474,62 @@ async fn expand_single(rel_path: &str, ctx: &ToolContext) -> (Option<String>, In
             k => InjectionAction::Degraded { file_kind: k },
         },
     )
+}
+
+/// B1: attempt a real image injection for an `@image` token. Returns
+/// `None` (→ Degraded placeholder) when the format is outside the
+/// png/jpg/webp whitelist, the file exceeds the 5 MiB cap, or the
+/// copy fails — the turn must never die because an image couldn't be
+/// attached. On success returns the model-readable text marker + the
+/// `InjectedImage` manifest action carrying the attachment name and
+/// the `(w×h)/750` token estimate (header probe via `imagesize`,
+/// never a pixel decode).
+async fn try_inject_image(
+    rel_path: &str,
+    resolved: &Path,
+    bytes: &[u8],
+    ctx: &ToolContext,
+    session_id: &str,
+) -> Option<(String, InjectionAction)> {
+    let ext = resolved
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let media_type = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => return None, // gif/bmp/tiff/heic/… → Degraded
+    };
+    // Magic-number sanity: a corrupted/mislabeled "pic.png" whose
+    // bytes aren't a real image would 400 the whole provider request
+    // once injected — degrade instead so the turn survives.
+    let magic_ok = match media_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.len() >= 3 && &bytes[..3] == b"\xff\xd8\xff",
+        _ => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+    };
+    if !magic_ok {
+        return None;
+    }
+    if bytes.len() > crate::attachments::MAX_IMAGE_BYTES {
+        return None;
+    }
+    let file = crate::attachments::save_image(&ctx.data_dir, session_id, media_type, bytes)
+        .await
+        .ok()?;
+    let tokens_est = imagesize::blob_size(bytes)
+        .ok()
+        .map(|d| (d.width as u64 * d.height as u64 / 750) as u32);
+    Some((
+        format!("[image: {}]", rel_path),
+        InjectionAction::InjectedImage {
+            file,
+            media_type: media_type.to_string(),
+            tokens_est,
+        },
+    ))
 }
 
 /// Lexical (no-fs) variant of `assert_within_root`: returns
@@ -613,7 +726,8 @@ mod tests {
     async fn text_file_content_is_injected_with_line_numbers() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("foo.txt"), "hello\n").unwrap();
-        let (out, records) = expand_at_tokens("see @foo.txt here", &ctx_at(&tmp)).await;
+        let (out, records) =
+            expand_at_tokens("see @foo.txt here", &ctx_at(&tmp), "sess-test").await;
         assert!(out.starts_with("see "), "got: {:?}", out);
         assert!(out.ends_with(" here"), "got: {:?}", out);
         assert!(out.contains("<file path=\"foo.txt\">"), "got: {:?}", out);
@@ -631,7 +745,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "AAA").unwrap();
         std::fs::write(tmp.path().join("b.txt"), "BBB").unwrap();
-        let (out, records) = expand_at_tokens("@a.txt and @b.txt", &ctx_at(&tmp)).await;
+        let (out, records) =
+            expand_at_tokens("@a.txt and @b.txt", &ctx_at(&tmp), "sess-test").await;
         assert!(out.contains("\t1\tAAA"), "got: {:?}", out);
         assert!(out.contains("\t1\tBBB"), "got: {:?}", out);
         assert!(out.contains(" and "), "got: {:?}", out);
@@ -649,7 +764,7 @@ mod tests {
         // > 50 KB so truncate_full_output applies head+tail.
         let line = "x".repeat(80) + "\n";
         std::fs::write(tmp.path().join("big.txt"), line.repeat(700)).unwrap();
-        let (out, records) = expand_at_tokens("@big.txt", &ctx_at(&tmp)).await;
+        let (out, records) = expand_at_tokens("@big.txt", &ctx_at(&tmp), "sess-test").await;
         assert!(
             out.contains("<truncated:"),
             "expected truncation marker, got: {:?}",
@@ -664,13 +779,90 @@ mod tests {
         assert_eq!(records[0].action, InjectionAction::Injected { lines: 700 });
     }
 
-    // --- expand_at_tokens: placeholder degradation ---
+    // --- expand_at_tokens: image injection + placeholder degradation ---
 
+    /// A real 1×1 transparent PNG (valid magic + IHDR so the
+    /// `imagesize` header probe resolves dimensions).
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// B1 (2026-08-16): a whitelisted, valid image @-token now injects
+    /// as a REAL attachment — bytes are copied into the session's
+    /// attachments dir and the manifest carries `InjectedImage` with
+    /// the server-generated file name (was: pre-B1 text placeholder).
     #[tokio::test]
-    async fn image_file_degrades_to_placeholder() {
+    async fn image_file_injects_as_real_attachment() {
         let tmp = tempdir().unwrap();
-        std::fs::write(tmp.path().join("pic.png"), b"\x89PNG\r\n\x1a\n fake").unwrap();
-        let (out, records) = expand_at_tokens("@pic.png", &ctx_at(&tmp)).await;
+        std::fs::write(tmp.path().join("pic.png"), TINY_PNG).unwrap();
+        let (out, records) = expand_at_tokens("@pic.png", &ctx_at(&tmp), "sess-at").await;
+        // Text marker names the file (model-readable).
+        assert!(out.contains("[image: pic.png]"), "got: {:?}", out);
+        assert!(!out.contains("<file"), "image must not inject as text");
+        assert_eq!(records.len(), 1);
+        let InjectionAction::InjectedImage {
+            file,
+            media_type,
+            tokens_est,
+        } = &records[0].action
+        else {
+            panic!("expected InjectedImage, got {:?}", records[0].action)
+        };
+        assert_eq!(media_type, "image/png");
+        assert!(
+            crate::attachments::is_valid_attachment_filename(file),
+            "server-generated name: {file}"
+        );
+        // (1×1)/750 rounds to 0 — header probe resolved dimensions.
+        assert_eq!(*tokens_est, Some(0));
+        // The copy physically lives in the session's attachments dir.
+        assert!(tmp
+            .path()
+            .join("attachments")
+            .join("sess-at")
+            .join(file)
+            .exists());
+    }
+
+    /// inject_at_tokens appends the ImageRef block for an injected
+    /// image so the request carries the real image (Text → Blocks).
+    #[tokio::test]
+    async fn inject_appends_image_ref_block_for_injected_image() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("pic.png"), TINY_PNG).unwrap();
+        let ctx = ctx_at(&tmp);
+        let mut messages = vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("look @pic.png".to_string()),
+            speaker: None,
+            attachments: None,
+        }];
+        let _ = inject_at_tokens(&mut messages, &ctx, "sess-blk").await;
+        let MessageContent::Blocks(blocks) = &messages[0].content else {
+            panic!("expected Blocks after image inject")
+        };
+        assert!(matches!(
+            &blocks[0],
+            crate::llm::types::ContentBlock::Text { .. }
+        ));
+        assert!(matches!(
+            &blocks[1],
+            crate::llm::types::ContentBlock::ImageRef { media_type, .. } if media_type == "image/png"
+        ));
+    }
+
+    /// Pre-B1 behavior preserved for non-injectable images: a corrupt
+    /// "png" (magic mismatch) degrades to the text placeholder +
+    /// `Degraded(Image)` manifest record (B2 兜底, review P1-2).
+    #[tokio::test]
+    async fn corrupt_image_degrades_to_placeholder() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("pic.png"), b"not really a png").unwrap();
+        let (out, records) = expand_at_tokens("@pic.png", &ctx_at(&tmp), "sess-deg").await;
         assert!(out.contains("[image: pic.png"), "got: {:?}", out);
         assert!(
             !out.contains("<file"),
@@ -688,11 +880,37 @@ mod tests {
         );
     }
 
+    /// Oversize (>5 MiB) and non-whitelisted formats (gif) fall back
+    /// to the same Degraded placeholder.
+    #[tokio::test]
+    async fn oversize_and_gif_images_degrade_to_placeholder() {
+        let tmp = tempdir().unwrap();
+        let mut big = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        big.extend(std::iter::repeat(0u8).take(crate::attachments::MAX_IMAGE_BYTES + 1));
+        std::fs::write(tmp.path().join("big.png"), &big).unwrap();
+        std::fs::write(tmp.path().join("anim.gif"), b"GIF89a whatever").unwrap();
+        let (out1, rec1) = expand_at_tokens("@big.png", &ctx_at(&tmp), "sess-lim").await;
+        assert!(matches!(
+            rec1[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Image
+            }
+        ));
+        assert!(out1.contains("不支持图片注入"));
+        let (_out2, rec2) = expand_at_tokens("@anim.gif", &ctx_at(&tmp), "sess-lim").await;
+        assert!(matches!(
+            rec2[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Image
+            }
+        ));
+    }
+
     #[tokio::test]
     async fn pdf_file_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("doc.pdf"), b"%PDF-1.4 fake").unwrap();
-        let (out, records) = expand_at_tokens("@doc.pdf", &ctx_at(&tmp)).await;
+        let (out, records) = expand_at_tokens("@doc.pdf", &ctx_at(&tmp), "sess-test").await;
         assert!(out.contains("[binary: doc.pdf"), "got: {:?}", out);
         assert!(out.contains("pdftotext"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
@@ -708,7 +926,7 @@ mod tests {
     async fn office_file_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("spec.docx"), b"PK\x03\x04 fake zip").unwrap();
-        let (out, records) = expand_at_tokens("@spec.docx", &ctx_at(&tmp)).await;
+        let (out, records) = expand_at_tokens("@spec.docx", &ctx_at(&tmp), "sess-test").await;
         assert!(out.contains("[binary: spec.docx"), "got: {:?}", out);
         assert!(out.contains("pandoc"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
@@ -724,7 +942,7 @@ mod tests {
     async fn binary_file_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("app.zip"), b"PK\x03\x04 fake").unwrap();
-        let (out, records) = expand_at_tokens("@app.zip", &ctx_at(&tmp)).await;
+        let (out, records) = expand_at_tokens("@app.zip", &ctx_at(&tmp), "sess-test").await;
         assert!(out.contains("[binary: app.zip"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -740,7 +958,8 @@ mod tests {
     #[tokio::test]
     async fn nonexistent_path_kept_verbatim() {
         let tmp = tempdir().unwrap();
-        let (out, records) = expand_at_tokens("ref @nope.txt end", &ctx_at(&tmp)).await;
+        let (out, records) =
+            expand_at_tokens("ref @nope.txt end", &ctx_at(&tmp), "sess-test").await;
         assert_eq!(out, "ref @nope.txt end");
         // B2 PR3: Skipped(Missing) recorded in the manifest even
         // though the @token is left untouched — the user sees the
@@ -758,7 +977,8 @@ mod tests {
     #[tokio::test]
     async fn traversal_outside_root_kept_verbatim() {
         let tmp = tempdir().unwrap();
-        let (out, records) = expand_at_tokens("@../../etc/passwd", &ctx_at(&tmp)).await;
+        let (out, records) =
+            expand_at_tokens("@../../etc/passwd", &ctx_at(&tmp), "sess-test").await;
         assert_eq!(out, "@../../etc/passwd");
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -774,7 +994,8 @@ mod tests {
         // `@b.com` matches the regex but `b.com` is not an in-root file →
         // the original `@b.com` is preserved, so `a@b.com` survives intact.
         let tmp = tempdir().unwrap();
-        let (out, records) = expand_at_tokens("contact a@b.com please", &ctx_at(&tmp)).await;
+        let (out, records) =
+            expand_at_tokens("contact a@b.com please", &ctx_at(&tmp), "sess-test").await;
         assert_eq!(out, "contact a@b.com please");
         // The `b.com` portion of the email IS a regex match — it
         // is recorded as Skipped(Missing). The user sees the
@@ -794,7 +1015,8 @@ mod tests {
     #[tokio::test]
     async fn no_token_leaves_text_unchanged() {
         let tmp = tempdir().unwrap();
-        let (out, records) = expand_at_tokens("just plain text, no refs", &ctx_at(&tmp)).await;
+        let (out, records) =
+            expand_at_tokens("just plain text, no refs", &ctx_at(&tmp), "sess-test").await;
         assert_eq!(out, "just plain text, no refs");
         // B2 PR3: empty manifest → no hint row rendered.
         assert!(records.is_empty());
@@ -812,14 +1034,16 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Text("look @foo.txt".to_string()),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Text("@foo.txt must NOT be touched".to_string()),
                 speaker: None,
+                attachments: None,
             },
         ];
-        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;
+        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
         // user expanded
         assert!(
             matches!(&messages[0].content, MessageContent::Text(t) if t.contains("<file path=\"foo.txt\">"))
@@ -851,8 +1075,9 @@ mod tests {
             role: Role::User,
             content: MessageContent::Blocks(blocks),
             speaker: None,
+            attachments: None,
         }];
-        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;
+        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
         // unchanged: Blocks variant preserved exactly
         assert!(matches!(&messages[0].content, MessageContent::Blocks(_)));
         // Blocks messages do not contribute to the manifest — no
@@ -877,19 +1102,22 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Text("@a.txt".to_string()),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::Assistant,
                 content: MessageContent::Text("ok".to_string()),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Text("@b.txt".to_string()),
                 speaker: None,
+                attachments: None,
             },
         ];
-        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;
+        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
         // Both user messages are expanded in place (the function
         // walks every user text row), but the manifest only
         // describes the LAST one.

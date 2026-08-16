@@ -50,6 +50,7 @@ pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireReq
             role: Role::User,
             content: MessageContent::Blocks(synthetic_results),
             speaker: None,
+            attachments: None,
         });
     }
     let messages = messages
@@ -255,6 +256,10 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                 // Anthropic would 100% miss every turn). The
                 // legacy concatenation path is preserved for
                 // everything else.
+                //
+                // B1 (2026-08-16): an image block forces the same
+                // block-preserving path — an image cannot ride the
+                // concatenated `User { content: String }` shape.
                 let has_cacheable = blocks.iter().any(|b| {
                     matches!(
                         b,
@@ -264,8 +269,14 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                         }
                     )
                 });
+                let has_image = blocks.iter().any(|b| {
+                    matches!(
+                        b,
+                        ContentBlock::Image { .. } | ContentBlock::ImageRef { .. }
+                    )
+                });
 
-                if has_cacheable {
+                if has_cacheable || has_image {
                     let mut out: Vec<WireMessage> = Vec::new();
                     let mut pending: Vec<WireBlock> = Vec::new();
                     for block in blocks {
@@ -278,6 +289,26 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                                     text,
                                     cache_control,
                                 });
+                            }
+                            // B1: resolved image rides as its own
+                            // wire block; an unresolved reference
+                            // means the caller skipped the resolve
+                            // pass — degrade to the text placeholder
+                            // (defensive; warn so the miss is
+                            // grep-able).
+                            ContentBlock::Image { source } => {
+                                pending.push(WireBlock::Image {
+                                    media_type: source.media_type,
+                                    data: source.data,
+                                });
+                            }
+                            ContentBlock::ImageRef { file, .. } => {
+                                tracing::warn!(
+                                    file = %file,
+                                    "to_wire: unresolved ImageRef in user message — resolve pass \
+                                     skipped? degrading to text placeholder"
+                                );
+                                pending.push(image_placeholder_wire_block(&file));
                             }
                             ContentBlock::ToolResult {
                                 tool_use_id,
@@ -333,7 +364,12 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                             }
                             ContentBlock::Thinking { .. }
                             | ContentBlock::RedactedThinking { .. }
-                            | ContentBlock::ToolUse { .. } => {
+                            | ContentBlock::ToolUse { .. }
+                            // B1: unreachable — `has_image` forces the
+                            // block-preserving path above; kept for
+                            // exhaustiveness.
+                            | ContentBlock::ImageRef { .. }
+                            | ContentBlock::Image { .. } => {
                                 tracing::debug!(
                                     "chat_message_to_wire_messages: skipping unexpected assistant block in user-role message"
                                 );
@@ -375,6 +411,12 @@ fn content_block_to_wire_block(block: ContentBlock) -> Vec<WireBlock> {
             text,
             cache_control,
         }],
+        // B1: images in an assistant-role message are not a supported
+        // shape (they only ride user messages); map to the text
+        // placeholder rather than dropping so the model still sees a
+        // trace of the block.
+        ContentBlock::Image { source } => vec![image_placeholder_wire_block(&source.media_type)],
+        ContentBlock::ImageRef { file, .. } => vec![image_placeholder_wire_block(&file)],
         ContentBlock::Thinking {
             thinking,
             signature,
@@ -470,6 +512,22 @@ pub fn strip_unsupported(
                 // Anthropic → OpenAI path: the OpenAI adapter
                 // drops cache_control at serialization time, so
                 // no special handling is needed here.
+                //
+                // B1 (2026-08-16): image blocks in user messages
+                // are **replaced** (not dropped) with the text
+                // placeholder when `supports_images` is false —
+                // the model is told an image was attached but not
+                // delivered, so it never hallucinates having seen
+                // one. Text / cache markers pass through unchanged.
+                let blocks: Vec<WireBlock> = blocks
+                    .into_iter()
+                    .map(|b| match b {
+                        WireBlock::Image { media_type, .. } if !target_caps.supports_images => {
+                            image_placeholder_wire_block(&media_type)
+                        }
+                        other => other,
+                    })
+                    .collect();
                 WireMessage::UserBlocks { blocks }
             }
             WireMessage::Tool {
@@ -498,6 +556,19 @@ pub fn strip_unsupported(
         .collect()
 }
 
+/// B1 (2026-08-16): the text placeholder emitted when an image block
+/// cannot be delivered — either the target model's `supports_images`
+/// cap is false (strip pass) or an unresolved `ImageRef` reached the
+/// wire (defensive). Same wording as the `at_file` degradation so the
+/// model sees one consistent shape; deliberately NOT silent: the model
+/// must know an image was attached but not delivered.
+pub(crate) fn image_placeholder_wire_block(label: &str) -> WireBlock {
+    WireBlock::Text {
+        text: format!("[image: {} — 当前模型不支持图片，未发送]", label),
+        cache_control: None,
+    }
+}
+
 fn block_supported(block: &WireBlock, caps: &WireCapabilities) -> bool {
     match block {
         WireBlock::Text { .. } | WireBlock::ToolUse { .. } => true,
@@ -505,6 +576,10 @@ fn block_supported(block: &WireBlock, caps: &WireCapabilities) -> bool {
         WireBlock::Signature { .. } | WireBlock::RedactedThinking { .. } => {
             caps.supports_thinking_signatures
         }
+        // B1: image support is decided per-message (user blocks),
+        // not by this assistant-block filter — see
+        // `strip_unsupported`'s UserBlocks arm.
+        WireBlock::Image { .. } => caps.supports_images,
     }
 }
 

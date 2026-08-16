@@ -102,6 +102,7 @@ async fn delete_provider_cascades_to_models() {
         None,
         None,
         false,
+        false,
         128_000,
     )
     .await
@@ -141,6 +142,7 @@ async fn create_model_then_list_joins_provider_fields() {
         Some(8192),
         Some("high"),
         true,
+        true,
         200_000,
     )
     .await
@@ -170,6 +172,7 @@ async fn update_model_on_missing_id_returns_none() {
         "GPT-4o",
         None,
         None,
+        false,
         false,
         128_000,
     )
@@ -294,11 +297,16 @@ async fn seed_backfills_sessions_model_id() {
  model_name TEXT NOT NULL, display_name TEXT NOT NULL,
  max_tokens INTEGER, thinking_effort TEXT,
  supports_thinking INTEGER NOT NULL DEFAULT 0,
+ supports_images INTEGER NOT NULL DEFAULT 0,
  context_window INTEGER NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
  )
  "#,
     )
+    // B1 (2026-08-16): the legacy shape above mirrors a DB *after*
+    // run_migrations (the PRAGMA probe adds `supports_images` before
+    // the seed runs in the real boot flow), so the direct
+    // `seed_default_providers_and_models` call below sees it.
     .execute(&pool)
     .await
     .unwrap();
@@ -363,6 +371,7 @@ async fn delete_provider_cascade_does_not_touch_unrelated_models() {
         None,
         None,
         false,
+        false,
         100_000,
     )
     .await
@@ -374,6 +383,7 @@ async fn delete_provider_cascade_does_not_touch_unrelated_models() {
         "M2",
         None,
         None,
+        false,
         false,
         100_000,
     )
@@ -465,4 +475,106 @@ async fn plaintext_api_key_migration_is_idempotent() {
             .unwrap();
     assert_eq!(row2.0, "", "still empty after 2nd migration");
     assert_eq!(row2.1, first_enc, "ciphertext unchanged (idempotent)");
+}
+
+// ---------------------------------------------------------------------------
+// B1 (2026-08-16): models.supports_images
+// ---------------------------------------------------------------------------
+
+/// The `supports_images` column is added idempotently: a migration
+/// re-run on a DB that already has the column is a no-op (greenfield
+/// DBs declare it in CREATE TABLE, existing DBs get it via the
+/// `add_models_column_if_missing` PRAGMA probe).
+#[tokio::test]
+async fn models_supports_images_migration_is_idempotent() {
+    let pool = make_pool().await;
+    // First run (via make_pool) already declared/added the column.
+    // Re-run — must NOT error.
+    run_migrations(&pool)
+        .await
+        .expect("migration re-run is idempotent on supports_images");
+    let exists: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('models') WHERE name = 'supports_images'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .try_get(0)
+    .unwrap();
+    assert_eq!(exists, 1, "supports_images column present");
+}
+
+/// `supports_images` round-trips through create → get → update →
+/// list, and legacy-style rows (column absent from INSERT via raw
+/// SQL) default to 0 = false = text-placeholder degradation, which
+/// is behavior-equivalent to the pre-B1 text-only channel.
+#[tokio::test]
+async fn supports_images_roundtrips_and_legacy_defaults_false() {
+    let pool = make_pool().await;
+    let p = create_provider(
+        &pool,
+        "anthropic",
+        "Anthropic官方 (supports_images test)",
+        "https://api.anthropic.com",
+        "",
+    )
+    .await
+    .unwrap();
+
+    // Explicit false round-trips.
+    let m = create_model(
+        &pool,
+        &p.id,
+        "legacy-model",
+        "Legacy Model",
+        None,
+        None,
+        false,
+        false,
+        100_000,
+    )
+    .await
+    .unwrap();
+    assert!(!m.supports_images);
+
+    // Update flips it to true.
+    let updated = update_model(
+        &pool,
+        &m.id,
+        &p.id,
+        "legacy-model",
+        "Legacy Model",
+        None,
+        None,
+        false,
+        true,
+        100_000,
+    )
+    .await
+    .unwrap()
+    .expect("row updated");
+    assert!(updated.supports_images);
+
+    // list_models join surface carries the flag through.
+    let list = list_models(&pool).await.unwrap();
+    let mwp = list.iter().find(|x| x.model.id == m.id).unwrap();
+    assert!(mwp.model.supports_images);
+
+    // A raw INSERT that omits the column (legacy shape) defaults to 0.
+    sqlx::query(
+        "INSERT INTO models (id, provider_id, model_name, display_name, \
+ supports_thinking, context_window, created_at, updated_at) \
+ VALUES ('raw-1', ?, 'raw-model', 'Raw', 0, 100000, '2026-08-16T00:00:00Z', '2026-08-16T00:00:00Z')",
+    )
+    .bind(&p.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let raw_val: i64 = sqlx::query("SELECT supports_images FROM models WHERE id = 'raw-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(raw_val, 0, "legacy row defaults to supports_images = 0");
 }

@@ -5,13 +5,22 @@
 // `cancel`(5 行循环枢纽,被 sessions 簇 / message 簇共用)留 hub。
 // 拆分契约见 `.trellis/spec/frontend/state-management.md`
 // §Stream Controller Pattern。
+//
+// B1 (2026-08-16) image-multimodal: this cluster additionally owns
+// the paste-staging strip state (`stagedImages` + add/remove/discard
+// actions) so the send / clear / session-switch lifecycle lives with
+// the send flow it feeds (design §5.1) — ChatInput.vue only collects
+// pasted Files and renders the strip.
 import type { ComputedRef, Ref } from "vue";
+import { ref } from "vue";
+import { transport } from "../transport";
+import { extractErrorMessage } from "../utils/useErrorBus";
 import { useChecklistStore } from "./checklist";
 import { useModelsStore } from "./models";
 import type { useStreamControllerStore } from "./streamController";
 import type { useProjectsStore } from "./projects";
-import { genId, parseForcedDispatchPrefix, type ChatMessagePayload } from "./chat";
-import type { ChatMessage, SessionSummary } from "./chat.types";
+import { genId, parseForcedDispatchPrefix, type AttachmentWireRef, type ChatMessagePayload } from "./chat";
+import type { ChatMessage, SessionSummary, StagedImage } from "./chat.types";
 
 export interface SendActionsContext {
   currentSessionId: Ref<string | null>;
@@ -23,6 +32,61 @@ export interface SendActionsContext {
   cancel: () => Promise<void>;
   createNewSession: () => Promise<string>;
   toPayloadContent: (m: ChatMessage) => string | ChatMessagePayload["content"];
+  toPayloadAttachments: (m: ChatMessage) => AttachmentWireRef[];
+}
+
+// B1 paste-staging gates (PRD R6: aligned with the strictest of the
+// two provider APIs; the backend re-checks both server-side).
+/** png / jpg / webp only — gif / bmp / tiff / heic rejected. */
+const IMAGE_MIME_WHITELIST = new Set(["image/png", "image/jpeg", "image/webp"]);
+/** ≤10 staged images per turn. */
+const MAX_STAGED_IMAGES = 10;
+/** ≤5MB per image. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** Chunked Uint8Array → base64. `String.fromCharCode(...bytes)` on a
+ *  5MB array blows the arg-count limit; 32KiB chunks don't. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () =>
+      reject(new Error(`read image failed: ${file.name || "unnamed"}`));
+    reader.onload = () => {
+      try {
+        resolve(bytesToBase64(new Uint8Array(reader.result as ArrayBuffer)));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/** Read pixel dimensions off the File via a throwaway objectURL.
+ *  Resolves `{w:0,h:0}` on decode failure (jsdom, truncated file) —
+ *  the caller's tokensEst floors at 1, mirroring the backend's
+ *  fixed-pad fallback. Always revokes the objectURL. */
+function readImageDimensions(file: File): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const done = (w: number, h: number) => {
+      URL.revokeObjectURL(url);
+      resolve({ w, h });
+    };
+    img.onload = () => done(img.naturalWidth || 0, img.naturalHeight || 0);
+    img.onerror = () => done(0, 0);
+    img.src = url;
+  });
 }
 
 export function createSendActions(ctx: SendActionsContext) {
@@ -36,12 +100,99 @@ export function createSendActions(ctx: SendActionsContext) {
     cancel,
     createNewSession,
     toPayloadContent,
+    toPayloadAttachments,
   } = ctx;
 
-  async function send(text: string) {
+  // ---------------------------------------------------------------------
+  // B1 paste-staging strip (R2a). In-memory only — switching sessions
+  // or reloading drops unsent images (nothing hits the disk until
+  // `save_attachment` runs inside `send`).
+  // ---------------------------------------------------------------------
+  const stagedImages = ref<StagedImage[]>([]);
+
+  /** Stage pasted image Files after the per-file gates (mime
+   *  whitelist / 5MB / ≤10). Non-image entries are ignored (the
+   *  paste handler only forwards `image/*`, this is defensive);
+   *  rejected files toast and DON'T block the rest of the batch. */
+  async function addStagedImages(files: File[]): Promise<void> {
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) continue;
+      if (!IMAGE_MIME_WHITELIST.has(f.type)) {
+        projectsStore.showToast("仅支持 png / jpg / webp 图片", "warn");
+        continue;
+      }
+      if (f.size > MAX_IMAGE_BYTES) {
+        projectsStore.showToast("单张图片不能超过 5MB", "warn");
+        continue;
+      }
+      if (stagedImages.value.length >= MAX_STAGED_IMAGES) {
+        projectsStore.showToast(`单轮最多 ${MAX_STAGED_IMAGES} 张图片`, "warn");
+        continue;
+      }
+      const { w, h } = await readImageDimensions(f);
+      stagedImages.value.push({
+        url: URL.createObjectURL(f),
+        file: f,
+        w,
+        h,
+        tokensEst: Math.max(1, Math.round((w * h) / 750)),
+      });
+    }
+  }
+
+  /** Drop one staged image (its ✕ button) — revoke its objectURL. */
+  function removeStagedImage(index: number): void {
+    const item = stagedImages.value[index];
+    stagedImages.value.splice(index, 1);
+    if (item) URL.revokeObjectURL(item.url);
+  }
+
+  /** Drop the whole strip WITH revoke — session switch / project
+   *  change. NOT used after a successful send: the optimistic
+   *  message still renders from the localUrls (see `send`). */
+  function discardStagedImages(): void {
+    for (const s of stagedImages.value) URL.revokeObjectURL(s.url);
+    stagedImages.value = [];
+  }
+
+  /** Upload one staged image set via `save_attachment`; returns the
+   *  per-image server refs. Any failure rejects — the caller aborts
+   *  the whole send and keeps the strip (no partial sends). */
+  async function uploadStagedImages(
+    sessionId: string,
+    staged: StagedImage[],
+  ): Promise<Array<{ file: string; localUrl: string; mediaType: string; tokensEst: number }>> {
+    const out: Array<{ file: string; localUrl: string; mediaType: string; tokensEst: number }> = [];
+    for (const s of staged) {
+      const dataBase64 = await fileToBase64(s.file);
+      const resp = await transport.invoke<{ file: string }>(
+        "save_attachment",
+        {
+          sessionId,
+          mediaType: s.file.type,
+          dataBase64,
+        },
+      );
+      if (!resp || typeof resp.file !== "string" || !resp.file) {
+        throw new Error("save_attachment: response missing `file`");
+      }
+      out.push({
+        file: resp.file,
+        localUrl: s.url,
+        mediaType: s.file.type,
+        tokensEst: s.tokensEst,
+      });
+    }
+    return out;
+  }
+
+  async function send(text: string, staged?: StagedImage[]) {
+    const stagedForTurn = staged ?? stagedImages.value;
     const trimmed = text.trim();
-    // Empty input is always rejected.
-    if (!trimmed) return;
+    // Empty input is always rejected — EXCEPT a pure-image send
+    // (B1 R2a: empty text + staged images goes through so 看图问答
+    // doesn't force typing).
+    if (!trimmed && stagedForTurn.length === 0) return;
     // Bug 6 fix (PR3): the old guard was a single global `sending`
     // ref. The new guard is per-session: the user can have multiple
     // sessions streaming concurrently, but they can't fire a second
@@ -88,15 +239,15 @@ export function createSendActions(ctx: SendActionsContext) {
     // is `model_id` (snake_case) to match the backend `ForcedDispatch`
     // struct (no serde rename — nested IPC struct fields pass through
     // verbatim, unlike top-level Tauri command args which auto-camel).
-    const models = useModelsStore().models;
-    const parsed = parseForcedDispatchPrefix(trimmed, models);
+    const modelsStore = useModelsStore();
+    const parsed = parseForcedDispatchPrefix(trimmed, modelsStore.models);
     if (parsed === null) return; // empty task after prefix
     let forcedDispatch = parsed.forcedDispatch;
     let body = parsed.body;
 
     // Lazily create a session if there isn't one yet. `createNewSession`
-    // throws if no project is active, so the chat area is expected
-    // to be visible only when a project is selected (Q2 in dispatch
+    // throws if no project is active, so the chat area is expected to
+    // be visible only when a project is selected (Q2 in dispatch
     // prompt: the empty state hides the input, so send/create is
     // unreachable from the UI).
     if (!currentSessionId.value) {
@@ -146,6 +297,38 @@ export function createSendActions(ctx: SendActionsContext) {
       -1,
     ) + 1;
 
+    // B1 (2026-08-16) image upload pass — runs AFTER the session id
+    // exists (`save_attachment` needs it) and BEFORE the optimistic
+    // message is pushed (its metadata carries the server file names
+    // so `toPayloadAttachments` maps them onto the wire).
+    let uploaded: Array<{ file: string; localUrl: string; mediaType: string; tokensEst: number }> = [];
+    if (stagedForTurn.length > 0) {
+      // R3 soft notice: model lacks vision → toast but still send
+      // (the wire layer degrades Image blocks to a text placeholder
+      // the model can read). Unresolvable model → skip the notice.
+      const sessionModelId = currentSession.value?.model_id;
+      const model =
+        (sessionModelId ? modelsStore.byId(sessionModelId) : undefined) ??
+        modelsStore.defaultModel;
+      if (model && model.supportsImages === false) {
+        projectsStore.showToast(
+          "当前模型不支持图片，将以占位符发送",
+          "warn",
+        );
+      }
+      try {
+        uploaded = await uploadStagedImages(sessionId, stagedForTurn);
+      } catch (e) {
+        // P1-3: any upload failure aborts the WHOLE send (no partial
+        // sends) and the strip is kept so the user can retry / prune.
+        projectsStore.showToast(
+          `图片上传失败，已取消发送：${extractErrorMessage(e)}`,
+          "error",
+        );
+        return;
+      }
+    }
+
     // F2: activate force-follow mode so the chat stays scrolled to
     // bottom for the entire duration of the stream.
     forceFollowActive.value = true;
@@ -171,6 +354,25 @@ export function createSendActions(ctx: SendActionsContext) {
       seq: nextSeq,
       role: "user",
       content: body,
+      // B1: optimistic attachment manifest — camelCase + `localUrl`
+      // for the pre-DB render (`MessageImages.vue` reads localUrl
+      // first); `file` (server name) makes `toPayloadAttachments`
+      // map it onto the wire history entry. The finalize reload
+      // replaces this whole object with the backend's snake_case
+      // manifest.
+      ...(uploaded.length > 0
+        ? {
+            metadata: {
+              attachments: uploaded.map((u) => ({
+                file: u.file,
+                localUrl: u.localUrl,
+                mediaType: u.mediaType,
+                source: "paste",
+                tokensEst: u.tokensEst,
+              })),
+            },
+          }
+        : {}),
     };
     const assistantMsg: ChatMessage = {
       id: genId(),
@@ -198,9 +400,20 @@ export function createSendActions(ctx: SendActionsContext) {
     // streaming events and persists it before the next LLM call,
     // so the history we send here will line up with what's in the
     // DB.
+    //
+    // B1: user rows carry their `attachments` refs (current turn's
+    // optimistic manifest + rehydrated history manifests) so the
+    // backend rebuilds Image blocks every request.
     const history: ChatMessagePayload[] = msgs
       .filter((m) => m.id !== assistantMsg.id)
-      .map((m) => ({ role: m.role, content: toPayloadContent(m) }));
+      .map((m) => {
+        const attachments = toPayloadAttachments(m);
+        return {
+          role: m.role,
+          content: toPayloadContent(m),
+          ...(attachments.length > 0 ? { attachments } : {}),
+        };
+      });
 
     // `startRequest` registers the active request, pins the session
     // in the LRU, and invokes the backend `chat` IPC. The
@@ -221,7 +434,22 @@ export function createSendActions(ctx: SendActionsContext) {
       // finalize on `Done { stop_reason: "group_chat_end" }`.
       groupChat: currentSession.value?.session_type === "group_chat",
     });
+
+    // B1: release the staging strip. The objectURLs are NOT revoked
+    // here — the optimistic user message still renders from
+    // `metadata.attachments[].localUrl` until the finalize reload
+    // replaces it with server-file refs. TODO(B1 follow-up): revoke
+    // on message replacement (needs a hook into
+    // `reloadAfterFinalize`); until then the URLs live until
+    // session switch / page unload.
+    stagedImages.value = [];
   }
 
-  return { send };
+  return {
+    send,
+    stagedImages,
+    addStagedImages,
+    removeStagedImage,
+    discardStagedImages,
+  };
 }

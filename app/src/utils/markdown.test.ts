@@ -107,4 +107,55 @@ describe("renderMarkdown", () => {
       expect(html.toLowerCase()).not.toContain("<iframe");
     });
   });
+
+  // B1 (2026-08-16) R7: img src two-state allow-list. External
+  // images (any src not on our attachments route) must NOT render
+  // as <img> — they become a new-tab link, so no network request
+  // fires when the bubble mounts. Self-hosted forms pass through.
+  describe("img allow-list (B1 R7)", () => {
+    it("downgrades an external markdown image to a link (no <img>, has <a>)", () => {
+      const html = renderMarkdown("![](http://evil.com/x.png)");
+      expect(html).not.toContain("<img");
+      expect(html).toContain("<a");
+      expect(html).toContain('href="http://evil.com/x.png"');
+      expect(html).toContain("[图片]");
+      // The opener attributes survive DOMPurify (ADD_ATTR).
+      expect(html).toContain('target="_blank"');
+      expect(html).toContain('rel="noreferrer"');
+    });
+
+    it("downgrades a raw HTML <img> with an external src", () => {
+      const html = renderMarkdown(
+        '<img src="https://cdn.example.com/pic.png" alt="ad">',
+      );
+      expect(html).not.toContain("<img");
+      expect(html).toContain('href="https://cdn.example.com/pic.png"');
+    });
+
+    it("keeps a self-hosted relative attachment img", () => {
+      const html = renderMarkdown("![](/api/v1/attachments/s1/a1b2c3d4e5f6.png)");
+      expect(html).toContain("<img");
+      expect(html).toContain('src="/api/v1/attachments/s1/a1b2c3d4e5f6.png"');
+    });
+
+    it("keeps a daemonBase-absolute attachment img (DEV cross origin)", () => {
+      // vitest jsdom: import.meta.env.DEV is true and no ?daemonUrl
+      // query is set, so daemonBase() resolves to http://localhost:7456
+      // (deterministic for this fixture).
+      const html = renderMarkdown(
+        "![](http://localhost:7456/api/v1/attachments/s1/a1.png)",
+      );
+      expect(html).toContain("<img");
+      expect(html).toContain(
+        'src="http://localhost:7456/api/v1/attachments/s1/a1.png"',
+      );
+    });
+
+    it("keeps the pwa-remote proxy form with access_token query (prefix match)", () => {
+      const html = renderMarkdown(
+        "![](http://localhost:7456/api/v1/proxy/api/v1/attachments/s1/a1.png?access_token=tok)",
+      );
+      expect(html).toContain("<img");
+    });
+  });
 });

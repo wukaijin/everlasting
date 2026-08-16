@@ -11,6 +11,7 @@ import { useConfigStore } from "../stores/config";
 import { useProjectsStore } from "../stores/projects";
 import { usePermissionsStore } from "../stores/permissions";
 import { useSubagentRunsStore } from "../stores/subagentRuns";
+import type { StagedImage } from "../stores/chat.types";
 import ChatPanel from "./chat/ChatPanel.vue";
 import EmptyProjectState from "./chat/EmptyProjectState.vue";
 import SubagentDrawer from "./chat/SubagentDrawer.vue";
@@ -67,7 +68,7 @@ const showEmptyState = computed<boolean>(
   () => projectsStore.currentProjectId === null,
 );
 
-async function onSend(text: string) {
+async function onSend(text: string, staged: StagedImage[]) {
   if (!projectsStore.currentProjectId) {
     // Defensive: the empty state should make this unreachable,
     // but if some race gets us here, surface a toast instead of
@@ -76,7 +77,7 @@ async function onSend(text: string) {
     projectsStore.showToast("请先添加项目", "warn");
     return;
   }
-  await store.send(text);
+  await store.send(text, staged);
 }
 </script>
 

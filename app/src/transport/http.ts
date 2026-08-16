@@ -51,6 +51,10 @@ import { getDeviceToken, clearDeviceToken } from "./auth";
 const CMD_TO_DOMAIN: Record<string, string> = {
   // agent
   chat: "agent",
+  // B1 (2026-08-17): paste-image upload — 缺这行时前端报
+  // `unknown cmd "save_attachment"`(PR5 遗漏,贴图发送即断)。
+  // GET 附件走 <img> 直连不进本表。
+  save_attachment: "attachments",
   // cancel
   cancel_chat: "cancel",
   // command_palette

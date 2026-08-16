@@ -116,6 +116,7 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
                 role,
                 content: mc,
                 speaker: None,
+                attachments: None,
             })
         })
         .collect();
@@ -198,21 +199,25 @@ async fn agent_loop_c3_compaction_does_not_panic() {
             role: Role::User,
             content: MessageContent::Text("tiny head 1".into()),
             speaker: None,
+            attachments: None,
         },
         ChatMessage {
             role: Role::Assistant,
             content: MessageContent::Text("tiny head 2".into()),
             speaker: None,
+            attachments: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text(big_middle),
             speaker: None,
+            attachments: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text("tiny tail".into()),
             speaker: None,
+            attachments: None,
         },
     ];
     run_chat_loop(
@@ -503,21 +508,25 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
             role: Role::User,
             content: MessageContent::Text("tiny head 1".into()),
             speaker: None,
+            attachments: None,
         },
         ChatMessage {
             role: Role::Assistant,
             content: MessageContent::Text("tiny head 2".into()),
             speaker: None,
+            attachments: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text("droppable middle".into()),
             speaker: None,
+            attachments: None,
         },
         ChatMessage {
             role: Role::User,
             content: MessageContent::Text(huge),
             speaker: None,
+            attachments: None,
         },
     ];
 

@@ -21,6 +21,7 @@ mod tests {
             max_tokens: Some(8192),
             thinking_effort: thinking_effort.map(str::to_string),
             supports_thinking,
+            supports_images: false,
             context_window: 200_000,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),
@@ -32,6 +33,7 @@ mod tests {
             supports_thinking,
             supports_reasoning_effort: supports_thinking,
             supports_thinking_signatures: supports_thinking,
+            supports_images: true,
         }
     }
 
@@ -40,6 +42,7 @@ mod tests {
             supports_thinking,
             supports_reasoning_effort: reasoning,
             supports_thinking_signatures: false,
+            supports_images: true,
         }
     }
 
@@ -83,6 +86,7 @@ mod tests {
                 input: serde_json::json!({}),
             }]),
             speaker: None,
+            attachments: None,
         }];
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_1".to_string()]);
     }
@@ -98,6 +102,7 @@ mod tests {
                     input: serde_json::json!({}),
                 }]),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::User,
@@ -107,6 +112,7 @@ mod tests {
                     is_error: false,
                 }]),
                 speaker: None,
+                attachments: None,
             },
         ];
         assert!(orphan_tool_use_ids(&msgs).is_empty());
@@ -132,6 +138,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::User,
@@ -141,6 +148,7 @@ mod tests {
                     is_error: false,
                 }]),
                 speaker: None,
+                attachments: None,
             },
         ];
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_2".to_string()]);
@@ -168,6 +176,7 @@ mod tests {
                     input: serde_json::json!({}),
                 }]),
                 speaker: None,
+                attachments: None,
             }],
             system: None,
             stream: false,
@@ -209,6 +218,7 @@ mod tests {
                         input: serde_json::json!({}),
                     }]),
                     speaker: None,
+                    attachments: None,
                 },
                 ChatMessage {
                     role: Role::User,
@@ -218,6 +228,7 @@ mod tests {
                         is_error: false,
                     }]),
                     speaker: None,
+                    attachments: None,
                 },
             ],
             system: None,
@@ -544,6 +555,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Text("hello".to_string()),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![ToolDef {
@@ -593,6 +605,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -639,6 +652,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -738,6 +752,7 @@ mod tests {
             supports_thinking: false,
             supports_reasoning_effort: false,
             supports_thinking_signatures: false,
+            supports_images: false,
         };
         let stripped = strip_unsupported(messages, &caps);
         let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
@@ -788,6 +803,7 @@ mod tests {
             supports_thinking: false,
             supports_reasoning_effort: false,
             supports_thinking_signatures: false,
+            supports_images: false,
         };
         let stripped = strip_unsupported(messages, &caps);
         assert_eq!(stripped.len(), 2);
@@ -898,6 +914,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }];
         let req = ChatRequest {
             model: "claude-sonnet-4-5".to_string(),
@@ -947,6 +964,7 @@ mod tests {
                 signature: String::new(),
             }]),
             speaker: None,
+            attachments: None,
         }];
         let req = ChatRequest {
             model: "m".to_string(),
@@ -1007,6 +1025,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }];
         let req = ChatRequest {
             model: "m".to_string(),
@@ -1105,6 +1124,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -1118,5 +1138,216 @@ mod tests {
         assert!(
             matches!(&wire.messages[0], WireMessage::UserBlocks { blocks } if blocks.len() == 2)
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B1 (2026-08-16): image blocks — serde shapes + wire conversion + strip
+// ---------------------------------------------------------------------------
+
+mod b1_image_tests {
+    use super::*;
+    use crate::llm::types::{ImageSource, MessageContent, Role};
+
+    fn image_msg() -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text {
+                    text: "what is this?".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: "image/png".to_string(),
+                        data: "aGVsbG8=".to_string(),
+                    },
+                },
+            ]),
+            speaker: None,
+            attachments: None,
+        }
+    }
+
+    #[test]
+    fn image_ref_serde_is_internal_shape() {
+        // The stable reference form uses the internal `image_ref` tag —
+        // it never appears on a provider wire.
+        let b = ContentBlock::ImageRef {
+            file: "abc123.png".to_string(),
+            media_type: "image/png".to_string(),
+        };
+        let v = serde_json::to_value(&b).unwrap();
+        assert_eq!(v["type"], "image_ref");
+        assert_eq!(v["file"], "abc123.png");
+        let back: ContentBlock = serde_json::from_value(v).unwrap();
+        assert_eq!(back, b);
+    }
+
+    #[test]
+    fn resolved_image_serde_is_anthropic_native_shape() {
+        // The resolved form serializes as the Anthropic-native image
+        // block — the Anthropic adapter serde-serializes the
+        // reconstructed ChatRequest verbatim, so this shape IS the
+        // wire payload.
+        let b = ContentBlock::Image {
+            source: ImageSource {
+                source_type: "base64".to_string(),
+                media_type: "image/jpeg".to_string(),
+                data: "aGVsbG8=".to_string(),
+            },
+        };
+        let v = serde_json::to_value(&b).unwrap();
+        assert_eq!(v["type"], "image");
+        assert_eq!(v["source"]["type"], "base64");
+        assert_eq!(v["source"]["media_type"], "image/jpeg");
+        assert_eq!(v["source"]["data"], "aGVsbG8=");
+        let back: ContentBlock = serde_json::from_value(v).unwrap();
+        assert_eq!(back, b);
+    }
+
+    #[test]
+    fn user_image_becomes_wire_image_block() {
+        let req = ChatRequest {
+            model: "m".to_string(),
+            max_tokens: 100,
+            messages: vec![image_msg()],
+            system: None,
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        // The image forces the block-preserving UserBlocks path.
+        let WireMessage::UserBlocks { blocks } = &wire.messages[0] else {
+            panic!("expected UserBlocks")
+        };
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], WireBlock::Text { .. }));
+        let WireBlock::Image { media_type, data } = &blocks[1] else {
+            panic!("expected WireBlock::Image")
+        };
+        assert_eq!(media_type, "image/png");
+        assert_eq!(data, "aGVsbG8=");
+    }
+
+    #[test]
+    fn unresolved_image_ref_degrades_to_text_placeholder() {
+        let req = ChatRequest {
+            model: "m".to_string(),
+            max_tokens: 100,
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![ContentBlock::ImageRef {
+                    file: "abc123.png".to_string(),
+                    media_type: "image/png".to_string(),
+                }]),
+                speaker: None,
+                attachments: None,
+            }],
+            system: None,
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        let WireMessage::UserBlocks { blocks } = &wire.messages[0] else {
+            panic!("expected UserBlocks")
+        };
+        assert_eq!(blocks.len(), 1);
+        let WireBlock::Text { text, .. } = &blocks[0] else {
+            panic!("expected placeholder text")
+        };
+        assert!(
+            text.contains("abc123.png"),
+            "placeholder names the file: {text}"
+        );
+        assert!(
+            text.contains("不支持图片"),
+            "placeholder states non-delivery: {text}"
+        );
+    }
+
+    #[test]
+    fn strip_replaces_image_with_placeholder_when_caps_off() {
+        let messages = vec![WireMessage::UserBlocks {
+            blocks: vec![
+                WireBlock::Text {
+                    text: "context:".to_string(),
+                    cache_control: None,
+                },
+                WireBlock::Image {
+                    media_type: "image/png".to_string(),
+                    data: "aGVsbG8=".to_string(),
+                },
+            ],
+        }];
+        let caps = WireCapabilities {
+            supports_thinking: true,
+            supports_reasoning_effort: true,
+            supports_thinking_signatures: true,
+            supports_images: false,
+        };
+        let stripped = strip_unsupported(messages, &caps);
+        let WireMessage::UserBlocks { blocks } = &stripped[0] else {
+            panic!("expected UserBlocks")
+        };
+        // Text survives; image is REPLACED (not dropped) with the
+        // placeholder so the model knows an image was attached.
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], WireBlock::Text { text, .. } if text == "context:"));
+        let WireBlock::Text { text, .. } = &blocks[1] else {
+            panic!("expected placeholder text")
+        };
+        assert!(text.contains("image/png"));
+        assert!(text.contains("不支持图片"));
+    }
+
+    #[test]
+    fn strip_keeps_image_when_caps_on() {
+        let messages = vec![WireMessage::UserBlocks {
+            blocks: vec![WireBlock::Image {
+                media_type: "image/png".to_string(),
+                data: "aGVsbG8=".to_string(),
+            }],
+        }];
+        let caps = WireCapabilities {
+            supports_thinking: true,
+            supports_reasoning_effort: true,
+            supports_thinking_signatures: true,
+            supports_images: true,
+        };
+        let stripped = strip_unsupported(messages, &caps);
+        let WireMessage::UserBlocks { blocks } = &stripped[0] else {
+            panic!("expected UserBlocks")
+        };
+        assert!(matches!(&blocks[0], WireBlock::Image { .. }));
+    }
+
+    #[test]
+    fn wire_image_round_trips_to_resolved_content_block() {
+        // from_wire maps WireBlock::Image back to ContentBlock::Image
+        // with source_type "base64" so the Anthropic adapter's serde
+        // pass emits the native shape verbatim.
+        let msgs = wire_messages_to_chat_messages(vec![WireMessage::UserBlocks {
+            blocks: vec![WireBlock::Image {
+                media_type: "image/webp".to_string(),
+                data: "aGVsbG8=".to_string(),
+            }],
+        }]);
+        let MessageContent::Blocks(blocks) = &msgs[0].content else {
+            panic!("expected Blocks")
+        };
+        let ContentBlock::Image { source } = &blocks[0] else {
+            panic!("expected ContentBlock::Image")
+        };
+        assert_eq!(source.source_type, "base64");
+        assert_eq!(source.media_type, "image/webp");
+        // End-to-end: the reconstructed message serializes to the
+        // Anthropic-native image block.
+        let v = serde_json::to_value(&msgs[0]).unwrap();
+        assert_eq!(v["content"][0]["type"], "image");
+        assert_eq!(v["content"][0]["source"]["type"], "base64");
     }
 }

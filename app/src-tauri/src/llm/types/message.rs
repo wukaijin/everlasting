@@ -91,6 +91,39 @@ pub enum ContentBlock {
         #[serde(default, skip_serializing_if = "is_false")]
         is_error: bool,
     },
+    /// B1 (2026-08-16): stable image **reference** — a file name inside
+    /// the session's attachments directory. This is the form that
+    /// lives in history / metadata / group-chat rewrites: lightweight
+    /// to clone and serializable without dragging megabytes of base64
+    /// through C3 compaction estimates, `role_history` clones, or SSE
+    /// payloads. Never sent as-is: the request builder resolves it to
+    /// [`ContentBlock::Image`] right before `provider.send` (one disk
+    /// read per turn; see `agent` image resolve pass). Serde tag
+    /// `"image_ref"` is internal-only — it never appears on a provider
+    /// wire.
+    ImageRef { file: String, media_type: String },
+    /// B1: resolved pre-send image (base64). Exists only in the
+    /// request copy between the resolve pass and `provider.send`.
+    /// Serializes as the Anthropic-native image block
+    /// (`{"type":"image","source":{"type":"base64",…}}`) because the
+    /// Anthropic adapter serde-serializes the reconstructed
+    /// `ChatRequest` verbatim; the OpenAI adapter maps it to
+    /// `image_url` with a data URL. When the model's
+    /// `supports_images` cap is false, the wire strip pass replaces
+    /// this block with a text placeholder instead of dropping it (the
+    /// model must know an image was attached but not delivered).
+    Image { source: ImageSource },
+}
+
+/// B1 (2026-08-16): Anthropic-shaped image source payload. The
+/// `source_type` is always `"base64"` today; kept as a data field
+/// (not an enum) so the serde shape matches Anthropic's wire exactly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub media_type: String,
+    pub data: String,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {

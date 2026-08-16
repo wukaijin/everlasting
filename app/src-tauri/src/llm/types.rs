@@ -31,11 +31,11 @@ mod request;
 mod usage;
 
 #[allow(unused_imports)]
-pub use chat::{ChatMessage, ToolDef};
+pub use chat::{AttachmentRef, ChatMessage, ToolDef};
 #[allow(unused_imports)]
 pub use event::{ChatEvent, LlmErrorCategory, RecallHit};
 #[allow(unused_imports)]
-pub use message::{CacheControl, ContentBlock, MessageContent, Role};
+pub use message::{CacheControl, ContentBlock, ImageSource, MessageContent, Role};
 #[allow(unused_imports)]
 pub use request::{ChatRequest, ThinkingConfig};
 #[allow(unused_imports)]

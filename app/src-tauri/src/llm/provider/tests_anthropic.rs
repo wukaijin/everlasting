@@ -29,6 +29,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             max_tokens: 16384,
             thinking_effort: "xhigh".to_string(),
+            supports_images: false,
         };
         let tc = config.thinking_config();
         match tc {
@@ -74,6 +75,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             max_tokens: 16384,
             thinking_effort: "high".to_string(),
+            supports_images: false,
         });
         assert_eq!(p.protocol(), ProviderProtocol::Anthropic);
         let caps = p.capabilities();
@@ -120,6 +122,7 @@ mod tests {
             max_tokens: Some(8192),
             thinking_effort: Some("high".to_string()),
             supports_thinking: true,
+            supports_images: false,
             context_window: 200_000,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),

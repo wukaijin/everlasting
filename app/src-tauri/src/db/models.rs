@@ -25,6 +25,7 @@ pub async fn create_model(
     max_tokens: Option<u32>,
     thinking_effort: Option<&str>,
     supports_thinking: bool,
+    supports_images: bool,
     context_window: u32,
 ) -> Result<ModelRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
@@ -33,8 +34,8 @@ pub async fn create_model(
         r#"
  INSERT INTO models
  (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
- supports_thinking, context_window, created_at, updated_at)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ supports_thinking, supports_images, context_window, created_at, updated_at)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
  "#,
     )
     .bind(&id)
@@ -44,6 +45,7 @@ pub async fn create_model(
     .bind(max_tokens)
     .bind(thinking_effort)
     .bind(supports_thinking as i32)
+    .bind(supports_images as i32)
     .bind(context_window)
     .bind(&now)
     .bind(&now)
@@ -57,6 +59,7 @@ pub async fn create_model(
         max_tokens,
         thinking_effort: thinking_effort.map(str::to_string),
         supports_thinking,
+        supports_images,
         context_window,
         created_at: now.clone(),
         updated_at: now,
@@ -71,7 +74,7 @@ pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sq
         r#"
  SELECT m.id, m.provider_id, m.model_name, m.display_name,
  m.max_tokens, m.thinking_effort, m.supports_thinking,
- m.context_window, m.created_at, m.updated_at,
+ m.supports_images, m.context_window, m.created_at, m.updated_at,
  p.display_name AS provider_display_name,
  p.protocol AS provider_protocol
  FROM models m
@@ -84,6 +87,7 @@ pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sq
     rows.into_iter()
         .map(|r| {
             let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
+            let supports_images_i: i32 = r.try_get("supports_images")?;
             Ok(ModelWithProvider {
                 model: ModelRow {
                     id: r.try_get("id")?,
@@ -93,6 +97,7 @@ pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sq
                     max_tokens: r.try_get("max_tokens")?,
                     thinking_effort: r.try_get("thinking_effort")?,
                     supports_thinking: supports_thinking_i != 0,
+                    supports_images: supports_images_i != 0,
                     context_window: r.try_get("context_window")?,
                     created_at: r.try_get("created_at")?,
                     updated_at: r.try_get("updated_at")?,
@@ -111,7 +116,7 @@ pub async fn get_model(pool: &SqlitePool, id: &str) -> Result<Option<ModelRow>, 
     let row = sqlx::query(
         r#"
  SELECT id, provider_id, model_name, display_name,
- max_tokens, thinking_effort, supports_thinking,
+ max_tokens, thinking_effort, supports_thinking, supports_images,
  context_window, created_at, updated_at
  FROM models
  WHERE id = ?
@@ -124,6 +129,7 @@ pub async fn get_model(pool: &SqlitePool, id: &str) -> Result<Option<ModelRow>, 
         None => Ok(None),
         Some(r) => {
             let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
+            let supports_images_i: i32 = r.try_get("supports_images")?;
             Ok(Some(ModelRow {
                 id: r.try_get("id")?,
                 provider_id: r.try_get("provider_id")?,
@@ -132,6 +138,7 @@ pub async fn get_model(pool: &SqlitePool, id: &str) -> Result<Option<ModelRow>, 
                 max_tokens: r.try_get("max_tokens")?,
                 thinking_effort: r.try_get("thinking_effort")?,
                 supports_thinking: supports_thinking_i != 0,
+                supports_images: supports_images_i != 0,
                 context_window: r.try_get("context_window")?,
                 created_at: r.try_get("created_at")?,
                 updated_at: r.try_get("updated_at")?,
@@ -151,6 +158,7 @@ pub async fn update_model(
     max_tokens: Option<u32>,
     thinking_effort: Option<&str>,
     supports_thinking: bool,
+    supports_images: bool,
     context_window: u32,
 ) -> Result<Option<ModelRow>, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
@@ -159,7 +167,7 @@ pub async fn update_model(
  UPDATE models
  SET provider_id = ?, model_name = ?, display_name = ?,
  max_tokens = ?, thinking_effort = ?,
- supports_thinking = ?, context_window = ?, updated_at = ?
+ supports_thinking = ?, supports_images = ?, context_window = ?, updated_at = ?
  WHERE id = ?
  "#,
     )
@@ -169,6 +177,7 @@ pub async fn update_model(
     .bind(max_tokens)
     .bind(thinking_effort)
     .bind(supports_thinking as i32)
+    .bind(supports_images as i32)
     .bind(context_window)
     .bind(&now)
     .bind(id)
@@ -185,6 +194,7 @@ pub async fn update_model(
         max_tokens,
         thinking_effort: thinking_effort.map(str::to_string),
         supports_thinking,
+        supports_images,
         context_window,
         created_at: String::new(),
         updated_at: now,

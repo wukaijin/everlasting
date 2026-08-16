@@ -135,6 +135,14 @@ export interface TurnTraceRow {
    *  request's turn rows. `null` for pre-column rows and worker
    *  turns (worker injection lives in subagent/prompt.rs). */
   memoryToken: number | null;
+  /** B1 (2026-08-16) image-multimodal R6: sum of the request's
+   *  image-block token estimates — current-turn pastes PLUS rebuilt
+   *  history images (history images are re-sent every request, so
+   *  counting only new images would systematically understate).
+   *  Per-image estimate is `(w×h)/750` computed at attach time.
+   *  Mirrors Rust `TurnTraceRow.images_token` → `imagesToken`.
+   *  `null` for pre-column rows; `0` for image-less turns. */
+  imagesToken: number | null;
   createdAt: string;
 }
 
@@ -170,6 +178,12 @@ export interface TurnTrace {
    *  render treatment as `toolsToken` (`mem` legend cell +
    *  share-of-context tooltip); per-request constant. */
   memoryToken?: number;
+  /** B1 (2026-08-16) image-multimodal R6: sum of the request's
+   *  image-block token estimates (current-turn + rebuilt history;
+   *  `(w×h)/750` per image). Render treatment mirrors the tools /
+   *  memory cells (`img` legend cell + share-of-context tooltip),
+   *  gated on `> 0` so image-less turns don't render a noise cell. */
+  imagesToken?: number;
   /** Audit events whose `turnSeq === this.seq` (populated only
    *  on the 回看 path — the live path doesn't carry audit
    *  events; the audit row store handles those). The card
@@ -251,6 +265,9 @@ export function parseTurnTraceRow(row: TurnTraceRow): TurnTrace {
   }
   if (row.memoryToken != null) {
     out.memoryToken = row.memoryToken;
+  }
+  if (row.imagesToken != null) {
+    out.imagesToken = row.imagesToken;
   }
   return out;
 }

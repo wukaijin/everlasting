@@ -127,6 +127,7 @@ pub(crate) fn role_history(full: &[ChatMessage], current_role: &str) -> Vec<Chat
                             role: Role::User,
                             content: MessageContent::Text(text),
                             speaker: Some(sp.clone()),
+                            attachments: None,
                         });
                     }
                     pending_other_tool_use_ids.extend(extract_tool_use_ids(&m.content));

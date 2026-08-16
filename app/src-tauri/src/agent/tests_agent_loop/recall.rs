@@ -71,6 +71,7 @@ async fn agent_loop_emits_recall_on_fts_hit() {
         role: Role::User,
         content: MessageContent::Text("please run cargo test in wsl and check the output".into()),
         speaker: None,
+        attachments: None,
     }];
 
     run_chat_loop(
@@ -226,6 +227,7 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
         role: Role::User,
         content: MessageContent::Text("run cargo test please".into()),
         speaker: None,
+        attachments: None,
     }];
 
     run_chat_loop(

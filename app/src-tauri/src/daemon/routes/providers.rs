@@ -110,6 +110,7 @@ pub struct AddModelRequest {
     pub max_tokens: Option<u32>,
     pub thinking_effort: Option<String>,
     pub supports_thinking: bool,
+    pub supports_images: bool,
     pub context_window: u32,
 }
 
@@ -125,6 +126,7 @@ pub async fn add_model(
         req.max_tokens,
         req.thinking_effort,
         req.supports_thinking,
+        req.supports_images,
         req.context_window,
     )
     .await?;
@@ -140,6 +142,7 @@ pub struct UpdateModelRequest {
     pub max_tokens: Option<u32>,
     pub thinking_effort: Option<String>,
     pub supports_thinking: bool,
+    pub supports_images: bool,
     pub context_window: u32,
 }
 
@@ -156,6 +159,7 @@ pub async fn update_model(
         req.max_tokens,
         req.thinking_effort,
         req.supports_thinking,
+        req.supports_images,
         req.context_window,
     )
     .await?;

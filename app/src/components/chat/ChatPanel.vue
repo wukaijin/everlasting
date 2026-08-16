@@ -37,7 +37,7 @@
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
-import type { SessionSummary } from "../../stores/chat.types";
+import type { SessionSummary, StagedImage } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
 import { useQuestionCardsStore } from "../../stores/questionCards";
@@ -73,7 +73,9 @@ const reviewStateStore = useReviewStateStore();
 const traceStore = useTraceStore();
 
 const emit = defineEmits<{
-  send: [text: string];
+  /** B1 (2026-08-16): the staged paste-image set rides the send
+   *  event up (ChatInput → ChatPanel → ChatWindow → store.send). */
+  send: [text: string, staged: StagedImage[]];
 }>();
 
 const hasMessages = computed(() => chatStore.messages.length > 0);
@@ -872,7 +874,7 @@ onUnmounted(() => reviewStateStore.stop());
 
     <ChatInput
       :sending="chatStore.isCurrentSessionStreaming"
-      @send="emit('send', $event)"
+      @send="(text: string, staged: StagedImage[]) => emit('send', text, staged)"
       @stop="onStop"
     />
 

@@ -161,6 +161,43 @@ pub(crate) async fn chat_inner(
     forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
 ) -> Result<(), AppCommandError> {
     let tool_defs = state.tools.clone();
+    // B1 (2026-08-16): image-attachment caps, enforced at the shared
+    // entry so both transports return a clear error instead of a
+    // mid-loop failure. Two tiers (design §3.1, review P1-4 修正版):
+    // ① per-turn NEW images ≤ 10 (the staging limit, mirrored
+    // server-side); ② request TOTAL (new + history rebuilt) ≤ 20 —
+    // history images ride every request, so a long image-heavy
+    // conversation could otherwise exceed the providers' per-request
+    // image limits (both Anthropic and OpenAI cap at 20).
+    {
+        let mut total_images = 0usize;
+        for m in &messages {
+            if let Some(refs) = &m.attachments {
+                total_images += refs.len();
+            }
+        }
+        let new_this_turn = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == crate::llm::types::Role::User)
+            .and_then(|m| m.attachments.as_ref())
+            .map(|refs| refs.len())
+            .unwrap_or(0);
+        if new_this_turn > 10 {
+            return Err(anyhow::anyhow!(
+                "单轮最多附加 10 张图片(本次 {} 张),请删减后再发送",
+                new_this_turn
+            )
+            .into());
+        }
+        if total_images > 20 {
+            return Err(anyhow::anyhow!(
+                "请求内图片总数超过 20 张上限(历史 {} 张 + 新图),建议新建 session 或删减历史图片",
+                total_images
+            )
+            .into());
+        }
+    }
     let db = state.db.clone();
     let catalog = state.catalog.clone();
     let cancellations = state.cancellations.clone();

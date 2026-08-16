@@ -15,6 +15,7 @@ fn fresh_user_message() -> ChatMessage {
             cache_control: Some(CacheControl::Ephemeral),
         }]),
         speaker: None,
+        attachments: None,
     }
 }
 
@@ -319,6 +320,7 @@ fn append_workflow_breadcrumb_skips_when_first_message_is_assistant() {
             cache_control: None,
         }]),
         speaker: None,
+        attachments: None,
     }];
     let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
     assert!(!appended);
@@ -343,6 +345,7 @@ fn append_workflow_breadcrumb_skips_when_user_role_message_is_text_only() {
         role: Role::User,
         content: MessageContent::Text("plain string".to_string()),
         speaker: None,
+        attachments: None,
     }];
     let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
     assert!(!appended);
@@ -370,6 +373,7 @@ fn append_workflow_breadcrumb_preserves_existing_blocks_order() {
             },
         ]),
         speaker: None,
+        attachments: None,
     }];
     append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
     match &msgs[0].content {

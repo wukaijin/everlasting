@@ -34,6 +34,7 @@ function model(id: string, displayName: string): ModelWithProvider {
     maxTokens: null,
     thinkingEffort: null,
     supportsThinking: false,
+    supportsImages: false,
     contextWindow: 128000,
     createdAt: "",
     updatedAt: "",

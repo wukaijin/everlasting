@@ -290,6 +290,7 @@ mod tests {
             role: Role::User,
             content: MessageContent::Text(text.to_string()),
             speaker: None,
+            attachments: None,
         }
     }
 
@@ -298,6 +299,7 @@ mod tests {
             role: Role::Assistant,
             content: MessageContent::Blocks(blocks),
             speaker: Some(speaker.to_string()),
+            attachments: None,
         }
     }
 
@@ -497,6 +499,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("r1")]),
                 speaker: None,
+                attachments: None,
             },
             assistant_blocks_speaker(
                 vec![ContentBlock::Text {
@@ -548,6 +551,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("r1")]),
                 speaker: None,
+                attachments: None,
             },
         ];
 
@@ -594,6 +598,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("c1")]),
                 speaker: None,
+                attachments: None,
             },
             assistant_blocks_speaker(
                 vec![ContentBlock::Text {
@@ -637,6 +642,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("c1")]),
                 speaker: None,
+                attachments: None,
             },
         ];
 
@@ -880,6 +886,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![tool_result("c1")]),
                 speaker: None,
+                attachments: None,
             },
             // The weak-model mislabel row: speaker claims M3 but content
             // reads as D4F speaking.

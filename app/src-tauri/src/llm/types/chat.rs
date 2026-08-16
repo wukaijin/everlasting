@@ -33,6 +33,36 @@ pub struct ChatMessage {
     /// speaker) and existing test fixtures deserialize to `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// B1 (2026-08-16): image attachments referenced by this user
+    /// message. Rides the history from the frontend (classic chat —
+    /// mapped from `messages.metadata.attachments` on rehydrate) or
+    /// from `reload_messages` (group chat — reconstructed from the
+    /// same metadata), plus the current turn's freshly-uploaded
+    /// images. The agent loop's attach pass turns these into
+    /// `ContentBlock::ImageRef` blocks on the in-memory request
+    /// copy; the DB row itself stays text-only (the metadata
+    /// manifest is the persistent source of truth). `None` on all
+    /// legacy messages and every assistant row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<AttachmentRef>>,
+}
+
+/// B1 (2026-08-16): one image attachment reference on a
+/// [`ChatMessage`]. `file` is the server-generated name inside
+/// `<app_data_dir>/attachments/<session_id>/` (see
+/// `crate::attachments`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentRef {
+    pub file: String,
+    pub media_type: String,
+    /// `"paste"` (clipboard upload) or `"at_file"` (@-token copy).
+    pub source: String,
+    /// Attach-time estimate `(w×h)/750` (the Anthropic image-token
+    /// formula). Feeds `turn_trace.images_token`; `None` when the
+    /// dimensions couldn't be read (estimator falls back to a fixed
+    /// pad).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_est: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             max_tokens: 16384,
             reasoning_effort: None,
+            supports_images: true,
         }
     }
 
@@ -49,6 +50,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             max_tokens: 16384,
             reasoning_effort: Some("high".to_string()),
+            supports_images: false,
         }
     }
 
@@ -58,16 +60,18 @@ mod tests {
     fn openai_caps_derives_reasoning_effort_from_config() {
         // A model that opted into reasoning effort (o1/o3 with
         // thinking_effort set) keeps the capability.
-        let caps = openai_caps(Some("high"));
+        let caps = openai_caps(Some("high"), true);
         assert!(!caps.supports_thinking);
         assert!(caps.supports_reasoning_effort);
         assert!(!caps.supports_thinking_signatures);
+        assert!(caps.supports_images);
 
         // A non-reasoning model (gpt-4o, no thinking_effort) must
         // NOT claim reasoning support — otherwise strip_unsupported
         // keeps historical Reasoning blocks and pollutes context.
-        let caps = openai_caps(None);
+        let caps = openai_caps(None, false);
         assert!(!caps.supports_reasoning_effort);
+        assert!(!caps.supports_images);
     }
 
     #[test]
@@ -87,7 +91,7 @@ mod tests {
             ],
             speaker: None,
         }];
-        let caps = openai_caps(None);
+        let caps = openai_caps(None, true);
         let stripped = strip_unsupported(messages, &caps);
         let WireMessage::Assistant { blocks, .. } = &stripped[0] else {
             panic!("expected Assistant");
@@ -465,6 +469,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -475,6 +480,7 @@ mod tests {
             supports_thinking: false,
             supports_reasoning_effort: true,
             supports_thinking_signatures: false,
+            supports_images: true,
         };
         let stripped = strip_unsupported(wire.messages, &caps);
         // The signature-bearing Anthropic session has its
@@ -813,6 +819,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             max_tokens: 16384,
             reasoning_effort: None, // o1 family is the signal, not effort
+            supports_images: false,
         };
         let wire = WireRequest {
             model: "o1-mini".to_string(),
@@ -985,6 +992,7 @@ mod tests {
             api_key,
             max_tokens: 65536,
             reasoning_effort: None,
+            supports_images: false,
         };
         let p = OpenAIProvider::new(c);
         let mut s = p.send(
@@ -993,6 +1001,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Text("吃了吗".to_string()),
                 speaker: None,
+                attachments: None,
             }],
             vec![],
         );
@@ -1024,5 +1033,76 @@ mod tests {
             "expected non-empty text, got: {:?}",
             accumulated
         );
+    }
+
+    // ---- B1 (2026-08-16): vision content array ----
+
+    #[test]
+    fn build_http_body_user_image_becomes_content_array_with_image_url() {
+        use crate::llm::types::{ImageSource, MessageContent, Role};
+        // A user message carrying an image must serialize as a
+        // content ARRAY mixing text and image_url entries — a plain
+        // string cannot carry an image (OpenAI Chat Completions).
+        let req = ChatRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 100,
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: "what is this?".to_string(),
+                        cache_control: None,
+                    },
+                    ContentBlock::Image {
+                        source: ImageSource {
+                            source_type: "base64".to_string(),
+                            media_type: "image/png".to_string(),
+                            data: "aGVsbG8=".to_string(),
+                        },
+                    },
+                ]),
+                speaker: None,
+                attachments: None,
+            }],
+            system: None,
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = super::super::wire::chat_request_to_wire(req, None);
+        let body = OpenAIProvider::build_http_body(&wire, &cfg());
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1);
+        let content = msgs[0]["content"].as_array().expect("content is an array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "what is this?");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            "data:image/png;base64,aGVsbG8="
+        );
+    }
+
+    #[test]
+    fn build_http_body_userblocks_without_image_stays_string() {
+        // Regression lock: text-only UserBlocks (the B5 cache_control
+        // shape) keeps the historical flatten-to-string form.
+        let wire = super::super::wire::WireRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(100),
+            system: None,
+            messages: vec![super::super::wire::WireMessage::UserBlocks {
+                blocks: vec![WireBlock::Text {
+                    text: "plain".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &cfg());
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(msgs[0]["content"].is_string());
+        assert_eq!(msgs[0]["content"], "plain");
     }
 }

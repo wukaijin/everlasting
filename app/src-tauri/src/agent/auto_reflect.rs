@@ -443,6 +443,7 @@ async fn reflect_to_pitfall(
         role: Role::User,
         content: MessageContent::Text(user_message),
         speaker: None,
+        attachments: None,
     }];
 
     // Empty tool list — the reflection is a single text

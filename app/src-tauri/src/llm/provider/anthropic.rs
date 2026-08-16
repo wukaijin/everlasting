@@ -67,6 +67,9 @@ pub struct LlmConfig {
     /// `effort` value for adaptive thinking. `low` / `medium` / `high`
     /// / `xhigh` / `max` (Anthropic schema). Defaults to `"high"`.
     pub thinking_effort: String,
+    /// B1 (2026-08-16): from `ModelRow.supports_images` — gates the
+    /// wire strip's image→text-placeholder degradation for this model.
+    pub supports_images: bool,
 }
 
 impl LlmConfig {
@@ -483,15 +486,17 @@ impl Provider for AnthropicProvider {
             thinking: None,
         };
         let mut wire = chat_request_to_wire(req, system);
-        // Anthropic target: supports everything. We pass
-        // permissive capabilities so `strip_unsupported` is a
-        // no-op for the Anthropic→Anthropic path; the function
-        // is the **single place** that encodes the strip rules,
-        // and running it costs nothing.
+        // Anthropic target: the protocol itself supports everything,
+        // but model-level caps still apply — B1 (2026-08-16) threads
+        // `ModelRow.supports_images` through `LlmConfig` so a
+        // non-vision Anthropic-protocol model gets the image→text
+        // placeholder degradation in `strip_unsupported` (the single
+        // place that encodes strip rules).
         let caps = WireCapabilities {
             supports_thinking: true,
             supports_reasoning_effort: true,
             supports_thinking_signatures: true,
+            supports_images: config.supports_images,
         };
         wire.messages = strip_unsupported(wire.messages, &caps);
         // Reconstruct the Anthropic-shaped ChatRequest that

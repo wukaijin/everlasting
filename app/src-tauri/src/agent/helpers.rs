@@ -97,6 +97,7 @@ session was cancelled before the tool could run. The tool {} did not run.",
         role: Role::User,
         content: MessageContent::Blocks(blocks),
         speaker: None,
+        attachments: None,
     }
 }
 

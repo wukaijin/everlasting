@@ -58,6 +58,7 @@ async fn update_session_model_id_sets_and_clears() {
         None,
         None,
         false,
+        false,
         100_000,
     )
     .await
@@ -113,6 +114,7 @@ async fn load_session_includes_model_id() {
         "Select Test Model",
         None,
         None,
+        false,
         false,
         100_000,
     )

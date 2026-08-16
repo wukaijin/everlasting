@@ -438,6 +438,7 @@ pub(crate) async fn prepare_loop_state(
                 role: Role::User,
                 content: MessageContent::Blocks(instructions_blocks),
                 speaker: None,
+                attachments: None,
             },
         );
         messages.insert(
@@ -449,6 +450,7 @@ pub(crate) async fn prepare_loop_state(
                         .to_string(),
                 ),
                 speaker: None,
+                attachments: None,
             },
         );
     }
@@ -499,6 +501,7 @@ pub(crate) async fn prepare_loop_state(
                 role: Role::User,
                 content: MessageContent::Blocks(skill_blocks),
                 speaker: None,
+                attachments: None,
             },
         );
     }
@@ -744,8 +747,45 @@ pub(crate) async fn prepare_loop_state(
     // event so the live-streaming user message's hint row appears
     // before the assistant starts.
     let (last_user_after_inject, injections) =
-        crate::agent::at_file::inject_at_tokens(&mut messages, &current_ctx).await;
-    if !injections.is_empty() && last_user_snapshot.is_some() {
+        crate::agent::at_file::inject_at_tokens(&mut messages, &current_ctx, &session_id).await;
+    // B1 (2026-08-16): attach the message-level attachment refs
+    // (current turn's paste uploads + history refs riding the
+    // frontend payload / reload) as `ImageRef` blocks on the
+    // in-memory request copy. Runs after the @-token pass above —
+    // @-injected images already appended their own ImageRef blocks
+    // inside `inject_at_tokens`; this pass covers the rest. The DB
+    // row was already persisted text-only (source of truth intact).
+    let _attached_images = crate::attachments::attach_images(&mut messages);
+    // B1: the metadata manifest carries BOTH the @-token records and
+    // the message's attachment refs (paste path). Merge the
+    // @-injected images into the attachments list so the frontend
+    // renders one thumbnail row from one key.
+    let last_user_attachments: Vec<crate::llm::types::AttachmentRef> = {
+        let mut refs = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == crate::llm::types::Role::User)
+            .and_then(|m| m.attachments.clone())
+            .unwrap_or_default();
+        for r in &injections {
+            if let crate::agent::at_file::InjectionAction::InjectedImage {
+                file,
+                media_type,
+                tokens_est,
+            } = &r.action
+            {
+                refs.push(crate::llm::types::AttachmentRef {
+                    file: file.clone(),
+                    media_type: media_type.clone(),
+                    source: "at_file".to_string(),
+                    tokens_est: *tokens_est,
+                });
+            }
+        }
+        refs
+    };
+    let has_attachments = !last_user_attachments.is_empty();
+    if (!injections.is_empty() || has_attachments) && last_user_snapshot.is_some() {
         // Update the user row with the injection manifest as
         // metadata. The `update_message_metadata` IPC at the
         // SQL layer (added in this PR — see `db::sessions.rs`)
@@ -765,7 +805,18 @@ pub(crate) async fn prepare_loop_state(
         // silently dropped every entry. The envelope leaves
         // room for future metadata fields (latency, tags,
         // links) without another rehydrate-path migration.
-        let meta = serde_json::json!({ "injections": &injections });
+        //
+        // B1 (2026-08-16): `attachments` joins the envelope (same
+        // single-write-path contract); emitted only when non-empty
+        // so legacy rows / text turns stay byte-identical.
+        let meta = if has_attachments {
+            serde_json::json!({
+                "injections": &injections,
+                "attachments": &last_user_attachments,
+            })
+        } else {
+            serde_json::json!({ "injections": &injections })
+        };
         // B6 PR1b: skip the metadata UPDATE in worker mode (the
         // user row is the parent's, not the worker's).
         if !skip_persist {

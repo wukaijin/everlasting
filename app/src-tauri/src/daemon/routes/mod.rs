@@ -41,6 +41,7 @@
 //! - `worktree` (4): `attach_worktree`, `detach_worktree`, ...
 
 pub mod agent;
+pub mod attachments;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
@@ -84,6 +85,7 @@ use crate::state::AppState;
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api/v1/agent", agent::router(state.clone()))
+        .nest("/api/v1/attachments", attachments::router(state.clone()))
         .nest("/api/v1/cancel", cancel::router(state.clone()))
         .nest(
             "/api/v1/command_palette",

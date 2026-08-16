@@ -1093,6 +1093,7 @@ mod tests {
             role: Role::User,
             content: MessageContent::Text(text.to_string()),
             speaker: None,
+            attachments: None,
         }
     }
 

@@ -85,6 +85,29 @@ pub(crate) async fn add_messages_column_if_missing(
     Ok(())
 }
 
+/// Add a column to `models` if it doesn't already exist. Mirrors
+/// [`add_session_column_if_missing`]. Added for B1 (image
+/// multimodal, 2026-08-16) — the `supports_images` capability flag
+/// that gates wire-layer image blocks (default 0 = degrade to text
+/// placeholder, behavior-equivalent to the pre-B1 text-only channel).
+pub(crate) async fn add_models_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!("ALTER TABLE models ADD COLUMN {} {}", column, decl);
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}
+
 /// Add a column to `subagent_runs` if it doesn't already exist.
 /// Mirrors [`add_session_column_if_missing`]. Added for the
 /// 2026-06-21 subagent-drawer redesign PR1 (`task` + `final_text`).

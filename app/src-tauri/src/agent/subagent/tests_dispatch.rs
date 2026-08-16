@@ -355,6 +355,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             50_000,
         )
         .await
@@ -498,6 +499,7 @@ mod tests {
             display_name,
             None,
             None,
+            false,
             false,
             ctx,
         )
