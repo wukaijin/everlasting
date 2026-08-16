@@ -120,6 +120,7 @@ mod tests {
             max_tokens: Some(8192),
             thinking_effort: Some("high".to_string()),
             supports_thinking: true,
+            supports_images: false,
             context_window: 200_000,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),

@@ -1,0 +1,30 @@
+{
+  "id": "b1-image-multimodal",
+  "name": "b1-image-multimodal",
+  "title": "B1 图片支持(multimodal)",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "feat",
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-08-16",
+  "completedAt": null,
+  "branch": "feat/b1-image-multimodal",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "description": "输入层 multimodal:粘贴+@文件两路传图,支持图片的模型看图推理;models 表 supports_images 配置项;文件系统附件存储+GET 路由;wire 两 adapter;turn_trace images_token 切片;DOMPurify 收紧闭合外链图缺口;群聊支持。议程 8 决议+评审修订已落 PRD/design/implement",
+    "dev_type": "feature",
+    "package": "fullstack"
+  }
+}

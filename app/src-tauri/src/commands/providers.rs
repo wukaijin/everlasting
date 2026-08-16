@@ -146,6 +146,7 @@ pub async fn add_model_inner(
     max_tokens: Option<u32>,
     thinking_effort: Option<String>,
     supports_thinking: bool,
+    supports_images: bool,
     context_window: u32,
 ) -> Result<db::ModelRow, AppCommandError> {
     let display_name = if display_name.is_empty() {
@@ -161,6 +162,7 @@ pub async fn add_model_inner(
         max_tokens,
         thinking_effort.as_deref(),
         supports_thinking,
+        supports_images,
         context_window,
     )
     .await
@@ -179,6 +181,7 @@ pub async fn add_model(
     max_tokens: Option<u32>,
     thinking_effort: Option<String>,
     supports_thinking: bool,
+    supports_images: bool,
     context_window: u32,
 ) -> Result<db::ModelRow, AppCommandError> {
     add_model_inner(
@@ -189,6 +192,7 @@ pub async fn add_model(
         max_tokens,
         thinking_effort,
         supports_thinking,
+        supports_images,
         context_window,
     )
     .await
@@ -204,6 +208,7 @@ pub async fn update_model_inner(
     max_tokens: Option<u32>,
     thinking_effort: Option<String>,
     supports_thinking: bool,
+    supports_images: bool,
     context_window: u32,
 ) -> Result<Option<db::ModelRow>, AppCommandError> {
     let display_name = if display_name.is_empty() {
@@ -220,6 +225,7 @@ pub async fn update_model_inner(
         max_tokens,
         thinking_effort.as_deref(),
         supports_thinking,
+        supports_images,
         context_window,
     )
     .await
@@ -239,6 +245,7 @@ pub async fn update_model(
     max_tokens: Option<u32>,
     thinking_effort: Option<String>,
     supports_thinking: bool,
+    supports_images: bool,
     context_window: u32,
 ) -> Result<Option<db::ModelRow>, AppCommandError> {
     update_model_inner(
@@ -250,6 +257,7 @@ pub async fn update_model(
         max_tokens,
         thinking_effort,
         supports_thinking,
+        supports_images,
         context_window,
     )
     .await

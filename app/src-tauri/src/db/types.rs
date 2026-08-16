@@ -105,6 +105,12 @@ pub struct ModelRow {
     pub max_tokens: Option<u32>,
     pub thinking_effort: Option<String>,
     pub supports_thinking: bool,
+    /// B1 (2026-08-16): whether the model accepts image content
+    /// blocks. When false the wire layer degrades every image to a
+    /// text placeholder (the model is told an image was attached but
+    /// not delivered) — behavior-equivalent to the pre-B1 text-only
+    /// channel, so the default 0 never breaks existing rows.
+    pub supports_images: bool,
     pub context_window: u32,
     pub created_at: String,
     pub updated_at: String,

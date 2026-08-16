@@ -21,6 +21,7 @@ mod tests {
             max_tokens: Some(8192),
             thinking_effort: thinking_effort.map(str::to_string),
             supports_thinking,
+            supports_images: false,
             context_window: 200_000,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),

@@ -109,14 +109,17 @@ pub async fn seed_default_providers_and_models(pool: &SqlitePool) -> Result<(), 
     .await?;
 
     // --- models ---
+    // `supports_images` per real vendor capability (B1, 2026-08-16):
+    // Claude Sonnet/Opus and gpt-4o accept image input; gpt-4.1 is
+    // text-only. Users override per row in Settings.
     let sonnet_id = Uuid::new_v4().to_string();
     sqlx::query(
         r#"
  INSERT INTO models
  (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
- supports_thinking, context_window, created_at, updated_at)
+ supports_thinking, supports_images, context_window, created_at, updated_at)
  VALUES (?, ?, 'claude-sonnet-4-5', 'Claude Sonnet4.5',
- NULL, NULL,1,200000, ?, ?)
+ NULL, NULL,1,1,200000, ?, ?)
  "#,
     )
     .bind(&sonnet_id)
@@ -130,9 +133,9 @@ pub async fn seed_default_providers_and_models(pool: &SqlitePool) -> Result<(), 
         r#"
  INSERT INTO models
  (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
- supports_thinking, context_window, created_at, updated_at)
+ supports_thinking, supports_images, context_window, created_at, updated_at)
  VALUES (?, ?, 'claude-opus-4-7', 'Claude Opus4.7',
- NULL, NULL,1,200000, ?, ?)
+ NULL, NULL,1,1,200000, ?, ?)
  "#,
     )
     .bind(&opus_id)
@@ -146,9 +149,9 @@ pub async fn seed_default_providers_and_models(pool: &SqlitePool) -> Result<(), 
         r#"
  INSERT INTO models
  (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
- supports_thinking, context_window, created_at, updated_at)
+ supports_thinking, supports_images, context_window, created_at, updated_at)
  VALUES (?, ?, 'gpt-4o', 'GPT-4o',
- NULL, NULL,0,128000, ?, ?)
+ NULL, NULL,0,1,128000, ?, ?)
  "#,
     )
     .bind(&gpt4o_id)
@@ -162,9 +165,9 @@ pub async fn seed_default_providers_and_models(pool: &SqlitePool) -> Result<(), 
         r#"
  INSERT INTO models
  (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
- supports_thinking, context_window, created_at, updated_at)
+ supports_thinking, supports_images, context_window, created_at, updated_at)
  VALUES (?, ?, 'gpt-4.1', 'GPT-4.1',
- NULL, NULL,0,1000000, ?, ?)
+ NULL, NULL,0,0,1000000, ?, ?)
  "#,
     )
     .bind(&gpt41_id)

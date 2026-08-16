@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ContentBlock/wire 层契约与 Pair Atomicity——PR2 加 Image 变体、to_wire 占位降级须遵循(评审背书的核心参照)"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "Anthropic/OpenAI 两 adapter 发射规则——PR2 image 块两种 wire 格式(base64 source / image_url data URL)落点"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "turn_trace token 列契约(tools_token/memory_token 先例)——PR4 images_token 列口径=请求内全部 Image 块求和,同 Done 写点"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "幂等 migration helper 模式(add_turn_trace_column_if_missing / add_models_column_if_missing)——PR1/PR4 列添加"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "init.rs 挂载点与 at_file 注入管线约束——PR4 attachments 重建/metadata merge 不破坏群聊 dedup 守卫区"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由注册与 handler 模式——PR3 GET 附件路由(首个 GET 二进制路由)+ save POST"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "chat 前端契约(ChatInput/MessageItem/发送链路)——PR5 暂存列表/缩略图行/发送签名扩展"}
+{"file": ".trellis/spec/frontend/chat/message-list-and-markdown.md", "reason": "markdown 渲染与 DOMPurify 管线——PR5 img 两态放行收紧(外链图降级为链接)"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "daemonBase/proxyPrefix/query-token 三模式取 URL 规则——PR5 attachmentUrl util 与 pwa-remote 图片鉴权"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store/action 模式——PR5 chatSendActions 扩 staged 参数与乐观消息 metadata"}
