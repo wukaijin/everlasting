@@ -370,6 +370,12 @@ pub async fn delete_session_inner(
     // 一处清理两边生效。
     crate::memory::digest::registry().clear(&session_id).await;
 
+    // B1 (2026-08-16): delete the session's image-attachments
+    // directory (best-effort, same wiring point as the stub/digest
+    // registry cleanup above — a deleted session leaves no orphan
+    // image files behind).
+    crate::attachments::delete_session_attachments(&state.app_data_dir, &session_id);
+
     // Step 4 follow-up: best-effort worktree + branch cleanup.
     // Triggered when the session's `worktree_state` is `active`
     // (NOT `detached` — a detached session's worktree was already

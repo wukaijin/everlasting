@@ -34,6 +34,7 @@
 //! (Windows console subsystem on/off, env-filter defaults).
 
 mod agent;
+mod attachments;
 mod background_shell;
 mod commands;
 mod crypto;
@@ -245,6 +246,7 @@ pub fn run() {
             commands::providers::test_provider,
             commands::providers::test_model,
             // Sessions
+            commands::attachments::save_attachment,
             commands::sessions::list_sessions,
             commands::sessions::create_session,
             commands::sessions::load_session,

@@ -21,6 +21,7 @@
 //! shim". It is registered in [`crate::commands::all_commands`]
 //! alongside the rest.
 
+pub mod attachments;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
