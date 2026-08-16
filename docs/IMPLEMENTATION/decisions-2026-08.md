@@ -40,3 +40,8 @@
 - **决策 ⑦ — PC daemon 一等公民 + 永久不做主动推送**:远程是 opt-in 附加层,不反过来绑架 PC 架构;主动推送永久不做。
 - **决策 ⑧ — 移动端中限适配(DEC-1~7)**:滚动 tab / pill / 触控目标等适配,不引入 Tailwind。
 - **决策 ⑨ — 测试专用 import 移入 `cfg(test)`**:commit `2a482eb`,release lib 构建 0 警告。
+
+### 2026-08-16 — P3.3 读写不对称取消(远程权限分层不做)
+
+- **Context**:REMOTE-ACCESS-ROADMAP P3.3 原规划"远程 client 默认只读、写操作需显式 grant + `Transport.isLocal` 属性区分本地/远程连接",epic 期间由 Q11 决策推后(PWA 全权、不做权限分层),2026-08-16 用户决策正式取消,不再作为候选。
+- **决策**:PWA 全权模型接受为**最终形态**——远程设备(手机)与桌面 GUI 权限完全相同,不做远程只读档/写授权分层,`Transport.isLocal` 不引入。远程通道安全边界维持既有机制:配对码 60s 一次性 + per-IP 限速 + device_token + shared_secret + HTTPS(nginx 自理),token 存 localStorage(P3.4 MVP 决策不变)。`docs/REMOTE-ACCESS-ROADMAP.md` P3.3 状态同步为"取消"。

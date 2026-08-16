@@ -369,7 +369,7 @@ cargo test --package everlasting-daemon --test e2e large_payload
 **落地时拆的子阶段与实际状态**:
 - P3.1 配对码流程 + `devices` 表 + token 校验中间件 → ✅ **已落地**:配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分),redeem 换 64-hex device_token;`crates/everlasting-remote/src/routes/pairing.rs` + `db/schema.rs` 的 `nodes/devices/pairing_codes` 三表 + `auth.rs`(shared_secret + device_token 双通道);PC 侧 `daemon/routes/pairing.rs` + `commands/pairing.rs` 镜像
 - P3.2 HTTPS(自签/Let's Encrypt/Cloudflare Tunnel) → ⚠️ **部分落地**:HTTPS 由用户自理(nginx 反代 + 证书,epic Q9),**非 Cloudflare Tunnel**
-- P3.3 读写不对称(远程 client 默认只读,写操作需 grant;`Transport.isLocal` 属性区分) → ❌ **推后**:PWA 等权(epic Q11),transport 层无 `isLocal`
+- P3.3 读写不对称(远程 client 默认只读,写操作需 grant;`Transport.isLocal` 属性区分) → ❌ **取消(2026-08-16 用户决策)**:PWA 全权(epic Q11)定为最终形态,不做远程权限分层,`isLocal` 不引入;远程安全边界维持既有四件套(配对码一次性 + per-IP 限速 + device_token + shared_secret)+ HTTPS。见 [IMPLEMENTATION §4 2026-08-16](./IMPLEMENTATION/decisions-2026-08.md)
 - P3.4 token 存储 XSS 防护评估(localStorage vs httpOnly cookie) → ✅ **MVP 接受 localStorage**(`transport/auth.ts`),V2 再评估 httpOnly cookie
 - P3.5 Cloudflare Tunnel / Tailscale Funnel 部署文档(两套并存) → ❌ **替换**:国内 2C2G 服务器 + 自研 WSS 隧道(`scripts/deploy-remote.sh` + `docs/REMOTE-DEPLOY.md`)
 
