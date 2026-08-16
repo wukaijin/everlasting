@@ -97,6 +97,7 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
             role: Role::User,
             content: MessageContent::Text(content),
             speaker,
+            attachments: None,
         }],
         WireMessage::UserBlocks { blocks } => {
             // B5 refactor (2026-06-11): preserve block-level
@@ -112,6 +113,7 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
                 role: Role::User,
                 content: MessageContent::Blocks(merged),
                 speaker: None,
+                attachments: None,
             }]
         }
         WireMessage::Tool {
@@ -128,6 +130,7 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
                     is_error: false,
                 }]),
                 speaker: None,
+                attachments: None,
             }]
         }
         WireMessage::Assistant { blocks, speaker } => {
@@ -145,6 +148,7 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(merged),
                 speaker,
+                attachments: None,
             }]
         }
     }

@@ -47,6 +47,7 @@ fn user_msg(content: MessageContent) -> ChatMessage {
         role: Role::User,
         content,
         speaker: None,
+        attachments: None,
     }
 }
 
@@ -136,6 +137,7 @@ fn dd_guard_skips_persist_for_speaker_user_in_group_chat() {
         role: Role::User,
         content: MessageContent::Text("主持人发言".to_string()),
         speaker: Some("moderator".to_string()),
+        attachments: None,
     };
     let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg);
     assert!(
@@ -178,6 +180,7 @@ fn dd_guard_rewrite_row_skips_at_file_injection() {
         role: Role::User,
         content: MessageContent::Text("M1 发言".to_string()),
         speaker: Some("M1".to_string()),
+        attachments: None,
     };
     let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg).unwrap();
     assert!(
@@ -199,6 +202,7 @@ fn dd_guard_rewrite_row_seq_not_first_user_row() {
         role: Role::User,
         content: MessageContent::Text("主持人发言".to_string()),
         speaker: Some("moderator".to_string()),
+        attachments: None,
     };
     let hit = dd_guard_hit(false, group_chat_state().as_ref(), &loaded, &msg).unwrap();
     assert_eq!(

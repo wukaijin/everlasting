@@ -50,6 +50,7 @@ pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireReq
             role: Role::User,
             content: MessageContent::Blocks(synthetic_results),
             speaker: None,
+            attachments: None,
         });
     }
     let messages = messages

@@ -299,3 +299,259 @@ mod tests {
             .block_on(fut)
     }
 }
+
+// ---------------------------------------------------------------------------
+// B1 PR4: agent-loop helpers — attach pass, pre-send resolve, token estimate
+// ---------------------------------------------------------------------------
+
+use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
+
+/// Fallback per-image token pad when no attach-time estimate is
+/// available (mirrors the C3 estimator constant in
+/// `agent::context.rs`).
+pub const IMAGES_TOKEN_FALLBACK_EACH: u32 = 1600;
+
+/// Convert every user message's `attachments` field into
+/// `ContentBlock::ImageRef` blocks appended to its content (the
+/// in-memory request side). Idempotent within one loop entry (the
+/// `attachments` field is left untouched; a message whose content
+/// already carries its ImageRef blocks — re-entering `run_chat_loop`
+/// with a reload-fresh Vec — is the normal shape, and appending twice
+/// cannot happen because entries always arrive with text-only
+/// content).
+///
+/// Returns the number of image blocks appended (used by the caller
+/// for the request-total cap).
+pub fn attach_images(messages: &mut [ChatMessage]) -> usize {
+    let mut appended = 0;
+    for m in messages.iter_mut() {
+        if m.role != Role::User {
+            continue;
+        }
+        let Some(refs) = m.attachments.clone() else {
+            continue;
+        };
+        if refs.is_empty() {
+            continue;
+        }
+        let blocks: Vec<ContentBlock> = refs
+            .iter()
+            .map(|r| ContentBlock::ImageRef {
+                file: r.file.clone(),
+                media_type: r.media_type.clone(),
+            })
+            .collect();
+        appended += blocks.len();
+        m.content = match m.content.clone() {
+            // Pure-image turn: Blocks with the images only (an empty
+            // Text block would waste tokens).
+            MessageContent::Text(t) if t.trim().is_empty() => MessageContent::Blocks(blocks),
+            MessageContent::Text(t) => MessageContent::Blocks(
+                vec![ContentBlock::Text {
+                    text: t,
+                    cache_control: None,
+                }]
+                .into_iter()
+                .chain(blocks)
+                .collect(),
+            ),
+            MessageContent::Blocks(mut existing) => {
+                existing.extend(blocks);
+                MessageContent::Blocks(existing)
+            }
+        };
+    }
+    appended
+}
+
+/// Pre-send resolve pass (runs on the per-turn request clone in
+/// `drive.rs`, right before `retry_open`): every `ImageRef` block is
+/// read from disk once and replaced with the resolved
+/// `ContentBlock::Image` (base64). A missing/unreadable file degrades
+/// to the wire-layer text placeholder instead of failing the turn —
+/// history stays deliverable even if an attachment was deleted out of
+/// band.
+pub async fn resolve_image_refs(
+    messages: Vec<ChatMessage>,
+    app_data_dir: &Path,
+    session_id: &str,
+) -> Vec<ChatMessage> {
+    let mut out = messages;
+    for m in out.iter_mut() {
+        if m.role != Role::User {
+            continue;
+        }
+        if let MessageContent::Blocks(blocks) = &mut m.content {
+            for b in blocks.iter_mut() {
+                let ContentBlock::ImageRef { file, media_type } = b else {
+                    continue;
+                };
+                match read_image(app_data_dir, session_id, file).await {
+                    Ok((_, bytes)) => {
+                        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+                        *b = ContentBlock::Image {
+                            source: crate::llm::types::ImageSource {
+                                source_type: "base64".to_string(),
+                                media_type: media_type.clone(),
+                                data: B64.encode(bytes),
+                            },
+                        };
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            file = %file,
+                            error = %e,
+                            "resolve_image_refs: attachment unreadable — degrading to text placeholder"
+                        );
+                        let label = file.clone();
+                        *b = ContentBlock::Text {
+                            text: format!("[image: {} — 附件不可读，未发送]", label),
+                            cache_control: None,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Estimate the request's total image-token cost: the sum of every
+/// image block's attach-time estimate (fallback pad when missing).
+/// Called on the same request clone the provider is about to see, so
+/// the number matches what `context_input` will be billed (P0-1 口径:
+/// 含历史重建的全部 Image 块).
+pub fn estimate_images_token(messages: &[ChatMessage]) -> u32 {
+    let mut total = 0u32;
+    for m in messages {
+        if m.role != Role::User {
+            continue;
+        }
+        let MessageContent::Blocks(blocks) = &m.content else {
+            continue;
+        };
+        for b in blocks {
+            if matches!(
+                b,
+                ContentBlock::Image { .. } | ContentBlock::ImageRef { .. }
+            ) {
+                total += IMAGES_TOKEN_FALLBACK_EACH;
+            }
+        }
+        // Prefer the precise per-image estimates when present.
+        if let Some(refs) = &m.attachments {
+            let est: u32 = refs
+                .iter()
+                .map(|r| r.tokens_est.unwrap_or(IMAGES_TOKEN_FALLBACK_EACH))
+                .sum();
+            let pads = refs.len() as u32 * IMAGES_TOKEN_FALLBACK_EACH;
+            // The pad contribution (added above per block) and the
+            // estimate refer to the same images — replace, don't add
+            // (the attach pass guarantees the attachments list covers
+            // every image block on the message 1:1).
+            total = total.saturating_sub(pads) + est;
+        }
+    }
+    total
+}
+
+#[cfg(test)]
+mod agent_helper_tests {
+    use super::*;
+    use crate::llm::types::AttachmentRef;
+
+    fn user_msg(text: &str, refs: Vec<AttachmentRef>) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+            speaker: None,
+            attachments: if refs.is_empty() { None } else { Some(refs) },
+        }
+    }
+
+    fn aref(file: &str, est: Option<u32>) -> AttachmentRef {
+        AttachmentRef {
+            file: file.to_string(),
+            media_type: "image/png".to_string(),
+            source: "paste".to_string(),
+            tokens_est: est,
+        }
+    }
+
+    #[test]
+    fn attach_appends_image_refs_and_handles_pure_image() {
+        let mut msgs = vec![
+            user_msg("hello", vec![aref("a.png", None)]),
+            user_msg("", vec![aref("b.png", None), aref("c.png", None)]),
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Text("hi".to_string()),
+                speaker: None,
+                attachments: Some(vec![aref("d.png", None)]),
+            },
+        ];
+        let n = attach_images(&mut msgs);
+        // Assistant rows never attach.
+        assert_eq!(n, 3);
+        let MessageContent::Blocks(b) = &msgs[0].content else {
+            panic!()
+        };
+        assert_eq!(b.len(), 2); // text + image
+        assert!(matches!(b[0], ContentBlock::Text { .. }));
+        assert!(matches!(&b[1], ContentBlock::ImageRef { file, .. } if file == "a.png"));
+        let MessageContent::Blocks(b) = &msgs[1].content else {
+            panic!()
+        };
+        assert_eq!(b.len(), 2); // pure image: NO empty text block
+        assert!(matches!(b[0], ContentBlock::ImageRef { .. }));
+        assert!(matches!(&msgs[2].content, MessageContent::Text(_)));
+    }
+
+    #[test]
+    fn estimate_prefers_precise_tokens_over_pad() {
+        let mut msgs = vec![user_msg(
+            "x",
+            vec![aref("a.png", Some(800)), aref("b.png", None)],
+        )];
+        attach_images(&mut msgs);
+        // 800 (precise) + 1600 (pad fallback) — not 2×1600.
+        assert_eq!(
+            estimate_images_token(&msgs),
+            800 + IMAGES_TOKEN_FALLBACK_EACH
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_reads_files_and_degrades_missing() {
+        let root = tmp_root_pub();
+        let file = save_image(&root, "sessResolve1", "image/png", b"pngdata".as_slice())
+            .await
+            .unwrap();
+        let mut msgs = vec![user_msg(
+            "x",
+            vec![
+                aref(&file, None),
+                aref("ffffffffffffffffffffffffffffffff.png", None),
+            ],
+        )];
+        attach_images(&mut msgs);
+        let msgs = resolve_image_refs(msgs, &root, "sessResolve1").await;
+        let MessageContent::Blocks(b) = &msgs[0].content else {
+            panic!()
+        };
+        // first: resolved to base64 Image
+        assert!(
+            matches!(&b[1], ContentBlock::Image { source, .. } if source.data == "cG5nZGF0YQ==")
+        );
+        // second: missing file → text placeholder, turn survives
+        assert!(matches!(&b[2], ContentBlock::Text { text, .. } if text.contains("附件不可读")));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn tmp_root_pub() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("everlasting-att2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+}

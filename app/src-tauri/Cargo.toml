@@ -60,6 +60,10 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# B1 (2026-08-16): image header dimension probe (PNG IHDR / JPEG SOF /
+# WebP VP8X) for the @-token image-token estimate. Pure Rust, no
+# system deps, header-only (never decodes pixels).
+imagesize = "0.13"
 
 # Persistence (step 3a)
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono"] }

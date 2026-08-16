@@ -86,6 +86,7 @@ mod tests {
                 input: serde_json::json!({}),
             }]),
             speaker: None,
+            attachments: None,
         }];
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_1".to_string()]);
     }
@@ -101,6 +102,7 @@ mod tests {
                     input: serde_json::json!({}),
                 }]),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::User,
@@ -110,6 +112,7 @@ mod tests {
                     is_error: false,
                 }]),
                 speaker: None,
+                attachments: None,
             },
         ];
         assert!(orphan_tool_use_ids(&msgs).is_empty());
@@ -135,6 +138,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             },
             ChatMessage {
                 role: Role::User,
@@ -144,6 +148,7 @@ mod tests {
                     is_error: false,
                 }]),
                 speaker: None,
+                attachments: None,
             },
         ];
         assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_2".to_string()]);
@@ -171,6 +176,7 @@ mod tests {
                     input: serde_json::json!({}),
                 }]),
                 speaker: None,
+                attachments: None,
             }],
             system: None,
             stream: false,
@@ -212,6 +218,7 @@ mod tests {
                         input: serde_json::json!({}),
                     }]),
                     speaker: None,
+                    attachments: None,
                 },
                 ChatMessage {
                     role: Role::User,
@@ -221,6 +228,7 @@ mod tests {
                         is_error: false,
                     }]),
                     speaker: None,
+                    attachments: None,
                 },
             ],
             system: None,
@@ -547,6 +555,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Text("hello".to_string()),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![ToolDef {
@@ -596,6 +605,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -642,6 +652,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -903,6 +914,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }];
         let req = ChatRequest {
             model: "claude-sonnet-4-5".to_string(),
@@ -952,6 +964,7 @@ mod tests {
                 signature: String::new(),
             }]),
             speaker: None,
+            attachments: None,
         }];
         let req = ChatRequest {
             model: "m".to_string(),
@@ -1012,6 +1025,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }];
         let req = ChatRequest {
             model: "m".to_string(),
@@ -1110,6 +1124,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -1151,6 +1166,7 @@ mod b1_image_tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }
     }
 
@@ -1228,6 +1244,7 @@ mod b1_image_tests {
                     media_type: "image/png".to_string(),
                 }]),
                 speaker: None,
+                attachments: None,
             }],
             system: None,
             stream: true,

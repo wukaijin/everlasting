@@ -829,6 +829,7 @@ pub async fn run_chat_loop(
                 },
             ]),
             speaker: None,
+            attachments: None,
         };
         if !skip_persist {
             if let Err(e) = crate::db::persist_turn(

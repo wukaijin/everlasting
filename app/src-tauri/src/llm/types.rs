@@ -31,7 +31,7 @@ mod request;
 mod usage;
 
 #[allow(unused_imports)]
-pub use chat::{ChatMessage, ToolDef};
+pub use chat::{AttachmentRef, ChatMessage, ToolDef};
 #[allow(unused_imports)]
 pub use event::{ChatEvent, LlmErrorCategory, RecallHit};
 #[allow(unused_imports)]

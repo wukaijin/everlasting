@@ -145,6 +145,7 @@ pub(crate) async fn build_resume_messages(
         role: crate::llm::types::Role::User,
         content: crate::llm::types::MessageContent::Text(final_task.to_string()),
         speaker: None,
+        attachments: None,
     });
     tracing::info!(
         run_id = %run_id,
@@ -191,5 +192,6 @@ pub(crate) fn build_clarification_message(
         role: crate::llm::types::Role::User,
         content: crate::llm::types::MessageContent::Text(lines.join("\n")),
         speaker: None,
+        attachments: None,
     })
 }

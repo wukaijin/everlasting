@@ -1773,6 +1773,7 @@ pub(crate) async fn finalize_turn(
                 role: Role::User,
                 content: MessageContent::Blocks(result_blocks),
                 speaker: None,
+                attachments: None,
             };
             // B6 PR1b: skip the cancelled tool_result persist
             // in worker mode (SubagentBufferSink transcript is
@@ -1826,6 +1827,7 @@ pub(crate) async fn finalize_turn(
         role: Role::User,
         content: MessageContent::Blocks(result_blocks),
         speaker: None,
+        attachments: None,
     };
     // B6 PR1b: skip the tool_result persist in worker mode
     // (SubagentBufferSink transcript is the worker's record).

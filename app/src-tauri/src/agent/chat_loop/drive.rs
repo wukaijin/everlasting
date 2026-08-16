@@ -349,6 +349,7 @@ pub(crate) async fn drive_turn(
                     cache_control: None,
                 }]),
                 speaker: None,
+                attachments: None,
             };
             // APPEND, never prepend — see cache-correctness note
             // above. Prepending would bust the memory cache
@@ -376,6 +377,7 @@ pub(crate) async fn drive_turn(
                     cache_control: None,
                 }]),
                 speaker: None,
+                attachments: None,
             };
             req.push(msg);
         }
@@ -515,6 +517,25 @@ pub(crate) async fn drive_turn(
         }
         req
     };
+
+    // B1 (2026-08-16): pre-send image resolve + token estimate on the
+    // per-turn request clone. `attach_images` (init.rs) turned the
+    // user messages' attachment refs into lightweight `ImageRef`
+    // blocks in the master `messages` Vec; here — after checklist /
+    // notification / recall appends and right before the wire layer —
+    // each ref is read from disk ONCE and resolved to base64. The
+    // master Vec keeps the lightweight refs (C3 estimates / role
+    // history clones never see megabyte payloads). Unreadable files
+    // degrade to a text placeholder (turn survives).
+    let turn_messages =
+        crate::attachments::resolve_image_refs(turn_messages, &current_ctx.data_dir, &session_id)
+            .await;
+    // images_token (P0-1 口径): the request's TOTAL image-token cost
+    // — new images + history rebuilds (they ride every request and
+    // the provider bills them per request). Per-request constant,
+    // written at the Done-event upsert below like tools_token /
+    // memory_token.
+    let images_token = crate::attachments::estimate_images_token(&turn_messages);
 
     // Turn-tool filter chain (provider-agnostic, applied before the
     // provider sees `tools[]`): mode → workflow → session_type. Each
@@ -877,7 +898,10 @@ pub(crate) async fn drive_turn(
                                 // WP1 (2026-08-15): memory_token rides the
                                 // same write point — per-request constant,
                                 // identical across the request's turn rows.
-                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token), memory_token).await {
+                                // B1 (2026-08-16): images_token likewise
+                                // (worker turns never carry attachments → 0).
+                                let images_tok = if skip_persist { None } else { Some(images_token) };
+                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token), memory_token, images_tok).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
                             }
@@ -1057,6 +1081,7 @@ pub(crate) async fn drive_turn(
             // (Phase 1 migration) so existing rows / sessions are
             // unaffected.
             speaker: current_speaker.clone(),
+            attachments: None,
         };
         let turn_latency = build_turn_latency(
             turn_send_at,

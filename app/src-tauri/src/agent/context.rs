@@ -511,6 +511,7 @@ mod tests {
             role: Role::User,
             content: MessageContent::Text(text.into()),
             speaker: None,
+            attachments: None,
         }
     }
 
@@ -520,6 +521,7 @@ mod tests {
             role: Role::Assistant,
             content: MessageContent::Text(text.into()),
             speaker: None,
+            attachments: None,
         }
     }
 
@@ -539,6 +541,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }
     }
 
@@ -552,6 +555,7 @@ mod tests {
                 is_error: false,
             }]),
             speaker: None,
+            attachments: None,
         }
     }
 
@@ -571,6 +575,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }
     }
 

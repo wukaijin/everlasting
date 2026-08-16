@@ -504,6 +504,7 @@ async fn reloaded_transcript(db: &sqlx::SqlitePool, session_id: &str) -> Vec<Cha
             },
             content: serde_json::from_value(m.content.clone()).unwrap(),
             speaker: m.speaker.clone(),
+            attachments: None,
         })
         .collect()
 }

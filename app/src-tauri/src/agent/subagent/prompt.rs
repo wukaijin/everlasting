@@ -69,6 +69,7 @@ pub async fn build_worker_messages(
             role: Role::User,
             content: MessageContent::Blocks(instructions_blocks),
             speaker: None,
+            attachments: None,
         });
         // Mirror the parent loop's memory pair: a synthetic assistant
         // ack keeps the Anthropic wire shape happy (user/assistant
@@ -82,6 +83,7 @@ pub async fn build_worker_messages(
                     .to_string(),
             ),
             speaker: None,
+            attachments: None,
         });
     }
     // The delegation task. APPEND — the memory breakpoint (if any)
@@ -92,6 +94,7 @@ pub async fn build_worker_messages(
         role: Role::User,
         content: MessageContent::Text(task.to_string()),
         speaker: None,
+        attachments: None,
     });
     messages
 }

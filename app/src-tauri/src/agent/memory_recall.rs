@@ -274,6 +274,7 @@ pub fn inject_recall_into_turn(turn_messages: &mut Vec<ChatMessage>, recall_text
             role: Role::User,
             content: MessageContent::Blocks(vec![block]),
             speaker: None,
+            attachments: None,
         },
     );
 }
@@ -482,6 +483,7 @@ mod tests {
                 },
             ]),
             speaker: None,
+            attachments: None,
         }];
         inject_recall_into_turn(&mut msgs, "recall body".into());
         // Still 1 message; blocks grew by 1.
@@ -519,6 +521,7 @@ mod tests {
             role: Role::User,
             content: MessageContent::Text("hello".into()),
             speaker: None,
+            attachments: None,
         }];
         inject_recall_into_turn(&mut msgs, "recall body".into());
         assert_eq!(msgs.len(), 2);

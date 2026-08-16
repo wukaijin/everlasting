@@ -129,19 +129,23 @@ fi
 if ! sqlite3 -readonly "$DB_PATH" "SELECT memory_token FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then
   echo "ERR: turn_trace has no memory_token column — daemon binary predates memory-block-governance WP1 (rebuild)" >&2; exit 1
 fi
+if ! sqlite3 -readonly "$DB_PATH" "SELECT images_token FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then
+  echo "ERR: turn_trace has no images_token column — daemon binary predates B1 PR4 (rebuild)" >&2; exit 1
+fi
 if [ "$(max_seq)" -lt 0 ]; then
   echo "ERR: no turn_trace rows for session (check daemon logs: ./scripts/daemon.sh logs)" >&2; exit 1
 fi
 
 # ── 4. 报告 ───────────────────────────────────────────────────────────
 sqlite3 -readonly -header -column "$DB_PATH" \
-  "SELECT seq, tools_token, memory_token,
+  "SELECT seq, tools_token, memory_token, images_token,
           json_extract(token_usage_json,'\$.input_tokens')      AS input_tok,
           json_extract(token_usage_json,'\$.output_tokens')     AS output_tok,
           json_extract(token_usage_json,'\$.cache_read_input_tokens') AS cache_read,
           json_extract(token_usage_json,'\$.context_input_tokens')    AS ctx_input,
           CAST(ROUND(100.0*tools_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS tools_pct,
-          CAST(ROUND(100.0*memory_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS mem_pct
+          CAST(ROUND(100.0*memory_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS mem_pct,
+          CAST(ROUND(100.0*images_token/json_extract(token_usage_json,'\$.context_input_tokens')) AS INT) AS img_pct
    FROM turn_trace WHERE session_id='$SID' ORDER BY seq;"
 MSG_COUNT="$(sqlite3 -readonly "$DB_PATH" "SELECT COUNT(*) FROM messages WHERE session_id='$SID';")"
 echo "messages persisted: $MSG_COUNT (user+assistant)"

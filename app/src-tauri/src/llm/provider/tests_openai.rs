@@ -469,6 +469,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             stream: true,
             tools: vec![],
@@ -1000,6 +1001,7 @@ mod tests {
                 role: Role::User,
                 content: MessageContent::Text("吃了吗".to_string()),
                 speaker: None,
+                attachments: None,
             }],
             vec![],
         );
@@ -1060,6 +1062,7 @@ mod tests {
                     },
                 ]),
                 speaker: None,
+                attachments: None,
             }],
             system: None,
             stream: true,
