@@ -182,6 +182,18 @@ export interface LatencyInfo {
 export type InjectionRecord =
   | { kind: "injected"; lines: number }
   | {
+      /** B1 (2026-08-16): an `@image` file was COPIED into the
+       *  session's attachments dir and injected as a real image
+       *  block. Wire shape mirrors the Rust `InjectionAction::
+       *  InjectedImage` struct variant (`#[serde(tag = "kind",
+       *  rename_all = "snake_case")]`, inner fields snake_case —
+       * `media_type` / `tokens_est`). */
+      kind: "injected_image";
+      file: string;
+      media_type: string;
+      tokens_est?: number | null;
+    }
+  | {
       kind: "degraded";
       file_kind: "image" | "pdf" | "office" | "binary";
     }
@@ -200,6 +212,42 @@ export type InjectionRecord =
 export interface InjectionEntry {
   path: string;
   action: InjectionRecord;
+}
+
+/** B1 (2026-08-16) image-multimodal: one image sitting in the
+ *  paste-staging strip (in-memory only — never persisted). `url`
+ *  is a `URL.createObjectURL` blob URL revoked on remove /
+ *  session switch; `tokensEst` is the `(w×h)/750` Anthropic-style
+ *  estimate computed at stage time. Lives on the chat store (not
+ *  ChatInput component state) so send / clear / session-switch
+ *  lifecycle is store-owned (design §5.1). */
+export interface StagedImage {
+  /** objectURL of the pasted File (thumbnail + optimistic render). */
+  url: string;
+  file: File;
+  w: number;
+  h: number;
+  tokensEst: number;
+}
+
+/** B1: one attachment as the RENDER layer sees it, read off
+ *  `ChatMessage.metadata.attachments`. Two producers, two shapes:
+ *  - optimistic (just-sent, in-memory): camelCase
+ *    `{ file, localUrl, mediaType, source, tokensEst }` — written
+ *    by `chatSendActions.send` before the DB row exists.
+ *  - rehydrated (DB `messages.metadata`): snake_case
+ *    `{ file, media_type, source, tokens_est }` — the backend
+ *    `AttachmentRef` serde shape (no rename_all).
+ *  Every field is optional because each producer fills a different
+ *  subset; consumers (`MessageImages.vue`) must accept both. */
+export interface AttachmentView {
+  file?: string;
+  localUrl?: string;
+  mediaType?: string;
+  media_type?: string;
+  source?: string;
+  tokensEst?: number;
+  tokens_est?: number;
 }
 
 /** Chat message with optional tool call/result/thinking metadata. */

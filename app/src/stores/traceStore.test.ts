@@ -54,6 +54,7 @@ function makeTurnTraceRow(
     breadcrumbJson: null,
     toolsToken: null,
     memoryToken: null,
+    imagesToken: null,
     createdAt: "2026-07-14 12:00:00",
     ...overrides,
   };

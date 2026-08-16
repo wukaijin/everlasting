@@ -17,6 +17,11 @@ export interface ModelWithProvider {
   /** `null` means "fall back to the global default (high)". */
   thinkingEffort: string | null;
   supportsThinking: boolean;
+  /** B1 (2026-08-16) image-multimodal R1: the model accepts image
+   *  blocks (vision). `false` → the wire layer downgrades images to
+   *  text placeholders (R3) and the frontend toasts a hint on send.
+   *  Explicitly configured — no model-name heuristics (design §1). */
+  supportsImages: boolean;
   contextWindow: number;
   createdAt: string;
   updatedAt: string;
@@ -91,6 +96,7 @@ export const useModelsStore = defineStore("models", () => {
       maxTokens?: number;
       thinkingEffort?: string;
       supportsThinking: boolean;
+      supportsImages: boolean;
       contextWindow: number;
     },
   ) {
@@ -118,6 +124,7 @@ export const useModelsStore = defineStore("models", () => {
       maxTokens?: number;
       thinkingEffort?: string;
       supportsThinking: boolean;
+      supportsImages: boolean;
       contextWindow: number;
     },
   ) {

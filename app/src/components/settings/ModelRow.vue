@@ -78,6 +78,11 @@ const testTitle = computed<string>(() =>
             <span v-if="model.supportsThinking" class="model-row__tag">
                 thinking
             </span>
+            <!-- B1 R1: vision capability tag — same tag treatment as
+                 thinking. -->
+            <span v-if="model.supportsImages" class="model-row__tag">
+                vision
+            </span>
             <span class="model-row__tag model-row__tag--muted">
                 {{
                     model.contextWindow >= 1000

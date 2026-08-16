@@ -98,7 +98,7 @@ import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
 import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInputCodeMirror";
 import { useChatStore } from "../../stores/chat";
-import { MODE_CYCLE, type SessionMode } from "../../stores/chat.types";
+import { MODE_CYCLE, type SessionMode, type StagedImage } from "../../stores/chat.types";
 import { useModelsStore } from "../../stores/models";
 import { useProjectsStore } from "../../stores/projects";
 import { tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
@@ -131,7 +131,11 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [text: string];
+  /** B1 (2026-08-16) image-multimodal: the staged paste-image set
+   *  rides the send event (ChatInput → ChatPanel → ChatWindow →
+   *  `chatStore.send(text, staged)`). The strip state itself lives
+   *  on the chat store; this is the same array reference. */
+  send: [text: string, staged: StagedImage[]];
   stop: [];
 }>();
 
@@ -211,7 +215,11 @@ const cm = useChatInputCodeMirror({
   placeholder: computed(() => props.placeholder),
   onSubmit: () => {
     const text = cm.input.value;
-    if (!text.trim() || props.sending) return;
+    // B1 R2a: pure-image sends pass (empty text + staged images);
+    // only an empty text AND empty strip is a no-op.
+    if ((!text.trim() && chatStore.stagedImages.length === 0) || props.sending) {
+      return;
+    }
     const v = cm.view.value;
     if (v) {
       const cur = v.state.doc.toString();
@@ -221,7 +229,13 @@ const cm = useChatInputCodeMirror({
     } else {
       cm.input.value = "";
     }
-    emit("send", text);
+    emit("send", text, chatStore.stagedImages);
+  },
+  // B1 (2026-08-16): pasted image files go straight to the chat
+  // store's staging strip (mime/size/count gates + objectURL
+  // lifecycle live there — see chatSendActions).
+  onPasteImages: (files) => {
+    void chatStore.addStagedImages(files);
   },
   commandItemsSource: async (): Promise<TriggerMenuItem[]> => {
     const projectId = projectsStore.currentProjectId;
@@ -380,7 +394,11 @@ function onStop() {
   emit("stop");
 }
 
-const sendDisabled = (): boolean => props.sending || !cm.input.value.trim();
+// B1 R2a: send is enabled for any non-empty text OR a non-empty
+// staging strip (pure-image sends).
+const sendDisabled = (): boolean =>
+  props.sending ||
+  (!cm.input.value.trim() && chatStore.stagedImages.length === 0);
 
 function onEscKeydown() {
   if (props.sending) {
@@ -572,6 +590,33 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
 
 <template>
   <footer class="chat-input" @keydown.escape.prevent="onEscKeydown">
+    <!-- B1 (2026-08-16) R2a: paste-image staging strip. Horizontal
+         thumbnail row above the input; each cell is a 56px-tall
+         thumb with a ✕ remove button. Renders only when the strip
+         is non-empty (state lives on the chat store —
+         `chatStore.stagedImages`). -->
+    <div v-if="chatStore.stagedImages.length > 0" class="chat-input__staged">
+      <div
+        v-for="(img, idx) in chatStore.stagedImages"
+        :key="img.url"
+        class="chat-input__staged-item"
+      >
+        <img
+          class="chat-input__staged-thumb"
+          :src="img.url"
+          :alt="`待发送图片 ${idx + 1}(${img.tokensEst} tokens 估算)`"
+        />
+        <button
+          type="button"
+          class="chat-input__staged-remove"
+          aria-label="移除此图片"
+          :title="`移除此图片(估算 ${img.tokensEst} tokens)`"
+          @click="chatStore.removeStagedImage(idx)"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
     <div class="chat-input__row" :style="inputRowStyle">
       <!-- PR2 (B7): per-session Mode picker. Placed on the LEFT
            of the input row (same line as the editor), NOT in
@@ -716,6 +761,63 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   padding: 12px 20px 16px;
   background: var(--color-bg-app);
   flex-shrink: 0;
+}
+
+/* B1 R2a: staging strip — horizontal scrollable thumbnail row above
+   the input row. 56px cells (thumb 48px + a little chrome), ✕ badge
+   overlapping the top-right corner of each cell. Zero new
+   dependencies: plain CSS + the store's objectURLs. */
+.chat-input__staged {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 4px 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.chat-input__staged-item {
+  position: relative;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+}
+
+.chat-input__staged-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-bg-border);
+  display: block;
+  background: var(--color-bg-elevated);
+}
+
+.chat-input__staged-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.chat-input__staged-remove:hover {
+  color: var(--color-tool-error-text, #e5484d);
+  background: var(--color-bg-app);
 }
 
 .chat-input__row {

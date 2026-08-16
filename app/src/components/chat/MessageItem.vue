@@ -53,6 +53,7 @@ import RequestModeChangeCard from "./RequestModeChangeCard.vue";
 import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue";
 import UiCard from "./UiCard.vue";
 import FileInjectionsHint from "./FileInjectionsHint.vue";
+import MessageImages from "./MessageImages.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
 import MessageItemEdit from "./MessageItemEdit.vue";
 import MessageItemFooter from "./MessageItemFooter.vue";
@@ -232,6 +233,45 @@ const showEditedLabel = computed<boolean>(
     !props.message.streaming &&
     !isEditingThisMessage.value,
 );
+
+// --- B1 (2026-08-16) R2a: user-turn attachment thumbnails ---------------
+// Map `message.metadata.attachments` into the `MessageImages` entry
+// shape. Two producers write the manifest (see `AttachmentView` in
+// `chat.types.ts`): the optimistic camelCase form from
+// `chatSendActions.send` (`file` + `localUrl` + `mediaType`) and the
+// rehydrated snake_case backend form (`file` + `media_type`). We
+// accept both — `file` present → the thumbnail resolves via the
+// daemon GET route; only-`localUrl` (pre-upload blob) renders the
+// blob URL. Entries with neither are dropped (nothing to show).
+const messageImages = computed<
+  Array<{ file?: string; localUrl?: string; mediaType: string }>
+>(() => {
+  const m = props.message;
+  if (m.role !== "user") return [];
+  const raw = m.metadata?.attachments;
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ file?: string; localUrl?: string; mediaType: string }> =
+    [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const file =
+      typeof o.file === "string" && o.file.length > 0 ? o.file : undefined;
+    const localUrl =
+      typeof o.localUrl === "string" && o.localUrl.length > 0
+        ? o.localUrl
+        : undefined;
+    if (!file && !localUrl) continue;
+    const mediaType =
+      typeof o.media_type === "string"
+        ? o.media_type
+        : typeof o.mediaType === "string"
+          ? o.mediaType
+          : "";
+    out.push({ file, localUrl, mediaType });
+  }
+  return out;
+});
 </script>
 
 <template>
@@ -613,6 +653,21 @@ const showEditedLabel = computed<boolean>(
         (edited)
       </span>
     </div>
+
+    <!--
+      B1 (2026-08-16) R2a: per-user-turn image attachment strip.
+      Renders one 64px thumbnail per image this turn carried (pasted
+      uploads render optimistically from the same manifest the
+      rehydrate path rewrites). Same level as FileInjectionsHint,
+      directly below the bubble. `sessionId` follows the existing
+      MessageActionsMenu pattern — the row's session is the chat
+      store's current session (message rows are per-session lists).
+    -->
+    <MessageImages
+      v-if="message.role === 'user' && messageImages.length > 0"
+      :session-id="chatStore.currentSessionId ?? ''"
+      :images="messageImages"
+    />
 
     <!--
       B2 PR3: per-user-turn `@relpath` injection hint row.

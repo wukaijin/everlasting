@@ -207,6 +207,59 @@ describe("TurnCard — render", () => {
     expect(w.find(".turn-card__token-cell--memory").exists()).toBe(false);
     expect(w.find(".turn-card__token-cell--tools").exists()).toBe(true);
   });
+
+  it("renders the B1 img estimate cell with its context share", () => {
+    // B1 (2026-08-16) R6: imagesToken + context_input present →
+    // `img` cell + share tooltip. Formula images_token /
+    // context_input (2500/10000 = 25%), same no-double-count rule
+    // as the tools[]/memory cells.
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          imagesToken: 2500,
+          tokenUsage: {
+            input_tokens: 3000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 10000,
+          },
+        }),
+      },
+    });
+    const imgCell = w.find(".turn-card__token-cell--images");
+    expect(imgCell.exists()).toBe(true);
+    expect(imgCell.text()).toContain("img 2.5K");
+    expect(imgCell.attributes("title")).toContain("25%");
+  });
+
+  it("omits the img cell when imagesToken is 0 (image-less turn) or absent", () => {
+    // B1 design: 无图轮 images_token=0 — a zero cell would be pure
+    // noise next to the 5-field bar, so the gate is > 0 (unlike
+    // tools/mem which render their 0s).
+    const w0 = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          imagesToken: 0,
+          tokenUsage: {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 1000,
+          },
+        }),
+      },
+    });
+    expect(w0.find(".turn-card__token-cell--images").exists()).toBe(false);
+
+    const wNoField = mount(TurnCard, {
+      props: { trace: makeTrace({ toolsToken: 100 }) },
+    });
+    expect(wNoField.find(".turn-card__token-cell--images").exists()).toBe(
+      false,
+    );
+  });
 });
 
 describe("TraceEventItem — critical highlighting", () => {

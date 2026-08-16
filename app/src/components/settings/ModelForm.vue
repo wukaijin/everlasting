@@ -8,6 +8,7 @@
 //   - maxTokens (optional, native <input>)
 //   - thinkingEffort (optional, SelectRoot via reka-ui)
 //   - supportsThinking (CheckboxRoot via reka-ui)
+//   - supportsImages (CheckboxRoot via reka-ui — B1 R1 vision flag)
 //   - contextWindow (native <input type="number">)
 //
 // R1 polish: form controls use reka-ui `SelectRoot` for the
@@ -53,6 +54,8 @@ export interface ModelFormState {
   /** "none" sentinel = omit (None). */
   thinkingEffort: string;
   supportsThinking: boolean;
+  /** B1 (2026-08-16) R1: model accepts image blocks (vision). */
+  supportsImages: boolean;
   contextWindow: number;
 }
 
@@ -207,6 +210,23 @@ const emit = defineEmits<{
                 <span class="model-form__label">Supports Thinking</span>
                 <CheckboxRoot
                     v-model="form.supportsThinking"
+                    class="model-form__checkbox"
+                >
+                    <CheckboxIndicator class="model-form__checkbox-indicator">
+                        <Icon name="check" :size="12" />
+                    </CheckboxIndicator>
+                </CheckboxRoot>
+            </div>
+        </div>
+
+        <!-- B1 (2026-08-16) R1: vision flag — same CheckboxRoot
+             treatment as supportsThinking. Owns its own row-pair so
+             the thinking row's select+check layout is unchanged. -->
+        <div class="model-form__row-pair">
+            <div class="model-form__field model-form__field--check">
+                <span class="model-form__label">支持图片 (vision)</span>
+                <CheckboxRoot
+                    v-model="form.supportsImages"
                     class="model-form__checkbox"
                 >
                     <CheckboxIndicator class="model-form__checkbox-indicator">

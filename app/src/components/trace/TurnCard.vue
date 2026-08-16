@@ -187,6 +187,21 @@ const memoryPct = computed<number | null>(() => {
   return (mem / ctx) * 100;
 });
 
+/** B1 (2026-08-16) image-multimodal R6: image-block tokens (all
+ *  Image blocks in the request — current-turn pastes + rebuilt
+ *  history) as a share of the turn's context_input. Same
+ *  no-double-count formula as `toolsPct`. `null` when
+ *  imagesToken was never written (pre-column rows) or
+ *  context_input is 0/absent. */
+const imagesPct = computed<number | null>(() => {
+  const img = props.trace.imagesToken;
+  const t = props.trace.tokenUsage;
+  if (img == null || !t) return null;
+  const ctx = t.context_input_tokens || 0;
+  if (ctx <= 0) return null;
+  return (img / ctx) * 100;
+});
+
 /** Tooltip string for the whole token block. Joins the 5-field
  *  breakdown with the tools[] estimate (C7) when present. */
 const tokensTitle = computed<string>(() => {
@@ -214,6 +229,14 @@ const tokensTitle = computed<string>(() => {
       memoryPct.value != null
         ? `Memory ≈${tok} (${memoryPct.value.toFixed(0)}% of context)`
         : `Memory ≈${tok}`,
+    );
+  }
+  if (props.trace.imagesToken != null) {
+    const tok = abbreviateTokens(props.trace.imagesToken);
+    parts.push(
+      imagesPct.value != null
+        ? `Images ≈${tok} (${imagesPct.value.toFixed(0)}% of context)`
+        : `Images ≈${tok}`,
     );
   }
   return parts.join(" · ");
@@ -348,6 +371,22 @@ const ungroupedLabel = computed<string>(() =>
           "
         >
           mem {{ abbreviateTokens(trace.memoryToken) }}
+        </span>
+        <!-- B1 (2026-08-16) R6: image-block estimate — same
+             slice-of-context treatment as the tools[]/memory cells.
+             Gated on > 0 (design: 无图轮 images_token=0,零图不渲染
+             noise cell), unlike tools/mem which also surface their
+             0s when the column exists. -->
+        <span
+          v-if="trace.imagesToken != null && trace.imagesToken > 0"
+          class="turn-card__token-cell turn-card__token-cell--images"
+          :title="
+            imagesPct != null
+              ? `图片块估算 ≈${abbreviateTokens(trace.imagesToken)}(约 context 的 ${imagesPct.toFixed(0)}%)`
+              : `图片块估算 ≈${abbreviateTokens(trace.imagesToken)}`
+          "
+        >
+          img {{ abbreviateTokens(trace.imagesToken) }}
         </span>
       </div>
     </div>
@@ -573,6 +612,16 @@ const ungroupedLabel = computed<string>(() =>
   border-radius: var(--radius-sm);
   padding: 0 4px;
   color: var(--color-accent-text);
+}
+
+/* B1 (2026-08-16) R6: image-block estimate — same pill treatment,
+ * read-tinted (the input-bar segment color) to distinguish from
+ * both tools (thinking-tinted) and memory (accent-tinted). */
+.turn-card__token-cell--images {
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  color: var(--color-tool-read);
 }
 
 .turn-card__sub {

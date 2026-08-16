@@ -45,6 +45,7 @@ const form = reactive<ModelFormState>({
   maxTokens: "",
   thinkingEffort: "none",
   supportsThinking: false,
+  supportsImages: false,
   contextWindow: 8192,
 });
 
@@ -75,6 +76,7 @@ function resetForm() {
   form.maxTokens = "";
   form.thinkingEffort = "none";
   form.supportsThinking = false;
+  form.supportsImages = false;
   form.contextWindow = 8192;
   editId.value = null;
 }
@@ -93,6 +95,7 @@ function startEdit(m: ModelWithProvider) {
   form.maxTokens = m.maxTokens != null ? String(m.maxTokens) : "";
   form.thinkingEffort = m.thinkingEffort ?? "none";
   form.supportsThinking = m.supportsThinking;
+  form.supportsImages = m.supportsImages;
   form.contextWindow = m.contextWindow;
 }
 
@@ -111,11 +114,13 @@ async function save() {
     // None (not null). See HACKING-wsl FU-1.
     const opts: {
       supportsThinking: boolean;
+      supportsImages: boolean;
       contextWindow: number;
       maxTokens?: number;
       thinkingEffort?: string;
     } = {
       supportsThinking: form.supportsThinking,
+      supportsImages: form.supportsImages,
       contextWindow: form.contextWindow,
     };
     if (form.maxTokens.trim() !== "") {

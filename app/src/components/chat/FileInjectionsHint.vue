@@ -43,7 +43,7 @@ const props = defineProps<{
 // (https://.../06-17-b2-pr3-at-file-injection-hint/prd.md):
 //
 //   · src/foo.ts   ✓ 注入 48 行
-//   · bar.png      ⊘ 图片·未注入(B1)
+//   · bar.png      ✓ 图片已注入(B1:复制进 attachments,真 image 块)
 //   · spec.docx    ⊘ 文档·未注入(可 pandoc 转换)
 //   · missing.txt  ⊘ 跳过(不存在)
 //
@@ -66,6 +66,23 @@ const rows = computed<Row[]>(() => {
         path: entry.path,
         glyph: "ok",
         status: `注入 ${a.lines} 行`,
+      };
+    }
+    if (a.kind === "injected_image") {
+      // B1 (2026-08-16): an `@image` file was copied into the
+      // session's attachments dir and injected as a REAL image
+      // block (the B1 upgrade of the old "⊘ 图片·未注入(B1)"
+      // degradation). The thumbnail itself renders from the
+      // message's attachment manifest (see MessageImages.vue) —
+      // this row only reports the verdict, with the `(w×h)/750`
+      // estimate when the backend attached one.
+      return {
+        path: entry.path,
+        glyph: "ok",
+        status:
+          a.tokens_est != null
+            ? `图片已注入(≈${a.tokens_est} tok)`
+            : "图片已注入",
       };
     }
     if (a.kind === "degraded") {
@@ -98,19 +115,29 @@ const rows = computed<Row[]>(() => {
         status: `${fileLabel}·${hint}`,
       };
     }
-    // Skipped
-    const reasonLabel =
-      a.reason === "out_of_root"
-        ? "越界"
-        : a.reason === "missing"
-          ? "不存在"
-          : a.reason === "unreadable"
-            ? "不可读"
-            : "未知";
+    if (a.kind === "skipped") {
+      const reasonLabel =
+        a.reason === "out_of_root"
+          ? "越界"
+          : a.reason === "missing"
+            ? "不存在"
+            : a.reason === "unreadable"
+              ? "不可读"
+              : "未知";
+      return {
+        path: entry.path,
+        glyph: "bad",
+        status: `跳过(${reasonLabel})`,
+      };
+    }
+    // Unknown future variant — neutral fallback. The wire enum
+    // stays open (a newer backend can emit kinds this build
+    // doesn't know); render the raw kind string instead of
+    // mislabeling it as a skip.
     return {
       path: entry.path,
       glyph: "bad",
-      status: `跳过(${reasonLabel})`,
+      status: String((a as { kind?: unknown }).kind ?? "未知"),
     };
   });
 });

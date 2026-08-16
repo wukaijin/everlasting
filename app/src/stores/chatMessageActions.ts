@@ -10,7 +10,7 @@ import { transport } from "../transport";
 import { useChecklistStore } from "./checklist";
 import type { useStreamControllerStore } from "./streamController";
 import type { useProjectsStore } from "./projects";
-import { genId, type ChatMessagePayload } from "./chat";
+import { genId, type AttachmentWireRef, type ChatMessagePayload } from "./chat";
 import type { ChatMessage, SessionSummary } from "./chat.types";
 
 export interface MessageActionsContext {
@@ -22,6 +22,11 @@ export interface MessageActionsContext {
   projectsStore: ReturnType<typeof useProjectsStore>;
   cancel: () => Promise<void>;
   toPayloadContent: (m: ChatMessage) => string | ChatMessagePayload["content"];
+  /** B1 (2026-08-16): resend / retry rebuild the wire history from
+   *  the in-memory (rehydrated) buffer — image-bearing user rows
+   *  must round-trip their `metadata.attachments` refs so the
+   *  backend re-attaches the Image blocks (design §6 D3). */
+  toPayloadAttachments: (m: ChatMessage) => AttachmentWireRef[];
 }
 
 export function createMessageActions(ctx: MessageActionsContext) {
@@ -34,6 +39,7 @@ export function createMessageActions(ctx: MessageActionsContext) {
     projectsStore,
     cancel,
     toPayloadContent,
+    toPayloadAttachments,
   } = ctx;
 
   // -----------------------------------------------------------------------
@@ -234,7 +240,15 @@ export function createMessageActions(ctx: MessageActionsContext) {
     msgs.push(userMsg, assistantMsg);
     const history: ChatMessagePayload[] = msgs
       .filter((m) => m.id !== assistantMsg.id)
-      .map((m) => ({ role: m.role, content: toPayloadContent(m) }));
+      .map((m) => {
+        // B1: rehydrated user rows round-trip their image refs.
+        const attachments = toPayloadAttachments(m);
+        return {
+          role: m.role,
+          content: toPayloadContent(m),
+          ...(attachments.length > 0 ? { attachments } : {}),
+        };
+      });
     // 3. Start the request with the `resendSeq` flag. Backend
     // audit fires at user-message persist site; otherwise the
     // request is identical to a normal send.
@@ -401,10 +415,16 @@ export function createMessageActions(ctx: MessageActionsContext) {
     //    events and persists at the next turn boundary (RULE-A-007
     //    flush path).
     const historyMsgs = msgs.slice(0, userIdx + 1);
-    const history: ChatMessagePayload[] = historyMsgs.map((m) => ({
-      role: m.role,
-      content: toPayloadContent(m),
-    }));
+    const history: ChatMessagePayload[] = historyMsgs.map((m) => {
+      // B1: retry re-fires the same history — image-bearing user
+      // rows keep their attachment refs.
+      const attachments = toPayloadAttachments(m);
+      return {
+        role: m.role,
+        content: toPayloadContent(m),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      };
+    });
     await controller.startRequest({
       sessionId,
       projectId,

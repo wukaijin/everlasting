@@ -179,6 +179,29 @@ export type ContentBlockPayload =
 export interface ChatMessagePayload {
   role: Role;
   content: string | ContentBlockPayload[];
+  /** B1 (2026-08-16) image-multimodal: image refs riding this user
+   *  message. The backend rebuilds `ContentBlock::ImageRef` blocks
+   *  from them each request (DB rows stay text-only; the metadata
+   *  manifest is the persistent source of truth). Omitted for
+   *  messages without attachments. See `AttachmentWireRef`. */
+  attachments?: AttachmentWireRef[];
+}
+
+/** B1: one image attachment in the `chat` IPC's nested
+ *  `messages[].attachments` array. Mirrors the Rust
+ *  `llm::types::chat::AttachmentRef` serde shape — the struct has
+ *  NO `rename_all`, so the wire fields are snake_case
+ *  (`media_type` / `tokens_est`) and ride the nested message
+ *  object verbatim on BOTH transports (httpTransport's
+ *  camelCase→snake_case pass only rewrites top-level command
+ *  params; Tauri's auto-camel only applies to command params
+ *  too — nested struct fields deserialize with their declared
+ *  serde names). */
+export interface AttachmentWireRef {
+  file: string;
+  media_type: string;
+  source: string;
+  tokens_est?: number;
 }
 
 export const genId = () =>
@@ -771,6 +794,45 @@ export const useChatStore = defineStore("chat", () => {
     return blocks;
   }
 
+  /** B1 (2026-08-16) image-multimodal: map a message's
+   *  `metadata.attachments` manifest onto the wire `attachments`
+   *  array. Tolerant of BOTH shapes the manifest appears in (see
+   *  `AttachmentView`): the optimistic camelCase form written by
+   *  `chatSendActions.send` (entries carry `file` + `localUrl`) and
+   *  the rehydrated snake_case form from the DB. Entries without a
+   *  server `file` name (e.g. a pre-upload localUrl-only entry)
+   *  are filtered out — nothing to fetch on the backend. */
+  function toPayloadAttachments(m: ChatMessage): AttachmentWireRef[] {
+    const raw = m.metadata?.attachments;
+    if (!Array.isArray(raw)) return [];
+    const out: AttachmentWireRef[] = [];
+    for (const r of raw) {
+      if (!r || typeof r !== "object") continue;
+      const o = r as Record<string, unknown>;
+      if (typeof o.file !== "string" || !o.file) continue;
+      const mediaType =
+        typeof o.media_type === "string"
+          ? o.media_type
+          : typeof o.mediaType === "string"
+            ? o.mediaType
+            : "";
+      if (!mediaType) continue;
+      const source = typeof o.source === "string" ? o.source : "paste";
+      const tokensRaw = o.tokens_est ?? o.tokensEst;
+      const tokens =
+        typeof tokensRaw === "number" && Number.isFinite(tokensRaw)
+          ? Math.max(0, Math.round(tokensRaw))
+          : undefined;
+      out.push({
+        file: o.file,
+        media_type: mediaType,
+        source,
+        ...(tokens !== undefined ? { tokens_est: tokens } : {}),
+      });
+    }
+    return out;
+  }
+
 
   /** PR5: cancel an in-flight chat request. The backend's agent
    *  loop notices on the next event boundary, bails out, persists
@@ -799,8 +861,17 @@ export const useChatStore = defineStore("chat", () => {
     cancel,
     createNewSession,
     toPayloadContent,
+    toPayloadAttachments,
   });
-  const { send } = sendActions;
+  const { send, stagedImages, addStagedImages, removeStagedImage, discardStagedImages } = sendActions;
+
+  // B1 (2026-08-16) image-multimodal: staged paste images are
+  // per-session in-memory state — drop them (revoking their
+  // objectURLs) whenever the active session changes, including the
+  // project-switch resets that flow through `currentSessionId`.
+  watch(currentSessionId, () => {
+    discardStagedImages();
+  });
 
   // Edit / resend / retry actions (08-10-chat-store-split: 拆出
   // chatMessageActions.ts,工厂 + ctx 注入,函数体原样保留)。
@@ -813,6 +884,7 @@ export const useChatStore = defineStore("chat", () => {
     projectsStore,
     cancel,
     toPayloadContent,
+    toPayloadAttachments,
   });
   const { editMessage, resendMessage, retryChat } = messageActions;
 
@@ -879,6 +951,14 @@ export const useChatStore = defineStore("chat", () => {
     // Methods
     send,
     cancel,
+    // B1 (2026-08-16) image-multimodal: paste-staging strip state +
+    // actions. Owned by the send cluster so the send / clear /
+    // session-switch lifecycle is store-owned (design §5.1);
+    // ChatInput.vue renders the strip and forwards pasted Files.
+    stagedImages,
+    addStagedImages,
+    removeStagedImage,
+    discardStagedImages,
     loadSessions,
     createNewSession,
     updateGroupChatConfig,

@@ -560,3 +560,61 @@ describe("MessageItem — group chat speaker chip", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------
+// B1 (2026-08-16) image-multimodal R2a: the user-message attachment
+// thumbnail strip. MessageItem maps `message.metadata.attachments`
+// (optimistic camelCase + rehydrated snake_case — see AttachmentView)
+// into the MessageImages entry shape; these tests lock the mapping
+// and the user-row-only gate.
+// ---------------------------------------------------------------------
+
+describe("MessageItem — B1 attachment thumbnails", () => {
+  function makeUserMessage(metadata: Record<string, unknown>): ChatMessage {
+    return {
+      id: "msg-user-1",
+      role: "user",
+      content: "看看这张图",
+      metadata,
+    };
+  }
+
+  it("renders one thumbnail per metadata.attachments entry (both shapes)", async () => {
+    const message = makeUserMessage({
+      attachments: [
+        // Optimistic (just-sent) entry: camelCase + localUrl.
+        { file: "a1.png", localUrl: "blob:opt", mediaType: "image/png" },
+        // Rehydrated (DB) entry: snake_case, no localUrl.
+        { file: "b2.jpg", media_type: "image/jpeg", source: "paste" },
+        // Garbage entries are dropped, not rendered.
+        null,
+        { localUrl: "", mediaType: "image/png" },
+      ],
+    });
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+
+    const thumbs = wrapper.findAll(".message-images__item");
+    expect(thumbs.length).toBe(2);
+    // file ref wins → daemon GET route (daemonBase in vitest DEV
+    // jsdom is http://localhost:7456; no token → direct path).
+    expect(thumbs[0].get("img").attributes("src")).toBe(
+      "http://localhost:7456/api/v1/attachments/sess-1/a1.png",
+    );
+    expect(thumbs[1].get("img").attributes("src")).toBe(
+      "http://localhost:7456/api/v1/attachments/sess-1/b2.jpg",
+    );
+  });
+
+  it("does not render the strip for assistant rows or messages without attachments", async () => {
+    const assistant = makeAssistantMessage([], []);
+    const w1 = mountItem(assistant, pinia);
+    await flushPromises();
+    expect(w1.find(".message-images").exists()).toBe(false);
+
+    const plain = makeUserMessage({});
+    const w2 = mountItem(plain, pinia);
+    await flushPromises();
+    expect(w2.find(".message-images").exists()).toBe(false);
+  });
+});

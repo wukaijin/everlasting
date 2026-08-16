@@ -27,6 +27,7 @@ import { markedHighlight } from "marked-highlight";
 import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { ref, type Ref } from "vue";
 import { renderCodeHtml } from "./highlight";
+import { daemonBase } from "../transport/http";
 
 // --- marked configuration ----------------------------------------------
 // Configure once at module load. `marked.setOptions` mutates the
@@ -73,6 +74,55 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
   RETURN_TRUSTED_TYPE: false,
 };
 
+// --- B1 (2026-08-16) R7: img src two-state allow-list --------------------
+// LLM output can carry `![](url)` images. DOMPurify's default html
+// profile KEEPS <img>, so an external image URL would fire a network
+// request the moment the bubble renders — closing the pre-existing
+// leak channel (BACKLOG §3.3 "不渲染 LLM 之外的图" was aspirational
+// until this gate). Any <img> whose src is NOT one of our own
+// attachment-route forms is downgraded to a plain opener link
+// BEFORE the DOMPurify pass:
+//
+//   ① relative `/api/v1/attachments/…` (browser-local PROD — the
+//      SPA is same-origin with the daemon);
+//   ② absolute `${daemonBase()}/api/v1/attachments/…` (DEV cross
+//      origin). Prefix match only, so the `?access_token=` query
+//      the pwa-remote `attachmentUrl()` appends passes, as does the
+//      pwa-remote proxy form
+//      `${daemonBase()}/api/v1/proxy/api/v1/attachments/…`.
+//
+// Implementation note: replacing the node inside a DOMPurify
+// `uponSanitizeAttribute` hook is awkward (hooks see attribute
+// strings, not owning nodes). The regex pass below runs on
+// marked's OUTPUT instead — marked always emits quoted attribute
+// values, so matching `<img … src="…" …>` is reliable — and
+// DOMPurify still sanitizes everything afterward (the replacement
+// <a>'s href survives because href is on the default allow-list;
+// target/rel via ADD_ATTR above).
+const IMG_TAG_RE = /<img\b[^>]*>/gi;
+const SRC_ATTR_RE = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+
+function isOwnAttachmentSrc(src: string): boolean {
+  if (src.startsWith("/api/v1/attachments/")) return true;
+  const base = daemonBase().replace(/\/+$/, "");
+  return (
+    src.startsWith(`${base}/api/v1/attachments/`) ||
+    src.startsWith(`${base}/api/v1/proxy/api/v1/attachments/`)
+  );
+}
+
+/** Replace non-allow-listed `<img>` tags with a new-tab link.
+ *  Allow-listed tags (our attachments route) pass through
+ *  untouched. */
+function downgradeExternalImages(html: string): string {
+  return html.replace(IMG_TAG_RE, (tag) => {
+    const m = SRC_ATTR_RE.exec(tag);
+    const src = m ? m[1] ?? m[2] ?? "" : "";
+    if (!src || isOwnAttachmentSrc(src)) return tag;
+    return `<a href="${src}" target="_blank" rel="noreferrer">[图片]</a>`;
+  });
+}
+
 /**
  * Render a markdown string to a sanitized HTML string.
  *
@@ -90,7 +140,7 @@ export function renderMarkdown(text: string): string {
   // is always a string. The cast keeps TypeScript from widening to
   // `string | Promise<string>` and forcing downstream casts.
   const rawHtml = marked.parse(trimmed) as string;
-  return DOMPurify.sanitize(rawHtml, PURIFY_CONFIG);
+  return DOMPurify.sanitize(downgradeExternalImages(rawHtml), PURIFY_CONFIG);
 }
 
 export interface DebouncedRenderer {

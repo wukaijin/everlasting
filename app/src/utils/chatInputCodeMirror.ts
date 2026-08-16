@@ -188,8 +188,25 @@ export interface AtToken {
  *    files like `/etc/hosts` or `/root/.bashrc`.
  *
  *  The split exists because `@` opens on every keypress and walking
- *  `/` (or even the project root to `MAX_FILES`) stalls the panel. */
+ *  `/` (or even the project root to MAX_FILES) stalls the panel. */
 export type FileViewMode = "shallow" | "system_root";
+
+/** B1 (2026-08-16) image-multimodal: extract the image files from a
+ *  paste clipboard. Any `image/*` entry counts — the mime whitelist
+ *  (png/jpg/webp) rejection is the CALLER's job so non-whitelisted
+ *  types still surface a toast instead of being silently swallowed
+ *  here. Exported pure (over the DataTransfer) so the paste contract
+ *  is unit-testable without a CM instance. */
+export function imageFilesFromClipboard(dt: DataTransfer | null): File[] {
+  if (!dt || !dt.files) return [];
+  const out: File[] = [];
+  for (const f of Array.from(dt.files)) {
+    if (f && typeof f.type === "string" && f.type.startsWith("image/")) {
+      out.push(f);
+    }
+  }
+  return out;
+}
 
 export interface UseChatInputCodeMirrorOpts {
   /** The host element the EditorView mounts into. Provided by the
@@ -220,6 +237,13 @@ export interface UseChatInputCodeMirrorOpts {
    *  mode so the parent can serve a shallow (cheap, default) or full
    *  (cached, slower) list without re-walking. */
   fileItemsSource?: (mode: FileViewMode) => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
+  /** B1 (2026-08-16) image-multimodal: invoked when a paste event
+   *  carries image files. The composable intercepts the paste
+   *  (preventDefault) and hands the whole array over in one call;
+   *  mime-whitelist / size / count gating is the parent's job (it
+   *  owns the toast surface). Plain-text pastes never reach this
+   *  callback — zero behavior change for them. */
+  onPasteImages?: (files: File[]) => void;
   /** explicit-agent-dispatch (2026-06-30): pull the available
    *  subagents for the `@@`-trigger panel (builtin + user + project
    *  layers via `list_subagents`). */
@@ -688,6 +712,25 @@ export function useChatInputCodeMirror(
     return true;
   }
 
+  // === B1 (2026-08-16) paste-image capture ========================
+
+  /** CM paste DOM handler. Image files → intercept (preventDefault)
+   *  + one array callback; text-only paste → return false so the
+   *  browser's default insertion runs untouched. */
+  function handlePaste(event: ClipboardEvent): boolean {
+    const files = imageFilesFromClipboard(event.clipboardData);
+    if (files.length === 0) return false;
+    event.preventDefault();
+    opts.onPasteImages?.(files);
+    return true;
+  }
+
+  function buildPasteHandler() {
+    return EditorView.domEventHandlers({
+      paste: (event: ClipboardEvent) => handlePaste(event),
+    });
+  }
+
   function buildKeymap() {
     return Prec.highest(
       keymap.of([
@@ -753,6 +796,9 @@ export function useChatInputCodeMirror(
         editableCompartment.of(EditorState.readOnly.of(opts.sending.value ? true : false)),
         EditorView.updateListener.of(onEditorUpdate),
         buildKeymap(),
+        // B1: paste-image interception (plain-text paste passes
+        // through — see handlePaste).
+        buildPasteHandler(),
         tokenHighlightPlugin,
       ],
     });

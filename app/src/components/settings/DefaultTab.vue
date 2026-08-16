@@ -65,6 +65,8 @@ function selectDefault(modelId: string) {
               <span class="default-tab__option-name">{{ m.displayName }}</span>
               <span class="default-tab__option-id">{{ m.modelName }}</span>
               <span v-if="m.supportsThinking" class="default-tab__tag">thinking</span>
+              <!-- B1 R1: vision capability tag — same tag treatment as thinking. -->
+              <span v-if="m.supportsImages" class="default-tab__tag">vision</span>
             </div>
           </label>
         </RadioGroupRoot>
