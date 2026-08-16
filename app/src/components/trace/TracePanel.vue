@@ -218,7 +218,7 @@ watch(
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(420px, 90vw);
+  width: min(560px, 92vw);
   background: var(--color-bg-surface);
   border-left: 1px solid var(--color-bg-border);
   box-shadow: var(--shadow-md);
@@ -266,6 +266,7 @@ watch(
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   margin: 0;
+  white-space: nowrap;
 }
 
 .trace-panel__title-icon {
@@ -298,6 +299,7 @@ watch(
   border-radius: var(--radius-sm);
   padding: 4px 8px;
   font-size: var(--text-xs);
+  line-height: 1;
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }

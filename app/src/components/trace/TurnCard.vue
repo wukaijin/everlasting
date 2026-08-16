@@ -506,7 +506,7 @@ const ungroupedLabel = computed<string>(() =>
 
 .turn-card__seq {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
@@ -525,7 +525,7 @@ const ungroupedLabel = computed<string>(() =>
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
 }
 
@@ -534,7 +534,7 @@ const ungroupedLabel = computed<string>(() =>
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-bg-border);
@@ -565,7 +565,7 @@ const ungroupedLabel = computed<string>(() =>
 .turn-card__token-bar {
   display: flex;
   width: 100%;
-  height: 6px;
+  height: 8px;
   background: var(--color-bg-app);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -587,7 +587,7 @@ const ungroupedLabel = computed<string>(() =>
   gap: 8px;
   flex-wrap: wrap;
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
 
@@ -629,7 +629,7 @@ const ungroupedLabel = computed<string>(() =>
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   padding: 4px 6px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
@@ -674,7 +674,7 @@ const ungroupedLabel = computed<string>(() =>
 
 .turn-card__sub-meta {
   color: var(--color-text-muted);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
 }
 
 .turn-card__bc-slug {
@@ -684,12 +684,12 @@ const ungroupedLabel = computed<string>(() =>
 
 .turn-card__bc-status {
   color: var(--color-text-muted);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
 }
 
 .turn-card__bc-text {
   color: var(--color-text-secondary);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
 }
 
 .turn-card__audits {
@@ -697,7 +697,7 @@ const ungroupedLabel = computed<string>(() =>
 }
 
 .turn-card__audits-details {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 
 .turn-card__audits-summary {
@@ -732,7 +732,7 @@ const ungroupedLabel = computed<string>(() =>
 }
 
 .turn-card__empty {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
   text-align: center;
   padding: 6px 0;
