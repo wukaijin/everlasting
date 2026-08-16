@@ -76,7 +76,10 @@ pub async fn get_attachment(
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/save", post(save_attachment))
+        // 命令名即路径段(全项目惯例:httpTransport 拼
+        // `/api/v1/{domain}/{cmd}`,如 files/list_files)— 写 `/save`
+        // 会让前端 invoke 打到不存在的 `/save_attachment` 而 404。
+        .route("/save_attachment", post(save_attachment))
         .route("/:session_id/:file", get(get_attachment))
         .with_state(state)
 }
