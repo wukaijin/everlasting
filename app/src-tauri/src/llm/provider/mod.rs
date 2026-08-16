@@ -160,6 +160,7 @@ pub fn build_provider(
                 api_key: provider_row.api_key.clone(),
                 max_tokens,
                 thinking_effort,
+                supports_images: model_row.supports_images,
             };
             Ok(Box::new(AnthropicProvider::new(config)))
         }
@@ -185,6 +186,7 @@ pub fn build_provider(
                 api_key: provider_row.api_key.clone(),
                 max_tokens,
                 reasoning_effort,
+                supports_images: model_row.supports_images,
             };
             Ok(Box::new(OpenAIProvider::new(config)))
         }

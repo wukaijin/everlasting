@@ -96,6 +96,10 @@ pub struct OpenAIConfig {
     /// reasoning_effort in the request body, so non-o1/o3 models
     /// are unaffected by this knob.
     pub reasoning_effort: Option<String>,
+    /// B1 (2026-08-16): from `ModelRow.supports_images` — gates the
+    /// wire strip's image→text-placeholder degradation + the
+    /// `image_url` emission for this model.
+    pub supports_images: bool,
 }
 
 impl OpenAIConfig {
@@ -187,19 +191,61 @@ impl OpenAIProvider {
                 // behavior identical to pre-refactor for the same
                 // logical content.
                 super::wire::WireMessage::UserBlocks { blocks } => {
-                    let mut content = String::new();
-                    for b in blocks {
-                        if let super::wire::WireBlock::Text { text, .. } = b {
-                            content.push_str(text);
+                    // B1 (2026-08-16): when the blocks carry images
+                    // (a vision request), OpenAI Chat Completions
+                    // requires content to be an *array* mixing
+                    // `{"type":"text"}` and `{"type":"image_url"}`
+                    // entries (a plain string cannot carry an image).
+                    // Without images we keep the historical
+                    // flatten-to-string shape, byte-identical to the
+                    // B5 refactor behavior.
+                    let has_image = blocks
+                        .iter()
+                        .any(|b| matches!(b, super::wire::WireBlock::Image { .. }));
+                    if has_image {
+                        let mut parts: Vec<Value> = Vec::new();
+                        for b in blocks {
+                            match b {
+                                super::wire::WireBlock::Text { text, .. } => {
+                                    if !text.is_empty() {
+                                        parts.push(json!({
+                                            "type": "text",
+                                            "text": text,
+                                        }));
+                                    }
+                                }
+                                super::wire::WireBlock::Image { media_type, data } => {
+                                    parts.push(json!({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": format!("data:{};base64,{}", media_type, data),
+                                        },
+                                    }));
+                                }
+                                // Defensive: user-role UserBlocks only
+                                // carry text + image blocks at this
+                                // point (tool_results were lifted into
+                                // WireMessage::Tool by the forward
+                                // pass). Skip anything else.
+                                _ => {}
+                            }
                         }
-                        // Defensive: a `UserBlocks` payload with
-                        // non-text blocks is unexpected (the wire
-                        // layer's `chat_message_to_wire_messages`
-                        // only produces text blocks for this
-                        // variant). Skip non-text rather than
-                        // crash.
+                        msgs.push(json!({ "role": "user", "content": parts }));
+                    } else {
+                        let mut content = String::new();
+                        for b in blocks {
+                            if let super::wire::WireBlock::Text { text, .. } = b {
+                                content.push_str(text);
+                            }
+                            // Defensive: a `UserBlocks` payload with
+                            // non-text blocks is unexpected (the wire
+                            // layer's `chat_message_to_wire_messages`
+                            // only produces text blocks for this
+                            // variant). Skip non-text rather than
+                            // crash.
+                        }
+                        msgs.push(json!({ "role": "user", "content": content }));
                     }
-                    msgs.push(json!({ "role": "user", "content": content }));
                 }
                 super::wire::WireMessage::Assistant { blocks, speaker } => {
                     let (text_parts, tool_calls, reasoning) = assistant_blocks_to_openai(blocks);
@@ -422,6 +468,11 @@ pub(crate) fn assistant_blocks_to_openai(
     for (i, b) in blocks.iter().enumerate() {
         match b {
             WireBlock::Text { text, .. } => text_parts.push(text.clone()),
+            // B1: images only ride user-role messages; an image in an
+            // assistant block is not a supported shape. Skip (the
+            // forward pass degrades stray assistant images to text
+            // placeholders before this point anyway).
+            WireBlock::Image { .. } => {}
             WireBlock::Reasoning { text } => {
                 // RULE-D-006: lift to top-level `reasoning_content`
                 // field (handled by the caller), NOT into content text.
@@ -491,11 +542,15 @@ pub(crate) fn is_o1_family(model: &str) -> bool {
 /// `OpenAIConfig.reasoning_effort` is already sourced from
 /// `model_row.thinking_effort` in `build_provider`, so it carries
 /// the same signal.
-pub(crate) fn openai_caps(reasoning_effort: Option<&str>) -> WireCapabilities {
+pub(crate) fn openai_caps(
+    reasoning_effort: Option<&str>,
+    supports_images: bool,
+) -> WireCapabilities {
     WireCapabilities {
         supports_thinking: false,
         supports_reasoning_effort: reasoning_effort.is_some(),
         supports_thinking_signatures: false,
+        supports_images,
     }
 }
 
@@ -529,7 +584,10 @@ impl Provider for OpenAIProvider {
         // previous Anthropic session are dropped for non-reasoning
         // OpenAI models (e.g. gpt-4o) instead of polluting their
         // context.
-        let caps = openai_caps(self.config.reasoning_effort.as_deref());
+        let caps = openai_caps(
+            self.config.reasoning_effort.as_deref(),
+            self.config.supports_images,
+        );
         let wire = WireRequest {
             messages: strip_unsupported(wire.messages, &caps),
             ..wire

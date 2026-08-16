@@ -38,6 +38,14 @@ pub struct WireCapabilities {
     /// `signature` / `redacted_thinking.data` blobs. Today only
     /// Anthropic can.
     pub supports_thinking_signatures: bool,
+    /// B1 (2026-08-16): whether the target model accepts image
+    /// content. Derived from `ModelRow.supports_images` (explicit
+    /// user configuration, no model-name heuristics). When false the
+    /// strip pass **replaces** image blocks with a text placeholder
+    /// (never silently drops — the model is told an image was
+    /// attached but not delivered, so it doesn't hallucinate having
+    /// seen one).
+    pub supports_images: bool,
 }
 
 impl WireCapabilities {
@@ -52,6 +60,7 @@ impl WireCapabilities {
     ///   `model_row.supports_thinking && protocol is anthropic`
     ///   (only Anthropic can carry the signature blob; OpenAI
     ///   drops it on cross-protocol send)
+    /// - `supports_images` ← `model_row.supports_images` (B1)
     #[allow(dead_code)] // consumed by future PRs that thread capabilities through Provider::send
     pub fn from_model_row(model: &crate::db::ModelRow, provider_protocol: &str) -> Self {
         let supports_thinking = model.supports_thinking;
@@ -61,6 +70,7 @@ impl WireCapabilities {
             supports_thinking,
             supports_reasoning_effort,
             supports_thinking_signatures,
+            supports_images: model.supports_images,
         }
     }
 }
@@ -164,6 +174,14 @@ pub enum WireBlock {
         name: String,
         input: Value,
     },
+    /// B1 (2026-08-16): resolved image (base64) riding a user-role
+    /// message. Mapped to:
+    /// - Anthropic `image` block with a base64 `source` (free via
+    ///   serde — see `ContentBlock::Image`).
+    /// - OpenAI `image_url` with a `data:` URL.
+    /// When the target's `supports_images` cap is false, the strip
+    /// pass replaces this block with a text placeholder.
+    Image { media_type: String, data: String },
 }
 
 /// Tool declaration. `description` and `input_schema` are

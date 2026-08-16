@@ -177,6 +177,23 @@ fn push_message_tokens(buf: &mut String, m: &ChatMessage) {
                 ContentBlock::RedactedThinking { data } => {
                     buf.push_str(data);
                 }
+                // B1 (2026-08-16): images are estimated as a fixed
+                // ~1600-token pad (≈ `(w×h)/750` for a typical
+                // screenshot), NOT the serialized block: an `Image`'s
+                // base64 string would overestimate 100×, and an
+                // `ImageRef`'s file name would underestimate just as
+                // badly. The precise per-image estimate lives in the
+                // attachments metadata (`turn_trace.images_token`,
+                // B1 PR4); this pad only feeds the soft C3 budget
+                // guard.
+                ContentBlock::ImageRef { file, media_type } => {
+                    buf.push_str(file);
+                    buf.push_str(media_type);
+                    buf.push_str(&"x".repeat(6400));
+                }
+                ContentBlock::Image { .. } => {
+                    buf.push_str(&"x".repeat(6400));
+                }
             }
         }
     }

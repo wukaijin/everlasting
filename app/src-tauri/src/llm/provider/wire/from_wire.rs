@@ -50,6 +50,9 @@ pub fn wire_block_to_chat_event(block: &WireBlock) -> Option<ChatEvent> {
             name: name.clone(),
             input: input.clone(),
         }),
+        // B1: images are request-side only — a provider stream never
+        // emits one, so there is no ChatEvent to map to.
+        WireBlock::Image { .. } => None,
     }
 }
 
@@ -225,6 +228,17 @@ fn wire_block_to_content_block(block: WireBlock) -> ContentBlock {
         },
         WireBlock::RedactedThinking { data } => ContentBlock::RedactedThinking { data },
         WireBlock::ToolUse { id, name, input } => ContentBlock::ToolUse { id, name, input },
+        // B1 (2026-08-16): a user-message image survives strip (or was
+        // already placeholder-replaced); map back to the resolved
+        // `ContentBlock::Image` so the Anthropic adapter's serde
+        // serialization emits the native image block verbatim.
+        WireBlock::Image { media_type, data } => ContentBlock::Image {
+            source: crate::llm::types::ImageSource {
+                source_type: "base64".to_string(),
+                media_type,
+                data,
+            },
+        },
     }
 }
 
