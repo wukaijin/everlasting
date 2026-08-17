@@ -381,7 +381,9 @@ textarea {
   .runtime-memory-modal,
   .memory-modal,
   .audit-modal,
-  .gcfg-content {
+  .gcfg-content,
+  /* D2 全局搜索(08-17-cross-session-search) */
+  .search-modal {
     width: 100vw !important;
     min-width: 0 !important;
     max-width: 100vw !important;
@@ -404,7 +406,8 @@ textarea {
   .audit-modal button,
   .gcfg-content button,
   .yolo-confirm-modal button,
-  .confirm-modal button {
+  .confirm-modal button,
+  .search-modal button {
     min-height: 44px;
     min-width: 44px;
   }

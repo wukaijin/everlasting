@@ -64,6 +64,13 @@ import { USE_UI_TOOL_NAME } from "./uiCard.types";
 
 const props = defineProps<{
   message: ChatMessage;
+  /** D2 (08-17-cross-session-search): read-only render context (the
+   *  SearchModal's session preview). Structurally disables the
+   *  hover `<MessageActionsMenu>` — NOT via CSS: the menu's
+   *  Edit/Resend actions call the CURRENT session's store actions,
+   *  which in a preview of another session would fire against the
+   *  wrong session. */
+  readonly?: boolean;
 }>();
 
 const chatStore = useChatStore();
@@ -296,7 +303,7 @@ const messageImages = computed<
       and the disable rules.
     -->
     <MessageActionsMenu
-      v-if="message.seq !== undefined"
+      v-if="message.seq !== undefined && !props.readonly"
       :message-seq="message.seq"
       :session-id="chatStore.currentSessionId ?? ''"
       :content="message.content"

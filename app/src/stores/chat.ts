@@ -528,6 +528,7 @@ export const useChatStore = defineStore("chat", () => {
     createNewSession,
     updateGroupChatConfig,
     switchSession,
+    openSessionInProject,
     deleteSession,
     clearSessionMessages,
     renameSession,
@@ -963,6 +964,9 @@ export const useChatStore = defineStore("chat", () => {
     createNewSession,
     updateGroupChatConfig,
     switchSession,
+    // D2 (08-17-cross-session-search): search-modal "open in main
+    // window" — project-aware switch (see chatSessionActions).
+    openSessionInProject,
     deleteSession,
     // B3 (PR2): `/clear` — wipe messages, keep session row.
     clearSessionMessages,

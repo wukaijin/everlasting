@@ -45,7 +45,6 @@ import {
   groupSessions,
   type BucketKey,
 } from "../utils/sessionGrouping";
-import { registerKeybinding } from "../utils/useKeyboard";
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -412,20 +411,12 @@ function clearSearch() {
   emit("search-clear");
 }
 
-/** Global Cmd/Ctrl+K → focus the search input. Capture-phase
- *  registration so the key is caught before focus is anywhere
- *  else in the app (CodeMirror inside ChatInput would
- *  otherwise swallow the keystroke). Disabled while the input
- *  is already focused (no-op cycle). */
+/** Global Cmd/Ctrl+K binding REMOVED (D2, 08-17-cross-session-search):
+ *  the shortcut now opens the global SearchModal (AppShell-level
+ *  registration). This sidebar title filter keeps its manual toggle
+ *  (the magnifying-glass button in Sidebar) and its Esc/clear
+ *  semantics — only the shortcut focus hop is gone. */
 const searchInputRef = ref<InstanceType<typeof SessionSearchInput> | null>(null);
-registerKeybinding({
-  key: "k",
-  ctrlOrMeta: true,
-  enabled: () => props.searchActive && document.activeElement?.tagName !== "INPUT",
-  handler: () => {
-    searchInputRef.value?.focus();
-  },
-});
 watch(() => props.searchActive, (active) => {
   if (active) {
     // After the input mounts, focus it (the child also focuses

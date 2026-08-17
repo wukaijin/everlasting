@@ -172,12 +172,36 @@ export function createSessionActions(ctx: SessionActionsContext) {
       }
       // Pull cwd from the session summary (the controller doesn't
       // expose session metadata; `list_sessions` already has the
-    // value in memory). Avoids a redundant `load_session` IPC.
+      // value in memory). Avoids a redundant `load_session` IPC.
       const summary = sessions.value.find((s) => s.id === sessionId);
       currentCwd.value = summary?.current_cwd ?? "";
     } finally {
       sessionLoading.value = false;
     }
+  }
+
+  /** D2 (08-17-cross-session-search): open a session that may live
+   *  in another project — the search modal's "在主窗口打开" path.
+   *
+   *  `switchSession` alone is WRONG for cross-project targets: it
+   *  never touches `currentProjectId`, so (a) `writeLastSession`
+   *  records the foreign session as the CURRENT project's last
+   *  active, and (b) `sessions.value.find` (scoped to the current
+   *  project's list) misses → `currentCwd` is blanked. So for a
+   *  foreign project we first switch the project, then EXPLICITLY
+   *  await `loadSessions` (do NOT rely on the chat.ts watcher's
+   *  async `onProjectChange` — racing it reintroduces (b)), then
+   *  `switchSession`. Same-project targets degrade to plain
+   *  `switchSession` with zero extra IPCs. */
+  async function openSessionInProject(
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    if (projectsStore.currentProjectId !== projectId) {
+      await projectsStore.switchProject(projectId);
+      await loadSessions(projectId);
+    }
+    await switchSession(sessionId);
   }
 
   async function deleteSession(sessionId: string) {
@@ -354,6 +378,7 @@ export function createSessionActions(ctx: SessionActionsContext) {
     createNewSession,
     updateGroupChatConfig,
     switchSession,
+    openSessionInProject,
     deleteSession,
     clearSessionMessages,
     renameSession,

@@ -24,10 +24,13 @@
 import { computed } from "vue";
 import { useProjectsStore } from "../../stores/projects";
 import { useChatStore } from "../../stores/chat";
+import { registerKeybinding } from "../../utils/useKeyboard";
+import { useSearchModal } from "../../composables/useSearchModal";
 import AppHeader from "./AppHeader.vue";
 import Sidebar from "./Sidebar.vue";
 import TracePanel from "../trace/TracePanel.vue";
 import ToastProvider from "../common/ToastProvider.vue";
+import SearchModal from "../search/SearchModal.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
 
 const projectsStore = useProjectsStore();
@@ -35,6 +38,21 @@ const chatStore = useChatStore();
 const showSidebar = computed<boolean>(
   () => projectsStore.currentProjectId !== null,
 );
+// D2 (08-17-cross-session-search): global search modal. Cmd/Ctrl+K
+// was repurposed from "focus the sidebar title filter" (that
+// binding was removed from SessionList; the filter itself is
+// untouched). AppShell owns the mount because the search must be
+// reachable regardless of which view fills the main slot — same
+// rationale as the TracePanel drawer above.
+const { open: openSearch } = useSearchModal();
+registerKeybinding({
+  key: "k",
+  ctrlOrMeta: true,
+  handler: (e) => {
+    e.preventDefault();
+    openSearch();
+  },
+});
 // S5 移动端抽屉导航(module-level 单例 composable,与 useToast 同构):AppHeader
 // 汉堡 toggle,Sidebar 读 mobileNavOpen + 选 session 自动 close,本组件渲染
 // 遮罩(@click close)。桌面下 open 状态被 CSS 忽略(Sidebar 常驻,fixed 定位
@@ -83,10 +101,15 @@ async function onToastClick(): Promise<void> {
 
     <!-- E2 (harness trace pipeline, 2026-07-14): trace-viewer
          drawer. Mounts at the AppShell level (sibling of the
-         main slot) so the timeline stays available even when
-         the chat surface is hidden. The slide-in / slide-out
+         main slot) so the timeline stays available even when the
+         chat surface is hidden. The slide-in / slide-out
          transition lives inside the panel itself. -->
     <TracePanel />
+
+    <!-- D2 (08-17-cross-session-search): global search dialog
+         (Cmd/Ctrl+K). Mounted at AppShell level for the same
+         reason as TracePanel. -->
+    <SearchModal />
 
     <!-- A5 R1 (2026-07-17): reka-ui Toast viewport for global
          error routing. Mounts at AppShell level so all 5 stub

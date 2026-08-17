@@ -18,7 +18,7 @@
 import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
 import type { ChatMessage } from "../../stores/chat.types";
-import { isRealUserTurnStart } from "../../utils/messageFormat";
+import { buildRunGroups } from "../../utils/messageFormat";
 import MessageItem from "./MessageItem.vue";
 import Icon from "../Icon.vue";
 
@@ -76,19 +76,14 @@ interface RunGroup {
   items: ChatMessage[];
 }
 
-const renderGroups = computed<RunGroup[]>(() => {
-  const groups: RunGroup[] = [];
-  let current: RunGroup | null = null;
-  for (const m of visibleMessages.value) {
-    if (isRealUserTurnStart(m) || current === null) {
-      current = { key: m.id, items: [m] };
-      groups.push(current);
-    } else {
-      current.items.push(m);
-    }
-  }
-  return groups;
-});
+// 08-17 (D2 cross-session-search): grouping logic extracted to
+// `buildRunGroups` (utils/messageFormat.ts) so the SearchModal's
+// read-only preview renders identically. Behavior-equivalent
+// replacement of the previous inline loop (same predicate, same
+// boundary guard, same key).
+const renderGroups = computed<RunGroup[]>(() =>
+  buildRunGroups(visibleMessages.value),
+);
 
 function isNearBottom(el: HTMLElement, threshold = 80): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;

@@ -153,3 +153,40 @@ export function toolIcon(toolName: string): string {
       return "wrench";
   }
 }
+
+/** One interleaved-thinking run group: a real user turn plus every
+ *  assistant / ghost-user / orphan-repair row visually belonging to
+ *  it (the 5b1fc81 run-group contract; see MessageList.vue for the
+ *  rendering rationale). Extracted from MessageList during D2
+ *  (08-17-cross-session-search) so the SearchModal's read-only
+ *  preview can render with the SAME grouping as the main chat view
+ *  without depending on the store-coupled component. Pure function:
+ *  no store access, no side effects.
+ *
+ *  Boundary guard mirrors the original: if the first visible row
+ *  isn't a real user turn, open a standalone group anyway so no
+ *  message is dropped (defensive; rehydrate shouldn't produce it). */
+export interface RunGroup<T> {
+  key: string;
+  items: T[];
+}
+
+export function buildRunGroups<
+  T extends {
+    id: string;
+    role: "user" | "assistant";
+    toolResults?: unknown[];
+  },
+>(messages: T[]): RunGroup<T>[] {
+  const groups: RunGroup<T>[] = [];
+  let current: RunGroup<T> | null = null;
+  for (const m of messages) {
+    if (isRealUserTurnStart(m) || current === null) {
+      current = { key: m.id, items: [m] };
+      groups.push(current);
+    } else {
+      current.items.push(m);
+    }
+  }
+  return groups;
+}

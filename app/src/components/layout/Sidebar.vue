@@ -146,8 +146,8 @@ function onSearchClear() {
           v-if="!searchActive"
           class="sidebar__action"
           type="button"
-          title="搜索会话 (Cmd/Ctrl+K)"
-          aria-label="搜索会话"
+          title="按标题过滤会话"
+          aria-label="按标题过滤会话"
           @click="toggleSearch"
         >
           <Icon name="magnifying-glass" :size="14" />

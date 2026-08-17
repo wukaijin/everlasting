@@ -42,10 +42,17 @@ import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
 import PendingBadge from "./PendingBadge.vue";
 import Icon from "../Icon.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
+import { useSearchModal } from "../../composables/useSearchModal";
 
 const streamController = useStreamControllerStore();
 const projectsStore = useProjectsStore();
 const { mobileNavOpen, toggle: toggleMobileNav } = useMobileNav();
+// D2 (08-17-cross-session-search): mobile-only entry for the global
+// search modal. Desktop uses Cmd/Ctrl+K (AppShell binding); the old
+// sidebar Cmd+K hop lived inside the nav drawer, which is invisible
+// unless the drawer is open — the header button gives mobile a
+// always-visible trigger (same slot the hamburger occupies).
+const { open: openSearch } = useSearchModal();
 // S5: 无项目时隐藏汉堡(与 Sidebar v-if="showSidebar" 对称,review P3-3)。
 // 空状态本身有"+ 添加项目"入口,汉堡点了也没东西弹。
 const showHamburger = computed(
@@ -72,6 +79,16 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
         @click="toggleMobileNav"
       >
         <Icon name="bars-3" :size="20" />
+      </button>
+      <!-- D2: mobile-only global search entry (mirror of the
+           hamburger's slot + touch-target shape). -->
+      <button
+        class="app-header__search-toggle"
+        type="button"
+        aria-label="全局搜索"
+        @click="openSearch"
+      >
+        <Icon name="magnifying-glass" :size="18" />
       </button>
       <ProjectTabs
         :streaming-project-ids="streamController.streamingProjectIds"
@@ -108,11 +125,14 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
 
 /* S5 移动端汉堡按钮。桌面 display:none(零回归);移动端 inline-flex,
    触摸目标 44×44(Apple HIG)。 */
-.app-header__menu-toggle {
+.app-header__menu-toggle,
+/* D2 移动端全局搜索入口(桌面 Cmd/Ctrl+K 已覆盖,按钮隐藏)。 */
+.app-header__search-toggle {
   display: none;
 }
 @media (max-width: 767px) {
-  .app-header__menu-toggle {
+  .app-header__menu-toggle,
+  .app-header__search-toggle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -129,7 +149,8 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
     transition: background var(--duration-fast) var(--ease-out),
       color var(--duration-fast) var(--ease-out);
   }
-  .app-header__menu-toggle:hover {
+  .app-header__menu-toggle:hover,
+  .app-header__search-toggle:hover {
     background: var(--color-bg-elevated);
     color: var(--color-text-primary);
   }
