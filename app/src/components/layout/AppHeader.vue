@@ -47,12 +47,15 @@ import { useSearchModal } from "../../composables/useSearchModal";
 const streamController = useStreamControllerStore();
 const projectsStore = useProjectsStore();
 const { mobileNavOpen, toggle: toggleMobileNav } = useMobileNav();
-// D2 (08-17-cross-session-search): mobile-only entry for the global
-// search modal. Desktop uses Cmd/Ctrl+K (AppShell binding); the old
-// sidebar Cmd+K hop lived inside the nav drawer, which is invisible
-// unless the drawer is open — the header button gives mobile a
-// always-visible trigger (same slot the hamburger occupies).
+// D2 (08-17-cross-session-search): global search entry. Mobile: the
+// old sidebar Cmd+K hop lived inside the nav drawer, which is
+// invisible unless the drawer is open — the header button gives an
+// always-visible trigger. Browser/PWA desktop (08-17 hotfix): also
+// shown, because Edge/Chrome don't reliably let pages override
+// Ctrl+K (omnibox search). Tauri desktop keeps it hidden (Ctrl+K
+// works uncontested there).
 const { open: openSearch } = useSearchModal();
+const showSearchButton = !isTauriWebview();
 // S5: 无项目时隐藏汉堡(与 Sidebar v-if="showSidebar" 对称,review P3-3)。
 // 空状态本身有"+ 添加项目"入口,汉堡点了也没东西弹。
 const showHamburger = computed(
@@ -80,12 +83,14 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
       >
         <Icon name="bars-3" :size="20" />
       </button>
-      <!-- D2: mobile-only global search entry (mirror of the
-           hamburger's slot + touch-target shape). -->
+      <!-- D2: global search entry (mobile always; browser/PWA desktop
+           too — see showSearchButton rationale). -->
       <button
         class="app-header__search-toggle"
+        :data-shown="showSearchButton ? '' : undefined"
         type="button"
         aria-label="全局搜索"
+        title="全局搜索 (Ctrl/Cmd+Shift+F)"
         @click="openSearch"
       >
         <Icon name="magnifying-glass" :size="18" />
@@ -123,36 +128,48 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
   z-index: 10;
 }
 
-/* S5 移动端汉堡按钮。桌面 display:none(零回归);移动端 inline-flex,
-   触摸目标 44×44(Apple HIG)。 */
+/* S5 移动端汉堡按钮 + D2 全局搜索入口。
+   汉堡:桌面 display:none(零回归);移动端 inline-flex,触摸目标 44×44。
+   搜索按钮:移动端始终显示;浏览器/PWA 桌面也显示(`[data-shown]`,
+   08-17 hotfix——Edge/Chrome 的 Ctrl+K 不总能让页面抢占,浏览器桌面需要
+   可点击入口);Tauri 桌面隐藏(Ctrl+K 无冲突)。共享样式放基础层,
+   display 差异在 media 外单独控制,44px 触摸目标只在移动端叠加
+   (桌面 header 40px 高,不强制 44)。 */
 .app-header__menu-toggle,
-/* D2 移动端全局搜索入口(桌面 Cmd/Ctrl+K 已覆盖,按钮隐藏)。 */
 .app-header__search-toggle {
   display: none;
+}
+.app-header__search-toggle[data-shown] {
+  display: inline-flex;
+}
+.app-header__menu-toggle,
+.app-header__search-toggle,
+.app-header__search-toggle[data-shown] {
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  font-family: inherit;
+  transition: background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.app-header__menu-toggle:hover,
+.app-header__search-toggle:hover,
+.app-header__search-toggle[data-shown]:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
 }
 @media (max-width: 767px) {
   .app-header__menu-toggle,
   .app-header__search-toggle {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 100%;
     min-height: 44px;
-    background: transparent;
-    border: none;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    padding: 0;
-    flex-shrink: 0;
-    font-family: inherit;
-    transition: background var(--duration-fast) var(--ease-out),
-      color var(--duration-fast) var(--ease-out);
-  }
-  .app-header__menu-toggle:hover,
-  .app-header__search-toggle:hover {
-    background: var(--color-bg-elevated);
-    color: var(--color-text-primary);
   }
   /* S5:AppHeader 的 ProjectTabs 移动端隐藏(挪进 Sidebar 抽屉顶部,见
        .sidebar__project-tabs)。桌面常驻不动。 */

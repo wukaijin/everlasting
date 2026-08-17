@@ -53,6 +53,20 @@ registerKeybinding({
     openSearch();
   },
 });
+// 08-17 hotfix: Edge (and some Chrome setups) reserve Ctrl+K for
+// the omnibox search and don't always let the page override it.
+// Ctrl/Cmd+Shift+F is the escape-hatch alias (VS Code global-search
+// muscle memory; no browser default binding). Both stay registered
+// — Tauri desktop keeps the single-tap Ctrl+K.
+registerKeybinding({
+  key: "f",
+  ctrlOrMeta: true,
+  shiftKey: true,
+  handler: (e) => {
+    e.preventDefault();
+    openSearch();
+  },
+});
 // S5 移动端抽屉导航(module-level 单例 composable,与 useToast 同构):AppHeader
 // 汉堡 toggle,Sidebar 读 mobileNavOpen + 选 session 自动 close,本组件渲染
 // 遮罩(@click close)。桌面下 open 状态被 CSS 忽略(Sidebar 常驻,fixed 定位

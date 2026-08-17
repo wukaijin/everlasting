@@ -106,12 +106,18 @@ const visibleTitleHits = computed(() =>
 
 const truncated = computed(() => hits.value.length >= RESULT_LIMIT);
 const hasQuery = computed(() => query.value.trim().length > 0);
+/** The query the LAST COMPLETED search ran with (echoed in the
+ *  result-status line + empty state so "did it search?" is always
+ *  answerable at a glance — the 08-17 user feedback: results felt
+ *  indistinguishable from "nothing happened"). */
+const searchedQuery = ref("");
 
 async function runSearch(): Promise<void> {
   const q = query.value.trim();
   if (!q) {
     hits.value = [];
     searchError.value = null;
+    searchedQuery.value = "";
     return;
   }
   const seq = ++searchSeq;
@@ -125,13 +131,24 @@ async function runSearch(): Promise<void> {
     });
     if (seq !== searchSeq) return; // stale response — a newer query superseded it
     hits.value = result;
+    searchedQuery.value = q;
   } catch (e) {
     if (seq !== searchSeq) return;
     searchError.value = e instanceof Error ? e.message : String(e);
     hits.value = [];
+    searchedQuery.value = q;
   } finally {
     if (seq === searchSeq) searching.value = false;
   }
+}
+
+/** Enter = search NOW (skip the debounce tail). IME-composition
+ *  Enter (candidate confirm) must not trigger — `isComposing` is
+ *  exactly that signal. */
+function onEnter(e: KeyboardEvent): void {
+  if (e.isComposing) return;
+  if (debounceTimer) clearTimeout(debounceTimer);
+  void runSearch();
 }
 
 watch(query, () => {
@@ -227,12 +244,13 @@ function timeLabel(iso: string): string {
               v-model="query"
               class="search-modal__input"
               type="text"
-              placeholder="搜索所有会话的消息与标题…"
+              placeholder="搜索所有会话的消息与标题,回车立即搜索"
               autocomplete="off"
               spellcheck="false"
               autofocus
               @compositionstart="isComposing = true"
               @compositionend="isComposing = false"
+              @keydown.enter="onEnter"
             />
             <span v-if="searching" class="search-modal__spinner" aria-label="搜索中" />
             <DialogClose as-child>
@@ -265,15 +283,22 @@ function timeLabel(iso: string): string {
 
           <div class="search-modal__results">
             <div v-if="searchError" class="search-modal__state search-modal__state--error">
-              搜索失败:{{ searchError }}
+              搜索 "{{ searchedQuery }}" 失败:{{ searchError }}
             </div>
             <div v-else-if="!hasQuery" class="search-modal__state">
               输入关键词,跨项目检索全部会话
             </div>
-            <div v-else-if="!searching && hits.length === 0" class="search-modal__state">
-              没有匹配的会话或消息
+            <div v-else-if="searching" class="search-modal__status">
+              正在搜索 "{{ query.trim() }}"…
             </div>
-            <template v-else>
+            <template v-else-if="hits.length > 0">
+              <!-- Status line: makes "the search ran, here's how much it
+                   found" explicit — without it the results quietly
+                   replacing the placeholder is easy to miss. -->
+              <div class="search-modal__status">
+                找到 {{ hits.length }} 条命中(标题 {{ titleHits.length }} · 消息
+                {{ contentHits.length }})
+              </div>
               <!-- title hits first (flat) -->
               <section v-if="visibleTitleHits.length > 0" class="search-modal__section">
                 <h3 class="search-modal__section-title">会话标题</h3>
@@ -315,6 +340,11 @@ function timeLabel(iso: string): string {
                 仅显示前 {{ RESULT_LIMIT }} 条命中,试着用更具体的关键词
               </div>
             </template>
+            <!-- Searched (query echoed) but zero hits — a DIFFERENT
+                 message from the never-searched placeholder above. -->
+            <div v-else class="search-modal__state">
+              没有找到与 "{{ searchedQuery }}" 匹配的会话或消息
+            </div>
           </div>
         </template>
 
@@ -503,6 +533,16 @@ function timeLabel(iso: string): string {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* Search-status line (正在搜索… / 找到 N 条命中) — small but
+   textual, so the search lifecycle is perceivable without watching
+   for the tiny input spinner. */
+.search-modal__status {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  padding: 0 var(--space-1);
+  flex-shrink: 0;
 }
 
 .search-modal__section {

@@ -81,6 +81,40 @@ describe("SearchModal", () => {
     wrapper.unmount();
   });
 
+  it("Enter triggers the search immediately (no debounce wait) and lands a result-status line", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockResolvedValue([contentHit()]);
+    const wrapper = await mountOpen();
+    const input = document.body.querySelector<HTMLInputElement>(".search-modal__input");
+    input!.value = "权限";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    // Enter must bypass the 250ms debounce — fired with 0 advance.
+    input!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("找到 1 条命中");
+    vi.useRealTimers();
+    wrapper.unmount();
+  });
+
+  it("zero-hit search echoes the searched query (distinct from never-searched placeholder)", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockResolvedValue([]);
+    const wrapper = await mountOpen();
+    const input = document.body.querySelector<HTMLInputElement>(".search-modal__input");
+    input!.value = "量子纠缠";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(260);
+    await flushPromises();
+    const state = document.body.querySelector(".search-modal__state");
+    expect(state?.textContent).toContain("量子纠缠");
+    expect(state?.textContent).toContain("没有找到");
+    vi.useRealTimers();
+    wrapper.unmount();
+  });
+
   it("renders title hits first and groups content hits project→session", async () => {
     vi.useFakeTimers();
     invokeMock.mockResolvedValue([
