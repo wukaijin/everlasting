@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/chat.md", "reason": "chat 组件 spec 索引 + 各 scenario 子文件入口;新卡片 scenario 要登记在此"}
+{"file": ".trellis/spec/frontend/chat/streamcontroller-routing.md", "reason": "tool:call 路由模式的适用边界 —— 本设计刻意不走该路由,需理解何时该走/不该走"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store vs 组件局部状态的硬规则(搜索 modal 状态是组件局部的,卡片重查状态同理不得入 Pinia)"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "命中行 hit-area 与移动端适配规范(R5)"}
+{"file": ".trellis/tasks/08-17-search-history-card/design.md", "reason": "本任务技术设计:状态机/prefill 契约/4 决策"}
