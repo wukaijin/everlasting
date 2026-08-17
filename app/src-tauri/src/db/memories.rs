@@ -63,7 +63,7 @@ pub use lifecycle::{
     ACTIVE_TO_VERIFIED_AGE_DAYS, ACTIVE_TO_VERIFIED_AT, CANDIDATE_TO_ACTIVE_AT,
 };
 #[allow(unused_imports)]
-pub(crate) use search::build_recall_fts_query;
+pub(crate) use search::{build_recall_fts_query, escape_fts5};
 #[allow(unused_imports)]
 pub use search::{
     find_pitfalls_by_trigger, find_pitfalls_by_trigger_all_status, search_memories_fts,

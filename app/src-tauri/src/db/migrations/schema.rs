@@ -1011,6 +1011,99 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // placeholder degradation = pre-B1 behavior).
     add_models_column_if_missing(pool, "supports_images", "INTEGER NOT NULL DEFAULT 0").await?;
 
+    // --- D2 (cross-session search, 2026-08-17): `messages_fts` FTS5
+    // virtual table for full-text search over `messages.text`.
+    //
+    // Mirrors the `autonomous_memories_fts` pattern above (external
+    // content + trigram tokenizer + 3-trigger sync dance) with two
+    // deliberate differences:
+    //
+    // 1. **`AFTER UPDATE OF text`** (memories uses plain `AFTER
+    //    UPDATE`). `messages` rows take frequent non-text UPDATEs
+    //    (`update_message_latency`, `update_message_metadata`,
+    //    tool-result duration patches) — an unqualified update
+    //    trigger would do an FTS delete+insert pair on every one of
+    //    those writes. Restricting to `OF text` keeps the FTS churn
+    //    to actual content rewrites (D3 message editing).
+    //
+    // 2. **Docsize-guarded rebuild backfill** (memories never needed
+    //    one: its table and FTS landed in the same migration, so
+    //    there were no pre-existing rows). `messages` has months of
+    //    live rows on upgrade, so after creating the index we probe
+    //    the FTS index's actual document count and run the FTS5
+    //    `rebuild` command only when it diverges from the base
+    //    table — first boot after upgrade rebuilds once, subsequent
+    //    boots skip (avoiding a full reindex on every daemon start).
+    //
+    //    Probe choice (empirically verified 2026-08-17, see
+    //    `search_tests::backfill`): neither `COUNT(*) FROM
+    //    messages_fts` (reads through to the content table — always
+    //    equals the base count, even with a fully stale index) nor
+    //    the `integrity-check` command (passes on a never-indexed
+    //    external-content table) can detect staleness. The
+    //    `%_docsize` shadow table holds exactly one row per indexed
+    //    document — 0 for a fresh index, N after backfill — and
+    //    stays in lockstep with INSERT / `('delete',…)` / `UPDATE OF
+    //    text` triggers (including empty-`text` rows, which common
+    //    tool-result-only messages produce).
+    sqlx::query(
+        r#"
+ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    text,
+    content='messages', content_rowid='id',
+    tokenize='trigram'
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+ CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, text)
+    VALUES (new.id, new.text);
+ END
+ "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+ CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text)
+    VALUES ('delete', old.id, old.text);
+ END
+ "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+ CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF text ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text)
+    VALUES ('delete', old.id, old.text);
+    INSERT INTO messages_fts(rowid, text)
+    VALUES (new.id, new.text);
+ END
+ "#,
+    )
+    .execute(pool)
+    .await?;
+    let msg_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(pool)
+        .await?;
+    let fts_doc_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages_fts_docsize")
+        .fetch_one(pool)
+        .await?;
+    if msg_count != fts_doc_count {
+        // FTS5 external-content rebuild: rescans the content table
+        // and regenerates the whole index. Same lazy-init semantics
+        // as the seed helpers above — runs at most once per upgrade.
+        sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+            .execute(pool)
+            .await?;
+    }
+
     // --- PR1 of multi-model task: seed default providers + models
     // if the catalog is empty. Idempotent:0-row check skips the
     // insert on subsequent boots. Backfills `sessions.model_id`

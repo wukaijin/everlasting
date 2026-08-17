@@ -68,6 +68,8 @@ pub mod projects;
 pub mod projects_tests;
 pub mod providers;
 pub mod providers_tests;
+pub mod search;
+pub mod search_tests;
 pub mod sessions;
 pub mod sessions_tests;
 pub mod subagent_overrides;

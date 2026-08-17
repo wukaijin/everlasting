@@ -17,7 +17,7 @@ use super::types::{MemoryInsertError, MemoryRow, MemoryScope};
 /// this (precision-first); v2 can switch to per-token escaping +
 /// OR-join for recall-first semantics. See prd §4 H3 tradeoff
 /// note.
-fn escape_fts5(q: &str) -> String {
+pub(crate) fn escape_fts5(q: &str) -> String {
     format!("\"{}\"", q.replace('"', "\"\""))
 }
 
