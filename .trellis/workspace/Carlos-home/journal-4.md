@@ -498,3 +498,8 @@ brainstorm 四决议(全局 Modal 接管 Cmd+K / 全部 project / Modal 内只�
 ### Status
 
 [OK] **Completed**(② Agent 驱动 search_history tool 为 follow-up;UI 视觉真机复验待用户)
+
+
+### Session 102 补记:用户实测三笔 hotfix(commit 1e5e3e4)
+
+用户 Edge 真机反馈:① Ctrl+K 与浏览器搜索冲突;② 输入后不知"搜没搜过/怎么触发"。诊断:headless Chromium 复验功能全通(29 命中渲染正常),根因是交互反馈缺失而非搜索缺陷;另抓到预存 get_home_dir 405(浏览器模式 console 污染,curl 证实 daemon 缺路由)。修复:回车立即搜(bypass debounce,IME isComposing 守卫)+ "找到 N 条命中"状态行 + 空态回显查询词;Ctrl+Shift+F 别名 + 浏览器/PWA 桌面常显 AppHeader 搜索按钮(Tauri 桌面保持隐藏);config 域补 POST /get_home_dir 路由 + oneshot 测试。headless 复验:双快捷键开 modal/Enter 状态行/空态回显/console 零错误;1081 前端测试绿。教训:静默成功(结果悄悄替换占位)在搜索类 UI 等于失败——状态行是刚需,不是装饰。
