@@ -14,7 +14,7 @@
 > - [memory.md](./memory.md) §Scenario: Autonomous Memories —`remember` 完整契约(DB schema / 安全网 / 频率控制 / silent-allow 权限模型)
 > - [memory.md](./memory.md) §Scenario: V2-2+ Observability & Management(2026-07-06)— `update_autonomous_memory` / `update_autonomous_memory_status` IPC + `ChatEvent::Recall` + `validate_memory_text` helper + `edited_by_user` provenance + 状态机矩阵(前端只读副本 / 后端硬墙)
 >
-> **何时读本文**:涉及 `builtin_tools()` / `edit_file` / `ReadGuard` / `shell` spillover / `grep` / `glob` / `list_dir` / `remember`(silent-allow 自主记忆写)/ `update_autonomous_memory{,_status}` IPC / `ChatEvent::Recall` / `load_tool_schemas` + `stubify`(tools Stub 注册,D)时。
+> **何时读本文**:涉及 `builtin_tools()` / `edit_file` / `ReadGuard` / `shell` spillover / `grep` / `glob` / `list_dir` / `remember`(silent-allow 自主记忆写)/ `update_autonomous_memory{,_status}` IPC / `ChatEvent::Recall` / `load_tool_schemas` + `stubify`(tools Stub 注册,D)/ `search_history`(D2② agent 驱动跨 session 搜索)时。
 >
 > **⑨ 关 Permission Layer 设计合约**:[permission-layer.md](./permission-layer.md)(A2 + B7, 2026-06-13,2026-06-21 移入)。
 
@@ -39,3 +39,4 @@
 - [12-builtin-plugin-source-layer](./tool-contract/12-builtin-plugin-source-layer.md)
 - [13-use-ui-button-apply-ui-diff](./tool-contract/13-use-ui-button-apply-ui-diff.md)
 - [14-stub-registration](./tool-contract/14-stub-registration.md) — tools Stub 注册(渐进式披露 D,`load_tool_schemas` 契约 + 粘性 registry + 开关)
+- [15-search-history](./tool-contract/15-search-history.md) — `search_history`(D2② agent 驱动跨 session 全文搜索,复用 db::search 共享层 + Tier 5 silent Allow + agent 侧 limit 50 vs modal 200)

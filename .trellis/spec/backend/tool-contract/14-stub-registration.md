@@ -27,11 +27,15 @@ pub fn load_tool_schemas_def() -> ToolDef;
 - stub ToolDef:`name` 不变;`description` = 极短语义摘要 + `load_tool_schemas([name]) first.`;
   `input_schema` = `{"type":"object"}`(宽松外壳)。**原地替换保序** — tools[]
   顺序与 `builtin_tools()` 注册序一致,顺序扰动会动 provider 前缀缓存断点(C7 R3.2)。
-- 静态度量单测:classic-chat 集 stubify 后 `count_tokens ≤ 3700`(**2026-08-14
+- 静态度量单测:classic-chat 集 stubify 后 `count_tokens ≤ 3900`(**2026-08-14
   用户两轮拍板从 ≤3000 上调**:首轮改 3500 后实测仍超 — 极短摘要 stub 10 个
   含 JSON 包装 330(非预估 190)+ dispatch 生产 5 模型 enum 984(非预估
   500),合计 3675、live 实测 3677;AC1 线随用户拍板定 3700。基线 6773 →
-  3677:省 3096,-45.7%,tools 占首轮 context 38.5% → 26%)。
+  3677:省 3096,-45.7%,tools 占首轮 context 38.5% → 26%。
+  **2026-08-17 二次校准 3700→3900**:D2② 注册 `search_history`(+178 tok 实测
+  → 3855)。该工具非 stub 候选(3 参数 schema;recall 类首次直用优于先 load
+  再重试),stub 化也只省 ~140(3715 仍超线)— 线随新增注册工具基线整体平移。
+  若未来再注册新工具逼近 3900,优先评估扩 `STUB_CANDIDATES` 而非继续平移)。
 - 不变量单测:`STUB_CANDIDATES ∩ {read_file,grep,glob,list_dir,use_skill} = ∅` —
   防未来候选/白名单扩员重新引入「直呼绕过 serial 自愈拦截」的洞。
 

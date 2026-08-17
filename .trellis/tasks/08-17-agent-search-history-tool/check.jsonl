@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "检查新 tool 是否符合注册序/注释/权限声明约定,scenario 是否补齐"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查清单(fmt/clippy/测试组织)"}
+{"file": ".trellis/tasks/08-17-agent-search-history-tool/prd.md", "reason": "AC1-AC8 验收清单与 R4-R6 权限/worker/群聊边界决策"}

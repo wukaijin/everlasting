@@ -35,7 +35,7 @@ fn classify_dispatch_batch(tool_calls: &[(String, String, Value)]) -> DispatchBa
 // in the concurrent-branch allowlist; the 4 file-reading tools cover the
 // on-disk read surface. See `READONLY_TOOL_ALLOWLIST` doc in
 // `subagent::tools_filter::READONLY_TOOL_ALLOWLIST` for rationale.
-const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
+const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch", "search_history"];  // search_history joined 2026-08-17 (D2②, read-only DB query)
 pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef>;   // mirrors STRUCTURALLY_DISABLED pattern
 
 // run_subagent gained a trailing param:
@@ -102,7 +102,7 @@ per-worker worktree isolation (see "L3b PR2 update" below).
 | Pure batch, d=4 (> limit 3) | 4 tool_results all `is_error: true`; 0 workers spawn |
 | Mixed batch (dispatch + read_file) | Falls to serial path; serial loop runs dispatch (B6) + read_file in order |
 | Single dispatch (d=1) | Serial path (B6 behavior, `force_readonly=false`) — unchanged |
-| `general-purpose` in concurrent branch | worker toolset stripped to 5 read-only tools (`read_file, grep, glob, list_dir, web_fetch`); writes impossible |
+| `general-purpose` in concurrent branch | worker toolset stripped to the read-only allowlist (`read_file, grep, glob, list_dir, web_fetch, search_history` — 6 since D2② 2026-08-17); writes impossible |
 | Parent Stop mid-batch | `parent_token` fires → all N `child_token()` fire → all workers cancelled; `cancel_parent` aggregated |
 | One worker errors, others succeed | each returns its own `(content, is_error, …)`; tool_results carry per-worker `[status: …]` prefix independently |
 
@@ -122,7 +122,7 @@ Backend (`cargo test --lib`, `agent/tests_subagent.rs`):
 
 | Test | Asserts |
 |---|---|
-| `l3a_filter_tools_readonly_keeps_only_five_read_tools` | unit: allowlist keeps 5 read-only tools (`read_file, grep, glob, list_dir, web_fetch`), strips writes incl. `dispatch_subagent` (anti-nesting pin). L3b PR2: no longer the concurrent-branch safety argument, but the function + test stay (L3a opt-in / future explicit read-only callers). |
+| `l3a_filter_tools_readonly_keeps_only_read_tools` | unit: allowlist keeps exactly the read-only tools (6 since D2② 2026-08-17: `read_file, grep, glob, list_dir, web_fetch, search_history`), strips writes incl. `dispatch_subagent` (anti-nesting pin). Renamed from `..._keeps_only_five_read_tools` when `search_history` joined. L3b PR2: no longer the concurrent-branch safety argument, but the function + test stay (L3a opt-in / future explicit read-only callers). |
 | `l3a_classify_dispatch_batch_branches_correctly` | unit: all 3 branches (Serial/OverLimit/Concurrent) classified by (d, o) |
 | `l3a_pure_batch_of_three_dispatches_runs_concurrently` | AC1/6: 3 workers, tool_use order preserved (asserted via persisted DB messages). L3b PR2: workers now in per-worker worktrees; the order-preservation invariant is unchanged. |
 | `l3a_pure_batch_over_limit_hard_rejects_all` | AC3: 4 dispatch → all tool_error, 0 workers (call_count, runs empty) |

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "工具注册/execute 签名/权限 Tier 约定的 SoT;新 tool scenario 也要落在"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "messages_fts external-content + docsize 回填契约;db::search 共享层的使用边界"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "工具过滤链 drive.rs mode→workflow→session_type→stub 的挂接顺序,确认新 tool 天然穿过"}
+{"file": ".trellis/tasks/08-17-agent-search-history-tool/design.md", "reason": "本任务技术设计:输入解析/输出格式/接线点/5 决策(权限零改动依据见 R4 段,替代超大 permission-layer.md)"}
