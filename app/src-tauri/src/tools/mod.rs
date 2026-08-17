@@ -32,6 +32,7 @@ pub mod remember;
 pub mod request_mode_change;
 pub mod request_task_state_transition;
 pub mod run_background_shell;
+pub mod search_history;
 pub mod shell;
 pub mod shell_kill;
 pub mod shell_status;
@@ -226,6 +227,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // session_type for a cleaner classic-chat tool list.
         nominate_speaker::definition(),
         end_discussion::definition(),
+        // D2② (2026-08-17): agent-driven cross-session full-text
+        // search — thin wrapper over the shared `db::search::
+        // search_messages` layer (the user-facing SearchModal is the
+        // other driver). Read-only DB query: Tier 5 silent Allow via
+        // `ToolKind::Other` (same as `remember`), Risk::Low default,
+        // Plan mode keeps it. NOT intercepted by chat_loop (plain
+        // dispatch). Not a C7D stub candidate (3-param schema).
+        // Appended LAST — `builtin_tools()` order feeds the provider
+        // prefix cache; appending never shifts the existing prefix.
+        search_history::definition(),
     ]
 }
 
@@ -490,6 +501,12 @@ async fn execute_tool_inner(
         }
         "glob" => {
             let (out, is_err) = glob::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default(), None)
+        }
+        // D2②: plain dispatch (no chat_loop interception). Receives
+        // `session_id` only for the `(this session)` hit marker.
+        "search_history" => {
+            let (out, is_err) = search_history::execute(input, ctx, session_id).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
         "list_dir" => {

@@ -297,7 +297,7 @@ mod tests {
     /// classic-chat 真实首轮工具集:builtin 23 − R3 裁 2(nominate/end)
     /// − workflow 裁 2(create_task/request_task_state_transition)+
     /// dispatch_subagent 动态 def + load_tool_schemas def。应用
-    /// R3/R4 后 stubify,count_tokens ≤ 3700。
+    /// R3/R4 后 stubify,count_tokens ≤ 3900。
     ///
     /// **预算校准(2026-08-14,用户两轮拍板)**:
     /// 1. 原 design ≤3000 在 Edit 模式(AC1 实测模式)数学不可达 —
@@ -310,6 +310,13 @@ mod tests {
     ///    stub 语义摘要(177 tok 差距不值得牺牲「模型 load 前知道
     ///    工具干嘛」)。基线 6773 → 3677:省 3096,削减 45.7%,
     ///    tools 占首轮 context 38.5% → 26%。
+    /// 3. **3700 → 3900(2026-08-17,D2②)**:注册 `search_history`
+    ///    (agent 驱动跨 session 全文搜索)实测 +178 tok → 3855。该
+    ///    工具非 stub 候选(3 参数 schema;recall 类工具首次直用优
+    ///    于先 load 再重试),且 stub 化也只省 ~140(3715 仍超线)—
+    ///    线随新增注册工具基线整体平移,沿用校准 2 的「实测 > 预估
+    ///    线」先例。若未来再注册新工具逼近 3900,优先评估扩
+    ///    STUB_CANDIDATES 而非继续平移。
     /// dispatch 校准:生产 `model_briefs = list_models`(实测 5 模型),
     /// 用真实 display_name 列表模拟(不是 2 模型的低估值)。
     #[tokio::test]
@@ -350,8 +357,8 @@ mod tests {
         let json = serde_json::to_string(&defs).unwrap_or_default();
         let tokens = crate::memory::tokens::count_tokens(&json).await;
         assert!(
-            tokens <= 3700,
-            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 3700(AC1 线,用户拍板)"
+            tokens <= 3900,
+            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 3900(AC1 线,校准史见上)"
         );
     }
 

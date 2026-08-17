@@ -101,28 +101,38 @@ pub fn filter_tools_for_subagent(all_tools: Vec<ToolDef>, def: &SubagentDef) -> 
 
 /// Tool names permitted in the **read-only** worker toolset (L3a,
 /// 2026-06-24; `web_fetch` added 2026-06-25, task
-/// 06-25-subagent-web-access). This is the **runtime-forced
-/// read-only layer** (the 2nd of 3 — see L3a PRD "只读保证三层"):
-/// when multiple workers run concurrently in a pure dispatch
-/// batch, the concurrent branch forces every worker's toolset
-/// down to just these 5 read-only tools regardless of its
-/// `SubagentDef` allowlist. For `researcher` this is a no-op (its
-/// `SubagentDef.tools` is already exactly these 5); for
-/// `general-purpose` it strips write/edit/shell/etc. (`web_fetch`
-/// is kept — it is a read-only network op, `Risk::Low`, and
-/// SSRF-guarded in `tools/web_fetch.rs`; a worker's `web_fetch`
-/// still goes through the Tier 4 permission check, inheriting the
-/// parent session's `web_fetch` grant or surfacing a
-/// `WorkerAskBanner`). The safety baseline is still the
-/// `is_worker: true` permission layer (worker asks route through
-/// `WorkerAskBanner` since the 2026-06-22 RULE-FrontSubagent-003
-/// fix — they no longer collapse to `Deny`; 3rd layer) —
-/// `filter_tools_readonly` is defense-in-depth that keeps the
-/// concurrent branch's tool discovery surface aligned with its
-/// read-only contract so the LLM never even sees a write tool in
-/// the concurrent path.
-pub const READONLY_TOOL_ALLOWLIST: &[&str] =
-    &["read_file", "grep", "glob", "list_dir", "web_fetch"];
+/// 06-25-subagent-web-access; `search_history` added 2026-08-17,
+/// D2②). This is the **runtime-forced read-only layer** (the 2nd of
+/// 3 — see L3a PRD "只读保证三层"): when multiple workers run
+/// concurrently in a pure dispatch batch, the concurrent branch
+/// forces every worker's toolset down to just these read-only tools
+/// regardless of its `SubagentDef` allowlist. `web_fetch` is kept —
+/// it is a read-only network op, `Risk::Low`, and SSRF-guarded in
+/// `tools/web_fetch.rs`; a worker's `web_fetch` still goes through
+/// the Tier 4 permission check, inheriting the parent session's
+/// `web_fetch` grant or surfacing a `WorkerAskBanner`.
+/// `search_history` is a read-only DB query (Tier 5 silent Allow),
+/// so concurrent read-only workers keep it — serial `general-
+/// purpose` workers have it via `builtin_tools()` (not in
+/// `STRUCTURALLY_DISABLED`); the builtin `researcher`'s hardcoded
+/// 5-tool `SubagentDef.tools` was deliberately NOT extended (its
+/// system prompt enumerates its tools; frontmatter agents can opt
+/// in), so researcher's allowlist is no longer exactly this list.
+/// The safety baseline is still the `is_worker: true` permission
+/// layer (worker asks route through `WorkerAskBanner` since the
+/// 2026-06-22 RULE-FrontSubagent-003 fix — they no longer collapse
+/// to `Deny`; 3rd layer) — `filter_tools_readonly` is
+/// defense-in-depth that keeps the concurrent branch's tool
+/// discovery surface aligned with its read-only contract so the LLM
+/// never even sees a write tool in the concurrent path.
+pub const READONLY_TOOL_ALLOWLIST: &[&str] = &[
+    "read_file",
+    "grep",
+    "glob",
+    "list_dir",
+    "web_fetch",
+    "search_history",
+];
 
 /// Force a worker's toolset down to read-only tools only (L3a,
 /// 2026-06-24). Applied by the concurrent dispatch branch in
@@ -133,11 +143,11 @@ pub const READONLY_TOOL_ALLOWLIST: &[&str] =
 /// filter pattern (same `.filter(|t| allowlist.contains(t.name))`
 /// shape).
 ///
-/// `researcher` is unaffected (its allowlist is already exactly
-/// `READONLY_TOOL_ALLOWLIST`); `general-purpose` is downgraded
-/// from its full-minus-disabled set to just the 5 read-only tools
-/// (incl. `web_fetch`). Returns a fresh `Vec<ToolDef>` (consumes
-/// the input).
+/// `researcher` is unaffected (its `SubagentDef.tools` allowlist is
+/// the original 5 research tools — see `READONLY_TOOL_ALLOWLIST`
+/// for the D2② divergence note); `general-purpose` is downgraded
+/// from its full-minus-disabled set to just the read-only tools
+/// above. Returns a fresh `Vec<ToolDef>` (consumes the input).
 pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef> {
     tools
         .into_iter()
