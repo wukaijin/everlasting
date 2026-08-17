@@ -23,11 +23,12 @@ import {
   DialogTitle,
   DialogClose,
 } from "reka-ui";
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { transport } from "../../transport";
 import { useChatStore } from "../../stores/chat";
 import type { MessageSearchHit } from "../../stores/chat.types";
 import { useSearchModal } from "../../composables/useSearchModal";
+import { hitTimeLabel, splitSnippetAt } from "../../utils/searchHits";
 import Icon from "../Icon.vue";
 import SearchPreviewBody from "./SearchPreviewBody.vue";
 
@@ -35,7 +36,7 @@ const QUERY_DEBOUNCE_MS = 250;
 const RESULT_LIMIT = 50;
 
 const chatStore = useChatStore();
-const { searchModalOpen, close } = useSearchModal();
+const { searchModalOpen, close, consumePrefill } = useSearchModal();
 
 // --- results state --------------------------------------------------------
 const query = ref("");
@@ -171,25 +172,52 @@ function onEnter(e: KeyboardEvent): void {
 
 watch(query, () => {
   if (isComposing.value) return;
+  if (bootingPrefill) return; // armed by the open watcher, see below
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(runSearch, QUERY_DEBOUNCE_MS);
 });
 
 // Changing the filter re-runs server-side (cheap + keeps the hit
 // pool consistent with the chips) — no debounce needed.
-watch(projectFilter, () => void runSearch());
+watch(projectFilter, () => {
+  if (bootingPrefill) return; // armed by the open watcher, see below
+  void runSearch();
+});
+
+// Prefill boot guard: while the open watcher arms a prefill's
+// query/projectFilter and fires its OWN immediate runSearch, the
+// value mutations above queue these two watchers too — without the
+// guard every prefill open would double-fire the IPC (immediate +
+// debounced). The guard is cleared on nextTick, AFTER the queued
+// pre-flush watchers have run, so it can never swallow a later
+// user edit (a same-query reopen where the watchers DON'T fire
+// still clears on nextTick — no leak, unlike a one-shot counter).
+let bootingPrefill = false;
 
 // Reset to a clean results state on every open (stale results from
-// a previous open are noise, not context).
+// a previous open are noise, not context). With a pending prefill
+// (D2②+ SearchHistoryCard CTA / programmatic opens) the query and
+// project filter are pre-armed and the first search fires
+// immediately — no debounce, no IME window on a programmatic open.
 watch(searchModalOpen, (open) => {
   if (open) {
-    query.value = "";
+    const prefill = consumePrefill();
+    bootingPrefill = !!prefill?.query;
+    query.value = prefill?.query ?? "";
     hits.value = [];
-    projectFilter.value = null;
+    projectFilter.value = prefill?.projectId ?? null;
     availableProjects.value = [];
     searchError.value = null;
     searchedQuery.value = "";
     preview.value = null;
+    if (prefill && prefill.query) {
+      void runSearch();
+      // Clear AFTER the queued query/projectFilter watchers have
+      // been skipped in this flush (see `bootingPrefill` above).
+      void nextTick(() => {
+        bootingPrefill = false;
+      });
+    }
   }
 });
 
@@ -222,26 +250,15 @@ async function openInMainWindow(target: PreviewTarget): Promise<void> {
 /** Highlight the query inside a snippet. Returns [before, match,
  *  after] segments, case-insensitive first occurrence — the wire
  *  deliberately carries no offsets (design §2). */
-function splitSnippet(
-  snippet: string,
-): [string, string | null, string] {
-  const q = query.value.trim().toLowerCase();
-  if (!q) return [snippet, null, ""];
-  const idx = snippet.toLowerCase().indexOf(q);
-  if (idx === -1) return [snippet, null, ""];
-  return [snippet.slice(0, idx), snippet.slice(idx, idx + q.length), snippet.slice(idx + q.length)];
+// hit-rendering helpers extracted to utils/searchHits (shared with
+// the D2②+ SearchHistoryCard); local wrappers keep the template's
+// call sites stable.
+function splitSnippet(snippet: string): [string, string | null, string] {
+  return splitSnippetAt(snippet, query.value);
 }
 
 function timeLabel(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  const sameYear = d.getFullYear() === now.getFullYear();
-  return d.toLocaleDateString("zh-CN", {
-    year: sameYear ? undefined : "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
+  return hitTimeLabel(iso);
 }
 </script>
 

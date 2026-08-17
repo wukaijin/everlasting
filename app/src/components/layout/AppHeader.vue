@@ -91,7 +91,7 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
         type="button"
         aria-label="全局搜索"
         title="全局搜索 (Ctrl/Cmd+Shift+F)"
-        @click="openSearch"
+        @click="openSearch()"
       >
         <Icon name="magnifying-glass" :size="18" />
       </button>

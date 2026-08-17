@@ -618,3 +618,42 @@ describe("MessageItem — B1 attachment thumbnails", () => {
     expect(w2.find(".message-images").exists()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------
+// D2②+ (08-17-search-history-card): search_history tool_use renders
+// the dedicated SearchHistoryCard INSTEAD of the generic
+// ToolCallCard (same replace-dispatch as end_discussion →
+// DiscussionSummaryCard).
+// ---------------------------------------------------------------------
+
+describe("MessageItem — search_history tool dispatch", () => {
+  it("replaces ToolCallCard with SearchHistoryCard for search_history", async () => {
+    const message = makeAssistantMessage(
+      [{ id: "tu-sh-1", name: "search_history", input: { query: "worktree" } }],
+      [
+        {
+          toolUseId: "tu-sh-1",
+          content: 'Found 1 hits for "worktree" (scope: all projects):',
+          isError: false,
+        },
+      ],
+    );
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+
+    const card = wrapper.find("[data-testid='search-history-card-tu-sh-1']");
+    expect(card.exists()).toBe(true);
+    // The generic tool card is REPLACED (not a sibling below it).
+    expect(wrapper.find(".tool-card").exists()).toBe(false);
+  });
+
+  it("still renders the generic ToolCallCard for other read tools", async () => {
+    const message = makeAssistantMessage([
+      { id: "tu-grep-1", name: "grep", input: { pattern: "x", path: "." } },
+    ]);
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    expect(wrapper.find(".tool-card").exists()).toBe(true);
+    expect(wrapper.find("[data-testid^='search-history-card']").exists()).toBe(false);
+  });
+});

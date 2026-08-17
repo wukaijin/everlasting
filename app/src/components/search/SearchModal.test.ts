@@ -13,6 +13,7 @@
 // go against `document.body` (attachTo), not the wrapper.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { nextTick } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
@@ -248,6 +249,73 @@ describe("SearchModal", () => {
     // data-seq anchor present on the rendered message.
     expect(document.body.querySelector('[data-seq="3"]')).not.toBeNull();
     vi.useRealTimers();
+    wrapper.unmount();
+  });
+
+  // -------------------------------------------------------------------
+  // D2②+ (08-17-search-history-card): programmatic prefill open.
+  // The open watcher only fires on a false→true transition, and the
+  // module singleton may already be true from the tests above —
+  // close + tick first so every prefill test starts from false.
+  // -------------------------------------------------------------------
+
+  async function reopenWith(prefill?: { query: string; projectId?: string | null }) {
+    const { open, close } = useSearchModal();
+    close();
+    await nextTick();
+    // Mount FIRST (mirrors production: AppShell keeps SearchModal
+    // always-mounted, so the open watcher observes the transition).
+    // Mounting after open() would miss the false→true change.
+    const wrapper = mount(SearchModal, { attachTo: document.body });
+    await flushPromises();
+    invokeMock.mockClear();
+    open(prefill);
+    await flushPromises();
+    await nextTick(); // bootingPrefill guard cleared
+    return wrapper;
+  }
+
+  it("open({query}) prefills the query and searches immediately (no debounce)", async () => {
+    invokeMock.mockResolvedValue([contentHit()]);
+    const wrapper = await reopenWith({ query: "worktree" });
+
+    // Fired once, synchronously with the open — no timer advance.
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("search_messages", {
+      query: "worktree",
+      projectId: null,
+      limit: 50,
+    });
+    expect(document.body.textContent).toContain("找到 1 条命中");
+    wrapper.unmount();
+  });
+
+  it("open({query, projectId}) arms the project filter without double-firing", async () => {
+    invokeMock.mockResolvedValue([contentHit()]);
+    const wrapper = await reopenWith({ query: "worktree", projectId: "pa" });
+
+    // Exactly ONE search — the prefill's own run; arming
+    // query/projectFilter must not trigger watcher-driven reruns.
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("search_messages", {
+      query: "worktree",
+      projectId: "pa",
+      limit: 50,
+    });
+    wrapper.unmount();
+  });
+
+  it("a plain open() after a prefill open does NOT reuse the stale prefill", async () => {
+    invokeMock.mockResolvedValue([]);
+    const wrapperPrefill = await reopenWith({ query: "worktree" });
+    wrapperPrefill.unmount();
+    invokeMock.mockClear();
+
+    // Second open: no args → blank state, no auto search.
+    const wrapper = await reopenWith();
+    expect(invokeMock).not.toHaveBeenCalled();
+    const input = document.body.querySelector<HTMLInputElement>(".search-modal__input");
+    expect(input?.value).toBe("");
     wrapper.unmount();
   });
 });

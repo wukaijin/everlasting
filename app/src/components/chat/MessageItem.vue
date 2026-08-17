@@ -48,6 +48,7 @@ import { createDebouncedRenderer } from "../../utils/markdown";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import DiscussionSummaryCard from "./DiscussionSummaryCard.vue";
+import SearchHistoryCard from "./SearchHistoryCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import RequestModeChangeCard from "./RequestModeChangeCard.vue";
 import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue";
@@ -80,6 +81,9 @@ const controller = useStreamControllerStore();
 // follow-up): its `summary` is the discussion's final conclusion — render
 // a visible DiscussionSummaryCard instead of a plain ToolCallCard.
 const END_DISCUSSION_TOOL_NAME = "end_discussion";
+/** D2②+: search_history 的 tool_use 渲染专属 SearchHistoryCard
+ * (替换通用 ToolCallCard,同 end_discussion 先例)。 */
+const SEARCH_HISTORY_TOOL_NAME = "search_history";
 
 const hasVisibleBubble = computed<boolean>(() => {
   const m = props.message;
@@ -382,6 +386,14 @@ const messageImages = computed<
             :call="item"
             :result="getToolResult(message, item.id)"
           />
+          <!-- D2②+ (08-17-search-history-card): search_history 的
+               tool_result 是给 LLM 的紧凑文本,专属卡片替换通用卡
+               (重查 IPC 拿结构化 hits + CTA 开搜索 modal)。 -->
+          <SearchHistoryCard
+            v-else-if="item.name === SEARCH_HISTORY_TOOL_NAME"
+            :call="item"
+            :result="getToolResult(message, item.id)"
+          />
           <ToolCallCard
             v-else
             :call="item"
@@ -534,6 +546,11 @@ const messageImages = computed<
         -->
         <DiscussionSummaryCard
           v-if="tc.name === END_DISCUSSION_TOOL_NAME"
+          :call="tc"
+          :result="getToolResult(message, tc.id)"
+        />
+        <SearchHistoryCard
+          v-else-if="tc.name === SEARCH_HISTORY_TOOL_NAME"
           :call="tc"
           :result="getToolResult(message, tc.id)"
         />
