@@ -1004,3 +1004,35 @@ pub async fn group_chat_cache_rates(
 ) -> Result<Vec<db::trace::SpeakerCacheUsage>, AppCommandError> {
     group_chat_cache_rates_inner(&state, session_id).await
 }
+
+// ---------------------------------------------------------------------------
+// D2 cross-session full-text search (08-17-cross-session-search)
+// ---------------------------------------------------------------------------
+
+/// User-facing search over all sessions (`messages_fts` FTS5 for
+/// ≥3-char queries, LIKE fallback below that so 2-char Chinese
+/// words stay searchable). Title hits ride along in the same
+/// response, discriminated by `kind`. This is the shared query
+/// layer's IPC surface; the agent-driven `search_history` tool
+/// (D2 driver ②, follow-up) calls `db::search::search_messages`
+/// directly without this command.
+pub async fn search_messages_inner(
+    state: &Arc<AppState>,
+    query: String,
+    project_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<db::search::MessageSearchHit>, AppCommandError> {
+    db::search::search_messages(&state.db, &query, project_id.as_deref(), limit)
+        .await
+        .map_err(|e| anyhow::anyhow!("search_messages failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn search_messages(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+    project_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<db::search::MessageSearchHit>, AppCommandError> {
+    search_messages_inner(&state, query, project_id, limit).await
+}

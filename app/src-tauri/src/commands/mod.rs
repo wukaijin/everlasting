@@ -190,5 +190,12 @@ pub fn all_command_names() -> Vec<&'static str> {
         // {"boundary", "parse", "conflict", "io", "empty"}
         // drives the inline error UX.
         "apply_ui_diff",
+        // D2 (cross-session full-text search, 2026-08-17):
+        // user-facing search IPC for the global SearchModal
+        // (FTS5 ≥3 chars / LIKE fallback below; title rider in
+        // the same response). Read-only, no tool counterpart —
+        // the agent-driven `search_history` tool (driver ②)
+        // is a follow-up that bypasses this command.
+        "search_messages",
     ]
 }

@@ -20,8 +20,8 @@ use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, create_session_inner, delete_session_inner, diff_worktree_inner,
     edit_user_message_inner, group_chat_cache_rates_inner, list_sessions_inner, load_session_inner,
-    record_tool_duration_inner, rename_session_inner, set_session_color_inner,
-    set_session_plugin_name_inner, set_session_workflow_enabled_inner,
+    record_tool_duration_inner, rename_session_inner, search_messages_inner,
+    set_session_color_inner, set_session_plugin_name_inner, set_session_workflow_enabled_inner,
     update_message_latency_inner, update_session_metadata_inner,
 };
 use crate::db;
@@ -302,6 +302,28 @@ pub async fn group_chat_cache_rates(
     Ok(Json(result))
 }
 
+/// `POST /api/v1/sessions/search_messages` — D2 cross-session
+/// full-text search (08-17-cross-session-search). POST per the
+/// transport-wide `invoke` contract (all CMD_TO_DOMAIN commands
+/// POST; the domain's only GET `/:id/snapshot` is a transport
+/// special-case, not a precedent). Title rider + content hits in
+/// one round-trip; ≥3-char queries dispatch FTS5, shorter ones
+/// fall back to LIKE (2-char Chinese words must stay searchable).
+#[derive(Debug, Deserialize)]
+pub struct SearchMessagesRequest {
+    pub query: String,
+    pub project_id: Option<String>,
+    pub limit: Option<u32>,
+}
+
+pub async fn search_messages(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SearchMessagesRequest>,
+) -> Result<Json<Vec<db::search::MessageSearchHit>>, AppCommandError> {
+    let result = search_messages_inner(&state, req.query, req.project_id, req.limit).await?;
+    Ok(Json(result))
+}
+
 /// `POST /api/v1/sessions/list_workflow_plugins` — discover
 /// workflow plugins under `<project>/.everlasting/workflow/`.
 /// Phase 2.2 follow-up (2026-07-21): this handler was missing
@@ -343,5 +365,85 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/record_tool_duration", post(record_tool_duration))
         .route("/edit_user_message", post(edit_user_message))
         .route("/group_chat_cache_rates", post(group_chat_cache_rates))
+        .route("/search_messages", post(search_messages))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use crate::llm::types::{ContentBlock, MessageContent, Role};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // oneshot
+
+    /// D2 route-level smoke (spec backend/daemon-server.md §6 —
+    /// new IPC commands get a Router oneshot test). Seeds a
+    /// session + one user message through the production db layer
+    /// (exercising both the FTS insert trigger and the
+    /// first-user-message auto-title), then POSTs the
+    /// `/search_messages` route and checks both hit kinds come
+    /// back in one round-trip.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_messages_route_returns_title_and_content_hits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let pool = &state.db;
+        let project = db::projects::create_project(pool, "d2route", "/tmp/d2_route", false, None)
+            .await
+            .unwrap();
+        let session = db::sessions::create_session(
+            pool,
+            "d2-route-sess-1",
+            &project.id,
+            "/tmp/d2_route",
+            "GLM-4.7",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let content = MessageContent::Blocks(vec![ContentBlock::Text {
+            text: "路由层冒烟:关于 pineapple 的讨论".to_string(),
+            cache_control: None,
+        }]);
+        db::sessions::persist_turn(pool, &session.id, Role::User, &content, 0, None, None)
+            .await
+            .unwrap();
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/search_messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"pineapple"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let hits: Vec<db::search::MessageSearchHit> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(hits.len(), 2, "auto-title + content both hit: {hits:?}");
+        assert!(hits
+            .iter()
+            .any(|h| h.kind == db::search::SearchHitKind::Title));
+        let content_hit = hits
+            .iter()
+            .find(|h| h.kind == db::search::SearchHitKind::Content)
+            .unwrap();
+        assert_eq!(content_hit.seq, Some(0));
+        assert_eq!(content_hit.session_id, session.id);
+        assert!(content_hit
+            .snippet
+            .as_deref()
+            .unwrap()
+            .contains("pineapple"));
+    }
 }

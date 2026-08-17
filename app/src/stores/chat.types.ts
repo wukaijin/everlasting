@@ -532,6 +532,27 @@ export interface SpeakerCacheUsage {
   context_input: number;
 }
 
+/** D2 (cross-session search, 2026-08-17): one hit from
+ *  `search_messages`. Wire form mirrors the Rust struct
+ *  (`db/search.rs::MessageSearchHit`, snake_case, no serde
+ *  rename). `kind` discriminates the two surfaces searched in one
+ *  round-trip: "title" (session title matched; message-level
+ *  fields absent) vs "content" (message body matched). */
+export interface MessageSearchHit {
+  kind: "title" | "content";
+  session_id: string;
+  session_title: string;
+  project_id: string;
+  project_name: string | null;
+  updated_at: string;
+  seq: number | null;
+  role: string | null;
+  speaker: string | null;
+  /** ~±100-char window around the first match; the UI locates the
+   *  query inside it (lowercased indexOf) for highlighting. */
+  snippet: string | null;
+}
+
 /** User-facing mode subset — the three modes the MVP UI exposes.
  *  Excludes `Background` (reserved in the backend enum for
  *  schema stability but never shown to the user). */

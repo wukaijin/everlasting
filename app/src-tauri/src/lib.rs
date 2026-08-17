@@ -276,6 +276,10 @@ pub fn run() {
             // data (`turn_trace` ↔ `messages.speaker` join); the
             // modal swallows failures and renders "—".
             commands::sessions::group_chat_cache_rates,
+            // D2 (cross-session search, 2026-08-17): user-facing
+            // full-text search over all sessions (FTS5 + LIKE
+            // fallback + title rider). Read-only.
+            commands::sessions::search_messages,
             // C2 (review visualization view, 2026-07-26):
             // review-state.json read IPCs for the frontend
             // `<ReviewMatrix>` panel. `get_review_state`

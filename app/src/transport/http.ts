@@ -134,6 +134,8 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   load_session: "sessions",
   record_tool_duration: "sessions",
   rename_session: "sessions",
+  // D2 (cross-session search, 2026-08-17): global SearchModal.
+  search_messages: "sessions",
   // review (C2)
   get_review_state: "review",
   get_current_task_slug: "review",
