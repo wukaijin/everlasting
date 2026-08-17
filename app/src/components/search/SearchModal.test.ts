@@ -115,6 +115,58 @@ describe("SearchModal", () => {
     wrapper.unmount();
   });
 
+  it("typed-but-not-yet-searched shows an Enter hint, never an empty-echo with blank query", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockResolvedValue([]);
+    const wrapper = await mountOpen();
+    const input = document.body.querySelector<HTMLInputElement>(".search-modal__input");
+    // Type WITHOUT advancing the debounce timer — the 250ms gap used
+    // to fall into the empty-result branch (`没有找到与 "" 匹配`).
+    input!.value = "开始";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushPromises();
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("回车立即搜索");
+    expect(body).not.toContain('""');
+    vi.useRealTimers();
+    wrapper.unmount();
+  });
+
+  it("clicking a project chip keeps the chip row alive (chips from unfiltered runs only)", async () => {
+    vi.useFakeTimers();
+    const paHit = contentHit();
+    const pbHit = contentHit({ session_id: "s2", project_id: "pb", project_name: "Project B" });
+    invokeMock.mockImplementation(async (_cmd: string, args?: Record<string, unknown>) =>
+      (args?.projectId ?? null) === null ? [paHit, pbHit] : [pbHit],
+    );
+    const wrapper = await mountOpen();
+    const input = document.body.querySelector<HTMLInputElement>(".search-modal__input");
+    input!.value = "权限";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(260);
+    await flushPromises();
+
+    // Two projects in chips.
+    let chips = [...document.body.querySelectorAll(".search-modal__chip")];
+    expect(chips.length).toBe(3); // 全部 + pa + pb
+    (chips.find((c) => c.textContent?.includes("Project B")) as HTMLButtonElement)!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+
+    // Filtered search ran scoped…
+    const scopedCall = invokeMock.mock.calls.find(
+      (c) => (c[1] as Record<string, unknown>)?.projectId === "pb",
+    );
+    expect(scopedCall).toBeTruthy();
+    // …and the chip row SURVIVED the filtered result set (previously
+    // the row vanished because chips derived from filtered hits).
+    chips = [...document.body.querySelectorAll(".search-modal__chip")];
+    expect(chips.length).toBe(3);
+    expect(chips[0]?.textContent).toContain("全部");
+    vi.useRealTimers();
+    wrapper.unmount();
+  });
+
   it("renders title hits first and groups content hits project→session", async () => {
     vi.useFakeTimers();
     invokeMock.mockResolvedValue([

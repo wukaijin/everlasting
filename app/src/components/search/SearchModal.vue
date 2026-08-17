@@ -52,17 +52,23 @@ let searchSeq = 0;
 const titleHits = computed(() => hits.value.filter((h) => h.kind === "title"));
 const contentHits = computed(() => hits.value.filter((h) => h.kind === "content"));
 
-/** Distinct projects present in the result set (drives the filter
- *  chips). "全部" (null) is always first. */
-const projectOptions = computed(() => {
+/** Projects available as filter chips. NOT derived from the current
+ *  (possibly filtered) hit set — a filtered search returns only the
+ *  selected project's hits, and deriving chips from that made the
+ *  whole row vanish on the first chip click (08-17 hotfix #2) and
+ *  stranded the filter on. Instead the chip source is refreshed
+ *  only by UNFILTERED searches (which run on query change / open)
+ *  and survives filtered re-searches. */
+const availableProjects = ref<{ id: string; label: string }[]>([]);
+function refreshAvailableProjects(unfilteredHits: MessageSearchHit[]): void {
   const seen = new Map<string, string>();
-  for (const h of hits.value) {
+  for (const h of unfilteredHits) {
     if (!seen.has(h.project_id)) {
       seen.set(h.project_id, h.project_name ?? h.project_id);
     }
   }
-  return [...seen.entries()].map(([id, label]) => ({ id, label }));
-});
+  availableProjects.value = [...seen.entries()].map(([id, label]) => ({ id, label }));
+}
 
 /** Content hits grouped project → session (design §4.2). Within a
  *  session, first snippet + "还有 N 条" — the preview reveals the
@@ -111,6 +117,15 @@ const hasQuery = computed(() => query.value.trim().length > 0);
  *  answerable at a glance — the 08-17 user feedback: results felt
  *  indistinguishable from "nothing happened"). */
 const searchedQuery = ref("");
+const trimmedQuery = computed(() => query.value.trim());
+/** True when the input holds a query the last completed search did
+ *  NOT run — the debounce window, an IME hold, or post-search edits.
+ *  Plugs the state-machine hole where this gap rendered as
+ *  `没有找到与 "" 匹配` (08-17 hotfix #1: typed-but-not-yet-searched
+ *  is a DIFFERENT state from searched-and-empty). */
+const staleQuery = computed(
+  () => hasQuery.value && searchedQuery.value !== trimmedQuery.value,
+);
 
 async function runSearch(): Promise<void> {
   const q = query.value.trim();
@@ -132,6 +147,9 @@ async function runSearch(): Promise<void> {
     if (seq !== searchSeq) return; // stale response — a newer query superseded it
     hits.value = result;
     searchedQuery.value = q;
+    if (projectFilter.value === null) {
+      refreshAvailableProjects(result);
+    }
   } catch (e) {
     if (seq !== searchSeq) return;
     searchError.value = e instanceof Error ? e.message : String(e);
@@ -168,7 +186,9 @@ watch(searchModalOpen, (open) => {
     query.value = "";
     hits.value = [];
     projectFilter.value = null;
+    availableProjects.value = [];
     searchError.value = null;
+    searchedQuery.value = "";
     preview.value = null;
   }
 });
@@ -260,7 +280,7 @@ function timeLabel(iso: string): string {
             </DialogClose>
           </header>
 
-          <div v-if="projectOptions.length > 1" class="search-modal__filters">
+          <div v-if="availableProjects.length > 1" class="search-modal__filters">
             <button
               type="button"
               class="search-modal__chip"
@@ -270,7 +290,7 @@ function timeLabel(iso: string): string {
               全部
             </button>
             <button
-              v-for="p in projectOptions"
+              v-for="p in availableProjects"
               :key="p.id"
               type="button"
               class="search-modal__chip"
@@ -289,7 +309,13 @@ function timeLabel(iso: string): string {
               输入关键词,跨项目检索全部会话
             </div>
             <div v-else-if="searching" class="search-modal__status">
-              正在搜索 "{{ query.trim() }}"…
+              正在搜索 "{{ trimmedQuery }}"…
+            </div>
+            <!-- Typed but no completed search for it yet (debounce window /
+                 IME hold / post-search edit) with nothing to show — NOT
+                 "no results". -->
+            <div v-else-if="staleQuery && hits.length === 0" class="search-modal__status">
+              回车立即搜索 "{{ trimmedQuery }}"
             </div>
             <template v-else-if="hits.length > 0">
               <!-- Status line: makes "the search ran, here's how much it
@@ -297,7 +323,9 @@ function timeLabel(iso: string): string {
                    replacing the placeholder is easy to miss. -->
               <div class="search-modal__status">
                 找到 {{ hits.length }} 条命中(标题 {{ titleHits.length }} · 消息
-                {{ contentHits.length }})
+                {{ contentHits.length }})<template v-if="staleQuery">
+                  · 回车搜索 "{{ trimmedQuery }}"</template
+                >
               </div>
               <!-- title hits first (flat) -->
               <section v-if="visibleTitleHits.length > 0" class="search-modal__section">
