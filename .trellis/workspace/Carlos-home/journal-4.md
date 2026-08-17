@@ -507,3 +507,27 @@ brainstorm 四决议(全局 Modal 接管 Cmd+K / 全部 project / Modal 内只�
 ### Session 102 补记二:搜索状态机两洞(commit aa831d4)
 
 用户二轮实测:① 输入未回车期间显示"没有找到与 \"\" 匹配"——防抖 250ms 窗口内 searching=false + hits=[] 落进空态分支,searchedQuery 还是空串;② 点 project chip 后 chips 整行消失且过滤卡死——chips 列表从"当前命中"派生,带过滤重搜后命中只剩单 project,`v-if length>1` 塌缩。修:① 补 staleQuery 派生态(searchedQuery ≠ 当前 query ⇒ 待搜索),gap 显示"回车立即搜索 xxx",有旧结果时状态行追加"回车搜索"提示;② chips 源改 availableProjects 独立 ref,仅未过滤搜索刷新,过滤重搜不塌缩。教训:从响应数据派生的 UI 控件(chips)在过滤后必然自我吞噬——控件数据源必须与被过滤的数据集解耦;状态机要给"过渡窗口"显式命名,否则每个窗口都是一个新 bug。
+
+
+## Session 101: D2② search_history 全链路:后端 tool + 前端 SearchHistoryCard 双任务
+
+**Date**: 2026-08-17
+**Task**: D2② search_history 全链路:后端 tool + 前端 SearchHistoryCard 双任务
+**Branch**: `main`
+
+### Summary
+
+D2 双驱动收官两任务同日落地。①后端 search_history tool(a005b51/8d88261):薄封装复用 db::search::search_messages(SQL/IPC/前端零改动);{query, scope, limit≤50} → 紧凑一行一 hit 文本(title 命中标注/this session 标记/零命中非 error);权限链零改动(ToolKind::Other Tier 5 + plan 保留);READONLY_TOOL_ALLOWLIST 第 6 员(researcher 硬编码 5 项有意不动);注册 +178 tok → C7D AC1 预算线二次校准 3700→3900(stub 化只省 ~140 仍超线;沉淀守则:新工具先评估扩 STUB_CANDIDATES,平移线最后手段);l3a 守卫 5→6 显式跟进;10 新单测,1768 后端绿(1 预存 subagent guard flake 隔离通过)。②前端 SearchHistoryCard(3755a98/408ca9a):用户实测 tool_result 文本坨不可读 → 专属卡片替换渲染(end_discussion 先例),自取 tool_use.input 重查 search_messages IPC 拿结构化 hits(live/replay 同路,streamController 零改动;沉淀'自取自查 vs 事件路由'边界 spec);四态机含重查失败降级;CTA 经 useSearchModal prefill 扩参开①modal 预填即搜;两真 bug:prefill 双触发(bootingPrefill guard + nextTick 清除,一次性 counter 同 query 重复 open 会吞按键故否决)+ @click 裸绑 PointerEvent 当 prefill(vue-tsc 抓到);timeLabel/splitSnippet 抽 utils/searchHits 共享。+16 前端测,1099 全绿。spec:tool-contract 15-search-history + frontend chat/search-history-card;ROADMAP D2 双驱动全勾。待用户真机验收(重编 daemon 后问历史问题看卡片+CTA)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a005b51` | (see git log) |
+| `8d88261` | (see git log) |
+| `3755a98` | (see git log) |
+| `408ca9a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
