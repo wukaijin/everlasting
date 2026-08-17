@@ -56,3 +56,16 @@
 - **决策 — images_token 口径 = 请求内全部 Image 块(含历史重建)**:评审 P0-1;@图 w/h 由后端 `imagesize` crate 读文件头(纯 Rust 非像素解析),粘贴图前端 FileReader。
 - **偏差记录**:① 批量改 109 处 ChatMessage 字面量的脚本两轮误伤(`{` 丢失 / fn 返回类型括号错配),全部修复后全绿——此类机械改动应优先编译器反馈循环;② 正向视觉路径 live 未终验——catalog 无真实 vision 模型(MiniMax-M3 经 wukaijin 对 image 块静默忽略,in_tok=26 记账异常),降级路径 live 全验证;③ PR4 提交遗漏根 Cargo.lock(imagesize 锁),PR5 补上。
 - 任务:`08-16-b1-image-multimodal`。spec:llm-contract "Image Blocks" + token-usage-tracking "images_token"。
+
+### 2026-08-17 — D2① 跨 session 全文搜索(用户驱动 MVP)
+
+- **Context**:ROADMAP 第三档 D2 双驱动的 ①(用户驱动)。brainstorm 四决议(入口=全局 Modal 接管 Cmd/Ctrl+K;范围=全部 project 默认;跳转=Modal 内只读预览+定位;<3 字符 LIKE 兜底)+ 外部评审 3 项(P1 GET→POST、P2 跨 project 打开语义方案甲、P3 kind 字段契约回写,独立核实后全采纳,P3 另修出 design §2 struct 自身缺 kind 的内部矛盾)。
+- **决策 — docsize 守卫回填(本任务最有 transfer value 的实证)**:external-content FTS5 表的 `COUNT(*)` **穿透读内容表**(索引全空也返回基表行数),`integrity-check` 对从未索引的表**放行**——两者实证皆不可用作陈旧探针;`%_docsize` 影子表(每已索引文档恰一行,含空 text 行)才是精确探针。`run_migrations` 比对 messages 行数,分歧才 rebuild:升级后首启回填一次,后续跳过。live 实证:真实库 1192=1192。
+- **决策 — update trigger 限定 `AFTER UPDATE OF text`**:memories 模板的裸 `AFTER UPDATE` 在 messages 上会造成每次 latency/metadata 落库的 FTS delete+insert 写放大;限定 text 列后只有 D3 编辑类真实改写触发同步(测试锁定:metadata/latency UPDATE 后 docsize 不变)。
+- **决策 — 双路分派 + title 附带**:≥3 unicode 字符走 FTS(trigram phrase + bm25),<3 走 LIKE(`%_\` 转义)保 2 字中文词可搜;`sessions.title` LIKE 附带同程返回(`kind: title|content` 判别,单次 IPC 两类命中,content 专属字段 Option)。snippet Rust 统一切窗,前端 lowercased-indexOf 自行高亮——wire 不携带匹配偏移,消掉 Rust char index ↔ JS UTF-16 index 的语义漂移面。
+- **决策 — 预览复用粒度 = MessageItem + buildRunGroups,不复用 MessageList 整壳**:MessageList 直读 `store.messages`(非 prop 驱动),整壳复用会绑死当前 session;改提取 20 行 run 分组纯函数 `buildRunGroups`(MessageList 行为等价调用,主聊天热路径唯一触点,既有测试兜底)。`MessageItem` 新增 `readonly` prop **结构禁用**(非 CSS 隐藏)hover 编辑菜单——预览里 Edit/Resend 会打到当前 session 的 store action,跨 session 预览时必然错靶。
+- **决策 — `openSessionInProject` 组合 action(评审 P2 方案甲)**:`switchSession` 不碰 `currentProjectId`,裸跨 project 调用会 ① 把 B 的 session 记成 A 的 last active ② `sessions.value.find` miss → currentCwd 置空。组合顺序 `switchProject` → **显式** `await loadSessions` → `switchSession`(不依赖 chat.ts watcher 的异步 onProjectChange,消竞态);同 project 退化为裸 switchSession 零额外 IPC。
+- **决策 — 路由 POST(评审 P1)**:`httpTransport.invoke` 对所有 CMD_TO_DOMAIN 命令硬编码 POST,sessions 域唯一 GET(`/:id/snapshot`)是 transport 特判 URL 非先例;GET 注册会 405。
+- **决策 — limit 每类各自截断**(title N + content N):一类洪水不淹没另一类;测试锁定语义。
+- **live 实证**:2 字中文"权限"跨 3 project 真实命中(LIKE 兜底)/ FTS "worktree" 命中 / title 命中按 updated_at 倒序 / project 过滤精确;"trigram""缓存率" 0 命中经 DB 直查证实为词本身不存在(非索引缺陷)。UI 交互层(浏览器点按)本 session 无浏览器后端未验,组件/路由测试覆盖 + 用户真机 Ctrl+K 复验。
+- 任务:`08-17-cross-session-search`。spec:database-guidelines "messages_fts" Scenario。② Agent 驱动 `search_history` tool 为 follow-up(复用 `db::search::search_messages`,不经 IPC)。

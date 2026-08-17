@@ -478,3 +478,23 @@ BACKLOG §3.1 治理落地:WP1 turn_trace.memory_token 列(与 tools_token 同�
 ### Status
 
 [OK] **Completed**(正向视觉路径待真实 vision 模型;三切片齐备,统一 token 预算表可排期)
+
+## Session 102: D2① 跨 session 全文搜索(用户驱动 MVP)全程落地
+
+**Date**: 2026-08-17
+**Task**: `.trellis/tasks/08-17-cross-session-search`
+**Branch**: `main`
+
+### Summary
+
+brainstorm 四决议(全局 Modal 接管 Cmd+K / 全部 project / Modal 内只读预览定位 / <3 字 LIKE 兜底)→ 外部评审 3 项独立核实全采纳(P1 GET→POST 为真 bug、P2 方案甲并补 currentCwd 置空+watcher 竞态两坑、P3 延伸修出 design §2 struct 缺 kind)→ 3 PR:① messages_fts(external-content+trigram,`UPDATE OF text` 防写放大,**docsize 守卫回填**——`COUNT(*)` 穿透/integrity-check 放行两探针实证皆废,`%_docsize` 才精确,live 1192=1192)+ db/search.rs 双路分派 + title 附带;② search_messages 6 处注册链(POST);③ SearchModal 两态 + SearchPreviewBody(MessageItem readonly 结构禁编辑菜单 + buildRunGroups 提取)+ openSessionInProject + Cmd+K 接管 + 移动端入口。1758 后端 + 1079 前端绿,clippy/fmt/build 净。live:2 字中文跨 project 命中/FTS 命中/title 倒序/project 过滤/回填精确。坑:自动标题使单查询天然双 hit(测试预期修正);浏览器后端本 session 不可用,UI 点按留用户真机验。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (见 git log) | PR1 后端 FTS + 查询层 / PR2 IPC+路由 / PR3 前端 / 收口 |
+
+### Status
+
+[OK] **Completed**(② Agent 驱动 search_history tool 为 follow-up;UI 视觉真机复验待用户)
