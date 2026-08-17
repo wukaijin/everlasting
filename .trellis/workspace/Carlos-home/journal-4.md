@@ -503,3 +503,7 @@ brainstorm 四决议(全局 Modal 接管 Cmd+K / 全部 project / Modal 内只�
 ### Session 102 补记:用户实测三笔 hotfix(commit 1e5e3e4)
 
 用户 Edge 真机反馈:① Ctrl+K 与浏览器搜索冲突;② 输入后不知"搜没搜过/怎么触发"。诊断:headless Chromium 复验功能全通(29 命中渲染正常),根因是交互反馈缺失而非搜索缺陷;另抓到预存 get_home_dir 405(浏览器模式 console 污染,curl 证实 daemon 缺路由)。修复:回车立即搜(bypass debounce,IME isComposing 守卫)+ "找到 N 条命中"状态行 + 空态回显查询词;Ctrl+Shift+F 别名 + 浏览器/PWA 桌面常显 AppHeader 搜索按钮(Tauri 桌面保持隐藏);config 域补 POST /get_home_dir 路由 + oneshot 测试。headless 复验:双快捷键开 modal/Enter 状态行/空态回显/console 零错误;1081 前端测试绿。教训:静默成功(结果悄悄替换占位)在搜索类 UI 等于失败——状态行是刚需,不是装饰。
+
+### Session 102 补记二:搜索状态机两洞(commit aa831d4)
+
+用户二轮实测:① 输入未回车期间显示"没有找到与 \"\" 匹配"——防抖 250ms 窗口内 searching=false + hits=[] 落进空态分支,searchedQuery 还是空串;② 点 project chip 后 chips 整行消失且过滤卡死——chips 列表从"当前命中"派生,带过滤重搜后命中只剩单 project,`v-if length>1` 塌缩。修:① 补 staleQuery 派生态(searchedQuery ≠ 当前 query ⇒ 待搜索),gap 显示"回车立即搜索 xxx",有旧结果时状态行追加"回车搜索"提示;② chips 源改 availableProjects 独立 ref,仅未过滤搜索刷新,过滤重搜不塌缩。教训:从响应数据派生的 UI 控件(chips)在过滤后必然自我吞噬——控件数据源必须与被过滤的数据集解耦;状态机要给"过渡窗口"显式命名,否则每个窗口都是一个新 bug。
