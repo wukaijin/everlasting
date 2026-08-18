@@ -531,3 +531,34 @@ D2 双驱动收官两任务同日落地。①后端 search_history tool(a005b51/
 ### Status
 
 [OK] **Completed**
+
+
+## Session 102: C3 摘要式上下文压缩 — LLM 摘要取代机械丢组 + 立项后续三任务
+
+**Date**: 2026-08-18
+**Task**: C3 摘要式上下文压缩 — LLM 摘要取代机械丢组 + 立项后续三任务
+**Branch**: `feat/llm-context-compaction`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+- 3 PR + P1 修复:摘要行水位替换(cutoff_seq 精确折叠)/ LLM 摘要生成(handoff 模板 + 增量合并 + 熔断)/ 前端摘要行最低渲染 + TracePanel 徽标
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 1813 后端(1 预存 flake)+ 1099 前端
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- live 烟测(重编 daemon 后构造超线 session);后续:max-turns-softcap / manual-compact / handoff 已立项待 brainstorm
