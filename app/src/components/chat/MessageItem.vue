@@ -34,7 +34,7 @@
 //   the parent <li> blocks the menu trigger entirely (defense
 //   against mid-stream edits racing the LLM).
 
-import { computed, watch, onUnmounted } from "vue";
+import { computed, watch, onUnmounted, ref } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
 import { useStreamControllerStore } from "../../stores/streamController";
@@ -245,6 +245,40 @@ const showEditedLabel = computed<boolean>(
     !isEditingThisMessage.value,
 );
 
+// --- C3 摘要式压缩 (2026-08-18, `08-18-llm-context-compaction`) --------
+// 摘要行 = 普通 user 消息 + `metadata.kind === "compaction_summary"`
+// (后端 `insert_compaction_summary` 落库;rehydrate 把原始 metadata 挂到
+// message 上 —— B1 attachments 同款通道)。最低渲染(design §8,Q6 决议):
+// 不当作用户气泡 —— 低调系统样式行 + 点击展开摘要正文。防"用户说过这句
+// 话"的误读;完整 UI 卡片(压缩时间线/前后 token 对比)与手动 /compact
+// 同期 follow-up。
+const isCompactionSummary = computed<boolean>(() => {
+  const meta = props.message.metadata;
+  if (!meta || typeof meta !== "object") return false;
+  return (meta as Record<string, unknown>).kind === "compaction_summary";
+});
+
+/** 摘要行正文展开态(默认收起,点击头部展开)。 */
+const summaryExpanded = ref(false);
+
+/** 摘要正文:rehydrate 的 text-only 行 content 是纯字符串;防御性
+ *  兜底非字符串形态(不渲染 [object Object])。 */
+const summaryBody = computed<string>(() => {
+  const c = props.message.content;
+  return typeof c === "string" ? c : JSON.stringify(c);
+});
+
+/** 摘要行副标题:前后 token(metadata 有则显示,旧格式缺字段容忍)。 */
+const summaryCaption = computed<string>(() => {
+  const meta = props.message.metadata as Record<string, unknown> | undefined;
+  const before = meta?.tokens_before;
+  const after = meta?.tokens_after;
+  if (typeof before === "number" && typeof after === "number") {
+    return `上下文已压缩 · ${before.toLocaleString()} → ${after.toLocaleString()} tokens · 点击查看摘要`;
+  }
+  return "上下文已压缩 · 点击查看摘要";
+});
+
 // --- B1 (2026-08-16) R2a: user-turn attachment thumbnails ---------------
 // Map `message.metadata.attachments` into the `MessageImages` entry
 // shape. Two producers write the manifest (see `AttachmentView` in
@@ -296,6 +330,32 @@ const messageImages = computed<
       },
     ]"
   >
+    <!--
+      C3 摘要行最低渲染 (2026-08-18):metadata.kind ==
+      "compaction_summary" 的行渲染为低调系统样式行(居中、灰、可
+      展开),不当作用户气泡 —— 该行的 text 是"延续自先前会话"的
+      历史摘要,不是用户说过的话。整行替换常规气泡(actions 菜单 /
+      附件 / 编辑 / footer 全部不适用),故用 v-if/v-else 包住
+      原有内容。
+    -->
+    <template v-if="isCompactionSummary">
+      <div
+        class="msg-compact-summary"
+        :aria-expanded="summaryExpanded"
+        @click="summaryExpanded = !summaryExpanded"
+      >
+        <div class="msg-compact-summary__head">
+          <Icon name="shrink" :size="12" />
+          <span class="msg-compact-summary__caption">
+            {{ summaryCaption }}
+          </span>
+        </div>
+        <div v-if="summaryExpanded" class="msg-compact-summary__body">
+          {{ summaryBody }}
+        </div>
+      </div>
+    </template>
+    <template v-else>
     <!--
       D3 PR2: hover-triggered actions menu. Renders a small ⋯
       button at the top-right of the row (absolute-positioned
@@ -747,6 +807,7 @@ const messageImages = computed<
       :retry-loading="retryLoading"
       @retry="onRetry"
     />
+    </template>
   </li>
 </template>
 
@@ -755,6 +816,43 @@ const messageImages = computed<
   display: flex;
   flex-direction: column;
   max-width: 75%;
+  /* C3 摘要行:整行(含 user 气泡变体)都换系统样式行,不受
+     max-width 约束 —— 居中、窄、低调。 */
+  .msg-compact-summary {
+    align-self: center;
+    width: min(560px, 92%);
+    margin: 10px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--color-bg-muted, rgba(127, 127, 127, 0.08));
+    border: 1px dashed var(--color-border, rgba(127, 127, 127, 0.3));
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .msg-compact-summary__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .msg-compact-summary__caption {
+    opacity: 0.85;
+  }
+
+  .msg-compact-summary__body {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--color-border, rgba(127, 127, 127, 0.2));
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: auto;
+    user-select: text;
+    opacity: 0.9;
+  }
   /* Position context for the absolute-positioned
      .msg-actions trigger — see MessageActionsMenu.vue.
      `relative` lets the trigger anchor to the row's

@@ -648,6 +648,9 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           tokens_after: event.tokens_after ?? 0,
           dropped_count: event.dropped_count ?? 0,
           degradation: event.degradation ?? "none",
+          // 08-18 PR2:压缩路径透传(summary/mechanical/none);
+          // 旧后端 wire 无该字段 → "none"。
+          method: event.method ?? "none",
         });
         break;
       }

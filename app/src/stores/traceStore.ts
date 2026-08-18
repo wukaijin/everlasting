@@ -150,6 +150,9 @@ export const useTraceStore = defineStore("trace", () => {
         tokens_after: event.tokens_after,
         dropped_count: event.dropped_count,
         degradation: event.degradation,
+        // 08-18 PR2:压缩路径徽标数据(live 路径;summary_usage 只在
+        // DB 回看路径的 compaction_json 里)。
+        method: event.method ?? "none",
       },
     };
     currentSessionTraces.set(event.seq, next);

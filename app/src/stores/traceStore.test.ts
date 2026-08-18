@@ -94,6 +94,8 @@ describe("useTraceStore — applyEvent (live path)", () => {
       tokens_after: 3000,
       dropped_count: 5,
       degradation: "none",
+      // 08-18 PR2:压缩路径徽标数据。
+      method: "summary",
     });
     const t = store.currentSessionTraces.get(1);
     expect(t).toBeDefined();
@@ -102,6 +104,7 @@ describe("useTraceStore — applyEvent (live path)", () => {
       tokens_after: 3000,
       dropped_count: 5,
       degradation: "none",
+      method: "summary",
     });
   });
 
@@ -148,6 +151,8 @@ describe("useTraceStore — applyEvent (live path)", () => {
     // accumulates. Locks the UPSERT-shaped data path.
     const store = useTraceStore();
     store.currentSessionId = "sess-1";
+    // 刻意不带 method 字段(旧后端 wire 形态)—— 归一化层须
+    // 兜底为 "none"。
     store.applyEvent({
       kind: "context_compacted",
       request_id: "rid-1",
@@ -170,6 +175,8 @@ describe("useTraceStore — applyEvent (live path)", () => {
     // Neither field is nulled by the second write.
     expect(t?.compaction?.dropped_count).toBe(5);
     expect(t?.loopHint?.hit_count).toBe(2);
+    // 缺 method 的旧 wire 归一化为 "none"。
+    expect(t?.compaction?.method).toBe("none");
   });
 });
 
