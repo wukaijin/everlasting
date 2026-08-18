@@ -326,13 +326,12 @@ pub fn apply_compaction_watermark(
 ///
 /// 返回 `Err(reason)` 时调用方按摘要失败处理(`Failed` → 机械兜底)。
 pub fn compressible_cutoff_seq(
-    messages: &[ChatMessage],
     synthetic_prefix_len: usize,
     cut: usize,
     prior: Option<&SummaryAnchor>,
     db_rows: &[MessageRow],
 ) -> Result<i64, &'static str> {
-    // messages[P] 是摘要消息 ⟺ prior.is_some()(见函数文档的推导;
+    // 有摘要 ⟺ prior.is_some()(见函数文档的推导;
     // 机械兜底丢组路径已把 anchor 置 None,首位回到常规行)。
     let has_summary = usize::from(prior.is_some());
     let Some(regular) = cut
@@ -1312,23 +1311,17 @@ mod tests {
         // 待压区 = messages[0..3](q1/a1/q2)→ 末行 = db_rows[2].seq = 2。
         let cut = 3usize;
         assert_eq!(
-            compressible_cutoff_seq(&messages, 0, cut, None, &db).unwrap(),
+            compressible_cutoff_seq(0, cut, None, &db).unwrap(),
             2,
             "prior=None:精确 = db_rows[cut - P - 1].seq(非 seq-1 近似)"
         );
         // 同一布局 + 合成头(P=2):待压区下标平移,结果不变。
         let mut with_prefix = vec![user("mem-u"), assistant("mem-a")];
         with_prefix.extend(messages.clone());
-        assert_eq!(
-            compressible_cutoff_seq(&with_prefix, 2, cut + 2, None, &db).unwrap(),
-            2
-        );
+        assert_eq!(compressible_cutoff_seq(2, cut + 2, None, &db).unwrap(), 2);
         // 关键反例(旧 bug 语义):摘要行插在游标 6 → "seq-1" 会得到 5
         // (当前输入行的 seq,折叠点吞掉保留区)。精确计算绝不能返回它。
-        assert_ne!(
-            compressible_cutoff_seq(&messages, 0, cut, None, &db).unwrap(),
-            5
-        );
+        assert_ne!(compressible_cutoff_seq(0, cut, None, &db).unwrap(), 5);
     }
 
     /// 有折叠(prior = Some,水位命中或同 loop 上一轮压缩):待压区
@@ -1356,20 +1349,12 @@ mod tests {
         };
         // 内存列表(合成头 P=0)= 水位折叠产物:
         // [S 消息] + [a3, a4, current, answer] + 新尾。
-        let messages = vec![
-            user("S"),
-            assistant("a3"),
-            user("a4"),
-            user("current question"),
-            assistant("answer"),
-            user("new question"),
-        ];
-        // 待压区 = messages[0..3] = [S, a3, a4] → 常规行 a3/a4,末行
+        // 待压区 = 列表前 3 条 = [S, a3, a4] → 常规行 a3/a4,末行
         // = 过滤后缀(seq>2 且非 summary:a3/a4/current/answer)的
         // 第 2 个 = a4@4。
         let cut = 3usize;
         assert_eq!(
-            compressible_cutoff_seq(&messages, 0, cut, Some(&anchor), &db).unwrap(),
+            compressible_cutoff_seq(0, cut, Some(&anchor), &db).unwrap(),
             4,
             "prior=Some:位移 + kind 过滤后取待压区末行真实 seq"
         );
@@ -1377,7 +1362,7 @@ mod tests {
         // 常规行),这里就会取到错行 —— 过滤后缀显式不含 seq 6。
         let cut_wider = 5usize; // 待压区 [S, a3, a4, current, answer] → 末行 answer@7
         assert_eq!(
-            compressible_cutoff_seq(&messages, 0, cut_wider, Some(&anchor), &db).unwrap(),
+            compressible_cutoff_seq(0, cut_wider, Some(&anchor), &db).unwrap(),
             7
         );
     }
@@ -1393,9 +1378,8 @@ mod tests {
             content: String::new(),
             cutoff: -1,
         };
-        let messages = vec![user("S"), user("tail")];
         assert_eq!(
-            compressible_cutoff_seq(&messages, 0, 1, Some(&anchor), &db).unwrap(),
+            compressible_cutoff_seq(0, 1, Some(&anchor), &db).unwrap(),
             -1,
             "regular == 0:cutoff = prior.cutoff(传递)"
         );
@@ -1407,8 +1391,7 @@ mod tests {
     fn cutoff_seq_out_of_bounds_errors_instead_of_panicking() {
         // DB 空(历史只在 wire 上,生产不会发生 —— reloadAfterFinalize
         // 保证 wire 镜像 DB;防御陈旧/异常)。
-        let messages = vec![user("q1"), assistant("a1"), user("q2")];
-        assert!(compressible_cutoff_seq(&messages, 0, 2, None, &[]).is_err());
+        assert!(compressible_cutoff_seq(0, 2, None, &[]).is_err());
         // regular 超出过滤后缀长度(prior 场景)。
         let db = vec![
             row(0, "user", "q1", None),
@@ -1421,8 +1404,7 @@ mod tests {
             cutoff: 0,
         };
         // 过滤后缀只剩 q2@2 一个常规行,regular = 2 越界。
-        let msgs = vec![user("S"), user("q2"), user("tail")];
-        assert!(compressible_cutoff_seq(&msgs, 0, 3, Some(&anchor), &db).is_err());
+        assert!(compressible_cutoff_seq(0, 3, Some(&anchor), &db).is_err());
     }
 
     // =====================================================================

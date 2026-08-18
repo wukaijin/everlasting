@@ -375,3 +375,27 @@ loop resilient without affecting the trace pipeline.
 **caps 降级(R3)**:`WireCapabilities.supports_images=false` 时 `strip_unsupported` 对 UserBlocks 内 Image **替换**(非丢弃)为 `[image: {label} — 当前模型不支持图片,未发送]` 文本——模型必须知道有图未发,防幻觉。live 实证(08-17,MiniMax-M3):模型读到占位后明确拒答"图片没有送达"。
 
 **When this bites**:① user 消息含图强制 UserBlocks 路径(图不能进 `User{content: String}`);② OpenAI 侧含图 content 必须是数组(text + image_url 混排),无图时保持历史字符串形状(回归锁测试);③ C3 估算对图块用固定 ~1600 tok 垫板(base64 字符串会百倍高估);④ Anthropic cache 断点在首块 text,Image 追加在 user 消息尾部不耦合。
+
+
+## Scenario: SSE chunk-boundary UTF-8 carry (RULE, 2026-08-18)
+
+**Bug (incident `3qnzktvosvxmsycoz46` turn=25)**:流式 LLM 生成中断,日志
+`WARN ... chat: LLM stream errored ... error=network error: non-utf8 chunk:
+incomplete utf-8 byte sequence from index 4082`。根因:两个 provider 对每个
+网络 chunk 单独 `std::str::from_utf8`,而 TCP/HTTP chunking 会把一个多字节
+UTF-8 字符(如 CJK 的 3 字节字)切开分到两个 chunk——chunk 尾部截断属于
+"incomplete"(`error_len() == None`)而非损坏,应跨 chunk 拼接,但代码直接
+`yield Err(Network)` 杀掉了整轮健康的生成。中文会话高频触发(3 字节/字,
+单轮几千 token,25 轮里迟早抽中边界)。
+
+**Rule**:流式 SSE 解码必须跨 chunk carry 残留字节;`error_len().is_none()`
+(尾部截断)时缓冲等下一 chunk,只有 `error_len().is_some()`(流内真无效字节)
+才报 Network 错。共享 helper 在 `llm/sse.rs` 的 `utf8_chunk_text(&mut carry,
+&bytes)`:`Ok(Some(text))` / `Ok(None)`(等待)/ `Err(Utf8Error)`(硬错误)。
+两个 provider(`anthropic.rs` / `openai.rs` 的 stream 循环)都必须走它,禁止
+对 `bytes_stream()` 的裸 chunk 直接 `from_utf8`。
+
+**When this bites**:① 任何 UTF-8 多字节内容(中文/emoji/数学符号)长输出;
+② 代理/网关分包偏小或乱切时概率上升;③ 换 provider 重写流式读取时照抄了
+"每 chunk 独立解码"的旧模式。回归测试在 `llm/sse.rs`(CJK 切 3 段、逐字节
+喂、ASCII 前缀 + 截断尾、无效字节仍报错)。

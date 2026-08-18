@@ -70,7 +70,7 @@ use super::wire::{
 };
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::classify_error_response;
-use crate::llm::sse::SseParser;
+use crate::llm::sse::{utf8_chunk_text, SseParser};
 use crate::llm::types::{ChatEvent, ChatMessage, TokenUsage, ToolDef};
 use crate::llm::LlmError;
 
@@ -692,6 +692,12 @@ impl Provider for OpenAIProvider {
 
             let mut byte_stream = resp.bytes_stream();
             let mut parser = SseParser::new();
+            // RULE: decode with cross-chunk carry-over — TCP chunking
+            // can split a multi-byte UTF-8 char across two chunks;
+            // decoding each chunk in isolation aborts a healthy turn
+            // with "incomplete utf-8 byte sequence" (incident
+            // 3qnzktvosvxmsycoz46 turn=25).
+            let mut utf8_carry: Vec<u8> = Vec::new();
             // Map: `tool_call_index -> {id, name, args_buf}`.
             // OpenAI can emit several tool_calls in parallel
             // within a single response; the index is the
@@ -720,15 +726,16 @@ impl Provider for OpenAIProvider {
                         return;
                     }
                 };
-                let text = match std::str::from_utf8(&bytes) {
-                    Ok(t) => t,
+                let text = match utf8_chunk_text(&mut utf8_carry, &bytes) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => continue, // partial char at chunk boundary: wait
                     Err(e) => {
                         yield Err(crate::llm::error::LlmError::Network(format!("non-utf8 chunk: {}", e)));
                         return;
                     }
                 };
 
-                for event in parser.feed(text) {
+                for event in parser.feed(&text) {
                     // OpenAI Chat Completions sends only
                     // `data: {...}\n\n` — no `event:` lines.
                     // SseParser's `event_type` is empty, so

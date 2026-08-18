@@ -2042,7 +2042,6 @@ async fn attempt_summary_compaction(
     // 保留区数进待压区(cutoff 过大 → 下一请求丢保留区,PR2 check P1
     // 的错向)或数错行(cutoff 过小 → 已摘要行重复出席)。
     let cutoff_seq = match compressible_cutoff_seq(
-        messages,
         synthetic_prefix_len,
         cut,
         prior.as_ref(),

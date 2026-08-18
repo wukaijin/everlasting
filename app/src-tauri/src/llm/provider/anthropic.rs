@@ -34,7 +34,7 @@ use super::wire::{
 };
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::LlmError;
-use crate::llm::sse::SseParser;
+use crate::llm::sse::{utf8_chunk_text, SseParser};
 use crate::llm::types::{ChatEvent, ChatMessage, ChatRequest, ThinkingConfig, TokenUsage, ToolDef};
 
 /// Default `max_tokens` for LLM requests. Bumped from 1024 → 16384 in
@@ -140,6 +140,12 @@ impl AnthropicProvider {
 
             let mut byte_stream = resp.bytes_stream();
             let mut parser = SseParser::new();
+            // RULE: decode with cross-chunk carry-over — TCP chunking
+            // can split a multi-byte UTF-8 char across two chunks;
+            // decoding each chunk in isolation aborts a healthy turn
+            // with "incomplete utf-8 byte sequence" (incident
+            // 3qnzktvosvxmsycoz46 turn=25).
+            let mut utf8_carry: Vec<u8> = Vec::new();
             let mut block_state = BlockState::Idle;
             let mut stop_reason: Option<String> = None;
             // A4: buffer Anthropic's `message_delta.usage` payload
@@ -163,15 +169,16 @@ impl AnthropicProvider {
                         return;
                     }
                 };
-                let text = match std::str::from_utf8(&bytes) {
-                    Ok(t) => t,
+                let text = match utf8_chunk_text(&mut utf8_carry, &bytes) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => continue, // partial char at chunk boundary: wait
                     Err(e) => {
                         yield Err(LlmError::Network(format!("non-utf8 chunk: {}", e)));
                         return;
                     }
                 };
 
-                for event in parser.feed(text) {
+                for event in parser.feed(&text) {
                     match event.event.as_str() {
                         // --- content_block_start: begin a new block ---
                         "content_block_start" => {
