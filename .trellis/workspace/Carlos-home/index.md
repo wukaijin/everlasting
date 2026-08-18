@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 102
-- **Last Active**: 2026-08-18
+- **Total Sessions**: 103
+- **Last Active**: 2026-08-19
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~564 | Active |
+| `journal-4.md` | ~585 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 103 | 2026-08-19 | 手动 /compact 命令入口完成(08-18-manual-compact-command) | `79b7e56` | `main` |
 | 102 | 2026-08-18 | C3 摘要式上下文压缩 — LLM 摘要取代机械丢组 + 立项后续三任务 | - | `feat/llm-context-compaction` |
 | 101 | 2026-08-17 | D2② search_history 全链路:后端 tool + 前端 SearchHistoryCard 双任务 | `a005b51`, `8d88261`, `3755a98`, `408ca9a` | `main` |
 | 100 | 2026-08-15 | memory 指令块窗口治理:WP1 度量 + WP2 分级注入 digest 落地 | `be873d4` `8dafc71` | `feat/memory-block-governance` |

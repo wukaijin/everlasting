@@ -562,3 +562,24 @@ Session summary was not supplied.
 ### Next Steps
 
 - live 烟测(重编 daemon 后构造超线 session);后续:max-turns-softcap / manual-compact / handoff 已立项待 brainstorm
+
+
+## Session 103: 手动 /compact 命令入口完成(08-18-manual-compact-command)
+
+**Date**: 2026-08-19
+**Task**: 手动 /compact 命令入口完成(08-18-manual-compact-command)
+**Branch**: `main`
+
+### Summary
+
+三任务排序推荐后开工 compact-command。brainstorm 决议 D1-D7(命令名/focus 语法/通用直输拦截/进行中拒绝/失败零写入/熔断绕过+记账/观测走 metadata);代码探索发现 resource_loader 已预留 /compact 位、lookup_provider_for_session 可命令层复用。实现:后端 run_manual_compaction 空闲期编排(共享 send_summary_completion helper,drive.rs 同源改造;seq=MAX+1 空闲期语义;水位 prior 增量合并;失败零 DB 写入)+ compact_session 四处注册 + gate 链(群聊/config/in-flight/provider);前端 executeBuiltin 统一 palette 与直输分发(matchBuiltinCommandInput 拦截,顺带修 /help /clear /new 直输发 LLM 不一致)+ reloadSessionMessages 复用 done-reload 管线。测试:后端 manual_compaction 6 集成 + route 冒烟 + compaction 50 全绿(全量 1829 过,2 个预存 flaky 隔离通过归因);FE 1114 过 + vue-tsc 0 + clippy 0。live:turn-smoke.sh 加 --compact 模式(大消息轮撑保留区预算 + 全量 wire 续跑验证水位)——发现单条 wire 会致水位对齐 fail-open 后改全量 wire 复验:manual compaction applied 无 watermark_miss、保留区存活、摘要行契约(seq=MAX+1/trigger=manual/focus/cutoff 精确)全中。已知边界记录 spec:待压区极小时摘要净增长。spec 回写 pattern-llm-compaction §手动入口;任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `79b7e56` | (see git log) |
+
+### Status
+
+[OK] **Completed**
