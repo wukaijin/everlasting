@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "核验 manual 摘要行 metadata/cutoff 精确值/prior 合并与契约一致;auto 路径零回归"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/tests-required.md", "reason": "测试完备性要求:mock 端到端 + 边界场景清单"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "核验命令四处注册齐整(Tauri/daemon route/CMD_TO_DOMAIN)+ oneshot 冒烟"}

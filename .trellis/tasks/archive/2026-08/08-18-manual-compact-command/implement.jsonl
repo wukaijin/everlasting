@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "C3+ 压缩数据契约(摘要行 metadata/水位折叠/降级链/熔断)——manual 入口必须同源复用"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon HTTP 路由注册惯例 + oneshot 冒烟测试要求(§6)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider 调用契约:摘要侧路 completion(无 tools/禁 thinking/4k 上限/retry)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-turn-boundary-persist.md", "reason": "seq 游标与 persist 不变量:为什么空闲期 MAX(seq)+1 安全、活跃期禁止"}
+{"file": ".trellis/tasks/archive/2026-08/08-18-llm-context-compaction/design.md", "reason": "父任务设计:build_compaction_prompt 模板/保留区算法/cutoff 精确语义(PR2 教训)/prompt §6 与边界 §7"}
