@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核对压缩挂点与 loop 不变量未被破坏"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对摘要行/trace 写入符合 DB 规范"}
+{"file": ".trellis/tasks/08-18-llm-context-compaction/research/01-c3-current-state.md", "reason": "对照基线行为(机械丢组 fallback 应原样保留)"}
+{"file": ".trellis/tasks/08-18-llm-context-compaction/research/05-synthesis-and-adaptation.md", "reason": "对照决议(Q1-Q6)与风险清单逐项验收"}

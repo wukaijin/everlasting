@@ -81,3 +81,4 @@
 - [pattern-turn-boundary-persist](./agent-loop-architecture/pattern-turn-boundary-persist.md)
 - [tests-required](./agent-loop-architecture/tests-required.md)
 - [pattern-worker-worktree-override](./agent-loop-architecture/pattern-worker-worktree-override.md)
+- [pattern-llm-compaction](./agent-loop-architecture/pattern-llm-compaction.md)

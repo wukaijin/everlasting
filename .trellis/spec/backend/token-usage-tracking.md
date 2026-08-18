@@ -909,3 +909,16 @@ const toolsPct = contextInput > 0 ? toolsToken / contextInput : null;
 - **口径**:`estimate_images_token(&turn_messages)` 在 `drive.rs` 的 per-turn 请求 clone 上、resolve 之后计算——Σ 每图 `tokens_est`(attach 时 `(w×h)/750`,前端 FileReader 读粘贴图、后端 `imagesize` crate 读 @图文件头),缺失回退 1600/图垫板。写入点与 tools/memory 同一 Done upsert(`!skip_persist` gate,worker 轮 None)。
 - **When this bites**:估算是"字段优先"——`attachments` 字段的精确值**替换**垫板贡献而非叠加;若某消息的 Image 块数与 attachments 数不一致(理论上 attach pass 保证 1:1),会以字段为准。live 实测(08-17):800×600 png → 640 tok 精确落值,无图轮 = 0。
 - TurnCard `img` cell 门是 `> 0`(tools/mem 是 `!= null`)——无图轮不渲染噪声 cell。
+
+## Scenario: 摘要压缩旁路 usage(C3,2026-08-18)
+
+- **口径**:LLM 摘要调用是**旁路 completion**(无 tools、禁 thinking 采集、
+  4k 输出兜底)—— 其 `TokenUsage` **不混入**主 turn 的
+  `update_last_turn_usage`(`context_input`/per-turn 记账口径不变),只进
+  `compaction_json.summary_usage`(trace.rs 手工 json!,与 method 同写点)。
+- **When this bites**:主 turn 的 token 统计永远不包含压缩开销 —— 想算
+  真实成本要看 compaction_json;TracePanel 的 TurnCard token 字段因此
+  不因压缩而跳变(展示的是请求上下文,不是总消耗)。
+- 摘要求输入 = 模板 + prior-summary + transcript(预算 0.7×window,溢出
+  丢最旧 + `[older transcript omitted]` 记号),输出 `clamp_summary_output`
+  4k token 兜底。
