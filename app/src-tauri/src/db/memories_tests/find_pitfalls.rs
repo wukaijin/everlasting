@@ -2,7 +2,8 @@
 
 use super::make_pool;
 use super::memories::{
-    find_pitfalls_by_trigger, test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus,
+    find_pitfalls_by_trigger, find_pitfalls_by_trigger_all_status, test_helpers::insert_raw,
+    MemoryKind, MemoryScope, MemoryStatus,
 };
 
 /// `find_pitfalls_by_trigger` matches pitfall memories by `tool_name`
@@ -207,4 +208,69 @@ async fn find_pitfalls_command_pattern_substring_filter() {
         .await
         .unwrap();
     assert!(rows.is_empty(), "non-matching command_pattern filtered");
+}
+
+/// Precision-first (2026-08-18, task 08-18-debug-session-5df29977
+/// 问题1): a row whose `command_pattern` is SET is skipped when the
+/// probe supplies NO command — the constraint can't be confirmed.
+/// This is the 5df29977 incident regression: Path-kind tools
+/// (edit_file) never extract a command probe, so two edit_file
+/// pitfalls carrying error-text patterns (`Missing required
+/// parameter: path`) fired on EVERY healthy edit_file call
+/// (hit_count 60/15). The SQL pre-fix fell through the
+/// `if let Some(cp) = command_pattern` guard entirely.
+#[tokio::test]
+async fn find_pitfalls_command_pattern_row_without_probe_command_is_skipped() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "pit-cp-no-probe",
+        MemoryScope::User,
+        None,
+        MemoryKind::Pitfall,
+        MemoryStatus::Active,
+        "needs the command to confirm",
+        "must not fire when the probe has no command",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE autonomous_memories SET tool_name='edit_file', \
+         command_pattern='Missing required parameter: path' \
+         WHERE memory_id='pit-cp-no-probe'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Probe with NO command (the edit_file / Path-kind probe shape):
+    // the constrained row is skipped — both the P3-era filter and
+    // the P5 all-status variant share the semantics.
+    let rows = find_pitfalls_by_trigger(&pool, "edit_file", None, None)
+        .await
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "command_pattern-constrained row must not fire without a probe command"
+    );
+    let rows = find_pitfalls_by_trigger_all_status(&pool, "edit_file", None, None)
+        .await
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "all_status variant shares the precision-first skip"
+    );
+
+    // Control: the same row DOES fire when the probe supplies a
+    // matching command (e.g. a shell-kind probe containing the
+    // stored substring).
+    let rows = find_pitfalls_by_trigger(
+        &pool,
+        "edit_file",
+        Some("error: Missing required parameter: path"),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "matching probe command still recalls");
 }

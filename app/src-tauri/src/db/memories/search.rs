@@ -352,6 +352,20 @@ pub async fn search_memories_fts_recall(
 /// `idx_am_pitfall`); `command_pattern` is an optional secondary
 /// substring filter.
 ///
+/// **command_pattern semantics (2026-08-18, task
+/// 08-18-debug-session-5df29977 问题1)**:
+/// - If a pitfall's `command_pattern` is `NULL` → the pitfall is
+///   command-agnostic (fires for ANY command / no command).
+/// - If `command_pattern` is `Some(cp)` AND the probe command is
+///   `Some(cmd)` → the pitfall fires only if `cmd.contains(cp)`.
+/// - If `command_pattern` is `Some(cp)` AND the probe command is
+///   `None` (Path-kind tools never extract one — see
+///   `extract_probe_args`) → the pitfall does NOT fire (the
+///   constraint can't be confirmed; precision-first). Pre-fix this
+///   arm fell through and recalled on EVERY call of the tool_name
+///   (the 5df29977 incident: two edit_file pitfalls carrying
+///   error-text patterns footnoted 60/15 healthy calls).
+///
 /// **path_globs semantics (M2)**:
 /// - If a pitfall's `path_globs` is `NULL` → the pitfall is
 ///   path-agnostic (fires for ANY path; e.g. "always pass
@@ -395,12 +409,15 @@ pub async fn find_pitfalls_by_trigger(
     // iteration support.
     let mut out = Vec::with_capacity(candidates.len());
     for mem in candidates {
-        // command_pattern substring match (P3 will refine the rule).
-        if let Some(cp) = command_pattern {
-            if let Some(mem_cp) = &mem.command_pattern {
-                if !cp.contains(mem_cp.as_str()) {
-                    continue;
-                }
+        // command_pattern substring match — precision-first on a
+        // missing probe command (see the doc comment above for the
+        // full 4-arm semantics). A row that constrains on command
+        // text but the caller supplied none (Path-kind tools) can't
+        // be confirmed → skip, mirroring the path_globs arm below.
+        if let Some(mem_cp) = &mem.command_pattern {
+            match command_pattern {
+                Some(cp) if cp.contains(mem_cp.as_str()) => {}
+                _ => continue,
             }
         }
         // path_globs match (M2).
@@ -470,11 +487,10 @@ pub async fn find_pitfalls_by_trigger_all_status(
     // the matching semantics; only the status filter differs).
     let mut out = Vec::with_capacity(candidates.len());
     for mem in candidates {
-        if let Some(cp) = command_pattern {
-            if let Some(mem_cp) = &mem.command_pattern {
-                if !cp.contains(mem_cp.as_str()) {
-                    continue;
-                }
+        if let Some(mem_cp) = &mem.command_pattern {
+            match command_pattern {
+                Some(cp) if cp.contains(mem_cp.as_str()) => {}
+                _ => continue,
             }
         }
         if let Some(globs_json) = &mem.path_globs {
