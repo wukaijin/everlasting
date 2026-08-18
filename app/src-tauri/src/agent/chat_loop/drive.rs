@@ -1534,6 +1534,17 @@ pub(crate) async fn drive_turn(
         loop_window.pop_front();
     }
     let loop_verdict = loop_detection::detect(&loop_window.iter().cloned().collect::<Vec<_>>());
+    // 2026-08-18 (5df29977 问题5) design note: do NOT collapse the
+    // window on a hard verdict. Evicting the flagged signature
+    // resets the very runway the C2+ 3-strike escalation needs —
+    // a pure identical-call death loop would hard-fire (hit 1),
+    // get collapsed to an empty window, verdict None next turn
+    // (counter reset), hard-fire again… never reaching the ≥3
+    // intervention / worker break. The false-positive half of the
+    // incident is fixed in `detect` itself (the L2 recency-touch
+    // gate: stale residue pairs no longer count unless one touches
+    // the last two window slots), which keeps hard strikes
+    // window-driven and untouched.
     // C2+ (2026-07-05): maintain the consecutive-hit counter and
     // trigger active intervention at >= 3. The counter is
     // per-`run_chat_loop`-local (declared next to `loop_window`
@@ -1776,6 +1787,17 @@ pub(crate) async fn drive_turn(
                                     // same call will not make
                                     // progress.
                                     loop_hit_count = 0;
+                                    // 2026-08-18 (5df29977 问题5):
+                                    // clear the detection window
+                                    // too — the residue that
+                                    // accumulated the 3 strikes
+                                    // would otherwise re-trigger
+                                    // SoftLoop on the very next
+                                    // turn (fresh 3-strike budget
+                                    // must start from a clean
+                                    // window; the hard detector
+                                    // rebuilds from new calls).
+                                    loop_window.clear();
                                     loop_hint = Some(
                                         "loop intervention: 用户已确认你在循环重复操作并选择继续。\
                                          请立即改变策略或停止 — 重复相同调用不会取得进展。"

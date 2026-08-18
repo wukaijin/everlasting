@@ -23,8 +23,11 @@
 //! - **Level 2 — Jaccard soft hint (tolerant of noise)**: within a
 //!   `SOFT_WINDOW` (5) window, at least `SOFT_PAIR_MIN` (2) pairs of
 //!   calls whose token-set Jaccard similarity exceeds
-//!   `SOFT_THRESHOLD` (0.85). Handles "near-duplicate" loops, mainly
-//!   long `shell` commands with minor flag drift.
+//!   `SOFT_THRESHOLD` (0.85), AND at least one qualifying pair
+//!   touches one of the two most recent calls (the 2026-08-18
+//!   recency-touch gate, 5df29977 问题5 — see the L2 comment in
+//!   [`detect`] for the incident). Handles "near-duplicate" loops,
+//!   mainly long `shell` commands with minor flag drift.
 //!
 //! On either hit the action is **soft** (per §2.5.4 "不强制打断"):
 //! [`LoopVerdict::hint_text`] produces a synthetic `tool_result` that
@@ -157,12 +160,29 @@ pub fn detect(window: &[ToolCall]) -> LoopVerdict {
     }
 
     // --- Level 2: pairwise Jaccard soft hint -------------------------
+    // 2026-08-18 recency-touch gate (task 08-18-debug-session-5df29977
+    // 问题5, session 5df29977): pre-fix, ANY ≥2 similar pairs in the
+    // window fired — including stale residue the model had already
+    // moved past. Incident replay: 3 failed empty `write_file{}`
+    // calls (hard-flagged at seq 136) lingered in the window; two
+    // LATER, completely different calls (a successful write to
+    // progress.md, then a state-transition request) still saw the 3
+    // stale pairwise-1.0 pairs → SoftLoop hits 2 and 3 → a false
+    // intervention at 09:29 while nothing recent was similar. The
+    // gate: at least one qualifying pair must have its LATER element
+    // among the last two window positions (`j >= n - 2` — since
+    // `j > i`, this covers a pair touching either recent slot). Pure
+    // stale pairs now stay silent; the existing interleaved-repeat
+    // case (`A B A B done` — pair (1,3) touches position n-2) still
+    // fires.
     let token_sets: Vec<HashSet<String>> = window
         .iter()
         .map(|c| tokenize_for_jaccard(&serialize_for_similarity(c)))
         .collect();
+    let n = token_sets.len();
     let mut pairs = 0usize;
     let mut max_j = 0.0f64;
+    let mut recency_touched = false;
     for i in 0..token_sets.len() {
         for j in (i + 1)..token_sets.len() {
             let sim = jaccard(&token_sets[i], &token_sets[j]);
@@ -171,10 +191,13 @@ pub fn detect(window: &[ToolCall]) -> LoopVerdict {
                 if sim > max_j {
                     max_j = sim;
                 }
+                if j + 2 >= n {
+                    recency_touched = true;
+                }
             }
         }
     }
-    if pairs >= SOFT_PAIR_MIN {
+    if pairs >= SOFT_PAIR_MIN && recency_touched {
         return LoopVerdict::SoftLoop {
             pairs,
             max_jaccard: max_j,
@@ -540,6 +563,47 @@ mod tests {
             }
             other => panic!("expected SoftLoop, got {:?}", other),
         }
+    }
+
+    // --- 2026-08-18 recency-touch gate (5df29977 问题5) -----------------
+
+    #[test]
+    fn soft_loop_stale_pairs_without_recent_endpoint_is_none() {
+        // The 09:29 false-intervention replay, WITHOUT the hard
+        // collapse having already fired (the recency gate alone must
+        // block it): 3 identical failed empty write_file calls at
+        // the window head, then two fresh unrelated calls. The 3
+        // stale pairs are pairwise Jaccard 1.0 (≥ SOFT_PAIR_MIN),
+        // but no qualifying pair touches the last two positions →
+        // None. Pre-fix this returned SoftLoop and (with the hit
+        // counter at 2) escalated into the intervention.
+        let w = vec![
+            call("write_file", json!({})),
+            call("write_file", json!({})),
+            call("write_file", json!({})),
+            call("write_file", json!({"path": "/x/progress.md"})),
+            call(
+                "request_task_state_transition",
+                json!({"state": "implement"}),
+            ),
+        ];
+        assert_eq!(detect(&w), LoopVerdict::None);
+    }
+
+    #[test]
+    fn soft_loop_latest_call_similar_to_history_still_fires() {
+        // Positive control for the recency gate: the model keeps
+        // re-issuing A (positions 0/2/4 — never 3-consecutive, so
+        // L1 stays quiet). The qualifying pairs (0,4)/(2,4) touch
+        // the LAST call → still a legitimate soft hint.
+        let w = vec![
+            call("shell", json!({"command": "npm run build"})),
+            call("shell", json!({"command": "cat /etc/hosts"})),
+            call("shell", json!({"command": "npm run build"})),
+            call("shell", json!({"command": "cat /etc/hosts"})),
+            call("shell", json!({"command": "npm run build"})),
+        ];
+        assert!(matches!(detect(&w), LoopVerdict::SoftLoop { .. }));
     }
 
     #[test]
