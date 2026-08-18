@@ -7,7 +7,7 @@
 
 ## 1. 系统架构
 
-> ✅ **当前状态(2026-07-23,daemon 化已落地)**:agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)。
+> ✅ **当前状态(2026-08-18)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,无 `decisions.md`)。
 >
 > 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
@@ -31,14 +31,19 @@
 ║                           ▼                                            ║
 ║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
 ║  │  axum router (daemon/server.rs::build_router)            │          ║
-║  │   · 97 个 #[tauri::command] 镜像为 REST 路由             │          ║
-║  │     (同 handler 双暴露 IPC + HTTP,Q0 决策)              │          ║
+║  │   · 95 个 #[tauri::command] 镜像为 REST 路由(2026-08-18  │          ║
+║  │     实测;commands/ 21 文件,不含 tests_resolve_mode_change │          ║
+║  │     测试 0 计数 + tests_get_pending_interaction 测试 1)  │          ║
 ║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
+║  │   · /api/v1/attachments/<id> GET 二进制(B1 08-16,首个    │          ║
+║  │     非 JSON REST 路由,手机 PWA 看图路径)                │          ║
 ║  │   · ServeDir fallback(同源服务 dist/ SPA)              │          ║
 ║  │  ──────────────────────────────────────────────────────  │          ║
 ║  │  AppState (Arc,axum 每个 handler clone 一份)             │          ║
 ║  │   · SQLite pool(持有 WAL writer;Thin 模式 GUI 不开)   │          ║
-║  │   · agent core(Agent Loop / Tool Registry 24 builtin    │          ║
+║  │   · agent core(Agent Loop / Tool Registry 25 builtin     │          ║
+║  │     + 1 stub 元工具 load_tool_schemas + 1 动态 dispatch  │          ║
+║  │     dispatch_subagent = 27 注册名;                         │          ║
 ║  │     / Workflow Engine / Resource Loaders /              │          ║
 ║  │     PermissionStore / SessionManager)                   │          ║
 ║  │   · 自研 LLM Provider trait(Anthropic/OpenAI)          │          ║
@@ -97,7 +102,7 @@
 ```
 **进程边界说明**:
 - **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
-- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 97 个原 `#[tauri::command]` handler 镜像为 REST 路由,前端同一份 handler 代码服务 IPC 与 HTTP。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 95 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-08-18 实测;commands/ 21 文件),前端同一份 handler 代码服务 IPC 与 HTTP。
 - **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
 - **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
 - **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client(GUI + 浏览器 + 经 remote daemon 的远程 PWA client)共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
@@ -174,6 +179,24 @@
 
 ### 1.5 远程访问形态(2026-08 remote-control epic S1~S6b 落地,merge 94828cb)
 
+> 完整 E2E 部署 / 验收手册见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md);运维 / systemd / nginx 见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md)。本节只讲 §1 拓扑层的角色边界与"本地零依赖 remote"不变量。
+
+**三个角色,三台机器**:
+
+| 角色 | 跑什么 | 端口 | 谁访问 |
+|---|---|---|---|
+| **云服务器** | `everlasting-remote`(独立二进制,`crates/everlasting-remote`)+ nginx + 前端 dist | 443(nginx)→ 7457(remote) | 手机 + PC 都连它 |
+| **PC** | `everlasting-daemon`(agent core + tunnel client + 前端) | 7456 | PC 自己 + 经 remote 被手机访问 |
+| **手机** | 浏览器(Safari/Chrome PWA) | — | 访问 remote 域名 |
+
+**关键不变量**:PC daemon 本地功能**完全不依赖 remote**。remote 挂了/隧道断了/没配,PC 本地照常工作,只是手机暂时连不上。agent 进程 100% 在 PC,数据不出本机;云上 remote **不持文件 / 不存 agent 数据**,只存 `nodes` / `devices` / `pairing_codes` 三表。
+
+**`/health` 端点**:`GET /health` 返回 `{remoteId, ...}`(`remoteId` 字段是手机 PWA `isRemoteContext()` 判定的信号,无此字段手机不跳 `/pairing`)。
+
+**首个非 JSON REST 路由(B1 08-16)**:`GET /api/v1/attachments/<id>` 返回二进制(图片 / 附件),同源 daemon / 手机 PWA 都可达,用于 inline 预览 `messages.metadata.attachments`(B1 image multimodal 详见 §1.6)。
+
+> 拓扑 ASCII + 三形态(形态 A Tauri GUI + sidecar / 形态 B 纯浏览器 / 形态 C 手机 PWA + 云 remote)见 §1.1 图示;**形态 C 即 §1.1 形态 C**(2026-08 epic 引入,详见 §1.1)。
+
 > 📌 手机 PWA / 远程浏览器经 HTTPS 访问云上 `everlasting-remote`,由它经 WSS 长连接接到 PC daemon 的 tunnel client,loopback 打到本地 agent core(拓扑见 §1.1 形态 C)。**remote 只存 token/devices/配对码,不存 agent 数据;PC daemon 本地功能零依赖 remote。** 中继方案变更:Cloudflare Workers + D1 → 国内 2C2G 服务器 + 自研 Rust remote daemon(HTTPS 用户自理,nginx 反代,非 Cloudflare Tunnel)。部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),端到端验证见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)。
 
 **配对码 bootstrap 流程**(`crates/everlasting-remote/` + `app/src-tauri/src/daemon/tunnel/`):
@@ -186,6 +209,32 @@
 **PWA 壳**:vite-plugin-pwa + `public/icons/`,手机浏览器可安装为 PWA。脚本:`scripts/remote.sh`(本地隧道)/ `deploy-remote.sh`(云端部署)/ `remote-e2e-smoke.mjs`(端到端冒烟)。
 
 **决策偏差记录**:Phase 3(dogfooding)在 dogfooding 前置条件未满足时由 epic 直接启动完成 —— 见决策日志对应条目。
+
+### 1.6 近期落地特性(2026-08-14~18)
+
+> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)。横切关注点(C7 / C7D / memory-gov / C3+)见 §2.5.10~13;本节按"用户可感知度"挑 3 个最显著的:**B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool**。
+
+**B1 image multimodal(2026-08-16/17 落地)**
+- 模型能力:`models.supports_images` 新列(`INTEGER NOT NULL DEFAULT 0`,B1 backfill `add_models_column_if_missing`,见 `db/migrations/schema.rs:1012`),UI Settings 配置 capability 标志
+- wire 层:`ContentBlock` 双形态 — `ImageRef`(JSON 引用,仅 ID + metadata,占 token 少)/ `Image`(serde 即 Anthropic 原生 image block,占 token 多);Anthropic provider 优先发 `Image`,不支持 vision 的模型走 `ImageRef` 占位降级(`Caps=false` 仍接受 attachment 但不下发 LLM,降级展示)
+- 存储:`messages.metadata.attachments[]` JSON 数组引用 attachments 表;文件落 `app_data_dir/attachments/<id>.<ext>`
+- 路由:首个二进制 GET 路由 `GET /api/v1/attachments/<id>`(`daemon/routes/attachments.rs`,见 §1.5,手机 PWA 看图路径)
+- 度量:`turn_trace.images_token INTEGER` 列(B1 PR4,backfill 同 C7 / memory-gov,见 `db/migrations/schema.rs:1006`)
+- 安全:DOMPurify 收紧外链 img(防 prompt injection via 加载追踪)
+- 完整设计:见 [ROADMAP.md §1.2 B1](./ROADMAP.md) 行(2026-08-16/17 落地)
+
+**D2 跨 session 全文搜索(2026-08-17 落地)**
+- DB:`messages_fts` FTS5 虚拟表(external-content + trigram + `UPDATE OF text` 防写放大 + `messages_fts_docsize` 影子表守卫回填,见 `db/migrations/schema.rs:1051`)
+- 后端:`db/search.rs` 双路分派 — FTS 命中走 rowid → `messages` 主表;FTS 0 命中回退 LIKE 兜底,title 附带
+- IPC:`search_messages` 新命令(`commands/search_messages.rs`),**POST** 接收 query + session 过滤
+- 前端:`SearchModal` 两态(空态提示 / 命中态列表,按 session 分组)+ Cmd/Ctrl+K 接管(`app/src/components/SearchModal.vue`)
+- 完整设计:见 [ROADMAP.md §1.2 D2①](./ROADMAP.md) 行(2026-08-17 落地)
+
+**D2② agent search_history tool(2026-08-17 落地)**
+- `tools/search_history.rs` 薄封装 `db::search::search_messages`,LLM 显式调
+- `READONLY_TOOL_ALLOWLIST` 第 6 员(其他 5:`read_file` / `grep` / `glob` / `list_dir` / `web_fetch`)
+- UI 卡片:`SearchHistoryCard` 4 态机(loading / empty / results / error),前端组件注册表新员
+- 完整设计:见 [ROADMAP.md §1.2 D2②](./ROADMAP.md) 行(2026-08-17 落地)
 
 ---
 
@@ -531,7 +580,7 @@ match tool_call.name {
     "glob"        => globset walk, cap 100, mtime desc,
     "list_dir"    => tokio::fs::read_dir, alphabetical + `/` suffix on dirs,
                      non-recursive,
-    "use_skill"   => SkillCache 取 SKILL.md 正文 → tool_result 回填(L1,2026-06-18 落地,详见 [IMPLEMENTATION §4](./IMPLEMENTATION/decisions.md))
+    "use_skill"   => SkillCache 取 SKILL.md 正文 → tool_result 回填(L1,2026-06-18 落地,详见 [IMPLEMENTATION §4](./IMPLEMENTATION/decisions-2026-06.md))
     "use_memory"  => 读 / 写 runtime memory(详见 [memory spec](../.trellis/spec/backend/memory.md))
     "use_ui"      => 构造 UiCard 走 ⑭ 分支(详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成))
     ...
@@ -656,7 +705,7 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
-> 16 关卡在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION/decisions.md) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
+> **18+ 关卡**(原 16 关卡 + C7 stub / memory digest / C3+ compaction 3 个新横切关注点,详见 §2.5.10~13)在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION/decisions-2026-06.md / -07.md / -08.md](./IMPLEMENTATION/) 对应日期条目(按月分卷,无 `decisions.md`)。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
 
 ### 2.5 横切关注点:16 关之外但必做的事
 
@@ -669,7 +718,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **关键设计**:取消不立即终止 LLM 请求,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
 - **`shell` 进程组杀整组**:`shell` tool 子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程。Windows 留 P2
 - **缺失后果**:用户按 stop 没反应 → 跑光了 token 还在跑 → 信任崩塌
-- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION/decisions.md)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
+- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION/decisions-2026-06.md)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
 
 #### 2.5.2 ⑩ Tool 超时回填
 
@@ -698,21 +747,18 @@ agent loop 结束(text-only response or max_turns reached):
   - **Level 2 Jaccard 软提示**(`SOFT_WINDOW=5` / `SOFT_THRESHOLD=0.85`):≥2 对 token-set Jaccard > 0.85 → 容忍近重复
 - **per-tool 签名**:`read_file`/`write_file`/`list_dir`=path,`grep`/`glob`=pattern+path,`edit_file`=path+old_string(含 old_string 才不误判正当的同文件多块编辑),`shell`/`run_background_shell`=command,其余 fallback `name+canonical(input)`
 - **命中动作(软)**:两层都 `tracing::warn!` + 把 hint 文本插入 result message,**不跳过执行、不终止 loop**,MAX_TURNS=200 仍是硬兜底。无 AuditKind 落表
-- **完整设计 + 调研**:详见 [IMPLEMENTATION §4 2026-06-24 ADR](./IMPLEMENTATION/decisions.md)
+- **完整设计 + 调研**:详见 [IMPLEMENTATION §4 2026-06-24 ADR](./IMPLEMENTATION/decisions-2026-06.md)
 
-#### 2.5.5 ⑤ Context 超限降级(C3 MVP,2026-06-12 落地,**已实施**)
+#### 2.5.5 ⑤ Context 压缩(C3+ LLM 摘要式压缩,2026-08-18 落地,**替代** C3 MVP 机械丢组 2026-06-12)
 
-- **触发**:总 token > `context_window * 0.80`(MVP 阈值,留 0.20 余量给 tiktoken cl100k_base 1-2% 漂移)
-- **保护顺序**:
-  1. **不动**:`system_prompt` + `role.system_prompt` + 4 层 Memory 合成段
-  2. **优先丢**:runtime tool_result(从最老 turn 开始丢)
-  3. **次优丢**:老 user / assistant turn(从最老开始丢)
-  4. **裁剪目标**:降到 `context_window * 0.50`
-- **不变量**:`assistant(tool_use)` + `user(tool_result)` 必须成对丢(API 400 红线);Thinking / RedactedThinking blocks 只能随整 turn 丢;当前 user message、当前 tool_result 不丢
-- **不能做**:丢 system prompt / role prompt / 所有 memory
-- **MAX_TURNS 兜底**:200(从 20 → 50 → 200 演进,详见 ADR)
-- **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护)
-- **完整设计 + BUG 修复历史**:详见 [IMPLEMENTATION §4 2026-06-12/14/15 ADR](./IMPLEMENTATION/decisions.md)(RULE-A-001/002/006 已闭环)
+- **触发**:总 token > `context_window * 0.85`(取代 C3 MVP 的 0.80 阈值)
+- **策略**:LLM 9 段模板结构化摘要(`task / progress / facts / decisions / open / files / next` 等)+ `prior-summary` 增量合并(已存在 summary 作上下文,避免每轮全量重写)
+- **保留区存活**:`clamp(15k, 10% 窗, 25k)` token 边界,**最近 turn 逐字不丢**(掉 LLM 看不到刚刚说过的话会发懵)
+- **元数据**:摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`(区别于 user / assistant),前端折叠渲染
+- **水位**:`cutoff_seq` 精确折叠记忆,展开按需(不破坏 pair 不变量)
+- **兜底**:连续 3 次 LLM 摘要失败 → 熔断回退 C3 机械丢组(0.80→0.50 旧逻辑,见代码 `agent/context.rs`)
+- **实现位置**:`app/src-tauri/src/agent/context.rs`(`compact_messages` + 新 LLM call)+ `messages` 表 schema 兼容(messages 表 metadata 列从 JSON 字段读)
+- **完整设计**:见 [ROADMAP.md §1.2 C3+](./ROADMAP.md) 行(2026-08-18 落地)+ C3 MVP 历史见 [IMPLEMENTATION/decisions-2026-06.md 2026-06-12/14/15 ADR](./IMPLEMENTATION/decisions-2026-06.md)(RULE-A-001/002/006 已闭环)
 
 #### 2.5.6 Session 切换的并发态
 
@@ -735,7 +781,16 @@ agent loop 结束(text-only response or max_turns reached):
 - **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
 - **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
 - **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
-- **17 类 AuditKind + 完整 schema + payload wire shape + UI 渲染细节**:见 [IMPLEMENTATION §4 2026-06-13/14 ADR](./IMPLEMENTATION/decisions.md) + `app/src-tauri/src/agent/permissions/audit.rs`
+- **25 类 AuditKind(2026-08-18 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
+  - **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
+  - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
+  - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
+  - **Message 域(2)**:EditMessage(D3 PR1)/ ResendMessage(D3 PR3)
+  - **Loop 域(1)**:LoopIntervention(C2+ 07-05 主动干预)
+  - **Worker 域(4)**:WorkerAskAllowed / WorkerAskDenied / WorkerAskTimedOut / WorkerAskCancelled(L3b 06-22 RULE-FrontSubagent-003 fix)
+  - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
+  - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
+  - 实现位置:`app/src-tauri/src/agent/permissions/audit.rs`;落表点见各 variant 注释 + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) 各月 ADR
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
 
@@ -747,7 +802,38 @@ agent loop 结束(text-only response or max_turns reached):
   - `web_fetch` 虽只读但 Tier 4 默认 `emit ask`,MVP 排除(走串行,保留逐个 ask UX)
   - 共享状态安全:并发集合无 shell(改 cwd)/edit_file(写 read_guard)→ 无写冲突;`PermissionStore`/`SkillCache`/`ReadGuard` 都是 `Arc<Mutex/RwLock>`,多 task 并发 read 安全
   - cancel:并发不 `break`,等所有 task 完成或被 cancel;`execute_tool` 内 `tokio::select!` 各 task 独立响应 cancel
-- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION/decisions.md) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./spikes/2026-06-19-async-parallel-tool-research.md)
+- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION/decisions-2026-06.md) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./spikes/2026-06-19-async-parallel-tool-research.md)
+
+#### 2.5.10 ⑨ C7 tools token 治理(2026-08-14 落地)
+
+- **问题**:关卡 ⑤ context 构造时,LLM tool 列表占 prompt 大量 token(实测 25 builtin × 平均 ~1.2KB schema ≈ 30k token),`context_window * 0.85` 触发前已吃紧
+- **方案**:静态裁剪 `STUB_CANDIDATES` 列表(`filter_tools_for_session_type` 在 drive.rs 第 3 环,按 session_type 砍掉不适用的 builtin,例如 group_chat 砍掉 `dispatch_subagent`、worker subagent 砍掉 `merge_worker` / `discard_worker` / workflow-only 工具)
+- **度量**:`turn_trace.tools_token INTEGER` 列(C7 08-14,add_turn_trace_column_if_missing backfill,见 `db/migrations/schema.rs:994-999`)
+- **实测**:session 起步 tools_token -38.5%(裸 session → session_type 命中裁剪)
+- **完整设计**:见 [ROADMAP.md §1.2 C7](./ROADMAP.md) 行(2026-08-14 落地)
+
+#### 2.5.11 ⑨ C7D tools stub 注册 + 元工具按需取回(2026-08-14 落地)
+
+- **问题**:C7 静态裁剪后,某些罕见工具仍被 LLM 主动调(例如 `merge_worker` / `discard_worker` 在 worker 流程),一刀切砍掉误伤
+- **方案**:`tools/stub.rs` + `StubRegistry`(session 粘性 loaded-set,记录当前 session 已经取回 schema 的工具名)+ **`load_tool_schemas` 元工具**(LLM 想调罕见工具时显式 `load_tool_schemas({"merge_worker"})` 拿回完整 schema)
+- **gate**:`tools_stub_enabled` drive.rs 第 4 环(开关 && 非 worker && 非群聊时生效,worker / 群聊直接给全 schema 不走 stub)
+- **度量**:`turn_trace.tools_token` 配合 stub 触发次数统计(预计 tools_token 进一步 -12%)
+- **实测**:C7 + C7D 联合,session 起步 tools_token 26%(从原 38.5% 进一步降)
+- **完整设计**:见 [ROADMAP.md §1.2 C7D](./ROADMAP.md) 行(2026-08-14 落地)
+
+#### 2.5.12 ⑤ memory-gov 指令块窗口治理(2026-08-15 落地)
+
+- **问题**:关卡 ⑤ context 构造时,AGENTS.md / CLAUDE.md 加载段占 prompt token(实测 4 文件合计 60-100k token,长项目超过 0.30×window)
+- **方案 WP1 度量**:`turn_trace.memory_token INTEGER` 列(08-15,backfill 同 C7)
+- **方案 WP2 切节注入**:`memory/digest.rs` fence-aware 切节目录(纯机械,标题 + 首句,无 LLM 调用);`AGENTS.md` primary 永不 digest(`mtime` 锁死),`CLAUDE.md` 且 tokens>600 才 digest
+- **方案 WP3 元工具**:`load_memory_sections` 元工具(append,精确寻址 banner label 切片,LLM 看到目录找不到的内容时显式拉全文)
+- **gate**:`MemoryDigestRegistry` OnceLock 单例 + `memory_digest_enabled` 缺省 on(fail-open,worker / 群聊豁免)
+- **实测**:context_window 72% → 28%(-79.5%)
+- **完整设计**:见 [ROADMAP.md §1.2 memory-gov](./ROADMAP.md) 行(2026-08-15 落地)
+
+#### 2.5.13 ⑤ C3+ LLM 摘要式压缩(2026-08-18 落地)
+
+- **见 §2.5.5**(新策略替代 C3 MVP 0.80→0.50 机械丢组);4 个新横切关卡中 C3+ 是最重的,核心 spec 详见 §2.5.5,本节仅作为横切索引存在
 
 ---
 
@@ -781,7 +867,7 @@ agent loop 结束(text-only response or max_turns reached):
 
 **核心变更**:agent core 从 Tauri 进程内拆出,变成独立 `everlasting-daemon` 进程。Tauri GUI 降级为瘦客户端(Thin 模式),与浏览器 client 并列,都经同源 HTTP/SSE 连同一 daemon。
 
-> 这条决策的完整动机与编排见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md);决策档案(为什么 axum / 为什么 sidecar / 为什么默认 httpTransport)见 [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)。本节只讲架构本身。
+> 这条决策的完整动机与编排见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md);决策档案(为什么 axum / 为什么 sidecar / 为什么默认 httpTransport)见 [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md)(daemon 化于 2026-07-23 收官)。本节只讲架构本身。
 
 **为什么必须**:
 - 远程/浏览器访问 —— agent core 要能脱离 Tauri webview 被浏览器触达(daemon 用 ServeDir 同源服务 SPA)
@@ -793,7 +879,7 @@ agent loop 结束(text-only response or max_turns reached):
 - 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
 - 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
 - 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
-- 97 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用)
+- 95 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-08-18 实测 95** 个,commands/ 21 文件)
 - 新增 `crates/everlasting-remote/`(axum 云服务端:shared_secret auth + device_token、配对码 60s 一次性 + per-IP 限速(`ratelimit.rs`)、WSS 隧道服务端、反向代理、SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表)+ `crates/everlasting-remote-protocol/`(2026-08-11 workspace 翻转:根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,Cargo.lock / target 在根)
 - PC daemon 新增 `src-tauri/src/daemon/tunnel/`(client / config / dispatcher / manager / node_id / sse_bridge;WSS 长连接 + loopback 转发,取消只停转发)
 - 前端新增 `app/src/transport/auth.ts`(device_token / `isRemoteContext()`)+ `app/src/router/index.ts` vue-router `isRemoteContext()` 守卫 + `PairingView` / `NodeListView` / `ChatView` / `RemoteTab.vue` + PWA 壳(vite-plugin-pwa + `public/icons/`);配对流程:PC Remote tab 生成 6 位配对码 → 手机 PWA redeem 换 64-hex device_token → nodes 列表

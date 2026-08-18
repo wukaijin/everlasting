@@ -32,9 +32,10 @@
 
 ### 1.2 候选但暂不锁定
 
-- **Editor**:Monaco vs CodeMirror 6 — Monaco 体积大但功能强;CodeMirror 6 轻量可定制。先用 CodeMirror 6
 - **State management (frontend)**:Pinia(已锁定,跟随 Vue 官方)
 - **UI 组件库**:reka-ui vs shadcn-vue vs radix-vue — 三家都是 unstyled + accessible primitives。先 reka-ui
+
+> **已锁定(2026-08-18 同步)**:~~**Editor**:Monaco vs CodeMirror 6 — 先用 CodeMirror 6~~ → **CodeMirror 6 已落地**(B2 PR1.5 2026-06-17,commits `1ed212c` / `8e7c975`,用于 `SearchModal` / 权限 Modal 等轻量编辑场景);Monaco 体积 + ~3MB bundle 仍偏大,走 `vue-codemirror` 包装;后续若需 LSP / 多光标再评估 Monaco
 
 ### 1.3 明确不用
 
@@ -59,7 +60,7 @@
 | 模糊搜索 | `fuzzysort` ^3.1.0(B2 PR1 实际采用,前端 TS 库) | @文件补全 | BACKLOG §1 输入层 @文件 |
 | gitignore 解析 | **未引入 `ignore` crate**(B2 改用更简实现) | 过滤项目扫描范围 | BACKLOG §1 输入层 @文件 |
 | 文件监听 | ~~`notify`~~(已移除) | memory watcher 原用 notify,后改为 mtime fence freshness check(read_guard 防过期),notify 已从依赖删除 | BACKLOG §3 Memory |
-| YAML 解析 | 手写 parser(B3);~~`serde_yml`~~(已废弃) | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role / B3 /command |
+| YAML 解析 | 手写 parser(B3 + L3d 2026-06-25/26 已支持数组 frontmatter) | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role / B3 /command / **L3d subagent frontmatter(`SubagentDef.tools` 数组 + `arguments` 等)** |
 | TOML 解析 | `toml` | role / config 解析 | BACKLOG §4 Role |
 | 飞书 SDK | 用现有 `feishu-integration` skill | 消息收发 | BACKLOG §6 飞书 |
 | 命令面板(前端) | reka-ui `command` (或自写 `<TriggerMenu>`) | 输入触发器 | BACKLOG §1 输入层 |
@@ -79,10 +80,19 @@
 | Workflow 系统(B8)| `app/src-tauri/src/agent/workflow/` | workflow.json 外置 + builtin dev plugin + task 状态机 + breadcrumb + delegation;`create_task` / `request_task_state_transition` LLM tool;07-08~10 落地,**零新增依赖**(用既有 `serde` + `tokio::fs`;notify 已移除,freshness 走 mtime fence) |
 | 生成式 UI(B9)| `app/src-tauri/src/tools/use_ui.rs` | non-blocking execute + UiPrimitive registry;07-02 部分落地,推后期(button+action 白名单 / diff 应用 / session 开关) |
 | 自主记忆(V2 2 期)| `app/src-tauri/src/agent/{auto_reflect,memory_recall,memory_hygiene,remember}.rs` + `db::autonomous_memories` 表 | FTS5 + pitfall trigger_key + 状态机(candidate→active→verified)+ 异步卫生 job;06-29 落地,**零新增依赖**(用既有 `sqlx` FTS5) |
+| E2 turn-level harness trace(07-14)| `app/src-tauri/src/db/turn_trace.rs` + `db/migrations/schema.rs:222` | `turn_trace` 表 + 4 个 ChatEvent(`TokenUsage` / `Compaction` / `LoopHint` / `Breadcrumb`)+ `session_audit_events.turn_seq` 列(nullable,审计按 turn 落表);`scripts/turn-smoke.sh` 单轮烟测,**零新增依赖** |
+| C7 tools token 治理(08-14)| `app/src-tauri/src/tools/{mod.rs,filter_tools_for_session_type}.rs` + `agent/drive.rs` 第 3 环 | `STUB_CANDIDATES` 静态裁剪 + `turn_trace.tools_token INTEGER` 列(`add_turn_trace_column_if_missing` backfill,`db/migrations/schema.rs:994-999`);session 起步 -38.5%,**零新增依赖** |
+| C7D tools stub 注册(08-14)| `app/src-tauri/src/tools/stub.rs` + `agent/drive.rs` 第 4 环 | `StubRegistry`(session 粘性 loaded-set)+ `load_tool_schemas` 元工具 + `tools_stub_enabled` gate;C7+C7D 联合 -62%,**零新增依赖** |
+| memory-gov 指令块治理(08-15)| `app/src-tauri/src/memory/digest.rs` + `agent/drive.rs` + `tools/load_memory_sections.rs` | `MemoryDigestRegistry` OnceLock + fence-aware 切节注入(标题+首句;`AGENTS.md` primary 永不 digest / `CLAUDE.md` 且 tokens>600 才 digest)+ `load_memory_sections` 元工具 + `turn_trace.memory_token INTEGER`;**零新增依赖** |
+| B1 image multimodal(08-16/17)| `app/src-tauri/src/attachments/` + `app/src-tauri/src/llm/wire.rs::ContentBlock` + `daemon/routes/attachments.rs` + `db/migrations/schema.rs:1012` + `:1006` | `ContentBlock::Image` / `ImageRef` 双形态(Anthropic 优先发 `Image`,OpenAI / 不支持 vision 走 `ImageRef` 占位降级)+ `models.supports_images` 配置 + `messages.metadata.attachments[]` 引用 + **首个二进制 GET 路由** `/api/v1/attachments/<id>`(`tower-http::set_header(Content-Type, mime_guess)`)+ `turn_trace.images_token INTEGER`;**零新增依赖**(`mime_guess` 已借 `axum` / `tower-http` 间接带入) |
+| D2 跨 session 全文搜索(08-17)| `app/src-tauri/src/db/{search,messages_fts}.rs` + `db/migrations/schema.rs:1051` + `commands/search_messages.rs` + `app/src/components/SearchModal.vue` | `messages_fts` FTS5 虚拟表(external-content + trigram + `UPDATE OF text` 防写放大 + `messages_fts_docsize` 影子表守卫回填)+ `db/search.rs` 双路分派(FTS rowid→主表;0 命中 LIKE 兜底)+ `search_messages` POST IPC + `SearchModal` 两态 + Cmd/Ctrl+K 接管;**零新增依赖**(`sqlx` FTS5 已带) |
+| D2② agent search_history(08-17)| `app/src-tauri/src/tools/search_history.rs` + `app/src/components/SearchHistoryCard.vue` | 薄封装 `db::search::search_messages` + `READONLY_TOOL_ALLOWLIST` 第 6 员 + 4 态机(loading/empty/results/error);**零新增依赖** |
+| C3+ LLM 摘要式压缩(08-18)| `app/src-tauri/src/agent/context.rs::compact_messages` + `messages` 表 metadata kind | `context_window * 0.85` 触发 → LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)`)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组(兜底);`messages.metadata.kind = "compaction_summary"` 元数据;**零新增依赖** |
+| B11 远程遥控通道(08-11~13)| `crates/everlasting-remote/`(独立二进制)+ `crates/everlasting-remote-protocol/` + `app/src-tauri/src/daemon/tunnel/{client,config,dispatcher,manager,node_id,sse_bridge}.rs` + `app/src/components/{settings/RemoteTab,PairingView,NodeListView,RemoteTab}.vue` + `app/src/transport/{auth,http}.ts` | axum 0.7 + `tower-http::ServeDir` + `tokio-tungstenite` 0.24 WSS + `sqlx` + `dashmap` + `subtle`(constant-time compare);**Cargo workspace 翻转**(08-11,根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,`Cargo.lock` / `target` 在根);**新引入依赖** `everlasting-remote-protocol` 内部 crate + `dashmap` + `subtle`,其余借已有 |
 
 **说明**:
 - `image`、`libheif-rs`、`nucleo`、`ignore` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif;`notify` 已移除,见上)
-- **`serde_yml` 已废弃(2026-06-16 发现)**:`serde_yml` + 前代 `serde_yaml` 均在 crates.io 标 "Deprecated"(`0.0.13` 仅 compat shim)。B3 `/command` 的 frontmatter(`name` / `description` / `argument-hint` 单行标量)改用**手写 parser**(`app/src-tauri/src/resource_loader.rs::parse_frontmatter`,~40 行,split `---` + `key:value`),零依赖。未来 Skill / Memory / Role frontmatter 字段复杂化(多行 / 数组)时再上 maintained fork(候选 `serde_yaml_neo`)——§5 共享 loader 契约仍成立(parser 隔在 `parse_frontmatter` 函数后,替换局部)。
+- **`serde_yml` 已废弃(2026-06-16 发现)**:`serde_yml` + 前代 `serde_yaml` 均在 crates.io 标 "Deprecated"(`0.0.13` 仅 compat shim)。B3 `/command` 的 frontmatter(`name` / `description` / `argument-hint` 单行标量)+ L3d subagent frontmatter(`SubagentDef.tools` 数组 + `arguments` 等,2026-06-25/26 落地)都用**手写 parser**(`app/src-tauri/src/resource_loader.rs::parse_frontmatter`,~60 行,split `---` + `key:value` + 数组 `- item` 解析),零依赖。未来 Skill / Memory / Role frontmatter 字段再复杂化(嵌套 map / 多行字符串)时再上 maintained fork(候选 `serde_yaml_neo`)——§5 共享 loader 契约仍成立(parser 隔在 `parse_frontmatter` 函数后,替换局部)。
 - 前端不引入 UI 框架(Element Plus / Vuetify 太重),自己攒 + 用 reka-ui / shadcn-vue primitives
 - **ECharts 替代 recharts 的理由**:recharts 纯 React,跨框架方案 ECharts + vue-echarts 更成熟,中文文档全
 

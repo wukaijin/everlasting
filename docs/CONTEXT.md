@@ -1,7 +1,7 @@
 # CONTEXT.md
 
 > Everlasting 项目术语表(glossary)。
-> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions.md` 决策日志,本文件不重复。
+> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志(按月分卷,无 `decisions.md`),本文件不重复。
 
 ---
 
@@ -50,7 +50,7 @@ Anthropic Messages API 的 token 用量在 SSE 流的 `message_delta` 事件中�
 OpenAI Chat Completions 的 token 用量在流末尾携带(`usage: { prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details: { cached_tokens } }`),**仅在请求体发送 `stream_options: { include_usage: true }` 时**返回。
 
 ### Checklist (agent 自跟踪清单)
-> **实现状态**:**B12 已落地(2026-06-19)**。TodoWrite 式 `update_checklist` tool — 全量替换(单次调用覆盖完整清单,非增量 diff)+ 三态 `pending` / `in_progress` / `done` + 至多一 `in_progress` coerce(LLM 误标多个 in_progress 时收一)+ loop-local Vec(per-request,通过 `ToolContext` 传,不污染持久化 messages)+ 每轮 ephemeral **append** 注入请求副本(不入持久化,保 memory cache breakpoint 不断)。前端 `<ChecklistCard>` ChatPanel 浮层(展开 / 最小化悬浮球 + 焦点动效)+ checklist store(客户端复刻 coerce)。无新 DB 表(replay 从 DB history 还原,reload 按 `is_error` 过滤 cancel 合成 result)。PR1 `994db84` + PR2 `1896470` + PR3 spec;决策见 [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION/decisions.md)。
+> **实现状态**:**B12 已落地(2026-06-19)**。TodoWrite 式 `update_checklist` tool — 全量替换(单次调用覆盖完整清单,非增量 diff)+ 三态 `pending` / `in_progress` / `done` + 至多一 `in_progress` coerce(LLM 误标多个 in_progress 时收一)+ loop-local Vec(per-request,通过 `ToolContext` 传,不污染持久化 messages)+ 每轮 ephemeral **append** 注入请求副本(不入持久化,保 memory cache breakpoint 不断)。前端 `<ChecklistCard>` ChatPanel 浮层(展开 / 最小化悬浮球 + 焦点动效)+ checklist store(客户端复刻 coerce)。无新 DB 表(replay 从 DB history 还原,reload 按 `is_error` 过滤 cancel 合成 result)。PR1 `994db84` + PR2 `1896470` + PR3 spec;决策见 [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION/decisions-2026-06.md)。
 
 LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自己写、改、标记完成,用于不丢失自己的计划与进度。对齐 Claude Code 的 `TaskCreate/TaskList`、opencode 的 `todowrite`、Cline 的 plan-act。
 
@@ -72,6 +72,7 @@ LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自
 - **status** ∈ `{running, completed, cancelled, error, incomplete}`(终态 4 个,无 `failed`)
 - `transcript_json` 持久化整段 transcript + `transcript_truncated` 哨兵(超限截断)
 - app 启动时 `reap_orphaned_runs` 把上一进程崩溃留下的 `running` 标记为 `error`(防止假 running)
+- **B1 关系(2026-08-16)**:SubagentRun 本身无新列,但 worker subagent 处理的图片 attachment 落 `messages.metadata.attachments[]` JSON 引用(父 session `parent_session_id` 共享,worker 与 parent 共用同一 `messages` 主表),通过 `parent_session_id` 反查可拿到 worker 期间产生的所有 messages / metadata / attachments
 
 ### Worker Worktree
 L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
@@ -100,8 +101,8 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 ### MAX_TURNS
 当前常量 `200`(`app/src-tauri/src/agent/mod.rs:76`)。Agent Loop 单 request 内最大 turn 数,超限终止。这是循环检测的**硬兜底**。变更轨迹:`20 → 50 → 200`(06-24 C2 落地时调到 200)。
 
-### Context Compression Thresholds (C3)
-`context_window * 0.80` 触发 context 压缩,降到 `0.50`,**B5 memory 永远保护**(超限降级时优先裁其它层,不裁指令文件)。实现见 `app/src-tauri/src/agent/context.rs`。
+### Context Compression Thresholds (C3+ 替代 C3,2026-08-18)
+原 C3 阈值(`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,2026-06-12 落地)已被 **C3+ LLM 摘要式压缩(2026-08-18)** 替换。**当前**:`context_window * 0.85` 触发 → LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + **保留区存活**(`clamp(15k, 10% 窗, 25k)` token 边界,最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`(前端折叠渲染);连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组(0.80→0.50 旧逻辑,作兜底)。B5 4 层 memory 仍永远保护(优先裁其它层)。实现见 `app/src-tauri/src/agent/context.rs` + `memory/digest.rs` 协作;详细 spec 见 [ARCHITECTURE §2.5.5/§2.5.13](./ARCHITECTURE.md)。
 
 ### Loop Detection (C2 循环检测)
 **分级触发**取代原文单一 0.9 阈值,因单一阈值无法适配短 / 长 input:
@@ -112,10 +113,21 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 `MAX_TURNS=200` 仍是硬兜底。无 AuditKind 落表(§2.5.8)。token 切分纯 Rust `split_whitespace`(不复用 tiktoken)。实现见 `app/src-tauri/src/agent/loop_detection.rs`。
 
 ### AuditKind
-`session_audit_events.kind` 字符串枚举,**25 类**(演进:A2+B7 初版 17 → 06-24 resend_message + c2 系列增补 → 07-07 request_mode_change 三类 17→20 → 07-13 ui_diff_applied 等):`tool_executed` / `tool_allowed` / `tool_denied` / `tool_ask` / `mode_changed` / `grant_added` / `grant_revoked` / `resend_message` / `loop_intervention` / `mode_change_requested` / `mode_change_allowed` / `mode_change_denied` / `ui_diff_applied` 等(完整列表见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md) + `permissions/types.rs::AuditKind`)。每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选)。
+`session_audit_events.kind` 字符串枚举,**2026-08-18 实测 25 类**(2026-08-14 仍在审计 docstring 写"18 variants",代码债不在本任务范围),按域分组(完整 25 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
+
+- **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
+- **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
+- **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
+- **Message 域(2)**:EditMessage(D3 PR1 06-17)/ ResendMessage(D3 PR3 06-17)
+- **Loop 域(1)**:LoopIntervention(C2+ 07-05 主动干预)
+- **Worker 域(4)**:WorkerAskAllowed / WorkerAskDenied / WorkerAskTimedOut / WorkerAskCancelled(L3b 06-22 RULE-FrontSubagent-003 fix)
+- **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
+- **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
+
+每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选);E2 07-14 起增 `turn_seq` 列(`session_audit_events.turn_seq INTEGER`,nullable,审计按 turn 落表)。
 
 ### L1 / L2 / L3 命名约定
-路线图子档命名:
+路线图子档命名(2026-08-18 同步,2026-08-14~18 6 个新特性加入新字母):
 
 - **L1**:后台 shell + 完成通知(L1a 不带 PTY / L1b 后续接 portable-pty)
 - **L2**:单 turn 多 tool 并发(只读 batch,`is_parallel_eligible` + `FuturesUnordered`)
@@ -123,7 +135,17 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
   - **L3a**:并发只读 dispatch(`force_readonly` 剥写 + `DELEGATION_MAX_CONCURRENT_CHILDREN` 默认 3)
   - **L3b**:worker worktree 隔离(PR1 serial 核心 / PR2 concurrent 解锁 / PR3 merge_worker + discard_worker + sweep / PR3+ permission+concurrency hardening / PR4 前端合并/丢弃 UI)
   - **L3c**:worker 联网(`SubagentDef.tools` + `READONLY_TOOL_ALLOWLIST` 加 `web_fetch`)
-  - **L3d**:frontmatter loader(`~/.config/everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md`)
+  - **L3d**:frontmatter loader(`~/.config/everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md`,数组 frontmatter 解析已落地)
+- **C7** (2026-08-14):tools token 治理 — `STUB_CANDIDATES` 静态裁剪(`filter_tools_for_session_type` drive.rs 第 3 环)+ `turn_trace.tools_token INTEGER` 度量(session 起步 -38.5%)
+- **C7D** (2026-08-14):tools stub 注册 + 元工具按需取回 — `StubRegistry`(session 粘性 loaded-set)+ `load_tool_schemas` 元工具 + `tools_stub_enabled` gate(C7+C7D 联合 -62%)
+- **C3** (2026-06-12,已废):机械丢组 0.80→0.50,被 **C3+** 替换
+- **C3+** (2026-08-18):LLM 摘要式压缩(`context_window * 0.85` 触发,LLM 9 段模板摘要 + 保留区存活 + cutoff_seq 水位;连续 3 次失败熔断回退 C3)
+- **memory-gov** (2026-08-15):指令块窗口治理 — `memory/digest.rs` 切节注入 + `load_memory_sections` 元工具 + `turn_trace.memory_token INTEGER` 度量(-79.5%)
+- **B1** (2026-08-16/17):image multimodal — `ContentBlock::Image` / `ImageRef` 双形态 + `models.supports_images` 配置 + `messages.metadata.attachments[]` 引用 + 首个二进制 GET 路由 `/api/v1/attachments/<id>`
+- **D2①** (2026-08-17):跨 session 全文搜索 — `messages_fts` FTS5 + `db/search.rs` 双路分派 + `search_messages` POST IPC + `SearchModal` + Cmd/Ctrl+K
+- **D2②** (2026-08-17):agent `search_history` tool(`READONLY_TOOL_ALLOWLIST` 第 6 员,薄封装 `db::search`)+ `SearchHistoryCard` 4 态机
+- **E2** (2026-07-14):turn-level harness trace — `turn_trace` 表 + 4 个 ChatEvent(`TokenUsage` / `Compaction` / `LoopHint` / `Breadcrumb`)+ `session_audit_events.turn_seq` 列
+- **B11** (2026-08-11~13):远程遥控通道 — `crates/everlasting-remote` 云中继 + PC tunnel client + 手机 PWA 配对/节点/远程操作 + Cargo workspace 翻转
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
@@ -141,7 +163,7 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— 97 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— **2026-08-18 实测 95** 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`commands/` 21 文件;tests_resolve_mode_change 测试 0 计数 + tests_get_pending_interaction 测试 1);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
 - **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分);WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
 - **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
 - **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。
@@ -153,6 +175,6 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 
 ## 相关决策
 
-- 设计决策走 [`docs/IMPLEMENTATION/decisions.md 决策日志`](./IMPLEMENTATION/decisions.md)(本文件不重复)
+- 设计决策走 [`docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志](./IMPLEMENTATION/)(按月分卷,无 `decisions.md`;本月新建条目落 `decisions-YYYY-MM.md` + 更新 `[ARCHITECTURE.md](./ARCHITECTURE.md)` 对应章节)
 - A4 Token 相关术语、Checklist(agent 自跟踪清单)均已落地(详见上文 Checklist 条目,B12 2026-06-19),作为术语定义保留
 - 跨层契约走 `.trellis/spec/backend/llm-contract.md` "Scenario: Token Usage Tracking" 段

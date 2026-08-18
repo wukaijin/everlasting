@@ -13,7 +13,7 @@
 - 之后再回来能快速回到上下文
 - 讨论时有共同语言
 
-讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions.md 决策日志](./IMPLEMENTATION/decisions.md)。
+讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions-2026-{06,07,08}.md 决策日志](./IMPLEMENTATION/)(按月分卷,无 `decisions.md`)。
 
 ---
 
@@ -54,23 +54,24 @@
 **已具备**(完整 commit 走 `git log`,粗粒度状态见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成)):
 
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
-- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 16 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))
+- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~18 加 C7 / C7D / memory-gov / C3+ 4 个新横切关卡)
 - 多项目 / 多 session 管理(SQLite 持久化)
-- 工具集(24 个 builtin,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册 + `dispatch_subagent` 动态追加;filter_tools_for_mode/subagent/workflow 三层过滤):
+- 工具集(2026-08-18 实测 27 个注册名 = 25 builtin + 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤):
   - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
   - Shell:`shell`(Bash 落盘 + cat -n)/ `run_background_shell` / `shell_status` / `shell_kill`(L1a 后台 shell,tokio Child 不带 PTY)
   - 联网:`web_fetch`(SSRF 拦截 + 5 MiB body cap,attribution prefix)
-  - Skill / Memory / UI:`use_skill`(B4 三层渐进披露,workflow-aware)/ `use_ui`(B9 生成式 UI,non-blocking)/ `update_checklist`(B12 loop-local + workflow 分支同步 task.json.items)/ `remember`(V2 2 期自主记忆写入)
+  - Skill / Memory / UI:`use_skill`(B4 三层渐进披露,workflow-aware)/ `use_ui`(B9 生成式 UI,non-blocking)/ `update_checklist`(B12 loop-local + workflow 分支同步 task.json.items)/ `remember`(V2 2 期自主记忆写入)/ `search_history`(D2② 08-17,`READONLY_TOOL_ALLOWLIST` 第 6 员,薄封装 `db::search::search_messages`)/ `load_tool_schemas`(C7D 08-14 stub 元工具,LLM 显式取回罕见工具 schema)
   - 交互:`ask_user_question`(跨 turn,B9 selector 复用)/ `request_mode_change`(B6+ A,07-07,LLM 申请切 mode 用户 inline card 授权)
   - Workflow(07-08~10,workflow_enabled session 可见,filter_tools_for_workflow 白名单):`create_task` / `request_task_state_transition`
   - Subagent:`dispatch_subagent`(B6)/ `merge_worker` / `discard_worker`(L3b worker worktree 收口,`ToolKind::GitMutation`)
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 25 类 AuditKind + web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
-- C3 Context 压缩 + token 硬卡:`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,MAX_TURNS 20 → 50 → **200**(C2 06-24 调,详见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md#255-⑤-context-超限降级c3-mvp2026-06-12-落地已实施))
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **25 类 AuditKind**(2026-08-18 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/UI 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发 → LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;`MAX_TURNS=200` 仍是兜底(详见 [ARCHITECTURE §2.5.5/§2.5.13](./ARCHITECTURE.md))
 - C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,MAX_TURNS=200 仍是硬兜底
 - B5 Memory/指令文件系统:4 文件(User / Project × CLAUDE.md / AGENTS.md)+ `cache_control: ephemeral` 注入 + 100 KiB 硬卡 + tiktoken cl100k_base 估算 + mtime fence 新鲜度校验(notify 已移除)
+- **memory-gov 指令块窗口治理**(2026-08-15 落地):`memory/digest.rs` fence-aware 切节目录(纯机械,标题+首句;`AGENTS.md` primary 永不 digest / `CLAUDE.md` 且 tokens>600 才 digest)+ `load_memory_sections` 元工具(append,精确寻址 banner label)+ `turn_trace.memory_token INTEGER` 度量(实测指令块 -79.5%,context_window 72% → 28%);`MemoryDigestRegistry` OnceLock 单例 + `memory_digest_enabled` 缺省 on(fail-open,worker / 群聊豁免)
 - **V2 2 期** 自主记忆系统(2026-06-29 落地,5 child epic):agent 自主产生 + 跨 session 召回的经验库 — `autonomous_memories` 表(状态机 candidate→active→verified)+ 两层召回(per-turn FTS5 + 工具前 trigger_key 精确匹配)+ verified 软拦截重判 + 异步卫生 job
 - A4 Token 用量统计:per-session 累积(4 列)+ ChatInput hint 区 0-49% 绿 / 50-74% 黄 / 75%+ 红
 - D1 session 重命名 + 8 色标记
@@ -84,6 +85,10 @@
 - **B8** Workflow 编排层(07-08~10 完整落地):`workflow.json` 外置(`.everlasting/workflow.json` + `load_workflow` + `validate` + `fallback`)+ builtin dev workflow plugin(`resources/builtin-workflow/dev/workflow.json` 开箱即用)+ 任务状态机(Planning → Implement → Check → Done 四态单向)+ per-turn breadcrumb 注入(synthetic user message + `cache_control: ephemeral`)+ delegation 模板(`run_subagent` 时注入 worker)+ Step 0.1~3.3 完整 9 阶段管线(`workflow_enabled` 列 / 顶栏 toggle / `WorkflowDef` struct / `task.json` 读写 / `create_task` IPC / plugin skill loader / `set_task_state` + `archive_task` IPC)+ plugin agents/ 落点(`SubagentSource::Plugin`)+ `B12 Checklist → task.json.items` 同步 + `TaskStatus → Done` 触发 `trigger_spec_distillation` 沉淀 spec 到 `.everlasting/spec/`
 - **daemon 化**(07-20~23,remote-access epic):agent core 拆出独立 `everlasting-daemon` 进程 + 前端 transport 抽象(httpTransport 默认)+ 纯浏览器模式(详见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md))
 - **远程遥控通道**(08-11~13,remote-control epic S1~S6b):`crates/everlasting-remote` 云中继(仅转发不存 agent 数据)+ PC tunnel client(WSS 长连接 + loopback 转发,agent core 零改动)+ 手机 PWA 配对/节点/远程操作 + 移动端适配;Cargo workspace 翻转(详见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) + [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md))
+- **C7 tools token 治理**(2026-08-14):`STUB_CANDIDATES` 静态裁剪(`filter_tools_for_session_type` drive.rs 第 3 环,按 session_type 砍不适用的 builtin)+ `turn_trace.tools_token INTEGER` 度量;实测 session 起步 tools_token -38.5%
+- **C7D tools stub 注册**(2026-08-14):`StubRegistry`(session 粘性 loaded-set)+ `load_tool_schemas` 元工具按需取回 + `tools_stub_enabled` gate(开关 && 非 worker && 非群聊时生效);C7 + C7D 联合实测 -62%
+- **B1 image multimodal**(2026-08-16/17):`ContentBlock::Image` / `ImageRef` 双形态 + `models.supports_images` 配置(`INTEGER NOT NULL DEFAULT 0`,`db/migrations/schema.rs:1012`)+ `messages.metadata.attachments[]` 引用 attachments 表 + **首个二进制 GET 路由** `GET /api/v1/attachments/<id>`(daemon `daemon/routes/attachments.rs`,手机 PWA 看图路径)+ `turn_trace.images_token INTEGER` 度量(B1 PR4);不支持 vision 的模型走 ImageRef 占位降级
+- **D2 跨 session 全文搜索**(2026-08-17):`messages_fts` FTS5 虚拟表(`db/migrations/schema.rs:1051`,external-content + trigram + `UPDATE OF text` 防写放大 + `messages_fts_docsize` 影子表守卫回填)+ `db/search.rs` 双路分派(FTS 命中走 rowid → `messages` 主表;0 命中回退 LIKE 兜底)+ `search_messages` POST IPC + 前端 `SearchModal` 两态(空态/命中态按 session 分组)+ Cmd/Ctrl+K 接管
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
@@ -121,7 +126,7 @@
 - ❌ **不做 MCP 暴露** — 个人工具,工具集对外开放杠杆不足
 - ❌ **不做 Provider 限流(令牌桶)** — 个人使用场景未撞到限流,后期按需再评估
 
-> 完整"移除"决策矩阵见 [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION/decisions.md) + [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
+> 完整"移除"决策矩阵见 [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION/decisions-2026-06.md) + [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
 
 ---
 
@@ -156,8 +161,8 @@
 | Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#⑨-tool-权限检查) 实施的前提 |
-| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION/decisions.md) |
-| 上下文爆炸                    | 高     | ✅ C3 context 压缩(0.80→0.50,B5 保护)+ 消息裁剪 + tool result 截断 |
+| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION/decisions-2026-07.md) |
+| 上下文爆炸                    | 高     | ✅ **C3+ LLM 摘要式压缩**(2026-08-18,替代 C3 MVP 0.80→0.50)+ 保留区存活(`clamp(15k, 10%窗, 25k)`)+ `cutoff_seq` 水位折叠 + 消息裁剪 + tool result 截断 |
 | 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,MAX_TURNS=200 兜底 |
 
 ### 5.2 工程权衡
@@ -165,7 +170,7 @@
 **复杂度 vs 学习价值**(历史决策,2026-06-04 起 + 2026-06-09 rig-core 弃用):
 - 选 rig:省掉 50% 样板代码,但少学 50% harness 细节
 - 选 reqwest:多学 50%,但每个字节都懂
-- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions.md))
+- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions-2026-06.md))
 
 **功能范围 vs 完成度**:
 - MVP 8 项都做,每项做到 70 分,胜过做 15 项每项 40 分

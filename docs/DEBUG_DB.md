@@ -24,9 +24,11 @@ DB 文件位置由 Tauri `app_data_dir()` 解析,各平台:
 
 | 进程 / 形态 | 怎么算出 data dir | 代码 |
 |---|---|---|
-| **GUI(Full 模式)** | Tauri `app.path().app_data_dir()` = `dirs::data_dir().join(identifier)` | `state.rs:235-239`(`app_data_dir()` 读取)+ `state.rs:283`(`db_path`) |
-| **daemon 裸跑** | `resolve_data_dir()` = `dirs::data_dir().join(EVERLASTING_APP_IDENTIFIER)`,`EVERLASTING_APP_IDENTIFIER` 由 `build.rs` 从 `tauri.conf.json` 读出编译期注入 | `bin/everlasting-daemon.rs:259`(`resolve_data_dir`),`env!` 在 `bin/everlasting-daemon.rs:263` |
-| **daemon sidecar(GUI spawn)** | GUI 把 Tauri-resolved `app_data_dir` 经 `--data-dir <PATH>` 显式传给 daemon,daemon 优先用 arg | `bin/everlasting-daemon.rs:209`(`parse_data_dir_from_args`)|
+| **GUI(Full 模式)** | Tauri `app.path().app_data_dir()` = `dirs::data_dir().join(identifier)` | `state.rs` `app_data_dir()` 读取 + `state.rs::db_path`(行号漂移风险,看 `state.rs` 实际位置)|
+| **daemon 裸跑** | `resolve_data_dir()` = `dirs::data_dir().join(EVERLASTING_APP_IDENTIFIER)`,`EVERLASTING_APP_IDENTIFIER` 由 `build.rs` 从 `tauri.conf.json` 读出编译期注入 | `bin/everlasting-daemon.rs::resolve_data_dir`,`env!` 在 `bin/everlasting-daemon.rs`(行号漂移风险,看 daemon bin 实际位置)|
+| **daemon sidecar(GUI spawn)** | GUI 把 Tauri-resolved `app_data_dir` 经 `--data-dir <PATH>` 显式传给 daemon,daemon 优先用 arg | `bin/everlasting-daemon.rs::parse_data_dir_from_args` |
+
+> ⚠️ **行号漂移说明(2026-08-18 同步)**:08-14~18 多次改 schema / 加 turn_trace 三 token 列 / 加 messages_fts / 加 supports_images 字段,`state.rs` 与 daemon bin 行号已变。`app/src-tauri/src/state.rs` 与 `app/src-tauri/src/bin/everlasting-daemon.rs` **仍在 workspace 内的 `app/src-tauri/` member**(2026-08-11 workspace 翻后路径不变,根 `Cargo.toml` members = `app/src-tauri` + `crates/everlasting-remote` + `crates/everlasting-remote-protocol`)。
 
 **孤儿 DB 坑(2026-07-23 commit `16548fd` 修复前)**:`resolve_data_dir()` 曾用 `dirs::data_dir().join("everlasting")`(无 `dev.` 前缀),与 Tauri 的 `app_data_dir()`(`.../dev.everlasting.app/`)对不上 → daemon 裸跑打开一个空 DB,看不到 GUI 写入的 151 条历史消息。修复方式:build.rs 注入 `EVERLASTING_APP_IDENTIFIER` 使两者走同一个 identifier。**如果升级/迁移后 GUI 看不到历史、daemon 看得到(或反之)**,先 `ls` 两个候选目录确认是不是又分叉了:
 ```bash
@@ -46,7 +48,7 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 
 ---
 
-## 2. Schema 索引(12 张表)
+## 2. Schema 索引(13 张表 — 12 张业务表 + 1 张 FTS5 虚拟表)
 
 权威定义在 [`app/src-tauri/src/db/migrations.rs`](../app/src-tauri/src/db/migrations.rs);每张表的 CRUD 函数按表分文件组织在 `app/src-tauri/src/db/{table}.rs`。
 
@@ -56,16 +58,17 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 | 2 | `sessions` | `db/migrations/schema.rs` | `id` / `project_id` / `title` / `model_id` / `mode` (edit/plan/yolo) / `session_type` (chat/group_chat,2026-07-29 群聊) / `cwd` / `color` / token 累计 4 列 |
 | 3 | `messages` | `db/migrations/schema.rs` | `id` / `session_id` / `seq` / `role` (user/assistant) / `content` (JSON 序列化的 ContentBlock[]) / `speaker` (群聊参与者标识,2026-07-29) / `is_error` / `parent_tool_use_id` |
 | 4 | `providers` | `db/migrations/schema.rs` | `id` / `kind` (anthropic/openai) / `base_url` / `has_key` (BOOL,因 RULE-D-001 api_key 加密) |
-| 5 | `models` | `db/migrations/schema.rs` | `id` / `provider_id` / `model_name` / `display_name` / `context_window` |
+| 5 | `models` | `db/migrations/schema.rs` | `id` / `provider_id` / `model_name` / `display_name` / `context_window` / **`thinking_effort`**(07-10 multi-model PR3,缺省 `high`,Anthropic → `thinking.adaptive.effort` / OpenAI → 顶层 `reasoning_effort`)/ **`supports_images`**(B1 08-16, INTEGER NOT NULL DEFAULT 0,见 `db/migrations/schema.rs:1012` `add_models_column_if_missing`) |
 | 6 | `app_config` | `db/migrations/schema.rs` | 单行 kv 表(默认 model_id / 默认 cwd 等);remote tunnel 4 个 key:`remote_url` / `shared_secret` / `tunnel_node_id` / `tunnel_display_name`(存 daemon DB,清配置即停 tunnel,见 `daemon/tunnel/config.rs`) |
 | 7 | `session_tool_permissions` | `db/migrations/schema.rs` | `session_id` / `match_kind` (tool/prefix/path) / `match_value` / `decision` (allow/deny) / `expires_at` |
-| 8 | `session_audit_events` | `db/migrations/schema.rs` | `id` / `session_id` / `ts` / `kind` (AuditKind 字符串) / `payload_json` |
+| 8 | `session_audit_events` | `db/migrations/schema.rs` | `id` / `session_id` / `ts` / `kind` (AuditKind 字符串) / `payload_json` / **`turn_seq`**(E2 07-14,nullable,21 类调用点落表时携带对应 turn 序号,见 `db/migrations/schema.rs:936-941`) |
 | 9 | `subagent_runs` | `db/migrations/schema_helpers.rs`(约 L153) | `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` (running/completed/cancelled/error/incomplete) / `started_at` / `finished_at` (NULL while running) / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation` (L3b PR1+) |
 | 10 | `autonomous_memories` | `db/migrations/schema.rs` | `id` / `memory_id` (TEXT UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` (JSON) / `tool_name` / `command_pattern` / `path_globs` (JSON) / `source_session_id` / `source_ref` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(V2 2 期,2026-06-29 落地,状态机候选/激活/已验证) |
 | 11 | `subagent_model_overrides` | `db/migrations/schema.rs` | `agent_name` (TEXT PK) / `model_id` / `updated_at`(B6+ C,2026-07-03,builtin agent 无 frontmatter 文件可改 → 全局 DB override,优先级 `DB > frontmatter > parent`) |
-| 12 | `turn_trace` | `db/migrations/schema.rs` | `id` (INTEGER PK) / `session_id` (FK CASCADE) / `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(E2,2026-07-14,turn-level harness trace,UNIQUE(session_id, seq)) |
+| 12 | `turn_trace` | `db/migrations/schema.rs` | `id` (INTEGER PK) / `session_id` (FK CASCADE) / `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(E2,2026-07-14,turn-level harness trace,UNIQUE(session_id, seq))/ **`tools_token INTEGER`**(C7 08-14,实测 session 起步 tools_token -38.5%)/ **`memory_token INTEGER`**(memory-gov 08-15,实测指令块 -79.5%)/ **`images_token INTEGER`**(B1 PR4 08-16,图片 attachment 计量) |
+| 13 | `messages_fts` | `db/migrations/schema.rs:1051` | FTS5 虚拟表(external-content + trigram tokenizer + `UPDATE OF text` 触发器防写放大 + `messages_fts_docsize` 影子表守卫回填,见 `db/migrations/schema.rs:1062-1085` INSERT/DELETE/UPDATE 触发器) — D2 跨 session 全文搜索的存储后端(2026-08-17) |
 
-**索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` 等(`migrations.rs` 顶部)。
+**索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` / **`idx_session_audit_events_turn_seq`**(E2 07-14)/ **FTS5 影子表 `messages_fts_docsize`** 索引(`db/migrations/schema.rs` 顶部)。
 
 ### 2.1 remote 侧 DB(云端 everlasting-remote,2026-08 remote epic)
 
@@ -152,6 +155,29 @@ SELECT memory_id, kind, status, title, tool_name, command_pattern,
 FROM autonomous_memories
 WHERE status IN ('candidate', 'active')
 ORDER BY hit_count DESC, last_used_at DESC;
+
+-- 7. D2 (2026-08-17) — 跨 session 全文搜索(走 messages_fts FTS5)
+--    FTS5 命中走 rowid 回查 messages 主表拿完整 ContentBlock;
+--    0 命中走 LIKE 兜底(见 db/search.rs 双路分派)
+SELECT m.session_id, m.seq, m.role,
+       substr(m.content, 1, 200) AS preview
+FROM messages_fts mf
+JOIN messages m ON m.rowid = mf.rowid
+WHERE messages_fts MATCH ?1                    -- ?1 = 用户输入的 FTS5 query
+  AND m.session_id IN (SELECT id FROM sessions WHERE project_id = ?2)
+ORDER BY rank                                   -- FTS5 BM25 rank
+LIMIT 50;
+
+-- 8. C7+memory-gov+B1 (2026-08-14~16) — 看某 session 的 turn-level 三 token 列
+--    tools_token(08-14 C7)+ memory_token(08-15 memory-gov)+ images_token(08-16 B1)
+--    配合 context_window 看是否触发了压缩阈值(0.85×window)
+SELECT seq,
+       json_extract(token_usage_json, '$.input_tokens') AS input_tokens,
+       tools_token, memory_token, images_token
+FROM turn_trace
+WHERE session_id = 'YOUR_SESSION_ID'
+ORDER BY seq DESC
+LIMIT 20;
 ```
 
 ### 3.4 消息内容(content 是 JSON)解析
@@ -188,7 +214,7 @@ WHERE session_id = 'YOUR_SESSION_ID'
 
 - **默认走项目 IPC,不要直连修改**:CRUD 逻辑在 `app/src-tauri/src/db/{table}.rs`,经过 type-safe 包装 + business rules;直连 UPDATE 可能绕过"tool_use/tool_result 配对保护"等不变量,导致 agent loop 状态错乱
 - **直连只读时也别用生产 DB**:复制到 `/tmp/everlasting-debug.db` 再操作(`sqlite3 ~/.local/.../everlasting.db ".backup /tmp/everlasting-debug.db"`)
-- **RULE-D-001(api_key 加密)**:不要 SELECT `providers` 表查 api_key — 已经不存明文(列从 `api_key` 改为 `api_key_enc` + `key_migrated_at` 哨兵,详见 [IMPLEMENTATION §4 2026-06-24](./IMPLEMENTATION/decisions.md))
+- **RULE-D-001(api_key 加密)**:不要 SELECT `providers` 表查 api_key — 已经不存明文(列从 `api_key` 改为 `api_key_enc` + `key_migrated_at` 哨兵,详见 [IMPLEMENTATION §4 2026-06-24](./IMPLEMENTATION/decisions-2026-06.md))
 - **DB 文件泄露威胁模型**:见 `app/src-tauri/src/crypto.rs:5` 注释,无 machine-id 解不开 `api_key_enc`;但 session 标题 / message 历史仍是明文,**DB 文件跟 OS 账号权限走**
 - **调试时停 daemon(daemon 化后 2026-07 同步)**:**持有 WAL writer 的是 daemon 进程**,不是 GUI。Thin 模式(默认)下 GUI 根本不开 `SqlitePool`(`sidecar.rs` 注释:Thin 模式 GUI does NOT load `AppState` / does NOT open a `SqlitePool`)。直连查询安全(`-readonly` 无写竞争),但**不要**在 daemon 运行时用写模式(`-cmd "UPDATE..."`)连接,会撞 `SQLITE_BUSY`。要安全地直连写:先 `./scripts/daemon.sh stop` 停 daemon(Thin 模式下 GUI 还开着也不影响,GUI 没开 pool)。Full 模式(`?transport=tauri`)例外 —— 那是 GUI 进程持有 writer,要停 GUI
 
@@ -203,7 +229,7 @@ WHERE session_id = 'YOUR_SESSION_ID'
 | Token 计数对不上 | `sessions.{input,output,cache_creation,cache_read}_total` | 单条 LLM 响应的 token 在 `chat-event` 实时更新,DB 累计是 turn 边界 commit 的 |
 | 权限决策错了 | `session_audit_events` 同 session_id + kind = 'tool_denied' / 'tool_allowed' | payload_json 里有 reason / critical / mode |
 | Subagent 卡死 | `subagent_runs.status` NOT IN 终态 | 配合 `started_at` 算 wall-clock。**daemon 启动时** `reap_orphaned_runs`(daemon 化后 2026-07:reap 发生在 daemon 的 `load_inner` 即 `state.rs:297`,Thin 模式 GUI 不调 `load_inner`,所以是 daemon 进程在 reap)会把残留 `running`(上一进程崩溃 / 被杀留下的孤儿)标记为 `error`,所以重启后看到的假 running 已被清理 |
-| FTS5 搜索不返回 | `autonomous_memories_fts` | FTS5 虚拟表是单独表,autonomous_memories 主表 INSERT 时需同步;查 [IMPLEMENTATION §4 2026-06-17 "D2 降档"](./IMPLEMENTATION/decisions.md) 状态 |
+| FTS5 搜索不返回 | `messages_fts`(`messages_fts_docsize` 影子表守卫) | D2 主搜索走 `messages_fts` virtual table(2026-08-17,external-content + trigram),`autonomous_memories_fts` 是另一张 FTS 表(自主记忆自身搜索);`messages_fts` INSERT/UPDATE/DELETE 触发器见 `db/migrations/schema.rs:1062-1085`,`UPDATE OF text` 防写放大 |
 | Memory 召回不命中 | `autonomous_memories.status NOT IN ('verified', 'active')` | status='candidate' 不进 recall;查 `tool_name` / `command_pattern` 是否精确匹配,`hit_count` 是否 < 阈值(quality 层 P5 软拦截) |
 
 ---

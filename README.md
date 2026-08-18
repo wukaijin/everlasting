@@ -10,7 +10,7 @@
 
 不是另一个 Claude Code 替代品 —— 是同样的能力（聊、改代码、跑命令）加上三件事：
 
-- **自研 agent core** — 自己实现 Agent Loop / Tool Calling / 流式 SSE / 16 关卡请求生命周期，不用 SDK 包装。学习 harness engineering，完全可控，不被厂商牵着走。
+- **自研 agent core** — 自己实现 Agent Loop / Tool Calling / 流式 SSE / 18+ 关卡请求生命周期，不用 SDK 包装(2026-08-14~18 加 C7 tools token / C7D stub / memory-gov / C3+ LLM 摘要式压缩 4 个新横切关卡)。学习 harness engineering，完全可控，不被厂商牵着走。
 - **深度 WSL 集成** — 项目放 WSL 内部（`~/projects`），不走 `/mnt/c`；GUI 进程通过 WSLg / Wayland 渲染到 Windows 桌面。
 - **多项目 / 多 session / 工作流** — 不是一次性对话，是一个持久的工作环境。每个 session 一个 git worktree，可并行、可互不污染、可瞬时切换。
 
@@ -18,9 +18,9 @@
 
 ## 状态
 
-MVP 主体 + V2 路线图主体已落地；daemon 化（agent core 拆出独立进程，GUI 作为瘦客户端）已于 2026-07 收官，近期主线是**群聊（group chat）多参与者编排**与 review 可视化。
+MVP 主体 + V2 路线图主体已落地；daemon 化（agent core 拆出独立进程，GUI 作为瘦客户端）已于 2026-07 收官；remote-control epic S1~S6b（手机 PWA / WSS 隧道 / 配对 / 中继）于 2026-08-11~13 落地(merge `94828cb`)；近期(2026-08-14~18)主线是**多模态图片输入(B1)+ 跨 session 全文搜索(D2)+ 自主记忆治理(memory-gov)+ 工具集 token 治理(C7/C7D)+ Context 压缩升级(C3+ LLM 摘要式压缩)**——6 个跨层特性。
 
-完整路线 / 排期 / 维护承诺见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth）；决策历史见 [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md)。本文档不重复细节。
+完整路线 / 排期 / 维护承诺见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth）；决策历史见 [docs/IMPLEMENTATION/decisions-2026-06.md / -07.md / -08.md](./docs/IMPLEMENTATION/)(按月分卷,无 `decisions.md`)。本文档不重复细节。
 
 ## 5 分钟上手
 
@@ -72,13 +72,13 @@ WSL 环境踩坑（中文输入法、linuxbrew pkg-config、Rust 工具链、字
 
 ## 能做什么
 
-agent core 内置 24 个工具，按职能分组：
+agent core 内置 **27 个工具注册名**(25 builtin + 1 stub 元工具 `load_tool_schemas` + 1 动态派发 `dispatch_subagent`,按 session_type / worker / workflow 三层白名单过滤后实际可见数量更少),按职能分组:
 
 - **读写 & 文件** — 读 / 写 / 编辑（前置 ReadGuard 三道隔离 check）/ grep / glob / 列目录
 - **Shell** — 前台 shell（落盘 + cat -n）/ 后台 shell（长任务，24h 保留，APPEND 到 user message 保 memory cache breakpoint）/ 状态查询 / kill
 - **联网** — web 抓取（SSRF 拦截 + 5 MiB body cap + 来源标注）
-- **技能 / 记忆 / UI** — Skill 调用（三层渐进披露）/ 生成式 UI 卡片（non-blocking）/ checklist 自跟踪 / 自主记忆写入
-- **跨 turn 交互** — 向用户提问（支持自由输入）/ 申请切换 mode（用户 inline card 授权）
+- **技能 / 记忆 / UI** — Skill 调用（三层渐进披露）/ 生成式 UI 卡片（non-blocking）/ checklist 自跟踪 / 自主记忆写入 / 跨 session 全文搜索（search_history tool + DB catalog）
+- **跨 turn 交互** — 向用户提问（支持自由输入）/ 申请切换 mode（用户 inline card 授权）/ 多模态图片输入（B1：attachment 上传 + vision-capable 模型 inline preview + 首个二进制 GET 路由 `/api/v1/attachments/<id>`）
 - **工作流编排** — task 状态机（Planning → Implement → Check → Done），Check→Done 触发 spec 沉淀
 - **群聊编排** — nominate_speaker / end_discussion（群聊发言控制，仅 group_chat session 生效）
 - **Subagent** — 派发 worker（独立 worktree 隔离）/ 合并 / 丢弃
@@ -99,11 +99,14 @@ agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），两�
 
 ### 横切能力
 
-- **权限系统** — 5-tier path-based 决策层 + 3 档 Mode（`edit` / `plan` / `yolo`）+ 审计日志 + `ToolKind::GitMutation`（避免 Shell 串扰）
-- **Context 压缩** — token 阈值触发降级，memory 永远保护，MAX_TURNS=200 兜底
-- **循环检测** — 精确签名硬触发 + Jaccard 软提示；连续触发走主动干预（用户决策）
-- **网络健壮性** — `retry_open` wrapper + Full Jitter + retry-after + 双向熔断
+- **权限系统** — 5-tier path-based 决策层 + 3 档 Mode（`edit` / `plan` / `yolo`）+ 审计日志(25 类 AuditKind,见 `app/src-tauri/src/agent/permissions/audit.rs`)+ `ToolKind::GitMutation`（避免 Shell 串扰）
+- **Context 压缩** — C3+ LLM 摘要式压缩(2026-08-18,替代 C3 MVP 机械丢组);超 `context_window * 0.85` 触发 LLM 9 段模板摘要 + 保留区存活(最近 turn 逐字不丢) + `cutoff_seq` 水位折叠;连续 3 次失败熔断回退 C3 机械降级
+- **循环检测** — 精确签名硬触发 + Jaccard 软提示；连续触发走主动干预（C2+ LoopIntervention,07-05 用户决策）
+- **网络健壮性** — `retry_open` wrapper(A5+ 07-05,Full Jitter / 首字节前重试 / retry-after advisory / budget 60s 双向熔断)
 - **自主记忆** — agent 自主产生 + 跨 session 召回 + 状态机（candidate → active → verified）+ 异步卫生 job
+- **Tools token 治理** — C7 静态裁剪 `STUB_CANDIDATES`(按 session_type 砍)+ C7D `load_tool_schemas` 元工具按需取回(2026-08-14);实测 session 起步 tools_token -38.5% → -62%
+- **指令块窗口治理** — memory-gov fence-aware 切节注入(纯机械,标题+首句)+ `load_memory_sections` 元工具(append,精确寻址 banner label);实测 -79.5%
+- **多模态图片(B1)** — `ContentBlock::Image` / `ImageRef` 双形态 + `models.supports_images` 配置 + `messages.metadata.attachments[]` 引用 + 首个二进制 GET 路由(`/api/v1/attachments/<id>`);不支持 vision 的模型走 ImageRef 占位降级
 
 ## 文档索引
 
@@ -113,9 +116,9 @@ agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），两�
 |---|---|
 | 第一次接触 / 看项目边界 | [docs/DESIGN.md](./docs/DESIGN.md) §2-3 |
 | 看当前在哪步 / 下一步选项 | [docs/ROADMAP.md](./docs/ROADMAP.md) |
-| 写代码前看模块怎么分 / 调用怎么走 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) §2 16 关卡 |
+| 写代码前看模块怎么分 / 调用怎么走 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) §2 18+ 关卡 |
 | 选库 / 做依赖决策 | [docs/TECH.md](./docs/TECH.md) |
-| 看"为什么这么做"的历史 ADR | [docs/IMPLEMENTATION/decisions.md](./docs/IMPLEMENTATION/decisions.md) |
+| 看"为什么这么做"的历史 ADR | [docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md](./docs/IMPLEMENTATION/)(按月分卷) |
 | 评估新功能技术细节 | [docs/BACKLOG.md](./docs/BACKLOG.md) |
 | daemon 化怎么分阶段落地 | [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) |
 | 撞 WSL / LLM API / markdown 渲染怪事 | [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) / [docs/HACKING-llm.md](./docs/HACKING-llm.md) / [docs/HACKING-markdown.md](./docs/HACKING-markdown.md) |
@@ -126,7 +129,7 @@ agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），两�
 
 - 仅个人使用，非商业项目
 - WSL Ubuntu 22.04 优先，Windows / macOS 不主动适配
-- 不做移动端 / 云端部署 / 托管型 Web 版（注：本地浏览器模式 —— localhost 访问本机 daemon —— 是 daemon 化的副产物，不算"Web 版"；跨设备云端访问见 [BACKLOG §4](./docs/BACKLOG.md#4-跨设备)，未做）
+- 不做移动端 / 云端部署 / 托管型 Web 版（注：本地浏览器模式 —— localhost 访问本机 daemon —— 是 daemon 化的副产物，不算"Web 版"；**跨设备远程访问已落地**——2026-08 remote-control epic S1~S6b:手机 PWA 经 HTTPS + 云 `everlasting-remote` WSS 中继到 PC daemon,详见 [REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md) + [REMOTE-DEPLOY.md](./docs/REMOTE-DEPLOY.md);"云端部署 agent core"仍不做,agent 进程 100% 在 PC,云上 remote **不持文件 / 不存 agent 数据**,只中继转发）
 - 不包装 Claude Code / Codex SDK（自研是学习目标）
 - 不做通用 agent 框架（Cline / OpenHands 已在做）
 - 不做 in-app 自动升级（走包管理器或手动）
