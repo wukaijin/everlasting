@@ -22,6 +22,12 @@
 #   ./scripts/turn-smoke.sh --project-path /x   # 指定 project(不在列表则自动创建)
 #   ./scripts/turn-smoke.sh --message "..."     # 自定义消息
 #   ./scripts/turn-smoke.sh --turns 2           # 同 session 连发 2 轮(cache 对比)
+#   ./scripts/turn-smoke.sh --compact           # 手动 /compact live 冒烟(08-18-
+#                                               # manual-compact-command):小轮 →
+#                                               # 大消息轮(~20k token)→ idle 后
+#                                               # POST compact_session → 断言摘要行
+#                                               # 契约(trigger=manual/focus/seq)→
+#                                               # 再跑一轮验证水位续跑
 #   ./scripts/turn-smoke.sh --keep              # 保留烟测 session(默认跑完即删)
 #   ./scripts/turn-smoke.sh --timeout 300       # 等 turn_trace 的超时秒数(默认 180)
 #
@@ -35,6 +41,7 @@ FOLLOWUP_MESSAGE="继续,仍然只回一句,不要调用任何工具"
 TURNS=1
 TIMEOUT=180
 KEEP=0
+COMPACT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -43,6 +50,7 @@ while [ $# -gt 0 ]; do
     --turns) TURNS="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --compact) COMPACT=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -95,16 +103,30 @@ max_seq() {
 
 send_and_wait() {
   # $1 = 消息文本;发一条 user 消息,轮询直到出现 seq 更大的 turn_trace 行。
+  # --compact 模式发**全量 wire**(DB 行 text 列 + 新消息,镜像真实前端
+  # rehydrate + reloadAfterFinalize 行为)—— 水位折叠的 wire↔DB 对齐前提
+  # 依赖全量 wire;单条 wire 会让对齐防御 fail-open,验不到水位。非
+  # compact 模式保持单条 wire 的历史语义(--turns 2 的 cache 对比口径)。
   local MSG="$1" BEFORE_SEQ ELAPSED=0
   BEFORE_SEQ="$(max_seq)"
   local REQ_ID="turn-smoke-$(date +%s)-$BEFORE_SEQ"
   local BODY
-  BODY="$(MESSAGE="$MSG" REQ_ID="$REQ_ID" SID="$SID" python3 -c '
-import json,os
+  BODY="$(MESSAGE="$MSG" REQ_ID="$REQ_ID" SID="$SID" DB_PATH="$DB_PATH" FULLWIRE="$COMPACT" python3 -c '
+import json,os,sqlite3
+msgs=[]
+if os.environ.get("FULLWIRE")=="1":
+    con=sqlite3.connect("file:"+os.environ["DB_PATH"]+"?mode=ro",uri=True)
+    for role,text in con.execute(
+        "SELECT role,text FROM messages WHERE session_id=? ORDER BY seq",
+        (os.environ["SID"],)):
+        msgs.append({"role":role,"content":text})
+msgs.append({"role":"user","content":os.environ["MESSAGE"]})
 print(json.dumps({"request_id":os.environ["REQ_ID"],"session_id":os.environ["SID"],
-                  "messages":[{"role":"user","content":os.environ["MESSAGE"]}]}))
+                  "messages":msgs}))
 ')"
-  curl -sf -X POST "$BASE/api/v1/agent/chat" -H 'Content-Type: application/json' -d "$BODY" >/dev/null
+  # body 走 stdin(--compact 的大消息 ~90KB,走 -d argv 会撞单参数上限)。
+  printf '%s' "$BODY" | curl -sf -X POST "$BASE/api/v1/agent/chat" \
+    -H 'Content-Type: application/json' -d @- >/dev/null
   echo "turn sent (request_id=$REQ_ID), polling turn_trace..."
   while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
     [ "$(max_seq)" -gt "$BEFORE_SEQ" ] && return 0
@@ -121,6 +143,52 @@ while [ "$T" -le "$TURNS" ]; do
   send_and_wait "$TURN_MSG"
   T=$((T+1))
 done
+
+# ── 2.5 手动 /compact live 冒烟(08-18-manual-compact-command) ────────
+# 布局:小轮(上面)+ 大消息轮(下面)。保留区预算 clamp 下限 15k token,
+# 大消息单组(~20k token)进保留区,待压区 = 更早的小轮对 —— 管道全链路
+# (HTTP → gate → provider → 摘要 → 落库)可跑通;token 骤降的强断言在
+# mock 端到端,这里验证真实 LLM 下的落库契约与水位续跑。
+if [ "$COMPACT" = "1" ]; then
+  BIG_MSG="$(python3 -c 'print("这是背景资料段落,用于撑过保留区预算。 " * 1600 + "\n(以上为背景资料)请只回一句:收到。")')"
+  send_and_wait "$BIG_MSG"
+  echo "invoking compact_session (focus=冒烟定向)..."
+  COMPACT_RESP="$(SID="$SID" python3 -c '
+import json,os
+print(json.dumps({"session_id":os.environ["SID"],"focus":"冒烟定向"}))
+' | curl -sf -m 180 -X POST "$BASE/api/v1/sessions/compact_session" \
+      -H 'Content-Type: application/json' -d @-)" || {
+    echo "ERR: compact_session call failed (check daemon logs)" >&2; exit 1;
+  }
+  echo "$COMPACT_RESP" | python3 -c '
+import json,sys
+r=json.load(sys.stdin)
+print("compact ok: before={} after={} cutoff_seq={} model={}".format(
+    r["tokens_before"], r["tokens_after"], r["cutoff_seq"], r["model"]))
+'
+  # 落库契约:kind / trigger=manual / focus / seq=MAX+1(摘要行是最后插入行)。
+  SUMMARY_CHECK="$(SID="$SID" DB_PATH="$DB_PATH" python3 - << 'PYEOF'
+import json, os, sqlite3
+sid = os.environ["SID"]
+con = sqlite3.connect(f"file:{os.environ['DB_PATH']}?mode=ro", uri=True)
+rows = con.execute(
+    "SELECT seq, text, metadata FROM messages WHERE session_id=? "
+    "ORDER BY seq DESC LIMIT 1", (sid,)).fetchall()
+assert rows, "no messages row after compaction"
+seq, text, meta_json = rows[0]
+meta = json.loads(meta_json or "{}")
+assert meta.get("kind") == "compaction_summary", f"kind={meta.get('kind')}"
+assert meta.get("trigger") == "manual", f"trigger={meta.get('trigger')}"
+assert meta.get("focus") == "冒烟定向", f"focus={meta.get('focus')}"
+print(f"summary row ok: seq={seq} trigger=manual focus=冒烟定向 "
+      f"cutoff={meta.get('cutoff_seq')} body[:40]={text[:40]!r}")
+PYEOF
+)" || { echo "ERR: summary row contract check failed" >&2; exit 1; }
+  echo "$SUMMARY_CHECK"
+  # 水位续跑:再发一轮,turn_trace 出现新行 = 下一请求正常吃到新水位。
+  send_and_wait "$FOLLOWUP_MESSAGE"
+  echo "post-compact turn ok (watermark pickup verified by new turn_trace row)"
+fi
 
 # ── 3. 列存在性检查(缺失 = daemon 二进制早于对应任务) ─────────────────
 if ! sqlite3 -readonly "$DB_PATH" "SELECT tools_token FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then

@@ -2,7 +2,8 @@
 
 > 来源:任务 `08-18-llm-context-compaction`(PRD/design/review 走
 > `.trellis/tasks/08-18-llm-context-compaction/`,现实现
-> `agent/compaction.rs` + `drive.rs` C3 块)。
+> `agent/compaction.rs` + `drive.rs` C3 块)。手动 `/compact` 入口
+> 由 `08-18-manual-compact-command` 增补(见文末 §手动入口)。
 
 C3 压缩从"机械丢组"升级为**两层结构 + 兜底链**:超触发线(0.85×window)时,
 被压区由 LLM 生成 handoff 式结构化摘要回填,近期消息(保留区,15-25k token)
@@ -77,3 +78,44 @@ TS 三处)带 method/summary_usage;摘要 usage **不混入**
   摘要消息当 anchor 跳过 transcript 输入);
 - 图片:被压区退出 context(transcript 渲染 `[image attached: <file>]`
   占位);保留区照常;`images_token` 口径自动跟随请求内容。
+
+## 手动 /compact 入口(08-18-manual-compact-command)
+
+`compact_session` 命令(`commands/sessions.rs` `_inner` + Tauri +
+daemon route + FE `CMD_TO_DOMAIN` 四处注册)→ `agent/compaction.rs::
+run_manual_compaction`(空闲期编排,与 auto 路径共享 prompt/保留区/
+落库/熔断纯函数)。与 auto 的契约差异:
+
+- **seq = MAX(seq)+1 仅在空闲期合法**:命令层查
+  `session_active_request` 拒绝 in-flight(streaming 中不排队不取消,
+  toast 引导先 Stop)后,才无并发 persist、无撞 `(session_id, seq)`
+  主键风险——active loop 内仍必须吃 loop 游标(上文 seq 契约)。
+- **gate 链在命令层**:群聊(session_type)拒绝、
+  `llm_compaction_enabled=false` 拒绝(回滚开关罩住手动——关掉时
+  init 水位替换也停,写了摘要行无用);worker 不可从 session 行判定
+  (请求期 flag),接受该限制(命令面向单聊会话)。
+- **不受 0.85 触发线限制**(用户主动收窗),但空待压区(水位后
+  常规历史全进保留区)→ `NothingToCompress` 报错,零 LLM 调用。
+- **熔断**:不查 `is_tripped`(手动可解救 tripped session),失败照
+  记 `record_failure` / 成功 `record_success`(与 auto 共享信号)。
+- **失败 = 零 DB 写入 + 用户可见错误**(手动发生在 turn 边界外,无
+  in-loop context 可修,机械丢组无持久化语义;下一次请求超线时
+  drive_turn 既有降级链自然接管)。
+- **metadata 增量**:`trigger: "manual"` + `focus`(直输 rest-of-line
+  自由文本,注入 prompt 头部 `FOCUS INSTRUCTIONS FROM THE USER` 块,
+  `build_compaction_prompt` 第 4 参,auto 路径恒 None);无 turn 上下文
+  → 不写 `compaction_json`,观测靠 metadata + 命令响应载荷
+  (`ManualCompactionOutcome`:cutoff/tokens before-after/usage/model)。
+- **共用 helper**:摘要旁路 completion(retry_open + 剥壳)抽为
+  `send_summary_completion`,auto(drive.rs)与 manual 同源。
+
+已知边界(接受):待压区极小(历史几乎全在一个巨尾保留组)时,摘要
+正文可能比被压内容更"胖"(context 净增长)——用户主动行为,后续
+增量合并会吸收;auto 路径同构但罕见(触发线保证待压区一般较大)。
+
+前端契约:builtin 命令集在 `resource_loader.rs BUILTIN_COMMANDS`
+(含 `argument_hint` 字段),handler 统一 `ChatInput.vue::
+executeBuiltin`(palette 选中与直输 `/xxx`+Enter 拦截
+`utils/slashCommand.ts matchBuiltinCommandInput` 同落一处,两者
+不漂移);成功后 `reloadSessionMessages`(= done 后 reload 同款
+管线)让摘要行走既有 `kind=compaction_summary` 渲染。

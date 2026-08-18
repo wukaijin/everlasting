@@ -1093,6 +1093,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // UI components call — production callers go through `startRequest`
     // which routes the `done` / `error` events through this function.
     finalizeRequest: events.finalizeRequest,
+    // 08-18-manual-compact-command: /compact 落库后前端刷新消息流复用
+    // 同一"DB 已变,拉平视图"路径(done 后 reload 同款:rehydrate +
+    // checklist 重推导 + pending reconcile)。requestId 缺省时 F5 延迟
+    // 回写分支自然跳过(req == null)。
+    reloadAfterFinalize: events.reloadAfterFinalize,
     // F5 follow-up: exposed for the thinking-timer boundary
     // regression test. The test drives the `tool:call`
     // path directly because the full IPC → event-emitter

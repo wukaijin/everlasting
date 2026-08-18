@@ -2003,20 +2003,9 @@ enum SummaryOutcome {
     Failed { reason: &'static str },
     /// 用户在摘要打开期间取消。**不是摘要机制的失败** —— 不计熔断
     /// (连续 3 次用户取消就永久跳过摘要是行为倒退,且熔断粘性下
-    /// 无法靠成功清零);主 turn 的 select 会立刻命中取消臂,机械
+    /// 无法靠成功清零);主 turn 的 select 会立刻命中取消臂正常退出,机械
     /// 兜底是空转(无害)。
     Cancelled,
-}
-
-/// 摘要旁路 completion 的 retry sink:静默(no-op)。摘要调用是 turn
-/// 入口的后台旁路 —— retrying 通知若走 `LlmRetrySink` 会挂到
-/// in-flight 的主 assistant 占位气泡上,用户会看到"还没开始输出就
-/// 在重试"的困惑。可观测性由失败 warn + 熔断 registry + trace 的
-/// method/mechanical 兜底信号承担。
-struct SummaryRetrySink;
-
-impl RetrySink for SummaryRetrySink {
-    fn emit_retrying(&self, _event: crate::llm::retry::RetryingEvent) {}
 }
 
 /// 一次 LLM 摘要压缩尝试(design §4.2 + §4.3,drive.rs C3 块的
@@ -2050,7 +2039,8 @@ async fn attempt_summary_compaction(
 ) -> SummaryOutcome {
     use crate::agent::compaction::{
         build_compaction_prompt, build_summary_chat_message, clamp_summary_output,
-        compressible_cutoff_seq, COMPACTION_SUMMARY_KIND,
+        compressible_cutoff_seq, send_summary_completion, SummaryStreamError,
+        COMPACTION_SUMMARY_KIND,
     };
 
     // PR2.5(修订 2026-08-18):cutoff_seq 精确计算(design §4.3)。**在
@@ -2093,69 +2083,23 @@ async fn attempt_summary_compaction(
     };
 
     let compressible = &messages[synthetic_prefix_len..cut];
-    let prompt = build_compaction_prompt(compressible, prior.as_ref(), context_window).await;
-    let summary_request = ChatMessage {
-        role: Role::User,
-        content: MessageContent::Text(prompt),
-        speaker: None,
-        attachments: None,
-    };
+    let prompt = build_compaction_prompt(compressible, prior.as_ref(), context_window, None).await;
 
-    // 旁路 completion:retry_open 包裹(A5+ 现成),无 tools。
-    let mut rng = fastrand::Rng::new();
-    let sink = SummaryRetrySink;
-    let outcome = retry_open(
-        provider.as_ref(),
-        None,
-        vec![summary_request],
-        vec![],
-        &RetryPolicy::default(),
-        token,
-        &sink,
-        &mut rng,
-    )
-    .await;
-    let mut stream = match outcome {
-        OpenOutcome::Stream(s) => s,
-        // 用户在摘要打开期间取消 —— 按失败处理;主 turn 的 select
-        // 会立刻命中取消臂正常退出,机械兜底是空转(无害)。
-        OpenOutcome::Cancelled => return SummaryOutcome::Cancelled,
-    };
-
-    // 输出剥壳:只收 assistant text(Delta),取 Done 的 usage;
-    // thinking / signature / tool 事件一概忽略(禁 thinking 的
-    // 采集口径)。流错误 = 摘要失败 —— 含 Err(LlmError) 与
-    // Ok(ChatEvent::Error) 两种形态(与主 turn 的 RULE-A-011
-    // 转换同源:mid-stream 错误可能以任一形态到达;Ok(Error)
-    // 被忽略的话,部分文本会被当成完整摘要落库)。
-    let mut text = String::new();
-    let mut usage: Option<crate::llm::types::TokenUsage> = None;
-    let mut errored = false;
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(ChatEvent::Delta { text: t }) => text.push_str(&t),
-            Ok(ChatEvent::Done { usage: u, .. }) => usage = u,
-            Ok(ChatEvent::Error { .. }) => {
-                errored = true;
-                break;
-            }
-            Ok(_) => {}
-            Err(_) => {
-                errored = true;
-                break;
-            }
+    // 旁路 completion(auto 路径无 focus):共享 helper(手动 /compact
+    // 入口同源,08-18-manual-compact-command 抽取),retry_open 包裹、
+    // 无 tools;剥壳只收 assistant text + Done usage,Ok(ChatEvent::Error)
+    // 与 Err 都算失败(RULE-A-011 同源 —— 漏接 Ok(Error) 会把半截
+    // 文本当完整摘要落库)。输出 4k 截断由 clamp 承担。
+    let (text, usage) = match send_summary_completion(provider.as_ref(), token, prompt).await {
+        Ok(v) => v,
+        // 用户在摘要打开期间取消 —— 不是摘要机制的失败,不计熔断;
+        // 主 turn 的 select 会立刻命中取消臂正常退出,机械兜底是
+        // 空转(无害)。
+        Err(SummaryStreamError::Cancelled) => return SummaryOutcome::Cancelled,
+        Err(SummaryStreamError::Failed(reason)) => {
+            return SummaryOutcome::Failed { reason };
         }
-    }
-    if errored {
-        return SummaryOutcome::Failed {
-            reason: "summary stream errored",
-        };
-    }
-    if text.trim().is_empty() {
-        return SummaryOutcome::Failed {
-            reason: "summary output empty",
-        };
-    }
+    };
     let summary_text = clamp_summary_output(text);
 
     // 回填列表先在内存构建(纯 move/clone,无副作用),估算

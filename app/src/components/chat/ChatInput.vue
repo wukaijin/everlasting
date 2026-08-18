@@ -98,10 +98,16 @@ import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
 import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInputCodeMirror";
 import { useChatStore } from "../../stores/chat";
-import { MODE_CYCLE, type SessionMode, type StagedImage } from "../../stores/chat.types";
+import {
+  MODE_CYCLE,
+  type ManualCompactionResult,
+  type SessionMode,
+  type StagedImage,
+} from "../../stores/chat.types";
 import { useModelsStore } from "../../stores/models";
 import { useProjectsStore } from "../../stores/projects";
 import { tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
+import { matchBuiltinCommandInput } from "../../utils/slashCommand";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 import { registerShiftTabCycle } from "../../utils/useKeyboard";
 import { useMobileKeyboard } from "../../composables/useMobileKeyboard";
@@ -218,6 +224,26 @@ const cm = useChatInputCodeMirror({
     // B1 R2a: pure-image sends pass (empty text + staged images);
     // only an empty text AND empty strip is a no-op.
     if ((!text.trim() && chatStore.stagedImages.length === 0) || props.sending) {
+      return;
+    }
+    // 08-18-manual-compact-command: typed builtin dispatch. With the
+    // palette closed (or Esc'd), `/compact focus…` + Enter must run the
+    // command instead of shipping the text to the LLM. Same handler as
+    // palette selection (`executeBuiltin`) so the two paths can't drift;
+    // `/help` `/clear` `/new` typed directly gain the palette behavior
+    // here too (they previously went to the model as plain messages).
+    const builtin = matchBuiltinCommandInput(text);
+    if (builtin) {
+      const v0 = cm.view.value;
+      if (v0) {
+        const cur = v0.state.doc.toString();
+        if (cur.length > 0) {
+          v0.dispatch({ changes: { from: 0, to: cur.length, insert: "" } });
+        }
+      } else {
+        cm.input.value = "";
+      }
+      void executeBuiltin(builtin.name, builtin.rest || undefined);
       return;
     }
     const v = cm.view.value;
@@ -471,6 +497,65 @@ registerShiftTabCycle({
  *  on the line via `[slashOffset, tokenEnd)`); skill instead
  *  REPLACES the typed prefix with the canonical `/skill-name ` so
  *  the editor holds a clean reference. */
+/** Shared builtin dispatcher — the palette-select path (`onCommandSelect`)
+ *  and the typed `/xxx` + Enter interception (`onSubmit`) both land here,
+ *  so the two entry points can never drift. `focus` is only consumed by
+ *  /compact (rest-of-line 定向说明,prd D2). */
+async function executeBuiltin(name: string, focus?: string): Promise<void> {
+  const sid = chatStore.currentSessionId;
+  switch (name) {
+    case "help":
+      // `/help` reopens the panel with the full list (filter
+      // cleared) — no separate help view in PR2.
+      cm.commandPaletteOpen.value = true;
+      cm.commandFilter.value = "";
+      break;
+    case "clear":
+      if (!sid) return;
+      try {
+        await chatStore.clearSessionMessages(sid);
+      } catch (e) {
+        console.error("/clear failed:", e);
+      }
+      break;
+    case "new":
+      try {
+        await chatStore.createNewSession();
+      } catch (e) {
+        console.error("/new failed:", e);
+      }
+      break;
+    case "compact": {
+      // 08-18-manual-compact-command: idle-time summary compaction.
+      // Backend owns the whole gate chain (group-chat / config switch /
+      // in-flight / provider); failures come back as user-readable
+      // errors and surface via toast (prd R4, never silent). The
+      // summary row appears via the same reload path every DB append
+      // uses, so MessageItem's compaction_summary rendering applies.
+      if (!sid) return;
+      projectsStore.showToast("正在压缩上下文…", "info");
+      try {
+        const r = await transport.invoke<ManualCompactionResult>("compact_session", {
+          sessionId: sid,
+          focus: focus ?? null,
+        });
+        projectsStore.showToast(
+          `已压缩：${r.tokens_before.toLocaleString()} → ${r.tokens_after.toLocaleString()} tokens`,
+          "info",
+          6000,
+        );
+        await chatStore.reloadSessionMessages(sid);
+      } catch (e) {
+        console.error("/compact failed:", e);
+        projectsStore.showToast(`压缩失败：${extractErrorMessage(e)}`, "error", 6000);
+      }
+      break;
+    }
+    default:
+      console.warn("Unknown builtin command:", name);
+  }
+}
+
 async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   const slashTok = cm.currentSlashToken();
   if (!slashTok || slashTok.slashOffset < 0) return;
@@ -480,37 +565,16 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   const afterToken = doc.slice(tokenEnd);
   cm.closeCommandPalette();
 
-  const sid = chatStore.currentSessionId;
-
   if (item.is_builtin || item.source === "builtin") {
-    cm.replaceDoc(beforeToken + afterToken, beforeToken.length);
+    // /compact: the text after the slash token is the optional focus —
+    // consume it (editor keeps only the pre-token part). Other builtins
+    // keep the leftover text in the editor (pre-existing behavior).
+    const focus = item.name === "compact" ? afterToken.trim() : "";
+    const keepDoc = item.name === "compact" ? beforeToken : beforeToken + afterToken;
+    cm.replaceDoc(keepDoc, beforeToken.length);
     await nextTick();
     cm.view.value?.focus();
-    switch (item.name) {
-      case "help":
-        // `/help` reopens the panel with the full list (filter
-        // cleared) — no separate help view in PR2.
-        cm.commandPaletteOpen.value = true;
-        cm.commandFilter.value = "";
-        break;
-      case "clear":
-        if (!sid) return;
-        try {
-          await chatStore.clearSessionMessages(sid);
-        } catch (e) {
-          console.error("/clear failed:", e);
-        }
-        break;
-      case "new":
-        try {
-          await chatStore.createNewSession();
-        } catch (e) {
-          console.error("/new failed:", e);
-        }
-        break;
-      default:
-        console.warn("Unknown builtin command:", item.name);
-    }
+    await executeBuiltin(item.name, focus || undefined);
     return;
   }
 

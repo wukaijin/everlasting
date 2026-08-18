@@ -1046,3 +1046,103 @@ pub async fn search_messages(
 ) -> Result<Vec<db::search::MessageSearchHit>, AppCommandError> {
     search_messages_inner(&state, query, project_id, limit).await
 }
+
+// ---------------------------------------------------------------------------
+// Manual /compact (08-18-manual-compact-command)
+// ---------------------------------------------------------------------------
+
+/// 手动 /compact:空闲期对 session 现存历史执行一次 LLM 摘要压缩
+/// (与 C3+ 自动路径同源,不受 0.85 触发线限制)。编排主体在
+/// `agent::compaction::run_manual_compaction`;本层负责 gate 链:
+/// session 存在 → 非群聊(scope 同 C3+)→ `llm_compaction_enabled`
+/// 开关(回滚开关,关 = 摘要路径整体停用,含手动 → 水位替换也不吃,
+/// 写了无用,明确报错)→ in-flight 拒绝(streaming 中不排队不自动
+/// 取消,prd D4)→ provider 解析(与 chat 主路径同源)。失败全部
+/// 返回用户可读错误(前端 toast),零静默;summary 行落库后下一次
+/// 请求由 init 的水位替换自然吃到(不重付)。
+pub async fn compact_session_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    focus: Option<String>,
+) -> Result<crate::agent::compaction::ManualCompactionOutcome, AppCommandError> {
+    use crate::agent::compaction::{run_manual_compaction, ManualCompactionError};
+
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("compact_session: load_session failed: {}", e))?
+        .ok_or_else(|| AppCommandError::new(ErrorCategory::InvalidRequest, "会话不存在或已删除"))?;
+
+    if loaded.session.session_type == db::SessionType::GroupChat {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "群聊会话不支持手动压缩",
+        ));
+    }
+
+    // 回滚开关同口径(init.rs compaction_on):"false" 才关,fail-open。
+    if let Ok(Some(v)) = db::config::get_config_value(&state.db, "llm_compaction_enabled").await {
+        if v == "false" {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "LLM 压缩已禁用(config llm_compaction_enabled=false)",
+            ));
+        }
+    }
+
+    // in-flight guard:run_manual_compaction 的 seq=MAX+1 只在无活跃
+    // loop 时安全(pattern-llm-compaction 的 seq 契约);streaming 中
+    // 拒绝,不排队不自动取消(prd D4)。
+    if state
+        .session_active_request
+        .lock()
+        .await
+        .contains_key(&session_id)
+    {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "当前有轮次进行中,请先停止后再压缩",
+        ));
+    }
+
+    let resolved =
+        crate::agent::chat::lookup_provider_for_session(&session_id, &state.db, &state.catalog)
+            .await
+            .map_err(|e| {
+                let (msg, cat) = e.user_message_and_category();
+                AppCommandError::new(ErrorCategory::from(cat), format!("压缩失败:{}", msg))
+            })?;
+
+    match run_manual_compaction(
+        &state.db,
+        &session_id,
+        resolved.provider,
+        resolved.context_window,
+        focus.as_deref(),
+        &loaded.messages,
+    )
+    .await
+    {
+        Ok(outcome) => Ok(outcome),
+        Err(ManualCompactionError::NothingToCompress) => Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "无可压缩内容:近期历史都在保留区内,无需压缩",
+        )),
+        Err(ManualCompactionError::SummaryFailed(reason)) => Err(AppCommandError::new(
+            ErrorCategory::Server,
+            format!("摘要压缩失败({}),上下文未改动", reason),
+        )),
+        Err(ManualCompactionError::PersistFailed) => Err(AppCommandError::new(
+            ErrorCategory::Server,
+            "摘要落库失败,上下文未改动",
+        )),
+    }
+}
+
+#[tauri::command]
+pub async fn compact_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    focus: Option<String>,
+) -> Result<crate::agent::compaction::ManualCompactionOutcome, AppCommandError> {
+    compact_session_inner(&state, session_id, focus).await
+}

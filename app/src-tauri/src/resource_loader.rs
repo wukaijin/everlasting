@@ -89,27 +89,40 @@ pub struct CommandInfo {
 /// A builtin command handled entirely by the frontend (no file, no
 /// template body). The frontend's `executeCommand` dispatches these to
 /// existing actions (`/clear` → `clear_session_messages`, `/new` →
-/// `createSession`) or a self-listing view (`/help`).
+/// `createSession`) or a self-listing view (`/help`). `argument_hint`
+/// rides along to the palette exactly like custom commands' frontmatter
+/// hint (builtin 无参命令为 `None`).
 pub struct BuiltinCommand {
     pub name: &'static str,
     pub description: &'static str,
+    pub argument_hint: Option<&'static str>,
 }
 
-/// The builtin command set for B3 MVP. `/mode` and `/model` are
-/// intentionally omitted (existing ModeSelect / ModelSelect buttons
-/// already cover them); `/compact` is deferred.
+/// The builtin command set. `/mode` and `/model` are intentionally
+/// omitted (existing ModeSelect / ModelSelect buttons already cover
+/// them). `/compact` (08-18-manual-compact-command) triggers the
+/// idle-time summary compaction via the `compact_session` command;
+/// its optional rest-of-line focus text narrows the summary.
 pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "help",
         description: "列出所有可用命令",
+        argument_hint: None,
     },
     BuiltinCommand {
         name: "clear",
         description: "清空当前会话消息（保留会话）",
+        argument_hint: None,
     },
     BuiltinCommand {
         name: "new",
         description: "新建会话",
+        argument_hint: None,
+    },
+    BuiltinCommand {
+        name: "compact",
+        description: "压缩上下文（摘要收窗）",
+        argument_hint: Some("[focus] 可选定向说明"),
     },
 ];
 

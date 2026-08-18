@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use crate::agent::question_store::PendingInteractionEntry;
 use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
-    clear_session_messages_inner, create_session_inner, delete_session_inner, diff_worktree_inner,
-    edit_user_message_inner, group_chat_cache_rates_inner, list_sessions_inner, load_session_inner,
+    clear_session_messages_inner, compact_session_inner, create_session_inner,
+    delete_session_inner, diff_worktree_inner, edit_user_message_inner,
+    group_chat_cache_rates_inner, list_sessions_inner, load_session_inner,
     record_tool_duration_inner, rename_session_inner, search_messages_inner,
     set_session_color_inner, set_session_plugin_name_inner, set_session_workflow_enabled_inner,
     update_message_latency_inner, update_session_metadata_inner,
@@ -343,6 +344,24 @@ pub async fn list_workflow_plugins(
     )))
 }
 
+/// `POST /api/v1/sessions/compact_session` — 手动 /compact
+/// (08-18-manual-compact-command):空闲期摘要压缩,可选 focus
+/// 定向指令。gate 链(群聊/开关/in-flight/provider)全在
+/// `compact_session_inner`;此处只做 transport 解包。
+#[derive(Debug, Deserialize)]
+pub struct CompactSessionRequest {
+    pub session_id: String,
+    pub focus: Option<String>,
+}
+
+pub async fn compact_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CompactSessionRequest>,
+) -> Result<Json<crate::agent::compaction::ManualCompactionOutcome>, AppCommandError> {
+    let result = compact_session_inner(&state, req.session_id, req.focus).await?;
+    Ok(Json(result))
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/list_sessions", post(list_sessions))
@@ -366,6 +385,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/edit_user_message", post(edit_user_message))
         .route("/group_chat_cache_rates", post(group_chat_cache_rates))
         .route("/search_messages", post(search_messages))
+        .route("/compact_session", post(compact_session))
         .with_state(state)
 }
 
@@ -445,5 +465,57 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("pineapple"));
+    }
+
+    /// Manual /compact route smoke (spec backend/daemon-server.md §6):
+    /// POST `/compact_session` against a **group-chat** session. The
+    /// group gate fires before provider resolution, so the route test
+    /// needs no models/catalog — it proves the transport wiring (JSON
+    /// parse → `_inner` → gate) plus the scope gate's user-readable
+    /// rejection in one round-trip. The full manual-compaction pipeline
+    /// (mock provider, watermark, seq) is covered in
+    /// `agent::tests_agent_loop::manual_compaction`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_session_route_rejects_group_chat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let pool = &state.db;
+        let project = db::projects::create_project(pool, "gcsmoke", "/tmp/gc_smoke", false, None)
+            .await
+            .unwrap();
+        let session = db::sessions::create_session(
+            pool,
+            "gc-compact-smoke-1",
+            &project.id,
+            "/tmp/gc_smoke",
+            "GLM-4.7",
+            None,
+            Some("group_chat"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/compact_session")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session_id":"{}","focus":null}}"#,
+                        session.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+        assert!(text.contains("群聊"), "group gate message: {text}");
     }
 }

@@ -531,6 +531,7 @@ export const useChatStore = defineStore("chat", () => {
     openSessionInProject,
     deleteSession,
     clearSessionMessages,
+    reloadSessionMessages,
     renameSession,
     setSessionColor,
     attachWorktree,
@@ -970,6 +971,9 @@ export const useChatStore = defineStore("chat", () => {
     deleteSession,
     // B3 (PR2): `/clear` — wipe messages, keep session row.
     clearSessionMessages,
+    // 08-18-manual-compact-command: `/compact` 落库后刷新消息流
+    // (摘要行经 rehydrate 管线渲染)。
+    reloadSessionMessages,
     renameSession,
     setSessionColor,
     attachWorktree,

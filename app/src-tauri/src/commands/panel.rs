@@ -148,6 +148,7 @@ pub async fn list_panel_items_inner(
         .map(|b| BuiltinStub {
             name: b.name.to_string(),
             description: b.description.to_string(),
+            argument_hint: b.argument_hint.map(|h| h.to_string()),
         })
         .collect();
     let commands: Vec<CommandStub> = custom_commands
@@ -280,7 +281,7 @@ fn dedup_panel(
         items.push(PanelItem {
             name: b.name.clone(),
             description: b.description.clone(),
-            argument_hint: None,
+            argument_hint: b.argument_hint.clone(),
             source: "builtin".to_string(),
             is_builtin: true,
         });
@@ -316,6 +317,7 @@ fn dedup_panel(
 struct BuiltinStub {
     name: String,
     description: String,
+    argument_hint: Option<String>,
 }
 
 struct CommandStub {
@@ -337,6 +339,7 @@ mod tests {
         BuiltinStub {
             name: name.to_string(),
             description: format!("builtin {name}"),
+            argument_hint: None,
         }
     }
     fn c(name: &str) -> CommandStub {

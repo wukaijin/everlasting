@@ -124,6 +124,7 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   resolve_tool_question: "question",
   // sessions
   clear_session_messages: "sessions",
+  compact_session: "sessions",
   create_session: "sessions",
   delete_session: "sessions",
   diff_worktree: "sessions",

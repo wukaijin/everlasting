@@ -280,6 +280,11 @@ pub fn run() {
             // full-text search over all sessions (FTS5 + LIKE
             // fallback + title rider). Read-only.
             commands::sessions::search_messages,
+            // Manual /compact (08-18-manual-compact-command): idle-time
+            // LLM summary compaction for the current session. Shares the
+            // C3+ auto path's pure functions; bypasses the 0.85 trigger
+            // line but rejects in-flight turns.
+            commands::sessions::compact_session,
             // C2 (review visualization view, 2026-07-26):
             // review-state.json read IPCs for the frontend
             // `<ReviewMatrix>` panel. `get_review_state`

@@ -524,6 +524,8 @@ pub fn build_summary_chat_message(summary_text: &str) -> ChatMessage {
 ///   消息本身不进 transcript,不重复喂 —— 评审 P1-2)。anchor 消息
 ///   按构造就位于 `compressible[0]`(水位替换与循环内压缩都把它放在
 ///   `synthetic_prefix_len` 处),故 prior 存在时跳过 slice 首元素;
+/// - `focus`(手动 /compact 专用,auto 路径恒 `None`)→ 模板头部注入
+///   用户定向指令块:收窄摘要侧重的主题,不替换必填段落结构;
 /// - transcript 渲染:一行式 `[role] text`;tool_use 只留 name + input
 ///   截断;tool_result 截 2000 chars 加 `...[truncated N chars]`;
 ///   thinking/redacted 不渲染;图片渲染 `[image attached: <file>]`;
@@ -534,6 +536,7 @@ pub async fn build_compaction_prompt(
     compressible: &[ChatMessage],
     prior: Option<&SummaryAnchor>,
     context_window: u32,
+    focus: Option<&str>,
 ) -> String {
     // prior anchor 消息 = compressible[0](按构造,见 fn doc);跳过它,
     // 它的内容经 <prior-summary> 块进入 prompt,transcript 不重复渲染。
@@ -580,6 +583,14 @@ pub async fn build_compaction_prompt(
              conversation transcript below, THE CONVERSATION WINS. Items completed in\n\
              the transcript move to \"Completed\"; items invalidated are dropped.\n\n",
             anchor.content
+        ));
+    }
+    if let Some(focus) = focus {
+        prompt.push_str(&format!(
+            "FOCUS INSTRUCTIONS FROM THE USER: {focus}\n\
+             The user manually requested this compaction with the focus above.\n\
+             Prioritize details related to it across the sections below; the focus\n\
+             narrows emphasis, it does not replace or drop any required section.\n\n"
         ));
     }
     prompt.push_str(&format!(
@@ -722,6 +733,291 @@ impl CompactionRegistry {
     pub async fn clear(&self, session_id: &str) {
         self.inner.write().await.remove(session_id);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 手动 /compact 入口(08-18-manual-compact-command)
+// ---------------------------------------------------------------------------
+
+/// 从 DB 行集倒序找最新水位摘要行,推导 [`SummaryAnchor`]。
+///
+/// 与 `apply_compaction_watermark` 的第 1-2 步同源,但服务于空闲期
+/// (无 wire 可折叠):手动压缩用它的产出做增量合并的 prior 输入。
+/// `cutoff_seq` 缺失/非整数(旧格式/异常行)→ `None` —— 与水位替换
+/// 的 fail-open 同语义:退回"无水位",重新全量摘要,不 panic。
+pub fn latest_summary_anchor(rows: &[MessageRow]) -> Option<SummaryAnchor> {
+    let row = rows
+        .iter()
+        .rev()
+        .find(|r| message_metadata_kind(r.metadata.as_ref()) == Some(COMPACTION_SUMMARY_KIND))?;
+    let cutoff = row.metadata.as_ref()?.get("cutoff_seq")?.as_i64()?;
+    Some(SummaryAnchor {
+        seq: row.seq,
+        // text 列 = 纯摘要正文(insert 契约两列同值,前缀不落库)
+        content: row.text.clone(),
+        cutoff,
+    })
+}
+
+/// 摘要旁路 completion 的失败形态(共用 helper 的错误面;auto 路径
+/// 需要区分"用户取消"以避免计入熔断,手动路径无取消源、统一按失败)。
+#[derive(Debug)]
+pub(crate) enum SummaryStreamError {
+    Cancelled,
+    Failed(&'static str),
+}
+
+/// 摘要旁路 completion(auto drive 路径与手动 /compact 入口共用):
+/// `retry_open` 包裹、无 tools、单条 user prompt;剥壳只收 assistant
+/// text(Delta)+ `Done` 的 usage;`Ok(ChatEvent::Error)` 与 `Err` 都算
+/// 失败(RULE-A-011 同源 —— 漏接 Ok(Error) 会把半截文本当完整摘要)。
+/// 输出**未**做 4k 截断,调用方自行 `clamp_summary_output`。
+pub(crate) async fn send_summary_completion(
+    provider: &dyn crate::llm::Provider,
+    token: &tokio_util::sync::CancellationToken,
+    prompt: String,
+) -> Result<(String, Option<crate::llm::types::TokenUsage>), SummaryStreamError> {
+    use crate::llm::retry::{retry_open, OpenOutcome, RetryPolicy, RetrySink};
+    use crate::llm::types::ChatEvent;
+    use futures_util::StreamExt;
+
+    /// retry sink:静默(no-op)。摘要调用是旁路 —— retrying 通知挂到
+    /// in-flight 的主 assistant 占位气泡会让用户看到"还没开始输出就在
+    /// 重试"的困惑;可观测性由失败 warn + 熔断 registry 承担。
+    struct SummaryRetrySink;
+    impl RetrySink for SummaryRetrySink {
+        fn emit_retrying(&self, _event: crate::llm::retry::RetryingEvent) {}
+    }
+
+    let request = ChatMessage {
+        role: Role::User,
+        content: MessageContent::Text(prompt),
+        speaker: None,
+        attachments: None,
+    };
+    let mut rng = fastrand::Rng::new();
+    let sink = SummaryRetrySink;
+    let outcome = retry_open(
+        provider,
+        None,
+        vec![request],
+        vec![],
+        &RetryPolicy::default(),
+        token,
+        &sink,
+        &mut rng,
+    )
+    .await;
+    let mut stream = match outcome {
+        OpenOutcome::Stream(s) => s,
+        OpenOutcome::Cancelled => return Err(SummaryStreamError::Cancelled),
+    };
+
+    let mut text = String::new();
+    let mut usage: Option<crate::llm::types::TokenUsage> = None;
+    let mut errored = false;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatEvent::Delta { text: t }) => text.push_str(&t),
+            Ok(ChatEvent::Done { usage: u, .. }) => usage = u,
+            Ok(ChatEvent::Error { .. }) => {
+                errored = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                errored = true;
+                break;
+            }
+        }
+    }
+    if errored {
+        return Err(SummaryStreamError::Failed("summary stream errored"));
+    }
+    if text.trim().is_empty() {
+        return Err(SummaryStreamError::Failed("summary output empty"));
+    }
+    Ok((text, usage))
+}
+
+/// 手动压缩结果载荷(`compact_session` 命令响应;serde snake_case,
+/// TS 镜像类型 `ManualCompactionResult`)。
+#[derive(Debug, serde::Serialize)]
+pub struct ManualCompactionOutcome {
+    pub cutoff_seq: i64,
+    pub tokens_before: u32,
+    pub tokens_after: u32,
+    pub summary_usage: Option<crate::llm::types::TokenUsage>,
+    /// provider 协议族(Debug 名,与 auto 路径 metadata 同口径)。
+    pub model: String,
+}
+
+/// 手动压缩失败类别(命令层映射为用户可读错误)。
+#[derive(Debug)]
+pub enum ManualCompactionError {
+    /// 待压区为空:水位之后的常规历史全部落在保留区(或会话几乎为
+    /// 空)。没付 LLM 调用,不计熔断。
+    NothingToCompress,
+    /// 摘要 completion 失败(流错误/空输出)。已计熔断。
+    SummaryFailed(&'static str),
+    /// 摘要行落库失败。已计熔断。
+    PersistFailed,
+}
+
+/// 手动 /compact:空闲期(turn 边界外)对 DB 现存历史执行一次摘要
+/// 压缩(prd R1-R4)。
+///
+/// 与 auto 路径(drive.rs `attempt_summary_compaction`)共享全部纯函数
+/// (prompt 组装 / 保留区 / 落库 / 熔断),差异在编排上下文:
+///
+/// - 输入 = `load_session` 的 DB 行(无 loop 内存态;空闲期 wire↔DB 1:1
+///   由前端 reloadAfterFinalize 保证,无对齐风险);
+/// - 水位 prior 从最新摘要行现推([`latest_summary_anchor`]),等价
+///   init 水位命中时的 anchor 种子 → 已有水位走增量合并(R3);
+/// - 无 0.85 触发线(用户主动收窗,低 context 同样执行,R1),但空
+///   待压区拒绝(NothingToCompress);
+/// - **seq = MAX(seq)+1:仅在本函数被 in-flight guard 保护的前提下
+///   安全**(无活跃 loop 才无并发 persist;active loop 内必须吃 loop
+///   游标 —— 见 pattern-llm-compaction 的 seq 契约。命令层
+///   `compact_session_inner` 查 `session_active_request` 后才调用);
+/// - 熔断(D6):不查 `is_tripped`(手动不受熔断限制),失败照记
+///   `record_failure` / 成功 `record_success`(与 auto 共享信号,
+///   成功顺带解熔断)。
+///
+/// caller(`compact_session_inner`)负责 scope/config gate(群聊拒绝、
+/// `llm_compaction_enabled` 开关)与 in-flight guard。
+pub async fn run_manual_compaction(
+    db: &sqlx::SqlitePool,
+    session_id: &str,
+    provider: std::sync::Arc<dyn crate::llm::Provider>,
+    context_window: u32,
+    focus: Option<&str>,
+    rows: &[MessageRow],
+) -> Result<ManualCompactionOutcome, ManualCompactionError> {
+    let prior = latest_summary_anchor(rows);
+
+    // candidate = 水位之后的常规行(kind 过滤:被吸收的旧摘要行 seq
+    // 可能 > 新水位 cutoff,不过滤会数错行 —— compressible_cutoff_seq
+    // 同款口径)。与 auto 路径的等价物:折叠产物 [S?] + 常规行。
+    let filtered: Vec<&MessageRow> = rows
+        .iter()
+        .filter(|r| {
+            message_metadata_kind(r.metadata.as_ref()) != Some(COMPACTION_SUMMARY_KIND)
+                && prior.as_ref().is_none_or(|a| r.seq > a.cutoff)
+        })
+        .collect();
+    let candidates: Vec<ChatMessage> = filtered.iter().map(|r| row_to_chat_message(r)).collect();
+
+    // 保留区(DB 行不含合成头,synthetic 偏移 = 0;尾部天然受保护)。
+    let cut = compute_preservation_region(&candidates, 0, context_window).await;
+    if cut == 0 || cut >= candidates.len() {
+        return Err(ManualCompactionError::NothingToCompress);
+    }
+    // 待压区末行精确 seq(契约:禁"摘要行 seq-1"近似)。
+    let cutoff_seq = filtered[cut - 1].seq;
+
+    // build_compaction_prompt 的 prior 语义假设 anchor 消息位于
+    // compressible[0](auto 路径构造)并跳过之;手动路径没有该内存
+    // 消息,补一条占位(内容经 <prior-summary> 块进场,占位被跳过)。
+    let anchor_msg = |a: &SummaryAnchor| ChatMessage {
+        role: Role::User,
+        content: MessageContent::Text(a.content.clone()),
+        speaker: None,
+        attachments: None,
+    };
+    let mut compressible: Vec<ChatMessage> = Vec::with_capacity(cut + 1);
+    if let Some(anchor) = prior.as_ref() {
+        compressible.push(anchor_msg(anchor));
+    }
+    compressible.extend_from_slice(&candidates[..cut]);
+
+    // tokens_before = 当前水位视图([旧摘要?] + 全部 candidate)——
+    // 下一请求不压缩时的 context 量级(观测口径,非精确账)。
+    let mut view_before: Vec<ChatMessage> = Vec::with_capacity(candidates.len() + 1);
+    if let Some(anchor) = prior.as_ref() {
+        view_before.push(anchor_msg(anchor));
+    }
+    view_before.extend(candidates.iter().cloned());
+    let tokens_before = crate::agent::context::estimate_messages_tokens(&view_before).await;
+
+    let prompt =
+        build_compaction_prompt(&compressible, prior.as_ref(), context_window, focus).await;
+
+    // 手动入口无取消源(fresh token 永不触发);Cancelled 分支是
+    // retry_open 语义完备性的防御位,按失败处理。
+    let token = tokio_util::sync::CancellationToken::new();
+    let (raw_text, usage) = match send_summary_completion(provider.as_ref(), &token, prompt).await {
+        Ok(v) => v,
+        Err(SummaryStreamError::Cancelled) => {
+            compaction_registry().record_failure(session_id).await;
+            return Err(ManualCompactionError::SummaryFailed("summary cancelled"));
+        }
+        Err(SummaryStreamError::Failed(reason)) => {
+            compaction_registry().record_failure(session_id).await;
+            tracing::warn!(
+                session_id = %session_id,
+                reason,
+                "manual compaction: summary completion failed"
+            );
+            return Err(ManualCompactionError::SummaryFailed(reason));
+        }
+    };
+    let summary_text = clamp_summary_output(raw_text);
+
+    // tokens_after = [新摘要] + 保留区。
+    let mut view_after: Vec<ChatMessage> = vec![build_summary_chat_message(&summary_text)];
+    view_after.extend_from_slice(&candidates[cut..]);
+    let tokens_after = crate::agent::context::estimate_messages_tokens(&view_after).await;
+
+    // metadata 契约同 auto(design §2.1)+ trigger/focus 手动增量。
+    // serde default 兼容旧回看行(缺 focus 字段)。
+    let model = format!("{:?}", provider.protocol());
+    let next_seq = rows.iter().map(|r| r.seq).max().unwrap_or(0) + 1;
+    let metadata = serde_json::json!({
+        "kind": COMPACTION_SUMMARY_KIND,
+        "cutoff_seq": cutoff_seq,
+        "preserve_from_seq": cutoff_seq + 1,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "trigger": "manual",
+        "focus": focus,
+        "model": model,
+        "prior_summary_seq": prior.as_ref().map(|a| a.seq),
+        "summary_usage": usage,
+    });
+    if let Err(e) = crate::db::sessions::insert_compaction_summary(
+        db,
+        session_id,
+        &summary_text,
+        next_seq,
+        &metadata,
+    )
+    .await
+    {
+        compaction_registry().record_failure(session_id).await;
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            next_seq,
+            "manual compaction: insert_compaction_summary failed"
+        );
+        return Err(ManualCompactionError::PersistFailed);
+    }
+    compaction_registry().record_success(session_id).await;
+    tracing::info!(
+        session_id = %session_id,
+        cutoff_seq,
+        tokens_before,
+        tokens_after,
+        "manual compaction applied"
+    );
+    Ok(ManualCompactionOutcome {
+        cutoff_seq,
+        tokens_before,
+        tokens_after,
+        summary_usage: usage,
+        model,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,7 +1881,7 @@ mod tests {
     async fn prompt_template_skeleton_without_prior() {
         crate::memory::tokens::ensure_initialized().await;
         let compressible = vec![user("fix the login bug"), assistant("I'll look at auth.rs")];
-        let prompt = build_compaction_prompt(&compressible, None, 200_000).await;
+        let prompt = build_compaction_prompt(&compressible, None, 200_000, None).await;
         assert!(prompt.contains("CONTEXT CHECKPOINT COMPACTION"));
         assert!(prompt.contains("Primary Request and Intent"));
         assert!(prompt.contains("Output ONLY the summary"));
@@ -1614,7 +1910,7 @@ mod tests {
             user("second question"),
             assistant("second answer"),
         ];
-        let prompt = build_compaction_prompt(&compressible, Some(&anchor), 200_000).await;
+        let prompt = build_compaction_prompt(&compressible, Some(&anchor), 200_000, None).await;
         assert!(
             prompt.contains("<prior-summary>\nPRIOR_SUMMARY_BODY\n</prior-summary>"),
             "prior 块注入纯摘要 content"
@@ -1661,7 +1957,7 @@ mod tests {
             speaker: None,
             attachments: None,
         };
-        let prompt = build_compaction_prompt(&[asst, result_msg], None, 200_000).await;
+        let prompt = build_compaction_prompt(&[asst, result_msg], None, 200_000, None).await;
         assert!(
             prompt.contains("[tool_use read_file "),
             "tool_use 留 name+input"
@@ -1707,7 +2003,7 @@ mod tests {
             speaker: None,
             attachments: None,
         };
-        let prompt = build_compaction_prompt(&[m], None, 200_000).await;
+        let prompt = build_compaction_prompt(&[m], None, 200_000, None).await;
         assert!(prompt.contains("[image attached: /tmp/shot.png]"));
     }
 
@@ -1724,7 +2020,7 @@ mod tests {
                 user(text)
             })
             .collect();
-        let prompt = build_compaction_prompt(&compressible, None, 20_000).await;
+        let prompt = build_compaction_prompt(&compressible, None, 20_000, None).await;
         assert!(
             prompt.contains("[older transcript omitted]"),
             "溢出丢最旧须留记号"

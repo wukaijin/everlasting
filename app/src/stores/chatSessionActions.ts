@@ -275,6 +275,17 @@ export function createSessionActions(ctx: SessionActionsContext) {
     }
   }
 
+  /** Manual /compact (08-18-manual-compact-command): pull the
+   *  session's messages fresh from the DB after the backend appended
+   *  a compaction-summary row. Reuses the stream-completion reload
+   *  path (rehydrate + checklist re-derive + pending reconcile) so
+   *  the summary row renders through the exact pipeline every other
+   *  DB append uses. Idle-only by construction — the backend rejects
+   *  in-flight sessions before writing. */
+  async function reloadSessionMessages(sessionId: string): Promise<void> {
+    await controller.reloadAfterFinalize(sessionId);
+  }
+
   // D1: rename + color tag
   async function renameSession(sessionId: string, newTitle: string) {
     await transport.invoke("rename_session", { sessionId, newTitle });
@@ -381,6 +392,7 @@ export function createSessionActions(ctx: SessionActionsContext) {
     openSessionInProject,
     deleteSession,
     clearSessionMessages,
+    reloadSessionMessages,
     renameSession,
     setSessionColor,
     attachWorktree,

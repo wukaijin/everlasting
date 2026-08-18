@@ -647,7 +647,7 @@ pub(crate) async fn chat_inner(
 /// 2. If NULL or points to missing model → fall back to global
 ///    `app_config.default_model_id`
 /// 3. If still not found → DB slow path (`resolve_chat_provider`)
-async fn lookup_provider_for_session(
+pub(crate) async fn lookup_provider_for_session(
     session_id: &str,
     db: &SqlitePool,
     catalog: &Arc<tokio::sync::RwLock<crate::state::ProviderCatalog>>,

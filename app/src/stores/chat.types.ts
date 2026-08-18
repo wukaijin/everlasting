@@ -532,6 +532,27 @@ export interface SpeakerCacheUsage {
   context_input: number;
 }
 
+/** Manual /compact result (08-18-manual-compact-command). Wire form
+ *  mirrors the Rust `agent::compaction::ManualCompactionOutcome`
+ *  (snake_case, no serde rename). `tokens_before` / `tokens_after`
+ *  are cl100k estimates of the pre/post watermark context view —
+ *  for the completion toast, not billing. `summary_usage` is the
+ *  side-channel summary completion's usage (never mixed into turn
+ *  usage accounting). */
+export interface ManualCompactionResult {
+  cutoff_seq: number;
+  tokens_before: number;
+  tokens_after: number;
+  summary_usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+    context_input_tokens: number;
+  } | null;
+  model: string;
+}
+
 /** D2 (cross-session search, 2026-08-17): one hit from
  *  `search_messages`. Wire form mirrors the Rust struct
  *  (`db/search.rs::MessageSearchHit`, snake_case, no serde
