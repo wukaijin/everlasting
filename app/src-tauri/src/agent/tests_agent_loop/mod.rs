@@ -7,6 +7,7 @@ use super::tests_common;
 
 mod basic;
 mod checklist;
+mod compaction_summary;
 mod error_path;
 mod error_persist;
 mod mock_provider;

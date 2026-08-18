@@ -297,6 +297,10 @@ export interface ChatEventPayload {
   tokens_after?: number;
   dropped_count?: number;
   degradation?: string;
+  // 08-18-llm-context-compaction PR2:压缩路径("none" /
+  // "summary" / "mechanical")。旧后端 wire 无此字段 —— 归一化层
+  // `?? "none"` 兜底。
+  method?: string;
   // E2: only present when `kind === "loop_hint"`. Mirrors
   // Rust `ChatEvent::LoopHint`.
   hit_count?: number;

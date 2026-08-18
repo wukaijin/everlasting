@@ -251,6 +251,20 @@ const compactionCritical = computed<boolean>(
   () => props.trace.compaction?.degradation === "still_over",
 );
 
+/** C3 摘要式压缩 (2026-08-18):method 徽标 —— summary = LLM 摘要
+ *  路径(主路径),mechanical = 机械丢组(fallback / gate 关),none =
+ *  旧回看行缺字段(traceStore 已 `?? "none"` 归一)。 */
+const compactionMethodLabel = computed<string>(() => {
+  switch (props.trace.compaction?.method) {
+    case "summary":
+      return "摘要";
+    case "mechanical":
+      return "机械";
+    default:
+      return "—";
+  }
+});
+
 /** Audit event rows attached to this turn (the 回看 path
  *  groups them by `turnSeq`; the live path doesn't carry
  *  audit events). Empty array when not loaded. */
@@ -407,7 +421,10 @@ const ungroupedLabel = computed<string>(() =>
         {{ abbreviateTokens(trace.compaction.tokens_before) }} →
         {{ abbreviateTokens(trace.compaction.tokens_after) }}
         <span class="turn-card__sub-meta">
-          ({{ trace.compaction.dropped_count }} 块 · {{ trace.compaction.degradation }})
+          ({{ trace.compaction.dropped_count }} 块 · {{ trace.compaction.degradation }} ·
+          <span
+            :class="trace.compaction.method === 'summary' ? 'turn-card__badge--summary' : ''"
+          >{{ compactionMethodLabel }}</span>)
         </span>
       </span>
     </div>
@@ -675,6 +692,13 @@ const ungroupedLabel = computed<string>(() =>
 .turn-card__sub-meta {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
+}
+
+/* C3 摘要式压缩 (2026-08-18):method=summary 徽标强调 —— 用户扫
+   TurnCard 一眼能分辨"这轮压缩是 LLM 摘要还是机械丢组"。 */
+.turn-card__badge--summary {
+  color: var(--color-accent);
+  font-weight: 600;
 }
 
 .turn-card__bc-slug {

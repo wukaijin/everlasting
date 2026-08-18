@@ -70,6 +70,12 @@ pub(crate) struct DriveTurnOutcome {
     pub(crate) last_usage_terminal: Option<crate::llm::types::TokenUsage>,
     pub(crate) workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
     pub(crate) cancelled: bool,
+    /// C3 摘要压缩 PR2(08-18-llm-context-compaction,design §4.2):
+    /// 当前水位摘要锚点。进参是上一 turn 的 anchor(init 种子或上次
+    /// 压缩产物),出参在本 turn 成功压缩后更新为新摘要 —— 同
+    /// `loop_hit_count` 的循环内穿参模式,覆盖**同一 loop run 内的
+    /// 二次压缩**(LoopInit 单次穿参罩不住的场景,评审 P1-1 修正)。
+    pub(crate) summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -122,6 +128,13 @@ pub(crate) async fn drive_turn(
     // WP2: digest gate(注入同源,经 LoopInit 穿入)— 决定是否侧挂
     // `load_memory_sections` 元工具 def。
     digest_on: bool,
+    // C3 摘要压缩 PR2 (08-18-llm-context-compaction):水位锚点
+    // (init 种子;成功压缩后经 DriveTurnOutcome 更新)、合成头长度
+    // (待压区/保留区起算,design §4.1)、摘要 gate(开关 && !worker
+    // && !群聊,init 同源)。熔断 registry 走进程级单例,不穿参。
+    summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
+    synthetic_prefix_len: usize,
+    compaction_on: bool,
 ) -> Result<DriveTurnOutcome, ()> {
     let mut messages = messages;
     let mut seq = seq;
@@ -132,6 +145,7 @@ pub(crate) async fn drive_turn(
     let mut loop_hit_count = loop_hit_count;
     let mut last_usage_terminal = last_usage_terminal;
     let mut workflow_ctx = workflow_ctx;
+    let mut summary_anchor = summary_anchor;
     permission_ctx.turn_seq = Some(seq);
     // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
     // refresh `head_sha` + rebuild `system_prompt` at the start of
@@ -173,17 +187,197 @@ pub(crate) async fn drive_turn(
     // the test's tiny context_window, dropped_count == 0 and
     // the messages vec is unchanged).
     //
-    // RULE-A-002 (2026-06-14): `compact_messages` now returns a
-    // `DegradationKind` signal. `StillOver` means every safe
+    // 08-18-llm-context-compaction PR2:超线时**先尝试 LLM 摘要压缩**
+    // (design §4),失败/熔断/gate 关闭才落到原 `compact_messages`
+    // 机械丢组(fallback tier,行为原样不动)。
+    //
+    // gate:`compaction_on`(LoopInit 穿入 = `llm_compaction_enabled
+    // && !worker && !群聊`,与水位替换同源)+ `!skip_persist`(防御
+    // 性:非 worker 恒真)+ 熔断未触发(`CompactionRegistry` 连续
+    // 3 次失败粘性跳过摘要直达机械)。本 turn 已有摘要
+    // (`summary_anchor` 存在)照样可再压 —— 增量合并,prior 来自
+    // 循环内 anchor(评审 P1-1)。
+    //
+    // RULE-A-002 (2026-06-14): `StillOver` means every safe
     // droppable candidate was exhausted but the budget is still
     // over target — sending the list would 400 on `prompt is
     // too long`. The agent loop emits an `Error` event +
     // terminates the chat instead of silently firing the
     // over-budget request. `None` / `NoCandidates` are safe-to-
-    // proceed.
+    // proceed. 摘要路径的 StillOver 只会经"摘要后 > 0.95 窗口的
+    // 机械兜底"产生(摘要本身不丢消息,巨尾消息才兜不下来)。
     {
-        let compacted =
-            crate::agent::context::compact_messages(messages.clone(), context_window).await;
+        let breaker = crate::agent::compaction::compaction_registry();
+        // gate 先行:关闭(worker / 群聊 / 开关 off / 熔断)时**不付**
+        // 摘要路径的全历史估算成本 —— `tokens_pre` 是摘要触发检查的
+        // 额外一次 cl100k 编码,机械路径 `compact_messages` 自己还会
+        // 再估一次,gate 关闭时跳过本次 = 每 turn 成本与 PR2 之前持平。
+        let summary_gate = compaction_on && !skip_persist && !breaker.is_tripped(&session_id).await;
+        let tokens_pre = if summary_gate {
+            crate::agent::context::estimate_messages_tokens(&messages).await
+        } else {
+            0
+        };
+        let trigger = crate::agent::context::trigger_threshold(context_window);
+
+        // ---- 摘要尝试(gate 全开 + 超触发线)----
+        let mut summary_result: Option<crate::agent::context::CompactResult> = None;
+        if summary_gate && (tokens_pre as u64) >= (trigger as u64) {
+            let cut = crate::agent::compaction::compute_preservation_region(
+                &messages,
+                synthetic_prefix_len,
+                context_window,
+            )
+            .await;
+            if std::env::var("P1_DBG").is_ok() {
+                eprintln!(
+                    "DBG preservation: turn={} tokens_pre={} cut={} P={} msgs_len={} first_roles={:?}",
+                    turn,
+                    tokens_pre,
+                    cut,
+                    synthetic_prefix_len,
+                    messages.len(),
+                    messages
+                        .iter()
+                        .take(8)
+                        .map(|m| (
+                            if m.role == Role::User { "u" } else { "a" },
+                            m.content.to_text().chars().take(12).collect::<String>()
+                        ))
+                        .collect::<Vec<_>>()
+                );
+            }
+            // 空待压区(cut == synthetic_prefix_len,窗口过小)→ 直走
+            // 机械路径(design §4.1 / 评审 P3)。
+            if cut > synthetic_prefix_len {
+                match attempt_summary_compaction(
+                    provider.clone(),
+                    &token,
+                    &db,
+                    &session_id,
+                    &messages,
+                    synthetic_prefix_len,
+                    cut,
+                    summary_anchor.clone(),
+                    &loaded_session.messages,
+                    seq,
+                    tokens_pre,
+                    context_window,
+                )
+                .await
+                {
+                    SummaryOutcome::Applied {
+                        messages: folded,
+                        seq: next_seq,
+                        anchor,
+                        usage,
+                        tokens_after,
+                        folded_count,
+                    } => {
+                        // 落库 + 回填双成功:熔断清零(prd R5),
+                        // anchor 更新(同 loop 二次压缩的 prior 种子)。
+                        breaker.record_success(&session_id).await;
+                        summary_anchor = Some(anchor);
+                        seq = next_seq;
+                        // 摘要行占了原 seq → 本 turn 的 assistant 行落在
+                        // 推进后的 seq 上;turn 顶部的 `turn_seq = Some(seq)`
+                        // 指向的是摘要行,重指到 assistant 行保持审计
+                        // 引用准确(permission ask / mode change 等 audit
+                        // 行的 turn_seq 语义 = 本 turn assistant 行的 seq)。
+                        permission_ctx.turn_seq = Some(seq);
+                        tracing::info!(
+                            request_id = %rid,
+                            session_id = %session_id,
+                            turn,
+                            tokens_before = tokens_pre,
+                            tokens_after,
+                            folded_count,
+                            context_window,
+                            "agent loop: context compacted via LLM summary (C3/PR2)"
+                        );
+                        // 摘要后复查(design §4.4):仍超 0.95×window
+                        // (巨尾消息)→ 机械丢组兜底;否则不追加 —— 摘要
+                        // 路径目标是语义保留,不是压到 target。
+                        if (tokens_after as u64)
+                            >= (crate::agent::context::summary_postcheck_threshold(context_window)
+                                as u64)
+                        {
+                            let mech =
+                                crate::agent::context::compact_messages(folded, context_window)
+                                    .await;
+                            // 机械兜底真丢了消息时使 anchor 失效:机械路径
+                            // 只保护 [0..PROTECTED_HEAD=2],synthetic_prefix_len
+                            // ≥ 2 时刚插入的摘要消息在可丢中段(最旧组优先,
+                            // 几乎必丢)。anchor 留 Some 会让同 loop 后续压缩
+                            // 误把 compressible[0] 当 anchor 跳过(丢失一条
+                            // transcript 输入)。DB 行仍在,下一请求水位替换
+                            // 自会重新种 anchor;本 loop 内退化为全新摘要
+                            // (无 prior)是安全方向的保守值。
+                            if mech.dropped_count > 0 {
+                                summary_anchor = None;
+                            }
+                            summary_result = Some(crate::agent::context::CompactResult {
+                                messages: mech.messages,
+                                // 摘要折叠 + 机械兜底两层合计的原始
+                                // 消息净出量(只报 mech 会漏掉摘要
+                                // 折叠掉的那部分)。
+                                dropped_count: folded_count.saturating_add(mech.dropped_count),
+                                tokens_before: tokens_pre,
+                                tokens_after: mech.tokens_after,
+                                degradation: mech.degradation,
+                                method: crate::agent::context::CompactMethod::Summary,
+                                summary_usage: usage,
+                            });
+                        } else {
+                            // dropped_count = 真实离开 context 的原始消息
+                            // 数(= 被折叠的待压区条数)。不用 folded-1
+                            // 的"净减"口径:compressible.len()==1(单条
+                            // 巨消息折叠)时净减 = 0,会让 record_compaction
+                            // 的 `dropped_count > 0` 门漏记本次摘要
+                            // (观测盲区);trace/前端展示的"被折叠条数"
+                            // 语义也更直观。
+                            summary_result = Some(crate::agent::context::CompactResult {
+                                messages: folded,
+                                dropped_count: folded_count,
+                                tokens_before: tokens_pre,
+                                tokens_after,
+                                degradation: crate::agent::context::DegradationKind::None,
+                                method: crate::agent::context::CompactMethod::Summary,
+                                summary_usage: usage,
+                            });
+                        }
+                    }
+                    SummaryOutcome::Failed { reason } => {
+                        // 摘要失败(LLM 错误 / 空输出 / 落库失败):
+                        // 失败计数 +1(连续 3 次熔断)→ 机械兜底
+                        // (messages 未动 —— helper 只借用)。
+                        breaker.record_failure(&session_id).await;
+                        // 先读后记:tracing 字段里内联 .await 会让
+                        // future 变非 Send(chat.rs 的 tokio::spawn 边界)。
+                        let failures = breaker.failures(&session_id).await;
+                        tracing::warn!(
+                            request_id = %rid,
+                            session_id = %session_id,
+                            turn,
+                            reason,
+                            failures,
+                            "agent loop: LLM summary compaction failed — falling back to mechanical drop (C3/PR2)"
+                        );
+                    }
+                    SummaryOutcome::Cancelled => {
+                        // 用户取消:不计熔断、不 warn(非摘要机制失败);
+                        // 主 turn 的取消 select 会立刻接管,机械兜底空转。
+                    }
+                }
+            }
+        }
+
+        // ---- 机械路径(未触发摘要 / 摘要失败 / gate 关闭)----
+        let compacted = if let Some(r) = summary_result {
+            r
+        } else {
+            crate::agent::context::compact_messages(messages, context_window).await
+        };
         if compacted.dropped_count > 0 {
             tracing::info!(
                 request_id = %rid,
@@ -198,7 +392,9 @@ pub(crate) async fn drive_turn(
         }
         // E2 trace (2026-07-14): record C3 compaction observation
         // (both normal compaction + StillOver error). Always-on
-        // emit + persist; best-effort on the DB write.
+        // emit + persist; best-effort on the DB write. PR2:seq 用
+        // 推进后的游标 —— 摘要行已落库,本 turn 的 persist 行(及其
+        // turn_trace 行)排在摘要行之后,对齐才成立。
         if compacted.dropped_count > 0
             || matches!(
                 compacted.degradation,
@@ -1753,5 +1949,259 @@ pub(crate) async fn drive_turn(
         last_usage_terminal,
         workflow_ctx,
         cancelled,
+        // C3 PR2:水位锚点穿出(未压缩的 turn 原样带回上一 turn 的值)。
+        summary_anchor,
     })
+}
+
+// ---------------------------------------------------------------------------
+// C3 摘要压缩 PR2(08-18-llm-context-compaction)—— 摘要旁路 completion
+// ---------------------------------------------------------------------------
+
+/// [`attempt_summary_compaction`] 的结果。
+enum SummaryOutcome {
+    /// 摘要生成 + 落库双成功(design §4.2/§4.3):
+    /// - `messages`:回填后的列表 = 合成头 + [前缀+摘要] + 保留区 + 当前输入;
+    /// - `seq`:推进后的游标(摘要行占了原 seq,返回 insert 的 +1);
+    /// - `anchor`:新水位锚点(纯摘要 content + 摘要行 seq);
+    /// - `usage`:摘要调用的 token usage(只进 trace,不混主 turn 口径);
+    /// - `tokens_after` / `folded_count`:回填后估算 / 被折叠的消息数。
+    Applied {
+        messages: Vec<ChatMessage>,
+        seq: i64,
+        anchor: crate::agent::compaction::SummaryAnchor,
+        usage: Option<crate::llm::types::TokenUsage>,
+        tokens_after: u32,
+        folded_count: usize,
+    },
+    /// 失败(LLM 错误 / 空输出 / 落库失败)。`messages` 由调用方保留
+    /// 所有权(helper 只借用,失败时原样走机械兜底);`reason` 进
+    /// warn 日志。**失败计数由调用方统一处理**(走到这里的一定是
+    /// 真实尝试失败,gate 关闭/空待压区根本不进本函数)。
+    Failed { reason: &'static str },
+    /// 用户在摘要打开期间取消。**不是摘要机制的失败** —— 不计熔断
+    /// (连续 3 次用户取消就永久跳过摘要是行为倒退,且熔断粘性下
+    /// 无法靠成功清零);主 turn 的 select 会立刻命中取消臂,机械
+    /// 兜底是空转(无害)。
+    Cancelled,
+}
+
+/// 摘要旁路 completion 的 retry sink:静默(no-op)。摘要调用是 turn
+/// 入口的后台旁路 —— retrying 通知若走 `LlmRetrySink` 会挂到
+/// in-flight 的主 assistant 占位气泡上,用户会看到"还没开始输出就
+/// 在重试"的困惑。可观测性由失败 warn + 熔断 registry + trace 的
+/// method/mechanical 兜底信号承担。
+struct SummaryRetrySink;
+
+impl RetrySink for SummaryRetrySink {
+    fn emit_retrying(&self, _event: crate::llm::retry::RetryingEvent) {}
+}
+
+/// 一次 LLM 摘要压缩尝试(design §4.2 + §4.3,drive.rs C3 块的
+/// 摘要路径主体;仅在 gate 全开 + 超触发线 + 待压区非空时进入)。
+///
+/// 时序契约(implement.md 风险节):**摘要行 insert 必须在内存回填
+/// 生效之前成功** —— 内存替换而无持久化会破坏 AC2"第二请求不重付"
+/// (前端 reloadAfterFinalize 从 DB 回灌,没有 DB 行就没有水位)。
+/// 落库失败 = 摘要失败,整体走机械兜底。
+///
+/// 摘要 LLM 调用是**旁路 completion**:无 tools、不进 tools 执行链
+/// (不 audit tool_executed)、usage 不进 `update_last_turn_usage`。
+/// thinking 禁用说明:`Provider::send` 无请求级开关,靠 prompt 的
+/// "Output ONLY the summary" 指令约束 + 采集时忽略 ThinkingDelta
+/// (thinking 内容对摘要正文无贡献);输出超长由
+/// `clamp_summary_output` 按 4k token 截断兜底。
+#[allow(clippy::too_many_arguments)]
+async fn attempt_summary_compaction(
+    provider: Arc<dyn Provider>,
+    token: &CancellationToken,
+    db: &SqlitePool,
+    session_id: &str,
+    messages: &[ChatMessage],
+    synthetic_prefix_len: usize,
+    cut: usize,
+    prior: Option<crate::agent::compaction::SummaryAnchor>,
+    db_rows: &[crate::db::MessageRow],
+    seq: i64,
+    tokens_before: u32,
+    context_window: u32,
+) -> SummaryOutcome {
+    use crate::agent::compaction::{
+        build_compaction_prompt, build_summary_chat_message, clamp_summary_output,
+        compressible_cutoff_seq, COMPACTION_SUMMARY_KIND,
+    };
+
+    // PR2.5(修订 2026-08-18):cutoff_seq 精确计算(design §4.3)。**在
+    // LLM 调用之前**算 —— 对齐失效(wire 与 DB 行序失配 / 待压区退化
+    // 到只剩 prior 摘要)直接走失败路径,不为注定落不了库的摘要付一次
+    // 旁路 completion。精确值的对齐论证见 `compressible_cutoff_seq`
+    // 文档:无折叠场景 = `db_rows[cut - synthetic_prefix_len - 1].seq`
+    // (design §4.3 原式);有折叠场景(水位命中 / 同 loop 上一轮压缩,
+    // 即 prior.is_some)按 `seq > prior.cutoff 且 kind ≠ summary` 的
+    // 过滤后缀数行 —— 摘要行按插入游标排在保留区之后,naive 下标会把
+    // 保留区数进待压区(cutoff 过大 → 下一请求丢保留区,PR2 check P1
+    // 的错向)或数错行(cutoff 过小 → 已摘要行重复出席)。
+    let cutoff_seq = match compressible_cutoff_seq(
+        messages,
+        synthetic_prefix_len,
+        cut,
+        prior.as_ref(),
+        db_rows,
+    ) {
+        Ok(c) => c,
+        Err(reason) => {
+            if std::env::var("P1_DBG").is_ok() {
+                eprintln!(
+                    "DBG cutoff declined: reason={} cut={} P={} prior={:?} db_rows={}",
+                    reason,
+                    cut,
+                    synthetic_prefix_len,
+                    prior.as_ref().map(|a| (a.seq, a.cutoff)),
+                    db_rows.len()
+                );
+            }
+            tracing::warn!(
+                session_id = %session_id,
+                turn_cut = cut,
+                synthetic_prefix_len,
+                reason,
+                "agent loop: compaction cutoff misaligned — declining summary attempt, mechanical fallback (C3/PR2.5)"
+            );
+            return SummaryOutcome::Failed { reason };
+        }
+    };
+
+    let compressible = &messages[synthetic_prefix_len..cut];
+    let prompt = build_compaction_prompt(compressible, prior.as_ref(), context_window).await;
+    let summary_request = ChatMessage {
+        role: Role::User,
+        content: MessageContent::Text(prompt),
+        speaker: None,
+        attachments: None,
+    };
+
+    // 旁路 completion:retry_open 包裹(A5+ 现成),无 tools。
+    let mut rng = fastrand::Rng::new();
+    let sink = SummaryRetrySink;
+    let outcome = retry_open(
+        provider.as_ref(),
+        None,
+        vec![summary_request],
+        vec![],
+        &RetryPolicy::default(),
+        token,
+        &sink,
+        &mut rng,
+    )
+    .await;
+    let mut stream = match outcome {
+        OpenOutcome::Stream(s) => s,
+        // 用户在摘要打开期间取消 —— 按失败处理;主 turn 的 select
+        // 会立刻命中取消臂正常退出,机械兜底是空转(无害)。
+        OpenOutcome::Cancelled => return SummaryOutcome::Cancelled,
+    };
+
+    // 输出剥壳:只收 assistant text(Delta),取 Done 的 usage;
+    // thinking / signature / tool 事件一概忽略(禁 thinking 的
+    // 采集口径)。流错误 = 摘要失败 —— 含 Err(LlmError) 与
+    // Ok(ChatEvent::Error) 两种形态(与主 turn 的 RULE-A-011
+    // 转换同源:mid-stream 错误可能以任一形态到达;Ok(Error)
+    // 被忽略的话,部分文本会被当成完整摘要落库)。
+    let mut text = String::new();
+    let mut usage: Option<crate::llm::types::TokenUsage> = None;
+    let mut errored = false;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatEvent::Delta { text: t }) => text.push_str(&t),
+            Ok(ChatEvent::Done { usage: u, .. }) => usage = u,
+            Ok(ChatEvent::Error { .. }) => {
+                errored = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                errored = true;
+                break;
+            }
+        }
+    }
+    if errored {
+        return SummaryOutcome::Failed {
+            reason: "summary stream errored",
+        };
+    }
+    if text.trim().is_empty() {
+        return SummaryOutcome::Failed {
+            reason: "summary output empty",
+        };
+    }
+    let summary_text = clamp_summary_output(text);
+
+    // 回填列表先在内存构建(纯 move/clone,无副作用),估算
+    // tokens_after 进 metadata;**落库成功后才把它交回调用方**。
+    let folded_count = compressible.len();
+    let mut folded = Vec::with_capacity(synthetic_prefix_len + 1 + (messages.len() - cut));
+    folded.extend_from_slice(&messages[..synthetic_prefix_len]);
+    folded.push(build_summary_chat_message(&summary_text));
+    folded.extend_from_slice(&messages[cut..]);
+    let tokens_after = crate::agent::context::estimate_messages_tokens(&folded).await;
+
+    // design §2.1 metadata(修订 2026-08-18:cutoff_seq = 待压区末行
+    // 真实 seq,精确值,不再是"摘要行 seq-1"上界 —— 那是当前输入行
+    // 的 seq,会让下一请求的水位折叠吞掉保留区与本请求提问,PR2 check
+    // P1 正是此错)。preserve_from_seq = cutoff + 1(DB 行连续区,可
+    // 精确写入)。model 记 provider 协议族(Debug 名)—— 具体 model
+    // id 未穿进 loop(run_chat_loop 签名硬约束),协议族已足够审计
+    // 区分 Mock/Anthropic/OpenAI。
+    let metadata = serde_json::json!({
+        "kind": COMPACTION_SUMMARY_KIND,
+        "cutoff_seq": cutoff_seq,
+        "preserve_from_seq": cutoff_seq + 1,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "trigger": "auto",
+        "model": format!("{:?}", provider.protocol()),
+        "prior_summary_seq": prior.as_ref().map(|a| a.seq),
+        "summary_usage": usage,
+    });
+
+    // seq 游标契约(复核 P1):吃 loop 当前游标插入、返回推进值,
+    // 绝不走独立 MAX(seq)+1(messages 主键 (session_id, seq) 会与
+    // loop 后续 persist 撞号)。
+    let next_seq = match crate::db::sessions::insert_compaction_summary(
+        db,
+        session_id,
+        &summary_text,
+        seq,
+        &metadata,
+    )
+    .await
+    {
+        Ok(next) => next,
+        Err(e) => {
+            // 落库失败 = 摘要失败(内存替换而无持久化会破 AC2)。
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                seq,
+                "agent loop: insert_compaction_summary failed — treating as summary failure"
+            );
+            return SummaryOutcome::Failed {
+                reason: "summary persist failed",
+            };
+        }
+    };
+
+    SummaryOutcome::Applied {
+        anchor: crate::agent::compaction::SummaryAnchor {
+            seq, // 摘要行的 seq(插入游标,非推进值)
+            content: summary_text,
+            cutoff: cutoff_seq, // PR2.5:随锚点穿参,同 loop 二次压缩的对齐基准
+        },
+        messages: folded,
+        seq: next_seq,
+        usage,
+        tokens_after,
+        folded_count,
+    }
 }

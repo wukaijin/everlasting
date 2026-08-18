@@ -10,6 +10,7 @@
 #[allow(unused_imports)]
 use super::{migrations, models, projects, providers, sessions, types};
 
+mod compaction_summary;
 mod fields_worktree;
 mod latency_message;
 mod model_usage;

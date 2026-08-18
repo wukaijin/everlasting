@@ -59,6 +59,27 @@ pub(crate) struct LoopInit {
     /// workers inject via `subagent/prompt.rs` instead and never
     /// populate this (design §3.5a).
     pub(crate) memory_token: Option<u32>,
+    /// C3 摘要压缩 PR1 (08-18-llm-context-compaction):
+    /// init 时水位替换命中则种子为水位摘要(`SummaryAnchor`,
+    /// 纯摘要正文 + DB 行 seq),PR2 的 drive_turn 压缩路径经
+    /// `DriveTurnOutcome` 循环内穿参更新(同 `loop_hit_count`
+    /// 模式),供增量合并的 `<prior-summary>` 注入(评审 P1-1
+    /// 修正:不按"摘要落在位置 2"猜)。`None` = 本请求无水位
+    /// (未压缩过 / gate 关 / 对齐 fail-open)。
+    pub(crate) summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
+    /// C3 摘要压缩 PR1 预留(PR2 开始读取):init 完成全部合成插入
+    /// (B5 memory 头对 ×2 + B4 skill listing ×1)后的合成头长度。
+    /// PR2 的待压区与保留区都从这里起算,不把每请求重注入的
+    /// skill listing 喂给摘要(design §4.1,评审 P2-2)。恒有值
+    /// (无合成插入时为 0),与水位是否命中无关。
+    pub(crate) synthetic_prefix_len: usize,
+    /// C3 摘要压缩 PR2(08-18-llm-context-compaction):摘要压缩
+    /// 总 gate(`llm_compaction_enabled && !worker && !群聊`,与
+    /// 上面水位替换的 `compaction_on` 同源同值 —— 每 request 读
+    /// 一次 config,穿 LoopInit 免去 drive 侧重复读库)。drive_turn
+    /// 的 C3 块据此决定超线时先尝试摘要还是直走机械;熔断
+    /// (`compaction_registry`)是 drive 侧的第二重独立 gate。
+    pub(crate) compaction_on: bool,
 }
 
 /// run_chat_loop 初始化段(L591–1262):CancellationGuard 构造之后、
@@ -401,6 +422,63 @@ pub(crate) async fn prepare_loop_state(
         _ => true,
     } && !effective_is_worker
         && !is_group_chat;
+    // C3 摘要压缩 PR1 (08-18-llm-context-compaction): 水位替换 gate,
+    // 口径照抄上面的 digest gate —— 开关(best-effort 缺省 on,
+    // `"false"` 才关,fail-open 同 `tools_stub_enabled`)&& !worker
+    // && !群聊(`session_type` 判定,worker/群聊路径不进这条替换:
+    // worker 有 200 turn + resume 兜,群聊有 30 轮编排上限)。
+    // 开关关 = 水位替换停用,完全回到 main 行为(design §10 回滚点)。
+    let compaction_on =
+        match crate::db::config::get_config_value(&db, "llm_compaction_enabled").await {
+            Ok(Some(v)) => v != "false",
+            _ => true,
+        } && !effective_is_worker
+            && !is_group_chat;
+    // C3 水位替换:对 raw wire 历史操作,**必须发生在下方 B5 memory
+    // 头对 insert(0/1) 与 B4 skill listing 插入之前** —— 头对照常落
+    // 在替换后列表的 0-1 位,摘要消息在合成头之后(位置 ≥ 2,memory
+    // cache 断点不 bust,design §3)。DB 是 SoT:wire 层 ChatMessage
+    // 无 metadata 字段,前端无法告知 kind;`loaded_session.messages`
+    // 在上面已现成加载,零额外查询。算法与对齐防御见
+    // `agent::compaction` 模块文档(依赖前端 reloadAfterFinalize
+    // 保证 wire 含摘要行 —— 评审 P1-3)。
+    let mut summary_anchor: Option<crate::agent::compaction::SummaryAnchor> = None;
+    if compaction_on {
+        match crate::agent::compaction::apply_compaction_watermark(
+            messages,
+            &loaded_session.messages,
+        ) {
+            crate::agent::compaction::WatermarkResult::Applied {
+                messages: folded,
+                anchor,
+            } => {
+                // PR1:摘要消息直接用 DB 行 content(纯摘要,无前缀
+                // 话术 —— 前缀在 PR2 的 in-context 构建时拼接,不落库,
+                // 评审 P1-2)。`summary_anchor` 是 PR2 增量合并的种子
+                // (`DriveTurnOutcome` 循环内穿参,design §4.2)。
+                messages = folded;
+                summary_anchor = Some(anchor);
+            }
+            crate::agent::compaction::WatermarkResult::Miss {
+                messages: original,
+                reason,
+            } => {
+                // 对齐失败 ≠ 哑失败(评审 P1-3):warn 可观测后
+                // fail-open 回全量历史 = main 行为。本 PR 只用
+                // tracing 落 watermark_miss;DB trace 扩展属 PR2。
+                if let crate::agent::compaction::MissReason::AlignmentFailed { summary_seq } =
+                    reason
+                {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        summary_seq,
+                        "watermark_miss: compaction summary row present but wire history does not align; fail-open to full history"
+                    );
+                }
+                messages = original;
+            }
+        }
+    }
     let instructions_blocks = if digest_on {
         let loaded_sections = crate::memory::digest::registry().get(&session_id).await;
         crate::memory::loader::build_instructions_blocks_with_digest(
@@ -491,6 +569,9 @@ pub(crate) async fn prepare_loop_state(
     )
     .await;
     let skill_blocks = crate::skill::loader::build_skill_listing_block(&skill_infos);
+    // C3 PR1 预留:bool 先行捕获(skill_blocks 会被 move 进下面的
+    // insert),`synthetic_prefix_len` 依赖它。
+    let has_skill_listing = !skill_blocks.is_empty();
     if !skill_blocks.is_empty() {
         // Insert after the memory user/assistant pair (pos 2) when
         // memory is present, else at the head (pos 0).
@@ -505,6 +586,15 @@ pub(crate) async fn prepare_loop_state(
             },
         );
     }
+    // C3 摘要压缩 PR1 预留 (08-18-llm-context-compaction): init 完成
+    // 全部合成插入(B5 头对 insert(0/1) + B4 skill listing)后的
+    // 合成头长度 —— PR2 的待压区/保留区从这里起算(design §4.1)。
+    // 三种布局:memory+skills → 3 / 仅 memory → 2 / 仅 skills → 1 /
+    // 都无 → 0。摘要消息(若水位替换发生)落在合成头之后,位置随
+    // 布局漂移,这正是 PR2 用 `SummaryAnchor` 而非位置猜测的原因
+    // (评审 P1-1)。
+    let synthetic_prefix_len =
+        (if has_memory { 2 } else { 0 }) + (if has_skill_listing { 1 } else { 0 });
 
     // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
     // `head_sha` is now MUTABLE and refreshed at the start of every
@@ -871,5 +961,8 @@ pub(crate) async fn prepare_loop_state(
         system_prompt,
         memory_token,
         digest_on,
+        summary_anchor,
+        synthetic_prefix_len,
+        compaction_on,
     })
 }

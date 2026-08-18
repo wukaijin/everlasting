@@ -95,3 +95,25 @@ from index counts.
 old rows searchable), delete propagation, `UPDATE OF text` red line
 (metadata/latency updates don't churn docsize; text rewrite swaps the index),
 LIKE-wildcard literalism, per-kind limit semantics.
+
+### Pattern: compaction_summary 摘要行(C3,2026-08-18)
+
+- **行形态**:普通 `messages` 行,`role='user'`,`metadata.kind =
+  "compaction_summary"`(无 migration,复用 B1 的 metadata 列;FTS insert
+  trigger 自动索引,D2 可搜)。
+- **两列同值契约**:`content` 与 `text` 列**必须同值写纯摘要正文** ——
+  wire 对齐锚在 `text` 列(前端 rehydrate 回发 text 列原文),in-context
+  折叠从 `content` 重建;两列分叉会让摘要文本漂移。**不要照抄
+  `insert_system_event` 的两列分叉先例**(content 带前缀、text 不带)。
+  回填前缀话术(`SUMMARY_CONTEXT_PREFIX`)只加在 in-context 构建时,不落库。
+- **metadata 字段**:`cutoff_seq`(被压区末行真实 seq,**load-bearing 水位
+  折叠点,禁止 seq-1 近似**)/ `preserve_from_seq`(cutoff+1)/ `tokens_before`/
+  `tokens_after` / `trigger` / `model`(协议族 Debug 名)/ `prior_summary_seq`/
+  `summary_usage`。
+- **seq 分配**:摘要行 insert **吃 loop 的 seq 游标、返回推进值**,绝不
+  独立 `MAX(seq)+1`(活跃 loop 内会与 loop 后续 persist 撞
+  `(session_id, seq)` 主键;`insert_system_event` 的 MAX+1 只在无活跃
+  loop 的 IPC 路径安全)。
+- **水位语义**:context = `[最新摘要行] + [seq > cutoff_seq 且 kind ≠
+  compaction_summary 的行]`;保留区跨请求存活;旧摘要行被增量合并吸收
+  (kind 过滤防重复);D3 cascade 删摘要行 → 倒序找现存最新自愈。

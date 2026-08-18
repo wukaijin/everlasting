@@ -58,6 +58,13 @@ export interface CompactionPayload {
    *  turn is about to abort because compaction alone didn't
    *  bring the context under the threshold). */
   degradation: "none" | "no_candidates" | "still_over" | string;
+  /** 08-18-llm-context-compaction PR2:压缩路径
+   *  (`"none"` / `"summary"` / `"mechanical"`)。旧回看行(PRPC2
+   *  之前)没有该字段 —— 消费侧须按 `"none"` 兜底。 */
+  method?: "none" | "summary" | "mechanical" | string;
+  /** PR2:摘要 LLM 调用的 usage(仅 method=summary 的行有;live
+   *  wire 不带,只有 DB 回看路径的 compaction_json 里有)。 */
+  summary_usage?: TokenUsagePayload;
 }
 
 /** C2 loop-detection soft hint. Mirrors Rust
@@ -207,6 +214,10 @@ export interface ContextCompactedEvent {
   tokens_after: number;
   dropped_count: number;
   degradation: string;
+  /** 08-18 PR2:压缩路径(`"none"` / `"summary"` / `"mechanical"`)。
+   *  optional —— 旧后端 wire 无此字段,消费侧(store/live 归一化)
+   *  须按 `"none"` 兜底。 */
+  method?: string;
 }
 
 /** Mirror of Rust `ChatEvent::LoopHint` payload. */

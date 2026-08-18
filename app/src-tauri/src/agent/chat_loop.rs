@@ -670,6 +670,14 @@ pub async fn run_chat_loop(
         mut system_prompt,
         memory_token,
         digest_on,
+        // C3 摘要压缩 PR2 (08-18-llm-context-compaction):水位锚点 +
+        // 合成头长度 + 摘要 gate。`summary_anchor` 是跨 turn 可变状态
+        // —— drive_turn 每次成功压缩后更新,经 `DriveTurnOutcome`
+        // 回写(同 `loop_hit_count` 线程模式,覆盖同 loop 内二次压缩,
+        // 评审 P1-1 修正)。
+        mut summary_anchor,
+        synthetic_prefix_len,
+        compaction_on,
     } = init;
 
     // -----------------------------------------------------------------
@@ -941,6 +949,15 @@ pub async fn run_chat_loop(
             memory_token,
             // WP2: digest gate(注入与元工具 append 同源)。
             digest_on,
+            // C3 摘要压缩 PR2 (08-18-llm-context-compaction):水位
+            // 锚点(跨 turn 可变,drive 成功压缩后更新)、合成头长度
+            // (待压区/保留区起算)、摘要 gate(开关 && !worker &&
+            // !群聊)。熔断 registry 走进程级单例
+            // (`compaction::compaction_registry()`),不经参数 ——
+            // run_chat_loop 签名是硬约束。
+            summary_anchor,
+            synthetic_prefix_len,
+            compaction_on,
         )
         .await
         {
@@ -958,6 +975,9 @@ pub async fn run_chat_loop(
         permission_ctx = drive_outcome.permission_ctx;
         loop_window = drive_outcome.loop_window;
         loop_hit_count = drive_outcome.loop_hit_count;
+        // C3 摘要压缩 PR2:水位锚点回写(同 loop 二次压缩时,
+        // 下一 turn 的 prior-summary 来自循环内 anchor 而非 init 种子)。
+        summary_anchor = drive_outcome.summary_anchor;
         last_usage_terminal = drive_outcome.last_usage_terminal;
         workflow_ctx = drive_outcome.workflow_ctx;
         let tool_calls = drive_outcome.tool_calls;

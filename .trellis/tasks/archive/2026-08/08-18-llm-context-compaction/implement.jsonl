@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "C3 关卡与 agent loop 架构约束:压缩挂点、turn 边界、不变量(RULE-A-001/002)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "messages 表 metadata 契约与 turn_trace 写点规范"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider 调用契约(摘要侧路 completion 走同契约 + retry_open)"}
+{"file": ".trellis/tasks/08-18-llm-context-compaction/research/01-c3-current-state.md", "reason": "现状基线:接线点/组原子性/前端全量重发约束"}
+{"file": ".trellis/tasks/08-18-llm-context-compaction/research/05-synthesis-and-adaptation.md", "reason": "决议与方案骨架(用户已批 Q1-Q6)"}

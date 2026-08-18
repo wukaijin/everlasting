@@ -370,6 +370,16 @@ pub async fn delete_session_inner(
     // 一处清理两边生效。
     crate::memory::digest::registry().clear(&session_id).await;
 
+    // C3 摘要压缩 PR2 (08-18-llm-context-compaction): clear the
+    // session's compaction breaker count(熔断 registry 清理,同上 ——
+    // session_id 复用不得继承旧 session 的连续失败计数,否则新 session
+    // 第一条消息就被跳过摘要直达机械)。进程级 OnceLock 单例,不经
+    // AppState(选型同 digest:run_chat_loop 签名硬约束),本 inner
+    // 函数一处清理两边生效。
+    crate::agent::compaction::compaction_registry()
+        .clear(&session_id)
+        .await;
+
     // B1 (2026-08-16): delete the session's image-attachments
     // directory (best-effort, same wiring point as the stub/digest
     // registry cleanup above — a deleted session leaves no orphan
