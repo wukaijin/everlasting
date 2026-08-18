@@ -220,6 +220,12 @@ pub enum ChatEvent {
         tokens_after: u32,
         dropped_count: u32,
         degradation: String,
+        /// 08-18-llm-context-compaction PR2(design §5):本次压缩
+        /// 路径(`CompactMethod::as_str()`:`"none"` / `"summary"` /
+        /// `"mechanical"`)。向后兼容由 TS 侧承担(wire 字段 optional +
+        /// `?? "none"` 归一化)—— 本枚举仅 Serialize,serde default
+        /// 无从生效。
+        method: String,
     },
     /// E2 trace (2026-07-14): C2 loop-detection soft hint (1-2
     /// consecutive hits, below the ≥3 active-intervention threshold).

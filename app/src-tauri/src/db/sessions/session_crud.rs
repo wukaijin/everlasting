@@ -732,3 +732,58 @@ pub async fn insert_system_event(
     .await?;
     Ok(())
 }
+
+/// C3 摘要压缩 PR2(08-18-llm-context-compaction,design §4.3):
+/// 插入一行 LLM 压缩摘要(`role='user'` + `metadata.kind =
+/// compaction_summary`),仿 [`insert_system_event`] 的落库形态。
+///
+/// **与 insert_system_event 的两处关键差异**:
+///
+/// 1. **seq 吃传入游标,返回推进值**(复核 P1 级):绝不走独立
+///    `MAX(seq)+1` —— 活跃 loop 内 loop 自己持有内存 seq 游标,独立
+///    MAX+1 会与 loop 的下一次 persist 撞 `(session_id, seq)` 主键。
+///    调用方(drive.rs C3 块)把 loop 当前 `seq` 传入,摘要行落在
+///    `seq` 处(即当前 turn 持久化行之前,水位链天然有序),返回
+///    `seq + 1` 作为后续 persist 的新游标。
+/// 2. **content 与 text 两列同值写纯摘要**(PR1 check 固化契约):
+///    前端 rehydrate 管线对 text-only user 行回发 `text` 列原文
+///    (水位替换的对齐锚点,见 `agent::compaction` 模块文档),
+///    折叠消息从 `content` 列重建 —— 两列分叉会让 in-context 摘要
+///    与对齐/前端展示所用文本漂移。`insert_system_event` 先例本身
+///    两列不同值(content 带 "[worktree event] " 前缀),**别照抄**。
+///    回填前缀话术只在 in-context 构建时拼接,绝不落库(评审 P1-2)。
+///
+/// `metadata` 由调用方组装(design §2.1 字段:tokens_before/after、
+/// trigger、model、prior_summary_seq、summary_usage 等),本函数只
+/// 负责 kind 之外原样透传 —— kind 由调用方写入(与常量
+/// `crate::agent::compaction::COMPACTION_SUMMARY_KIND` 对齐)。
+pub async fn insert_compaction_summary(
+    pool: &SqlitePool,
+    session_id: &str,
+    summary_text: &str,
+    seq: i64,
+    metadata: &serde_json::Value,
+) -> Result<i64, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    // content = 单 Text 块 JSON(insert_system_event 同款形态,
+    // rehydrate 路径可直接解析);text = 同值纯摘要。
+    let content_json = serde_json::json!([{ "type": "text", "text": summary_text }]).to_string();
+    sqlx::query(
+        r#"
+ INSERT INTO messages
+ (session_id, role, content, text, has_tool_calls, has_tool_results,
+ created_at, seq, metadata)
+ VALUES (?, 'user', ?, ?,0,0, ?, ?, ?)
+ "#,
+    )
+    .bind(session_id)
+    .bind(&content_json)
+    .bind(summary_text)
+    .bind(&now)
+    .bind(seq)
+    .bind(metadata.to_string())
+    .execute(pool)
+    .await?;
+    // 推进后的游标:摘要行占了 `seq`,后续 persist 从 seq+1 起。
+    Ok(seq + 1)
+}

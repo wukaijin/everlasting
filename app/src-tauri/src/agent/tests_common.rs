@@ -288,6 +288,18 @@ pub(crate) async fn make_harness() -> TestHarness {
         .await
         .expect("set tools_stub_enabled=false");
 
+    // C3 摘要压缩 PR2 (08-18-llm-context-compaction): 既有测试默认
+    // **关** LLM 摘要压缩 — 摘要路径会先于主 turn 额外消费一次
+    // MockProvider script 条目并折叠 messages,既有测试的
+    // call_count / sent_messages 断言会全数漂移。机械丢组路径
+    // (compact_messages)不受此开关影响,既有 C3 测试照常。摘要
+    // 专项测试(tests_agent_loop/compaction_summary.rs)显式
+    // `set_config_value("llm_compaction_enabled", "true")` 覆盖本默认
+    // (同 stub 先例)。
+    db::config::set_config_value(&pool, "llm_compaction_enabled", "false")
+        .await
+        .expect("set llm_compaction_enabled=false");
+
     TestHarness {
         db: pool,
         project_id,

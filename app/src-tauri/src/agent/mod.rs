@@ -47,6 +47,7 @@ pub mod auto_reflect;
 pub mod behavior_prompt;
 pub mod chat;
 pub mod chat_loop;
+pub mod compaction;
 pub mod context;
 pub mod group_chat;
 pub mod group_chat_loop;

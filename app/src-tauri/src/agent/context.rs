@@ -9,9 +9,9 @@
 //! **Decisions (PRD ADR-lite)**:
 //! - Token estimation reuses `crate::memory::tokens::count_tokens`
 //!   (cl100k_base). 1-2% drift from the Anthropic tokenizer is
-//!   absorbed by the conservative 0.80 trigger / 0.50 target
+//!   absorbed by the conservative 0.85 trigger / 0.50 target
 //!   thresholds — no need for a per-model tokenizer.
-//! - Trigger threshold: `context_window * 0.80`.
+//! - Trigger threshold: `context_window * 0.85` (08-18 起为 0.85,原 0.80).
 //! - Trim target: `context_window * 0.50`.
 //! - Protection priority (high → low):
 //!   1. `messages[0..=1]` — B5 synthetic memory pair
@@ -44,10 +44,19 @@ use crate::memory::tokens::count_tokens;
 
 /// Compaction trigger: when estimated tokens reach this fraction of
 /// `context_window`, compaction kicks in.
-const TRIGGER_RATIO: f64 = 0.80;
+///
+/// 08-18-llm-context-compaction(prd 决议 Q4):0.80 → 0.85 —— 摘要
+/// 路径落地后压缩质量更高,可以更晚触发(少压缩 = 少语义损失)。
+const TRIGGER_RATIO: f64 = 0.85;
 /// Compaction target: after compaction, the estimated tokens should
 /// be at or below this fraction of `context_window`.
 const TARGET_RATIO: f64 = 0.50;
+/// 08-18-llm-context-compaction PR2(design §4.1):**摘要后**复查线。
+/// 摘要成功回填后估算仍超 0.85 × window 的 95%(巨尾消息:保留区
+/// 本身就占 ~10% 窗 + 摘要 + 当前输入)→ 机械丢组兜底 → 仍超则
+/// StillOver fail-fast(RULE-A-002 不变)。低于此线不追加机械丢组
+/// —— 摘要路径的目标是语义保留,不是压到 0.50。
+const SUMMARY_POSTCHECK_RATIO: f64 = 0.95;
 /// The number of messages at the head of the array that are
 /// permanently protected (B5 synthetic memory pair: instructions
 /// user message + assistant ack). See `chat.rs` lines ~355-388 for
@@ -96,6 +105,33 @@ impl DegradationKind {
     }
 }
 
+/// 08-18-llm-context-compaction PR2(design §5):本次压缩走的路径。
+/// 观测维度 —— `compaction_json` / `ChatEvent::ContextCompacted` 的
+/// `method` 字段;前端 TracePanel TurnCard 压缩 cell 显示徽标(PR3)。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub enum CompactMethod {
+    /// 未触发(低于触发线 / 无可压候选)。
+    None,
+    /// LLM 摘要路径:待压区折叠为 handoff 摘要(含摘要后机械兜底
+    /// 的组合路径 —— 摘要发生了就以 Summary 记)。
+    Summary,
+    /// 机械丢组(legacy C3;现在同时是摘要失败/熔断/gate 关闭的
+    /// fallback tier)。
+    Mechanical,
+}
+
+impl CompactMethod {
+    /// Stable string for serialization (trace payload / audit),
+    /// consumed by the E2 trace pipeline + TS `CompactionPayload`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Summary => "summary",
+            Self::Mechanical => "mechanical",
+        }
+    }
+}
+
 /// Result of [`compact_messages`]. Always returned — even when no
 /// compaction happened (in which case `dropped_count == 0` and
 /// `messages` is unchanged from the input). The `degradation` field
@@ -119,6 +155,12 @@ pub struct CompactResult {
     /// safe-to-proceed; `StillOver` MUST be surfaced as an Error
     /// by the agent loop.
     pub degradation: DegradationKind,
+    /// 08-18-llm-context-compaction PR2:本次压缩路径(观测)。
+    pub method: CompactMethod,
+    /// PR2:摘要 LLM 调用的 usage(仅 `method == Summary` 时有值)。
+    /// **不混入 `update_last_turn_usage`**(主 turn 口径不变,
+    /// design §5),只进 `compaction_json`。
+    pub summary_usage: Option<crate::llm::types::TokenUsage>,
 }
 
 /// Estimate the total token count of a message list using the
@@ -126,7 +168,7 @@ pub struct CompactResult {
 ///
 /// This is an **approximation** — the real tokenizer used by the
 /// upstream model may differ by 1-2%. The compaction thresholds
-/// (0.80 / 0.50) leave enough headroom to absorb this drift.
+/// (0.85 / 0.50) leave enough headroom to absorb this drift.
 ///
 /// The estimate sums the visible text of every message (`role` +
 /// `content.to_text()`). Tool inputs and tool results are also
@@ -248,6 +290,8 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
             tokens_before,
             tokens_after: tokens_before,
             degradation: DegradationKind::None,
+            method: CompactMethod::None,
+            summary_usage: None,
         };
     }
 
@@ -263,6 +307,8 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
             tokens_before,
             tokens_after: tokens_before,
             degradation: DegradationKind::NoCandidates,
+            method: CompactMethod::None,
+            summary_usage: None,
         };
     }
 
@@ -281,6 +327,8 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
             tokens_before,
             tokens_after: tokens_before,
             degradation: DegradationKind::NoCandidates,
+            method: CompactMethod::None,
+            summary_usage: None,
         };
     }
 
@@ -318,6 +366,8 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
             tokens_before,
             tokens_after: tokens_before,
             degradation: DegradationKind::NoCandidates,
+            method: CompactMethod::None,
+            summary_usage: None,
         };
     }
 
@@ -357,18 +407,32 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
         tokens_before,
         tokens_after,
         degradation,
+        // 机械路径自报 Mechanical(真正丢组才走到这里;上方所有
+        // 早返都是 CompactMethod::None)。
+        method: CompactMethod::Mechanical,
+        summary_usage: None,
     }
 }
 
 /// Compute the token count at which compaction triggers.
-fn trigger_threshold(context_window: u32) -> u32 {
+///
+/// 08-18-llm-context-compaction PR2:`pub(crate)` —— drive.rs 的摘要
+/// 路径先自查触发线(决定是否尝试摘要),与 `compact_messages`
+/// 内部共用同一常量(评审 P3:helper 与常量同步改 0.85)。
+pub(crate) fn trigger_threshold(context_window: u32) -> u32 {
     ((context_window as f64) * TRIGGER_RATIO) as u32
 }
 
 /// Compute the token count that compaction should bring the list
 /// down to.
-fn target_threshold(context_window: u32) -> u32 {
+pub(crate) fn target_threshold(context_window: u32) -> u32 {
     ((context_window as f64) * TARGET_RATIO) as u32
+}
+
+/// 08-18-llm-context-compaction PR2(design §4.1):摘要成功后的复查
+/// 线(`window × 0.95`)。摘要回填后的估算仍超此线 → 机械丢组兜底。
+pub(crate) fn summary_postcheck_threshold(context_window: u32) -> u32 {
+    ((context_window as f64) * SUMMARY_POSTCHECK_RATIO) as u32
 }
 
 /// Estimate tokens across `messages`, skipping indices flagged in
@@ -407,7 +471,12 @@ async fn estimate_messages_tokens_iter(messages: &[ChatMessage], dropped: &[bool
 /// The returned ranges are `(start, end)` exclusive-end indices
 /// into `messages`, ordered oldest-first (so the caller can drop
 /// from the front until the budget is satisfied).
-fn group_droppable_turns(
+///
+/// 08-18-llm-context-compaction PR2:`pub(crate)` —— 摘要路径的
+/// `compute_preservation_region` 反方向复用同一组语义(组边界 =
+/// RULE-A-001 原子性边界),保证两条压缩路径对"什么是一个可丢弃/
+/// 可保留单元"的判定永不漂移。
+pub(crate) fn group_droppable_turns(
     messages: &[ChatMessage],
     head: usize,
     tail_index: usize,
@@ -604,8 +673,8 @@ mod tests {
             user("what's up?"),
         ];
         let before = messages.clone();
-        // context_window = 200_000 → trigger at 160_000. Our tiny
-        // messages are well under.
+        // context_window = 200_000 → trigger at 170_000 (PR2 起 0.85).
+        // Our tiny messages are well under.
         let result = compact_messages(messages, 200_000).await;
         assert_eq!(result.dropped_count, 0, "nothing should be dropped");
         assert_eq!(
@@ -632,7 +701,7 @@ mod tests {
         messages.push(user("B5 memory instructions go here"));
         messages.push(assistant("Understood."));
         // Each turn pair ~ 100+ tokens. 10 of them → >1000 tokens,
-        // well above 800 (0.80 * 1000) and well above the trim
+        // well above 850 (0.85 * 1000) and well above the trim
         // target 500 (0.50 * 1000).
         for _ in 0..10 {
             messages.push(user(big_pad(800)));
@@ -856,14 +925,32 @@ mod tests {
 
     #[test]
     fn trigger_threshold_matches_prd_ratio() {
-        assert_eq!(trigger_threshold(200_000), 160_000);
-        assert_eq!(trigger_threshold(1000), 800);
+        // 08-18-llm-context-compaction(prd 决议 Q4):0.80 → 0.85。
+        assert_eq!(trigger_threshold(200_000), 170_000);
+        assert_eq!(trigger_threshold(1000), 850);
     }
 
     #[test]
     fn target_threshold_matches_prd_ratio() {
         assert_eq!(target_threshold(200_000), 100_000);
         assert_eq!(target_threshold(1000), 500);
+    }
+
+    /// PR2(design §4.1):摘要后复查线 0.95 —— 摘要回填后仍超此线
+    /// 才追加机械兜底。
+    #[test]
+    fn summary_postcheck_threshold_matches_design_ratio() {
+        assert_eq!(summary_postcheck_threshold(200_000), 190_000);
+        assert_eq!(summary_postcheck_threshold(1_000), 950);
+    }
+
+    /// PR2:`CompactMethod::as_str` 的稳定字符串(CompactionPayload
+    /// / trace json 消费)。
+    #[test]
+    fn compact_method_strings() {
+        assert_eq!(CompactMethod::None.as_str(), "none");
+        assert_eq!(CompactMethod::Summary.as_str(), "summary");
+        assert_eq!(CompactMethod::Mechanical.as_str(), "mechanical");
     }
 
     // -----------------------------------------------------------------------
@@ -1102,7 +1189,7 @@ mod tests {
         //
         // Layout: head[2 small] + middle[1 small droppable] +
         //         tail[1 huge user text].
-        // context_window = 1000 → trigger = 800, target = 500.
+        // context_window = 1000 → trigger = 850, target = 500.
         // The huge tail alone is well over 500 tokens.
         let messages = vec![
             user("B5 memory instructions"),
@@ -1163,11 +1250,29 @@ mod tests {
             assistant("hi"),
             user("current"),
         ];
-        // context_window = 200_000 → trigger = 160_000. The tiny
+        // context_window = 200_000 → trigger = 170_000. The tiny
         // messages are well under the trigger so compaction is a
         // no-op.
         let result = compact_messages(messages, 200_000).await;
         assert_eq!(result.dropped_count, 0);
         assert_eq!(result.degradation, DegradationKind::None);
+        // PR2:未触发路径的 method = None,无摘要 usage。
+        assert_eq!(result.method, CompactMethod::None);
+        assert_eq!(result.summary_usage, None);
+    }
+
+    /// PR2:真正丢组的机械路径自报 `method = Mechanical`。
+    #[tokio::test]
+    async fn compact_dropped_reports_mechanical_method() {
+        let mut messages = vec![user("B5 memory"), assistant("ack")];
+        for _ in 0..10 {
+            messages.push(user(big_pad(800)));
+            messages.push(assistant(big_pad(800)));
+        }
+        messages.push(user("tail"));
+        let result = compact_messages(messages, 1000).await;
+        assert!(result.dropped_count > 0);
+        assert_eq!(result.method, CompactMethod::Mechanical);
+        assert_eq!(result.summary_usage, None);
     }
 }

@@ -45,12 +45,17 @@ pub async fn record_compaction(
     result: &CompactResult,
 ) {
     let degradation = result.degradation.as_str().to_string();
+    // 08-18-llm-context-compaction PR2(design §5):method(压缩路径)
+    // 上 wire;summary_usage 只进 compaction_json(不混入
+    // update_last_turn_usage —— 主 turn 口径不变)。
+    let method = result.method.as_str().to_string();
     let event = ChatEvent::ContextCompacted {
         seq,
         tokens_before: result.tokens_before,
         tokens_after: result.tokens_after,
         dropped_count: result.dropped_count as u32,
         degradation: degradation.clone(),
+        method,
     };
     emit_chat_event_via_sink(sink, rid, &event);
 
@@ -59,6 +64,8 @@ pub async fn record_compaction(
         "tokens_after": result.tokens_after,
         "dropped_count": result.dropped_count,
         "degradation": degradation,
+        "method": result.method.as_str(),
+        "summary_usage": result.summary_usage,
     });
     if let Err(e) =
         crate::db::trace::upsert_turn_trace_compaction(db, session_id, seq, &payload).await
