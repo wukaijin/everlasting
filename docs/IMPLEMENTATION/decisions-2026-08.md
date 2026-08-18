@@ -69,3 +69,16 @@
 - **决策 — limit 每类各自截断**(title N + content N):一类洪水不淹没另一类;测试锁定语义。
 - **live 实证**:2 字中文"权限"跨 3 project 真实命中(LIKE 兜底)/ FTS "worktree" 命中 / title 命中按 updated_at 倒序 / project 过滤精确;"trigram""缓存率" 0 命中经 DB 直查证实为词本身不存在(非索引缺陷)。UI 交互层(浏览器点按)本 session 无浏览器后端未验,组件/路由测试覆盖 + 用户真机 Ctrl+K 复验。
 - 任务:`08-17-cross-session-search`。spec:database-guidelines "messages_fts" Scenario。② Agent 驱动 `search_history` tool 为 follow-up(复用 `db::search::search_messages`,不经 IPC)。
+
+### 2026-08-18 — C3+ 摘要式上下文压缩(LLM 摘要取代机械丢组)
+
+- **Context**:C3(06-12)纯机械丢组无语义保留,长 session 早期决策彻底丢失;去 MAX_TURNS 硬卡的前提是上下文可语义无损续。7 家工具调研(Claude Code/Codex/Gemini CLI/opencode/Cline/Roo/OpenHands/Aider + Manus/Anthropic 通用原则)+ 外部评审(P1-1 位置假设、P1-2 前缀落库、P1-3 对齐依赖)+ check 独立复核(含 P1 级设计缺陷发现)全流程走完,3 PR + 1 修复。
+- **决策 — 水位按 `cutoff_seq` 精确折叠,不是摘要行位置**:PR2 check 发现原设计"摘要行之前的全折叠"会把保留区(15-25k 逐字)与本请求提问一起吞掉——摘要行按 seq 游标插在全量行之后,按位置折叠恰丢最该保的东西,而摘要 transcript 从未覆盖它们。按 cutoff 折叠后保留区/提问/回答跨请求天然存活;旧摘要行被增量合并吸收(kind 过滤防重复)。`cutoff_seq` 因此从"审计冗余"升级为 load-bearing 字段,由 `compressible_cutoff_seq` 精确计算(无折叠 = `db_rows[cut - P - 1].seq`;有折叠 = 过滤后缀数行;退化 = 传递 prior.cutoff)。
+- **决策 — 摘要行 content/text 两列同值写纯摘要,前缀话术不落库**:wire 对齐锚在 text 列(rehydrate 回发 text 列原文),in-context 折叠从 content 重建;前缀落库会进 `<prior-summary>` 滚雪球 + 污染 D2 搜索。不照抄 `insert_system_event` 的两列分叉先例。
+- **决策 — 摘要行 insert 吃 loop 的 seq 游标,绝不独立 `MAX(seq)+1`**:messages 主键 `(session_id, seq)`,活跃 loop 内独立 MAX+1 会与 loop 后续 persist 撞号;`insert_system_event` 的 MAX+1 只在无活跃 loop 的 IPC 路径安全。配套 `permission_ctx.turn_seq` 重指到 assistant 行保审计引用。
+- **决策 — prior-summary 检测用 `SummaryAnchor` 经 `DriveTurnOutcome` 循环内穿参,不用位置猜测**:合成头布局随 memory/skills 有无漂移(摘要实际落位 1/2/3);循环内穿参同时覆盖同 loop 二次压缩(LoopInit 单次穿参罩不住)。
+- **决策 — 熔断走进程级 OnceLock 单例,不加 AppState**:`run_chat_loop` 24+ 参签名是硬约束,AppState 句柄穿不进 loop;同 `memory::digest::registry()` 先例,`delete_session_inner` 清理。连续 3 次失败跳摘要直达机械,成功清零。
+- **决策 — 摘要失败路径必须把 `Ok(ChatEvent::Error)` 当失败**(check 修 bug):mid-stream 错误可能以任一形态到达,漏接 Ok(Error) 会把半截文本当完整摘要落库;降级链 = 摘要失败 → 机械丢组原样 → StillOver fail-fast(RULE-A-002 不变)。
+- **决策 — 观测口径**:`CompactResult.method`(Summary/Mechanical/None)+ `summary_usage`(摘要 usage 不混入 `update_last_turn_usage`,只进 compaction_json;trace.rs 手工 json 三处联动)。TS 侧 `?? "none"` 兼容旧回看行。
+- **偏差记录**:① `preserved_region_and_question_survive_across_requests` 断言一度过严(要求缺席非空文本行最大 seq == cutoff,但被压区末组可能是空 text 的工具配对)——修为"边界行在 DB + 缺席最大非空 seq ≤ cutoff";② live 烟测未跑(catalog 无超线长 session 现场,需真机重编 daemon 后构造),AC1/AC2 的 live 半边留待;③ 全量测试 1 个预存 flaky(`dispatch_main guard` 满并发超时,单发 0.56s 过,基线同挂)。
+- 任务:`08-18-llm-context-compaction`(已归档)。spec:agent-loop-architecture "pattern-llm-compaction" + database-guidelines "compaction_summary" + token-usage-tracking "摘要旁路 usage"。后续任务:MAX_TURNS 软卡化 / 手动 `/compact` / handoff 接力(已立项)。
