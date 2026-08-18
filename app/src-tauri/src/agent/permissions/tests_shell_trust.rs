@@ -236,8 +236,14 @@ fn classify_logical_or_compound_uses_segment_max() {
 
 #[test]
 fn classify_sequence_compound_uses_segment_max() {
-    // cd is NOT in any whitelist → Ask. max(Ask, ReadOnly) = Ask.
-    assert_eq!(classify_prefix("cd foo; ls"), ShellTrust::Ask);
+    // cd is ReadOnly (subshell cwd only, 2026-08-18) → the compound
+    // classifies by its other segments: max(ReadOnly, ReadOnly) =
+    // ReadOnly. Pre-08-18 cd was unlisted → Ask, which dragged every
+    // `cd <dir> && <readonly>` compound to the modal (session
+    // 5df29977: 16 of its 21 asks were cd-headed).
+    assert_eq!(classify_prefix("cd foo; ls"), ShellTrust::ReadOnly);
+    // Unlisted token still escalates: max(Ask, ReadOnly) = Ask.
+    assert_eq!(classify_prefix("rm foo; ls"), ShellTrust::Ask);
     // Two ReadOnly segments → ReadOnly.
     assert_eq!(classify_prefix("echo a; echo b"), ShellTrust::ReadOnly);
 }

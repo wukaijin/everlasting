@@ -160,7 +160,13 @@ pub(crate) const READ_ONLY_WHITELIST: &[&str] = &[
     "printf", "true", "false", "test", // test -f / -d etc.
     "[",    // [ -f ... ]
     "pwd",  // print working dir
-    "env",  // env vars (read)
+    // cd only changes the subshell's cwd — zero FS effect. Being
+    // unlisted dragged every `cd <dir> && <readonly>` compound to
+    // Ask (16 of 21 permission asks in session 5df29977, 08-18);
+    // ReadOnly lets those compounds classify by their other
+    // segments.
+    "cd",  // cd /path && git log …
+    "env", // env vars (read)
     "whoami", "date", "cal", "uname", "which", "type",
     // Structured-data readers
     "jq", // jq '.foo' data.json
