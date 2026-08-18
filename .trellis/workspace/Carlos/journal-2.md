@@ -392,3 +392,29 @@ S6 子任务全部归档。基于 S5 真机截图 30 个痛点(A/B/C/D 组)收�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 38: 排查并修复会话 5df29977 五项异常
+
+**Date**: 2026-08-18
+**Task**: 排查并修复会话 5df29977 五项异常
+**Branch**: `main`
+
+### Summary
+
+DB 取证 + 代码复验锁定五因并全部修复:① pitfall 召回 precision-fix(command_pattern 有值而 probe 无 command 时跳过,edit_file 不再恒注脚);② loop 干预卡片提交后立即 removePending;③ cd 进只读白名单(消 16/21 次弹窗);④ create_session INSERT mode 'chat'→'edit' + confirmYolo 失败 toast(真因 root guard 静默,z-index 假设推翻);⑤ loop 检测 L2 recency 门 + 干预继续后清窗(误报消除;hard 折叠方案因架空 3-strike 被否决)。四轮 turn-smoke live 验证通过;后端定向 + 前端 1100 全绿(全量 2 个 subagent flaky 已归因干净树)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bf820ff` | (see git log) |
+| `fc97922` | (see git log) |
+| `546cea3` | (see git log) |
+| `87886ba` | (see git log) |
+| `07ad211` | (see git log) |
+| `974486b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
