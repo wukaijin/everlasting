@@ -101,6 +101,20 @@ const loopIntervention = computed(
   },
 );
 
+/** 2026-08-18 (5df29977 问题2): drop the pending entry the moment
+ *  the floating intervention card reports a successful submit OR
+ *  skip. Pre-fix nothing removed the entry on the submit path — the
+ *  card lingered until the next session switch (ensureLoaded pull)
+ *  or stream end (reloadAfterFinalize pull); on a long-running loop
+ *  that meant "answered card stays for minutes". The IPC itself
+ *  already resolved the backend QuestionStore (resolveToolQuestion
+ *  inside the card); this mirrors `resolveModeChange`'s
+ *  success-path removePending so the cache converges immediately. */
+function onLoopInterventionSettled(): void {
+  const sid = chatStore.currentSessionId;
+  if (sid) questionCardsStore.removePending(sid);
+}
+
 /** PR5: forwarded to `chatStore.cancel()` so the parent can keep
  *  the ChatInput → ChatPanel → store flow symmetric with `send`. */
 function onStop() {
@@ -990,6 +1004,8 @@ onUnmounted(() => reviewStateStore.stop());
         :tool-use-id="loopIntervention.tool_use_id"
         :questions="loopIntervention.questions"
         state="pending"
+        @answered="onLoopInterventionSettled"
+        @cancelled="onLoopInterventionSettled"
       />
     </div>
   </section>
