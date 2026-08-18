@@ -68,6 +68,38 @@ async fn load_session_returns_none_for_missing() {
     assert!(result.is_none());
 }
 
+/// 2026-08-18 (5df29977 问题4) regression: the INSERT must persist
+/// `mode='edit'`, agreeing with the returned struct's `Mode::Edit`.
+/// b999803 accidentally wrote the legacy `'chat'` into the mode slot
+/// (confused with session_type's DEFAULT 'chat'); the every-init
+/// `chat→edit` scrub migration masked the disagreement, so only
+/// sessions created after the last process start kept the bad value.
+#[tokio::test]
+async fn create_session_persists_edit_mode() {
+    let pool = test_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(s.mode, crate::db::Mode::Edit, "struct field is Edit");
+    // The persisted row must agree — pre-fix the struct said Edit
+    // while the row held the legacy 'chat'.
+    let row: (String,) = sqlx::query_as("SELECT mode FROM sessions WHERE id = ?")
+        .bind(&s.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row.0, "edit", "INSERT must persist edit, not legacy chat");
+}
+
 #[tokio::test]
 async fn persist_and_load_messages() {
     let pool = test_pool().await;

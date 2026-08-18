@@ -221,4 +221,28 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
     // confirmYolo so the modal always closes.
     expect(store.pendingYoloConfirm).toBe(false);
   });
+
+  // 2026-08-18 (5df29977 问题4): the IPC rejection must surface as
+  // an error toast. Pre-fix the catch was console-only — the
+  // root-guard "Cannot enable Yolo as root" rejection left the user
+  // with a closed modal, an unchanged chip, and zero feedback.
+  it("confirmYolo surfaces the backend rejection as an error toast (root guard)", async () => {
+    const sid = seedSession({ id: "s1", mode: "edit" });
+    invokeMock.mockRejectedValue(new Error("Cannot enable Yolo as root"));
+
+    const store = useChatStore();
+    await store.requestSetMode(sid, "yolo");
+    const result = await store.confirmYolo();
+
+    expect(result).toBe(false);
+    // Modal closed + mode NOT flipped (the optimistic update only
+    // runs on the success path).
+    expect(store.pendingYoloConfirm).toBe(false);
+    expect(store.sessions[0].mode).toBe("edit");
+    // The rejection is surfaced with the backend message.
+    const { useProjectsStore } = await import("./projects");
+    const toast = useProjectsStore().toast;
+    expect(toast?.kind).toBe("error");
+    expect(toast?.message).toContain("Cannot enable Yolo as root");
+  });
 });

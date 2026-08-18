@@ -159,6 +159,19 @@ export function createModeActions(ctx: ModeActionsContext) {
       }
     } catch (e) {
       console.error("Failed to confirm Yolo:", e);
+      // 2026-08-18 (5df29977 问题4): surface the backend rejection.
+      // Pre-fix this was console-only — the root guard's
+      // "Cannot enable Yolo as root" left the user with a closed
+      // modal, an unchanged chip, and zero feedback ("无法切换" with
+      // no explanation). Lazy imports match questionCards.ts's
+      // pattern (avoids a static store cycle at module-eval time).
+      const { extractErrorMessage } = await import("../utils/useErrorBus");
+      const { useProjectsStore } = await import("./projects");
+      useProjectsStore().showToast(
+        `Yolo 切换失败：${extractErrorMessage(e)}`,
+        "error",
+        5000,
+      );
       // 2026-07-07: even on failure, unblock the agent loop
       // oneshot (with allow=false) so the LLM doesn't freeze
       // waiting. Only do this when we have a pending resolve

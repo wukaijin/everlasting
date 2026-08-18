@@ -58,12 +58,19 @@ pub async fn create_session(
     let session_type = session_type.unwrap_or("chat");
     let session_type_typed = crate::db::SessionType::from_str_opt(session_type);
 
+    // The `mode` slot below MUST stay 'edit' (mirroring the struct
+    // field). 2026-08-18 (5df29977 问题4): b999803 wrote the legacy
+    // 'chat' here — confused with session_type's DEFAULT 'chat' —
+    // so new sessions' DB rows disagreed with the returned
+    // `Mode::Edit` struct. The every-init `chat→edit` scrub
+    // migration masked it: only sessions created after the last
+    // process start kept the bad value (2 rows in that incident).
     sqlx::query(
         r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
  worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled, plugin_name, session_type)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0, 'dev', ?)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'none', NULL, ?, NULL, 'edit', 0, 'dev', ?)
  "#,
     )
     .bind(session_id)
