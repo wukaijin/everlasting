@@ -905,8 +905,19 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     const isLoopIntervention = payload.tool_use_id.startsWith(
       "loop_intervention_",
     );
+    // MAX_TURNS softcap (08-18-max-turns-softcap): the main loop hit
+    // its turn budget and asks 继续(+200)/压缩后续跑/停止. Same
+    // floating-card rationale as loop_intervention — the synthetic
+    // `turn_limit_softcap_{turn}` id has no tool_use anchor.
+    const isTurnLimitSoftcap = payload.tool_use_id.startsWith(
+      "turn_limit_softcap_",
+    );
     useQuestionCardsStore().addPending(payload.session_id, {
-      kind: isLoopIntervention ? "loop_intervention" : "question",
+      kind: isLoopIntervention
+        ? "loop_intervention"
+        : isTurnLimitSoftcap
+          ? "turn_limit_softcap"
+          : "question",
       payload,
     });
     maybeNotifyPending(payload.session_id, "question");

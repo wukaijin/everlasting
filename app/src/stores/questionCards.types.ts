@@ -426,7 +426,8 @@ export type PendingInteraction =
   | { kind: "question"; payload: ToolQuestionPayload }
   | { kind: "mode_change"; payload: ModeChangePayload }
   | { kind: "task_state_transition"; payload: TaskStateTransitionPayload }
-  | { kind: "loop_intervention"; payload: ToolQuestionPayload };
+  | { kind: "loop_intervention"; payload: ToolQuestionPayload }
+  | { kind: "turn_limit_softcap"; payload: ToolQuestionPayload };
 
 /** IPC return shape of `get_pending_interaction`. Mirrors the
  *  Rust `PendingInteractionEntry` struct (top-level `kind` +
@@ -445,7 +446,8 @@ export interface PendingInteractionEntry {
     | "question"
     | "mode_change"
     | "task_state_transition"
-    | "loop_intervention";
+    | "loop_intervention"
+    | "turn_limit_softcap";
   payload: PendingInteraction;
 }
 

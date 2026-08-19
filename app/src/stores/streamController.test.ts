@@ -1454,6 +1454,42 @@ describe("streamController — C2+ loop-intervention kind routing", () => {
       expect(pending.payload.tool_use_id).toBe("loop_intervention_3");
     }
   });
+
+  // MAX_TURNS softcap (08-18-max-turns-softcap): same routing
+  // contract for the `turn_limit_softcap_{turn}` prefix — the
+  // synthetic id must be tagged `kind: "turn_limit_softcap"` so
+  // ChatPanel renders the floating 继续/压缩后续跑/停止 card,
+  // never `kind: "question"`.
+  it("accepts a turn_limit_softcap pending and distinguishes it from question", () => {
+    const store = useQuestionCardsStore();
+    const sid = "sess-softcap";
+    store.addPending(sid, {
+      kind: "turn_limit_softcap",
+      payload: {
+        session_id: sid,
+        tool_use_id: "turn_limit_softcap_201",
+        questions: [
+          {
+            question: "本轮对话已达到 200 轮上限(agent 仍在工作中)。是否继续?",
+            header: "轮数上限确认",
+            options: [
+              { label: "继续(+200 轮)" },
+              { label: "压缩后续跑" },
+              { label: "停止" },
+            ],
+            multi_select: false,
+          },
+        ],
+        ts: 0,
+      },
+    });
+    const pending = store.getPending(sid);
+    expect(pending?.kind).toBe("turn_limit_softcap");
+    // The discriminated union narrows payload to ToolQuestionPayload.
+    if (pending && pending.kind === "turn_limit_softcap") {
+      expect(pending.payload.tool_use_id).toBe("turn_limit_softcap_201");
+    }
+  });
 });
 
 // A5+ (2026-07-04, R8): retrying event handling. The agent loop's

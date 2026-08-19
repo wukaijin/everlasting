@@ -126,6 +126,32 @@ export interface LoopInterventionAuditPayload {
   run_id?: string | null;
 }
 
+/** MAX_TURNS softcap (08-18-max-turns-softcap, 2026-08-19):
+ *  payload for the turn-limit softcap ask's `turn_limit_softcap`
+ *  audit rows. Mirrors the Rust-side
+ *  `record_turn_limit_softcap_audit` helper's
+ *  `{ turn, budget, action }` shape. `action` discriminates the
+ *  ask branches: `"asked"` (QuestionStore registration succeeded,
+ *  floating card emitted), `"continued"` (user picked
+ *  「继续(+200 轮)」), `"compacted_continued"` (user picked
+ *  「压缩后续跑」 — next turn force-triggers summary compaction),
+ *  `"stopped"` (user picked 「停止」 / malformed answer / card
+ *  skipped / register AlreadyPending degrade), `"timeout_stopped"`
+ *  (10min default no-response timeout — auto-stop),
+ *  `"cancelled"` (user hit Stop while the ask was pending, or the
+ *  oneshot dropped). Worker + group-chat paths never reach the
+ *  softcap (hard cap unchanged) and never write this row. */
+export interface TurnLimitSoftcapAuditPayload {
+  /** Turn number at the boundary hit (= budget + 1). */
+  turn?: number;
+  /** Turn budget at the hit (default 200; +200 per 继续). */
+  budget?: number;
+  /** `"asked"` / `"continued"` / `"compacted_continued"` /
+   *  `"stopped"` / `"timeout_stopped"` / `"cancelled"` — see the
+   *  docstring above. */
+  action?: string;
+}
+
 /** B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
  *  payload for the user-triggered `apply_ui_diff` IPC's success
  *  audit rows. Mirrors the Rust-side
@@ -160,6 +186,7 @@ export type ParsedPayload =
   | { kind: "tool_executed"; payload: ToolExecutedPayload }
   | { kind: "mode"; payload: ModeAuditPayload }
   | { kind: "loop_intervention"; payload: LoopInterventionAuditPayload }
+  | { kind: "turn_limit_softcap"; payload: TurnLimitSoftcapAuditPayload }
   | { kind: "ui_diff_applied"; payload: UiDiffAppliedAuditPayload }
   | { kind: "raw"; raw: unknown }
   | { kind: "empty" };
@@ -189,6 +216,10 @@ const MODE_KINDS = new Set<string>([
 
 const TOOL_EXECUTED_KIND = "tool_executed";
 const LOOP_INTERVENTION_KIND = "loop_intervention";
+// 08-18-max-turns-softcap (2026-08-19): turn-limit softcap ask
+// audit kind. Wire string is locked by
+// `AuditKind::TurnLimitSoftcap.as_str()` in `agent/permissions/audit.rs`.
+const TURN_LIMIT_SOFTCAP_KIND = "turn_limit_softcap";
 // 2026-07-13 (B9+ D4): user-triggered diff apply audit kind.
 // Wire string is locked by `AuditKind::UiDiffApplied.as_str()`
 // in `agent/permissions/audit.rs`.
@@ -220,6 +251,15 @@ export function parseAuditPayload(
     return {
       kind: "loop_intervention",
       payload: parsed as LoopInterventionAuditPayload,
+    };
+  }
+  // 08-18-max-turns-softcap (2026-08-19): turn-budget softcap ask
+  // lifecycle. The payload is `{turn, budget, action}` — see
+  // `record_turn_limit_softcap_audit` on the Rust side.
+  if (kind === TURN_LIMIT_SOFTCAP_KIND) {
+    return {
+      kind: "turn_limit_softcap",
+      payload: parsed as TurnLimitSoftcapAuditPayload,
     };
   }
   // 2026-07-13 (B9+ D4): user-triggered diff apply success.
@@ -291,6 +331,16 @@ export const AUDIT_KIND_OPTIONS: ReadonlyArray<{ value: string | null; label: st
   // surface). Wire string is locked by
   // `AuditKind::LoopIntervention.as_str()` in the Rust side.
   { value: "loop_intervention", label: "循环检测干预" },
+  // 08-18-max-turns-softcap (2026-08-19): the main agent loop hit
+  // its turn budget (default 200) and asked the user via
+  // QuestionStore whether to 继续(+200) / 压缩后续跑 / 停止.
+  // Six actions land here: `asked` (card emitted), `continued`,
+  // `compacted_continued`, `stopped` (user stop / malformed /
+  // skipped / AlreadyPending degrade), `timeout_stopped` (10min
+  // no-response auto-stop), `cancelled` (Stop while pending).
+  // Worker + group chat stay hard-capped and never write this row.
+  // Wire string is locked by `AuditKind::TurnLimitSoftcap.as_str()`.
+  { value: "turn_limit_softcap", label: "轮数软卡" },
   // B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
   // user-triggered diff apply success. The user clicked
   // 应用 on a `<DiffPrimitive>` (or `<ButtonPrimitive>` with
@@ -318,6 +368,7 @@ export type AuditIconFamily =
   | "message-edit"
   | "message-resend"
   | "loop-intervention"
+  | "turn-limit-softcap"
   | "ui-diff-applied"
   | "unknown";
 
@@ -362,6 +413,12 @@ export function iconFamilyForKind(kind: string): AuditIconFamily {
     // the generic "unknown / gray" bucket.
     case "loop_intervention":
       return "loop-intervention";
+    // 08-18-max-turns-softcap (2026-08-19): the turn-budget softcap
+    // ask. Distinct family so the icon reads "turn limit"
+    // (clock, amber — matches the timeout family tone; the softcap
+    // is a budget/timing confirmation, not a critical deny).
+    case "turn_limit_softcap":
+      return "turn-limit-softcap";
     // B9+ D4 (2026-07-13): user-triggered diff apply success.
     // Reuses the `--color-tool-write` emerald (same as executed-
     // success) because the user just successfully wrote files

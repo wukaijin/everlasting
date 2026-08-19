@@ -101,6 +101,26 @@ const loopIntervention = computed(
   },
 );
 
+/** MAX_TURNS softcap (08-18-max-turns-softcap) pending for the
+ *  current session, if any. The main agent loop hit its turn
+ *  budget (default 200) and registered a `TurnLimitSoftcap`
+ *  PendingInteraction (via `tool:question` event with
+ *  `tool_use_id=turn_limit_softcap_N`) offering
+ *  继续(+200)/压缩后续跑/停止. Rendered as a FLOATING card for
+ *  the same no-tool_use-anchor reason as `loopIntervention`
+ *  above (2026-07-28 incident — a synthetic id must never be
+ *  tagged `question`). */
+const turnLimitSoftcap = computed(
+  () => {
+    const sid = chatStore.currentSessionId;
+    if (!sid) return null;
+    const pending = questionCardsStore.getPending(sid);
+    return pending && pending.kind === "turn_limit_softcap"
+      ? pending.payload
+      : null;
+  },
+);
+
 /** 2026-08-18 (5df29977 问题2): drop the pending entry the moment
  *  the floating intervention card reports a successful submit OR
  *  skip. Pre-fix nothing removed the entry on the submit path — the
@@ -111,6 +131,15 @@ const loopIntervention = computed(
  *  inside the card); this mirrors `resolveModeChange`'s
  *  success-path removePending so the cache converges immediately. */
 function onLoopInterventionSettled(): void {
+  const sid = chatStore.currentSessionId;
+  if (sid) questionCardsStore.removePending(sid);
+}
+
+/** MAX_TURNS softcap (08-18-max-turns-softcap): mirrors
+ *  `onLoopInterventionSettled` — drop the pending entry the moment
+ *  the floating softcap card reports a successful submit or skip so
+ *  the answered card doesn't linger on a still-running loop. */
+function onTurnLimitSoftcapSettled(): void {
   const sid = chatStore.currentSessionId;
   if (sid) questionCardsStore.removePending(sid);
 }
@@ -1006,6 +1035,29 @@ onUnmounted(() => reviewStateStore.stop());
         state="pending"
         @answered="onLoopInterventionSettled"
         @cancelled="onLoopInterventionSettled"
+      />
+    </div>
+
+    <!--
+          MAX_TURNS softcap floating card (08-18-max-turns-softcap).
+          When the main agent loop hits its turn budget (default
+          200), the backend registers a `TurnLimitSoftcap` pending
+          interaction and emits it on `tool:question`. This card
+          surfaces the 继续(+200)/压缩后续跑/停止 choice as a
+          TOP-anchored overlay, mirroring the loop-intervention card
+          above — the resolve flow (`resolveToolQuestion`) is
+          identical and the backend's softcap select!{rx} arm
+          interprets the answer (unanswered asks auto-stop after
+          the 10-minute softcap timeout).
+    -->
+    <div v-if="turnLimitSoftcap" class="chat-panel__loop-intervention">
+      <AskUserQuestionCard
+        :session-id="chatStore.currentSessionId ?? ''"
+        :tool-use-id="turnLimitSoftcap.tool_use_id"
+        :questions="turnLimitSoftcap.questions"
+        state="pending"
+        @answered="onTurnLimitSoftcapSettled"
+        @cancelled="onTurnLimitSoftcapSettled"
       />
     </div>
   </section>

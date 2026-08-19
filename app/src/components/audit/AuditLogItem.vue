@@ -100,6 +100,16 @@ const meta = computed<{ iconName: string; colorVar: string }>(() => {
         iconName: "warn",
         colorVar: "var(--color-tool-shell)",
       };
+    // 08-18-max-turns-softcap (2026-08-19): the turn-budget softcap
+    // ask (main loop hit 200 turns → 继续/压缩后续跑/停止 card).
+    // Renders a clock icon in the amber shell color — the softcap
+    // is a timing/budget confirmation, matching the timeout
+    // family's tone.
+    case "turn-limit-softcap":
+      return {
+        iconName: "clock",
+        colorVar: "var(--color-tool-shell)",
+      };
     // B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
     // user-triggered diff apply success. Renders a file-check
     // icon in `--color-tool-write` (emerald) — same color as
@@ -224,6 +234,36 @@ const loopInterventionSummary = computed<string>(() => {
   return `循环检测干预 · ${kindLabel} · 第 ${hit} 次命中 · ${actionLabel}`;
 });
 
+/** MAX_TURNS softcap (08-18-max-turns-softcap): turn-limit softcap
+ *  summary line. Format:
+ *  `轮数软卡 · 第 N 轮 · 预算 B · 动作`. Renders empty for
+ *  non-turn_limit_softcap kinds. */
+const turnLimitSoftcapSummary = computed<string>(() => {
+  if (parsed.value.kind !== "turn_limit_softcap") return "";
+  const p = parsed.value.payload;
+  const turn = p.turn ?? 0;
+  const budget = p.budget ?? 0;
+  const actionLabel = (() => {
+    switch (p.action) {
+      case "asked":
+        return "询问";
+      case "continued":
+        return "已继续";
+      case "compacted_continued":
+        return "压缩后续跑";
+      case "stopped":
+        return "已停止";
+      case "timeout_stopped":
+        return "超时停止";
+      case "cancelled":
+        return "已取消";
+      default:
+        return p.action ?? "?";
+    }
+  })();
+  return `轮数软卡 · 第 ${turn} 轮 · 预算 ${budget} · ${actionLabel}`;
+});
+
 /** B9+ D4 (2026-07-13): user-triggered diff apply summary. Format:
  *  `应用 diff · N 个文件 (+A / -B) [+M more]`. Lists up to 32 file
  *  paths inline (mirrors the backend `record_ui_diff_applied_audit`
@@ -327,6 +367,10 @@ const isCritical = computed<boolean>(() => {
 
       <div v-if="loopInterventionSummary" class="audit-item__loop">
         {{ loopInterventionSummary }}
+      </div>
+
+      <div v-if="turnLimitSoftcapSummary" class="audit-item__loop">
+        {{ turnLimitSoftcapSummary }}
       </div>
 
       <div v-if="uiDiffAppliedSummary" class="audit-item__ui-diff">
