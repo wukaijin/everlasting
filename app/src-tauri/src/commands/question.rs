@@ -997,6 +997,13 @@ mod tests {
             InteractionKind::LoopIntervention.as_str(),
             "loop_intervention"
         );
+        // MAX_TURNS softcap (08-18-max-turns-softcap): the floating
+        // turn-budget ask card kind — must stay snake_case on the
+        // wire (ChatPanel dispatches on `kind === "turn_limit_softcap"`).
+        assert_eq!(
+            InteractionKind::TurnLimitSoftcap.as_str(),
+            "turn_limit_softcap"
+        );
     }
 
     #[test]
@@ -1034,10 +1041,20 @@ mod tests {
             questions: vec![],
             ts: 0,
         });
+        // MAX_TURNS softcap (08-18-max-turns-softcap): same
+        // reuse-`ToolQuestionPayload` shape as `LoopIntervention`
+        // (floating card, synthetic `turn_limit_softcap_{turn}` id).
+        let sc = PendingInteraction::TurnLimitSoftcap(ToolQuestionPayload {
+            session_id: "s1".into(),
+            tool_use_id: "turn_limit_softcap_201".into(),
+            questions: vec![],
+            ts: 0,
+        });
         assert_eq!(q.kind(), InteractionKind::Question);
         assert_eq!(m.kind(), InteractionKind::ModeChange);
         assert_eq!(t.kind(), InteractionKind::TaskStateTransition);
         assert_eq!(l.kind(), InteractionKind::LoopIntervention);
+        assert_eq!(sc.kind(), InteractionKind::TurnLimitSoftcap);
     }
 }
 

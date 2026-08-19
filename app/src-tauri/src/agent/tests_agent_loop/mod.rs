@@ -16,6 +16,7 @@ mod notifications;
 mod parallel_dispatch;
 mod recall;
 mod resilience;
+mod softcap;
 mod stub;
 
 /// Helper: flatten a `Vec<ChatMessage>` into a single string for

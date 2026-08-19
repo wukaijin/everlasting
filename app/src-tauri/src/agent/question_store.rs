@@ -287,6 +287,12 @@ pub enum InteractionKind {
     /// NOT driven by an `ask_user_question` tool_use block — the
     /// frontend renders it as a floating card (no tool_use anchor).
     LoopIntervention,
+    /// MAX_TURNS softcap (08-18-max-turns-softcap): the main chat
+    /// loop hit its turn budget. Distinct from `Question` for the
+    /// same floating-card reason as `LoopIntervention` — the
+    /// synthetic `turn_limit_softcap_{turn}` tool_use_id has no
+    /// `ask_user_question` anchor.
+    TurnLimitSoftcap,
 }
 
 impl InteractionKind {
@@ -303,6 +309,7 @@ impl InteractionKind {
             Self::ModeChange => "mode_change",
             Self::TaskStateTransition => "task_state_transition",
             Self::LoopIntervention => "loop_intervention",
+            Self::TurnLimitSoftcap => "turn_limit_softcap",
         }
     }
 }
@@ -327,6 +334,12 @@ pub enum PendingInteraction {
     /// e8a1ad96…) where the prior `Question` tagging made the card
     /// unrenderable.
     LoopIntervention(ToolQuestionPayload),
+    /// MAX_TURNS softcap (08-18-max-turns-softcap). Same
+    /// reuse-`ToolQuestionPayload` + floating-card rationale as
+    /// `LoopIntervention` above: the ask fires at the turn-budget
+    /// boundary (no tool_use anchor), offering
+    /// 继续(+200)/压缩后续跑(gate 开时)/停止.
+    TurnLimitSoftcap(ToolQuestionPayload),
 }
 
 impl PendingInteraction {
@@ -336,6 +349,7 @@ impl PendingInteraction {
             Self::ModeChange(_) => InteractionKind::ModeChange,
             Self::TaskStateTransition(_) => InteractionKind::TaskStateTransition,
             Self::LoopIntervention(_) => InteractionKind::LoopIntervention,
+            Self::TurnLimitSoftcap(_) => InteractionKind::TurnLimitSoftcap,
         }
     }
 }
@@ -456,6 +470,7 @@ impl QuestionStore {
             PendingInteraction::ModeChange(p) => p.ts,
             PendingInteraction::TaskStateTransition(p) => p.ts,
             PendingInteraction::LoopIntervention(p) => p.ts,
+            PendingInteraction::TurnLimitSoftcap(p) => p.ts,
         };
         map.insert(
             session_id.to_string(),

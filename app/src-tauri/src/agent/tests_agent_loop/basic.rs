@@ -856,15 +856,34 @@ async fn agent_loop_max_turns_emits_done_marker() {
     // test exercises the MAX_TURNS backstop (not C2+ early
     // termination). The C2+ path is covered by the dedicated
     // tests in `tests_c2plus.rs`.
+    //
+    // MAX_TURNS softcap (08-18-max-turns-softcap): the turn=201
+    // boundary now surfaces as a `TurnLimitSoftcap` ask instead of
+    // the hard stop. The resolver dispatches on `get_payload()
+    // .kind` — loop_intervention → 「继续」(keep exercising the
+    // backstop), turn_limit_softcap → 「停止」(the softcap's exact
+    // stop label; ends the loop with today's Done{max_turns}).
+    // Assertions below are unchanged (exactly one Done{max_turns},
+    // send_count = MAX_TURNS).
     let store_for_resolver = h.question_store.clone();
     let session_for_resolver = h.session_id.clone();
     tokio::spawn(async move {
         loop {
-            if store_for_resolver
-                .get_payload(&session_for_resolver)
-                .await
-                .is_some()
-            {
+            if let Some(entry) = store_for_resolver.get_payload(&session_for_resolver).await {
+                let label = match entry.kind {
+                    crate::agent::question_store::InteractionKind::LoopIntervention => {
+                        "继续".to_string()
+                    }
+                    crate::agent::question_store::InteractionKind::TurnLimitSoftcap => {
+                        "停止".to_string()
+                    }
+                    // Other kinds never fire in this script's shape;
+                    // keep polling (defensive).
+                    _ => {
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        continue;
+                    }
+                };
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 let _ = store_for_resolver
                     .resolve(
@@ -874,7 +893,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
                                 crate::agent::question_store::QuestionAnswer {
                                     question: String::new(),
                                     header: None,
-                                    options: vec!["继续".into()],
+                                    options: vec![label],
                                     multi_select: false,
                                     custom: None,
                                 },

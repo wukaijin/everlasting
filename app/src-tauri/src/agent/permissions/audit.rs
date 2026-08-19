@@ -118,6 +118,16 @@ pub enum AuditKind {
     /// 落 `continued`。worker 触发不落本表(worker 无独立审计
     /// surface,worker run 自有 transcript 记录)。
     LoopIntervention,
+    /// MAX_TURNS softcap (08-18-max-turns-softcap, 2026-08-19):
+    /// 单聊主 loop 撞线(默认 200 turn)不再硬终断,改为经
+    /// QuestionStore 弹浮动询问卡(继续 +200 / 压缩后续跑 / 停止)。
+    /// payload 携带 `turn`(撞线时的 turn 号,= budget+1)/
+    /// `budget`(撞线时的预算)/ `action`(见
+    /// [`record_turn_limit_softcap_audit`])。落表点在
+    /// chat_loop.rs 的软卡询问 helper 各分支:register 成功后
+    /// 立即落 `asked`;三分支/超时/取消各落对应 action。worker
+    /// 与群聊路径不经软卡(硬卡原样),不落本表。
+    TurnLimitSoftcap,
 
     // === Worker 域 (2026-06-22, RULE-FrontSubagent-003 fix) ===
     /// worker subagent 在 Tier 4 交互式 ask 后,user 选了"Allow"
@@ -193,6 +203,9 @@ impl AuditKind {
             Self::EditMessage => "edit_message",
             Self::ResendMessage => "resend_message",
             Self::LoopIntervention => "loop_intervention",
+            // 08-18-max-turns-softcap (2026-08-19): wire shape
+            // snake_case lowercase, mirrors LoopIntervention.
+            Self::TurnLimitSoftcap => "turn_limit_softcap",
             Self::WorkerAskAllowed => "worker_ask_allowed",
             Self::WorkerAskDenied => "worker_ask_denied",
             Self::WorkerAskTimedOut => "worker_ask_timed_out",
@@ -410,6 +423,51 @@ pub async fn record_loop_intervention_audit(
         db,
         session_id,
         AuditKind::LoopIntervention.as_str(),
+        Some(&payload_str),
+        turn_seq,
+    )
+    .await
+}
+
+/// MAX_TURNS softcap (08-18-max-turns-softcap, 2026-08-19):
+/// record a `turn_limit_softcap` audit row. Mirrors
+/// [`record_loop_intervention_audit`] (best-effort, warn+swallow on
+/// DB error — a failed audit write must not break the agent loop).
+///
+/// Fired at the softcap ask helper's branches in `chat_loop.rs`:
+///
+/// - `action = "asked"` —— `QuestionStore::register` 成功后立即落
+///   (同 C2+ 先例);
+/// - `action = "continued"` —— 用户选「继续(+200 轮)」;
+/// - `action = "compacted_continued"` —— 用户选「压缩后续跑」;
+/// - `action = "stopped"` —— 用户选「停止」/ 未匹配畸形载荷 /
+///   用户跳过卡片 / register `AlreadyPending` 降级(降级为今日
+///   max_turns 硬停行为);
+/// - `action = "timeout_stopped"` —— 询问超时(`softcap_ask_timeout`,
+///   缺省 10min)无响应,按决议停止;
+/// - `action = "cancelled"` —— pending 期间用户 Stop(取消令牌)
+///   或 oneshot dropped。
+///
+/// `turn` 是撞线时的 turn 号(budget+1);`budget` 是撞线时的
+/// turn 预算(缺省 `MAX_TURNS` = 200,每次「继续」+200)。
+pub async fn record_turn_limit_softcap_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    turn: usize,
+    budget: usize,
+    action: &str,
+    turn_seq: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "turn": turn,
+        "budget": budget,
+        "action": action,
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::TurnLimitSoftcap.as_str(),
         Some(&payload_str),
         turn_seq,
     )

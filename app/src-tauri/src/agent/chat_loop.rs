@@ -39,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, RwLock};
@@ -51,6 +51,10 @@ use crate::agent::helpers::{
     build_synthetic_tool_result_message, emit_chat_event_via_sink, persist_turn_cwd,
 };
 use crate::agent::loop_detection;
+use crate::agent::question_store::{
+    InteractionResponse, PendingInteraction, Question, QuestionAnswer, QuestionOption,
+    ToolQuestionPayload,
+};
 use crate::agent::subagent::SubagentEventSink;
 use crate::agent::MAX_TURNS;
 use crate::llm::{
@@ -902,7 +906,83 @@ pub async fn run_chat_loop(
     let mut loop_hit_count: u32 = 0;
 
     let turn_limit = max_turns.unwrap_or(MAX_TURNS);
-    for turn in 1..=turn_limit {
+    // MAX_TURNS softcap (08-18-max-turns-softcap): the fixed
+    // `for turn in 1..=turn_limit` became a budget-carrying `loop`.
+    // `turn` still starts at 1 and increments by exactly 1 per
+    // executed turn (drive_turn's turn param / loop_intervention id
+    // / DBG semantics unchanged) — the softcap ask consumes one
+    // turn number (budget+1) without executing a turn body.
+    // Worker subagents break at the boundary and take today's hard
+    // terminal (AC4: worker + group chat stay hard-capped; group
+    // chat never enters this loop — it has its own outer
+    // MAX_ORCHESTRATION_ROUNDS loop in group_chat_loop.rs).
+    // Env hook EVERLASTING_SOFTCAP_TURN_BOUNDARY (QA/live, design §1)
+    // lowers the FIRST ask point by replacing the initial budget —
+    // applied once here, NOT re-read per iteration (a per-turn re-read
+    // would re-ask every turn after a「继续」grant, since the env
+    // value stays fixed while the budget grows). Grants extend the
+    // budget naturally, so the second ask lands at boundary+200.
+    // Unset/unparseable → `turn_limit`, byte-identical to today's
+    // `turn > turn_limit` judgment.
+    let mut turns_budget = softcap_boundary(turn_limit);
+    let mut turn = 0usize;
+    // Set by the softcap「压缩后续跑」answer; consumed (reset to
+    // false) right after the next drive_turn call — one-shot.
+    let mut force_compaction = false;
+    // Set when the softcap helper already emitted the terminal
+    // (Done{max_turns} / Done{cancelled}) so the post-loop tail
+    // does not double-emit. Worker break leaves it false → the
+    // tail emits exactly as today.
+    let mut softcap_terminal_emitted = false;
+    loop {
+        turn += 1;
+        if turn > turns_budget {
+            if effective_is_worker || group_chat_state.is_some() {
+                // Worker / group-chat path: hard cap unchanged —
+                // break into the post-loop hard terminal (worker
+                // messages capture included, 1096-1098 original
+                // semantics). Group chat reuses run_chat_loop for
+                // each per-speaker segment with max_turns=1
+                // (group_chat_loop.rs §54) — its budget exhaustion
+                // is the 30-round orchestration's business, NOT a
+                // softcap ask (R4: 仅单聊主 loop; a softcap here
+                // would also hang speaker turns that end on
+                // tool_use with nobody watching the store).
+                break;
+            }
+            match ask_turn_limit_softcap(
+                &question_store,
+                &sink,
+                &rid,
+                &session_id,
+                &db,
+                &token,
+                skip_persist,
+                turn,
+                turns_budget,
+                compaction_on,
+                last_usage_terminal,
+                last_cwd.as_deref(),
+                seq,
+            )
+            .await
+            {
+                SoftcapOutcome::Continue => {
+                    turns_budget += TURN_LIMIT_GRANT;
+                }
+                SoftcapOutcome::CompactContinue => {
+                    turns_budget += TURN_LIMIT_GRANT;
+                    force_compaction = true;
+                }
+                SoftcapOutcome::Terminal => {
+                    softcap_terminal_emitted = true;
+                    break;
+                }
+            }
+            // Re-arm: the consumed turn number was budget+1, the
+            // next iteration starts budget+2.
+            continue;
+        }
         // E2 trace (2026-07-14): update the per-turn seq on the
         // permission context so `record_audit` can pass it to
         // `record_audit_event` for audit turn alignment.
@@ -958,12 +1038,23 @@ pub async fn run_chat_loop(
             summary_anchor,
             synthetic_prefix_len,
             compaction_on,
+            // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」
+            // 的一次性 force 标志 —— 只绕过 C3 的 token 触发线,gate
+            // (开关/worker/熔断/skip_persist)与空待压区照旧
+            // (drive.rs C3 块;design §2.2)。drive_turn 按值收参,
+            // 返回后立即置 false 消费。
+            force_compaction,
         )
         .await
         {
             Ok(o) => o,
             Err(()) => return,
         };
+        // One-shot consumption (design §1): the force flag armed by
+        // the softcap「压缩后续跑」answer applied to exactly this
+        // drive_turn call — compaction failure / gate-off fall
+        // through naturally, the flag never leaks into later turns.
+        force_compaction = false;
         // Write the cross-turn state back to the function-scope bindings
         // (these are declared above the loop and must persist across turns —
         // a `let` destructure inside the loop body would shadow + drop them
@@ -1052,14 +1143,103 @@ pub async fn run_chat_loop(
         seq += 1;
     }
 
-    tracing::warn!(max_turns = turn_limit, "agent loop: max turns reached");
-    // B6 PR1b: skip the max_turns terminal persists in worker mode.
-    if !skip_persist {
-        persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-        let _ = crate::db::touch_session(&db, &session_id).await;
-        emit_chat_event_via_sink(
+    // MAX_TURNS softcap (08-18-max-turns-softcap): the hard terminal
+    // is shared by the worker break (today's behavior, byte-identical)
+    // and skipped when the softcap helper already emitted its own
+    // terminal (Done{max_turns} stop / timeout stop / Done{cancelled}).
+    if !softcap_terminal_emitted {
+        emit_max_turns_terminal(
+            &db,
+            &session_id,
             &sink,
             &rid,
+            skip_persist,
+            turns_budget,
+            last_usage_terminal,
+            last_cwd.as_deref(),
+        )
+        .await;
+    }
+
+    // C1 (07-26-subagent-resume): capture the worker's final messages
+    // snapshot for persistence. Only worker runs are resume candidates
+    // (`effective_is_worker` gate — the parent session is never resumed),
+    // and only the normal completion paths reach here (end_turn /
+    // max_turns / loop_terminated). Early `return;` exits (session not
+    // found, fatal setup errors) skip this — their messages are partial
+    // or empty and unsafe to resume from; resume falls back to fresh
+    // dispatch in that case (design §5). The sink's default no-op
+    // means non-`SubagentBufferSink` sinks (parent / test mocks) pay
+    // nothing.
+    if effective_is_worker {
+        sink.record_worker_messages(&messages);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MAX_TURNS softcap (08-18-max-turns-softcap) — 撞线询问替代硬终断
+// ---------------------------------------------------------------------------
+
+/// 「继续」的加成粒度(决议表 2026-08-19):再给一整个预算
+/// (= `MAX_TURNS` = 200),计数归零可再跑;400/600… 每次撞线再问。
+pub(crate) const TURN_LIMIT_GRANT: usize = MAX_TURNS;
+
+/// 软卡询问的缺省超时(决议:10 分钟无响应 → 停止,与今日
+/// max_turns 行为等价;unattended 不烧钱)。env
+/// `EVERLASTING_SOFTCAP_TIMEOUT_MS` 覆盖(ms;parse 失败回退缺省)
+/// —— 仅软卡专项测试设置(env 调试钩子先例:`P1_DBG`,
+/// drive.rs;Rust 2021 `env::set_var` 安全)。
+fn softcap_ask_timeout() -> Duration {
+    const DEFAULT: Duration = Duration::from_secs(600);
+    match std::env::var("EVERLASTING_SOFTCAP_TIMEOUT_MS") {
+        Ok(v) => v
+            .trim()
+            .parse::<u64>()
+            .map(Duration::from_millis)
+            .unwrap_or(DEFAULT),
+        Err(_) => DEFAULT,
+    }
+}
+
+/// 撞线边界(design §1 测试钩子,QA/live 用):env
+/// `EVERLASTING_SOFTCAP_TURN_BOUNDARY` 只在 loop 初始化时应用一次
+/// (替换初始 budget);未设 / parse 失败 → `turn_limit`(生产行为与
+/// 今日 `turn > turn_limit` 判定完全一致)。
+fn softcap_boundary(turn_limit: usize) -> usize {
+    match std::env::var("EVERLASTING_SOFTCAP_TURN_BOUNDARY") {
+        Ok(v) => v.trim().parse::<usize>().unwrap_or(turn_limit),
+        Err(_) => turn_limit,
+    }
+}
+
+/// The shared max_turns hard terminal, extracted VERBATIM from the
+/// pre-softcap post-loop block (persist_turn_cwd + touch_session +
+/// `Done{stop_reason:"max_turns"}`; stop_reason string unchanged —
+/// 前端 / worker 父 loop / trace 消费方零感知). Used by:
+///
+/// - the worker boundary break — byte-identical to today's
+///   behavior (`skip_persist` skips the persists in worker mode
+///   exactly as the old inline `if !skip_persist` did, AC4);
+/// - the softcap 停止 / 超时停止 / register 降级 paths (AC2:
+///   "与今日 max_turns 终态等价" 字面成立 —— 同一函数体).
+pub(crate) async fn emit_max_turns_terminal(
+    db: &SqlitePool,
+    session_id: &str,
+    sink: &Arc<dyn ChatEventSink>,
+    rid: &str,
+    skip_persist: bool,
+    budget: usize,
+    last_usage_terminal: Option<crate::llm::types::TokenUsage>,
+    last_cwd: Option<&Path>,
+) {
+    tracing::warn!(max_turns = budget, "agent loop: max turns reached");
+    // B6 PR1b: skip the max_turns terminal persists in worker mode.
+    if !skip_persist {
+        persist_turn_cwd(db, session_id, last_cwd).await;
+        let _ = crate::db::touch_session(db, session_id).await;
+        emit_chat_event_via_sink(
+            sink,
+            rid,
             &ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
                 // 2026-06-21 (R3): thread the last turn's
@@ -1082,19 +1262,291 @@ pub async fn run_chat_loop(
             },
         );
     }
+}
 
-    // C1 (07-26-subagent-resume): capture the worker's final messages
-    // snapshot for persistence. Only worker runs are resume candidates
-    // (`effective_is_worker` gate — the parent session is never resumed),
-    // and only the normal completion paths reach here (end_turn /
-    // max_turns / loop_terminated). Early `return;` exits (session not
-    // found, fatal setup errors) skip this — their messages are partial
-    // or empty and unsafe to resume from; resume falls back to fresh
-    // dispatch in that case (design §5). The sink's default no-op
-    // means non-`SubagentBufferSink` sinks (parent / test mocks) pay
-    // nothing.
-    if effective_is_worker {
-        sink.record_worker_messages(&messages);
+/// [`ask_turn_limit_softcap`] 的三分支结果(design §1)。
+enum SoftcapOutcome {
+    /// 用户选「继续(+200 轮)」—— 预算 +`TURN_LIMIT_GRANT` 续跑。
+    Continue,
+    /// 用户选「压缩后续跑」—— 预算 +`TURN_LIMIT_GRANT`,且下一
+    /// turn 强制触发自动摘要压缩(force flag,一次性)。
+    CompactContinue,
+    /// 终止。终态事件(`Done{max_turns}` 或 `Done{cancelled}`)
+    /// 已在 helper 内 emit —— 调用方置
+    /// `softcap_terminal_emitted` 后 break,循环后尾巴不再 emit。
+    Terminal,
+}
+
+/// MAX_TURNS 软卡询问(design §2.1):主 loop 撞线边界上的浮动
+/// 询问卡。结构照抄 C2+ 主动干预(drive.rs 的 register →
+/// `emit_tool_question` → biased select),**新增超时臂**。
+///
+/// 撞线点在循环边界:上一轮 tool results 已由 `finalize_turn`
+/// 落库(DB 尾部干净,无孤儿 tool_use),因此停止 / 超时分支
+/// **不需要** `finalize_pending_tool_results`,直接走
+/// `emit_max_turns_terminal`(AC2 字节级等价)。
+///
+/// payload 条件构建(决议 4):`compaction_on` 时三选项
+/// (继续 / 压缩后续跑 / 停止),否则两选项(卡片不展示选了
+/// 也无效的选项)。解析按 label 精确匹配,未匹配 / 畸形 → 停止
+/// (防御默认,C2+ 同款)。
+#[allow(clippy::too_many_arguments)]
+async fn ask_turn_limit_softcap(
+    question_store: &crate::agent::question_store::QuestionStore,
+    sink: &Arc<dyn ChatEventSink>,
+    rid: &str,
+    session_id: &str,
+    db: &SqlitePool,
+    token: &CancellationToken,
+    skip_persist: bool,
+    turn: usize,
+    turns_budget: usize,
+    compaction_on: bool,
+    last_usage_terminal: Option<crate::llm::types::TokenUsage>,
+    last_cwd: Option<&Path>,
+    seq: i64,
+) -> SoftcapOutcome {
+    let continue_label = format!("继续(+{} 轮)", TURN_LIMIT_GRANT);
+    let compact_label = "压缩后续跑";
+    let stop_label = "停止";
+    let mut options = vec![QuestionOption {
+        label: continue_label.clone(),
+        description: Some("再给一整个轮数预算继续运行;再次撞线时会重新询问".to_string()),
+        preview: None,
+    }];
+    if compaction_on {
+        options.push(QuestionOption {
+            label: compact_label.to_string(),
+            description: Some("先强制一次摘要压缩收窄上下文,再继续(同样 +200 轮)".to_string()),
+            preview: None,
+        });
+    }
+    options.push(QuestionOption {
+        label: stop_label.to_string(),
+        description: Some("按轮数上限结束本次运行(发送新消息即可继续)".to_string()),
+        preview: None,
+    });
+    let payload = ToolQuestionPayload {
+        session_id: session_id.to_string(),
+        // turn = 撞线时的 turn 号(budget+1);前端 streamEvents 按
+        // `turn_limit_softcap_` 前缀识别为浮动卡(同
+        // `loop_intervention_` 先例,2026-07-28 事故教训:绝不能 tag
+        // 成 Question —— 无 tool_use 锚点会永不渲染)。
+        tool_use_id: format!("turn_limit_softcap_{turn}"),
+        questions: vec![Question {
+            question: format!(
+                "本轮对话已达到 {} 轮上限(agent 仍在工作中)。是否继续?",
+                turns_budget
+            ),
+            header: Some("轮数上限确认".to_string()),
+            options,
+            multi_select: false,
+            allow_custom: false,
+        }],
+        ts: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    };
+
+    match question_store
+        .register(
+            session_id,
+            &payload.tool_use_id,
+            // Register as `TurnLimitSoftcap`(NOT `Question`)so the
+            // frontend renders a floating card(C2+ 同款)。
+            PendingInteraction::TurnLimitSoftcap(payload.clone()),
+        )
+        .await
+    {
+        Ok(rx) => {
+            // Audit: action = "asked" lands immediately after
+            // register succeeds(best-effort,warn+swallow,同 C2+;
+            // 软卡仅在非 worker 主 loop 可达,skip_persist 恒 false)。
+            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                db,
+                session_id,
+                turn,
+                turns_budget,
+                "asked",
+                Some(seq),
+            )
+            .await;
+            sink.emit_tool_question(&payload);
+            tracing::info!(
+                request_id = %rid,
+                session_id = %session_id,
+                turn,
+                budget = turns_budget,
+                "turn-limit softcap: question asked"
+            );
+            // Four-arm biased select: cancel / timeout / rx(design §2.1).
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    // User hit Stop while the question was pending:
+                    // clear the slot, emit Done{cancelled}(循环边界
+                    // 无孤儿 tool_use,无需 finalize_pending_tool_results)。
+                    question_store.remove(session_id).await;
+                    let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                        db, session_id, turn, turns_budget, "cancelled", Some(seq),
+                    ).await;
+                    if !skip_persist {
+                        persist_turn_cwd(db, session_id, last_cwd).await;
+                        let _ = crate::db::touch_session(db, session_id).await;
+                    }
+                    emit_chat_event_via_sink(
+                        sink,
+                        rid,
+                        &ChatEvent::Done {
+                            stop_reason: Some("cancelled".to_string()),
+                            usage: None,
+                        },
+                    );
+                    SoftcapOutcome::Terminal
+                }
+                _ = tokio::time::sleep(softcap_ask_timeout()) => {
+                    // 10min(缺省)无响应 → 停止(决议:unattended
+                    // 不替用户确认烧钱;停止 = 今日行为零回归)。
+                    question_store.remove(session_id).await;
+                    let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                        db, session_id, turn, turns_budget, "timeout_stopped", Some(seq),
+                    ).await;
+                    emit_max_turns_terminal(
+                        db, session_id, sink, rid, skip_persist,
+                        turns_budget, last_usage_terminal, last_cwd,
+                    ).await;
+                    SoftcapOutcome::Terminal
+                }
+                resp = rx => {
+                    // resolve 已原子移除槽位(Answered / Cancelled 路径)。
+                    match resp {
+                        Ok(InteractionResponse::Answered(value)) => {
+                            let answers: Vec<QuestionAnswer> =
+                                serde_json::from_value(value).unwrap_or_default();
+                            let chosen = answers
+                                .first()
+                                .map(|a| a.options.first().cloned().unwrap_or_default())
+                                .unwrap_or_default();
+                            if chosen == continue_label {
+                                let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                    db, session_id, turn, turns_budget, "continued", Some(seq),
+                                ).await;
+                                SoftcapOutcome::Continue
+                            } else if chosen == compact_label && compaction_on {
+                                let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                    db, session_id, turn, turns_budget, "compacted_continued", Some(seq),
+                                ).await;
+                                SoftcapOutcome::CompactContinue
+                            } else {
+                                // 「停止」/ 未匹配畸形载荷 → 防御默认停止
+                                // (C2+ 同款)。
+                                let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                    db, session_id, turn, turns_budget, "stopped", Some(seq),
+                                ).await;
+                                emit_max_turns_terminal(
+                                    db, session_id, sink, rid, skip_persist,
+                                    turns_budget, last_usage_terminal, last_cwd,
+                                ).await;
+                                SoftcapOutcome::Terminal
+                            }
+                        }
+                        Ok(InteractionResponse::Cancelled) => {
+                            // 用户点「跳过」→ 视同停止(安全默认,
+                            // C2+ cancel 同款)。
+                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                db, session_id, turn, turns_budget, "stopped", Some(seq),
+                            ).await;
+                            emit_max_turns_terminal(
+                                db, session_id, sink, rid, skip_persist,
+                                turns_budget, last_usage_terminal, last_cwd,
+                            ).await;
+                            SoftcapOutcome::Terminal
+                        }
+                        Err(_recv_err) => {
+                            // Sender dropped(槽位被 remove 等)→ 视同
+                            // cancel(C2+ 同款安全默认)。
+                            tracing::warn!(
+                                "turn-limit softcap oneshot dropped without response — treating as cancelled"
+                            );
+                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                db, session_id, turn, turns_budget, "cancelled", Some(seq),
+                            ).await;
+                            if !skip_persist {
+                                persist_turn_cwd(db, session_id, last_cwd).await;
+                                let _ = crate::db::touch_session(db, session_id).await;
+                            }
+                            emit_chat_event_via_sink(
+                                sink,
+                                rid,
+                                &ChatEvent::Done {
+                                    stop_reason: Some("cancelled".to_string()),
+                                    usage: None,
+                                },
+                            );
+                            SoftcapOutcome::Terminal
+                        }
+                    }
+                }
+            }
+        }
+        // AlreadyPending(理论上不可达:turn 内 ask_user_question 在
+        // finalize 前已 resolve;防御)→ warn + 降级为今日硬停行为。
+        Err(crate::agent::question_store::QuestionStoreError::AlreadyPending) => {
+            tracing::warn!(
+                session_id = %session_id,
+                "turn-limit softcap register: a question is already pending — degrading to hard stop"
+            );
+            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                db,
+                session_id,
+                turn,
+                turns_budget,
+                "stopped",
+                Some(seq),
+            )
+            .await;
+            emit_max_turns_terminal(
+                db,
+                session_id,
+                sink,
+                rid,
+                skip_persist,
+                turns_budget,
+                last_usage_terminal,
+                last_cwd,
+            )
+            .await;
+            SoftcapOutcome::Terminal
+        }
+        Err(e) => {
+            // `NotFound` 等不可达分支(防御,同 C2+ register 错误处理)。
+            tracing::error!(
+                error = %e,
+                "turn-limit softcap register: unexpected store error — degrading to hard stop"
+            );
+            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                db,
+                session_id,
+                turn,
+                turns_budget,
+                "stopped",
+                Some(seq),
+            )
+            .await;
+            emit_max_turns_terminal(
+                db,
+                session_id,
+                sink,
+                rid,
+                skip_persist,
+                turns_budget,
+                last_usage_terminal,
+                last_cwd,
+            )
+            .await;
+            SoftcapOutcome::Terminal
+        }
     }
 }
 

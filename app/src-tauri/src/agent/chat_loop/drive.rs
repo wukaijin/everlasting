@@ -135,6 +135,12 @@ pub(crate) async fn drive_turn(
     summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
     synthetic_prefix_len: usize,
     compaction_on: bool,
+    // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」的
+    // 一次性 force 标志 —— 只绕过下方 C3 块的 token 触发线,gate
+    // 本身(开关/worker/熔断/skip_persist)与空待压区
+    // (cut == synthetic_prefix_len → 机械路径)全部照旧
+    // (design §2.2)。chat_loop 在本函数返回后置 false(一次性)。
+    force_compaction: bool,
 ) -> Result<DriveTurnOutcome, ()> {
     let mut messages = messages;
     let mut seq = seq;
@@ -220,9 +226,9 @@ pub(crate) async fn drive_turn(
         };
         let trigger = crate::agent::context::trigger_threshold(context_window);
 
-        // ---- 摘要尝试(gate 全开 + 超触发线)----
+        // ---- 摘要尝试(gate 全开 + 超触发线 / softcap force)----
         let mut summary_result: Option<crate::agent::context::CompactResult> = None;
-        if summary_gate && (tokens_pre as u64) >= (trigger as u64) {
+        if summary_gate && (force_compaction || (tokens_pre as u64) >= (trigger as u64)) {
             let cut = crate::agent::compaction::compute_preservation_region(
                 &messages,
                 synthetic_prefix_len,
@@ -263,6 +269,9 @@ pub(crate) async fn drive_turn(
                     seq,
                     tokens_pre,
                     context_window,
+                    // MAX_TURNS softcap:观测区分 force 路径(「压缩
+                    // 后续跑」→ "softcap")与常规超线路径("auto")。
+                    if force_compaction { "softcap" } else { "auto" },
                 )
                 .await
                 {
@@ -2036,6 +2045,10 @@ async fn attempt_summary_compaction(
     seq: i64,
     tokens_before: u32,
     context_window: u32,
+    // MAX_TURNS softcap (08-18-max-turns-softcap):metadata `trigger`
+    // 字段的来源标注 —— auto 路径传 "auto",软卡 force 路径传
+    // "softcap"(观测可区分)。
+    trigger_label: &'static str,
 ) -> SummaryOutcome {
     use crate::agent::compaction::{
         build_compaction_prompt, build_summary_chat_message, clamp_summary_output,
@@ -2124,7 +2137,7 @@ async fn attempt_summary_compaction(
         "preserve_from_seq": cutoff_seq + 1,
         "tokens_before": tokens_before,
         "tokens_after": tokens_after,
-        "trigger": "auto",
+        "trigger": trigger_label,
         "model": format!("{:?}", provider.protocol()),
         "prior_summary_seq": prior.as_ref().map(|a| a.seq),
         "summary_usage": usage,
