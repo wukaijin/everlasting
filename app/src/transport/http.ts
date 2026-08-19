@@ -130,6 +130,9 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   diff_worktree: "sessions",
   edit_user_message: "sessions",
   group_chat_cache_rates: "sessions",
+  // /handoff (08-18-handoff-mechanism): 缺这行时浏览器/remote 模式报
+  // `unknown cmd "handoff_session"`(Tauri IPC 模式侥幸不经过本表)。
+  handoff_session: "sessions",
   list_sessions: "sessions",
   list_workflow_plugins: "sessions",
   load_session: "sessions",

@@ -100,6 +100,7 @@ import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInput
 import { useChatStore } from "../../stores/chat";
 import {
   MODE_CYCLE,
+  type HandoffResult,
   type ManualCompactionResult,
   type SessionMode,
   type StagedImage,
@@ -533,10 +534,13 @@ async function executeBuiltin(name: string, focus?: string): Promise<void> {
       // summary row appears via the same reload path every DB append
       // uses, so MessageItem's compaction_summary rendering applies.
       if (!sid) return;
-      projectsStore.showToast("正在压缩上下文…", "info");
+      // HUD 按 session 隔离:只在发起会话显示,切走即隐藏(见 chat.ts
+      // summaryBusyBySession)。用捕获的 busySid 避免切会话后清错键。
+      const busySid = sid;
+      chatStore.setSummaryBusy(busySid, "正在压缩上下文…");
       try {
         const r = await transport.invoke<ManualCompactionResult>("compact_session", {
-          sessionId: sid,
+          sessionId: busySid,
           focus: focus ?? null,
         });
         projectsStore.showToast(
@@ -544,10 +548,46 @@ async function executeBuiltin(name: string, focus?: string): Promise<void> {
           "info",
           6000,
         );
-        await chatStore.reloadSessionMessages(sid);
+        await chatStore.reloadSessionMessages(busySid);
       } catch (e) {
         console.error("/compact failed:", e);
         projectsStore.showToast(`压缩失败：${extractErrorMessage(e)}`, "error", 6000);
+      } finally {
+        chatStore.clearSummaryBusy(busySid);
+      }
+      break;
+    }
+    case "handoff": {
+      // 08-18-handoff-mechanism: full-coverage summary becomes the
+      // FIRST context of a NEW child session. Same backend gate chain
+      // as /compact; on success refresh the session list and SWITCH to
+      // the child — then wait for user input (no auto first turn,
+      // prd D2). Failure is zero-side-effect (backend rolls the shell
+      // back), so we just stay in the current session + toast.
+      if (!sid) return;
+      const busySid = sid;
+      chatStore.setSummaryBusy(busySid, "正在生成接力摘要…");
+      try {
+        const r = await transport.invoke<HandoffResult>("handoff_session", {
+          sessionId: busySid,
+          focus: focus ?? null,
+        });
+        // List first so switchSession finds the new summary (cwd
+        // lookup) without a redundant load_session IPC.
+        if (projectsStore.currentProjectId) {
+          await chatStore.loadSessions(projectsStore.currentProjectId);
+        }
+        await chatStore.switchSession(r.new_session_id);
+        projectsStore.showToast(
+          `已接力到新会话：${r.tokens_before.toLocaleString()} → ${r.tokens_after.toLocaleString()} tokens`,
+          "info",
+          6000,
+        );
+      } catch (e) {
+        console.error("/handoff failed:", e);
+        projectsStore.showToast(`接力失败：${extractErrorMessage(e)}`, "error", 6000);
+      } finally {
+        chatStore.clearSummaryBusy(busySid);
       }
       break;
     }
@@ -566,11 +606,13 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   cm.closeCommandPalette();
 
   if (item.is_builtin || item.source === "builtin") {
-    // /compact: the text after the slash token is the optional focus —
-    // consume it (editor keeps only the pre-token part). Other builtins
-    // keep the leftover text in the editor (pre-existing behavior).
-    const focus = item.name === "compact" ? afterToken.trim() : "";
-    const keepDoc = item.name === "compact" ? beforeToken : beforeToken + afterToken;
+    // /compact & /handoff: the text after the slash token is the
+    // optional focus — consume it (editor keeps only the pre-token
+    // part). Other builtins keep the leftover text in the editor
+    // (pre-existing behavior).
+    const takesFocus = item.name === "compact" || item.name === "handoff";
+    const focus = takesFocus ? afterToken.trim() : "";
+    const keepDoc = takesFocus ? beforeToken : beforeToken + afterToken;
     cm.replaceDoc(keepDoc, beforeToken.length);
     await nextTick();
     cm.view.value?.focus();

@@ -35,6 +35,9 @@
 // and delegates the chip + diff UI to the new components.
 
 import { extractErrorMessage } from "../../utils/useErrorBus";
+// 08-18(handoff/compact): 摘要 loading 遮罩的 HUD 动效(纯 SMIL,
+// <img> 引用即可动画)。来源 brand/motion/logo-hud.svg。
+import logoHudUrl from "../../assets/logo-hud.svg";
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
 import type { SessionSummary, StagedImage } from "../../stores/chat.types";
@@ -1060,6 +1063,30 @@ onUnmounted(() => reviewStateStore.stop());
         @cancelled="onTurnLimitSoftcapSettled"
       />
     </div>
+
+    <!--
+          08-18(handoff/compact)摘要 loading 遮罩:LLM 全量摘要可跑
+          数分钟,期间锁住整个会话面板(消息 + 输入 + 浮动卡)。HUD
+          刻度环动效(brand/motion/logo-hud.svg,纯 SMIL,<img> 内自
+          动画)+ 文案来自 `chatStore.summaryBusy`(null = 空闲不渲
+          染)。z-index 高于浮动卡(50)、低于 modal(1000+)。
+    -->
+    <div
+      v-if="chatStore.summaryBusy"
+      class="chat-panel__summary-overlay"
+      role="status"
+      aria-live="polite"
+    >
+      <img
+        class="chat-panel__summary-overlay__logo"
+        :src="logoHudUrl"
+        alt=""
+        aria-hidden="true"
+      />
+      <div class="chat-panel__summary-overlay__caption">
+        {{ chatStore.summaryBusy }}
+      </div>
+    </div>
   </section>
 </template>
 
@@ -1605,6 +1632,40 @@ onUnmounted(() => reviewStateStore.stop());
   border: 1px solid var(--color-status-warn, #f59e0b);
   border-radius: var(--radius-md, 8px);
   box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
+}
+
+/* 08-18(handoff/compact)摘要 loading 遮罩:整面板覆盖(inset:0,
+   含消息区与输入栏),半透明底 + blur 把"面板被锁住"表达到位;
+   z-index 70 高于浮动卡(50/60),低于 modal(1000+)。 */
+.chat-panel__summary-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  background: var(--color-bg-app, #f7f8fa);
+  /* 半透明 + backdrop blur:面板内容隐约可见(位置感),交互被完全
+     挡住(pointer-events 由整层 div 天然拦截)。 */
+  opacity: 0.96;
+  backdrop-filter: blur(4px);
+}
+
+.chat-panel__summary-overlay__logo {
+  width: 112px;
+  height: 112px;
+  border-radius: 18px;
+  /* 遮罩底色与 tile 深底之间留一层 elevation 阴影,避免深色主题里
+     logo 贴底"浮"不起来。 */
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
+}
+
+.chat-panel__summary-overlay__caption {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
 }
 
 /* S6a 主聊天视图 header 瘦身(08-13-mobile-chat-view)。桌面样式块零改动,

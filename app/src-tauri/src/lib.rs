@@ -285,6 +285,10 @@ pub fn run() {
             // C3+ auto path's pure functions; bypasses the 0.85 trigger
             // line but rejects in-flight turns.
             commands::sessions::compact_session,
+            // /handoff (08-18-handoff-mechanism): full-coverage summary
+            // becomes the first context of a NEW child session; parent
+            // session rows untouched.
+            commands::sessions::handoff_session,
             // C2 (review visualization view, 2026-07-26):
             // review-state.json read IPCs for the frontend
             // `<ReviewMatrix>` panel. `get_review_state`

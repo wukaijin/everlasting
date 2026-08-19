@@ -24,6 +24,22 @@ describe("matchBuiltinCommandInput", () => {
     });
   });
 
+  // 08-18-handoff-mechanism: /handoff takes the same optional
+  // rest-of-line focus as /compact; prefix safety mirrors it too
+  // (/hand is NOT /handoff).
+  it("matches /handoff with optional focus (exact-name only)", () => {
+    expect(matchBuiltinCommandInput("/handoff")).toEqual({
+      name: "handoff",
+      rest: "",
+    });
+    expect(matchBuiltinCommandInput("/handoff 继续调 diff")).toEqual({
+      name: "handoff",
+      rest: "继续调 diff",
+    });
+    expect(matchBuiltinCommandInput("/hand")).toBeNull();
+    expect(matchBuiltinCommandInput("/handoffx")).toBeNull();
+  });
+
   it("tolerates leading whitespace before the slash", () => {
     expect(matchBuiltinCommandInput("  /clear")).toEqual({ name: "clear", rest: "" });
   });

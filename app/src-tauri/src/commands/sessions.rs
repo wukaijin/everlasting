@@ -1146,3 +1146,279 @@ pub async fn compact_session(
 ) -> Result<crate::agent::compaction::ManualCompactionOutcome, AppCommandError> {
     compact_session_inner(&state, session_id, focus).await
 }
+
+/// 接力子会话标题:`接力: {parent 去掉一层已有 "接力: " 前缀}` —— 防
+/// 接力链嵌套前缀;80 字符截断由 `rename_session` 服务端兜底。显式设
+/// 标题同时防新会话首条用户消息(常是"继续")抢注 auto-title。
+fn handoff_child_title(parent_title: &str) -> String {
+    let base = parent_title.strip_prefix("接力: ").unwrap_or(parent_title);
+    format!("接力: {}", base)
+}
+
+/// best-effort 清理接力失败残留的空壳子 session(无 messages,删除
+/// 无损;parent 不动)。
+async fn cleanup_shell_child(db_pool: &sqlx::SqlitePool, child_id: &str) {
+    if let Err(e) = db::delete_session(db_pool, child_id).await {
+        tracing::warn!(
+            error = %e,
+            child_id = %child_id,
+            "handoff: cleanup of shell child session failed"
+        );
+    }
+}
+
+/// handoff 持久化半边(生成在 `agent::compaction::generate_handoff_summary`):
+/// 建子 session(继承 parent 字段)→ 接力行落库 → parent 侧 metadata
+/// 关联。继承走 create 后 UPDATE(`db::create_session` 只收 7 参,
+/// mode/worktree/workflow/plugin/title 是硬编码默认值,全部用既有
+/// setter 纯新增调用);mode 继承经 `set_session_mode_internal` 复用
+/// mode_changed 审计 + Yolo root guard(commands 层单一真源,不绕行
+/// 裸列写)。任一步失败 → 清理空壳再报错,保住"失败零副作用"。
+pub(crate) async fn persist_handoff_child(
+    db_pool: &sqlx::SqlitePool,
+    parent: &db::SessionRow,
+    gen: &crate::agent::compaction::HandoffSummary,
+    focus: Option<&str>,
+) -> Result<crate::agent::compaction::HandoffOutcome, AppCommandError> {
+    use crate::agent::compaction::{HANDOFF_SUMMARY_KIND, SUMMARY_CONTEXT_PREFIX};
+
+    let child_id = uuid::Uuid::new_v4().to_string();
+    let new_session_title = handoff_child_title(&parent.title);
+
+    // child 侧 metadata 创建即写入(零读-改-写)。
+    let child_metadata = serde_json::json!({
+        "handoff": {
+            "parent_session_id": parent.id,
+            "parent_title": parent.title,
+            "focus": focus,
+        }
+    });
+    let child_metadata_str = child_metadata.to_string();
+
+    let persist = async {
+        db::create_session(
+            db_pool,
+            &child_id,
+            &parent.project_id,
+            &parent.current_cwd,
+            &parent.model,
+            parent.model_id.as_deref(),
+            None,
+            Some(child_metadata_str.as_str()),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("建子会话失败: {}", e))?;
+
+        db::rename_session(db_pool, &child_id, &new_session_title)
+            .await
+            .map_err(|e| anyhow::anyhow!("设子会话标题失败: {}", e))?;
+
+        // worktree 三列按 parent 原样复制(双 session 共享目录是接受
+        // 的 MVP 边界 —— task design §7;全默认时跳过写入)。
+        if parent.worktree_state != db::WorktreeState::None
+            || parent.worktree_path.is_some()
+            || parent.last_worktree_path.is_some()
+        {
+            db::set_worktree_state(
+                db_pool,
+                &child_id,
+                parent.worktree_state,
+                parent.worktree_path.as_deref(),
+                parent.last_worktree_path.as_deref(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("继承 worktree 失败: {}", e))?;
+        }
+        if parent.workflow_enabled {
+            db::set_session_workflow_enabled(db_pool, &child_id, true)
+                .await
+                .map_err(|e| anyhow::anyhow!("继承 workflow 状态失败: {}", e))?;
+        }
+        if parent.plugin_name != "dev" {
+            db::set_session_plugin_name(db_pool, &child_id, &parent.plugin_name)
+                .await
+                .map_err(|e| anyhow::anyhow!("继承插件失败: {}", e))?;
+        }
+        if parent.mode != db::Mode::Edit {
+            crate::commands::question::set_session_mode_internal(db_pool, &child_id, parent.mode)
+                .await
+                .map_err(|e| anyhow::anyhow!("继承模式失败: {:?}", e))?;
+        }
+
+        // 接力行:prefix 落库自包含(HANDOFF_SUMMARY_KIND 契约);
+        // 新 session 空表,seq=1;复用 insert_compaction_summary 纯机械
+        // (两列落库 + 游标契约,kind 由 metadata 透传)。
+        let prefixed = format!("{}\n\n{}", SUMMARY_CONTEXT_PREFIX, gen.summary_text);
+        let row_metadata = serde_json::json!({
+            "kind": HANDOFF_SUMMARY_KIND,
+            "parent_session_id": parent.id,
+            "parent_title": parent.title,
+            "trigger": "handoff",
+            "focus": focus,
+            "cutoff_seq": gen.cutoff_seq,
+            "tokens_before": gen.tokens_before,
+            "tokens_after": gen.tokens_after,
+            "model": gen.model,
+            "summary_usage": gen.summary_usage,
+            "from_prior_fast_path": gen.from_prior_fast_path,
+        });
+        db::insert_compaction_summary(db_pool, &child_id, &prefixed, 1, &row_metadata)
+            .await
+            .map_err(|e| anyhow::anyhow!("接力摘要落库失败: {}", e))?;
+
+        // parent 侧读-改-写合并(不 clobber 已有键;低频接受非原子)。
+        // 合并基线**现读** DB(不信调用方快照 —— 两次接力的 parent 行
+        // 可能是同一个陈旧引用,信任快照会 clobber 上一次的 children)。
+        let fresh_parent = db::load_session(db_pool, &parent.id)
+            .await
+            .map_err(|e| anyhow::anyhow!("回读父会话失败: {}", e))?
+            .ok_or_else(|| anyhow::anyhow!("父会话在接力中途消失"))?;
+        let mut base = fresh_parent
+            .session
+            .metadata
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !base.is_object() {
+            base = serde_json::json!({});
+        }
+        let mut children = base
+            .get("handoff_children")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        children.push(serde_json::json!(child_id));
+        base["handoff_children"] = serde_json::Value::Array(children);
+        db::set_session_metadata(db_pool, &parent.id, &base)
+            .await
+            .map_err(|e| anyhow::anyhow!("回写父会话关联失败: {}", e))?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    if let Err(e) = persist {
+        cleanup_shell_child(db_pool, &child_id).await;
+        return Err(AppCommandError::new(
+            ErrorCategory::Server,
+            format!("接力失败(子会话已回滚,原会话未改动):{}", e),
+        ));
+    }
+
+    tracing::info!(
+        parent_id = %parent.id,
+        child_id = %child_id,
+        cutoff_seq = gen.cutoff_seq,
+        tokens_before = gen.tokens_before,
+        tokens_after = gen.tokens_after,
+        "handoff applied"
+    );
+    Ok(crate::agent::compaction::HandoffOutcome {
+        new_session_id: child_id,
+        new_session_title,
+        cutoff_seq: gen.cutoff_seq,
+        tokens_before: gen.tokens_before,
+        tokens_after: gen.tokens_after,
+        summary_usage: gen.summary_usage,
+        model: gen.model.clone(),
+    })
+}
+
+/// handoff 跨 session 接力(08-18-handoff-mechanism):把当前会话的
+/// 全量覆盖摘要作为新 session 的首条 context,长任务换会话续跑。
+/// gate 链逐条镜像 `compact_session_inner`(群聊拒绝 / 回滚开关 /
+/// in-flight 拒绝 —— 摘要生成读 parent 行集快照,streaming 中拒绝 /
+/// provider 解析);生成半边在 `agent::compaction::
+/// generate_handoff_summary`(D4 缺段校验重试),持久化半边在
+/// [`persist_handoff_child`]。原 session 消息行不动(prd R5/AC4)。
+pub async fn handoff_session_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    focus: Option<String>,
+) -> Result<crate::agent::compaction::HandoffOutcome, AppCommandError> {
+    use crate::agent::compaction::{generate_handoff_summary, HandoffGenerationError};
+
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("handoff_session: load_session failed: {}", e))?
+        .ok_or_else(|| AppCommandError::new(ErrorCategory::InvalidRequest, "会话不存在或已删除"))?;
+
+    if loaded.session.session_type == db::SessionType::GroupChat {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "群聊会话不支持接力",
+        ));
+    }
+
+    // 回滚开关同口径(compact_session_inner / init.rs compaction_on)。
+    if let Ok(Some(v)) = db::config::get_config_value(&state.db, "llm_compaction_enabled").await {
+        if v == "false" {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "LLM 压缩已禁用,无法生成接力摘要",
+            ));
+        }
+    }
+
+    if state
+        .session_active_request
+        .lock()
+        .await
+        .contains_key(&session_id)
+    {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "当前有轮次进行中,请先停止后再接力",
+        ));
+    }
+
+    let resolved =
+        crate::agent::chat::lookup_provider_for_session(&session_id, &state.db, &state.catalog)
+            .await
+            .map_err(|e| {
+                let (msg, cat) = e.user_message_and_category();
+                AppCommandError::new(ErrorCategory::from(cat), format!("接力失败:{}", msg))
+            })?;
+
+    let gen = match generate_handoff_summary(
+        &session_id,
+        resolved.provider,
+        resolved.context_window,
+        focus.as_deref(),
+        &loaded.messages,
+    )
+    .await
+    {
+        Ok(g) => g,
+        Err(HandoffGenerationError::NothingToHandoff) => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "会话没有可接力的内容",
+            ));
+        }
+        Err(HandoffGenerationError::SummaryFailed(reason)) => {
+            return Err(AppCommandError::new(
+                ErrorCategory::Server,
+                format!("接力摘要生成失败({}),原会话未改动", reason),
+            ));
+        }
+        Err(HandoffGenerationError::SummaryMissingSections(sections)) => {
+            return Err(AppCommandError::new(
+                ErrorCategory::Server,
+                format!(
+                    "接力摘要缺少必含段({}),重试后仍失败,原会话未改动",
+                    sections.join(", ")
+                ),
+            ));
+        }
+    };
+
+    persist_handoff_child(&state.db, &loaded.session, &gen, focus.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn handoff_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    focus: Option<String>,
+) -> Result<crate::agent::compaction::HandoffOutcome, AppCommandError> {
+    handoff_session_inner(&state, session_id, focus).await
+}

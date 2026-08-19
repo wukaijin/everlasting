@@ -58,7 +58,7 @@ import {
   UserGroupIcon,
   Bars3Icon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink, CornerUpRight } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -164,6 +164,9 @@ const map = {
   "repeat": Repeat,
   "list-tree": ListTree,
   "shrink": Shrink,
+  // handoff (08-18-handoff-mechanism): 接力行卡片图标 ——
+  // "corner-up-right" 表"续跑/接力"语义,与 shrink(收窗)对仗。
+  "corner-up-right": CornerUpRight,
 } as const;
 
 const Component = computed(() => {

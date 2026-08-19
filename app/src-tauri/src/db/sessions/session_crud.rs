@@ -764,6 +764,11 @@ pub async fn insert_system_event(
 /// trigger、model、prior_summary_seq、summary_usage 等),本函数只
 /// 负责 kind 之外原样透传 —— kind 由调用方写入(与常量
 /// `crate::agent::compaction::COMPACTION_SUMMARY_KIND` 对齐)。
+///
+/// handoff(08-18-handoff-mechanism)复用本函数落接力行:`kind =
+/// handoff_summary` + `summary_text` 为 prefix+摘要 自包含落库(与
+/// compaction_summary"前缀不落库"契约的有意分歧,见
+/// `crate::agent::compaction::HANDOFF_SUMMARY_KIND` 文档)。
 pub async fn insert_compaction_summary(
     pool: &SqlitePool,
     session_id: &str,
@@ -793,4 +798,30 @@ pub async fn insert_compaction_summary(
     .await?;
     // 推进后的游标:摘要行占了 `seq`,后续 persist 从 seq+1 起。
     Ok(seq + 1)
+}
+
+/// 覆写 `sessions.metadata`(整块 JSON 写入)。handoff
+/// (08-18-handoff-mechanism)parent 侧 `handoff_children` 合并写入的
+/// 落点;调用方负责读-改-写合并语义(handoff 用户驱动低频,并发
+/// clobber 风险接受 —— task design §3.8;需硬化时换 SQLite
+/// `json_set` 原子合并)。
+pub async fn set_session_metadata(
+    pool: &SqlitePool,
+    session_id: &str,
+    metadata: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+ UPDATE sessions
+ SET metadata = ?, updated_at = ?
+ WHERE id = ?
+ "#,
+    )
+    .bind(metadata.to_string())
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }

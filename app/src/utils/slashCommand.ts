@@ -20,6 +20,7 @@ export const BUILTIN_COMMAND_NAMES: readonly string[] = [
   "clear",
   "new",
   "compact",
+  "handoff",
 ];
 
 export interface BuiltinCommandMatch {

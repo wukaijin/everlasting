@@ -427,6 +427,24 @@ export const useChatStore = defineStore("chat", () => {
   // F4: true while switchSession is loading messages (IPC pending).
   const sessionLoading = ref(false);
 
+  // 08-18(handoff/compact):摘要类长操作的进行中状态。按 session 隔离
+  // (Map<sessionId, 文案>, null = 该会话空闲)—— 前版是全局 ref,切
+  // 到别的 session 还带着上一会话的 HUD,观感为"接力 loading 跟着人跑"。
+  // ChatInput 的 executeBuiltin 以捕获的 sid 为键 set/clear,ChatPanel
+  //  via `summaryBusy` (computed 当前会话) 渲染遮罩。
+  const summaryBusyBySession = reactive(new Map<string, string>());
+  const summaryBusy = computed<string | null>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return null;
+    return summaryBusyBySession.get(sid) ?? null;
+  });
+  function setSummaryBusy(sessionId: string, text: string): void {
+    summaryBusyBySession.set(sessionId, text);
+  }
+  function clearSummaryBusy(sessionId: string): void {
+    summaryBusyBySession.delete(sessionId);
+  }
+
   // F4: incremented after reloadAfterFinalize replaces messages, so
   // MessageList can re-scroll to bottom. The value is a counter, not a
   // boolean, to guarantee Vue detects the change.
@@ -945,6 +963,12 @@ export const useChatStore = defineStore("chat", () => {
     forceFollowActive,
     sessionLoading,
     scrollAfterReload,
+    // 08-18(handoff/compact):摘要长操作的整面板 loading 遮罩文案
+    // (per-session computed: 只在发起会话上显示,切走即隐藏).
+    summaryBusy,
+    summaryBusyBySession,
+    setSummaryBusy,
+    clearSummaryBusy,
     // D3 PR2: the message seq currently in inline edit mode.
     // Written by `<MessageActionsMenu>`'s `edit` emit, cleared
     // on Save success / Cancel. UI consumers read it via

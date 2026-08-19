@@ -26,6 +26,7 @@ pub use messages::{
 pub use session_crud::{
     create_session, delete_messages_by_session, delete_session, insert_compaction_summary,
     insert_system_event, list_sessions, load_session, rename_session, set_session_color,
-    set_session_plugin_name, set_session_workflow_enabled, set_worktree_state, touch_session,
-    update_last_turn_usage, update_session_cwd, update_session_model_id,
+    set_session_metadata, set_session_plugin_name, set_session_workflow_enabled,
+    set_worktree_state, touch_session, update_last_turn_usage, update_session_cwd,
+    update_session_model_id,
 };

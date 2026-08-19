@@ -119,3 +119,75 @@ executeBuiltin`(palette 选中与直输 `/xxx`+Enter 拦截
 `utils/slashCommand.ts matchBuiltinCommandInput` 同落一处,两者
 不漂移);成功后 `reloadSessionMessages`(= done 后 reload 同款
 管线)让摘要行走既有 `kind=compaction_summary` 渲染。
+
+## handoff 跨 session 接力(08-18-handoff-mechanism)
+
+`/handoff [focus]`:同一摘要管道的第三个落点——全量覆盖摘要成为**新
+session** 的首条 context(parent 原样保留)。生成半边 `agent/compaction
+.rs::generate_handoff_summary`(纯函数 + 熔断,无 DB 写),持久化半边
+`commands/sessions.rs::persist_handoff_child` + `handoff_session_inner`
+(gate 链)。分层原因:mode 继承走 `set_session_mode_internal`
+(commands 层单一真源:mode_changed 审计 + Yolo root guard),agent 模块
+不得反向 import commands。
+
+与 manual /compact 的契约差异:
+
+- **全量覆盖**:不切保留区 —— 水位后**全部**常规行进摘要(新 session
+  从摘要独立起步,尾部信息必须进摘要)。**anchor 占位契约**同 manual:
+  prior 存在时 `compressible[0]` 必须是 anchor 占位消息
+  (`build_compaction_prompt` 跳过 compressible[0] 视为占位——不构造会
+  静默丢水位后最旧一条常规行;评审 bug 级发现)。
+- **handoff_summary 行契约(与 compaction_summary 的有意分歧)**:
+  `role='user'`,`metadata.kind = "handoff_summary"`,content(单 Text
+  块 JSON)与 text(纯文本)两列同载 `SUMMARY_CONTEXT_PREFIX + 摘要`
+  —— prefix **落库自包含**。compaction_summary 的"前缀绝不落库"契约
+  (防 `<prior-summary>` 滚雪球 + 污染 D2 搜索)在这里不适用:handoff
+  行不进锚点检测(`latest_summary_anchor` / `apply_compaction_watermark`
+  只认 compaction_summary),无滚雪球;新 session 无水位机制替它拼接,
+  且 FE rehydrate 对 text-only user 行逐字回发 text 列——prefix 不落库
+  就永远进不了 wire。seq=1(新 session 空表)。
+- **不参与水位**:handoff 行在 wire 里就是普通 user 消息;新 session
+  后续增长触发自动压缩时,它作为 regular 行进 transcript 被再摘要,
+  接力链自然延续(首个 compaction anchor 在新 session 内自洽)。由此
+  绕开"旧 session 摘要行移植 → cutoff_seq 跨 session 失配 →
+  AlignmentFailed fail-open"的移植坑。
+- **D4 缺段校验**:`validate_handoff_summary` 子串匹配 Work State /
+  Next Step(模板第六段实际标题 "Optional Next Step";标题在且其后有
+  非空行)——缺失 → 带纠正块重试一次 → 仍缺 → `SummaryMissingSections`
+  报错,**不建 session**(零副作用)。
+- **快路径**(防御性):水位后无新常规行 → prior 摘要原样接力,零 LLM
+  调用;缺段退化 LLM 补段。正常流程难达此态(manual/auto 压缩必留保留
+  区),为 D3 自愈等边界兜底。
+- **继承**:create 后 UPDATE(`db::create_session` 只收 7 参,mode/
+  worktree/workflow/plugin/title 是硬编码默认)——title=`接力: {去一层
+  前缀的 parent title}`(防首条"继续"抢注 auto-title)、worktree 三列
+  `set_worktree_state` 原样复制(双 session 共享目录是接受的 MVP 边界)、
+  workflow/plugin 走各自 setter、mode 经 `set_session_mode_internal`
+  (仅 parent.mode != edit 时)。任一步失败 → best-effort
+  `delete_session` 清空壳再报错(空壳无 messages,删除无损)。
+- **双向 metadata JSON**(无 migration):child 创建时写
+  `{"handoff": {parent_session_id, parent_title, focus}}`(零 RMW);
+  parent 读-改-写合并 `handoff_children` 列表(容多次接力;合并基线
+  **现读 DB**,不信调用方快照——两次接力复用同一陈旧 parent 行会
+  clobber;低频接受非原子,需硬化换 SQLite `json_set`)。审计查询:
+
+```sql
+-- 谁是接力产物
+SELECT id, title FROM sessions
+WHERE json_extract(metadata, '$.handoff.parent_session_id') IS NOT NULL;
+-- parent 接力出了哪些 child
+SELECT json_extract(metadata, '$.handoff_children') FROM sessions WHERE id = ?;
+```
+
+- **daemon 路由**:POST `/handoff_session`,body `{session_id, focus}`
+  (与 `/compact_session` 同构;项目路由风格是扁平 body,非 path-param)。
+- **trigger 取值**:`"handoff"`(非 "manual"——与 /compact 的摘要行
+  metadata 区分,卡片徽标可辨来源)。
+
+前端契约:`/handoff` 进 BUILTIN_COMMANDS + `matchBuiltinCommandInput`
++ `executeBuiltin` case(palette focus 提取与 /compact 同款);成功后
+`loadSessions` → `switchSession(new_session_id)`(切新会话等用户输入,
+**不自动跑首轮**,prd D2);`kind=handoff_summary` 行复用摘要行系统样式
+(corner-up-right 图标 + `接力自「parent_title」` 徽标 + "查看原会话"
+stopPropagation 跳回 parent;同 project 直接 `switchSession`)。类型镜像
+`HandoffResult`(chat.types.ts)。

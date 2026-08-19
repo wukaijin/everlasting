@@ -132,6 +132,22 @@ describe("httpTransport.invoke", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // 08-18-handoff-mechanism: compact/handoff 两个摘要入口的 domain 映射
+  // 回归锚 —— handoff_session 曾漏加 CMD_TO_DOMAIN,浏览器/remote 模式
+  // /handoff 即断(Tauri IPC 模式不经过本表,侥幸测不出)。新增带 HTTP
+  // 路由的 command 时,此列表是该映射的最低同步清单。
+  it("maps the summary builtins (compact/handoff) to the sessions domain", async () => {
+    const t = await loadTransport();
+    await t.invoke("compact_session", { sessionId: "s1", focus: null });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/sessions/compact_session",
+    );
+    await t.invoke("handoff_session", { sessionId: "s1", focus: null });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/sessions/handoff_session",
+    );
+  });
+
   it("throws TransportError with status + parsed body on HTTP !ok", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,

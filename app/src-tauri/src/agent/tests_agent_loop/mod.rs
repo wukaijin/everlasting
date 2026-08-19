@@ -10,6 +10,7 @@ mod checklist;
 mod compaction_summary;
 mod error_path;
 mod error_persist;
+mod handoff;
 mod manual_compaction;
 mod mock_provider;
 mod notifications;

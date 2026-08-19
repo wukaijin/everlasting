@@ -103,6 +103,8 @@ pub struct BuiltinCommand {
 /// them). `/compact` (08-18-manual-compact-command) triggers the
 /// idle-time summary compaction via the `compact_session` command;
 /// its optional rest-of-line focus text narrows the summary.
+/// `/handoff` (08-18-handoff-mechanism) hands the full-coverage
+/// summary to a NEW child session via the `handoff_session` command.
 pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "help",
@@ -122,6 +124,11 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "compact",
         description: "压缩上下文（摘要收窗）",
+        argument_hint: Some("[focus] 可选定向说明"),
+    },
+    BuiltinCommand {
+        name: "handoff",
+        description: "接力到新会话（全量摘要续跑）",
         argument_hint: Some("[focus] 可选定向说明"),
     },
 ];

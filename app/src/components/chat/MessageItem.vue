@@ -44,7 +44,7 @@ import { taskStateTransitionCardPropsFor as taskStateTransitionCardPropsResolved
 import { buildTimeline, shouldUseTimeline, speakerAccentOf, speakerLabelOf, showSpeakerChipFor } from "./messageTimeline";
 import { useMessageEditing } from "./useMessageEditing";
 import { getToolResult } from "../../utils/messageFormat";
-import { createDebouncedRenderer } from "../../utils/markdown";
+import { createDebouncedRenderer, renderMarkdown } from "../../utils/markdown";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import DiscussionSummaryCard from "./DiscussionSummaryCard.vue";
@@ -268,6 +268,13 @@ const summaryBody = computed<string>(() => {
   return typeof c === "string" ? c : JSON.stringify(c);
 });
 
+/** 摘要正文的 markdown 渲染(08-19 用户反馈:摘要行是结构化 markdown
+ *  文本,纯文本插值把标题/列表拍成一坨)。与消息气泡同一条渲染管线
+ *  (renderMarkdown),`.msg__markdown` 类复用其排版样式。 */
+const summaryHtml = computed<string>(() =>
+  renderMarkdown(summaryBody.value),
+);
+
 /** 摘要行副标题:前后 token(metadata 有则显示,旧格式缺字段容忍)。 */
 const summaryCaption = computed<string>(() => {
   const meta = props.message.metadata as Record<string, unknown> | undefined;
@@ -278,6 +285,46 @@ const summaryCaption = computed<string>(() => {
   }
   return "上下文已压缩 · 点击查看摘要";
 });
+
+// --- handoff 接力行 (2026-08-19, `08-18-handoff-mechanism`) ------------
+// 接力会话的首条 context = `metadata.kind === "handoff_summary"` 的 user
+// 行(prefix 话术自包含落库,后端 `persist_handoff_child`)。渲染复用
+// compaction 摘要行的低调系统样式,差异:corner-up-right 图标 +
+// "接力自 {parent_title}" 徽标 + "查看原会话"跳回 parent(同 project,
+// switchSession 即可)。
+const isHandoffSummary = computed<boolean>(() => {
+  const meta = props.message.metadata;
+  if (!meta || typeof meta !== "object") return false;
+  return (meta as Record<string, unknown>).kind === "handoff_summary";
+});
+
+const handoffParentId = computed<string | null>(() => {
+  const meta = props.message.metadata as Record<string, unknown> | undefined;
+  const v = meta?.parent_session_id;
+  return typeof v === "string" && v.length > 0 ? v : null;
+});
+
+const handoffCaption = computed<string>(() => {
+  const meta = props.message.metadata as Record<string, unknown> | undefined;
+  const title = meta?.parent_title;
+  const after = meta?.tokens_after;
+  const from =
+    typeof title === "string" && title.length > 0 ? `「${title}」` : "先前会话";
+  if (typeof after === "number") {
+    return `接力自${from} · ${after.toLocaleString()} tokens 起点 · 点击查看摘要`;
+  }
+  return `接力自${from} · 点击查看摘要`;
+});
+
+async function jumpToHandoffParent(): Promise<void> {
+  const pid = handoffParentId.value;
+  if (!pid) return;
+  try {
+    await chatStore.switchSession(pid);
+  } catch (e) {
+    console.error("handoff: jump to parent session failed:", e);
+  }
+}
 
 // --- B1 (2026-08-16) R2a: user-turn attachment thumbnails ---------------
 // Map `message.metadata.attachments` into the `MessageImages` entry
@@ -346,13 +393,44 @@ const messageImages = computed<
       >
         <div class="msg-compact-summary__head">
           <Icon name="shrink" :size="12" />
-          <span class="msg-compact-summary__caption">
+          <span class="msg-compact-summary__caption" :title="summaryCaption">
             {{ summaryCaption }}
           </span>
         </div>
-        <div v-if="summaryExpanded" class="msg-compact-summary__body">
-          {{ summaryBody }}
+        <div
+          v-if="summaryExpanded"
+          class="msg-compact-summary__body msg__markdown"
+          v-html="summaryHtml"
+        ></div>
+      </div>
+    </template>
+    <template v-else-if="isHandoffSummary">
+      <!-- handoff 接力行:同款系统样式行,图标/徽标区分 + 跳回原会话
+           (链接 stopPropagation,不触发展开)。 -->
+      <div
+        class="msg-compact-summary"
+        :aria-expanded="summaryExpanded"
+        @click="summaryExpanded = !summaryExpanded"
+      >
+        <div class="msg-compact-summary__head">
+          <Icon name="corner-up-right" :size="12" />
+          <span class="msg-compact-summary__caption" :title="handoffCaption">
+            {{ handoffCaption }}
+          </span>
+          <span
+            v-if="handoffParentId"
+            class="msg-compact-summary__link"
+            role="button"
+            tabindex="0"
+            @click.stop="jumpToHandoffParent"
+            @keydown.enter.prevent="jumpToHandoffParent"
+          >查看原会话</span>
         </div>
+        <div
+          v-if="summaryExpanded"
+          class="msg-compact-summary__body msg__markdown"
+          v-html="summaryHtml"
+        ></div>
       </div>
     </template>
     <template v-else>
@@ -837,21 +915,41 @@ const messageImages = computed<
     display: flex;
     align-items: center;
     gap: 6px;
+    /* 单行布局(08-19 用户反馈:长 parent title 的 caption 把
+       「查看原会话」挤到折行):caption 截断省略号,链接永不折行。 */
+    min-width: 0;
   }
 
   .msg-compact-summary__caption {
     opacity: 0.85;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .msg-compact-summary__link {
+    margin-left: auto;
+    flex-shrink: 0;
+    white-space: nowrap;
+    text-decoration: underline dotted;
+    cursor: pointer;
+    user-select: none;
+    opacity: 0.9;
   }
 
   .msg-compact-summary__body {
     margin-top: 6px;
     padding-top: 6px;
     border-top: 1px solid var(--color-border, rgba(127, 127, 127, 0.2));
-    white-space: pre-wrap;
+    /* 08-19: 摘要正文改 markdown 渲染(v-html + .msg__markdown 排版),
+       pre-wrap 移除 —— 段落/列表间距由 markdown 样式负责。 */
+    font-size: 13px;
     word-break: break-word;
     cursor: auto;
     user-select: text;
-    opacity: 0.9;
+    opacity: 0.95;
   }
   /* Position context for the absolute-positioned
      .msg-actions trigger — see MessageActionsMenu.vue.

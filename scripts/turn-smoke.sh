@@ -28,6 +28,14 @@
 #                                               # POST compact_session → 断言摘要行
 #                                               # 契约(trigger=manual/focus/seq)→
 #                                               # 再跑一轮验证水位续跑
+#   ./scripts/turn-smoke.sh --handoff           # /handoff live 冒烟(08-18-
+#                                               # handoff-mechanism):一轮小消息 →
+#                                               # POST handoff_session → 断言子
+#                                               # session 首行契约(kind=handoff_
+#                                               # summary/prefix/trigger)+ 双向
+#                                               # metadata + parent 行数不变 → 子
+#                                               # session 续跑一轮 → 清理两会话。
+#                                               # 全量覆盖无保留区,无需大消息。
 #   ./scripts/turn-smoke.sh --keep              # 保留烟测 session(默认跑完即删)
 #   ./scripts/turn-smoke.sh --timeout 300       # 等 turn_trace 的超时秒数(默认 180)
 #
@@ -42,6 +50,7 @@ TURNS=1
 TIMEOUT=180
 KEEP=0
 COMPACT=0
+HANDOFF=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -51,6 +60,7 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     --compact) COMPACT=1; shift ;;
+    --handoff) HANDOFF=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -65,10 +75,16 @@ curl -sf -m 3 "$BASE/health" >/dev/null || { echo "ERR: daemon not reachable at 
 [ -f "$DB_PATH" ] || { echo "ERR: DB not found at $DB_PATH (see AGENTS.md / docs/DEBUG_DB.md)" >&2; exit 2; }
 
 SID=""
+PARENT_SID=""
+CHILD_SID=""
 cleanup() {
-  if [ -n "$SID" ] && [ "$KEEP" != "1" ]; then
-    curl -s -X POST "$BASE/api/v1/sessions/delete_session" \
-      -H 'Content-Type: application/json' -d "{\"session_id\":\"$SID\"}" >/dev/null 2>&1 || true
+  if [ "$KEEP" != "1" ]; then
+    # --handoff 会把 SID 切到子 session;三个变量覆盖 parent/child 双引用
+    # (--handoff 后 SID==CHILD_SID,重复 delete 是幂等 no-op)。
+    for s in "$SID" "$PARENT_SID" "$CHILD_SID"; do
+      [ -n "$s" ] && curl -s -X POST "$BASE/api/v1/sessions/delete_session" \
+        -H 'Content-Type: application/json' -d "{\"session_id\":\"$s\"}" >/dev/null 2>&1 || true
+    done
   fi
 }
 trap cleanup EXIT
@@ -103,15 +119,16 @@ max_seq() {
 
 send_and_wait() {
   # $1 = 消息文本;发一条 user 消息,轮询直到出现 seq 更大的 turn_trace 行。
-  # --compact 模式发**全量 wire**(DB 行 text 列 + 新消息,镜像真实前端
-  # rehydrate + reloadAfterFinalize 行为)—— 水位折叠的 wire↔DB 对齐前提
-  # 依赖全量 wire;单条 wire 会让对齐防御 fail-open,验不到水位。非
-  # compact 模式保持单条 wire 的历史语义(--turns 2 的 cache 对比口径)。
+  # --compact / --handoff 模式发**全量 wire**(DB 行 text 列 + 新消息,
+  # 镜像真实前端 rehydrate + reloadAfterFinalize 行为)—— 水位折叠的
+  # wire↔DB 对齐前提依赖全量 wire;单条 wire 会让对齐防御 fail-open,
+  # 验不到水位(handoff 子会话无水位,但全量 wire 同样镜像真实前端)。
+  # 其他模式保持单条 wire 的历史语义(--turns 2 的 cache 对比口径)。
   local MSG="$1" BEFORE_SEQ ELAPSED=0
   BEFORE_SEQ="$(max_seq)"
   local REQ_ID="turn-smoke-$(date +%s)-$BEFORE_SEQ"
   local BODY
-  BODY="$(MESSAGE="$MSG" REQ_ID="$REQ_ID" SID="$SID" DB_PATH="$DB_PATH" FULLWIRE="$COMPACT" python3 -c '
+  BODY="$(MESSAGE="$MSG" REQ_ID="$REQ_ID" SID="$SID" DB_PATH="$DB_PATH" FULLWIRE="$((COMPACT + HANDOFF))" python3 -c '
 import json,os,sqlite3
 msgs=[]
 if os.environ.get("FULLWIRE")=="1":
@@ -188,6 +205,86 @@ PYEOF
   # 水位续跑:再发一轮,turn_trace 出现新行 = 下一请求正常吃到新水位。
   send_and_wait "$FOLLOWUP_MESSAGE"
   echo "post-compact turn ok (watermark pickup verified by new turn_trace row)"
+fi
+
+# ── 2.6 /handoff live 冒烟(08-18-handoff-mechanism)─────────────────────
+# 全量覆盖无保留区,一轮小消息即可(无需大消息撑预算)。管道:HTTP →
+# gate → provider → 全量摘要(真实 LLM)→ 子 session 继承 + 首行落库 →
+# 双向 metadata;然后子 session 续跑一轮验证接力 context 可用。
+if [ "$HANDOFF" = "1" ]; then
+  PARENT_MSGS_BEFORE="$(sqlite3 -readonly "$DB_PATH" \
+    "SELECT COUNT(*) FROM messages WHERE session_id='$SID';")"
+  echo "invoking handoff_session (focus=冒烟定向)..."
+  HANDOFF_RESP="$(SID="$SID" python3 -c '
+import json,os
+print(json.dumps({"session_id":os.environ["SID"],"focus":"冒烟定向"}))
+' | curl -sf -m 180 -X POST "$BASE/api/v1/sessions/handoff_session" \
+      -H 'Content-Type: application/json' -d @-)" || {
+    echo "ERR: handoff_session call failed (check daemon logs)" >&2; exit 1;
+  }
+  CHILD_SID="$(echo "$HANDOFF_RESP" | python3 -c '
+import json,sys
+r=json.load(sys.stdin)
+print(r["new_session_id"])
+')"
+  echo "$HANDOFF_RESP" | python3 -c '
+import json,sys
+r=json.load(sys.stdin)
+print("handoff ok: child_title={} before={} after={} cutoff_seq={} model={}".format(
+    r["new_session_title"], r["tokens_before"], r["tokens_after"],
+    r["cutoff_seq"], r["model"]))
+  '
+  # 落库契约:子首行(seq=1/kind=handoff_summary/trigger=handoff/focus/
+  # prefix 自包含)+ 双向 metadata + parent 行数不变 + parent 标题继承。
+  HANDOFF_CHECK="$(SID="$SID" CHILD="$CHILD_SID" DB_PATH="$DB_PATH" python3 - << 'PYEOF'
+import json, os, sqlite3
+sid, child = os.environ["SID"], os.environ["CHILD"]
+con = sqlite3.connect(f"file:{os.environ['DB_PATH']}?mode=ro", uri=True)
+rows = con.execute(
+    "SELECT seq, text, metadata FROM messages WHERE session_id=? ORDER BY seq",
+    (child,)).fetchall()
+assert rows, "child session has no messages"
+seq, text, meta_json = rows[0]
+meta = json.loads(meta_json or "{}")
+assert seq == 1, f"first row seq={seq} (want 1)"
+assert meta.get("kind") == "handoff_summary", f"kind={meta.get('kind')}"
+assert meta.get("trigger") == "handoff", f"trigger={meta.get('trigger')}"
+assert meta.get("focus") == "冒烟定向", f"focus={meta.get('focus')}"
+assert meta.get("parent_session_id") == sid, "parent_session_id mismatch"
+assert text.startswith("This session is being continued"), \
+    f"prefix not persisted: {text[:40]!r}"
+assert len(rows) == 1, f"child has {len(rows)} rows (want 1 pre-continuation)"
+sess = con.execute(
+    "SELECT title, metadata FROM sessions WHERE id=?", (child,)).fetchone()
+assert sess and sess[0].startswith("接力: "), f"child title={sess[0] if sess else None}"
+child_meta = json.loads(sess[1] or "{}")
+assert child_meta.get("handoff", {}).get("parent_session_id") == sid, \
+    f"child session metadata: {child_meta}"
+parent_meta_row = con.execute(
+    "SELECT metadata FROM sessions WHERE id=?", (sid,)).fetchone()
+parent_meta = json.loads((parent_meta_row or ["{}"])[0] or "{}")
+children = parent_meta.get("handoff_children", [])
+assert child in children, f"parent handoff_children missing child: {children}"
+parent_msgs = con.execute(
+    "SELECT COUNT(*) FROM messages WHERE session_id=?", (sid,)).fetchone()[0]
+print(f"handoff contract ok: child seq=1 kind=handoff_summary prefix=persisted "
+      f"title={sess[0]!r} children={len(children)} parent_msgs={parent_msgs}")
+PYEOF
+)" || { echo "ERR: handoff contract check failed" >&2; exit 1; }
+  echo "$HANDOFF_CHECK"
+  PARENT_MSGS_AFTER="$(sqlite3 -readonly "$DB_PATH" \
+    "SELECT COUNT(*) FROM messages WHERE session_id='$SID';")"
+  [ "$PARENT_MSGS_BEFORE" = "$PARENT_MSGS_AFTER" ] || {
+    echo "ERR: parent message count changed: $PARENT_MSGS_BEFORE → $PARENT_MSGS_AFTER" >&2; exit 1;
+  }
+  echo "parent rows intact: $PARENT_MSGS_AFTER (AC4)"
+  # 续跑:切到子 session 发一轮(全量 wire = 接力行 + 新消息,镜像真实
+  # 前端),turn_trace 新行 = 接力 context 可正常续跑。PARENT_SID 记原会话
+  # 供 cleanup 删除。
+  PARENT_SID="$SID"
+  SID="$CHILD_SID"
+  send_and_wait "$FOLLOWUP_MESSAGE"
+  echo "post-handoff continuation turn ok (relay context usable)"
 fi
 
 # ── 3. 列存在性检查(缺失 = daemon 二进制早于对应任务) ─────────────────

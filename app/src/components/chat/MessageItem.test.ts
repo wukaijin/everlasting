@@ -657,3 +657,109 @@ describe("MessageItem — search_history tool dispatch", () => {
     expect(wrapper.find("[data-testid^='search-history-card']").exists()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------
+// handoff 接力行 (08-18-handoff-mechanism):接力会话首条 context =
+// kind=="handoff_summary" 的 user 行 —— 复用 compaction 摘要行的系统
+// 样式,差异是 corner-up-right 图标 + "接力自"徽标 + 跳回 parent 链接。
+// ---------------------------------------------------------------------
+
+describe("MessageItem — handoff summary row", () => {
+  const PREFIX =
+    "This session is being continued from a previous conversation";
+
+  function makeHandoffRow(metadata: Record<string, unknown>): ChatMessage {
+    return {
+      id: "msg-ho-1",
+      role: "user",
+      content: `${PREFIX} that ran out of context.\n\n5. Work State — ok`,
+      metadata,
+    };
+  }
+
+  const HANDOFF_META = {
+    kind: "handoff_summary",
+    parent_session_id: "parent-1",
+    parent_title: "调试 daemon",
+    trigger: "handoff",
+    tokens_after: 3200,
+  };
+
+  it("renders the handoff system row with badge + parent link (not a user bubble)", async () => {
+    const wrapper = mountItem(makeHandoffRow({ ...HANDOFF_META }), pinia);
+    await flushPromises();
+
+    const row = wrapper.find(".msg-compact-summary");
+    expect(row.exists()).toBe(true);
+    expect(row.text()).toContain("接力自「调试 daemon」");
+    expect(row.text()).toContain("3,200 tokens 起点");
+    expect(wrapper.find(".msg-compact-summary__link").text()).toBe(
+      "查看原会话",
+    );
+  });
+
+  it("expands the summary body on row click (markdown-rendered)", async () => {
+    const row = makeHandoffRow({ ...HANDOFF_META });
+    row.content =
+      "This session is being continued…\n\n## Work State\n\n- **done**: setup\n- next: wiring\n";
+    const wrapper = mountItem(row, pinia);
+    await flushPromises();
+    expect(wrapper.find(".msg-compact-summary__body").exists()).toBe(false);
+
+    await wrapper.find(".msg-compact-summary").trigger("click");
+    const body = wrapper.find(".msg-compact-summary__body");
+    expect(body.exists()).toBe(true);
+    // markdown 管道(08-19):标题/加粗/列表渲染为结构化 HTML,不再是
+    // 纯文本插值;.msg__markdown 类复用气泡排版。
+    expect(body.classes()).toContain("msg__markdown");
+    expect(body.find("h2").text()).toContain("Work State");
+    expect(body.find("strong").text()).toBe("done");
+    expect(body.findAll("li").length).toBe(2);
+  });
+
+  it("jumps to the parent session from the link without toggling expand", async () => {
+    const spy = vi.spyOn(chatStore, "switchSession").mockResolvedValue();
+    const wrapper = mountItem(makeHandoffRow({ ...HANDOFF_META }), pinia);
+    await flushPromises();
+
+    await wrapper.find(".msg-compact-summary__link").trigger("click");
+    expect(spy).toHaveBeenCalledWith("parent-1");
+    // stopPropagation: link click must not expand the body.
+    expect(wrapper.find(".msg-compact-summary__body").exists()).toBe(false);
+    spy.mockRestore();
+  });
+
+  it("omits the link when parent_session_id is missing (defensive)", async () => {
+    const meta = { ...HANDOFF_META } as Record<string, unknown>;
+    delete meta.parent_session_id;
+    const wrapper = mountItem(makeHandoffRow(meta), pinia);
+    await flushPromises();
+    expect(wrapper.find(".msg-compact-summary__link").exists()).toBe(false);
+    expect(wrapper.text()).toContain("接力自「调试 daemon」");
+  });
+
+  it("falls back to a title-less badge and hides token count when metadata fields are absent", async () => {
+    const wrapper = mountItem(
+      makeHandoffRow({
+        kind: "handoff_summary",
+        parent_session_id: "parent-1",
+      }),
+      pinia,
+    );
+    await flushPromises();
+    expect(wrapper.text()).toContain("接力自先前会话");
+    expect(wrapper.text()).not.toContain("tokens 起点");
+  });
+
+  it("does NOT render the handoff row for compaction_summary kind (kinds are exclusive)", async () => {
+    const wrapper = mountItem(
+      makeHandoffRow({ kind: "compaction_summary", tokens_before: 9000, tokens_after: 1200 }),
+      pinia,
+    );
+    await flushPromises();
+    // compaction branch renders its own caption instead.
+    expect(wrapper.text()).toContain("上下文已压缩");
+    expect(wrapper.text()).not.toContain("接力自");
+    expect(wrapper.find(".msg-compact-summary__link").exists()).toBe(false);
+  });
+});

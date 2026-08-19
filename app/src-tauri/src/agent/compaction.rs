@@ -1021,6 +1021,281 @@ pub async fn run_manual_compaction(
 }
 
 // ---------------------------------------------------------------------------
+// handoff 跨 session 接力(08-18-handoff-mechanism)
+// ---------------------------------------------------------------------------
+
+/// `messages.metadata` 的 `kind` 值:handoff 接力行。与
+/// [`COMPACTION_SUMMARY_KIND`] 的两处关键差异:
+///
+/// 1. **prefix 话术落库自包含**(content/text 两列都写
+///    `SUMMARY_CONTEXT_PREFIX + 摘要`):新 session 没有水位机制替它拼接
+///    (锚点检测只认 compaction_summary),而 FE rehydrate 对 text-only
+///    user 行逐字回发 `text` 列 —— prefix 不落库就永远进不了 wire。
+///    compaction_summary 的"绝不落库"契约(防 `<prior-summary>` 滚雪球 +
+///    D2 搜索污染)在这里不适用:handoff 行不进 anchor 检测,无滚雪球;
+///    搜索多命中一段固定话术是可接受代价。
+/// 2. **不参与水位**:本 kind 行在 wire 里就是普通 user 消息;新 session
+///    后续增长触发自动压缩时,它作为 regular 行进 transcript 被再摘要,
+///    接力链自然延续(首个 compaction anchor 在新 session 内自洽)。
+pub const HANDOFF_SUMMARY_KIND: &str = "handoff_summary";
+
+/// handoff 摘要必含段(prd R2/D4)。子串匹配 —— 模板第六段实际标题为
+/// "Optional Next Step",按 "Next Step" 子串识别。
+const HANDOFF_REQUIRED_SECTIONS: [&str; 2] = ["Work State", "Next Step"];
+
+/// 校验 handoff 摘要含全部必含段:段标题行(子串,容忍编号 / `#` /
+/// "Optional" 前缀与大小写)存在,且其后还有非空内容。标题后的非空行
+/// 不区分归属(相邻段共界,"标题在但正文空"的细分场景放行)—— 校验
+/// 目标是拦"整段缺失",与 AC2 的缺段重试/报错契约对齐。
+pub fn validate_handoff_summary(text: &str) -> Vec<&'static str> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut missing = Vec::new();
+    for name in HANDOFF_REQUIRED_SECTIONS {
+        let needle = name.to_lowercase();
+        let header = lines.iter().position(|l| {
+            let t = l.trim();
+            !t.is_empty() && t.len() <= 120 && t.to_lowercase().contains(&needle)
+        });
+        match header {
+            None => missing.push(name),
+            Some(idx) => {
+                if !lines[idx + 1..].iter().any(|l| !l.trim().is_empty()) {
+                    missing.push(name);
+                }
+            }
+        }
+    }
+    missing
+}
+
+/// handoff 摘要生成产物(持久化半边在 `commands::sessions::
+/// handoff_session_inner`:生成 → 建子 session 继承 → 接力行落库 →
+/// 双向 metadata 关联)。
+#[derive(Debug)]
+pub struct HandoffSummary {
+    /// 纯摘要正文(无 prefix;prefix 由持久化半边拼接落库)。
+    pub summary_text: String,
+    pub summary_usage: Option<crate::llm::types::TokenUsage>,
+    /// 摘要前 parent 水位视图的 token 量级(观测口径,同 manual)。
+    pub tokens_before: u32,
+    /// 新 session 起点视图 = prefix + 摘要 单条消息的 token 量级。
+    pub tokens_after: u32,
+    /// provider 协议族(Debug 名,与 auto/manual 路径 metadata 同口径)。
+    pub model: String,
+    /// 信息性:摘要覆盖到 parent 的最后一行 seq(接力行 metadata 落库)。
+    pub cutoff_seq: i64,
+    /// 快路径产物(prior 摘要原样接力,零 LLM 调用)。
+    pub from_prior_fast_path: bool,
+}
+
+/// handoff 生成失败类别(命令层映射为用户可读错误)。
+#[derive(Debug)]
+pub enum HandoffGenerationError {
+    /// 会话无内容(无常规行且无水位摘要)。零 LLM 调用,不计熔断。
+    NothingToHandoff,
+    /// 摘要 completion 失败(流错误/空输出)。已计熔断。
+    SummaryFailed(&'static str),
+    /// 两次尝试(含纠正重试)都缺必含段(D4)。已计熔断;调用方保证
+    /// 零副作用(生成失败时不建 session)。
+    SummaryMissingSections(Vec<&'static str>),
+}
+
+/// handoff 接力结果载荷(`handoff_session` 命令响应;serde snake_case,
+/// TS 镜像类型 `HandoffResult`)。
+#[derive(Debug, serde::Serialize)]
+pub struct HandoffOutcome {
+    pub new_session_id: String,
+    pub new_session_title: String,
+    pub cutoff_seq: i64,
+    pub tokens_before: u32,
+    pub tokens_after: u32,
+    pub summary_usage: Option<crate::llm::types::TokenUsage>,
+    pub model: String,
+}
+
+/// handoff 摘要生成(/handoff 的 LLM 半边)。
+///
+/// 与 [`run_manual_compaction`] 共享 prompt / completion / 熔断 / 增量
+/// 合并纯函数,契约差异:
+///
+/// - **全量覆盖**:不切保留区 —— 水位之后的全部常规行进摘要。新
+///   session 从摘要独立起步,尾部信息必须进摘要(prd R1);
+/// - **anchor 占位契约**与 manual 同款:prior 存在时 `compressible[0]`
+///   为占位消息(`build_compaction_prompt` 跳过之,内容经
+///   `<prior-summary>` 块进场 —— 不构造会静默丢水位后最旧一条常规行);
+/// - **快路径**:水位之后无新常规行 → prior 摘要即全量覆盖摘要,原样
+///   接力(零 LLM 调用);缺必含段则退化 LLM 补段(D4 对快路径同样
+///   成立);
+/// - **D4 校验重试**:缺必含段 → 带纠正块重试一次 → 仍缺 → 报错;
+/// - 熔断同 manual:不查 `is_tripped`,最终失败 `record_failure` /
+///   成功 `record_success`(中间重试不计)。
+///
+/// caller(`handoff_session_inner`)负责 scope/config gate、in-flight
+/// guard 与持久化半边。
+pub async fn generate_handoff_summary(
+    session_id: &str,
+    provider: std::sync::Arc<dyn crate::llm::Provider>,
+    context_window: u32,
+    focus: Option<&str>,
+    rows: &[MessageRow],
+) -> Result<HandoffSummary, HandoffGenerationError> {
+    let prior = latest_summary_anchor(rows);
+
+    // candidate 口径与 manual 同款:kind 过滤(被吸收的旧 compaction
+    // 摘要行)+ 水位之后。handoff_summary 行**不过滤** —— parent 自身
+    // 若是接力产物,其接力行是 regular 上下文(且 seq 早于任何后继
+    // 水位时由水位增量合并吸收)。
+    let filtered: Vec<&MessageRow> = rows
+        .iter()
+        .filter(|r| {
+            message_metadata_kind(r.metadata.as_ref()) != Some(COMPACTION_SUMMARY_KIND)
+                && prior.as_ref().is_none_or(|a| r.seq > a.cutoff)
+        })
+        .collect();
+    if filtered.is_empty() && prior.is_none() {
+        return Err(HandoffGenerationError::NothingToHandoff);
+    }
+    let candidates: Vec<ChatMessage> = filtered.iter().map(|r| row_to_chat_message(r)).collect();
+    let cutoff_seq = rows.iter().map(|r| r.seq).max().unwrap_or(0);
+
+    let anchor_msg = |a: &SummaryAnchor| ChatMessage {
+        role: Role::User,
+        content: MessageContent::Text(a.content.clone()),
+        speaker: None,
+        attachments: None,
+    };
+    // tokens_before = parent 当前水位视图([旧摘要?] + 全部常规行)。
+    let mut view_before: Vec<ChatMessage> = Vec::with_capacity(candidates.len() + 1);
+    if let Some(anchor) = prior.as_ref() {
+        view_before.push(anchor_msg(anchor));
+    }
+    view_before.extend(candidates.iter().cloned());
+    let tokens_before = crate::agent::context::estimate_messages_tokens(&view_before).await;
+
+    let model = format!("{:?}", provider.protocol());
+
+    // 快路径:无新常规行 → prior 摘要即全量覆盖摘要,原样接力。
+    if filtered.is_empty() {
+        let text = prior
+            .as_ref()
+            .expect("filtered empty with prior.is_none() already rejected above")
+            .content
+            .clone();
+        if validate_handoff_summary(&text).is_empty() {
+            let tokens_after =
+                crate::agent::context::estimate_messages_tokens(&[build_summary_chat_message(
+                    &text,
+                )])
+                .await;
+            compaction_registry().record_success(session_id).await;
+            tracing::info!(session_id = %session_id, cutoff_seq, tokens_before, tokens_after, "handoff summary reused prior (fast path)");
+            return Ok(HandoffSummary {
+                summary_text: text,
+                summary_usage: None,
+                tokens_before,
+                tokens_after,
+                model,
+                cutoff_seq,
+                from_prior_fast_path: true,
+            });
+        }
+        // 缺段 → 退化 LLM 补段(下方空 candidates 路径:prior-summary
+        // 块 + 空 transcript,纠正由模型补全段落)。
+    }
+
+    // 占位契约(评审①):prior 存在时 compressible[0] = anchor 占位。
+    let mut compressible: Vec<ChatMessage> = Vec::with_capacity(candidates.len() + 1);
+    if let Some(anchor) = prior.as_ref() {
+        compressible.push(anchor_msg(anchor));
+    }
+    compressible.extend(candidates.iter().cloned());
+
+    let base_prompt =
+        build_compaction_prompt(&compressible, prior.as_ref(), context_window, focus).await;
+
+    // handoff 入口无取消源(fresh token 永不触发);Cancelled 分支按
+    // 失败处理(同 manual 口径)。
+    let token = tokio_util::sync::CancellationToken::new();
+    let (raw_text, usage) =
+        match send_summary_completion(provider.as_ref(), &token, base_prompt.clone()).await {
+            Ok(v) => v,
+            Err(SummaryStreamError::Cancelled) => {
+                compaction_registry().record_failure(session_id).await;
+                return Err(HandoffGenerationError::SummaryFailed("summary cancelled"));
+            }
+            Err(SummaryStreamError::Failed(reason)) => {
+                compaction_registry().record_failure(session_id).await;
+                tracing::warn!(
+                    session_id = %session_id,
+                    reason,
+                    "handoff: summary completion failed"
+                );
+                return Err(HandoffGenerationError::SummaryFailed(reason));
+            }
+        };
+    let mut summary_text = clamp_summary_output(raw_text);
+    let mut summary_usage = usage;
+
+    let missing = validate_handoff_summary(&summary_text);
+    if !missing.is_empty() {
+        // D4:带纠正块重试一次(sections 点名缺失段)。
+        let sections = missing.join(", ");
+        let retry_prompt = format!(
+            "{base_prompt}\n\nCORRECTION: your previous summary omitted these required \
+             sections: {sections}. Regenerate the FULL summary including ALL six numbered \
+             sections (especially the missing ones). Output ONLY the corrected summary."
+        );
+        match send_summary_completion(provider.as_ref(), &token, retry_prompt).await {
+            Ok((raw2, usage2)) => {
+                let corrected = clamp_summary_output(raw2);
+                let missing2 = validate_handoff_summary(&corrected);
+                if !missing2.is_empty() {
+                    compaction_registry().record_failure(session_id).await;
+                    tracing::warn!(
+                        session_id = %session_id,
+                        missing = ?missing2,
+                        "handoff: summary still missing required sections after retry"
+                    );
+                    return Err(HandoffGenerationError::SummaryMissingSections(missing2));
+                }
+                summary_text = corrected;
+                summary_usage = usage2;
+            }
+            Err(SummaryStreamError::Cancelled | SummaryStreamError::Failed(_)) => {
+                compaction_registry().record_failure(session_id).await;
+                return Err(HandoffGenerationError::SummaryFailed(
+                    "summary retry failed",
+                ));
+            }
+        }
+    }
+
+    // tokens_after = 新 session 起点视图(prefix + 摘要,单条)。
+    let tokens_after =
+        crate::agent::context::estimate_messages_tokens(&[build_summary_chat_message(
+            &summary_text,
+        )])
+        .await;
+    compaction_registry().record_success(session_id).await;
+    tracing::info!(
+        session_id = %session_id,
+        cutoff_seq,
+        tokens_before,
+        tokens_after,
+        "handoff summary generated"
+    );
+    Ok(HandoffSummary {
+        summary_text,
+        summary_usage,
+        tokens_before,
+        tokens_after,
+        model,
+        cutoff_seq,
+        from_prior_fast_path: false,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Tests(风格对齐 agent/context.rs:同文件内嵌 tests mod)
 // ---------------------------------------------------------------------------
 

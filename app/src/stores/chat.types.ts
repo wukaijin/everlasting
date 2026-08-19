@@ -553,6 +553,27 @@ export interface ManualCompactionResult {
   model: string;
 }
 
+/** /handoff result (08-18-handoff-mechanism). Wire form mirrors the Rust
+ *  `agent::compaction::HandoffOutcome` (snake_case, no serde rename).
+ *  `tokens_before` is the parent's pre-summary watermark view estimate;
+ *  `tokens_after` is the NEW session's starting context (prefix + summary,
+ *  single message). The frontend switches to `new_session_id` on success. */
+export interface HandoffResult {
+  new_session_id: string;
+  new_session_title: string;
+  cutoff_seq: number;
+  tokens_before: number;
+  tokens_after: number;
+  summary_usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+    context_input_tokens: number;
+  } | null;
+  model: string;
+}
+
 /** D2 (cross-session search, 2026-08-17): one hit from
  *  `search_messages`. Wire form mirrors the Rust struct
  *  (`db/search.rs::MessageSearchHit`, snake_case, no serde

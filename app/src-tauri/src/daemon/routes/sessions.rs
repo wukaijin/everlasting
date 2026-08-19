@@ -20,7 +20,7 @@ use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, compact_session_inner, create_session_inner,
     delete_session_inner, diff_worktree_inner, edit_user_message_inner,
-    group_chat_cache_rates_inner, list_sessions_inner, load_session_inner,
+    group_chat_cache_rates_inner, handoff_session_inner, list_sessions_inner, load_session_inner,
     record_tool_duration_inner, rename_session_inner, search_messages_inner,
     set_session_color_inner, set_session_plugin_name_inner, set_session_workflow_enabled_inner,
     update_message_latency_inner, update_session_metadata_inner,
@@ -362,6 +362,22 @@ pub async fn compact_session(
     Ok(Json(result))
 }
 
+/// `/handoff`(08-18-handoff-mechanism):与 `/compact_session` 同构的
+/// body 形式;transport 解包后走 `handoff_session_inner`。
+#[derive(Debug, Deserialize)]
+pub struct HandoffSessionRequest {
+    pub session_id: String,
+    pub focus: Option<String>,
+}
+
+pub async fn handoff_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<HandoffSessionRequest>,
+) -> Result<Json<crate::agent::compaction::HandoffOutcome>, AppCommandError> {
+    let result = handoff_session_inner(&state, req.session_id, req.focus).await?;
+    Ok(Json(result))
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/list_sessions", post(list_sessions))
@@ -386,6 +402,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/group_chat_cache_rates", post(group_chat_cache_rates))
         .route("/search_messages", post(search_messages))
         .route("/compact_session", post(compact_session))
+        .route("/handoff_session", post(handoff_session))
         .with_state(state)
 }
 
@@ -502,6 +519,55 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/compact_session")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session_id":"{}","focus":null}}"#,
+                        session.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+        assert!(text.contains("群聊"), "group gate message: {text}");
+    }
+
+    /// /handoff route smoke(spec backend/daemon-server.md §6 同款口径):
+    /// POST `/handoff_session` 对群聊会话 —— 群聊 gate 在 provider 解析
+    /// 之前触发,一轮往返证明 transport 接线(JSON 解析 → `_inner` →
+    /// gate)+ 用户可读拒绝。完整接力管道在
+    /// `agent::tests_agent_loop::handoff`。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handoff_session_route_rejects_group_chat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let pool = &state.db;
+        let project = db::projects::create_project(pool, "gchsmoke", "/tmp/gc_hsmoke", false, None)
+            .await
+            .unwrap();
+        let session = db::sessions::create_session(
+            pool,
+            "gc-handoff-smoke-1",
+            &project.id,
+            "/tmp/gc_hsmoke",
+            "GLM-4.7",
+            None,
+            Some("group_chat"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/handoff_session")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(
                         r#"{{"session_id":"{}","focus":null}}"#,
