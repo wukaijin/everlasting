@@ -92,9 +92,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 版本唯一来源是 app/package.json 的 packageManager 字段
-      # (不指定 version 输入时 action-setup 自动读它,本地/CI 一致)
+      # 版本唯一来源是 app/package.json 的 packageManager 字段。
+      # 注意 action-setup 只读**仓库根** package.json(本仓库没有,
+      # working-directory 默认值对 action 不生效),所以必须先从
+      # app/package.json 提取版本喂给 version 输入,不能省略。
+      - name: Resolve pnpm version from app/package.json
+        id: pnpm-version
+        run: echo "version=$(jq -r '.packageManager | split("@")[-1]' package.json)" >> "$GITHUB_OUTPUT"
+
       - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.pnpm-version.outputs.version }}
 
       - uses: actions/setup-node@v4
         with:
