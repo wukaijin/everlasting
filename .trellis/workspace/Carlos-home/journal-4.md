@@ -583,3 +583,27 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 104: MAX_TURNS 软卡化——撞线询问替代硬终断
+
+**Date**: 2026-08-19
+**Task**: MAX_TURNS 软卡化——撞线询问替代硬终断
+**Branch**: `main`
+
+### Summary
+
+单聊主 loop 200 轮撞线由硬终断改为 QuestionStore 软卡询问(继续+200/压缩后续跑/停止),10min 无响应超时停止与今日行为等价;worker 与群聊硬卡零回归(群聊 speaker 段经 group_chat_state 门排除——实现中发现的缺口,曾致全量 30min 挂起)。压缩联动走 drive_turn force 穿参只绕 token 触发线,metadata trigger=softcap 区分。新增 TurnLimitSoftcap PendingInteraction/audit kind(无 migration)、前端浮动卡四点位、softcap.rs 8 用例;live 冒烟 PASS(boundary env 实跑弹卡→resolve 停止→audit asked→stopped)。spec 沉淀 pattern-turn-limit-softcap。全量 1836/1838(2 失败为 main 既有 flaky,基线复现无关),前端 1108/1108。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ae2f3b4` | (see git log) |
+| `df34842` | (see git log) |
+| `b6fa382` | (see git log) |
+| `26a3040` | (see git log) |
+
+### Status
+
+[OK] **Completed**
