@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "tools/memory/images 三列的计数点/写点/占比口径契约,新列(at_files/system/context_window)与实发口径(D9)照此模式扩"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "drive_turn 组装顺序与 loop 不变量——PR1 时序重排(tools 过滤链挪到压缩块前)的参照与回归基线"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "C3+ 触发线(0.85)/postcheck(0.95)/机械丢组语义——三处口径切换到统一总量时不得破坏的契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "turn_trace 表契约与幂等加列 helper(add_turn_trace_column_if_missing)模式"}
+{"file": ".trellis/spec/backend/memory/decisions.md", "reason": "digest registry 粘性/目录态语义——臂 3(memory 节回退)消费该机制,不得改 registry 本体"}

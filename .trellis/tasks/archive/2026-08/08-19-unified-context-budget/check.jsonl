@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "核对三旧列零回归 + 新列实发口径(预裁 − freed)落值正确"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "核对三处口径切换后压缩/水位/postcheck 行为:messages 部件自身超线场景不变,tools+system 挤窗场景按新口径触发"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门:clippy/fmt/测试覆盖要求"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "PR2 turnTrace.ts 新字段与 TurnCard 改动的类型契约"}
