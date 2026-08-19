@@ -682,6 +682,12 @@ pub async fn run_chat_loop(
         mut summary_anchor,
         synthetic_prefix_len,
         compaction_on,
+        // unified-context-budget WP1 (2026-08-19): system/@files 切片 +
+        // 同请求 spans(D10 临时产物,WP2 budget gate 消费)。请求常量,
+        // 每 turn 原样穿给 drive_turn。
+        system_token,
+        at_files_token,
+        at_file_spans,
     } = init;
 
     // -----------------------------------------------------------------
@@ -1038,6 +1044,12 @@ pub async fn run_chat_loop(
             summary_anchor,
             synthetic_prefix_len,
             compaction_on,
+            // unified-context-budget WP1 (2026-08-19): system/@files
+            // 切片 + 同请求 spans(D10)。请求常量穿参;spans 每轮
+            // clone(WP2 gate 只读消费,PR1 落 trace 列)。
+            system_token,
+            at_files_token,
+            at_file_spans.clone(),
             // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」
             // 的一次性 force 标志 —— 只绕过 C3 的 token 触发线,gate
             // (开关/worker/熔断/skip_persist)与空待压区照旧

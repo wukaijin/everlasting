@@ -164,12 +164,16 @@ async fn agent_loop_c3_compaction_does_not_panic() {
     // Construct messages that force a CLEAN compaction
     // (`DegradationKind::None`): head[2 tiny protected] +
     // middle[1 large droppable] + tail[1 tiny protected].
-    // context_window = 1000 → trigger = 800, target = 500.
-    // `big_middle` (~4.8KB ≈ 1200 tokens) pushes tokens_before
-    // past the 800 trigger; dropping it leaves head(2 tiny) +
-    // tail(1 tiny) ≈ 10 tokens, well under target 500 → `None`
-    // (safe-to-proceed). The provider IS called and emits Done —
-    // the loop completes normally.
+    //
+    // unified-context-budget WP1 (2026-08-19): 口径切换后 target 比较
+    // 含 request overhead(system + tools 估算),窗口 1000 的旧夹具
+    // 被 system prompt(≈1k tok)单枪匹马顶过 target 500 → 恒 StillOver。
+    // 重设为 compaction_summary 同款环境容忍窗口 20_000:
+    // trigger = 17_000,target = 10_000。`big_middle`(~72KB ≈ 18k
+    // tokens)确保任何环境(合成头 0..3 条,含 user-scope memory ≈7k)
+    // 的 messages 部件都过触发线;丢组后剩余 = 合成头对(≤7k)+ system
+    // (≈1k)+ tail < target 10_000 → `None`(safe-to-proceed),provider
+    // 被调用并 Done —— 与本测试"干净压缩后 loop 存活"的意图一致。
     //
     // This is the clean-compaction counterpart to
     // `agent_loop_c3_still_over_emits_error_and_skips_provider`
@@ -179,19 +183,16 @@ async fn agent_loop_c3_compaction_does_not_panic() {
     //
     // RULE-A-017 (2026-06-28): the original setup
     // (`test_messages()` = `["hello"]` + context_window = 10)
-    // was dwarfed by run_chat_loop's B5/skill head injection,
-    // which pushed the post-drop estimate past target 5 and
-    // tripped `StillOver` (emit Error, no Done) — the opposite
-    // of this test's "loop survives" intent. The 4-message /
-    // window-1000 shape mirrors the still_over test so it stays
-    // stable under the same injection.
+    // was dwarfed by run_chat_loop's B5/skill head injection
+    // — the 4-message shape mirrors the still_over test so it
+    // stays stable under the same injection.
     let big_middle = {
         // Same filler helper as the still_over test — repeated
         // ASCII that cl100k_base encodes at ~4 chars/token.
         "the quick brown fox jumps over the lazy dog. "
-            .repeat(4_800 / 45 + 1)
+            .repeat(72_000 / 45 + 1)
             .chars()
-            .take(4_800)
+            .take(72_000)
             .collect::<String>()
     };
     let messages = vec![
@@ -223,9 +224,9 @@ async fn agent_loop_c3_compaction_does_not_panic() {
     run_chat_loop(
         vec![],
         mock.clone(),
-        // Force compaction to trigger (tokens_before > trigger 800)
-        // but resolve cleanly (post-drop < target 500 → None).
-        1000,
+        // Force compaction to trigger (unified total > trigger 17_000)
+        // but resolve cleanly (post-drop < target 10_000 → None).
+        20_000,
         "rid-c3".into(),
         h.session_id.clone(),
         messages,

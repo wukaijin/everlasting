@@ -59,6 +59,29 @@ pub(crate) struct LoopInit {
     /// workers inject via `subagent/prompt.rs` instead and never
     /// populate this (design §3.5a).
     pub(crate) memory_token: Option<u32>,
+    /// unified-context-budget WP1 (2026-08-19): cl100k estimate of
+    /// the system prompt body (send-side part) + the skill-listing
+    /// synthetic message (attribution 口径: physically inside
+    /// messages, attributed to the system slice, design §2).
+    /// Per-request constant like memory_token; head_sha-driven
+    /// per-turn system rebuilds change a few chars, absorbed by the
+    /// estimate. Worker turns never reach the Done write point
+    /// (skip_persist gate), same as memory_token.
+    pub(crate) system_token: u32,
+    /// unified-context-budget WP1 (2026-08-19): sum of the @-token
+    /// injected-body token estimates across ALL user messages of the
+    /// request (`inject_at_tokens` spans aggregate). Per-request
+    /// constant; 0 when nothing was injected.
+    pub(crate) at_files_token: u32,
+    /// unified-context-budget WP1 (2026-08-19, prd D10): the
+    /// same-request @文件 spans — ephemeral (never persisted; @文件
+    /// are re-expanded per request so DB spans would be stale by
+    /// construction). Threaded to `drive_turn` for the WP2 budget
+    /// gate to consume within this request; PR1 only produces them
+    /// (same reservation pattern as `synthetic_prefix_len` in C3
+    /// PR1). APPEND-only turn assembly keeps the offsets stable
+    /// (AC3).
+    pub(crate) at_file_spans: Vec<crate::agent::at_file::AtFileSpan>,
     /// C3 摘要压缩 PR1 (08-18-llm-context-compaction):
     /// init 时水位替换命中则种子为水位摘要(`SummaryAnchor`,
     /// 纯摘要正文 + DB 行 seq),PR2 的 drive_turn 压缩路径经
@@ -572,6 +595,24 @@ pub(crate) async fn prepare_loop_state(
     // C3 PR1 预留:bool 先行捕获(skill_blocks 会被 move 进下面的
     // insert),`synthetic_prefix_len` 依赖它。
     let has_skill_listing = !skill_blocks.is_empty();
+    // unified-context-budget WP1 (2026-08-19): skill listing 的归因
+    // 切片计数 —— 物理上它随下面的 insert 进 messages(messages 部件
+    // 估算已含),这里只取归因值汇入 `system_token`(design §2:system
+    // 切片 = system prompt 本体 + skill listing 归因)。必须在 move 前
+    // 从 `skill_blocks` 取文本。
+    let skill_listing_token = if skill_blocks.is_empty() {
+        0
+    } else {
+        let joined = skill_blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::llm::types::ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        crate::memory::tokens::count_tokens(&joined).await
+    };
     if !skill_blocks.is_empty() {
         // Insert after the memory user/assistant pair (pos 2) when
         // memory is present, else at the head (pos 0).
@@ -635,6 +676,14 @@ pub(crate) async fn prepare_loop_state(
             crate::agent::system_prompt::assemble_system_prompt(mode_prefix, &base_prompt)
         }
     };
+    // unified-context-budget WP1 (2026-08-19): system 切片 = system
+    // prompt 本体(发送部件)+ skill listing(归因,上面已计)。请求
+    // 常量:head_sha 每轮重建只动几个字符,absorbed(见 LoopInit 字段
+    // 注释)。注意与 drive_turn 每轮的 overhead 估算区分 —— 那是
+    // `count_tokens(当前 system_prompt)`(不含 skill listing,它在
+    // messages 里),两个口径各自独立(prd D8)。
+    let system_token =
+        crate::memory::tokens::count_tokens(&system_prompt).await + skill_listing_token;
 
     // Persist the most recent user message before the agent loop runs.
     //
@@ -836,8 +885,13 @@ pub(crate) async fn prepare_loop_state(
     // `None` metadata), and (b) push a `ChatEvent::FileInjections`
     // event so the live-streaming user message's hint row appears
     // before the assistant starts.
-    let (last_user_after_inject, injections) =
+    let (last_user_after_inject, injections, at_file_spans) =
         crate::agent::at_file::inject_at_tokens(&mut messages, &current_ctx, &session_id).await;
+    // unified-context-budget WP1 (2026-08-19): @文件切片聚合(全部
+    // user message 的注入正文 est 之和)。@图不在内 —— 其 token 走
+    // attachments 的 tokens_est / images_token 列,不重复计
+    // (TurnTraceRow.at_files_token 注释同款口径)。
+    let at_files_token = at_file_spans.iter().map(|s| s.tokens).sum::<u32>();
     // B1 (2026-08-16): attach the message-level attachment refs
     // (current turn's paste uploads + history refs riding the
     // frontend payload / reload) as `ImageRef` blocks on the
@@ -964,5 +1018,8 @@ pub(crate) async fn prepare_loop_state(
         summary_anchor,
         synthetic_prefix_len,
         compaction_on,
+        system_token,
+        at_files_token,
+        at_file_spans,
     })
 }

@@ -6,6 +6,7 @@
 use super::tests_common;
 
 mod basic;
+mod budget;
 mod checklist;
 mod compaction_summary;
 mod error_path;

@@ -33,6 +33,15 @@
 //! the manifest in `messages.metadata` for session-reload display, and
 //! (2) push a `ChatEvent::FileInjections` event to the frontend for
 //! live display under the user message bubble.
+//!
+//! unified-context-budget WP1 (2026-08-19): [`inject_at_tokens`] also
+//! returns **same-request spans** ([`AtFileSpan`] list) locating each
+//! injected body inside the request's `messages` vec + a cl100k
+//! estimate per body. The spans are ephemeral request-local products
+//! (prd D10): `@` files are re-expanded from the current file content
+//! on every request, so persisting spans would be stale by
+//! construction — they live only in loop state and are consumed by
+//! the WP2 budget gate within the same request.
 
 use crate::llm::types::{ChatMessage, MessageContent, Role};
 use crate::tools::read_file::truncate_full_output;
@@ -194,6 +203,65 @@ pub enum InjectionAction {
     Skipped { reason: SkipReason },
 }
 
+/// unified-context-budget WP1 (2026-08-19, prd D10): the location of
+/// one injected `@`-token body inside the CURRENT request's messages.
+///
+/// **Same-request ephemeral** — never persisted. `@` files are
+/// re-expanded from disk on every request (`init.rs` keeps the raw
+/// `@relpath` as source of truth), so a stored span would be stale by
+/// construction. The loop state carries the spans from
+/// [`inject_at_tokens`] (init) to the consumer (WP2 budget gate in
+/// `drive_turn`) within one request only.
+///
+/// APPEND-safety (prd AC3): turn-loop synthetic messages (checklist /
+/// background-shell notifications / recall) are APPENDED after the
+/// injection pass and never mutate existing message text, so
+/// `(msg_idx, start, end)` stays valid for the whole request. Lookups
+/// go through [`span_text`], which fails open (returns `None`) on any
+/// mismatch instead of panicking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtFileSpan {
+    /// Index into the request `messages` vec (the user message whose
+    /// text carried the `@token`).
+    pub msg_idx: usize,
+    /// Byte offset of the injected body's start within the message
+    /// text. When an `@image` injection turned the message Text →
+    /// Blocks, the offset is within the FIRST Text block (the
+    /// expansion string landed there verbatim).
+    pub start: usize,
+    /// Byte offset one past the injected body's end (exclusive).
+    pub end: usize,
+    /// The raw `@relpath` the user typed (manifest identity).
+    pub path: String,
+    /// cl100k estimate of the injected body (the exact text occupying
+    /// `[start, end)`). Aggregated into `turn_trace.at_files_token`.
+    pub tokens: u32,
+}
+
+/// Resolve a span back to its injected body in the CURRENT messages,
+/// failing open. `None` (span mismatch: message gone, role changed,
+/// text shorter than `end`, non-char-boundary) means the caller MUST
+/// skip the span — never trim, never panic (prd R7.1 / design §2
+/// 消费侧防御).
+// WP2 budget gate 消费(PR3);PR1 先落产出侧 + 单测。
+#[allow(dead_code)]
+pub fn span_text<'a>(messages: &'a [ChatMessage], span: &AtFileSpan) -> Option<&'a str> {
+    let msg = messages.get(span.msg_idx)?;
+    if msg.role != Role::User {
+        return None;
+    }
+    let text = match &msg.content {
+        MessageContent::Text(t) => t.as_str(),
+        // @图注入致 Text→Blocks 形态:偏移定在首个 Text 块内。
+        MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+            crate::llm::types::ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })?,
+    };
+    // `str::get` rejects out-of-bounds / non-boundary ranges → fail-open.
+    text.get(span.start..span.end)
+}
+
 /// Compiled once. `@` followed by a run of non-space, non-`@` chars.
 /// Excluding `@` from the run lets `a@b.com` match only `@b.com` (which
 /// then resolves to a non-existent path and is left untouched), and
@@ -278,11 +346,14 @@ fn is_control_char(b: u8) -> bool {
 /// tool messages are skipped.
 ///
 /// Returns the per-token injection manifest (one `InjectionRecord` per
-/// `@relpath` token, in document order) plus a clone of the **last**
-/// user text message's expanded content. The chat loop persists the
-/// ORIGINAL user content to the DB (PR2 "source of truth"), and uses
-/// the manifest as the `messages.metadata` JSON to drive the frontend
-/// hint row on session reload.
+/// `@relpath` token, in document order), a clone of the **last** user
+/// text message's expanded content, and the same-request spans of every
+/// injected body across ALL user messages (unified-context-budget WP1,
+/// prd D10 — ephemeral, never persisted; the manifest keeps describing
+/// only the LAST user message, unchanged B2 PR3 contract). The chat
+/// loop persists the ORIGINAL user content to the DB (PR2 "source of
+/// truth"), and uses the manifest as the `messages.metadata` JSON to
+/// drive the frontend hint row on session reload.
 ///
 /// `expand_at_tokens` keeps the in-place mutation of every user text
 /// message (so C3 compaction + `provider.send` see the expanded
@@ -292,15 +363,18 @@ pub async fn inject_at_tokens(
     messages: &mut [ChatMessage],
     ctx: &ToolContext,
     session_id: &str,
-) -> (Option<String>, Vec<InjectionRecord>) {
+) -> (Option<String>, Vec<InjectionRecord>, Vec<AtFileSpan>) {
     let mut last_expanded: Option<String> = None;
     let mut last_records: Vec<InjectionRecord> = Vec::new();
-    for msg in messages.iter_mut() {
+    let mut spans: Vec<AtFileSpan> = Vec::new();
+    for (msg_idx, msg) in messages.iter_mut().enumerate() {
         if msg.role != Role::User {
             continue;
         }
         if let MessageContent::Text(text) = &msg.content {
-            let (expanded, records) = expand_at_tokens(text, ctx, session_id).await;
+            let (expanded, records, msg_spans) =
+                expand_at_tokens(text, ctx, session_id, msg_idx).await;
+            spans.extend(msg_spans);
             // B1 (2026-08-16): an injected image is more than a text
             // marker — append `ImageRef` blocks so the request carries
             // the real image (converted Text → Blocks; the DB row was
@@ -342,24 +416,28 @@ pub async fn inject_at_tokens(
             last_records = records;
         }
     }
-    (last_expanded, last_records)
+    (last_expanded, last_records, spans)
 }
 
 /// Rewrite a single text string: each `@relpath` match is replaced by
 /// its expansion (file content / placeholder), or left as the original
 /// `@token` when the path is invalid. Non-matching text is preserved
-/// verbatim. Returns the rewritten string plus the per-token injection
+/// verbatim. Returns the rewritten string, the per-token injection
 /// manifest (one `InjectionRecord` per `@relpath` token, in document
-/// order).
+/// order), and the same-request spans for every body that actually
+/// replaced its token (WP1: skipped tokens keep the `@token` verbatim
+/// — nothing was injected, so no span).
 async fn expand_at_tokens(
     text: &str,
     ctx: &ToolContext,
     session_id: &str,
-) -> (String, Vec<InjectionRecord>) {
+    msg_idx: usize,
+) -> (String, Vec<InjectionRecord>, Vec<AtFileSpan>) {
     let re = at_token_regex();
     let mut out = String::with_capacity(text.len());
     let mut last_end = 0;
     let mut records: Vec<InjectionRecord> = Vec::new();
+    let mut spans: Vec<AtFileSpan> = Vec::new();
     for m in re.find_iter(text) {
         out.push_str(&text[last_end..m.start()]);
         // m.as_str() includes the leading `@`; skip it for the path.
@@ -370,7 +448,16 @@ async fn expand_at_tokens(
                     path: path_str.to_string(),
                     action,
                 });
-                out.push_str(&expanded)
+                let start = out.len();
+                let tokens = crate::memory::tokens::count_tokens(&expanded).await;
+                out.push_str(&expanded);
+                spans.push(AtFileSpan {
+                    msg_idx,
+                    start,
+                    end: out.len(),
+                    path: path_str.to_string(),
+                    tokens,
+                });
             }
             (None, action) => {
                 records.push(InjectionRecord {
@@ -384,7 +471,7 @@ async fn expand_at_tokens(
         last_end = m.end();
     }
     out.push_str(&text[last_end..]);
-    (out, records)
+    (out, records, spans)
 }
 
 /// Resolve and read one `@relpath`. Returns `(expansion, action)`:
@@ -726,8 +813,8 @@ mod tests {
     async fn text_file_content_is_injected_with_line_numbers() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("foo.txt"), "hello\n").unwrap();
-        let (out, records) =
-            expand_at_tokens("see @foo.txt here", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) =
+            expand_at_tokens("see @foo.txt here", &ctx_at(&tmp), "sess-test", 0).await;
         assert!(out.starts_with("see "), "got: {:?}", out);
         assert!(out.ends_with(" here"), "got: {:?}", out);
         assert!(out.contains("<file path=\"foo.txt\">"), "got: {:?}", out);
@@ -745,8 +832,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "AAA").unwrap();
         std::fs::write(tmp.path().join("b.txt"), "BBB").unwrap();
-        let (out, records) =
-            expand_at_tokens("@a.txt and @b.txt", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) =
+            expand_at_tokens("@a.txt and @b.txt", &ctx_at(&tmp), "sess-test", 0).await;
         assert!(out.contains("\t1\tAAA"), "got: {:?}", out);
         assert!(out.contains("\t1\tBBB"), "got: {:?}", out);
         assert!(out.contains(" and "), "got: {:?}", out);
@@ -764,7 +851,7 @@ mod tests {
         // > 50 KB so truncate_full_output applies head+tail.
         let line = "x".repeat(80) + "\n";
         std::fs::write(tmp.path().join("big.txt"), line.repeat(700)).unwrap();
-        let (out, records) = expand_at_tokens("@big.txt", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) = expand_at_tokens("@big.txt", &ctx_at(&tmp), "sess-test", 0).await;
         assert!(
             out.contains("<truncated:"),
             "expected truncation marker, got: {:?}",
@@ -799,7 +886,7 @@ mod tests {
     async fn image_file_injects_as_real_attachment() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("pic.png"), TINY_PNG).unwrap();
-        let (out, records) = expand_at_tokens("@pic.png", &ctx_at(&tmp), "sess-at").await;
+        let (out, records, _) = expand_at_tokens("@pic.png", &ctx_at(&tmp), "sess-at", 0).await;
         // Text marker names the file (model-readable).
         assert!(out.contains("[image: pic.png]"), "got: {:?}", out);
         assert!(!out.contains("<file"), "image must not inject as text");
@@ -862,7 +949,7 @@ mod tests {
     async fn corrupt_image_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("pic.png"), b"not really a png").unwrap();
-        let (out, records) = expand_at_tokens("@pic.png", &ctx_at(&tmp), "sess-deg").await;
+        let (out, records, _) = expand_at_tokens("@pic.png", &ctx_at(&tmp), "sess-deg", 0).await;
         assert!(out.contains("[image: pic.png"), "got: {:?}", out);
         assert!(
             !out.contains("<file"),
@@ -889,7 +976,7 @@ mod tests {
         big.extend(std::iter::repeat(0u8).take(crate::attachments::MAX_IMAGE_BYTES + 1));
         std::fs::write(tmp.path().join("big.png"), &big).unwrap();
         std::fs::write(tmp.path().join("anim.gif"), b"GIF89a whatever").unwrap();
-        let (out1, rec1) = expand_at_tokens("@big.png", &ctx_at(&tmp), "sess-lim").await;
+        let (out1, rec1, _) = expand_at_tokens("@big.png", &ctx_at(&tmp), "sess-lim", 0).await;
         assert!(matches!(
             rec1[0].action,
             InjectionAction::Degraded {
@@ -897,7 +984,7 @@ mod tests {
             }
         ));
         assert!(out1.contains("不支持图片注入"));
-        let (_out2, rec2) = expand_at_tokens("@anim.gif", &ctx_at(&tmp), "sess-lim").await;
+        let (_out2, rec2, _) = expand_at_tokens("@anim.gif", &ctx_at(&tmp), "sess-lim", 0).await;
         assert!(matches!(
             rec2[0].action,
             InjectionAction::Degraded {
@@ -910,7 +997,7 @@ mod tests {
     async fn pdf_file_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("doc.pdf"), b"%PDF-1.4 fake").unwrap();
-        let (out, records) = expand_at_tokens("@doc.pdf", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) = expand_at_tokens("@doc.pdf", &ctx_at(&tmp), "sess-test", 0).await;
         assert!(out.contains("[binary: doc.pdf"), "got: {:?}", out);
         assert!(out.contains("pdftotext"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
@@ -926,7 +1013,7 @@ mod tests {
     async fn office_file_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("spec.docx"), b"PK\x03\x04 fake zip").unwrap();
-        let (out, records) = expand_at_tokens("@spec.docx", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) = expand_at_tokens("@spec.docx", &ctx_at(&tmp), "sess-test", 0).await;
         assert!(out.contains("[binary: spec.docx"), "got: {:?}", out);
         assert!(out.contains("pandoc"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
@@ -942,7 +1029,7 @@ mod tests {
     async fn binary_file_degrades_to_placeholder() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("app.zip"), b"PK\x03\x04 fake").unwrap();
-        let (out, records) = expand_at_tokens("@app.zip", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) = expand_at_tokens("@app.zip", &ctx_at(&tmp), "sess-test", 0).await;
         assert!(out.contains("[binary: app.zip"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -958,8 +1045,8 @@ mod tests {
     #[tokio::test]
     async fn nonexistent_path_kept_verbatim() {
         let tmp = tempdir().unwrap();
-        let (out, records) =
-            expand_at_tokens("ref @nope.txt end", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) =
+            expand_at_tokens("ref @nope.txt end", &ctx_at(&tmp), "sess-test", 0).await;
         assert_eq!(out, "ref @nope.txt end");
         // B2 PR3: Skipped(Missing) recorded in the manifest even
         // though the @token is left untouched — the user sees the
@@ -977,8 +1064,8 @@ mod tests {
     #[tokio::test]
     async fn traversal_outside_root_kept_verbatim() {
         let tmp = tempdir().unwrap();
-        let (out, records) =
-            expand_at_tokens("@../../etc/passwd", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) =
+            expand_at_tokens("@../../etc/passwd", &ctx_at(&tmp), "sess-test", 0).await;
         assert_eq!(out, "@../../etc/passwd");
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -994,8 +1081,8 @@ mod tests {
         // `@b.com` matches the regex but `b.com` is not an in-root file →
         // the original `@b.com` is preserved, so `a@b.com` survives intact.
         let tmp = tempdir().unwrap();
-        let (out, records) =
-            expand_at_tokens("contact a@b.com please", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) =
+            expand_at_tokens("contact a@b.com please", &ctx_at(&tmp), "sess-test", 0).await;
         assert_eq!(out, "contact a@b.com please");
         // The `b.com` portion of the email IS a regex match — it
         // is recorded as Skipped(Missing). The user sees the
@@ -1015,8 +1102,8 @@ mod tests {
     #[tokio::test]
     async fn no_token_leaves_text_unchanged() {
         let tmp = tempdir().unwrap();
-        let (out, records) =
-            expand_at_tokens("just plain text, no refs", &ctx_at(&tmp), "sess-test").await;
+        let (out, records, _) =
+            expand_at_tokens("just plain text, no refs", &ctx_at(&tmp), "sess-test", 0).await;
         assert_eq!(out, "just plain text, no refs");
         // B2 PR3: empty manifest → no hint row rendered.
         assert!(records.is_empty());
@@ -1043,7 +1130,7 @@ mod tests {
                 attachments: None,
             },
         ];
-        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
+        let (last_expanded, records, _) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
         // user expanded
         assert!(
             matches!(&messages[0].content, MessageContent::Text(t) if t.contains("<file path=\"foo.txt\">"))
@@ -1077,7 +1164,7 @@ mod tests {
             speaker: None,
             attachments: None,
         }];
-        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
+        let (last_expanded, records, _) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
         // unchanged: Blocks variant preserved exactly
         assert!(matches!(&messages[0].content, MessageContent::Blocks(_)));
         // Blocks messages do not contribute to the manifest — no
@@ -1117,7 +1204,7 @@ mod tests {
                 attachments: None,
             },
         ];
-        let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
+        let (last_expanded, records, _) = inject_at_tokens(&mut messages, &ctx, "sess-test").await;
         // Both user messages are expanded in place (the function
         // walks every user text row), but the manifest only
         // describes the LAST one.
@@ -1132,5 +1219,153 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].path, "b.txt");
         assert_eq!(records[0].action, InjectionAction::Injected { lines: 1 });
+    }
+
+    // -------------------------------------------------------------------
+    // unified-context-budget WP1 (2026-08-19): same-request spans.
+    // -------------------------------------------------------------------
+
+    /// Spans cover EVERY user message's injections (not just the
+    /// manifest's last-message contract), point at the injected body
+    /// via [`span_text`], and skipped tokens produce no span.
+    #[tokio::test]
+    async fn spans_locate_injected_bodies_across_all_user_messages() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "AAAA").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "BBBBBBBB").unwrap();
+        let ctx = ctx_at(&tmp);
+        let mut messages = vec![
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("see @a.txt and @nope.txt".to_string()),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Text("ok".to_string()),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("and @b.txt".to_string()),
+                speaker: None,
+                attachments: None,
+            },
+        ];
+        let (_, _, spans) = inject_at_tokens(&mut messages, &ctx, "sess-span").await;
+
+        // Two spans (a.txt at msg 0, b.txt at msg 2); the skipped
+        // @nope.txt kept its token verbatim → no span.
+        assert_eq!(spans.len(), 2, "spans: {:?}", spans);
+        assert_eq!(spans[0].msg_idx, 0);
+        assert_eq!(spans[0].path, "a.txt");
+        assert_eq!(spans[1].msg_idx, 2);
+        assert_eq!(spans[1].path, "b.txt");
+        // Both resolve back to their injected body (the exact text
+        // occupying [start, end)), and the token estimates are sane.
+        for (span, marker) in [(&spans[0], "a.txt"), (&spans[1], "b.txt")] {
+            let body = span_text(&messages, span).expect("span must resolve");
+            assert!(
+                body.contains(&format!("<file path=\"{marker}\">")),
+                "span body: {:?}",
+                body
+            );
+            assert!(body.ends_with(&format!("</file>")), "body: {:?}", body);
+            assert!(span.tokens > 0, "injected body must count > 0 tokens");
+        }
+        // Aggregate (turn_trace.at_files_token 口径) = Σ span tokens.
+        let total: u32 = spans.iter().map(|s| s.tokens).sum();
+        assert!(total >= spans[0].tokens + spans[1].tokens);
+    }
+
+    /// APPEND-safety (prd AC3): the turn loop appends checklist /
+    /// background-notification synthetic messages AFTER injection —
+    /// those appends must not disturb span resolution (indices and
+    /// message text are untouched).
+    #[tokio::test]
+    async fn span_lookup_survives_appended_synthetic_messages() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("notes.txt"), "content").unwrap();
+        let ctx = ctx_at(&tmp);
+        let mut messages = vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("read @notes.txt".to_string()),
+            speaker: None,
+            attachments: None,
+        }];
+        let (_, _, spans) = inject_at_tokens(&mut messages, &ctx, "sess-append").await;
+        let before = span_text(&messages, &spans[0])
+            .expect("span resolves pre-append")
+            .to_string();
+
+        // Mirror drive.rs's APPEND-only synthetic injections: a
+        // checklist-shaped user message + a notification-shaped one.
+        for text in [
+            "<current-checklist>\n[ ] task\n</current-checklist>",
+            "[system] 后台 shell bs-1 已完成,exit code 0。",
+        ] {
+            messages.push(ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![crate::llm::types::ContentBlock::Text {
+                    text: text.to_string(),
+                    cache_control: None,
+                }]),
+                speaker: None,
+                attachments: None,
+            });
+        }
+        let after = span_text(&messages, &spans[0]).expect("span resolves post-append");
+        assert_eq!(after, before, "APPEND must not shift existing spans");
+    }
+
+    /// Fail-open (prd R7.1): a span that no longer fits the message
+    /// (text shorter than `end`, msg_idx out of range, wrong role)
+    /// resolves to `None` — the consumer skips, never panics. Also
+    /// locks the Text→Blocks form: an @image injection's span offsets
+    /// live in the FIRST Text block.
+    #[tokio::test]
+    async fn span_lookup_fails_open_on_mismatch() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("pic.png"), TINY_PNG).unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "AAA").unwrap();
+        let ctx = ctx_at(&tmp);
+        let mut messages = vec![
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("img @pic.png".to_string()),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("@a.txt".to_string()),
+                speaker: None,
+                attachments: None,
+            },
+        ];
+        let (_, _, spans) = inject_at_tokens(&mut messages, &ctx, "sess-mismatch").await;
+        // msg 0: @图 injection → Text→Blocks; span resolves inside the
+        // first Text block.
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].msg_idx, 0);
+        let body = span_text(&messages, &spans[0]).expect("image-marker span resolves");
+        assert!(body.contains("[image: pic.png]"), "body: {:?}", body);
+
+        // Text shorter than span end (theoretical mismatch — e.g. a
+        // future consumer trimming in place) → None, no panic.
+        let mut stale = spans[1].clone();
+        stale.end = usize::MAX;
+        assert_eq!(span_text(&messages, &stale), None);
+        // msg_idx out of range → None.
+        let mut oob = spans[1].clone();
+        oob.msg_idx = messages.len() + 10;
+        assert_eq!(span_text(&messages, &oob), None);
+        // Non-user target → None.
+        let mut wrong_role = spans[1].clone();
+        wrong_role.msg_idx = 0;
+        messages[0].role = Role::Assistant;
+        assert_eq!(span_text(&messages, &wrong_role), None);
     }
 }

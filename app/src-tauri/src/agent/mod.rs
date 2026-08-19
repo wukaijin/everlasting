@@ -45,6 +45,7 @@
 pub mod at_file;
 pub mod auto_reflect;
 pub mod behavior_prompt;
+pub mod budget;
 pub mod chat;
 pub mod chat_loop;
 pub mod compaction;

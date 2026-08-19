@@ -135,6 +135,13 @@ pub(crate) async fn drive_turn(
     summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
     synthetic_prefix_len: usize,
     compaction_on: bool,
+    // unified-context-budget WP1 (2026-08-19): system 切片(init 计,
+    // system prompt 本体 + skill listing 归因)与 @文件切片聚合 +
+    // 同请求 spans(prd D10 临时产物 —— WP2 budget gate 消费,PR1
+    // 只穿到 Done 写点落列)。
+    system_token: u32,
+    at_files_token: u32,
+    at_file_spans: Vec<crate::agent::at_file::AtFileSpan>,
     // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」的
     // 一次性 force 标志 —— 只绕过下方 C3 块的 token 触发线,gate
     // 本身(开关/worker/熔断/skip_persist)与空待压区
@@ -189,6 +196,134 @@ pub(crate) async fn drive_turn(
             crate::agent::system_prompt::assemble_system_prompt(mode_prefix, &base_prompt);
     }
 
+    // Turn-tool filter chain (provider-agnostic, applied before the
+    // provider sees `tools[]`): mode → workflow → session_type. Each
+    // ring is a pure `Vec<ToolDef>` filter. The chain order matters
+    // only for readability (all three are independent set-subtractions);
+    // `session_type` is read from the loaded session row at zero cost
+    // (no DB round-trip — design §R3 / 评审 P2-1).
+    //
+    // unified-context-budget WP1 (2026-08-19, D7 时序重排): 本块
+    // (过滤链 + stubify + dispatch/元工具 append + tools_token 估算)
+    // 原位于 turn 组装与图片 resolve 之后,现整体挪到 C3 压缩块
+    // **之前** —— 压缩触发线的统一口径(prd R3)需要当轮 tools_json
+    // 估算。依赖核查:本块只依赖 permissions + head_sha(上方已刷新)
+    // + StubRegistry/SubagentCache,与压缩块零依赖;挪动为纯顺序
+    // 变化,tools_token 计数语义不变(仍在"最终发送集合"上序列化
+    // —— 压缩只改 messages,不改 tools)。
+    let is_group_chat = loaded_session.session.session_type == crate::db::SessionType::GroupChat;
+    let mut turn_tool_defs = crate::tools::filter_tools_for_session_type(
+        crate::tools::filter_tools_for_workflow(
+            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode),
+            workflow_ctx.is_some(),
+        ),
+        is_group_chat,
+    );
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 第 4 环
+    // stubify。开关开 && 非 worker && 非群聊时,候选集内未 loaded
+    // 的工具原地替换为 stub(真名 + 一句话摘要 + 宽松外壳 schema,
+    // 保序 — tools[] 顺序稳定是前缀缓存前提,C7 R3.2)。
+    //
+    // **gate 是唯一防线**:群聊复用同一 `run_chat_loop`(`group_chat_
+    // loop.rs:286/:478`)且其白名单含候选 `web_fetch` — 若缺
+    // `!is_group_chat`,群聊每轮 `web_fetch` 会被 stub 且
+    // `load_tool_schemas` 被 append 进 speaker turn defs,污染白名单
+    // 语义(评审 P1-1);worker 自主可靠性优先不 stub(与
+    // `dispatch_subagent` append 的 `!effective_is_worker` gate 同款,
+    // drive.rs:546 先例)。`loaded` 集合读自 session-keyed registry
+    // (粘性 — 加载后不回退,AC4)。
+    if stub_on && !effective_is_worker && !is_group_chat {
+        let loaded = stub_loaded.get(&session_id).await;
+        turn_tool_defs = crate::tools::stub::stubify(turn_tool_defs, &loaded);
+    }
+    // L3d (2026-06-25): append the dynamic `dispatch_subagent`
+    // ToolDef so the enum reflects builtin + user + project
+    // subagents merged by `SubagentCache` (mtime-fenced scan).
+    // The static `dispatch_subagent` definition is no longer in
+    // `builtin_tools()` (it would freeze the enum at startup);
+    // we rebuild it here every turn so a freshly-written `.md`
+    // is picked up on the next chat turn. `filter_tools_for_mode`
+    // keeps dispatch_subagent in every mode (it is a
+    // `Risk::Low` discovery tool — the worker's actual writes /
+    // shells go through their own Tier 4 permission check).
+    //
+    // WORKER NESTING GUARD (permission-layer.md §"Subagent
+    // availability"): a worker (`effective_is_worker == true`)
+    // MUST NOT see `dispatch_subagent` in its turn tool list.
+    // The B6 `filter_tools_for_subagent` strips
+    // `dispatch_subagent` from the worker's *initial*
+    // `worker_tool_defs` (`dispatch/prepare.rs::prepare_worker`), but that filter
+    // only applies to the seed list — this per-turn append runs
+    // inside the nested `run_chat_loop` and would otherwise
+    // re-introduce the ToolDef on every turn, defeating the
+    // `STRUCTURALLY_DISABLED` no-nesting invariant. Skip the
+    // append when we are inside a worker run.
+    //
+    // `worktree_path` is in scope from `run_chat_loop`'s top-level
+    // session load (canonicalized via `assert_within_root`) — it
+    // matches what `MemoryCache` / `SkillCache` use, so the
+    // subagent `<project>/.everlasting/agents/*.md` dir lines up
+    // with the project's other namespace dirs.
+    if !effective_is_worker {
+        let project_path = worktree_path.to_string_lossy().to_string();
+        // C5: thread the active plugin name so plugin-layer agents
+        // (e.g. review's `reviewer`) reach the dispatch enum.
+        let workflow_name = workflow_ctx.as_ref().map(|c| c.workflow_def.name.as_str());
+        let dispatch_def = crate::agent::subagent::definition_with_cache(
+            &subagent_cache,
+            &project_path,
+            workflow_name,
+            &model_briefs,
+        )
+        .await;
+        turn_tool_defs.push(dispatch_def);
+    }
+    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 同侧
+    // append `load_tool_schemas` 元工具 def(dispatch append 之后,
+    // 与现有 append 同侧 — 避免无谓的顺序扰动,评审 P2-3)。**不进**
+    // `builtin_tools()`(那会渗入 worker 种子集 `prepare_worker` 与
+    // 群聊前的全集);gate 与 stubify 同源(开关 && !worker && !群聊)。
+    // 群聊 speaker 绝不带它 — 群聊白名单语义不被污染(评审 P1-1)。
+    if stub_on && !effective_is_worker && !is_group_chat {
+        turn_tool_defs.push(crate::tools::stub::load_tool_schemas_def());
+    }
+    // memory-block-governance WP2 (2026-08-15): 同侧 append
+    // `load_memory_sections` 元工具 def。gate 与注入同源(LoopInit 的
+    // digest_on = 开关 && !worker && !群聊,init.rs 已含 worker/群聊
+    // 豁免);tools_token 估算在下方序列化点之后,自动计入此 def 的
+    // ~百余 tok 成本(净收益按 memory 降幅计,AC2 口径)。
+    if digest_on {
+        turn_tool_defs.push(crate::memory::digest::load_memory_sections_def());
+    }
+    let turn_tool_defs = turn_tool_defs;
+    // C7 (2026-08-14, R1): estimate the per-turn `tools[]` token cost
+    // for the trace viewer. Serialized AFTER the full filter chain
+    // (mode/workflow/session_type below) + the dispatch_subagent
+    // append, so the estimate reflects the exact ToolDef set sent on
+    // the wire this turn. cl100k_base (`memory/tokens.rs`); the BPE
+    // encode is µs–low-ms for the ~31k-char JSON, safe inline (the
+    // encoder is guarded by a `tokio::sync::Mutex`, not the runtime's
+    // blocking pool). Best-effort: a serialization failure yields an
+    // empty string → 0 tokens, never blocks the turn. The value is
+    // NOT folded into the cache-rate (`context_input_tokens` already
+    // contains tools); it's a separately-measured slice persisted to
+    // `turn_trace.tools_token` for the trace viewer (see design §R1).
+    // Computed before `turn_tool_defs` is moved into `retry_open`
+    // below; `tools_token` is `Copy` (`u32`) so it stays in scope at
+    // the `Done`-event upsert write point.
+    let tools_json = serde_json::to_string(&turn_tool_defs).unwrap_or_default();
+    let tools_token = crate::memory::tokens::count_tokens(&tools_json).await;
+
+    // unified-context-budget WP1 (2026-08-19, prd R3 / D8): 统一口径
+    // 的 overhead —— 与 messages 并列发送、消息裁剪动不了的两个部件
+    // (system prompt + tools[])。供下方 C3 块三处"当前占用"切换到
+    // `estimate_request_tokens` 全量口径。注意:这里的 system 估算
+    // 是**每轮当前** system_prompt(head_sha 刷新后),与 trace 的
+    // `system_token`(init 请求常量,含 skill listing 归因)是两个
+    // 口径,互不混用。tools 侧不重复编码 —— 上方 `tools_token` 即
+    // `count_tokens(&tools_json)`。
+    let request_overhead = crate::memory::tokens::count_tokens(&system_prompt).await + tools_token;
+
     // C3 compaction (test pass-through: if messages don't exceed
     // the test's tiny context_window, dropped_count == 0 and
     // the messages vec is unchanged).
@@ -218,9 +353,13 @@ pub(crate) async fn drive_turn(
         // 摘要路径的全历史估算成本 —— `tokens_pre` 是摘要触发检查的
         // 额外一次 cl100k 编码,机械路径 `compact_messages` 自己还会
         // 再估一次,gate 关闭时跳过本次 = 每 turn 成本与 PR2 之前持平。
+        // unified-context-budget WP1 (prd R3): 口径切换 —— messages-only
+        // → `estimate_request_tokens` 统一总量(补上 tools+system 挤窗
+        // 时漏计的洞;`request_overhead` 已在 C3 块之前算好)。
         let summary_gate = compaction_on && !skip_persist && !breaker.is_tripped(&session_id).await;
         let tokens_pre = if summary_gate {
-            crate::agent::context::estimate_messages_tokens(&messages).await
+            crate::agent::budget::estimate_request_tokens(&system_prompt, &tools_json, &messages)
+                .await
         } else {
             0
         };
@@ -307,13 +446,19 @@ pub(crate) async fn drive_turn(
                         // 摘要后复查(design §4.4):仍超 0.95×window
                         // (巨尾消息)→ 机械丢组兜底;否则不追加 —— 摘要
                         // 路径目标是语义保留,不是压到 target。
-                        if (tokens_after as u64)
+                        // WP1 口径:`tokens_after` 是折叠后 messages 部件
+                        // (messages-only),补 `request_overhead` 才是统一
+                        // 总量(prd R3/D8)。
+                        if (tokens_after as u64 + request_overhead as u64)
                             >= (crate::agent::context::summary_postcheck_threshold(context_window)
                                 as u64)
                         {
-                            let mech =
-                                crate::agent::context::compact_messages(folded, context_window)
-                                    .await;
+                            let mech = crate::agent::context::compact_messages(
+                                folded,
+                                context_window,
+                                request_overhead,
+                            )
+                            .await;
                             // 机械兜底真丢了消息时使 anchor 失效:机械路径
                             // 只保护 [0..PROTECTED_HEAD=2],synthetic_prefix_len
                             // ≥ 2 时刚插入的摘要消息在可丢中段(最旧组优先,
@@ -382,10 +527,13 @@ pub(crate) async fn drive_turn(
         }
 
         // ---- 机械路径(未触发摘要 / 摘要失败 / gate 关闭)----
+        // WP1 口径:统一总量(messages + request_overhead)进触发线,
+        // 无 gate —— 群聊/worker 同受益(prd R3/D5)。
         let compacted = if let Some(r) = summary_result {
             r
         } else {
-            crate::agent::context::compact_messages(messages, context_window).await
+            crate::agent::context::compact_messages(messages, context_window, request_overhead)
+                .await
         };
         if compacted.dropped_count > 0 {
             tracing::info!(
@@ -742,114 +890,11 @@ pub(crate) async fn drive_turn(
     // memory_token.
     let images_token = crate::attachments::estimate_images_token(&turn_messages);
 
-    // Turn-tool filter chain (provider-agnostic, applied before the
-    // provider sees `tools[]`): mode → workflow → session_type. Each
-    // ring is a pure `Vec<ToolDef>` filter. The chain order matters
-    // only for readability (all three are independent set-subtractions);
-    // `session_type` is read from the loaded session row at zero cost
-    // (no DB round-trip — design §R3 / 评审 P2-1).
-    let is_group_chat = loaded_session.session.session_type == crate::db::SessionType::GroupChat;
-    let mut turn_tool_defs = crate::tools::filter_tools_for_session_type(
-        crate::tools::filter_tools_for_workflow(
-            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode),
-            workflow_ctx.is_some(),
-        ),
-        is_group_chat,
-    );
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 第 4 环
-    // stubify。开关开 && 非 worker && 非群聊时,候选集内未 loaded
-    // 的工具原地替换为 stub(真名 + 一句话摘要 + 宽松外壳 schema,
-    // 保序 — tools[] 顺序稳定是前缀缓存前提,C7 R3.2)。
-    //
-    // **gate 是唯一防线**:群聊复用同一 `run_chat_loop`(`group_chat_
-    // loop.rs:286/:478`)且其白名单含候选 `web_fetch` — 若缺
-    // `!is_group_chat`,群聊每轮 `web_fetch` 会被 stub 且
-    // `load_tool_schemas` 被 append 进 speaker turn defs,污染白名单
-    // 语义(评审 P1-1);worker 自主可靠性优先不 stub(与
-    // `dispatch_subagent` append 的 `!effective_is_worker` gate 同款,
-    // drive.rs:546 先例)。`loaded` 集合读自 session-keyed registry
-    // (粘性 — 加载后不回退,AC4)。
-    if stub_on && !effective_is_worker && !is_group_chat {
-        let loaded = stub_loaded.get(&session_id).await;
-        turn_tool_defs = crate::tools::stub::stubify(turn_tool_defs, &loaded);
-    }
-    // L3d (2026-06-25): append the dynamic `dispatch_subagent`
-    // ToolDef so the enum reflects builtin + user + project
-    // subagents merged by `SubagentCache` (mtime-fenced scan).
-    // The static `dispatch_subagent` definition is no longer in
-    // `builtin_tools()` (it would freeze the enum at startup);
-    // we rebuild it here every turn so a freshly-written `.md`
-    // is picked up on the next chat turn. `filter_tools_for_mode`
-    // keeps dispatch_subagent in every mode (it is a
-    // `Risk::Low` discovery tool — the worker's actual writes /
-    // shells go through their own Tier 4 permission check).
-    //
-    // WORKER NESTING GUARD (permission-layer.md §"Subagent
-    // availability"): a worker (`effective_is_worker == true`)
-    // MUST NOT see `dispatch_subagent` in its turn tool list.
-    // The B6 `filter_tools_for_subagent` strips
-    // `dispatch_subagent` from the worker's *initial*
-    // `worker_tool_defs` (`dispatch/prepare.rs::prepare_worker`), but that filter
-    // only applies to the seed list — this per-turn append runs
-    // inside the nested `run_chat_loop` and would otherwise
-    // re-introduce the ToolDef on every turn, defeating the
-    // `STRUCTURALLY_DISABLED` no-nesting invariant. Skip the
-    // append when we are inside a worker run.
-    //
-    // `worktree_path` is in scope from `run_chat_loop`'s top-level
-    // session load (canonicalized via `assert_within_root`) — it
-    // matches what `MemoryCache` / `SkillCache` use, so the
-    // subagent `<project>/.everlasting/agents/*.md` dir lines up
-    // with the project's other namespace dirs.
-    if !effective_is_worker {
-        let project_path = worktree_path.to_string_lossy().to_string();
-        // C5: thread the active plugin name so plugin-layer agents
-        // (e.g. review's `reviewer`) reach the dispatch enum.
-        let workflow_name = workflow_ctx.as_ref().map(|c| c.workflow_def.name.as_str());
-        let dispatch_def = crate::agent::subagent::definition_with_cache(
-            &subagent_cache,
-            &project_path,
-            workflow_name,
-            &model_briefs,
-        )
-        .await;
-        turn_tool_defs.push(dispatch_def);
-    }
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 同侧
-    // append `load_tool_schemas` 元工具 def(dispatch append 之后,
-    // 与现有 append 同侧 — 避免无谓的顺序扰动,评审 P2-3)。**不进**
-    // `builtin_tools()`(那会渗入 worker 种子集 `prepare_worker` 与
-    // 群聊前的全集);gate 与 stubify 同源(开关 && !worker && !群聊)。
-    // 群聊 speaker 绝不带它 — 群聊白名单语义不被污染(评审 P1-1)。
-    if stub_on && !effective_is_worker && !is_group_chat {
-        turn_tool_defs.push(crate::tools::stub::load_tool_schemas_def());
-    }
-    // memory-block-governance WP2 (2026-08-15): 同侧 append
-    // `load_memory_sections` 元工具 def。gate 与注入同源(LoopInit 的
-    // digest_on = 开关 && !worker && !群聊,init.rs 已含 worker/群聊
-    // 豁免);tools_token 估算在下方序列化点之后,自动计入此 def 的
-    // ~百余 tok 成本(净收益按 memory 降幅计,AC2 口径)。
-    if digest_on {
-        turn_tool_defs.push(crate::memory::digest::load_memory_sections_def());
-    }
-    let turn_tool_defs = turn_tool_defs;
-    // C7 (2026-08-14, R1): estimate the per-turn `tools[]` token cost
-    // for the trace viewer. Serialized AFTER the full filter chain
-    // (mode/workflow/session_type below) + the dispatch_subagent
-    // append, so the estimate reflects the exact ToolDef set sent on
-    // the wire this turn. cl100k_base (`memory/tokens.rs`); the BPE
-    // encode is µs–low-ms for the ~31k-char JSON, safe inline (the
-    // encoder is guarded by a `tokio::sync::Mutex`, not the runtime's
-    // blocking pool). Best-effort: a serialization failure yields an
-    // empty string → 0 tokens, never blocks the turn. The value is
-    // NOT folded into the cache-rate (`context_input_tokens` already
-    // contains tools); it's a separately-measured slice persisted to
-    // `turn_trace.tools_token` for the trace viewer (see design §R1).
-    // Computed before `turn_tool_defs` is moved into `retry_open`
-    // below; `tools_token` is `Copy` (`u32`) so it stays in scope at
-    // the `Done`-event upsert write point.
-    let tools_json = serde_json::to_string(&turn_tool_defs).unwrap_or_default();
-    let tools_token = crate::memory::tokens::count_tokens(&tools_json).await;
+    // (Turn-tool filter chain + stubify + dispatch/元工具 append +
+    // tools_token 估算:unified-context-budget WP1 D7 时序重排后位于
+    // 函数顶部 C3 压缩块之前 —— 统一口径的触发线需要当轮 tools 估算。
+    // 见上方 "Turn-tool filter chain" 块注释。)
+
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
     let mut finalized_thinking: Vec<(String, String)> = Vec::new();
@@ -1105,8 +1150,16 @@ pub(crate) async fn drive_turn(
                                 // identical across the request's turn rows.
                                 // B1 (2026-08-16): images_token likewise
                                 // (worker turns never carry attachments → 0).
+                                // unified-context-budget WP1 (2026-08-19):
+                                // at_files / system 切片同点落列;
+                                // `context_window` 是请求时窗口快照
+                                // (前端预算行分母,非切片)。at_files 语义
+                                // 与 images 对齐:零注入 → NULL。
                                 let images_tok = if skip_persist { None } else { Some(images_token) };
-                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token), memory_token, images_tok).await {
+                                // 零注入 → NULL(spans 空判断,比 ==0 语义准 ——
+                                // 覆盖"有 span 但 est 为 0"的边界)。
+                                let at_files_tok = if skip_persist || at_file_spans.is_empty() { None } else { Some(at_files_token) };
+                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token), memory_token, images_tok, at_files_tok, Some(system_token), Some(context_window)).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
                             }

@@ -974,6 +974,27 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             -- semantics as tools_token / memory_token. NULL for
             -- pre-column rows, worker turns, imageless requests.
             images_token      INTEGER,
+            -- unified-context-budget WP1 (2026-08-19): @文件切片 —
+            -- cl100k estimate of the @-token injected bodies across
+            -- ALL user messages this request (text file content +
+            -- degradation placeholders; spans are re-expanded per
+            -- request, only the aggregate lands here). Same slice
+            -- semantics as tools_token / memory_token. NULL for
+            -- pre-column rows, worker turns, requests without
+            -- injections.
+            at_files_token    INTEGER,
+            -- unified-context-budget WP1 (2026-08-19): system 切片 —
+            -- cl100k estimate of the system prompt body (a send-side
+            -- part, parallel to messages) PLUS the skill-listing
+            -- synthetic message (attribution: physically inside
+            -- messages, attributed to the system slice per design
+            -- §2). NULL for pre-column rows and worker turns.
+            system_token      INTEGER,
+            -- unified-context-budget WP1 (2026-08-19): request-time
+            -- context_window snapshot (the model actually serving
+            -- this turn). Frontend budget-row denominator; NULL for
+            -- pre-column rows (frontend falls back to 200_000).
+            context_window    INTEGER,
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, seq)
@@ -1005,6 +1026,13 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // image-token estimate (incl. history rebuilds). Same idempotent
     // backfill pattern as tools_token / memory_token.
     add_turn_trace_column_if_missing(pool, "images_token", "INTEGER").await?;
+    // unified-context-budget WP1 (2026-08-19): at_files_token /
+    // system_token / context_window — same idempotent backfill
+    // pattern; no-op for greenfield DBs (declared in the CREATE
+    // TABLE above).
+    add_turn_trace_column_if_missing(pool, "at_files_token", "INTEGER").await?;
+    add_turn_trace_column_if_missing(pool, "system_token", "INTEGER").await?;
+    add_turn_trace_column_if_missing(pool, "context_window", "INTEGER").await?;
     // B1 (2026-08-16): `models.supports_images` — capability flag for
     // the image-multimodal channel. No-op for greenfield DBs (declared
     // in the CREATE TABLE above); existing rows default to 0 (text

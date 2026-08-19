@@ -255,6 +255,19 @@ pub async fn estimate_messages_tokens(messages: &[ChatMessage]) -> u32 {
 
 /// Compact a message list to fit within the model's context window.
 ///
+/// **unified-context-budget WP1 (2026-08-19)**: `extra_tokens` is the
+/// request overhead the messages-only view cannot see — the system
+/// prompt + serialized `tools[]` JSON estimates
+/// (`budget::estimate_request_overhead`). The occupancy checked by
+/// the trigger line, the greedy drop loop, and the tokens_after /
+/// StillOver judgments is the **unified total** (messages estimate +
+/// `extra_tokens`) — closing the old messages-only 口径洞 where
+/// tools+system crowded a small window past 0.85 without the
+/// mechanical path ever noticing (prd R3; 无 gate,群聊/worker 同受益)。
+/// The overhead cannot be dropped by message trimming (it rides every
+/// request), which is exactly why it must be present in the target
+/// comparisons. Legacy messages-only callers pass `0`.
+///
 /// Algorithm (see module docs for the protection priority):
 /// 1. Estimate the current token count. If `< context_window *
 ///    TRIGGER_RATIO`, return the input unchanged.
@@ -278,8 +291,12 @@ pub async fn estimate_messages_tokens(messages: &[ChatMessage]) -> u32 {
 /// blocks are never orphaned. Since they live inside assistant
 /// turns and a turn is dropped atomically, no signature ends up
 /// without its parent turn.
-pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -> CompactResult {
-    let tokens_before = estimate_messages_tokens(&messages).await;
+pub async fn compact_messages(
+    messages: Vec<ChatMessage>,
+    context_window: u32,
+    extra_tokens: u32,
+) -> CompactResult {
+    let tokens_before = estimate_messages_tokens(&messages).await + extra_tokens;
 
     // Trigger threshold not reached — nothing to do.
     let trigger = trigger_threshold(context_window);
@@ -346,7 +363,8 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
     let mut dropped_count: usize = 0;
 
     for (start, end) in &groups {
-        if (estimate_messages_tokens_iter(&messages, &dropped_indices).await as u64)
+        if ((estimate_messages_tokens_iter(&messages, &dropped_indices).await as u64)
+            + (extra_tokens as u64))
             < (target as u64)
         {
             break;
@@ -379,7 +397,7 @@ pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -
         }
     }
 
-    let tokens_after = estimate_messages_tokens(&out).await;
+    let tokens_after = estimate_messages_tokens(&out).await + extra_tokens;
 
     // RULE-A-002 (2026-06-14): if we exhausted every safe droppable
     // candidate but the budget is still over the target, surface
@@ -675,7 +693,7 @@ mod tests {
         let before = messages.clone();
         // context_window = 200_000 → trigger at 170_000 (PR2 起 0.85).
         // Our tiny messages are well under.
-        let result = compact_messages(messages, 200_000).await;
+        let result = compact_messages(messages, 200_000, 0).await;
         assert_eq!(result.dropped_count, 0, "nothing should be dropped");
         assert_eq!(
             result.messages, before,
@@ -709,7 +727,7 @@ mod tests {
         }
         messages.push(user("current question"));
 
-        let result = compact_messages(messages, 1000).await;
+        let result = compact_messages(messages, 1000, 0).await;
 
         // Triggered.
         assert!(
@@ -762,7 +780,7 @@ mod tests {
         messages.push(user_tool_result("tu_2"));
         messages.push(user("current question"));
 
-        let result = compact_messages(messages, 1000).await;
+        let result = compact_messages(messages, 1000, 0).await;
         assert!(result.dropped_count > 0, "should compact something");
 
         // Walk the survivors and verify every tool_use has a
@@ -812,7 +830,7 @@ mod tests {
         }
         messages.push(user("tail"));
 
-        let result = compact_messages(messages, 1000).await;
+        let result = compact_messages(messages, 1000, 0).await;
         assert!(result.dropped_count > 0);
         // Head pair must be present.
         assert!(
@@ -844,7 +862,7 @@ mod tests {
         }
         messages.push(user("current question"));
 
-        let result = compact_messages(messages, 1000).await;
+        let result = compact_messages(messages, 1000, 0).await;
         assert!(result.dropped_count > 0, "should drop something");
 
         // Every Thinking block that survives must be intact
@@ -886,7 +904,7 @@ mod tests {
         // we require head + tail + at least one droppable middle).
         let messages = vec![user("B5 memory"), assistant("ack"), user("hi")];
         // Force trigger by setting an absurdly small context_window.
-        let result = compact_messages(messages, 10).await;
+        let result = compact_messages(messages, 10, 0).await;
         assert_eq!(result.dropped_count, 0, "not enough messages to compact");
         assert_eq!(result.messages.len(), 3);
     }
@@ -912,7 +930,7 @@ mod tests {
         }
         messages.push(user("tail"));
 
-        let result = compact_messages(messages, 4000).await;
+        let result = compact_messages(messages, 4000, 0).await;
         // No panic, head + tail intact.
         assert!(result.messages.len() >= 3);
         assert_eq!(result.messages[0].content.to_text(), "B5 memory");
@@ -1142,7 +1160,7 @@ mod tests {
         // alone (4 messages) total > 5 tokens; padding must be
         // dropped but the algorithm will then consider the tail
         // pair's assistant(tool_use) singleton droppable.
-        let result = compact_messages(messages, 10).await;
+        let result = compact_messages(messages, 10, 0).await;
         // Walk survivors and check pair integrity.
         for i in 0..result.messages.len() {
             let m = &result.messages[i];
@@ -1201,7 +1219,7 @@ mod tests {
             user(big_pad(8_000)),
         ];
 
-        let result = compact_messages(messages, 1000).await;
+        let result = compact_messages(messages, 1000, 0).await;
 
         // The middle "droppable" message must have been dropped.
         assert!(
@@ -1253,7 +1271,7 @@ mod tests {
         // context_window = 200_000 → trigger = 170_000. The tiny
         // messages are well under the trigger so compaction is a
         // no-op.
-        let result = compact_messages(messages, 200_000).await;
+        let result = compact_messages(messages, 200_000, 0).await;
         assert_eq!(result.dropped_count, 0);
         assert_eq!(result.degradation, DegradationKind::None);
         // PR2:未触发路径的 method = None,无摘要 usage。
@@ -1270,7 +1288,7 @@ mod tests {
             messages.push(assistant(big_pad(800)));
         }
         messages.push(user("tail"));
-        let result = compact_messages(messages, 1000).await;
+        let result = compact_messages(messages, 1000, 0).await;
         assert!(result.dropped_count > 0);
         assert_eq!(result.method, CompactMethod::Mechanical);
         assert_eq!(result.summary_usage, None);
