@@ -418,3 +418,48 @@ DB 取证 + 代码复验锁定五因并全部修复:① pitfall 召回 precision
 ### Status
 
 [OK] **Completed**
+
+
+## Session 39: 统一 token 预算表 + 关卡⑤硬卡(unified-context-budget)全程落地
+
+**Date**: 2026-08-19
+**Task**: 统一 token 预算表 + 关卡⑤硬卡(unified-context-budget)全程落地
+**Branch**: `main`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+### Summary
+
+推荐 → brainstorm(单任务两 WP + start 前评审 6 项独立处置:F1 估算重复计数采纳并连带修正 PRD 口径洞描述、F5 部分采纳——发现 @文件每 request 重展开使 DB spans 方案不可行,裁定同请求临时 spans)→ 4 PR 实施。**WP1**:turn_trace 三新列(at_files/system/context_window)+ budget.rs 统一估算(三部件加法,messages 已含 memory/skill/@文件/图片——评审 F1)+ 压缩三处口径统一切换(修 tools+system 挤窗漏计洞;机械路径 extra_tokens 参惠及群聊/worker)+ drive.rs 时序重排(tools 链前置 D7)+ at_file 同请求 spans(D10,fail-open)。**WP2**:关卡⑤硬卡(0.95×window,context_budget_enabled fail-open && !worker && !群聊)三臂静默裁剪(旧 @文件 span→占位 / 旧图→B1 占位降级 / memory 头→目录态快照,非破坏性请求副本)+ 臂尽 fail-fast(breakdown 错误)+ ChatEvent::BudgetTrim/审计 ContextBudgetTrim + trace 实发口径(预裁−freed)。前端:TurnCard per-model 窗口(弃 200k 硬编码)+ 预算构成条(五切片+残差)+ BudgetTrim chip/徽标 + 审计条目。坑:子代理撞 5h 限额留半成品由主会话接手补完;cl100k 对重复文本压缩比漂移使固定算术夹具脆(改自校准);Bash 进程组杀 daemon 需 run_in_background 前台承载。范围注记:C3 StillOver(0.5 target)先于 0.95 闸门中止一切确定性超线构造,臂级行为由单测锁、全 loop 只锁 no-misfire。live 烟测:三新列落值(system=795/window=200000),常态轮零裁剪。
+
+### Testing
+
+- [OK] 后端 1869+1 既有 flaky(subagent guard,复跑即过);前端 1122;vue-tsc 0;clippy 零新增(4 基线既有 stash 对照);fmt 干净
+- [OK] live:turn-smoke 重编 daemon 实跑,system_token/context_window/at_files 落值正确
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- BACKLOG §3.1 统一预算表条目可勾;后续候选:A4+ 成本聚合视图 / C6 大输出截断统一
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ca675a1` | (see git log) |
+| `484541a` | (see git log) |
+| `325ad19` | (see git log) |
+| `415c2fa` | (see git log) |
+| `8980c5b` | (see git log) |
+
+### Status
+
+[OK] **Completed**

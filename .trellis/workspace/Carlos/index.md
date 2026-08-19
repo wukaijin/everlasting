@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 38
-- **Last Active**: 2026-08-18
+- **Total Sessions**: 39
+- **Last Active**: 2026-08-19
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~420 | Active |
+| `journal-2.md` | ~465 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 39 | 2026-08-19 | 统一 token 预算表 + 关卡⑤硬卡(unified-context-budget)全程落地 | `ca675a1`, `484541a`, `325ad19`, `415c2fa`, `8980c5b` | `main` |
 | 38 | 2026-08-18 | 排查并修复会话 5df29977 五项异常 | `bf820ff`, `fc97922`, `546cea3`, `87886ba`, `07ad211`, `974486b` | `main` |
 | 37 | 2026-08-14 | C7D tools Stub 注册:实施检查 + 部署漂移修复 + 归档 | `bcf4187` | `main` |
 | 36 | 2026-08-13 | S6a+S6b 移动端打磨完成(主聊天视图+Settings 面板+三轮真机迭代) | `acb8284`, `5ea3647` | `feat/remote-control-epic-s1` |
