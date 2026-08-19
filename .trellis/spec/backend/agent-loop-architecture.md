@@ -83,3 +83,4 @@
 - [pattern-worker-worktree-override](./agent-loop-architecture/pattern-worker-worktree-override.md)
 - [pattern-llm-compaction](./agent-loop-architecture/pattern-llm-compaction.md)
 - [pattern-turn-limit-softcap](./agent-loop-architecture/pattern-turn-limit-softcap.md)
+- [pattern-budget-gate](./agent-loop-architecture/pattern-budget-gate.md)
