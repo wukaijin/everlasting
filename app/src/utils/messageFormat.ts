@@ -124,6 +124,7 @@ export function toolAccentVar(toolName: string): string {
     case "read_file":
       return "var(--color-tool-read)";
     case "write_file":
+    case "edit_file":
       return "var(--color-tool-write)";
     case "shell":
       return "var(--color-tool-shell)";
@@ -141,6 +142,7 @@ export function toolIcon(toolName: string): string {
     case "read_file":
       return "document";
     case "write_file":
+    case "edit_file":
       return "pencil";
     case "shell":
       return "command-line";

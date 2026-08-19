@@ -49,6 +49,7 @@ import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import DiscussionSummaryCard from "./DiscussionSummaryCard.vue";
 import SearchHistoryCard from "./SearchHistoryCard.vue";
+import EditFileCard from "./EditFileCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import RequestModeChangeCard from "./RequestModeChangeCard.vue";
 import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue";
@@ -84,6 +85,7 @@ const END_DISCUSSION_TOOL_NAME = "end_discussion";
 /** D2②+: search_history 的 tool_use 渲染专属 SearchHistoryCard
  * (替换通用 ToolCallCard,同 end_discussion 先例)。 */
 const SEARCH_HISTORY_TOOL_NAME = "search_history";
+const EDIT_FILE_TOOL_NAME = "edit_file";
 
 const hasVisibleBubble = computed<boolean>(() => {
   const m = props.message;
@@ -532,6 +534,11 @@ const messageImages = computed<
             :call="item"
             :result="getToolResult(message, item.id)"
           />
+          <EditFileCard
+            v-else-if="item.name === EDIT_FILE_TOOL_NAME"
+            :call="item"
+            :result="getToolResult(message, item.id)"
+          />
           <ToolCallCard
             v-else
             :call="item"
@@ -689,6 +696,11 @@ const messageImages = computed<
         />
         <SearchHistoryCard
           v-else-if="tc.name === SEARCH_HISTORY_TOOL_NAME"
+          :call="tc"
+          :result="getToolResult(message, tc.id)"
+        />
+        <EditFileCard
+          v-else-if="tc.name === EDIT_FILE_TOOL_NAME"
           :call="tc"
           :result="getToolResult(message, tc.id)"
         />
@@ -956,6 +968,15 @@ const messageImages = computed<
      `relative` lets the trigger anchor to the row's
      top-right without flowing inline. */
   position: relative;
+}
+
+/* 系统行占满整行再让卡片居中,否则 75% 的 .msg 会把 min(560px,92%) 困在右侧 */
+.msg:has(.msg-compact-summary) {
+  max-width: none;
+  width: 100%;
+  align-self: center;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .msg--user {
