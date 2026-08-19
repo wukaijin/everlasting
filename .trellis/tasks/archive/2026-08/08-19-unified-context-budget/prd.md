@@ -54,7 +54,7 @@
 - [x] AC5 裁尽仍超 → fail-fast:Error turn + `context_over_budget` 标识 + 各切片 breakdown(单测锁文案;形态对齐 RULE-A-002 Error+abort,stop_reason 语义在错误文本中)。
 - [x] AC6 gate:worker/群聊豁免(gate 同 digest/compaction);开关缺省 on;no-misfire 集成锁常态零干扰。
 - [x] AC7 live 烟测:重编 daemon 实跑——system_token=795 / context_window=200000 / at_files NULL(零注入语义正确)三新列落值,tools 3996 / mem 2080 与基线吻合。WP2 臂级 live 触发不可构造(见 AC3 注记),观测链路(chip/徽标/审计)有前端测试覆盖。
-- [x] AC8 全量验证:后端 1869+1 既有 flaky(subagent guard,复跑即过,与 main 基线同款);前端 1122 全绿;vue-tsc 0 err;clippy 零新增(4 个基线既有,stash 对照核实);fmt 干净。
+- [x] AC8 全量验证:后端 1869+1 既有 flaky(subagent guard,复跑即过,与 main 基线同款);前端 1122 全绿;vue-tsc 0 err;clippy 零新增(4 个基线既有,stash 对照核实);fmt 干净。**勘误(2026-08-19 归档后复检)**:clippy 基线实测(worktree @ 9abfe1e)为 **3** 个既有,非 4 个——第 4 个 `useless_format`(@file span 新测试内 `ends_with(&format!("</file>"))`)系 WP1 commit ca675a1 新增,当时的 stash 对照漏判;已改为 `ends_with("</file>")` 修复,修复后 clippy 与基线持平(3 个既有:emit_max_turns_terminal 8 参 / at_file repeat_n / trace.rs comparison_to_empty)。
 
 ## Key Decisions
 

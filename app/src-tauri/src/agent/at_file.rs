@@ -1272,7 +1272,7 @@ mod tests {
                 "span body: {:?}",
                 body
             );
-            assert!(body.ends_with(&format!("</file>")), "body: {:?}", body);
+            assert!(body.ends_with("</file>"), "body: {:?}", body);
             assert!(span.tokens > 0, "injected body must count > 0 tokens");
         }
         // Aggregate (turn_trace.at_files_token 口径) = Σ span tokens.
