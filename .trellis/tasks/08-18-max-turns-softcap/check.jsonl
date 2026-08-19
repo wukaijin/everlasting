@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "backend 质量检查基线"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 层 Quality Check 章节"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/tests-required.md", "reason": "循环改动必须配套的测试要求——软卡五分支覆盖核查依据"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "核查 force 压缩路径未破坏水位/seq/gate 契约(cutoff_seq 精确值、insert 吃 loop 游标等)"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "核查 softcap 测试的 mock 脚本编排符合契约"}
