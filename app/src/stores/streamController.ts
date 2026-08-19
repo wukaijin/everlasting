@@ -229,6 +229,15 @@ export interface ChatEventPayload {
     | "context_compacted"
     | "loop_hint"
     | "workflow_breadcrumb"
+    // unified-context-budget WP2 (2026-08-19): the 关卡⑤ hard gate
+    // trimmed the outgoing request before send (read-only /
+    // non-persistent on the Rust side, `Retrying` 先例). Mirrors
+    // Rust `ChatEvent::BudgetTrim { request_id, seq, freed_tokens,
+    // post_total, window }` (snake_case wire). The handler attaches
+    // the payload to the in-flight assistant placeholder's transient
+    // `budgetTrim` field AND routes a copy into
+    // `useTraceStore().applyEvent` for the TurnCard badge.
+    | "budget_trim"
     // 08-04 follow-up (实时 speaker 标识): emitted by the group-chat
     // orchestrator (`run_group_chat_loop`) right before each inner
     // speaker turn, so the frontend knows whose placeholder is about to
@@ -244,6 +253,12 @@ export interface ChatEventPayload {
   stop_reason?: string;
   message?: string;
   category?: ErrorCategory;
+  /** unified-context-budget WP2: only present when
+   *  `kind === "budget_trim"`. Mirrors Rust `ChatEvent::BudgetTrim`
+   *  (snake_case wire). */
+  freed_tokens?: number;
+  post_total?: number;
+  window?: number;
   /** A4 (Token Usage Tracking): the per-turn token usage report
    *  from the LLM. `undefined` on every non-Done event, and on
    *  Done events where the provider did not report usage

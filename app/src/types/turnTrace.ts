@@ -219,6 +219,14 @@ export interface TurnTrace {
   /** unified-context-budget WP1 (2026-08-19): 请求时 context_window
    *  快照 —— contextUtilPct 的分母(per-model;旧行回退 200_000)。 */
   contextWindow?: number;
+  /** unified-context-budget WP2 (2026-08-19): 关卡⑤硬卡的裁剪观察
+   *  (live 路径经 ChatEvent::BudgetTrim 归一化写入;回看路径无此维
+   *  —— 持久化记录在 context_budget_trim 审计行,不在 turn_trace)。 */
+  budgetTrim?: {
+    freed_tokens: number;
+    post_total: number;
+    window: number;
+  };
   /** Audit events whose `turnSeq === this.seq` (populated only
    *  on the 回看 path — the live path doesn't carry audit
    *  events; the audit row store handles those). The card
@@ -265,6 +273,17 @@ export interface WorkflowBreadcrumbEvent {
   task_slug: string | null;
   status: string | null;
   breadcrumb_text: string;
+}
+
+/** Mirror of Rust `ChatEvent::BudgetTrim` payload
+ *  (unified-context-budget WP2, snake_case wire)。 */
+export interface BudgetTrimEvent {
+  kind: "budget_trim";
+  request_id: string;
+  seq: number;
+  freed_tokens: number;
+  post_total: number;
+  window: number;
 }
 
 // ---------------------------------------------------------------------------

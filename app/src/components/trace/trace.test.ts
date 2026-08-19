@@ -374,6 +374,25 @@ describe("TurnCard — render", () => {
     });
     expect(wLegacy.find(".turn-card__ctx").text()).toContain("8%");
   });
+
+  it("renders the WP2 budget-trim badge when budgetTrim is set", () => {
+    // unified-context-budget WP2: 关卡⑤裁剪观察 → TurnCard 预算裁剪
+    // 徽标(live 路径;缺字段不渲染)。
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          budgetTrim: { freed_tokens: 3200, post_total: 18_400, window: 20_000 },
+        }),
+      },
+    });
+    const badge = w.find(".turn-card__sub--budget");
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toContain("预算裁剪");
+    expect(badge.text()).toContain("3.2K");
+
+    const wNoTrim = mount(TurnCard, { props: { trace: makeTrace() } });
+    expect(wNoTrim.find(".turn-card__sub--budget").exists()).toBe(false);
+  });
 });
 
 describe("TraceEventItem — critical highlighting", () => {

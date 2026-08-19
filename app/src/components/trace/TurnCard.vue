@@ -616,6 +616,21 @@ const ungroupedLabel = computed<string>(() =>
       </span>
     </div>
 
+    <!-- unified-context-budget WP2 (2026-08-19): 预算裁剪徽标 ——
+         关卡⑤硬卡静默裁剪了本请求(live 路径;持久化记录在
+         context_budget_trim 审计行)。 -->
+    <div
+      v-if="trace.budgetTrim"
+      class="turn-card__sub turn-card__sub--budget"
+      :title="`裁剪后 ≈${abbreviateTokens(trace.budgetTrim.post_total)} / 窗口 ${abbreviateTokens(trace.budgetTrim.window)}`"
+    >
+      <Icon name="shrink" :size="12" class="turn-card__sub-icon" />
+      <span class="turn-card__sub-title">预算裁剪</span>
+      <span class="turn-card__sub-body">
+        −{{ abbreviateTokens(trace.budgetTrim.freed_tokens) }}(旧 @文件/图/memory)
+      </span>
+    </div>
+
     <!-- Audit events for this turn (回看 path) -->
     <div v-if="auditEvents.length > 0" class="turn-card__audits">
       <details class="turn-card__audits-details">
@@ -851,6 +866,12 @@ const ungroupedLabel = computed<string>(() =>
 
 .turn-card__sub--warn {
   border-left-color: var(--color-tool-shell);
+}
+
+/* unified-context-budget WP2: 预算裁剪徽标 —— shell 色系(治理动作,
+ * 非错误);与 compaction sub-card 并列时一眼可辨。 */
+.turn-card__sub--budget {
+  border-left-color: var(--color-accent);
 }
 
 .turn-card__sub-icon {

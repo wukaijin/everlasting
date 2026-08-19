@@ -121,6 +121,15 @@ const meta = computed<{ iconName: string; colorVar: string }>(() => {
         iconName: "file-check",
         colorVar: "var(--color-tool-write)",
       };
+    // unified-context-budget WP2 (2026-08-19, task
+    // `08-19-unified-context-budget`): the 关卡⑤ hard gate's silent
+    // trim. Renders a shrink icon in the accent color — 治理动作非
+    // 错误,与 TracePanel 的预算裁剪徽标同色系。
+    case "context-budget-trim":
+      return {
+        iconName: "shrink",
+        colorVar: "var(--color-accent)",
+      };
     default:
       return { iconName: "info", colorVar: "var(--color-text-muted)" };
   }

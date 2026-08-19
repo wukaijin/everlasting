@@ -152,6 +152,26 @@ export interface TurnLimitSoftcapAuditPayload {
   action?: string;
 }
 
+/** unified-context-budget WP2 (2026-08-19, task
+ *  `08-19-unified-context-budget`): payload for the 关卡⑤ hard
+ *  gate's trim audit rows. Mirrors the Rust-side
+ *  `record_context_budget_trim_audit` helper's
+ *  `{ arms: [{kind, count, tokens_freed}], over_by, pre_total,
+ *  post_total, window }` shape (prd R8)。 */
+export interface ContextBudgetTrimAuditPayload {
+  /** Trim arms in priority order — kind ∈ `"at_file"` |
+   *  `"image"` | `"memory_section"`. */
+  arms?: Array<{ kind?: string; count?: number; tokens_freed?: number }>;
+  /** pre_total − budget line (0.95 × window). */
+  over_by?: number;
+  /** Unified estimate before trimming (audit-only — trace 列记
+   *  实发值,prd D9)。 */
+  pre_total?: number;
+  /** Unified estimate after trimming. */
+  post_total?: number;
+  window?: number;
+}
+
 /** B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
  *  payload for the user-triggered `apply_ui_diff` IPC's success
  *  audit rows. Mirrors the Rust-side
@@ -188,6 +208,7 @@ export type ParsedPayload =
   | { kind: "loop_intervention"; payload: LoopInterventionAuditPayload }
   | { kind: "turn_limit_softcap"; payload: TurnLimitSoftcapAuditPayload }
   | { kind: "ui_diff_applied"; payload: UiDiffAppliedAuditPayload }
+  | { kind: "context_budget_trim"; payload: ContextBudgetTrimAuditPayload }
   | { kind: "raw"; raw: unknown }
   | { kind: "empty" };
 
@@ -224,6 +245,10 @@ const TURN_LIMIT_SOFTCAP_KIND = "turn_limit_softcap";
 // Wire string is locked by `AuditKind::UiDiffApplied.as_str()`
 // in `agent/permissions/audit.rs`.
 const UI_DIFF_APPLIED_KIND = "ui_diff_applied";
+// unified-context-budget WP2 (2026-08-19): 关卡⑤ hard-gate trim
+// audit kind. Wire string is locked by
+// `AuditKind::ContextBudgetTrim.as_str()` in `agent/permissions/audit.rs`.
+const CONTEXT_BUDGET_TRIM_KIND = "context_budget_trim";
 
 /** Parse the raw `payloadJson` for a row into a typed shape.
  *  Never throws — malformed / null / unknown shapes degrade
@@ -269,6 +294,15 @@ export function parseAuditPayload(
     return {
       kind: "ui_diff_applied",
       payload: parsed as UiDiffAppliedAuditPayload,
+    };
+  }
+  // unified-context-budget WP2 (2026-08-19): 关卡⑤ hard-gate trim.
+  // The payload is `{arms, over_by, pre_total, post_total, window}` —
+  // see `record_context_budget_trim_audit` on the Rust side.
+  if (kind === CONTEXT_BUDGET_TRIM_KIND) {
+    return {
+      kind: "context_budget_trim",
+      payload: parsed as ContextBudgetTrimAuditPayload,
     };
   }
   if (MODE_KINDS.has(kind)) {
@@ -351,6 +385,13 @@ export const AUDIT_KIND_OPTIONS: ReadonlyArray<{ value: string | null; label: st
   // write this row — the apply handler returns inline errors
   // to the frontend without audit.
   { value: "ui_diff_applied", label: "应用 diff" },
+  // unified-context-budget WP2 (2026-08-19, task
+  // `08-19-unified-context-budget`): the 关卡⑤ hard gate silently
+  // trimmed the outgoing request (旧轮次 @文件/图片/memory 节) to fit
+  // the 0.95 budget line. Payload carries the per-arm breakdown +
+  // pre/post unified totals. Wire string is locked by
+  // `AuditKind::ContextBudgetTrim.as_str()` in the Rust side.
+  { value: "context_budget_trim", label: "预算裁剪" },
 ];
 
 /** Visual family for the list row's leading icon. The renderer
@@ -370,6 +411,7 @@ export type AuditIconFamily =
   | "loop-intervention"
   | "turn-limit-softcap"
   | "ui-diff-applied"
+  | "context-budget-trim"
   | "unknown";
 
 /** Map a wire `kind` to the icon family the modal renders.
@@ -427,6 +469,12 @@ export function iconFamilyForKind(kind: string): AuditIconFamily {
     // checkmark that `tool_executed` uses.
     case "ui_diff_applied":
       return "ui-diff-applied";
+    // unified-context-budget WP2 (2026-08-19): the 关卡⑤ hard gate's
+    // silent trim. Distinct family so the icon reads "budget
+    // governance" (shrink, accent) instead of the generic gray
+    // bucket — 治理动作,非错误。
+    case "context_budget_trim":
+      return "context-budget-trim";
     default:
       return "unknown";
   }

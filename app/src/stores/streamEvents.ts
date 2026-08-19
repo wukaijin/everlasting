@@ -376,6 +376,11 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         // no `delta` ever arrived — a pure tool_use turn) MUST
         // clear so the chip doesn't linger post-stream.
         last.retrying = undefined;
+        // unified-context-budget WP2: terminal `done` — the budget-trim
+        // chip described THIS request's shape; the stream is over, so
+        // clear it (the durable record lives in the audit row + trace
+        // badge).
+        last.budgetTrim = undefined;
         // 交错思考(实时态): stream 结束兜底 —— seal 活动 thinking + flush
         // 残留的 pending text。thinking 块已就地累积在 contentBlocks,无需
         // 再 push;text 段(text 之后直接 done)靠这里 flush。
@@ -466,6 +471,8 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         // would linger on the bubble even though `last.error`
         // is now showing).
         last.retrying = undefined;
+        // unified-context-budget WP2: terminal `error` — 同款清理。
+        last.budgetTrim = undefined;
         // F5: error path. The `totalMs` is still recorded
         // (user wants to see "在 X 秒时断了"), but `ttfbMs`
         // and `genMs` may be `null` (no delta arrived).
@@ -680,6 +687,43 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           status: event.status ?? null,
           breadcrumb_text: event.breadcrumb_text ?? "",
         });
+        break;
+      }
+      case "budget_trim": {
+        // unified-context-budget WP2 (2026-08-19): the 关卡⑤ hard
+        // gate trimmed the outgoing request just before send. Two
+        // sinks: (a) the trace store (TurnCard badge — durable
+        // observation, same flow as `context_compacted`), and
+        // (b) the in-flight assistant placeholder's transient
+        // `budgetTrim` field (MessageItem renders a "✂ 预算裁剪"
+        // chip above the bubble). Unlike `retrying`, the chip is
+        // NOT cleared on `start` / `delta` — the trim describes
+        // this request's shape and should stay visible through
+        // the stream; the terminal `done` / `error` handlers
+        // clear it, and `rehydrateMessages` never copies it.
+        if (
+          typeof event.freed_tokens !== "number" ||
+          typeof event.post_total !== "number" ||
+          typeof event.window !== "number"
+        ) {
+          // Defensive — the Rust side always sends all fields for
+          // `budget_trim`; drop a malformed event rather than risk
+          // the renderer.
+          break;
+        }
+        useTraceStore().applyEvent({
+          kind: "budget_trim",
+          request_id: event.request_id,
+          seq: event.seq ?? 0,
+          freed_tokens: event.freed_tokens,
+          post_total: event.post_total,
+          window: event.window,
+        });
+        last.budgetTrim = {
+          freedTokens: event.freed_tokens,
+          postTotal: event.post_total,
+          window: event.window,
+        };
         break;
       }
     }

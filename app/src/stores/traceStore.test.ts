@@ -128,6 +128,27 @@ describe("useTraceStore — applyEvent (live path)", () => {
     });
   });
 
+  // unified-context-budget WP2 (2026-08-19): the 关卡⑤ trim observation
+  // upserts the budgetTrim field (live path).
+  it("upserts a budget_trim event into the budgetTrim field", () => {
+    const store = useTraceStore();
+    store.currentSessionId = "sess-1";
+    store.applyEvent({
+      kind: "budget_trim",
+      request_id: "rid-1",
+      seq: 3,
+      freed_tokens: 3200,
+      post_total: 18_400,
+      window: 20_000,
+    });
+    const t = store.currentSessionTraces.get(3);
+    expect(t?.budgetTrim).toEqual({
+      freed_tokens: 3200,
+      post_total: 18_400,
+      window: 20_000,
+    });
+  });
+
   it("upserts a workflow_breadcrumb event with null task_slug", () => {
     const store = useTraceStore();
     store.currentSessionId = "sess-1";

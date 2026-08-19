@@ -38,6 +38,7 @@ import { computed, watch, onUnmounted, ref } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
 import { useStreamControllerStore } from "../../stores/streamController";
+import { abbreviateTokens } from "../../utils/tokenUsage";
 import { askCardPropsFor as askCardPropsResolved } from "./messageCards/askCard";
 import { modeChangeCardPropsFor as modeChangeCardPropsResolved } from "./messageCards/modeChangeCard";
 import { taskStateTransitionCardPropsFor as taskStateTransitionCardPropsResolved } from "./messageCards/taskStateTransitionCard";
@@ -643,6 +644,34 @@ const messageImages = computed<
       <span class="msg__notice-text">{{ message.notice }}</span>
     </div>
 
+    <!--
+      unified-context-budget WP2 (2026-08-19): transient budget-trim
+      notice. The 关卡⑤ hard gate silently trimmed the outgoing
+      request (旧轮次 @文件/图片/memory 节) right before send — the
+      in-flight assistant placeholder carries a `budgetTrim` object
+      from the `budget_trim` ChatEvent until the terminal
+      `done` / `error`. We render a small chip above the bubble so
+      the user knows why this turn's context looked thinner than
+      the session history suggests (the durable record is the
+      `context_budget_trim` audit row + the TracePanel badge).
+
+      Visibility rules mirror `retrying` / `notice`: assistant rows
+      only; NOT persisted (`rehydrateMessages` never copies it), so
+      a session reload drops the chip.
+    -->
+    <div
+      v-if="message.role === 'assistant' && message.budgetTrim"
+      class="msg__notice msg__budget-trim"
+      data-testid="msg-budget-trim"
+      :title="`裁剪后 ≈${abbreviateTokens(message.budgetTrim.postTotal)} / 窗口 ${abbreviateTokens(message.budgetTrim.window)}(详见审计日志)`"
+    >
+      <Icon name="shrink" :size="12" icon-class="msg__notice-icon" />
+      <span class="msg__notice-text">
+        预算裁剪:本轮请求省略了 −{{ abbreviateTokens(message.budgetTrim.freedTokens) }}
+        (旧 @文件/图片/记忆节)
+      </span>
+    </div>
+
     <div
       v-if="message.redactedThinkingData && message.redactedThinkingData.length"
       class="msg__redacted"
@@ -1184,6 +1213,17 @@ const messageImages = computed<
 .msg__notice-text {
   white-space: normal;
   word-break: break-word;
+}
+
+/* unified-context-budget WP2: 预算裁剪 chip —— accent 色系(治理动作,
+ * 与 TracePanel 徽标 / 审计 icon 同色),在 notice 的中性样式上着色。 */
+.msg__budget-trim {
+  border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  color: var(--color-accent-text);
+}
+
+.msg__budget-trim .msg__notice-icon {
+  color: var(--color-accent);
 }
 
 .msg__tools {

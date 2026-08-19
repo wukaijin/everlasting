@@ -54,6 +54,7 @@ import {
   type ContextCompactedEvent,
   type LoopHintEvent,
   type WorkflowBreadcrumbEvent,
+  type BudgetTrimEvent,
   parseTurnTraceRow,
 } from "../types/turnTrace";
 
@@ -193,6 +194,25 @@ export const useTraceStore = defineStore("trace", () => {
     currentSessionTraces.set(event.seq, next);
   }
 
+  // unified-context-budget WP2 (2026-08-19): 关卡⑤裁剪观察(live)。
+  function applyBudgetTrim(event: BudgetTrimEvent): void {
+    const existing = currentSessionTraces.get(event.seq) ?? {
+      id: 0,
+      sessionId: currentSessionId.value ?? "",
+      seq: event.seq,
+      createdAt: new Date().toISOString(),
+    };
+    const next: TurnTrace = {
+      ...existing,
+      budgetTrim: {
+        freed_tokens: event.freed_tokens,
+        post_total: event.post_total,
+        window: event.window,
+      },
+    };
+    currentSessionTraces.set(event.seq, next);
+  }
+
   /** Public dispatcher — used by streamController. Returns
    *  `true` if the event was handled, `false` if the kind is
    *  not a trace event (defensive — the streamController
@@ -201,7 +221,8 @@ export const useTraceStore = defineStore("trace", () => {
     event:
       | ContextCompactedEvent
       | LoopHintEvent
-      | WorkflowBreadcrumbEvent,
+      | WorkflowBreadcrumbEvent
+      | BudgetTrimEvent,
   ): void {
     switch (event.kind) {
       case "context_compacted":
@@ -212,6 +233,9 @@ export const useTraceStore = defineStore("trace", () => {
         break;
       case "workflow_breadcrumb":
         applyWorkflowBreadcrumb(event);
+        break;
+      case "budget_trim":
+        applyBudgetTrim(event);
         break;
     }
   }

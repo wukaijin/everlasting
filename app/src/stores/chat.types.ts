@@ -284,6 +284,26 @@ export interface ChatMessage {
     waitMs: number;
     reason: string;
   };
+  /**
+   * unified-context-budget WP2 (2026-08-19): transient budget-trim
+   * notice attached to the in-flight assistant placeholder when the
+   * 关卡⑤ hard gate silently trimmed the outgoing request (旧轮次
+   * @文件/图片/memory 节被裁)。Set by `streamEvents`'
+   * `case 'budget_trim'` handler BEFORE the stream starts; cleared
+   * on the terminal `done` / `error` (visible through the whole
+   * stream — unlike `retrying`, the trim describes this request's
+   * shape, so early clearing on `start`/`delta` would hide it).
+   * NOT persisted to DB and NOT part of the rehydrate shape —
+   * `rehydrateMessages` skips it. The MessageItem renders a small
+   * "✂ 预算裁剪 −N" row above the bubble when set; the durable
+   * records are the `context_budget_trim` audit row + the trace
+   * store's `budgetTrim` badge.
+   */
+  budgetTrim?: {
+    freedTokens: number;
+    postTotal: number;
+    window: number;
+  };
   /** 08-07-group-chat-review-fixes R2: transient orchestrator notice
    *  shown when a group-chat discussion ends abnormally or skips a
    *  turn. Set by `streamController`'s `done` handler when the
