@@ -234,46 +234,39 @@ pub async fn enforce_budget(
     report
 }
 
-/// 在请求副本上把一个 span 的注入正文替换为占位行。fail-open:span
-/// 解析不到(消息没了 / 角色漂移 / 文本变短 / 非字符边界)→ 不动,
-/// 返回 false(prd R7.1)。
+/// 在请求副本上把一个 span 的注入正文替换为占位行。寻址与边界
+/// 校验委托 [`crate::agent::at_file::span_text`](span 定位的单一定
+/// 义:角色漂移 / 越界 / 非字符边界 → `None`,prd R7.1 fail-open)。
+/// 校验通过后下方按同款"Text 整串 / Blocks 首 Text 块"定位改写 —
+/// 两次定位之间无任何变更,`replace_range` 的区间合法性已由
+/// span_text 在同一段文本上先行保证。
 fn apply_span_placeholder(messages: &mut [ChatMessage], span: &AtFileSpan) -> bool {
     let placeholder = format!(
         "[at-file {}: 约 {} tokens，预算裁剪省略]",
         span.path, span.tokens
     );
+    if crate::agent::at_file::span_text(messages, span).is_none() {
+        return false;
+    }
     let Some(msg) = messages.get_mut(span.msg_idx) else {
         return false;
     };
-    if msg.role != Role::User {
-        return false;
-    }
-    let mut replaced = false;
-    match &mut msg.content {
-        MessageContent::Text(t) => {
-            replaced = replace_range(t, span, &placeholder);
-        }
+    let target: Option<&mut String> = match &mut msg.content {
+        MessageContent::Text(t) => Some(t),
         // @图注入致 Text→Blocks 形态:偏移定在首个 Text 块内
         //(span_text 同款寻址)。
-        MessageContent::Blocks(blocks) => {
-            for b in blocks.iter_mut() {
-                if let ContentBlock::Text { text, .. } = b {
-                    replaced = replace_range(text, span, &placeholder);
-                    break;
-                }
-            }
+        MessageContent::Blocks(blocks) => blocks.iter_mut().find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text),
+            _ => None,
+        }),
+    };
+    match target {
+        Some(text) => {
+            text.replace_range(span.start..span.end, &placeholder);
+            true
         }
+        None => false,
     }
-    replaced
-}
-
-fn replace_range(text: &mut String, span: &AtFileSpan, placeholder: &str) -> bool {
-    // `str::get` 拒绝越界 / 非边界区间 → fail-open。
-    if text.get(span.start..span.end).is_none() {
-        return false;
-    }
-    text.replace_range(span.start..span.end, placeholder);
-    true
 }
 
 async fn blocks_text_tokens(content: &MessageContent) -> u32 {

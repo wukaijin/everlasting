@@ -242,9 +242,9 @@ pub struct AtFileSpan {
 /// failing open. `None` (span mismatch: message gone, role changed,
 /// text shorter than `end`, non-char-boundary) means the caller MUST
 /// skip the span — never trim, never panic (prd R7.1 / design §2
-/// 消费侧防御).
-// WP2 budget gate 消费(PR3);PR1 先落产出侧 + 单测。
-#[allow(dead_code)]
+/// 消费侧防御). Consumed by the WP2 budget gate's
+/// `budget::apply_span_placeholder` (寻址/边界的单一定义) and the
+/// span tests below.
 pub fn span_text<'a>(messages: &'a [ChatMessage], span: &AtFileSpan) -> Option<&'a str> {
     let msg = messages.get(span.msg_idx)?;
     if msg.role != Role::User {
