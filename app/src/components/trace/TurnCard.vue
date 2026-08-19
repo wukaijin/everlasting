@@ -127,27 +127,27 @@ const latencyLabel = computed<string>(() => {
 });
 
 /** Context-window utilization — the trace card's
- *  "over-budget" red highlight. We don't have a reliable
- *  model-window constant in the store layer (each model
- *  has its own 200K / 1M etc.), so the heuristic is the
- *  sum of the 4 input-side fields vs. a conservative 200K
- *  reference. If the project later adds per-model window
- *  metadata, swap the constant for a derived lookup. The
- *  colors reuse the existing `tokenUsageLevel` ladder so
- *  the trace card matches the ChatInput hint chip's
- *  threshold logic. */
+ *  "over-budget" red highlight. unified-context-budget WP1
+ *  (2026-08-19): the denominator is now the per-model
+ *  `context_window` snapshot on the trace row (request-time,
+ *  written by the backend). Pre-column rows fall back to the
+ *  old conservative 200K reference. The colors reuse the
+ *  existing `tokenUsageLevel` ladder so the trace card matches
+ *  the ChatInput hint chip's threshold logic. */
 const contextUtilPct = computed<number | null>(() => {
   const t = props.trace.tokenUsage;
   if (!t) return null;
-  // 200K is the conservative Anthropic default; the
-  // per-model window can be smaller or larger but the
-  // color-band is the same shape (ok / warn / alert). The
-  // exact percentage is informational — the user reads
-  // ">" or "<" the threshold, not the raw number.
-  const CONTEXT_WINDOW_REF = 200_000;
   const input = t.context_input_tokens || t.input_tokens;
   if (input === 0) return null;
-  return (input / CONTEXT_WINDOW_REF) * 100;
+  const window = props.trace.contextWindow ?? 200_000;
+  return (input / window) * 100;
+});
+
+/** Per-model window label for the ctx chip tooltip ("200K" /
+ *  "1M"; 旧行回退 200K 不单列,数值一致)。 */
+const contextWindowLabel = computed<string>(() => {
+  const window = props.trace.contextWindow ?? 200_000;
+  return abbreviateTokens(window);
 });
 
 const contextLevel = computed<"ok" | "warn" | "alert" | "none">(() => {
@@ -202,6 +202,97 @@ const imagesPct = computed<number | null>(() => {
   return (img / ctx) * 100;
 });
 
+/** unified-context-budget WP1 (2026-08-19): @文件切片(全部 user
+ *  message 的注入正文 est 之和)占 context_input 的比例。同
+ *  `toolsPct` 的 no-double-count 公式。`null` when atFilesToken
+ *  was never written(pre-column / worker / 零注入 rows)or
+ *  context_input is 0/absent。 */
+const atFilesPct = computed<number | null>(() => {
+  const at = props.trace.atFilesToken;
+  const t = props.trace.tokenUsage;
+  if (at == null || !t) return null;
+  const ctx = t.context_input_tokens || 0;
+  if (ctx <= 0) return null;
+  return (at / ctx) * 100;
+});
+
+/** unified-context-budget WP1 (2026-08-19): system 切片(system
+ *  prompt 本体 + skill listing 归因)占 context_input 的比例。 */
+const systemPct = computed<number | null>(() => {
+  const sys = props.trace.systemToken;
+  const t = props.trace.tokenUsage;
+  if (sys == null || !t) return null;
+  const ctx = t.context_input_tokens || 0;
+  if (ctx <= 0) return null;
+  return (sys / ctx) * 100;
+});
+
+/** unified-context-budget WP1 (2026-08-19): 预算构成条 —— 五个
+ *  归因切片 + 历史残差在**实发总量**(context_input,provider 计量)
+ *  内的占比。残差 = ctx − Σ切片,钳 0(本地 cl100k 切片估算与
+ *  provider 计量有系统性偏差,残差吸收之,prd D9/AC4)。全部切片
+ *  都缺列(旧行)时不渲染;条满宽 = 100% 的 context_input,窗口
+ *  占用看 header 的 ctx chip。 */
+const budgetBarSegments = computed<
+  Array<{ widthPct: number; colorVar: string; label: string; value: number }>
+>(() => {
+  const t = props.trace.tokenUsage;
+  if (!t) return [];
+  const ctx = t.context_input_tokens || 0;
+  if (ctx <= 0) return [];
+  const slices = [
+    {
+      key: "tools",
+      value: props.trace.toolsToken ?? 0,
+      colorVar: "var(--color-tool-thinking)",
+      label: "tools[]",
+    },
+    {
+      key: "mem",
+      value: props.trace.memoryToken ?? 0,
+      colorVar: "var(--color-accent)",
+      label: "memory",
+    },
+    {
+      key: "img",
+      value: props.trace.imagesToken ?? 0,
+      colorVar: "var(--color-tool-read)",
+      label: "images",
+    },
+    {
+      key: "at",
+      value: props.trace.atFilesToken ?? 0,
+      colorVar: "var(--color-tool-write)",
+      label: "@文件",
+    },
+    {
+      key: "sys",
+      value: props.trace.systemToken ?? 0,
+      colorVar: "var(--color-tool-shell)",
+      label: "system",
+    },
+  ];
+  if (slices.every((s) => s.value <= 0)) return [];
+  const used = slices.reduce((acc, s) => acc + s.value, 0);
+  const residual = Math.max(0, ctx - used);
+  return [
+    ...slices,
+    {
+      key: "residual",
+      value: residual,
+      colorVar: "var(--color-bg-border)",
+      label: "历史+杂项",
+    },
+  ]
+    .filter((s) => s.value > 0)
+    .map((s) => ({
+      widthPct: Math.max(0.5, (s.value / ctx) * 100),
+      colorVar: s.colorVar,
+      label: `${s.label}: ${abbreviateTokens(s.value)}`,
+      value: s.value,
+    }));
+});
+
 /** Tooltip string for the whole token block. Joins the 5-field
  *  breakdown with the tools[] estimate (C7) when present. */
 const tokensTitle = computed<string>(() => {
@@ -237,6 +328,22 @@ const tokensTitle = computed<string>(() => {
       imagesPct.value != null
         ? `Images ≈${tok} (${imagesPct.value.toFixed(0)}% of context)`
         : `Images ≈${tok}`,
+    );
+  }
+  if (props.trace.atFilesToken != null) {
+    const tok = abbreviateTokens(props.trace.atFilesToken);
+    parts.push(
+      atFilesPct.value != null
+        ? `@文件 ≈${tok} (${atFilesPct.value.toFixed(0)}% of context)`
+        : `@文件 ≈${tok}`,
+    );
+  }
+  if (props.trace.systemToken != null) {
+    const tok = abbreviateTokens(props.trace.systemToken);
+    parts.push(
+      systemPct.value != null
+        ? `System ≈${tok} (${systemPct.value.toFixed(0)}% of context)`
+        : `System ≈${tok}`,
     );
   }
   return parts.join(" · ");
@@ -321,7 +428,7 @@ const ungroupedLabel = computed<string>(() =>
         v-if="contextLevel !== 'none'"
         class="turn-card__ctx"
         :class="`turn-card__ctx--${contextLevel}`"
-        :title="`context 占用 ${contextUtilPct?.toFixed(1)}%`"
+        :title="`context 占用 ${contextUtilPct?.toFixed(1)}%(窗口 ${contextWindowLabel})`"
       >
         <Icon name="info" :size="12" />
         {{ contextUtilPct?.toFixed(0) }}%
@@ -402,6 +509,50 @@ const ungroupedLabel = computed<string>(() =>
         >
           img {{ abbreviateTokens(trace.imagesToken) }}
         </span>
+        <!-- unified-context-budget WP1 (2026-08-19): @文件切片 —
+             同 img 的 >0 gate(零注入不渲染 noise cell)。 -->
+        <span
+          v-if="trace.atFilesToken != null && trace.atFilesToken > 0"
+          class="turn-card__token-cell turn-card__token-cell--atfiles"
+          :title="
+            atFilesPct != null
+              ? `@文件注入估算 ≈${abbreviateTokens(trace.atFilesToken)}(约 context 的 ${atFilesPct.toFixed(0)}%)`
+              : `@文件注入估算 ≈${abbreviateTokens(trace.atFilesToken)}`
+          "
+        >
+          @ {{ abbreviateTokens(trace.atFilesToken) }}
+        </span>
+        <!-- WP1: system 切片 — 同 tools/mem 的列存在即展示。 -->
+        <span
+          v-if="trace.systemToken != null"
+          class="turn-card__token-cell turn-card__token-cell--system"
+          :title="
+            systemPct != null
+              ? `system(prompt+skills)估算 ≈${abbreviateTokens(trace.systemToken)}(约 context 的 ${systemPct.toFixed(0)}%)`
+              : `system(prompt+skills)估算 ≈${abbreviateTokens(trace.systemToken)}`
+          "
+        >
+          sys {{ abbreviateTokens(trace.systemToken) }}
+        </span>
+      </div>
+      <!-- unified-context-budget WP1 (2026-08-19): 预算构成条 —
+           五归因切片 + 历史残差在实发总量(context_input)内的构成。
+           全切片缺列(旧行)不渲染;各段 title 见 budgetBarSegments。 -->
+      <div
+        v-if="budgetBarSegments.length > 0"
+        class="turn-card__budget-bar"
+        aria-hidden="true"
+      >
+        <div
+          v-for="(seg, idx) in budgetBarSegments"
+          :key="idx"
+          class="turn-card__budget-segment"
+          :style="{
+            width: seg.widthPct + '%',
+            background: seg.colorVar,
+          }"
+          :title="seg.label"
+        />
       </div>
     </div>
 
@@ -639,6 +790,45 @@ const ungroupedLabel = computed<string>(() =>
   border-radius: var(--radius-sm);
   padding: 0 4px;
   color: var(--color-tool-read);
+}
+
+/* unified-context-budget WP1 (2026-08-19): @文件切片 — write-tinted
+ * (与预算构成条同色),sys 切片 — shell-tinted。 */
+.turn-card__token-cell--atfiles {
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  color: var(--color-tool-write);
+}
+
+.turn-card__token-cell--system {
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  color: var(--color-tool-shell);
+}
+
+/* WP1: 预算构成条 — 与 token 5-field bar 同构的细条(6px),满宽 =
+ * 100% context_input;残差段用 border 色保持低调(它是"其余历史",
+ * 不是被治理对象)。 */
+.turn-card__budget-bar {
+  display: flex;
+  width: 100%;
+  height: 6px;
+  background: var(--color-bg-app);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-bg-border);
+}
+
+.turn-card__budget-segment {
+  height: 100%;
+  min-width: 1px;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.turn-card__budget-segment:hover {
+  opacity: 0.8;
 }
 
 .turn-card__sub {

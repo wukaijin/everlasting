@@ -150,6 +150,23 @@ export interface TurnTraceRow {
    *  Mirrors Rust `TurnTraceRow.images_token` → `imagesToken`.
    *  `null` for pre-column rows; `0` for image-less turns. */
   imagesToken: number | null;
+  /** unified-context-budget WP1 (2026-08-19): @文件切片 —— 全部
+   *  user message 的 @-token 注入正文 est 之和(文本 + 降级占位;
+   *  @图走 imagesToken 不在此列)。Mirrors Rust
+   *  `TurnTraceRow.at_files_token` → `atFilesToken`。实发口径
+   *  (prd D9)。`null` for pre-column rows / worker turns / 零注入
+   *  requests。 */
+  atFilesToken: number | null;
+  /** unified-context-budget WP1 (2026-08-19): system 切片 = system
+   *  prompt 本体(发送部件)+ skill listing 合成消息(messages 内
+   *  归因口径)。Mirrors Rust `TurnTraceRow.system_token` →
+   *  `systemToken`。`null` for pre-column rows and worker turns. */
+  systemToken: number | null;
+  /** unified-context-budget WP1 (2026-08-19): 请求时
+   *  `context_window` 快照 —— 预算行分母(NOT a token slice)。
+   *  Mirrors Rust `TurnTraceRow.context_window` → `contextWindow`。
+   *  `null` for pre-column rows(card 回退 200_000)。 */
+  contextWindow: number | null;
   createdAt: string;
 }
 
@@ -191,6 +208,17 @@ export interface TurnTrace {
    *  memory cells (`img` legend cell + share-of-context tooltip),
    *  gated on `> 0` so image-less turns don't render a noise cell. */
   imagesToken?: number;
+  /** unified-context-budget WP1 (2026-08-19): @文件切片(全部 user
+   *  message 的注入正文 est 之和;实发口径,裁剪后 = 预裁 − freed)。
+   *  Render treatment mirrors the img cell(gated on > 0)。*/
+  atFilesToken?: number;
+  /** unified-context-budget WP1 (2026-08-19): system 切片(system
+   *  prompt 本体 + skill listing 归因)。Render treatment mirrors the
+   *  tools/mem cells(列存在即展示)。*/
+  systemToken?: number;
+  /** unified-context-budget WP1 (2026-08-19): 请求时 context_window
+   *  快照 —— contextUtilPct 的分母(per-model;旧行回退 200_000)。 */
+  contextWindow?: number;
   /** Audit events whose `turnSeq === this.seq` (populated only
    *  on the 回看 path — the live path doesn't carry audit
    *  events; the audit row store handles those). The card
@@ -279,6 +307,15 @@ export function parseTurnTraceRow(row: TurnTraceRow): TurnTrace {
   }
   if (row.imagesToken != null) {
     out.imagesToken = row.imagesToken;
+  }
+  if (row.atFilesToken != null) {
+    out.atFilesToken = row.atFilesToken;
+  }
+  if (row.systemToken != null) {
+    out.systemToken = row.systemToken;
+  }
+  if (row.contextWindow != null) {
+    out.contextWindow = row.contextWindow;
   }
   return out;
 }

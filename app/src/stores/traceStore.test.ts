@@ -55,6 +55,9 @@ function makeTurnTraceRow(
     toolsToken: null,
     memoryToken: null,
     imagesToken: null,
+    atFilesToken: null,
+    systemToken: null,
+    contextWindow: null,
     createdAt: "2026-07-14 12:00:00",
     ...overrides,
   };

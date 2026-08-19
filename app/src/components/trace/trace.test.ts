@@ -260,6 +260,120 @@ describe("TurnCard — render", () => {
       false,
     );
   });
+
+  it("renders the WP1 @files estimate cell with its context share", () => {
+    // unified-context-budget WP1: atFilesToken + context_input
+    // present → `@` cell + share tooltip. Formula at_files_token /
+    // context_input (2000/10000 = 20%).
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          atFilesToken: 2000,
+          tokenUsage: {
+            input_tokens: 3000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 10000,
+          },
+        }),
+      },
+    });
+    const atCell = w.find(".turn-card__token-cell--atfiles");
+    expect(atCell.exists()).toBe(true);
+    expect(atCell.text()).toContain("@ 2K");
+    expect(atCell.attributes("title")).toContain("20%");
+  });
+
+  it("renders the WP1 system estimate cell and omits @ when zero", () => {
+    // systemToken surfaces whenever the column exists (like tools/
+    // mem); atFilesToken follows the img >0 gate (零注入不渲染)。
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          systemToken: 1500,
+          atFilesToken: 0,
+          tokenUsage: {
+            input_tokens: 3000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 10000,
+          },
+        }),
+      },
+    });
+    const sysCell = w.find(".turn-card__token-cell--system");
+    expect(sysCell.exists()).toBe(true);
+    expect(sysCell.text()).toContain("sys 1.5K");
+    expect(sysCell.attributes("title")).toContain("15%");
+    expect(w.find(".turn-card__token-cell--atfiles").exists()).toBe(false);
+  });
+
+  it("renders the budget composition bar with five slices + residual", () => {
+    // WP1 预算构成条:ctx=10000,五切片 7000 + 残差 3000 → 6 段
+    // (每段 >0);残差 = ctx − Σ切片,钳 0(AC4)。旧行(全切片
+    // 缺列)不渲染条。
+    const mkUsage = (ctx: number) => ({
+      input_tokens: ctx,
+      output_tokens: 100,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      context_input_tokens: ctx,
+    });
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          toolsToken: 3000,
+          memoryToken: 2000,
+          imagesToken: 1000,
+          atFilesToken: 500,
+          systemToken: 500,
+          tokenUsage: mkUsage(10_000),
+        }),
+      },
+    });
+    const segs = w.findAll(".turn-card__budget-segment");
+    expect(segs.length).toBe(6);
+    const residual = segs[segs.length - 1];
+    expect(residual.attributes("title")).toContain("历史+杂项");
+    expect(residual.attributes("title")).toContain("3K");
+
+    // 全切片缺列 → 不渲染条。
+    const wLegacy = mount(TurnCard, {
+      props: { trace: makeTrace({ tokenUsage: mkUsage(10_000) }) },
+    });
+    expect(wLegacy.find(".turn-card__budget-bar").exists()).toBe(false);
+  });
+
+  it("uses the per-model contextWindow for utilization (fallback 200K)", () => {
+    // WP1:contextWindow=32000 且 ctx=16000 → 50%(旧 200K 硬编码会
+    // 算出 8%);旧行缺列回退 200K。
+    const mkUsage = (ctx: number) => ({
+      input_tokens: ctx,
+      output_tokens: 100,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      context_input_tokens: ctx,
+    });
+    const w = mount(TurnCard, {
+      props: {
+        trace: makeTrace({
+          contextWindow: 32_000,
+          tokenUsage: mkUsage(16_000),
+        }),
+      },
+    });
+    const chip = w.find(".turn-card__ctx");
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("50%");
+    expect(chip.attributes("title")).toContain("窗口 32K");
+
+    const wLegacy = mount(TurnCard, {
+      props: { trace: makeTrace({ tokenUsage: mkUsage(16_000) }) },
+    });
+    expect(wLegacy.find(".turn-card__ctx").text()).toContain("8%");
+  });
 });
 
 describe("TraceEventItem — critical highlighting", () => {
