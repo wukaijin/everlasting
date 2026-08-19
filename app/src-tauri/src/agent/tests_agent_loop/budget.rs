@@ -105,6 +105,16 @@ async fn seed_history(h: &TestHarness, rows: &[ChatMessage]) {
 /// compaction_summary.rs 的模板(harness 默认压缩关 → 机械路径直达,
 /// 免摘要 mock 脚本)。
 async fn run_loop(h: &TestHarness, provider: Arc<MockProvider>, messages: Vec<ChatMessage>) {
+    run_loop_with_emitter(h, provider, messages, Arc::new(MockEmitter::new())).await;
+}
+
+/// `run_loop` 的 emitter 注入变体(预算闸门测试要检查 ChatEvent 流)。
+async fn run_loop_with_emitter(
+    h: &TestHarness,
+    provider: Arc<MockProvider>,
+    messages: Vec<ChatMessage>,
+    emitter: Arc<MockEmitter>,
+) {
     run_chat_loop(
         vec![],
         provider,
@@ -112,7 +122,7 @@ async fn run_loop(h: &TestHarness, provider: Arc<MockProvider>, messages: Vec<Ch
         "rid-budget-it".into(),
         h.session_id.clone(),
         messages,
-        Arc::new(MockEmitter::new()),
+        emitter,
         h.db.clone(),
         h.cancellations.clone(),
         h.session_active_request.clone(),
@@ -193,4 +203,50 @@ async fn tools_and_system_squeeze_triggers_mechanical_compaction() {
         traces.iter().any(|t| t.compaction_json.is_some()),
         "record_compaction must have persisted a compaction observation"
     );
+}
+
+/// AC6 集成半边:常态请求(未超 0.95 预算线)在硬卡默认开(fail-open)
+/// 之下零干扰 —— 无 BudgetTrim 事件、无 context_budget_trim 审计行、
+/// turn 正常 Done。硬卡臂级行为的确定性覆盖在 `agent::budget::tests`
+/// (enforce_budget 单测;全 loop 逼出臂级行为会与环境合成头耦合,
+/// 由 C3 StillOver 抢先中止,见任务 prd Review Resolution)。
+#[tokio::test]
+async fn budget_gate_default_on_does_not_fire_on_normal_request() {
+    crate::memory::tokens::ensure_initialized().await;
+    let h = make_harness().await;
+    // budget gate 开关缺省 = 开(fail-open),不 set 即默认开。
+    let mock = Arc::new(MockProvider::new(vec![end_turn_response("done")]));
+    let emitter = Arc::new(MockEmitter::new());
+    let wire = vec![
+        user("hello"),
+        assistant("hi there"),
+        user("normal question"),
+    ];
+    run_loop_with_emitter(&h, mock.clone(), wire, emitter.clone()).await;
+
+    // turn 正常完成。
+    assert_eq!(mock.call_count(), 1);
+    let events = emitter.chat_events();
+    assert!(
+        events
+            .iter()
+            .any(|p| matches!(&p.event, ChatEvent::Done { .. })),
+        "常态请求必须照常 Done"
+    );
+    // 无 BudgetTrim 事件(未裁剪)。
+    assert!(
+        events
+            .iter()
+            .all(|p| !matches!(&p.event, ChatEvent::BudgetTrim { .. })),
+        "未超线不得发 BudgetTrim"
+    );
+    // 无 context_budget_trim 审计行。
+    let audit_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM session_audit_events WHERE session_id = ? AND kind = 'context_budget_trim'",
+    )
+    .bind(&h.session_id)
+    .fetch_one(&h.db)
+    .await
+    .unwrap();
+    assert_eq!(audit_rows, 0, "未裁剪不得落 context_budget_trim 审计");
 }

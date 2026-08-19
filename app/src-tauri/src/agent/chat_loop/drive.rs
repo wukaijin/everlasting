@@ -142,6 +142,13 @@ pub(crate) async fn drive_turn(
     system_token: u32,
     at_files_token: u32,
     at_file_spans: Vec<crate::agent::at_file::AtFileSpan>,
+    // unified-context-budget WP2 (2026-08-19): 关卡⑤硬卡输入 ——
+    // 当前 turn user 槽位(裁剪保护边界)、memory 目录态快照(臂 3
+    // 回退目标)、config 开关(gate = budget_on && !worker && !群聊,
+    // prd D5/R6)。
+    current_user_msg_idx: usize,
+    memory_catalog_blocks: Option<Vec<crate::llm::types::ContentBlock>>,
+    budget_on: bool,
     // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」的
     // 一次性 force 标志 —— 只绕过下方 C3 块的 token 触发线,gate
     // 本身(开关/worker/熔断/skip_persist)与空待压区
@@ -895,6 +902,113 @@ pub(crate) async fn drive_turn(
     // 函数顶部 C3 压缩块之前 —— 统一口径的触发线需要当轮 tools 估算。
     // 见上方 "Turn-tool filter chain" 块注释。)
 
+    // unified-context-budget WP2 (2026-08-19, prd R6-R9): 关卡⑤硬卡
+    // —— send 前最后一道检查。位置在图片 resolve 之后(臂 2 要看到
+    // 已 resolve 的 Image 块)、APPEND 组装之后(压缩块与 send 之间的
+    // 增长 —— checklist/后台 shell 通知/recall —— 正是本闸要兜的
+    // 窗口)。gate 与 digest/compaction 同款豁免(worker/群聊机械压缩
+    // 仍兜底,prd D5)。裁剪只改 `turn_messages` 请求副本(D6 非破坏
+    // 性);trace 切片列改记实发值(预裁 − freed,D9)。
+    let mut turn_messages = turn_messages;
+    let mut images_token = images_token;
+    let mut at_files_token = at_files_token;
+    let mut memory_token = memory_token;
+    if budget_on && !effective_is_worker && !is_group_chat {
+        let report = crate::agent::budget::enforce_budget(
+            &system_prompt,
+            &tools_json,
+            &mut turn_messages,
+            &at_file_spans,
+            current_user_msg_idx,
+            memory_catalog_blocks.as_deref(),
+            context_window,
+        )
+        .await;
+        if !report.arms.is_empty() {
+            // 实发口径(D9):切片列 = 预裁 − freed;臂 3 改记目录态值。
+            at_files_token = at_files_token.saturating_sub(report.at_files_freed);
+            images_token = images_token.saturating_sub(report.images_freed);
+            if let Some(me) = report.memory_effective {
+                memory_token = Some(me);
+            }
+            let freed_total: u32 = report.arms.iter().map(|a| a.tokens_freed).sum();
+            tracing::info!(
+                request_id = %rid,
+                session_id = %session_id,
+                turn,
+                pre_total = report.pre_total,
+                post_total = report.post_total,
+                line = report.line,
+                window = report.window,
+                arms = ?report.arms,
+                "budget gate: request trimmed before send (关卡⑤)"
+            );
+            // 非持久化只读事件(同 Retrying 先例;前端瞬时 chip)。
+            emit_chat_event_via_sink(
+                &sink,
+                &rid,
+                &ChatEvent::BudgetTrim {
+                    request_id: rid.clone(),
+                    seq,
+                    freed_tokens: freed_total,
+                    post_total: report.post_total,
+                    window: report.window,
+                },
+            );
+            // 持久化审计(best-effort,warn + swallow)。
+            if !skip_persist {
+                let arms_json = serde_json::to_string(&report.arms).unwrap_or_else(|_| "[]".into());
+                if let Err(e) = crate::agent::permissions::record_context_budget_trim_audit(
+                    &db,
+                    &session_id,
+                    &arms_json,
+                    report.pre_total.saturating_sub(report.line),
+                    report.pre_total,
+                    report.post_total,
+                    report.window,
+                    Some(seq),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        "budget gate: context_budget_trim audit write failed (non-fatal)"
+                    );
+                }
+            }
+        }
+        if report.still_over {
+            // prd R9: 裁尽仍超线 fail-fast —— 不发必 400 的请求,
+            // 对齐 RULE-A-002 StillOver 的 Error+abort 形态;错误
+            // 文本含各切片 breakdown + "context_over_budget" 标识。
+            let msg = crate::agent::budget::format_over_budget_message(
+                report.post_total,
+                report.window,
+                tools_token,
+                memory_token,
+                system_token,
+                at_files_token,
+                images_token,
+            );
+            tracing::error!(
+                request_id = %rid,
+                session_id = %session_id,
+                turn,
+                post_total = report.post_total,
+                line = report.line,
+                "budget gate: arms exhausted, still over budget line — aborting turn"
+            );
+            sink.emit_chat_event(&crate::state::ChatEventPayload {
+                request_id: rid.clone(),
+                event: ChatEvent::Error {
+                    message: msg,
+                    category: LlmErrorCategory::InvalidRequest,
+                },
+            });
+            return Err(());
+        }
+    }
+
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
     let mut finalized_thinking: Vec<(String, String)> = Vec::new();
@@ -1243,6 +1357,17 @@ pub(crate) async fn drive_turn(
                         tracing::warn!(
                             request_id = %rid,
                             "chat: unexpected trace event in LLM stream (ignoring)"
+                        );
+                    }
+                    // unified-context-budget WP2 (2026-08-19):
+                    // `BudgetTrim` is emitted by the 关卡⑤ gate above
+                    // (NOT by the LLM stream) — a provider re-emitting
+                    // it would mean the wire shape leaked. Drop it
+                    // (same pattern as the trace events).
+                    ChatEvent::BudgetTrim { .. } => {
+                        tracing::warn!(
+                            request_id = %rid,
+                            "chat: unexpected BudgetTrim in LLM stream (ignoring — emitted by budget gate)"
                         );
                     }
                 }

@@ -128,6 +128,15 @@ pub enum AuditKind {
     /// 立即落 `asked`;三分支/超时/取消各落对应 action。worker
     /// 与群聊路径不经软卡(硬卡原样),不落本表。
     TurnLimitSoftcap,
+    /// unified-context-budget WP2 (08-19-unified-context-budget,
+    /// 2026-08-19): 关卡⑤硬卡静默裁剪发生时落表。payload 携带
+    /// `arms`(裁剪臂明细,`[{kind, count, tokens_freed}]`,kind ∈
+    /// `at_file`|`image`|`memory_section`)/ `over_by` / `pre_total`
+    /// / `post_total` / `window`。落表点在 drive.rs send 前
+    /// budget gate(仅裁剪实际发生时;gate 关/未超线不落)。
+    /// 裁尽仍超线的 fail-fast 不落本表(那是 Error turn,非裁剪)。
+    /// worker / 群聊不经硬卡,不落本表。
+    ContextBudgetTrim,
 
     // === Worker 域 (2026-06-22, RULE-FrontSubagent-003 fix) ===
     /// worker subagent 在 Tier 4 交互式 ask 后,user 选了"Allow"
@@ -206,6 +215,7 @@ impl AuditKind {
             // 08-18-max-turns-softcap (2026-08-19): wire shape
             // snake_case lowercase, mirrors LoopIntervention.
             Self::TurnLimitSoftcap => "turn_limit_softcap",
+            Self::ContextBudgetTrim => "context_budget_trim",
             Self::WorkerAskAllowed => "worker_ask_allowed",
             Self::WorkerAskDenied => "worker_ask_denied",
             Self::WorkerAskTimedOut => "worker_ask_timed_out",
@@ -468,6 +478,46 @@ pub async fn record_turn_limit_softcap_audit(
         db,
         session_id,
         AuditKind::TurnLimitSoftcap.as_str(),
+        Some(&payload_str),
+        turn_seq,
+    )
+    .await
+}
+
+/// unified-context-budget WP2 (08-19-unified-context-budget,
+/// 2026-08-19): record a `context_budget_trim` audit row when the
+/// 关卡⑤ hard gate actually trimmed something. Best-effort semantics
+/// mirror the softcap helper (warn + swallow on DB error — a failed
+/// audit write must not break the turn).
+///
+/// `arms_json` is the serialized `[{kind, count, tokens_freed}]`
+/// list from `budget::BudgetTrimReport`; `over_by` / `pre_total` /
+/// `post_total` / `window` carry the unified-estimate accounting
+/// (prd R8/D9 — trace 列记实发值,预裁值只活在 audit payload)。
+#[allow(clippy::too_many_arguments)]
+pub async fn record_context_budget_trim_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    arms_json: &str,
+    over_by: u32,
+    pre_total: u32,
+    post_total: u32,
+    window: u32,
+    turn_seq: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "arms": serde_json::from_str::<serde_json::Value>(arms_json)
+            .unwrap_or(serde_json::json!([])),
+        "over_by": over_by,
+        "pre_total": pre_total,
+        "post_total": post_total,
+        "window": window,
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::ContextBudgetTrim.as_str(),
         Some(&payload_str),
         turn_seq,
     )

@@ -207,6 +207,22 @@ pub enum ChatEvent {
     /// worker's LLM via `inject_recall_into_turn`), but the
     /// main chat's `lastRecallHits` chip is unaffected — AC7.
     Recall { hits: Vec<RecallHit> },
+    /// unified-context-budget WP2 (08-19-unified-context-budget,
+    /// 2026-08-19): the 关卡⑤ hard gate silently trimmed the
+    /// outgoing request to fit the context budget. **Read-only /
+    /// non-persistent** (like `Retrying`) — an observation, not an
+    /// LLM request. The frontend renders a transient "预算裁剪"
+    /// chip from it; the durable record is the
+    /// `context_budget_trim` audit row (payload carries the
+    /// pre/post totals). Wire fields mirror the audit payload
+    /// (snake_case, tag `kind = "budget_trim"`).
+    BudgetTrim {
+        request_id: String,
+        seq: i64,
+        freed_tokens: u32,
+        post_total: u32,
+        window: u32,
+    },
     /// E2 trace (2026-07-14): C3 context compaction observation.
     /// Emitted always-on (live panel) + persisted to
     /// `turn_trace.compaction_json` (回看). Write point:

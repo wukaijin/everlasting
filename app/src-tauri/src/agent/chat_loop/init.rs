@@ -82,6 +82,12 @@ pub(crate) struct LoopInit {
     /// PR1). APPEND-only turn assembly keeps the offsets stable
     /// (AC3).
     pub(crate) at_file_spans: Vec<crate::agent::at_file::AtFileSpan>,
+    /// unified-context-budget WP2 (2026-08-19): 当前 turn user 消息
+    /// 槽位(裁剪臂保护边界,见计算点注释)。
+    pub(crate) current_user_msg_idx: usize,
+    /// unified-context-budget WP2 (2026-08-19): 目录态指令块快照
+    /// (臂 3 回退目标;digest_on 且非空才 Some)。
+    pub(crate) memory_catalog_blocks: Option<Vec<crate::llm::types::ContentBlock>>,
     /// C3 摘要压缩 PR1 (08-18-llm-context-compaction):
     /// init 时水位替换命中则种子为水位摘要(`SummaryAnchor`,
     /// 纯摘要正文 + DB 行 seq),PR2 的 drive_turn 压缩路径经
@@ -512,6 +518,20 @@ pub(crate) async fn prepare_loop_state(
     } else {
         crate::memory::loader::build_instructions_blocks(&memory_layers)
     };
+    // unified-context-budget WP2 (2026-08-19): 臂 3(预算裁剪回退目标)
+    // 的目录态快照 —— 与注入视图同源构建但**不带已加载节**。仅
+    // digest_on 时可用(无 digest 机制不回退);每 request 构建一次,
+    // 预算不紧时零成本(仅 clone 持有)。
+    let memory_catalog_blocks: Option<Vec<crate::llm::types::ContentBlock>> = if digest_on {
+        let catalog = crate::memory::loader::build_instructions_blocks_with_digest(
+            &memory_layers,
+            true,
+            &std::collections::HashSet::new(),
+        );
+        (!catalog.is_empty()).then_some(catalog)
+    } else {
+        None
+    };
     let has_memory = !instructions_blocks.is_empty();
     // memory-block-governance WP1 (2026-08-15): cl100k estimate of
     // the blocks actually injected below — banner + wrappers +
@@ -900,6 +920,14 @@ pub(crate) async fn prepare_loop_state(
     // inside `inject_at_tokens`; this pass covers the rest. The DB
     // row was already persisted text-only (source of truth intact).
     let _attached_images = crate::attachments::attach_images(&mut messages);
+    // unified-context-budget WP2 (2026-08-19): 当前 turn user 消息槽位
+    // —— 裁剪臂的保护边界(msg_idx >= 此槽位的 @文件/图片不裁)。
+    // 在注入 + 附件两个 pass 之后、turn 循环 APPEND 之前计算:此后
+    // 只有尾部追加,rposition 稳定(AC3)。
+    let current_user_msg_idx = messages
+        .iter()
+        .rposition(|m| m.role == Role::User)
+        .unwrap_or(0);
     // B1: the metadata manifest carries BOTH the @-token records and
     // the message's attachment refs (paste path). Merge the
     // @-injected images into the attachments list so the frontend
@@ -1021,5 +1049,7 @@ pub(crate) async fn prepare_loop_state(
         system_token,
         at_files_token,
         at_file_spans,
+        current_user_msg_idx,
+        memory_catalog_blocks,
     })
 }

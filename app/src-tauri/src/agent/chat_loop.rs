@@ -623,6 +623,13 @@ pub async fn run_chat_loop(
         Ok(Some(v)) => v != "false",
         _ => true,
     };
+    // unified-context-budget WP2 (2026-08-19): 关卡⑤硬卡开关,同款
+    // fail-open 缺省开语义(读法与 `tools_stub_enabled` 一致;关 =
+    // send 前行为与 WP1 完全一致,回滚通道 prd AC6)。
+    let budget_on = match crate::db::config::get_config_value(&db, "context_budget_enabled").await {
+        Ok(Some(v)) => v != "false",
+        _ => true,
+    };
     let init = match prepare_loop_state(
         db.clone(),
         sink.clone(),
@@ -688,6 +695,10 @@ pub async fn run_chat_loop(
         system_token,
         at_files_token,
         at_file_spans,
+        // WP2: 当前 turn user 槽位(裁剪保护边界)+ memory 目录态快照
+        // (臂 3 回退目标)。
+        current_user_msg_idx,
+        memory_catalog_blocks,
     } = init;
 
     // -----------------------------------------------------------------
@@ -1050,6 +1061,12 @@ pub async fn run_chat_loop(
             system_token,
             at_files_token,
             at_file_spans.clone(),
+            // WP2: 硬卡 gate 输入 —— 当前 turn 槽位 + 目录态快照 +
+            // config 开关(gate = budget_on && !worker && !群聊,豁免
+            // 口径与 digest/compaction 同源,prd D5)。
+            current_user_msg_idx,
+            memory_catalog_blocks.clone(),
+            budget_on,
             // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」
             // 的一次性 force 标志 —— 只绕过 C3 的 token 触发线,gate
             // (开关/worker/熔断/skip_persist)与空待压区照旧
