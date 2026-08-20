@@ -607,3 +607,27 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 105: worker turn_trace 度量盲区闭合——run 维度唯一键 + drawer Token 明细
+
+**Date**: 2026-08-20
+**Task**: worker turn_trace 度量盲区闭合——run 维度唯一键 + drawer Token 明细
+**Branch**: `main`
+
+### Summary
+
+unified-context-budget 留下的小额 follow-up 全程落地。研究先行发现两件事:① worker loop seq 与父后续轮共享区间,旧 UNIQUE(session_id,seq) 下开闸必互撞——run 维度必须并入唯一键(表重建迁移,空串哨兵非 NULL,显式列清单拷贝修正 widen 先例 SELECT* 不可复用点);② 机械压缩 record_compaction 与 loop 软提示 record_loop_hint 原无 worker 门,worker 撞线时以父名义污染主行(既有跨归因 bug)——同钥匙一并归位。交付:PR1 存储层(run_id 列+表重建+db 四 upsert 扩参+list_worker_turn_traces,子代理);PR2 写点开闸(Done 臂 run 行落值 usage/tools/system/window,memory/images/@文件 按契约 NULL——研究论断被实证推翻,worker 经共享 init 实际注入 memory 是 Some,写点显式归 NULL;compaction/loop_hint 旁路传 run_key;IPC 全链 Tauri+daemon+transport;集成锁 run 行落值/主行隔离/sessions.last_* 不被 worker 写);PR3 前端(SubagentDrawer「Token 明细」折叠区+runTracesByRunId 粘性缓存,running 态 expand 即 force 重拉)——子代理撞 5h 限额由主会话接手。验证:后端 1874/1875(唯一失败为基线已知负载型 flaky,失败名两轮确认+隔离过),前端 1133/1133(+11 新),vue-tsc 0,clippy stash 对照与基线逐条一致零新增,fmt 净,e2e 路由冒烟过。spec 回写三处:token-usage-tracking(worker 行语义+seq 冲突根因)/database-guidelines(表约束加宽迁移守则)/subagent-runs-schema(run 关联)。坑:describe 插错测试组致 mock 计数跨测试泄漏(纯类组无 beforeEach);python 搬移代码块丢闭合行;AC『零改动』用可选字段实现(runId?: string)比改 fixture 更符合回滚容错语义。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a76b6b7` | (see git log) |
+| `38c8e63` | (see git log) |
+| `5e5999a` | (see git log) |
+| `24da69e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
