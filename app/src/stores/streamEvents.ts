@@ -11,6 +11,7 @@ import {
   PendingInteraction,
 } from "./questionCards.types";
 import { matchesReviewStatePath, useReviewStateStore } from "./reviewState";
+import { useQuotaStore } from "./quota";
 import { useTraceStore } from "./traceStore";
 import type { ChatMessage, ContentBlockView } from "./chat.types";
 import type {
@@ -1185,6 +1186,10 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     // `ensureLoaded`. Fires after every stream completion —
     // see the helper's doc for the source-of-truth rationale.
     await reconcilePendingInteractionFromBackend(sessionId);
+    // 08-20-turn-usage-event-quota-view WP3: request 结束 = 一次轻量
+    // 配额窗口重查(滑动窗口客户端推算必漂,design 取舍"跑完这轮后
+    // 刷新";fire-and-forget,不挡消息面)。
+    void useQuotaStore().refresh();
     // F5: persist the per-message latency to the DB. The
     // rehydrated messages carry the seq on each row, so we
     // find the LAST assistant message (the one the agent

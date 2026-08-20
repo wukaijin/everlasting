@@ -40,6 +40,10 @@ import BrowserHeader from "./BrowserHeader.vue";
 import ProjectTabs from "../ProjectTabs.vue";
 import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
 import PendingBadge from "./PendingBadge.vue";
+// 08-20-turn-usage-event-quota-view WP3: 5h 滚动窗口配额 chip(全局,
+// 跨 session 语义 → 顶栏;数据 useQuotaStore,刷新 = mount/弹层开/
+// finalize 后)。
+import QuotaChip from "./QuotaChip.vue";
 import Icon from "../Icon.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
 import { useSearchModal } from "../../composables/useSearchModal";
@@ -108,6 +112,7 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
            pending-interaction count across all sessions/projects.
            Hidden when count === 0 (self-managed inside the badge). -->
       <PendingBadge />
+      <QuotaChip />
     </component>
   </header>
 </template>
