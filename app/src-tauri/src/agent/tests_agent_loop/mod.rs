@@ -20,6 +20,7 @@ mod recall;
 mod resilience;
 mod softcap;
 mod stub;
+mod turn_usage_event;
 
 /// Helper: flatten a `Vec<ChatMessage>` into a single string for
 /// substring assertions. Concatenates every text block in every

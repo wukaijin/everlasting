@@ -335,6 +335,8 @@ pub fn run() {
             // rows for the SubagentDrawer "Token 明细" view (PR3
             // frontend; backend read path ships first).
             commands::permissions::list_worker_turn_traces,
+            commands::usage::set_quota_settings,
+            commands::usage::usage_window,
             // F5 (LLM Latency Tracking): per-message latency +
             // per-tool duration persistence. Called by the
             // frontend `streamController` on `done` / `tool:result`

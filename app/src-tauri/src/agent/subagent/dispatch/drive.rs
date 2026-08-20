@@ -67,6 +67,9 @@ pub(crate) async fn drive_worker(
     worker_tool_defs: Vec<ToolDef>,
     worker_provider: Arc<dyn Provider>,
     worker_ctx: u32,
+    // 08-20-turn-usage-event-quota-view WP2:worker 模型的 provider 行 id
+    // (WorkerModel.worker_provider_id),落 turn_trace run 行归因。
+    worker_provider_id: Option<String>,
     worker_rid: String,
     worker_messages: Vec<ChatMessage>,
     worker_sink: Arc<SubagentBufferSink>,
@@ -112,6 +115,7 @@ pub(crate) async fn drive_worker(
         worker_tool_defs,
         worker_provider.clone(),
         worker_ctx,
+        worker_provider_id,
         worker_rid.clone(),
         parent_session_id.to_string(),
         worker_messages,

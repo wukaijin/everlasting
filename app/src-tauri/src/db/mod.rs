@@ -78,6 +78,8 @@ pub mod subagent_runs;
 pub mod subagent_runs_tests;
 pub mod trace;
 pub mod types;
+pub mod usage;
+pub mod usage_tests;
 
 // Re-export every public item from the submodules so callers can
 // keep using the pre-PR2 `db::FooRow` / `db::crud_fn(...)` paths.

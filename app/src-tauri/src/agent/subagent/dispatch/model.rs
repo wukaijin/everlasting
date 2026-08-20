@@ -49,6 +49,12 @@ pub(crate) struct WorkerModel {
     pub(crate) worker_ctx: u32,
     /// worker 实际模型的 display_name(backfill 后;None = 父 session 亦无模型)。
     pub(crate) worker_display: Option<String>,
+    /// 08-20-turn-usage-event-quota-view WP2: worker 实际模型的 provider
+    /// 行 id(worker 自己模型 catalog 命中,或 inherit 时按父 session
+    /// 模型回填 —— 与 display 同一块回填,同一 ModelRow)。落
+    /// `turn_trace.provider_id` run 行归因。None = 两路皆失(聚合归
+    /// unknown 桶)。
+    pub(crate) worker_provider_id: Option<String>,
 }
 
 /// 阶段 B2(连续段):`resolve_final_model`(DB > frontmatter > parent)+
@@ -107,9 +113,10 @@ pub(crate) async fn resolve_worker(
         Some(c) => Some(c.read().await),
         None => None,
     };
-    let (worker_provider, worker_ctx, mut worker_display): (
+    let (worker_provider, worker_ctx, mut worker_display, mut worker_provider_id): (
         Arc<dyn Provider>,
         u32,
+        Option<String>,
         Option<String>,
     ) = resolve_worker_provider(
         final_model.as_deref(),
@@ -143,6 +150,13 @@ pub(crate) async fn resolve_worker(
                     match crate::db::models::get_model(db, mid).await {
                         Ok(Some(m)) => {
                             worker_display = Some(m.display_name);
+                            // 08-20-turn-usage-event-quota-view WP2:inherit
+                            // 场景的 provider 归因 —— 同一 ModelRow 顺手取
+                            // (display 回填 = worker 实际跑的就是父模型,
+                            // provider_id 同源即准确)。
+                            if worker_provider_id.is_none() {
+                                worker_provider_id = Some(m.provider_id);
+                            }
                         }
                         Ok(None) => tracing::warn!(
                             parent_session_id = %parent_session_id,
@@ -174,5 +188,6 @@ pub(crate) async fn resolve_worker(
         worker_provider,
         worker_ctx,
         worker_display,
+        worker_provider_id,
     }
 }

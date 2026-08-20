@@ -61,6 +61,7 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-forced".into(),
         h.session_id.clone(),
         test_messages(),

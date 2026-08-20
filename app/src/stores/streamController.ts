@@ -238,6 +238,15 @@ export interface ChatEventPayload {
     // `budgetTrim` field AND routes a copy into
     // `useTraceStore().applyEvent` for the TurnCard badge.
     | "budget_trim"
+    // 08-20-turn-usage-event-quota-view WP1: per-turn token
+    // observation emitted at the agent loop's Done arm next to the
+    // turn_trace upsert (read-only / non-persistent, `BudgetTrim`
+    // 先例). Mirrors Rust `ChatEvent::TurnUsage`. The handler routes
+    // it into `useTraceStore().applyEvent` so the TurnCard token
+    // cells appear immediately (no waiting for the next
+    // `loadHistory`). Slice fields are `number | null` on the wire
+    // (Rust `Option<u32>`).
+    | "turn_usage"
     // 08-04 follow-up (实时 speaker 标识): emitted by the group-chat
     // orchestrator (`run_group_chat_loop`) right before each inner
     // speaker turn, so the frontend knows whose placeholder is about to
@@ -259,6 +268,17 @@ export interface ChatEventPayload {
   freed_tokens?: number;
   post_total?: number;
   window?: number;
+  /** 08-20-turn-usage-event-quota-view WP1: only present when
+   *  `kind === "turn_usage"`. Mirrors Rust `ChatEvent::TurnUsage`
+   *  (snake_case wire; slices are `number | null` per Rust
+   *  `Option<u32>`). */
+  run_id?: string;
+  tools_token?: number | null;
+  memory_token?: number | null;
+  images_token?: number | null;
+  at_files_token?: number | null;
+  system_token?: number | null;
+  context_window?: number;
   /** A4 (Token Usage Tracking): the per-turn token usage report
    *  from the LLM. `undefined` on every non-Done event, and on
    *  Done events where the provider did not report usage

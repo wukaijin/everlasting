@@ -14,7 +14,8 @@ use super::columns::{
     add_subagent_runs_column_if_missing, add_turn_trace_column_if_missing,
 };
 use super::schema_helpers::{
-    home_dir_or_dot, migrate_provider_api_keys_to_encrypted, rebuild_turn_trace_with_run_id,
+    add_turn_trace_provider_id_and_backfill, home_dir_or_dot,
+    migrate_provider_api_keys_to_encrypted, rebuild_turn_trace_with_run_id,
     widen_subagent_runs_status_check_for_incomplete,
 };
 
@@ -1005,6 +1006,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             -- this turn). Frontend budget-row denominator; NULL for
             -- pre-column rows (frontend falls back to 200_000).
             context_window    INTEGER,
+            -- 08-20-turn-usage-event-quota-view WP2: provider 归因
+            -- (5h 滚动窗口配额聚合的分组键)。主 loop 行 = session
+            -- 当前 model 的 provider;worker 行 = resolve_worker_provider
+            -- 实际解析的 provider。NULL = unknown(catalog miss 写入 /
+            -- 回填近似 join 不到的遗留行)—— 聚合端归 unknown 桶。
+            -- 不参与 UNIQUE/表约束,老库经
+            -- schema_helpers::add_turn_trace_provider_id_and_backfill
+            -- 在重建迁移之后追加(故 rebuild 模板不含此列)。
+            provider_id       TEXT,
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             UNIQUE(session_id, run_id, seq)
@@ -1061,6 +1071,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    // 08-20-turn-usage-event-quota-view WP2: provider 归因列 + 遗留行
+    // 近似回填。排在 rebuild_turn_trace_with_run_id **之后**(列不参与
+    // 表约束,重建后才 ALTER 追加;见 helper 注释)。greenfield 已在
+    // 上方 CREATE 声明 → probe 短路 no-op。
+    add_turn_trace_provider_id_and_backfill(pool).await?;
     // B1 (2026-08-16): `models.supports_images` — capability flag for
     // the image-multimodal channel. No-op for greenfield DBs (declared
     // in the CREATE TABLE above); existing rows default to 0 (text

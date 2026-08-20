@@ -726,6 +726,50 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         };
         break;
       }
+      case "turn_usage": {
+        // 08-20-turn-usage-event-quota-view WP1: per-turn token 观察,
+        // 唯一 sink 是 trace store(TurnCard token cells 即时可见;
+        // 不挂消息占位符 —— ChatInput hint 的实时路径在 `done` case
+        // 早已存在,两者口径不同:hint = 上轮上下文快照,此处 =
+        // trace 明细)。防御同 `budget_trim`:malformed drop。
+        // 事件缺失(usage=None 的取消/错误轮)时该轮 cells 保持
+        // "—",退化等下一次 loadHistory —— 与 Rust 侧双层门对称。
+        if (
+          typeof event.seq !== "number" ||
+          typeof event.context_window !== "number" ||
+          !event.usage ||
+          typeof event.usage.input_tokens !== "number"
+        ) {
+          break;
+        }
+        // `context_input_tokens` 在 streamController 的 wire 类型上是
+        // optional(legacy 后端兜底)—— Rust TurnUsage 恒发全 5 字段,
+        // 缺失时按 `done` case 同款 Anthropic 归一化兜底。
+        const u = event.usage;
+        const normalizedUsage = {
+          input_tokens: u.input_tokens,
+          output_tokens: u.output_tokens,
+          cache_creation_input_tokens: u.cache_creation_input_tokens,
+          cache_read_input_tokens: u.cache_read_input_tokens,
+          context_input_tokens:
+            u.context_input_tokens ??
+            u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens,
+        };
+        useTraceStore().applyEvent({
+          kind: "turn_usage",
+          request_id: event.request_id,
+          seq: event.seq,
+          run_id: event.run_id ?? "",
+          usage: normalizedUsage,
+          tools_token: event.tools_token ?? null,
+          memory_token: event.memory_token ?? null,
+          images_token: event.images_token ?? null,
+          at_files_token: event.at_files_token ?? null,
+          system_token: event.system_token ?? null,
+          context_window: event.context_window,
+        });
+        break;
+      }
     }
   }
 

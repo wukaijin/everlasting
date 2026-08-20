@@ -135,6 +135,7 @@ async fn run_loop(
         tool_defs,
         mock.clone(),
         200_000,
+        None,
         rid.into(),
         h.session_id.clone(),
         test_messages(),

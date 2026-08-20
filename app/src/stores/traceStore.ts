@@ -55,6 +55,7 @@ import {
   type LoopHintEvent,
   type WorkflowBreadcrumbEvent,
   type BudgetTrimEvent,
+  type TurnUsageEvent,
   parseTurnTraceRow,
 } from "../types/turnTrace";
 
@@ -213,6 +214,30 @@ export const useTraceStore = defineStore("trace", () => {
     currentSessionTraces.set(event.seq, next);
   }
 
+  // 08-20-turn-usage-event-quota-view WP1: per-turn token 观察(live)。
+  // 切片 null → undefined 归一化(TurnTrace 的字段语义是
+  // "undefined = never written",与 parseTurnTraceRow 的回看路径一致),
+  // compaction/loopHint/breadcrumb 等已落维度经 spread 保留(merge)。
+  function applyTurnUsage(event: TurnUsageEvent): void {
+    const existing = currentSessionTraces.get(event.seq) ?? {
+      id: 0,
+      sessionId: currentSessionId.value ?? "",
+      seq: event.seq,
+      createdAt: new Date().toISOString(),
+    };
+    const next: TurnTrace = {
+      ...existing,
+      tokenUsage: event.usage,
+      toolsToken: event.tools_token ?? undefined,
+      memoryToken: event.memory_token ?? undefined,
+      imagesToken: event.images_token ?? undefined,
+      atFilesToken: event.at_files_token ?? undefined,
+      systemToken: event.system_token ?? undefined,
+      contextWindow: event.context_window,
+    };
+    currentSessionTraces.set(event.seq, next);
+  }
+
   /** Public dispatcher — used by streamController. Returns
    *  `true` if the event was handled, `false` if the kind is
    *  not a trace event (defensive — the streamController
@@ -222,7 +247,8 @@ export const useTraceStore = defineStore("trace", () => {
       | ContextCompactedEvent
       | LoopHintEvent
       | WorkflowBreadcrumbEvent
-      | BudgetTrimEvent,
+      | BudgetTrimEvent
+      | TurnUsageEvent,
   ): void {
     switch (event.kind) {
       case "context_compacted":
@@ -236,6 +262,9 @@ export const useTraceStore = defineStore("trace", () => {
         break;
       case "budget_trim":
         applyBudgetTrim(event);
+        break;
+      case "turn_usage":
+        applyTurnUsage(event);
         break;
     }
   }

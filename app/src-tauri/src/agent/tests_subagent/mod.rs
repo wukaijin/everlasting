@@ -38,6 +38,7 @@ pub(super) async fn run_loop(
         vec![],
         mock,
         200_000,
+        None,
         rid.into(),
         h.session_id.clone(),
         messages,

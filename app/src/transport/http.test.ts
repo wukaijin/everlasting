@@ -148,6 +148,21 @@ describe("httpTransport.invoke", () => {
     );
   });
 
+  // 08-20-turn-usage-event-quota-view WP2: usage 组两 command 的映射
+  // 回归锚(同 handoff_session 先例 —— 漏加时浏览器/remote 模式即断,
+  // Tauri IPC 模式测不出)。
+  it("maps the quota IPCs to the usage domain", async () => {
+    const t = await loadTransport();
+    await t.invoke("usage_window", { providerId: null });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/usage/usage_window",
+    );
+    await t.invoke("set_quota_settings", { windowHours: 5, limitTokens: null });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/usage/set_quota_settings",
+    );
+  });
+
   it("throws TransportError with status + parsed body on HTTP !ok", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,

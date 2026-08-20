@@ -333,6 +333,9 @@ pub(crate) async fn chat_inner(
     // (it's a property of the chosen model and is stable within
     // one chat invocation — the user can't change models mid-chat).
     let context_window: u32 = resolved.context_window;
+    // 08-20-turn-usage-event-quota-view WP2: provider 归因随同一
+    // wrapper 穿进 spawn closure(同 context_window 的稳定性论证)。
+    let provider_id: Option<String> = resolved.provider_id;
     tracing::info!(
         request_id = %rid,
         session_id = %session_id,
@@ -440,6 +443,7 @@ pub(crate) async fn chat_inner(
             crate::agent::group_chat_loop::run_group_chat_loop(
                 tool_defs,
                 context_window,
+                provider_id,
                 rid.clone(),
                 session_id.clone(),
                 messages,
@@ -467,6 +471,7 @@ pub(crate) async fn chat_inner(
                 tool_defs,
                 provider,
                 context_window,
+                provider_id,
                 rid.clone(),
                 session_id.clone(),
                 messages,
@@ -701,6 +706,7 @@ pub(crate) async fn lookup_provider_for_session(
                 model_display_name: mwp.model.display_name.clone(),
                 provider_display_name: provider_row.display_name.clone(),
                 context_window: mwp.model.context_window,
+                provider_id: Some(mwp.model.provider_id.clone()),
             });
         }
     }
@@ -723,6 +729,7 @@ pub(crate) async fn lookup_provider_for_session(
         // `ResolvedChatProvider` type that doesn't carry the row
         // metadata, so we read it from the row we already have.
         context_window: mwp.model.context_window,
+        provider_id: Some(mwp.model.provider_id.clone()),
     })
 }
 
@@ -778,4 +785,12 @@ pub struct ResolvedChatProviderWrapper {
     /// the resolved catalog row, so callers can rely on it being
     /// non-zero for any model the user can actually pick.
     pub context_window: u32,
+    /// 08-20-turn-usage-event-quota-view WP2: the resolved model's
+    /// provider row id (`ModelRow.provider_id` already at hand on
+    /// both resolution arms). Threaded into `run_chat_loop` →
+    /// `drive_turn` → the Done-arm `upsert_turn_trace_token` as
+    /// the `turn_trace.provider_id` attribution (5h-window quota
+    /// aggregation's grouping key). `Provider` trait has no id
+    /// member, hence the explicit field.
+    pub provider_id: Option<String>,
 }

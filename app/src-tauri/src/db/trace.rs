@@ -142,13 +142,14 @@ pub async fn upsert_turn_trace_token(
     at_files_token: Option<u32>,
     system_token: Option<u32>,
     context_window: Option<u32>,
+    provider_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let json = serde_json::to_string(usage).unwrap_or_else(|_| "{}".to_string());
     sqlx::query(
         r#"
         INSERT INTO turn_trace (session_id, run_id, seq, token_usage_json, tools_token, memory_token,
-                                images_token, at_files_token, system_token, context_window)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                images_token, at_files_token, system_token, context_window, provider_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, run_id, seq)
         DO UPDATE SET token_usage_json = excluded.token_usage_json,
                       tools_token = excluded.tools_token,
@@ -156,7 +157,8 @@ pub async fn upsert_turn_trace_token(
                       images_token = excluded.images_token,
                       at_files_token = excluded.at_files_token,
                       system_token = excluded.system_token,
-                      context_window = excluded.context_window
+                      context_window = excluded.context_window,
+                      provider_id = excluded.provider_id
         "#,
     )
     .bind(session_id)
@@ -169,6 +171,7 @@ pub async fn upsert_turn_trace_token(
     .bind(at_files_token.map(|t| t as i64))
     .bind(system_token.map(|t| t as i64))
     .bind(context_window.map(|t| t as i64))
+    .bind(provider_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -545,6 +548,7 @@ mod tests {
             Some(400),
             Some(2500),
             Some(200_000),
+            None,
         )
         .await
         .unwrap();
@@ -617,7 +621,7 @@ mod tests {
         for seq in [3i64, 1, 2] {
             let usage = TokenUsage::default();
             upsert_turn_trace_token(
-                &pool, &sid, "", seq, &usage, None, None, None, None, None, None,
+                &pool, &sid, "", seq, &usage, None, None, None, None, None, None, None,
             )
             .await
             .unwrap();
@@ -637,12 +641,12 @@ mod tests {
 
         let usage = TokenUsage::default();
         upsert_turn_trace_token(
-            &pool, &sid, "", 1, &usage, None, None, None, None, None, None,
+            &pool, &sid, "", 1, &usage, None, None, None, None, None, None, None,
         )
         .await
         .unwrap();
         upsert_turn_trace_token(
-            &pool, &sid, "", 2, &usage, None, None, None, None, None, None,
+            &pool, &sid, "", 2, &usage, None, None, None, None, None, None, None,
         )
         .await
         .unwrap();
@@ -677,6 +681,7 @@ mod tests {
             Some(31),
             Some(41),
             Some(32_000),
+            None,
         )
         .await
         .unwrap();
@@ -697,6 +702,7 @@ mod tests {
             Some(33),
             Some(42),
             Some(64_000),
+            None,
         )
         .await
         .unwrap();
@@ -785,6 +791,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -823,7 +830,7 @@ mod tests {
 
         let usage = TokenUsage::default();
         upsert_turn_trace_token(
-            &pool, &sid, "", 1, &usage, None, None, None, None, None, None,
+            &pool, &sid, "", 1, &usage, None, None, None, None, None, None, None,
         )
         .await
         .unwrap();
@@ -913,6 +920,12 @@ mod tests {
             .unwrap();
 
         rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        // 08-20-turn-usage-event-quota-view WP2:真实迁移链在重建之后紧跟
+        // provider_id 追加(helper);测试镜像链序,否则后续带 provider_id
+        // 的 upsert 会撞 "no column named provider_id"。
+        crate::db::migrations::schema_helpers::add_turn_trace_provider_id_and_backfill(&pool)
+            .await
+            .unwrap();
 
         // run_id 列存在且旧行全量 ''(哨兵)。
         let col_count: i64 = sqlx::query_scalar(
@@ -985,6 +998,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1013,6 +1027,7 @@ mod tests {
             None,
             None,
             Some(50_000),
+            None,
         )
         .await
         .unwrap();
@@ -1040,6 +1055,12 @@ mod tests {
                 .await
                 .unwrap();
         rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        // 08-20-turn-usage-event-quota-view WP2:真实迁移链在重建之后紧跟
+        // provider_id 追加(helper);测试镜像链序,否则后续带 provider_id
+        // 的 upsert 会撞 "no column named provider_id"。
+        crate::db::migrations::schema_helpers::add_turn_trace_provider_id_and_backfill(&pool)
+            .await
+            .unwrap();
         let ids_after: Vec<i64> =
             sqlx::query_scalar("SELECT id FROM turn_trace WHERE session_id = ? ORDER BY id")
                 .bind(&sid)
@@ -1062,6 +1083,12 @@ mod tests {
             .await
             .unwrap();
         rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        // 08-20-turn-usage-event-quota-view WP2:真实迁移链在重建之后紧跟
+        // provider_id 追加(helper);测试镜像链序,否则后续带 provider_id
+        // 的 upsert 会撞 "no column named provider_id"。
+        crate::db::migrations::schema_helpers::add_turn_trace_provider_id_and_backfill(&pool)
+            .await
+            .unwrap();
         let table_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'turn_trace'",
         )
@@ -1074,6 +1101,12 @@ mod tests {
         // helper 重跑必须短路(AC1 greenfield no-op 语义)。
         run_migrations(&pool).await.unwrap();
         rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        // 08-20-turn-usage-event-quota-view WP2:真实迁移链在重建之后紧跟
+        // provider_id 追加(helper);测试镜像链序,否则后续带 provider_id
+        // 的 upsert 会撞 "no column named provider_id"。
+        crate::db::migrations::schema_helpers::add_turn_trace_provider_id_and_backfill(&pool)
+            .await
+            .unwrap();
         let col_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('turn_trace') WHERE name = 'run_id'",
         )
@@ -1131,6 +1164,7 @@ mod tests {
             None,
             None,
             Some(200_000),
+            None,
         )
         .await
         .unwrap();
@@ -1146,6 +1180,7 @@ mod tests {
             None,
             None,
             Some(50_000),
+            None,
         )
         .await
         .unwrap();
@@ -1162,6 +1197,7 @@ mod tests {
             None,
             None,
             Some(50_000),
+            None,
         )
         .await
         .unwrap();

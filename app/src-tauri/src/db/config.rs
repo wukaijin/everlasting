@@ -61,6 +61,17 @@ pub async fn set_config_value(
     Ok(())
 }
 
+/// 08-20-turn-usage-event-quota-view WP2: 删除一个 config 键(quota
+/// 额度"清除"语义)。表名 `app_config` 的 schema 知识留在本层 ——
+/// command 层裸写 DELETE 曾写错表名(质检 Step 5 实证)。
+pub async fn delete_config_value(pool: &SqlitePool, key: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM app_config WHERE key = ?")
+        .bind(key)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Seed the default `providers` + `models` + `default_model_id` if
 /// the `providers` table is empty. Idempotent: when at least one
 /// provider already exists, the function is a no-op (preserves any

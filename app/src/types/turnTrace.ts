@@ -292,6 +292,28 @@ export interface BudgetTrimEvent {
   window: number;
 }
 
+/** 08-20-turn-usage-event-quota-view WP1: per-turn token 观察(live
+ * 路径)。Mirrors Rust `ChatEvent::TurnUsage`(snake_case wire)。切片
+ * 字段 `number | null`(Rust `Option<u32>` 序列化为 null;worker 行按
+ * NULL 列契约带 null —— 但 worker 事件不冒泡到主 chat,主 loop 行
+ * 全切片非 null)。store 侧归一化 null → undefined(TurnTrace 的
+ * "undefined = never written" 语义)。 */
+export interface TurnUsageEvent {
+  kind: "turn_usage";
+  request_id: string;
+  seq: number;
+  /** `''` = 主 loop 行(worker 事件被 sink 跳过,不到达前端;字段
+   *  保留与 wire 形状对齐)。 */
+  run_id: string;
+  usage: TokenUsagePayload;
+  tools_token?: number | null;
+  memory_token?: number | null;
+  images_token?: number | null;
+  at_files_token?: number | null;
+  system_token?: number | null;
+  context_window: number;
+}
+
 // ---------------------------------------------------------------------------
 // Parsers (turn_trace row → TurnTrace)
 // ---------------------------------------------------------------------------

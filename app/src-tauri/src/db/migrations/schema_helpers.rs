@@ -367,3 +367,57 @@ pub(crate) fn home_dir_or_dot() -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| ".".to_string())
 }
+
+/// 08-20-turn-usage-event-quota-view WP2: `turn_trace.provider_id`
+/// 一次性加列 + 回填。**必须排在 `rebuild_turn_trace_with_run_id`
+/// 之后**(provider_id 不参与表约束,重建模板/拷贝列清单不含它;
+/// 老库路径 = 重建产出新形状表后再 ALTER 追加)。
+///
+/// 回填口径:遗留行按 `session → model → provider` **近似**(session
+/// 当前 model 的 provider;session 中途切过模型或 model 已删 → join
+/// 不到 → 留 NULL,聚合端归 unknown 桶)。回填只在列**刚创建**时跑
+/// 一次(probe 守卫),后续新写入行的 NULL(catalog miss)不会被
+/// 启动重跑覆盖 —— 新行的 provider_id 由 `upsert_turn_trace_token`
+/// 写入,迁移不再碰。
+pub(crate) async fn add_turn_trace_provider_id_and_backfill(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    // 表不存在时 no-op(同 rebuild helper 的 missing-table 语义 —— 隔离
+    // 测试会裸跑本 helper)。
+    let table_exists: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'turn_trace'",
+    )
+    .fetch_one(pool)
+    .await?
+    .try_get(0)?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let exists: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('turn_trace') WHERE name = 'provider_id'",
+    )
+    .fetch_one(pool)
+    .await?
+    .try_get(0)?;
+    if exists > 0 {
+        return Ok(());
+    }
+    sqlx::query("ALTER TABLE turn_trace ADD COLUMN provider_id TEXT")
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        r#"
+        UPDATE turn_trace
+        SET provider_id = (
+            SELECT m.provider_id
+            FROM sessions s
+            JOIN models m ON s.model_id = m.id
+            WHERE s.id = turn_trace.session_id
+        )
+        WHERE provider_id IS NULL
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}

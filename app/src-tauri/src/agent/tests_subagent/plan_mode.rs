@@ -141,6 +141,7 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 vec![],
                 mock.clone(),
                 200_000,
+                None,
                 "rid-rule-a-014".into(),
                 h.session_id.clone(),
                 test_messages(),

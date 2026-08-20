@@ -149,6 +149,88 @@ describe("useTraceStore — applyEvent (live path)", () => {
     });
   });
 
+  // 08-20-turn-usage-event-quota-view WP1: per-turn token observation
+  // upserts the token cells (live path) — TurnCard renders immediately.
+  it("upserts a turn_usage event into tokenUsage + slice fields", () => {
+    const store = useTraceStore();
+    store.currentSessionId = "sess-1";
+    store.applyEvent({
+      kind: "turn_usage",
+      request_id: "rid-1",
+      seq: 5,
+      run_id: "",
+      usage: {
+        input_tokens: 120,
+        output_tokens: 45,
+        cache_creation_input_tokens: 30,
+        cache_read_input_tokens: 80,
+        context_input_tokens: 230,
+      },
+      tools_token: 3900,
+      memory_token: 2080,
+      images_token: null,
+      at_files_token: null,
+      system_token: 795,
+      context_window: 200_000,
+    });
+    const t = store.currentSessionTraces.get(5);
+    expect(t?.tokenUsage).toEqual({
+      input_tokens: 120,
+      output_tokens: 45,
+      cache_creation_input_tokens: 30,
+      cache_read_input_tokens: 80,
+      context_input_tokens: 230,
+    });
+    expect(t?.toolsToken).toBe(3900);
+    expect(t?.memoryToken).toBe(2080);
+    expect(t?.systemToken).toBe(795);
+    expect(t?.contextWindow).toBe(200_000);
+    // null → undefined 归一化("undefined = never written" 语义,
+    // 与 parseTurnTraceRow 回看路径一致)。
+    expect(t?.imagesToken).toBeUndefined();
+    expect(t?.atFilesToken).toBeUndefined();
+  });
+
+  it("turn_usage merges into an existing seq without clobbering compaction", () => {
+    // 同 seq 的 compaction 维度先到(live 事件乱序),turn_usage 后到
+    // 不得覆盖已落维度(applyTurnUsage 的 spread merge 契约)。
+    const store = useTraceStore();
+    store.currentSessionId = "sess-1";
+    store.applyEvent({
+      kind: "context_compacted",
+      request_id: "rid-1",
+      seq: 7,
+      tokens_before: 18_000,
+      tokens_after: 12_000,
+      dropped_count: 6,
+      degradation: "none",
+      method: "mechanical",
+    });
+    store.applyEvent({
+      kind: "turn_usage",
+      request_id: "rid-1",
+      seq: 7,
+      run_id: "",
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        context_input_tokens: 10,
+      },
+      tools_token: 100,
+      memory_token: null,
+      images_token: null,
+      at_files_token: null,
+      system_token: 50,
+      context_window: 20_000,
+    });
+    const t = store.currentSessionTraces.get(7);
+    expect(t?.compaction).toBeDefined();
+    expect(t?.tokenUsage?.input_tokens).toBe(10);
+    expect(t?.toolsToken).toBe(100);
+  });
+
   it("upserts a workflow_breadcrumb event with null task_slug", () => {
     const store = useTraceStore();
     store.currentSessionId = "sess-1";

@@ -66,6 +66,7 @@ pub mod subagent_runs;
 pub mod subagents;
 pub mod task;
 pub mod ui;
+pub mod usage;
 pub mod worktree;
 
 use std::sync::Arc;
@@ -109,6 +110,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/subagents", subagents::router(state.clone()))
         .nest("/api/v1/task", task::router(state.clone()))
         .nest("/api/v1/ui", ui::router(state.clone()))
+        .nest("/api/v1/usage", usage::router(state.clone()))
         .merge(stream::router(state.clone()))
         .nest("/api/v1/worktree", worktree::router(state))
 }

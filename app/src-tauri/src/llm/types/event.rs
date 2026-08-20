@@ -223,6 +223,39 @@ pub enum ChatEvent {
         post_total: u32,
         window: u32,
     },
+    /// 08-20-turn-usage-event-quota-view WP1: per-turn token
+    /// observation, emitted from the agent loop's Done arm right
+    /// next to the `upsert_turn_trace_token` DB write (same
+    /// values, same site — event/DB consistency holds by
+    /// construction). **Read-only / non-persistent** (like
+    /// `Recall` / `BudgetTrim`): the durable record is the
+    /// `turn_trace` row; this event exists so the TracePanel
+    /// TurnCard's token cells appear immediately instead of
+    /// waiting for the next `loadHistory` (which only fires on
+    /// the next user message / session switch). The double gate
+    /// at the emit site (`if let Some(t) = usage` +
+    /// `!skip_persist || !run_key.is_empty()`) means cancelled /
+    /// errored turns (usage=None) and degraded worker runs
+    /// (run_key='') emit nothing — the frontend cells stay "—",
+    /// degrading to the pre-event behavior. Worker runs (run_key
+    /// non-empty) DO emit, but the event lands in the
+    /// `SubagentBufferSink` transcript (the drawer's
+    /// unknown-kind switch ignores it) — it never reaches the
+    /// main chat's activeRequests gate. Slice fields mirror the
+    /// NULL-column contract at the upsert call site (worker rows
+    /// keep memory/images/at_files `None`).
+    TurnUsage {
+        request_id: String,
+        seq: i64,
+        run_id: String,
+        usage: TokenUsage,
+        tools_token: Option<u32>,
+        memory_token: Option<u32>,
+        images_token: Option<u32>,
+        at_files_token: Option<u32>,
+        system_token: Option<u32>,
+        context_window: u32,
+    },
     /// E2 trace (2026-07-14): C3 context compaction observation.
     /// Emitted always-on (live panel) + persisted to
     /// `turn_trace.compaction_json` (回看). Write point:

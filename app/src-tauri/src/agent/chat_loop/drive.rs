@@ -104,6 +104,9 @@ pub(crate) async fn drive_turn(
     subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
     provider: Arc<dyn Provider>,
     context_window: u32,
+    // 08-20-turn-usage-event-quota-view WP2: 解析模型的 provider 行 id,
+    // Done 臂 upsert 落 turn_trace.provider_id(5h 窗口聚合分组键)。
+    provider_id: Option<String>,
     rid: String,
     session_id: String,
     sink: Arc<dyn ChatEventSink>,
@@ -1319,9 +1322,29 @@ pub(crate) async fn drive_turn(
                                 // 零注入 → NULL(spans 空判断,比 ==0 语义准 ——
                                 // 覆盖"有 span 但 est 为 0"的边界)。
                                 let at_files_tok = if skip_persist || at_file_spans.is_empty() { None } else { Some(at_files_token) };
-                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, run_key, seq, t, Some(tools_token), memory_tok, images_tok, at_files_tok, Some(system_token), Some(context_window)).await {
+                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, run_key, seq, t, Some(tools_token), memory_tok, images_tok, at_files_tok, Some(system_token), Some(context_window), provider_id.as_deref()).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
+                                // 08-20-turn-usage-event-quota-view WP1:同点同值
+                                // emit 一份 read-only 事件,TracePanel TurnCard 的
+                                // token cells 即时可见(loadHistory 只在下一条用户
+                                // 消息 / 切 session 时触发)。emit 不进上方 DB 错误
+                                // 分支 —— DB 写失败事件照发(前端先见值,回看口径
+                                // 退化等 loadHistory)。worker 事件落 SubagentBufferSink
+                                // transcript(drawer 未知 kind switch 静默忽略),
+                                // 不达主 chat activeRequests gate。
+                                emit_chat_event_via_sink(&sink, &rid, &ChatEvent::TurnUsage {
+                                    request_id: rid.clone(),
+                                    seq,
+                                    run_id: run_key.to_string(),
+                                    usage: *t,
+                                    tools_token: Some(tools_token),
+                                    memory_token: memory_tok,
+                                    images_token: images_tok,
+                                    at_files_token: at_files_tok,
+                                    system_token: Some(system_token),
+                                    context_window,
+                                });
                             }
                         }
                     }
@@ -1335,6 +1358,11 @@ pub(crate) async fn drive_turn(
                     ChatEvent::TurnComplete { .. } => {
                         tracing::warn!(request_id = %rid, "chat: unexpected TurnComplete in LLM stream");
                     }
+                    // 08-20-turn-usage-event-quota-view WP1: TurnUsage 是
+                    // loop 层事件(本文件 Done 臂 emit),不从 provider
+                    // stream 到达 —— 与 TurnComplete / FileInjections 同款
+                    // 防御臂,wire 泄漏时静默丢弃。
+                    ChatEvent::TurnUsage { .. } => {}
                     // B2 PR3: `FileInjections` is emitted ONCE per
                     // user turn from the agent loop's pre-turn
                     // hook (right after `inject_at_tokens` runs) —

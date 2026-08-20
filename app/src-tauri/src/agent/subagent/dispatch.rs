@@ -295,6 +295,7 @@ pub(crate) async fn run_subagent(
         worker_provider,
         worker_ctx,
         worker_display,
+        worker_provider_id,
     } = resolve_worker(
         db,
         provider,
@@ -356,6 +357,7 @@ pub(crate) async fn run_subagent(
         worker_tool_defs,
         worker_provider,
         worker_ctx,
+        worker_provider_id,
         worker_rid.clone(),
         worker_messages,
         worker_sink.clone(),

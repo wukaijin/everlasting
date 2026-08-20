@@ -148,16 +148,22 @@ pub(crate) async fn resolve_final_model(
 ///   ctx/display from `get_model(mid)` (one DB roundtrip; ctx falls back
 ///   to parent if the row vanished between catalog build + now).
 /// - `def_model=Some(mid)` + catalog miss → `warn!` + inherit parent.
+///
+/// 08-20-turn-usage-event-quota-view WP2: 第 4 返回值 = provider 行 id
+/// (`turn_trace.provider_id` 归因)。catalog 命中分支 `get_model` 已
+/// fetch,顺手取 `provider_id`;inherit / miss 分支返回 None,由
+/// caller(`resolve_worker`)按父 session 模型回填 —— 回填块本来就在
+/// `get_model` 父模型,零额外查询。
 pub(crate) async fn resolve_worker_provider(
     def_model: Option<&str>,
     parent_provider: &Arc<dyn Provider>,
     parent_ctx: u32,
     catalog: Option<&ProviderCatalog>,
     db: &SqlitePool,
-) -> (Arc<dyn Provider>, u32, Option<String>) {
+) -> (Arc<dyn Provider>, u32, Option<String>, Option<String>) {
     let mid = match def_model.map(str::trim).filter(|s| !s.is_empty()) {
         Some(m) => m,
-        None => return (parent_provider.clone(), parent_ctx, None),
+        None => return (parent_provider.clone(), parent_ctx, None, None),
     };
     let hit: Option<Arc<dyn Provider>> = catalog.and_then(|c| c.get(mid).cloned());
     match hit {
@@ -168,7 +174,8 @@ pub(crate) async fn resolve_worker_provider(
                 .map(|m| m.context_window)
                 .unwrap_or(parent_ctx);
             let disp = model_row.as_ref().map(|m| m.display_name.clone());
-            (p, ctx, disp)
+            let pid = model_row.map(|m| m.provider_id);
+            (p, ctx, disp, pid)
         }
         None => {
             tracing::warn!(
@@ -176,7 +183,7 @@ pub(crate) async fn resolve_worker_provider(
                 "subagent model not in catalog (deleted / provider api_key missing); \
                  falling back to parent provider"
             );
-            (parent_provider.clone(), parent_ctx, None)
+            (parent_provider.clone(), parent_ctx, None, None)
         }
     }
 }

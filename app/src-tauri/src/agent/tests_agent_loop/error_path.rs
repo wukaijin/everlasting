@@ -45,6 +45,7 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-err-tool".into(),
         h.session_id.clone(),
         test_messages(),
@@ -227,6 +228,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // Force compaction to trigger (unified total > trigger 17_000)
         // but resolve cleanly (post-drop < target 10_000 → None).
         20_000,
+        None,
         "rid-c3".into(),
         h.session_id.clone(),
         messages,
@@ -351,6 +353,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-err".into(),
         h.session_id.clone(),
         test_messages(),
@@ -537,6 +540,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // Force tiny context_window so compaction triggers and
         // StillOver fires.
         1000,
+        None,
         "rid-c3-still-over".into(),
         h.session_id.clone(),
         messages,
@@ -715,6 +719,7 @@ async fn agent_loop_persist_failure_emits_error() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-persist-fail".into(),
         h.session_id.clone(),
         test_messages(),
@@ -895,6 +900,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-audit-cancel".into(),
         h.session_id.clone(),
         test_messages(),

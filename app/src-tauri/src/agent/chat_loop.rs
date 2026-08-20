@@ -320,6 +320,12 @@ pub async fn run_chat_loop(
     tool_defs: Vec<ToolDef>,
     provider: Arc<dyn Provider>,
     context_window: u32,
+    // 08-20-turn-usage-event-quota-view WP2: 解析模型的 provider 行 id,
+    // 落 `turn_trace.provider_id`(5h 窗口配额聚合分组键)。`None` =
+    // catalog miss 等极端路径(落 NULL,聚合归 unknown 桶)。主路来自
+    // `ResolvedChatProviderWrapper.provider_id`,worker 路来自
+    // `resolve_worker_provider` 扩展返回值。
+    provider_id: Option<String>,
     rid: String,
     session_id: String,
     messages: Vec<ChatMessage>,
@@ -1028,6 +1034,7 @@ pub async fn run_chat_loop(
             subagent_cache.clone(),
             provider.clone(),
             context_window,
+            provider_id.clone(),
             rid.clone(),
             session_id.clone(),
             sink.clone(),

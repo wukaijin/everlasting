@@ -36,6 +36,12 @@
 #                                               # metadata + parent 行数不变 → 子
 #                                               # session 续跑一轮 → 清理两会话。
 #                                               # 全量覆盖无保留区,无需大消息。
+#   ./scripts/turn-smoke.sh --assert-turn-usage # 08-20-turn-usage-event-quota-view
+#                                               # WP1 AC8:并发订阅 /api/v1/stream,
+#                                               # 捕获 kind=turn_usage 事件,断言
+#                                               # 字段齐全且与 DB 落值同值(顺带
+#                                               # 验 AC1 的一致性半边);WP2 顺带
+#                                               # 断言 provider_id 列落值。
 #   ./scripts/turn-smoke.sh --keep              # 保留烟测 session(默认跑完即删)
 #   ./scripts/turn-smoke.sh --timeout 300       # 等 turn_trace 的超时秒数(默认 180)
 #
@@ -51,6 +57,7 @@ TIMEOUT=180
 KEEP=0
 COMPACT=0
 HANDOFF=0
+ASSERT_TURN_USAGE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -59,6 +66,7 @@ while [ $# -gt 0 ]; do
     --turns) TURNS="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --assert-turn-usage) ASSERT_TURN_USAGE=1; shift ;;
     --compact) COMPACT=1; shift ;;
     --handoff) HANDOFF=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -155,11 +163,25 @@ print(json.dumps({"request_id":os.environ["REQ_ID"],"session_id":os.environ["SID
 
 TURN_MSG="$MESSAGE"
 T=1
+# --assert-turn-usage:先挂 SSE 订阅再发轮(事件随 turn 推出,迟挂会漏)。
+TURN_USAGE_LOG=""
+SSE_PID=""
+cleanup_sse() {
+  [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null || true
+}
+if [ "$ASSERT_TURN_USAGE" = "1" ]; then
+  TURN_USAGE_LOG="$(mktemp /tmp/turn-smoke-sse.XXXXXX)"
+  curl -sN --max-time $((TIMEOUT * TURNS + 60)) "$BASE/api/v1/stream" \
+    >"$TURN_USAGE_LOG" 2>/dev/null &
+  SSE_PID=$!
+fi
 while [ "$T" -le "$TURNS" ]; do
   [ "$T" -gt 1 ] && TURN_MSG="$FOLLOWUP_MESSAGE"
   send_and_wait "$TURN_MSG"
   T=$((T+1))
 done
+# 稍等尾部帧 flush 再收线。
+if [ -n "$SSE_PID" ]; then sleep 3; cleanup_sse; fi
 
 # ── 2.5 手动 /compact live 冒烟(08-18-manual-compact-command) ────────
 # 布局:小轮(上面)+ 大消息轮(下面)。保留区预算 clamp 下限 15k token,
@@ -301,8 +323,58 @@ fi
 if ! sqlite3 -readonly "$DB_PATH" "SELECT at_files_token FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then
   echo "ERR: turn_trace has no at_files_token column — daemon binary predates unified-context-budget WP1 (rebuild)" >&2; exit 1
 fi
+# 08-20-turn-usage-event-quota-view WP2:provider 归因列。
+if ! sqlite3 -readonly "$DB_PATH" "SELECT provider_id FROM turn_trace LIMIT 1;" >/dev/null 2>&1; then
+  echo "ERR: turn_trace has no provider_id column — daemon binary predates turn-usage-event-quota-view WP2 (rebuild)" >&2; exit 1
+fi
 if [ "$(max_seq)" -lt 0 ]; then
   echo "ERR: no turn_trace rows for session (check daemon logs: ./scripts/daemon.sh logs)" >&2; exit 1
+fi
+
+# -- 3.5 --assert-turn-usage assertion (08-20 WP1 AC8) -------------------------
+if [ "$ASSERT_TURN_USAGE" = "1" ]; then
+  TURN_USAGE_CHECK="$(SID="$SID" DB_PATH="$DB_PATH" LOG="$TURN_USAGE_LOG" python3 - << 'PYEOF2'
+import json, os, sqlite3
+
+sid, db_path, log = os.environ["SID"], os.environ["DB_PATH"], os.environ["LOG"]
+events = []
+with open(log, "r", errors="replace") as fh:
+    for line in fh:
+        if line.startswith("data:"):
+            try:
+                payload = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            if payload.get("kind") == "turn_usage":
+                events.append(payload)
+assert events, "no kind=turn_usage event captured on /api/v1/stream"
+for ev in events:
+    assert ev.get("run_id") == "", f"run_id={ev.get('run_id')!r} (main loop sentinel)"
+    u = ev.get("usage") or {}
+    for field in ("input_tokens", "output_tokens", "cache_creation_input_tokens",
+                  "cache_read_input_tokens", "context_input_tokens"):
+        assert isinstance(u.get(field), int), f"usage.{field} missing/not int: {u}"
+    assert isinstance(ev.get("seq"), int), "seq missing"
+    assert isinstance(ev.get("context_window"), int), "context_window missing"
+con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+db_rows = con.execute(
+    "SELECT seq, token_usage_json FROM turn_trace "
+    "WHERE session_id=? AND run_id='' AND token_usage_json IS NOT NULL", (sid,)).fetchall()
+db_by_seq = {seq: json.loads(js) for seq, js in db_rows}
+ev_by_seq = {ev["seq"]: ev["usage"] for ev in events}
+for seq, usage in ev_by_seq.items():
+    assert seq in db_by_seq, f"event seq {seq} has no DB row"
+    assert db_by_seq[seq] == usage, f"seq {seq}: event usage {usage} != DB {db_by_seq[seq]}"
+prov = con.execute(
+    "SELECT provider_id FROM turn_trace WHERE session_id=? AND run_id='' "
+    "ORDER BY seq DESC LIMIT 1", (sid,)).fetchone()
+assert prov and prov[0], f"fresh main row provider_id is NULL: {prov}"
+print(f"turn_usage events ok: {len(events)} captured, "
+      f"{len(ev_by_seq)} seq-consistent with DB, provider_id={prov[0][:8]}...")
+PYEOF2
+)" || { echo "ERR: turn_usage event assertion failed (see above)" >&2; rm -f "$TURN_USAGE_LOG"; exit 1; }
+  echo "$TURN_USAGE_CHECK"
+  rm -f "$TURN_USAGE_LOG"
 fi
 
 # ── 4. 报告 ───────────────────────────────────────────────────────────

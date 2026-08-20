@@ -119,6 +119,7 @@ async fn run_loop_with_emitter(
         vec![],
         provider,
         WINDOW,
+        None,
         "rid-budget-it".into(),
         h.session_id.clone(),
         messages,

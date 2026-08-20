@@ -137,6 +137,10 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   // `unknown cmd "handoff_session"`(Tauri IPC 模式侥幸不经过本表)。
   handoff_session: "sessions",
   list_sessions: "sessions",
+  // 08-20-turn-usage-event-quota-view WP2: 5h 窗口配额 IPC(POST,
+  // /api/v1/usage 组)。
+  usage_window: "usage",
+  set_quota_settings: "usage",
   list_workflow_plugins: "sessions",
   load_session: "sessions",
   record_tool_duration: "sessions",

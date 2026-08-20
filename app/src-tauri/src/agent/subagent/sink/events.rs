@@ -16,6 +16,16 @@ use super::SubagentBufferSink;
 
 impl crate::state::ChatEventSink for SubagentBufferSink {
     fn emit_chat_event(&self, payload: &ChatEventPayload) {
+        // 08-20-turn-usage-event-quota-view WP1: `TurnUsage` 是 loop 层
+        // trace 观测(与 compaction/loop_hint 同族),不是对话事件 ——
+        // worker 维度的持久记录走 turn_trace run 行(Done 臂 upsert,
+        // 不经本 sink),transcript / `subagent:event` 均不消费。早退
+        // 在 `record()` 之前 = 同时挡掉 transcript 落录与 live 转发
+        // (record() 一身兼两职)。不挡则 worker 每轮多一条无人渲染的
+        // transcript 行(实证:`persists_subagent_run` 的 3→4 断言破)。
+        if matches!(payload.event, ChatEvent::TurnUsage { .. }) {
+            return;
+        }
         // Track terminal signals + accumulate text deltas for the
         // final summary.
         match &payload.event {

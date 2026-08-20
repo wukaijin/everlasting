@@ -210,6 +210,7 @@ async fn group_chat_full_multi_round_flow_no_errors_no_duplicate_tool_results() 
     run_group_chat_loop(
         crate::tools::builtin_tools(),
         200_000,
+        None,
         "rid-gc".to_string(),
         gc_session_id.clone(),
         test_messages(), // [user "hello"] — round-0 tail, genuinely new
@@ -538,6 +539,7 @@ async fn entry_guard_does_not_skip_when_group_chat_state_none() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-guard-none".to_string(),
         h.session_id.clone(),
         messages,
@@ -616,6 +618,7 @@ async fn entry_guard_skips_when_group_chat_state_some_and_tail_matches_db() {
         vec![],
         mock.clone(),
         200_000,
+        None,
         "rid-guard-some".to_string(),
         h.session_id.clone(),
         messages,
@@ -745,6 +748,7 @@ async fn participant_gathers_evidence_then_speaks_across_turns() {
     run_group_chat_loop(
         crate::tools::builtin_tools(),
         200_000,
+        None,
         "rid-r3".to_string(),
         gc_session_id.clone(),
         test_messages(), // [user "hello"] — round-0 tail, genuinely new
@@ -862,6 +866,7 @@ async fn orchestrator_emits_nonterminal_done_for_unknown_nominee() {
     run_group_chat_loop(
         crate::tools::builtin_tools(),
         200_000,
+        None,
         "rid-r2-nominee".to_string(),
         gc_session_id.clone(),
         test_messages(),

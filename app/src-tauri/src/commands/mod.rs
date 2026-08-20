@@ -38,6 +38,7 @@ pub mod question;
 pub mod sessions;
 pub mod subagent_runs;
 pub mod subagents;
+pub mod usage;
 // C2 (review visualization view, 2026-07-26): review-state.json
 // read IPCs for the frontend `<ReviewMatrix>` panel.
 // `get_review_state` returns a three-state payload
@@ -142,6 +143,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         // 08-20-worker-turn-trace-persist: per-run worker turn rows
         // (SubagentDrawer "Token 明细", read path).
         "list_worker_turn_traces",
+        // 08-20-turn-usage-event-quota-view WP2: 5h 窗口配额 IPC。
+        "usage_window",
+        "set_quota_settings",
         // D3 PR1 (2026-06-17): edit a user message in place.
         "edit_user_message",
         // B6 PR3a (2026-06-20): subagent_runs list/get for the

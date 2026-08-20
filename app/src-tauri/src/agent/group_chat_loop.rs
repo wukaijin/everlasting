@@ -210,6 +210,9 @@ async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> 
 pub async fn run_group_chat_loop(
     tool_defs: Vec<ToolDef>,
     context_window: u32,
+    // 08-20-turn-usage-event-quota-view WP2: 父 session 解析模型的
+    // provider id(群聊 speaker 各自模型解析失败/未覆盖时的归因兜底)。
+    provider_id: Option<String>,
     rid: String,
     session_id: String,
     messages: Vec<ChatMessage>,
@@ -239,7 +242,7 @@ pub async fn run_group_chat_loop(
     }));
 
     let moderator_prompt = moderator_system_prompt(&gc_ctx);
-    let moderator_provider =
+    let (moderator_provider, moderator_provider_id) =
         resolve_provider(&worker_catalog, &gc_ctx.moderator_model_id, &db).await;
 
     // R2 (08-07-group-chat-toolset-and-identity): the reason the loop
@@ -304,6 +307,7 @@ pub async fn run_group_chat_loop(
                 group_chat_tool_defs(&tool_defs, true),
                 provider.clone(),
                 context_window,
+                moderator_provider_id.clone().or(provider_id.clone()),
                 rid.clone(),
                 session_id.clone(),
                 history,
@@ -430,7 +434,8 @@ pub async fn run_group_chat_loop(
                 continue;
             }
         };
-        let participant_provider = resolve_provider(&worker_catalog, &participant.model, &db).await;
+        let (participant_provider, participant_provider_id) =
+            resolve_provider(&worker_catalog, &participant.model, &db).await;
         let participant_prompt =
             participant_system_prompt(&participant.name, participant.persona_md.as_deref());
 
@@ -507,6 +512,7 @@ pub async fn run_group_chat_loop(
             group_chat_tool_defs(&tool_defs, false),
             provider,
             context_window,
+            participant_provider_id.or(provider_id.clone()),
             rid.clone(),
             session_id.clone(),
             // Per-role history: the participant's own assistant rows
@@ -633,18 +639,29 @@ pub async fn run_group_chat_loop(
 /// shared `worker_catalog` (the live, hot-reloaded map) first; that
 /// is the same catalog `chat_inner` uses. Returns `None` (logged) on
 /// miss so the orchestrator can skip the turn rather than crash.
+// 08-20-turn-usage-event-quota-view WP2: 同时返回该模型的 provider 行
+// id(catalog 键是 model_id,`get_model` 一查可得;查不到 = None,
+// caller 落父默认或 NULL)。
 async fn resolve_provider(
     catalog: &Option<Arc<tokio::sync::RwLock<ProviderCatalog>>>,
     model_id: &str,
-    _db: &SqlitePool,
-) -> Option<Arc<dyn crate::llm::Provider>> {
-    let catalog = catalog.as_ref()?;
+    db: &SqlitePool,
+) -> (Option<Arc<dyn crate::llm::Provider>>, Option<String>) {
+    let Some(catalog) = catalog.as_ref() else {
+        return (None, None);
+    };
     let guard = catalog.read().await;
-    guard.get(model_id).cloned().or_else(|| {
+    let provider = guard.get(model_id).cloned().or_else(|| {
         tracing::warn!(
             model_id,
             "group_chat: model_id not in catalog; turn will be skipped"
         );
         None
-    })
+    });
+    let provider_id = crate::db::models::get_model(db, model_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|m| m.provider_id);
+    (provider, provider_id)
 }

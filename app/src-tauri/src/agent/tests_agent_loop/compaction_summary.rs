@@ -249,6 +249,7 @@ async fn run_loop(
         vec![],
         provider,
         WINDOW,
+        None,
         rid.into(),
         session_id,
         messages,

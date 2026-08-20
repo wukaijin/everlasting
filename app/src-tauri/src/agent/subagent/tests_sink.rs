@@ -124,6 +124,42 @@ mod tests {
 
     // ---- token usage accumulation (B6 PR2) ----
 
+    /// 08-20-turn-usage-event-quota-view WP1:`TurnUsage` 是 trace 观测
+    /// 非对话事件 —— worker transcript 与 `subagent:event` 均不记录
+    /// (持久记录走 turn_trace run 行的 Done 臂 upsert,不经本 sink)。
+    /// 锁住早退契约,防回归成"每轮一条无人渲染的 transcript 行"
+    /// (会破 `persists_subagent_run` 的 transcript 计数断言)。
+    #[test]
+    fn buffer_sink_skips_turn_usage_transcript_record() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid-u".into(),
+            event: ChatEvent::TurnUsage {
+                request_id: "rid-u".into(),
+                seq: 1,
+                run_id: "run-1".into(),
+                usage: TokenUsage::default(),
+                tools_token: None,
+                memory_token: None,
+                images_token: None,
+                at_files_token: None,
+                system_token: None,
+                context_window: 200_000,
+            },
+        });
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid-u".into(),
+            event: ChatEvent::Start,
+        });
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(
+            transcript.len(),
+            1,
+            "TurnUsage must not enter the worker transcript"
+        );
+        assert_eq!(transcript[0].kind, TranscriptKind::ChatEvent);
+    }
+
     #[test]
     fn buffer_sink_accumulates_token_usage_per_turn() {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());

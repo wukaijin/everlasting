@@ -271,7 +271,7 @@ mod tests {
         let pool = test_pool().await;
         let parent = mock_provider();
         let catalog: ProviderCatalog = HashMap::new();
-        let (wp, ctx, disp) =
+        let (wp, ctx, disp, _pid) =
             resolve_worker_provider(None, &parent, 100_000, Some(&catalog), &pool).await;
         assert!(Arc::ptr_eq(&wp, &parent), "None model must inherit parent");
         assert_eq!(ctx, 100_000);
@@ -285,7 +285,7 @@ mod tests {
         let worker = mock_provider();
         let mut catalog: ProviderCatalog = HashMap::new();
         catalog.insert("model-worker".to_string(), worker.clone());
-        let (wp, _ctx, _disp) = resolve_worker_provider(
+        let (wp, _ctx, _disp, _pid) = resolve_worker_provider(
             Some("model-worker"),
             &parent,
             100_000,
@@ -308,7 +308,7 @@ mod tests {
         let pool = test_pool().await;
         let parent = mock_provider();
         let catalog: ProviderCatalog = HashMap::new();
-        let (wp, _ctx, disp) = resolve_worker_provider(
+        let (wp, _ctx, disp, _pid) = resolve_worker_provider(
             Some("nonexistent-id"),
             &parent,
             100_000,
@@ -328,7 +328,7 @@ mod tests {
         // catalog=None (tests, no AppHandle) + model=Some → parent.
         let pool = test_pool().await;
         let parent = mock_provider();
-        let (wp, _, _) =
+        let (wp, _, _, _) =
             resolve_worker_provider(Some("any-id"), &parent, 100_000, None, &pool).await;
         assert!(Arc::ptr_eq(&wp, &parent));
     }
@@ -364,12 +364,15 @@ mod tests {
         let mut catalog: ProviderCatalog = HashMap::new();
         catalog.insert(model_row.id.clone(), worker.clone());
         let parent = mock_provider();
-        let (wp, ctx, disp) =
+        let (wp, ctx, disp, pid) =
             resolve_worker_provider(Some(&model_row.id), &parent, 100_000, Some(&catalog), &pool)
                 .await;
         assert!(Arc::ptr_eq(&wp, &worker));
         assert_eq!(ctx, 50_000, "ctx must come from the model row, not parent");
         assert_eq!(disp.as_deref(), Some("Claude Test"));
+        // 08-20-turn-usage-event-quota-view WP2: hit 分支第 4 返回值 =
+        // model 行的 provider_id(归因链锁定)。
+        assert_eq!(pid.as_deref(), Some(provider_row.id.as_str()));
     }
 
     // -----------------------------------------------------------------------
