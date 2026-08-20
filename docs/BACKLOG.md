@@ -67,6 +67,8 @@
 > **✅ 已完成(2026-08-15)**:memory 指令块治理落地(WP1 memory_token 度量 + WP2 分级注入 digest + `load_memory_sections` 按需拉取)。live 实测 memory **10124→2080(-79.5%)**,首轮 context **-47%**,双轮 cache 率不劣化,模型按目录主动拉节验证通过。见 [ROADMAP §1.2 memory-gov 行](./ROADMAP.md);剩余缓解手段(统一 token 预算表 / 关卡⑤硬卡)仍为候选,待多来源切片(tools/memory/图片/@文件)齐备后再评估。
 >
 > **🖼️ 图片切片就位(2026-08-16/17,B1)**:`turn_trace.images_token` 第三切片落地(口径 = 请求内全部图片块含历史重建;粘贴图前端 FileReader 估 / @图 imagesize 头探测,`(w×h)/750`)。三切片齐备,**统一 token 预算表 / 关卡⑤硬卡的评估前置已满足**,可排期。见 [ROADMAP §1.2 B1 行](./ROADMAP.md)。
+>
+> **✅ 已完成(2026-08-19,unified-context-budget)**:统一 token 预算表 + 关卡⑤硬卡落地(WP1 度量:`turn_trace` 加 `at_files_token` / `system_token` / `context_window` 三列 + 压缩口径统一为 system+tools+messages 发送部件加法;WP2 硬卡:`BUDGET_LINE_RATIO=0.95`×window 触发静默裁剪,裁尽仍超 fail-fast,落 `AuditKind::ContextBudgetTrim`;前端 TurnCard 预算构成条 + BudgetTrim chip)。本候选从"评估前置"转正式落地,见 [ROADMAP §1.2 unified-context-budget 行](./ROADMAP.md)。
 
 ### 3.2 状态管理复杂度
 - 多 channel 共享 session 状态 → 集中到 agent daemon(daemon 化 2026-07 已落地,GUI + 浏览器共享同一 `everlasting-daemon` 进程的 session 池)

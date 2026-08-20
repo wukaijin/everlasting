@@ -67,9 +67,10 @@
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **25 类 AuditKind**(2026-08-18 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/UI 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
-- **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发 → LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;`MAX_TURNS=200` 仍是兜底(详见 [ARCHITECTURE §2.5.5/§2.5.13](./ARCHITECTURE.md))
-- C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,MAX_TURNS=200 仍是硬兜底
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **27 类 AuditKind**(2026-08-20 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发(2026-08-19 起触发口径统一切换为 system+tools+messages 三部件之和,见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md))→ LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO=0.95`,unified-context-budget 2026-08-19);撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)(详见 [ARCHITECTURE §2.5.5/§2.5.14](./ARCHITECTURE.md))
+- C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)
+- **MAX_TURNS 软卡**(2026-08-19 落地,**替代硬终断**):单聊主 loop 撞线(缺省 200)改 QuestionStore 询问——继续(+200)/ 压缩后续跑 / 停止,10 分钟超时兜底;worker 与群聊 speaker 段保持硬卡直接 break(详见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md))
 - B5 Memory/指令文件系统:4 文件(User / Project × CLAUDE.md / AGENTS.md)+ `cache_control: ephemeral` 注入 + 100 KiB 硬卡 + tiktoken cl100k_base 估算 + mtime fence 新鲜度校验(notify 已移除)
 - **memory-gov 指令块窗口治理**(2026-08-15 落地):`memory/digest.rs` fence-aware 切节目录(纯机械,标题+首句;`AGENTS.md` primary 永不 digest / `CLAUDE.md` 且 tokens>600 才 digest)+ `load_memory_sections` 元工具(append,精确寻址 banner label)+ `turn_trace.memory_token INTEGER` 度量(实测指令块 -79.5%,context_window 72% → 28%);`MemoryDigestRegistry` OnceLock 单例 + `memory_digest_enabled` 缺省 on(fail-open,worker / 群聊豁免)
 - **V2 2 期** 自主记忆系统(2026-06-29 落地,5 child epic):agent 自主产生 + 跨 session 召回的经验库 — `autonomous_memories` 表(状态机 candidate→active→verified)+ 两层召回(per-turn FTS5 + 工具前 trigger_key 精确匹配)+ verified 软拦截重判 + 异步卫生 job
@@ -163,7 +164,7 @@
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#⑨-tool-权限检查) 实施的前提 |
 | LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION/decisions-2026-07.md) |
 | 上下文爆炸                    | 高     | ✅ **C3+ LLM 摘要式压缩**(2026-08-18,替代 C3 MVP 0.80→0.50)+ 保留区存活(`clamp(15k, 10%窗, 25k)`)+ `cutoff_seq` 水位折叠 + 消息裁剪 + tool result 截断 |
-| 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,MAX_TURNS=200 兜底 |
+| 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,撞线走 MAX_TURNS 软卡询问(2026-08-19,见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md)) |
 
 ### 5.2 工程权衡
 

@@ -65,10 +65,10 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 | 9 | `subagent_runs` | `db/migrations/schema_helpers.rs`(约 L153) | `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` (running/completed/cancelled/error/incomplete) / `started_at` / `finished_at` (NULL while running) / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation` (L3b PR1+) |
 | 10 | `autonomous_memories` | `db/migrations/schema.rs` | `id` / `memory_id` (TEXT UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` (JSON) / `tool_name` / `command_pattern` / `path_globs` (JSON) / `source_session_id` / `source_ref` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(V2 2 期,2026-06-29 落地,状态机候选/激活/已验证) |
 | 11 | `subagent_model_overrides` | `db/migrations/schema.rs` | `agent_name` (TEXT PK) / `model_id` / `updated_at`(B6+ C,2026-07-03,builtin agent 无 frontmatter 文件可改 → 全局 DB override,优先级 `DB > frontmatter > parent`) |
-| 12 | `turn_trace` | `db/migrations/schema.rs` | `id` (INTEGER PK) / `session_id` (FK CASCADE) / `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(E2,2026-07-14,turn-level harness trace,UNIQUE(session_id, seq))/ **`tools_token INTEGER`**(C7 08-14,实测 session 起步 tools_token -38.5%)/ **`memory_token INTEGER`**(memory-gov 08-15,实测指令块 -79.5%)/ **`images_token INTEGER`**(B1 PR4 08-16,图片 attachment 计量) |
+| 12 | `turn_trace` | `db/migrations/schema.rs` | `id` (INTEGER PK) / `session_id` (FK CASCADE) / **`run_id`**(08-20 表重建并入唯一键;**`''` = 主 loop 行哨兵**,worker 行 = `subagent_runs.id`;不用 NULL 因 SQLite UNIQUE 视 NULL 互异)/ `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(E2,2026-07-14,turn-level harness trace,**UNIQUE(session_id, run_id, seq)**)/ **`tools_token INTEGER`**(C7 08-14,实测 session 起步 tools_token -38.5%)/ **`memory_token INTEGER`**(memory-gov 08-15,实测指令块 -79.5%)/ **`images_token INTEGER`**(B1 PR4 08-16,图片 attachment 计量)/ **`at_files_token INTEGER`**(unified-context-budget WP1 08-19,@文件注入体 cl100k 估算)/ **`system_token INTEGER`**(08-19,system prompt 体 + skill-listing 合成消息)/ **`context_window INTEGER`**(08-19,请求时模型 context_window 快照,前端预算行分母) |
 | 13 | `messages_fts` | `db/migrations/schema.rs:1051` | FTS5 虚拟表(external-content + trigram tokenizer + `UPDATE OF text` 触发器防写放大 + `messages_fts_docsize` 影子表守卫回填,见 `db/migrations/schema.rs:1062-1085` INSERT/DELETE/UPDATE 触发器) — D2 跨 session 全文搜索的存储后端(2026-08-17) |
 
-**索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` / **`idx_session_audit_events_turn_seq`**(E2 07-14)/ **FTS5 影子表 `messages_fts_docsize`** 索引(`db/migrations/schema.rs` 顶部)。
+**索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` / **`idx_session_audit_events_turn_seq`**(E2 07-14)/ **`idx_turn_trace_run`**(08-20,partial index `ON turn_trace(run_id) WHERE run_id != ''`,专服 `list_worker_turn_traces` 按 run_id 点查)/ **FTS5 影子表 `messages_fts_docsize`** 索引(`db/migrations/schema.rs` 顶部)。
 
 ### 2.1 remote 侧 DB(云端 everlasting-remote,2026-08 remote epic)
 
@@ -168,16 +168,25 @@ WHERE messages_fts MATCH ?1                    -- ?1 = 用户输入的 FTS5 quer
 ORDER BY rank                                   -- FTS5 BM25 rank
 LIMIT 50;
 
--- 8. C7+memory-gov+B1 (2026-08-14~16) — 看某 session 的 turn-level 三 token 列
+-- 8. C7+memory-gov+B1+budget (2026-08-14~20) — 看某 session 的 turn-level token 切片
 --    tools_token(08-14 C7)+ memory_token(08-15 memory-gov)+ images_token(08-16 B1)
---    配合 context_window 看是否触发了压缩阈值(0.85×window)
-SELECT seq,
+--    + at_files_token/system_token(08-19 unified-context-budget)+ context_window
+--    run_id = '' 只出主 loop 行;worker 行按 subagent_runs.id 单独点查(见下)
+SELECT seq, run_id,
        json_extract(token_usage_json, '$.input_tokens') AS input_tokens,
-       tools_token, memory_token, images_token
+       tools_token, memory_token, images_token, at_files_token, system_token, context_window
 FROM turn_trace
 WHERE session_id = 'YOUR_SESSION_ID'
+  AND run_id = ''
 ORDER BY seq DESC
 LIMIT 20;
+
+-- 8b. worker per-turn 度量 (2026-08-20 worker-turn-trace-persist) —
+--     某 run 的逐轮 trace 行(list_worker_turn_traces IPC 的 SQL 等价)
+SELECT seq, tools_token, memory_token, at_files_token, system_token
+FROM turn_trace
+WHERE run_id = 'YOUR_SUBAGENT_RUN_ID'   -- subagent_runs.id
+ORDER BY seq;
 ```
 
 ### 3.4 消息内容(content 是 JSON)解析

@@ -7,7 +7,7 @@
 
 ## 1. 系统架构
 
-> ✅ **当前状态(2026-08-18)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,无 `decisions.md`)。
+> ✅ **当前状态(2026-08-20)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,无 `decisions.md`)。
 >
 > 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
@@ -210,9 +210,9 @@
 
 **决策偏差记录**:Phase 3(dogfooding)在 dogfooding 前置条件未满足时由 epic 直接启动完成 —— 见决策日志对应条目。
 
-### 1.6 近期落地特性(2026-08-14~18)
+### 1.6 近期落地特性(2026-08-14~20)
 
-> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)。横切关注点(C7 / C7D / memory-gov / C3+)见 §2.5.10~13;本节按"用户可感知度"挑 3 个最显著的:**B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool**。
+> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量)。横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)见 §2.5.10~15;本节按"用户可感知度"挑 3 个最显著的:**B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool**。08-19~20 批次中最重的 **unified-context-budget(统一 token 预算 + 关卡⑤硬卡)** 见 §2.5.14。
 
 **B1 image multimodal(2026-08-16/17 落地)**
 - 模型能力:`models.supports_images` 新列(`INTEGER NOT NULL DEFAULT 0`,B1 backfill `add_models_column_if_missing`,见 `db/migrations/schema.rs:1012`),UI Settings 配置 capability 标志
@@ -746,18 +746,19 @@ agent loop 结束(text-only response or max_turns reached):
   - **Level 1 精确签名硬触发**(`HARD_WINDOW=3`):连续 3 次归一化签名完全相同 → 零误报抓真死循环
   - **Level 2 Jaccard 软提示**(`SOFT_WINDOW=5` / `SOFT_THRESHOLD=0.85`):≥2 对 token-set Jaccard > 0.85 → 容忍近重复
 - **per-tool 签名**:`read_file`/`write_file`/`list_dir`=path,`grep`/`glob`=pattern+path,`edit_file`=path+old_string(含 old_string 才不误判正当的同文件多块编辑),`shell`/`run_background_shell`=command,其余 fallback `name+canonical(input)`
-- **命中动作(软)**:两层都 `tracing::warn!` + 把 hint 文本插入 result message,**不跳过执行、不终止 loop**,MAX_TURNS=200 仍是硬兜底。无 AuditKind 落表
+- **命中动作(软)**:两层都 `tracing::warn!` + 把 hint 文本插入 result message,**不跳过执行、不终止 loop**,撞线兜底见 §2.5.15(2026-08-19 起软卡询问,非硬停)。无 AuditKind 落表
 - **完整设计 + 调研**:详见 [IMPLEMENTATION §4 2026-06-24 ADR](./IMPLEMENTATION/decisions-2026-06.md)
 
 #### 2.5.5 ⑤ Context 压缩(C3+ LLM 摘要式压缩,2026-08-18 落地,**替代** C3 MVP 机械丢组 2026-06-12)
 
-- **触发**:总 token > `context_window * 0.85`(取代 C3 MVP 的 0.80 阈值)
+- **触发**:总 token > `context_window * 0.85`(取代 C3 MVP 的 0.80 阈值)。**触发口径 2026-08-19 统一切换**为"按发送部件加法"——`count_tokens(system_prompt) + count_tokens(tools_json) + estimate_messages_tokens(messages)` 三部件之和(`agent/budget.rs::estimate_request_tokens`),修复旧口径只数 messages、漏计 tools/system 的洞(小窗口模型 32k/64k 下可能在 messages 未达触发线时整体超窗)
 - **策略**:LLM 9 段模板结构化摘要(`task / progress / facts / decisions / open / files / next` 等)+ `prior-summary` 增量合并(已存在 summary 作上下文,避免每轮全量重写)
 - **保留区存活**:`clamp(15k, 10% 窗, 25k)` token 边界,**最近 turn 逐字不丢**(掉 LLM 看不到刚刚说过的话会发懵)
 - **元数据**:摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`(区别于 user / assistant),前端折叠渲染
 - **水位**:`cutoff_seq` 精确折叠记忆,展开按需(不破坏 pair 不变量)
 - **兜底**:连续 3 次 LLM 摘要失败 → 熔断回退 C3 机械丢组(0.80→0.50 旧逻辑,见代码 `agent/context.rs`)
-- **实现位置**:`app/src-tauri/src/agent/context.rs`(`compact_messages` + 新 LLM call)+ `messages` 表 schema 兼容(messages 表 metadata 列从 JSON 字段读)
+- **硬卡**:2026-08-19 起叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO = 0.95`×window,裁尽仍超才 fail-fast),见 §2.5.14
+- **实现位置**:`app/src-tauri/src/agent/context.rs`(`compact_messages` + 新 LLM call)+ `agent/budget.rs`(统一口径 + 硬卡引擎)+ `messages` 表 schema 兼容(messages 表 metadata 列从 JSON 字段读)
 - **完整设计**:见 [ROADMAP.md §1.2 C3+](./ROADMAP.md) 行(2026-08-18 落地)+ C3 MVP 历史见 [IMPLEMENTATION/decisions-2026-06.md 2026-06-12/14/15 ADR](./IMPLEMENTATION/decisions-2026-06.md)(RULE-A-001/002/006 已闭环)
 
 #### 2.5.6 Session 切换的并发态
@@ -781,14 +782,15 @@ agent loop 结束(text-only response or max_turns reached):
 - **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
 - **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
 - **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
-- **25 类 AuditKind(2026-08-18 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
+- **27 类 AuditKind(2026-08-20 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
   - **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
   - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
   - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
   - **Message 域(2)**:EditMessage(D3 PR1)/ ResendMessage(D3 PR3)
-  - **Loop 域(1)**:LoopIntervention(C2+ 07-05 主动干预)
+  - **Loop 域(2)**:LoopIntervention(C2+ 07-05 主动干预)/ TurnLimitSoftcap(08-19 MAX_TURNS 软卡询问)
   - **Worker 域(4)**:WorkerAskAllowed / WorkerAskDenied / WorkerAskTimedOut / WorkerAskCancelled(L3b 06-22 RULE-FrontSubagent-003 fix)
   - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
+  - **Budget 域(1)**:ContextBudgetTrim(08-19 关卡⑤硬卡裁剪,unified-context-budget)
   - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
   - 实现位置:`app/src-tauri/src/agent/permissions/audit.rs`;落表点见各 variant 注释 + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) 各月 ADR
 
@@ -834,6 +836,23 @@ agent loop 结束(text-only response or max_turns reached):
 #### 2.5.13 ⑤ C3+ LLM 摘要式压缩(2026-08-18 落地)
 
 - **见 §2.5.5**(新策略替代 C3 MVP 0.80→0.50 机械丢组);4 个新横切关卡中 C3+ 是最重的,核心 spec 详见 §2.5.5,本节仅作为横切索引存在
+
+#### 2.5.14 ⑤ 统一上下文预算硬卡(unified-context-budget,2026-08-19 落地)
+
+- **问题**:C3+ 压缩触发线(0.85×window)只盯 messages 旧口径,且是"事后压缩"不是"事前硬卡";多来源切片(tools / memory / 图片 / @文件 / system)各是各的账,没有一把统一的尺
+- **统一口径(WP1 度量)**:按发送部件加法 — `estimate_request_tokens = count_tokens(system_prompt) + count_tokens(tools_json) + estimate_messages_tokens(messages)`(`agent/budget.rs`)。**核心不变量:归因切片(tools_token / memory_token / at_files_token / images_token / system_token)是从 messages 内部归因的展示口径,与总量口径永不互相加计**(评审 F1 重复计数教训,AC1 单测锁定)
+- **新切片列**:`turn_trace.at_files_token`(@文件注入体 cl100k 估算)/ `system_token`(system prompt 体 + skill-listing 合成消息)/ `context_window`(请求时模型窗口快照,前端预算行分母)——均幂等 backfill(`add_turn_trace_column_if_missing`),NULL 为加列前行 / worker 轮
+- **关卡⑤硬卡(WP2 引擎)**:`BUDGET_LINE_RATIO = 0.95`×window 触发**静默裁剪**(对齐 `SUMMARY_POSTCHECK_RATIO` 0.95,贴窗留 5% 吸收 cl100k 与 provider 计量的系统性偏差);裁尽仍超才 fail-fast。触发落 `AuditKind::ContextBudgetTrim`。软卡「压缩后续跑」force 压缩走同引擎但绕过 token 触发线(见 §2.5.15)
+- **前端**:TurnCard 预算构成条(各切片占比,分母 = context_window)+ BudgetTrim 瞬时 chip + 审计条目
+- **完整设计**:见 [ROADMAP.md §1.2 unified-context-budget](./ROADMAP.md) 行;spec 沉淀 `.trellis/spec/backend/agent-loop-architecture/pattern-budget-gate.md`
+
+#### 2.5.15 ⑬ MAX_TURNS 软卡 + 手动 /compact + handoff(2026-08-19 落地)
+
+- **MAX_TURNS 软卡**(替代硬终断):单聊主 loop 撞线(缺省 200)不再无条件 `stop_reason="max_turns"` 硬停,改为 QuestionStore 软卡询问——继续(+`TURN_LIMIT_GRANT`=200)/ 压缩后续跑(置 `force_compaction=true` 绕过 C3 token 触发线,`trigger_label="softcap"` 观测区分)/ 停止;10 分钟超时兜底(`EVERLASTING_SOFTCAP_TIMEOUT_MS` 测试钩子)。**break 门 = `effective_is_worker || group_chat_state.is_some()`**:worker(有 C1 resume)与群聊 speaker 段保持硬卡直接 break。新 `AuditKind::TurnLimitSoftcap`(action `asked/continued/compacted_continued/stopped/timeout_stopped/cancelled`,worker 与群聊不落表)。实现 `chat_loop.rs::ask_turn_limit_softcap` + `emit_max_turns_terminal`
+- **手动 /compact**:空闲期 LLM 摘要压缩入口(通用内置命令直输分发),不走软卡 force 路径(软卡走 drive_turn 按值穿参,见 spec)
+- **handoff 跨 session 接力**:接力摘要进下一 session + HUD 按 session 隔离修复
+- **worker per-turn 度量(2026-08-20)**:`turn_trace` 表重建并入 run 维度 — 唯一键 `UNIQUE(session_id, run_id, seq)`(`''` 哨兵 = 主 loop 行,worker 行 = `subagent_runs.id`;不用 NULL 因 SQLite UNIQUE 视 NULL 互异)+ partial index `idx_turn_trace_run`(`WHERE run_id != ''`)+ `list_worker_turn_traces` IPC 全链 + SubagentDrawer「Token 明细」per-run 折叠区(`runTracesByRunId` 粘性缓存)。老库走 `schema_helpers::rebuild_turn_trace_with_run_id` 重建迁移
+- **spec**:`.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md`
 
 ---
 

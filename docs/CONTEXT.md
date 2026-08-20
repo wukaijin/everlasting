@@ -99,7 +99,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 - 生命周期:`delete_session` → `kill_all_for_session`;`RunEvent::Exit` → `kill_all`
 
 ### MAX_TURNS
-当前常量 `200`(`app/src-tauri/src/agent/mod.rs:76`)。Agent Loop 单 request 内最大 turn 数,超限终止。这是循环检测的**硬兜底**。变更轨迹:`20 → 50 → 200`(06-24 C2 落地时调到 200)。
+当前常量 `200`(`app/src-tauri/src/agent/mod.rs:76`)。Agent Loop 单 request 内最大 turn 数。**已软卡化(2026-08-19,`08-18-max-turns-softcap`)**:单聊主 loop 撞线不再无条件 `stop_reason="max_turns"` 硬停,改为 QuestionStore 软卡询问——继续(+200)/ 压缩后续跑(gate 开时)/ 停止,10 分钟超时兜底;「继续」每次 `turns_budget += TURN_LIMIT_GRANT`(= MAX_TURNS),400/600… 每次撞线再问。**worker(有 C1 resume)与群聊 speaker 段仍保持硬卡直接 break**(`break 门 = effective_is_worker || group_chat_state.is_some()`)。新增 `AuditKind::TurnLimitSoftcap`(action:`asked / continued / compacted_continued / stopped / timeout_stopped / cancelled`,worker 与群聊不落表)。变更轨迹:`20 → 50 → 200`(06-24 C2 落地时调到 200)。详细 spec 见 [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md)。
 
 ### Context Compression Thresholds (C3+ 替代 C3,2026-08-18)
 原 C3 阈值(`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,2026-06-12 落地)已被 **C3+ LLM 摘要式压缩(2026-08-18)** 替换。**当前**:`context_window * 0.85` 触发 → LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + **保留区存活**(`clamp(15k, 10% 窗, 25k)` token 边界,最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`(前端折叠渲染);连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组(0.80→0.50 旧逻辑,作兜底)。B5 4 层 memory 仍永远保护(优先裁其它层)。实现见 `app/src-tauri/src/agent/context.rs` + `memory/digest.rs` 协作;详细 spec 见 [ARCHITECTURE §2.5.5/§2.5.13](./ARCHITECTURE.md)。
@@ -110,24 +110,25 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 - **L1 精确签名硬触发**(N=3):同一 tool_use 签名(含 `edit_file` 的 `old_string` 避免正当多块编辑误判)连续 3 次,直接打断 loop
 - **L2 Jaccard 软提示**(N=5,0.85):最近 5 次 tool_use 的 input 集合 Jaccard ≥ 0.85 时,**hint 作为 `ContentBlock::Text` 注入 result message**,LLM 下一轮看到提示,**不跳过执行、不终止 loop**
 
-`MAX_TURNS=200` 仍是硬兜底。无 AuditKind 落表(§2.5.8)。token 切分纯 Rust `split_whitespace`(不复用 tiktoken)。实现见 `app/src-tauri/src/agent/loop_detection.rs`。
+撞线兜底见上节 MAX_TURNS(2026-08-19 起软卡询问,非硬停)。无 AuditKind 落表(§2.5.8)。token 切分纯 Rust `split_whitespace`(不复用 tiktoken)。实现见 `app/src-tauri/src/agent/loop_detection.rs`。
 
 ### AuditKind
-`session_audit_events.kind` 字符串枚举,**2026-08-18 实测 25 类**(2026-08-14 仍在审计 docstring 写"18 variants",代码债不在本任务范围),按域分组(完整 25 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
+`session_audit_events.kind` 字符串枚举,**2026-08-20 实测 27 类**(2026-08-18 记 25 类;2026-08-14 仍在审计 docstring 写"18 variants",代码债不在本任务范围),按域分组(完整 27 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
 
 - **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
 - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
 - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
 - **Message 域(2)**:EditMessage(D3 PR1 06-17)/ ResendMessage(D3 PR3 06-17)
-- **Loop 域(1)**:LoopIntervention(C2+ 07-05 主动干预)
+- **Loop 域(2)**:LoopIntervention(C2+ 07-05 主动干预)/ TurnLimitSoftcap(08-19 MAX_TURNS 软卡询问)
 - **Worker 域(4)**:WorkerAskAllowed / WorkerAskDenied / WorkerAskTimedOut / WorkerAskCancelled(L3b 06-22 RULE-FrontSubagent-003 fix)
 - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
+- **Budget 域(1)**:ContextBudgetTrim(08-19 关卡⑤硬卡裁剪,unified-context-budget)
 - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
 
 每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选);E2 07-14 起增 `turn_seq` 列(`session_audit_events.turn_seq INTEGER`,nullable,审计按 turn 落表)。
 
 ### L1 / L2 / L3 命名约定
-路线图子档命名(2026-08-18 同步,2026-08-14~18 6 个新特性加入新字母):
+路线图子档命名(2026-08-20 同步,2026-08-14~20 新特性加入新字母):
 
 - **L1**:后台 shell + 完成通知(L1a 不带 PTY / L1b 后续接 portable-pty)
 - **L2**:单 turn 多 tool 并发(只读 batch,`is_parallel_eligible` + `FuturesUnordered`)
@@ -146,6 +147,11 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制:
 - **D2②** (2026-08-17):agent `search_history` tool(`READONLY_TOOL_ALLOWLIST` 第 6 员,薄封装 `db::search`)+ `SearchHistoryCard` 4 态机
 - **E2** (2026-07-14):turn-level harness trace — `turn_trace` 表 + 4 个 ChatEvent(`TokenUsage` / `Compaction` / `LoopHint` / `Breadcrumb`)+ `session_audit_events.turn_seq` 列
 - **B11** (2026-08-11~13):远程遥控通道 — `crates/everlasting-remote` 云中继 + PC tunnel client + 手机 PWA 配对/节点/远程操作 + Cargo workspace 翻转
+- **unified-context-budget** (2026-08-19):统一 token 预算 — `turn_trace` 加 `at_files_token` / `system_token` / `context_window` 三列 + 关卡⑤硬卡裁剪引擎(`agent/budget.rs`,触发时裁剪并落 `AuditKind::ContextBudgetTrim`)+ 前端 TurnCard 预算构成条 / BudgetTrim 瞬时 chip
+- **softcap** (2026-08-19):MAX_TURNS 软卡(见上 MAX_TURNS 节)
+- **compact 命令** (2026-08-19):手动 `/compact` — 空闲期 LLM 摘要压缩入口(`CompactResult` method + `trigger_label` 观测)
+- **handoff** (2026-08-19):跨 session 接力 — HUD 按 session 隔离 + 接力摘要进下一 session
+- **worker per-turn trace** (2026-08-20):`turn_trace` 并入 run 维度(表重建 `UNIQUE(session_id, run_id, seq)`,`''` 哨兵主行)+ Done 臂 run 行落值 + `list_worker_turn_traces` IPC 全链 + SubagentDrawer「Token 明细」折叠区
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
