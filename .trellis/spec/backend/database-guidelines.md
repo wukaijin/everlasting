@@ -96,6 +96,30 @@ old rows searchable), delete propagation, `UPDATE OF text` red line
 (metadata/latency updates don't churn docsize; text rewrite swaps the index),
 LIKE-wildcard literalism, per-kind limit semantics.
 
+### Pattern: SQLite 表约束加宽 = 表重建;哨兵空串;显式列清单(2026-08-20,08-20-worker-turn-trace-persist)
+
+**Scope/Trigger**:给已有表的 `UNIQUE` 表约束加一列(如 `turn_trace` 的
+`UNIQUE(session_id, seq)` → `UNIQUE(session_id, run_id, seq)`),或任何
+SQLite 无法 `ALTER` 的表级约束变更。先例两则:
+`widen_subagent_runs_status_check_for_incomplete`(CHECK 加宽)与
+`rebuild_turn_trace_with_run_id`(UNIQUE 加宽,`db/migrations/schema_helpers.rs`)。
+
+- **NULL 不能当哨兵**:新维度列若有"无此值"语义,必须 `NOT NULL
+  DEFAULT ''` 之类的空串哨兵。SQLite `UNIQUE` 视 NULL 互异 —— NULL 主行
+  的 `(sid, NULL, seq)` 冲突**不触发 upsert 冲突子句**而是插入第二行,
+  既有 upsert 语义静默破坏。
+- **重建拷贝用显式列清单,不抄 `SELECT *`**:widen 先例列集不变才敢
+  `SELECT *`;列集一旦变化(新列插中间),位置拷贝每列错位。清单必须
+  覆盖全部遗留列 —— 这也决定了 helper 必须排在相关
+  `add_*_column_if_missing` 回填**之后**挂进迁移链。
+- **幂等探针 + 残留守卫**:`pragma_table_info` 查目标列短路(重跑
+  no-op);重建前 `DROP TABLE IF EXISTS <t>_old` 清残留(崩溃遗留的
+  old 表会撞 RENAME)。
+- **事务包裹五步**(rename → create → copy → drop → index),崩溃不留
+  半重建态。不 toggle `PRAGMA foreign_keys`(单进程迁移 + 无外部表引用
+  该表时成立,先例论证可平移;多连接测试池的 pragma 污染比理论上的
+  FK 窗口更实际)。
+
 ### Pattern: compaction_summary 摘要行(C3,2026-08-18)
 
 - **行形态**:普通 `messages` 行,`role='user'`,`metadata.kind =

@@ -410,3 +410,18 @@ pub async fn insert_run_with_id(
 ### Migration: `add_subagent_runs_worktree_path_column`
 
 Idempotent column-add migration. CHECK constraint unchanged (still `running | completed | cancelled | error | incomplete`). Index strategy unchanged (still indexed by `(parent_session_id, child_ts DESC)` per the table-level pattern). The column-add is non-breaking: existing rows get `NULL`, which is the correct "not isolated" state for pre-L3b runs.
+
+## turn_trace 关联:per-run worker 轮度量(2026-08-20,08-20-worker-turn-trace-persist)
+
+`subagent_runs.id` 现在同时是 `turn_trace.run_id` 的取值域(worker 行):
+worker 的每个真实 LLM turn 落一行 `(parent_session_id, run_id, seq)`,
+携带 usage_json + tools_token + system_token + context_window(memory/
+images/@文件 列按 worker 契约 NULL)。**run_id 无 FK** —— `''` 哨兵
+(主 loop 行)不是合法 run id;run 行无独立删除路径,生命周期由
+turn_trace 自身的 `session_id` CASCADE 兜底(删 session 同时级联两者)。
+读侧 `list_worker_turn_traces(run_id)`(SubagentDrawer「Token 明细」,
+前端 `useSubagentRunsStore.runTracesByRunId` 粘性缓存);`token_usage_json`
+(run 级累计)仍是 run 行自己的权威字段,per-turn 行是明细不是替代。
+完整切片语义与唯一键重建迁移见
+[token-usage-tracking §worker per-turn 行](./token-usage-tracking.md)
+与 [database-guidelines §表约束加宽](./database-guidelines.md)。
