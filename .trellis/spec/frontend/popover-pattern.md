@@ -27,6 +27,20 @@ whose trigger element is **external** to the popover's `root` (a
 sibling `<textarea>`, not a child of `root`). See "Variation:
 External Trigger Element" below.
 
+2026-08-21 (quota panel relocation, follow-up to
+`08-20-turn-usage-event-quota-view`) added
+`app/src/components/chat/ChatInputTokenUsage.vue` — the hint-row
+token chip's click popover (context bar + last-turn breakdown +
+cache-hit rate + rolling-window aggregates + settings). It
+absorbed the short-lived AppHeader `QuotaChip.vue` (08-20, since
+deleted) and replaced the chip's reka-ui hover Tooltip. Geometry
+follows `ChatInputLatencyPopover` (opens up from the hint row)
+with one variation: the popover is wide (420px) and **centered on
+the chip** via `left: 50%; transform: translateX(-50%)` +
+`max-width: calc(100vw - 32px)` instead of `left: 0` anchoring —
+remember to compose `translateX(-50%)` into any Transition
+`transform` keyframes when copying.
+
 Future dropdowns / popovers in this project SHOULD follow this
 pattern unless the use case has a reason to deviate (e.g.
 accessibility requirements that demand

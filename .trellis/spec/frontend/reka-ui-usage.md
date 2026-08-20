@@ -396,13 +396,18 @@ information** — e.g. breaking down a single number into
 its components, or providing a one-line hint that doesn't
 need its own click target.
 
-**Production instance** (2026-06-10, A4):
-`app/src/components/chat/ChatInput.vue` — the
-`chat-input__token-usage` chip (e.g. "14.2K · 7% / 200K")
-hovers out a 4-line breakdown (`input / cache_read /
-cache_creation / output`) via reka-ui `Tooltip`. The
-trigger is the chip itself; the tooltip content is
-the breakdown list.
+**Production instance** (2026-06-10, A4; updated 2026-08-21):
+`app/src/components/chat/ChatInputHintRow.vue`'s
+`chat-input__token-usage` chip (e.g. "14.2K · 7% / 200K") was
+the original A4 instance — hovering out a 4-line breakdown
+(`input / cache_read / cache_creation / output`). On 2026-08-21
+(quota panel relocation follow-up to
+`08-20-turn-usage-event-quota-view`) that chip became a **click
+popover** (`ChatInputTokenUsage.vue`, hand-rolled pattern — see
+`popover-pattern.md`) because its content grew into a full usage
+dashboard. The remaining Tooltip production user is
+`app/src/components/chat/MessageItemFooter.vue` — consult it for
+the six-piece structure in situ before writing a new one.
 
 **Six-piece structure** (always required, in this order):
 

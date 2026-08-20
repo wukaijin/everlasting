@@ -658,3 +658,30 @@ unified-context-budget 留下的小额 follow-up 全程落地。研究先行发�
 ### Status
 
 [OK] **Completed**
+
+## Session 107: token-usage 用量弹层迁移——AppHeader QuotaChip 并入 input hint chip
+
+**Date**: 2026-08-21
+**Task**: `.trellis/tasks/08-21-token-usage-popover-relocate/`
+**Branch**: `main`
+
+### Summary
+
+用户对 08-20 落的 QuotaChip UI 不满,对话内直接提改版:panel 迁到 input 下方 token chip 的弹出 popover、变大、上下文容量占用进度条 + 明细列表 + 平均缓存命中率 + 窗口聚合。落地:新 `ChatInputTokenUsage.vue`(手写 popover 族,向上开 420px,translateX(-50%) 居中于 chip——Transition transform 需合成 translateX 否则动画偏移)四分区仪表盘:上下文占用(进度条 + usageLevel 着色 + 剩余)/ 上轮明细(四计数 + cacheRatePercent 命中率)/ 滚动窗口聚合(总量 + 额度占比条 + 平均命中率 Σcr/Σ(in+cc+cr)——provider 同族不混,跨 provider 求和口径仍准 / per-provider 主-worker 拆分 + 各自命中率 + 小时柱 / top sessions 跳转)/ 设置行。HintRow 的 reka Tooltip 移除(生产 Tooltip 仅剩 MessageItemFooter),S6a 隐藏规则改 :deep(.chat-input__token);AppHeader QuotaChip 摘除删除。quota store 零改动,刷新链不变(mount/开弹层/streamEvents done)。验证:前端 1146/1146 + vue-tsc 0;真机 headless 截图(VLM 复核居中/无裁切/分区渲染)+ 移动端 390px 隐藏生效。坑:①旧 QuotaChip 用了不存在的 token(--color-status-warning/--radius-full)一直吃 fallback,新组件改正确名;②首截图弹层报 405,排查为旧 daemon 二进制早于 usage 路由提交(curl 422 vs 405 对照定位),非前端回归;③daemon.sh bg 在工具会话里被进程组回收,setsid nohup 直拉二进制绕过。spec 回写两处:popover-pattern.md(新实例 + 居中几何变体)/reka-ui-usage.md(Tooltip pattern 生产实例换主)。
+
+### Main Changes
+
+- `app/src/components/chat/ChatInputTokenUsage.vue` 新增(chip + 大号弹层;同日二轮加构成堆叠条 + 常显图例,traceStore 最近一轮取数,消息=残差,技能归并在 system 标注「system+技能」,共 9 测试用例)
+- `app/src/components/chat/ChatInputHintRow.vue` Tooltip → 弹层组件;`app/src/components/layout/AppHeader.vue` 摘 QuotaChip
+- 删除 `QuotaChip.vue` / `QuotaChip.test.ts`;`quota.ts` 注释更新
+- spec:`popover-pattern.md` + `reka-ui-usage.md` 实例同步。二轮:构成可视化弃 TurnCard hover 式,常显图例(用户点名不要悬停);图例 % 各自 Math.round 可能 ≠ 100 合计属正常
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (未提交) | 待用户确认后提交 |
+
+### Status
+
+[OK] **Completed**
