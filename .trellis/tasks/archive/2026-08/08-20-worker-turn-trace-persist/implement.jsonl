@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 pre-development checklist 与 spec 索引入口"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "turn_trace 表契约、幂等迁移模式(add_*_column_if_missing / widen 先例)、IPC camelCase wire 约定"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "五切片 + context_window 的列语义与写点契约,worker 行须对齐"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs 行生命周期(无独立删除路径),run_id 关联的依据"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "新增 daemon route 的注册惯例(命令名即路径段教训)"}
+{"file": ".trellis/tasks/08-20-worker-turn-trace-persist/research/worker-path-analysis.md", "reason": "全部代码锚点:seq 冲突根因、旁路污染写点、写点改造面、迁移差异点(显式列清单)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store action + reactive Map 粘性缓存模式(runTracesByRunId)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer 子组件落点与既有 drawer 结构约定"}
