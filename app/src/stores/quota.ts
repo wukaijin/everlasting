@@ -1,18 +1,19 @@
 // 08-20-turn-usage-event-quota-view WP3 — useQuotaStore。
 //
-// 5h 滚动窗口配额视图的数据层(AppHeader QuotaChip / 弹层唯一数据源)。
+// 5h 滚动窗口配额视图的数据层。2026-08-21 起唯一消费组件是
+// ChatInput hint 行的 `<ChatInputTokenUsage>` 大号用量弹层(原
+// AppHeader QuotaChip 已并入,顶栏不再常驻入口)。
 //
 //   后端 `usage_window` IPC(db::usage 聚合 turn_trace)
 //     → refresh() 写 report
-//     → computed: chipTotal / chipPct(QuotaChip 常驻显示)
+//     → computed: chipTotal / chipPct(弹层窗口总量 + 额度占比条)
 //     → 弹层直接读 report(per-provider 拆分 / hourly / top sessions)
 //
 // 刷新时机(design 取舍:不做定时轮询、不做客户端增量推算 —— 滑动窗口
 // 客户端推算必漂;5h 尺度下"跑完这轮后刷新"语义刚好):
-//   1. chip 挂载时(AppHeader mount);
-//   2. 弹层打开时(QuotaChip toggle → open);
-//   3. 每次 request finalize 后(streamController.reloadAfterFinalize
-//      尾部 fire-and-forget,一次轻查询)。
+//   1. 弹层组件挂载时(ChatInputTokenUsage mount);
+//   2. 弹层打开时(toggle → open);
+//   3. 每次 request 完成后(streamEvents done 分支 fire-and-forget)。
 //
 // `setSettings` 写 config 两键(quota_window_hours / quota_limit_tokens,
 // 后端 `set_quota_settings`)后立即 refresh —— 弹层内保存即时反映。
