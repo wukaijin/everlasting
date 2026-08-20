@@ -972,3 +972,249 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         "worker rid must be registered in cancellations during the worker's run"
     );
 }
+
+/// 08-20-worker-turn-trace-persist AC2 + AC3: researcher dispatch 多轮
+/// → worker 的每个真实 LLM turn 落 (父 sid, run UUID, seq 递增) 行,
+/// 且 worker 行不污染主行 / 不写父 sessions.last_*。
+///
+/// Script: parent_t1(dispatch) → worker_t1(read_file tool_use) →
+/// worker_t2(final text) → parent_t2(final text)。三方 usage 值互不
+/// 相同(parent_t1=100 / worker=700,800 / parent_t2=111),使"谁的
+/// 数字落在哪"可判。
+///
+/// AC2 断言(run 行):每轮 token_usage_json 非空、tools_token 非空
+/// (worker 工具集过滤后仍非空 → cl100k > 0)、context_window 落值
+/// (worker 继承父 200_000)、memory/images/at_files 列 NULL(worker
+/// 语义:prompt.rs 注入 / 无附件 / 无 @注入)。
+/// AC3 断言(主行隔离):run_id='' 行只有父自己的 2 轮(usage 值
+/// 100/111,worker 的 700/800 不出现);list_turn_traces 不含 worker
+/// 行;sessions.last_input_tokens = 111(父 t2 的值,worker 覆盖会
+/// 变成 700/800 —— RULE-A-015 reversal 回归锁)。
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_loop_dispatch_subagent_worker_turn_trace_rows_persisted() {
+    let h = make_harness().await;
+    // worker_t1 要真读一个文件(read-only 工具走完 execute → tool_result
+    // 回喂 → worker 进入第 2 轮)。
+    std::fs::write(h.project_path.join("worker_note.txt"), "data").unwrap();
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Parent turn 1: dispatch researcher.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_dispatch_trace".into(),
+                name: "dispatch_subagent".into(),
+                input: serde_json::json!({
+                    "subagent": "researcher",
+                    "task": "read the note and summarize"
+                }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage {
+                    input_tokens: 100,
+                    ..Default::default()
+                }),
+            }),
+        ]),
+        // Worker turn 1: read_file tool_use (real turn #1).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_worker_read".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({ "path": "worker_note.txt" }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage {
+                    input_tokens: 700,
+                    output_tokens: 70,
+                    cache_creation_input_tokens: 7,
+                    cache_read_input_tokens: 77,
+                    context_input_tokens: 784,
+                }),
+            }),
+        ]),
+        // Worker turn 2: final text (real turn #2).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta {
+                text: "the note says data".into(),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage {
+                    input_tokens: 800,
+                    output_tokens: 80,
+                    cache_creation_input_tokens: 8,
+                    cache_read_input_tokens: 88,
+                    context_input_tokens: 896,
+                }),
+            }),
+        ]),
+        // Parent turn 2: final text.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta {
+                text: "ok based on the worker's report".into(),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage {
+                    input_tokens: 111,
+                    ..Default::default()
+                }),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-dispatch-trace".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        // B6 PR1b: production-style caller → skip_persist=false
+        // (worker 的 skip 在 run_subagent 的嵌套调用里)。
+        false,
+        Some(false),
+        None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
+        None,
+        None,
+        h.subagent_cache.clone(),
+        None,
+        None,
+        None, // project_main_override (2026-07-29)
+        h.app_data_dir.clone(),
+        None,
+        h.question_store.clone(),
+        None,
+        None,
+        None,
+        h.stub_loaded.clone(),
+    )
+    .await;
+
+    // 4 sends: parent_t1 + worker_t1 + worker_t2 + parent_t2.
+    assert_eq!(
+        mock.call_count(),
+        4,
+        "expected 4 sends (parent_t1 + worker_t1 + worker_t2 + parent_t2)"
+    );
+
+    // The run row exists (insert_run succeeded → worker_run_id_opt=Some).
+    let runs = db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
+        .await
+        .expect("list subagent runs");
+    assert_eq!(runs.len(), 1, "exactly one worker run");
+    let run_id = runs[0].id.clone();
+
+    // ---- AC2: worker per-turn rows ----
+    let worker_rows = db::trace::list_worker_turn_traces(&h.db, &run_id)
+        .await
+        .expect("list worker turn traces");
+    assert_eq!(
+        worker_rows.len(),
+        2,
+        "each real worker LLM turn must leave exactly one run row"
+    );
+    // (父 sid, run UUID, seq 递增):worker seq 是 worker loop 自己的
+    // 游标(从父 DB messages max+1 起),只断言严格递增 + 归属。
+    assert!(
+        worker_rows[0].seq < worker_rows[1].seq,
+        "worker row seqs must be strictly increasing: {:?}",
+        worker_rows.iter().map(|r| r.seq).collect::<Vec<_>>()
+    );
+    for (i, row) in worker_rows.iter().enumerate() {
+        assert_eq!(row.session_id, h.session_id, "row {i}: parent session id");
+        assert_eq!(row.run_id, run_id, "row {i}: run id routing");
+        assert!(
+            row.token_usage_json
+                .as_deref()
+                .is_some_and(|j| !j.is_empty()),
+            "row {i}: usage JSON must be non-empty"
+        );
+        assert!(
+            row.tools_token.is_some_and(|t| t > 0),
+            "row {i}: worker toolset estimate must land (got {:?})",
+            row.tools_token
+        );
+        assert_eq!(
+            row.context_window,
+            Some(200_000),
+            "row {i}: worker inherits the parent context window"
+        );
+        // worker 切片语义(prd R2):memory 走 subagent/prompt.rs、无
+        // 附件、无 @注入 → 三列 NULL,不是 0。
+        assert_eq!(row.memory_token, None, "row {i}: memory slice NULL");
+        assert_eq!(row.images_token, None, "row {i}: images slice NULL");
+        assert_eq!(row.at_files_token, None, "row {i}: at_files slice NULL");
+    }
+    // 逐轮 usage 区分:worker_t1=700 / worker_t2=800(非零且互不相同,
+    // 证明两行是各自 turn 的快照而非同一行被覆写)。
+    let w0_in = serde_json::from_str::<serde_json::Value>(
+        worker_rows[0].token_usage_json.as_deref().unwrap(),
+    )
+    .unwrap()["input_tokens"]
+        .clone();
+    let w1_in = serde_json::from_str::<serde_json::Value>(
+        worker_rows[1].token_usage_json.as_deref().unwrap(),
+    )
+    .unwrap()["input_tokens"]
+        .clone();
+    assert_eq!(w0_in, serde_json::json!(700));
+    assert_eq!(w1_in, serde_json::json!(800));
+
+    // ---- AC3: 主行隔离 ----
+    // run_id='' 的行只有父自己的两轮,usage 值 100 / 111(worker 的
+    // 700 / 800 若混入即 fail)。
+    let main_rows = db::trace::list_turn_traces(&h.db, &h.session_id)
+        .await
+        .expect("list main turn traces");
+    assert_eq!(main_rows.len(), 2, "main rows = parent_t1 + parent_t2 only");
+    let mut main_inputs: Vec<i64> = Vec::new();
+    for row in &main_rows {
+        assert_eq!(row.run_id, "", "main rows must carry the '' sentinel");
+        let v: serde_json::Value =
+            serde_json::from_str(row.token_usage_json.as_deref().unwrap()).unwrap();
+        main_inputs.push(v["input_tokens"].as_i64().unwrap());
+    }
+    main_inputs.sort();
+    assert_eq!(
+        main_inputs,
+        vec![100, 111],
+        "main rows must carry ONLY the parent's usages (worker 700/800 leaked?)"
+    );
+
+    // worker 不写父 sessions.last_*:快照必须停留在父 t2 的 111
+    // (RULE-A-015 reversal 回归锁;worker 的 700/800 任一次覆盖都会
+    // 改变此值)。
+    let last_input: Option<i64> =
+        sqlx::query_scalar("SELECT last_input_tokens FROM sessions WHERE id = ?")
+            .bind(&h.session_id)
+            .fetch_one(&h.db)
+            .await
+            .expect("read sessions.last_input_tokens");
+    assert_eq!(
+        last_input,
+        Some(111),
+        "sessions.last_* must hold the PARENT's last turn (111), not a worker turn's"
+    );
+}

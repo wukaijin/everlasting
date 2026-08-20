@@ -111,6 +111,13 @@ pub(crate) async fn drive_turn(
     token: CancellationToken,
     background_shells: &crate::background_shell::DefaultRegistry,
     skip_persist: bool,
+    // 08-20-worker-turn-trace-persist: worker 的 `subagent_runs.id`
+    // (`run_chat_loop` 已有 `worker_run_id: Option<String>` 的 &str
+    // 视图)。`None` / `Some("")` 都归一为空 run_key —— insert_run 失败
+    // 的降级语义(D6):worker 写点自然不写,不造孤儿命名空间。
+    // 主路 / 群聊恒 None(签名 +1 参,调用点唯一 —— chat_loop.rs,
+    // 已知 ~45 参债务,不为此小额任务重构)。
+    worker_run_id: Option<&str>,
     current_speaker: &Option<String>,
     question_store: &crate::agent::question_store::QuestionStore,
     // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 开关
@@ -167,6 +174,11 @@ pub(crate) async fn drive_turn(
     let mut workflow_ctx = workflow_ctx;
     let mut summary_anchor = summary_anchor;
     permission_ctx.turn_seq = Some(seq);
+    // 08-20-worker-turn-trace-persist: run 维度写键。'' = 主行(worker
+    // 未跑或 insert_run 失败降级);非空 = worker 行的 turn_trace 键
+    // 第三元。下方三个写点(Done 臂 upsert / record_compaction /
+    // record_loop_hint)都用它路由。
+    let run_key: &str = worker_run_id.unwrap_or("");
     // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
     // refresh `head_sha` + rebuild `system_prompt` at the start of
     // EVERY turn. The LLM only consumes `system_prompt` once per
@@ -559,14 +571,25 @@ pub(crate) async fn drive_turn(
         // emit + persist; best-effort on the DB write. PR2:seq 用
         // 推进后的游标 —— 摘要行已落库,本 turn 的 persist 行(及其
         // turn_trace 行)排在摘要行之后,对齐才成立。
+        // 08-20-worker-turn-trace-persist: run_key 路由 —— worker 路径
+        // (机械压缩无 gate,群聊/worker 同受益)写 run 行,不再以
+        // (父 sid, worker seq) 污染主行。
         if compacted.dropped_count > 0
             || matches!(
                 compacted.degradation,
                 crate::agent::context::DegradationKind::StillOver { .. }
             )
         {
-            crate::agent::trace::record_compaction(&sink, &db, &rid, &session_id, seq, &compacted)
-                .await;
+            crate::agent::trace::record_compaction(
+                &sink,
+                &db,
+                &rid,
+                &session_id,
+                run_key,
+                seq,
+                &compacted,
+            )
+            .await;
         }
         match compacted.degradation {
             crate::agent::context::DegradationKind::None
@@ -1255,25 +1278,48 @@ pub(crate) async fn drive_turn(
                                 if let Err(e) = crate::db::update_last_turn_usage(&db, &session_id, t).await {
                                     tracing::warn!(error = %e, "chat: failed to update last-turn token usage (non-fatal)");
                                 }
-                                // E2 trace (2026-07-14): persist per-turn
-                                // token usage to turn_trace (worker-gated
-                                // by !skip_persist, same as
-                                // update_last_turn_usage — RULE-A-015).
-                                // WP1 (2026-08-15): memory_token rides the
-                                // same write point — per-request constant,
-                                // identical across the request's turn rows.
-                                // B1 (2026-08-16): images_token likewise
-                                // (worker turns never carry attachments → 0).
-                                // unified-context-budget WP1 (2026-08-19):
-                                // at_files / system 切片同点落列;
-                                // `context_window` 是请求时窗口快照
-                                // (前端预算行分母,非切片)。at_files 语义
-                                // 与 images 对齐:零注入 → NULL。
+                            }
+                            // E2 trace (2026-07-14): persist per-turn
+                            // token usage to turn_trace. 08-20-worker
+                            // -turn-trace-persist 开闸:worker
+                            // (skip_persist=true)也写,但路由到 (父 sid,
+                            // run UUID, seq) run 行 —— run_key 空
+                            // (insert_run 失败降级)时自然不写。
+                            // update_last_turn_usage 的 !skip_persist 门
+                            // (上方)不动:snapshot 语义,RULE-A-015
+                            // reversal 不碰 —— worker 不覆盖父
+                            // sessions.last_*。
+                            //
+                            // WP1 (2026-08-15): memory_token rides the
+                            // same write point — per-request constant,
+                            // identical across the request's turn rows.
+                            // B1 (2026-08-16): images_token likewise
+                            // (worker turns never carry attachments → 0,
+                            // 但 worker 行契约是 NULL 而非 0 —— 见
+                            // 下方 images_tok 门)。
+                            // unified-context-budget WP1 (2026-08-19):
+                            // at_files / system 切片同点落列;
+                            // `context_window` 是请求时窗口快照
+                            // (前端预算行分母,非切片)。at_files 语义
+                            // 与 images 对齐:零注入 → NULL。
+                            //
+                            // worker 行的切片列保持 NULL(prd R2):memory
+                            // 度量面对 worker 维持排除(§3.5a 语义,列文档
+                            // 契约「worker turn → NULL」)—— 注意 worker 经
+                            // 共享 init 路径**同样注入** memory banner
+                            // (有层级时 memory_token 是 Some),此处按契约
+                            // 记 NULL(度量面排除,非"估算为零");images /
+                            // at_files 是真实零(worker 无附件 / 无 @注入)。
+                            // skip_persist 在新门下不再恒 false(worker 也
+                            // 进本块),三个判定都是活的。memory_token 的
+                            // 真值只落主行。
+                            if !skip_persist || !run_key.is_empty() {
+                                let memory_tok = if skip_persist { None } else { memory_token };
                                 let images_tok = if skip_persist { None } else { Some(images_token) };
                                 // 零注入 → NULL(spans 空判断,比 ==0 语义准 ——
                                 // 覆盖"有 span 但 est 为 0"的边界)。
                                 let at_files_tok = if skip_persist || at_file_spans.is_empty() { None } else { Some(at_files_token) };
-                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t, Some(tools_token), memory_token, images_tok, at_files_tok, Some(system_token), Some(context_window)).await {
+                                if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, run_key, seq, t, Some(tools_token), memory_tok, images_tok, at_files_tok, Some(system_token), Some(context_window)).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
                             }
@@ -1766,6 +1812,8 @@ pub(crate) async fn drive_turn(
     // hits, before the ≥3 active-intervention threshold). The ≥3
     // path already writes `loop_intervention` audit rows; this
     // trace covers the pre-intervention turns only.
+    // 08-20-worker-turn-trace-persist: run_key 路由(worker 1-2 次
+    // 命中走本写点;≥3 直接 break 不落)—— 归位同 compaction。
     if verdict_kind_str.is_some() && loop_hit_count < 3 {
         if let Some(vk) = verdict_kind_str {
             crate::agent::trace::record_loop_hint(
@@ -1773,6 +1821,7 @@ pub(crate) async fn drive_turn(
                 &db,
                 &rid,
                 &session_id,
+                run_key,
                 seq,
                 loop_hit_count,
                 vk,

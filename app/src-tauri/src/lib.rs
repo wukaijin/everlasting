@@ -331,6 +331,10 @@ pub fn run() {
             // for the manual cleanup button.
             commands::permissions::list_turn_traces,
             commands::permissions::clear_session_trace,
+            // 08-20-worker-turn-trace-persist: per-run worker turn
+            // rows for the SubagentDrawer "Token 明细" view (PR3
+            // frontend; backend read path ships first).
+            commands::permissions::list_worker_turn_traces,
             // F5 (LLM Latency Tracking): per-message latency +
             // per-tool duration persistence. Called by the
             // frontend `streamController` on `done` / `tool:result`

@@ -139,6 +139,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         // E2 (harness trace pipeline, 2026-07-14): trace viewer IPCs.
         "list_turn_traces",
         "clear_session_trace",
+        // 08-20-worker-turn-trace-persist: per-run worker turn rows
+        // (SubagentDrawer "Token 明细", read path).
+        "list_worker_turn_traces",
         // D3 PR1 (2026-06-17): edit a user message in place.
         "edit_user_message",
         // B6 PR3a (2026-06-20): subagent_runs list/get for the

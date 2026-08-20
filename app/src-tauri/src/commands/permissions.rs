@@ -411,6 +411,30 @@ pub async fn list_turn_traces(
     list_turn_traces_inner(&state, session_id).await
 }
 
+/// 08-20-worker-turn-trace-persist: read one worker run's per-turn
+/// `turn_trace` rows (run_id = `subagent_runs.id`), ordered by
+/// `seq ASC`. Powers the SubagentDrawer per-run "Token 明细" view
+/// (PR3 frontend). Unknown / pre-migration run returns an empty
+/// `Vec` (NOT an error) — the drawer renders its empty state.
+/// NOTE: worker 行的 seq 是 worker loop 自己的游标,勿当父
+/// messages 的全局 seq 消费(prd Risks)。
+pub async fn list_worker_turn_traces_inner(
+    state: &Arc<AppState>,
+    run_id: String,
+) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
+    db::trace::list_worker_turn_traces(&state.db, &run_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("list_worker_turn_traces failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn list_worker_turn_traces(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
+    list_worker_turn_traces_inner(&state, run_id).await
+}
+
 /// Delete all `turn_trace` rows for `session_id`. Wired to the trace
 /// viewer's "清理" button. The `ON DELETE CASCADE` on the `session_id`
 /// FK also fires this automatically when a session is deleted, so

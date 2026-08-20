@@ -13,8 +13,8 @@ use serde::Deserialize;
 
 use crate::commands::permissions::{
     clear_session_trace_inner, grant_tool_permission_inner, list_session_audit_events_inner,
-    list_session_tool_permissions_inner, list_turn_traces_inner, permission_response_inner,
-    revoke_tool_permission_inner, set_session_mode_inner,
+    list_session_tool_permissions_inner, list_turn_traces_inner, list_worker_turn_traces_inner,
+    permission_response_inner, revoke_tool_permission_inner, set_session_mode_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;
@@ -119,6 +119,22 @@ pub async fn list_turn_traces(
     Ok(Json(result))
 }
 
+/// 08-20-worker-turn-trace-persist: per-run worker turn rows
+/// (SubagentDrawer "Token 明细"). 路由名遵循「命令名即路径段」
+/// 惯例(B1 hotfix 2 教训 —— 不做别名)。
+#[derive(Debug, Deserialize)]
+pub struct ListWorkerTurnTracesRequest {
+    pub run_id: String,
+}
+
+pub async fn list_worker_turn_traces(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ListWorkerTurnTracesRequest>,
+) -> Result<Json<Vec<db::trace::TurnTraceRow>>, AppCommandError> {
+    let result = list_worker_turn_traces_inner(&state, req.run_id).await?;
+    Ok(Json(result))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ClearSessionTraceRequest {
     pub session_id: String,
@@ -172,6 +188,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(list_session_audit_events),
         )
         .route("/list_turn_traces", post(list_turn_traces))
+        .route("/list_worker_turn_traces", post(list_worker_turn_traces))
         .route("/clear_session_trace", post(clear_session_trace))
         .with_state(state)
 }

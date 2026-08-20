@@ -1035,6 +1035,10 @@ pub async fn run_chat_loop(
             token.clone(),
             &background_shells,
             skip_persist,
+            // 08-20-worker-turn-trace-persist: worker 的 subagent_runs.id
+            // 透传(&str 视图)—— drive_turn 的 Done 臂 / 旁路写点按它
+            // 路由 worker turn_trace 行;主路 / 群聊恒 None(run_key='')。
+            worker_run_id.as_deref(),
             &current_speaker,
             &question_store,
             // D (2026-08-14): stubify 开关 + session 粘性 loaded-set。

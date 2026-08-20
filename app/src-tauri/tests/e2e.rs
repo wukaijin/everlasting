@@ -663,6 +663,8 @@ mod e1e_router_smoke {
             "/api/v1/permissions/revoke_tool_permission",
             "/api/v1/permissions/list_session_audit_events",
             "/api/v1/permissions/list_turn_traces",
+            // 08-20-worker-turn-trace-persist: per-run worker turn rows.
+            "/api/v1/permissions/list_worker_turn_traces",
             "/api/v1/permissions/clear_session_trace",
             // projects
             "/api/v1/projects/list_projects",
