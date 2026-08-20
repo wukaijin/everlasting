@@ -64,6 +64,11 @@ pub enum ChatEvent {
 
 ```sql
 ALTER TABLE sessions ADD COLUMN input_tokens_total INTEGER;
+-- ⚠ 2026-08-21 勘误(08-20-turn-usage-event-quota-view 实现期发现):
+-- input_tokens_total / output_tokens_total 自 2026-06-26 snapshot 重构后
+-- **无写点**(update_last_turn_usage 只写 last_* 快照列),是孤儿列;
+-- session 全周期累计的可信口径 = turn_trace 全量聚合
+-- (db::usage::usage_window 的 lifetime 口径),勿再读这两列。
 ALTER TABLE sessions ADD COLUMN output_tokens_total INTEGER;
 ALTER TABLE sessions ADD COLUMN cache_creation_total INTEGER;
 ALTER TABLE sessions ADD COLUMN cache_read_total INTEGER;

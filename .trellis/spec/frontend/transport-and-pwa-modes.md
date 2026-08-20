@@ -65,3 +65,4 @@ The `errorBus` (`window.unhandledrejection`) only fires for **uncaught** errors;
 - Remote-native responses (`pairing.rs RedeemedResponse`, `nodes.rs NodeInfo`) use `#[serde(rename_all = "camelCase")]` → **camelCase** wire (`deviceToken`, `nodeId`, `displayName`).
 - Request bodies follow the Rust struct's serde default (snake_case for `RedeemRequest`: `device_name`).
 - `transport.invoke` auto-converts top-level arg keys camelCase→snake_case (daemon serde default); direct `fetch` does NOT — hand-write the right casing.
+- **Command 形状铁律(08-21 质检实证)**:新 IPC 的 `#[tauri::command]` 参数必须**扁平标量**(Tauri 端 JS camelCase 自动映射 snake 参数;HTTP 端顶层 camel→snake 后作 body)——嵌套 `request: SomeStruct` 参数在 HTTP 模式下 body 变成 `{"request": …}` 而 daemon 路由结构体期望顶层字段,Option 字段全体静默 miss(不报错,语义漂移);对应地 **daemon 路由请求结构体用 snake_case 无 rename**(body 已被 invoke 转成 snake)。违例实例:`set_quota_settings` 初版(08-20 任务,质检抓出后改扁平 + snake 结构体)。
