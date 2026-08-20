@@ -34,5 +34,6 @@ pub(crate) use columns::{
 };
 #[allow(unused_imports)]
 pub(crate) use schema_helpers::{
-    migrate_provider_api_keys_to_encrypted, widen_subagent_runs_status_check_for_incomplete,
+    migrate_provider_api_keys_to_encrypted, rebuild_turn_trace_with_run_id,
+    widen_subagent_runs_status_check_for_incomplete,
 };

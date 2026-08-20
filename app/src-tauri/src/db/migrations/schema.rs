@@ -14,7 +14,7 @@ use super::columns::{
     add_subagent_runs_column_if_missing, add_turn_trace_column_if_missing,
 };
 use super::schema_helpers::{
-    home_dir_or_dot, migrate_provider_api_keys_to_encrypted,
+    home_dir_or_dot, migrate_provider_api_keys_to_encrypted, rebuild_turn_trace_with_run_id,
     widen_subagent_runs_status_check_for_incomplete,
 };
 
@@ -944,6 +944,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TABLE IF NOT EXISTS turn_trace (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id        TEXT NOT NULL,
+            -- 08-20-worker-turn-trace-persist: run 维度并入唯一键。
+            -- '' = 主 loop 行(哨兵空串而非 NULL —— SQLite UNIQUE 视
+            -- NULL 互异,NULL 主行的 (sid,seq) 冲突会插出第二行而不
+            -- 触发 upsert,既有语义破坏);worker 行 = subagent_runs.id。
+            -- 不加 FK:'' 不是合法 subagent_runs.id;subagent_runs 行无
+            -- 独立删除路径(discard_worker 只清 worktree_path),生命
+            -- 周期由 session_id FK CASCADE 兜底(删 session 级联两者)。
+            -- 重建迁移见 schema_helpers::rebuild_turn_trace_with_run_id
+            -- (老库路径;本 CREATE 只罩 greenfield)。
+            run_id            TEXT NOT NULL DEFAULT '',
             seq               INTEGER NOT NULL,
             token_usage_json  TEXT,
             compaction_json   TEXT,
@@ -997,20 +1007,19 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             context_window    INTEGER,
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-            UNIQUE(session_id, seq)
+            UNIQUE(session_id, run_id, seq)
         )
         "#,
     )
     .execute(pool)
     .await?;
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_turn_trace_session_seq
-        ON turn_trace(session_id, seq)
-        "#,
-    )
-    .execute(pool)
-    .await?;
+    // 08-20-worker-turn-trace-persist: 旧 idx_turn_trace_session_seq
+    // (session_id, seq) 不再重建 —— 新 UNIQUE(session_id, run_id, seq)
+    // 的隐式索引前缀 (session_id, run_id) 已覆盖按 session 查主行
+    // (run_id='') 的路径。新 partial index(下方、重建迁移之后创建)
+    // 专服 list_worker_turn_traces(按 run_id 点查);写放大可忽略 ——
+    // worker 行每 run ≤ SUBAGENT_MAX_TURNS(200)轮,且 WHERE run_id != ''
+    // 使主行(海量多数)根本不进索引。
     add_session_audit_events_column_if_missing(pool, "turn_seq", "INTEGER").await?;
     // C7 (2026-08-14): `turn_trace.tools_token` — backfills the new
     // per-turn tools[] token-estimate column on existing turn_trace
@@ -1033,6 +1042,25 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     add_turn_trace_column_if_missing(pool, "at_files_token", "INTEGER").await?;
     add_turn_trace_column_if_missing(pool, "system_token", "INTEGER").await?;
     add_turn_trace_column_if_missing(pool, "context_window", "INTEGER").await?;
+    // 08-20-worker-turn-trace-persist: 老库重建迁移 —— 把
+    // UNIQUE(session_id, seq) 表重建为 UNIQUE(session_id, run_id, seq)
+    // 并补 run_id 列(SQLite 无法 ALTER 表约束)。必须排在上方 6 个
+    // 列回填**之后**:重建拷贝用显式列清单,老表需先补齐全部遗留列
+    // (拷贝列清单详见 helper 注释)。探针短路:新形状(含 greenfield
+    // 的 CREATE 产物)直接 no-op。
+    rebuild_turn_trace_with_run_id(pool).await?;
+    // partial index `idx_turn_trace_run`(见上方注释)必须在重建
+    // **之后**创建:老形状表没有 run_id 列,先建索引会直接报
+    // "no such column"。greenfield(重建 no-op)与重建后的新表都能
+    // 命中本句。
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_turn_trace_run
+        ON turn_trace(run_id) WHERE run_id != ''
+        "#,
+    )
+    .execute(pool)
+    .await?;
     // B1 (2026-08-16): `models.supports_images` — capability flag for
     // the image-multimodal channel. No-op for greenfield DBs (declared
     // in the CREATE TABLE above); existing rows default to 0 (text

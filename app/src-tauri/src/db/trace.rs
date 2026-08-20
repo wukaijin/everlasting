@@ -1,10 +1,12 @@
 //! E2 (harness trace pipeline, 2026-07-14) — `turn_trace` table CRUD.
 //!
-//! One row per `(session_id, seq)` pair. Each trace dimension
-//! (token_usage / compaction / loop_hint / breadcrumb) is written
-//! by a separate UPSERT that touches only its column, leaving the
-//! others untouched. The `UNIQUE(session_id, seq)` constraint is
-//! the UPSERT anchor.
+//! One row per `(session_id, run_id, seq)` triple (08-20-worker-turn
+//! -trace-persist: run 维度并入唯一键;`run_id=''` 是主 loop 行的
+//! 哨兵 —— worker 行 = `subagent_runs.id`,与父行共享 seq 区间但不
+//! 再互相覆写). Each trace dimension (token_usage / compaction /
+//! loop_hint / breadcrumb) is written by a separate UPSERT that
+//! touches only its column, leaving the others untouched. The
+//! `UNIQUE(session_id, run_id, seq)` constraint is the UPSERT anchor.
 //!
 //! All functions return `Result<T, sqlx::Error>` (no logging) so
 //! the caller decides how to surface the error — the trace
@@ -33,6 +35,10 @@ use crate::llm::types::TokenUsage;
 pub struct TurnTraceRow {
     pub id: i64,
     pub session_id: String,
+    /// 08-20-worker-turn-trace-persist: run 维度。`''` = 主 loop 行
+    /// (哨兵空串,主行恒为它);非空 = `subagent_runs.id`(worker 行,
+    /// 经 `list_worker_turn_traces` 读回)。序列化为 wire `runId`。
+    pub run_id: String,
     pub seq: i64,
     pub token_usage_json: Option<String>,
     pub compaction_json: Option<String>,
@@ -86,10 +92,13 @@ pub struct TurnTraceRow {
 // UPSERT helpers — one per trace dimension
 // ---------------------------------------------------------------------------
 
-/// Upsert the `token_usage_json` column for `(session_id, seq)`.
+/// Upsert the `token_usage_json` column for `(session_id, run_id, seq)`.
 /// Called from the agent loop's `Done { usage }` arm, right after
-/// `update_last_turn_usage` (inside the `!skip_persist` gate so
-/// worker turns don't pollute the parent's trace rows).
+/// `update_last_turn_usage`. 主路传 `run_id = ""`(update 门
+/// `!skip_persist` 不变);worker 路传 run UUID(写点门
+/// `!skip_persist || !run_key.is_empty()`,worker 行落 (父 sid,
+/// run UUID, seq) —— per-turn 度量补盲区,08-20-worker-turn-trace
+/// -persist)。
 ///
 /// The JSON payload is the serialized `TokenUsage` (5-field shape
 /// mirroring `ChatEvent::Done.usage`).
@@ -97,10 +106,11 @@ pub struct TurnTraceRow {
 /// C7 (2026-08-14): `tools_token` is the cl100k estimate of the
 /// serialized `tools[]` array for this turn, written in the same
 /// upsert because both originate from the same `Done`-event write
-/// point. On a `UNIQUE(session_id, seq)` conflict both columns are
-/// rewritten together (a retry re-estimates tools_token from the
-/// same turn's tool list). Other dimensions (compaction / loop_hint
-/// / breadcrumb) are untouched — they have their own upserts.
+/// point. On a `UNIQUE(session_id, run_id, seq)` conflict both
+/// columns are rewritten together (a retry re-estimates
+/// tools_token from the same turn's tool list). Other dimensions
+/// (compaction / loop_hint / breadcrumb) are untouched — they
+/// have their own upserts.
 ///
 /// memory-block-governance WP1 (2026-08-15): `memory_token` rides
 /// the same write point — it is a per-request constant (the memory
@@ -123,6 +133,7 @@ pub struct TurnTraceRow {
 pub async fn upsert_turn_trace_token(
     pool: &SqlitePool,
     session_id: &str,
+    run_id: &str,
     seq: i64,
     usage: &TokenUsage,
     tools_token: Option<u32>,
@@ -135,10 +146,10 @@ pub async fn upsert_turn_trace_token(
     let json = serde_json::to_string(usage).unwrap_or_else(|_| "{}".to_string());
     sqlx::query(
         r#"
-        INSERT INTO turn_trace (session_id, seq, token_usage_json, tools_token, memory_token,
+        INSERT INTO turn_trace (session_id, run_id, seq, token_usage_json, tools_token, memory_token,
                                 images_token, at_files_token, system_token, context_window)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(session_id, seq)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id, run_id, seq)
         DO UPDATE SET token_usage_json = excluded.token_usage_json,
                       tools_token = excluded.tools_token,
                       memory_token = excluded.memory_token,
@@ -149,6 +160,7 @@ pub async fn upsert_turn_trace_token(
         "#,
     )
     .bind(session_id)
+    .bind(run_id)
     .bind(seq)
     .bind(&json)
     .bind(tools_token.map(|t| t as i64))
@@ -162,28 +174,33 @@ pub async fn upsert_turn_trace_token(
     Ok(())
 }
 
-/// Upsert the `compaction_json` column for `(session_id, seq)`.
+/// Upsert the `compaction_json` column for `(session_id, run_id, seq)`.
 /// Called from `agent::trace::record_compaction` at the C3
 /// compaction write point (both normal and `StillOver` branches).
+/// `run_id` 路由同族:主路 `''`,worker 路传 run UUID(08-20 归位
+/// —— 旧行为里 worker 触发的压缩以 (父 sid, worker seq) 写主行,
+/// 与父后续同 seq 的 Done upsert 合并,构成跨归因污染)。
 ///
 /// The JSON payload shape: `{"tokens_before", "tokens_after",
 /// "dropped_count", "degradation"}`.
 pub async fn upsert_turn_trace_compaction(
     pool: &SqlitePool,
     session_id: &str,
+    run_id: &str,
     seq: i64,
     payload: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let json = payload.to_string();
     sqlx::query(
         r#"
-        INSERT INTO turn_trace (session_id, seq, compaction_json)
-        VALUES (?, ?, ?)
-        ON CONFLICT(session_id, seq)
+        INSERT INTO turn_trace (session_id, run_id, seq, compaction_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, run_id, seq)
         DO UPDATE SET compaction_json = excluded.compaction_json
         "#,
     )
     .bind(session_id)
+    .bind(run_id)
     .bind(seq)
     .bind(&json)
     .execute(pool)
@@ -191,27 +208,30 @@ pub async fn upsert_turn_trace_compaction(
     Ok(())
 }
 
-/// Upsert the `loop_hint_json` column for `(session_id, seq)`.
+/// Upsert the `loop_hint_json` column for `(session_id, run_id, seq)`.
 /// Called from `agent::trace::record_loop_hint` at the C2 soft-hint
 /// write point (1-2 consecutive hits, before the ≥3 intervention).
+/// `run_id` 路由同 `upsert_turn_trace_compaction`(worker 归位)。
 ///
 /// The JSON payload shape: `{"hit_count", "verdict_kind"}`.
 pub async fn upsert_turn_trace_loop_hint(
     pool: &SqlitePool,
     session_id: &str,
+    run_id: &str,
     seq: i64,
     payload: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let json = payload.to_string();
     sqlx::query(
         r#"
-        INSERT INTO turn_trace (session_id, seq, loop_hint_json)
-        VALUES (?, ?, ?)
-        ON CONFLICT(session_id, seq)
+        INSERT INTO turn_trace (session_id, run_id, seq, loop_hint_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, run_id, seq)
         DO UPDATE SET loop_hint_json = excluded.loop_hint_json
         "#,
     )
     .bind(session_id)
+    .bind(run_id)
     .bind(seq)
     .bind(&json)
     .execute(pool)
@@ -219,28 +239,32 @@ pub async fn upsert_turn_trace_loop_hint(
     Ok(())
 }
 
-/// Upsert the `breadcrumb_json` column for `(session_id, seq)`.
+/// Upsert the `breadcrumb_json` column for `(session_id, run_id, seq)`.
 /// Called from `agent::trace::record_breadcrumb` at the workflow
-/// breadcrumb injection write point.
+/// breadcrumb injection write point. `run_id` 恒 `''` —— worker 的
+/// `workflow_ctx = None`,`record_breadcrumb` 在 worker 路径根本不
+/// 触发(db 层 API 统一加参,此族只是签名对齐)。
 ///
 /// The JSON payload shape: `{"task_slug", "status",
 /// "breadcrumb_text"}`.
 pub async fn upsert_turn_trace_breadcrumb(
     pool: &SqlitePool,
     session_id: &str,
+    run_id: &str,
     seq: i64,
     payload: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let json = payload.to_string();
     sqlx::query(
         r#"
-        INSERT INTO turn_trace (session_id, seq, breadcrumb_json)
-        VALUES (?, ?, ?)
-        ON CONFLICT(session_id, seq)
+        INSERT INTO turn_trace (session_id, run_id, seq, breadcrumb_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, run_id, seq)
         DO UPDATE SET breadcrumb_json = excluded.breadcrumb_json
         "#,
     )
     .bind(session_id)
+    .bind(run_id)
     .bind(seq)
     .bind(&json)
     .execute(pool)
@@ -309,6 +333,10 @@ pub async fn list_speaker_cache_usage(
           AND m.role = 'assistant'
           AND m.speaker IS NOT NULL
           AND t.token_usage_json IS NOT NULL
+          -- 08-20-worker-turn-trace-persist: worker 行(run_id != '')也带
+          -- usage JSON 且与父 messages 共享 seq 区间,join 若不排除会被
+          -- 群聊 speaker 查询误当主行。主行限定,既有语义零变化。
+          AND t.run_id = ''
           AND m.seq = (
               SELECT MAX(m2.seq) FROM messages m2
               WHERE m2.session_id = m.session_id
@@ -335,22 +363,29 @@ pub async fn list_speaker_cache_usage(
 // Read + clear
 // ---------------------------------------------------------------------------
 
-/// Read all turn_trace rows for `session_id`, ordered by `seq ASC`
-/// (chronological). Wired to the `list_turn_traces` Tauri command
-/// for the trace viewer's 回看 mode. Empty / missing session
-/// returns an empty `Vec` (NOT an error).
+/// Read all MAIN-loop `turn_trace` rows for `session_id` (run_id=''
+/// sentinel filter), ordered by `seq ASC` (chronological). Wired to
+/// the `list_turn_traces` Tauri command for the trace viewer's 回看
+/// mode. Empty / missing session returns an empty `Vec` (NOT an
+/// error).
+///
+/// 08-20-worker-turn-trace-persist: worker 行 (run_id != '') 被过滤
+/// —— 既有消费面零变化(前端 traceStore 的 `Map<seq, TurnTrace>`
+/// 按 seq 键控,worker 行与父行共享 seq 区间,混入会互相顶掉;
+/// `list_speaker_cache_usage` 的主行语义同理由 SQL 侧过滤保持)。
+/// worker 行走 [`list_worker_turn_traces`]。
 pub async fn list_turn_traces(
     pool: &SqlitePool,
     session_id: &str,
 ) -> Result<Vec<TurnTraceRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
-        SELECT id, session_id, seq, token_usage_json, compaction_json,
+        SELECT id, session_id, run_id, seq, token_usage_json, compaction_json,
                loop_hint_json, breadcrumb_json, tools_token, memory_token,
                images_token, at_files_token, system_token, context_window,
                created_at
         FROM turn_trace
-        WHERE session_id = ?
+        WHERE session_id = ? AND run_id = ''
         ORDER BY seq ASC
         "#,
     )
@@ -362,6 +397,58 @@ pub async fn list_turn_traces(
             Ok(TurnTraceRow {
                 id: r.try_get("id")?,
                 session_id: r.try_get("session_id")?,
+                run_id: r.try_get("run_id")?,
+                seq: r.try_get("seq")?,
+                token_usage_json: r.try_get("token_usage_json")?,
+                compaction_json: r.try_get("compaction_json")?,
+                loop_hint_json: r.try_get("loop_hint_json")?,
+                breadcrumb_json: r.try_get("breadcrumb_json")?,
+                tools_token: r.try_get("tools_token")?,
+                memory_token: r.try_get("memory_token")?,
+                images_token: r.try_get("images_token")?,
+                at_files_token: r.try_get("at_files_token")?,
+                system_token: r.try_get("system_token")?,
+                context_window: r.try_get("context_window")?,
+                created_at: r.try_get("created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Read all `turn_trace` rows for one worker run (`run_id` =
+/// `subagent_runs.id`), ordered by `seq ASC`. `run_id` is globally
+/// unique (UUID), so no session scoping is needed. Missing run /
+/// pre-migration run (no per-turn rows — the pre-08-20 worker path
+/// never wrote turn_trace) returns an empty `Vec` (NOT an error);
+/// the frontend renders its "无 per-turn 记录" empty state.
+///
+/// NOTE: worker 行的 seq 是 worker loop 自己的游标(与父 messages
+/// 的 seq 共享区间但互不参照)—— 按序展示用,勿当全局 seq 消费
+/// (prd Risks)。
+pub async fn list_worker_turn_traces(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Vec<TurnTraceRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, session_id, run_id, seq, token_usage_json, compaction_json,
+               loop_hint_json, breadcrumb_json, tools_token, memory_token,
+               images_token, at_files_token, system_token, context_window,
+               created_at
+        FROM turn_trace
+        WHERE run_id = ?
+        ORDER BY seq ASC
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(TurnTraceRow {
+                id: r.try_get("id")?,
+                session_id: r.try_get("session_id")?,
+                run_id: r.try_get("run_id")?,
                 seq: r.try_get("seq")?,
                 token_usage_json: r.try_get("token_usage_json")?,
                 compaction_json: r.try_get("compaction_json")?,
@@ -449,6 +536,7 @@ mod tests {
         upsert_turn_trace_token(
             &pool,
             &sid,
+            "",
             1,
             &usage,
             Some(7000),
@@ -468,13 +556,13 @@ mod tests {
             "dropped_count": 5,
             "degradation": "none"
         });
-        upsert_turn_trace_compaction(&pool, &sid, 1, &compaction)
+        upsert_turn_trace_compaction(&pool, &sid, "", 1, &compaction)
             .await
             .unwrap();
 
         // Write loop_hint for seq=1.
         let hint = serde_json::json!({"hit_count": 2, "verdict_kind": "soft"});
-        upsert_turn_trace_loop_hint(&pool, &sid, 1, &hint)
+        upsert_turn_trace_loop_hint(&pool, &sid, "", 1, &hint)
             .await
             .unwrap();
 
@@ -484,7 +572,7 @@ mod tests {
             "status": "in_progress",
             "breadcrumb_text": "<workflow-task-meta>..."
         });
-        upsert_turn_trace_breadcrumb(&pool, &sid, 1, &bc)
+        upsert_turn_trace_breadcrumb(&pool, &sid, "", 1, &bc)
             .await
             .unwrap();
 
@@ -528,9 +616,11 @@ mod tests {
         // Write out of order (seq=3, 1, 2).
         for seq in [3i64, 1, 2] {
             let usage = TokenUsage::default();
-            upsert_turn_trace_token(&pool, &sid, seq, &usage, None, None, None, None, None, None)
-                .await
-                .unwrap();
+            upsert_turn_trace_token(
+                &pool, &sid, "", seq, &usage, None, None, None, None, None, None,
+            )
+            .await
+            .unwrap();
         }
 
         let rows = list_turn_traces(&pool, &sid).await.unwrap();
@@ -546,12 +636,16 @@ mod tests {
         let sid = seed_session(&pool).await;
 
         let usage = TokenUsage::default();
-        upsert_turn_trace_token(&pool, &sid, 1, &usage, None, None, None, None, None, None)
-            .await
-            .unwrap();
-        upsert_turn_trace_token(&pool, &sid, 2, &usage, None, None, None, None, None, None)
-            .await
-            .unwrap();
+        upsert_turn_trace_token(
+            &pool, &sid, "", 1, &usage, None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
+        upsert_turn_trace_token(
+            &pool, &sid, "", 2, &usage, None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(list_turn_traces(&pool, &sid).await.unwrap().len(), 2);
 
@@ -574,6 +668,7 @@ mod tests {
         upsert_turn_trace_token(
             &pool,
             &sid,
+            "",
             1,
             &usage1,
             Some(111),
@@ -593,6 +688,7 @@ mod tests {
         upsert_turn_trace_token(
             &pool,
             &sid,
+            "",
             1,
             &usage2,
             Some(222),
@@ -680,6 +776,7 @@ mod tests {
         upsert_turn_trace_token(
             &pool,
             &sid,
+            "",
             1,
             &usage,
             Some(425),
@@ -725,14 +822,401 @@ mod tests {
         let sid = seed_session(&pool).await;
 
         let usage = TokenUsage::default();
-        upsert_turn_trace_token(&pool, &sid, 1, &usage, None, None, None, None, None, None)
-            .await
-            .unwrap();
+        upsert_turn_trace_token(
+            &pool, &sid, "", 1, &usage, None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
         assert_eq!(list_turn_traces(&pool, &sid).await.unwrap().len(), 1);
 
         crate::db::delete_session(&pool, &sid).await.unwrap();
 
         assert_eq!(list_turn_traces(&pool, &sid).await.unwrap().len(), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // 08-20-worker-turn-trace-persist — run_id 维度(重建迁移 + 路由)
+    // -------------------------------------------------------------------
+
+    /// 老形状的 turn_trace(2026-08-19 形态:全部切片列已回填,唯一键
+    /// 还是 UNIQUE(session_id, seq))+ 遗留索引。镜像 pre-08-20 binary
+    /// 升级前的真实表形,供重建迁移测试手建。
+    async fn create_old_shape_turn_trace(pool: &SqlitePool) {
+        sqlx::query("DROP TABLE turn_trace")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE turn_trace (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id        TEXT NOT NULL,
+                seq               INTEGER NOT NULL,
+                token_usage_json  TEXT,
+                compaction_json   TEXT,
+                loop_hint_json    TEXT,
+                breadcrumb_json   TEXT,
+                tools_token       INTEGER,
+                memory_token      INTEGER,
+                images_token      INTEGER,
+                at_files_token    INTEGER,
+                system_token      INTEGER,
+                context_window    INTEGER,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                UNIQUE(session_id, seq)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_turn_trace_session_seq ON turn_trace(session_id, seq)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// AC1(迁移):老形状表 → 重建后 run_id 列存在、旧行全量 run_id=''
+    /// 且逐列值不错位、新唯一键语义生效(主行二写仍 upsert / 主行与
+    /// worker 行同 seq 共存)、重复跑迁移 no-op。
+    #[tokio::test]
+    async fn rebuild_turn_trace_with_run_id_migrates_old_shape() {
+        use crate::db::migrations::schema_helpers::rebuild_turn_trace_with_run_id;
+
+        let pool = test_pool().await;
+        let sid = seed_session(&pool).await;
+        create_old_shape_turn_trace(&pool).await;
+
+        // 一条每个列都塞了可区分值的遗留行 —— 重建用显式列清单拷贝,
+        // 任何列错位都会在这里现形(not just row count)。
+        sqlx::query(
+            r#"
+            INSERT INTO turn_trace (session_id, seq, token_usage_json, compaction_json,
+                                    loop_hint_json, breadcrumb_json, tools_token,
+                                    memory_token, images_token, at_files_token,
+                                    system_token, context_window, created_at)
+            VALUES (?, 1, '{"input_tokens":11}', '{"dropped_count":2}', '{"hit_count":3}',
+                    '{"task_slug":"t"}', 111, 222, 333, 444, 555, 666, '2020-01-01 00:00:00')
+            "#,
+        )
+        .bind(&sid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO turn_trace (session_id, seq) VALUES (?, 2)")
+            .bind(&sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+
+        // run_id 列存在且旧行全量 ''(哨兵)。
+        let col_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('turn_trace') WHERE name = 'run_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(col_count, 1, "run_id column must exist after rebuild");
+        let empty_run_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM turn_trace WHERE session_id = ? AND run_id = ''",
+        )
+        .bind(&sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            empty_run_rows, 2,
+            "both legacy rows must backfill run_id=''"
+        );
+
+        // 逐列不错位(显式列清单拷贝的回归锚)。
+        let rows = list_turn_traces(&pool, &sid).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        let legacy = rows.iter().find(|r| r.seq == 1).unwrap();
+        assert_eq!(legacy.run_id, "");
+        assert_eq!(legacy.tools_token, Some(111));
+        assert_eq!(legacy.memory_token, Some(222));
+        assert_eq!(legacy.images_token, Some(333));
+        assert_eq!(legacy.at_files_token, Some(444));
+        assert_eq!(legacy.system_token, Some(555));
+        assert_eq!(legacy.context_window, Some(666));
+        assert_eq!(legacy.created_at, "2020-01-01 00:00:00");
+        assert!(legacy.token_usage_json.as_deref().unwrap().contains("11"));
+        assert!(legacy.compaction_json.is_some());
+        assert!(legacy.loop_hint_json.is_some());
+        assert!(legacy.breadcrumb_json.is_some());
+
+        // 遗留索引不再存在(随 turn_trace_old 一起被 DROP);新 partial
+        // 索引就位。
+        let legacy_idx: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_turn_trace_session_seq'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(legacy_idx, 0, "legacy index must not survive the rebuild");
+        let run_idx: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_turn_trace_run'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(run_idx, 1, "partial index must exist after rebuild");
+
+        // 新唯一键语义:主行 (sid,'',1) 二写仍 upsert(不插第二行)。
+        let usage = TokenUsage {
+            input_tokens: 999,
+            ..Default::default()
+        };
+        upsert_turn_trace_token(
+            &pool,
+            &sid,
+            "",
+            1,
+            &usage,
+            Some(7000),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let main_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM turn_trace WHERE session_id = ? AND run_id = ''",
+        )
+        .bind(&sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            main_rows, 2,
+            "main-row second write must upsert, not insert"
+        );
+
+        // 主行与 worker 行同 seq 共存(worker 复用父 seq 区间的根因场景)。
+        upsert_turn_trace_token(
+            &pool,
+            &sid,
+            "run-uuid-x",
+            1,
+            &usage,
+            Some(8000),
+            None,
+            None,
+            None,
+            None,
+            Some(50_000),
+        )
+        .await
+        .unwrap();
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM turn_trace WHERE session_id = ?")
+            .bind(&sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total, 3, "worker row at colliding seq must coexist");
+        // 读侧路由:list_turn_traces 只见主行,list_worker_turn_traces
+        // 只见该 run 的行。
+        assert_eq!(list_turn_traces(&pool, &sid).await.unwrap().len(), 2);
+        let worker_rows = list_worker_turn_traces(&pool, "run-uuid-x").await.unwrap();
+        assert_eq!(worker_rows.len(), 1);
+        assert_eq!(worker_rows[0].seq, 1);
+        assert_eq!(worker_rows[0].run_id, "run-uuid-x");
+        assert_eq!(worker_rows[0].tools_token, Some(8000));
+        assert_eq!(worker_rows[0].context_window, Some(50_000));
+
+        // 二次跑 no-op:探针短路,行数与 id 均不动(重建会重排 id)。
+        let ids_before: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM turn_trace WHERE session_id = ? ORDER BY id")
+                .bind(&sid)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        let ids_after: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM turn_trace WHERE session_id = ? ORDER BY id")
+                .bind(&sid)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(ids_before, ids_after, "rebuild re-run must be a no-op");
+    }
+
+    /// AC1(探针边界):表不存在 → helper 直接 Ok(不建表 —— greenfield
+    /// CREATE 归 run_migrations 管);run_migrations 全量跑后(greenfield
+    /// 库)再跑 helper 同样 no-op。
+    #[tokio::test]
+    async fn rebuild_turn_trace_missing_table_is_noop() {
+        use crate::db::migrations::schema_helpers::rebuild_turn_trace_with_run_id;
+
+        let pool = test_pool().await;
+        sqlx::query("DROP TABLE turn_trace")
+            .execute(&pool)
+            .await
+            .unwrap();
+        rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        let table_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'turn_trace'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(table_count, 0, "helper must not create the table itself");
+
+        // greenfield 路径:test_pool 的 run_migrations 已建新形状表,
+        // helper 重跑必须短路(AC1 greenfield no-op 语义)。
+        run_migrations(&pool).await.unwrap();
+        rebuild_turn_trace_with_run_id(&pool).await.unwrap();
+        let col_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('turn_trace') WHERE name = 'run_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(col_count, 1);
+    }
+
+    /// AC1 补充:完整 run_migrations 重跑(模拟旧库升级 → 再升级)幂等。
+    #[tokio::test]
+    async fn run_migrations_rebuild_is_idempotent_after_manual_old_shape() {
+        let pool = test_pool().await;
+        let sid = seed_session(&pool).await;
+        create_old_shape_turn_trace(&pool).await;
+        sqlx::query("INSERT INTO turn_trace (session_id, seq) VALUES (?, 1)")
+            .bind(&sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // 全量重跑(而非直呼 helper)—— 验证迁移挂在链上且可重复。
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let rows = list_turn_traces(&pool, &sid).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_id, "");
+    }
+
+    /// db 层 run_id 路由(design §5「4 个 upsert 的 run_id 透传,至少
+    /// token + compaction 两族」):同 seq 的主行与 worker 行各自独立
+    /// upsert / 互不覆写;compaction 族 worker 行不落主行。
+    #[tokio::test]
+    async fn upsert_routes_by_run_id_across_families() {
+        let pool = test_pool().await;
+        let sid = seed_session(&pool).await;
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_input_tokens: 1,
+            cache_read_input_tokens: 2,
+            context_input_tokens: 13,
+        };
+
+        // token 族:主行 (sid,'',1) 与 worker 行 (sid,'run-a',1)。
+        upsert_turn_trace_token(
+            &pool,
+            &sid,
+            "",
+            1,
+            &usage,
+            Some(100),
+            None,
+            None,
+            None,
+            None,
+            Some(200_000),
+        )
+        .await
+        .unwrap();
+        upsert_turn_trace_token(
+            &pool,
+            &sid,
+            "run-a",
+            1,
+            &usage,
+            Some(200),
+            None,
+            None,
+            None,
+            None,
+            Some(50_000),
+        )
+        .await
+        .unwrap();
+        // worker 行二写:只覆写该 run 的行(second-writer-wins 限同键)。
+        upsert_turn_trace_token(
+            &pool,
+            &sid,
+            "run-a",
+            1,
+            &usage,
+            Some(250),
+            None,
+            None,
+            None,
+            None,
+            Some(50_000),
+        )
+        .await
+        .unwrap();
+
+        let main = list_turn_traces(&pool, &sid).await.unwrap();
+        assert_eq!(main.len(), 1);
+        assert_eq!(main[0].run_id, "");
+        assert_eq!(
+            main[0].tools_token,
+            Some(100),
+            "worker write must not touch the main row"
+        );
+        let worker = list_worker_turn_traces(&pool, "run-a").await.unwrap();
+        assert_eq!(worker.len(), 1);
+        assert_eq!(worker[0].tools_token, Some(250));
+        assert_eq!(worker[0].session_id, sid);
+
+        // compaction 族:worker 触发的压缩写 (sid,'run-b',7),不落主行。
+        let compaction = serde_json::json!({
+            "tokens_before": 5000, "tokens_after": 3000,
+            "dropped_count": 5, "degradation": "none"
+        });
+        upsert_turn_trace_compaction(&pool, &sid, "run-b", 7, &compaction)
+            .await
+            .unwrap();
+        // loop_hint 族同款路由。
+        upsert_turn_trace_loop_hint(
+            &pool,
+            &sid,
+            "run-b",
+            7,
+            &serde_json::json!({"hit_count": 1, "verdict_kind": "soft"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            list_turn_traces(&pool, &sid)
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.compaction_json.is_none() && r.loop_hint_json.is_none()),
+            "worker bypass writes must not land on main rows"
+        );
+        let run_b = list_worker_turn_traces(&pool, "run-b").await.unwrap();
+        assert_eq!(run_b.len(), 1);
+        assert!(run_b[0].compaction_json.is_some());
+        assert!(run_b[0].loop_hint_json.is_some());
+        assert_eq!(run_b[0].seq, 7);
+
+        // 读侧空态:未知 run → 空 Vec(前端「无 per-turn 记录」)。
+        assert!(list_worker_turn_traces(&pool, "no-such-run")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     // -------------------------------------------------------------------
@@ -748,9 +1232,9 @@ mod tests {
             Some(j) => {
                 sqlx::query(
                     r#"
-                    INSERT INTO turn_trace (session_id, seq, token_usage_json)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(session_id, seq)
+                    INSERT INTO turn_trace (session_id, run_id, seq, token_usage_json)
+                    VALUES (?, '', ?, ?)
+                    ON CONFLICT(session_id, run_id, seq)
                     DO UPDATE SET token_usage_json = excluded.token_usage_json
                     "#,
                 )
@@ -764,9 +1248,9 @@ mod tests {
             None => {
                 sqlx::query(
                     r#"
-                    INSERT INTO turn_trace (session_id, seq)
-                    VALUES (?, ?)
-                    ON CONFLICT(session_id, seq)
+                    INSERT INTO turn_trace (session_id, run_id, seq)
+                    VALUES (?, '', ?)
+                    ON CONFLICT(session_id, run_id, seq)
                     DO UPDATE SET token_usage_json = NULL
                     "#,
                 )

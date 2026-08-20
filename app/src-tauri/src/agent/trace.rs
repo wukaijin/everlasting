@@ -33,14 +33,24 @@ use crate::state::ChatEventSink;
 /// (the turn is about to abort, but the trace row still captures
 /// the degradation).
 ///
+/// 08-20-worker-turn-trace-persist: `run_id` routes the DB upsert —
+/// `''` for the main loop (现状), the worker's `subagent_runs.id`
+/// for the worker path. 旧行为里 worker 触发的机械压缩无 worker
+/// 门,以 (父 sid, worker seq) 写主行;父后续同 seq 的 Done upsert
+/// 会合并进该行 → 父卡片显示一次从未发生的压缩(跨归因污染)。
+/// emit 侧(ChatEvent)不动 —— worker 事件进 SubagentBufferSink
+/// transcript,现状维持。
+///
 /// **Best-effort**: DB upsert failure is `warn!`-logged and
 /// swallowed. The emit always fires (even if the DB write fails)
 /// so the live panel still sees the signal.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_compaction(
     sink: &Arc<dyn ChatEventSink>,
     db: &SqlitePool,
     rid: &str,
     session_id: &str,
+    run_id: &str,
     seq: i64,
     result: &CompactResult,
 ) {
@@ -68,7 +78,7 @@ pub async fn record_compaction(
         "summary_usage": result.summary_usage,
     });
     if let Err(e) =
-        crate::db::trace::upsert_turn_trace_compaction(db, session_id, seq, &payload).await
+        crate::db::trace::upsert_turn_trace_compaction(db, session_id, run_id, seq, &payload).await
     {
         tracing::warn!(
             error = %e,
@@ -89,12 +99,18 @@ pub async fn record_compaction(
 /// `loop_intervention` audit rows; this helper covers the
 /// pre-intervention turns only.
 ///
+/// 08-20-worker-turn-trace-persist: `run_id` 语义同
+/// [`record_compaction`] —— worker 路径的 loop 软提示路由到 run 行,
+/// 不再以 (父 sid, worker seq) 污染主行。emit 侧不动。
+///
 /// **Best-effort**: same contract as `record_compaction`.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_loop_hint(
     sink: &Arc<dyn ChatEventSink>,
     db: &SqlitePool,
     rid: &str,
     session_id: &str,
+    run_id: &str,
     seq: i64,
     hit_count: u32,
     verdict_kind: &str,
@@ -111,7 +127,7 @@ pub async fn record_loop_hint(
         "verdict_kind": verdict_kind,
     });
     if let Err(e) =
-        crate::db::trace::upsert_turn_trace_loop_hint(db, session_id, seq, &payload).await
+        crate::db::trace::upsert_turn_trace_loop_hint(db, session_id, run_id, seq, &payload).await
     {
         tracing::warn!(
             error = %e,
@@ -133,6 +149,10 @@ pub async fn record_loop_hint(
 ///
 /// `task_slug` / `status` are `None` when there is no active
 /// workflow task (the bootstrap breadcrumb branch).
+///
+/// 08-20-worker-turn-trace-persist: db upsert 恒传 `run_id = ""` ——
+/// worker 路径 `workflow_ctx = None`,本 helper 在 worker loop 根本
+/// 不触发(签名不动;db 层 4 个 upsert 统一加参只为 API 一致)。
 ///
 /// **Best-effort**: same contract as `record_compaction`.
 #[allow(clippy::too_many_arguments)]
@@ -160,7 +180,7 @@ pub async fn record_breadcrumb(
         "breadcrumb_text": breadcrumb_text,
     });
     if let Err(e) =
-        crate::db::trace::upsert_turn_trace_breadcrumb(db, session_id, seq, &payload).await
+        crate::db::trace::upsert_turn_trace_breadcrumb(db, session_id, "", seq, &payload).await
     {
         tracing::warn!(
             error = %e,

@@ -205,6 +205,158 @@ pub(crate) async fn widen_subagent_runs_status_check_for_incomplete(
     Ok(())
 }
 
+/// Rebuild `turn_trace` with the `run_id` column + the widened
+/// UNIQUE constraint (08-20-worker-turn-trace-persist).
+///
+/// SQLite cannot `ALTER` a table constraint, so widening
+/// `UNIQUE(session_id, seq)` → `UNIQUE(session_id, run_id, seq)`
+/// (the upsert anchor) requires the table-rebuild dance — same
+/// 5 steps as [`widen_subagent_runs_status_check_for_incomplete`]
+/// above, with three deliberate differences:
+///
+/// 1. **Probe**: `pragma_table_info('turn_trace')` for a `run_id`
+///    column (more direct than the precedent's
+///    `sqlite_master.sql contains` probe — the column is the
+///    actual migration target). Table missing entirely → return
+///    Ok (the greenfield CREATE in `run_migrations` owns that
+///    case; calling this helper standalone on a pre-schema pool
+///    is a no-op).
+/// 2. **Explicit column list in the copy** (NOT `SELECT *`): the
+///    new `run_id` column sits in the MIDDLE of the column order
+///    (after `session_id`), so a positional `SELECT *` would
+///    mis-align every column after it. The precedent could use
+///    `SELECT *` only because its rebuild kept the identical
+///    column set. The list below must cover every legacy column —
+///    which is why `run_migrations` invokes this AFTER the six
+///    `add_turn_trace_column_if_missing` backfills (an old-shape
+///    table missing e.g. `context_window` would fail the named
+///    SELECT).
+/// 3. **Transaction-wrapped**: rename → create → copy → drop →
+///    index in one `BEGIN IMMEDIATE` (via `pool.begin`), so a
+///    crash cannot leave a half-rebuilt state. Residue safety: if
+///    a pre-tx-era crash somehow left a `turn_trace_old` behind,
+///    the `ALTER TABLE ... RENAME TO turn_trace_old` below fails
+///    loudly on the duplicate name — the `DROP TABLE IF EXISTS`
+///    preamble clears it instead (its rows are already in the
+///    current table or lost with that crash; the probe then
+///    re-runs the rebuild).
+///
+/// **FK safety**: same argument as the `widen_subagent_runs`
+/// precedent — no other table references `turn_trace`, and its
+/// only FK (`session_id → sessions`) keeps pointing at the same
+/// `sessions` rows throughout, so `PRAGMA foreign_keys` is NOT
+/// toggled (avoids polluting the multi-connection test pool's
+/// per-connection pragma state).
+pub(crate) async fn rebuild_turn_trace_with_run_id(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Probe 1: table must exist (greenfield CREATE not yet run /
+    // helper invoked standalone) → nothing to rebuild.
+    let table_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'turn_trace'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    // Probe 2: `run_id` column already present (greenfield CREATE
+    // or a previous rebuild) → short-circuit, re-runs are no-ops.
+    let has_run_id: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('turn_trace') WHERE name = 'run_id'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_run_id > 0 {
+        return Ok(());
+    }
+
+    // Residue guard (see doc comment point 3): a leftover
+    // `turn_trace_old` from an aborted pre-transaction rebuild
+    // would collide with the RENAME below.
+    sqlx::query("DROP TABLE IF EXISTS turn_trace_old")
+        .execute(pool)
+        .await?;
+
+    // Five-step dance inside one transaction (BEGIN IMMEDIATE via
+    // pool.begin — bound to a single pooled connection).
+    let mut tx = pool.begin().await?;
+    // Step 1: rename existing.
+    sqlx::query("ALTER TABLE turn_trace RENAME TO turn_trace_old")
+        .execute(&mut *tx)
+        .await?;
+    // Step 2: create the new-shape table (mirrors the greenfield
+    // CREATE in schema.rs — keep the two in sync).
+    sqlx::query(
+        r#"
+        CREATE TABLE turn_trace (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id        TEXT NOT NULL,
+            run_id            TEXT NOT NULL DEFAULT '',
+            seq               INTEGER NOT NULL,
+            token_usage_json  TEXT,
+            compaction_json   TEXT,
+            loop_hint_json    TEXT,
+            breadcrumb_json   TEXT,
+            tools_token       INTEGER,
+            memory_token      INTEGER,
+            images_token      INTEGER,
+            at_files_token    INTEGER,
+            system_token      INTEGER,
+            context_window    INTEGER,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id, run_id, seq)
+        )
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    // Step 3: copy rows with an EXPLICIT column list — old rows
+    // are all main-loop rows, so run_id seeds '' (the sentinel).
+    // NOT SELECT *: run_id is new and sits mid-order (see doc
+    // comment point 2).
+    sqlx::query(
+        r#"
+        INSERT INTO turn_trace (id, session_id, run_id, seq,
+                                token_usage_json, compaction_json,
+                                loop_hint_json, breadcrumb_json,
+                                tools_token, memory_token, images_token,
+                                at_files_token, system_token,
+                                context_window, created_at)
+        SELECT id, session_id, '', seq,
+               token_usage_json, compaction_json,
+               loop_hint_json, breadcrumb_json,
+               tools_token, memory_token, images_token,
+               at_files_token, system_token,
+               context_window, created_at
+        FROM turn_trace_old
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    // Step 4: drop the old table (its indexes — incl. the legacy
+    // idx_turn_trace_session_seq — go with it; the new UNIQUE
+    // covers that lookup path with its (session_id, run_id)
+    // prefix).
+    sqlx::query("DROP TABLE turn_trace_old")
+        .execute(&mut *tx)
+        .await?;
+    // Step 5: re-create the worker-rows partial index (the
+    // run_migrations-level CREATE INDEX after this helper covers
+    // the greenfield path; doing it here too keeps a standalone
+    // rebuild self-contained. IF NOT EXISTS makes the double
+    // create a no-op.)
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_turn_trace_run
+        ON turn_trace(run_id) WHERE run_id != ''
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// `std::env::home_dir` was removed; this is the cross-platform
 /// fallback. If the env vars are unset we fall back to "." so the
 /// legacy row has *some* path (it'll be wrong, but the row will
