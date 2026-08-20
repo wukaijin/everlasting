@@ -631,3 +631,30 @@ unified-context-budget 留下的小额 follow-up 全程落地。研究先行发�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 106: docs 同步 08-19/20 落地——五特性文档回归
+
+**Date**: 2026-08-20
+**Task**: docs 同步 08-19/20 落地——五特性文档回归
+**Branch**: `main`
+
+### Summary
+
+代码 08-19/20 连续落地五特性(unified-context-budget 统一预算+关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量+turn_trace 表重建),而 docs/ 全部停在 08-18,多处表述与代码现状直接冲突。按优先级回归六个文档:DEBUG_DB(turn_trace 唯一键 UNIQUE(session_id,run_id,seq)+run_id 空串哨兵+at_files/system/context_window 三列+idx_turn_trace_run+查询示例补 worker 行)、CONTEXT(MAX_TURNS 硬兜底改软卡询问语义+AuditKind 25→27+命名约定补 5 条目)、ARCHITECTURE(状态块/§1.6 补 5 续接特性+§2.5.5 触发口径改三部件加法+新增 §2.5.14 budget 硬卡/§2.5.15 softcap·compact·handoff·worker trace 两节+§2.5.8 AuditKind 列表)、DESIGN(三处 MAX_TURNS 兜底表述+C3+ 触发口径)、ROADMAP(§1.2 补 08-19/20 五行)、BACKLOG(统一预算待办标完成)。spec 侧(.trellis/spec)本就与代码同步,无需回写。坑:ROADMAP C2 06-24 历史行保留原文+加软卡指注,不改写历史;INTERLEAVED-THINKING-DESIGN 的 UNIQUE(session_id,seq) 是 messages 表约束,与 turn_trace 无关不动;ARCHITECTURE AuditKind 列表首次遗漏 27 类更新,复检 grep 兜住。验证:grep 复查无遗留旧表述(仅历史指注)、ROADMAP 表格管道数 5 列一致、git diff 6 文件 +66/-24。提交 e352704。
+
+### Main Changes
+
+- DEBUG_DB.md: turn_trace 表 12 + 索引 + 查询示例 #8/8b 同步 run 维度
+- CONTEXT.md / ARCHITECTURE.md / DESIGN.md: MAX_TURNS 软卡 + AuditKind 27 类 + 触发口径
+- ROADMAP.md §1.2 五行 + BACKLOG.md 预算待办标完成
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e352704` | (see git log) |
+
+### Status
+
+[OK] **Completed**
