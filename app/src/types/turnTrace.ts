@@ -121,6 +121,12 @@ export interface TokenUsagePayload {
 export interface TurnTraceRow {
   id: number;
   sessionId: string;
+  /** 08-20-worker-turn-trace-persist: run 维度 —— `''` = 主 loop 行,
+   *  worker 行 = `subagent_runs.id`。`list_turn_traces` 只回主行,
+   *  worker 行走 `list_worker_turn_traces`。optional 而非必填:
+   *  回滚兼容(新前端 + 旧后端 payload 无此字段)+ 既有 fixture
+   *  零改动;消费点以 `?? ''` 容错(store 归一化时兜底)。 */
+  runId?: string;
   seq: number;
   tokenUsageJson: string | null;
   compactionJson: string | null;

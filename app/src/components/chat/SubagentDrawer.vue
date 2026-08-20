@@ -47,6 +47,7 @@ import { truncate } from "../../utils/useTruncate";
 import { renderMarkdown } from "../../utils/markdown";
 import DrawerSection from "./DrawerSection.vue";
 import DrawerPromptCard from "./DrawerPromptCard.vue";
+import WorkerTurnTraceList from "./WorkerTurnTraceList.vue";
 import DrawerThinkingBlock from "./DrawerThinkingBlock.vue";
 import DrawerToolCallCard from "./DrawerToolCallCard.vue";
 import DrawerPermissionAskCard from "./DrawerPermissionAskCard.vue";
@@ -833,6 +834,12 @@ function isPermissionAskLive(rid: string): boolean {
               </template>
             </div>
           </div>
+
+          <!-- 08-20-worker-turn-trace-persist: per-run「Token 明细」
+               折叠区。worker 行为 per-turn 度量(turn_trace 的 run 维度),
+               不随 transcript 分段 —— 放 footer 区(Merge 控件之上),
+               组件自带收起态与拉取时机(run 活动中 expand 即 force 重拉)。 -->
+          <WorkerTurnTraceList v-if="run" :run-id="run.id" />
 
           <!-- L3b PR4 (2026-06-27): Merge / Discard controls for
                completed workers with preserved branches. The

@@ -80,6 +80,11 @@ import {
   parseConflictFiles,
 } from "./subagentRuns.types";
 import { RunAccumulator, parseTranscriptJson } from "./runAccumulator";
+import {
+  parseTurnTraceRow,
+  type TurnTrace,
+  type TurnTraceRow,
+} from "../types/turnTrace";
 import { useProjectsStore } from "./projects";
 import { useChatStore } from "./chat";
 
@@ -207,6 +212,22 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *  button on run B). The drawer reads `mergeStateByRunId.get(rid)`
    *  to drive its disabled + spinner rendering. */
   const mergeStateByRunId = reactive(new Map<string, MergeState>());
+
+  /** 08-20-worker-turn-trace-persist: per-runId worker turn_trace
+   *  rows (parsed `TurnTrace[]`, ordered seq ASC by the SQL). Fed by
+   *  `loadRunTurnTraces` (the drawer's「Token 明细」expander). Sticky
+   *  cache — survives drawer close like `getRunCache`; cleared with
+   *  the run in `clearSession`. Only worker turns land here; the
+   *  main loop's rows stay in traceStore (`list_turn_traces`). */
+  const runTracesByRunId = reactive(new Map<string, TurnTrace[]>());
+
+  /** Per-runId loading flag for `loadRunTurnTraces` (drawer spinner). */
+  const runTracesLoading = reactive(new Map<string, boolean>());
+
+  /** Per-runId error message for the last failed fetch (empty slot =
+   *  no error). The drawer renders one degraded line, not a toast —
+   *  trace viewing is a secondary inspection surface. */
+  const runTracesError = reactive(new Map<string, string>());
 
   // -----------------------------------------------------------------------
   // API
@@ -521,6 +542,11 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       // A delete mid-merge shouldn't strand the run's spinner
       // (the merge would fail on the missing row anyway).
       mergeStateByRunId.delete(s.id);
+      // 08-20-worker-turn-trace-persist: drop the per-run token
+      // trace cache alongside the run row it belongs to.
+      runTracesByRunId.delete(s.id);
+      runTracesLoading.delete(s.id);
+      runTracesError.delete(s.id);
       const t = debounceTimers.get(s.id);
       if (t !== undefined) {
         clearTimeout(t);
@@ -652,6 +678,53 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
   }
 
   // -----------------------------------------------------------------------
+  // 08-20-worker-turn-trace-persist: per-run worker turn-trace fetch
+  // -----------------------------------------------------------------------
+
+  /** Load the worker's per-turn turn_trace rows for the「Token 明细」
+   *  expander in SubagentDrawer (WorkerTurnTraceList).
+   *
+   *  Fetch semantics: skipped when a fetch is already in flight, and
+   *  when the run already has cached rows unless `force` — the drawer
+   *  passes `force` only while the run is still `running` (worker
+   *  rows accumulate live, one per Done event), so terminal runs
+   *  fetch exactly once (sticky cache) and running runs refresh on
+   *  each expand.
+   *
+   *  Failure: records `runTracesError` (drawer renders a degraded
+   *  line) and KEEPS any previously cached rows. Unknown /
+   *  pre-migration runs return an empty Vec from the backend (not an
+   *  error) — the drawer shows its empty state.
+   *
+   *  Rollback tolerance: an older backend omits `runId` on the wire
+   *  → normalized to `""` here so the typed `TurnTraceRow.runId`
+   *  contract holds for downstream consumers. */
+  async function loadRunTurnTraces(
+    runId: string,
+    opts?: { force?: boolean },
+  ): Promise<void> {
+    if (runTracesLoading.get(runId)) return;
+    if (!opts?.force && runTracesByRunId.has(runId)) return;
+    runTracesLoading.set(runId, true);
+    runTracesError.delete(runId);
+    try {
+      const rows = await transport.invoke<TurnTraceRow[]>(
+        "list_worker_turn_traces",
+        { runId },
+      );
+      const normalized = (Array.isArray(rows) ? rows : []).map((r) => ({
+        ...r,
+        runId: r.runId ?? "",
+      }));
+      runTracesByRunId.set(runId, normalized.map(parseTurnTraceRow));
+    } catch (e) {
+      runTracesError.set(runId, extractErrorMessage(e));
+    } finally {
+      runTracesLoading.delete(runId);
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Drawer-derived getters
   // -----------------------------------------------------------------------
 
@@ -684,6 +757,11 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     // reads `mergeStateByRunId.get(openRunId)` to drive button
     // disabled + spinner rendering.
     mergeStateByRunId,
+    // 08-20-worker-turn-trace-persist: per-run worker turn_trace
+    // rows + fetch state (drawer「Token 明细」expander).
+    runTracesByRunId,
+    runTracesLoading,
+    runTracesError,
     // actions
     fetchForSession,
     fetchRun,
@@ -694,6 +772,8 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     // L3b PR4: merge / discard worker branch actions.
     mergeWorker,
     discardWorker,
+    // 08-20-worker-turn-trace-persist: per-run turn-trace fetch.
+    loadRunTurnTraces,
     // lifecycle
     start,
     stop,

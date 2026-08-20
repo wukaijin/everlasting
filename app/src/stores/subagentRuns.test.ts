@@ -826,6 +826,130 @@ describe("useSubagentRunsStore", () => {
       expect(final.text).toBe("found 3 files");
     }
   });
+
+  // 08-20-worker-turn-trace-persist: per-run worker turn-trace fetch
+  // (drawer「Token 明细」expander data path).
+  describe("loadRunTurnTraces", () => {
+    /** Minimal `TurnTraceRow` wire fixture — a worker turn with usage
+     *  + the slices workers actually carry (tools/system/window);
+     *  memory/images/@文件 stay null per the worker row contract. */
+    function traceRow(overrides: Partial<import("../types/turnTrace").TurnTraceRow> = {}) {
+      return {
+        id: 1,
+        sessionId: "sess-parent",
+        runId: "run-1",
+        seq: 42,
+        tokenUsageJson:
+          '{"input_tokens":1000,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":400,"context_input_tokens":1410}',
+        compactionJson: null,
+        loopHintJson: null,
+        breadcrumbJson: null,
+        toolsToken: 700,
+        memoryToken: null,
+        imagesToken: null,
+        atFilesToken: null,
+        systemToken: 2500,
+        contextWindow: 200000,
+        createdAt: "2026-08-20 00:00:00",
+        ...overrides,
+      } satisfies import("../types/turnTrace").TurnTraceRow;
+    }
+
+    it("invokes list_worker_turn_traces + parses rows into runTracesByRunId", async () => {
+      const store = useSubagentRunsStore();
+      invokeMock.mockResolvedValueOnce([traceRow(), traceRow({ id: 2, seq: 43 })]);
+
+      await store.loadRunTurnTraces("run-1");
+
+      expect(invokeMock).toHaveBeenCalledWith("list_worker_turn_traces", {
+        runId: "run-1",
+      });
+      const traces = store.runTracesByRunId.get("run-1");
+      expect(traces?.length).toBe(2);
+      // Parsed via parseTurnTraceRow: raw *_json → typed sub-objects.
+      expect(traces?.[0].tokenUsage?.input_tokens).toBe(1000);
+      expect(traces?.[0].tokenUsage?.context_input_tokens).toBe(1410);
+      expect(traces?.[0].toolsToken).toBe(700);
+      expect(traces?.[0].systemToken).toBe(2500);
+      expect(traces?.[0].contextWindow).toBe(200000);
+      // seq ASC order is the SQL's contract; rows land as-is.
+      expect(traces?.map((t) => t.seq)).toEqual([42, 43]);
+    });
+
+    it("skips refetch when cached unless force (terminal run fetch-once)", async () => {
+      const store = useSubagentRunsStore();
+      invokeMock.mockResolvedValueOnce([traceRow()]);
+      await store.loadRunTurnTraces("run-1");
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+
+      // Cached + no force → skip (drawer sticky-cache semantics for
+      // terminal runs).
+      await store.loadRunTurnTraces("run-1");
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+
+      // Running run expands → force → refetch.
+      invokeMock.mockResolvedValueOnce([traceRow(), traceRow({ id: 2, seq: 43 })]);
+      await store.loadRunTurnTraces("run-1", { force: true });
+      expect(invokeMock).toHaveBeenCalledTimes(2);
+      expect(store.runTracesByRunId.get("run-1")?.length).toBe(2);
+    });
+
+    it("records runTracesError and KEEPS prior rows on failure", async () => {
+      const store = useSubagentRunsStore();
+      invokeMock.mockResolvedValueOnce([traceRow()]);
+      await store.loadRunTurnTraces("run-1");
+
+      invokeMock.mockRejectedValueOnce("ipc down");
+      await store.loadRunTurnTraces("run-1", { force: true });
+
+      expect(store.runTracesError.get("run-1")).toBe("ipc down");
+      // Prior data survives the failed refresh.
+      expect(store.runTracesByRunId.get("run-1")?.length).toBe(1);
+    });
+
+    it("normalizes a missing runId (old-backend rollback) to empty string", async () => {
+      const store = useSubagentRunsStore();
+      const { runId: _omit, ...legacy } = traceRow();
+      invokeMock.mockResolvedValueOnce([legacy]);
+
+      await store.loadRunTurnTraces("run-1");
+
+      // The typed contract holds for downstream consumers even when
+      // an older backend omits the field on the wire.
+      expect(store.runTracesByRunId.get("run-1")?.[0]).toBeTruthy();
+    });
+
+    it("clearSession drops the run's trace cache alongside the run row", async () => {
+      const store = useSubagentRunsStore();
+      invokeMock.mockResolvedValue([
+        {
+          id: "run-1",
+          parentSessionId: "sess-a",
+          parentRequestId: "req-1",
+          subagentName: "researcher",
+          status: "completed",
+          startedAt: "2026-08-20 00:00:00",
+          finishedAt: "2026-08-20 00:01:00",
+          tokenUsageJson: null,
+          summary: null,
+          finalText: null,
+          task: null,
+          turnCount: 1,
+          worktreePath: null,
+          modelDisplay: null,
+        },
+      ]);
+      await store.fetchForSession("sess-a");
+
+      invokeMock.mockResolvedValueOnce([traceRow()]);
+      await store.loadRunTurnTraces("run-1");
+      expect(store.runTracesByRunId.has("run-1")).toBe(true);
+
+      store.clearSession("sess-a");
+      expect(store.runTracesByRunId.has("run-1")).toBe(false);
+      expect(store.runTracesError.has("run-1")).toBe(false);
+    });
+  });
 });
 
 // -----------------------------------------------------------------------

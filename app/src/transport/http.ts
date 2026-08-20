@@ -92,6 +92,9 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   list_session_audit_events: "permissions",
   list_session_tool_permissions: "permissions",
   list_turn_traces: "permissions",
+  // 08-20-worker-turn-trace-persist: per-run worker turn rows
+  // (SubagentDrawer "Token 明细", PR3 前端消费;后端读路径先落地)。
+  list_worker_turn_traces: "permissions",
   permission_response: "permissions",
   revoke_tool_permission: "permissions",
   set_session_mode: "permissions",
