@@ -310,15 +310,22 @@ function modelLabel(id: string): string {
   <DialogRoot :open="open" @update:open="(v: boolean) => emit('update:open', v)">
     <DialogPortal>
       <DialogOverlay class="gcfg-overlay" />
-      <DialogContent class="gcfg-content" aria-describedby="gcfg-desc">
-        <DialogTitle class="gcfg-title">
-          {{ mode === "create" ? "新建群聊" : "编辑参与者" }}
-        </DialogTitle>
-        <DialogDescription class="gcfg-subtitle">
-          {{ mode === "create"
-            ? "配置 2-3 个参与者(不含主持人)。"
-            : "修改当前群聊的参与者配置。" }}
-        </DialogDescription>
+      <DialogContent class="gcfg-content">
+        <div class="gcfg-header">
+          <div class="gcfg-header__text">
+            <DialogTitle class="gcfg-title">
+              {{ mode === "create" ? "新建群聊" : "编辑参与者" }}
+            </DialogTitle>
+            <DialogDescription class="gcfg-subtitle">
+              {{ mode === "create"
+                ? "配置 2-3 个参与者(不含主持人)。"
+                : "修改当前群聊的参与者配置。" }}
+            </DialogDescription>
+          </div>
+          <DialogClose class="gcfg-close" aria-label="Close">
+            <Icon name="x" />
+          </DialogClose>
+        </div>
 
         <!-- 滚动 body: 错误条 + 参与者列表 + 添加按钮。
              标题/副标题/footer 留在滚动区外, 内容超高时只滚动这里。
@@ -346,7 +353,7 @@ function modelLabel(id: string): string {
                     :data-testid="`gcfg-remove-${idx}`"
                     @click="removeParticipant(idx)"
                   >
-                    ✕
+                    <Icon name="x" :size="14" />
                   </button>
                 </div>
               </div>
@@ -480,142 +487,225 @@ function modelLabel(id: string): string {
           </button>
         </div>
 
-        <DialogClose class="gcfg-close" aria-label="Close">
-          <Icon name="x" />
-        </DialogClose>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>
 </template>
 
 <style scoped>
+/* 样式对齐项目 modal 家族(MemoryModal / RuntimeMemoryModal,规范见
+   .trellis/spec/frontend/popover-pattern.md + design-tokens.md):
+   - 全部改用 --color-* / --radius-* / --text-* / --shadow-* token——旧版
+     引用的 --ev-color-* 在本项目从未定义,一直落在硬编码中性灰 fallback
+     上,色相与普鲁士蓝暗色主题脱节,是"风格不统一"的根因;
+   - A 类 reka-ui Dialog 惯例:mask 不动画,content 做 scale 0.1↔1 zoom,
+     阴影用最大档 --shadow-xl;
+   - 结构 = elevated 头/脚 + border 分隔线 + app 底色滚动 body。
+   z-index 层级沿用家族基线(overlay 2000 / content 2001 / Select portal
+   3000),此 modal 与 RuntimeMemoryModal 不会同时打开,无冲突。 */
 .gcfg-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
+  backdrop-filter: blur(4px);
   z-index: 2000;
 }
 
-/* DialogContent 本身不滚动: 改成 flex 列容器, header/subtitle/footer 固定,
-   只有 .gcfg-body 滚动 (R3)。z-index 与 RuntimeMemoryModal 对齐到同一
-   基线 (overlay 2000 / content 2001), Select portal 内容用 3000, 留足
-   分层空间——此 modal 与 RuntimeMemoryModal 不会同时打开, 无冲突。
-   见 .trellis/spec/frontend/reka-ui-usage.md。 */
+/* DialogContent 本身不滚动: flex 列容器, header/footer 固定, 只有
+   .gcfg-body 滚动。根类名 .gcfg-content 被全局移动端全屏覆盖块
+   (style.css @media max-width:767px)与测试引用,不可改名。 */
 .gcfg-content {
   position: fixed;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: min(640px, 92vw);
-  max-height: 88vh;
+  width: min(640px, calc(100vw - 40px));
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
-  background: var(--ev-color-bg-panel, #1e1e1e);
-  color: var(--ev-color-text, #e0e0e0);
-  border-radius: 8px;
-  padding: 24px;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  outline: none;
+  overflow: hidden;
   z-index: 2001;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: gcfg-zoom var(--duration-modal-in) var(--ease-modal-in) both;
+}
+.gcfg-content[data-state="closed"] {
+  animation: gcfg-zoom-out var(--duration-modal-out) var(--ease-accelerate)
+    forwards;
+}
+
+@keyframes gcfg-zoom {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.1);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes gcfg-zoom-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.1);
+  }
+}
+
+.gcfg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--color-bg-border);
+  background: var(--color-bg-elevated);
+  flex-shrink: 0;
+}
+
+.gcfg-header__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .gcfg-title {
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0 0 4px;
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
 }
 
 .gcfg-subtitle {
-  font-size: 13px;
-  color: var(--ev-color-text-muted, #8a8a8a);
-  margin: 0 0 16px;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
 }
 
-.gcfg-error {
-  background: var(--ev-color-error-bg, #5a1a1a);
-  color: var(--ev-color-error-text, #ffb3b3);
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 13px;
-  margin-bottom: 12px;
+.gcfg-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-base) var(--ease-out);
+}
+.gcfg-close:hover {
+  background: var(--color-bg-border);
+  color: var(--color-text-primary);
 }
 
 /* 滚动 body: 撑满 dialog 剩余高度, 内容超高时只滚这里。
-   min-height:0 是 flex 子项可收缩的关键 (R3)。 */
+   min-height:0 是 flex 子项可收缩的关键; 子项间距统一走 gap。 */
 .gcfg-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 16px;
+  background: var(--color-bg-app);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gcfg-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid
+    color-mix(in srgb, var(--color-tool-error) 20%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
+  color: var(--color-tool-error-text);
+  font-size: var(--text-sm);
 }
 
 .gcfg-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-bottom: 12px;
 }
 
 .gcfg-row {
-  border: 1px solid var(--ev-color-border, #333);
-  border-radius: 6px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
   padding: 12px;
-  background: var(--ev-color-bg-input, #2a2a2a);
+  background: var(--color-bg-surface);
 }
 
 .gcfg-row__head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .gcfg-row__title {
-  font-weight: 500;
-  font-size: 14px;
-}
-
-.gcfg-row__actions {
-  display: flex;
-  gap: 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
 }
 
 .gcfg-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   background: transparent;
-  border: 1px solid var(--ev-color-border, #444);
-  color: var(--ev-color-text, #e0e0e0);
+  border: none;
+  color: var(--color-text-muted);
   cursor: pointer;
-  padding: 2px 6px;
-  font-size: 12px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-base) var(--ease-out);
 }
 .gcfg-icon-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 .gcfg-icon-btn--danger:hover:not(:disabled) {
-  background: var(--ev-color-error-bg, #5a1a1a);
+  background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
+  color: var(--color-tool-error-text);
 }
 
 .gcfg-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .gcfg-field:last-child {
   margin-bottom: 0;
 }
 
 .gcfg-field__label {
-  font-size: 12px;
-  color: var(--ev-color-text-muted, #8a8a8a);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
 }
 
 /* Read-only cache-rate line on each participant row
    (08-10-group-chat-cache-rate). */
 .gcfg-cache-rate {
-  font-size: 12px;
-  color: var(--ev-color-text-muted, #8a8a8a);
-  margin-bottom: 8px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  margin-bottom: 10px;
 }
 
 /* Read-only moderator zone at the bottom of the edit modal. */
@@ -624,57 +714,74 @@ function modelLabel(id: string): string {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  margin-top: 4px;
-  border: 1px solid var(--ev-color-border, #333);
-  border-radius: 6px;
-  background: var(--ev-color-bg-input, #2a2a2a);
-  font-size: 13px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  font-size: var(--text-sm);
 }
 
 .gcfg-moderator__label {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .gcfg-moderator__model {
-  color: var(--ev-color-text-muted, #8a8a8a);
+  color: var(--color-text-secondary);
 }
 
 .gcfg-moderator__rate {
   margin-left: auto;
-  color: var(--ev-color-text-muted, #8a8a8a);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
 }
 
+/* 输入控件比所在卡片(surface)低一层(app),与家族
+   elevated 壳 + surface 输入框的"内嵌暗一档"关系一致。 */
 .gcfg-input,
 .gcfg-textarea {
   width: 100%;
-  background: var(--ev-color-bg-page, #1a1a1a);
-  border: 1px solid var(--ev-color-border, #444);
-  border-radius: 4px;
-  padding: 6px 8px;
-  color: var(--ev-color-text, #e0e0e0);
-  font: inherit;
-  font-size: 13px;
   box-sizing: border-box;
+  padding: 6px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  outline: none;
+}
+.gcfg-input:focus,
+.gcfg-textarea:focus {
+  border-color: var(--color-accent);
+}
+.gcfg-input::placeholder,
+.gcfg-textarea::placeholder {
+  color: var(--color-text-muted);
 }
 
 .gcfg-textarea {
-  font-family: var(--ev-font-mono, monospace);
   resize: vertical;
+  min-height: 80px;
+  line-height: var(--leading-normal);
 }
 
 .gcfg-trigger {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   width: 100%;
-  background: var(--ev-color-bg-page, #1a1a1a);
-  border: 1px solid var(--ev-color-border, #444);
-  border-radius: 4px;
-  padding: 6px 8px;
-  color: var(--ev-color-text, #e0e0e0);
+  padding: 6px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-sm);
   cursor: pointer;
+}
+.gcfg-trigger[data-state="open"] {
+  border-color: var(--color-accent);
 }
 
 /* Select 内容由 <SelectPortal> teleport 到 <body>, 是嵌套渲染的 portal
@@ -684,83 +791,89 @@ function modelLabel(id: string): string {
 :deep(.gcfg-select-content) {
   width: var(--reka-select-trigger-width);
   min-width: var(--reka-select-trigger-width, 240px);
-  background: var(--ev-color-bg-panel, #1e1e1e);
-  border: 1px solid var(--ev-color-border, #444);
-  border-radius: 4px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: 4px;
   max-height: 240px;
   z-index: 3000 !important;
 }
 
 :deep(.gcfg-select-item) {
-  padding: 6px 12px;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 3px;
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
   cursor: pointer;
   outline: none;
 }
 :deep(.gcfg-select-item[data-highlighted]) {
-  background: var(--ev-color-bg-hover, #2a2a2a);
+  background: var(--color-bg-surface);
+}
+:deep(.gcfg-select-item[data-state="checked"]) {
+  color: var(--color-accent-text);
 }
 
 .gcfg-add {
   display: block;
   width: 100%;
   padding: 8px;
-  margin-bottom: 16px;
   background: transparent;
-  border: 1px dashed var(--ev-color-border, #555);
-  border-radius: 4px;
-  color: var(--ev-color-text-muted, #8a8a8a);
+  border: 1px dashed
+    color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
   cursor: pointer;
-  font-size: 13px;
+  transition: background var(--duration-base) var(--ease-out);
 }
 .gcfg-add:hover {
-  background: var(--ev-color-bg-hover, #2a2a2a);
-  color: var(--ev-color-text, #e0e0e0);
+  background: var(--color-bg-surface);
+  border-color: color-mix(in srgb, var(--color-text-muted) 70%, transparent);
+  color: var(--color-text-primary);
 }
 
 .gcfg-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-bg-border);
+  background: var(--color-bg-elevated);
+  flex-shrink: 0;
 }
 
 .gcfg-btn {
-  padding: 8px 16px;
-  border-radius: 4px;
-  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-sm);
   cursor: pointer;
+  transition: background var(--duration-base) var(--ease-out);
 }
 .gcfg-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.gcfg-btn--secondary {
-  background: transparent;
-  border-color: var(--ev-color-border, #444);
-  color: var(--ev-color-text, #e0e0e0);
+.gcfg-btn--secondary:hover:not(:disabled) {
+  background: var(--color-bg-border);
 }
 .gcfg-btn--primary {
-  background: var(--ev-color-accent, #4a8eff);
-  color: white;
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-text-on-accent, #fff);
 }
 .gcfg-btn--primary:hover:not(:disabled) {
-  background: var(--ev-color-accent-hover, #3a7eef);
-}
-
-.gcfg-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  background: transparent;
-  border: none;
-  color: var(--ev-color-text-muted, #8a8a8a);
-  cursor: pointer;
-  padding: 4px;
-}
-.gcfg-close:hover {
-  color: var(--ev-color-text, #e0e0e0);
+  filter: brightness(1.1);
 }
 </style>
