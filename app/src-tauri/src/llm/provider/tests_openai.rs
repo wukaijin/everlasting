@@ -255,6 +255,7 @@ mod tests {
                 WireMessage::Tool {
                     tool_call_id: "call_1".to_string(),
                     content: "127.0.0.1 localhost".to_string(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![],
@@ -705,6 +706,7 @@ mod tests {
             messages: vec![WireMessage::Tool {
                 tool_call_id: "call_1".to_string(),
                 content: "result body".to_string(),
+                images: Vec::new(),
             }],
             tools: vec![],
         };

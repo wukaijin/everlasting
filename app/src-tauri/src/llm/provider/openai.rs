@@ -334,7 +334,28 @@ impl OpenAIProvider {
                 super::wire::WireMessage::Tool {
                     tool_call_id,
                     content,
+                    images,
                 } => {
+                    // R4: OpenAI tool messages are string-only —
+                    // tool-result images degrade to per-image notice
+                    // lines prepended to the content (the strip pass
+                    // already handles the supports_images=false case;
+                    // this arm covers vision models on an
+                    // OpenAI-protocol provider).
+                    let content = if images.is_empty() {
+                        content.clone()
+                    } else {
+                        let notices: Vec<String> = images
+                            .iter()
+                            .map(|img| {
+                                format!(
+                                    "[image: {} — 当前接口不支持工具结果图片，未发送]",
+                                    img.media_type
+                                )
+                            })
+                            .collect();
+                        format!("{}\n{}", notices.join("\n"), content)
+                    };
                     msgs.push(json!({
                         "role": "tool",
                         "tool_call_id": tool_call_id,

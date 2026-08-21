@@ -110,6 +110,8 @@ mod tests {
                     tool_use_id: "toolu_1".to_string(),
                     content: "ok".to_string(),
                     is_error: false,
+                    images: None,
+                    resolved: None,
                 }]),
                 speaker: None,
                 attachments: None,
@@ -146,6 +148,8 @@ mod tests {
                     tool_use_id: "toolu_1".to_string(),
                     content: "ok".to_string(),
                     is_error: false,
+                    images: None,
+                    resolved: None,
                 }]),
                 speaker: None,
                 attachments: None,
@@ -191,6 +195,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id,
                 content,
+                ..
             } => {
                 assert_eq!(tool_call_id, "orphan_1");
                 assert!(
@@ -226,6 +231,8 @@ mod tests {
                         tool_use_id: "ok_1".to_string(),
                         content: "data".to_string(),
                         is_error: false,
+                        images: None,
+                        resolved: None,
                     }]),
                     speaker: None,
                     attachments: None,
@@ -262,6 +269,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
             WireMessage::User {
                 content: "thanks".to_string(),
@@ -297,10 +305,12 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
             WireMessage::Tool {
                 tool_call_id: "toolu_2".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
             WireMessage::User {
                 content: "next".to_string(),
@@ -334,6 +344,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
         ];
         let violations = orphan_tool_call_order(&messages);
@@ -386,6 +397,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
         ];
         let violations = orphan_tool_call_order(&messages);
@@ -420,6 +432,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
         ];
         let violations = orphan_tool_call_order(&messages);
@@ -471,6 +484,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok".to_string(),
+                images: Vec::new(),
             },
         ];
         let violations = orphan_tool_call_order(&messages);
@@ -514,6 +528,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_1".to_string(),
                 content: "ok1".to_string(),
+                images: Vec::new(),
             },
             WireMessage::User {
                 content: "interleaved".to_string(),
@@ -522,6 +537,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "toolu_2".to_string(),
                 content: "ok2".to_string(),
+                images: Vec::new(),
             },
         ];
         let violations = orphan_tool_call_order(&messages);
@@ -593,6 +609,8 @@ mod tests {
                         tool_use_id: "toolu_1".to_string(),
                         content: "127.0.0.1 localhost".to_string(),
                         is_error: false,
+                        images: None,
+                        resolved: None,
                     },
                     ContentBlock::Text {
                         text: "and another:".to_string(),
@@ -602,6 +620,8 @@ mod tests {
                         tool_use_id: "toolu_2".to_string(),
                         content: "ok".to_string(),
                         is_error: false,
+                        images: None,
+                        resolved: None,
                     },
                 ]),
                 speaker: None,
@@ -618,7 +638,7 @@ mod tests {
             matches!(&wire.messages[0], WireMessage::User { content, .. } if content == "looking at result:")
         );
         assert!(
-            matches!(&wire.messages[1], WireMessage::Tool { tool_call_id, content }
+            matches!(&wire.messages[1], WireMessage::Tool { tool_call_id, content, .. }
             if tool_call_id == "toolu_1" && content == "127.0.0.1 localhost")
         );
         assert!(
@@ -797,6 +817,7 @@ mod tests {
             WireMessage::Tool {
                 tool_call_id: "t1".to_string(),
                 content: "result".to_string(),
+                images: Vec::new(),
             },
         ];
         let caps = WireCapabilities {
@@ -1349,5 +1370,166 @@ mod b1_image_tests {
         let v = serde_json::to_value(&msgs[0]).unwrap();
         assert_eq!(v["content"][0]["type"], "image");
         assert_eq!(v["content"][0]["source"]["type"], "base64");
+    }
+
+    // ------------------------------------------------------------------
+    // R4 (08-21-b1-image-followups): tool-result images on the wire —
+    // lift + caps strip degrade + unresolved-refs notice.
+    // ------------------------------------------------------------------
+
+    fn tool_result_image_message(resolved: bool) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "toolu_9".to_string(),
+                content: "[image: shot.png — 已作为图片块发送]".to_string(),
+                is_error: false,
+                images: Some(vec![crate::llm::types::AttachmentRef {
+                    file: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png".to_string(),
+                    media_type: "image/png".to_string(),
+                    source: "read_file".to_string(),
+                    tokens_est: Some(640),
+                }]),
+                resolved: if resolved {
+                    Some(vec![crate::llm::types::ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: "image/png".to_string(),
+                        data: "aGVsbG8=".to_string(),
+                    }])
+                } else {
+                    None
+                },
+            }]),
+            speaker: None,
+            attachments: None,
+        }
+    }
+
+    #[test]
+    fn tool_result_images_lift_to_wire() {
+        let req = ChatRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![tool_result_image_message(true)],
+            system: None,
+            stream: false,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        match &wire.messages[0] {
+            WireMessage::Tool {
+                content, images, ..
+            } => {
+                assert_eq!(images.len(), 1);
+                assert_eq!(images[0].data, "aGVsbG8=");
+                assert!(content.contains("已作为图片块发送"));
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+        // 无图路径:resolved=None 且 images=None 的 ToolResult 不带 images。
+        let plain = ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t".to_string(),
+                content: "ok".to_string(),
+                is_error: false,
+                images: None,
+                resolved: None,
+            }]),
+            speaker: None,
+            attachments: None,
+        };
+        let req2 = ChatRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![plain],
+            system: None,
+            stream: false,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire2 = chat_request_to_wire(req2, None);
+        match &wire2.messages[0] {
+            WireMessage::Tool { images, .. } => assert!(images.is_empty()),
+            other => panic!("expected Tool, got {other:?}"),
+        }
+    }
+
+    /// resolve 被跳过时(refs 仍在、无 resolved):lift 不得静默丢图,
+    /// content 前插「未解析」提示行。
+    #[test]
+    fn unresolved_tool_result_refs_get_notice() {
+        let req = ChatRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![tool_result_image_message(false)],
+            system: None,
+            stream: false,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        match &wire.messages[0] {
+            WireMessage::Tool {
+                content, images, ..
+            } => {
+                assert!(images.is_empty(), "unresolved refs must not hit the wire");
+                assert!(content.contains("未解析"), "{content}");
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+    }
+
+    /// caps=false:工具图降级为占位行 + images 清空。
+    #[test]
+    fn strip_degrades_tool_result_images_when_no_vision() {
+        let caps = WireCapabilities {
+            supports_thinking: false,
+            supports_reasoning_effort: false,
+            supports_thinking_signatures: false,
+            supports_images: false,
+        };
+        let messages = vec![WireMessage::Tool {
+            tool_call_id: "t".to_string(),
+            content: "result body".to_string(),
+            images: vec![crate::llm::provider::wire::WireImage {
+                media_type: "image/png".to_string(),
+                data: "aGVsbG8=".to_string(),
+            }],
+        }];
+        let stripped = strip_unsupported(messages, &caps);
+        match &stripped[0] {
+            WireMessage::Tool {
+                content, images, ..
+            } => {
+                assert!(images.is_empty());
+                assert!(content.contains("当前模型不支持图片"), "{content}");
+                assert!(content.contains("result body"), "{content}");
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+        // vision 模型:原样通过。
+        let messages2 = vec![WireMessage::Tool {
+            tool_call_id: "t".to_string(),
+            content: "result body".to_string(),
+            images: vec![crate::llm::provider::wire::WireImage {
+                media_type: "image/png".to_string(),
+                data: "aGVsbG8=".to_string(),
+            }],
+        }];
+        let kept = strip_unsupported(
+            messages2,
+            &WireCapabilities {
+                supports_thinking: false,
+                supports_reasoning_effort: false,
+                supports_thinking_signatures: false,
+                supports_images: true,
+            },
+        );
+        match &kept[0] {
+            WireMessage::Tool { images, .. } => assert_eq!(images.len(), 1),
+            other => panic!("expected Tool, got {other:?}"),
+        }
     }
 }

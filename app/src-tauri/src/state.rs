@@ -600,12 +600,20 @@ pub struct ToolCallPayload {
 }
 
 /// Event payload for the low-frequency `tool:result` channel.
+///
+/// `images` (08-21-b1-image-followups R6): attachment refs the tool
+/// returned (read_file on an image) — the frontend renders them as
+/// thumbnails in the tool-result card via the attachments GET route.
+/// Absent on every text-only result (old payloads deserialize
+/// compatibly via serde default).
 #[derive(Serialize, Clone)]
 pub struct ToolResultPayload {
     pub request_id: String,
     pub tool_use_id: String,
     pub content: String,
     pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<crate::llm::types::AttachmentRef>>,
 }
 
 // ---------------------------------------------------------------------------

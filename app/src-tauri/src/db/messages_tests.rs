@@ -103,6 +103,8 @@ async fn setup_session_with_3_turns(pool: &SqlitePool) -> String {
         tool_use_id: "toolu_abc".to_string(),
         content: "host1".to_string(),
         is_error: false,
+        images: None,
+        resolved: None,
     }]);
     persist_turn(pool, &s.id, Role::User, &tool_result_content, 2, None, None)
         .await

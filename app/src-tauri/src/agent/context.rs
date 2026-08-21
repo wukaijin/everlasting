@@ -640,6 +640,8 @@ mod tests {
                 tool_use_id: id.to_string(),
                 content: "result body".to_string(),
                 is_error: false,
+                images: None,
+                resolved: None,
             }]),
             speaker: None,
             attachments: None,

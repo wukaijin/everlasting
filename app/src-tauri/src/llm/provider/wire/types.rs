@@ -131,10 +131,24 @@ pub enum WireMessage {
     ///   block.
     /// - OpenAI: a `role: "tool"` message with `tool_call_id` +
     ///   `content` (a string).
+    ///
+    /// `images` (08-21-b1-image-followups R4): resolved base64 images
+    /// the tool returned (read_file on an image). Anthropic emits them
+    /// INSIDE the tool_result content block array (documented form);
+    /// OpenAI's protocol is string-only so its adapter degrades them
+    /// to placeholder text. Empty = the historical no-image shape.
     Tool {
         tool_call_id: String,
         content: String,
+        images: Vec<WireImage>,
     },
+}
+
+/// One resolved image riding a tool result (see `WireMessage::Tool`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WireImage {
+    pub media_type: String,
+    pub data: String,
 }
 
 /// One content block inside an assistant message, or the

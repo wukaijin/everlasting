@@ -648,3 +648,147 @@ fn a5plus_chat_event_retrying_wire_shape() {
     assert_eq!(v["wait_ms"], 1500);
     assert_eq!(v["reason"], "服务器错误 (HTTP 503)");
 }
+
+// ---------------------------------------------------------------------------
+// 08-21-b1-image-followups R4: ToolResult serde 三分支(手动 serde 的
+// 硬闸 —— 无图路径必须与历史 derive 输出逐字节一致)。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tool_result_plain_serializes_byte_identical() {
+    let block = ContentBlock::ToolResult {
+        tool_use_id: "toolu_123".to_string(),
+        content: "127.0.0.1 localhost".to_string(),
+        is_error: false,
+        images: None,
+        resolved: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&block).unwrap(),
+        r#"{"type":"tool_result","tool_use_id":"toolu_123","content":"127.0.0.1 localhost"}"#
+    );
+    // is_error: true 必须出现(skip 过滤只跳 false)。
+    let err_block = ContentBlock::ToolResult {
+        tool_use_id: "t".to_string(),
+        content: "boom".to_string(),
+        is_error: true,
+        images: None,
+        resolved: None,
+    };
+    let s = serde_json::to_string(&err_block).unwrap();
+    assert!(s.contains(r#""is_error":true"#), "{s}");
+}
+
+#[test]
+fn tool_result_images_refs_serialize_without_base64() {
+    let block = ContentBlock::ToolResult {
+        tool_use_id: "t".to_string(),
+        content: "[image: shot.png]".to_string(),
+        is_error: false,
+        images: Some(vec![crate::llm::types::AttachmentRef {
+            file: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png".to_string(),
+            media_type: "image/png".to_string(),
+            source: "read_file".to_string(),
+            tokens_est: Some(640),
+        }]),
+        resolved: None,
+    };
+    let s = serde_json::to_string(&block).unwrap();
+    assert!(
+        s.contains(r#""images":[{"file":"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png""#),
+        "{s}"
+    );
+    assert!(s.contains(r#""tokens_est":640"#), "{s}");
+    assert!(!s.contains("base64"), "DB 形态永不携带 base64: {s}");
+    // 旧 DB 行(无 images 字段)反序列化兼容。
+    let old: ContentBlock =
+        serde_json::from_str(r#"{"type":"tool_result","tool_use_id":"t","content":"ok"}"#).unwrap();
+    assert!(matches!(
+        &old,
+        ContentBlock::ToolResult {
+            images: None,
+            resolved: None,
+            ..
+        }
+    ));
+    // 带 images 的行 round-trip。
+    let rt: ContentBlock = serde_json::from_str(&s).unwrap();
+    assert_eq!(rt, block);
+}
+
+#[test]
+fn tool_result_resolved_serializes_content_block_array() {
+    let block = ContentBlock::ToolResult {
+        tool_use_id: "t".to_string(),
+        content: "[image: shot.png — sent]".to_string(),
+        is_error: false,
+        images: None,
+        resolved: Some(vec![crate::llm::types::ImageSource {
+            source_type: "base64".to_string(),
+            media_type: "image/png".to_string(),
+            data: "aGVsbG8=".to_string(),
+        }]),
+    };
+    let v: serde_json::Value = serde_json::to_value(&block).unwrap();
+    // content 是 block array(image 在前、text 在后),且不出现 images 字段。
+    // (serde_json Map 键序不定,断言走结构不走走 substring。)
+    let arr = v["content"].as_array().expect("content must be an array");
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["type"], "image");
+    assert_eq!(arr[0]["source"]["type"], "base64");
+    assert_eq!(arr[0]["source"]["data"], "aGVsbG8=");
+    assert_eq!(arr[1]["type"], "text");
+    assert_eq!(arr[1]["text"], "[image: shot.png — sent]");
+    assert!(v.get("images").is_none(), "HTTP 形态不得输出 refs 字段");
+    let s = serde_json::to_string(&block).unwrap();
+    // array 形态反序列化对称(仅测试摄入)。
+    let rt: ContentBlock = serde_json::from_str(&s).unwrap();
+    match rt {
+        ContentBlock::ToolResult {
+            resolved,
+            images,
+            content,
+            ..
+        } => {
+            assert_eq!(images, None);
+            assert_eq!(content, "[image: shot.png — sent]");
+            let imgs = resolved.expect("array form must parse into resolved");
+            assert_eq!(imgs.len(), 1);
+            assert_eq!(imgs[0].data, "aGVsbG8=");
+        }
+        _ => panic!("expected ToolResult"),
+    }
+}
+
+#[test]
+fn content_block_other_variants_round_trip_after_manual_serde() {
+    // 手动 serde 改造的回归锁:非 ToolResult 变体的 JSON 形状不变。
+    let cases = vec![
+        (
+            ContentBlock::Text {
+                text: "hi".into(),
+                cache_control: None,
+            },
+            r#"{"type":"text","text":"hi"}"#,
+        ),
+        (
+            ContentBlock::Text {
+                text: "hi".into(),
+                cache_control: Some(crate::llm::types::CacheControl::Ephemeral),
+            },
+            r#"{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}"#,
+        ),
+        (
+            ContentBlock::ImageRef {
+                file: "a.png".into(),
+                media_type: "image/png".into(),
+            },
+            r#"{"type":"image_ref","file":"a.png","media_type":"image/png"}"#,
+        ),
+    ];
+    for (block, expect) in cases {
+        assert_eq!(serde_json::to_string(&block).unwrap(), expect);
+        let rt: ContentBlock = serde_json::from_str(expect).unwrap();
+        assert_eq!(rt, block);
+    }
+}

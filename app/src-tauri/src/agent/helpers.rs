@@ -90,6 +90,8 @@ session was cancelled before the tool could run. The tool {} did not run.",
                 tool_use_id: id.clone(),
                 content,
                 is_error: true,
+                images: None,
+                resolved: None,
             }
         })
         .collect();

@@ -93,6 +93,30 @@ fn media_type_for_ext(ext: &str) -> Option<&'static str> {
     }
 }
 
+/// R3 (08-21-b1-image-followups): whitelist media type for a path's
+/// extension (png / jpg / jpeg / webp; `None` = not an image path).
+/// Shared by the @-file injection and the `read_file` image arm.
+pub fn image_media_type_for_path(path: &Path) -> Option<&'static str> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    media_type_for_ext(&ext)
+}
+
+/// R3: magic-number check for the whitelist media types. A corrupted
+/// or mislabeled "pic.png" whose bytes aren't a real image would 400
+/// the whole provider request once injected — callers degrade/report
+/// instead so the turn survives. Extracted from the @-file path.
+pub fn image_magic_matches(bytes: &[u8], media_type: &str) -> bool {
+    match media_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.len() >= 3 && &bytes[..3] == b"\xff\xd8\xff",
+        "image/webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
 /// Persist one image for `session_id`. Returns the generated file name
 /// (e.g. `"a1b2…32-hex….png"`) that callers store in message metadata
 /// and later hand to [`read_image`] / the GET route.
@@ -371,11 +395,20 @@ pub fn attach_images(messages: &mut [ChatMessage]) -> usize {
 /// to the wire-layer text placeholder instead of failing the turn —
 /// history stays deliverable even if an attachment was deleted out of
 /// band.
+///
+/// R4 (08-21-b1-image-followups): `ToolResult` blocks carrying image
+/// refs (read_file on an image) resolve the same way into
+/// `data.resolved`; the refs are REBUILT to the successfully-loaded
+/// subset so `estimate_images_token` (which runs after this pass)
+/// counts exactly what will be sent. Unreadable refs degrade to a
+/// notice line inside the tool-result content.
 pub async fn resolve_image_refs(
     messages: Vec<ChatMessage>,
     app_data_dir: &Path,
     session_id: &str,
 ) -> Vec<ChatMessage> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
     let mut out = messages;
     for m in out.iter_mut() {
         if m.role != Role::User {
@@ -383,33 +416,88 @@ pub async fn resolve_image_refs(
         }
         if let MessageContent::Blocks(blocks) = &mut m.content {
             for b in blocks.iter_mut() {
-                let ContentBlock::ImageRef { file, media_type } = b else {
-                    continue;
-                };
-                match read_image(app_data_dir, session_id, file).await {
-                    Ok((_, bytes)) => {
-                        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-                        *b = ContentBlock::Image {
-                            source: crate::llm::types::ImageSource {
-                                source_type: "base64".to_string(),
-                                media_type: media_type.clone(),
-                                data: B64.encode(bytes),
-                            },
+                match b {
+                    ContentBlock::ImageRef { file, media_type } => {
+                        match read_image(app_data_dir, session_id, file).await {
+                            Ok((_, bytes)) => {
+                                *b = ContentBlock::Image {
+                                    source: crate::llm::types::ImageSource {
+                                        source_type: "base64".to_string(),
+                                        media_type: media_type.clone(),
+                                        data: B64.encode(bytes),
+                                    },
+                                };
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    session_id = %session_id,
+                                    file = %file,
+                                    error = %e,
+                                    "resolve_image_refs: attachment unreadable — degrading to text placeholder"
+                                );
+                                let label = file.clone();
+                                *b = ContentBlock::Text {
+                                    text: format!("[image: {} — 附件不可读，未发送]", label),
+                                    cache_control: None,
+                                };
+                            }
+                        }
+                    }
+                    ContentBlock::ToolResult {
+                        content,
+                        images,
+                        resolved,
+                        ..
+                    } => {
+                        let Some(refs) = images.clone() else {
+                            continue;
+                        };
+                        if refs.is_empty() || resolved.is_some() {
+                            continue;
+                        }
+                        let mut loaded_sources = Vec::new();
+                        let mut loaded_refs = Vec::new();
+                        let mut failed = Vec::new();
+                        for r in &refs {
+                            match read_image(app_data_dir, session_id, &r.file).await {
+                                Ok((media_type, bytes)) => {
+                                    loaded_sources.push(crate::llm::types::ImageSource {
+                                        source_type: "base64".to_string(),
+                                        media_type,
+                                        data: B64.encode(bytes),
+                                    });
+                                    loaded_refs.push(r.clone());
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        session_id = %session_id,
+                                        file = %r.file,
+                                        error = %e,
+                                        "resolve_image_refs: tool-result image unreadable — degrading"
+                                    );
+                                    failed.push(r.file.clone());
+                                }
+                            }
+                        }
+                        if !failed.is_empty() {
+                            let notices: Vec<String> = failed
+                                .iter()
+                                .map(|f| format!("[image: {} — 附件不可读，未发送]", f))
+                                .collect();
+                            *content = format!("{}\n{}", notices.join("\n"), content);
+                        }
+                        *resolved = if loaded_sources.is_empty() {
+                            None
+                        } else {
+                            Some(loaded_sources)
+                        };
+                        *images = if loaded_refs.is_empty() {
+                            None
+                        } else {
+                            Some(loaded_refs)
                         };
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            file = %file,
-                            error = %e,
-                            "resolve_image_refs: attachment unreadable — degrading to text placeholder"
-                        );
-                        let label = file.clone();
-                        *b = ContentBlock::Text {
-                            text: format!("[image: {} — 附件不可读，未发送]", label),
-                            cache_control: None,
-                        };
-                    }
+                    _ => continue,
                 }
             }
         }
@@ -422,6 +510,12 @@ pub async fn resolve_image_refs(
 /// Called on the same request clone the provider is about to see, so
 /// the number matches what `context_input` will be billed (P0-1 口径:
 /// 含历史重建的全部 Image 块).
+///
+/// R4: tool-result images (`ToolResult.images`, read_file) carry
+/// their own `tokens_est` inline — no message-level attachments
+/// manifest covers them, so they are summed directly in the block
+/// scan (no pad, no double-count: they are not standalone Image
+/// blocks).
 pub fn estimate_images_token(messages: &[ChatMessage]) -> u32 {
     let mut total = 0u32;
     for m in messages {
@@ -432,11 +526,19 @@ pub fn estimate_images_token(messages: &[ChatMessage]) -> u32 {
             continue;
         };
         for b in blocks {
-            if matches!(
-                b,
-                ContentBlock::Image { .. } | ContentBlock::ImageRef { .. }
-            ) {
-                total += IMAGES_TOKEN_FALLBACK_EACH;
+            match b {
+                ContentBlock::Image { .. } | ContentBlock::ImageRef { .. } => {
+                    total += IMAGES_TOKEN_FALLBACK_EACH;
+                }
+                ContentBlock::ToolResult {
+                    images: Some(refs), ..
+                } => {
+                    total += refs
+                        .iter()
+                        .map(|r| r.tokens_est.unwrap_or(IMAGES_TOKEN_FALLBACK_EACH))
+                        .sum::<u32>();
+                }
+                _ => {}
             }
         }
         // Prefer the precise per-image estimates when present.
@@ -553,5 +655,77 @@ mod agent_helper_tests {
         let dir = std::env::temp_dir().join(format!("everlasting-att2-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // ------------------------------------------------------------------
+    // R4 (08-21-b1-image-followups): tool-result images — resolve + estimate
+    // ------------------------------------------------------------------
+
+    fn tool_result_msg(refs: Vec<AttachmentRef>) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".to_string(),
+                content: "[image: shot.png — 已作为图片块发送]".to_string(),
+                is_error: false,
+                images: Some(refs),
+                resolved: None,
+            }]),
+            speaker: None,
+            attachments: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_tool_result_images_and_rebuild_refs() {
+        let root = tmp_root_pub();
+        let file = save_image(&root, "sessToolImg1", "image/png", b"pngdata".as_slice())
+            .await
+            .unwrap();
+        let msgs = vec![tool_result_msg(vec![
+            aref(&file, Some(64)),
+            aref("ffffffffffffffffffffffffffffffff.png", Some(32)), // missing
+        ])];
+        let msgs = resolve_image_refs(msgs, &root, "sessToolImg1").await;
+        let MessageContent::Blocks(b) = &msgs[0].content else {
+            panic!()
+        };
+        let ContentBlock::ToolResult {
+            content,
+            images,
+            resolved,
+            ..
+        } = &b[0]
+        else {
+            panic!()
+        };
+        // 成功的 ref → resolved(base64);失败 → 降级文案进 content。
+        let imgs = resolved.as_ref().expect("resolved must be Some");
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].data, base64_encode(b"pngdata"));
+        // images 重建为成功子集(estimate 只计将发送的图)。
+        assert_eq!(images.as_ref().unwrap().len(), 1);
+        assert_eq!(images.as_ref().unwrap()[0].file, file);
+        assert!(content.contains("附件不可读"), "{content}");
+        assert!(content.contains("已作为图片块发送"), "{content}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn estimate_counts_tool_result_images_precisely() {
+        let mut msgs = vec![tool_result_msg(vec![
+            aref("a.png", Some(800)),
+            aref("b.png", None), // 无估算 → 1600 垫底
+        ])];
+        // user 文本图(attachments 清单替换路径)与工具图互不 double-count。
+        msgs.push(user_msg("x", vec![aref("c.png", Some(100))]));
+        attach_images(&mut msgs[1..]);
+        let total = estimate_images_token(&msgs);
+        assert_eq!(total, 800 + IMAGES_TOKEN_FALLBACK_EACH + 100);
+    }
+
+    fn base64_encode(bytes: &[u8]) -> String {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        B64.encode(bytes)
     }
 }

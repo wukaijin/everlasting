@@ -486,6 +486,8 @@ fn synthetic_tool_result_message_mirrors_tool_calls() {
             tool_use_id,
             content,
             is_error,
+            images: None,
+            resolved: None,
         } => {
             assert_eq!(tool_use_id, "toolu_abc", "tool_use_id must match");
             assert!(

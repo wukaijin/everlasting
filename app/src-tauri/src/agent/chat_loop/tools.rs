@@ -219,6 +219,7 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: true,
+                            images: None,
                         });
                         return Some((
                             i,
@@ -226,6 +227,8 @@ pub(crate) async fn dispatch_tool_calls(
                                 tool_use_id: id,
                                 content: envelope,
                                 is_error: true,
+                                images: None,
+                                resolved: None,
                             },
                         ));
                     }
@@ -295,6 +298,7 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: false,
+                            images: None,
                         });
                         // No tool_executed audit (tool didn't run
                         // — RULE-A-004's intent applies: don't
@@ -306,6 +310,8 @@ pub(crate) async fn dispatch_tool_calls(
                                 tool_use_id: id,
                                 content: envelope,
                                 is_error: false,
+                                images: None,
+                                resolved: None,
                             },
                         ));
                     }
@@ -321,16 +327,17 @@ pub(crate) async fn dispatch_tool_calls(
                     };
 
                     let tool_exec_start = Instant::now();
-                    let (content, is_error, _update, exit_code) = crate::tools::execute_tool(
-                        &name,
-                        &input,
-                        &current_ctx,
-                        Some(&read_guard),
-                        Some(&session_id),
-                        Some(&skill_cache),
-                        token.clone(),
-                    )
-                    .await;
+                    let (content, is_error, _update, exit_code, images) =
+                        crate::tools::execute_tool(
+                            &name,
+                            &input,
+                            &current_ctx,
+                            Some(&read_guard),
+                            Some(&session_id),
+                            Some(&skill_cache),
+                            token.clone(),
+                        )
+                        .await;
                     // P3: prepend the pitfall footnote (if any)
                     // to the tool result content BEFORE the
                     // envelope wrap, so the LLM reads the hint
@@ -415,6 +422,7 @@ pub(crate) async fn dispatch_tool_calls(
                         tool_use_id: id.clone(),
                         content: envelope_str.clone(),
                         is_error,
+                        images: images.clone(),
                     });
                     Some((
                         i,
@@ -422,6 +430,8 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id,
                             content: envelope_str,
                             is_error,
+                            images,
+                            resolved: None,
                         },
                     ))
                 }
@@ -499,11 +509,14 @@ pub(crate) async fn dispatch_tool_calls(
                         tool_use_id: id.clone(),
                         content: envelope_str.clone(),
                         is_error: true,
+                        images: None,
                     });
                     result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: envelope_str,
                         is_error: true,
+                        images: None,
+                        resolved: None,
                     });
                 }
             }
@@ -656,6 +669,7 @@ pub(crate) async fn dispatch_tool_calls(
                                     tool_use_id: id.clone(),
                                     content: envelope.clone(),
                                     is_error: true,
+                                    images: None,
                                 });
                                 return Some((
                                     i,
@@ -663,6 +677,8 @@ pub(crate) async fn dispatch_tool_calls(
                                         tool_use_id: id,
                                         content: envelope,
                                         is_error: true,
+                                        images: None,
+                                        resolved: None,
                                     },
                                 ));
                             }
@@ -763,6 +779,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 tool_use_id: id.clone(),
                                 content: envelope_str.clone(),
                                 is_error,
+                                images: None,
                             });
                             Some((
                                 i,
@@ -770,6 +787,8 @@ pub(crate) async fn dispatch_tool_calls(
                                     tool_use_id: id,
                                     content: envelope_str,
                                     is_error,
+                                    images: None,
+                                    resolved: None,
                                 },
                             ))
                         }
@@ -846,11 +865,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope_str,
                             is_error,
+                            images: None,
+                            resolved: None,
                         });
                         if cancelled {
                             break;
@@ -907,11 +929,14 @@ pub(crate) async fn dispatch_tool_calls(
                                 tool_use_id: id.clone(),
                                 content: envelope_str.clone(),
                                 is_error,
+                                images: None,
                             });
                             result_blocks.push(ContentBlock::ToolResult {
                                 tool_use_id: id.clone(),
                                 content: envelope_str,
                                 is_error,
+                                images: None,
+                                resolved: None,
                             });
                             if cancelled {
                                 break;
@@ -974,11 +999,14 @@ pub(crate) async fn dispatch_tool_calls(
                                     tool_use_id: id.clone(),
                                     content: envelope_str.clone(),
                                     is_error: true,
+                                    images: None,
                                 });
                                 result_blocks.push(ContentBlock::ToolResult {
                                     tool_use_id: id.clone(),
                                     content: envelope_str,
                                     is_error: true,
+                                    images: None,
+                                    resolved: None,
                                 });
                                 if cancelled {
                                     break;
@@ -1019,11 +1047,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: true,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope,
                             is_error: true,
+                            images: None,
+                            resolved: None,
                         });
                         continue;
                     }
@@ -1100,11 +1131,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope_str,
                             is_error,
+                            images: None,
+                            resolved: None,
                         });
                         if cancelled {
                             break;
@@ -1165,11 +1199,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope_str,
                             is_error,
+                            images: None,
+                            resolved: None,
                         });
                         continue;
                     }
@@ -1257,11 +1294,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope_str,
                             is_error,
+                            images: None,
+                            resolved: None,
                         });
                         if cancelled {
                             break;
@@ -1384,11 +1424,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope_str,
                             is_error,
+                            images: None,
+                            resolved: None,
                         });
                         if cancelled {
                             break;
@@ -1513,11 +1556,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope_str,
                             is_error,
+                            images: None,
+                            resolved: None,
                         });
                         if cancel_parent {
                             cancelled = true;
@@ -1579,11 +1625,14 @@ pub(crate) async fn dispatch_tool_calls(
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: false,
+                            images: None,
                         });
                         result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: envelope,
                             is_error: false,
+                            images: None,
+                            resolved: None,
                         });
                         // No tool_executed audit (tool didn't run — RULE-
                         // A-004's intent). No P4 reflect either (no real
@@ -1602,16 +1651,17 @@ pub(crate) async fn dispatch_tool_calls(
                     };
 
                     let tool_exec_start = Instant::now();
-                    let (content, is_error, update, exit_code) = crate::tools::execute_tool(
-                        name,
-                        input,
-                        &current_ctx,
-                        Some(&read_guard),
-                        Some(&session_id),
-                        Some(&skill_cache),
-                        token.clone(),
-                    )
-                    .await;
+                    let (content, is_error, update, exit_code, images) =
+                        crate::tools::execute_tool(
+                            name,
+                            input,
+                            &current_ctx,
+                            Some(&read_guard),
+                            Some(&session_id),
+                            Some(&skill_cache),
+                            token.clone(),
+                        )
+                        .await;
                     // P3: prepend the pitfall footnote (if any) to the
                     // tool result content BEFORE the envelope wrap, so the
                     // LLM reads the hint together with the tool output.
@@ -1691,11 +1741,14 @@ pub(crate) async fn dispatch_tool_calls(
                         tool_use_id: id.clone(),
                         content: envelope_str.clone(),
                         is_error,
+                        images: images.clone(),
                     });
                     result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: envelope_str,
                         is_error,
+                        images,
+                        resolved: None,
                     });
                     if cancelled {
                         break;

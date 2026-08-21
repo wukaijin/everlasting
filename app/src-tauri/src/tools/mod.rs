@@ -441,7 +441,13 @@ pub async fn execute_tool(
     session_id: Option<&str>,
     skill_cache: Option<&SkillCache>,
     cancel: CancellationToken,
-) -> (String, bool, ToolContextUpdate, Option<i32>) {
+) -> (
+    String,
+    bool,
+    ToolContextUpdate,
+    Option<i32>,
+    Option<Vec<crate::llm::types::AttachmentRef>>,
+) {
     // C1: generic cancel wrapper for all tools. The `biased;` ensures
     // the cancel arm is polled first when both are ready, so a
     // cancelled request returns immediately even if the tool future
@@ -450,7 +456,7 @@ pub async fn execute_tool(
         biased;
         _ = cancel.cancelled() => {
             tracing::info!(tool = %name, "execute_tool: cancelled before/during tool execution");
-            ("Tool execution was cancelled".to_string(), true, ToolContextUpdate::default(), None)
+            ("Tool execution was cancelled".to_string(), true, ToolContextUpdate::default(), None, None)
         }
         result = execute_tool_inner(name, input, ctx, guard, session_id, skill_cache, &cancel) => {
             result
@@ -468,64 +474,75 @@ async fn execute_tool_inner(
     session_id: Option<&str>,
     skill_cache: Option<&SkillCache>,
     cancel: &CancellationToken,
-) -> (String, bool, ToolContextUpdate, Option<i32>) {
+) -> (
+    String,
+    bool,
+    ToolContextUpdate,
+    Option<i32>,
+    Option<Vec<crate::llm::types::AttachmentRef>>,
+) {
     match name {
         "read_file" => {
-            let (out, is_err) = read_file::execute(input, ctx, guard, session_id).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            // R3 (08-21-b1-image-followups): image files return
+            // AttachmentRefs riding the tool result (wire layer
+            // delivers them as image blocks on vision models).
+            let (out, is_err, images) = read_file::execute(input, ctx, guard, session_id).await;
+            (out, is_err, ToolContextUpdate::default(), None, images)
         }
         "write_file" => {
             let (out, is_err) = write_file::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "edit_file" => match (guard, session_id) {
             (Some(g), Some(sid)) => {
                 let (out, is_err) = edit_file::execute(input, ctx, g, sid).await;
-                (out, is_err, ToolContextUpdate::default(), None)
+                (out, is_err, ToolContextUpdate::default(), None, None)
             }
             _ => (
                 "edit_file called without a ReadGuard / session_id; this is a bug.".to_string(),
                 true,
                 ToolContextUpdate::default(),
                 None,
+                None,
             ),
         },
         "shell" => {
             let (out, is_err, update, exit_code) =
                 shell::execute(input, ctx, session_id, cancel).await;
-            (out, is_err, update, exit_code)
+            (out, is_err, update, exit_code, None)
         }
         "grep" => {
             let (out, is_err) = grep::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "glob" => {
             let (out, is_err) = glob::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         // D2②: plain dispatch (no chat_loop interception). Receives
         // `session_id` only for the `(this session)` hit marker.
         "search_history" => {
             let (out, is_err) = search_history::execute(input, ctx, session_id).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "list_dir" => {
             let (out, is_err) = list_dir::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "web_fetch" => {
             let (out, is_err) = web_fetch::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "use_skill" => match skill_cache {
             Some(cache) => {
                 let (out, is_err) = use_skill::execute(input, cache, ctx).await;
-                (out, is_err, ToolContextUpdate::default(), None)
+                (out, is_err, ToolContextUpdate::default(), None, None)
             }
             None => (
                 "use_skill called without a SkillCache; this is a bug.".to_string(),
                 true,
                 ToolContextUpdate::default(),
+                None,
                 None,
             ),
         },
@@ -544,7 +561,7 @@ async fn execute_tool_inner(
             // in-memory handle is always updated — same shape as
             // pre-Step-2.6.
             let (out, is_err) = update_checklist::execute(input, &ctx.checklist, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "create_task" => {
             // 07-10-workflow-task-json-hardening R2: seed a workflow
@@ -555,7 +572,7 @@ async fn execute_tool_inner(
             // update_checklist). Only visible in workflow sessions
             // (filter_tools_for_workflow strips it otherwise).
             let (out, is_err) = create_task::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "run_background_shell" => {
             // L1a: fire-and-forget shell. Returns immediately with
@@ -563,19 +580,19 @@ async fn execute_tool_inner(
             // completion notification is drained at the start of
             // the next agent-loop turn.
             let (out, is_err, update) = run_background_shell::execute(input, ctx, session_id).await;
-            (out, is_err, update, None)
+            (out, is_err, update, None, None)
         }
         "shell_status" => {
             // L1a: query a background shell's current state.
             // Reads-only; no process exit code.
             let (out, is_err, update) = shell_status::execute(input, ctx, session_id).await;
-            (out, is_err, update, None)
+            (out, is_err, update, None, None)
         }
         "shell_kill" => {
             // L1a: SIGKILL a background shell's process group.
             // Idempotent — killing a Done shell is a no-op success.
             let (out, is_err, update) = shell_kill::execute(input, ctx, session_id).await;
-            (out, is_err, update, None)
+            (out, is_err, update, None, None)
         }
         // L3b PR3 (2026-06-27): merge the worker's preserved
         // `worker/<run_id>` branch into the parent session's
@@ -586,7 +603,7 @@ async fn execute_tool_inner(
         "merge_worker" => {
             let (out, is_err, update, exit_code) =
                 merge_worker::execute(input, ctx, session_id).await;
-            (out, is_err, update, exit_code)
+            (out, is_err, update, exit_code, None)
         }
         // L3b PR3 (2026-06-27): discard the worker's preserved
         // branch + worktree (no merge). Fail-fast on an
@@ -594,7 +611,7 @@ async fn execute_tool_inner(
         "discard_worker" => {
             let (out, is_err, update, exit_code) =
                 discard_worker::execute(input, ctx, session_id).await;
-            (out, is_err, update, exit_code)
+            (out, is_err, update, exit_code, None)
         }
         // P2 (2026-06-29): remember tool — agent self-writes a
         // candidate-status memory. Silent Allow (no Tier 4 ask);
@@ -603,7 +620,7 @@ async fn execute_tool_inner(
         // frequency-control accounting.
         "remember" => {
             let (out, is_err) = remember::execute(input, ctx, session_id).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         // use_ui (B9, 2026-07-02): non-blocking display tool. Returns
         // a plain "已渲染 N 个 primitive" ack; the primitives data is
@@ -612,7 +629,7 @@ async fn execute_tool_inner(
         // blocking interception in chat_loop.rs). Tier 5 silent Allow.
         "use_ui" => {
             let (out, is_err) = use_ui::execute(input, ctx, session_id).await;
-            (out, is_err, ToolContextUpdate::default(), None)
+            (out, is_err, ToolContextUpdate::default(), None, None)
         }
         // "remember" | _ => unknown-tool fallback below.
         // `ask_user_question` (2026-06-30) is intentionally NOT
@@ -630,6 +647,7 @@ async fn execute_tool_inner(
             format!("Unknown tool: {}", name),
             true,
             ToolContextUpdate::default(),
+            None,
             None,
         ),
     }

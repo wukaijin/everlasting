@@ -828,6 +828,7 @@ pub async fn run_chat_loop(
             tool_use_id: tool_use_id.clone(),
             content: envelope_str,
             is_error,
+            images: None,
         });
 
         // ⑥ the worker summary is also this turn's assistant text —

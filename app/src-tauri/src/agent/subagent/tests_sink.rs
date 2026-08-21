@@ -114,6 +114,7 @@ mod tests {
             tool_use_id: "toolu_1".to_string(),
             content: "ok".to_string(),
             is_error: false,
+            images: None,
         });
         let transcript = sink.transcript_snapshot();
         assert_eq!(transcript.len(), 3);
@@ -428,6 +429,7 @@ mod tests {
             tool_use_id: "toolu_1".into(),
             content: "ok".into(),
             is_error: false,
+            images: None,
         });
         sink.emit_permission_ask(crate::agent::permissions::PermissionAskPayload {
             rid: "ask-rid".into(),
@@ -536,6 +538,7 @@ mod tests {
             tool_use_id: "toolu_p".into(),
             content: "ok".into(),
             is_error: false,
+            images: None,
         });
         let transcript = sink.transcript_snapshot();
         assert_eq!(transcript.len(), 2);
@@ -574,6 +577,7 @@ mod tests {
             tool_use_id: "toolu_orphan".into(),
             content: "partial".into(),
             is_error: false,
+            images: None,
         });
         let transcript = sink.transcript_snapshot();
         assert_eq!(transcript.len(), 1);
@@ -607,6 +611,7 @@ mod tests {
             tool_use_id: "toolu_a".into(),
             content: "a".into(),
             is_error: false,
+            images: None,
         });
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
@@ -620,6 +625,7 @@ mod tests {
             tool_use_id: "toolu_b".into(),
             content: "b".into(),
             is_error: false,
+            images: None,
         });
         let transcript = sink.transcript_snapshot();
         assert_eq!(transcript.len(), 4);

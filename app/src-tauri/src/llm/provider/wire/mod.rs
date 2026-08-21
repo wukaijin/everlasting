@@ -63,7 +63,7 @@ pub use from_wire::{
 };
 pub use to_wire::{chat_request_to_wire, strip_unsupported};
 #[allow(unused_imports)]
-pub use types::{WireBlock, WireCapabilities, WireMessage, WireRequest, WireTool};
+pub use types::{WireBlock, WireCapabilities, WireImage, WireMessage, WireRequest, WireTool};
 // pub(crate) 项保持原可见性再导出(外部调用点 wire::orphan_* 不变)
 #[allow(unused_imports)]
 pub(crate) use to_wire::{orphan_tool_call_order, orphan_tool_use_ids};

@@ -44,6 +44,8 @@ pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireReq
                           wire layer to keep the conversation going]"
                     .to_string(),
                 is_error: true,
+                images: None,
+                resolved: None,
             })
             .collect();
         messages.push(ChatMessage {
@@ -313,6 +315,8 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                             ContentBlock::ToolResult {
                                 tool_use_id,
                                 content,
+                                images,
+                                resolved,
                                 ..
                             } => {
                                 if !pending.is_empty() {
@@ -322,7 +326,12 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                                 }
                                 out.push(WireMessage::Tool {
                                     tool_call_id: tool_use_id,
-                                    content,
+                                    content: content_with_unresolved_notice(
+                                        content,
+                                        images.as_deref(),
+                                        resolved.as_deref(),
+                                    ),
+                                    images: tool_result_wire_images(resolved.as_deref()),
                                 });
                             }
                             ContentBlock::Thinking { .. }
@@ -349,6 +358,8 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                             ContentBlock::ToolResult {
                                 tool_use_id,
                                 content,
+                                images,
+                                resolved,
                                 ..
                             } => {
                                 if !pending_text.is_empty() {
@@ -359,7 +370,10 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
                                 }
                                 out.push(WireMessage::Tool {
                                     tool_call_id: tool_use_id,
-                                    content,
+                                    content: content_with_unresolved_notice(
+                                        content, images.as_deref(), resolved.as_deref(),
+                                    ),
+                                    images: tool_result_wire_images(resolved.as_deref()),
                                 });
                             }
                             ContentBlock::Thinking { .. }
@@ -533,10 +547,33 @@ pub fn strip_unsupported(
             WireMessage::Tool {
                 tool_call_id,
                 content,
-            } => WireMessage::Tool {
-                tool_call_id,
-                content,
-            },
+                images,
+            } => {
+                // R4: tool-result images on a no-vision model degrade
+                // to per-image placeholder lines prepended to the
+                // text content (same wording family as the user-image
+                // strip above — the model is told images existed but
+                // were not delivered).
+                if !target_caps.supports_images && !images.is_empty() {
+                    let notices: Vec<String> = images
+                        .iter()
+                        .map(|img| {
+                            format!("[image: {} — 当前模型不支持图片，未发送]", img.media_type)
+                        })
+                        .collect();
+                    WireMessage::Tool {
+                        tool_call_id,
+                        content: format!("{}\n{}", notices.join("\n"), content),
+                        images: Vec::new(),
+                    }
+                } else {
+                    WireMessage::Tool {
+                        tool_call_id,
+                        content,
+                        images,
+                    }
+                }
+            }
             WireMessage::Assistant { blocks, speaker } => {
                 let filtered: Vec<WireBlock> = blocks
                     .into_iter()
@@ -567,6 +604,46 @@ pub(crate) fn image_placeholder_wire_block(label: &str) -> WireBlock {
         text: format!("[image: {} — 当前模型不支持图片，未发送]", label),
         cache_control: None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tool-result image helpers (08-21-b1-image-followups R4)
+// ---------------------------------------------------------------------------
+
+/// Map resolved (base64) tool images to the wire image struct. Empty
+/// when the block carries no resolved images.
+fn tool_result_wire_images(
+    resolved: Option<&[crate::llm::types::ImageSource]>,
+) -> Vec<super::types::WireImage> {
+    resolved
+        .unwrap_or(&[])
+        .iter()
+        .map(|s| super::types::WireImage {
+            media_type: s.media_type.clone(),
+            data: s.data.clone(),
+        })
+        .collect()
+}
+
+/// Defensive: a ToolResult that still carries image REFS (never
+/// resolved — the resolve pass was skipped) must not silently drop
+/// them; prepend one notice line per ref, mirroring the unresolved
+/// `ImageRef` precedent above. When `resolved` is present the refs
+/// ride the resolved form instead and the content passes through.
+fn content_with_unresolved_notice(
+    content: String,
+    images: Option<&[crate::llm::types::AttachmentRef]>,
+    resolved: Option<&[crate::llm::types::ImageSource]>,
+) -> String {
+    let refs = match (images, resolved.is_some()) {
+        (Some(refs), false) if !refs.is_empty() => refs,
+        _ => return content,
+    };
+    let notices: Vec<String> = refs
+        .iter()
+        .map(|r| format!("[image: {} — 未解析，未发送]", r.file))
+        .collect();
+    format!("{}\n{}", notices.join("\n"), content)
 }
 
 fn block_supported(block: &WireBlock, caps: &WireCapabilities) -> bool {

@@ -589,15 +589,11 @@ async fn try_inject_image(
         "webp" => "image/webp",
         _ => return None, // gif/bmp/tiff/heic/… → Degraded
     };
-    // Magic-number sanity: a corrupted/mislabeled "pic.png" whose
-    // bytes aren't a real image would 400 the whole provider request
-    // once injected — degrade instead so the turn survives.
-    let magic_ok = match media_type {
-        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg" => bytes.len() >= 3 && &bytes[..3] == b"\xff\xd8\xff",
-        _ => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
-    };
-    if !magic_ok {
+    // Magic-number sanity (shared helper): a corrupted/mislabeled
+    // "pic.png" whose bytes aren't a real image would 400 the whole
+    // provider request once injected — degrade instead so the turn
+    // survives.
+    if !crate::attachments::image_magic_matches(bytes, media_type) {
         return None;
     }
     if bytes.len() > crate::attachments::MAX_IMAGE_BYTES {
@@ -692,7 +688,7 @@ fn expand_for_kind(rel_path: &str, kind: FileKind, bytes: &[u8]) -> String {
             format!("<file path=\"{}\">\n{}\n</file>", rel_path, body)
         }
         FileKind::Image => format!(
-            "[image: {} — 当前为纯文本通道，不支持图片注入（B1 计划）]",
+            "[image: {} — 格式不在白名单或超过 5MB，未注入（支持 png/jpg/webp，≤5MB）]",
             rel_path
         ),
         FileKind::Pdf => format!(
@@ -983,7 +979,7 @@ mod tests {
                 file_kind: FileKind::Image
             }
         ));
-        assert!(out1.contains("不支持图片注入"));
+        assert!(out1.contains("格式不在白名单或超过 5MB"));
         let (_out2, rec2, _) = expand_at_tokens("@anim.gif", &ctx_at(&tmp), "sess-lim", 0).await;
         assert!(matches!(
             rec2[0].action,

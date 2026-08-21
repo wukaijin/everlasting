@@ -30,7 +30,8 @@
 //! - The ReadGuard fingerprint still covers the full file (offset/
 //!   limit only affect the output slice, not the guard).
 
-use crate::llm::types::ToolDef;
+use crate::attachments;
+use crate::llm::types::{AttachmentRef, ToolDef};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
@@ -57,7 +58,10 @@ pub fn definition() -> ToolDef {
              For large files, use `offset` and `limit` to read a specific line range \
              instead of getting the full 50KB head+tail truncation. `offset` is \
              1-indexed (the first line is line 1). Line numbers in the output reflect \
-             the real file line numbers, not relative to offset."
+             the real file line numbers, not relative to offset.\n\n\
+             Image files (png / jpg / webp, ≤5MB) are returned as an image block you \
+             can actually SEE when the model supports vision — use this to inspect \
+             screenshots and diagrams instead of asking the user what they contain."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -81,22 +85,31 @@ pub fn definition() -> ToolDef {
     }
 }
 
-/// Execute the tool. Returns `(content, is_error)`.
+/// Execute the tool. Returns `(content, is_error, images)`.
 ///
 /// `guard` and `session_id` are optional: when both are present, the
 /// read is recorded in the guard (so a follow-up `edit_file` can
 /// verify freshness). When either is `None`, the read still works
 /// but the guard is not updated — the agent loop in `lib.rs::chat`
 /// always supplies both.
+///
+/// R3 (08-21-b1-image-followups): png/jpg/webp files (extension +
+/// magic number) are NOT read as text — the bytes are copied into
+/// the session attachments dir and returned as an `AttachmentRef`
+/// riding the ToolResult (the wire layer delivers it as an image
+/// block on vision models; caps/protocol degradation is the wire
+/// layer's job, same as user-pasted images). Oversized (>5 MiB)
+/// images return a notice instead (`is_error: false` — the file is
+/// readable, just too large to attach).
 pub async fn execute(
     input: &serde_json::Value,
     ctx: &ToolContext,
     guard: Option<&ReadGuard>,
     session_id: Option<&str>,
-) -> (String, bool) {
+) -> (String, bool, Option<Vec<AttachmentRef>>) {
     let raw_path = match input.get("path").and_then(|v| v.as_str()) {
         Some(p) => p,
-        None => return ("Missing required parameter: path".to_string(), true),
+        None => return ("Missing required parameter: path".to_string(), true, None),
     };
 
     // 1. Resolve (with `~` home expansion; see boundary::resolve_path).
@@ -108,6 +121,14 @@ pub async fn execute(
     //    deny-list + Tier 4 trusted allow-list + ask_path).
     //    assert_within_root stays for write_file/edit_file.
     let validated = requested;
+
+    // R3: image arm. Extension whitelist first (cheap), then magic
+    // number on the bytes — a "pic.png" that isn't a real image
+    // falls through to the UTF-8 path below and surfaces the usual
+    // read error instead of poisoning the provider request.
+    if let Some(media_type) = attachments::image_media_type_for_path(&validated) {
+        return read_image_arm(&validated, media_type, ctx, session_id).await;
+    }
 
     // 3. Parse offset and limit parameters.
     let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
@@ -123,13 +144,101 @@ pub async fn execute(
             if let (Some(g), Some(sid)) = (guard, session_id) {
                 g.record_read(sid, &validated).await;
             }
-            (truncate_output(content, offset, limit), false)
+            (truncate_output(content, offset, limit), false, None)
         }
         Err(e) => (
             format!("Failed to read file '{}': {}", validated.display(), e),
             true,
+            None,
         ),
     }
+}
+
+/// R3 image arm: magic-check, cap, copy into attachments, estimate
+/// tokens via the header probe (`imagesize`, never a pixel decode —
+/// same as the @-file path). Requires `session_id`; without one the
+/// image can't be persisted so we return a notice instead of a
+/// text-garbled error.
+async fn read_image_arm(
+    path: &std::path::Path,
+    media_type: &str,
+    ctx: &ToolContext,
+    session_id: Option<&str>,
+) -> (String, bool, Option<Vec<AttachmentRef>>) {
+    let bytes = match tokio::fs::read(path).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                format!("Failed to read file '{}': {}", path.display(), e),
+                true,
+                None,
+            )
+        }
+    };
+    // Magic-number sanity (same defense as the @-file path): a
+    // "pic.png" whose bytes aren't a real image must not reach the
+    // provider as an image block — report the mismatch instead.
+    if !attachments::image_magic_matches(bytes.as_slice(), media_type) {
+        return (
+            format!(
+                "Failed to read file '{}': file is not a valid {} image (magic mismatch)",
+                path.display(),
+                media_type
+            ),
+            true,
+            None,
+        );
+    }
+    if bytes.len() > attachments::MAX_IMAGE_BYTES {
+        return (
+            format!(
+                "[image: {} — 超过 5MB 上限未读取；请压缩或转换后重试]",
+                path.display()
+            ),
+            false,
+            None,
+        );
+    }
+    let Some(sid) = session_id else {
+        return (
+            format!(
+                "[image: {} — 当前上下文无法保存附件，未读取]",
+                path.display()
+            ),
+            false,
+            None,
+        );
+    };
+    let file = match attachments::save_image(&ctx.data_dir, sid, media_type, &bytes).await {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                format!("[image: {} — 附件保存失败，未发送: {}]", path.display(), e),
+                false,
+                None,
+            )
+        }
+    };
+    let dims = imagesize::blob_size(bytes.as_slice()).ok();
+    let tokens_est = dims.map(|d| (d.width as u64 * d.height as u64 / 750) as u32);
+    let dims_note = match dims {
+        Some(d) => format!(" ({}×{})", d.width, d.height),
+        None => String::new(),
+    };
+    (
+        format!(
+            "[image: {}{} — 已作为图片块发送]",
+            path.display(),
+            dims_note
+        ),
+        false,
+        Some(vec![AttachmentRef {
+            file,
+            media_type: media_type.to_string(),
+            source: "read_file".to_string(),
+            tokens_est,
+        }]),
+    )
 }
 
 /// Apply offset/limit slicing, then add line numbers, then apply
@@ -271,7 +380,7 @@ mod tests {
     async fn execute_reads_real_file_with_line_numbers() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("hello.txt"), "world").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("hello.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             None,
@@ -288,7 +397,7 @@ mod tests {
     async fn execute_reads_multiline_with_consecutive_line_numbers() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "first\nsecond\nthird\n").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("a.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             None,
@@ -306,7 +415,7 @@ mod tests {
     async fn execute_empty_lines_have_line_numbers() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "a\n\nb\n").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("a.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             None,
@@ -328,7 +437,7 @@ mod tests {
         let line = "x".repeat(80) + "\n";
         let big = line.repeat(700); // ~56 KB
         std::fs::write(tmp.path().join("big.txt"), &big).unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("big.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             None,
@@ -349,7 +458,7 @@ mod tests {
         std::fs::write(tmp.path().join("sub").join("a.txt"), "relative").unwrap();
 
         // ctx.cwd points to root; relative path "sub/a.txt" resolves there.
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": "sub/a.txt"}),
             &test_ctx(&tmp),
             None,
@@ -368,7 +477,7 @@ mod tests {
         // (Tier 2.5 deny / Tier 4 allow / ask_path). /etc/hostname exists
         // and is outside the tempdir project root, so the read succeeds.
         let tmp = tempdir().unwrap();
-        let (msg, is_error) = execute(
+        let (msg, is_error, _images) = execute(
             &serde_json::json!({"path": "/etc/hostname"}),
             &test_ctx(&tmp),
             None,
@@ -390,7 +499,7 @@ mod tests {
         // ("outside project root" / "rejected") is NOT — boundary is gone
         // for read 族.
         let tmp = tempdir().unwrap();
-        let (msg, _is_error) = execute(
+        let (msg, _is_error, _images) = execute(
             &serde_json::json!({"path": "../../etc/hostname"}),
             &test_ctx(&tmp),
             None,
@@ -406,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn execute_missing_path_param() {
         let tmp = tempdir().unwrap();
-        let (content, is_error) =
+        let (content, is_error, _images) =
             execute(&serde_json::json!({}), &test_ctx(&tmp), None, None).await;
         assert!(is_error);
         assert!(content.contains("Missing"));
@@ -415,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn execute_nonexistent_file() {
         let tmp = tempdir().unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("nope.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             None,
@@ -435,7 +544,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
         let guard = ReadGuard::new();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("a.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             Some(&guard),
@@ -475,7 +584,7 @@ mod tests {
             "line1\nline2\nline3\nline4\nline5\n",
         )
         .unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({
                 "path": tmp.path().join("a.txt").to_string_lossy(),
                 "offset": 3,
@@ -499,7 +608,7 @@ mod tests {
     async fn offset_beyond_file_returns_empty() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "only one line\n").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({
                 "path": tmp.path().join("a.txt").to_string_lossy(),
                 "offset": 100,
@@ -519,7 +628,7 @@ mod tests {
     async fn limit_beyond_eof_returns_to_end() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "a\nb\nc\n").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({
                 "path": tmp.path().join("a.txt").to_string_lossy(),
                 "offset": 2,
@@ -541,7 +650,7 @@ mod tests {
     async fn no_offset_limit_reads_full_file() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "x\ny\nz\n").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({"path": tmp.path().join("a.txt").to_string_lossy()}),
             &test_ctx(&tmp),
             None,
@@ -563,7 +672,7 @@ mod tests {
         let guard = ReadGuard::new();
 
         // Read with offset=2 — only get line2 and line3.
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({
                 "path": path.to_string_lossy(),
                 "offset": 2,
@@ -591,7 +700,7 @@ mod tests {
     async fn offset_zero_treated_as_one() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "first\nsecond\n").unwrap();
-        let (content, is_error) = execute(
+        let (content, is_error, _images) = execute(
             &serde_json::json!({
                 "path": tmp.path().join("a.txt").to_string_lossy(),
                 "offset": 0,
@@ -642,5 +751,122 @@ mod tests {
             "should truncate, got len {}",
             out.len()
         );
+    }
+
+    // ------------------------------------------------------------------
+    // R3 (08-21-b1-image-followups): image arm — 五态。
+    // ------------------------------------------------------------------
+
+    /// 标准 1x1 透明 PNG(魔数 + IHDR 可被 imagesize 头探测)。
+    fn one_px_png() -> Vec<u8> {
+        hex_literal("89504e470d0a1a0a0000000d4948445200000001000000010806000000")
+            .into_iter()
+            .chain(hex_literal("1f15c4890000000a49444154789c6300010000050001"))
+            .chain(hex_literal("0d0a2db40000000049454e44ae426082"))
+            .collect()
+    }
+
+    fn hex_literal(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// 白名单命中:魔数过、≤5MiB → 副本落盘 + tokens_est + 图片块文本行。
+    #[tokio::test]
+    async fn image_file_returns_attachment_ref() {
+        let tmp = tempdir().unwrap();
+        let png = one_px_png();
+        std::fs::write(tmp.path().join("shot.png"), &png).unwrap();
+        let (content, is_error, images) = execute(
+            &serde_json::json!({"path": tmp.path().join("shot.png").to_string_lossy()}),
+            &test_ctx(&tmp),
+            None,
+            Some("sessImgRead1"),
+        )
+        .await;
+        assert!(!is_error, "{content}");
+        assert!(content.contains("[image:"), "{content}");
+        assert!(content.contains("(1×1)"), "{content}");
+        let imgs = images.expect("image arm must return refs");
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].media_type, "image/png");
+        assert_eq!(imgs[0].source, "read_file");
+        // tokens_est = (1×1)/750 → 0(维度可读但积为零,允许 0)。
+        assert_eq!(imgs[0].tokens_est, Some(0));
+        // 副本真的落盘。
+        let dir = tmp.path().join("attachments").join("sessImgRead1");
+        assert!(dir.exists(), "attachment copy must exist");
+    }
+
+    /// 魔数不符(文本改名 .png)→ is_error,提示 magic mismatch(不产图)。
+    #[tokio::test]
+    async fn mislabeled_image_magic_mismatch_errors() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("fake.png"), "just text, not a png").unwrap();
+        let (content, is_error, images) = execute(
+            &serde_json::json!({"path": tmp.path().join("fake.png").to_string_lossy()}),
+            &test_ctx(&tmp),
+            None,
+            Some("sessImgRead2"),
+        )
+        .await;
+        assert!(is_error, "{content}");
+        assert!(content.contains("magic mismatch"), "{content}");
+        assert!(images.is_none());
+    }
+
+    /// >5MiB:非 error 占位提示,不落盘不产图。
+    #[tokio::test]
+    async fn oversize_image_returns_notice_not_error() {
+        let tmp = tempdir().unwrap();
+        let mut png = one_px_png();
+        png.resize(crate::attachments::MAX_IMAGE_BYTES + 1, 0);
+        std::fs::write(tmp.path().join("big.png"), &png).unwrap();
+        let (content, is_error, images) = execute(
+            &serde_json::json!({"path": tmp.path().join("big.png").to_string_lossy()}),
+            &test_ctx(&tmp),
+            None,
+            Some("sessImgRead3"),
+        )
+        .await;
+        assert!(!is_error, "{content}");
+        assert!(content.contains("超过 5MB"), "{content}");
+        assert!(images.is_none());
+    }
+
+    /// 扩展名非图:走既有 UTF-8 老路(cat -n 正常输出)。
+    #[tokio::test]
+    async fn non_image_extension_takes_text_path() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("notes.md"), "hello").unwrap();
+        let (content, is_error, images) = execute(
+            &serde_json::json!({"path": tmp.path().join("notes.md").to_string_lossy()}),
+            &test_ctx(&tmp),
+            None,
+            Some("sessImgRead4"),
+        )
+        .await;
+        assert!(!is_error);
+        assert!(content.starts_with("\t1\thello"), "{content}");
+        assert!(images.is_none());
+    }
+
+    /// 无 session_id:图片无法落盘 → 非 error 占位(不产 ref)。
+    #[tokio::test]
+    async fn image_without_session_id_degrades() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("shot.png"), one_px_png()).unwrap();
+        let (content, is_error, images) = execute(
+            &serde_json::json!({"path": tmp.path().join("shot.png").to_string_lossy()}),
+            &test_ctx(&tmp),
+            None,
+            None,
+        )
+        .await;
+        assert!(!is_error, "{content}");
+        assert!(content.contains("无法保存附件"), "{content}");
+        assert!(images.is_none());
     }
 }

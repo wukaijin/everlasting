@@ -177,12 +177,36 @@ pub async fn enforce_budget(
             }
             if let MessageContent::Blocks(blocks) = &mut msg.content {
                 for b in blocks.iter_mut() {
-                    if matches!(b, ContentBlock::Image { .. }) {
-                        *b = ContentBlock::Text {
-                            text: "[image: 历史图片 — 预算裁剪，未发送]".to_string(),
-                            cache_control: None,
-                        };
-                        img_count += 1;
+                    match b {
+                        ContentBlock::Image { .. } => {
+                            *b = ContentBlock::Text {
+                                text: "[image: 历史图片 — 预算裁剪，未发送]".to_string(),
+                                cache_control: None,
+                            };
+                            img_count += 1;
+                        }
+                        // R4 (08-21-b1-image-followups): 旧轮工具图
+                        // (read_file 返回的)同样降级 —— resolved 与
+                        // images 双清,占位行进 content。images_freed
+                        // 经 estimate 差值自然计入(estimate 对
+                        // ToolResult.images 精确计费)。
+                        ContentBlock::ToolResult {
+                            content,
+                            images: tool_images,
+                            resolved,
+                            ..
+                        } if tool_images.is_some() || resolved.is_some() => {
+                            let n = tool_images
+                                .as_ref()
+                                .map(|v| v.len())
+                                .or(resolved.as_ref().map(|v| v.len()))
+                                .unwrap_or(0);
+                            *content = format!("[image: 历史图片 — 预算裁剪，未发送]\n{content}");
+                            *tool_images = None;
+                            *resolved = None;
+                            img_count += n;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -709,5 +733,64 @@ mod tests {
         assert!(msg.contains("图片 ≈600"));
         let history = 9_000 - 3_900 - 2_000 - 1_500 - 400 - 600;
         assert!(msg.contains(&format!("历史+杂项 ≈{history}")));
+    }
+
+    /// R4 (08-21-b1-image-followups) 臂 2:旧轮 ToolResult 工具图
+    /// (read_file 返回)降级 —— resolved/images 双清 + 占位行,
+    /// images_freed 计入;当前轮工具图保护。
+    #[tokio::test]
+    async fn arm2_degrades_old_tool_result_images() {
+        crate::memory::tokens::ensure_initialized().await;
+        let tool_img_msg = |est: u32| ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".to_string(),
+                content: "[image: shot.png — 已作为图片块发送]".to_string(),
+                is_error: false,
+                images: Some(vec![crate::llm::types::AttachmentRef {
+                    file: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png".to_string(),
+                    media_type: "image/png".to_string(),
+                    source: "read_file".to_string(),
+                    tokens_est: Some(est),
+                }]),
+                resolved: None,
+            }]),
+            speaker: None,
+            attachments: None,
+        };
+        let mut messages = vec![
+            assistant_text("ack"),
+            tool_img_msg(1600),   // 旧轮(将被裁)
+            user("cur question"), // 当前轮(idx 2)
+        ];
+        let total = crate::agent::context::estimate_messages_tokens(&messages).await;
+        let report = enforce_budget("", "", &mut messages, &[], 2, None, total).await;
+
+        let arm = report
+            .arms
+            .iter()
+            .find(|a| a.kind == "image")
+            .expect("image arm must fire");
+        assert_eq!(arm.count, 1);
+        assert!(
+            report.images_freed >= 1_500,
+            "freed={}",
+            report.images_freed
+        );
+        let MessageContent::Blocks(b) = &messages[1].content else {
+            panic!()
+        };
+        match &b[0] {
+            ContentBlock::ToolResult {
+                content,
+                images,
+                resolved,
+                ..
+            } => {
+                assert!(content.contains("预算裁剪"), "{content}");
+                assert!(images.is_none() && resolved.is_none());
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
     }
 }

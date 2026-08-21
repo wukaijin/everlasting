@@ -316,6 +316,8 @@ mod tests {
             tool_use_id: id.to_string(),
             content: "Floor handed to M1.".to_string(),
             is_error: false,
+            images: None,
+            resolved: None,
         }
     }
 

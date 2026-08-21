@@ -119,15 +119,38 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
         WireMessage::Tool {
             tool_call_id,
             content,
+            images,
         } => {
             // Anthropic's `tool_result` lives inside a
             // `role: "user"` message with content blocks.
+            // R4 (08-21-b1-image-followups): tool images ride
+            // `resolved` — the manual `ContentBlock` Serialize then
+            // emits the Anthropic-documented tool_result content
+            // **block array** (image blocks + text block) instead of
+            // a plain string. Strip pass guarantees `images` is empty
+            // on no-vision targets, so this arm only fires for
+            // vision-capable models.
             vec![ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                     tool_use_id: tool_call_id,
                     content,
                     is_error: false,
+                    images: None,
+                    resolved: if images.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            images
+                                .into_iter()
+                                .map(|img| crate::llm::types::ImageSource {
+                                    source_type: "base64".to_string(),
+                                    media_type: img.media_type,
+                                    data: img.data,
+                                })
+                                .collect(),
+                        )
+                    },
                 }]),
                 speaker: None,
                 attachments: None,

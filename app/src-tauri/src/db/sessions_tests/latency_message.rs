@@ -454,11 +454,15 @@ async fn record_tool_duration_patches_matching_tool_result_block() {
             tool_use_id: "toolu_abc".to_string(),
             content: "result for tool 1".to_string(),
             is_error: false,
+            images: None,
+            resolved: None,
         },
         ContentBlock::ToolResult {
             tool_use_id: "toolu_def".to_string(),
             content: "result for tool 2".to_string(),
             is_error: false,
+            images: None,
+            resolved: None,
         },
     ]);
     persist_turn(&pool, &s.id, Role::User, &content, 0, None, None)
@@ -519,6 +523,8 @@ async fn record_tool_duration_returns_false_when_no_block_matches() {
         tool_use_id: "toolu_existing".to_string(),
         content: "x".to_string(),
         is_error: false,
+        images: None,
+        resolved: None,
     }]);
     persist_turn(&pool, &s.id, Role::User, &content, 0, None, None)
         .await
