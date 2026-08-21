@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 106
-- **Last Active**: 2026-08-20
+- **Total Sessions**: 107
+- **Last Active**: 2026-08-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~660 | Active |
+| `journal-4.md` | ~708 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 107 | 2026-08-21 | B1 图片收尾——自动压缩/拖拽/read_file 工具读图全链落地 | `36d46de` | `main` |
 | 106 | 2026-08-20 | docs 同步 08-19/20 落地——五特性文档回归 | `e352704` | `main` |
 | 105 | 2026-08-20 | worker turn_trace 度量盲区闭合——run 维度唯一键 + drawer Token 明细 | `a76b6b7`, `38c8e63`, `5e5999a`, `24da69e` | `main` |
 | 104 | 2026-08-19 | MAX_TURNS 软卡化——撞线询问替代硬终断 | `ae2f3b4`, `df34842`, `b6fa382`, `26a3040` | `main` |

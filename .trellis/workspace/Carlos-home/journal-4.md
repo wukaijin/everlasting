@@ -685,3 +685,24 @@ unified-context-budget 留下的小额 follow-up 全程落地。研究先行发�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 107: B1 图片收尾——自动压缩/拖拽/read_file 工具读图全链落地
+
+**Date**: 2026-08-21
+**Task**: B1 图片收尾——自动压缩/拖拽/read_file 工具读图全链落地
+**Branch**: `main`
+
+### Summary
+
+B1 三 follow-up 一次收口。brainstorm 五决议(D1 拖拽纳入/D2 压缩仅前端 canvas 零依赖/D3 长边1568+JPEG q0.85+压后判5MB/D4 拖拽只收图片/D5 缩略图呈现);探索推翻两假设(read_file 对图是裸 UTF-8 error 非占位;Anthropic tool_result 现发纯字符串未用 block array)。实现:前端 imageCompress(fail-open)+闸序压后判定+已压缩 chip+ChatPanel drop;后端 read_file 图片臂(魔数共享 helper)+ToolResultData 双形态 serde(DB=refs/wire=Anthropic block array,无图路径逐字节 fixture 锁,flatten 结构体+手动 Serialize 三分支)+wire 全链(strip caps 降级/OpenAI 占位/from_wire 还原)+estimate 内联 tokens_est+budget 臂2 双清;前端 ToolResultImages 缩略图双卡+wire history 回传 images refs(否则次轮丢图)。过程:子代理因 5h 限额双双中断改主代理直做;批量补字段脚本有 12 行窗口重复 bug,写检测器清了 28 处;live 三连败根因是误启 app/src-tauri/target 下 Aug9 陈旧二进制(pre-08-20 upsert SQL 撞新键形)——daemon 必须用根 target/release(daemon.sh 同款路径),换正确二进制后 turn-smoke --assert-turn-usage PASS。AC4 视觉 live:MiniMax-M3 read_file UI 截图准确读出标签页与侧栏文字(项目正向视觉首次实证),images_token=1728=(w×h)/750 精确入账,附件副本+GET 路由 200。验证:后端 1894 过(subagent_guard/plan_mode 两预存 flaky 隔离归因)+前端 1175 过+vue-tsc 0+clippy 零新增+fmt 净。spec 回写三处:llm-contract §Tool-Result Image Blocks/token-usage-tracking 工具图计费/tool-contract/16。压缩的 canvas 编码路径留用户下次 UI 会话手动验(逻辑已单测锁)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `36d46de` | (see git log) |
+
+### Status
+
+[OK] **Completed**
