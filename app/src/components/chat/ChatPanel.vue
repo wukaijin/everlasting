@@ -35,6 +35,7 @@
 // and delegates the chip + diff UI to the new components.
 
 import { extractErrorMessage } from "../../utils/useErrorBus";
+import { classifyDroppedFiles } from "../../utils/dragDropFiles";
 // 08-18(handoff/compact): 摘要 loading 遮罩的 HUD 动效(纯 SMIL,
 // <img> 引用即可动画)。来源 brand/motion/logo-hud.svg。
 import logoHudUrl from "../../assets/logo-hud.svg";
@@ -82,6 +83,22 @@ const emit = defineEmits<{
 }>();
 
 const hasMessages = computed(() => chatStore.messages.length > 0);
+
+/** B1 follow-up (08-21-b1-image-followups) D1/D4:聊天区文件拖放。
+ *  只收图片(image/*,白名单与张数闸由 addStagedImages 把关,压缩
+ *  R1 同管线生效);非图片文件 toast 引导走 @ 引用,混合批次图片
+ *  照常入暂存、非图片只提示一次。纯文本/无文件拖放不拦截 ——
+ *  CodeMirror 的文本 drop 在编辑器元素层自行处理,面板级
+ *  `dragover.prevent` 只是让 drop 事件可触发,不影响其行为。 */
+function onPanelDrop(e: DragEvent): void {
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  const { images, nonImage } = classifyDroppedFiles(Array.from(files));
+  if (images.length > 0) void chatStore.addStagedImages(images);
+  if (nonImage) {
+    projectsStore.showToast("请使用 @ 引用文件", "warn");
+  }
+}
 
 /** C2+ loop-intervention pending for the current session, if any.
  *  The backend registers a `LoopIntervention` PendingInteraction
@@ -648,7 +665,7 @@ onUnmounted(() => reviewStateStore.stop());
 </script>
 
 <template>
-  <section class="chat-panel">
+  <section class="chat-panel" @dragover.prevent @drop.prevent="onPanelDrop">
     <header class="chat-panel__header">
       <div class="chat-panel__title-row">
         <h1 class="chat-panel__title">{{ currentSessionTitle }}</h1>

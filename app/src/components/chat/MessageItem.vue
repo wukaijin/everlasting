@@ -544,6 +544,7 @@ const messageImages = computed<
             v-else
             :call="item"
             :result="getToolResult(message, item.id)"
+            :session-id="chatStore.currentSessionId ?? ''"
           />
           <AskUserQuestionCard
             v-if="askCardPropsFor(item) !== undefined"

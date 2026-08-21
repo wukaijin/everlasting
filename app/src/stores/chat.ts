@@ -55,6 +55,7 @@ import {
   type SessionSummary,
   type SessionTokenUsage,
   type ThinkingBlockInfo,
+  type ToolResultImageRef,
 } from "./chat.types";
 
 type Role = "user" | "assistant";
@@ -174,6 +175,12 @@ export type ContentBlockPayload =
       tool_use_id: string;
       content: string;
       is_error: boolean;
+      /** 08-21-b1-image-followups R4: tool-returned image refs
+       *  (read_file on an image). MUST ride the wire history — the
+       *  backend's pre-send resolve pass re-reads them from disk
+       *  each request; dropping them here would silently lose the
+       *  images on every turn after the first. */
+      images?: ToolResultImageRef[];
     };
 
 export interface ChatMessagePayload {
@@ -213,6 +220,93 @@ export const genId = () =>
 export function thinkingBlocksToText(blocks: ThinkingBlockInfo[] | undefined): string {
   if (!blocks || blocks.length === 0) return "";
   return blocks.map((b) => b.text).join("\n\n");
+}
+
+/** Wire-content builder (08-21 提为模块级纯函数以便单测): map one
+ *  `ChatMessage` onto its `chat` IPC `content` payload — string for
+ *  plain text, block array when the turn carries tool_use /
+ *  tool_result / thinking data. */
+export function toPayloadContentPure(m: ChatMessage): string | ContentBlockPayload[] {
+  // CRITICAL: tool_result blocks belong ONLY on user-role messages
+  // (Anthropic Messages API contract). `rehydrateMessages` (in the
+  // controller) attaches the following user message's tool_results
+  // onto the assistant message *for UI grouping* (per-message "done /
+  // running" lookup); here we MUST NOT echo them onto the wire when
+  // role=assistant or Anthropic returns 2013 ("tool result's tool id
+  // ... not found") because the assistant message itself isn't
+  // allowed to contain tool_result blocks. Same for `content` text
+  // emitted onto a ghost user message: only the assistant's text
+  // counts.
+  if (m.role === "assistant") {
+    const hasTools = !!m.toolCalls?.length;
+    const hasThinking =
+      !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
+    if (!hasTools && !hasThinking) {
+      return m.content;
+    }
+    const blocks: ContentBlockPayload[] = [];
+    // Thinking blocks come first (Anthropic convention: reasoning
+    // before any visible text in the same turn).
+    for (const tb of m.thinkingBlocks ?? []) {
+      blocks.push({
+        type: "thinking",
+        thinking: tb.text,
+        signature: tb.signature,
+      });
+    }
+    if (m.content) {
+      blocks.push({ type: "text", text: m.content });
+    }
+    for (const tc of m.toolCalls ?? []) {
+      blocks.push({
+        type: "tool_use",
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+      });
+    }
+    for (const data of m.redactedThinkingData ?? []) {
+      blocks.push({ type: "redacted_thinking", data });
+    }
+    // Intentionally omit `m.toolResults` — they're for the UI, not
+    // the wire. The matching user-role message in the array
+    // carries the canonical tool_result blocks.
+    return blocks;
+  }
+
+  // user role: emit tool_result blocks + any text/thinking/redacted.
+  // The rehydrated user message (formerly tool_result-only "ghost")
+  // and the live user-typed message both pass through here.
+  const hasTools = !!m.toolResults?.length;
+  const hasThinking =
+    !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
+  if (!hasTools && !hasThinking) {
+    return m.content;
+  }
+  const blocks: ContentBlockPayload[] = [];
+  for (const tb of m.thinkingBlocks ?? []) {
+    blocks.push({
+      type: "thinking",
+      thinking: tb.text,
+      signature: tb.signature,
+    });
+  }
+  if (m.content) {
+    blocks.push({ type: "text", text: m.content });
+  }
+  for (const tr of m.toolResults ?? []) {
+    blocks.push({
+      type: "tool_result",
+      tool_use_id: tr.toolUseId,
+      content: tr.content,
+      is_error: tr.isError,
+      ...(tr.images?.length ? { images: tr.images } : {}),
+    });
+  }
+  for (const data of m.redactedThinkingData ?? []) {
+    blocks.push({ type: "redacted_thinking", data });
+  }
+  return blocks;
 }
 
 export const useChatStore = defineStore("chat", () => {
@@ -732,87 +826,7 @@ export const useChatStore = defineStore("chat", () => {
    *  data are emitted verbatim in their original streaming order. The
    *  Anthropic API requires the exact signature blob on the next turn —
    *  omitting or rewriting it produces 400. */
-  function toPayloadContent(m: ChatMessage): string | ContentBlockPayload[] {
-    // CRITICAL: tool_result blocks belong ONLY on user-role messages
-    // (Anthropic Messages API contract). `rehydrateMessages` (in the
-    // controller) attaches the following user message's tool_results
-    // onto the assistant message *for UI grouping* (per-message "done /
-    // running" lookup); here we MUST NOT echo them onto the wire when
-    // role=assistant or Anthropic returns 2013 ("tool result's tool id
-    // ... not found") because the assistant message itself isn't
-    // allowed to contain tool_result blocks. Same for `content` text
-    // emitted onto a ghost user message: only the assistant's text
-    // counts.
-    if (m.role === "assistant") {
-      const hasTools = !!m.toolCalls?.length;
-      const hasThinking =
-        !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
-      if (!hasTools && !hasThinking) {
-        return m.content;
-      }
-      const blocks: ContentBlockPayload[] = [];
-      // Thinking blocks come first (Anthropic convention: reasoning
-      // before any visible text in the same turn).
-      for (const tb of m.thinkingBlocks ?? []) {
-        blocks.push({
-          type: "thinking",
-          thinking: tb.text,
-          signature: tb.signature,
-        });
-      }
-      if (m.content) {
-        blocks.push({ type: "text", text: m.content });
-      }
-      for (const tc of m.toolCalls ?? []) {
-        blocks.push({
-          type: "tool_use",
-          id: tc.id,
-          name: tc.name,
-          input: tc.input,
-        });
-      }
-      for (const data of m.redactedThinkingData ?? []) {
-        blocks.push({ type: "redacted_thinking", data });
-      }
-      // Intentionally omit `m.toolResults` — they're for the UI, not
-      // the wire. The matching user-role message in the array
-      // carries the canonical tool_result blocks.
-      return blocks;
-    }
-
-    // user role: emit tool_result blocks + any text/thinking/redacted.
-    // The rehydrated user message (formerly tool_result-only "ghost")
-    // and the live user-typed message both pass through here.
-    const hasTools = !!m.toolResults?.length;
-    const hasThinking =
-      !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
-    if (!hasTools && !hasThinking) {
-      return m.content;
-    }
-    const blocks: ContentBlockPayload[] = [];
-    for (const tb of m.thinkingBlocks ?? []) {
-      blocks.push({
-        type: "thinking",
-        thinking: tb.text,
-        signature: tb.signature,
-      });
-    }
-    if (m.content) {
-      blocks.push({ type: "text", text: m.content });
-    }
-    for (const tr of m.toolResults ?? []) {
-      blocks.push({
-        type: "tool_result",
-        tool_use_id: tr.toolUseId,
-        content: tr.content,
-        is_error: tr.isError,
-      });
-    }
-    for (const data of m.redactedThinkingData ?? []) {
-      blocks.push({ type: "redacted_thinking", data });
-    }
-    return blocks;
-  }
+  const toPayloadContent = toPayloadContentPure;
 
   /** B1 (2026-08-16) image-multimodal: map a message's
    *  `metadata.attachments` manifest onto the wire `attachments`

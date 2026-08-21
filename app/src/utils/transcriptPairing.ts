@@ -366,7 +366,21 @@ function toToolResultInfo(
   const d = p.duration_ms;
   const durationMs =
     typeof d === "number" && Number.isFinite(d) && d >= 0 ? d : undefined;
-  return { toolUseId, content, isError, durationMs };
+  // 08-21-b1-image-followups R6: tool-returned images ride the
+  // payload (snake_case AttachmentRef); filter to well-formed refs.
+  const rawImages = p.images;
+  const images = Array.isArray(rawImages)
+    ? (rawImages as NonNullable<ToolResultInfo["images"]>).filter(
+        (r) => r && typeof r.file === "string" && typeof r.media_type === "string",
+      )
+    : undefined;
+  return {
+    toolUseId,
+    content,
+    isError,
+    durationMs,
+    ...(images?.length ? { images } : {}),
+  };
 }
 
 /** Pair adjacent `ToolCallSection` + `ToolResultSection` entries

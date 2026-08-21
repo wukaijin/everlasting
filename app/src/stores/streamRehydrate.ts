@@ -3,7 +3,7 @@
 
 import { markRaw } from "vue";
 
-import type { ChatMessage, InjectionEntry } from "./chat.types";
+import type { ChatMessage, InjectionEntry, ToolResultImageRef } from "./chat.types";
 
 export interface LoadedMessage {
   id: number;
@@ -174,10 +174,16 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
           typeof durationRaw === "number" && Number.isFinite(durationRaw)
             ? Math.max(0, Math.round(durationRaw))
             : undefined;
+        const images = Array.isArray(b.images)
+          ? (b.images as ToolResultImageRef[]).filter(
+              (r) => r && typeof r.file === "string" && typeof r.media_type === "string",
+            )
+          : undefined;
         toolResults.push({
           toolUseId: b.tool_use_id,
           content: (b.content as string) ?? "",
           isError: !!b.is_error,
+          ...(images?.length ? { images } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
         });
         contentBlocks.push({

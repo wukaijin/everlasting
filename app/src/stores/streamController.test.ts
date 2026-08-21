@@ -141,6 +141,54 @@ function toolResult(id: string, content: string, isError = false): Record<string
   return { type: "tool_result", tool_use_id: id, content, is_error: isError };
 }
 
+
+describe("rehydrateMessages — R4/R6 tool-result images (08-21-b1-image-followups)", () => {
+  it("tool_result 块带 images refs → toolResults.images 透传(回看缩略图)", () => {
+    const loaded: LoadedMessage[] = [
+      usr(1, "", [
+        toolResult("t1", "[image: shot.png — 已作为图片块发送]"),
+        {
+          type: "tool_result",
+          tool_use_id: "t2",
+          content: "[image: big.png (800×600) — 已作为图片块发送]",
+          is_error: false,
+          images: [
+            {
+              file: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png",
+              media_type: "image/png",
+              source: "read_file",
+              tokens_est: 640,
+            },
+          ],
+        },
+      ]),
+    ];
+    const out = rehydrateMessages(loaded);
+    const withImages = out[0].toolResults?.find((t) => t.toolUseId === "t2");
+    expect(withImages?.images).toEqual([
+      {
+        file: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png",
+        media_type: "image/png",
+        source: "read_file",
+        tokens_est: 640,
+      },
+    ]);
+    const without = out[0].toolResults?.find((t) => t.toolUseId === "t1");
+    expect(without?.images).toBeUndefined();
+  });
+
+  it("旧 DB 行(无 images 字段)零变化", () => {
+    const loaded: LoadedMessage[] = [usr(1, "", [toolResult("t1", "ok")])];
+    const out = rehydrateMessages(loaded);
+    expect(out[0].toolResults?.[0]).toMatchObject({
+      toolUseId: "t1",
+      content: "ok",
+      isError: false,
+    });
+    expect(out[0].toolResults?.[0].images).toBeUndefined();
+  });
+});
+
 describe("rehydrateMessages — orphan tool_use repair (BUG FIX 2013)", () => {
   it("splices a synthetic user(tool_result) after an orphan assistant(tool_use)", () => {
     // The historical orphan shape: assistant emits a tool_use

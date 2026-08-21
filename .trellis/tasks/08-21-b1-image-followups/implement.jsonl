@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "wire 层 Image Blocks 契约(B1 沉淀):ContentBlock 双形态 / resolve 时序 / 降级原则,ToolResult 带图必须延续同一套不变量"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 契约索引:read_file 签名与返回形状,图片臂扩展需对齐既有 scenario 结构"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "images_token 口径(请求内全部图含历史重建),工具图计费与 estimate_images_token 不变量在此扩展"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "resolve/budget gate 时序(pattern-budget-gate),ToolResult images 的 resolve 点与裁剪点挂同一管线"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "ChatInput/暂存条/消息渲染契约,压缩标注与 tool result 缩略图落点"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 契约:chatSendActions 闸序改动 + StagedImage 形状扩展需守 SoT 规则"}

@@ -42,11 +42,31 @@ export interface ToolCallInfo {
   input: Record<string, unknown>;
 }
 
+/** 08-21-b1-image-followups R6: one tool-returned image ref — the
+ *  backend `AttachmentRef` serde shape (snake_case, `file` always
+ *  present). Shared by the live payload, the rehydrated DB row, and
+ *  the wire history so tool images survive reloads AND ride every
+ *  subsequent request (the backend resolve pass re-reads them from
+ *  disk each turn). */
+export interface ToolResultImageRef {
+  file: string;
+  media_type: string;
+  source?: string;
+  tokens_est?: number;
+}
+
 /** Tool result info displayed in the UI. */
 export interface ToolResultInfo {
   toolUseId: string;
   content: string;
   isError: boolean;
+  /** 08-21-b1-image-followups R6: tool-returned images (read_file on
+   *  an image). Backend `AttachmentRef` snake_case shape (NOT the
+   *  loose `AttachmentView` render type — these always carry file +
+   *  media_type); the card renders thumbnails via the attachments
+   *  GET route, the wire history carries them verbatim. Absent on
+   *  every text-only result. */
+  images?: ToolResultImageRef[];
   /** F5 (LLM Latency Tracking): wall-clock duration of this
    *  specific tool invocation in milliseconds, measured as
    *  `tool:result_at - tool:call_at` by the frontend. `null`
@@ -228,6 +248,13 @@ export interface StagedImage {
   w: number;
   h: number;
   tokensEst: number;
+  /** 08-21-b1-image-followups R1:压缩标注。`compressed=true` 时
+   *  w/h/tokensEst/file 均为压缩后终值,orig* 是原始值(暂存条「已压
+   *  缩」标注用;不进 wire —— 上传与乐观 manifest 只用压缩后值)。 */
+  compressed?: boolean;
+  origW?: number;
+  origH?: number;
+  origBytes?: number;
 }
 
 /** B1: one attachment as the RENDER layer sees it, read off

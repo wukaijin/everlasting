@@ -395,6 +395,15 @@ export interface ToolResultPayload {
   tool_use_id: string;
   content: string;
   is_error: boolean;
+  /** 08-21-b1-image-followups R6: backend `AttachmentRef` list when
+   *  the tool returned images (read_file on an image). Optional —
+   *  text-only results omit it (serde skip_serializing_if). */
+  images?: Array<{
+    file: string;
+    media_type: string;
+    source: string;
+    tokens_est?: number;
+  }>;
 }
 
 export const genId = () =>

@@ -14,6 +14,7 @@
 import type { ComputedRef, Ref } from "vue";
 import { ref } from "vue";
 import { transport } from "../transport";
+import { compressImage } from "../utils/imageCompress";
 import { extractErrorMessage } from "../utils/useErrorBus";
 import { useChecklistStore } from "./checklist";
 import { useModelsStore } from "./models";
@@ -111,9 +112,17 @@ export function createSendActions(ctx: SendActionsContext) {
   const stagedImages = ref<StagedImage[]>([]);
 
   /** Stage pasted image Files after the per-file gates (mime
-   *  whitelist / 5MB / ≤10). Non-image entries are ignored (the
-   *  paste handler only forwards `image/*`, this is defensive);
-   *  rejected files toast and DON'T block the rest of the batch. */
+   *  whitelist / compress / 5MB-on-compressed / ≤10). Non-image
+   *  entries are ignored (the paste & drop handlers only forward
+   *  `image/*`, this is defensive); rejected files toast and DON'T
+   *  block the rest of the batch.
+   *
+   *  08-21-b1-image-followups R1: compression runs BEFORE the 5MB
+   *  gate (D3「压后判定」) — an oversized-but-compressible image
+   *  gets downscaled/re-encoded and passes if the product fits;
+   *  w/h/tokensEst all reflect the compressed file. Compression is
+   *  fail-open: on any decode/encode failure the original file
+   *  flows through and the old gates apply unchanged. */
   async function addStagedImages(files: File[]): Promise<void> {
     for (const f of files) {
       if (!f.type.startsWith("image/")) continue;
@@ -121,7 +130,9 @@ export function createSendActions(ctx: SendActionsContext) {
         projectsStore.showToast("仅支持 png / jpg / webp 图片", "warn");
         continue;
       }
-      if (f.size > MAX_IMAGE_BYTES) {
+      const result = await compressImage(f);
+      const staged = result.file;
+      if (staged.size > MAX_IMAGE_BYTES) {
         projectsStore.showToast("单张图片不能超过 5MB", "warn");
         continue;
       }
@@ -129,13 +140,21 @@ export function createSendActions(ctx: SendActionsContext) {
         projectsStore.showToast(`单轮最多 ${MAX_STAGED_IMAGES} 张图片`, "warn");
         continue;
       }
-      const { w, h } = await readImageDimensions(f);
+      const { w, h } = result.w > 0 ? { w: result.w, h: result.h } : await readImageDimensions(staged);
       stagedImages.value.push({
-        url: URL.createObjectURL(f),
-        file: f,
+        url: URL.createObjectURL(staged),
+        file: staged,
         w,
         h,
         tokensEst: Math.max(1, Math.round((w * h) / 750)),
+        ...(result.compressed
+          ? {
+              compressed: true,
+              origW: result.origW,
+              origH: result.origH,
+              origBytes: result.origBytes,
+            }
+          : {}),
       });
     }
   }

@@ -52,12 +52,18 @@ import { abbreviateDuration } from "../../utils/duration";
 import ToolCallHeader from "./ToolCallHeader.vue";
 import ToolInputBody from "./ToolInputBody.vue";
 import ToolOutputBody from "./ToolOutputBody.vue";
+import ToolResultImages from "./ToolResultImages.vue";
 
 const props = defineProps<{
   call: ToolCallInfo;
   /** The matching tool_result, if any. Absent while the worker
    *  is still executing this tool_use (the card shows "running…"). */
   result?: ToolResultInfo;
+  /** 08-21-b1-image-followups R6: parent session id for
+   *  tool-returned image thumbnails (worker attachments live in
+   *  the parent session's dir). Optional — omitted renders
+   *  without thumbnails. */
+  sessionId?: string;
 }>();
 
 const isError = computed(() => !!props.result?.isError);
@@ -161,6 +167,11 @@ const statusIconName = computed<string>(() => {
       :content="result.content"
       :is-error="result.isError"
       :duration-ms="result.durationMs"
+    />
+    <ToolResultImages
+      v-if="result?.images?.length && sessionId"
+      :images="result.images"
+      :session-id="sessionId"
     />
   </div>
 </template>

@@ -1,3 +1,53 @@
+
+// ---------------------------------------------------------------------------
+// 08-21-b1-image-followups R4: tool-result images MUST ride the wire
+// history — the backend's pre-send resolve pass re-reads them from
+// disk each request; dropping them here would silently lose the
+// images on every turn after the first.
+// ---------------------------------------------------------------------------
+describe("toPayloadContent — tool-result images ride the wire", () => {
+  it("toolResults 带 images → tool_result 块携带 images refs", async () => {
+    const { toPayloadContentPure: toPayloadContent } = await import("./chat");
+    const out = toPayloadContent({
+      id: "m1",
+      role: "user",
+      content: "",
+      toolResults: [
+        {
+          toolUseId: "t1",
+          content: "[image: shot.png — 已作为图片块发送]",
+          isError: false,
+          images: [
+            {
+              file: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png",
+              media_type: "image/png",
+              source: "read_file",
+              tokens_est: 640,
+            },
+          ],
+        },
+      ],
+    }) as Array<Record<string, unknown>>;
+    const block = out.find((b) => b.type === "tool_result") as {
+      images?: Array<{ file: string }>;
+    };
+    expect(block?.images?.[0]?.file).toBe("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.png");
+  });
+
+  it("无 images 的 toolResults 零变化(块不含 images 键)", async () => {
+    const { toPayloadContentPure: toPayloadContent } = await import("./chat");
+    const out = toPayloadContent({
+      id: "m1",
+      role: "user",
+      content: "",
+      toolResults: [{ toolUseId: "t1", content: "ok", isError: false }],
+    }) as Array<Record<string, unknown>>;
+    const block = out.find((b) => b.type === "tool_result");
+    expect(block).toBeDefined();
+    expect(block && "images" in block).toBe(false);
+  });
+});
+
 // Tests for `chat.ts` forced-dispatch helpers — B6+ B
 // (task 07-06-b6plus-b-dispatch-model-arg).
 //

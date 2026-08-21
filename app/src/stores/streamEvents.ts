@@ -872,6 +872,7 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
       toolUseId: payload.tool_use_id,
       content: payload.content,
       isError: payload.is_error,
+      ...(payload.images?.length ? { images: payload.images } : {}),
       ...(durationMs !== undefined ? { durationMs } : {}),
     });
     // 交错思考(实时态): tool_result **不进** assistant contentBlocks ——

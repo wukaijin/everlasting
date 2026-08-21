@@ -399,3 +399,40 @@ UTF-8 字符(如 CJK 的 3 字节字)切开分到两个 chunk——chunk 尾部�
 ② 代理/网关分包偏小或乱切时概率上升;③ 换 provider 重写流式读取时照抄了
 "每 chunk 独立解码"的旧模式。回归测试在 `llm/sse.rs`(CJK 切 3 段、逐字节
 喂、ASCII 前缀 + 截断尾、无效字节仍报错)。
+
+## Scenario: Tool-Result Image Blocks — ToolResultData dual-form serde (08-21-b1-image-followups, 2026-08-21)
+
+`read_file` on a whitelisted image (png/jpg/jpeg/webp, magic-checked, ≤5MiB) returns an
+`AttachmentRef` (`source: "read_file"`) riding the tool result. `ContentBlock::ToolResult`
+now carries TWO optional image fields with mutually-exclusive-by-construction lifecycles:
+
+- `images: Option<Vec<AttachmentRef>>` — **persisted form** (DB rows, frontend rehydrate,
+  wire history from the client). File refs only; never base64 on disk.
+- `resolved: Option<Vec<ImageSource>>` — **request-copy-only** base64, set by the pre-send
+  resolve pass (same lifecycle as user-image `ImageRef → Image`). DB rows never carry it.
+
+**Serde is MANUAL on `ContentBlock`** (derive removed; fixture tests lock byte-compat):
+- `resolved: Some` → `content` serializes as the Anthropic-documented **block array**
+  (`[{type:"image",source},…,{type:"text",text}]`); the `images` refs field is NOT emitted
+  (unknown fields rejected by the API).
+- otherwise → string content (+ `images` refs when present for DB rows).
+- both `None` → byte-identical to the historical derive output.
+
+Degradation (wire layer, same principle as user images — caps consumed at the adapter):
+- `strip_unsupported` Tool arm: images + `!supports_images` → clear + prepend per-image
+  placeholder line to content.
+- OpenAI adapter Tool arm: protocol is string-only → same placeholder degradation
+  (vision models on OpenAI-protocol providers also degrade here).
+
+Invariants:
+1. **No-image path is byte-identical** to pre-R4 output (fixture tests in `tests_types.rs`).
+2. Tool-result rows are user-role but have NO message-level `attachments` manifest —
+   `estimate_images_token` reads `ToolResult.images` inline `tokens_est` instead (no 1600 pad).
+3. The resolve pass REBUILDS `images` to the successfully-loaded subset (unreadable refs
+   degrade to a notice line inside content) so estimate counts exactly what ships.
+4. The frontend wire history MUST carry `images` back (`ContentBlockPayload.tool_result.images`,
+   `toPayloadContentPure`) — dropping them silently loses the images on every later turn.
+5. Budget trim arm 2 covers old-turn tool images (resolved+images double-clear + placeholder).
+
+Gotcha: worker read_file images land in the PARENT session's attachments dir (worker shares
+the parent session id), so drawer thumbnails build URLs from `run.parentSessionId`.

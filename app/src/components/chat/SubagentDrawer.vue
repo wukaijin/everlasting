@@ -767,6 +767,7 @@ function isPermissionAskLive(rid: string): boolean {
                       v-if="e.kind === 'paired'"
                       :call="e.call"
                       :result="e.result"
+                      :session-id="run?.parentSessionId ?? ''"
                     />
                     <DrawerToolCallCard
                       v-else-if="e.kind === 'pending_call'"

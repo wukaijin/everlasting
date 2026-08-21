@@ -55,11 +55,17 @@ import Icon from "../Icon.vue";
 import ToolCallHeader from "./ToolCallHeader.vue";
 import ToolInputBody from "./ToolInputBody.vue";
 import ToolOutputBody from "./ToolOutputBody.vue";
+import ToolResultImages from "./ToolResultImages.vue";
 import PermissionAskBody from "./PermissionAskBody.vue";
 
 const props = defineProps<{
   call: ToolCallInfo;
   result?: ToolResultInfo;
+  /** 08-21-b1-image-followups R6: current session id — needed to
+   *  build attachment URLs for tool-returned image thumbnails.
+   *  Optional: callers without a session context (search preview)
+   *  render without thumbnails. */
+  sessionId?: string;
 }>();
 
 const accent = computed(() => {
@@ -706,6 +712,11 @@ watch(
       :content="result.content"
       :is-error="result.isError"
       :duration-ms="result.durationMs"
+    />
+    <ToolResultImages
+      v-if="!isDispatchSubagent && result?.images?.length && sessionId"
+      :images="result.images"
+      :session-id="sessionId"
     />
   </div>
 </template>

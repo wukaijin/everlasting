@@ -712,6 +712,13 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
           :src="img.url"
           :alt="`待发送图片 ${idx + 1}(${img.tokensEst} tokens 估算)`"
         />
+        <!-- 08-21-b1-image-followups R1:压缩标注(D3)。title 给出
+             原始→结果对照;未压缩的图零变化。 -->
+        <span
+          v-if="img.compressed"
+          class="chat-input__staged-compressed"
+          :title="`已压缩:${img.origW}×${img.origH} ${Math.round((img.origBytes ?? 0) / 1024)}KB → ${img.w}×${img.h}`"
+        >已压缩</span>
         <button
           type="button"
           class="chat-input__staged-remove"
@@ -919,6 +926,22 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   align-items: center;
   justify-content: center;
   transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+/* 08-21-b1-image-followups R1:压缩标注 —— 缩略图左下角小 chip。 */
+.chat-input__staged-compressed {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  line-height: 14px;
+  pointer-events: none;
+  user-select: none;
 }
 
 .chat-input__staged-remove:hover {

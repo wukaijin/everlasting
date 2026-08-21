@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质检基线:测试命名/覆盖要求"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "messages 持久化形状守则:可选字段无 migration 的 serde 兼容要求"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "复查 images_token 计费不 double-count / 不漏计工具图"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质检基线"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "IPC/事件字段形状铁律:payload 扩展需过三模式(Tauri/daemon/pwa-remote)"}
