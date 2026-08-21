@@ -177,6 +177,24 @@ function selectValue(row: SubagentWithModelRow): string {
   return row.resolvedModelId ?? INHERIT_SENTINEL;
 }
 
+/** Closed-trigger label. reka-ui's SelectValue flattens the selected
+ *  SelectItemText to plain text, so the provider chip span inside the
+ *  option loses its chip styling + margin and the trigger reads
+ *  "ProviderModel" as one mashed word. Render the trigger's label
+ *  explicitly instead (same pattern as GroupChatConfigModal's
+ *  `modelLabel`); the open dropdown keeps the chip look. */
+function triggerLabel(row: SubagentWithModelRow): string {
+  if (row.resolvedModelId === null) return "继承父级 (inherit)";
+  // Invalid model (catalog miss): show the id verbatim so the user
+  // can see what the override points at (matches the red-trigger
+  // state and the comment on the invalid-model hint below).
+  if (row.resolvedModelDisplay === null) return row.resolvedModelId;
+  const provider = providerLabelFor(row.resolvedModelId);
+  return provider
+    ? `${row.resolvedModelDisplay} (${provider})`
+    : row.resolvedModelDisplay;
+}
+
 async function onModelChange(
   row: SubagentWithModelRow,
   newValue: string | string[] | undefined,
@@ -268,9 +286,12 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
             reka-ui SelectRoot — mirrors the Add Model Provider
             selector in ModelForm.vue. Empty string = inherit
             parent (reka-ui SelectItem can't take null/boolean).
-            Provider context is shown as a small `<provider>`
-            prefix inside each SelectItemText (no SelectGroup /
-            SelectLabel nesting — see header note on UI fix #2).
+            The closed trigger renders `triggerLabel(row)` itself
+            (SelectValue would flatten the option's provider chip
+            span into mashed plain text); the open list keeps the
+            `<provider>` chip prefix inside each SelectItemText
+            (no SelectGroup / SelectLabel nesting — see header
+            note on UI fix #2).
           -->
           <SelectRoot
             :model-value="selectValue(row)"
@@ -286,7 +307,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
               }"
               aria-label="Model"
             >
-              <SelectValue placeholder="继承父级 (inherit)" />
+              <SelectValue>{{ triggerLabel(row) }}</SelectValue>
               <SelectIcon class="subagents-tab__trigger-icon">
                 <Icon name="chevron-down" :size="12" />
               </SelectIcon>

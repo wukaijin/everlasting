@@ -162,8 +162,12 @@ async function submit() {
 }
 
 .pairing-card__subtitle strong {
-  color: var(--color-text-primary);
-  font-weight: var(--weight-medium);
+  /* 08-21 ui-review:PC 端路径是配对页唯一需要照做的操作指引,
+     secondary→primary 灰阶差在小字号下读不出强调;换 accent-text
+     (design-tokens.md "accent as ink",6.71:1 AA)+ semibold,
+     用户扫一眼就能定位路径。 */
+  color: var(--color-accent-text);
+  font-weight: var(--weight-semibold);
 }
 
 .pairing-card__form {

@@ -821,16 +821,16 @@ function formatTimestamp(rfc3339: string): string {
 }
 
 /* 07-06 (am-observability-panel B2/AC1): recall-stats chip (hit
-   count + last-used). Sits in the meta row alongside the timestamp;
-   mono font + accent tint to read as a "stat" rather than a tag. */
+   count + last-used). Sits in the meta row alongside the timestamp.
+   08-21 ui-review:低频诊断信息降级 muted —— accent 版本是行内最亮
+   元素,和标签/时间抢主角;完整统计在 RuntimeMemoryModal 里看。 */
 .runtime-memory__stat {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
-  color: var(--color-accent-text);
-  opacity: 0.85;
+  color: var(--color-text-muted);
 }
 
 /* 07-06 (am-observability-panel B2/R3): the whole row is now a
