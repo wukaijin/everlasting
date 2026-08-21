@@ -1295,8 +1295,19 @@ const messageImages = computed<
 .msg__cursor {
   display: inline-block;
   margin-left: 2px;
-  animation: blink 1s steps(1) infinite;
-  color: var(--color-text-muted);
+  animation: blink var(--duration-blink) steps(1) infinite;
+  /* 2026-08-21: muted grey → accent gradient (blue→violet, vertical —
+     the ▍ glyph is tall so the gradient is actually visible). Part of
+     the streaming-feedback set (input-row rotating ring + stop halo);
+     background-clip:text on the glyph, blink cadence unchanged. */
+  background: linear-gradient(
+    180deg,
+    var(--color-accent-text),
+    var(--color-tool-thinking)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 @keyframes blink {

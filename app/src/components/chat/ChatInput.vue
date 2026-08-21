@@ -730,7 +730,11 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
         </button>
       </div>
     </div>
-    <div class="chat-input__row" :style="inputRowStyle">
+    <div
+      class="chat-input__row"
+      :class="{ 'chat-input__row--streaming': sending }"
+      :style="inputRowStyle"
+    >
       <!-- PR2 (B7): per-session Mode picker. Placed on the LEFT
            of the input row (same line as the editor), NOT in
            the hint row, per Q4 P2 in the 2026-06-13 mode-redesign
@@ -966,6 +970,87 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   box-shadow: var(--shadow-ring);
 }
 
+/* SSE streaming ring (2026-08-21): while `sending`, the input row's
+   border is replaced by a slowly rotating gradient ring (accent blue →
+   cyan → violet, all existing tokens — no new --color-*), plus a soft
+   breathing glow. The row is the only element guaranteed visible for
+   the whole stream (the message list scrolls), and the border is the
+   slot the idle/focus states already use, so streaming reads as the
+   third state in idle → focused → working rather than a new visual
+   language. Technique: ::before ring via the canonical mask-composite
+   gradient-border recipe; the conic angle animates through a
+   registered @property (WebKitGTK 2.44+/WebView2 both support it —
+   older engines degrade to a static gradient ring at 0deg).
+   `--duration-pulse * 2` (3.6s/rev) is deliberately slower than the
+   1.8s subagent breathing so the two never beat against each other. */
+@property --chat-input-stream-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.chat-input__row--streaming,
+.chat-input__row--streaming:focus-within {
+  /* Hide the static border + focus ring — the animated ::before ring
+     owns the border visual while streaming. box-shadow is driven by
+     the glow animation below (animations override the static
+     --shadow-ring). */
+  border-color: transparent;
+  animation: chat-input-stream-glow var(--duration-pulse) ease-in-out infinite;
+}
+
+.chat-input__row--streaming::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--chat-input-stream-angle, 0deg),
+    var(--color-accent-text),
+    var(--color-tool-read) 33%,
+    var(--color-tool-thinking) 66%,
+    var(--color-accent-text)
+  );
+  /* Ring mask: subtract the padding-box rect from the content-box
+     rect, leaving a 1px frame. #fff is structural (any opaque color
+     works), not a visual color. */
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: chat-input-stream-rotate calc(var(--duration-pulse) * 2) linear infinite;
+}
+
+@keyframes chat-input-stream-rotate {
+  to {
+    --chat-input-stream-angle: 360deg;
+  }
+}
+
+@keyframes chat-input-stream-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 10px color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 16px color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-input__row--streaming,
+  .chat-input__row--streaming:focus-within,
+  .chat-input__row--streaming::before {
+    animation: none;
+  }
+}
+
 /* PR1.5: CodeMirror 6 host. The EditorView creates `.cm-editor`
    inside this div; we style it through `:deep()` because CM
    injects its own DOM (scoped CSS `data-v-xxx` doesn't apply to
@@ -1089,9 +1174,30 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
 
 /* PR5 Stop button. Uses a different background so the visual cue
    "this will halt the stream" is unambiguous, and the square
-   glyph differentiates it from the up-arrow Send icon. */
+   glyph differentiates it from the up-arrow Send icon.
+   2026-08-21: slow red halo breathing (same --duration-pulse rhythm
+   as the subagent breathing + input-row glow) so the button reads
+   alive while streaming. Deliberately NOT part of the gradient ring
+   treatment — red is the semantic "stop" color and must stay pure. */
 .chat-input__stop {
   background: var(--color-tool-error);
+  animation: chat-input-stop-breathe var(--duration-pulse) ease-in-out infinite;
+}
+
+@keyframes chat-input-stop-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-tool-error) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--color-tool-error) 40%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-input__stop {
+    animation: none;
+  }
 }
 
 .chat-input__stop:hover {
