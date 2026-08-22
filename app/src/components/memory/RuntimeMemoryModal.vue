@@ -525,6 +525,7 @@ watch(
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   z-index: 2001;
   animation: runtime-memory-modal-zoom var(--duration-modal-in, 160ms)
@@ -731,6 +732,7 @@ watch(
   padding: 4px;
 }
 :deep(.runtime-memory-modal__status-viewport) {
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
 }
 :deep(.runtime-memory-modal__status-option) {
@@ -742,7 +744,6 @@ watch(
   font-family: var(--font-mono);
   color: var(--color-text-primary);
   cursor: pointer;
-  outline: none;
 }
 :deep(.runtime-memory-modal__status-option[data-highlighted]) {
   background: var(--color-bg-surface);
@@ -782,6 +783,7 @@ watch(
   border-radius: var(--radius-sm);
   font-size: var(--text-sm);
   color: var(--color-text-primary);
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
 }
 .runtime-memory-modal__input:focus {
@@ -798,6 +800,7 @@ watch(
   color: var(--color-text-primary);
   resize: vertical;
   min-height: 80px;
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
   font-family: inherit;
 }

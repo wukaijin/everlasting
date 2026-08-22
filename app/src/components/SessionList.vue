@@ -785,6 +785,7 @@ watch(() => props.searchActive, (active) => {
   border: 1px solid var(--color-accent);
   border-radius: 3px;
   padding: 1px 4px;
+  /* 自有焦点替代:常显 accent 边框+底色的重命名 chip,非裸输入框 */
   outline: none;
   font-family: inherit;
 }

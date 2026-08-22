@@ -352,6 +352,7 @@ async function onRefresh(): Promise<void> {
   overflow: hidden;
   box-shadow: var(--shadow-xl);
   z-index: 2001;
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   animation: audit-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }
@@ -464,7 +465,6 @@ async function onRefresh(): Promise<void> {
   font-size: var(--text-sm);
   font-family: inherit;
   cursor: pointer;
-  outline: none;
   transition: border-color var(--duration-base) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
 }
 
@@ -516,7 +516,6 @@ async function onRefresh(): Promise<void> {
   border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
-  outline: none;
 }
 
 :deep(.audit-modal__select-option[data-highlighted]) {

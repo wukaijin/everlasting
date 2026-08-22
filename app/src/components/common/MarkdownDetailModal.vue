@@ -224,6 +224,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   overflow: hidden;
   box-shadow: var(--shadow-xl);
   z-index: 2001;
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   animation: markdown-detail-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }

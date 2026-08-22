@@ -133,6 +133,7 @@ function onToastOpenChange(open: boolean, id: string): void {
   padding: 0;
   margin: 0;
   list-style: none;
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
 }
 

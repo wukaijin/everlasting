@@ -337,7 +337,6 @@ async function onCopy() {
   color: var(--color-text-secondary);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  outline: none;
 }
 
 .msg-actions__trigger:hover {
@@ -400,7 +399,6 @@ async function onCopy() {
   color: var(--color-text-primary);
   cursor: pointer;
   user-select: none;
-  outline: none;
 }
 
 :deep(.msg-actions__item)[data-highlighted] {

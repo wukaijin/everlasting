@@ -296,6 +296,43 @@ textarea {
     font: inherit;
 }
 
+/* ------------------------------------------------------------------------- *
+ * Global :focus-visible baseline (08-22-focus-visible-baseline)             *
+ * ------------------------------------------------------------------------- *
+ * 键盘导航可见性(WCAG 2.4.7)。此前全应用仅 4 个组件有 :focus-visible、
+ * 35 处 outline:none 压掉 UA 默认环,Tab 遍历无视觉指示。
+ *
+ * 选择器用 :where() 包裹(零特异性):任何组件只要自己声明了焦点样式
+ * (box-shadow / border-color 等)就天然胜出,基线不与之竞争;没声明的
+ * 交互元素落到这里,拿到 --shadow-ring(design-tokens 文档化的
+ * "0 0 0 3px color-mix(accent 20%)" 约定)。
+ *
+ * input/textarea 刻意不在组内:设置表单等文本域普遍有 ":focus 换
+ * accent 边框"的自定义替代(ChatInput 更是容器级 focus-within 环),
+ * 纳入会造成双重指示;它们的可聚焦反馈已存在。
+ *
+ * opt-out:.no-focus-ring 给确需完全自定义焦点呈现的元素;使用处必须
+ * 注释原因(PRD R2),且必须自带替代指示,否则键盘用户再次失明。
+ * ------------------------------------------------------------------------- */
+:where(
+        button,
+        a,
+        select,
+        summary,
+        [role="button"],
+        [role="tab"],
+        [role="menuitem"],
+        [role="option"],
+        [tabindex]:not([tabindex="-1"])
+    ):focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-ring);
+}
+
+.no-focus-ring:focus-visible {
+    box-shadow: none;
+}
+
 /* Dark theme baseline (applies everywhere; per PRD: dark only, reserve light extension) */
 :root {
     background: var(--color-bg-app);

@@ -1089,6 +1089,7 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
 }
 
 :deep(.chat-input__field .cm-editor.cm-focused) {
+  /* CodeMirror 自绘光标;外层 .chat-input__field 已有 focus-within --shadow-ring */
   outline: none;
 }
 

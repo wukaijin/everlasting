@@ -352,7 +352,7 @@ function timeLabel(iso: string): string {
                     v-for="h in visibleTitleHits"
                     :key="`t-${h.session_id}`"
                     type="button"
-                    class="search-modal__row"
+                    class="search-modal__row no-focus-ring"
                     @click="openInMainWindow({ sessionId: h.session_id, sessionTitle: h.session_title, projectId: h.project_id, seq: null })"
                   >
                     <span class="search-modal__row-title">{{ h.session_title }}</span>
@@ -458,6 +458,7 @@ function timeLabel(iso: string): string {
   overflow: hidden;
   box-shadow: var(--shadow-xl);
   z-index: 2001;
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   animation: search-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }
@@ -501,6 +502,7 @@ function timeLabel(iso: string): string {
   min-width: 0;
   background: transparent;
   border: none;
+  /* 焦点指示=输入光标 caret(裸搜索框,容器已提供上下文) */
   outline: none;
   color: var(--color-text-primary);
   font-size: var(--text-base);
@@ -689,6 +691,7 @@ function timeLabel(iso: string): string {
 .search-modal__row:hover,
 .search-modal__row:focus-visible {
   background: var(--color-bg-elevated);
+  /* 自有焦点替代::focus-visible 底色高亮(见下);基线环经模板 no-focus-ring 关闭 */
   outline: none;
 }
 

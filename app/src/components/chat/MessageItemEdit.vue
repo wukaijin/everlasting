@@ -230,6 +230,7 @@ function onSave() {
   font-size: var(--text-base);
   line-height: 1.5;
   resize: vertical;
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
   box-sizing: border-box;

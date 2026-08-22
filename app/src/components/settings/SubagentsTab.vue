@@ -581,7 +581,6 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
   border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
-  outline: none;
   line-height: 1.4;
 }
 

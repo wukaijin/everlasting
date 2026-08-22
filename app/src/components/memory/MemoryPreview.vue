@@ -393,7 +393,7 @@ function formatTimestamp(rfc3339: string): string {
           v-for="mem in store.runtimeMemories"
           :key="mem.id"
           class="runtime-memory"
-          :class="{ 'runtime-memory--clickable': true }"
+          :class="{ 'runtime-memory--clickable': true, 'no-focus-ring': true }"
           role="button"
           tabindex="0"
           @click="onRowClick(mem)"

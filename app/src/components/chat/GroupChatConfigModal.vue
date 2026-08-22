@@ -528,6 +528,7 @@ function modelLabel(id: string): string {
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   overflow: hidden;
   z-index: 2001;
@@ -748,6 +749,7 @@ function modelLabel(id: string): string {
   color: var(--color-text-primary);
   font: inherit;
   font-size: var(--text-sm);
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
 }
 .gcfg-input:focus,
@@ -808,7 +810,6 @@ function modelLabel(id: string): string {
   font-size: var(--text-sm);
   color: var(--color-text-primary);
   cursor: pointer;
-  outline: none;
 }
 :deep(.gcfg-select-item[data-highlighted]) {
   background: var(--color-bg-surface);

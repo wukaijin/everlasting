@@ -505,6 +505,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__input:focus {
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
   border-color: var(--color-accent);
 }
@@ -572,7 +573,6 @@ function protocolBadgeClass(protocol: string): string {
   border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
-  outline: none;
 }
 
 :deep(.providers-tab__option[data-highlighted]) {

@@ -163,6 +163,7 @@ function onKeydown(e: KeyboardEvent) {
   flex: 1;
   min-width: 0;
   border: none;
+  /* 焦点指示=输入光标 caret(裸搜索框,容器已提供上下文) */
   outline: none;
   background: transparent;
   color: var(--color-text-primary);

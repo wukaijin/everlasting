@@ -204,6 +204,7 @@ async function submit() {
 }
 
 .pairing-card__input:focus {
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
   border-color: var(--color-accent);
   box-shadow: var(--shadow-ring);
@@ -236,6 +237,7 @@ async function submit() {
 }
 
 .pairing-card__code-input:focus {
+  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
   outline: none;
   border-color: var(--color-accent);
   box-shadow: var(--shadow-ring);

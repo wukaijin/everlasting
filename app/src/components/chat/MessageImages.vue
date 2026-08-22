@@ -56,7 +56,7 @@ function openImage(img: ImageRef): void {
       v-for="(img, idx) in images"
       :key="img.file ?? img.localUrl ?? idx"
       type="button"
-      class="message-images__item"
+      class="message-images__item no-focus-ring"
       :data-testid="`message-image-${idx}`"
       :title="img.mediaType"
       @click="openImage(img)"
