@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0",
+  "task_id": "improve-readme",
+  "current_round": 2,
+  "rounds": [
+    {
+      "round": 1,
+      "dimensions": ["correctness", "completeness", "docs-quality"],
+      "models_present": ["deepseek-v4-flash", "q4-max"],
+      "models": {
+        "deepseek-v4-flash": {
+          "model_display": "DeepSeek V4 Flash",
+          "run_id": "run-001",
+          "status": "completed",
+          "verdict": "pass_with_minor",
+          "summary": "整体达标：结构清晰、命令可执行。两处事实性漂移与一处前置说明缺失需要跟进。",
+          "findings": [
+            {
+              "finding_id": "f-001",
+              "dimension": "correctness",
+              "severity": "high",
+              "issue": "README 快速开始里的默认端口 8080 与 proxy.conf.json 实际代理端口 4200 不一致，照抄命令会连不上。",
+              "suggestion": "以 proxy.*.conf.json 为单一来源修正端口并加一句校验命令。",
+              "location": "README.md L42",
+              "source_run_id": "run-001",
+              "triage": { "decision": "adopt", "reason": "事实错误，必须修。" }
+            },
+            {
+              "finding_id": "f-002",
+              "dimension": "completeness",
+              "severity": "medium",
+              "issue": "贡献约定章节没有提及提交信息格式，仓库实际在用 conventional commits。",
+              "suggestion": "补一小节列出 feat/fix/chore 前缀约定。",
+              "location": "README.md L77",
+              "source_run_id": "run-001",
+              "triage": { "decision": "adopt", "reason": "低成本高收益。" }
+            },
+            {
+              "finding_id": "f-003",
+              "dimension": "docs-quality",
+              "severity": "low",
+              "issue": "快速开始缺少 pnpm 安装前置说明，新环境直接跑会报 command not found。",
+              "source_run_id": "run-001"
+            }
+          ]
+        },
+        "q4-max": {
+          "model_display": "Q4 Max",
+          "run_id": "run-002",
+          "status": "completed",
+          "verdict": "revise",
+          "summary": "结构合格但关键参数漂移属于阻断级，建议修订后进入下一轮。",
+          "findings": [
+            {
+              "finding_id": "f-101",
+              "dimension": "correctness",
+              "severity": "critical",
+              "issue": "目录结构一节列出的 src/app 路径在仓库里已不存在（重构后移到 projects/），按图索骥会找不到文件。",
+              "suggestion": "重新生成目录树或直接删除该节。",
+              "location": "README.md L58-71",
+              "source_run_id": "run-002",
+              "triage": { "decision": "adopt", "reason": "阻断级事实错误。" }
+            },
+            {
+              "finding_id": "f-102",
+              "dimension": "completeness",
+              "severity": "info",
+              "issue": "可在文末追加 License 徽章提升第一印象，非必需。",
+              "source_run_id": "run-002"
+            }
+          ]
+        }
+      },
+      "change_log": ["round 1 初始化矩阵：双模型并行评审完成"],
+      "convergence_note": "两模型在端口漂移上交叉确认，其余为互补发现。"
+    }
+  ]
+}
