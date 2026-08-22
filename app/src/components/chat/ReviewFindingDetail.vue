@@ -145,12 +145,18 @@ async function openSource(): Promise<void> {
 </template>
 
 <style scoped>
+/* Token 迁移(08-22-review-token-migration):同 ReviewMatrix.vue 头注。
+   severity 徽章由"裸 Tailwind 600 档实底 + 白字"改为与 verdict/triage 徽章
+   一致的淡彩底 + 400 档文字 token(填充 500 / 文字 400 原则);critical 与
+   high 同用 tool-error 色系,以 tint 浓度区分层级。容器背景改 transparent:
+   父面已提供 elevated(grid 展开行)或 surface(维度对比列),避免子面与父
+   面同底,边框负责 delineation。 */
 .review-finding-detail {
-  padding: 8px 10px;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-  border-radius: 6px;
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.02));
-  font-size: 12px;
+  padding: var(--space-2) 10px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-size: var(--text-sm);
   /* 08-14 ux-polish-r1 WP2:finding 详情是多行 prose 阅读面 → --leading-relaxed */
   line-height: var(--leading-relaxed);
   display: flex;
@@ -167,80 +173,94 @@ async function openSource(): Promise<void> {
 .review-finding-detail__severity {
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
-.review-finding-detail__severity--critical { background: #b91c1c; }
-.review-finding-detail__severity--high { background: #dc2626; }
-.review-finding-detail__severity--medium { background: #d97706; }
-.review-finding-detail__severity--low { background: #2563eb; }
-.review-finding-detail__severity--info { background: #6b7280; }
+.review-finding-detail__severity--critical {
+  background: color-mix(in srgb, var(--color-tool-error) 26%, transparent);
+  color: var(--color-tool-error-text);
+}
+.review-finding-detail__severity--high {
+  background: color-mix(in srgb, var(--color-tool-error) 14%, transparent);
+  color: var(--color-tool-error-text);
+}
+.review-finding-detail__severity--medium {
+  background: color-mix(in srgb, var(--color-status-warn) 14%, transparent);
+  color: var(--color-status-warn);
+}
+.review-finding-detail__severity--low {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent-text);
+}
+.review-finding-detail__severity--info {
+  background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+  color: var(--color-text-secondary);
+}
 
 .review-finding-detail__dimension {
-  color: var(--text-secondary, #555);
-  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
 }
 
 .review-finding-detail__triage {
   margin-left: auto;
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 .review-finding-detail__triage--adopt {
-  background: rgba(34, 197, 94, 0.15);
-  color: #15803d;
+  background: color-mix(in srgb, var(--color-status-success) 15%, transparent);
+  color: var(--color-status-success);
 }
 .review-finding-detail__triage--reject {
-  background: rgba(220, 38, 38, 0.15);
-  color: #b91c1c;
+  background: color-mix(in srgb, var(--color-tool-error) 15%, transparent);
+  color: var(--color-tool-error-text);
 }
 .review-finding-detail__triage--defer {
-  background: rgba(107, 114, 128, 0.15);
-  color: #4b5563;
+  background: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
+  color: var(--color-text-secondary);
 }
 
 .review-finding-detail__issue {
   margin: 0;
-  color: var(--text-primary, #1f2937);
+  color: var(--color-text-primary);
 }
 
 .review-finding-detail__suggestion,
 .review-finding-detail__location,
 .review-finding-detail__triage-reason {
   margin: 0;
-  color: var(--text-secondary, #555);
+  color: var(--color-text-secondary);
 }
 
 .review-finding-detail__label {
-  font-weight: 600;
-  margin-right: 4px;
-  color: var(--text-tertiary, #6b7280);
+  font-weight: var(--weight-semibold);
+  margin-right: var(--space-1);
+  color: var(--color-text-muted);
 }
 
 .review-finding-detail__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   margin-top: 2px;
 }
 
 .review-finding-detail__source-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-  border-radius: 4px;
-  background: var(--bg-default, #fff);
-  color: var(--text-secondary, #555);
-  font-size: 11px;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 .review-finding-detail__source-btn:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  background: var(--color-bg-hover);
 }
 .review-finding-detail__source-btn:disabled {
   opacity: 0.6;
@@ -248,18 +268,7 @@ async function openSource(): Promise<void> {
 }
 
 .review-finding-detail__source-error {
-  color: #b91c1c;
-  font-size: 11px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .review-finding-detail {
-    border-color: var(--border-subtle, rgba(255, 255, 255, 0.1));
-    background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
-  }
-  .review-finding-detail__source-btn {
-    background: var(--bg-default, #1f2937);
-    color: var(--text-secondary, #d1d5db);
-  }
+  color: var(--color-tool-error-text);
+  font-size: var(--text-xs);
 }
 </style>

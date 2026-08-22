@@ -150,6 +150,7 @@ const columns = computed<ModelColumn[]>(() => {
 </template>
 
 <style scoped>
+/* Token 迁移(08-22-review-token-migration):同 ReviewMatrix.vue 头注。 */
 .review-dim-compare {
   display: flex;
   flex-direction: column;
@@ -158,7 +159,7 @@ const columns = computed<ModelColumn[]>(() => {
 
 .review-dim-compare__controls {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -166,27 +167,27 @@ const columns = computed<ModelColumn[]>(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary, #555);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
 }
 
 .review-dim-compare__control-label {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .review-dim-compare__select {
   padding: 3px 6px;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-  border-radius: 4px;
-  background: var(--bg-default, #fff);
-  color: var(--text-primary, #1f2937);
-  font-size: 12px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
 }
 
 .review-dim-compare__empty {
-  font-size: 12px;
-  color: var(--text-tertiary, #6b7280);
-  padding: 12px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  padding: var(--space-3);
   text-align: center;
 }
 
@@ -206,24 +207,16 @@ const columns = computed<ModelColumn[]>(() => {
 }
 
 .review-dim-compare__column-head {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-primary, #1f2937);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
   padding-bottom: 4px;
-  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-bottom: 1px solid var(--color-bg-border);
 }
 
 .review-dim-compare__column-empty {
-  font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
-  padding: 8px 4px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .review-dim-compare__select {
-    background: var(--bg-default, #1f2937);
-    color: var(--text-primary, #f3f4f6);
-    border-color: var(--border-subtle, rgba(255, 255, 255, 0.1));
-  }
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  padding: var(--space-2) 4px;
 }
 </style>

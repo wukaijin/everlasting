@@ -247,22 +247,25 @@ function findingsForCell(mv: ModelVerdict | null): ReviewFinding[] {
 </template>
 
 <style scoped>
+/* Token 迁移(08-22-review-token-migration):同 ReviewMatrix.vue 头注。
+   verdict 徽章由裸 Tailwind hex 改为"400 档文字 token + 同色系 color-mix
+   淡彩底"(design-tokens:填充 500 / 文字 400 原则)。 */
 .review-matrix-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .review-matrix-grid__summary {
-  font-size: 12px;
-  color: var(--text-secondary, #555);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
 }
 
 .review-matrix-grid__table {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-  border-radius: 6px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -271,20 +274,20 @@ function findingsForCell(mv: ModelVerdict | null): ReviewFinding[] {
   /* CSS var --rmg-cols is set inline on the table; the fallback
      `3` keeps the layout sane if the var is missing. */
   grid-template-columns: 100px repeat(var(--rmg-cols, 3), minmax(120px, 1fr));
-  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
+  border-bottom: 1px solid var(--color-bg-border);
 }
 .review-matrix-grid__row:last-child {
   border-bottom: none;
 }
 
 .review-matrix-grid__row--head {
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.02));
+  background: var(--color-bg-elevated);
 }
 
 .review-matrix-grid__cell {
-  padding: 8px 10px;
-  font-size: 12px;
-  border-right: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
+  padding: var(--space-2) 10px;
+  font-size: var(--text-sm);
+  border-right: 1px solid var(--color-bg-border);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -297,18 +300,19 @@ function findingsForCell(mv: ModelVerdict | null): ReviewFinding[] {
 .review-matrix-grid__cell--corner,
 .review-matrix-grid__cell--head,
 .review-matrix-grid__cell--row-head {
-  font-weight: 600;
-  color: var(--text-primary, #1f2937);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
 }
 
 .review-matrix-grid__cell--body {
   cursor: pointer;
   display: flex;
   align-items: center;
+  /* 6px:徽章与计数的半步间距 */
   gap: 6px;
 }
 .review-matrix-grid__cell--body:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  background: var(--color-bg-hover);
 }
 .review-matrix-grid__cell--empty,
 .review-matrix-grid__cell--body[tabindex="-1"] {
@@ -318,52 +322,65 @@ function findingsForCell(mv: ModelVerdict | null): ReviewFinding[] {
   background: transparent;
 }
 
+/* 斜纹 hatch 用 primary 的低比例 color-mix,替代原明暗双份 rgba 补丁 */
 .review-matrix-grid__cell--failed {
   opacity: 0.5;
   background: repeating-linear-gradient(
     45deg,
     transparent,
     transparent 4px,
-    rgba(0, 0, 0, 0.03) 4px,
-    rgba(0, 0, 0, 0.03) 8px
+    color-mix(in srgb, var(--color-text-primary) 6%, transparent) 4px,
+    color-mix(in srgb, var(--color-text-primary) 6%, transparent) 8px
   );
 }
 
 .review-matrix-grid__cell--expanded {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  background: var(--color-bg-hover);
 }
 
 .review-matrix-grid__convergence {
-  color: #d97706;
-  font-size: 10px;
+  color: var(--color-status-warn);
+  font-size: var(--text-2xs);
   margin-left: 2px;
 }
 
 .review-matrix-grid__verdict {
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
-.review-matrix-grid__verdict--pass { background: rgba(34, 197, 94, 0.15); color: #15803d; }
-.review-matrix-grid__verdict--minor { background: rgba(59, 130, 246, 0.15); color: #1d4ed8; }
-.review-matrix-grid__verdict--revise { background: rgba(217, 119, 6, 0.15); color: #b45309; }
-.review-matrix-grid__verdict--reject { background: rgba(220, 38, 38, 0.15); color: #b91c1c; }
+.review-matrix-grid__verdict--pass {
+  background: color-mix(in srgb, var(--color-status-success) 15%, transparent);
+  color: var(--color-status-success);
+}
+.review-matrix-grid__verdict--minor {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent-text);
+}
+.review-matrix-grid__verdict--revise {
+  background: color-mix(in srgb, var(--color-status-warn) 15%, transparent);
+  color: var(--color-status-warn);
+}
+.review-matrix-grid__verdict--reject {
+  background: color-mix(in srgb, var(--color-tool-error) 15%, transparent);
+  color: var(--color-tool-error-text);
+}
 
 .review-matrix-grid__count {
-  color: var(--text-secondary, #6b7280);
-  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
 }
 
 .review-matrix-grid__absent {
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--color-text-muted);
   font-style: italic;
 }
 
 .review-matrix-grid__expanded {
-  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.02));
-  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-bg-border);
+  background: var(--color-bg-elevated);
+  padding: var(--space-2) 10px;
 }
 
 .review-matrix-grid__expanded-inner {
@@ -381,30 +398,14 @@ function findingsForCell(mv: ModelVerdict | null): ReviewFinding[] {
 }
 
 .review-matrix-grid__expanded-head {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-primary, #1f2937);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
 }
 
 .review-matrix-grid__expanded-empty {
-  font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
-  padding: 8px 4px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .review-matrix-grid__row--head,
-  .review-matrix-grid__expanded {
-    background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
-  }
-  .review-matrix-grid__cell--failed {
-    background: repeating-linear-gradient(
-      45deg,
-      transparent,
-      transparent 4px,
-      rgba(255, 255, 255, 0.04) 4px,
-      rgba(255, 255, 255, 0.04) 8px
-    );
-  }
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  padding: var(--space-2) 4px;
 }
 </style>

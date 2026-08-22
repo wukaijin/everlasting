@@ -154,21 +154,27 @@ async function retry(): Promise<void> {
 </template>
 
 <style scoped>
+/* Token 迁移(08-22-review-token-migration):原 var(--bg-default, #fff) /
+   var(--text-*, …) / var(--border-subtle, …) 均为未定义变量,浅色 fallback
+   在暗色应用内渲染成白底面板。现全部消费正式 token;层级遵循 design-tokens
+   约定:面板=surface、头/子面=elevated,文字按 primary/secondary/muted 三档。
+   原 @media (prefers-color-scheme: dark) 补丁随迁移删除(app 为 dark-only)。 */
 .review-matrix {
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.1));
-  border-radius: 8px;
-  background: var(--bg-default, #fff);
-  margin-bottom: 8px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  margin-bottom: var(--space-2);
   overflow: hidden;
 }
 
 .review-matrix__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
+  /* 6px/10px:介于 --space-1 与 --space-2 之间的半步,紧凑头行不取整档 */
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.02));
+  border-bottom: 1px solid var(--color-bg-border);
+  background: var(--color-bg-elevated);
 }
 
 .review-matrix__collapse {
@@ -179,28 +185,29 @@ async function retry(): Promise<void> {
   height: 18px;
   border: none;
   background: transparent;
-  color: var(--text-secondary, #6b7280);
+  color: var(--color-text-secondary);
   cursor: pointer;
+  /* 3px:图标钮内圆角,低于 --radius-sm 的装饰档 */
   border-radius: 3px;
 }
 .review-matrix__collapse:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  background: var(--color-bg-hover);
 }
 
 .review-matrix__title {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-primary, #1f2937);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
 }
 
 .review-matrix__summary {
-  font-size: 12px;
-  color: var(--text-secondary, #6b7280);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
 }
 
 .review-matrix__loading {
-  font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 
 .review-matrix__tabs {
@@ -210,21 +217,22 @@ async function retry(): Promise<void> {
 }
 
 .review-matrix__tab {
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-secondary, #6b7280);
-  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 .review-matrix__tab:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  background: var(--color-bg-hover);
 }
+/* 激活态用 --color-bg-selected(spec:"selected list item / active nav")*/
 .review-matrix__tab--active {
-  background: var(--bg-default, #fff);
-  color: var(--text-primary, #1f2937);
-  border-color: var(--border-subtle, rgba(0, 0, 0, 0.12));
+  background: var(--color-bg-selected);
+  color: var(--color-text-primary);
+  border-color: var(--color-bg-border-strong);
 }
 
 .review-matrix__body {
@@ -232,9 +240,9 @@ async function retry(): Promise<void> {
 }
 
 .review-matrix__guide {
-  margin: 8px 0 0;
-  font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
   text-align: center;
 }
 
@@ -244,9 +252,9 @@ async function retry(): Promise<void> {
 }
 .review-matrix__error-body {
   margin: 0;
-  padding: 0 10px 8px;
-  font-size: 12px;
-  color: var(--text-secondary, #555);
+  padding: 0 10px var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
 }
 .review-matrix__error-actions {
   display: flex;
@@ -256,37 +264,22 @@ async function retry(): Promise<void> {
 }
 .review-matrix__btn {
   padding: 3px 10px;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-  border-radius: 4px;
-  background: var(--bg-default, #fff);
-  color: var(--text-primary, #1f2937);
-  font-size: 12px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 .review-matrix__btn:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  background: var(--color-bg-hover);
 }
 .review-matrix__btn:disabled {
   opacity: 0.6;
   cursor: progress;
 }
 .review-matrix__hint {
-  font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
-}
-
-@media (prefers-color-scheme: dark) {
-  .review-matrix {
-    background: var(--bg-default, #1f2937);
-    border-color: var(--border-subtle, rgba(255, 255, 255, 0.1));
-  }
-  .review-matrix__head {
-    background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
-  }
-  .review-matrix__tab--active {
-    background: var(--bg-default, #1f2937);
-    color: var(--text-primary, #f3f4f6);
-    border-color: var(--border-subtle, rgba(255, 255, 255, 0.15));
-  }
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 </style>
