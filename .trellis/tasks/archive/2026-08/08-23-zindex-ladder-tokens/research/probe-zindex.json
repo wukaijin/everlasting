@@ -1,0 +1,10 @@
+{
+  "overlay": {
+    "zIndex": "2000",
+    "position": "fixed"
+  },
+  "content": {
+    "zIndex": "2001",
+    "position": "fixed"
+  }
+}
