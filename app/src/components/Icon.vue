@@ -137,7 +137,7 @@ const map = {
   // lucide (project preference for the cleaner line weight on
   // the spinner). `circle` is the empty outline for pending;
   // `loader` is the classic spinner circle for in_progress (CSS
-  // `checklist-spin` rotates it); `check-mini` is the check
+  // `app-spin` rotates it, via ChecklistCard's :deep(svg) rule); `check-mini` is the check
   // mark for done.
   "circle": Circle,
   "loader": LoaderCircle,

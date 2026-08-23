@@ -617,7 +617,7 @@ const messageImages = computed<
       data-testid="msg-retrying"
       :title="`重试中 ${message.retrying.attempt}/${message.retrying.maxAttempts},${(message.retrying.waitMs / 1000).toFixed(1)}s 后重发`"
     >
-      <Icon name="refresh" :size="12" icon-class="msg__retrying-icon" />
+      <Icon name="refresh" :size="12" icon-class="msg__retrying-icon icon-spin" />
       <span class="msg__retrying-text">
         重试中 {{ message.retrying.attempt }}/{{ message.retrying.maxAttempts }},{{
           (message.retrying.waitMs / 1000).toFixed(1)
@@ -1166,19 +1166,10 @@ const messageImages = computed<
   font-family: var(--font-mono);
 }
 
+/* 旋转由全局 .icon-spin 原语提供(style.css);这里只管颜色 */
 .msg__retrying-icon {
   flex-shrink: 0;
   color: var(--color-status-warn, #f0ad4e);
-  animation: msg__retrying-spin 1.4s linear infinite;
-}
-
-@keyframes msg__retrying-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .msg__retrying-text {

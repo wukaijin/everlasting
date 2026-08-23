@@ -353,7 +353,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
           </SelectRoot>
           <span
             v-if="isLoading(row.name)"
-            class="subagents-tab__spinner"
+            class="app-spinner subagents-tab__spinner"
             aria-label="保存中"
           />
         </div>
@@ -613,19 +613,8 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
   color: var(--color-text-primary);
 }
 
-.subagents-tab__spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--color-bg-border);
-  border-top-color: var(--color-accent);
-  border-radius: 50%;
-  animation: subagents-tab-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
+/* 形态由全局 .app-spinner 原语提供(style.css);此处类名留作测试/检索钩子 */
 
-@keyframes subagents-tab-spin {
-  to { transform: rotate(360deg); }
-}
 
 .subagents-tab__invalid,
 .subagents-tab__error {

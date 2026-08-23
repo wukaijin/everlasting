@@ -1146,13 +1146,6 @@ onUnmounted(() => reviewStateStore.stop());
   min-width: 0;
 }
 
-.chat-panel__loading {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* PR-3e (2026-06-27): skeleton list. The skeleton is 3 gray
    placeholder bubbles laid out to mirror a real user →
    assistant turn. The 1.5s linear-gradient shimmer
@@ -1184,6 +1177,9 @@ onUnmounted(() => reviewStateStore.stop());
   align-items: flex-start;
 }
 
+/* @keyframes skeleton-shimmer 引自全局原语(style.css);渐变 stops 留在本地——
+   骨架起点须相对父底色错开一层,见 style.css 的骨架屏约定注释。 */
+
 .chat-panel__skeleton-bubble {
   height: 12px;
   border-radius: var(--radius-md);
@@ -1209,36 +1205,9 @@ onUnmounted(() => reviewStateStore.stop());
   width: 45%;
 }
 
-@keyframes skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* PR-3e (2026-06-27): the old .chat-panel__loading + spinner
-   classes are kept as no-op (the v-if was removed) so any
-   future test that still references the spinner class
-   doesn't 404. The keyframe is also kept for the same
-   reason. They render nothing because the v-if no longer
-   targets them; remove in a follow-up if no test references. */
-.chat-panel__loading {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-panel__spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--color-bg-border);
-  border-top-color: var(--color-accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+/* PR-3e 时代的 .chat-panel__loading/.chat-panel__spinner/@keyframes spin
+   死代码已删(08-23-spinner-skeleton-primitive):v-if 早移除、模板与测试
+   双零引用(grep 实证),注释里"remove in a follow-up"的后续到账。 */
 
 .chat-panel__title-row {
   display: flex;

@@ -175,6 +175,8 @@ async function onRetry(): Promise<void> {
 
 .turn-timeline__skeleton-card {
   height: 60px;
+  /* stops 留本地:骨架卡父级(turn 卡)是 bg-elevated,起点须向下错一层
+     用 surface;全局 keyframes skeleton-shimmer(style.css)提供动画 */
   background: linear-gradient(
     90deg,
     var(--color-bg-surface) 0%,
@@ -183,11 +185,6 @@ async function onRetry(): Promise<void> {
   );
   background-size: 200% 100%;
   border-radius: var(--radius-md);
-  animation: skeleton-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes skeleton-pulse {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
 }
 </style>

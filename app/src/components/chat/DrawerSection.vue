@@ -167,7 +167,7 @@ const finalChipText = computed<string>(() => {
         {{ entryCount }} {{ countUnit }}
       </span>
       <span v-if="live" class="drawer-section__live-chip" :title="`Worker running · ${liveChipText}`">
-        <span class="drawer-section__live-spinner" aria-hidden="true" />
+        <span class="app-spinner app-spinner--2xs app-spinner--inline drawer-section__live-spinner" aria-hidden="true" />
         <span class="drawer-section__live-text">{{ liveChipText }}</span>
       </span>
       <span v-else-if="typeof finalDurationMs === 'number'" class="drawer-section__final-chip">
@@ -260,20 +260,7 @@ const finalChipText = computed<string>(() => {
   flex-shrink: 0;
 }
 
-.drawer-section__live-spinner {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: drawer-section-spin 0.8s linear infinite;
-}
-
-@keyframes drawer-section-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* live-spinner 形态由全局 .app-spinner--2xs.app-spinner--inline 原语提供(style.css) */
 
 .drawer-section__live-text {
   /* visually centered next to the spinner */

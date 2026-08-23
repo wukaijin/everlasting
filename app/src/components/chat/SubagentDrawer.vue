@@ -728,7 +728,7 @@ function isPermissionAskLive(rid: string): boolean {
               />
 
               <div v-if="isEmpty" class="subagent-drawer__empty">
-                <div class="subagent-drawer__empty-icon" aria-hidden="true">
+                <div class="subagent-drawer__empty-icon icon-spin" aria-hidden="true">
                   <Icon name="loader" :size="20" />
                 </div>
                 <p class="subagent-drawer__empty-title">Worker 正在初始化</p>
@@ -988,11 +988,12 @@ function isPermissionAskLive(rid: string): boolean {
    intentionally smaller than the chat-panel 64px — the drawer
    is a transient surface, the worker is in flight, and the
    user knows the run started (they just clicked the
-   dispatch_subagent card). The 1.2s linear rotation signals
-   "in progress" without the breathing/pulse pattern used by
-   the running tool cards. Collapses under prefers-reduced-motion
-   (PR-1 @media block at top of style.css handles global
-   animation-duration collapse, so the rotation stops). */
+   dispatch_subagent card). Rotation comes from the global
+   .icon-spin primitive (style.css), which signals "in progress"
+   without the breathing/pulse pattern used by the running tool
+   cards. Collapses under prefers-reduced-motion (PR-1 @media
+   block at top of style.css handles global animation-duration
+   collapse, so the rotation stops). */
 .subagent-drawer__empty-icon {
   width: 32px;
   height: 32px;
@@ -1003,7 +1004,6 @@ function isPermissionAskLive(rid: string): boolean {
   justify-content: center;
   color: var(--color-accent-text);
   margin-bottom: var(--space-1);
-  animation: subagent-drawer-empty-spin 1.2s linear infinite;
 }
 
 .subagent-drawer__empty-title {
@@ -1017,10 +1017,6 @@ function isPermissionAskLive(rid: string): boolean {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
   margin: 0;
-}
-
-@keyframes subagent-drawer-empty-spin {
-  to { transform: rotate(360deg); }
 }
 
 .subagent-drawer__segments {

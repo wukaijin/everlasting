@@ -114,7 +114,7 @@ function statusIcon(status: ChecklistStatus): string {
         case "done":
             return "check-mini"; // lucide Check
         case "in_progress":
-            return "loader"; // lucide LoaderCircle; CSS checklist-spin rotates it
+            return "loader"; // lucide LoaderCircle; CSS app-spin rotates it
         case "pending":
         default:
             return "circle"; // lucide Circle
@@ -414,20 +414,13 @@ function statusClass(status: ChecklistStatus): string {
    icon's true geometric center (the Icon wrapper adds sub-pixel
    geometry), making the spinner wobble / orbit off-center.
    fill-box pins the pivot to the icon itself — steady, centered
-   rotation. */
+   rotation. Keyframes come from the global app-spin primitive
+   (style.css); .icon-spin can't be used here because it lands
+   on the wrapper span, not the svg. */
 .checklist-card__marker--in-progress :deep(svg) {
     transform-box: fill-box;
     transform-origin: 50% 50%;
-    animation: checklist-spin 1s linear infinite;
-}
-
-@keyframes checklist-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+    animation: app-spin 1s linear infinite;
 }
 
 .checklist-card__content {

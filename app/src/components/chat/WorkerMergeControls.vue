@@ -191,7 +191,7 @@ async function doDiscard(): Promise<void> {
       >
         <span
           v-if="isMergeLoading"
-          class="worker-merge-controls__spinner"
+          class="app-spinner app-spinner--sm app-spinner--inline worker-merge-controls__spinner"
           aria-hidden="true"
         />
         <Icon v-else name="git-merge" :size="12" />
@@ -206,7 +206,7 @@ async function doDiscard(): Promise<void> {
       >
         <span
           v-if="isDiscardLoading"
-          class="worker-merge-controls__spinner"
+          class="app-spinner app-spinner--sm app-spinner--inline worker-merge-controls__spinner"
           aria-hidden="true"
         />
         <Icon v-else name="trash" :size="12" />
@@ -332,25 +332,8 @@ async function doDiscard(): Promise<void> {
   background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
 }
 
-/* Spinner — reuses the project's rotation convention. The
-   0.6s linear infinite matches ChatInput's chat-input-spin
-   (the only `linear` animation in the codebase per
-   design-tokens.md). Kept inline here because it's a 12px
-   inline spinner, not a full loader surface. */
-.worker-merge-controls__spinner {
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius-pill);
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: worker-merge-controls-spin 0.6s linear infinite;
-}
-
-@keyframes worker-merge-controls-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* Spinner 形态由全局 .app-spinner--sm.app-spinner--inline 原语提供(style.css);
+   类名保留是 WorkerMergeControls.test.ts 的选择器钩子 */
 
 /* Conflict display — read-only file list + git CLI hint. Mirrors
    the DrawerPermissionAskCard's chrome (left-border tint +

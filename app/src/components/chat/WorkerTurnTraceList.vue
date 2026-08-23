@@ -93,7 +93,7 @@ function fmt(n: number | undefined): string {
       <span>Token 明细</span>
       <span
         v-if="loading"
-        class="worker-turn-trace__spinner"
+        class="app-spinner app-spinner--xs worker-turn-trace__spinner"
         aria-label="加载中"
       />
       <span
@@ -172,20 +172,7 @@ function fmt(n: number | undefined): string {
   font-weight: var(--weight-regular);
 }
 
-.worker-turn-trace__spinner {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 2px solid var(--color-bg-border);
-  border-top-color: var(--color-accent);
-  animation: worker-turn-trace-spin 0.8s linear infinite;
-}
-
-@keyframes worker-turn-trace-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* 形态由全局 .app-spinner--xs 原语提供(style.css);此处类名留作测试/检索钩子 */
 
 .worker-turn-trace__body {
   padding: 0 12px 10px;

@@ -289,7 +289,7 @@ function timeLabel(iso: string): string {
               @compositionend="isComposing = false"
               @keydown.enter="onEnter"
             />
-            <span v-if="searching" class="search-modal__spinner" aria-label="搜索中" />
+            <span v-if="searching" class="app-spinner search-modal__spinner" aria-label="搜索中" />
             <DialogClose as-child>
               <button type="button" class="search-modal__close" aria-label="关闭" @click="close">
                 <Icon name="x" :size="14" />
@@ -514,19 +514,7 @@ function timeLabel(iso: string): string {
   color: var(--color-text-muted);
 }
 
-.search-modal__spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid var(--color-bg-border);
-  border-top-color: var(--color-accent);
-  animation: search-modal-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-
-@keyframes search-modal-spin {
-  to { transform: rotate(360deg); }
-}
+/* 形态由全局 .app-spinner 原语提供(style.css);此处类名留作测试/检索钩子 */
 
 .search-modal__close,
 .search-modal__back {

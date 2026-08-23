@@ -1213,15 +1213,9 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   border-radius: 2px;
 }
 
-.chat-input__spinner {
-  animation: chat-input-spin 1s linear infinite;
-}
-
-@keyframes chat-input-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* .chat-input__spinner/@keyframes chat-input-spin 已删
+   (08-23-spinner-skeleton-primitive):样式存在但模板零引用(grep 实证),
+   属遗留死代码;全局原语在 style.css(.app-spinner/.icon-spin)。 */
 
 /* B2 @文件 palette row (rendered via <TriggerMenu>'s #row slot). The
    slot content is parent-scoped, so these rules live here (not in
