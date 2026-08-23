@@ -1,0 +1,87 @@
+{
+  "cssom": {
+    "keyframesAppSpin": true,
+    "ruleAppSpinner": true,
+    "ruleInline": true,
+    "rule2xs": true,
+    "ruleIconSpin": true,
+    "keyframesSkeletonShimmer": true
+  },
+  "computed": [
+    {
+      "variant": "base",
+      "animationName": "app-spin",
+      "animationDuration": "0.8s",
+      "animationTimingFunction": "linear",
+      "width": "14px",
+      "height": "14px",
+      "borderWidth": "2px",
+      "borderColor": "rgb(59, 91, 219) rgb(30, 37, 48) rgb(30, 37, 48)",
+      "borderTopColor": "rgb(59, 91, 219)"
+    },
+    {
+      "variant": "2xs",
+      "animationName": "app-spin",
+      "animationDuration": "0.8s",
+      "animationTimingFunction": "linear",
+      "width": "8px",
+      "height": "8px",
+      "borderWidth": "1px",
+      "borderColor": "rgb(59, 91, 219) rgb(30, 37, 48) rgb(30, 37, 48)",
+      "borderTopColor": "rgb(59, 91, 219)"
+    },
+    {
+      "variant": "xs",
+      "animationName": "app-spin",
+      "animationDuration": "0.8s",
+      "animationTimingFunction": "linear",
+      "width": "10px",
+      "height": "10px",
+      "borderWidth": "1px",
+      "borderColor": "rgb(59, 91, 219) rgb(30, 37, 48) rgb(30, 37, 48)",
+      "borderTopColor": "rgb(59, 91, 219)"
+    },
+    {
+      "variant": "sm",
+      "animationName": "app-spin",
+      "animationDuration": "0.8s",
+      "animationTimingFunction": "linear",
+      "width": "12px",
+      "height": "12px",
+      "borderWidth": "1px",
+      "borderColor": "rgb(59, 91, 219) rgb(30, 37, 48) rgb(30, 37, 48)",
+      "borderTopColor": "rgb(59, 91, 219)"
+    },
+    {
+      "variant": "lg",
+      "animationName": "app-spin",
+      "animationDuration": "0.8s",
+      "animationTimingFunction": "linear",
+      "width": "20px",
+      "height": "20px",
+      "borderWidth": "2px",
+      "borderColor": "rgb(59, 91, 219) rgb(30, 37, 48) rgb(30, 37, 48)",
+      "borderTopColor": "rgb(59, 91, 219)"
+    },
+    {
+      "variant": "sm-inline",
+      "animationName": "app-spin",
+      "animationDuration": "0.8s",
+      "animationTimingFunction": "linear",
+      "width": "12px",
+      "height": "12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(0, 0, 0, 0) rgb(203, 213, 225) rgb(203, 213, 225)",
+      "borderTopColor": "rgba(0, 0, 0, 0)"
+    }
+  ],
+  "iconSpin": {
+    "animationName": "app-spin",
+    "animationDuration": "1s"
+  },
+  "skeleton": {
+    "animationName": "skeleton-shimmer",
+    "animationDuration": "1.5s",
+    "keyframesInCssom": true
+  }
+}
