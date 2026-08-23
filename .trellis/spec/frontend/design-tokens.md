@@ -649,6 +649,37 @@ is more honest — the surface rises via black, not color.
 
 ---
 
+## Z-Index Ladder (added 2026-08-23, 08-23-zindex-ladder-tokens)
+
+13 semantic tokens in `app/src/style.css` `@theme`. **The values ARE the
+contract** — they were swept 1:1 from the de-facto layers across 29 files
+(42 sites), zero behavior change. Pick a tier from this table; never
+invent a new raw value in a component.
+
+| Token | Value | Band |
+|---|---|---|
+| `--z-raised` | 100 | Header dropdowns / side panel (TracePanel, Mode/ModelSelect, WorktreeChip) |
+| `--z-drawer-overlay` | 105 | Mobile drawer overlay (AppShell) |
+| `--z-drawer` | 110 | Mobile drawer body (Sidebar) |
+| `--z-input-pop` | 200 | Chat-input popovers (latency, token usage, TriggerMenu) |
+| `--z-sheet-overlay` | 999 | Heavy-surface overlay (SubagentDrawer) |
+| `--z-sheet` | 1000 | Heavy surfaces (SubagentDrawer, DiffModal) |
+| `--z-confirm` | 1100 | Confirm dialogs (ConfirmDialog, DeleteWorktreeConfirm) |
+| `--z-confirm-critical` | 1200 | Critical confirm (YoloConfirmModal) |
+| `--z-modal-overlay` | 2000 | Modal family backdrop (8 modals) |
+| `--z-modal` | 2001 | Modal family content |
+| `--z-over-modal` | 3000 | Must beat modal family: in-modal reka Select portals (6 sites, `!important`), msg actions menu / latency tooltip |
+| `--z-toast` | 5500 | ToastProvider |
+| `--z-top` | 9999 | Ceiling: SessionList ctx menu, AppShell legacy toast. Need "above everything"? use this — never `+1`. |
+
+**Micro-local exception**: stacking that never leaves a component (or a
+documented intra-family band like the chat floating cards 50/60/70) may
+keep raw values, but each site MUST carry a comment stating what it
+covers and what covers it. Grep `z-index` for stragglers when adding a
+new layer.
+
+---
+
 ## Icon Sizing
 
 All icons go through the `Icon.vue` wrapper (the only component
@@ -709,9 +740,10 @@ without re-deriving the numbers.
 
 | Concern | Value | Token / source |
 |---|---|---|
-| Backdrop z-index | `9998` | Convention (overlay below content) |
-| Content z-index | `9999` | Convention (above overlay) |
-| Toast z-index | `10000` | Per PR1 audit §3.2 (toast above all modals) |
+| Backdrop z-index | `var(--z-modal-overlay)` = 2000 | Z-index ladder (08-23-zindex-ladder-tokens). **Pre-2026-08-23 this row claimed 9998 — stale, reality was always 2000.** |
+| Content z-index | `var(--z-modal)` = 2001 | Ladder. **Pre-2026-08-23 this row claimed 9999 — stale.** |
+| In-modal Select portal | `var(--z-over-modal)` = 3000 (+`!important`) | reka-ui Select portals mount under `body`; must beat 2001 content. 6 modal-form sites. |
+| Toast z-index | `var(--z-toast)` = 5500 | `ToastProvider`. **Pre-2026-08-23 this row claimed 10000 — stale.** Known smell: AppShell keeps a legacy `projectsStore.toast` at `--z-top` (9999) alongside ToastProvider; merging them is a behavior change, tracked as follow-up input. |
 | Backdrop alpha | `70%` mix of `--color-bg-app` + 4px blur | `color-mix(in srgb, var(--color-bg-app) 70%, transparent)` |
 | Modal width | `min(560px, 90vw)` | PermissionModal (smaller than SettingsModal's `720px`) |
 | Modal max-height | `80vh` | PermissionModal body scrolls above this |

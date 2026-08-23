@@ -300,6 +300,7 @@ async function onCopy() {
   position: absolute;
   top: -8px;
   right: 4px;
+  /* 局部层:只盖本条消息内容;菜单本体在 --z-over-modal(见下) */
   z-index: 5;
   opacity: 0;
   transition: opacity var(--duration-fast) var(--ease-out);
@@ -369,7 +370,7 @@ async function onCopy() {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: 4px;
-  z-index: 3000;
+  z-index: var(--z-over-modal);
   font-size: var(--text-base);
   color: var(--color-text-primary);
   /* reka-ui 2.9.9 default opening animation; ~var(--duration-fast) var(--ease-out). */

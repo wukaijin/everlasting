@@ -179,7 +179,7 @@ async function onToastClick(): Promise<void> {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 105;
+    z-index: var(--z-drawer-overlay);
   }
 }
 .sidebar-overlay-enter-active,
@@ -222,7 +222,7 @@ async function onToastClick(): Promise<void> {
   box-shadow: var(--shadow-md);
   cursor: pointer;
   max-width: 80vw;
-  z-index: 9999;
+  z-index: var(--z-top);
   border: 1px solid var(--color-bg-border);
 }
 

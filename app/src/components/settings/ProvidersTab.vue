@@ -556,7 +556,7 @@ function protocolBadgeClass(protocol: string): string {
   box-shadow: var(--shadow-md);
   min-width: var(--reka-select-trigger-width, 240px);
   width: var(--reka-select-trigger-width);
-  z-index: 3000 !important;
+  z-index: var(--z-over-modal) !important;
   overflow: hidden;
 }
 
@@ -691,6 +691,7 @@ function protocolBadgeClass(protocol: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 局部层:tab 内确认遮罩,盖本 tab 内容;非全局 modal(那是 --z-modal) */
   z-index: 10;
   border-radius: var(--radius-md);
 }

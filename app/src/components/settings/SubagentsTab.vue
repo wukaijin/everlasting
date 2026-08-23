@@ -563,7 +563,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
   min-width: var(--reka-select-trigger-width, 240px);
   width: var(--reka-select-trigger-width);
   max-height: var(--reka-select-content-available-height);
-  z-index: 3000 !important;
+  z-index: var(--z-over-modal) !important;
   overflow: hidden;
 }
 

@@ -175,7 +175,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1200;
+  z-index: var(--z-confirm-critical);
   padding: 24px;
 }
 

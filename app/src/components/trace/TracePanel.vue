@@ -224,7 +224,7 @@ watch(
   box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
-  z-index: 100;
+  z-index: var(--z-raised);
 }
 
 /* Scroll region. `.trace-panel` is a fixed-height (viewport-tall)

@@ -438,7 +438,7 @@ function timeLabel(iso: string): string {
   inset: 0;
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
-  z-index: 2000;
+  z-index: var(--z-modal-overlay);
 }
 
 .search-modal {
@@ -457,7 +457,7 @@ function timeLabel(iso: string): string {
   flex-direction: column;
   overflow: hidden;
   box-shadow: var(--shadow-xl);
-  z-index: 2001;
+  z-index: var(--z-modal);
   /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   animation: search-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;

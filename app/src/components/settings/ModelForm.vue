@@ -398,7 +398,7 @@ const emit = defineEmits<{
     box-shadow: var(--shadow-md);
     min-width: var(--reka-select-trigger-width, 240px);
     width: var(--reka-select-trigger-width);
-    z-index: 3000 !important;
+    z-index: var(--z-over-modal) !important;
     overflow: hidden;
 }
 

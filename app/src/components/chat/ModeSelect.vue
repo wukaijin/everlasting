@@ -397,7 +397,7 @@ async function onYoloConfirm() {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   min-width: 220px;
-  z-index: 100;
+  z-index: var(--z-raised);
   padding: 4px;
   display: flex;
   flex-direction: column;

@@ -236,7 +236,7 @@ function onSearchClear() {
   .sidebar {
     position: fixed;
     inset: 0;
-    z-index: 110;
+    z-index: var(--z-drawer);
     width: min(88vw, 320px);
     padding-top: var(--safe-area-top);
     transform: translateX(-100%);

@@ -129,7 +129,7 @@ function onToastOpenChange(open: boolean, id: string): void {
   gap: 8px;
   width: 360px;
   max-width: calc(100vw - 32px);
-  z-index: 5500;
+  z-index: var(--z-toast);
   padding: 0;
   margin: 0;
   list-style: none;

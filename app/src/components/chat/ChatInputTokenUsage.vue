@@ -634,7 +634,7 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  z-index: 200;
+  z-index: var(--z-input-pop);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;

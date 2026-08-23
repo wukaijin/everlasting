@@ -356,7 +356,7 @@ function onRetryClick(): void {
   box-shadow: var(--shadow-md);
   padding: 6px 10px;
   min-width: 140px;
-  z-index: 3000;
+  z-index: var(--z-over-modal);
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-primary);

@@ -965,7 +965,7 @@ watch(() => props.searchActive, (active) => {
   padding: 4px;
   min-width: 140px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  z-index: 9999;
+  z-index: var(--z-top);
 }
 
 .ctx-menu--palette {

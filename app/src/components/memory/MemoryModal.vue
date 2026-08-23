@@ -85,7 +85,7 @@ const emit = defineEmits<{
   inset: 0;
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
-  z-index: 2000;
+  z-index: var(--z-modal-overlay);
 }
 
 .memory-modal {
@@ -108,7 +108,7 @@ const emit = defineEmits<{
   flex-direction: column;
   overflow: hidden;
   box-shadow: var(--shadow-xl);
-  z-index: 2001;
+  z-index: var(--z-modal);
   /* reka-ui DialogContent sets outline on focus; suppress for our
      design system (the inner focus indicators of MemoryPreview are
      enough). */

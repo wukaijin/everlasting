@@ -257,7 +257,7 @@ const averageLabel = computed(() =>
   min-width: 220px;
   max-width: 280px;
   max-height: 320px;
-  z-index: 200;
+  z-index: var(--z-input-pop);
   padding: 8px 10px;
   display: flex;
   flex-direction: column;

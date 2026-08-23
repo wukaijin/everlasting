@@ -889,7 +889,7 @@ function isPermissionAskLive(rid: string): boolean {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.35);
-  z-index: 999;
+  z-index: var(--z-sheet-overlay);
 }
 
 .subagent-drawer {
@@ -901,7 +901,7 @@ function isPermissionAskLive(rid: string): boolean {
   background: var(--color-bg-surface);
   border-left: 1px solid var(--color-bg-border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
-  z-index: 1000;
+  z-index: var(--z-sheet);
   display: flex;
   flex-direction: column;
   font-family: var(--font-sans);

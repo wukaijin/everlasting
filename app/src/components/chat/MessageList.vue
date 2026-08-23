@@ -375,6 +375,7 @@ onUnmounted(() => {
   position: absolute;
   right: 16px;
   bottom: 14px;
+  /* 局部层:盖消息流;被 ChecklistCard 浮动面板(50)盖——其注释有契约 */
   z-index: 10;
   width: 32px;
   height: 32px;

@@ -198,6 +198,25 @@
      "modal = xl" (06-27-frontend-consistency-sweep PR1). */
     --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.5);
     --shadow-ring: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+
+    /* Z-index ladder (08-23-zindex-ladder-tokens). 值即契约:这些数字是
+       2026-08 前全库的 de-facto 层级,收编为 token 时一个都没改。新层级
+       先查这张表落位,禁止在组件里发明新散值;组件内部的局部微层
+       (盖过兄弟元素、不跨文件)允许裸值但必须注释盖压关系。
+       顶层之上无层——9999 是天花板,需要"比一切都高"时用它,不要 +1。 */
+    --z-raised: 100; /* 头部下拉/侧面板:TracePanel、Mode/ModelSelect、WorktreeChip */
+    --z-drawer-overlay: 105; /* 移动端抽屉遮罩(AppShell) */
+    --z-drawer: 110; /* 移动端抽屉本体(Sidebar) */
+    --z-input-pop: 200; /* 输入区弹层:latency / token usage / TriggerMenu */
+    --z-sheet-overlay: 999; /* 重覆盖面遮罩(SubagentDrawer) */
+    --z-sheet: 1000; /* 重覆盖面:SubagentDrawer、DiffModal */
+    --z-confirm: 1100; /* 确认弹窗:ConfirmDialog、DeleteWorktreeConfirm */
+    --z-confirm-critical: 1200; /* 高危确认:YoloConfirmModal */
+    --z-modal-overlay: 2000; /* Modal 家族遮罩(8 modal) */
+    --z-modal: 2001; /* Modal 家族内容 */
+    --z-over-modal: 3000; /* 必须压过 Modal 家族:modal 内 reka portal Select、msg 菜单/tooltip */
+    --z-toast: 5500; /* ToastProvider */
+    --z-top: 9999; /* 天花板:SessionList ctx 菜单、AppShell 旧 toast */
 }
 
 /* ------------------------------------------------------------------------- *

@@ -391,7 +391,7 @@ defineExpose({
   min-width: 320px;
   max-width: 420px;
   max-height: 320px;
-  z-index: 200;
+  z-index: var(--z-input-pop);
   padding: 6px;
   display: flex;
   flex-direction: column;

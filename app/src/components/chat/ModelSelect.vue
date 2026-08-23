@@ -289,7 +289,7 @@ async function onModelPick(modelId: string) {
   min-width: 220px;
   max-height: 320px;
   overflow-y: auto;
-  z-index: 100;
+  z-index: var(--z-raised);
   padding: 4px;
   display: flex;
   flex-direction: column;

@@ -59,6 +59,7 @@ const emit = defineEmits<{
     display: flex;
     align-items: center;
     justify-content: center;
+    /* 局部层:tab 内确认遮罩,盖本 tab 内容;非全局 modal(那是 --z-modal) */
     z-index: 10;
     border-radius: var(--radius-md);
 }

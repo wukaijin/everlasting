@@ -196,7 +196,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   inset: 0;
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
-  z-index: 2000;
+  z-index: var(--z-modal-overlay);
 }
 
 .markdown-detail-modal {
@@ -223,7 +223,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   flex-direction: column;
   overflow: hidden;
   box-shadow: var(--shadow-xl);
-  z-index: 2001;
+  z-index: var(--z-modal);
   /* 容器接 programmatic focus,整框上环无意义;内部控件由全局 :focus-visible 基线负责(style.css) */
   outline: none;
   animation: markdown-detail-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;

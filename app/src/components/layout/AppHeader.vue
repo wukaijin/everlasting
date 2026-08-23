@@ -128,6 +128,7 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
   flex-shrink: 0;
   background: var(--color-bg-surface);
   border-bottom: 1px solid var(--color-bg-border);
+  /* 局部层:盖普通流内容,低于一切弹层(--z-raised 100 起) */
   z-index: 10;
 }
 

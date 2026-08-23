@@ -433,6 +433,7 @@ const titleText = computed<string>(() =>
   bottom: calc(100% + 4px);
   top: auto;
   left: 0;
+  /* 局部层:头部下拉家族(Mode/ModelSelect 同款几何),低于抽屉/遮罩带 */
   z-index: 20;
   min-width: 220px;
   background: var(--color-bg-elevated);
