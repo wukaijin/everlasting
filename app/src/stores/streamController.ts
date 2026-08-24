@@ -420,6 +420,9 @@ let unlistenTR: UnlistenFn | null = null;
 let unlistenTQ: UnlistenFn | null = null;
 let unlistenMC: UnlistenFn | null = null;
 let unlistenTST: UnlistenFn | null = null;
+// R3 (08-24-p1-turn-crash-recovery WP3): the `stream-resync` SSE
+// sentinel listener (see `handleStreamResync` in streamEvents.ts).
+let unlistenResync: UnlistenFn | null = null;
 let listenerWired = false;
 
 /** Pure decision + message builder for the cross-session pending
@@ -776,6 +779,19 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         events.handleTaskStateTransition(payload);
       },
     );
+    // R3 (08-24-p1-turn-crash-recovery WP3): the daemon's `SseRegistry`
+    // emits this sentinel when a reconnecting EventSource's
+    // Last-Event-ID can't be replayed (restarted daemon OR ring
+    // eviction on a live daemon — see the handler's CHECK-pass notes;
+    // the event alone can't tell the two apart, so the handler gates
+    // the finalize on a DB death-oracle before tearing anything
+    // down). Payload is empty/ignored — the event itself is the
+    // signal. Empty-restart no-op and re-entrancy guards live in the
+    // handler. Fire-and-forget: the async probe never blocks the
+    // listener dispatch.
+    unlistenResync = await transport.listen("stream-resync", () => {
+      void events.handleStreamResync();
+    });
     listenerWired = true;
     listenerReady.value = true;
   }
@@ -790,12 +806,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     unlistenTQ?.();
     unlistenMC?.();
     unlistenTST?.();
+    unlistenResync?.();
     unlistenChat = null;
     unlistenTC = null;
     unlistenTR = null;
     unlistenTQ = null;
     unlistenMC = null;
     unlistenTST = null;
+    unlistenResync = null;
     listenerWired = false;
     listenerReady.value = false;
   }
@@ -1142,6 +1160,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // checklist 重推导 + pending reconcile)。requestId 缺省时 F5 延迟
     // 回写分支自然跳过(req == null)。
     reloadAfterFinalize: events.reloadAfterFinalize,
+    // R3 (08-24-p1-turn-crash-recovery WP3): test entry point for the
+    // `stream-resync` sentinel handler. Production wiring is the
+    // `start()` listener above; tests drive it directly (or through
+    // the captured listener) to assert the interrupted-finalize +
+    // forced-refetch loop without a real EventSource.
+    handleStreamResync: events.handleStreamResync,
     // F5 follow-up: exposed for the thinking-timer boundary
     // regression test. The test drives the `tool:call`
     // path directly because the full IPC → event-emitter

@@ -407,6 +407,17 @@ pub const ERROR_MARKER: &str = "[生成出错中断]";
 /// this marker is the human-readable companion).
 pub const INCOMPLETE_MARKER: &str = "[未完成]";
 
+/// RULE-PERSIST-001 (08-24-p1-turn-crash-recovery): daemon 崩溃
+/// (kill -9 / OOM / 断电)后,启动恢复 pass
+/// (`db::sessions::messages::recover_interrupted_messages`)对流式
+/// 检查点残留行(`status='in_progress'` 且有内容)追加的 marker。
+/// 与 [`CANCELLED_MARKER`] / [`ERROR_MARKER`] 同族:方括号文案,
+/// DOMPurify 原样存活,rehydrate 路径统一内联渲染;独立 Text 块 +
+/// `\n\n` 前缀(非空时)对齐 drive.rs cancel/error marker 的追加
+/// 约定。区别于前两者:由**启动恢复 pass** 而非 agent loop 写入,
+/// 用户视角是"程序异常中断,内容已从检查点恢复"。
+pub const INTERRUPTED_MARKER: &str = "[异常中断已恢复]";
+
 // ---------------------------------------------------------------------------
 // Sink-based emit helpers (P1 RULE-A-006)
 //

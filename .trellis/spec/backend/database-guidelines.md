@@ -192,3 +192,60 @@ pub fn spawn_backup_task(state: &Arc<AppState>, data_dir: &Path);
 源库)/ `backup_same_second_collision` / `prune_keeps_newest_n` /
 `prune_ignores_foreign_files` / `backup_uncreatable_dir_returns_err` /
 `backup_dir_with_single_quote_in_path`。
+
+### Scenario: messages.status 检查点列 + 启动恢复(RULE-PERSIST-001 闭合,2026-08-24)
+
+**Scope/Trigger**: 触碰 turn 持久化路径(messages 写点)、给 messages
+加列、或想新增"崩溃残留状态"类生命周期列的改动。
+
+**Signatures**:
+
+```rust
+// db/sessions/messages.rs
+pub async fn upsert_in_progress_turn(pool, session_id, seq, blocks: &[ContentBlock], speaker) -> Result<()>
+pub async fn finalize_turn_persist(pool, ..同 persist_turn 签名..) -> Result<()>  // ON CONFLICT DO UPDATE + status=NULL
+pub async fn delete_in_progress_turn(pool, session_id, seq) -> Result<u64>         // WHERE status='in_progress' 守卫
+pub async fn recover_interrupted_messages(pool) -> Result<RecoveryReport>          // { interrupted, deleted, orphan_repaired }
+```
+
+**Contracts**:
+
+- `messages.status` 取值域:`NULL`=终态(全部存量行)/`'in_progress'`=流式
+  检查点 /`'interrupted'`=崩溃恢复过。**不加 CHECK**(存量表加 CHECK 要表
+  重建,收益低;写入点保证取值)。部分索引 `idx_messages_status ... WHERE
+  status IS NOT NULL`,启动扫描零成本。
+- 检查点 upsert 的 `DO UPDATE` 列含 `text` → `messages_fts_update`
+  (AFTER UPDATE OF text)随发,≤1次/s/流式 session,docsize 与索引实测
+  lockstep —— 无需额外守卫。
+- **`persist_turn` 本体保持裸 INSERT**:UNIQUE(session_id,seq) 冲突是 seq
+  漂移 bug 的告警信号(RULE-A-003);upsert 只属于 assistant 落库点(它
+  知道自己前面有检查点行)。
+- 恢复 pass 在 `state.rs` 启动序列 `reap_orphaned_runs` 之后、backup task
+  之前(`load_inner` 内)——首拍 VACUUM INTO 捕获的是恢复后状态,且 HTTP
+  handler 尚未 accept,无并发观察者。
+- db 层引用 `crate::agent::helpers::INTERRUPTED_MARKER`:db→agent 常量
+  级依赖已有先例(memories crud / subagent_runs 的运行时调用),可接受;
+  新增时优先参数传入而非扩大该方向。
+
+**Validation & Error Matrix**:
+
+| 条件 | 行为 |
+|------|------|
+| in_progress 行内容为空(含损坏 JSON) | DELETE |
+| in_progress 行有内容 | 追加 INTERRUPTED_MARKER 块(`\n\n` 前缀,独立 Text 块)+ status='interrupted' |
+| session 尾行 = assistant 且 has_tool_calls=1(孤儿 tool_use) | 按 seq+1 裸 INSERT 合成 is_error tool_result user 行(每 tool_use id 一块) |
+| 恢复中 DB 错误 | best-effort:逐行独立写,失败 log,下次启动重跑(幂等) |
+| 干净 DB | no-op,计数 0 |
+
+**Wrong vs Correct**:
+
+```sql
+-- Wrong:给全表 persist 都换 upsert —— 真 seq bug 被静默覆盖
+INSERT INTO messages (...) VALUES (...) ON CONFLICT(session_id, seq) DO UPDATE ...;
+
+-- Correct:只有 assistant 终态点(前面有检查点行)用 upsert,其余裸 INSERT 保告警语义
+```
+
+**Tests**:`db/messages_checkpoint_tests.rs`(file-backed)12 例 +
+`agent/tests_agent_loop/turn_checkpoint.rs` 4 例(含 AC4:孤儿修复后第二
+请求 provider 实收配对 tool_result)。

@@ -29,6 +29,14 @@ import type {
 import { buildPendingNotification, genId, groupChatNotice } from "./streamController";
 import { rehydrateMessages, type LoadedSession } from "./streamRehydrate";
 
+/** R3 (08-24-p1-turn-crash-recovery): marker the daemon's startup
+ *  recovery pass appends as an independent text block when it converts
+ *  a crashed `in_progress` checkpoint row to `status='interrupted'`.
+ *  Mirrors the Rust `agent::helpers::INTERRUPTED_MARKER` (same family
+ *  as `[已停止]` / `[生成出错中断]`). Duplicated on the frontend (no
+ *  cross-language import); keep in sync with the backend constant. */
+const INTERRUPTED_MARKER = "[异常中断已恢复]";
+
 export interface StreamEventsContext {
   messagesBySession: Map<string, ChatMessage[]>;
   pinnedSessions: Set<string>;
@@ -1161,8 +1169,22 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
    *  This function also owns the post-`done` cleanup of the
    *  request state (`activeRequests.delete` + `pinnedSessions.delete`).
    *  Moving it here (vs. in `finalizeRequest`) means the
-   *  request state is alive for the entire IPC path. */
-  async function reloadAfterFinalize(sessionId: string, requestId?: string): Promise<void> {
+   *  request state is alive for the entire IPC path.
+   *
+   *  R3 (08-24-p1-turn-crash-recovery): `opts.interrupted` selects
+   *  the "daemon died mid-stream" flavor — same forced DB reload, but
+   *  the quota window refresh is skipped. `refresh()` there encodes
+   *  "this request just consumed tokens" (post-`done` semantics); a
+   *  crashed turn has no Done and the daemon just restarted, so firing
+   *  the quota chain would be a spurious side effect (design §4). The
+   *  latency IPC branch is skipped naturally: the interrupted path
+   *  passes no `requestId` (latency bookkeeping for a crashed request
+   *  is out of scope, mirroring the PRD's turn_trace exclusion). */
+  async function reloadAfterFinalize(
+    sessionId: string,
+    requestId?: string,
+    opts?: { interrupted?: boolean },
+  ): Promise<void> {
     const loaded = await transport.invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
@@ -1189,8 +1211,11 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     await reconcilePendingInteractionFromBackend(sessionId);
     // 08-20-turn-usage-event-quota-view WP3: request 结束 = 一次轻量
     // 配额窗口重查(滑动窗口客户端推算必漂,design 取舍"跑完这轮后
-    // 刷新";fire-and-forget,不挡消息面)。
-    void useQuotaStore().refresh();
+    // 刷新";fire-and-forget,不挡消息面)。R3 interrupted 路径跳过
+    // (见函数头注释)。
+    if (!opts?.interrupted) {
+      void useQuotaStore().refresh();
+    }
     // F5: persist the per-message latency to the DB. The
     // rehydrated messages carry the seq on each row, so we
     // find the LAST assistant message (the one the agent
@@ -1293,6 +1318,172 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
       completedRequests.delete(requestId);
     }
   }
+
+  /** R3 (08-24-p1-turn-crash-recovery WP3): `stream-resync` sentinel
+   *  handler — closes the "daemon died mid-stream" loop.
+   *
+   *  Sequence being fixed: the chat POST already returned; the daemon
+   *  is killed (kill -9 / OOM); no `done`/`error` SSE event ever
+   *  arrives; EventSource auto-reconnects and the restarted daemon
+   *  can't replay the client's Last-Event-ID, emitting `stream-resync`.
+   *  Before this handler, the assistant placeholder kept its streaming
+   *  cursor forever (no watchdog existed).
+   *
+   *  CHECK-pass hardening (2026-08-24): the sentinel does NOT mean
+   *  "the daemon died" — sse.rs `compute_replay` emits it whenever
+   *  the reconnecting client's Last-Event-ID can't be covered with
+   *  guaranteed continuity. Three producers (WP4 decision table):
+   *  - daemon restart, empty buffer: fresh registry emitted zero
+   *    frames → sentinel(reason=restart)
+   *  - daemon restart, stale-high id: the client's id ≥ the fresh
+   *    registry's next_id (cross-process id aliasing) → sentinel
+   *    (reason=restart)
+   *  - live daemon, ring eviction: the client missed >512 frames
+   *    (network blip / laptop sleep during a chatty stream — every
+   *    delta AND subagent event is a frame) → sentinel
+   *    (reason=buffer_overrun) while the request is still streaming
+   *    server-side. Finalizing on this signal alone would kill a
+   *    LIVE request (teardown drops all subsequent deltas AND the
+   *    eventual `done` — the UI freezes at the checkpoint and the
+   *    session input stays blocked).
+   *
+   *  So the handler gates the finalize on a DB death-oracle instead
+   *  of trusting the event: force `load_session` and inspect the
+   *  LAST assistant row's `status` column (WP1).
+   *  - `'interrupted'` → the daemon's startup recovery pass rewrote
+   *    a crashed checkpoint row. The pass runs inside
+   *    `AppState::load_inner` BEFORE the HTTP server accepts, so any
+   *    load the reconnected client can perform already sees recovered
+   *    rows (no race). Definitive death → finalize locally as
+   *    INTERRUPTED + force-refetch (the DB truth replaces the
+   *    placeholder).
+   *  - `'in_progress'` → the live checkpoint row of a stream that is
+   *    STILL RUNNING server-side → no-op (pre-WP3 parity: subsequent
+   *    deltas keep appending and the terminal `done` finalizes +
+   *    reloads, healing the replay gap).
+   *  - terminal tail (`null`/no rows/oracle fetch failed) → ambiguous
+   *    (live tool-exec phase has no in_progress row either; a W2
+   *    crash looks identical) → conservative no-op. A true W2 crash
+   *    therefore keeps its placeholder until the backend sentinel
+   *    fix lands — documented residual, wrong-kill is the worse bug.
+   *
+   *  No-op when nothing is streaming: the sentinel also fires on a
+   *  daemon restart without a crash (any reconnect whose
+   *  Last-Event-ID can't be replayed) — harmless by design.
+   *
+   *  Re-entrancy / stale ids: the per-request teardown re-checks
+   *  `activeRequests.delete()` (boolean return) AFTER the oracle
+   *  await, so (a) a second sentinel in the same reconnect burst is
+   *  absorbed by the per-session in-flight probe guard (and by the
+   *  empty-victim skip), and (b) a `done`/`error` that races in while
+   *  the oracle is in flight finalizes normally and our teardown
+   *  finds the map entry gone — no double-finalize. Late events that
+   *  arrive after our teardown are dropped by `handleChatEvent`'s
+   *  unknown-request guard. */
+  const resyncProbeInFlight = new Set<string>();
+  async function handleStreamResync(): Promise<void> {
+    const sessionIds = new Set<string>();
+    for (const req of activeRequests.values()) {
+      sessionIds.add(req.sessionId);
+    }
+    if (sessionIds.size === 0) return;
+    for (const sid of sessionIds) {
+      if (resyncProbeInFlight.has(sid)) continue; // burst dedupe
+      resyncProbeInFlight.add(sid);
+      let dead = false;
+      try {
+        const loaded = await transport.invoke<LoadedSession | null>(
+          "load_session",
+          { sessionId: sid },
+        );
+        const rows = loaded?.messages ?? [];
+        // Death oracle: the LAST assistant row. Old interrupted rows
+        // from previous crashes sit mid-history and must not trigger
+        // (a live follow-up turn's terminal/in_progress row is the
+        // tail); a W2-crash synthetic tool_result (user role, tail)
+        // is walked over to the interrupted assistant row below it.
+        for (let i = rows.length - 1; i >= 0; i--) {
+          if (rows[i].role !== "assistant") continue;
+          dead = rows[i].status === "interrupted";
+          break;
+        }
+      } catch {
+        // Oracle unreachable (daemon/proxy down): conservative no-op —
+        // same pre-WP3 behavior as the ambiguous branch.
+        dead = false;
+      } finally {
+        resyncProbeInFlight.delete(sid);
+      }
+      if (!dead) continue;
+      // Snapshot AFTER the await — a racing `done` may have finalized
+      // (and a reload may have replaced the buffer) meanwhile.
+      const victims = [...activeRequests.values()].filter(
+        (r) => r.sessionId === sid,
+      );
+      let finalizedAny = false;
+      for (const req of victims) {
+        // Boolean-return delete = post-await re-entrancy guard: if a
+        // racing done/error (or a second sentinel's teardown) already
+        // removed the entry, skip — its own finalize/reload ran.
+        if (!activeRequests.delete(req.requestId)) continue;
+        pinnedSessions.delete(req.sessionId);
+        useChatStore().invalidateDiff(req.sessionId);
+        finalizedAny = true;
+        // Re-read the buffer tail (a racing reload may have replaced
+        // it during the oracle await).
+        const msgs = messagesBySession.get(req.sessionId);
+        const last = msgs?.[msgs.length - 1];
+        if (msgs && last && last.role === "assistant") {
+          // Terminal visual, mirroring the `done` arm's cleanup order:
+          // seal the active thinking block, flush pending text, clear the
+          // transient chips, stop the cursor. No `last.error` write (see
+          // doc above) — an interruption must not surface as an error.
+          last.streaming = false;
+          last.retrying = undefined;
+          last.budgetTrim = undefined;
+          sealActiveThinking(req);
+          flushPendingTimelineText(req, last);
+          // Marker text: `\n\n` prefix as an independent trailing block,
+          // mirroring the backend recovery pass's block shape (helpers.rs
+          // marker convention). Written to both render paths — `content`
+          // (bucket fallback) and `contentBlocks` (timeline; the flush
+          // above may have just created it for a pure-text stream). The
+          // forced refetch below replaces the buffer wholesale
+          // (`putMessages` = delete+set), so this local marker never
+          // survives as a duplicate next to the DB row's own marker —
+          // it only covers the pre-refetch window (or a failed refetch).
+          last.content = last.content
+            ? `${last.content}\n\n${INTERRUPTED_MARKER}`
+            : INTERRUPTED_MARKER;
+          if (last.contentBlocks) {
+            last.contentBlocks.push({
+              kind: "text",
+              text: `\n\n${INTERRUPTED_MARKER}`,
+            });
+            markRaw(last.contentBlocks);
+          }
+          // Same post-stream markRaw as the done/error arms — the deep
+          // arrays stop mutating here.
+          if (last.toolCalls) markRaw(last.toolCalls);
+          if (last.toolResults) markRaw(last.toolResults);
+          if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
+          if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
+        }
+        // Deliberately NOT moved to `completedRequests` — no latency
+        // IPC for a crashed request (see `reloadAfterFinalize`'s
+        // interrupted note).
+      }
+      if (!finalizedAny) continue;
+      // F2: reset force-follow on interruption too (the `done` / `error`
+      // arms do the same — the stream is over regardless of how it ended).
+      useChatStore().forceFollowActive = false;
+      // Forced refetch (NOT a cached `ensureLoaded`): replaces the
+      // marker'd placeholder with the recovered DB rows. Fire-and-forget
+      // — the placeholder stays visible until the load completes (same
+      // no-blank-flash contract as the done path).
+      void reloadAfterFinalize(sid, undefined, { interrupted: true });
+    }
+  }
   return {
     handleChatEvent,
     handleToolCall,
@@ -1304,5 +1495,9 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     maybeNotifyPending,
     finalizeRequest,
     reloadAfterFinalize,
+    // R3 (08-24-p1-turn-crash-recovery WP3): test entry point (stream-
+    // resync sentinel). Production wiring is the streamController's
+    // `start()` listener.
+    handleStreamResync,
   };
 }

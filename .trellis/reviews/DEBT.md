@@ -54,18 +54,9 @@
 
 > **本文件仅记录当前 open 债项**。已 closed 条目不在此保留;通过 git log 追溯。
 
-## P1 — 重要(正确性 + 资源) [1 item]
+## P1 — 重要(正确性 + 资源) [0 items]
 
-### RULE-PERSIST-001
-
-- **Level**: P1
-- **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat_loop/tools.rs:1779`(`finalize_turn` — 消息仅 turn 结束一次性落库,流式过程无逐块持久化;无 `run_status` / in_progress 启动恢复)
-- **Description**: daemon 崩溃(kill -9 / 断电 / OOM)时当前 turn 已流式内容全部丢失,reload 后只剩半个 user 消息
-- **Fix**: turn 开始落 `status=in_progress` 占位 + 流式过程周期性 checkpoint(每 N 块 upsert),启动检测 in_progress 恢复或提示(~150 行)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
+> 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
 ## P2 — 健壮性 + 债务,中长期清理 [4 items]
 
@@ -134,10 +125,10 @@
 | Level | Count | 说明 |
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
-| P1 | 1 | 正确性 + 资源(数据丢失风险) |
+| P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
 | P2 | 4 | 健壮性 + 债务,中长期清理 |
 | P3 | 1 | 文档 + 一致性,可延后 |
-| **Total** | **6** | 当前 open items |
+| **Total** | **5** | 当前 open items |
 
 ---
 

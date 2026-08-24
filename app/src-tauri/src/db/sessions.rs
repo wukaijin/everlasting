@@ -19,8 +19,9 @@ pub mod session_crud;
 
 #[allow(unused_imports)]
 pub use messages::{
-    edit_user_message, find_message_id_by_seq, persist_turn, record_tool_duration,
-    update_message_latency, update_message_metadata, MessageLatency,
+    delete_in_progress_turn, edit_user_message, finalize_turn_persist, find_message_id_by_seq,
+    persist_turn, record_tool_duration, recover_interrupted_messages, update_message_latency,
+    update_message_metadata, upsert_in_progress_turn, MessageLatency, RecoveryReport,
 };
 #[allow(unused_imports)]
 pub use session_crud::{

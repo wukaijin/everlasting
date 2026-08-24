@@ -1345,6 +1345,7 @@ mod tests {
             total_ms: None,
             thinking_ms: None,
             speaker: None,
+            status: None,
         }
     }
 

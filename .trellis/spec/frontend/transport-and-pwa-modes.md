@@ -60,6 +60,41 @@ Don't shoehorn pairing/nodes into `CMD_TO_DOMAIN` — their URLs don't follow th
 
 The `errorBus` (`window.unhandledrejection`) only fires for **uncaught** errors; existing stores systematically `try/catch + console.error` invoke results, so a 401 would be swallowed silently. Don't rely on errorBus for auth-state transitions.
 
+## `stream-resync` sentinel: oracle-trigger, never proof (2026-08-24)
+
+The daemon emits `stream-resync` when a reconnecting client's Last-Event-ID
+can't be covered with guaranteed continuity (restart-empty / restart-stale-id /
+ring eviction — decision table in `backend/daemon-server.md`). Three rules the
+consumer (`streamEvents.ts::handleStreamResync`) must keep:
+
+1. **A sentinel is NOT proof the daemon died.** Ring eviction fires it while
+   the request is still streaming server-side. Finalizing on the event alone
+   kills a LIVE request (teardown drops later deltas AND the eventual `done`;
+   the unknown-request guard then eats them all → UI frozen at checkpoint,
+   input blocked). Gate the finalize on the **DB death-oracle** instead:
+   force `load_session`, inspect the LAST assistant row's `status` —
+   `'interrupted'` → daemon's startup recovery rewrote a crashed checkpoint →
+   finalize as interrupted; `'in_progress'` → live checkpoint row → **no-op**
+   (pre-consumer self-healing parity: `done` still heals); ambiguous/fetch
+   failure → conservative no-op.
+2. **Interrupted finalize ≠ error finalize.** No `last.error`, no toast, no
+   quota refresh (`reloadAfterFinalize` `{ interrupted: true }` skips
+   `useQuotaStore().refresh()` — quota refresh encodes post-`done`
+   "just-consumed" semantics, spurious after a crash), no latency backfill.
+   Append the `[异常中断已恢复]` marker locally (byte-matched to the Rust
+   `INTERRUPTED_MARKER`, keep-in-sync at both sites) — the forced refetch
+   then replaces the buffer wholesale (`putMessages` is delete+set), so the
+   local marker can never duplicate the DB row's backend marker.
+3. **Re-entrancy is async now** (the oracle awaits a fetch): per-session
+   in-flight guard + re-check `activeRequests.delete()` boolean after the
+   await — a racing `done` in the burst wins; late events after teardown are
+   dropped by the unknown-request guard (`streamEvents.ts` first-line).
+
+Tests: `streamController.test.ts` "R3 stream-resync" describe — recover (real
+listener path), benign live no-op (oracle sees `in_progress`, later
+`group_chat_end` done still finalizes), burst + late done/error (exactly one
+reload).
+
 ## Wire field casing
 
 - Remote-native responses (`pairing.rs RedeemedResponse`, `nodes.rs NodeInfo`) use `#[serde(rename_all = "camelCase")]` → **camelCase** wire (`deviceToken`, `nodeId`, `displayName`).

@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
@@ -76,6 +76,90 @@ pub(crate) struct DriveTurnOutcome {
     /// `loop_hit_count` 的循环内穿参模式,覆盖**同一 loop run 内的
     /// 二次压缩**(LoopInit 单次穿参罩不住的场景,评审 P1-1 修正)。
     pub(crate) summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
+}
+
+// ---------------------------------------------------------------------------
+// RULE-PERSIST-001 (08-24-p1-turn-crash-recovery) WP2: turn 流式检查点
+//
+// daemon kill -9 / OOM / 断电时流式内容全在内存累加器里,不落库即丢。
+// 检查点把累积状态按时间门 upsert 进 messages 的 in_progress 行
+// (占位在 stream ready 后;终态由收尾落库覆盖)。仅主 chat
+// (`!skip_persist`)——worker 不进 messages 表,路径零改动。
+// ---------------------------------------------------------------------------
+
+/// 检查点时间门间隔。时间(而非 delta 数量)是最公平的度量:
+/// delta 大小差异悬殊,1s 门给出有界的丢失窗口(≤1s 的尾部生成
+/// 内容),同时把每秒 DB 写压在 1 次(upsert 走 WAL,与流式循环
+/// 无锁竞争 —— SQLite 单写者,检查点与收尾落库同池串行)。
+const CHECKPOINT_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// 每轮 turn 的检查点时间门状态。`last_write` 初始化为 stream
+/// ready 时刻(占位行刚写完,首个周期检查点从那之后 1s 起)。
+struct TurnCheckpoint {
+    last_write: Instant,
+}
+
+impl TurnCheckpoint {
+    fn new() -> Self {
+        Self {
+            last_write: Instant::now(),
+        }
+    }
+
+    /// 时间门是否到期。纯读 —— 门在**尝试**时关闭(见
+    /// [`Self::mark_written`]),与写成败解耦。
+    fn due(&self) -> bool {
+        self.last_write.elapsed() >= CHECKPOINT_INTERVAL
+    }
+
+    /// 关闭本次时间门。调用点在**发起写之前**,无论写成败 ——
+    /// 成功路径维持 ≤1s 检查点节奏;失败路径把重试推到下一个
+    /// 间隔,而不是下一个 delta 事件。若只在成功后 mark,持久性
+    /// DB 故障(磁盘满/锁)下 `due()` 恒真,每个流式事件都会
+    /// "全量克隆累加器 + 写尝试 + warn" —— delta 频率可达每秒
+    /// 数十次,长 turn 就是重试风暴 + 日志洪水。best-effort 契约
+    /// 下 1s 重试节奏已是正确的恢复粒度。
+    fn mark_written(&mut self) {
+        self.last_write = Instant::now();
+    }
+}
+
+/// 构造检查点快照 blocks:只读克隆累加器,**绝不**调用会变异的
+/// `flush_*` helpers —— flush 会把 pending 状态机(thinking/text
+/// 的边界推进)提前消费,破坏后续流式事件的顺序语义。快照 =
+/// `ordered_blocks` 克隆 + pending 追加为普通块:
+/// - 只有 `pending_text` → blocks + [Text](空文本跳过,对齐
+///   `flush_pending_text` 的空块过滤);
+/// - 只有 `pending_thinking` → blocks + [Thinking](镜像
+///   `flush_pending_thinking` 的"空文本也保留 signature"语义);
+/// - 理论上两者不可能并存(文本到达先 finalize thinking,思考
+///   到达先 flush text);若并存(防御),按 thinking→text 序追加
+///   (thinking 先开始必然先 finalize)。
+///
+/// 检查点行不追求块级完美(缺 signature 的 thinking 块、未配对
+/// 的 pending text 均可接受)—— 它只是崩溃恢复兜底;终态行仍由
+/// 收尾路径完整落库(flush 全部走一遍后覆盖同一 seq)。
+fn snapshot_checkpoint_blocks(
+    ordered_blocks: &[ContentBlock],
+    pending_text: &Option<String>,
+    pending_thinking: &Option<PendingThinking>,
+) -> Vec<ContentBlock> {
+    let mut snap = ordered_blocks.to_vec();
+    if let Some(p) = pending_thinking {
+        snap.push(ContentBlock::Thinking {
+            thinking: p.text.clone(),
+            signature: p.signature.clone(),
+        });
+    }
+    if let Some(text) = pending_text {
+        if !text.is_empty() {
+            snap.push(ContentBlock::Text {
+                text: text.clone(),
+                cache_control: None,
+            });
+        }
+    }
+    snap
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1109,6 +1193,35 @@ pub(crate) async fn drive_turn(
         }
     };
 
+    // RULE-PERSIST-001 (08-24-p1-turn-crash-recovery) WP2 写点①:
+    // stream ready 后立即写空占位行(status='in_progress')。此后
+    // 崩溃在**任何**流式阶段(哪怕 0 内容)都会留下可恢复锚点;
+    // 空占位由启动恢复 pass 删除,不残留空行。upsert 语义:同
+    // turn 内该 seq 首写是 INSERT,后续周期检查点走 DO UPDATE。
+    // 仅主 chat(!skip_persist)——worker 不进 messages 表。
+    // best-effort warn(与 subagent insert_run 失败降级同族):
+    // 占位写失败不打断流式,终态仍由收尾落库保证(RULE-A-003)。
+    let mut checkpoint = TurnCheckpoint::new();
+    if !skip_persist {
+        if let Err(e) = crate::db::upsert_in_progress_turn(
+            &db,
+            &session_id,
+            seq,
+            &[],
+            current_speaker.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                request_id = %rid,
+                session_id = %session_id,
+                seq,
+                "chat: in_progress placeholder write failed (non-fatal — stream continues)"
+            );
+        }
+    }
+
     loop {
         tokio::select! {
             biased;
@@ -1158,6 +1271,41 @@ pub(crate) async fn drive_turn(
                         emit_chat_event_via_sink(&sink, &rid, &event);
                     }
                     ChatEvent::Delta { text } => {
+                        // RULE-PERSIST-001 写点②: 时间门检查点(见
+                        // ThinkingDelta 臂同款注释)。挂在 Delta /
+                        // ThinkingDelta 两臂 —— 流式高频事件,其余臂
+                        // (Done/ToolCall/...)低频或本身就有落库动作。
+                        if !skip_persist && checkpoint.due() {
+                            // 门在尝试时关闭(成败皆然):持久性写
+                            // 失败下重试按 1s 间隔,不做 per-delta
+                            // 重试风暴。见 TurnCheckpoint::mark_written。
+                            checkpoint.mark_written();
+                            let snap = snapshot_checkpoint_blocks(
+                                &ordered_blocks,
+                                &pending_text,
+                                &pending_thinking,
+                            );
+                            if let Err(e) = crate::db::upsert_in_progress_turn(
+                                &db,
+                                &session_id,
+                                seq,
+                                &snap,
+                                current_speaker.as_deref(),
+                            )
+                            .await
+                            {
+                                // best-effort:写失败只 warn,不打断流式
+                                // (终态行由收尾落库保证;下一个到期
+                                // 检查点自然重试)。
+                                tracing::warn!(
+                                    error = %e,
+                                    request_id = %rid,
+                                    session_id = %session_id,
+                                    seq,
+                                    "chat: in_progress checkpoint write failed (non-fatal)"
+                                );
+                            }
+                        }
                         // 流序: 文本到达前先把可能 pending 的 thinking
                         // finalize,并按真实顺序(thinking 在前)填入
                         // ordered_blocks。文本累积到 pending_text,
@@ -1175,6 +1323,37 @@ pub(crate) async fn drive_turn(
                         emit_chat_event_via_sink(&sink, &rid, &event);
                     }
                     ChatEvent::ThinkingDelta { text } => {
+                        // RULE-PERSIST-001 写点②: 时间门检查点(1s
+                        // 门,CHECKPOINT_INTERVAL)。快照只读克隆累加器
+                        // (snapshot_checkpoint_blocks),不 flush ——
+                        // pending 状态机留给流式循环自己推进。写失败
+                        // best-effort warn;门在尝试时关闭(成败皆然,
+                        // 防 per-delta 重试风暴,见 mark_written)。
+                        if !skip_persist && checkpoint.due() {
+                            checkpoint.mark_written();
+                            let snap = snapshot_checkpoint_blocks(
+                                &ordered_blocks,
+                                &pending_text,
+                                &pending_thinking,
+                            );
+                            if let Err(e) = crate::db::upsert_in_progress_turn(
+                                &db,
+                                &session_id,
+                                seq,
+                                &snap,
+                                current_speaker.as_deref(),
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    request_id = %rid,
+                                    session_id = %session_id,
+                                    seq,
+                                    "chat: in_progress checkpoint write failed (non-fatal)"
+                                );
+                            }
+                        }
                         // 流序: 一个 thinking 块开始前,先把之前累积的
                         // 文本 flush 成 Text 块(思考夹在文本之间时,
                         // 前段文本应排在思考之前)。
@@ -1526,6 +1705,24 @@ pub(crate) async fn drive_turn(
     // —— 所有块在循环内已按真实到达顺序填入。
     let assistant_blocks = ordered_blocks;
 
+    // RULE-PERSIST-001 写点③(空 turn 分支):本 turn 未产生任何
+    // 内容(无文本/思考/工具/marker)→ 收尾不落库,检查点占位行
+    // 必须删掉,不留空行(R1.3)。delete 带 status='in_progress'
+    // 守卫:只吃自己的占位,误用时对终态行是 no-op。
+    if assistant_blocks.is_empty() && !skip_persist {
+        if let Err(e) = crate::db::delete_in_progress_turn(&db, &session_id, seq).await {
+            // best-effort:残留的空占位由启动恢复 pass 删除(空内容
+            // → delete),此处失败无需打断收尾。
+            tracing::warn!(
+                error = %e,
+                request_id = %rid,
+                session_id = %session_id,
+                seq,
+                "chat: delete_in_progress_turn on empty turn failed (non-fatal)"
+            );
+        }
+    }
+
     if !assistant_blocks.is_empty() {
         let msg = ChatMessage {
             role: Role::Assistant,
@@ -1564,7 +1761,14 @@ pub(crate) async fn drive_turn(
         // persist (log-only, see below at the `if cancelled`
         // block).
         if !skip_persist {
-            if let Err(e) = crate::db::persist_turn(
+            // RULE-PERSIST-001 写点③(终态覆盖):这里从 persist_turn
+            // (裸 INSERT)换成 finalize_turn_persist(ON CONFLICT DO
+            // UPDATE)—— 本 turn 的 seq 上已有检查点占位/周期行
+            // (写点①②),终态落库覆盖它并把 status 清回 NULL。
+            // 全库仅此落库点知道自己"前面有检查点行";其余调用点
+            // (user 行 / tool_result 行 / 合成行)seq 不同,保持裸
+            // INSERT 的 UNIQUE 冲突 bug 信号语义(RULE-A-003 家族)。
+            if let Err(e) = crate::db::finalize_turn_persist(
                 &db,
                 &session_id,
                 msg.role,
@@ -2436,5 +2640,110 @@ async fn attempt_summary_compaction(
         usage,
         tokens_after,
         folded_count,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RULE-PERSIST-001 WP2 单元测试:时间门 + 快照构造(纯逻辑,无 DB /
+// 无 1s 真等待 —— design §7 把间隔逻辑收敛在此处测)。
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_gate_not_due_immediately_after_placeholder() {
+        // 占位刚写完(TurnCheckpoint::new)→ 首个周期检查点必须等到
+        // CHECKPOINT_INTERVAL 之后,不会在流式头几个 delta 就写库。
+        let cp = TurnCheckpoint::new();
+        assert!(!cp.due());
+    }
+
+    #[test]
+    fn checkpoint_gate_due_only_after_interval() {
+        // 直接构造 last_write(同模块可见私有字段)避免 1s 真等待。
+        let just_under = TurnCheckpoint {
+            last_write: Instant::now() - CHECKPOINT_INTERVAL + Duration::from_millis(50),
+        };
+        assert!(!just_under.due(), "elapsed < interval must not fire");
+        let just_over = TurnCheckpoint {
+            last_write: Instant::now() - CHECKPOINT_INTERVAL - Duration::from_millis(1),
+        };
+        assert!(just_over.due(), "elapsed >= interval must fire");
+    }
+
+    #[test]
+    fn checkpoint_gate_mark_written_resets() {
+        let mut cp = TurnCheckpoint {
+            last_write: Instant::now() - CHECKPOINT_INTERVAL - Duration::from_millis(1),
+        };
+        assert!(cp.due());
+        cp.mark_written();
+        assert!(!cp.due(), "mark_written closes the gate");
+    }
+
+    fn text(s: &str) -> ContentBlock {
+        ContentBlock::Text {
+            text: s.to_string(),
+            cache_control: None,
+        }
+    }
+
+    #[test]
+    fn snapshot_appends_pending_text_after_ordered_blocks() {
+        let ordered = vec![text("a")];
+        let snap = snapshot_checkpoint_blocks(&ordered, &Some("pending".into()), &None);
+        assert_eq!(
+            snap,
+            vec![text("a"), text("pending")],
+            "pending text rides as a trailing Text block"
+        );
+        // ordered_blocks 本体未被克隆变异。
+        assert_eq!(ordered.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_appends_pending_thinking() {
+        let snap = snapshot_checkpoint_blocks(
+            &[text("a")],
+            &None,
+            &Some(PendingThinking {
+                text: "hmm".into(),
+                signature: "sig".into(),
+            }),
+        );
+        match snap.as_slice() {
+            [ContentBlock::Text { .. }, ContentBlock::Thinking {
+                thinking,
+                signature,
+            }] => {
+                assert_eq!(thinking, "hmm");
+                assert_eq!(signature, "sig");
+            }
+            other => panic!("unexpected snapshot shape: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn snapshot_defensive_both_pending_orders_thinking_first() {
+        // 理论不可达(Delta 先 finalize thinking / ThinkingDelta 先
+        // flush text),防御序:thinking → text。
+        let snap = snapshot_checkpoint_blocks(
+            &[],
+            &Some("tail text".into()),
+            &Some(PendingThinking {
+                text: "th".into(),
+                signature: String::new(),
+            }),
+        );
+        assert!(matches!(snap[0], ContentBlock::Thinking { .. }));
+        assert!(matches!(snap[1], ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn snapshot_skips_empty_pending_text() {
+        // 对齐 flush_pending_text 的空块过滤。
+        let snap = snapshot_checkpoint_blocks(&[text("a")], &Some(String::new()), &None);
+        assert_eq!(snap, vec![text("a")]);
     }
 }

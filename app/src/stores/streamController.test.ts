@@ -27,6 +27,7 @@ import { rehydrateMessages } from "./streamRehydrate";
 import { useMemoryStore } from "./memory";
 import { useChatStore } from "./chat";
 import { useQuestionCardsStore } from "./questionCards";
+import { transport } from "../transport";
 
 // RULE-FrontTest-001 (2026-06-25; transport-abstraction 2026-07-20):
 // `reloadAfterFinalize` fires `transport.invoke("load_session")` +
@@ -74,10 +75,14 @@ type LoadedMessage = {
   total_ms: number | null;
   // F5 follow-up: thinking-phase wall-clock. `null` for
   // pre-F5-follow-up rows AND for messages that never
-  // entered the thinking phase. The rehydrate tests at
-  // the bottom of the file exercise the round-trip
+  // entered the thinking phase. The rehydrate tests at the
+  // bottom of the file exercise the round-trip
   // (`thinking_ms: 850` → `m.thinkingDurationMs: 850`).
   thinking_ms: number | null;
+  // R3 (08-24-p1-turn-crash-recovery): optional turn lifecycle
+  // status (`'interrupted'` rows come back with the recovery
+  // marker text). Optional so pre-task fixtures still typecheck.
+  status?: string | null;
 };
 
 const SID = "test-session";
@@ -2208,7 +2213,7 @@ describe("groupChatNotice (08-07 R2)", () => {
   it("maps each orchestrator boundary stop_reason to a notice", () => {
     expect(groupChatNotice("max_rounds")).toContain("轮次上限");
     expect(groupChatNotice("nominee_unknown")).toContain("不在列表中");
-    expect(groupChatNotice("participant_unresolved")).toContain("模型不可用");
+    expect(groupChatNotice("participant_unresolved")).toContain("参与者");
   });
 
   it("returns null for non-boundary stop_reasons (no notice)", () => {
@@ -2217,5 +2222,303 @@ describe("groupChatNotice (08-07 R2)", () => {
     expect(groupChatNotice("end_turn")).toBeNull();
     expect(groupChatNotice("cancelled")).toBeNull();
     expect(groupChatNotice(undefined)).toBeNull();
+  });
+});
+
+// =====================================================================
+// R3 (08-24-p1-turn-crash-recovery WP3): the SSE `stream-resync` sentinel
+// closes the "daemon died mid-stream" loop. The chat POST already
+// returned, no done/error ever arrives, EventSource auto-reconnects and
+// the restarted daemon can't replay the client's Last-Event-ID. The
+// sentinel alone can't distinguish "daemon restarted" from "live daemon,
+// >512 replay frames evicted" (sse.rs compute_replay emits it for both),
+// so the handler first probes the DB death-oracle (`load_session`:
+// crashed checkpoints come back `status='interrupted'`, a live stream's
+// checkpoint row is still `'in_progress'`) and only finalizes on
+// confirmed death — otherwise it's a no-op and the live stream keeps
+// going. Confirmed-death contract: finalize still-streaming placeholders
+// as INTERRUPTED (no error surface), force-refetch the session so the
+// recovered checkpoint rows replace them, and stay a no-op when nothing
+// was streaming (bare daemon restart).
+// =====================================================================
+describe("streamController — R3 stream-resync interrupted finalize", () => {
+  const RESYNC_MARKER = "[异常中断已恢复]";
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    // The shared invoke mock's call history accumulates across the whole
+    // file (earlier describes drive done/error paths that fire the quota
+    // refresh). Reset to the module baseline so this suite's per-command
+    // assertions (load_session fired; usage_window NOT) see only its own
+    // traffic.
+    const invoke = vi.mocked(transport.invoke);
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+  });
+
+  /** Full RequestState shape (production fields all present — the
+   *  handler's seal/flush helpers read `pendingTimelineText` /
+   *  `activeThinkingIdx`, and `undefined !== null` would fake a
+   *  pending text segment). */
+  function makeReq(sid: string, rid: string, groupChat = false) {
+    return {
+      requestId: rid,
+      sessionId: sid,
+      projectId: "p1",
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      groupChat,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      history: [],
+      sendAt: Date.now(),
+      firstDeltaAt: Date.now(),
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: 0,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+    };
+  }
+
+  function seedStreaming(sid: string, rid: string, groupChat = false) {
+    const stream = useStreamControllerStore();
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "写点什么"), asst(1, "", [])]),
+      false,
+    );
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+    last.streaming = true;
+    last.content = "部分内容";
+    stream.activeRequests.set(rid, makeReq(sid, rid, groupChat));
+    stream.pinnedSessions.add(sid);
+    return { stream, last };
+  }
+
+  it("finalizes the streaming placeholder and refetches the session with the recovered row", async () => {
+    const sid = "resync-recover-sid";
+    const rid = "resync-recover-rid";
+    const { stream, last } = seedStreaming(sid, rid);
+
+    // The post-restart DB truth: the daemon's startup recovery pass
+    // rewrote the `in_progress` checkpoint row to `status='interrupted'`
+    // with the marker block appended.
+    const recoveredText = `部分内容\n\n${RESYNC_MARKER}`;
+    vi.mocked(transport.invoke).mockImplementation(async (cmd: unknown) => {
+      if (cmd === "load_session") {
+        return {
+          session: { id: sid },
+          messages: [
+            usrTyped(0, "写点什么"),
+            {
+              ...asst(
+                1,
+                recoveredText,
+                [
+                  { type: "text", text: "部分内容" },
+                  { type: "text", text: `\n\n${RESYNC_MARKER}` },
+                ],
+              ),
+              status: "interrupted",
+            },
+          ],
+        };
+      }
+      return null; // get_pending_interaction etc.
+    });
+
+    // Wire the listeners and dispatch the sentinel through the captured
+    // `stream-resync` listener — exactly what the EventSource does after
+    // the daemon restarts (payload may be empty; nothing depends on it).
+    await stream.start();
+    const listenMock = vi.mocked(transport.listen);
+    const resyncCall = listenMock.mock.calls.find(
+      ([ev]) => ev === "stream-resync",
+    );
+    expect(resyncCall).toBeTruthy();
+    resyncCall![1]({});
+    stream.stop();
+
+    // Teardown contract (asynchronous: the death-oracle load_session
+    // runs first): request finalized + session unpinned; the
+    // placeholder is sealed with the marker text, cursor gone, and NO
+    // error surface (interruption ≠ failure — no red bubble, no toast).
+    await vi.waitFor(() => {
+      expect(stream.activeRequests.size).toBe(0);
+    });
+    expect(stream.pinnedSessions.has(sid)).toBe(false);
+    expect(last.streaming).toBe(false);
+    expect(last.error).toBeUndefined();
+    expect(last.content).toContain(RESYNC_MARKER);
+
+    // Async contract: forced refetch replaces the placeholder with the
+    // recovered DB row (marker text + seq round-trip).
+    await vi.waitFor(() => {
+      const after = stream.getMessages(sid)!;
+      expect(after[after.length - 1].content).toBe(recoveredText);
+    });
+    const after = stream.getMessages(sid)!;
+    expect(after[after.length - 1].seq).toBe(1);
+    expect(after.some((m) => m.streaming)).toBe(false);
+
+    // Side-effect contract: forced refetch happened, but the done-path
+    // bookkeeping did NOT — no quota window refresh, no latency IPC
+    // backfill for a crashed request.
+    const cmds = vi.mocked(transport.invoke).mock.calls.map(
+      ([c]) => c as string,
+    );
+    expect(cmds).toContain("load_session");
+    expect(cmds).not.toContain("usage_window");
+    expect(cmds).not.toContain("update_message_latency");
+  });
+
+  it("no active streaming requests → no-op (bare daemon restart)", async () => {
+    const stream = useStreamControllerStore();
+    const sid = "resync-idle-sid";
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "hi"), asst(1, "hello", [])]),
+      false,
+    );
+    stream.loadedFromDb.add(sid);
+    const invoke = vi.mocked(transport.invoke);
+
+    void stream.handleStreamResync();
+    // Flush microtasks — a (wrong) fire-and-forget reload would surface
+    // as an invoke call here.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Deliberate: the no-op path fires NO transport side effects at all
+    // (not load_session, not quota, nothing).
+    expect(invoke).not.toHaveBeenCalled();
+    expect(stream.activeRequests.size).toBe(0);
+    // Cached buffer untouched.
+    expect(stream.getMessages(sid)!).toHaveLength(2);
+  });
+
+  it("benign reconnect during a LIVE stream (checkpoint row still in_progress) → no finalize, stream keeps going", async () => {
+    const sid = "resync-live-sid";
+    const rid = "resync-live-rid";
+    // Group-chat request mid-turn (laptop sleep → EventSource reconnect
+    // → >512 replay frames evicted → sentinel) while the daemon is
+    // ALIVE and the speaker's stream is still running server-side.
+    // Killing the request here would drop every subsequent delta AND
+    // the eventual done — the UI would freeze at the checkpoint.
+    const { stream, last } = seedStreaming(sid, rid, /* groupChat */ true);
+    const invoke = vi.mocked(transport.invoke);
+    // Death-oracle fetch: the live checkpoint row (`status=
+    // 'in_progress'`, written by the daemon ~1s into the stream)
+    // proves the turn is still running — do NOT finalize.
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "load_session"
+        ? {
+            session: { id: sid },
+            messages: [
+              usrTyped(0, "写点什么"),
+              {
+                ...asst(1, "部分内容(检查点)", []),
+                status: "in_progress",
+              },
+            ],
+          }
+        : null,
+    );
+
+    void stream.handleStreamResync();
+    // Flush the oracle roundtrip (invoke + resume).
+    await vi.waitFor(() => {
+      expect(
+        invoke.mock.calls.some(([c]) => c === "load_session"),
+      ).toBe(true);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Live contract: NOTHING torn down, NOTHING replaced — the request
+    // keeps streaming (subsequent deltas append and the terminal done
+    // finalizes + reloads, healing the replay gap; pre-WP3 parity).
+    expect(stream.activeRequests.has(rid)).toBe(true);
+    expect(stream.pinnedSessions.has(sid)).toBe(true);
+    expect(last.streaming).toBe(true);
+    expect(last.content).toBe("部分内容"); // no marker, buffer not replaced
+    expect(last.error).toBeUndefined();
+
+    // Recovery: the terminal `done` (group_chat_end for a group
+    // request) still finalizes normally — the oracle never marked the
+    // request dead.
+    stream.handleChatEvent({
+      request_id: rid,
+      kind: "done",
+      stop_reason: "group_chat_end",
+    });
+    await vi.waitFor(() => {
+      expect(stream.activeRequests.has(rid)).toBe(false);
+    });
+    await vi.waitFor(() => {
+      const msgs = stream.getMessages(sid)!;
+      expect(msgs[msgs.length - 1].content).toBe("部分内容(检查点)");
+    });
+  });
+
+  it("re-entrant sentinel burst and late done/error for the interrupted request are no-ops (no double-finalize)", async () => {
+    const sid = "resync-burst-sid";
+    const rid = "resync-burst-rid";
+    // group-chat requests stay in activeRequests across inner per-speaker
+    // `done`s — a daemon crash must still interrupt them.
+    const { stream } = seedStreaming(sid, rid, /* groupChat */ true);
+    const invoke = vi.mocked(transport.invoke);
+    // Post-recovery DB truth: the checkpoint row was rewritten to
+    // `status='interrupted'` — the death oracle's signal.
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "load_session"
+        ? {
+            session: { id: sid },
+            messages: [
+              usrTyped(0, "q"),
+              { ...asst(1, "恢复后的回答", []), status: "interrupted" },
+            ],
+          }
+        : null,
+    );
+
+    // Burst: the reconnect may deliver the sentinel twice; the second
+    // call is absorbed by the per-session in-flight probe guard (and,
+    // after the teardown, by the empty-victim skip) — one finalize.
+    void stream.handleStreamResync();
+    void stream.handleStreamResync();
+    // Teardown completes asynchronously (oracle await first).
+    await vi.waitFor(() => {
+      expect(stream.activeRequests.size).toBe(0);
+    });
+    // Late terminal events raced in from the pre-crash stream: the
+    // request is no longer in activeRequests, so handleChatEvent's
+    // unknown-request guard drops them (no second finalize/reload, no
+    // error surface).
+    stream.handleChatEvent({ request_id: rid, kind: "done" });
+    stream.handleChatEvent({
+      request_id: rid,
+      kind: "error",
+      message: "旧事件",
+      category: "server",
+    });
+
+    await vi.waitFor(() => {
+      const msgs = stream.getMessages(sid)!;
+      expect(msgs[msgs.length - 1].content).toBe("恢复后的回答");
+    });
+    // Exactly one oracle probe + one forced reload — the burst + late
+    // events added neither a second finalize nor a second reload.
+    const loadCount = invoke.mock.calls.filter(
+      ([c]) => (c as string) === "load_session",
+    ).length;
+    expect(loadCount).toBe(2);
+    const msgs = stream.getMessages(sid)!;
+    expect(msgs.some((m) => m.streaming)).toBe(false);
+    expect(msgs[msgs.length - 1].error).toBeUndefined();
   });
 });

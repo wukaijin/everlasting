@@ -61,6 +61,7 @@ pub mod backup;
 pub mod config;
 pub mod memories;
 pub mod memories_tests;
+pub mod messages_checkpoint_tests;
 pub mod messages_tests;
 pub mod migrations;
 pub mod migrations_tests;

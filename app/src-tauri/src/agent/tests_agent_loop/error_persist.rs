@@ -162,6 +162,15 @@ async fn agent_loop_error_persists_partial_text() {
         "ERROR_MARKER must be appended, got: {}",
         text
     );
+    // RULE-PERSIST-001 (08-24): the error path's final persist goes
+    // through finalize_turn_persist — the in_progress placeholder row
+    // (written at stream ready) must be overwritten AND status cleared
+    // back to NULL (terminal).
+    assert!(
+        assistants[0].status.is_none(),
+        "error-path final persist must clear status (got {:?})",
+        assistants[0].status
+    );
 }
 
 /// RULE-A-007 edge case: an error event with NO preceding delta

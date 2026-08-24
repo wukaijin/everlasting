@@ -468,6 +468,14 @@ pub struct MessageRow {
     /// Drives the frontend speaker-chip rendering in
     /// `MessageItem.vue` (round-tripped via `ChatMessage.speaker`).
     pub speaker: Option<String>,
+    /// RULE-PERSIST-001 (08-24-p1-turn-crash-recovery): turn 生命周期
+    /// 状态。`None`(DB NULL)= 终态 —— 全部存量行 + 正常收尾行;
+    /// `Some("in_progress")` = 流式检查点行(daemon 崩溃时残留,
+    /// 启动恢复 pass 会删空占位或标 `interrupted`);`Some
+    /// ("interrupted")` = 崩溃后恢复过的行(内容带中断 marker 文本
+    /// 块,见 `agent::helpers::INTERRUPTED_MARKER`)。前端 WP3 消费;
+    /// 旧前端忽略该字段,行为同今日。
+    pub status: Option<String>,
 }
 
 /// Result of `load_session` — session meta + all messages ordered by `seq`.

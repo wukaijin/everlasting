@@ -282,7 +282,7 @@ pub async fn load_session(
         r#"
  SELECT id, session_id, role, content, text, has_tool_calls, has_tool_results,
  created_at, seq, metadata, ttfb_ms, gen_ms, total_ms, thinking_ms,
- speaker
+ speaker, status
  FROM messages
  WHERE session_id = ?
  ORDER BY seq ASC
@@ -334,6 +334,13 @@ pub async fn load_session(
                 // `chat_loop.rs:run_chat_loop` + `persist_turn`). The
                 // frontend renders this as a chip + accent color.
                 speaker: r.try_get("speaker")?,
+                // RULE-PERSIST-001 (08-24-p1-turn-crash-recovery):
+                // 终态行 NULL;崩溃恢复过的行 'interrupted'。流式
+                // 进行中的检查点行 'in_progress' 只在"读取与活跃
+                // 流并发"(daemon 存活时 reload 页面)可见 —— WP3
+                // 据此把流式占位替换为检查点内容;跨进程重启后
+                // 该形态不可见(启动恢复 pass 先于任何 chat 跑)。
+                status: r.try_get("status")?,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()?;

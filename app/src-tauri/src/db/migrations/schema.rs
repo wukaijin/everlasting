@@ -375,6 +375,25 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // matching `thinking_ms`).
     add_messages_column_if_missing(pool, "speaker", "TEXT").await?;
 
+    // --- RULE-PERSIST-001 (08-24-p1-turn-crash-recovery): turn 流式
+    // 检查点生命周期列(对齐 subagent_runs 的行内 status 先例)。
+    // NULL = 终态(全部存量行 + 正常收尾行,零回填);'in_progress' =
+    // 流式检查点行(stream ready 占位 + 周期 upsert,同一 (session_id,
+    // seq) 被收尾落库覆盖后清回 NULL);'interrupted' = daemon 崩溃后
+    // 启动恢复 pass(recover_interrupted_messages)标记的行。取值域
+    // 由写入点保证 —— 存量表加 CHECK 要表重建(widen 先例),收益低。
+    // Partial index:仅索引非 NULL 行,存量行/终态行零维护成本;
+    // 恢复 pass 的 `WHERE status='in_progress'` 扫描走它。
+    add_messages_column_if_missing(pool, "status", "TEXT").await?;
+    sqlx::query(
+        r#"
+ CREATE INDEX IF NOT EXISTS idx_messages_status
+ ON messages(status) WHERE status IS NOT NULL
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
     // --- A2 + B7 (Permission system + per-session Mode, 2026-06-13).
     //
     // Per-session Mode binding (`sessions.mode TEXT`), persistent

@@ -39,6 +39,7 @@ fn db_row(role: &str, content: serde_json::Value, text: &str, seq: i64) -> Messa
         total_ms: None,
         thinking_ms: None,
         speaker: None,
+        status: None,
     }
 }
 

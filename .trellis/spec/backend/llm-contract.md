@@ -126,6 +126,16 @@ problem — the agent loop sees a generic 400 and retries, which 400s again.
   fed back; stop_reason only decides the terminal `Done` value.
   Test: `agent_loop_tool_use_with_non_tool_use_stop_reason_still_executes`
   (`agent/tests_agent_loop.rs`).
+- **Daemon crash during tool execution (RULE-PERSIST-001, 2026-08-24)**: the
+  assistant(tool_use) row is persisted BEFORE tools run; a kill -9 mid-
+  execution leaves the pair permanently orphaned in the DB — every later
+  request in that session 400s. Startup guard: `db::recover_interrupted_
+  messages` Step B scans each session's MAX(seq) tail; an assistant row with
+  `has_tool_calls=1` gets a synthetic `is_error` tool_result user row at
+  seq+1 (one block per tool_use_id, content notes the daemon interruption) —
+  same repair shape as the error path's `build_synthetic_tool_result_message`.
+  Test: `turn_checkpoint.rs` AC4 (second request's provider payload actually
+  contains the paired tool_result).
 
 **Test coverage** (in `agent/context.rs`):
 - `case_3_tool_use_tool_result_pair_intact_or_dropped_together`

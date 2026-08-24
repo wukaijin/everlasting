@@ -70,14 +70,37 @@ pub const LARGE_PAYLOAD_THRESHOLD: usize = 256 * 1024;
 /// 剔除(下次重连靠 `Last-Event-ID` 回放或 resync)。
 const LIVE_CHANNEL_CAPACITY: usize = 128;
 
-/// Buffer 被淘汰导致 `Last-Event-ID` 失效时下发的 sentinel 事件
-/// 名。前端 `httpTransport` 监听该事件 → GET
-/// `/api/v1/sessions/{current}/snapshot` → 用快照替换 store 后
-/// 重画 UI(design §2.4)。注意是全局信号(payload 无
-/// `session_id`,前端用当前活跃 session 自己调 snapshot)。
+/// 服务端无法证明「客户端 `Last-Event-ID` 之后事件连续」时下发的
+/// sentinel 事件名。前端 `httpTransport` 监听该事件 → R3 起
+/// `streamController.handleStreamResync` 以 DB 尾行为死亡 oracle
+/// 决定是否本地终结 streaming 占位(design §4;此前的语义是 GET
+/// snapshot 重拉)。注意是全局信号(payload 无 `session_id`,
+/// 前端用当前活跃 session 自己探测)。
+///
+/// sentinel 有三个生产者(task `08-24-p1-turn-crash-recovery` WP4
+/// 扩全;此前只有 ring 淘汰一种,daemon 重启后的首轮重连会静默
+/// 拿到空 replay,前端自愈循环收不到触发信号):ring 淘汰 gap、
+/// 重启后空 buffer、跨进程 stale 高 id —— 见 [`compute_replay`]
+/// 的决策表。
 const SENTINEL_EVENT: &str = "stream-resync";
 
-const SENTINEL_DATA: &str = r#"{"reason":"buffer_overrun"}"#;
+/// Sentinel payload 的 `reason` 值域。前端 handler **忽略** payload
+/// (事件本身就是信号,`streamController.ts` 的 resync listener 不
+/// 读 data),区分 reason 只为后端日志 / 排障定位 —— 不要让前端
+/// 逻辑依赖它,除非同步升级契约。
+const SENTINEL_REASON_OVERRUN: &str = "buffer_overrun";
+const SENTINEL_REASON_RESTART: &str = "restart";
+
+/// 构造单帧 resync sentinel。`id: 0`:sentinel 不推进客户端的
+/// `Last-Event-ID` 语义 —— 重连后要么从 buffer 头全量回放
+/// (`id > 0`),要么再收一条 sentinel,不会误入「已最新」分支。
+fn sentinel_frame(reason: &str) -> SseFrame {
+    SseFrame {
+        id: 0,
+        event: SENTINEL_EVENT.to_string(),
+        data: format!(r#"{{"reason":"{reason}"}}"#),
+    }
+}
 
 /// 一条已序列化的 SSE 帧。`id` 是全局单调递增的 u64(SSE `id:`
 /// 行,供客户端 `Last-Event-ID` 头回传);`event` 是前端 `listen`
@@ -169,13 +192,11 @@ impl SseRegistry {
     /// 返回 [`SseSubscription`]:replay 切片 + live channel。
     /// - `None` → 空 replay(新连接从"现在"开始,当前状态由前端
     ///   自己在 `httpTransport.listen` 连上后 GET snapshot 拉取)。
-    /// - `Some(last)` 且 buffer 非空:
-    ///   - `last + 1 < buffer_oldest_id`(last 与 oldest 之间存在被
-    ///     淘汰的 gap)→ replay = 单条 [`SENTINEL_EVENT`] sentinel
-    ///     (前端走 snapshot 重拉)。`last + 1 >= oldest`(含相邻与
-    ///     `last == 0` 首次回放)视为连续。
-    ///   - 否则 → replay = buffer 中 `id > last` 的帧(可能为空,
-    ///     表示客户端已是最新)。
+    /// - `Some(last)` → 交给 [`compute_replay`] 判定:连续则回放
+    ///   buffer 中 `id > last` 的帧(可能为空 = 已最新);无法证明
+    ///   连续(ring 淘汰 gap / 重启后空 buffer / 跨进程 stale 高
+    ///   id)则回放单条 [`SENTINEL_EVENT`] sentinel。完整决策表
+    ///   见 [`compute_replay`]。
     pub fn subscribe(&self, last_event_id: Option<u64>) -> SseSubscription {
         let (tx, rx) = mpsc::channel(LIVE_CHANNEL_CAPACITY);
         let replay = {
@@ -183,7 +204,7 @@ impl SseRegistry {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            let replay = compute_replay(&inner.buffer, last_event_id);
+            let replay = compute_replay(&inner.buffer, inner.next_id, last_event_id);
             inner.senders.push(tx);
             replay
         };
@@ -232,26 +253,62 @@ impl Default for SseRegistry {
 }
 
 /// 计算 `subscribe` 时应回放的帧切片(模块文档"replay 协议")。
-fn compute_replay(buffer: &VecDeque<SseFrame>, last_event_id: Option<u64>) -> Vec<SseFrame> {
+///
+/// 决策表(task `08-24-p1-turn-crash-recovery` WP4 扩全;此前
+/// sentinel 只覆盖 ring 淘汰一种失联,daemon 重启后的首轮重连
+/// 静默拿到空 replay,前端自愈循环收不到触发信号):
+///
+/// | `last_event_id` | buffer | 判定 | 返回 |
+/// |---|---|---|---|
+/// | `None` | 任意 | 首次连接 | 空(live 从"现在"开始) |
+/// | `Some(last)` | 空 | 重启后首轮重连 | sentinel(`restart`) |
+/// | `Some(last)` | 非空,`last + 1 < oldest` | ring 淘汰产生 gap | sentinel(`buffer_overrun`) |
+/// | `Some(last)` | 非空,`last >= next_id` | 跨进程 stale 高 id | sentinel(`restart`) |
+/// | `Some(last)` | 非空,`oldest - 1 <= last <= next_id - 1` | 连续窗口 | `id > last` 的帧(可能为空 = 已最新) |
+///
+/// **空 buffer → sentinel 的 WHY**:客户端能给出 `Some(last)` 说明
+/// 它此前收到过帧,而本进程一条都没发过 —— 唯一合理解释是 daemon
+/// 重启(R3 主场景:崩溃 → EventSource 自动重连 → 新 registry,
+/// id 从 1 重新计数)。误报无害:抢跑客户端(首帧前断连、回传
+/// `Some(0)`)也会拿到 sentinel,但前端把 sentinel 当死亡 oracle
+/// 的**触发器**而非死亡证明(design §4:探 DB 尾行,`in_progress`
+/// → 请求仍在跑 → no-op),所以这里宁滥勿缺。
+///
+/// **`last >= next_id` → sentinel 的 WHY**:id 是进程内单调计数,
+/// 重启后从 1 重新开始。stale 客户端的 `last` 可能已超过本进程
+/// 迄今发出的最大 id(`next_id - 1`)—— 此时 `id > last` 过滤结果
+/// 也是空,但那个"空"会被误读成"已最新",而真相是**无法证明
+/// 连续**:继续 live 订阅后,本进程随后发出的 id(1, 2, …)会与
+/// 客户端记录的上个进程 id 混叠,`Last-Event-ID` 的去重 / 回放
+/// 语义被破坏(前端 request-id 路由虽会丢掉错帧,但客户端值得
+/// 拿到诚实信号)。发 sentinel 让前端走 oracle 探测。
+fn compute_replay(
+    buffer: &VecDeque<SseFrame>,
+    next_id: u64,
+    last_event_id: Option<u64>,
+) -> Vec<SseFrame> {
     let Some(last) = last_event_id else {
         // 首次连接:不回放历史。
         return Vec::new();
     };
     if buffer.is_empty() {
-        return Vec::new();
+        // 重启后首轮重连:客户端持有上个进程的 id,本进程零帧。
+        return vec![sentinel_frame(SENTINEL_REASON_RESTART)];
     }
     let oldest = buffer.front().expect("non-empty checked").id;
     // overrun 判定:客户端 `last` 与 buffer `oldest` 之间存在 gap
-    // (被淘汰的帧)→ 整段无法完整回放,发 sentinel 让前端走 snapshot
-    // 重拉。`last + 1 < oldest` 等价于"last 之后到 oldest 之间至少缺
-    // 一帧";`last + 1 >= oldest`(含 `last == oldest - 1` 的相邻情形,
-    // 以及 `last == 0` 首次回放)视为连续,回放 (last, newest]。
+    // (被淘汰的帧)→ 整段无法完整回放,发 sentinel 让前端走
+    // snapshot / oracle 重拉。`last + 1 < oldest` 等价于"last 之后
+    // 到 oldest 之间至少缺一帧";`last + 1 >= oldest`(含
+    // `last == oldest - 1` 的相邻情形,以及 `last == 0` 首次回放)
+    // 视为连续,回放 (last, newest]。
     if last.saturating_add(1) < oldest {
-        return vec![SseFrame {
-            id: 0,
-            event: SENTINEL_EVENT.to_string(),
-            data: SENTINEL_DATA.to_string(),
-        }];
+        return vec![sentinel_frame(SENTINEL_REASON_OVERRUN)];
+    }
+    // stale 高 id 判定(跨进程混叠,见函数级注释 WHY)。与 overrun
+    // 分支互斥:`last >= next_id` 时必有 `last + 1 > oldest`。
+    if last >= next_id {
+        return vec![sentinel_frame(SENTINEL_REASON_RESTART)];
     }
     buffer.iter().filter(|f| f.id > last).cloned().collect()
 }
@@ -381,7 +438,9 @@ mod tests {
         assert!(frame.id >= 1);
     }
 
-    /// 首次连接(last=None)不回放历史。
+    /// 首次连接(last=None)不回放历史 —— 无论 buffer 是否有帧。
+    /// (WP4 起 `Some(last)` + 空 buffer 走 sentinel,与本用例分离,
+    /// 见下方 `replay_with_last_on_empty_buffer_emits_sentinel`。)
     #[tokio::test]
     async fn replay_first_connection_is_empty() {
         let reg = SseRegistry::new();
@@ -389,6 +448,47 @@ mod tests {
         reg.broadcast("chat-event", &payload("m1"));
         let sub = reg.subscribe(None);
         assert!(sub.replay.is_empty());
+    }
+
+    /// R3/WP4:重启后首轮重连 —— 新 registry 的 buffer 空,但客户端
+    /// 带着上个进程的 `Last-Event-ID` → 必须发 sentinel(此前是
+    /// 静默空 replay,前端自愈循环收不到触发信号)。payload 换
+    /// `reason: "restart"` 以便排障;前端忽略 reason,无契约变化。
+    #[tokio::test]
+    async fn replay_with_last_on_empty_buffer_emits_sentinel() {
+        let reg = SseRegistry::new();
+        let sub = reg.subscribe(Some(42));
+        assert_eq!(sub.replay.len(), 1);
+        assert_eq!(sub.replay[0].event, SENTINEL_EVENT);
+        assert_eq!(sub.replay[0].id, 0, "sentinel uses reserved id 0");
+        assert_eq!(
+            sub.replay[0].data,
+            format!(r#"{{"reason":"{SENTINEL_REASON_RESTART}"}}"#)
+        );
+    }
+
+    /// R3/WP4:跨进程 stale 高 id —— 新进程已发若干帧(next_id=4),
+    /// 但客户端 `last=10` 来自上个进程 → 无法证明连续 → sentinel;
+    /// 不能落入 `id > last` 过滤的"空 replay 被误读成已最新"分支。
+    /// 对照:`last == next_id - 1`(恰已最新)仍是空 replay 而非
+    /// sentinel —— stale-high 分支不侵蚀连续窗口的上边界。
+    #[tokio::test]
+    async fn replay_with_stale_high_id_emits_sentinel() {
+        let reg = SseRegistry::new();
+        for i in 0..3 {
+            reg.broadcast("chat-event", &payload(&format!("m{i}")));
+        }
+        // id 1..=3, next_id=4;last=10 >= 4 → sentinel。
+        let sub = reg.subscribe(Some(10));
+        assert_eq!(sub.replay.len(), 1);
+        assert_eq!(sub.replay[0].event, SENTINEL_EVENT);
+        assert_eq!(
+            sub.replay[0].data,
+            format!(r#"{{"reason":"{SENTINEL_REASON_RESTART}"}}"#)
+        );
+        // last=3(= next_id-1,已最新)→ 空 replay,不是 sentinel。
+        let current = reg.subscribe(Some(3));
+        assert!(current.replay.is_empty());
     }
 
     /// `Some(last)` 回放 buffer 中 `id > last` 的帧。
@@ -420,11 +520,15 @@ mod tests {
         assert_eq!(s_full.replay.len(), 512);
         assert_eq!(s_full.replay.first().unwrap().id, 11);
         assert_eq!(s_full.replay.last().unwrap().id, 522);
-        // last=9 → 9 与 oldest(11) 之间缺 id=10(gap)→ sentinel.
+        // last=9 → 9 与 oldest(11) 之间缺 id=10(gap)→ sentinel,
+        // reason 区分于重启场景(前端忽略 reason,排障用)。
         let s_sentinel = reg.subscribe(Some(9));
         assert_eq!(s_sentinel.replay.len(), 1);
         assert_eq!(s_sentinel.replay[0].event, SENTINEL_EVENT);
-        assert_eq!(s_sentinel.replay[0].data, SENTINEL_DATA);
+        assert_eq!(
+            s_sentinel.replay[0].data,
+            format!(r#"{{"reason":"{SENTINEL_REASON_OVERRUN}"}}"#)
+        );
         // last=11(=oldest)→ 回放 (11, 522] = id 12..=522 (511 帧).
         let s_partial = reg.subscribe(Some(11));
         assert_eq!(s_partial.replay.len(), 511);
@@ -433,19 +537,28 @@ mod tests {
 
     /// 单条 > [`LARGE_PAYLOAD_THRESHOLD`] 的事件:live channel 照推,
     /// 但不入 buffer(重连后不回放,前端走 snapshot)。
+    ///
+    /// WP4 注:探测方式必须是"非空 buffer + 已最新 last"—— 新
+    /// 语义下空 buffer + `Some(last)` 会拿 sentinel,无法证明大帧
+    /// 不在 buffer 里。先发一条小帧(id=1)占住 buffer,再发大帧
+    /// (id=2,应跳过 buffer),`subscribe(Some(1))` 回放为空才构成
+    /// 证明(若大帧入了 buffer,id=2 > last=1 会被回放)。
     #[tokio::test]
     async fn large_payload_skips_buffer_but_reaches_live() {
         let reg = SseRegistry::new();
         let mut sub = reg.subscribe(None);
+        reg.broadcast("chat-event", &payload("small"));
         let big_text = "x".repeat(LARGE_PAYLOAD_THRESHOLD + 1);
         reg.broadcast("tool:result", &payload(&big_text));
-        // live 收到大帧。
+        // live 两条都收到:小帧 + 大帧。
+        let small = sub.live.recv().await.expect("live got small frame");
+        assert_eq!(small.event, "chat-event");
         let frame = sub.live.recv().await.expect("live got large frame");
         assert_eq!(frame.event, "tool:result");
         assert!(frame.data.len() > LARGE_PAYLOAD_THRESHOLD);
-        // 但 buffer 不含它:本次仅广播这一条(未入 buffer)→
-        // buffer 空 → subscribe(Some(0)) 回放为空。
-        let sub2 = reg.subscribe(Some(0));
+        // 但 buffer 只含小帧:id=1 已最新 → 空 replay(大帧若入
+        // buffer,id=2 > 1 会被回放)。
+        let sub2 = reg.subscribe(Some(1));
         assert!(
             sub2.replay.is_empty(),
             "large payload must not enter the replay buffer"

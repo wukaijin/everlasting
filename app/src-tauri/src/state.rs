@@ -320,6 +320,34 @@ impl AppState {
             ),
         }
 
+        // RULE-PERSIST-001 (2026-08-24): recover messages rows orphaned
+        // by a crashed previous process — streaming checkpoint residue
+        // (`status='in_progress'`: empty placeholder deleted, content
+        // rows marked interrupted with a marker block) + per-session
+        // orphan assistant(tool_use) tails (synthetic is_error
+        // tool_result appended so the next request doesn't 400 on pair
+        // atomicity). Same best-effort shell as the reap above: a
+        // failure logs and never blocks startup; the pass is idempotent
+        // so a mid-pass crash just re-runs it next boot. Ordering note:
+        // this lives inside `load_inner`, so both the daemon bin (its
+        // `spawn_backup_task` fires the first VACUUM INTO only after
+        // `load_daemon_state` returns) and the GUI run recovery BEFORE
+        // any backup / HTTP handler — the startup backup captures the
+        // recovered state, and no request can observe pre-recovery rows.
+        match crate::db::recover_interrupted_messages(&db).await {
+            Ok(report) if report.total() > 0 => tracing::info!(
+                interrupted = report.interrupted,
+                deleted = report.deleted,
+                orphan_repaired = report.orphan_repaired,
+                "startup: recovered interrupted messages from crash residue"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                "startup: failed to recover interrupted messages (non-fatal)"
+            ),
+        }
+
         // Grill decision #3: build the provider catalog. We do this
         // BEFORE the backfill spawn so a backfill panic doesn't
         // leave the catalog half-built.

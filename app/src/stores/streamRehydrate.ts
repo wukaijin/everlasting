@@ -46,6 +46,17 @@ export interface LoadedMessage {
    *  typecheck — the rehydrate path treats `undefined` as
    *  `null` (no chip). */
   speaker?: string | null;
+  /** RULE-PERSIST-001 (08-24-p1-turn-crash-recovery WP3): turn lifecycle
+   *  status, mirroring the Rust `MessageRow.status` column (snake_case
+   *  mirror rule). `null`/`undefined` = terminal row (all pre-task rows
+   *  + normally-finished turns); `'in_progress'` = streaming checkpoint
+   *  row (normally never observed here — the daemon's startup recovery
+   *  pass rewrites or deletes them before any load can see them);
+   *  `'interrupted'` = row recovered after a daemon crash (content ends
+   *  with the `[异常中断已恢复]` marker text block appended by the
+   *  recovery pass). No UI renders the field yet — the marker text is
+   *  visible content; this field is type-safety for future consumers. */
+  status?: string | null;
   /** B2 PR3: optional per-user-turn injection manifest
    *  JSON, written by the agent loop's `update_message_metadata`
    *  SQL after `inject_at_tokens` produces the list. `null`
