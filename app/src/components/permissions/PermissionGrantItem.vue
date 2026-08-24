@@ -63,7 +63,7 @@ const hasValue = computed<boolean>(() => props.row.matchValue !== null);
 
     <button
       type="button"
-      class="grant-item__revoke"
+      class="grant-item__revoke btn btn--danger-soft btn--sm"
       title="撤销此放行"
       @click="emit('revoke', row)"
     >
@@ -143,27 +143,9 @@ const hasValue = computed<boolean>(() => props.row.matchValue !== null);
   color: var(--color-text-muted);
 }
 
+/* 撤销按钮由全局 .btn 家族承载(danger-soft·sm,hover 红 tint);
+   仅保留 flex 几何。 */
 .grant-item__revoke {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-xs);
-  padding: 4px 8px;
-  background: transparent;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-family: inherit;
   flex-shrink: 0;
-  transition: background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-
-.grant-item__revoke:hover {
-  background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
-  border-color: var(--color-tool-error);
-  color: var(--color-tool-error-text);
 }
 </style>

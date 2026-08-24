@@ -72,7 +72,7 @@ function openMostRecent(): void {
 <template>
   <button
     v-if="count > 0"
-    class="worker-ask-banner"
+    class="worker-ask-banner btn btn--pill btn--sm"
     type="button"
     :title="`${count} 个 worker 正在等待审批 — 点击展开 drawer`"
     :aria-label="`${count} 个 worker 待审批`"
@@ -87,19 +87,16 @@ function openMostRecent(): void {
 </template>
 
 <style scoped>
+/* 08-24 btn-family:形状/基础排版落家族(pill·sm);tool-shell
+   琥珀 tint 本体家族无变体,颜色/描边/hover 本地覆写(非阻塞
+   banner 语义),transition 需覆盖 filter 家族未含。 */
 .worker-ask-banner {
-  display: inline-flex;
-  align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border-radius: 999px;
   border: 1px solid var(--color-tool-shell);
   background: color-mix(in srgb, var(--color-tool-shell) 12%, transparent);
   color: var(--color-tool-shell);
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
   transition: filter var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
   /* Non-blocking: doesn't steal focus from the chat input. */
   user-select: none;

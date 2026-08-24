@@ -697,7 +697,7 @@ function isPermissionAskLive(rid: string): boolean {
                  '↓ 跳到最新'),删除原底部冗余按钮。 -->
             <button
               v-if="showJumpLatest"
-              class="subagent-drawer__jump-latest"
+              class="subagent-drawer__jump-latest btn btn--muted btn--pill btn--sm"
               type="button"
               :title="newCount > 0 ? `跳到最新 (${newCount} 条新事件)` : '跳到最新'"
               aria-label="Jump to latest"
@@ -813,7 +813,7 @@ function isPermissionAskLive(rid: string): boolean {
                     <button
                       v-if="replyIsTruncated"
                       type="button"
-                      class="subagent-drawer__reply-view-full"
+                      class="subagent-drawer__reply-view-full btn btn--ghost btn--sm"
                       @click="replyModalOpen = true"
                     >
                       View full →
@@ -925,31 +925,20 @@ function isPermissionAskLive(rid: string): boolean {
    滚动后按钮滚出视野,等于"看不见也用不到"。sticky top=0 让按钮
    始终停在视口顶部。pill 样式 + 阴影 + 居中,行为与原底部
    subagent-drawer__new-events 一致;z-index:2 盖在 segments
-   滚动内容之上(segments 自身无 z-index,默认 auto)。 */
+   滚动内容之上(segments 自身无 z-index,默认 auto)。
+   08-24 btn-family:本体由 muted·pill·sm 家族承载(hover 转 accent
+   与原语义一致);本地保留 sticky 定位/居中几何/FAB 阴影(design-tokens
+   特例表)与字重、横向 12px 呼吸。 */
 .subagent-drawer__jump-latest {
   position: sticky;
   top: 0;
   z-index: 2;
-  display: flex;
-  align-items: center;
   gap: 6px;
   margin: 0 auto 8px;
   width: fit-content;
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--color-accent);
-  background: var(--color-bg-surface);
-  color: var(--color-accent-text);
-  cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-}
-.subagent-drawer__jump-latest:hover {
-  background: var(--color-accent);
-  color: var(--color-bg-app);
 }
 .subagent-drawer__jump-latest svg {
   flex-shrink: 0;
@@ -1098,15 +1087,12 @@ function isPermissionAskLive(rid: string): boolean {
   padding: 0;
 }
 
+/* 08-24 btn-family:text-link 形态落 ghost·sm;本地保留文字链接的
+   accent 色/贴边 padding/underline hover(同 EmptyProjectState
+   text-link 先例)。 */
 .subagent-drawer__reply-view-full {
   align-self: flex-start;
-  background: transparent;
-  border: 0;
   color: var(--color-accent-text);
-  cursor: pointer;
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
   padding: 2px 0;
 }
 

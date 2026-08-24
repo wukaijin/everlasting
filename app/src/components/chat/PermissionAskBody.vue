@@ -237,12 +237,12 @@ function cancelFeedback(): void {
         <div class="permission-ask-body__feedback-actions">
           <button
             type="button"
-            class="permission-ask-body__btn permission-ask-body__btn--deny"
+            class="permission-ask-body__btn permission-ask-body__btn--deny btn btn--muted btn--sm"
             @click="submitFeedback"
           >提交拒绝</button>
           <button
             type="button"
-            class="permission-ask-body__btn"
+            class="permission-ask-body__btn btn btn--muted btn--sm"
             @click="cancelFeedback"
           >取消</button>
         </div>
@@ -250,23 +250,23 @@ function cancelFeedback(): void {
       <div v-else class="permission-ask-body__actions">
         <button
           type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--once"
+          class="permission-ask-body__btn permission-ask-body__btn--once btn btn--muted btn--sm"
           @click="respond('allow_once')"
         >仅一次</button>
         <button
           v-if="!hideAllowAlways"
           type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--always"
+          class="permission-ask-body__btn permission-ask-body__btn--always btn btn--primary btn--sm"
           @click="respond('allow_always')"
         >{{ allowAlwaysLabel }}</button>
         <button
           type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--deny"
+          class="permission-ask-body__btn permission-ask-body__btn--deny btn btn--muted btn--sm"
           @click="respond('deny')"
         >拒绝</button>
         <button
           type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--deny"
+          class="permission-ask-body__btn permission-ask-body__btn--deny btn btn--muted btn--sm"
           @click="showFeedback = true"
         >拒绝并说明</button>
       </div>
@@ -383,29 +383,9 @@ function cancelFeedback(): void {
   flex-wrap: wrap;
 }
 
-.permission-ask-body__btn {
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
-  padding: 3px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid var(--color-bg-border);
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  transition: filter var(--duration-fast) var(--ease-out);
-}
-
-.permission-ask-body__btn:hover {
-  filter: brightness(1.08);
-}
-
-.permission-ask-body__btn--always {
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-accent);
-}
-
+/* 按钮由全局 .btn 家族承载(紧凑档 sm:仅一次/取消/拒绝 = muted·sm,
+   始终允许 = primary·sm);deny 是"红字描边"语义,家族无对应变体,
+   本地覆写文字/边框色。 */
 .permission-ask-body__btn--deny {
   color: var(--color-tool-error-text);
   border-color: var(--color-tool-error);

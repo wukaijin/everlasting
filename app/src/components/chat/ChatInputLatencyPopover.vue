@@ -121,7 +121,7 @@ const averageLabel = computed(() =>
   <div ref="root" class="chat-input__latency">
     <button
       type="button"
-      class="chat-input__latency-chip"
+      class="chat-input__latency-chip btn btn--muted btn--sm"
       :class="{ 'chat-input__latency-chip--open': open }"
       :aria-haspopup="'dialog'"
       :aria-expanded="open"
@@ -201,29 +201,14 @@ const averageLabel = computed(() =>
   flex-shrink: 0;
 }
 
+/* 08-24 btn-family:耗时 chip 由 muted·sm 家族承载(hover 转 accent
+   与原语义一致);本地保留 mono 字体/紧凑 padding/user-select。
+   (原块的 font: inherit + 重复声明 mono/text-xs 是互相抵消的冗余,
+   随迁移清理。)--open 是展开态,家族不拥有,本地保留。 */
 .chat-input__latency-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  font-family: var(--font-mono);
   padding: 2px 8px;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
   user-select: none;
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-}
-
-.chat-input__latency-chip:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-text-primary);
 }
 
 .chat-input__latency-chip--open {

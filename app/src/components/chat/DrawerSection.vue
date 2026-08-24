@@ -152,7 +152,7 @@ const finalChipText = computed<string>(() => {
   <section class="drawer-section" :data-type="type">
     <button
       type="button"
-      class="drawer-section__header"
+      class="drawer-section__header btn btn--ghost"
       :aria-expanded="open"
       @click="toggle"
     >
@@ -189,24 +189,14 @@ const finalChipText = computed<string>(() => {
   overflow: hidden;
 }
 
+/* 08-24 btn-family:折叠头由 ghost 家族承载(hover wash);本地保留
+   通栏宽度/左对齐几何。 */
 .drawer-section__header {
-  display: flex;
-  align-items: center;
   gap: 6px;
   width: 100%;
   padding: 8px 12px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
   text-align: left;
-}
-
-.drawer-section__header:hover {
-  background: var(--color-bg-elevated);
+  justify-content: flex-start;
 }
 
 .drawer-section__chevron {

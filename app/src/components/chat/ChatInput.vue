@@ -721,7 +721,7 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
         >已压缩</span>
         <button
           type="button"
-          class="chat-input__staged-remove"
+          class="chat-input__staged-remove btn btn--muted btn--circle"
           aria-label="移除此图片"
           :title="`移除此图片(估算 ${img.tokensEst} tokens)`"
           @click="chatStore.removeStagedImage(idx)"
@@ -843,7 +843,7 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
            long stream with no draft. -->
       <button
         v-if="sending"
-        class="chat-input__action chat-input__stop"
+        class="chat-input__action chat-input__stop btn btn--danger btn--circle"
         aria-label="停止生成"
         @click="onStop"
       >
@@ -851,7 +851,7 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
       </button>
       <button
         v-else
-        class="chat-input__action chat-input__send"
+        class="chat-input__action chat-input__send btn btn--primary btn--circle"
         :disabled="sendDisabled()"
         aria-label="发送"
         @click="cm.submit"
@@ -911,6 +911,9 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   background: var(--color-bg-elevated);
 }
 
+/* 08-24 btn-family:18px 圆形删除钮,本体由 muted·circle 家族承载;
+   本地保留定位/固定几何 + 裸 10px 字号落 --text-2xs token +
+   hover 红字(删除语义,家族 muted hover 是 accent 转向不匹配)。 */
 .chat-input__staged-remove {
   position: absolute;
   top: -6px;
@@ -918,21 +921,12 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   width: 18px;
   height: 18px;
   padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  color: var(--color-text-secondary);
-  font-size: 10px;
   line-height: 1;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+  font-size: var(--text-2xs);
 }
 
-/* 08-21-b1-image-followups R1:压缩标注 —— 缩略图左下角小 chip。 */
+/* 08-21-b1-image-followups R1:压缩标注 —— 缩略图左下角小 chip。
+   (非按钮元素,不迁 .btn;裸 10px 字号落 --text-2xs token。) */
 .chat-input__staged-compressed {
   position: absolute;
   left: 2px;
@@ -942,13 +936,13 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   line-height: 14px;
   pointer-events: none;
   user-select: none;
 }
 
-.chat-input__staged-remove:hover {
+.chat-input__staged-remove:hover:not(:disabled) {
   color: var(--color-tool-error-text, #e5484d);
   background: var(--color-bg-app);
 }
@@ -1144,33 +1138,21 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
 /* Shared shape for both the Send and Stop action buttons. PR5
    factored the common width/height/border-radius/padding out of
    the old `.chat-input__send` rule so the new Stop variant can
-   reuse it without duplicating pixel values. */
+   reuse it without duplicating pixel values.
+   08-24 btn-family:本体由 primary·circle(send)/ danger·circle(stop)
+   家族承载;本地仅保留 32px 固定几何 + opacity 进 transition(输入行
+   disabled 渐隐,家族 transition 未含 opacity)。 */
 .chat-input__action {
   flex-shrink: 0;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
-  border: none;
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-family: inherit;
   padding: 0;
   transition: background var(--duration-base) var(--ease-out), opacity var(--duration-base) var(--ease-out);
-}
-
-.chat-input__send:hover:not(:disabled) {
-  background: var(--color-accent-hover);
 }
 
 .chat-input__send:disabled {
   background: var(--color-bg-elevated);
   color: var(--color-text-muted);
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 /* PR5 Stop button. Uses a different background so the visual cue
@@ -1179,9 +1161,10 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
    2026-08-21: slow red halo breathing (same --duration-pulse rhythm
    as the subagent breathing + input-row glow) so the button reads
    alive while streaming. Deliberately NOT part of the gradient ring
-   treatment — red is the semantic "stop" color and must stay pure. */
+   treatment — red is the semantic "stop" color and must stay pure.
+   08-24 btn-family:tool-error 实底由 danger 家族承载;红晕呼吸动画
+   本地保留;原 80%+#000 混色 hover 删,落家族 brightness(1.1)。 */
 .chat-input__stop {
-  background: var(--color-tool-error);
   animation: chat-input-stop-breathe var(--duration-pulse) ease-in-out infinite;
 }
 
@@ -1199,10 +1182,6 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   .chat-input__stop {
     animation: none;
   }
-}
-
-.chat-input__stop:hover {
-  background: color-mix(in srgb, var(--color-tool-error) 80%, #000 20%);
 }
 
 .chat-input__stop-glyph {

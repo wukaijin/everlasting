@@ -535,7 +535,7 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
             <button
               v-for="s in quotaStore.report.topSessions"
               :key="s.sessionId"
-              class="chat-input__token-session-row"
+              class="chat-input__token-session-row btn btn--ghost btn--sm"
               type="button"
               :disabled="!s.projectId"
               :title="s.sessionId"
@@ -563,7 +563,7 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
             <input v-model="limitInput" class="chat-input__token-input" type="number" min="0" placeholder="未设置" />
           </label>
           <button
-            class="chat-input__token-save"
+            class="chat-input__token-save btn btn--muted btn--sm"
             type="button"
             :disabled="saving"
             @click="saveSettings"
@@ -829,27 +829,14 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
 .chat-input__token-sessions {
   padding-top: var(--space-1);
 }
+/* 08-24 btn-family:session 行由 ghost·sm 家族承载(hover wash 同
+   语义);本地保留通栏左对齐两端几何。 */
 .chat-input__token-session-row {
-  display: flex;
   justify-content: space-between;
   gap: var(--space-2);
   width: 100%;
   padding: var(--space-1) var(--space-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-xs);
   text-align: left;
-  cursor: pointer;
-}
-.chat-input__token-session-row:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-.chat-input__token-session-row:disabled {
-  cursor: default;
-  opacity: 0.6;
 }
 .chat-input__token-session-title {
   overflow: hidden;
@@ -887,20 +874,8 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
   font: inherit;
   font-size: var(--text-xs);
 }
-.chat-input__token-save {
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-bg-border);
-  background: var(--color-bg-elevated);
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.chat-input__token-save:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
+/* 08-24 btn-family:保存按钮由 muted·sm 家族承载(原 padding 恰为
+   space-1/space-3 = sm 档,零本地覆写,BEM 类留作锚点)。 */
 
 .chat-input__token-muted {
   color: var(--color-text-muted);

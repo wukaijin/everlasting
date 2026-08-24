@@ -161,7 +161,7 @@ onMounted(async () => {
           </span>
         </div>
       </div>
-      <button type="button" class="shcard__cta" @click="openFullResults">
+      <button type="button" class="shcard__cta btn btn--muted" @click="openFullResults">
         共 {{ totalHits }} 条命中 · 点击查看全部
       </button>
     </template>
@@ -288,23 +288,13 @@ onMounted(async () => {
   font-weight: var(--weight-medium);
 }
 
+/* 底部 CTA 由全局 .btn 家族承载(muted,hover 转 accent);此处仅
+   保留几何(margin/width/min-height)。原裸 transition 0.15s ease
+   删,落家族 fast。 */
 .shcard__cta {
   margin-top: var(--space-2);
   width: 100%;
   min-height: 36px;
-  padding: 6px 10px;
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-  background: var(--color-bg-elevated, var(--color-bg-surface));
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
-}
-
-.shcard__cta:hover {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
 }
 
 /* 移动端 hit-area(responsive-mobile §6:可点元素 ≥44px)。 */

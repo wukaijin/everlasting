@@ -254,7 +254,7 @@ async function onDeny(): Promise<void> {
       >{{ submitError }}</p>
       <button
         type="button"
-        class="wf-state-card__btn wf-state-card__btn--primary"
+        class="wf-state-card__btn wf-state-card__btn--primary btn btn--primary"
         :disabled="submitting"
         data-testid="wf-state-card-allow"
         @click="onAllow"
@@ -264,7 +264,7 @@ async function onDeny(): Promise<void> {
       </button>
       <button
         type="button"
-        class="wf-state-card__btn"
+        class="wf-state-card__btn btn btn--muted"
         :disabled="submitting"
         data-testid="wf-state-card-deny"
         @click="onDeny"
@@ -395,41 +395,10 @@ async function onDeny(): Promise<void> {
   flex-wrap: wrap;
 }
 
+/* 动作按钮由全局 .btn 家族承载(允许 = primary / 拒绝 = muted);
+   flex:1 是两钮等宽几何,保留。 */
 .wf-state-card__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
   flex: 1;
-  padding: 6px 12px;
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-border-strong);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-family: inherit;
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-.wf-state-card__btn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-  border-color: var(--color-accent);
-}
-.wf-state-card__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Primary (允许) button — accent filled. */
-.wf-state-card__btn--primary {
-  color: var(--color-text-on-accent);
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.wf-state-card__btn--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
 }
 
 .wf-state-card__error {

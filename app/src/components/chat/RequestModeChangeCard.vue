@@ -182,6 +182,16 @@ const targetColorClass = computed<string>(() =>
   modeColorClass(props.targetMode),
 );
 
+/** 08-24 btn-family:允许按钮的家族变体按目标模式取 —— edit →
+ *  btn--primary(accent)/ yolo → btn--danger(tool-error)均与原
+ *  实底一致;plan 的 tool-read 实底家族无变体,回落 btn 基类 +
+ *  本地 background/color 覆写(见样式区 --plan 块,不立新变体)。 */
+const primaryBtnFamilyClass = computed<string>(() => {
+  if (props.targetMode === "edit") return "btn--primary";
+  if (props.targetMode === "yolo") return "btn--danger";
+  return "";
+});
+
 /** Narrowing helper for the `currentMode` prop — it's
  *  typed as `string | null` (defensive for legacy rehydrate
  *  data) but the card's comparison row wants a narrow union. */
@@ -368,8 +378,8 @@ async function onDeny(): Promise<void> {
       >{{ submitError }}</p>
       <button
         type="button"
-        class="mode-card__btn mode-card__btn--primary"
-        :class="targetColorClass"
+        class="mode-card__btn mode-card__btn--primary btn"
+        :class="[targetColorClass, primaryBtnFamilyClass]"
         :disabled="submitting"
         data-testid="mode-card-allow"
         @click="onAllow"
@@ -379,7 +389,7 @@ async function onDeny(): Promise<void> {
       </button>
       <button
         type="button"
-        class="mode-card__btn"
+        class="mode-card__btn btn btn--muted"
         :disabled="submitting"
         data-testid="mode-card-deny"
         @click="onDeny"
@@ -545,59 +555,23 @@ async function onDeny(): Promise<void> {
   flex-wrap: wrap;
 }
 
+/* 动作按钮由全局 .btn 家族承载(允许 edit = primary / yolo =
+   danger / 拒绝 = muted);flex:1 是两钮等宽几何,保留。 */
 .mode-card__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
   flex: 1;
-  padding: 6px 12px;
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-border-strong);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-family: inherit;
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-.mode-card__btn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-  border-color: var(--color-accent);
-}
-.mode-card__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
-/* Primary (允许) button — color follows target mode. The
-   `.mode-card__btn--primary` base sets the "filled" look
-   (matching AskUserQuestionCard's primary button); the
-   `--plan` / `--yolo` / `--edit` modifiers tint it. */
+/* Primary (允许) — plan 模式特例:tool-read 实底家族无变体,btn 基类 +
+   本地 background/border/color 覆写(不立新变体);edit/yolo 由
+   btn--primary / btn--danger 家族承载。 */
 .mode-card__btn--primary {
   color: var(--color-text-on-accent);
-}
-.mode-card__btn--primary.mode-card--edit {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.mode-card__btn--primary.mode-card--edit:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
 }
 .mode-card__btn--primary.mode-card--plan {
   background: var(--color-tool-read);
   border-color: var(--color-tool-read);
 }
 .mode-card__btn--primary.mode-card--plan:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-.mode-card__btn--primary.mode-card--yolo {
-  background: var(--color-tool-error);
-  border-color: var(--color-tool-error);
-}
-.mode-card__btn--primary.mode-card--yolo:hover:not(:disabled) {
   filter: brightness(1.1);
 }
 

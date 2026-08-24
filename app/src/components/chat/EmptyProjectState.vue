@@ -54,7 +54,7 @@ async function onLoadHidden() {
       <p class="empty-state__hint">
         添加一个项目目录，开始与 LLM 协作编码
       </p>
-      <button class="empty-state__add" @click="onAdd">
+      <button class="empty-state__add btn btn--primary btn--lg" @click="onAdd">
         <Icon name="plus" :size="16" icon-class="empty-state__add-plus" />
         添加项目
       </button>
@@ -100,7 +100,7 @@ async function onLoadHidden() {
               </div>
               <div class="hidden-projects__path" :title="p.path">{{ p.path }}</div>
             </div>
-            <button class="hidden-projects__btn" @click="onUnhide(p.id)">
+            <button class="hidden-projects__btn btn btn--muted" @click="onUnhide(p.id)">
               重新打开
             </button>
           </li>
@@ -109,7 +109,7 @@ async function onLoadHidden() {
 
       <button
         v-else
-        class="empty-state__load-hidden"
+        class="empty-state__load-hidden btn btn--ghost"
         @click="onLoadHidden"
       >
         查看最近隐藏的项目
@@ -170,26 +170,17 @@ async function onLoadHidden() {
   line-height: 1.5;
 }
 
+/* 08-24 btn-family:主 CTA 本体由 primary·lg 家族承载(原 11px 22px
+   保守归档到 lg 的 10px 16px);本地保留 radius-lg 大圆角/text-md
+   字号/edge 高光阴影 + :active 弹簧按压(家族不含 :active,
+   transition 需含 transform 家族未含)。 */
 .empty-state__add {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
-  padding: 11px 22px;
-  border: 1px solid var(--color-accent);
   border-radius: var(--radius-lg);
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
   font-size: var(--text-md);
   font-weight: var(--weight-medium);
-  cursor: pointer;
-  transition: background var(--duration-base) var(--ease-out), border-color var(--duration-base) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
-  font-family: inherit;
   box-shadow: 0 1px 0 color-mix(in srgb, var(--color-accent) 35%, transparent);
-}
-
-.empty-state__add:hover {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
+  transition: background var(--duration-base) var(--ease-out), border-color var(--duration-base) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
 }
 
 .empty-state__add:active {
@@ -201,16 +192,15 @@ async function onLoadHidden() {
   font-weight: 400;
 }
 
+/* 08-24 btn-family:text-link 形态落 ghost;本地保留文字链接的
+   underline + 颜色(hover accent-text 同原语义,家族 ghost hover
+   wash 叠加其上)。 */
 .empty-state__load-hidden {
   margin-top: 20px;
   padding: 6px 12px;
-  background: transparent;
-  border: none;
-  color: var(--color-text-secondary);
   font-size: var(--text-sm);
-  cursor: pointer;
+  color: var(--color-text-secondary);
   text-decoration: underline;
-  font-family: inherit;
 }
 
 .empty-state__load-hidden:hover {
@@ -329,21 +319,10 @@ async function onLoadHidden() {
   text-align: left;
 }
 
+/* 08-24 btn-family:「重新打开」由 muted 家族承载(hover 的
+   accent-muted+accent 边与家族 muted hover 逐值相同);本地仅保留
+   flex 几何。列表 chrome(header/items/paths)不动。 */
 .hidden-projects__btn {
   flex-shrink: 0;
-  padding: 5px 12px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-accent-text);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-.hidden-projects__btn:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
 }
 </style>

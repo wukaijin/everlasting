@@ -488,7 +488,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
       >提交失败: {{ submitError }}</p>
       <button
         type="button"
-        class="ask-card__btn ask-card__btn--primary"
+        class="ask-card__btn ask-card__btn--primary btn btn--primary"
         :disabled="!allAnswered || submitting"
         data-testid="ask-card-submit"
         @click="handleSubmit"
@@ -498,7 +498,7 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
       </button>
       <button
         type="button"
-        class="ask-card__btn"
+        class="ask-card__btn btn btn--muted"
         :disabled="submitting"
         data-testid="ask-card-skip"
         @click="handleSkip"
@@ -823,42 +823,8 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
   flex-wrap: wrap;
 }
 
-.ask-card__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-border-strong);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-family: inherit;
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-
-.ask-card__btn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-  border-color: var(--color-accent);
-}
-
-.ask-card__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ask-card__btn--primary {
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-accent);
-}
-
-.ask-card__btn--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-}
+/* 底部动作按钮由全局 .btn 家族承载(提交 = primary / 跳过 = muted);
+   选项行是 <li role="button"> 非按钮元素,特例保留本地。 */
 
 .ask-card__error {
   flex: 1;

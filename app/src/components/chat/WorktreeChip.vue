@@ -169,7 +169,7 @@ function onDelete() {
         <button
             type="button"
             :class="[
-                'worktree-chip__main',
+                'worktree-chip__main btn btn--tint btn--sm',
                 {
                     'worktree-chip__main--alone': state === 'none',
                 },
@@ -183,7 +183,7 @@ function onDelete() {
         <button
             v-if="state !== 'none'"
             type="button"
-            class="worktree-chip__toggle"
+            class="worktree-chip__toggle btn btn--tint btn--sm"
             aria-label="worktree options"
             title="worktree options"
             @click.stop="toggleMenu"
@@ -202,7 +202,7 @@ function onDelete() {
                 <button
                     v-if="pathForDisplay"
                     type="button"
-                    class="worktree-chip__menu-item"
+                    class="worktree-chip__menu-item btn btn--ghost"
                     role="menuitem"
                     @click="onCopyPath"
                 >
@@ -211,7 +211,7 @@ function onDelete() {
                 </button>
                 <button
                     type="button"
-                    class="worktree-chip__menu-item"
+                    class="worktree-chip__menu-item btn btn--ghost"
                     role="menuitem"
                     @click="onCopyBranch"
                 >
@@ -222,7 +222,7 @@ function onDelete() {
                 <button
                     v-if="state === 'active'"
                     type="button"
-                    class="worktree-chip__menu-item"
+                    class="worktree-chip__menu-item btn btn--ghost"
                     role="menuitem"
                     :disabled="detachDisabled"
                     @click="onPublish"
@@ -232,7 +232,7 @@ function onDelete() {
                 </button>
                 <button
                     type="button"
-                    class="worktree-chip__menu-item"
+                    class="worktree-chip__menu-item btn btn--ghost"
                     role="menuitem"
                     :disabled="detachDisabled"
                     @click="onDetach"
@@ -242,7 +242,7 @@ function onDelete() {
                 </button>
                 <button
                     type="button"
-                    class="worktree-chip__menu-item worktree-chip__menu-item--danger"
+                    class="worktree-chip__menu-item worktree-chip__menu-item--danger btn btn--ghost"
                     role="menuitem"
                     :disabled="deleteDisabled"
                     @click="onDelete"
@@ -262,23 +262,16 @@ function onDelete() {
     align-items: stretch;
 }
 
+/* 分体药丸左半(main)/右半(toggle):本体由全局 .btn 家族承载
+ * (tint·sm,hover 提亮收敛);本地仅保留分体几何 —— 左半去右圆角
+ * 与右边框、右半去左圆角 + 紧凑 icon padding、mono/nowrap 排版。
+ * (原 main 的 font-family: mono 被其后 font: inherit 重置,是死
+ * 声明,随迁移删除;实际渲染本就是 sans。) */
 .worktree-chip__main {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: var(--text-xs);
-    background: var(--color-accent-muted);
-    color: var(--color-accent-text);
-    border: 1px solid var(--color-accent);
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
     border-right: 0;
-    padding: 2px 8px;
-    font-family: var(--font-mono);
     white-space: nowrap;
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--text-xs);
 }
 
 /* When the chevron toggle is absent (state === 'none'), the main
@@ -287,34 +280,15 @@ function onDelete() {
 .worktree-chip__main--alone {
     border-top-right-radius: 4px;
     border-bottom-right-radius: 4px;
-    border-right: 1px solid var(--color-accent);
-}
-
-.worktree-chip__main:hover {
-    background: var(--color-accent);
-    color: var(--color-bg-app);
+    border-right: 1px solid var(--color-accent-muted);
 }
 
 .worktree-chip__toggle {
-    background: var(--color-accent-muted);
-    color: var(--color-accent-text);
-    border: 1px solid var(--color-accent);
+    padding: 2px 4px;
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
     border-top-right-radius: 4px;
     border-bottom-right-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--text-xs);
-    padding: 2px 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.worktree-chip__toggle:hover {
-    background: var(--color-accent);
-    color: var(--color-bg-app);
 }
 
 .worktree-chip__menu {
@@ -332,36 +306,16 @@ function onDelete() {
     flex-direction: column;
 }
 
+/* 下拉菜单行:ghost 家族承载 hover wash;本地保留菜单行左对齐
+   布局与行距,danger 行红字覆写(家族无红字 ghost 变体)。 */
 .worktree-chip__menu-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
-    background: transparent;
-    border: 0;
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--text-sm);
+    justify-content: flex-start;
     text-align: left;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-}
-
-.worktree-chip__menu-item:hover:not(:disabled) {
-    background: var(--color-bg-elevated);
-}
-
-.worktree-chip__menu-item:disabled {
-    color: var(--color-text-muted);
-    cursor: not-allowed;
+    gap: 6px;
 }
 
 .worktree-chip__menu-item--danger {
     color: var(--color-tool-error-text);
-}
-
-.worktree-chip__menu-item--danger:hover:not(:disabled) {
-    background: var(--color-bg-elevated);
 }
 
 .worktree-chip__menu-sep {

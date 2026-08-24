@@ -85,7 +85,7 @@ function fmt(n: number | undefined): string {
   <div class="worker-turn-trace">
     <button
       type="button"
-      class="worker-turn-trace__header"
+      class="worker-turn-trace__header btn btn--ghost"
       :aria-expanded="expanded"
       @click="toggle"
     >
@@ -148,23 +148,10 @@ function fmt(n: number | undefined): string {
   background: var(--color-bg-elevated);
 }
 
+/* 折叠头由全局 .btn 家族承载(ghost,hover wash);此处仅保留
+   家族不拥有的字重(font: inherit 是全局 button reset 冗余,删)。 */
 .worker-turn-trace__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
-}
-
-.worker-turn-trace__header:hover {
-  background: var(--color-bg-surface);
 }
 
 .worker-turn-trace__count {

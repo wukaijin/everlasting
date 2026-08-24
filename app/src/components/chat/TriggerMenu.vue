@@ -326,7 +326,7 @@ defineExpose({
         v-for="(item, i) in filtered"
         :key="item.key"
         type="button"
-        class="trigger-menu__row"
+        class="trigger-menu__row btn btn--ghost"
         :class="{ 'trigger-menu__row--active': i === activeIndex }"
         :data-idx="i"
         role="option"
@@ -456,7 +456,9 @@ defineExpose({
 
 /* Each row is a grid: main (name + desc) on the left, meta
    (hint + source chip) on the right. Same column structure as
-   ModeSelect's `.mode-select__item`. */
+   ModeSelect's `.mode-select__item`.
+   08-24 btn-family:hover wash 由 ghost 家族承载;菜单行是 grid 两列
+   布局(覆写家族 inline-flex/居中),--active 键盘导航态本地保留。 */
 .trigger-menu__row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -464,24 +466,11 @@ defineExpose({
   column-gap: 10px;
   row-gap: 1px;
   padding: 6px 8px;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
   text-align: left;
-  cursor: pointer;
-  transition: background var(--duration-instant) var(--ease-out);
 }
 
-.trigger-menu__row:hover,
 .trigger-menu__row--active {
   background: var(--color-bg-elevated);
-}
-
-.trigger-menu__row--active {
   /* Subtle accent tint on the active row so keyboard nav is
      visible even when the row is not hovered. Reuses the same
      accent-muted token as the focused chat-input border for

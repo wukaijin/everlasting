@@ -75,6 +75,10 @@ function onClick(): void {
 </template>
 
 <style scoped>
+/* 08-24 btn-family 特例判定:这是徽章形态的可点元素(2px 9px 紧凑
+   药丸 + text-2xs + tabular-nums + 脉冲圆点),主体是 badge 样式而
+   非按钮样式 —— 最小家族档 btn--sm(4px 8px + text-xs)也会撑大它,
+   且 accent 18% 徽章底与家族变体语义不合,整块保留本地。 */
 .pending-badge {
   align-self: center;
   display: inline-flex;

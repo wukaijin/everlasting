@@ -86,7 +86,7 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
       <button
         v-if="isTruncated"
         type="button"
-        class="drawer-prompt-card__view-full"
+        class="drawer-prompt-card__view-full btn btn--ghost btn--sm"
         @click="modalOpen = true"
       >
         View full →
@@ -178,17 +178,13 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
   line-height: 1.4;
 }
 
+/* 08-24 btn-family:text-link 形态落 ghost·sm;本地保留文字链接的
+   accent 色/贴边 padding/underline hover(同 SubagentDrawer
+   view-full 先例)。 */
 .drawer-prompt-card__view-full {
   align-self: flex-start;
-  background: transparent;
-  border: 0;
   color: var(--color-accent-text);
-  cursor: pointer;
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
   padding: 2px 0;
-  text-decoration: none;
 }
 
 .drawer-prompt-card__view-full:hover {

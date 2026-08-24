@@ -214,7 +214,7 @@ function onRetryClick(): void {
     <button
       v-if="canRetry"
       type="button"
-      class="msg__error-retry"
+      class="msg__error-retry btn btn--danger-soft btn--sm"
       :disabled="!!retryLoading"
       :data-testid="'msg-retry-button'"
       @click="onRetryClick"
@@ -284,31 +284,11 @@ function onRetryClick(): void {
 /* A5 R2 (2026-07-17): retry button. Inline 在错误文本后,小尺寸 +
    8px 间距;复用工具行按钮风格(无新 design token)。disabled 态
    颜色退到 muted + cursor not-allowed。 */
+/* A5 R2: retry 按钮由全局 .btn 家族承载(danger-soft·sm,hover 红
+   tint 与原语义一致);仅保留 margin 几何与 user-select 行为。 */
 .msg__error-retry {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
   margin-left: 6px;
-  padding: 2px 8px;
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--color-tool-error) 50%, transparent);
-  border-radius: var(--radius-sm);
-  color: var(--color-tool-error-text);
-  font-size: var(--text-xs);
-  font-family: inherit;
-  cursor: pointer;
   user-select: none;
-  transition:
-    background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-.msg__error-retry:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
-  border-color: var(--color-tool-error);
-}
-.msg__error-retry:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 /* F5 (LLM Latency Tracking): per-message latency chip. Sits

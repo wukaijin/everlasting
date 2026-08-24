@@ -156,7 +156,7 @@ function statusClass(status: ChecklistStatus): string {
         <button
             v-if="!expanded"
             type="button"
-            class="checklist-card__ball"
+            class="checklist-card__ball btn btn--muted btn--circle"
             :aria-label="`展开清单(${doneCount}/${total})`"
             :title="`展开进度清单 (${doneCount}/${total})`"
             @click="toggleExpanded"
@@ -193,7 +193,7 @@ function statusClass(status: ChecklistStatus): string {
                 </span>
                 <button
                     type="button"
-                    class="checklist-card__minimize"
+                    class="checklist-card__minimize btn btn--ghost btn--icon"
                     :title="'最小化'"
                     aria-label="最小化清单"
                     @click="toggleExpanded"
@@ -318,26 +318,13 @@ function statusClass(status: ChecklistStatus): string {
     flex-shrink: 0;
 }
 
+/* 08-24 btn-family:20px 固定 icon 钮本体由 ghost·icon 家族承载;
+   本地仅保留固定几何(w/h + padding:0)。 */
 .checklist-card__minimize {
     flex-shrink: 0;
     width: 20px;
     height: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-sm);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition:
-        background var(--duration-fast) var(--ease-out),
-        color var(--duration-fast) var(--ease-out);
-}
-
-.checklist-card__minimize:hover {
-    background: var(--color-bg-border);
-    color: var(--color-text-primary);
+    padding: 0;
 }
 
 .checklist-card__items {
@@ -436,20 +423,15 @@ function statusClass(status: ChecklistStatus): string {
     color: var(--color-text-muted);
 }
 
-/* ---- Minimized floating ball ---- */
+/* ---- Minimized floating ball ----
+   08-24 btn-family:本体由 muted·circle 家族承载;本地保留 44px 固定
+   几何/FAB 阴影(design-tokens 特例表)/scale 按压放大(transition 含
+   transform,家族未含)/overflow 给 ball-ring 外溢。 */
 .checklist-card__ball {
     position: relative;
     width: 44px;
     height: 44px;
     padding: 0;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-bg-border);
-    color: var(--color-text-secondary);
-    cursor: pointer;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
     transition:
         transform var(--duration-fast) var(--ease-out),
@@ -459,8 +441,6 @@ function statusClass(status: ChecklistStatus): string {
 }
 
 .checklist-card__ball:hover {
-    background: var(--color-bg-elevated);
-    border-color: var(--color-accent);
     transform: scale(1.06);
 }
 

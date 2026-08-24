@@ -210,7 +210,7 @@ async function onCopy() {
       >
         <button
           type="button"
-          class="msg-actions__trigger"
+          class="msg-actions__trigger btn btn--muted"
           :aria-label="isStreaming ? '流式生成中，无法操作' : '消息操作'"
           :title="isStreaming ? '流式生成中' : isEditing ? '编辑中' : '消息操作'"
           data-testid="msg-actions-trigger"
@@ -325,25 +325,13 @@ async function onCopy() {
   pointer-events: none;
 }
 
+/* 08-24 btn-family:22px 固定 icon 钮本体由 muted 家族承载;本地仅
+   保留固定几何 + 自有焦点增强(组件级 focus-visible,压过全局
+   :where() 基线是既有意图)。下拉菜单项(reka portal)不迁。 */
 .msg-actions__trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 22px;
   height: 22px;
   padding: 0;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-}
-
-.msg-actions__trigger:hover {
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  border-color: var(--color-text-muted);
 }
 
 .msg-actions__trigger:focus-visible {
@@ -351,10 +339,6 @@ async function onCopy() {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 
-.msg-actions__trigger:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 
 .msg-actions__icon {
   display: inline-flex;

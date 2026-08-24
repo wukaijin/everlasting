@@ -263,7 +263,7 @@ onUnmounted(() => {
     </TransitionGroup>
     <button
       v-if="!isAtBottom"
-      class="scroll-to-bottom"
+      class="scroll-to-bottom btn btn--muted btn--circle"
       type="button"
       title="回到底部"
       aria-label="回到底部"
@@ -370,7 +370,11 @@ onUnmounted(() => {
 
 /* Floating "back to bottom" button — appears only when the user has
    scrolled away from the bottom. Confined to .messages-wrap, so it
-   floats above the message list without touching the input box below. */
+   floats above the message list without touching the input box below.
+   08-24 btn-family:本体由 muted·circle 家族承载(hover 与原
+   accent-muted+accent 边一致);本地保留定位/32px 几何/FAB 阴影
+   (design-tokens 特例表)+ :active 按压(transition 含 transform,
+   家族未含)。 */
 .scroll-to-bottom {
   position: absolute;
   right: 16px;
@@ -380,22 +384,8 @@ onUnmounted(() => {
   width: 32px;
   height: 32px;
   padding: 0;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  color: var(--color-text-secondary);
-  cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
-}
-
-.scroll-to-bottom:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
 }
 
 .scroll-to-bottom:active {

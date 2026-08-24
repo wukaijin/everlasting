@@ -682,7 +682,7 @@ onUnmounted(() => reviewStateStore.stop());
         -->
         <button
           v-if="isGroupChat"
-          class="chat-panel__chip chat-panel__chip--group-chat mobile-hide-group-chat"
+          class="chat-panel__chip chat-panel__chip--group-chat btn btn--ghost mobile-hide-group-chat"
           type="button"
           title="编辑参与者"
           aria-label="编辑群聊参与者"
@@ -732,7 +732,7 @@ onUnmounted(() => reviewStateStore.stop());
         <div class="chat-panel__title-actions">
         <button
           v-if="projectsStore.currentProjectId"
-          class="chat-panel__memory-btn"
+          class="chat-panel__memory-btn btn btn--muted"
           type="button"
           title="查看项目指令文件 (CLAUDE.md / AGENTS.md)"
           aria-label="Memory"
@@ -764,7 +764,7 @@ onUnmounted(() => reviewStateStore.stop());
                 -->
         <button
           v-if="chatStore.currentSessionId"
-          class="chat-panel__audit-btn"
+          class="chat-panel__audit-btn btn btn--muted"
           type="button"
           title="查看会话审计日志"
           aria-label="Audit"
@@ -789,7 +789,7 @@ onUnmounted(() => reviewStateStore.stop());
                 -->
         <button
           v-if="chatStore.currentSessionId"
-          class="chat-panel__trace-btn"
+          class="chat-panel__trace-btn btn btn--muted"
           type="button"
           :title="traceStore.panelOpen ? '关闭 trace 时间线' : '打开 trace 时间线'"
           :aria-label="traceStore.panelOpen ? 'Close trace' : 'Open trace'"
@@ -806,7 +806,7 @@ onUnmounted(() => reviewStateStore.stop());
                 -->
         <button
           v-if="chatStore.currentSessionId"
-          class="chat-panel__grants-btn"
+          class="chat-panel__grants-btn btn btn--muted"
           type="button"
           title="管理「始终允许」放行"
           aria-label="Permissions"
@@ -842,7 +842,7 @@ onUnmounted(() => reviewStateStore.stop());
     >
       <button
         type="button"
-        class="chat-panel__recall-toggle"
+        class="chat-panel__recall-toggle btn btn--ghost btn--sm"
         @click="recallExpanded = !recallExpanded"
       >
         <Icon name="brain" :size="12" />
@@ -1311,110 +1311,52 @@ onUnmounted(() => reviewStateStore.stop());
    affordance (cursor + hover state) so the user knows it's
    clickable. The "群聊 (N participants)" text gives the user
    the participant count at a glance — clicking opens the
-   edit-mode modal. */
+   edit-mode modal.
+   08-24 btn-family:ghost 家族承载 hover wash;font: inherit 在此
+   非全局 reset 冗余 —— 抵消 .chat-panel__chip 基类的 mono(本地
+   覆写)。原 color: var(--color-text) 是失效 token(全库无定义,
+   实际落到 inherit),删,落家族 ghost 的 text-secondary。 */
 .chat-panel__chip--group-chat {
-  cursor: pointer;
   background: transparent;
-  font: inherit;
-  color: var(--color-text);
   border-color: var(--color-accent-muted);
+  font: inherit;
   flex-shrink: 0;
-  /* Override the default chip "span" cursor in the title-row's
-     flex layout — buttons in flex rows sometimes inherit
-     `text` cursor on certain browsers. */
-  cursor: pointer;
-}
-.chat-panel__chip--group-chat:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-accent-text);
 }
 
-/* Memory entry button (2026-06-11). Sits to the right of the
-   WorktreeChip, after the cwd chip's `margin-left: auto` has
-   pushed everything from cwd onward to the right. Visual matches
-   the chip family (small, 11px-ish height) but uses an icon
-   instead of text. */
+/* Memory entry button (2026-06-11). 08-24 btn-family:四个兄弟
+   (memory/audit/trace/grants)本体由 btn--muted 家族承载(hover 与原
+   accent-muted+accent 边+accent-text 逐值相同);本地仅保留 24×22
+   固定几何 + :active 按压态(家族不含 :active)。 */
 .chat-panel__memory-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
   width: 24px;
   height: 22px;
   padding: 0;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-.chat-panel__memory-btn:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
 }
 
 .chat-panel__memory-btn:active {
   background: var(--color-bg-border);
 }
 
-/* C4 audit-log entry button (2026-06-14 PR2). Sits to the right
-   of the Memory button. Visually identical to the memory button
-   (chip-family icon button) so the two read as a pair. */
+/* C4 audit-log entry button (2026-06-14 PR2). 同上 chip-family
+   icon button,muted 家族 + 本地几何/:active。 */
 .chat-panel__audit-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
   width: 24px;
   height: 22px;
   padding: 0;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-.chat-panel__audit-btn:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
 }
 
 .chat-panel__audit-btn:active {
   background: var(--color-bg-border);
 }
 
-/* Permission-grant management entry (task 07-01). Visually
-   identical to the audit/memory buttons — the three read as a
-   chip-family group of "session inspector" actions. */
+/* Permission-grant management entry (task 07-01). 同上。 */
 .chat-panel__grants-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
   width: 24px;
   height: 22px;
   padding: 0;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-.chat-panel__grants-btn:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
 }
 
 .chat-panel__grants-btn:active {
@@ -1422,30 +1364,12 @@ onUnmounted(() => reviewStateStore.stop());
 }
 
 /* E2 (harness trace pipeline, 2026-07-14): trace timeline
-   toggle button. Sits in the same chip-family as the
-   audit / grants buttons (24x22, 1px border, --color-bg-elevated).
-   Same hover behavior — accent-muted + accent border. */
+   toggle button. 同上。 */
 .chat-panel__trace-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
   width: 24px;
   height: 22px;
   padding: 0;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-.chat-panel__trace-btn:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
 }
 
 .chat-panel__trace-btn:active {
@@ -1540,21 +1464,11 @@ onUnmounted(() => reviewStateStore.stop());
   background: color-mix(in srgb, var(--color-accent) 4%, transparent);
   font-size: var(--text-xs);
 }
+/* 08-24 btn-family:折叠行由 ghost·sm 家族承载;本地仅保留通栏
+   banner 的宽横 padding 几何。 */
 .chat-panel__recall-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   width: 100%;
   padding: 4px 16px;
-  border: none;
-  background: transparent;
-  color: var(--color-accent-text);
-  cursor: pointer;
-  font-size: var(--text-xs);
-  font-family: inherit;
-}
-.chat-panel__recall-toggle:hover {
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
 }
 .chat-panel__recall-groups {
   padding: 0 16px 6px;

@@ -175,7 +175,7 @@ function onSave() {
     <div class="msg__editor-actions">
       <button
         type="button"
-        class="msg__editor-btn msg__editor-btn--cancel"
+        class="msg__editor-btn msg__editor-btn--cancel btn btn--muted"
         :disabled="saving || isStreaming"
         data-testid="msg-editor-cancel"
         @click="onCancel"
@@ -184,7 +184,7 @@ function onSave() {
       </button>
       <button
         type="button"
-        class="msg__editor-btn msg__editor-btn--save"
+        class="msg__editor-btn msg__editor-btn--save btn btn--primary"
         :disabled="saving || isStreaming || editBuffer.trim().length === 0"
         data-testid="msg-editor-save"
         @click="onSave"
@@ -268,43 +268,11 @@ function onSave() {
   gap: 8px;
 }
 
+/* 编辑器按钮由全局 .btn 家族承载(取消 = muted / 保存 = primary);
+   仅保留家族不拥有的字重。原 --save 的 accent 85%+#000 hover 与
+   disabled accent 50% 混色按家族收敛弃用(hover → accent-hover,
+   disabled → opacity 0.5)。 */
 .msg__editor-btn {
-  padding: 4px 12px;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  font-family: inherit;
-  border: 1px solid var(--color-bg-border);
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-}
-
-.msg__editor-btn:hover:not(:disabled) {
-  background: var(--color-bg-surface);
-  border-color: var(--color-text-muted);
-}
-
-.msg__editor-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.msg__editor-btn--save {
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-accent);
-}
-
-.msg__editor-btn--save:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-accent) 85%, #000);
-  border-color: color-mix(in srgb, var(--color-accent) 85%, #000);
-}
-
-.msg__editor-btn--save:disabled {
-  background: color-mix(in srgb, var(--color-accent) 50%, transparent);
-  border-color: transparent;
-  color: var(--color-text-on-accent);
 }
 </style>

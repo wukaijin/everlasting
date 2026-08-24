@@ -184,7 +184,7 @@ async function doDiscard(): Promise<void> {
     <div class="worker-merge-controls__row">
       <button
         type="button"
-        class="worker-merge-controls__btn worker-merge-controls__btn--merge"
+        class="worker-merge-controls__btn worker-merge-controls__btn--merge btn btn--muted"
         :disabled="anyLoading"
         :aria-label="`合并 ${branchLabel} 分支到 session 分支`"
         @click="askMerge"
@@ -199,7 +199,7 @@ async function doDiscard(): Promise<void> {
       </button>
       <button
         type="button"
-        class="worker-merge-controls__btn worker-merge-controls__btn--discard"
+        class="worker-merge-controls__btn worker-merge-controls__btn--discard btn btn--danger-soft"
         :disabled="anyLoading"
         :aria-label="`丢弃 ${branchLabel} 分支`"
         @click="askDiscard"
@@ -286,32 +286,12 @@ async function doDiscard(): Promise<void> {
   gap: 8px;
 }
 
+/* 按钮由全局 .btn 家族承载(合并 = muted + 绿字本地覆写 /
+   丢弃 = danger-soft);此处仅保留家族不拥有的字重。
+   merge 的 tool-write(绿)变体家族无对应 —— 本地覆写文字/边框
+   色 + hover tool-write 12% tint(行级"安全合并"语义,不立新变体)。 */
 .worker-merge-controls__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-bg-border);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.worker-merge-controls__btn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-
-.worker-merge-controls__btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
 }
 
 .worker-merge-controls__btn--merge {
@@ -321,15 +301,6 @@ async function doDiscard(): Promise<void> {
 
 .worker-merge-controls__btn--merge:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-tool-write) 12%, transparent);
-}
-
-.worker-merge-controls__btn--discard {
-  color: var(--color-tool-error-text);
-  border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-}
-
-.worker-merge-controls__btn--discard:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
 }
 
 /* Spinner 形态由全局 .app-spinner--sm.app-spinner--inline 原语提供(style.css);

@@ -189,7 +189,7 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
         <button
           v-if="hasInputStrings && diffRows"
           type="button"
-          class="edit-card__toggle"
+          class="edit-card__toggle btn btn--tint btn--sm"
           :aria-expanded="diffExpanded"
           :title="diffExpanded ? '收起 diff' : '展开 diff'"
           @click.stop="diffExpanded = !diffExpanded"
@@ -298,24 +298,9 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
   color: var(--color-text-muted);
 }
 
+/* 展开按钮由全局 .btn 家族承载(tint·sm);仅保留 margin 几何。 */
 .edit-card__toggle {
   margin-left: 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 8px;
-  background: var(--color-accent-muted);
-  color: var(--color-accent-text);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.edit-card__toggle:hover {
-  background: var(--color-accent);
-  color: var(--color-bg-app);
 }
 
 .edit-card__approval {

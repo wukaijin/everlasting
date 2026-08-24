@@ -558,7 +558,7 @@ watch(
         <button
           v-if="showDiffButton"
           type="button"
-          class="tool-card__diff-btn"
+          class="tool-card__diff-btn btn btn--tint btn--sm"
           :title="
             fileDiffOpen
               ? 'Hide diff for this file'
@@ -749,25 +749,11 @@ watch(
 
 /* Step 4 / PR3: per-file diff button + popover inside the
  * tool card. The button sits in the header status row; the
- * popover replaces the regular card body when open. */
+ * popover replaces the regular card body when open.
+ * 08-24 btn-family:按钮本体由全局 .btn 家族承载(tint·sm);此处
+ * 仅保留 margin 几何。 */
 .tool-card__diff-btn {
   margin-left: 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 8px;
-  background: var(--color-accent-muted);
-  color: var(--color-accent-text);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.tool-card__diff-btn:hover {
-  background: var(--color-accent);
-  color: var(--color-bg-app);
 }
 
 .tool-card__diff {
