@@ -706,3 +706,30 @@ B1 三 follow-up 一次收口。brainstorm 五决议(D1 拖拽纳入/D2 压缩�
 ### Status
 
 [OK] **Completed**
+
+## Session 108: Button CSS 家族收敛——167 个 <button>/69 文件统一 .btn 原语
+
+**Date**: 2026-08-24
+**Task**: `.trellis/tasks/archive/2026-08/08-24-btn-family-convergence/`
+**Branch**: `main`
+
+### Summary
+
+08-24 键盘任务遗留的 UI 清单最后一项(三项候选中最大一单)。规划期子代理全量盘点(167 钮/69 文件/约 135 条规则,6 variant 可映射 ~92%),PRD/design/implement 三件套 + 单任务全量收敛、视觉保守归一两决议。实施 6 个 WP:style.css `.btn` 家族(基类 + primary/danger/danger-soft/ghost/muted/tint/outline 七变体 + sm/lg 尺寸 + pill/circle/icon 形状,焦点零声明)→ modal 簇 28 钮 → settings 簇 16 钮(顺手修 PluginSelect `--color-bg-overlay` 失效 token)→ chat 簇 54 钮(卡片批 + 重几何批,FAB 阴影/呼吸动画/弹簧按压全保留)→ 布局导航簇(hover 红实底 ×3 本地覆写)→ 长尾 8 文件 + 债清扫。终态:141 处钮级家族消费点,未迁恰为 6 个注释特例(MessageImages 瓦片/DefaultTab 表单/chip 三件套/ui-prim ×2)。净删约 1300 行 scoped 按钮样式。债:裸 rgba 红 ×6、fallback ×2、裸 radius/font/transition、disabled 五档全部清零;另清 `--color-text` 失效引用。验证:1175 测试 ×6 轮全绿 + vue-tsc 0 错 + 中间 VLM 检查点 ×2 + 终盘全量 ui-review 7 界面零渲染级缺陷 + :focus 规则零增删(键盘环完好)。坑:①WP5 子代理撞 5h 限额中断,主代理接手;②python replace 两处静默失败(样式删了模板类没挂)——「无家族类文件清单」终盘审计兜住,审计已沉淀进 AC 证据文件;③daemon 在本 harness 必须单命令内联起停(08-24 键盘任务 evidence 已有档案,setsid 也不逃)。spec 回写 design-tokens.md「Button Family」节(API + 所有权规则 + 审计命令)。生成式 ui-prim 是否消费 .btn 写回 BACKLOG 附录 A 候选待办。
+
+### Main Changes
+
+- `app/src/style.css`:`.btn` 家族区(~150 行,含注释体例)
+- 63 个组件文件迁移(保留 BEM 类追加家族类,删家族拥有的 scoped 声明)
+- `.trellis/spec/frontend/design-tokens.md`:Button Family 节
+- 债清理:失效 token ×3、裸 rgba ×6、fallback ×2、disabled 五档归一
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a1e2a0`..`727ddd7` | WP1 家族落地 → WP2 modal → WP3 settings → WP4 chat → WP5 布局 → WP6 长尾(6 提交)+ archive |
+
+### Status
+
+[OK] **Completed**
