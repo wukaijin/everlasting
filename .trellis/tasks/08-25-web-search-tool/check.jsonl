@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/08-25-web-search-tool/research/local-web-fetch-reuse.md", "reason": "对照验收:名单五处翻转齐全、stub 不变量、注册 append-last 等连锁是否全做"}
+{"file": ".trellis/tasks/08-25-web-search-tool/research/search-backend-options.md", "reason": "对照验收:错误码文案(401/432/433/202)、basic depth 防 2-credit、直连可达性结论未被违背"}
+{"file": ".trellis/spec/backend/tool-contract/15-search-history.md", "reason": "只读工具检查清单样板(权限矩阵 + token 预算连锁)"}
+{"file": ".trellis/spec/backend/tool-contract/14-stub-registration.md", "reason": "stub 静态测试线未平移、STUB∩PARALLEL 不变量保持"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证 ToolKind::Other 静默放行未被误改为 ask 路径"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查基线"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试组织与命名契约(tests_web_search.rs 归位)"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端检查基线(WP3)"}

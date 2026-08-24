@@ -1,0 +1,28 @@
+{
+  "id": "web-search-tool",
+  "name": "web-search-tool",
+  "title": "F4 Web 搜索工具(search → 取前 N 条结果正文)",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-08-25",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "description": "ROADMAP F4:为 agent 补 web_search 工具——搜索 → 取前 N 条结果正文,复用 web_fetch 安全模型(SSRF/5MiB cap/htmd/attribution)。当前:planning 调研期"
+  }
+}

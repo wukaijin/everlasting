@@ -1,0 +1,12 @@
+{"file": ".trellis/tasks/08-25-web-search-tool/research/search-backend-options.md", "reason": "后端选型定案 + Tavily/DDG API 契约(字段名/错误码/202 语义)+ 本机网络实测(auto 选路依据)"}
+{"file": ".trellis/tasks/08-25-web-search-tool/research/local-web-fetch-reuse.md", "reason": "注册/权限/stub/worker 名单的 file:line 级复用面 + 必办连锁(3960 静态测试)"}
+{"file": ".trellis/spec/backend/tool-contract/01-tool-set-extension.md", "reason": "新工具模块基模(definition/execute/mod.rs 臂)"}
+{"file": ".trellis/spec/backend/tool-contract/02-web-fetch.md", "reason": "web_fetch 契约边界:复用件语义(truncate/UA/超时惯例)+ web_search 被显式推迟的原始边界"}
+{"file": ".trellis/spec/backend/tool-contract/14-stub-registration.md", "reason": "STUB_CANDIDATES 注册 + tools[] ≤3960 tok 静态测试与校准史(WP1 必撞)"}
+{"file": ".trellis/spec/backend/tool-contract/15-search-history.md", "reason": "最近只读工具全程样板:权限矩阵零改动路径 + token 预算连锁预警"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "key 加密存放模式(crypto.rs/master key/WSL fallback 先例)——WP2 key 存放对齐"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "app_config KV get/set 使用守则(WP2 配置读写)"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon route 添加守则(WP2 GET/PUT 双形态)"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "transport 抽象双形态(http/tauri)——WP2/3 两新方法遵循的模式"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "Settings 新小节样式 token 与 Button Family 归属规则"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "表单节/下拉/密码框组件惯例(WP3)"}
