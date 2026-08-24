@@ -38,6 +38,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::daemon::routes;
+use crate::db::backup;
 use crate::state::AppState;
 
 /// Default daemon port (Q1 decision — `7456` is the project's
@@ -51,6 +52,67 @@ pub const DEFAULT_DAEMON_PORT: u16 = 7456;
 /// never touches private modules.
 pub async fn load_daemon_state(data_dir: std::path::PathBuf) -> Arc<AppState> {
     Arc::new(AppState::load_from_dir(data_dir).await)
+}
+
+/// Spawn the RULE-DB-001 backup loop for the daemon bin (2026-08-24,
+/// task `08-24-p1-db-backup-log-rotation`): snapshot the store via
+/// `VACUUM INTO` at startup and every 24h afterwards, into
+/// `<data_dir>/backups/`, pruning retention down to
+/// [`backup::KEEP_BACKUPS`] files after every attempt. Exposed here
+/// (same rationale as [`load_daemon_state`]: the bin never touches the
+/// private `db` module directly).
+///
+/// Detached spawn (never joined) — the axum server runs in parallel,
+/// and a backup failure only `warn!`s and waits for the next cycle:
+/// the backup is an insurance layer and must never block daemon
+/// startup/availability (R1). The GUI Full mode (in-process Tauri
+/// escape hatch) deliberately stays backup-free — no timer tasks in
+/// the GUI main process.
+pub fn spawn_backup_task(state: &AppState, data_dir: &Path) {
+    // SqlitePool is a cheap Arc clone; the task holds it for the
+    // process lifetime alongside the server's own handle.
+    let db = state.db.clone();
+    let backups = backup::backup_dir(data_dir);
+    tokio::spawn(async move {
+        // A fresh interval's FIRST tick completes immediately → the loop
+        // body runs once right away (startup snapshot); later ticks fire
+        // 24h apart, so a long-lived daemon keeps fresh backups without
+        // a restart.
+        let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600));
+        loop {
+            interval.tick().await;
+            let started = std::time::Instant::now();
+            match backup::backup_database(&db, &backups).await {
+                Ok(path) => {
+                    let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    tracing::info!(
+                        path = %path.display(),
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        size_bytes,
+                        "database backup snapshot written"
+                    );
+                }
+                Err(e) => {
+                    // D4: no in-loop retry — the 24h cycle IS the retry.
+                    tracing::warn!(
+                        error = %e,
+                        "database backup failed (non-fatal); retrying next cycle"
+                    );
+                }
+            }
+            // Retention runs after every attempt so the dir stays bounded
+            // even when an earlier backup half-failed.
+            match backup::prune_backups(&backups, backup::KEEP_BACKUPS) {
+                Ok(removed) if !removed.is_empty() => {
+                    tracing::info!(count = removed.len(), "pruned old database backups")
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "prune database backups failed (non-fatal)")
+                }
+            }
+        }
+    });
 }
 
 /// Build the un-mounted daemon router. Exposed so integration tests

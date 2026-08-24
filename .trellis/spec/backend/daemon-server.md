@@ -252,6 +252,32 @@ signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
 
 ---
 
+## Pattern: daemon 运维伴生物(备份 task + 日志文件,RULE-DAEMON-001 闭合 2026-08-24)
+
+**DB 备份 task**:`bin/everlasting-daemon.rs` 在 `load_daemon_state` 成功
+后调用 `server::spawn_backup_task(&state, &data_dir)`(detached,不 join,
+不阻塞 serve)。启动即快照一次 + 每 24h 一次,`VACUUM INTO` 到
+`<data_dir>/backups/` 保 7 份;失败仅 `warn!` 继续服务。契约细节见
+[database-guidelines "DB 快照备份"](../database-guidelines.md)。
+**不要**把 spawn 挪进 bin 内联 —— lib 的 `db` 模块私有,沿用
+"wrapper so the bin never touches private modules" 先例。
+
+**日志文件**(仅 `daemon.sh bg/restart` 的 standalone 模式;前台模式照旧
+打终端,Rust stdout tracing 不动、零依赖):
+
+- 路径 `${XDG_STATE_HOME:-$HOME/.local/state}/dev.everlasting.app/daemon.log`
+  —— 排障先看这里,**不再是 `/tmp`**(重启即覆盖的老坑已闭合)。
+- `bg` 启动 **追加写(`>>`)**,不覆盖历史。
+- 启动时大小轮转:>10 MiB 滚动保 3 代(`daemon.log` → `.1` → `.2` →
+  `.3`,最旧删);运行中增长上限 ≈ 4×10 MiB。
+- `rotate_log()` 的存在性守卫 + `|| true` 降级是**必须的**:首次滚动
+  `.1`/`.2` 不存在,裸 `mv` 在 `set -e` 下会中断 `do_start` 导致 daemon
+  永远起不来(design 伪代码照抄必踩,实测复现过)。
+- `STATE_DIR` 用 `${HOME:-/tmp}` 降级:cron/systemd 裸环境下 `$HOME`
+  未设,`set -u` 直接杀死脚本(连 `help` 都打不出)。
+
+---
+
 ## Scenario: 新增一个 IPC 命令(2026-08 + Phase 4 group-chat 沉淀)
 
 ### 1. Scope / Trigger

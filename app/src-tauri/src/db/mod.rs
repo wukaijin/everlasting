@@ -36,6 +36,8 @@
 //! Post-PR2 of the audit task: this module is a thin facade. The
 //! actual logic lives in:
 //!
+//! - [`backup`] — `VACUUM INTO` snapshot backups + retention pruning
+//!   (RULE-DB-001, 2026-08-24).
 //! - [`types`] — Row structs + enums (`ProviderRow`, `ModelRow`,
 //! `ProjectRow`, `SessionRow`, `SessionSummary`, `MessageRow`,
 //! `LoadedSession`, `WorktreeState`, `ProviderProtocol`).
@@ -55,6 +57,7 @@
 //! pre-PR2 `db::FooRow` / `db::crud_fn(...)` paths keep working
 //! without any caller change.
 
+pub mod backup;
 pub mod config;
 pub mod memories;
 pub mod memories_tests;
@@ -93,9 +96,10 @@ pub use projects::*;
 pub use providers::*;
 pub use sessions::*;
 // (tests is `#[cfg(test)]`-gated internally; nothing to re-export.)
-// `subagent_runs` is reachable as `db::subagent_runs::*` via the
-// `pub mod` declaration above; no `pub use` needed (and adding
-// one would conflict with the `pub mod subagent_runs` line).
+// `backup` and `subagent_runs` are reachable as `db::backup::*` /
+// `db::subagent_runs::*` via the `pub mod` declarations above; no
+// `pub use` needed (nothing consumes their items via the `db::` short
+// paths — adding one just triggers unused-import warnings).
 // `trace` is reachable as `db::trace::*` via the `pub mod` declaration
 // above; no `pub use` to avoid conflicts.
 pub use types::*;

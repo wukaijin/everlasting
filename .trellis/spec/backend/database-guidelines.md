@@ -141,3 +141,54 @@ SQLite 无法 `ALTER` 的表级约束变更。先例两则:
 - **水位语义**:context = `[最新摘要行] + [seq > cutoff_seq 且 kind ≠
   compaction_summary 的行]`;保留区跨请求存活;旧摘要行被增量合并吸收
   (kind 过滤防重复);D3 cascade 删摘要行 → 倒序找现存最新自愈。
+
+### Scenario: DB 快照备份 — VACUUM INTO(RULE-DB-001 闭合,2026-08-24)
+
+**Scope/Trigger**: 任何触碰备份链路(`db/backup.rs` 的
+`backup_database` / `prune_backups`,daemon 的 `spawn_backup_task`)或
+想在其他路径调用 `VACUUM INTO` 的改动。
+
+**Signatures**:
+
+```rust
+// db/backup.rs
+pub const KEEP_BACKUPS: usize = 7;
+pub fn backup_dir(data_dir: &Path) -> PathBuf;   // data_dir/backups/
+pub async fn backup_database(db: &SqlitePool, dir: &Path) -> std::io::Result<PathBuf>;
+pub fn prune_backups(dir: &Path, keep: usize) -> std::io::Result<Vec<PathBuf>>;  // 返回被删列表
+
+// daemon/server.rs — daemon 启动即备份一次,之后每 24h;失败仅 warn 等下一周期
+pub fn spawn_backup_task(state: &Arc<AppState>, data_dir: &Path);
+```
+
+**Contracts**:
+
+- 备份文件名 `everlasting-YYYYMMDD-HHMMSS.db`(本地时间),同秒已存在
+  取 `-2`/`-3` 后缀(上限 999 防死循环)。**文件名字典序 = 时间序**,
+  prune 靠这个删最旧 —— 改名格式必须保持可排序。
+- `VACUUM INTO` 路径是拼接 SQL:路径中的 `'` 必须 `''` 转义(SQLite
+  字符串字面量标准;**不认反斜杠转义**)。
+- 备份目录跟随 `--data-dir`(sidecar 传 GUI `app_data_dir` 时与 DB
+  同根,P2.1 路径一致性),**不要**挪去 state 目录。
+
+> **Warning(gotcha,实测)**: sqlx 在 **`:memory:` pool 上执行
+> `VACUUM INTO` 会静默 no-op** —— 所有 executor 形式都返回 `Ok` 但
+> 目标文件不出现(sqlite3 CLI 对内存库同操作正常)。file-backed 池一切
+> 正常。**涉及 `VACUUM INTO` 的测试必须用 file-backed 临时目录建池**
+> (`db/migrations/pool.rs::init_pool` + tempdir),不要用 in-memory
+> test pool 模式,否则测了个寂寞。
+
+**Validation & Error Matrix**:
+
+| 条件 | 行为 |
+|------|------|
+| backups 目录不存在 | `create_dir_all` 自建 |
+| 备份失败(磁盘满/目录只读/VACUUM 报错) | `Err` → `warn!`,**不 panic 不阻塞 daemon**,等下一周期 |
+| VACUUM 中途进程被杀 | 残留 0 字节文件;下次同秒后缀避让,最终被 prune 按最旧清掉 |
+| WAL writer 并发写 | 安全 —— `VACUUM INTO` 是读事务,WAL 读者不阻塞 writer |
+
+**Tests**(`db/backup.rs` 内联,file-backed 池):
+`backup_creates_valid_copy`(副本用 `mode=ro` 独立 pool 打开数行数 ==
+源库)/ `backup_same_second_collision` / `prune_keeps_newest_n` /
+`prune_ignores_foreign_files` / `backup_uncreatable_dir_returns_err` /
+`backup_dir_with_single_quote_in_path`。

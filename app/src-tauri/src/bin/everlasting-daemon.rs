@@ -150,6 +150,13 @@ async fn main() -> ExitCode {
     // skipped (no AppHandle available; P2.3 wires the SSE sink).
     let state = server::load_daemon_state(data_dir.clone()).await;
 
+    // RULE-DB-001 backup loop (2026-08-24, task
+    // `08-24-p1-db-backup-log-rotation`): startup snapshot + every 24h,
+    // `VACUUM INTO` into `<data_dir>/backups/`. Detached task; backup
+    // failures only warn (insurance layer, never an availability risk).
+    // See `spawn_backup_task` for the full contract.
+    server::spawn_backup_task(&state, &data_dir);
+
     // S2 tunnel client (2026-08-11, task `08-11-tunnel-client`,design §2.4
     // / §4.2 P1-1 修订):**只有这里** spawn tunnel —— lib.rs 零改动,
     // Tauri GUI(Thin/Full)持有空壳 manager 但从不 start()。双进程同

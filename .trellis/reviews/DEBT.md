@@ -54,18 +54,7 @@
 
 > **本文件仅记录当前 open 债项**。已 closed 条目不在此保留;通过 git log 追溯。
 
-## P1 — 重要(正确性 + 资源) [2 items]
-
-### RULE-DB-001
-
-- **Level**: P1
-- **Subsystem**: DB
-- **File**: `app/src-tauri/src/db/`(全层 + `migrations/`,无 backup / VACUUM INTO / 迁移前副本)
-- **Description**: 全库数据(会话 / 消息 / 自主记忆 / 审计 / token 用量)仅单一 `everlasting.db`(实测 15M),零备份机制;一次坏盘 / 误删 / migration 写坏即数据归零
-- **Fix**: daemon 启动或每日定时 `VACUUM INTO` 快照到 `~/.local/state/dev.everlasting.app/backups/`,保留最近 N 份(~50 行)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
+## P1 — 重要(正确性 + 资源) [1 item]
 
 ### RULE-PERSIST-001
 
@@ -78,18 +67,7 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
 
-## P2 — 健壮性 + 债务,中长期清理 [5 items]
-
-### RULE-DAEMON-001
-
-- **Level**: P2
-- **Subsystem**: Daemon
-- **File**: `scripts/daemon.sh:36`(`LOG_FILE=/tmp/everlasting-daemon.log`)+ `app/src-tauri/src/main.rs:4`(tracing stdout/stderr,无 RollingFile)
-- **Description**: daemon 日志单文件写死 `/tmp`,重启即覆盖(排障永远缺"出事前"的日志)且单文件无限增长无轮转
-- **Fix**: 日志移到 `~/.local/state/dev.everlasting.app/daemon.log` + 大小 / 日期轮转(tracing-appender 或启动时 mv 旧档)(~30 行)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
+## P2 — 健壮性 + 债务,中长期清理 [4 items]
 
 ### RULE-CI-001
 
@@ -156,10 +134,10 @@
 | Level | Count | 说明 |
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
-| P1 | 2 | 正确性 + 资源(数据丢失风险) |
-| P2 | 5 | 健壮性 + 债务,中长期清理 |
+| P1 | 1 | 正确性 + 资源(数据丢失风险) |
+| P2 | 4 | 健壮性 + 债务,中长期清理 |
 | P3 | 1 | 文档 + 一致性,可延后 |
-| **Total** | **8** | 当前 open items |
+| **Total** | **6** | 当前 open items |
 
 ---
 
