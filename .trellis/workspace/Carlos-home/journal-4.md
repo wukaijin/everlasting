@@ -733,3 +733,25 @@ B1 三 follow-up 一次收口。brainstorm 五决议(D1 拖拽纳入/D2 压缩�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 108: DB 备份(VACUUM INTO)+ daemon 日志轮转(P1/P2 债收口)
+
+**Date**: 2026-08-24
+**Task**: DB 备份(VACUUM INTO)+ daemon 日志轮转(P1/P2 债收口)
+**Branch**: `main`
+
+### Summary
+
+收口 RULE-DB-001(P1)与 RULE-DAEMON-001(P2):新增 db/backup.rs(VACUUM INTO 在线快照,同秒后缀避让,prune 保 7 份;实测坑:sqlx :memory: 池上 VACUUM INTO 静默 no-op,测试须 file-backed 建池)+ daemon/server.rs spawn_backup_task(启动即备份+24h 周期,失败仅 warn);daemon.sh 日志移 ~/.local/state/dev.everlasting.app/daemon.log(>> 追加+启动 >10MiB 滚动保 3 代)。质检修两个真 bug:rotate_log 首滚 mv 报错在 set -e 下中断启动、STATE_DIR 在 HOME 缺失时 set -u 杀脚本。backup 测试 6/6,全量 1899 passed/2 failed(tests_subagent 预存 flaky,stash 对照无关)。spec 沉淀 database-guidelines(DB 快照备份 Scenario)+ daemon-server(运维伴生物 Pattern);DEBT.md 闭合两条(P1 剩 RULE-PERSIST-001)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5ef8ff0` | (see git log) |
+| `88ec85c` | (see git log) |
+
+### Status
+
+[OK] **Completed**
