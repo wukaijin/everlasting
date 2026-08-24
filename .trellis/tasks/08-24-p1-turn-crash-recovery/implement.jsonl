@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移幂等探针式加列/表约束守则/backup Scenario 的 file-backed 建池坑;WP1 全部落在 db 层"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "drive_turn 流式循环结构/RULE-A-003 落库失败语义/检查点写点接线(WP2)的宿主模块"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "pair atomicity(孤儿 tool_use/tool_result 400)+ marker 块约定;Step B 修复与 WP2 集成锁依据"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "state.rs 启动序列/reap 先例/best-effort 壳;恢复 pass 落点与日志形态"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "running 占位+终态覆盖+启动 reap 的先例契约,本设计直接贴它"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-003/A-007 家族:落库失败 emit 语义;检查点 best-effort warn 的先例参照"}
+{"file": ".trellis/tasks/08-24-p1-turn-crash-recovery/research/persistence-path-map.md", "reason": "本任务研究沉淀:链路锚点/崩溃窗口/先例/设计结论"}

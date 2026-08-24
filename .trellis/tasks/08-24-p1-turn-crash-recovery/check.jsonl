@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门:测试/日志/注释体例"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "db 层变更检查:迁移幂等/显式列清单/测试建池方式"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "pair atomicity 与 wire 兼容检查依据"}
+{"file": ".trellis/tasks/08-24-p1-turn-crash-recovery/research/persistence-path-map.md", "reason": "对照研究锚点核改动面是否收敛(design §2.3/§3.2 边界)"}
