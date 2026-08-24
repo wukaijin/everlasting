@@ -362,7 +362,7 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
 }
 
 .edit-diff-line--del {
-  background: rgba(239, 68, 68, 0.12);
+  background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
 }
 
 .edit-diff-line--ctx {

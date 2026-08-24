@@ -123,7 +123,7 @@ async function openSource(): Promise<void> {
     <div class="review-finding-detail__actions">
       <button
         type="button"
-        class="review-finding-detail__source-btn"
+        class="review-finding-detail__source-btn btn btn--muted btn--sm"
         :disabled="sourceLoading"
         @click="openSource"
       >
@@ -247,23 +247,10 @@ async function openSource(): Promise<void> {
   margin-top: 2px;
 }
 
-.review-finding-detail__source-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 3px var(--space-2);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-surface);
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.review-finding-detail__source-btn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
+/* 源码查看钮由全局 .btn 家族承载(muted sm;hover wash 收敛为家族
+ * accent-muted 方向,与 Review 系其它按钮一致)。 */
+/* 加载中 progress 光标;opacity 落家族 disabled 0.5。 */
 .review-finding-detail__source-btn:disabled {
-  opacity: 0.6;
   cursor: progress;
 }
 

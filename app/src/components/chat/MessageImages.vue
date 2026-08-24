@@ -90,6 +90,7 @@ function openImage(img: ImageRef): void {
 }
 
 .message-images__item {
+    /* 图片缩略图瓦片(媒体平铺语义,非动作按钮家族形态),特例保留本地样式。 */
   width: 64px;
   height: 64px;
   padding: 0;

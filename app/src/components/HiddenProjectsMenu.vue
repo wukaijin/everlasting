@@ -66,7 +66,7 @@ async function onUnhide(id: string): Promise<void> {
     <DropdownMenuTrigger as-child>
       <button
         type="button"
-        class="hidden-menu__trigger"
+        class="hidden-menu__trigger btn btn--ghost"
         :title="`${projectsStore.hiddenProjects.length} 个已隐藏项目`"
         :aria-label="`已隐藏项目 (${projectsStore.hiddenProjects.length})`"
         data-testid="hidden-projects-trigger"
@@ -104,7 +104,7 @@ async function onUnhide(id: string): Promise<void> {
           </div>
           <button
             type="button"
-            class="hidden-menu__action"
+            class="hidden-menu__action btn btn--muted"
             :aria-label="`重新打开 ${p.name}`"
             data-testid="hidden-projects-action"
             @click="void onUnhide(p.id)"
@@ -119,19 +119,13 @@ async function onUnhide(id: string): Promise<void> {
 
 <style scoped>
 /* Trigger button — in template, NOT teleported, so scoped is fine. */
+/* 触发器由全局 .btn 家族承载(ghost);此处仅标题栏分段几何。
+ * hover 转 accent-muted(选中语义,配计数徽章),覆写家族 wash。 */
 .hidden-menu__trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   height: 100%;
+  gap: 4px;
   padding: 0 10px;
-  background: transparent;
-  border: none;
   border-left: 1px solid var(--color-bg-border);
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
   position: relative;
 }
 
@@ -245,21 +239,9 @@ async function onUnhide(id: string): Promise<void> {
   text-align: left;
 }
 
+/* 重新打开钮由全局 .btn 家族承载(muted,hover 逐值等于家族);
+ * portal 节点 scoped 需 :deep() 包裹,仅剩几何。 */
 :deep(.hidden-menu__action) {
   flex-shrink: 0;
-  padding: 4px 10px;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-accent-text);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-:deep(.hidden-menu__action:hover) {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
 }
 </style>

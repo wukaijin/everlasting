@@ -83,7 +83,7 @@ async function copyCode() {
   margin-left: auto;
   padding: 2px 8px;
   border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-secondary);
   font-size: 11px;

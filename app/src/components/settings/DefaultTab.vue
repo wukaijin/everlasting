@@ -163,7 +163,8 @@ function selectDefault(modelId: string) {
   background: var(--color-accent-muted);
 }
 
-/* reka-ui RadioGroupItem renders a <button> by default; we style
+/* reka-ui RadioGroupItem renders a <button> by default (表单控件,
+   不属 .btn 动作按钮家族); we style
    the button to match the previous hand-rolled 14px circle. The
    inner `RadioGroupIndicator` is the filled dot. */
 .default-tab__radio {

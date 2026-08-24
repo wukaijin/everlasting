@@ -216,7 +216,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
         >
             <button
                 type="button"
-                class="diff-file__header"
+                class="diff-file__header btn btn--muted"
                 @click="toggleCollapsed(pf.file.path)"
             >
                 <Icon
@@ -312,23 +312,17 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     overflow: hidden;
 }
 
+/* 文件头折叠行由全局 .btn 家族承载(muted);此处仅通栏几何
+ * (下边框是 diff 区分隔线,保留)。hover 由 elevated 转 accent-muted
+ * 方向收敛。 */
 .diff-file__header {
-    display: flex;
-    align-items: center;
     gap: 8px;
     width: 100%;
     padding: 6px 10px;
-    background: var(--color-bg-elevated);
     border: 0;
     border-bottom: 1px solid var(--color-bg-border);
-    cursor: pointer;
     text-align: left;
-    font: inherit;
     color: inherit;
-}
-
-.diff-file__header:hover {
-    background: var(--color-bg-border);
 }
 
 .diff-file__chevron {
@@ -418,7 +412,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     background: rgba(16, 185, 129, 0.12);
 }
 .diff-line--del {
-    background: rgba(239, 68, 68, 0.12);
+    background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
 }
 .diff-line--hunk {
     background: var(--color-bg-surface);
@@ -477,7 +471,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
 }
 
 .diff-raw-line--del {
-    background: rgba(239, 68, 68, 0.12);
+    background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
     color: var(--color-text-primary);
 }
 

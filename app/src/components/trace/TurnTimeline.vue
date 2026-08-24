@@ -71,7 +71,7 @@ async function onRetry(): Promise<void> {
       </span>
       <button
         type="button"
-        class="turn-timeline__retry"
+        class="turn-timeline__retry btn btn--muted btn--sm"
         @click="onRetry"
       >
         重试
@@ -151,20 +151,7 @@ async function onRetry(): Promise<void> {
   word-break: break-all;
 }
 
-.turn-timeline__retry {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  padding: 2px 10px;
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.turn-timeline__retry:hover {
-  background: var(--color-bg-border);
-}
+/* 重试钮由全局 .btn 家族承载(muted sm)。 */
 
 .turn-timeline__skeleton {
   display: flex;

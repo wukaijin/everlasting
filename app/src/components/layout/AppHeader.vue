@@ -75,7 +75,7 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
            移动端 inline-flex)。无项目时 v-if 隐藏(review P3-3)。 -->
       <button
         v-if="showHamburger"
-        class="app-header__menu-toggle"
+        class="app-header__menu-toggle btn btn--ghost"
         type="button"
         aria-label="打开导航"
         :aria-expanded="mobileNavOpen"
@@ -86,7 +86,7 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
       <!-- D2: global search entry (mobile always; browser/PWA desktop
            too — see showSearchButton rationale). -->
       <button
-        class="app-header__search-toggle"
+        class="app-header__search-toggle btn btn--ghost"
         :data-shown="showSearchButton ? '' : undefined"
         type="button"
         aria-label="全局搜索"
@@ -146,28 +146,15 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
 .app-header__search-toggle[data-shown] {
   display: inline-flex;
 }
+/* 汉堡/搜索钮由全局 .btn 家族承载(ghost);此处仅标题栏分段几何
+ * (44px 宽×全高、桌面隐藏/移动常显的 display 编排与 44px 触摸目标)。 */
 .app-header__menu-toggle,
 .app-header__search-toggle,
 .app-header__search-toggle[data-shown] {
-  align-items: center;
-  justify-content: center;
   width: 44px;
   height: 100%;
-  background: transparent;
-  border: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
   padding: 0;
   flex-shrink: 0;
-  font-family: inherit;
-  transition: background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-.app-header__menu-toggle:hover,
-.app-header__search-toggle:hover,
-.app-header__search-toggle[data-shown]:hover {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
 }
 @media (max-width: 767px) {
   .app-header__menu-toggle,
