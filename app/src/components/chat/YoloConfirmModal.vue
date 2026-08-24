@@ -108,7 +108,7 @@ watch(
           </h2>
           <button
             type="button"
-            class="yolo-confirm-modal__close"
+            class="yolo-confirm-modal__close btn btn--icon btn--ghost"
             aria-label="Close"
             :disabled="disabled"
             @click="emit('cancel')"
@@ -145,7 +145,7 @@ watch(
         <footer class="yolo-confirm-modal__actions">
           <button
             type="button"
-            class="yolo-confirm-modal__btn yolo-confirm-modal__btn--cancel"
+            class="yolo-confirm-modal__btn yolo-confirm-modal__btn--cancel btn btn--muted"
             :disabled="disabled"
             @click="emit('cancel')"
           >
@@ -154,7 +154,7 @@ watch(
           <button
             ref="confirmButton"
             type="button"
-            class="yolo-confirm-modal__btn yolo-confirm-modal__btn--confirm"
+            class="yolo-confirm-modal__btn yolo-confirm-modal__btn--confirm btn btn--danger"
             :disabled="disabled"
             @click="emit('confirm')"
           >
@@ -222,27 +222,8 @@ watch(
   color: var(--color-tool-error-text);
 }
 
-.yolo-confirm-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.yolo-confirm-modal__close:hover:not(:disabled) {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
-}
-
-.yolo-confirm-modal__close:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon / cancel = muted /
+   confirm = danger);BEM 类仅为测试锚点保留。 */
 
 .yolo-confirm-modal__body {
   padding: 16px;
@@ -304,39 +285,6 @@ watch(
   padding: 12px 16px;
   border-top: 1px solid var(--color-bg-border);
   justify-content: flex-end;
-}
-
-.yolo-confirm-modal__btn {
-  font: inherit;
-  font-size: var(--text-sm);
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid var(--color-bg-border);
-}
-
-.yolo-confirm-modal__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.yolo-confirm-modal__btn--cancel {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-}
-
-.yolo-confirm-modal__btn--cancel:hover:not(:disabled) {
-  border-color: var(--color-accent-muted);
-}
-
-.yolo-confirm-modal__btn--confirm {
-  background: var(--color-tool-error);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-tool-error);
-}
-
-.yolo-confirm-modal__btn--confirm:hover:not(:disabled) {
-  filter: brightness(1.1);
 }
 
 /* 150ms fade + scale 0.96→1 enter, 100ms fade-in leave —

@@ -322,7 +322,7 @@ function modelLabel(id: string): string {
                 : "修改当前群聊的参与者配置。" }}
             </DialogDescription>
           </div>
-          <DialogClose class="gcfg-close" aria-label="Close">
+          <DialogClose class="gcfg-close btn btn--icon btn--ghost" aria-label="Close">
             <Icon name="x" />
           </DialogClose>
         </div>
@@ -347,7 +347,7 @@ function modelLabel(id: string): string {
                 <div class="gcfg-row__actions">
                   <button
                     type="button"
-                    class="gcfg-icon-btn gcfg-icon-btn--danger"
+                    class="gcfg-icon-btn gcfg-icon-btn--danger btn btn--icon btn--danger-soft"
                     :disabled="participants.length <= MIN_PARTICIPANTS"
                     :aria-label="`Remove participant ${idx + 1}`"
                     :data-testid="`gcfg-remove-${idx}`"
@@ -434,7 +434,7 @@ function modelLabel(id: string): string {
           <button
             v-if="participants.length < MAX_PARTICIPANTS"
             type="button"
-            class="gcfg-add"
+            class="gcfg-add btn btn--outline"
             :data-testid="'gcfg-add'"
             @click="addParticipant"
           >
@@ -470,7 +470,7 @@ function modelLabel(id: string): string {
         <div class="gcfg-footer">
           <button
             type="button"
-            class="gcfg-btn gcfg-btn--secondary"
+            class="gcfg-btn gcfg-btn--secondary btn btn--muted"
             :data-testid="'gcfg-cancel'"
             @click="cancel"
           >
@@ -478,7 +478,7 @@ function modelLabel(id: string): string {
           </button>
           <button
             type="button"
-            class="gcfg-btn gcfg-btn--primary"
+            class="gcfg-btn gcfg-btn--primary btn btn--primary"
             :disabled="!isValid || submitting"
             :data-testid="'gcfg-submit'"
             @click="submit"
@@ -593,20 +593,6 @@ function modelLabel(id: string): string {
 
 .gcfg-close {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  transition: background var(--duration-base) var(--ease-out);
-}
-.gcfg-close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 
 /* 滚动 body: 撑满 dialog 剩余高度, 内容超高时只滚这里。
@@ -661,27 +647,12 @@ function modelLabel(id: string): string {
   color: var(--color-text-secondary);
 }
 
+/* 22px 固定尺寸 icon 钮(danger-soft 家族承载红 tint hover);本地仅保留
+   显式几何 w/h + padding:0(见 style.css .btn--icon 注)。 */
 .gcfg-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 22px;
   height: 22px;
   padding: 0;
-  background: transparent;
-  border: none;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: background var(--duration-base) var(--ease-out);
-}
-.gcfg-icon-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.gcfg-icon-btn--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
-  color: var(--color-tool-error-text);
 }
 
 .gcfg-field {
@@ -818,21 +789,15 @@ function modelLabel(id: string): string {
   color: var(--color-accent-text);
 }
 
+/* + 添加参与者:btn--outline 家族 + 本地覆写虚线描边(add-zone 形态,
+   家族无 dashed 变体);border 色相/hover 抬底保留 muted 混色。 */
 .gcfg-add {
-  display: block;
   width: 100%;
-  padding: 8px;
-  background: transparent;
-  border: 1px dashed
-    color-mix(in srgb, var(--color-text-muted) 45%, transparent);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: background var(--duration-base) var(--ease-out);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-text-muted) 45%, transparent);
 }
-.gcfg-add:hover {
+
+.gcfg-add:hover:not(:disabled) {
   background: var(--color-bg-surface);
   border-color: color-mix(in srgb, var(--color-text-muted) 70%, transparent);
   color: var(--color-text-primary);
@@ -848,33 +813,6 @@ function modelLabel(id: string): string {
   flex-shrink: 0;
 }
 
-.gcfg-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 14px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: background var(--duration-base) var(--ease-out);
-}
-.gcfg-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.gcfg-btn--secondary:hover:not(:disabled) {
-  background: var(--color-bg-border);
-}
-.gcfg-btn--primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-text-on-accent, #fff);
-}
-.gcfg-btn--primary:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
+/* footer 按钮样式由全局 .btn 家族承载(secondary = muted / primary =
+   primary);BEM 类仅为锚点保留。 */
 </style>

@@ -56,7 +56,7 @@ const emit = defineEmits<{
                     </h2>
                     <button
                         type="button"
-                        class="diff-modal__close"
+                        class="diff-modal__close btn btn--icon btn--ghost"
                         @click="emit('close')"
                         aria-label="Close"
                     >
@@ -134,22 +134,7 @@ const emit = defineEmits<{
     font-weight: 400;
 }
 
-.diff-modal__close {
-    background: transparent;
-    border: 0;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    padding: 4px;
-    border-radius: var(--radius-sm);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.diff-modal__close:hover {
-    background: var(--color-bg-border);
-    color: var(--color-text-primary);
-}
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon)。 */
 
 .diff-modal__body {
     flex: 1;

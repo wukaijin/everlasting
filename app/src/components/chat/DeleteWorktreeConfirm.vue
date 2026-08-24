@@ -74,7 +74,7 @@ watch(
           </h2>
           <button
             type="button"
-            class="confirm-modal__close"
+            class="confirm-modal__close btn btn--icon btn--ghost"
             aria-label="Close"
             @click="emit('cancel')"
           >
@@ -94,7 +94,7 @@ watch(
         <footer class="confirm-modal__actions">
           <button
             type="button"
-            class="confirm-modal__btn confirm-modal__btn--cancel"
+            class="confirm-modal__btn confirm-modal__btn--cancel btn btn--muted"
             @click="emit('cancel')"
           >
             取消
@@ -102,7 +102,7 @@ watch(
           <button
             ref="confirmButton"
             type="button"
-            class="confirm-modal__btn confirm-modal__btn--danger"
+            class="confirm-modal__btn confirm-modal__btn--danger btn btn--danger"
             @click="emit('confirm')"
           >
             确认删除
@@ -160,22 +160,8 @@ watch(
   color: var(--color-tool-error-text);
 }
 
-.confirm-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.confirm-modal__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
-}
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon / cancel = muted /
+   danger = danger);BEM 类保留。 */
 
 .confirm-modal__body {
   padding: 16px;
@@ -204,34 +190,6 @@ watch(
   padding: 12px 16px;
   border-top: 1px solid var(--color-bg-border);
   justify-content: flex-end;
-}
-
-.confirm-modal__btn {
-  font: inherit;
-  font-size: var(--text-sm);
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid var(--color-bg-border);
-}
-
-.confirm-modal__btn--cancel {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-}
-
-.confirm-modal__btn--cancel:hover {
-  border-color: var(--color-accent-muted);
-}
-
-.confirm-modal__btn--danger {
-  background: var(--color-tool-error);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-tool-error);
-}
-
-.confirm-modal__btn--danger:hover {
-  filter: brightness(1.1);
 }
 
 /* R4 modal animation: fade + scale 0.96→1 from center. 150ms

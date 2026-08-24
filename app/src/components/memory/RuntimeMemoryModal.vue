@@ -259,7 +259,7 @@ watch(
             <DialogClose as-child>
               <button
                 type="button"
-                class="runtime-memory-modal__close"
+                class="runtime-memory-modal__close btn btn--icon btn--ghost"
                 aria-label="关闭"
               >
                 <Icon name="x" :size="14" />
@@ -390,14 +390,14 @@ watch(
               <div class="runtime-memory-modal__demote-actions">
                 <button
                   type="button"
-                  class="runtime-memory-modal__btn runtime-memory-modal__btn--ghost"
+                  class="runtime-memory-modal__btn runtime-memory-modal__btn--ghost btn btn--muted"
                   @click="cancelDemote"
                 >
                   取消
                 </button>
                 <button
                   type="button"
-                  class="runtime-memory-modal__btn runtime-memory-modal__btn--primary"
+                  class="runtime-memory-modal__btn runtime-memory-modal__btn--primary btn btn--primary"
                   @click="confirmDemote"
                 >
                   确认降级
@@ -413,7 +413,7 @@ watch(
                 <button
                   v-if="!editing"
                   type="button"
-                  class="runtime-memory-modal__btn runtime-memory-modal__btn--ghost runtime-memory-modal__btn--sm"
+                  class="runtime-memory-modal__btn runtime-memory-modal__btn--ghost runtime-memory-modal__btn--sm btn btn--muted btn--sm"
                   @click="startEdit"
                 >
                   <Icon name="pencil" :size="11" />
@@ -447,7 +447,7 @@ watch(
               <div v-if="editing" class="runtime-memory-modal__edit-actions">
                 <button
                   type="button"
-                  class="runtime-memory-modal__btn runtime-memory-modal__btn--ghost"
+                  class="runtime-memory-modal__btn runtime-memory-modal__btn--ghost btn btn--muted"
                   :disabled="saving"
                   @click="cancelEdit"
                 >
@@ -455,7 +455,7 @@ watch(
                 </button>
                 <button
                   type="button"
-                  class="runtime-memory-modal__btn runtime-memory-modal__btn--primary"
+                  class="runtime-memory-modal__btn runtime-memory-modal__btn--primary btn btn--primary"
                   :disabled="saving"
                   @click="saveEdit"
                 >
@@ -470,7 +470,7 @@ watch(
             <section class="runtime-memory-modal__danger">
               <button
                 type="button"
-                class="runtime-memory-modal__btn runtime-memory-modal__btn--danger"
+                class="runtime-memory-modal__btn runtime-memory-modal__btn--danger btn btn--danger-soft"
                 @click="deleteOpen = true"
               >
                 <Icon name="trash" :size="11" />
@@ -608,23 +608,13 @@ watch(
   background: color-mix(in srgb, var(--color-status-warn) 8%, transparent);
 }
 
+/* 24px 固定尺寸 icon 钮:家族承载形态,本地仅保留显式几何
+   (style.css .btn--icon 注:固定尺寸钮本地声明 w/h + padding:0)。 */
 .runtime-memory-modal__close {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
   height: 24px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--duration-base) var(--ease-out);
-}
-.runtime-memory-modal__close:hover {
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
+  padding: 0;
 }
 
 .runtime-memory-modal__error {
@@ -836,43 +826,7 @@ watch(
   border-top: 1px solid var(--color-bg-border);
 }
 
-.runtime-memory-modal__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  font-size: var(--text-sm);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: background var(--duration-base) var(--ease-out);
-}
-.runtime-memory-modal__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.runtime-memory-modal__btn--sm {
-  padding: 2px 8px;
-  font-size: var(--text-xs);
-}
-.runtime-memory-modal__btn--ghost:hover:not(:disabled) {
-  background: var(--color-bg-border);
-}
-.runtime-memory-modal__btn--primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-text-on-accent, #fff);
-}
-.runtime-memory-modal__btn--primary:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-.runtime-memory-modal__btn--danger {
-  color: var(--color-tool-error-text);
-  border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-}
-.runtime-memory-modal__btn--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
-}
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon / ghost·sm =
+   muted·sm / primary = primary / danger = danger-soft);BEM 类仅为
+   锚点保留。 */
 </style>

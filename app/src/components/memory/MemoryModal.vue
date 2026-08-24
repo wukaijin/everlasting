@@ -51,7 +51,7 @@ const emit = defineEmits<{
             项目指令文件
           </DialogTitle>
           <DialogClose as-child>
-            <button type="button" class="memory-modal__close" aria-label="Close">
+            <button type="button" class="memory-modal__close btn btn--icon btn--ghost" aria-label="Close">
               <Icon name="x" :size="14" />
             </button>
           </DialogClose>
@@ -147,22 +147,7 @@ const emit = defineEmits<{
   color: var(--color-text-primary);
 }
 
-.memory-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.memory-modal__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
-}
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon)。 */
 
 .memory-modal__body {
   flex: 1;

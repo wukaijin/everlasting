@@ -151,7 +151,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
           <DialogClose as-child>
             <button
               type="button"
-              class="markdown-detail-modal__close"
+              class="markdown-detail-modal__close btn btn--icon btn--ghost"
               aria-label="Close"
               @click="close"
             >
@@ -301,22 +301,9 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   color: var(--color-tool-shell);
 }
 
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon);flex 几何保留。 */
 .markdown-detail-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-}
-
-.markdown-detail-modal__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 
 .markdown-detail-modal__body {

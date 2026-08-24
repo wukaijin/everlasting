@@ -34,14 +34,14 @@ const emit = defineEmits<{
             <div class="delete-model-confirm__actions">
                 <button
                     type="button"
-                    class="delete-model-confirm__btn delete-model-confirm__btn--danger"
+                    class="delete-model-confirm__btn delete-model-confirm__btn--danger btn btn--danger-soft"
                     @click="emit('confirm')"
                 >
                     Delete
                 </button>
                 <button
                     type="button"
-                    class="delete-model-confirm__btn delete-model-confirm__btn--secondary"
+                    class="delete-model-confirm__btn delete-model-confirm__btn--secondary btn btn--muted"
                     @click="emit('cancel')"
                 >
                     Cancel
@@ -88,37 +88,9 @@ const emit = defineEmits<{
     justify-content: flex-end;
 }
 
+/* 按钮样式由全局 .btn 家族承载(danger = danger-soft / secondary =
+   muted);此处仅保留家族不拥有的字重。 */
 .delete-model-confirm__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    border: 1px solid var(--color-bg-border);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-sm);
     font-weight: var(--weight-medium);
-    cursor: pointer;
-    background: transparent;
-    color: var(--color-text-secondary);
-    transition:
-        background var(--duration-base) var(--ease-out),
-        color var(--duration-base) var(--ease-out);
-}
-
-.delete-model-confirm__btn--danger {
-    color: var(--color-tool-error-text);
-}
-
-.delete-model-confirm__btn--danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.15);
-}
-
-.delete-model-confirm__btn--secondary {
-    background: var(--color-bg-elevated);
-    color: var(--color-text-primary);
-}
-
-.delete-model-confirm__btn--secondary:hover:not(:disabled) {
-    background: var(--color-bg-border);
 }
 </style>

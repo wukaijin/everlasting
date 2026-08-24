@@ -173,7 +173,7 @@ async function onRefresh(): Promise<void> {
           <DialogClose as-child>
             <button
               type="button"
-              class="audit-modal__close"
+              class="audit-modal__close btn btn--icon btn--ghost"
               aria-label="Close"
             >
               <Icon name="x" :size="14" />
@@ -258,7 +258,7 @@ async function onRefresh(): Promise<void> {
 
           <button
             type="button"
-            class="audit-modal__refresh"
+            class="audit-modal__refresh btn btn--muted btn--sm"
             :disabled="store.loading"
             title="刷新"
             @click="onRefresh"
@@ -391,22 +391,10 @@ async function onRefresh(): Promise<void> {
   white-space: nowrap;
 }
 
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon / refresh =
+   muted·sm);flex 几何保留。 */
 .audit-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-}
-
-.audit-modal__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 
 .audit-modal__filters {
@@ -597,31 +585,8 @@ async function onRefresh(): Promise<void> {
   margin-left: auto;
 }
 
-.audit-modal__refresh {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-xs);
-  padding: 4px 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-}
-
-.audit-modal__refresh:hover:not(:disabled) {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
-}
-
-.audit-modal__refresh:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
+/* 按钮样式由全局 .btn 家族承载(refresh = muted·sm,hover 转 accent
+   与原语义一致)。 */
 
 .audit-modal__body {
   flex: 1;

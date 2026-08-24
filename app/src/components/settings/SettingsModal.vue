@@ -26,7 +26,7 @@ const open = defineModel<boolean>("open", { required: true });
         <header class="settings-modal__header">
           <DialogTitle class="settings-modal__title">Settings</DialogTitle>
           <DialogClose as-child>
-            <button type="button" class="settings-modal__close" aria-label="Close">
+            <button type="button" class="settings-modal__close btn btn--icon btn--ghost" aria-label="Close">
               <Icon name="x" :size="14" />
               <!-- S6b: 移动端语义化关闭文案(桌面 display:none) -->
               <span class="settings-modal__close-label">Done</span>
@@ -141,22 +141,8 @@ const open = defineModel<boolean>("open", { required: true });
   color: var(--color-text-primary);
 }
 
-.settings-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.settings-modal__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
-}
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon);
+   tabs 是 reka TabsTrigger 表单控件,非按钮家族,保留本地。 */
 
 .settings-modal__body {
   flex: 1;

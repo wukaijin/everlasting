@@ -485,10 +485,10 @@ textarea {
     font-size: var(--text-base);
 }
 
-/* icon-only 方形钮:padding 归零,由组件给显式 width/height(偶数,配
- * Icon 组件尺寸规则);不设尺寸时配 aspect-ratio 自动方形。 */
+/* icon-only 方形钮:默认 4px 呼吸留白 + 自动方形;固定尺寸钮(22/24px 等)
+ * 本地声明 width/height + padding: 0(显式几何,组件所有)。 */
 .btn--icon {
-    padding: 0;
+    padding: var(--space-1);
     aspect-ratio: 1 / 1;
 }
 

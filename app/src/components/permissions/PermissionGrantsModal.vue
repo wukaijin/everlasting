@@ -84,7 +84,7 @@ function onRevoke(row: PermissionGrantRow): void {
         <header class="grant-modal__header">
           <DialogTitle class="grant-modal__title">{{ modalTitle }}</DialogTitle>
           <DialogClose as-child>
-            <button type="button" class="grant-modal__close" aria-label="Close">
+            <button type="button" class="grant-modal__close btn btn--icon btn--ghost" aria-label="Close">
               <Icon name="x" :size="14" />
             </button>
           </DialogClose>
@@ -94,7 +94,7 @@ function onRevoke(row: PermissionGrantRow): void {
           <span class="grant-modal__count">{{ store.grants.length }} 项放行</span>
           <button
             type="button"
-            class="grant-modal__refresh"
+            class="grant-modal__refresh btn btn--muted btn--sm"
             :disabled="store.loading"
             title="刷新"
             @click="onRefresh"
@@ -208,22 +208,9 @@ function onRevoke(row: PermissionGrantRow): void {
   white-space: nowrap;
 }
 
+/* 按钮样式由全局 .btn 家族承载(close = ghost icon);flex 几何保留。 */
 .grant-modal__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-}
-
-.grant-modal__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 
 .grant-modal__toolbar {
@@ -242,33 +229,16 @@ function onRevoke(row: PermissionGrantRow): void {
   color: var(--color-text-muted);
 }
 
-.grant-modal__refresh {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.grant-modal__count {
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
-  padding: 4px 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-family: inherit;
+  color: var(--color-text-muted);
+}
+
+/* 按钮样式由全局 .btn 家族承载(refresh = muted·sm,hover 转 accent
+   与原语义一致);margin 几何保留。 */
+.grant-modal__refresh {
   margin-left: auto;
-  transition: background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-
-.grant-modal__refresh:hover:not(:disabled) {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-accent-text);
-}
-
-.grant-modal__refresh:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .grant-modal__body {
