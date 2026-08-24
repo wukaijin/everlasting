@@ -1,0 +1,29 @@
+{
+  "itemCount": 6,
+  "landedTabStop": 11,
+  "landedStopInfo": [
+    {
+      "role": "button",
+      "ariaCurrent": "true",
+      "focusVisible": true,
+      "boxShadow": "color(srgb 0.231373 0.356863 0.858824 / 0.2) 0px 0px 0px 3px"
+    }
+  ],
+  "focusInfo": {
+    "focused": true,
+    "role": "button",
+    "ariaCurrent": null,
+    "focusVisible": true,
+    "boxShadow": "color(srgb 0.231373 0.356863 0.858824 / 0.2) 0px 0px 0px 3px",
+    "title": "新对话"
+  },
+  "afterEnter": {
+    "currentTitle": "新对话",
+    "movedToTarget": true,
+    "activeCount": 1
+  },
+  "afterShiftEnter": {
+    "editInputExists": true,
+    "editInputFocused": true
+  }
+}
