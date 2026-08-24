@@ -680,6 +680,65 @@ new layer.
 
 ---
 
+## Button Family (added 2026-08-24, 08-24-btn-family-convergence)
+
+`.btn` CSS class family in `app/src/style.css` — the single source of truth
+for what a button looks like (previously 167 `<button>` across 69 files each
+carried hand-written scoped styles; variants/sizes/radii drifted). Same
+pattern as `.app-spinner`: shared CSS classes, **no Vue component**.
+
+### API
+
+```
+.btn                        base: inline-flex centered, text-sm, 6px 12px (md),
+                            radius-sm, transparent bg, fast bg/color/border
+                            transition, :disabled = opacity .5 + not-allowed
+.btn--primary               accent fill + on-accent text; hover accent-hover
+.btn--danger                tool-error fill + on-accent text; hover brightness(1.1)
+.btn--danger-soft           ghost body; hover red 12% tint + error-text ink
+.btn--ghost                 transparent; hover --color-bg-hover + primary ink
+.btn--muted                 elevated fill + 1px bg-border; hover accent-muted fill
+                            + accent border + accent-text ink
+.btn--tint                  accent-muted fill; hover brightness(1.15)
+.btn--outline               1px bg-border on transparent; hover elevated fill
+.btn--sm / --lg             size modifiers (default md); sm = 4px 8px + text-xs,
+                            lg = 10px 16px + text-base
+.btn--icon                  icon-only square: padding 0 + aspect-ratio 1
+.btn--pill / --circle       shape modifiers (default radius-sm); circle needs
+                            explicit component width/height
+```
+
+Keep the original BEM class alongside (`class="confirm-modal__btn btn
+btn--danger"`) — tests / `:deep()` / probes anchor on BEM names.
+
+### Ownership rules
+
+The family owns `background / color / border / padding / border-radius /
+font-size / cursor / transition / :hover / :disabled`. Components keep only
+positioning and explicit geometry (margin / flex / width / height / gap /
+z-index). A local override of a family-owned property requires an inline
+comment stating why. **font-weight and line-height are NOT owned** — they
+inherit; sites deviating keep one local declaration.
+
+The family declares **no focus styles**: the global `:where()` focus-visible
+baseline (08-22) owns keyboard rings; a `.btn*` box-shadow would out-rank the
+zero-specificity baseline.
+
+`:active` is not in the family (single-site `--ease-spring` press in
+EmptyProjectState stays local). The `6px` vertical md padding is a documented
+half-step (between `--space-1`/`--space-2`) written raw in `style.css`,
+allowed per the spacing half-step rule.
+
+### Audit
+
+```bash
+cd app/src && grep -rn "background: var(--color-accent)" --include="*.vue" . | grep -v "\.btn"
+# expect: only documented exceptions (node-card / palette-dot / toggle-pill /
+# ui-prim generative-UI family / hover-red-solid ×3 with local overrides)
+```
+
+---
+
 ## Icon Sizing
 
 All icons go through the `Icon.vue` wrapper (the only component

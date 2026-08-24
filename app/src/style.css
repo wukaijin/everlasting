@@ -430,6 +430,153 @@ textarea {
  * bg-app 上用 elevated→border-strong;TurnTimeline 卡片父级是 elevated,
  * 用 surface→elevated),各组件按背景层级自取。 */
 
+/* ------------------------------------------------------------------------- *
+ * Shared button family: .btn (08-24-btn-family-convergence)                  *
+ * ------------------------------------------------------------------------- *
+ * 全库按钮的单一事实源(此前 167 个 <button>/69 文件各自 scoped 手写,变体
+ * /尺寸/圆角漂移)。用法:`class="btn btn--{variant}[--{size}][--{shape}]"`,
+ * 保留原 BEM 类不删(测试/探针锚点)。
+ *
+ * 家族拥有:background / color / border / padding / border-radius /
+ * font-size / cursor / transition / :hover / :disabled。组件只保留定位与
+ * 显式尺寸(margin/flex/width/height/gap/z-index)。局部覆写家族属性需
+ * 行内注释说明原因。
+ *
+ * 焦点样式零声明:键盘焦点环由上方 :where() 基线统一负责,家族类若写
+ * box-shadow 会以 (0,1,0) 特异性压过零特异性基线。
+ *
+ * 尺寸:6px 纵向 padding 是 --space-1(4)/--space-2(8) 的半步,按
+ * design-tokens.md 半步规则在本文件(token 定义处)用 raw 值 + 注释。
+ * disabled 统一 opacity 0.5(迁移前五档 0.4~0.7,0.5 为主导值)。
+ * :active 不入家族(仅 EmptyProjectState spring press 一处特例)。
+ * ------------------------------------------------------------------------- */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-1);
+    /* md 默认档;6px 为半步 raw,见上注 */
+    padding: 6px 12px;
+    font-size: var(--text-sm);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition:
+        background var(--duration-fast) var(--ease-out),
+        color var(--duration-fast) var(--ease-out),
+        border-color var(--duration-fast) var(--ease-out);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* --- 尺寸修饰(默认 md) --- */
+.btn--sm {
+    padding: 4px 8px;
+    font-size: var(--text-xs);
+}
+
+.btn--lg {
+    padding: 10px 16px;
+    font-size: var(--text-base);
+}
+
+/* icon-only 方形钮:padding 归零,由组件给显式 width/height(偶数,配
+ * Icon 组件尺寸规则);不设尺寸时配 aspect-ratio 自动方形。 */
+.btn--icon {
+    padding: 0;
+    aspect-ratio: 1 / 1;
+}
+
+/* --- 形状修饰(默认 radius-sm) --- */
+.btn--pill {
+    border-radius: var(--radius-pill);
+}
+
+/* 圆形钮(send/stop/scroll-to-bottom):需组件显式 width/height */
+.btn--circle {
+    border-radius: 50%;
+}
+
+/* --- 变体 --- */
+
+/* ghost:透明底,hover 才有 10% primary wash(导航/工具条/modal close) */
+.btn--ghost:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+/* muted:elevated 弱底,hover 转 accent-muted(chip 族"会话检查器"按钮、
+ * cancel、refresh 类)。带 1px bg-border 描边(modal/settings 系现状)。 */
+.btn--muted {
+    border: 1px solid var(--color-bg-border);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
+}
+
+.btn--muted:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    background: var(--color-accent-muted);
+    color: var(--color-accent-text);
+}
+
+/* tint:accent-muted 本体(selected 态底色),hover 提亮 */
+.btn--tint {
+    border: 1px solid var(--color-accent-muted);
+    background: var(--color-accent-muted);
+    color: var(--color-text-primary);
+}
+
+.btn--tint:hover:not(:disabled) {
+    filter: brightness(1.15);
+}
+
+/* primary:accent 实底(保存/添加/确认等主动作) */
+.btn--primary {
+    border: 1px solid var(--color-accent);
+    background: var(--color-accent);
+    color: var(--color-text-on-accent);
+}
+
+.btn--primary:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+}
+
+/* danger:tool-error 实底(删除/危险确认);hover 提亮(无 error-hover token,
+ * brightness 是 ConfirmDialog/YoloConfirm 既有写法) */
+.btn--danger {
+    border: 1px solid var(--color-tool-error);
+    background: var(--color-tool-error);
+    color: var(--color-text-on-accent);
+}
+
+.btn--danger:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+
+/* danger-soft:ghost 本体,hover 红 tint + error-text(行级删除/撤销类;
+ * 迁移前 3 处裸 rgba(239,68,68,.15) 统一为此 color-mix 写法) */
+.btn--danger-soft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
+    color: var(--color-tool-error-text);
+}
+
+/* outline:描边主导、透明底(轻量次动作);hover 抬底不抬边 */
+.btn--outline {
+    border: 1px solid var(--color-bg-border);
+    background: transparent;
+    color: var(--color-text-primary);
+}
+
+.btn--outline:hover:not(:disabled) {
+    border-color: var(--color-bg-border-strong);
+    background: var(--color-bg-elevated);
+}
+
 /* Dark theme baseline (applies everywhere; per PRD: dark only, reserve light extension) */
 :root {
     background: var(--color-bg-app);
