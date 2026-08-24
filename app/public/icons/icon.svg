@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting favicon">
   <!-- Favicon variant — no center spark (unreadable <20px) and heavier stroke (48 ≈ 1.5px at 16px). -->
   <g fill="none" stroke-width="48" stroke-linecap="round">
-    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
-    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#0891b2"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#d97706"/>
   </g>
 </svg>

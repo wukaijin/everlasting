@@ -76,8 +76,10 @@ export default defineConfig(async () => ({
         name: "Everlasting",
         short_name: "Everlasting",
         description: "远程遥控你的 AI agent",
-        theme_color: "#0a0e14",
-        background_color: "#0a0e14",
+        // 浅色图标(PWA 桌面快捷方式在浅色 Launcher 上可见):
+        // theme/background 用浅底 #f8fafc 与图标一致,避免深色图块吞掉图标。
+        theme_color: "#f8fafc",
+        background_color: "#f8fafc",
         display: "standalone",
         start_url: "/",
         icons: [
