@@ -512,7 +512,7 @@ watch(() => props.searchActive, (active) => {
       </div>
       <span class="session-item__dot" aria-hidden="true" />
       <button
-        class="session-item__delete"
+        class="session-item__delete btn btn--ghost btn--icon"
         title="删除"
         aria-label="删除会话"
         @click="(e) => onDelete(s.id, e)"
@@ -605,7 +605,7 @@ watch(() => props.searchActive, (active) => {
             </div>
             <span class="session-item__dot" aria-hidden="true" />
             <button
-              class="session-item__delete"
+              class="session-item__delete btn btn--ghost btn--icon"
               title="删除"
               aria-label="删除会话"
               @click="(e) => onDelete(s.id, e)"
@@ -617,7 +617,7 @@ watch(() => props.searchActive, (active) => {
             v-if="slicedGroups.get(key)!.hidden > 0"
             class="session-more"
           >
-            <button class="session-more__btn" @click="expanded = true">
+            <button class="session-more__btn btn btn--outline btn--sm" @click="expanded = true">
               查看更早的 {{ slicedGroups.get(key)!.hidden }} 个
             </button>
           </li>
@@ -631,7 +631,7 @@ watch(() => props.searchActive, (active) => {
       <span class="session-empty__hint">点上方 + 开始</span>
     </li>
     <li v-else-if="expanded && totalHidden > 0" class="session-more">
-      <button class="session-more__btn" @click="expanded = false">
+      <button class="session-more__btn btn btn--outline btn--sm" @click="expanded = false">
         收起
       </button>
     </li>
@@ -893,22 +893,17 @@ watch(() => props.searchActive, (active) => {
   50% { opacity: 0.4; }
 }
 
+/* 08-24 btn-family:20px 固定 icon 钮由 ghost·icon 家族承载;本地保留
+   固定几何 + hover 显隐(opacity reveal;原 transition: all 收敛为显式
+   opacity)。hover 红实底是会话删除语义特例(设计文档备案,不立变体),
+   本地覆写。 */
 .session-item__delete {
   flex-shrink: 0;
   width: 20px;
   height: 20px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: all var(--duration-fast) var(--ease-out);
   padding: 0;
-  font-family: inherit;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
 .session-item:hover .session-item__delete,
@@ -954,23 +949,11 @@ watch(() => props.searchActive, (active) => {
   text-align: center;
 }
 
+/* 08-24 btn-family 判定:全库唯一 radius-md 真按钮,按任务倾向迁家族
+   归一 —— 透明底 + 描边形态落 outline·sm,原 radius-md 归一到家族
+   radius-sm;本地仅保留通栏宽度。 */
 .session-more__btn {
   width: 100%;
-  background: transparent;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-md);
-  padding: 6px 8px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  font-family: inherit;
-}
-
-.session-more__btn:hover {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  border-color: var(--color-accent);
 }
 
 </style>
@@ -1033,6 +1016,8 @@ watch(() => props.searchActive, (active) => {
   margin: 4px 0;
 }
 
+/* 08-24 btn-family 特例:palette-dot 是色板圆点(backgroundColor 内联
+   绑定的色样,50% 圆形是色样形态的一部分),非按钮家族形态,整块保留。 */
 .palette-dot {
   width: 20px;
   height: 20px;

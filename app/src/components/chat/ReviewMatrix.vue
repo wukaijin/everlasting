@@ -88,7 +88,7 @@ async function retry(): Promise<void> {
       <button
         v-if="error.kind === 'network'"
         type="button"
-        class="review-matrix__btn"
+        class="review-matrix__btn btn btn--muted btn--sm"
         :disabled="loading"
         @click="retry"
       >
@@ -104,7 +104,7 @@ async function retry(): Promise<void> {
     <header class="review-matrix__head">
       <button
         type="button"
-        class="review-matrix__collapse"
+        class="review-matrix__collapse btn btn--icon btn--ghost"
         :aria-expanded="!collapsed"
         :aria-label="collapsed ? '展开 review 矩阵' : '折叠 review 矩阵'"
         @click="collapsed = !collapsed"
@@ -123,7 +123,7 @@ async function retry(): Promise<void> {
       <div class="review-matrix__tabs">
         <button
           type="button"
-          class="review-matrix__tab"
+          class="review-matrix__tab btn btn--sm btn--ghost"
           :class="{ 'review-matrix__tab--active': activeTab === 'matrix' }"
           @click="activeTab = 'matrix'"
         >
@@ -131,7 +131,7 @@ async function retry(): Promise<void> {
         </button>
         <button
           type="button"
-          class="review-matrix__tab"
+          class="review-matrix__tab btn btn--sm btn--ghost"
           :class="{ 'review-matrix__tab--active': activeTab === 'dim' }"
           @click="activeTab = 'dim'"
         >
@@ -177,21 +177,11 @@ async function retry(): Promise<void> {
   background: var(--color-bg-elevated);
 }
 
+/* collapse/tab 由全局 .btn 家族承载(ghost icon / ghost sm);此处仅几何。 */
 .review-matrix__collapse {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 18px;
   height: 18px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  /* 3px:图标钮内圆角,低于 --radius-sm 的装饰档 */
-  border-radius: 3px;
-}
-.review-matrix__collapse:hover {
-  background: var(--color-bg-hover);
+  padding: 0;
 }
 
 .review-matrix__title {
@@ -216,17 +206,9 @@ async function retry(): Promise<void> {
   gap: 2px;
 }
 
+/* 家族 ghost 无边框,激活态会亮边 → 透明边占位防激活时 2px 跳位。 */
 .review-matrix__tab {
-  padding: 2px var(--space-2);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.review-matrix__tab:hover {
-  background: var(--color-bg-hover);
 }
 /* 激活态用 --color-bg-selected(spec:"selected list item / active nav")*/
 .review-matrix__tab--active {
@@ -262,20 +244,8 @@ async function retry(): Promise<void> {
   gap: 10px;
   padding: 0 10px 10px;
 }
-.review-matrix__btn {
-  padding: 3px 10px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-.review-matrix__btn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
+/* retry 按钮由 .btn--muted--sm 承载;重试进行中用 progress 光标。 */
 .review-matrix__btn:disabled {
-  opacity: 0.6;
   cursor: progress;
 }
 .review-matrix__hint {

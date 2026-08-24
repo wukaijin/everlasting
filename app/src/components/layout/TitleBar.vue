@@ -199,7 +199,7 @@ async function onClose() {
       data-tauri-drag-region="false"
     >
       <button
-        class="titlebar__btn"
+        class="titlebar__btn btn btn--ghost"
         type="button"
         title="最小化 / Minimize"
         aria-label="Minimize"
@@ -209,7 +209,7 @@ async function onClose() {
         <Icon name="minus" :size="14" />
       </button>
       <button
-        class="titlebar__btn"
+        class="titlebar__btn btn btn--ghost"
         type="button"
         :title="isMaximized ? '还原 / Restore' : '最大化 / Maximize'"
         :aria-label="isMaximized ? 'Restore' : 'Maximize'"
@@ -219,7 +219,7 @@ async function onClose() {
         <Icon :name="isMaximized ? 'restore' : 'maximize'" :size="14" />
       </button>
       <button
-        class="titlebar__btn titlebar__btn--close"
+        class="titlebar__btn titlebar__btn--close btn btn--ghost"
         type="button"
         title="关闭 / Close"
         aria-label="Close"
@@ -306,25 +306,16 @@ async function onClose() {
   flex-shrink: 0;
 }
 
+/* 08-24 btn-family:窗口控制钮由 ghost 家族承载(hover wash);本地保留
+   Windows 11 的 46px 通高几何 + cursor: default(窗口控制惯例非 pointer,
+   覆写家族 pointer)+ :active 按压(家族不含)。close 的 hover 红实底是
+   窗口关闭语义特例(设计文档已备案,不立 --close 变体),本地覆写。 */
 .titlebar__btn {
   width: 46px; /* Windows 11 standard */
   height: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--color-text-secondary);
   line-height: 1;
-  cursor: default;
-  font-family: inherit;
   padding: 0;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
-}
-
-.titlebar__btn:hover {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
+  cursor: default;
 }
 
 .titlebar__btn:active {

@@ -220,6 +220,10 @@ async function onModelPick(modelId: string) {
   display: inline-flex;
 }
 
+/* 08-24 btn-family 三件套特例判定:trigger chip 是 chat-input chip 族
+   (ModeSelect / ModelSelect / PluginSelect)的下拉触发器 —— radius-md +
+   mono + 选中态无家族变体对应,与 WP3 已判定的 PluginSelect 保持一致,
+   整块保留本地(三件套需同步迁移,不单独破例)。 */
 .model-select__trigger {
   display: inline-flex;
   align-items: center;

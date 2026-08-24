@@ -102,7 +102,7 @@ async function submit() {
 
         <button
           type="submit"
-          class="pairing-card__btn"
+          class="pairing-card__btn btn btn--primary btn--lg"
           :disabled="!canSubmit"
         >
           {{ pairingInProgress ? "配对中…" : "配对" }}
@@ -243,25 +243,9 @@ async function submit() {
   box-shadow: var(--shadow-ring);
 }
 
+/* 配对 CTA 由 .btn--primary--lg 承载;9px→10px 落家族档。 */
 .pairing-card__btn {
-  padding: 9px 16px;
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-base);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
-  transition: background var(--duration-base) var(--ease-out);
-}
-
-.pairing-card__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.pairing-card__btn:hover:not(:disabled) {
-  background: var(--color-accent-hover);
 }
 
 .pairing-card__error {

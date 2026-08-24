@@ -87,7 +87,7 @@ onMounted(refresh);
       <h1 class="node-list-view__title">选择设备</h1>
       <button
         type="button"
-        class="node-list-view__logout"
+        class="node-list-view__logout btn btn--outline"
         @click="logout"
       >
         登出
@@ -113,7 +113,7 @@ onMounted(refresh);
         {{ loadError }}
         <button
           type="button"
-          class="node-list-view__retry"
+          class="node-list-view__retry btn btn--outline btn--sm"
           @click="refresh"
         >
           重试
@@ -185,23 +185,15 @@ onMounted(refresh);
   color: var(--color-text-primary);
 }
 
-.node-list-view__logout {
-  padding: 4px 12px;
-  background: transparent;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition:
-    background var(--duration-base) var(--ease-out),
-    color var(--duration-base) var(--ease-out);
+/* logout/retry 由全局 .btn 家族承载(outline / outline sm);retry 是错误
+ * 重试语义,叠 tool-error 红边红字覆写。 */
+.node-list-view__retry {
+  flex-shrink: 0;
+  border-color: var(--color-tool-error);
+  color: var(--color-tool-error-text);
 }
 
-.node-list-view__logout:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
-}
+/* node-card 是卡片式设备选择钮(卡片语义非按钮家族形态),特例保留本地样式。 */
 
 .node-list-view__body {
   flex: 1;
@@ -240,17 +232,15 @@ onMounted(refresh);
   gap: 12px;
 }
 
+/* logout/retry 由全局 .btn 家族承载(outline / outline sm);retry 是错误
+ * 重试语义,叠 tool-error 红边红字覆写。 */
 .node-list-view__retry {
   flex-shrink: 0;
-  padding: 2px 10px;
-  background: transparent;
-  border: 1px solid var(--color-tool-error);
-  border-radius: var(--radius-sm);
+  border-color: var(--color-tool-error);
   color: var(--color-tool-error-text);
-  font-size: var(--text-xs);
-  cursor: pointer;
 }
 
+/* node-card 是卡片式设备选择钮(卡片语义非按钮家族形态),特例保留本地样式。 */
 .node-list-view__loading,
 .node-list-view__empty {
   padding: 32px 16px;

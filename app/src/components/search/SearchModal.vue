@@ -291,7 +291,7 @@ function timeLabel(iso: string): string {
             />
             <span v-if="searching" class="app-spinner search-modal__spinner" aria-label="搜索中" />
             <DialogClose as-child>
-              <button type="button" class="search-modal__close" aria-label="关闭" @click="close">
+              <button type="button" class="search-modal__close btn btn--ghost btn--icon" aria-label="关闭" @click="close">
                 <Icon name="x" :size="14" />
               </button>
             </DialogClose>
@@ -300,7 +300,7 @@ function timeLabel(iso: string): string {
           <div v-if="availableProjects.length > 1" class="search-modal__filters">
             <button
               type="button"
-              class="search-modal__chip"
+              class="search-modal__chip btn btn--outline btn--pill btn--sm"
               :class="{ 'search-modal__chip--active': projectFilter === null }"
               @click="projectFilter = null"
             >
@@ -310,7 +310,7 @@ function timeLabel(iso: string): string {
               v-for="p in availableProjects"
               :key="p.id"
               type="button"
-              class="search-modal__chip"
+              class="search-modal__chip btn btn--outline btn--pill btn--sm"
               :class="{ 'search-modal__chip--active': projectFilter === p.id }"
               @click="projectFilter = p.id"
             >
@@ -352,7 +352,7 @@ function timeLabel(iso: string): string {
                     v-for="h in visibleTitleHits"
                     :key="`t-${h.session_id}`"
                     type="button"
-                    class="search-modal__row no-focus-ring"
+                    class="search-modal__row no-focus-ring btn btn--ghost"
                     @click="openInMainWindow({ sessionId: h.session_id, sessionTitle: h.session_title, projectId: h.project_id, seq: null })"
                   >
                     <span class="search-modal__row-title">{{ h.session_title }}</span>
@@ -402,7 +402,7 @@ function timeLabel(iso: string): string {
           <header class="search-modal__bar search-modal__bar--preview">
             <button
               type="button"
-              class="search-modal__back"
+              class="search-modal__back btn btn--ghost btn--icon"
               aria-label="返回结果列表"
               @click="preview = null"
             >
@@ -414,13 +414,13 @@ function timeLabel(iso: string): string {
             </div>
             <button
               type="button"
-              class="search-modal__open-btn"
+              class="search-modal__open-btn btn btn--primary btn--sm"
               @click="openInMainWindow(preview)"
             >
               在主窗口打开
             </button>
             <DialogClose as-child>
-              <button type="button" class="search-modal__close" aria-label="关闭" @click="close">
+              <button type="button" class="search-modal__close btn btn--ghost btn--icon" aria-label="关闭" @click="close">
                 <Icon name="x" :size="14" />
               </button>
             </DialogClose>
@@ -516,24 +516,11 @@ function timeLabel(iso: string): string {
 
 /* 形态由全局 .app-spinner 原语提供(style.css);此处类名留作测试/检索钩子 */
 
+/* 08-24 btn-family:关闭/返回 icon 钮由 ghost·icon 家族承载;仅保留
+   flex 几何。 */
 .search-modal__close,
 .search-modal__back {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-}
-
-.search-modal__close:hover,
-.search-modal__back:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 
 .search-modal__filters {
@@ -545,15 +532,11 @@ function timeLabel(iso: string): string {
   flex-shrink: 0;
 }
 
+/* 08-24 btn-family:筛选 chip 形态落 outline·pill·sm(描边主导透明底);
+   本地保留紧凑横 padding + nowrap。--active 的 accent 16% 选中态自查:
+   家族无 pill-outline 选中变体,本地保留(选中语义非 hover 语义)。 */
 .search-modal__chip {
-  background: transparent;
-  border: 1px solid var(--color-bg-border);
-  border-radius: 999px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  font-family: inherit;
   padding: 2px 10px;
-  cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
 }

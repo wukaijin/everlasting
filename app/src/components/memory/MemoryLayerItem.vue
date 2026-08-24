@@ -132,7 +132,7 @@ function onOpenEditor() {
     }"
   >
     <button
-      class="memory-layer__head"
+      class="memory-layer__head btn btn--ghost"
       :aria-expanded="expanded"
       type="button"
       :disabled="isMissing"
@@ -174,7 +174,7 @@ function onOpenEditor() {
           {{ layer.path }}
         </span>
         <button
-          class="memory-layer__open"
+          class="memory-layer__open btn btn--muted btn--sm"
           type="button"
           @click="onOpenEditor"
         >
@@ -205,22 +205,18 @@ function onOpenEditor() {
   opacity: 0.6;
 }
 
+/* 折叠头由全局 .btn 家族承载(ghost);此处仅通栏几何。 */
 .memory-layer__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   width: 100%;
+  gap: 8px;
   padding: 8px 10px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--text-sm);
   text-align: left;
-  color: var(--color-text-primary);
 }
 
+/* missing 态的变暗由 .memory-layer--missing 在层级别处理,
+ * 抵消家族 disabled 的 opacity 0.5 避免双重变暗。 */
 .memory-layer__head:disabled {
+  opacity: 1;
   cursor: default;
 }
 
@@ -382,25 +378,8 @@ function onOpenEditor() {
   flex: 1;
 }
 
+/* 编辑器打开钮由全局 .btn 家族承载(muted sm,hover 逐值等于家族)。 */
 .memory-layer__open {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   flex-shrink: 0;
-  padding: 4px 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-primary);
-  font-size: var(--text-xs);
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
-}
-
-.memory-layer__open:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-text-primary);
 }
 </style>

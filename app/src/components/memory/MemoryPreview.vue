@@ -278,7 +278,7 @@ function formatTimestamp(rfc3339: string): string {
           </span>
         </span>
         <button
-          class="memory-preview__refresh"
+          class="memory-preview__refresh btn btn--muted btn--sm"
           type="button"
           :disabled="store.loading || !effectiveProjectId"
           @click="onRefresh"
@@ -344,7 +344,7 @@ function formatTimestamp(rfc3339: string): string {
             {{ store.runtimeMemories.length }} 条
           </span>
           <button
-            class="memory-preview__refresh"
+            class="memory-preview__refresh btn btn--muted btn--sm"
             type="button"
             :disabled="
               store.runtimeMemoriesLoading || !effectiveProjectId
@@ -465,7 +465,7 @@ function formatTimestamp(rfc3339: string): string {
           </div>
           <button
             type="button"
-            class="runtime-memory__delete"
+            class="runtime-memory__delete btn btn--icon btn--danger-soft"
             aria-label="删除记忆"
             title="删除记忆"
             @click.stop="onDeleteClick(mem.id)"
@@ -571,30 +571,7 @@ function formatTimestamp(rfc3339: string): string {
   color: var(--color-status-warn);
 }
 
-.memory-preview__refresh {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-primary);
-  font-size: var(--text-xs);
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
-}
-
-.memory-preview__refresh:hover:not(:disabled) {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-}
-
-.memory-preview__refresh:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* 刷新钮由全局 .btn 家族承载(muted sm,hover 逐值等于家族)。 */
 
 .memory-preview__error {
   display: flex;
@@ -846,28 +823,11 @@ function formatTimestamp(rfc3339: string): string {
   outline-offset: 1px;
 }
 
+/* 删除钮由全局 .btn 家族承载(danger-soft icon);此处仅几何。 */
 .runtime-memory__delete {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
   height: 24px;
   padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-muted);
-  cursor: pointer;
-  transition:
-    background var(--duration-base) var(--ease-out),
-    color var(--duration-base) var(--ease-out),
-    border-color var(--duration-base) var(--ease-out);
-}
-
-.runtime-memory__delete:hover {
-  background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
-  border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-  color: var(--color-tool-error-text);
 }
 </style>

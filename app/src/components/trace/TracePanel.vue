@@ -171,7 +171,7 @@ watch(
         <div class="trace-panel__actions">
           <button
             type="button"
-            class="trace-panel__btn trace-panel__btn--clear"
+            class="trace-panel__btn trace-panel__btn--clear btn btn--muted btn--sm"
             :disabled="!cleanupEnabled"
             :title="cleanupEnabled ? '清理本 session 的 trace 数据' : '请先选择 session'"
             @click="onClearClick"
@@ -181,7 +181,7 @@ watch(
           </button>
           <button
             type="button"
-            class="trace-panel__close"
+            class="trace-panel__close btn btn--icon btn--ghost"
             aria-label="关闭"
             @click="onClose"
           >
@@ -289,53 +289,12 @@ watch(
   flex-shrink: 0;
 }
 
-.trace-panel__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--color-bg-surface);
-  color: var(--color-text-secondary);
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: var(--text-xs);
-  line-height: 1;
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.trace-panel__btn:not(:disabled):hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
-}
-
-.trace-panel__btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
+/* 按钮由全局 .btn 家族承载(close = ghost icon / clear = muted sm);
+ * clear 是删除语义,muted 家族 hover 上叠红字红边覆写。 */
 .trace-panel__btn--clear:not(:disabled):hover {
+  background: var(--color-bg-border);
   color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 35%, transparent);
-}
-
-.trace-panel__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.trace-panel__close:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 
 /* Slide-in / slide-out transition (mirrors SubagentDrawer). */

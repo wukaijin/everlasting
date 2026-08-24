@@ -123,7 +123,7 @@ function tabTooltip(p: {
           title="正在生成"
         >●</span>
         <button
-          class="tab__close"
+          class="tab__close btn btn--ghost btn--icon"
           :title="'关闭 Tab(数据保留)'"
           :aria-label="`关闭 ${p.name}`"
           @click="(e) => onHide(p.id, e)"
@@ -133,7 +133,7 @@ function tabTooltip(p: {
       </div>
     </div>
     <button
-      class="tabs__add"
+      class="tabs__add btn btn--ghost"
       title="添加项目"
       :aria-label="'添加项目'"
       @click="onAdd"
@@ -156,7 +156,7 @@ function tabTooltip(p: {
         @keydown.esc.prevent="onManualPathCancel"
       />
       <button
-        class="manual-path__btn manual-path__btn--confirm"
+        class="manual-path__btn manual-path__btn--confirm btn btn--ghost btn--icon"
         :disabled="manualPathBusy || !manualPath.trim()"
         title="添加"
         @click="onManualPathSubmit"
@@ -164,7 +164,7 @@ function tabTooltip(p: {
         <Icon name="check" :size="14" />
       </button>
       <button
-        class="manual-path__btn manual-path__btn--cancel"
+        class="manual-path__btn manual-path__btn--cancel btn btn--ghost btn--icon"
         title="取消"
         @click="onManualPathCancel"
       >
@@ -217,10 +217,11 @@ function tabTooltip(p: {
   background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 13px;
+  /* 08-24 裸值清理:13px = --text-base 等值,落 token。tab 本身是
+     <div> 非按钮,样式保留本地(--active 选中态家族不合)。 */
+  font-size: var(--text-base);
   color: var(--color-text-secondary);
-  transition: background 0.1s, color 0.1s;
-  font-family: inherit;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .tab:hover {
@@ -294,23 +295,18 @@ function tabTooltip(p: {
   50% { opacity: 0.35; }
 }
 
+/* 08-24 btn-family:18px 固定 icon 钮由 ghost·icon 家族承载;本地保留
+   固定几何 + hover 显隐(opacity reveal,需 opacity transition 家族未含;
+   原裸 3px radius / 0.1s 删,落家族 radius-sm / fast)。hover 红实底是
+   tab 关闭语义特例(设计文档备案,不立变体),本地覆写。 */
 .tab__close {
   flex-shrink: 0;
   width: 18px;
   height: 18px;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--color-text-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.1s, background 0.1s, color 0.1s;
   padding: 0;
-  font-family: inherit;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
 .tab:hover .tab__close,
@@ -323,25 +319,13 @@ function tabTooltip(p: {
   color: var(--color-text-on-accent);
 }
 
+/* 08-24 btn-family:+ 添加 tab 由 ghost 家族承载(本体透明,hover 收敛
+   家族 wash);本地保留 40px 通高几何。 */
 .tabs__add {
   flex-shrink: 0;
   width: 40px;
   height: 100%;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-secondary);
-  transition: background 0.1s, color 0.1s;
-  font-family: inherit;
   padding: 0;
-}
-
-.tabs__add:hover {
-  background: var(--color-accent-muted);
-  color: var(--color-accent-text);
 }
 
 /* P2.4 D6: browser-mode manual-path entry. */
@@ -375,29 +359,13 @@ function tabTooltip(p: {
   opacity: 0.6;
 }
 
+/* 08-24 btn-family:manual-path 确认/取消 26px icon 钮由 ghost·icon
+   家族承载(原 1px 边/裸 4px radius/0.1s 删,落家族);本地保留固定
+   几何。confirm 的 hover 绿字是"路径有效"语义特例,本地覆写。 */
 .manual-path__btn {
   width: 26px;
   height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  color: var(--color-text-secondary);
-  cursor: pointer;
   padding: 0;
-  transition: background 0.1s, color 0.1s;
-}
-
-.manual-path__btn:hover:not(:disabled) {
-  background: var(--color-accent-muted);
-  color: var(--color-accent-text);
-}
-
-.manual-path__btn:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 .manual-path__btn--confirm:hover:not(:disabled) {

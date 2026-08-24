@@ -115,7 +115,7 @@ function onKeydown(e: KeyboardEvent) {
     />
     <button
       v-if="modelValue.length > 0"
-      class="session-search__clear"
+      class="session-search__clear btn btn--icon btn--ghost"
       type="button"
       title="清空 (Esc)"
       aria-label="清空搜索"
@@ -176,26 +176,11 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--color-text-muted);
 }
 
+/* 清空钮由全局 .btn 家族承载(ghost icon);此处仅几何。 */
 .session-search__clear {
   flex-shrink: 0;
   width: 18px;
   height: 18px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   padding: 0;
-  font-family: inherit;
-  transition: background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.session-search__clear:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
 }
 </style>

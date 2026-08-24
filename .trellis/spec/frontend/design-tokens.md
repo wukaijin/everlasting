@@ -703,7 +703,9 @@ pattern as `.app-spinner`: shared CSS classes, **no Vue component**.
 .btn--outline               1px bg-border on transparent; hover elevated fill
 .btn--sm / --lg             size modifiers (default md); sm = 4px 8px + text-xs,
                             lg = 10px 16px + text-base
-.btn--icon                  icon-only square: padding 0 + aspect-ratio 1
+.btn--icon                  icon-only square: padding --space-1 + aspect-ratio 1;
+                            fixed-size icon buttons declare local w/h + padding 0
+                            (explicit geometry stays component-owned)
 .btn--pill / --circle       shape modifiers (default radius-sm); circle needs
                             explicit component width/height
 ```

@@ -132,7 +132,7 @@ function onSearchClear() {
       <div class="sidebar__actions">
         <button
           v-if="!searchActive"
-          class="sidebar__action"
+          class="sidebar__action btn btn--ghost btn--icon"
           type="button"
           :title="density === 'compact' ? '切换为舒适密度' : '切换为紧凑密度'"
           :aria-label="
@@ -144,7 +144,7 @@ function onSearchClear() {
         </button>
         <button
           v-if="!searchActive"
-          class="sidebar__action"
+          class="sidebar__action btn btn--ghost btn--icon"
           type="button"
           title="按标题过滤会话"
           aria-label="按标题过滤会话"
@@ -154,7 +154,7 @@ function onSearchClear() {
         </button>
         <button
           v-if="!searchActive"
-          class="sidebar__action"
+          class="sidebar__action btn btn--ghost btn--icon"
           type="button"
           title="新建群聊"
           aria-label="新建群聊"
@@ -164,7 +164,7 @@ function onSearchClear() {
           <Icon name="users" :size="14" />
         </button>
         <button
-          class="sidebar__add"
+          class="sidebar__add btn btn--ghost btn--icon"
           type="button"
           title="新建会话"
           aria-label="新建会话"
@@ -181,7 +181,7 @@ function onSearchClear() {
     <div class="sidebar__footer">
       <button
         type="button"
-        class="sidebar__settings"
+        class="sidebar__settings btn btn--ghost btn--sm"
         title="设置"
         aria-label="设置"
         @click="onSettingsClick"
@@ -292,46 +292,18 @@ function onSearchClear() {
   gap: 2px;
 }
 
+/* 08-24 btn-family:22px 固定 icon 钮(density/filter/群聊/新增)由
+   ghost·icon 家族承载;本地仅保留固定几何(w/h + padding:0)。 */
 .sidebar__action {
   width: 22px;
   height: 22px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: inherit;
   padding: 0;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
-}
-
-.sidebar__action:hover {
-  background: var(--color-bg-elevated);
-  color: var(--color-accent-text);
 }
 
 .sidebar__add {
   width: 22px;
   height: 22px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: inherit;
   padding: 0;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
-}
-
-.sidebar__add:hover {
-  background: var(--color-bg-elevated);
-  color: var(--color-accent-text);
 }
 
 /* PR5: bottom-of-sidebar footer that holds the Settings entry.
@@ -347,24 +319,12 @@ function onSearchClear() {
   justify-content: flex-start;
 }
 
+/* 08-24 btn-family:设置入口由 ghost·sm 家族承载;本地保留 mono 字体
+   与紧凑横向 padding(原裸 border-radius: 3px 删,落家族 radius-sm)。 */
 .sidebar__settings {
-  display: inline-flex;
-  align-items: center;
   gap: 6px;
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
   padding: 4px 6px;
-  border-radius: 3px;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
-}
-
-.sidebar__settings:hover {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
 }
 
 .sidebar__settings-label {
