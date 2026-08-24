@@ -161,7 +161,10 @@ const menuY = ref(0);
 // --- D1: inline rename state ---
 const editingId = ref<string | null>(null);
 const editingTitle = ref("");
-const editInput = ref<HTMLInputElement | null>(null);
+// v-for 作用域内的模板 ref 会被 Vue 收成数组(08-24 实测:声明成单元素时
+// .focus() 落在数组上是静默空操作,重命名框从不自动聚焦)。同一时刻
+// 至多渲染一个编辑框,取数组首项即可。
+const editInput = ref<HTMLInputElement | HTMLInputElement[] | null>(null);
 
 // --- F3: delete confirmation state ---
 const confirmOpen = ref(false);
@@ -262,8 +265,9 @@ async function startEditing(id: string, currentTitle: string) {
   editingTitle.value = currentTitle;
   contextMenuOpen.value = false;
   await nextTick();
-  editInput.value?.focus();
-  editInput.value?.select();
+  const el = Array.isArray(editInput.value) ? editInput.value[0] : editInput.value;
+  el?.focus();
+  el?.select();
 }
 
 function commitEdit() {
@@ -438,6 +442,11 @@ watch(() => props.searchActive, (active) => {
 
   <!-- Flat filter mode: query is non-empty. Skip group headers
        and render matches as a single list. -->
+  <!-- session-item 键盘可达(08-24-session-item-keyboard):范式照抄
+       SessionGroupHeader(role=button + tabindex + Enter/Space.prevent)。
+       enter.exact 防止 Shift+Enter 重命名时双触发 onClick;
+       Shift+Enter 对应鼠标双击重命名。焦点环由全局 :focus-visible
+       基线的 [tabindex] 选择器自动提供,无需本地样式。 -->
   <ul
     v-if="flatFilterMode"
     :class="['session-list', `session-list--${density}`]"
@@ -447,9 +456,15 @@ watch(() => props.searchActive, (active) => {
       :key="s.id"
       :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
       :style="cardStyle(s)"
+      role="button"
+      tabindex="0"
+      :aria-current="s.id === store.currentSessionId ? 'true' : undefined"
       @click="onClick(s.id)"
       @dblclick="startEditing(s.id, s.title)"
       @contextmenu="onContextMenu($event, s.id)"
+      @keydown.enter.exact="onClick(s.id)"
+      @keydown.space.prevent="onClick(s.id)"
+      @keydown.shift.enter="startEditing(s.id, s.title)"
     >
       <div class="session-item__main">
         <div class="session-item__title-row">
@@ -534,9 +549,15 @@ watch(() => props.searchActive, (active) => {
             :key="s.id"
             :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
             :style="cardStyle(s)"
+            role="button"
+            tabindex="0"
+            :aria-current="s.id === store.currentSessionId ? 'true' : undefined"
             @click="onClick(s.id)"
             @dblclick="startEditing(s.id, s.title)"
             @contextmenu="onContextMenu($event, s.id)"
+            @keydown.enter.exact="onClick(s.id)"
+            @keydown.space.prevent="onClick(s.id)"
+            @keydown.shift.enter="startEditing(s.id, s.title)"
           >
             <div class="session-item__main">
               <div class="session-item__title-row">
