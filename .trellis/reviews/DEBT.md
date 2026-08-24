@@ -78,7 +78,7 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
 
-## P2 — 健壮性 + 债务,中长期清理 [2 items]
+## P2 — 健壮性 + 债务,中长期清理 [5 items]
 
 ### RULE-DAEMON-001
 
@@ -102,9 +102,51 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
 
-## P3 — 轻微(文档/一致性) [0 items]
+### RULE-FM-001
 
-_无 open 项(RULE-B-007 + RULE-C-008 已 closed, 详见 git log)。_
+- **Level**: P2
+- **Subsystem**: Tools
+- **File**: `app/src-tauri/src/resource_loader.rs:160/195`、`app/src-tauri/src/skill/loader/frontmatter.rs:48/79`、`app/src-tauri/src/agent/subagent/frontmatter.rs:85/116`
+- **Description**: frontmatter 解析器 3 份复制(`parse_frontmatter` + `apply_kv` 逐字相同,仅字段不同;`parse_tools_array` / `parse_allowed_tools` 并存);测试断言也复制(`apply_kv_ignores_comments_blank_unknown` 在 resource_loader.rs:558 + skill/tests_loader.rs:55 两处)——一个行为变更 = 改 3 实现 + ≥3 测试
+- **Fix**: 在 resource_loader 之上抽泛型 `parse_md_resource<T>(content, T::default, T::apply_kv)`,三 loader 各留 `apply_kv` + 字段定义(~半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
+
+### RULE-TESTPOOL-001
+
+- **Level**: P2
+- **Subsystem**: Cross
+- **File**: `app/src-tauri/src/`(grep "fn test_pool" 命中 15 处:db/sessions_tests/mod.rs:23、db/subagent_runs_tests.rs:28、db/messages_tests.rs:22、projects/store.rs:176、db/memories_tests/mod.rs:23、commands/tests_resolve_mode_change.rs:56、agent/tests_common.rs:157、tools/tests_merge_worker.rs:15、db/search_tests.rs:18、db/usage_tests.rs:12、db/providers_tests.rs:21、db/permissions_tests.rs:24、db/trace.rs:498、db/projects_tests.rs:23、agent/subagent/tests_dispatch.rs:255)
+- **Description**: in-memory 测试池构建函数 15 处手写复制(connect + PRAGMA foreign_keys + migrations::run),migrations 变更要同步 15 处
+- **Fix**: 抽 `db/test_support.rs` 共享 `test_pool()`,15 处改调用(~120 行净删)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
+
+### RULE-ARGS-001
+
+- **Level**: P2
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/agent/chat_loop.rs:319`(`run_chat_loop` 18 参)、`chat_loop/drive.rs:82`(drive_turn)、`chat_loop/tools.rs:1779`(finalize_turn);grep "too_many_arguments" 全库 43 处
+- **Description**: 项目穿状态的方式是线性参数管道(每次新 feature 往既有签名追加参数 + 注释块);chat_loop 已物理拆成 `chat_loop/{drive,init,tools}.rs` 但超长签名原样存活在子文件——拆分只做了形式没做实质
+- **Fix**: parameter object 重构(provider / cancel / cache / subagent 套件聚类),目标 43 处非单函数(中等 epic 量级)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
+
+## P3 — 轻微(文档/一致性) [1 items]
+
+### RULE-DOC-001
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `app/src-tauri/src/agent/chat_loop/drive.rs:107`(参数注释块 `08-20-turn-usage-event-quota-view WP2` 等)、`docs/CONTEXT.md`(与 CLAUDE.md "当前状态" 段重复)
+- **Description**: 参数注释块把 git log 已记录的 feature 名 + 日期 + commit hash 重复进代码注释,形成双 source of truth(注释会被 feature 重命名牵动,gir log 是只读稳定副本);CLAUDE.md "当前状态"段与 ROADMAP 重复且每轮注入付 token 税
+- **Fix**: 参数注释收敛为一句用途说明,历史走 git log;CLAUDE.md 状态段改派生生成(git log / 代码现状 / 既有 memory 管道)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
 
 
 ---
@@ -115,9 +157,9 @@ _无 open 项(RULE-B-007 + RULE-C-008 已 closed, 详见 git log)。_
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 2 | 正确性 + 资源(数据丢失风险) |
-| P2 | 2 | 健壮性 + 债务,中长期清理 |
-| P3 | 0 | 文档 + 一致性,可延后 |
-| **Total** | **4** | 当前 open items |
+| P2 | 5 | 健壮性 + 债务,中长期清理 |
+| P3 | 1 | 文档 + 一致性,可延后 |
+| **Total** | **8** | 当前 open items |
 
 ---
 
