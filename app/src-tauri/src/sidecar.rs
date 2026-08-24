@@ -35,7 +35,13 @@
 //! The `--port` + `--data-dir` args MUST match the
 //! `capabilities/default.json` `shell:allow-execute` scoped args
 //! exactly (static segments verbatim, dynamic `--data-dir` value under
-//! a `.+` regex validator).
+//! a `.+` regex validator). The spawn also injects `EVERLASTING_SIDECAR=1`
+//! (env vars are not part of the shell scope validation, so no
+//! capability change needed): the daemon gates its Linux orphan-guard
+//! (`PR_SET_PDEATHSIG`) on this flag so ONLY the GUI-owned sidecar dies
+//! with its parent — standalone launches (`daemon.sh bg`, `cargo run`,
+//! CI) stay alive after their short-lived parent shell exits
+//! (2026-08-24 regression fix).
 //!
 //! ## Kill semantics
 //!
@@ -162,6 +168,10 @@ pub fn spawn_and_manage(app: &AppHandle, data_dir: &Path) {
         .shell()
         .sidecar(SIDECAR_NAME)
         .expect("sidecar 'everlasting-daemon' not resolved (check bundle.externalBin + binaries/ staging)")
+        // Mark the child as GUI-owned so the daemon arms its Linux
+        // orphan-guard (PDEATHSIG) ONLY in this mode — standalone
+        // launches must survive their parent shell exiting.
+        .env("EVERLASTING_SIDECAR", "1")
         .args([
             "--port",
             &SIDECAR_PORT.to_string(),

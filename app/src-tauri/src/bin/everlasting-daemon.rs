@@ -62,29 +62,35 @@ async fn main() -> ExitCode {
     // 父进程终止时给本进程发 SIGTERM —— daemon 已有的 `shutdown_signal`
     // handler 会走优雅退出。
     //
-    // 为什么需要:`tauri dev` 的 Rust live reload 是**强制 kill GUI 进程**
-    // (不走 `RunEvent::Exit`),所以 `SidecarHandle::kill()` 永远跑不到,
-    // daemon 会成孤儿继续占端口 → 下次 sidecar 探测端口冲突 exit 1 →
-    // 前端 "daemon 不可用"。GUI 正常退出 / crash / 被强杀同理。
+    // 为什么需要(sidecar 场景):`tauri dev` 的 Rust live reload 是**强制
+    // kill GUI 进程**(不走 `RunEvent::Exit`),所以 `SidecarHandle::kill()`
+    // 永远跑不到,daemon 会成孤儿继续占端口 → 下次 sidecar 探测端口冲突
+    // exit 1 → 前端 "daemon 不可用"。GUI 正常退出 / crash / 被强杀同理。
     // prctl 把"daemon 生命周期绑死 GUI"沉到内核层,无论 GUI 怎么死都生效。
+    //
+    // 2026-08-24 gate 修复:仅 sidecar 模式(`EVERLASTING_SIDECAR=1`,
+    // 由 sidecar.rs 的 spawn 注入)才启用。此前无条件设置,standalone 的
+    // `daemon.sh bg` 必死:daemon 的父进程是 daemon.sh 脚本本身,脚本在
+    // `sleep 1.5` 验活通过、打印"后台运行中"后正常退出 → 内核 PDEATHSIG
+    // 发 SIGTERM → daemon 起来 ~1.5s 即被优雅杀掉(日志只见 graceful
+    // shutdown,极易误判为"自己崩了")。standalone(`daemon.sh` /
+    // `cargo run` / CI)不绑父进程生命周期:后台服务被 init 收养是正常
+    // 形态;防护 1(`getppid()==1` 拒启动)也一并 gate —— systemd unit /
+    // daemonize 场景 ppid 天然是 1,不 gate 会直接拒启。
     //
     // 两个 race 防护(POSIX prctl 的已知坑):
     //   1. 若父进程在 prctl 调用前已死,本进程会被 init(PID 1)收养 →
     //      prctl 此时绑的是 init,不会触发。所以先判 `getppid() == 1` 直接退。
     //   2. `PR_SET_PDEATHSIG` 只在调用那一刻设置;父进程之后的变更不再
     //      监听。daemon 不会 reparent(整个生命周期父进程不变),故无需重设。
-    //
-    // 非 sidecar 启动(standalone `cargo run --bin everlasting-daemon` /
-    // `daemon.sh`)也安全:它们的父进程是 shell,shell 退出 daemon 跟着退,
-    // 符合"前台跑、关终端即停"的预期。CI 测试中 daemon 的父进程是 test
-    // runner,runner 退出 daemon 也退,无泄漏。
     #[cfg(target_os = "linux")]
-    {
+    if is_sidecar_mode() {
+        tracing::debug!("sidecar mode: orphan-guard armed (PDEATHSIG=SIGTERM)");
         // 防护 1:父进程已死(被 init 收养)→ 立即退,不 bind 端口。
         // 排除自身 PID==1 的极端情况(容器里 daemon 可能就是 init)。
         if std::process::id() != 1 && unsafe { libc::getppid() } == 1 {
             tracing::error!(
-                "everlasting-daemon: parent already exited (reparented to init); refusing to start as orphan"
+                "everlasting-daemon: sidecar parent already exited (reparented to init); refusing to start as orphan"
             );
             return ExitCode::from(1);
         }
@@ -119,6 +125,7 @@ async fn main() -> ExitCode {
 
     tracing::info!(
         port,
+        sidecar = is_sidecar_mode(),
         data_dir = %data_dir.display(),
         daemon_version = env!("CARGO_PKG_VERSION"),
         "everlasting-daemon starting"
@@ -187,6 +194,21 @@ async fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// 是否以 GUI sidecar 身份运行。GUI 的 `sidecar.rs::spawn_and_manage`
+/// spawn 时注入 `EVERLASTING_SIDECAR=1`;standalone(`daemon.sh` /
+/// `cargo run` / CI)不设 → orphan-guard(PDEATHSIG)关闭,后台 daemon
+/// 不再被短命父进程(daemon.sh 脚本)的退出连坐(2026-08-24 回归修复)。
+fn is_sidecar_mode() -> bool {
+    sidecar_flag_from_env(std::env::var_os("EVERLASTING_SIDECAR"))
+}
+
+/// `is_sidecar_mode` 的纯函数核心。拆出来单测:直接测 env 读取需要
+/// set_var,并行测试下有竞态。语义与 `EVERLASTING_GUI_FULL_STATE` 对齐:
+/// 仅字面量 `"1"` 生效(非 "1" 一律当 standalone,宁可少绑也不误杀)。
+fn sidecar_flag_from_env(v: Option<std::ffi::OsString>) -> bool {
+    v.as_deref() == Some(std::ffi::OsStr::new("1"))
 }
 
 /// Parse `--port <N>` from CLI args. Falls back to
@@ -312,8 +334,21 @@ async fn probe_port_conflict(port: u16) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_data_dir;
+    use super::{resolve_data_dir, sidecar_flag_from_env};
     use std::ffi::OsStr;
+
+    /// 2026-08-24 orphan-guard gate:仅 `EVERLASTING_SIDECAR=1`(字面量
+    /// "1")按 sidecar 对待 → 设 PDEATHSIG;缺失/空/"0"/"true" 都是
+    /// standalone → 不绑父进程生命周期,`daemon.sh bg` 的 daemon 不再
+    /// 随 daemon.sh 脚本退出被内核 SIGTERM 连坐。
+    #[test]
+    fn sidecar_flag_from_env_requires_literal_one() {
+        assert!(sidecar_flag_from_env(Some("1".into())));
+        assert!(!sidecar_flag_from_env(None));
+        assert!(!sidecar_flag_from_env(Some("".into())));
+        assert!(!sidecar_flag_from_env(Some("0".into())));
+        assert!(!sidecar_flag_from_env(Some("true".into())));
+    }
 
     /// P2.1 path-consistency invariant: the daemon's data dir MUST end
     /// with the same identifier the GUI's `app_data_dir()` uses
