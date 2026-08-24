@@ -755,3 +755,25 @@ B1 三 follow-up 一次收口。brainstorm 五决议(D1 拖拽纳入/D2 压缩�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 109: turn 流式持久化 + 崩溃恢复(RULE-PERSIST-001 P1 闭合)
+
+**Date**: 2026-08-25
+**Task**: turn 流式持久化 + 崩溃恢复(RULE-PERSIST-001 P1 闭合)
+**Branch**: `main`
+
+### Summary
+
+DEBT 最后一条 P1 全链收口。规划期研究推翻两认知:① 崩溃有双窗口——W2 工具执行中崩溃留孤儿 tool_use 行,该 session 此后每次请求 400(pair atomicity),比丢内容更重,今天零修复;② subagent_runs 已是'running 占位+启动 reap'完整先例,设计直接贴它零新机制。交付四 WP:WP1 messages.status 列(NULL/in_progress/interrupted+partial index)+ db 层 upsert/finalize/delete + recover_interrupted_messages(空占位删/有内容加 [异常中断已恢复] marker/孤儿尾合成 is_error tool_result)+ state.rs 启动 pass;WP2 drive.rs 三写点(stream ready 占位/Delta·ThinkingDelta 臂 1s 时间门只读克隆检查点/assistant 落库点独占 upsert——persist_turn 保持裸 INSERT 保 seq 漂移告警语义);WP3 前端 stream-resync 消费者+DB 死亡预言机;WP4 sse.rs 哨兵决策表。check 链抓三真问题:检查点失败重试风暴(改按 attempt 关门)、哨兵重启后根本不发(原研究'必收哨兵'结论错误,补空 buffer/跨进程陈旧高 id 两哨兵臂)、活请求被哨兵误终结(死亡预言机:末尾行 status 判死活,活请求 no-op 由 done 自愈)。验证:后端 1925+1 基线 flaky(stash 对照)/前端 1179+build/remote 89/fmt/clippy 零新增;隔离实例(--data-dir DB 副本)kill -9 真演 PASS(11s 杀,检查点 402 字→重启恢复 interrupted 413 字含 marker 零残留)+turn-smoke 过;意外收获:真实 DB 副本上 orphan_repaired=4——存量 4 个孤儿 session 下次真实 daemon 重启自动修复。坑:首演 6s 杀太早 provider 未吐 delta,改轮询检查点落库再杀;daemon 生命周期必须单命令内联。spec 回写五处:agent-loop-architecture(+pattern-turn-checkpoint)/database-guidelines(检查点 Scenario)/daemon-server(哨兵决策表)/llm-contract(崩溃孤儿修复)/frontend-transport(哨兵=oracle-trigger 非 proof)。DEBT P1 清零(剩 4 P2+1 P3)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3c4850b` | (see git log) |
+| `76765cd` | (see git log) |
+
+### Status
+
+[OK] **Completed**
