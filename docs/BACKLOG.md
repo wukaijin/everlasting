@@ -33,13 +33,15 @@
 ---
 
 
-## 1. 输入层扩展 → 已落地 (B2 @file 2026-06-17, B3 /command 2026-06-17),详见 ROADMAP §1.2;§1.1 多模态缓做 (ROADMAP §3)
+## 1. 输入层扩展
+
+> 状态与排期归 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)(B2 @文件 + B3 /command 已落地;多模态见 [ROADMAP §2 第三档](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排))。
 
 ---
 
 ## 2. Agent Skill 系统
 
-**状态**:已落地 (B4 2026-06-18),详见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)。
+> 状态与排期归 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)(B4 已落地)。
 
 ---
 
@@ -106,8 +108,8 @@
 - 本节 = "在另一台机器接着干"
 
 **形态**:
-- **本地 daemon 化(✅ 已落地,2026-07,见 [ROADMAP §1.2 "daemon 化"](./ROADMAP.md#12-路线图外完成))**:agent core 已拆为独立 `everlasting-daemon` 进程(axum HTTP),Tauri GUI 作为瘦客户端 + 纯浏览器模式共享同一 agent core。这是跨设备的**基础**,但不等于跨设备 —— 本节未完成部分指**跨机器**接续。
-- **VPS 中继 + 手机访问(✅ 已落地,remote epic S1~S6b,2026-08-11~08-13,merge `94828cb`)**:落地模型与早期计划(集中式"VPS daemon 唯一权威")不同 —— **PC daemon 是权威**(持全部 agent 数据/文件),云端 `everlasting-remote` **仅中继**(不持文件、不存 agent 数据,只存 nodes/devices/pairing_codes)。已交付:VPS 中继 + 配对 + PWA 手机访问(含移动端适配,08-13-mobile-chat-view / mobile-settings / mobile-polish),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)
+- **本地 daemon 化(✅ 已落地,见 [ROADMAP §1.2 "daemon 化"](./ROADMAP.md#12-路线图外完成))**:agent core 已拆为独立 `everlasting-daemon` 进程(axum HTTP),Tauri GUI 作为瘦客户端 + 纯浏览器模式共享同一 agent core。这是跨设备的**基础**,但不等于跨设备 —— 本节未完成部分指**跨机器**接续。
+- **VPS 中继 + 手机访问(✅ 已落地,remote epic S1~S6b,见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成))**:落地模型与早期计划(集中式"VPS daemon 唯一权威")不同 —— **PC daemon 是权威**(持全部 agent 数据/文件),云端 `everlasting-remote` **仅中继**(不持文件、不存 agent 数据,只存 nodes/devices/pairing_codes)。已交付:VPS 中继 + 配对 + PWA 手机访问(含移动端适配,08-13-mobile-chat-view / mobile-settings / mobile-polish),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)
 - **跨机器接续(❌ 未做,本节剩余主范围)**:worktree 迁移 / 多设备 session 同步仍未做 —— 数据仍只在 PC,手机经隧道访问的是 PC daemon
 
 **daemon 化已提供的基础(本地)**:
@@ -148,13 +150,12 @@
 
 > 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](./_archive/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机 + 实际落地状态。
 
-### ~~5.1 cwd 简化为 `~/` ✅ 已落地~~ (已落地 2026-06-06)(2026-06-06,commit `ef7cea8`)
+### ~~5.1 cwd 简化为 `~/`(✅ 已落地 2026-06-06)~~
 
 - **原现状**:chat header 显示 cwd 用完整绝对路径(`/home/carlos/code/foo/backend`)。PROPOSAL §5.4 / Q5 决议是简化为 `~/foo/backend`,但 PR1 backend 没暴露 `home_dir` 给前端。
 - **修法**:`configStore` 加 `homeDir` 字段(后端 `dirs::home_dir()` 经 Tauri command 暴露),frontend 写 `simplifyPath(cwd, homeDir)` 工具做前缀替换,`chatStore.simplifiedCwd` computed 派生给 ChatHeader 用。
 - **落地状态**:`app/src/utils/path.ts` + `app/src/stores/config.ts` + `app/src/stores/chat.ts` `simplifiedCwd` computed 都已存在并使用。
-- **关联**:PR3 commit `ef7cea8` "准备 pwd `~/` 简化数据通路" + FOLLOW-UP §FU-1(已 done,2026-06-06)。
-- **状态**:✅ 已完成。
+- **关联**:PR3 "准备 pwd `~/` 简化数据通路"(具体 commit 走 `git log`)+ FOLLOW-UP §FU-1(已 done,2026-06-06)。
 
 ### 5.2 TS interface 字段 `snake_case` → `camelCase` ⏸ 保持现状(2026-06-07 决策)
 
