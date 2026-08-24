@@ -4,7 +4,7 @@
  > + S2(PC tunnel client)+ S4(配对/PWA)+ S5(移动适配)。
 >
 > - 部署细节见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md)(remote 单端运维)
-> - 架构决策见 [`.trellis/tasks/08-11-remote-control-epic/prd.md`](../.trellis/tasks/08-11-remote-control-epic/prd.md)(SoT)
+> - 架构决策见 [`.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md`](../.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md)(SoT)
 > - 远期规划见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md)
 
 ## 0. 拓扑与角色

@@ -2,6 +2,7 @@
 
 > Everlasting 项目术语表(glossary)。
 > 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志(按月分卷,无 `decisions.md`),本文件不重复。
+> 词条内的实现状态为**历史快照**(落地时记录),新进展/新特性只更新 [ROADMAP.md](./ROADMAP.md) 与决策日志,不在此追加;术语新增时才加词条。
 
 ---
 
@@ -50,7 +51,7 @@ Anthropic Messages API 的 token 用量在 SSE 流的 `message_delta` 事件中�
 OpenAI Chat Completions 的 token 用量在流末尾携带(`usage: { prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details: { cached_tokens } }`),**仅在请求体发送 `stream_options: { include_usage: true }` 时**返回。
 
 ### Checklist (agent 自跟踪清单)
-> **实现状态**:**B12 已落地(2026-06-19)**。TodoWrite 式 `update_checklist` tool — 全量替换(单次调用覆盖完整清单,非增量 diff)+ 三态 `pending` / `in_progress` / `done` + 至多一 `in_progress` coerce(LLM 误标多个 in_progress 时收一)+ loop-local Vec(per-request,通过 `ToolContext` 传,不污染持久化 messages)+ 每轮 ephemeral **append** 注入请求副本(不入持久化,保 memory cache breakpoint 不断)。前端 `<ChecklistCard>` ChatPanel 浮层(展开 / 最小化悬浮球 + 焦点动效)+ checklist store(客户端复刻 coerce)。无新 DB 表(replay 从 DB history 还原,reload 按 `is_error` 过滤 cancel 合成 result)。PR1 `994db84` + PR2 `1896470` + PR3 spec;决策见 [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION/decisions-2026-06.md)。
+> **实现状态**:**B12 已落地(2026-06-19)**。实现细节(注入机制 / 前端组件 / DB 表)见 [ROADMAP §1.2 B12 行](./ROADMAP.md) + [决策日志 2026-06-18](./IMPLEMENTATION/decisions-2026-06.md),此处只留定义。
 
 LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自己写、改、标记完成,用于不丢失自己的计划与进度。对齐 Claude Code 的 `TaskCreate/TaskList`、opencode 的 `todowrite`、Cline 的 plan-act。
 

@@ -58,17 +58,7 @@
 - 关卡 ⑤ (context 构造) 做硬卡
 - 超限按优先级裁剪
 
-> 📌 **待办(2026-08-14,源自 C7 brainstorm):memory 指令块(CLAUDE.md/AGENTS.md)窗口治理** — 与 `tools[]` 并列的窗口大头,但走不同路径。本仓库实测 CLAUDE.md 27KB≈6-7k token + AGENTS.md ~1k(`memory/loader.rs:204` 的 `load_for_session` 最多叠 4 层:用户/项目 × CLAUDE.md/AGENTS.md);挂了 `cache_control`(省钱)但**不省窗口**。等 C7(`.trellis/tasks/08-14-c7-tools-token-governance/`)的 tools 占比度量数据产出后,评估 memory 块治理优先级(手段是按相关性裁剪/分段加载,而非全量注入 — 与 tools 裁剪不同)。不纳入 C7(不同治理对象 + 不同手段)。
->
-> **评估结论(2026-08-14,C7 live 烟测数据落地)**:首轮 context_input=17602 tok 中 tools=6773(38.5%,`turn_trace.tools_token`),memory 指令块估算 ~7-8k(≈42%;CLAUDE.md 27.8KB + AGENTS.md 3.2KB 复核)—— **tools + memory 合计约占首轮窗口八成,memory 块治理确认值得排期**,与 C7 Phase 2 的 D(Stub 注册,触发线 tools>15% 已过)同级候选。
->
-> **进展(2026-08-15)**:D 已落地(C7D,`08-14-c7d-tools-stub-registration`,commit `bcf4187`:tools 首轮 6773→3677,占比 38.5%→26%),见 [ROADMAP §1.2](./ROADMAP.md)。memory 块(~7-8k)反超为首轮窗口最大单项,治理任务已建:`.trellis/tasks/08-15-memory-block-governance/`(WP1 度量先行 + WP2 手段 brainstorm)。
->
-> **✅ 已完成(2026-08-15)**:memory 指令块治理落地(WP1 memory_token 度量 + WP2 分级注入 digest + `load_memory_sections` 按需拉取)。live 实测 memory **10124→2080(-79.5%)**,首轮 context **-47%**,双轮 cache 率不劣化,模型按目录主动拉节验证通过。见 [ROADMAP §1.2 memory-gov 行](./ROADMAP.md);剩余缓解手段(统一 token 预算表 / 关卡⑤硬卡)仍为候选,待多来源切片(tools/memory/图片/@文件)齐备后再评估。
->
-> **🖼️ 图片切片就位(2026-08-16/17,B1)**:`turn_trace.images_token` 第三切片落地(口径 = 请求内全部图片块含历史重建;粘贴图前端 FileReader 估 / @图 imagesize 头探测,`(w×h)/750`)。三切片齐备,**统一 token 预算表 / 关卡⑤硬卡的评估前置已满足**,可排期。见 [ROADMAP §1.2 B1 行](./ROADMAP.md)。
->
-> **✅ 已完成(2026-08-19,unified-context-budget)**:统一 token 预算表 + 关卡⑤硬卡落地(WP1 度量:`turn_trace` 加 `at_files_token` / `system_token` / `context_window` 三列 + 压缩口径统一为 system+tools+messages 发送部件加法;WP2 硬卡:`BUDGET_LINE_RATIO=0.95`×window 触发静默裁剪,裁尽仍超 fail-fast,落 `AuditKind::ContextBudgetTrim`;前端 TurnCard 预算构成条 + BudgetTrim chip)。本候选从"评估前置"转正式落地,见 [ROADMAP §1.2 unified-context-budget 行](./ROADMAP.md)。
+> 📌 **候选(2026-08-14 起,memory 指令块窗口治理)**:已评估并落地——`memory-gov`(分级注入 digest,指令块注入 -79.5%)与 `unified-context-budget`(统一 token 预算 + 关卡⑤硬卡)均已实现,进度见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) 对应行,此处不再重复。
 
 ### 3.2 状态管理复杂度
 - 多 channel 共享 session 状态 → 集中到 agent daemon(daemon 化 2026-07 已落地,GUI + 浏览器共享同一 `everlasting-daemon` 进程的 session 池)
