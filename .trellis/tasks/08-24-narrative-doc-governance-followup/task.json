@@ -1,0 +1,27 @@
+{
+  "id": "08-24-narrative-doc-governance-followup",
+  "name": "narrative-doc-governance-followup",
+  "title": "叙事文档治理 follow-up:清 inventory 待办 + 修复 ROADMAP §5 自矛盾",
+  "description": "清上一个叙事文档治理任务遗留的 inventory 待办(BACKLOG/CONTEXT 进度叙事收敛为链接)+ 修复 ROADMAP §5 自矛盾(删'加 commit hash'与'不列 commit'并存)+ 补纪律自查点防增量;契约文档当 SOT,叙事文档只当索引",
+  "status": "open",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-08-24",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "related": [
+    "RULE-DOC-001",
+    "ROADMAP §5",
+    "08-24-narrative-doc-governance",
+    "session 702e6ec8"
+  ]
+}
