@@ -158,10 +158,12 @@
 | ~~C7~~ | ~~工具上下文渐进式披露(tools[] token 治理)~~ | ✅ 08-14 落地(R1 度量 + R3 静态裁剪;live 实测 tools 占首轮 context 38.5% → D(Stub)Phase 2 触发线 >15% 已过),见 §1.2 |
 | **F1** | 消息队列(输入排队 / 优先级 / 批量注入) | 当前 turn 串行,占用时新输入只能阻塞/丢弃;补显式**输入侧**队列(排队 + 优先级 + 批量注入),统一外部入口(用户连发 / 群聊 / F2 定时任务共用),复用群聊 turn-taking 编排基建。区别于 daemon SSE **输出侧** backpressure(已落地,见 [REMOTE-ACCESS-ROADMAP §P2.3](./REMOTE-ACCESS-ROADMAP.md)) |
 | **F3** | 资源治理(系统级限损框架) | context/token 治理已落地(unified-context-budget / C7 / memory-gov / B1,见 §1.2);扩展为统一资源治理:并发(worker / shell 上限)、进程 / 内存、磁盘(worktree / attachments / 日志),与 F1 反压联动。**边界**:不含 Provider API 限流(C5 已移除,见 §3) |
+| **F4** | Web 搜索工具 | 现有 `web_fetch` 需已知 URL,查最新文档 / API 变更 / 报错解法无入口;补"搜索 → 取前 N 条结果正文"组合,复用 web_fetch 安全模型(SSRF 拦截 / 5 MiB cap / htmd 转 markdown / attribution),主流 coding agent 标配 |
+| **F5** | PDF/Office 文档阅读 | B2 @文件对 PDF/Office 仍占位降级(`agent/at_file.rs` 仅提示 shell 跑 pdftotext / pandoc);补文本型 PDF 原生文本注入 + 扫描件走 B1 图片通道。B2 输入层遗留缺口,与 B1(图片)同属多模态家族 |
 
 > **已实施的 22 项**(B6 / B6+ / B8 / B12 / B4 / C2 / C2+ / A7 / L2 / L1 / L3a / L3b PR1 / L3b PR2 / L3b PR3 / L3c / L3d / A2+ / A5+ / E1 / V2-2+ / E2 / C7)已从第三档或第四档移到 §1.2 已实施列表。
 
-### 🔴 第四档 — 最远远期(app 主体完善之后)(3 项,B8 已于 2026-07-10、B11 已于 2026-08-13 迁至 §1.2)
+### 🔴 第四档 — 最远远期(app 主体完善之后)(4 项,B8 已于 2026-07-10、B11 已于 2026-08-13 迁至 §1.2)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
@@ -169,6 +171,7 @@
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,merge `94828cb` 于 08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |
 | A2+ P3 | shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail) | A2+ P1+P2 **判定层** 07-04 落地(见 §1.2);P3 是判定层之下的独立**限损层** — 判定错了也限损(盲区 `VAR=val cmd` / `$var` 展开 / 拆分器引号极端误判靠它兜底)。前置 WSL userns spike。拆自 parent `07-04-a2-shell-classification`(已 archive,P1+P2 收口)。源方案 [docs/A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) §4 远期候选 |
 | F2  | 定时任务(本地 cron 式) | 本地定时唤醒 agent 跑任务(定时拉取 / 定时汇报);触发源守 [DESIGN 硬约束](./DESIGN.md#32-明确不做硬约束)(系统时间 / fs 事件 / 本地 webhook,**不接云端触发器**)。注入点走 F1 消息队列,空闲调度依赖 F3 并发上限 |
+| **F6** | 异步 agent 任务(detach 后台跑) | agent 级异步执行:大任务(重构模块 / 跑完测试汇报)后台跑、期间用户干别的、完成通知;daemon 化后技术上可行,缺任务状态管理 UX。与 F1 队列 / F2 定时 / F3 并发同属异步执行家族,依赖 F1/F3,建议统一设计 |
 
 ---
 
