@@ -347,7 +347,12 @@ const titleText = computed<string>(() =>
    - --on     : workflow ON, accent border + text
    - --open   : popover open, accent border + bg-elevated
                 (overrides --on when both apply — same as
-                the prior PluginSelect) */
+                the prior PluginSelect)
+
+   08-24 btn-family 归类:chip / toggle-row / item 均为 chat-input
+   chip 族(ModeSelect / ModelSelect 同款)的下拉 trigger 与 popover
+   菜单行 —— radius-md + mono + --on/--open 选中态无家族变体对应,
+   且三件套需同步迁移,本文件特例保留本地。 */
 .plugin-select__chip {
   display: inline-flex;
   align-items: center;
@@ -470,7 +475,10 @@ const titleText = computed<string>(() =>
 }
 
 .plugin-select__toggle-row:hover:not(:disabled) {
-  background: var(--color-bg-overlay);
+  /* 原 var(--color-bg-overlay) 为失效 token(全库无定义,规则实际
+     不生效)。popover 底是 elevated,hover 需抬一层:用全局 hover wash
+     token(任何底色上都可见,与 .btn--ghost hover 同源)。 */
+  background: var(--color-bg-hover);
 }
 
 .plugin-select__toggle-label {
@@ -556,7 +564,8 @@ const titleText = computed<string>(() =>
 }
 
 .plugin-select__item:hover:not(:disabled) {
-  background: var(--color-bg-overlay);
+  /* 同上:失效 --color-bg-overlay → 全局 hover wash。 */
+  background: var(--color-bg-hover);
 }
 
 .plugin-select__item:disabled {

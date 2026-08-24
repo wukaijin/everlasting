@@ -114,7 +114,7 @@ const testTitle = computed<string>(() =>
         <div class="model-row__actions">
             <button
                 type="button"
-                class="model-row__btn model-row__btn--ghost"
+                class="model-row__btn model-row__btn--ghost btn btn--icon btn--ghost"
                 :disabled="isRunning"
                 :title="testTitle"
                 @click="emit('test')"
@@ -123,14 +123,14 @@ const testTitle = computed<string>(() =>
             </button>
             <button
                 type="button"
-                class="model-row__btn model-row__btn--ghost"
+                class="model-row__btn model-row__btn--ghost btn btn--icon btn--ghost"
                 @click="emit('edit')"
             >
                 <Icon name="pencil" :size="12" />
             </button>
             <button
                 type="button"
-                class="model-row__btn model-row__btn--ghost model-row__btn--danger"
+                class="model-row__btn model-row__btn--ghost model-row__btn--danger btn btn--icon btn--danger-soft"
                 @click="emit('delete')"
             >
                 <Icon name="trash" :size="12" />
@@ -226,40 +226,9 @@ const testTitle = computed<string>(() =>
     flex-shrink: 0;
 }
 
-.model-row__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px;
-    border: 0;
-    border-radius: var(--radius-sm);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    background: transparent;
-    color: var(--color-text-muted);
-    transition:
-        background var(--duration-base) var(--ease-out),
-        color var(--duration-base) var(--ease-out);
-}
-
-.model-row__btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.model-row__btn--ghost:hover:not(:disabled) {
-    color: var(--color-text-primary);
-    background: var(--color-bg-border);
-}
-
-.model-row__btn--danger {
-    color: var(--color-tool-error-text);
-}
-
-.model-row__btn--danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.15);
-}
+/* 行内 icon 钮样式由全局 .btn 家族承载(ghost = icon ghost /
+   danger = icon danger-soft);纯 icon 无文字,原 font-weight 无渲染
+   效果不保留。下方移动端块是 32px 触摸目标守卫的显式几何,保留。 */
 
 /* --- S6b 移动端适配(08-13-mobile-settings, 320-430px) ---
  * Models tab 溢出检查:行内 3 个操作按钮被 44px 全局块放大后,长

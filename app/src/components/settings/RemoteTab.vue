@@ -208,7 +208,7 @@ onUnmounted(() => {
         <div class="remote-tab__form-actions">
           <button
             type="button"
-            class="remote-tab__btn remote-tab__btn--primary"
+            class="remote-tab__btn remote-tab__btn--primary btn btn--primary"
             :disabled="!canSave"
             @click="save"
           >
@@ -256,7 +256,7 @@ onUnmounted(() => {
       <div class="remote-tab__pairing">
         <button
           type="button"
-          class="remote-tab__btn remote-tab__btn--primary"
+          class="remote-tab__btn remote-tab__btn--primary btn btn--primary"
           :disabled="generating || connState === 'unconfigured'"
           @click="generateCode"
         >
@@ -376,36 +376,10 @@ onUnmounted(() => {
 
 /* --- buttons (mirrors ProvidersTab) --- */
 
+/* 按钮样式由全局 .btn 家族承载(primary);此处仅保留家族不拥有的
+   字重。 */
 .remote-tab__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
-  background: transparent;
-  color: var(--color-text-secondary);
-  transition:
-    background var(--duration-base) var(--ease-out),
-    color var(--duration-base) var(--ease-out);
-}
-
-.remote-tab__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.remote-tab__btn--primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.remote-tab__btn--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
 }
 
 /* --- status badge --- */

@@ -239,7 +239,7 @@ const emit = defineEmits<{
         <div class="model-form__actions">
             <button
                 type="button"
-                class="model-form__btn model-form__btn--primary"
+                class="model-form__btn model-form__btn--primary btn btn--primary"
                 :disabled="!canSave"
                 @click="emit('submit')"
             >
@@ -247,7 +247,7 @@ const emit = defineEmits<{
             </button>
             <button
                 type="button"
-                class="model-form__btn model-form__btn--secondary"
+                class="model-form__btn model-form__btn--secondary btn btn--muted"
                 @click="emit('cancel')"
             >
                 Cancel
@@ -432,44 +432,9 @@ const emit = defineEmits<{
     justify-content: flex-end;
 }
 
+/* 按钮样式由全局 .btn 家族承载(primary = primary / secondary =
+   muted);此处仅保留家族不拥有的字重。 */
 .model-form__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    border: 1px solid var(--color-bg-border);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-sm);
     font-weight: var(--weight-medium);
-    cursor: pointer;
-    background: transparent;
-    color: var(--color-text-secondary);
-    transition:
-        background var(--duration-base) var(--ease-out),
-        color var(--duration-base) var(--ease-out);
-}
-
-.model-form__btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.model-form__btn--primary {
-    background: var(--color-accent);
-    color: #fff;
-    border-color: var(--color-accent);
-}
-
-.model-form__btn--primary:hover:not(:disabled) {
-    background: var(--color-accent-hover);
-}
-
-.model-form__btn--secondary {
-    background: var(--color-bg-elevated);
-    color: var(--color-text-primary);
-}
-
-.model-form__btn--secondary:hover:not(:disabled) {
-    background: var(--color-bg-border);
 }
 </style>

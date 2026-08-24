@@ -172,7 +172,7 @@ function protocolBadgeClass(protocol: string): string {
       <button
         v-if="mode === 'idle'"
         type="button"
-        class="providers-tab__btn providers-tab__btn--primary"
+        class="providers-tab__btn providers-tab__btn--primary btn btn--primary"
         @click="startAdd"
       >
         <Icon name="plus" :size="14" />
@@ -213,7 +213,7 @@ function protocolBadgeClass(protocol: string): string {
         <div class="providers-tab__row-actions">
           <button
             type="button"
-            class="providers-tab__btn providers-tab__btn--ghost"
+            class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
             title="编辑"
             aria-label="编辑 provider"
             @click="startEdit(p)"
@@ -222,7 +222,7 @@ function protocolBadgeClass(protocol: string): string {
           </button>
           <button
             type="button"
-            class="providers-tab__btn providers-tab__btn--ghost providers-tab__btn--danger"
+            class="providers-tab__btn providers-tab__btn--ghost providers-tab__btn--danger btn btn--icon btn--danger-soft"
             title="删除"
             aria-label="删除 provider"
             @click="deleteConfirmId = p.id"
@@ -301,7 +301,7 @@ function protocolBadgeClass(protocol: string): string {
           />
           <button
             type="button"
-            class="providers-tab__btn providers-tab__btn--ghost"
+            class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
             :title="showApiKey ? 'Hide' : 'Show'"
             :aria-label="showApiKey ? 'Hide API key' : 'Show API key'"
             @click="showApiKey = !showApiKey"
@@ -315,7 +315,7 @@ function protocolBadgeClass(protocol: string): string {
       <div class="providers-tab__form-actions">
         <button
           type="button"
-          class="providers-tab__btn providers-tab__btn--primary"
+          class="providers-tab__btn providers-tab__btn--primary btn btn--primary"
           :disabled="!canSave"
           @click="save"
         >
@@ -323,7 +323,7 @@ function protocolBadgeClass(protocol: string): string {
         </button>
         <button
           type="button"
-          class="providers-tab__btn providers-tab__btn--secondary"
+          class="providers-tab__btn providers-tab__btn--secondary btn btn--muted"
           @click="cancelEdit"
         >
           Cancel
@@ -341,14 +341,14 @@ function protocolBadgeClass(protocol: string): string {
         <div class="providers-tab__confirm-actions">
           <button
             type="button"
-            class="providers-tab__btn providers-tab__btn--danger"
+            class="providers-tab__btn providers-tab__btn--danger btn btn--danger-soft"
             @click="confirmDelete"
           >
             Delete
           </button>
           <button
             type="button"
-            class="providers-tab__btn providers-tab__btn--secondary"
+            class="providers-tab__btn providers-tab__btn--secondary btn btn--muted"
             @click="deleteConfirmId = null"
           >
             Cancel
@@ -623,63 +623,11 @@ function protocolBadgeClass(protocol: string): string {
 
 /* --- Buttons --- */
 
+/* 按钮样式由全局 .btn 家族承载(primary / secondary=muted / ghost=
+   icon ghost / danger=danger-soft);此处仅保留家族不拥有的字重。
+   下方移动端块是 44px 触摸目标守卫的显式几何覆写,一并保留。 */
 .providers-tab__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
-  background: transparent;
-  color: var(--color-text-secondary);
-  transition: background var(--duration-base) var(--ease-out), color var(--duration-base) var(--ease-out);
-}
-
-.providers-tab__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.providers-tab__btn--primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.providers-tab__btn--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-}
-
-.providers-tab__btn--secondary {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-}
-
-.providers-tab__btn--secondary:hover:not(:disabled) {
-  background: var(--color-bg-border);
-}
-
-.providers-tab__btn--ghost {
-  background: transparent;
-  border: 0;
-  padding: 4px;
-  color: var(--color-text-muted);
-}
-
-.providers-tab__btn--ghost:hover:not(:disabled) {
-  color: var(--color-text-primary);
-  background: var(--color-bg-border);
-}
-
-.providers-tab__btn--danger {
-  color: var(--color-tool-error-text);
-}
-
-.providers-tab__btn--danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.15);
 }
 
 /* --- Delete confirm --- */

@@ -209,7 +209,7 @@ function openDeleteConfirm(m: ModelWithProvider) {
             <button
                 v-if="mode === 'idle'"
                 type="button"
-                class="models-tab__btn models-tab__btn--primary"
+                class="models-tab__btn models-tab__btn--primary btn btn--primary"
                 @click="startAdd"
             >
                 <Icon name="plus" :size="14" />
@@ -338,36 +338,10 @@ function openDeleteConfirm(m: ModelWithProvider) {
 
 /* --- Buttons (header Add Model) --- */
 
+/* 按钮样式由全局 .btn 家族承载(primary);此处仅保留家族不拥有的
+   字重。下方移动端块是触摸目标守卫的显式几何覆写,一并保留。 */
 .models-tab__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    border: 1px solid var(--color-bg-border);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-sm);
     font-weight: var(--weight-medium);
-    cursor: pointer;
-    background: transparent;
-    color: var(--color-text-secondary);
-    transition:
-        background var(--duration-base) var(--ease-out),
-        color var(--duration-base) var(--ease-out);
-}
-
-.models-tab__btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.models-tab__btn--primary {
-    background: var(--color-accent);
-    color: #fff;
-    border-color: var(--color-accent);
-}
-
-.models-tab__btn--primary:hover:not(:disabled) {
-    background: var(--color-accent-hover);
 }
 
 /* --- S6b 真机迭代 2(08-13,320-430px):Add Model 按钮不换行、tab 行内
