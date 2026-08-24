@@ -28,13 +28,15 @@ use tokio::sync::RwLock;
 
 use crate::llm::types::ToolDef;
 
-/// 候选 stub 工具集(prd Decision 1 的 10 个,方案 A 保守档)。顺序是
-/// 集合语义,不影响 `stubify` 输出顺序(见模块注释不变量 2)。
-pub const STUB_CANDIDATES: [&str; 10] = [
+/// 候选 stub 工具集(prd Decision 1 的 10 个,方案 A 保守档;
+/// 2026-08-25 F4 +`web_search` 第 11 员)。顺序是集合语义,不影响
+/// `stubify` 输出顺序(见模块注释不变量 2)。
+pub const STUB_CANDIDATES: [&str; 11] = [
     "use_ui",
     "remember",
     "update_checklist",
     "web_fetch",
+    "web_search",
     "run_background_shell",
     "shell_status",
     "shell_kill",
@@ -57,11 +59,12 @@ pub const PARALLEL_WHITELIST: [&str; 5] = ["read_file", "grep", "glob", "list_di
 /// 每工具超短语义摘要(手工维护,不从原 description 裁剪 — 确定性;
 /// 摘要末尾统一附 load_tool_schemas 指引)。长度受 AC1 预算约束
 /// (静态度量单测锁定 ≤3700,2026-08-14 用户两轮拍板)。
-const STUB_DESCRIPTIONS: [(&str, &str); 10] = [
+const STUB_DESCRIPTIONS: [(&str, &str); 11] = [
     ("use_ui", "Render interactive UI cards in the chat."),
     ("remember", "Write a long-term memory."),
     ("update_checklist", "Replace the current checklist."),
     ("web_fetch", "Fetch a URL."),
+    ("web_search", "Search the web."),
     ("run_background_shell", "Start a background shell."),
     ("shell_status", "Query a background shell."),
     ("shell_kill", "Kill a background shell."),

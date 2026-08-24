@@ -40,10 +40,12 @@ pub mod stub;
 pub mod tests_merge_worker;
 pub mod tests_shell;
 pub mod tests_web_fetch;
+pub mod tests_web_search;
 pub mod update_checklist;
 pub mod use_skill;
 pub mod use_ui;
 pub mod web_fetch;
+pub mod web_search;
 pub mod write_file;
 
 // Test files (flat layout — aligned with `agent/permissions/tests_*.rs`
@@ -237,6 +239,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // Appended LAST — `builtin_tools()` order feeds the provider
         // prefix cache; appending never shifts the existing prefix.
         search_history::definition(),
+        // F4 (2026-08-25): snippet-only web search; full pages come
+        // from the model following up with `web_fetch` on a hit's url
+        // (two-stage model, same split as Claude Code WebSearch/WebFetch).
+        // Read-only network call to a FIXED endpoint set (no user-
+        // controllable URL → no SSRF surface): Tier 5 silent Allow via
+        // `ToolKind::Other` (same as `search_history`). C7D stub
+        // candidate (and therefore NOT parallel-whitelist-eligible —
+        // the `stub.rs` disjointness invariant). Plain dispatch, no
+        // chat_loop interception. Appended LAST (prefix cache).
+        web_search::definition(),
     ]
 }
 
@@ -531,6 +543,12 @@ async fn execute_tool_inner(
         }
         "web_fetch" => {
             let (out, is_err) = web_fetch::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default(), None, None)
+        }
+        // F4: plain dispatch. Provider routing (auto/tavily/ddg per
+        // app_config) happens inside the tool on every execute.
+        "web_search" => {
+            let (out, is_err) = web_search::execute(input, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "use_skill" => match skill_cache {
