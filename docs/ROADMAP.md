@@ -156,16 +156,19 @@
 | ~~B6+~~ | ~~subagent 多模型支持（A frontmatter / B 动态选模型 / C UI+DB override）~~ | ✅ A 07-03 / C 07-03 / **B 07-06 全落地**，优先级链 `dispatch > DB > frontmatter > parent`，见 §1.2 |
 | ~~L3b PR1~~ | ~~worker worktree 隔离核心(PR1 落地,见 §1.2)~~ | 06-27 PR1 已落地,见 §1.2;PR2-4 拆为 follow-up tasks |
 | ~~C7~~ | ~~工具上下文渐进式披露(tools[] token 治理)~~ | ✅ 08-14 落地(R1 度量 + R3 静态裁剪;live 实测 tools 占首轮 context 38.5% → D(Stub)Phase 2 触发线 >15% 已过),见 §1.2 |
+| **F1** | 消息队列(输入排队 / 优先级 / 批量注入) | 当前 turn 串行,占用时新输入只能阻塞/丢弃;补显式**输入侧**队列(排队 + 优先级 + 批量注入),统一外部入口(用户连发 / 群聊 / F2 定时任务共用),复用群聊 turn-taking 编排基建。区别于 daemon SSE **输出侧** backpressure(已落地,见 [REMOTE-ACCESS-ROADMAP §P2.3](./REMOTE-ACCESS-ROADMAP.md)) |
+| **F3** | 资源治理(系统级限损框架) | context/token 治理已落地(unified-context-budget / C7 / memory-gov / B1,见 §1.2);扩展为统一资源治理:并发(worker / shell 上限)、进程 / 内存、磁盘(worktree / attachments / 日志),与 F1 反压联动。**边界**:不含 Provider API 限流(C5 已移除,见 §3) |
 
 > **已实施的 22 项**(B6 / B6+ / B8 / B12 / B4 / C2 / C2+ / A7 / L2 / L1 / L3a / L3b PR1 / L3b PR2 / L3b PR3 / L3c / L3d / A2+ / A5+ / E1 / V2-2+ / E2 / C7)已从第三档或第四档移到 §1.2 已实施列表。
 
-### 🔴 第四档 — 最远远期(app 主体完善之后)(2 项,B8 已于 2026-07-10、B11 已于 2026-08-13 迁至 §1.2)
+### 🔴 第四档 — 最远远期(app 主体完善之后)(3 项,B8 已于 2026-07-10、B11 已于 2026-08-13 迁至 §1.2)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,merge `94828cb` 于 08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |
 | A2+ P3 | shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail) | A2+ P1+P2 **判定层** 07-04 落地(见 §1.2);P3 是判定层之下的独立**限损层** — 判定错了也限损(盲区 `VAR=val cmd` / `$var` 展开 / 拆分器引号极端误判靠它兜底)。前置 WSL userns spike。拆自 parent `07-04-a2-shell-classification`(已 archive,P1+P2 收口)。源方案 [docs/A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) §4 远期候选 |
+| F2  | 定时任务(本地 cron 式) | 本地定时唤醒 agent 跑任务(定时拉取 / 定时汇报);触发源守 [DESIGN 硬约束](./DESIGN.md#32-明确不做硬约束)(系统时间 / fs 事件 / 本地 webhook,**不接云端触发器**)。注入点走 F1 消息队列,空闲调度依赖 F3 并发上限 |
 
 ---
 
