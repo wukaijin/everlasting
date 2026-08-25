@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -826,11 +826,20 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
     // Clone the parent_rid for the snapshot closure; the original
     // stays for the run_chat_loop call below.
     let parent_rid_for_snapshot = parent_rid.clone();
+    // Set by the snapshot task AFTER it has read both maps. The
+    // cancel task below waits on this flag, so "snapshot before
+    // cancel" is ordered by causality, not by a wall-clock guess.
+    let snapshot_taken = Arc::new(AtomicBool::new(false));
+    let snapshot_taken_for_task = snapshot_taken.clone();
     let snapshot_handle: tokio::task::JoinHandle<
         Option<(bool, bool)>, // (parent_session_active_present, worker_rid_present)
     > = tokio::spawn(async move {
         // Wait until the worker has been dispatched (call_count >= 2).
-        for _ in 0..1000 {
+        // Generous bound: on a loaded CI runner the parent's persist +
+        // first send + dispatch can take well over the 2s a tighter
+        // loop allowed (observed flake 2026-08-25). The loop exits
+        // early once the worker runs, so fast machines are unaffected.
+        for _ in 0..2500 {
             if call_handle.load(Ordering::SeqCst) >= 2 {
                 break;
             }
@@ -858,33 +867,41 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
             let map = cancellations_clone.lock().await;
             map.contains_key(&worker_rid_suffix)
         };
+        // Maps read — release the cancel task.
+        snapshot_taken_for_task.store(true, Ordering::SeqCst);
         Some((parent_present, worker_present))
     });
 
-    // Cancel task: once the snapshot has had its chance to read
-    // the maps, cancel the parent token. The child_token
+    // Cancel task: wait until the snapshot task has actually read the
+    // maps, THEN cancel the parent token. The child_token
     // relationship propagates the cancel to the worker, the
     // worker's select! cancel arm wins, the worker exits with
     // Done{cancelled}, run_subagent detects the cancel_parent
     // flag, the parent loop flips its `cancelled` and drives
     // its own cancel path (Done{cancelled} to the parent
-    // sink). The parent_token was pre-inserted in cancellations
+    // sink). The parent token was pre-inserted in cancellations
     // (we mock what `chat.rs::chat` does on spawn).
+    //
+    // 2026-08-25 flake fix: this used to be a fixed 500ms sleep. On a
+    // slow CI runner the parent's persist + first send + dispatch
+    // could exceed 500ms, so the cancel fired BEFORE the worker was
+    // dispatched — the parent's tool execution short-circuited, the
+    // worker never sent (call_count stayed 1), the snapshot returned
+    // None, and the test panicked at `.expect("snapshot captured")`.
+    // Waiting on `snapshot_taken` makes the ordering causal: the
+    // worker hangs on its HangingThenCancel stream until we cancel,
+    // so the snapshot is guaranteed its mid-run view first. The
+    // 2500×2ms poll bound (≥5s wall, more under load) only expires
+    // if dispatch is genuinely broken — in which case the snapshot's
+    // own poll reports it with "worker never ran".
     let cancel_for_task = parent_token.clone();
     let cancel_handle = tokio::spawn(async move {
-        // Wait until the snapshot has had time to read the maps
-        // AND take its snapshot. The snapshot polls for up to
-        // ~2000ms after spawn; we give it a comfortable 500ms
-        // margin so the cancel propagates AFTER the snapshot,
-        // not before. The parent token is pre-inserted in
-        // cancellations (mirroring `chat.rs::chat`); cancelling
-        // it before the parent dispatches the worker would
-        // short-circuit the parent's tool execution, and
-        // `run_subagent` would never run (the worker is never
-        // dispatched). 500ms is enough for the parent's user-
-        // message persist + first `provider.send` + tool
-        // dispatch.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        for _ in 0..2500 {
+            if snapshot_taken.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
         cancel_for_task.cancel();
     });
 
