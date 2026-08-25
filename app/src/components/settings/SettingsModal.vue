@@ -14,6 +14,7 @@ import DefaultTab from "./DefaultTab.vue";
 import MemoryTab from "./MemoryTab.vue";
 import SubagentsTab from "./SubagentsTab.vue";
 import RemoteTab from "./RemoteTab.vue";
+import SearchTab from "./SearchTab.vue";
 
 const open = defineModel<boolean>("open", { required: true });
 </script>
@@ -54,6 +55,10 @@ const open = defineModel<boolean>("open", { required: true });
             <TabsTrigger value="remote" class="settings-modal__tab">
               Remote
             </TabsTrigger>
+            <!-- F4 web_search:provider + Tavily key 配置(SearchTab)。 -->
+            <TabsTrigger value="search" class="settings-modal__tab">
+              Search
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="providers" class="settings-modal__content">
@@ -73,6 +78,9 @@ const open = defineModel<boolean>("open", { required: true });
           </TabsContent>
           <TabsContent value="remote" class="settings-modal__content">
             <RemoteTab />
+          </TabsContent>
+          <TabsContent value="search" class="settings-modal__content">
+            <SearchTab />
           </TabsContent>
         </TabsRoot>
       </DialogContent>

@@ -151,6 +151,8 @@ export function toolIcon(toolName: string): string {
       // (this card spawns a worker agent; `wrench` is the generic
       // fallback for unknown tools and reads wrong here).
       return "brain";
+    case "web_search":
+      return "magnifying-glass";
     default:
       return "wrench";
   }

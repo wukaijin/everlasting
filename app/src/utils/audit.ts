@@ -540,9 +540,14 @@ export function summarizeToolInput(
   const path = typeof input.path === "string" ? input.path : "";
   const url = typeof input.url === "string" ? input.url : "";
   const pattern = typeof input.pattern === "string" ? input.pattern : "";
+  const query = typeof input.query === "string" ? input.query : "";
 
   if (toolName === "shell" && cmd) return cmd;
   if (toolName === "web_fetch" && url) return url;
+  // F4 web_search:query 词比 URL fallback 可读(search_history 也走这分支)。
+  if ((toolName === "web_search" || toolName === "search_history") && query) {
+    return query;
+  }
   if ((toolName === "grep" || toolName === "glob") && pattern) {
     return path ? `${pattern} @ ${path}` : pattern;
   }
