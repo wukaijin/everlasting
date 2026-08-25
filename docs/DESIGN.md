@@ -56,10 +56,10 @@
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
 - 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~18 加 C7 / C7D / memory-gov / C3+ 4 个新横切关卡)
 - 多项目 / 多 session 管理(SQLite 持久化)
-- 工具集(2026-08-18 实测 27 个注册名 = 25 builtin + 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤):
+- 工具集(2026-08-25 实测 27 个注册名 = 25 builtin(含 F4 `web_search`)+ 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤):
   - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
   - Shell:`shell`(Bash 落盘 + cat -n)/ `run_background_shell` / `shell_status` / `shell_kill`(L1a 后台 shell,tokio Child 不带 PTY)
-  - 联网:`web_fetch`(SSRF 拦截 + 5 MiB body cap,attribution prefix)
+  - 联网:`web_fetch`(SSRF 拦截 + 5 MiB body cap,attribution prefix)+ `web_search`(F4 08-25,snippet-only,Tavily/DDG 双后端;固定端点无用户可控 URL → 无 SSRF 面,Tier 5 silent Allow;与 web_fetch 构成 search → fetch 两段式)
   - Skill / Memory / UI:`use_skill`(B4 三层渐进披露,workflow-aware)/ `use_ui`(B9 生成式 UI,non-blocking)/ `update_checklist`(B12 loop-local + workflow 分支同步 task.json.items)/ `remember`(V2 2 期自主记忆写入)/ `search_history`(D2② 08-17,`READONLY_TOOL_ALLOWLIST` 第 6 员,薄封装 `db::search::search_messages`)/ `load_tool_schemas`(C7D 08-14 stub 元工具,LLM 显式取回罕见工具 schema)
   - 交互:`ask_user_question`(跨 turn,B9 selector 复用)/ `request_mode_change`(B6+ A,07-07,LLM 申请切 mode 用户 inline card 授权)
   - Workflow(07-08~10,workflow_enabled session 可见,filter_tools_for_workflow 白名单):`create_task` / `request_task_state_transition`

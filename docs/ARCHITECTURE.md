@@ -173,7 +173,7 @@
 >
 > **上下文构建 — per-role history 隔离(08-07)**:每个角色从共享 DB transcript 经 `role_history(full, current_role)` 组装**独立** LLM 上下文:只保留自己的 assistant 行(verbatim,含 thinking + signature),他人发言改写为 `role:user`(归属由 wire 层插 `@name:` 前缀),他人 thinking / 工具对(工具结果不共享)与 moderator 仲裁对被剥离。取代早期 `participant_view`(多身份 assistant 共存 = 同模型串台根因)。
 >
-> **工具白名单(08-07)**:moderator 与参与者只拿调研类工具 `read_file`/`grep`/`glob`/`list_dir`/`web_fetch`,moderator 额外持有仲裁工具(白名单取代黑名单,新增 builtin 工具默认不进群聊);参与者 `max_turns=20`(可取材实证)、moderator `max_turns=1`。
+> **工具白名单(08-07;08-25 F4 起 + `web_search`)**:moderator 与参与者只拿调研类工具 `read_file`/`grep`/`glob`/`list_dir`/`web_fetch`/`web_search`,moderator 额外持有仲裁工具(白名单取代黑名单,新增 builtin 工具默认不进群聊);参与者 `max_turns=20`(可取材实证)、moderator `max_turns=1`。
 >
 > **入口与事件(08-04~08-07)**:入口持久化去重 + 参与者身份护栏(防 LLM 自名开头)+ 终止/发言人事件 + 逐轮流式 + 人类抢占插话;moderator 未调 `nominate_speaker` 时**重试 moderator turn**(08-06 废弃 round-robin 机械派人)+ wire 层孤儿 tool_use 自愈;编排器静默路径变可见 `Done{stop_reason}` 事件,非终态挂 notice 不 finalize;identity_contract 契约测试守身份不变量。Phase 1-4 见 `.trellis/tasks/archive/2026-07/07-29-group-chat/`,08-04~08-07 迭代见 `.trellis/tasks/archive/2026-08/08-0{4,6,7}-group-chat-*`。
 
@@ -232,7 +232,7 @@
 
 **D2② agent search_history tool(2026-08-17 落地)**
 - `tools/search_history.rs` 薄封装 `db::search::search_messages`,LLM 显式调
-- `READONLY_TOOL_ALLOWLIST` 第 6 员(其他 5:`read_file` / `grep` / `glob` / `list_dir` / `web_fetch`)
+- `READONLY_TOOL_ALLOWLIST` 第 6 员(当时其他 5:`read_file` / `grep` / `glob` / `list_dir` / `web_fetch`;2026-08-25 F4 起 `web_search` 为第 7 员)
 - UI 卡片:`SearchHistoryCard` 4 态机(loading / empty / results / error),前端组件注册表新员
 - 完整设计:见 [ROADMAP.md §1.2 D2②](./ROADMAP.md) 行(2026-08-17 落地)
 
