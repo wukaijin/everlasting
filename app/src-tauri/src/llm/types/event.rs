@@ -73,6 +73,16 @@ pub enum ChatEvent {
     /// speaker chip live). Never emitted by a provider — the agent
     /// loop's per-event stream match drops it defensively.
     Speaker { speaker: String },
+    /// F1 消息队列(2026-08-25):队列驱动器(`agent/chat.rs`
+    /// `run_queue_driver`)在**每次续轮内层 run 开始前**发一次。
+    /// 这是经典聊天的续轮渲染边界 —— 前端收到后把尾部排队 user
+    /// 占位物化为普通气泡 + 推新的 assistant 占位(streamEvents
+    /// 适配),随后该轮的 `Start`/`Delta` 才有正确的落点。不能复用
+    /// `Start` 做此边界:`Start` 是 run 内每次 LLM 调用的边界
+    /// (tool_use 后的下一轮也发),泛化会把普通多工具轮拆成多个
+    /// 气泡。与 `Speaker` 同位置同角色;provider 永不发出。
+    /// `count` = 本轮注入的排队消息条数(前端物化对账用)。
+    TurnContinuation { count: usize },
     /// Incremental text from the model.
     Delta { text: String },
     /// Incremental thinking summary from the model. Streamed via

@@ -27,6 +27,7 @@ pub mod command_palette;
 pub mod config;
 pub mod files;
 pub mod memory;
+pub mod message_queue;
 pub mod panel;
 // S2 (2026-08-11, task `08-11-tunnel-client`):配对码生成 IPC —— 经 tunnel
 // WSS 调 remote 的 `/internal/pairing/generate` 内部 RPC(design §2.5)。

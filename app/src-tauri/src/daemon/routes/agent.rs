@@ -44,7 +44,7 @@ pub struct ChatRequest {
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
-) -> Result<Json<()>, AppCommandError> {
+) -> Result<Json<crate::agent::chat::ChatAcceptance>, AppCommandError> {
     let sink: Arc<dyn ChatEventSink> = Arc::new(HttpSseSink {
         registry: state.sse.clone(),
     });
@@ -56,7 +56,7 @@ pub async fn chat(
     let worker_event_sink: Arc<dyn SubagentEventSink> = Arc::new(HttpSseSubagentSink {
         registry: state.sse.clone(),
     });
-    chat_inner(
+    let acceptance = chat_inner(
         &state,
         req.request_id,
         req.session_id,
@@ -68,7 +68,7 @@ pub async fn chat(
         req.forced_dispatch,
     )
     .await?;
-    Ok(Json(()))
+    Ok(Json(acceptance))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

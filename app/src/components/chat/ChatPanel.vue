@@ -44,6 +44,7 @@ import { useChatStore } from "../../stores/chat";
 import type { SessionSummary, StagedImage } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
+import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useQuestionCardsStore } from "../../stores/questionCards";
 import { useMemoryStore } from "../../stores/memory";
 import {
@@ -69,6 +70,17 @@ import ReviewMatrix from "./ReviewMatrix.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
+
+// F1 消息队列 (2026-08-25): 切 session 时从后端 SoT 水合排队视图
+// (R8;页面刷新 / PWA 第二端同样靠它恢复徽标)。失败仅 toast 不阻塞。
+watch(
+  () => chatStore.currentSessionId,
+  (sid) => {
+    if (sid) void useMessageQueueStore().hydrate(sid);
+  },
+  { immediate: true },
+);
+
 const projectsStore = useProjectsStore();
 const checklistStore = useChecklistStore();
 const questionCardsStore = useQuestionCardsStore();

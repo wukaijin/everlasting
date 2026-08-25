@@ -6,6 +6,7 @@ import { useChecklistStore, CHECKLIST_TOOL_NAME } from "./checklist";
 import { useMemoryStore } from "./memory";
 import { useQuestionCardsStore } from "./questionCards";
 import { useProjectsStore } from "./projects";
+import { useMessageQueueStore } from "./messageQueueStore";
 import {
   GET_PENDING_INTERACTION_CMD,
   PendingInteraction,
@@ -63,6 +64,32 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     if (!req) return; // event for unknown / already-finished request — drop
     const msgs = messagesBySession.get(req.sessionId);
     if (!msgs) return; // session was evicted mid-stream — shouldn't happen because pinned, but guard
+
+    // F1 消息队列 (2026-08-25): 续轮渲染边界。必须在 assistant 尾部
+    // 不变量检查**之前**处理 —— 事件到达时尾部恰是排队 user 占位,
+    // 落到下面的守卫会被静默丢弃(P1-2)。动作:① 物化尾部 count 条
+    // 排队占位(去 queued 徽标);② 推新 assistant 占位(后续该轮的
+    // start/delta 自然落点);③ 同步弹走队列视图前 count 条。
+    // 不复用 `start` 分支的群聊占位门控(:93):start 是 run 内每次
+    // LLM 调用的边界,泛化会把普通多工具轮拆成多个气泡。
+    if (event.kind === "turn_continuation") {
+      const count = typeof event.count === "number" ? event.count : 0;
+      // FIFO 对齐:占位按发送顺序 push,队首 = 数组**最前**的 queued
+      // 占位 —— 正向扫描物化前 count 条(已物化的普通行无标记自然跳过,
+      // 中途的上一轮 assistant 气泡不阻断扫描)。
+      let toMaterialize = count;
+      for (let i = 0; i < msgs.length && toMaterialize > 0; i++) {
+        const m = msgs[i];
+        if (m.queued) {
+          m.queued = undefined;
+          toMaterialize--;
+        }
+      }
+      msgs.push({ id: genId(), role: "assistant", content: "" });
+      useMessageQueueStore().shiftFront(req.sessionId, count);
+      return;
+    }
+
     let last = msgs[msgs.length - 1];
     if (!last || last.role !== "assistant") return;
 
@@ -482,6 +509,17 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         last.retrying = undefined;
         // unified-context-budget WP2: terminal `error` — 同款清理。
         last.budgetTrim = undefined;
+        // F1 (2026-08-25): 错误终止 → 队列保留不续轮(design §4)。
+        // 滞留项有视图但无事发生会困惑 —— 一行 toast 说明去向。
+        {
+          const retained = useMessageQueueStore().entriesFor(req.sessionId).length;
+          if (retained > 0) {
+            useProjectsStore().showToast(
+              `${retained} 条排队消息保留，下次发送时一起注入`,
+              "info",
+            );
+          }
+        }
         // F5: error path. The `totalMs` is still recorded
         // (user wants to see "在 X 秒时断了"), but `ttfbMs`
         // and `genMs` may be `null` (no delta arrived).

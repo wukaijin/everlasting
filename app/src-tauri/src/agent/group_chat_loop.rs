@@ -135,7 +135,7 @@ enum HaltReason {
 
 /// The moderator's system prompt. Tells it to facilitate + use the
 /// `nominate_speaker` / `end_discussion` tools. Built once per
-async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> {
+pub(crate) async fn reload_messages(db: &SqlitePool, session_id: &str) -> Vec<ChatMessage> {
     let loaded = match db::load_session(db, session_id).await {
         Ok(Some(l)) => l,
         _ => return Vec::new(),
@@ -365,6 +365,10 @@ pub async fn run_group_chat_loop(
                 // is_some()`)都会挡掉本路径,registry 不会被读写,
                 // 只作签名占位。
                 std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
+                // F1 queue driver (2026-08-25): guard-owned cleanup — this call
+                // site is single-shot per invocation (speaker / worker), not a
+                // continuation round; keep the guard as sole owner.
+                false,
             )
             .await;
         }
@@ -575,6 +579,10 @@ pub async fn run_group_chat_loop(
             // D (2026-08-14): 群聊传空 registry(同 moderator 调用点 —
             // gate 挡掉,只作占位)。
             std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
+            // F1 queue driver (2026-08-25): guard-owned cleanup — this call
+            // site is single-shot per invocation (speaker / worker), not a
+            // continuation round; keep the guard as sole owner.
+            false,
         )
         .await;
 

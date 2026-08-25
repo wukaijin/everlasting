@@ -52,6 +52,7 @@ import type {
 } from "./chat.types";
 import { useChecklistStore } from "./checklist";
 import { useMemoryStore } from "./memory";
+import { useMessageQueueStore } from "./messageQueueStore";
 import { createStreamEventHandlers, type StreamEventsContext } from "./streamEvents";
 import { rehydrateMessages, type LoadedSession } from "./streamRehydrate";
 import { useTraceStore } from "./traceStore";
@@ -177,6 +178,18 @@ export interface TurnLatency {
   thinkingMs: number | null;
 }
 
+/** F1 (2026-08-25): backend `ChatAcceptance` wire shape (camelCase)。 */
+export interface ChatAcceptanceView {
+  status: "started" | "queued";
+  position?: number;
+}
+
+/** F1 (2026-08-25): backend `CancelOutcome` wire shape。 */
+export interface CancelOutcomeView {
+  cancelled?: boolean;
+  clearedQueued?: number;
+}
+
 export interface ChatEventPayload {
   request_id: string;
   kind:
@@ -251,7 +264,13 @@ export interface ChatEventPayload {
     // orchestrator (`run_group_chat_loop`) right before each inner
     // speaker turn, so the frontend knows whose placeholder is about to
     // stream. Mirrors Rust `ChatEvent::Speaker { speaker }`.
-    | "speaker";
+    | "speaker"
+    // F1 消息队列 (2026-08-25): 队列驱动器在每次续轮内层 run 开始前
+    // 发一次 —— 经典聊天的续轮渲染边界。收到时尾部恰是排队 user 占位
+    // (非 assistant),因此 handler 必须挂在 assistant 尾部不变量检查
+    // **之前**(streamEvents.handleChatEvent 开头)。Mirrors Rust
+    // `ChatEvent::TurnContinuation { count }`.
+    | "turn_continuation";
   text?: string;
   signature?: string;
   data?: string;
@@ -259,6 +278,9 @@ export interface ChatEventPayload {
   // speaker name ("moderator" or a participant name) for the upcoming
   // turn.
   speaker?: string;
+  /** F1: only present when `kind === "turn_continuation"` — 本轮注入
+   *  的排队消息条数(前端物化对账用)。*/
+  count?: number;
   stop_reason?: string;
   message?: string;
   category?: ErrorCategory;
@@ -1053,7 +1075,6 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // stream start. The user's perception of latency is the
     // LLM's first-delta, not the trace reload. The trace store
     // has its own `loading` flag for the panel's loading skeleton.
-    void useTraceStore().resetForNewSession(args.sessionId);
     // Touch the session's messages (in case it was just loaded)
     // so it sits at MRU.
     const msgs = messagesBySession.get(args.sessionId);
@@ -1061,8 +1082,9 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       messagesBySession.delete(args.sessionId);
       messagesBySession.set(args.sessionId, msgs);
     }
+    let acceptance: ChatAcceptanceView | null = null;
     try {
-      await transport.invoke("chat", {
+      acceptance = await transport.invoke<ChatAcceptanceView>("chat", {
         requestId,
         sessionId: args.sessionId,
         messages: args.history,
@@ -1088,6 +1110,25 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       }
       events.finalizeRequest(requestId, args.sessionId, true);
     }
+    // F1 消息队列 (2026-08-25): 入队受理分支。忙时后端只入队不开流,
+    // 本次 rid 永远不会有事件 —— 请求状态出表、回收 assistant 占位、
+    // 给 user 占位打排队徽标,并从后端 SoT 水合队列视图。
+    if (acceptance && acceptance.status === "queued") {
+      activeRequests.delete(requestId);
+      const mmsgs = messagesBySession.get(args.sessionId);
+      if (mmsgs) {
+        const ai = mmsgs.findIndex((m) => m.id === args.assistantMsg.id);
+        if (ai >= 0) mmsgs.splice(ai, 1);
+        const um = mmsgs.find((m) => m.id === args.userMsg.id);
+        if (um) um.queued = { position: acceptance.position ?? 0 };
+      }
+      void useMessageQueueStore().hydrate(args.sessionId);
+      return requestId;
+    }
+    // started 分支:F1 前就有的"新请求清视图"副作用移到受理确认之后 —
+    // 排队请求不开新轮,不应抹掉正在跑的那轮的召回 chip / trace 时间线。
+    useMemoryStore().clearRecallHits(args.sessionId);
+    void useTraceStore().resetForNewSession(args.sessionId);
     return requestId;
   }
 
@@ -1098,9 +1139,13 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  `finalizeRequest`, which clears state. So this call is a
    *  fire-and-forget IPC; the actual state reset happens via
    *  the `done` event. */
-  async function cancel(requestId: string): Promise<void> {
+  async function cancel(requestId: string): Promise<CancelOutcomeView | null> {
     try {
-      await transport.invoke("cancel_chat", { requestId });
+      // F1 (2026-08-25): 后端返回 { cancelled, clearedQueued } ——
+      // clearedQueued 是 Stop/edit/resend/retry 清队 toast 的数据源。
+      return await transport.invoke<CancelOutcomeView>("cancel_chat", {
+        requestId,
+      });
     } catch (e) {
       // A failed cancel is logged but not user-facing — the
       // user already saw the Stop button and clicked it. The
@@ -1108,8 +1153,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // out), and the existing `done` / `error` path resets
       // state.
       console.error("[streamController] cancel failed:", e);
+      return null;
     }
   }
+
 
   /** The requestId of the current session's active stream, or
    *  null if the current session is not streaming. Convenience

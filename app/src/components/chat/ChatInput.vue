@@ -97,6 +97,7 @@ import PluginSelect from "./PluginSelect.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
 import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInputCodeMirror";
+import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useChatStore } from "../../stores/chat";
 import {
   MODE_CYCLE,
@@ -216,9 +217,18 @@ const host = ref<HTMLDivElement | null>(null);
 // 机制(Android resize layout viewport,本调用对 Android 无害)。见 design §4.1。
 useMobileKeyboard();
 
+// F1 消息队列 (2026-08-25): 经典 session 流式期间解锁输入(可继续
+// 打字并排队发送,PRD R1);仅群聊保持锁死(cancel+resend 抢占语义,
+// AC4)。`sendingEffective` 驱动 readOnly compartment 与输入框禁用
+// 视觉;发送键/Stop/Esc 仍看真实 streaming(见下)。
+const isGroupChatSession = computed(
+  () => chatStore.currentSession?.session_type === "group_chat",
+);
+const sendingEffective = computed(() => props.sending && isGroupChatSession.value);
+
 const cm = useChatInputCodeMirror({
   host,
-  sending: computed(() => props.sending),
+  sending: sendingEffective,
   placeholder: computed(() => props.placeholder),
   onSubmit: () => {
     const text = cm.input.value;
@@ -417,6 +427,17 @@ watchEffect(() => {
 
 // === Send / Stop / Esc ===========================================
 
+
+// F1 R8「修改」= 排队消息退回输入框:消费 queue store 的回填草稿。
+watch(
+  () => chatStore.currentSessionId,
+  () => {
+    const text = useMessageQueueStore().takeRecallDraft(chatStore.currentSessionId);
+    if (text != null) cm.input.value = text;
+  },
+  { immediate: true },
+);
+
 function onStop() {
   emit("stop");
 }
@@ -424,13 +445,16 @@ function onStop() {
 // B1 R2a: send is enabled for any non-empty text OR a non-empty
 // staging strip (pure-image sends).
 const sendDisabled = (): boolean =>
-  props.sending ||
+  (props.sending && isGroupChatSession.value) ||
   (!cm.input.value.trim() && chatStore.stagedImages.length === 0);
 
 function onEscKeydown() {
-  if (props.sending) {
-    onStop();
-  }
+  if (!props.sending) return;
+  // F1 / P2-5 拍板:经典 session 流式中编辑器**非空**时 Esc 不触发
+  // Stop —— 防止打好的排队输入被"Stop 清队列"连带丢弃;要停点按钮。
+  // 群聊保持原语义(Esc 即打断)。
+  if (!isGroupChatSession.value && cm.input.value.trim().length > 0) return;
+  onStop();
 }
 
 // === Mode cycle (Shift+Tab, B7 PR2) =============================
@@ -834,7 +858,7 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
       <div
         ref="host"
         class="chat-input__field"
-        :class="{ 'chat-input__field--disabled': sending }"
+        :class="{ 'chat-input__field--disabled': sendingEffective }"
         :aria-disabled="sending ? 'true' : undefined"
       />
       <!-- PR5: morph the send button into a Stop button while

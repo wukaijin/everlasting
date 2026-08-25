@@ -201,6 +201,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 // D (2026-08-14): stub loaded-set registry(测试默认
                 // 开关 off 路径不 stub;interception 测试用 harness 的)。
                 h.stub_loaded.clone(),
+                // F1 queue driver (2026-08-25): single-shot call site —
+                // guard-owned cleanup (not a continuation round).
+                false,
             ),
         ),
     )

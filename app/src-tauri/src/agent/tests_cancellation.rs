@@ -147,6 +147,7 @@ async fn cancellation_guard_removes_entry_on_drop() {
             request_id: "rid-g".to_string(),
             session_id: "sid-g".to_string(),
             skip_session_active: false,
+            skip_cancellations: false,
         };
         // _guard drops at end of block.
     }

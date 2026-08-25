@@ -110,6 +110,9 @@ async fn agent_loop_basic_text_only_completes() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -250,6 +253,9 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -353,6 +359,9 @@ async fn agent_loop_tool_use_with_non_tool_use_stop_reason_still_executes() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -497,6 +506,9 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -626,6 +638,9 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -795,6 +810,9 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -993,6 +1011,9 @@ async fn agent_loop_max_turns_emits_done_marker() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -1107,6 +1128,9 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 

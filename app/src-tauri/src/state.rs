@@ -126,6 +126,17 @@ pub struct AppState {
     /// (single-consumer receiver); if no destructive op drains it,
     /// the spawn closure removes it after `.send`.
     pub inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>>,
+    /// F1 message queue (2026-08-25): per-session FIFO of user
+    /// messages enqueued while a turn is running. Purely in-memory
+    /// (same risk posture as unsent composer text — lost on
+    /// restart); entries are persisted only when the driver injects
+    /// them as the next turn's input. See `agent/message_queue.rs`
+    /// for the queue contract and `SESSION_QUEUE_MAX`.
+    pub message_queues: Arc<
+        Mutex<
+            HashMap<String, std::collections::VecDeque<crate::agent::message_queue::QueuedMessage>>,
+        >,
+    >,
     /// Per-session read fingerprints. The `edit_file` tool consults
     /// this guard to ensure the LLM (a) read the file in the current
     /// session and (b) the file hasn't been modified on disk since.
@@ -429,6 +440,9 @@ impl AppState {
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             session_active_request: Arc::new(Mutex::new(HashMap::new())),
             inflight_exits: Arc::new(Mutex::new(HashMap::new())),
+            // F1 message queue (2026-08-25): per-session in-memory
+            // FIFO of user messages enqueued while a turn runs.
+            message_queues: Arc::new(Mutex::new(HashMap::new())),
             read_guard: ReadGuard::new(),
             memory_cache,
             command_cache,
@@ -583,6 +597,19 @@ pub struct CancellationGuard {
     /// Production chat passes `false` (unchanged behavior); the
     /// B6 worker path (PR1b) passes `true`.
     pub skip_session_active: bool,
+    /// F1 message queue (2026-08-25): when `true`, Drop also skips
+    /// the `cancellations.remove(&request_id)` step. The queue
+    /// driver (`agent/chat.rs`) calls `run_chat_loop` once per
+    /// continuation round under ONE rid; every inner call passes
+    /// both skips `true` so both maps stay registered across rounds
+    /// (a mid-driver eviction would let a concurrent enqueue see
+    /// "idle" and spawn a second driver on the same session). The
+    /// driver removes both entries itself on its final exit.
+    /// Default `false` everywhere else — single-shot paths (classic
+    /// chat round-trips, group-chat speaker calls, workers, tests)
+    /// keep the guard as sole owner of cleanup, byte-identical to
+    /// the pre-F1 contract.
+    pub skip_cancellations: bool,
 }
 
 impl Drop for CancellationGuard {
@@ -592,10 +619,13 @@ impl Drop for CancellationGuard {
         let request_id = self.request_id.clone();
         let session_id = self.session_id.clone();
         let skip_session_active = self.skip_session_active;
+        let skip_cancellations = self.skip_cancellations;
         tauri::async_runtime::spawn(async move {
-            let mut map = cancellations.lock().await;
-            map.remove(&request_id);
-            drop(map);
+            if !skip_cancellations {
+                let mut map = cancellations.lock().await;
+                map.remove(&request_id);
+                drop(map);
+            }
             if !skip_session_active {
                 let mut s2p = session_active_request.lock().await;
                 s2p.remove(&session_id);

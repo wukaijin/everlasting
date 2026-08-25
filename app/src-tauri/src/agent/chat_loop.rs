@@ -601,6 +601,16 @@ pub async fn run_chat_loop(
     // 每次新建的空 registry — worker 永不 stub(gate
     // `!effective_is_worker`),registry 只是签名占位,不会被读写。
     stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
+    // F1 消息队列(2026-08-25):`true` 时入口 CancellationGuard 的
+    // Drop 连 `cancellations.remove(&rid)` 一起跳过(与
+    // `skip_session_active` 独立)。队列驱动器(`agent/chat.rs`
+    // `run_queue_driver`)对**每一轮**内层调用传双 true——rid 与
+    // session slot 必须跨轮存活,否则轮间隙并发入队会误判"闲"并
+    // 在同一 session 上 spawn 第二个驱动器;驱动器自身在最终退出
+    // 时清两个 map。其余全部调用点(单发 chat / 群聊 speaker /
+    // worker / 全部测试)传 `false`,guard 仍是唯一清理者,行为与
+    // F1 前逐字节一致。尾部追加,同既有约定(测试夹具一行改)。
+    skip_cancellations: bool,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -618,6 +628,10 @@ pub async fn run_chat_loop(
         // `skip_session_active: true` to avoid evicting the parent's
         // entry.
         skip_session_active,
+        // F1 queue driver (2026-08-25): continuation rounds pass
+        // `true` so both maps survive across inner rounds — see the
+        // `skip_cancellations` param doc at the signature tail.
+        skip_cancellations,
     };
     // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 每
     // request 读一次 `tools_stub_enabled`(best-effort,缺省 = 开;

@@ -294,6 +294,8 @@ pub async fn delete_session_inner(
         &session_id,
     )
     .await;
+    // F1(2026-08-25):队列随 session 删除(design §4 取消矩阵)。
+    crate::agent::message_queue::clear_session(&state.message_queues, &session_id).await;
     // RULE-E-005 (2026-06-15): wait for the agent loop to exit
     // before deleting DB rows. Without this, an in-flight
     // `persist_turn` after deletion writes to a session that no
@@ -451,6 +453,8 @@ pub async fn clear_session_messages_inner(
     )
     .await;
     await_inflight_exit(exit_rx, "clear_session_messages").await;
+    // F1(2026-08-25):清空消息即清空排队(design §4)。
+    crate::agent::message_queue::clear_session(&state.message_queues, &session_id).await;
 
     // Drop pending permission asks + read fingerprints so the fresh
     // conversation starts clean.
@@ -885,16 +889,24 @@ pub async fn record_tool_duration(
 /// The DB layer serializes it via `MessageContent`'s `Serialize`
 /// impl so the round-trip is lossless.
 ///
-/// Returns `Ok(())` on success. Errors are wrapped as `String`
+/// Returns the `EditMessageOutcome` on success. Errors are wrapped as `String`
 /// for the Tauri IPC rejection (the frontend surfaces them as a
 /// toast — same contract as `delete_session` /
 /// `clear_session_messages`).
+/// F1(2026-08-25):编辑会取消在途轮并顺带清空该 session 队列
+/// (design §4);`cleared_queued` 供前端「已丢弃 N 条」toast(PRD R7)。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditMessageOutcome {
+    pub cleared_queued: usize,
+}
+
 pub async fn edit_user_message_inner(
     state: &Arc<AppState>,
     session_id: String,
     message_seq: i64,
     new_content: MessageContent,
-) -> Result<(), AppCommandError> {
+) -> Result<EditMessageOutcome, AppCommandError> {
     // 1. Stream race: cancel any in-flight chat on this session
     // first. Mirrors `delete_session` /
     // `clear_session_messages`. Wait for the loop to exit so the
@@ -908,6 +920,9 @@ pub async fn edit_user_message_inner(
     )
     .await;
     await_inflight_exit(exit_rx, "edit_user_message").await;
+    // F1(2026-08-25):cancel 链路顺带清队 + 计数(design §4)。
+    let cleared_queued =
+        crate::agent::message_queue::clear_session(&state.message_queues, &session_id).await;
 
     // 2. Confirm the session exists. The DB-layer helper is a
     // silent no-op on unknown session (matches the F5 latency
@@ -974,7 +989,11 @@ pub async fn edit_user_message_inner(
     // rejection. The frontend surfaces as a toast.
     db::edit_user_message(&state.db, &session_id, message_seq, &new_content)
         .await
-        .map_err(|e| anyhow::anyhow!("edit_user_message: db failed: {}", e).into())
+        .map_err(|e| -> AppCommandError {
+            anyhow::anyhow!("edit_user_message: db failed: {}", e).into()
+        })?;
+
+    Ok(EditMessageOutcome { cleared_queued })
 }
 
 #[tauri::command]
@@ -983,7 +1002,7 @@ pub async fn edit_user_message(
     session_id: String,
     message_seq: i64,
     new_content: MessageContent,
-) -> Result<(), AppCommandError> {
+) -> Result<EditMessageOutcome, AppCommandError> {
     edit_user_message_inner(&state, session_id, message_seq, new_content).await
 }
 

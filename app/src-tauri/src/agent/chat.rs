@@ -87,7 +87,7 @@ pub async fn chat(
     // `None` for normal sends. Mutually exclusive with `resendSeq`
     // (a resend never carries a forced dispatch).
     #[allow(non_snake_case)] forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
-) -> Result<(), AppCommandError> {
+) -> Result<ChatAcceptance, AppCommandError> {
     // Build the `ChatEventSink` adapter BEFORE delegating so the
     // pre-flight error path inside `chat_inner` also emits through
     // the trait (no direct `app.emit` — closes the bypass flagged in
@@ -143,6 +143,23 @@ pub async fn chat(
 /// a follow-up — see task `07-20-remote-access-daemon-split` implement.md
 /// C5 "完整 subagent sink 注入" 复盘点.
 #[allow(clippy::too_many_arguments)]
+/// F1 消息队列(2026-08-25):`chat` 入口的受理结果(design §2/§8)。
+///
+/// - `Started`:session 空闲,请求已认领 slot 并开跑 —— 响应形状与
+///   F1 前的 unit 语义等价(流照常走事件通道)。
+/// - `Queued`:session 忙,消息已入队,本次 RPC 无流;`position`
+///   为 1-based 队尾位次(前端排队徽标用)。
+///
+/// wire 形状 `{ "status": "started" }` / `{ "status": "queued",
+/// "position": N }`(serde tag)。向后兼容:闲时字段叠加而非
+/// rename,旧前端把非 unit 返回值忽略也不影响流。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ChatAcceptance {
+    Started,
+    Queued { position: usize },
+}
+
 pub(crate) async fn chat_inner(
     state: &Arc<AppState>,
     request_id: String,
@@ -159,7 +176,7 @@ pub(crate) async fn chat_inner(
     worker_event_sink: Arc<dyn SubagentEventSink>,
     resend_seq: Option<i64>,
     forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
-) -> Result<(), AppCommandError> {
+) -> Result<ChatAcceptance, AppCommandError> {
     let tool_defs = state.tools.clone();
     // B1 (2026-08-16): image-attachment caps, enforced at the shared
     // entry so both transports return a clear error instead of a
@@ -290,6 +307,90 @@ pub(crate) async fn chat_inner(
     let rid = request_id;
     let sink_for_spawn = sink.clone();
 
+    // ------------------------------------------------------------------
+    // F1 消息队列(2026-08-25):统一数据路径路由临界区(design §2)。
+    //
+    // 「查忙 + 入队 + 认领 slot + 注册 token/done」在同一临界区一次
+    // 完成 —— claim 即注册,消灭旧序"3a 取消 → 注册"之间的查忙竞态
+    // 窗。锁纪律:先 `message_queues` 后 `session_active_request`,
+    // 全仓固定;区内只有锁获取,无 DB/网络 await。
+    //
+    // - 忙 → 仅入队,返回 `Queued{position}`(本次 RPC 无流)。
+    // - 闲 → 入队 + 认领,继续走 preflight 并 spawn 驱动器;preflight
+    //   失败时回滚全部注册并弹出本条队列项(`pushed_id` 寻址)。
+    // - 群聊 / 开关关闭 / 无 user 尾条 → Legacy:行为与 F1 前逐字节
+    //   一致(下方 3a 防御性取消 + 既有注册序列原样保留)。
+    //
+    // 统一数据路径下**每一条发送都先进队**(含触发驱动器的这条),
+    // 驱动器只从队列消费 —— 错误终止后的滞留项与新消息天然 FIFO
+    // 同注(P1-1 修正的落点),D-D 入口不变量(尾条未落库)对注入
+    // 轮自动成立。
+    // ------------------------------------------------------------------
+    let message_queues = state.message_queues.clone();
+    let queue_enabled =
+        match crate::db::config::get_config_value(&db, "message_queue_enabled").await {
+            Ok(Some(v)) => v != "false",
+            _ => true, // fail-open,同 memory_digest / tools_stub 先例
+        };
+    let token = CancellationToken::new();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut done_rx = Some(done_rx);
+    let mut drive_claimed = false;
+    let mut queued_position: Option<usize> = None;
+    let mut pushed_id: Option<String> = None;
+    'routing: {
+        if group_chat_ctx.is_some() || !queue_enabled {
+            break 'routing;
+        }
+        let Some(tail) = messages
+            .last()
+            .filter(|m| m.role == crate::llm::types::Role::User)
+            .cloned()
+        else {
+            break 'routing;
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or_default();
+        let mut qmap = message_queues.lock().await;
+        let busy = {
+            let active = session_active_request.lock().await;
+            active.contains_key(&session_id)
+        };
+        let q = qmap.entry(session_id.clone()).or_default();
+        let pushed = match crate::agent::message_queue::push(q, tail, now_ms) {
+            Ok(id) => id,
+            Err(e) => {
+                // AC6:队列满(20)。用户可感知错误,不入队不认领。
+                tracing::warn!(session_id = %session_id, error = %e, "chat: enqueue rejected");
+                drop(qmap);
+                return Err(anyhow::anyhow!(e.to_string()).into());
+            }
+        };
+        pushed_id = Some(pushed);
+        queued_position = Some(q.len());
+        if !busy {
+            session_active_request
+                .lock()
+                .await
+                .insert(session_id.clone(), rid.clone());
+            cancellations
+                .lock()
+                .await
+                .insert(rid.clone(), token.clone());
+            if let Some(rx) = done_rx.take() {
+                inflight_exits.lock().await.insert(rid.clone(), rx);
+            }
+            drive_claimed = true;
+        }
+    }
+    if let Some(position) = queued_position {
+        if !drive_claimed {
+            return Ok(ChatAcceptance::Queued { position });
+        }
+    }
+
     // PR1 pre-flight: look up the catalog for the default model.
     // The failure modes map 1:1 to PRD §Q2's locked-in user-facing
     // messages, surfaced as `ChatEvent::Error` so the frontend can
@@ -323,7 +424,22 @@ pub(crate) async fn chat_inner(
                     category,
                 },
             });
-            return Ok(());
+            // F1(2026-08-25):Drive 路径在路由临界区已认领 slot +
+            // 注册 token/done,preflight 失败必须全部回滚,否则
+            // session 被一个永远不会跑的"假在途请求"卡死。
+            if drive_claimed {
+                cancellations.lock().await.remove(&rid);
+                session_active_request.lock().await.remove(&session_id);
+                inflight_exits.lock().await.remove(&rid);
+                if let Some(id) = &pushed_id {
+                    // best-effort:并发入队可能已在我们身后排队,
+                    // 按 uuid 只弹自己这条。
+                    let _ =
+                        crate::agent::message_queue::remove_by_id(&message_queues, &session_id, id)
+                            .await;
+                }
+            }
+            return Ok(ChatAcceptance::Started);
         }
     };
     let provider: Arc<dyn crate::llm::Provider> = resolved.provider;
@@ -345,70 +461,77 @@ pub(crate) async fn chat_inner(
         "chat: provider resolved"
     );
 
-    // 3a (2026-07-28, defensive depth): cancel any prior in-flight
-    // chat on this session BEFORE registering the new one. Mirrors
-    // the invariant already enforced by every destructive command
-    // (delete_session / clear_session_messages / edit_user_message /
-    // detach_worktree / delete_worktree) — see `commands/sessions.rs`
-    // and `commands/worktree.rs` for the same pattern.
-    //
-    // The frontend's `chatStore.send` early-returns on
-    // `isCurrentSessionStreaming` (chat.ts:952), and
-    // `editMessage` / `resendMessage` / `retryChat` each explicitly
-    // cancel before re-invoking. So in the current code base this
-    // cancel-then-await is a no-op for the normal paths. It is,
-    // however, load-bearing defense in depth: any future caller
-    // (or a race where the frontend guard mis-fires) that leaks a
-    // second chat request into the same session would otherwise
-    // strand the old agent loop holding stale
-    // `session_active_request` + `cancellations` state, and the
-    // old loop's tool execution would continue writing into a
-    // session that's already moved on.
-    //
-    // `await_inflight_exit` returns immediately on `None` (no
-    // prior in-flight), so the common cold-start path is a no-op.
-    let exit_rx = crate::agent::helpers::cancel_inflight_for_session(
-        &cancellations,
-        &session_active_request,
-        &inflight_exits,
-        &session_id,
-    )
-    .await;
-    crate::agent::helpers::await_inflight_exit(exit_rx, "chat").await;
+    // F1(2026-08-25):统一数据路径下,Drive 请求的 slot/token/done
+    // 注册已前移进上方路由临界区(claim 即注册)。此处的 3a 防御性
+    // 取消 + 注册序列仅对 **Legacy 路径**(queue 关闭 / 群聊 / 无
+    // user 尾条)保留,行为与 F1 前逐字节一致。
+    if !drive_claimed {
+        // 3a (2026-07-28, defensive depth): cancel any prior in-flight
+        // chat on this session BEFORE registering the new one. Mirrors
+        // the invariant already enforced by every destructive command
+        // (delete_session / clear_session_messages / edit_user_message /
+        // detach_worktree / delete_worktree) — see `commands/sessions.rs`
+        // and `commands/worktree.rs` for the same pattern.
+        //
+        // The frontend's `chatStore.send` early-returns on
+        // `isCurrentSessionStreaming` (chat.ts:952), and
+        // `editMessage` / `resendMessage` / `retryChat` each explicitly
+        // cancel before re-invoking. So in the current code base this
+        // cancel-then-await is a no-op for the normal paths. It is,
+        // however, load-bearing defense in depth: any future caller
+        // (or a race where the frontend guard mis-fires) that leaks a
+        // second chat request into the same session would otherwise
+        // strand the old agent loop holding stale
+        // `session_active_request` + `cancellations` state, and the
+        // old loop's tool execution would continue writing into a
+        // session that's already moved on.
+        //
+        // `await_inflight_exit` returns immediately on `None` (no
+        // prior in-flight), so the common cold-start path is a no-op.
+        let exit_rx = crate::agent::helpers::cancel_inflight_for_session(
+            &cancellations,
+            &session_active_request,
+            &inflight_exits,
+            &session_id,
+        )
+        .await;
+        crate::agent::helpers::await_inflight_exit(exit_rx, "chat").await;
 
-    // Register a cancellation token for this request. The frontend's
-    // Stop button calls `cancel_chat(rid)` which fetches this token
-    // and triggers it; the agent loop's `tokio::select!` notices and
-    // bails out. The entry is removed by the spawn task on every
-    // exit path (normal / error / cancel / max_turns) — see the
-    // guard at the end of the spawn closure.
-    let token = CancellationToken::new();
-    {
-        let mut map = cancellations.lock().await;
-        map.insert(rid.clone(), token.clone());
-    }
-    // Also register this session → request_id mapping so
-    // destructive operations (delete_session, detach_worktree,
-    // delete_worktree) can find and cancel the in-flight stream.
-    // The entry is removed by the CancellationGuard on Drop.
-    {
-        let mut map = session_active_request.lock().await;
-        map.insert(session_id.clone(), rid.clone());
-    }
-    // RULE-E-005 (2026-06-15): create the "agent loop exited"
-    // signal. The Receiver goes into `inflight_exits` keyed by
-    // request_id, so `cancel_inflight_for_session` can hand it to
-    // a destructive command, which awaits it (via
-    // `await_inflight_exit`) before deleting the worktree/session.
-    // The Sender moves into the spawn closure and fires when
-    // `run_chat_loop` returns — i.e. the loop has fully exited,
-    // including any in-flight tool that was already dispatched when
-    // cancel fired. Closing the race where the loop writes into a
-    // just-deleted worktree.
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-    {
-        let mut map = inflight_exits.lock().await;
-        map.insert(rid.clone(), done_rx);
+        // Register a cancellation token for this request. The frontend's
+        // Stop button calls `cancel_chat(rid)` which fetches this token
+        // and triggers it; the agent loop's `tokio::select!` notices and
+        // bails out. The entry is removed by the spawn task on every
+        // exit path (normal / error / cancel / max_turns) — see the
+        // guard at the end of the spawn closure.
+        {
+            let mut map = cancellations.lock().await;
+            map.insert(rid.clone(), token.clone());
+        }
+        // Also register this session → request_id mapping so
+        // destructive operations (delete_session, detach_worktree,
+        // delete_worktree) can find and cancel the in-flight stream.
+        // The entry is removed by the CancellationGuard on Drop.
+        {
+            let mut map = session_active_request.lock().await;
+            map.insert(session_id.clone(), rid.clone());
+        }
+        // RULE-E-005 (2026-06-15): create the "agent loop exited"
+        // signal. The Receiver goes into `inflight_exits` keyed by
+        // request_id, so `cancel_inflight_for_session` can hand it to
+        // a destructive command, which awaits it (via
+        // `await_inflight_exit`) before deleting the worktree/session.
+        // The Sender moves into the spawn closure and fires when
+        // `run_chat_loop` returns — i.e. the loop has fully exited,
+        // including any in-flight tool that was already dispatched when
+        // cancel fired. Closing the race where the loop writes into a
+        // just-deleted worktree.
+        //
+        // (F1:the channel itself is created up-front beside the routing
+        // critical section; here we only register the receiver.)
+        if let Some(rx) = done_rx.take() {
+            let mut map = inflight_exits.lock().await;
+            map.insert(rid.clone(), rx);
+        }
     }
 
     // P1 RULE-A-006 (2026-06-14): the sink was passed in by the
@@ -465,6 +588,41 @@ pub(crate) async fn chat_inner(
                 question_store,
                 gc_ctx,
             )
+            .await;
+        } else if drive_claimed {
+            // F1 消息队列(2026-08-25):队列驱动器路径(design §1)。
+            // 统一数据路径下每条发送都入队;驱动器只从队列消费,
+            // 正常结束后 drain 非空则自动续轮。内层 run_chat_loop
+            // 全部双抑制 guard(skip_session_active + skip_cancellations),
+            // slot/token/done 生命周期由驱动器自持(退出时统一清理)。
+            run_queue_driver(QueueDriverDeps {
+                tool_defs,
+                provider,
+                context_window,
+                provider_id,
+                rid: rid.clone(),
+                session_id: session_id.clone(),
+                inner_sink: sink_for_spawn,
+                db,
+                cancellations: cancellations.clone(),
+                session_active_request: session_active_request.clone(),
+                read_guard,
+                memory_cache,
+                skill_cache,
+                permission_asks,
+                token: token.clone(),
+                resend_seq,
+                forced_dispatch,
+                background_shells: background_shells.clone(),
+                worker_catalog: worker_catalog.clone(),
+                worker_event_sink: worker_event_sink.clone(),
+                subagent_cache,
+                app_data_dir,
+                question_store,
+                workflow_ctx,
+                stub_loaded,
+                queues: message_queues.clone(),
+            })
             .await;
         } else {
             run_chat_loop(
@@ -621,6 +779,12 @@ pub(crate) async fn chat_inner(
                 // D (2026-08-14): thread the stub loaded-set registry
                 // (classic-chat path — stubify + interception use it).
                 stub_loaded,
+                // F1 queue driver: the driver suppresses both guard
+                // cleanups on every inner round (see skip_cancellations
+                // param doc). This single-shot call site is only reached
+                // by legacy paths (queue disabled / group chat) — keep
+                // guard-owned cleanup.
+                false,
             )
             .await;
         } // end else (classic-chat path)
@@ -638,7 +802,7 @@ pub(crate) async fn chat_inner(
         inflight_exits.lock().await.remove(&rid);
     });
 
-    Ok(())
+    Ok(ChatAcceptance::Started)
 }
 
 /// PR1 catalog lookup for the default model.
@@ -793,4 +957,200 @@ pub struct ResolvedChatProviderWrapper {
     /// aggregation's grouping key). `Provider` trait has no id
     /// member, hence the explicit field.
     pub provider_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// F1 消息队列(2026-08-25):队列驱动器(design §1)
+// ---------------------------------------------------------------------------
+
+/// 驱动器依赖包。与 [`run_chat_loop`] 的参数一一对应(外加队列句柄
+/// 与 token),仅由 `chat_inner` 的 spawn 闭包与集成测试构造。不并入
+/// `run_chat_loop` 签名 —— 驱动器是 loop 之上的编排层,不是新的
+/// loop 形态。
+pub(crate) struct QueueDriverDeps {
+    pub(crate) tool_defs: Vec<crate::llm::types::ToolDef>,
+    pub(crate) provider: Arc<dyn crate::llm::Provider>,
+    pub(crate) context_window: u32,
+    pub(crate) provider_id: Option<String>,
+    pub(crate) rid: String,
+    pub(crate) session_id: String,
+    /// 未包装的 inner sink;每轮经 [`DriverSink`] 包装后传入内层
+    /// run,Done 被吞、真退出时补发(design §3)。
+    pub(crate) inner_sink: Arc<dyn ChatEventSink>,
+    pub(crate) db: sqlx::SqlitePool,
+    pub(crate) cancellations:
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    pub(crate) session_active_request:
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    pub(crate) read_guard: crate::tools::read_guard::ReadGuard,
+    pub(crate) memory_cache: Arc<crate::memory::MemoryCache>,
+    pub(crate) skill_cache: Arc<crate::skill::loader::SkillCache>,
+    pub(crate) permission_asks: crate::agent::permissions::PermissionStore,
+    pub(crate) token: CancellationToken,
+    pub(crate) resend_seq: Option<i64>,
+    pub(crate) forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
+    pub(crate) background_shells: crate::background_shell::DefaultRegistry,
+    pub(crate) worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
+    pub(crate) worker_event_sink: Arc<dyn SubagentEventSink>,
+    pub(crate) subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
+    pub(crate) app_data_dir: std::path::PathBuf,
+    pub(crate) question_store: crate::agent::question_store::QuestionStore,
+    pub(crate) workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
+    pub(crate) stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
+    pub(crate) queues: crate::agent::message_queue::SharedQueues,
+}
+
+/// 队列驱动器主循环。
+///
+/// ```text
+/// loop {
+///   drained = drain(queue)                    // FIFO 全队
+///   空 → break(Done 补发)
+///   round>0 → emit TurnContinuation{count}    // 前端续轮渲染边界
+///   input   = reload_messages(db) ++ drained  // D-D:尾条未落库
+///   run_chat_loop(..., 双抑制 guard, ...)
+///   cancelled → 清空队列, break
+///   errored / 续轮触顶 → 队列保留, break
+/// }
+/// 真结束(非 error)→ 补发最后被吞的 Done
+/// 清理 cancellations[rid] + session_active_request[sid]
+/// ```
+///
+/// # 为什么不用独立 rid/新请求实现续轮
+///
+/// 复用群聊"单 rid 保活跨内层 turn"机制(design §3):前端 finalize
+/// 只认 Done,中间轮的 Done 被 [`DriverSink`] 吞掉,单请求因此跨多
+/// 轮存活,TurnComplete/trace/token 记账全部按既有 per-turn 契约
+/// 工作,前端零新增 wire 语义(除 additive 的 TurnContinuation)。
+pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
+    use crate::agent::message_queue::{DriverSink, MAX_CONTINUATION_ROUNDS};
+
+    let (driver_sink, status) = DriverSink::new(deps.inner_sink.clone());
+    let driver_sink: Arc<dyn ChatEventSink> = Arc::new(driver_sink);
+    let mut round = 0usize;
+
+    loop {
+        let drained = crate::agent::message_queue::drain_all(&deps.queues, &deps.session_id).await;
+        if drained.is_empty() {
+            // claim 时至少压入一条,正常不应为空;防御性兜底。
+            break;
+        }
+        if round > 0 {
+            // 续轮渲染边界:先于本轮任何内层事件(sink 保序)。
+            // 见 ChatEvent::TurnContinuation 文档 —— 不能用 Start 兼任。
+            deps.inner_sink.emit_chat_event(&ChatEventPayload {
+                request_id: deps.rid.clone(),
+                event: ChatEvent::TurnContinuation {
+                    count: drained.len(),
+                },
+            });
+        }
+        // turn 输入 = DB 权威历史 + 排队尾条。与群聊 D-B 决策同构:
+        // 不信任客户端历史,reload 是唯一事实源(B1 attachments 经
+        // metadata 重建)。drained 尾条未落库,D-D 持久化点自然写入。
+        let mut turn_messages =
+            crate::agent::group_chat_loop::reload_messages(&deps.db, &deps.session_id).await;
+        turn_messages.extend(drained.iter().map(|qm| qm.message.clone()));
+
+        // resend 审计与 @@ 强制派发都是 round-0 语义(D8 保证 @@
+        // 永不入队 —— 这里只是纵深防御:round>0 一律 None)。
+        let (round_resend, round_forced) = if round == 0 {
+            (deps.resend_seq, deps.forced_dispatch.clone())
+        } else {
+            (None, None)
+        };
+
+        run_chat_loop(
+            deps.tool_defs.clone(),
+            deps.provider.clone(),
+            deps.context_window,
+            deps.provider_id.clone(),
+            deps.rid.clone(),
+            deps.session_id.clone(),
+            turn_messages,
+            driver_sink.clone(),
+            deps.db.clone(),
+            deps.cancellations.clone(),
+            deps.session_active_request.clone(),
+            deps.read_guard.clone(),
+            deps.memory_cache.clone(),
+            deps.skill_cache.clone(),
+            deps.permission_asks.clone(),
+            deps.token.clone(),
+            round_resend,
+            deps.background_shells.clone(),
+            // max_turns=None(生产预算);skip_session_active=true 与
+            // skip_cancellations=true —— slot/rid 条目跨轮存活,由驱
+            // 动器在最终退出时统一清理(guard 全程被抑制)。
+            None,
+            true,
+            // skip_persist=false:注入轮必须落库(用户消息是事实源)。
+            false,
+            Some(false),
+            deps.worker_catalog.clone(),
+            deps.worker_event_sink.clone(),
+            None,
+            None,
+            deps.subagent_cache.clone(),
+            None,
+            None,
+            None,
+            deps.app_data_dir.clone(),
+            round_forced,
+            deps.question_store.clone(),
+            deps.workflow_ctx.clone(),
+            None,
+            None,
+            deps.stub_loaded.clone(),
+            true,
+        )
+        .await;
+
+        // --- 轮间边界判定(design §4 取消矩阵)---
+        if deps.token.is_cancelled() {
+            // Stop / defense-in-depth 替换:清空队列(PRD R7)。
+            crate::agent::message_queue::clear_session(&deps.queues, &deps.session_id).await;
+            break;
+        }
+        let errored = status.lock().expect("driver status lock").errored;
+        if errored {
+            // 错误终止:非 user 过错,队列保留(PRD R3);不补发 Done
+            // —— Error 事件已触发前端 finalize,再补会双重终结。
+            break;
+        }
+        if round + 1 >= MAX_CONTINUATION_ROUNDS {
+            tracing::warn!(
+                session_id = %deps.session_id,
+                rounds = MAX_CONTINUATION_ROUNDS,
+                "chat: continuation round cap hit; retaining queue"
+            );
+            break;
+        }
+        round += 1;
+    }
+
+    // 真结束(非 error 路径):补发最后一轮被吞的 Done —— 这是整个
+    // 请求唯一到达前端的 Done,前端在此 finalize。
+    {
+        let st = status.lock().expect("driver status lock");
+        if !st.errored {
+            if let Some((stop_reason, usage)) = st.last_done.clone() {
+                deps.inner_sink.emit_chat_event(&ChatEventPayload {
+                    request_id: deps.rid.clone(),
+                    event: ChatEvent::Done { stop_reason, usage },
+                });
+            }
+        }
+    }
+
+    // 驱动器自持生命周期收尾:guard 全程双抑制,两个 map 条目由这里
+    // 统一注销(done_tx.send + inflight_exits 清理沿用 spawn 闭包既
+    // 有尾段,不变)。反搁浅语义:清理即最终态 —— 若此后仍有并发入
+    // 队,路由临界区会看到"闲"并为新消息 spawn 新驱动器,滞留项随
+    // 其首轮 drain 一起注入(统一数据路径保证顺序)。
+    deps.cancellations.lock().await.remove(&deps.rid);
+    deps.session_active_request
+        .lock()
+        .await
+        .remove(&deps.session_id);
 }

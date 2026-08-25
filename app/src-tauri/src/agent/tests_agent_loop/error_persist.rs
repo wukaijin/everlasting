@@ -133,6 +133,9 @@ async fn agent_loop_error_persists_partial_text() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -265,6 +268,9 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -382,6 +388,9 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -533,6 +542,9 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -652,6 +664,9 @@ async fn agent_loop_error_emits_turn_complete() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 

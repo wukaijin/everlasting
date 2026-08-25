@@ -185,7 +185,11 @@ describe("useChatStore.send — Phase 4 D9-Q4 human preemption", () => {
     expect(invokeMock).toHaveBeenCalledWith("cancel_chat", { requestId: rid });
   });
 
-  it("ordinary chat + streaming: no-op (guard retained)", async () => {
+  it("ordinary chat + streaming: queued send goes through (F1 message queue)", async () => {
+    // F1 消息队列 (2026-08-25): 经典 session 流式期间发送不再丢弃 ——
+    // 走后端入队路径(仍发 `chat`,不打断在途请求)。原"no-op 守卫"
+    // 契约由本用例取代;排队徽标/续轮注入的渲染契约见
+    // messageQueueStream.test.ts。
     await setupProjectAndSession("s1", "chat");
     const controller = useStreamControllerStore();
     const store = useChatStore();
@@ -193,16 +197,14 @@ describe("useChatStore.send — Phase 4 D9-Q4 human preemption", () => {
     seedStreamingRequest(controller, "s1", "req-in-flight");
     expect(store.isCurrentSessionStreaming).toBe(true);
 
-    await store.send("ignored");
+    await store.send("queued while busy");
 
-    // No cancel, no chat — the original early-return holds for
-    // ordinary chat sessions.
-    expect(lifecycleCalls()).toEqual([]);
+    // 不取消在途请求(排队 ≠ 打断),但 chat IPC 必须发生。
+    expect(lifecycleCalls()).toEqual(["chat"]);
     expect(invokeMock).not.toHaveBeenCalledWith(
       "cancel_chat",
       expect.anything(),
     );
-    expect(invokeMock).not.toHaveBeenCalledWith("chat", expect.anything());
   });
 
   it("group_chat + NOT streaming: normal send, no cancel", async () => {

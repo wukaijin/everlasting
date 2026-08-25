@@ -86,6 +86,9 @@ async fn run_loop_with_emitter(
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 }

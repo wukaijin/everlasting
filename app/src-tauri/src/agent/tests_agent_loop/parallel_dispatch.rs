@@ -371,6 +371,9 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -574,6 +577,9 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -797,6 +803,9 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
     cancel_handle.await.unwrap();

@@ -38,6 +38,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { transport } from "../transport";
 
 import { useProjectsStore } from "./projects";
+import { useMessageQueueStore } from "./messageQueueStore";
 import { useConfigStore } from "./config";
 import { useStreamControllerStore } from "./streamController";
 import { type ModelWithProvider } from "./models";
@@ -879,7 +880,17 @@ export const useChatStore = defineStore("chat", () => {
   async function cancel() {
     const rid = currentRequestId.value;
     if (!rid) return;
-    await controller.cancel(rid);
+    const sid = currentSessionId.value;
+    const outcome = await controller.cancel(rid);
+    // F1 (2026-08-25): Stop 语义 = 停当前轮 + 清空该 session 队列
+    // (PRD D3/R7)。N 来自后端 `cancel_chat` 返回(SoT);本地视图
+    // 同步清空。edit/resend/retry 的前端路径也走这里(cancel-first),
+    // 因此同一 toast 覆盖全部清队入口(P2-3)。
+    const cleared = outcome?.clearedQueued ?? 0;
+    if (sid && cleared > 0) {
+      useMessageQueueStore().clearSession(sid);
+      projectsStore.showToast(`已丢弃 ${cleared} 条排队消息`, "info");
+    }
   }
 
   // Send action (08-10-chat-store-split: 拆出 chatSendActions.ts,

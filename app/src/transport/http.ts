@@ -366,8 +366,10 @@ export const httpTransport: Transport = {
       }
       throw new TransportError(resp.status, body);
     }
-    // daemon handler 返回 `Json<T>`;chat / cancel_chat 返回 `Json(())`
-    // (body = `null`)。空 body 解析为 null,其余 JSON 透传。
+    // daemon handler 返回 `Json<T>`。F1 (2026-08-25): chat 现返回
+    // `{status:"started"|"queued", position?}`、cancel_chat 返回
+    // `{cancelled, clearedQueued}` —— JSON 透传即 P2-1 的 transport
+    // 透传要求;空 body 解析为 null(兼容 legacy 单元返回)。
     const text = await resp.text();
     if (text.length === 0) return null as T;
     return JSON.parse(text) as T;

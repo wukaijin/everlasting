@@ -134,6 +134,9 @@ async fn agent_loop_p5_soft_block_short_circuits_execute() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -272,6 +275,9 @@ async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -409,6 +415,9 @@ async fn a5plus_retry_does_not_double_count_token_usage() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -516,6 +525,9 @@ async fn a5plus_retry_emits_retrying_chat_events() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -628,6 +640,9 @@ async fn a5plus_retry_terminal_state_matches_no_retry_path() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 

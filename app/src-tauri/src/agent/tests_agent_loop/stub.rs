@@ -125,6 +125,9 @@ async fn agent_loop_load_tool_schemas_intercepts_and_sticky() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -216,6 +219,9 @@ async fn agent_loop_load_tool_schemas_intercepts_and_sticky() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
     let sent2 = mock2.sent_tools();
@@ -281,6 +287,9 @@ async fn agent_loop_stub_direct_call_self_heals() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -356,6 +365,9 @@ async fn agent_loop_stub_off_full_schemas_no_meta_tool() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -424,6 +436,9 @@ async fn agent_loop_worker_never_stubbed() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -509,6 +524,9 @@ async fn agent_loop_group_chat_never_stubbed() {
         Some(turn_state),
         Some("moderator".to_string()),
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 

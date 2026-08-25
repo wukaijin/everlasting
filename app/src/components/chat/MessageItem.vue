@@ -37,6 +37,7 @@
 import { computed, watch, onUnmounted, ref } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
+import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { abbreviateTokens } from "../../utils/tokenUsage";
 import { askCardPropsFor as askCardPropsResolved } from "./messageCards/askCard";
@@ -75,6 +76,32 @@ const props = defineProps<{
    *  wrong session. */
   readonly?: boolean;
 }>();
+
+
+// F1 消息队列 (2026-08-25): R8 排队消息单条操作。
+// 占位气泡与队列视图按 position 对齐(entriesFor 有序数组);
+// not-found(已开始注入)由 store 统一 toast 并水合对账。
+const queueStore = useMessageQueueStore();
+async function revokeQueued(): Promise<void> {
+  const sid = useChatStore().currentSessionId;
+  if (!sid || !props.message.queued) return;
+  const entry = queueStore.entriesFor(sid)[props.message.queued.position - 1];
+  if (!entry) {
+    void queueStore.hydrate(sid);
+    return;
+  }
+  await queueStore.revoke(sid, entry);
+}
+async function recallQueued(): Promise<void> {
+  const sid = useChatStore().currentSessionId;
+  if (!sid || !props.message.queued) return;
+  const entry = queueStore.entriesFor(sid)[props.message.queued.position - 1];
+  if (!entry) {
+    void queueStore.hydrate(sid);
+    return;
+  }
+  await queueStore.recallToComposer(sid, entry);
+}
 
 const chatStore = useChatStore();
 const controller = useStreamControllerStore();
@@ -887,6 +914,27 @@ const messageImages = computed<
       The component is a thin renderer — see
       `FileInjectionsHint.vue` for the per-row shape.
     -->
+    <!--
+      F1 消息队列 (2026-08-25): 排队中徽标 + 单条撤销 / 退回输入框
+      (R8)。仅内存占位有 `queued`;注入轮物化后本行随字段清除消失。
+    -->
+    <div
+      v-if="message.role === 'user' && message.queued"
+      class="f1-queued-row"
+    >
+      <span class="f1-queued-chip">⏳ 排队中 · 第 {{ message.queued.position }} 位</span>
+      <button
+        class="f1-queued-btn"
+        title="撤销（删除这条排队消息）"
+        @click.stop="revokeQueued"
+      >✕</button>
+      <button
+        class="f1-queued-btn"
+        title="退回输入框修改"
+        @click.stop="recallQueued"
+      >✎</button>
+    </div>
+
     <FileInjectionsHint
       v-if="
         message.role === 'user' &&
@@ -1510,5 +1558,36 @@ const messageImages = computed<
   .msg__bubble {
     padding: 5px 8px;
   }
+}
+</style>
+
+<style scoped>
+/* F1 (2026-08-25): 排队徽标行 —— 低饱和、不抢主气泡视觉。 */
+.f1-queued-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.f1-queued-chip {
+  font-size: 11px;
+  opacity: 0.72;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.f1-queued-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0.55;
+}
+.f1-queued-btn:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.18);
 }
 </style>

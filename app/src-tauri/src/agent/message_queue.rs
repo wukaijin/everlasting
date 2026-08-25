@@ -1,0 +1,349 @@
+//! F1 消息队列(2026-08-25)— 输入侧 per-session FIFO。
+//!
+//! 经典聊天 session 的 turn 进行中,新发送不再走"取消替换",而是
+//! 入队等待;当前轮正常结束后由驱动器(`agent/chat.rs` 的
+//! `run_queue_driver`)drain 全队、按序批量注入为下一个 turn。
+//!
+//! # 数据形态
+//!
+//! 队列本体挂在 [`crate::state::AppState::message_queues`]
+//! (`Arc<Mutex<HashMap<session_id, VecDeque<QueuedMessage>>>>`)。
+//! 每个排队项持有**完整的尾部 user [`ChatMessage`]**(含 B1
+//! `attachments` 引用)——与 `chat_inner` 收到的请求尾条同构,
+//! 注入时经 D-D 持久化点自然落库(排队项未落过库,guard 不会
+//! 误判跳过)。
+//!
+//! # 生命周期(纯内存)
+//!
+//! 入队仅内存;注入时才持久化。崩溃/重启丢失 = 与 composer 未
+//! 发送文本同等风险姿态(PRD D6 已决)。`delete_session` /
+//! `clear_session_messages` / Stop(cancel)负责清空。
+//!
+//! # 上限
+//!
+//! `SESSION_QUEUE_MAX` 有界防连发打爆内存(PRD AC6);超限返回
+//! [`QueueError::Full`],前端 toast 提示。
+//!
+//! # 并发约定(设计 §2 锁纪律)
+//!
+//! 路由判定("忙 → 仅入队 / 闲 → 入队 + 认领 slot")要求
+//! `message_queues` 与 `session_active_request` 两把锁在**同一
+//! 临界区**内成对获取。全仓固定加锁顺序:**先
+//! `message_queues`,后 `session_active_request`**;临界区内不得
+//! await(DB / 网络)。其余路径(delete_session 清队、cancel 链)
+/// 只碰其中一把,无反序锁。
+use crate::agent::permissions::PermissionAskPayload;
+use crate::llm::types::{ChatEvent, ChatMessage};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Shared queue-map handle as stored on `AppState`.
+pub type SharedQueues = Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>;
+
+/// Per-session queue capacity (PRD AC6). Beyond this the enqueue is
+/// rejected with [`QueueError::Full`] — bounded memory against a
+/// runaway client.
+pub const SESSION_QUEUE_MAX: usize = 20;
+
+/// Continuation rounds per driver request (design §1). Mirrors the
+/// group-chat orchestrator's `MAX_ORCHESTRATION_ROUNDS = 30` safety
+/// bound; on hitting it the driver exits Done-with-retained-queue
+/// (same semantics as error termination — design §4).
+pub const MAX_CONTINUATION_ROUNDS: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct QueuedMessage {
+    /// Stable uuid (NOT position — positions shift as siblings are
+    /// revoked). R8 revoke/recall address entries by this id.
+    pub id: String,
+    /// The full tail user message as received from the frontend
+    /// (text blocks + B1 attachment refs). Persisted verbatim at
+    /// injection time via run_chat_loop's entry persist site.
+    pub message: ChatMessage,
+    /// Epoch millis, observability only (`list_queued_messages`).
+    pub enqueued_at: i64,
+    /// R6 placeholder — MVP scheduling is pure FIFO; this field does
+    /// NOT participate in ordering. Do not branch on it without
+    /// opening the priority tier (ROADMAP B 档).
+    pub priority: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueueError {
+    /// Session queue at `SESSION_QUEUE_MAX`.
+    Full,
+    /// R8 revoke/recall target not found — either already drained by
+    /// the driver (injection started) or revoked by another surface.
+    NotFound,
+}
+
+impl std::fmt::Display for QueueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueueError::Full => write!(f, "排队已满({SESSION_QUEUE_MAX} 条上限)"),
+            QueueError::NotFound => write!(f, "消息已开始处理或已被移除"),
+        }
+    }
+}
+
+/// Append one message onto a queue VecDeque. Sync by design: the
+/// chat_inner routing critical section holds the `message_queues`
+/// lock across the busy-check + slot-claim sequence (module docs) and
+/// calls this while still holding the guard. Returns the entry uuid;
+/// position = queue length AFTER push (1-based tail).
+pub fn push(
+    q: &mut VecDeque<QueuedMessage>,
+    message: ChatMessage,
+    now_ms: i64,
+) -> Result<String, QueueError> {
+    if q.len() >= SESSION_QUEUE_MAX {
+        return Err(QueueError::Full);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    q.push_back(QueuedMessage {
+        id: id.clone(),
+        message,
+        enqueued_at: now_ms,
+        // R6 placeholder — see struct doc; MVP scheduling ignores it.
+        priority: 0,
+    });
+    Ok(id)
+}
+
+/// Drain ALL queued messages for `session_id` in FIFO order.
+/// Destructive (mirrors `drain_notifications`). Called by the driver
+/// between rounds and by the cancel path (Stop clears the queue).
+pub async fn drain_all(
+    queues: &Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    session_id: &str,
+) -> Vec<QueuedMessage> {
+    let mut map = queues.lock().await;
+    match map.get_mut(session_id) {
+        Some(q) => q.drain(..).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Clear (discard) every queued message for `session_id`; returns how
+/// many were dropped so `cancel_chat` can report "已丢弃 N 条"
+/// (PRD R7). Called from the cancel path and destructive commands.
+pub async fn clear_session(
+    queues: &Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    session_id: &str,
+) -> usize {
+    let mut map = queues.lock().await;
+    match map.remove(session_id) {
+        Some(q) => q.len(),
+        None => 0,
+    }
+}
+
+/// Remove one entry by uuid (R8 撤销). Returns the removed message.
+pub async fn remove_by_id(
+    queues: &Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    session_id: &str,
+    id: &str,
+) -> Result<QueuedMessage, QueueError> {
+    let mut map = queues.lock().await;
+    let q = map.get_mut(session_id).ok_or(QueueError::NotFound)?;
+    let pos = q
+        .iter()
+        .position(|m| m.id == id)
+        .ok_or(QueueError::NotFound)?;
+    Ok(q.remove(pos).expect("position validated above"))
+}
+
+/// Snapshot for `list_queued_messages` IPC (R8 hydration SoT).
+pub async fn list_session(
+    queues: &Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    session_id: &str,
+) -> Vec<QueuedMessage> {
+    let map = queues.lock().await;
+    map.get(session_id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::types::{MessageContent, Role};
+
+    fn user_msg(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+            speaker: None,
+            attachments: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn push_rejects_beyond_capacity() {
+        let mut q = VecDeque::new();
+        for i in 0..SESSION_QUEUE_MAX {
+            push(&mut q, user_msg(&format!("m{i}")), 0).expect("under capacity must succeed");
+        }
+        assert_eq!(q.len(), SESSION_QUEUE_MAX);
+        assert_eq!(push(&mut q, user_msg("overflow"), 0), Err(QueueError::Full));
+        // Rejected entry must NOT have been appended.
+        assert_eq!(q.len(), SESSION_QUEUE_MAX);
+    }
+
+    #[tokio::test]
+    async fn drain_all_is_fifo_and_destructive() {
+        let queues: SharedQueues = Arc::new(Mutex::new(HashMap::new()));
+        {
+            let mut map = queues.lock().await;
+            let q = map.entry("s1".into()).or_default();
+            push(q, user_msg("a"), 1).unwrap();
+            push(q, user_msg("b"), 2).unwrap();
+            push(q, user_msg("c"), 3).unwrap();
+        }
+        let drained = drain_all(&queues, "s1").await;
+        let texts: Vec<_> = drained
+            .iter()
+            .map(|m| match &m.message.content {
+                MessageContent::Text(t) => t.clone(),
+                _ => panic!("text expected"),
+            })
+            .collect();
+        assert_eq!(texts, vec!["a", "b", "c"]);
+        // Destructive: second drain is empty; missing session too.
+        assert!(drain_all(&queues, "s1").await.is_empty());
+        assert!(drain_all(&queues, "nope").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_session_returns_count() {
+        let queues: SharedQueues = Arc::new(Mutex::new(HashMap::new()));
+        {
+            let mut map = queues.lock().await;
+            let q = map.entry("s1".into()).or_default();
+            push(q, user_msg("a"), 1).unwrap();
+            push(q, user_msg("b"), 2).unwrap();
+        }
+        assert_eq!(clear_session(&queues, "s1").await, 2);
+        assert_eq!(clear_session(&queues, "s1").await, 0);
+        assert_eq!(clear_session(&queues, "nope").await, 0);
+    }
+
+    #[tokio::test]
+    async fn remove_by_id_targets_uuid_not_position() {
+        let queues: SharedQueues = Arc::new(Mutex::new(HashMap::new()));
+        let ids: Vec<String> = {
+            let mut map = queues.lock().await;
+            let q = map.entry("s1".into()).or_default();
+            (0..3)
+                .map(|i| push(q, user_msg(&format!("m{i}")), i).unwrap())
+                .collect()
+        };
+        // Remove the MIDDLE entry by uuid.
+        let mid = remove_by_id(&queues, "s1", &ids[1]).await.unwrap();
+        match &mid.message.content {
+            MessageContent::Text(t) => assert_eq!(t, "m1"),
+            _ => panic!("text expected"),
+        }
+        // Remaining order preserved.
+        let rest = list_session(&queues, "s1").await;
+        let texts: Vec<String> = rest
+            .iter()
+            .map(|m| match &m.message.content {
+                MessageContent::Text(t) => t.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(texts, vec!["m0", "m2"]);
+        // Unknown id / unknown session → NotFound.
+        assert_eq!(
+            remove_by_id(&queues, "s1", &ids[1]).await,
+            Err(QueueError::NotFound)
+        );
+        assert_eq!(
+            remove_by_id(&queues, "nope", &ids[0]).await,
+            Err(QueueError::NotFound)
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DriverSink — 续轮驱动器的 sink 包装器(design §3)
+// ---------------------------------------------------------------------------
+
+/// 驱动器观测到的内层 loop 终态。
+#[derive(Default, Debug, Clone)]
+pub struct DriverStatus {
+    /// 最近一次(被吞掉的)`Done` 的 `(stop_reason, usage)`。每轮
+    /// 内层 run 恰好发一次 Done;驱动器只在**真正退出**时把它经
+    /// inner sink 补发给前端 —— 中间轮不发,前端 finalize 只认
+    /// Done,单 rid 因此跨多轮保活(群聊同款机制)。
+    pub last_done: Option<(Option<String>, Option<crate::llm::types::TokenUsage>)>,
+    /// 任一 `Error` 事件流经即置位。错误路径驱动器不补发 Done
+    /// (Error 已触发前端 finalize,再补会双重终结)。
+    pub errored: bool,
+}
+
+/// [`ChatEventSink`] 装饰器:转发一切事件,**吞掉 `Done`**(记录到
+/// [`DriverStatus`]),`Error` 置位后照转。其余四个通道原样透传。
+///
+/// 吞 Done 的理由见 `DriverStatus::last_done`;这是"驱动器只在真
+/// 结束 emit 一次 Done"(design §1)的实现点 —— 不改
+/// `run_chat_loop` 的发射行为,包装发生在 sink 层。
+pub struct DriverSink {
+    inner: Arc<dyn crate::state::ChatEventSink>,
+    pub status: Arc<std::sync::Mutex<DriverStatus>>,
+}
+
+impl DriverSink {
+    pub fn new(
+        inner: Arc<dyn crate::state::ChatEventSink>,
+    ) -> (Self, Arc<std::sync::Mutex<DriverStatus>>) {
+        let status = Arc::new(std::sync::Mutex::new(DriverStatus::default()));
+        (
+            Self {
+                inner,
+                status: status.clone(),
+            },
+            status,
+        )
+    }
+
+    fn forward(&self, payload: &crate::state::ChatEventPayload) -> bool {
+        match &payload.event {
+            ChatEvent::Done { stop_reason, usage } => {
+                let mut st = self.status.lock().expect("driver status lock");
+                st.last_done = Some((stop_reason.clone(), *usage));
+                false
+            }
+            ChatEvent::Error { .. } => {
+                self.inner.emit_chat_event(payload);
+                let mut st = self.status.lock().expect("driver status lock");
+                st.errored = true;
+                true
+            }
+            _ => true,
+        }
+    }
+}
+
+impl crate::state::ChatEventSink for DriverSink {
+    fn emit_chat_event(&self, payload: &crate::state::ChatEventPayload) {
+        self.forward(payload);
+    }
+    fn emit_tool_call(&self, payload: &crate::state::ToolCallPayload) {
+        self.inner.emit_tool_call(payload);
+    }
+    fn emit_tool_result(&self, payload: &crate::state::ToolResultPayload) {
+        self.inner.emit_tool_result(payload);
+    }
+    fn emit_permission_ask(&self, payload: PermissionAskPayload) {
+        self.inner.emit_permission_ask(payload);
+    }
+}

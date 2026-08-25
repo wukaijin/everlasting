@@ -109,6 +109,9 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 

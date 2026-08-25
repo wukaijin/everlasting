@@ -1598,6 +1598,12 @@ pub(crate) async fn drive_turn(
                             "chat: unexpected Speaker in LLM stream (ignoring — emitted by group_chat orchestrator)"
                         );
                     }
+                    ChatEvent::TurnContinuation { .. } => {
+                        tracing::warn!(
+                            request_id = %rid,
+                            "chat: unexpected TurnContinuation in LLM stream (ignoring — emitted by the F1 queue driver)"
+                        );
+                    }
                     // E2 trace (2026-07-14): the 3 trace events are
                     // emitted by `agent::trace::record_*` (NOT by the
                     // LLM stream), so reaching this arm means a

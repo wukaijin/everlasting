@@ -23,9 +23,9 @@ pub struct CancelChatRequest {
 pub async fn cancel_chat(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CancelChatRequest>,
-) -> Result<Json<()>, AppCommandError> {
-    cancel_chat_inner(&state, req.request_id).await?;
-    Ok(Json(()))
+) -> Result<Json<crate::commands::cancel::CancelOutcome>, AppCommandError> {
+    let outcome = cancel_chat_inner(&state, req.request_id).await?;
+    Ok(Json(outcome))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

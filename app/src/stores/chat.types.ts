@@ -284,6 +284,14 @@ export interface ChatMessage {
   content: string; // accumulated text content
   streaming?: boolean;
   error?: { message: string; category: ErrorCategory };
+  /**
+   * F1 消息队列 (2026-08-25): 排队中标记(乐观占位,内存态)。
+   * 经典 session 流式期间发送的消息先以 queued 占位渲染(徽标 +
+   * 位次);驱动器续轮注入后由 `TurnContinuation` 物化为普通气泡,
+   * 最终 reload 与 DB 行对齐。不落库、不入 rehydrate(同
+   * `retrying` 先例)。
+   */
+  queued?: { position: number };
   /** 交错思考: 按真实流序排列的内容块,reload 后由
    *  `rehydrateMessages` 从 DB `content` 数组透传(见
    *  `ContentBlockView` 头注释)。`MessageRunGroup` 优先用它做流式

@@ -226,8 +226,21 @@ export function createSendActions(ctx: SendActionsContext) {
     // turn-taking (its reload observes the human interrupt). We do
     // NOT loosen the guard for ordinary `chat` sessions: there the
     // original "can't interject while streaming" semantics stay.
-    if (isCurrentSessionStreaming.value) {
-      if (currentSession.value?.session_type !== "group_chat") return;
+    // F1 消息队列 (2026-08-25): 经典 session 流式中不再丢弃发送 ——
+    // 走排队路径(后端入队,当前轮结束后批量注入续轮)。群聊保持
+    // 抢占语义(cancel + resend)不变。@@ 前缀在流式中直接拒绝(D8):
+    // 强制派发与延迟注入组合语义不清,MVP 不做。
+    const isGroupChat =
+      currentSession.value?.session_type === "group_chat";
+    const queueingClassic = isCurrentSessionStreaming.value && !isGroupChat;
+    if (queueingClassic && trimmed.startsWith("@@")) {
+      projectsStore.showToast(
+        "流式期间不支持 @@ 派发：请等当前轮结束或先停止",
+        "warn",
+      );
+      return;
+    }
+    if (isCurrentSessionStreaming.value && isGroupChat) {
       await cancel();
     }
     const projectId = projectsStore.currentProjectId;
@@ -292,7 +305,8 @@ export function createSendActions(ctx: SendActionsContext) {
     // run will re-derive from history if any update_checklist
     // fires; for the duration of the stream the card stays
     // hidden until the first update_checklist tool_use arrives.
-    useChecklistStore().clearForNewRun(sessionId);
+    // F1: 排队发送不开新轮,不重置在途轮的 checklist 视图。
+    if (!queueingClassic) useChecklistStore().clearForNewRun(sessionId);
 
     // B2 PR3 (bug fix 2026-06-17): compute the seq the
     // backend's `chat_loop` will assign to the user row.

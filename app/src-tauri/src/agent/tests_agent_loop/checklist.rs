@@ -141,6 +141,9 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -334,6 +337,9 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -507,6 +513,9 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
     cancel_handle.await.unwrap();

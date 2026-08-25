@@ -220,6 +220,9 @@ pub fn run() {
             agent::chat::chat,
             // Cancel / config
             commands::cancel::cancel_chat,
+            commands::message_queue::list_queued_messages,
+            commands::message_queue::remove_queued_message,
+            commands::message_queue::recall_queued_message,
             commands::config::get_llm_config,
             commands::config::get_home_dir,
             // S2 remote tunnel 配置(2026-08-11, task `08-11-tunnel-client`):

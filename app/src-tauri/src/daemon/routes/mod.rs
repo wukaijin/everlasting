@@ -48,6 +48,7 @@ pub mod config;
 pub mod files;
 pub mod health;
 pub mod memory;
+pub mod message_queue;
 pub mod panel;
 // S2 (2026-08-11, task `08-11-tunnel-client`):配对码生成 route(design
 // §3.1 清单第 5 条)。注意与 remote 的 `/api/v1/pairing/redeem` 区分:
@@ -95,6 +96,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/config", config::router(state.clone()))
         .nest("/api/v1/files", files::router(state.clone()))
         .nest("/api/v1/memory", memory::router(state.clone()))
+        .nest(
+            "/api/v1/message_queue",
+            message_queue::router(state.clone()),
+        )
         .nest("/api/v1/panel", panel::router(state.clone()))
         .nest("/api/v1/pairing", pairing::router(state.clone()))
         .nest("/api/v1/permissions", permissions::router(state.clone()))

@@ -282,6 +282,10 @@ pub(crate) async fn drive_worker(
         // gate `permission_ctx.is_worker` 挡掉),registry 不会被
         // 读写,只作签名占位。
         std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
+        // F1 queue driver (2026-08-25): guard-owned cleanup — this call
+        // site is single-shot per invocation (speaker / worker), not a
+        // continuation round; keep the guard as sole owner.
+        false,
     ))
     .await;
 }

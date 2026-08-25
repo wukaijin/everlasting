@@ -573,6 +573,9 @@ async fn entry_guard_does_not_skip_when_group_chat_state_none() {
         None, // group_chat_state = None → guard must NOT skip
         None, // current_speaker
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -652,6 +655,9 @@ async fn entry_guard_skips_when_group_chat_state_some_and_tail_matches_db() {
         Some(turn_state), // group_chat_state = Some → guard skips
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 

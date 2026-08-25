@@ -282,9 +282,10 @@ pub struct EditUserMessageRequest {
 pub async fn edit_user_message(
     State(state): State<Arc<AppState>>,
     Json(req): Json<EditUserMessageRequest>,
-) -> Result<Json<()>, AppCommandError> {
-    edit_user_message_inner(&state, req.session_id, req.message_seq, req.new_content).await?;
-    Ok(Json(()))
+) -> Result<Json<crate::commands::sessions::EditMessageOutcome>, AppCommandError> {
+    let outcome =
+        edit_user_message_inner(&state, req.session_id, req.message_seq, req.new_content).await?;
+    Ok(Json(outcome))
 }
 
 /// `POST /api/v1/sessions/group_chat_cache_rates` — per-speaker

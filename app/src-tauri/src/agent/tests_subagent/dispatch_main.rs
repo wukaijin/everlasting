@@ -126,6 +126,9 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -355,6 +358,9 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -516,6 +522,9 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -680,6 +689,9 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
@@ -970,6 +982,9 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1132,6 +1147,9 @@ async fn agent_loop_dispatch_subagent_worker_turn_trace_rows_persisted() {
         None,
         None,
         h.stub_loaded.clone(),
+        // F1 queue driver (2026-08-25): single-shot call site —
+        // guard-owned cleanup (not a continuation round).
+        false,
     )
     .await;
 
