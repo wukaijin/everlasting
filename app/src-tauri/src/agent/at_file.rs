@@ -189,6 +189,17 @@ pub enum InjectionAction {
         media_type: String,
         tokens_est: Option<u32>,
     },
+    /// F5 (2026-08-26): PDF/docx 文本提取成功,提取文本按文本 span 注入。
+    /// `format` = `"pdf" | "docx"`(字段名避开 serde tag `kind`);
+    /// `chars` 为注入字符数(截断后);`truncated` 标记超
+    /// [`crate::agent::doc_extract::MAX_EXTRACT_CHARS`] 截断(原文规模
+    /// 在 LLM marker 属性里,不进 wire)。页数/段落数同理只进 marker。
+    /// Drives `· <path>  ✓ 注入 <chars> 字符(<format>)`。
+    Extracted {
+        format: crate::agent::doc_extract::ExtractKind,
+        chars: usize,
+        truncated: bool,
+    },
     /// Non-text file (image / PDF / Office / binary) — placeholder
     /// was injected. The inner `file_kind` is snake_case
     /// (`"image"` / `"pdf"` / `"office"` / `"binary"`) to
@@ -550,6 +561,38 @@ async fn expand_single(
             return (Some(marker), action);
         }
     }
+    // F5 (2026-08-26): PDF / docx 先尝试原生文本提取(design §1 — 提取
+    // 是注入的一种形态),失败(扫描件/corrupt/超限)落 Degraded 占位,
+    // turn 不死。与 B1 fail-open 同构。
+    let extract_kind = if kind == FileKind::Pdf {
+        Some(crate::agent::doc_extract::ExtractKind::Pdf)
+    } else if kind == FileKind::Office && lower_ext(&resolved) == ".docx" {
+        Some(crate::agent::doc_extract::ExtractKind::Docx)
+    } else {
+        None
+    };
+    if let Some(ek) = extract_kind {
+        match crate::agent::doc_extract::try_extract(ek, &bytes) {
+            Ok(ex) => {
+                tracing::debug!(
+                    path = rel_path,
+                    kind = ?ek,
+                    chars = ex.orig_chars,
+                    truncated = ex.truncated,
+                    "at_file native extraction injected"
+                );
+                let action = InjectionAction::Extracted {
+                    format: ek,
+                    chars: ex.text.chars().count(),
+                    truncated: ex.truncated,
+                };
+                return (Some(render_extracted_marker(ek, rel_path, &ex)), action);
+            }
+            Err(reason) => {
+                tracing::info!(path = rel_path, %reason, "at_file extraction degraded");
+            }
+        }
+    }
     (
         Some(expand_for_kind(rel_path, kind, &bytes)),
         match kind {
@@ -677,6 +720,36 @@ fn lexical_within_root(ctx: &ToolContext, target: &Path) -> bool {
     true
 }
 
+/// F5:提取文本的 LLM marker,与 Text 注入的 `<file path>` 形态对齐。
+/// 页数(pdf)/段落数(docx)与原文规模只进 marker 属性(wire 不带);
+/// truncated 显式标注,提示 agent 可自行转换全文(design §5)。
+fn render_extracted_marker(
+    kind: crate::agent::doc_extract::ExtractKind,
+    rel_path: &str,
+    ex: &crate::agent::doc_extract::ExtractedText,
+) -> String {
+    use crate::agent::doc_extract::ExtractKind;
+    let (kind_str, unit_label) = match kind {
+        ExtractKind::Pdf => ("pdf", "pages"),
+        ExtractKind::Docx => ("docx", "paras"),
+    };
+    let trunc = if ex.truncated {
+        format!(" truncated=\"true\" orig_chars=\"{}\"", ex.orig_chars)
+    } else {
+        String::new()
+    };
+    format!(
+        "<doc path=\"{}\" kind=\"{}\" {}=\"{}\" chars=\"{}\"{}>\n{}\n</doc>",
+        rel_path,
+        kind_str,
+        unit_label,
+        ex.units,
+        ex.text.chars().count(),
+        trunc,
+        ex.text
+    )
+}
+
 /// Render the expansion for a classified, successfully-read file.
 fn expand_for_kind(rel_path: &str, kind: FileKind, bytes: &[u8]) -> String {
     match kind {
@@ -691,15 +764,20 @@ fn expand_for_kind(rel_path: &str, kind: FileKind, bytes: &[u8]) -> String {
             "[image: {} — 格式不在白名单或超过 5MB，未注入（支持 png/jpg/webp，≤5MB）]",
             rel_path
         ),
+        // F5:占位文案从"教用户跑命令"改为指令式(agent 主体,D3 分层
+        // 兜底层)——LLM 有 shell 工具,读到指令即自行转换。
         FileKind::Pdf => format!(
-            "[binary: {} — 二进制文档未注入；可 shell 运行 pdftotext 转文本后引用]",
-            rel_path
-        ),
-        FileKind::Office => format!(
-            "[binary: {} — 二进制文档未注入；可 shell 运行 pandoc {} -t plain 转文本后引用]",
+            "[binary: {} — 无文本层或提取失败，未注入；agent 可自行转换：pdftotext {} - 后读取]",
             rel_path, rel_path
         ),
-        FileKind::Binary => format!("[binary: {} — 二进制文件，无法注入文本内容]", rel_path),
+        FileKind::Office => format!(
+            "[binary: {} — 未注入；agent 可自行转换：pandoc {} -t plain（或 libreoffice --headless --convert-to txt）后读取]",
+            rel_path, rel_path
+        ),
+        FileKind::Binary => format!(
+            "[binary: {} — 二进制文件无法注入文本；agent 可按需用工具处理后读取]",
+            rel_path
+        ),
     }
 }
 
@@ -1013,6 +1091,106 @@ mod tests {
         assert!(out.contains("[binary: spec.docx"), "got: {:?}", out);
         assert!(out.contains("pandoc"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Office
+            }
+        );
+    }
+
+    // --- F5 (2026-08-26): PDF / docx native extraction ---
+
+    /// 最小 docx(zip 只含 word/document.xml),与 doc_extract 单测的
+    /// 构造同构;at_file 侧关注注入形态与 marker,不重复提取细节。
+    fn write_docx(dir: &std::path::Path, name: &str) {
+        let xml = concat!(
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+            "<w:body><w:p><w:r><w:t>F5 docx 注入测试段落</w:t></w:r></w:p></w:body></w:document>"
+        );
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            w.start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut w, xml.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        std::fs::write(dir.join(name), buf.into_inner()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pdf_native_extraction_is_injected() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("doc.pdf"),
+            crate::agent::doc_extract::test_fixtures::MINI_TEXT_PDF,
+        )
+        .unwrap();
+        let (out, records, spans) =
+            expand_at_tokens("@doc.pdf", &ctx_at(&tmp), "sess-test", 0).await;
+        assert!(
+            out.contains("<doc path=\"doc.pdf\" kind=\"pdf\" pages=\"1\""),
+            "marker: {out:?}"
+        );
+        assert!(
+            out.contains("Hello PDF native text layer fixture for F5"),
+            "{out:?}"
+        );
+        assert_eq!(records.len(), 1);
+        match &records[0].action {
+            InjectionAction::Extracted {
+                format,
+                chars,
+                truncated,
+            } => {
+                assert_eq!(*format, crate::agent::doc_extract::ExtractKind::Pdf);
+                assert!(*chars > 0);
+                assert!(!truncated);
+            }
+            other => panic!("expected Extracted, got {other:?}"),
+        }
+        // 提取文本与 Text 注入同构:进入同请求 spans(at_files_token 度量)
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].path, "doc.pdf");
+    }
+
+    #[tokio::test]
+    async fn docx_native_extraction_is_injected() {
+        let tmp = tempdir().unwrap();
+        write_docx(tmp.path(), "spec.docx");
+        let (out, records, spans) =
+            expand_at_tokens("@spec.docx", &ctx_at(&tmp), "sess-test", 0).await;
+        assert!(
+            out.contains("<doc path=\"spec.docx\" kind=\"docx\" paras=\"1\""),
+            "marker: {out:?}"
+        );
+        assert!(out.contains("F5 docx 注入测试段落"), "{out:?}");
+        assert_eq!(records.len(), 1);
+        assert!(matches!(
+            &records[0].action,
+            InjectionAction::Extracted {
+                format: crate::agent::doc_extract::ExtractKind::Docx,
+                ..
+            }
+        ));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_ole_office_keeps_placeholder() {
+        // .doc(OLE2)不在提取范围(D1:老格式纯 Rust 不可行)→ Degraded
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("old.doc"), b"\xd0\xcf\x11\xe0 fake ole").unwrap();
+        let (out, records, _) = expand_at_tokens("@old.doc", &ctx_at(&tmp), "sess-test", 0).await;
+        assert!(out.contains("[binary: old.doc"), "got: {out:?}");
+        assert!(
+            out.contains("agent 可自行转换"),
+            "self-serve wording: {out:?}"
+        );
         assert_eq!(
             records[0].action,
             InjectionAction::Degraded {

@@ -7,7 +7,10 @@
 //!
 //! Submodules:
 //! - [`at_file`] — B2 PR2 `@relpath` file-content injection (text →
-//!   `read_file`-format content; image/PDF/Office/binary → placeholder).
+//!   `read_file`-format content; image → B1 multimodal; PDF/docx →
+//!   F5 native extraction;其余二进制 → placeholder).
+//! - [`doc_extract`] — F5 PDF/docx 文本提取纯函数(bytes 进,提取
+//!   文本出;at_file 持有注入形态决策)。
 //! - [`behavior_prompt`] — `DEFAULT_BEHAVIOR_PROMPT`: the stable agent
 //!   behavior layer (tone / objectivity / tool usage / code conventions
 //!   / finishing / git safety / language), injected at the front of the
@@ -50,6 +53,7 @@ pub mod chat;
 pub mod chat_loop;
 pub mod compaction;
 pub mod context;
+pub mod doc_extract;
 pub mod group_chat;
 pub mod group_chat_loop;
 pub mod group_chat_prompts;

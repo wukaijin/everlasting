@@ -72,3 +72,43 @@ describe("FileInjectionsHint — injected_image (B1)", () => {
     expect(row.text()).not.toContain("跳过");
   });
 });
+
+describe("FileInjectionsHint — extracted (F5)", () => {
+  it("renders the ✓ 注入 N 字符(PDF) row for a native pdf extraction", () => {
+    const w = mountHint([
+      {
+        path: "docs/report.pdf",
+        action: { kind: "extracted", format: "pdf", chars: 33957, truncated: false },
+      },
+    ]);
+    const row = w.find(".file-injections-hint__row");
+    expect(row.exists()).toBe(true);
+    expect(row.find(".file-injections-hint__status--ok").exists()).toBe(true);
+    expect(row.text()).toContain("docs/report.pdf");
+    expect(row.text()).toContain("注入 33957 字符(PDF)");
+    expect(row.text()).not.toContain("截断");
+  });
+
+  it("renders the truncated badge when the 150k cap kicked in", () => {
+    const w = mountHint([
+      {
+        path: "big.pdf",
+        action: { kind: "extracted", format: "pdf", chars: 150000, truncated: true },
+      },
+    ]);
+    const row = w.find(".file-injections-hint__row");
+    expect(row.find(".file-injections-hint__status--ok").exists()).toBe(true);
+    expect(row.text()).toContain("已截断");
+  });
+
+  it("labels docx extraction with the docx kind", () => {
+    const w = mountHint([
+      {
+        path: "spec.docx",
+        action: { kind: "extracted", format: "docx", chars: 1200, truncated: false },
+      },
+    ]);
+    const row = w.find(".file-injections-hint__row");
+    expect(row.text()).toContain("注入 1200 字符(docx)");
+  });
+});

@@ -93,3 +93,13 @@
 - **决策 — 闲路径口径修正**(评审 Round 2):原"闲且队空逐字节对齐现状"作废——统一路径下闲时发送同样入队由驱动器消费,LLM 请求历史从客户端 `messages` 改为 DB reload(群聊 D-B 同构)。语义等价非逐字节;若未来出现"仅存于客户端 history、未落库"的请求内容会被 reload 丢弃(当前无此形态,记录在案)。
 - **偏差记录**:① P0 DriverSink 丢事件——`emit_chat_event` 未按 `forward` 返回值转发且 Error 分支自转发(双发),续轮 Delta 整链不可见,单测 2 例 + 集成 Delta 断言锁死;② F1 三命令漏 `CMD_TO_DOMAIN` 映射,开 session 即 unknown cmd(transport 层路由同步守卫断根);③ ChatInput 两道旧守卫(`sendDisabled`/readOnly 判定)吞掉流式发送,AC1 物理不可达——评审 d4f 称"AC1 未要求流式中可发送"系误读,实现者驳回正确;④ 跨设备可见性走 `list_queued_messages` 水合而非事件广播(省 wire 变体,代价非实时,MVP 接受)。
 - 任务:`08-25-f1-message-queue`(已归档)。spec:agent-loop-architecture "pattern-message-queue-driver"(注入契约 + TurnContinuation 事件语义 + 锁纪律)。B 档(优先级分档/抢占)与 C 档(daemon 统一入口服务化,F2/F6 生产者)留后续。
+
+### 2026-08-26 — F5 PDF/docx 原生文本提取(@文件注入第一档)
+
+- **Context**:B2 @文件对 PDF/Office 占位降级(提示用户自己跑 pdftotext/pandoc)。brainstorm 六决议(D1-D6)+ 业界对照搜证(Claude Code=平台内置视觉读 PDF;Codex=零内置 + openai/skills curated skills 教 agent 自助)。
+- **决策 — 平台内置 + agent 自助分层(D3),不引入 Node.js(D2)**:高频路径(文本型 PDF + docx)平台内置即时注入;长尾(OLE2 老格式/odf/rtf/扫描件/提取失败)Degraded 占位文案从"教用户跑命令"升级为**指令式**("agent 可自行转换:pdftotext <path> - 后读取")——占位文案即 prompt,LLM 有 shell 工具读到指令即自助,Codex skills 式路线的零成本形态。拒绝 Node.js:daemon 单二进制零运行时依赖是架构不变量,提取发生在后端请求构造时(前端 node 仅构建工具链)。
+- **决策 — PDF 库走 spike 闸门(D4),pdf-extract 过关不买 pdfium**:headless Chromium 打印中文 HTML 制样本 + pdftotext 对照。实证:中文零乱码零丢字(段落/表格/代码全保留)、英文长文档 33,957 vs 34,104 chars 语义等价、扫描件(位图页)返回 0 字符 → "<32 字符判扫描件"判据成立。pdfium(工业级 + 渲染扫描件)留 follow-up 档,四平台动态库分发成本不提前付。
+- **决策 — 提取是注入的一种形态**:doc_extract 纯函数模块(bytes 进文本出,零 IO),at_file 在 Degraded 兜底前分流;成功走与 Text 注入同构的 span 通道(`<doc>` marker + D10 同请求 span + at_files_token),失败落占位 turn 不死(B1 fail-open 同构)。三级 cap:源 20 MiB fail-fast → 扫描件 <32 字符 → 文本 150k 字符保头截断(≈CJK 50k tok)。
+- **决策 — wire 字段名避开 serde tag**:`InjectionAction` 内部 tag 即 `kind`,`Extracted` 变体的来源字段必须叫 `format`(撞名编译失败);TS 镜像同步。页数/段落数/原文规模只进 LLM marker 不进 wire。
+- **偏差记录**:① quick-xml 0.42 实体是独立 `GeneralRef` 事件(payload=实体名),不显式映射预定义五实体 + 字符引用会静默丢字("A & B" → "A B");空段 `<w:p/>` 走 Empty 事件同样要计数;② zip 默认 features 拉 zstd-sys(C 编译依赖)——收紧 `default-features=false, features=["deflate"]`;③ cargo init 在 workspace 目录内建 spike 项目会把自己挂进根 workspace members(污染 lock + 解析失败),spike 工程须仓库外或用后清理 members;④ `daemon.sh start` 是前台命令(后台用 `bg`),链式命令里误用 start 卡死后续冒烟;⑤ pdf-extract 有 unwrap 路径,catch_unwind 兜底为硬约束。
+- 任务:`08-26-f5-doc-reading`。spec:agent-loop-architecture "pattern-doc-extraction"。follow-up:xlsx/pptx 提取(管线已通,表格形态需单独设计)、pdfium 渲染扫描件走 B1 通道、正式 document skill(B4 体系)。

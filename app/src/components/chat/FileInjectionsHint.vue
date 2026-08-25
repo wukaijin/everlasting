@@ -44,6 +44,7 @@ const props = defineProps<{
 //
 //   · src/foo.ts   ✓ 注入 48 行
 //   · bar.png      ✓ 图片已注入(B1:复制进 attachments,真 image 块)
+//   · doc.pdf      ✓ 注入 39 字符(PDF)(F5:原生提取注入)
 //   · spec.docx    ⊘ 文档·未注入(可 pandoc 转换)
 //   · missing.txt  ⊘ 跳过(不存在)
 //
@@ -83,6 +84,18 @@ const rows = computed<Row[]>(() => {
           a.tokens_est != null
             ? `图片已注入(≈${a.tokens_est} tok)`
             : "图片已注入",
+      };
+    }
+    if (a.kind === "extracted") {
+      // F5 (2026-08-26): PDF/docx 原生提取注入。truncated 表示超
+      // 150k 字符截断(原文规模在 LLM marker 里,这里只亮状态)。
+      const kindLabel = a.format === "pdf" ? "PDF" : "docx";
+      return {
+        path: entry.path,
+        glyph: "ok",
+        status: a.truncated
+          ? `注入 ${a.chars} 字符(${kindLabel}·已截断)`
+          : `注入 ${a.chars} 字符(${kindLabel})`,
       };
     }
     if (a.kind === "degraded") {

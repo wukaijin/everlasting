@@ -218,6 +218,17 @@ export type InjectionRecord =
       file_kind: "image" | "pdf" | "office" | "binary";
     }
   | {
+      /** F5 (2026-08-26): PDF/docx 文本提取成功,提取文本按文本
+       *  span 注入。Wire shape mirrors the Rust `InjectionAction::
+       *  Extracted`(`format` 字段名避开 serde tag `kind`);
+       *  `chars` 为注入字符数(截断后);页数/段落数与原文规模
+       *  只进 LLM marker,不进 wire。 */
+      kind: "extracted";
+      format: "pdf" | "docx";
+      chars: number;
+      truncated: boolean;
+    }
+  | {
       kind: "skipped";
       reason: "out_of_root" | "missing" | "unreadable";
     };
