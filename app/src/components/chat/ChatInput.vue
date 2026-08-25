@@ -220,7 +220,8 @@ useMobileKeyboard();
 // F1 消息队列 (2026-08-25): 经典 session 流式期间解锁输入(可继续
 // 打字并排队发送,PRD R1);仅群聊保持锁死(cancel+resend 抢占语义,
 // AC4)。`sendingEffective` 驱动 readOnly compartment 与输入框禁用
-// 视觉;发送键/Stop/Esc 仍看真实 streaming(见下)。
+// 视觉;发送键 disabled 同样看 `sending && isGroupChat`(流式中经典
+// session 发送 = 排队),Stop/Esc 看真实 streaming(见下)。
 const isGroupChatSession = computed(
   () => chatStore.currentSession?.session_type === "group_chat",
 );
@@ -234,7 +235,13 @@ const cm = useChatInputCodeMirror({
     const text = cm.input.value;
     // B1 R2a: pure-image sends pass (empty text + staged images);
     // only an empty text AND empty strip is a no-op.
-    if ((!text.trim() && chatStore.stagedImages.length === 0) || props.sending) {
+    // F1: 经典 session 流式中放行走排队路径(chatSendActions 的
+    // queueingClassic → 后端入队);群聊保持拦截(cancel+resend 抢占,
+    // AC4 —— 输入框本身已被 sendingEffective 锁死,此守卫是兜底)。
+    if (
+      (!text.trim() && chatStore.stagedImages.length === 0) ||
+      (props.sending && isGroupChatSession.value)
+    ) {
       return;
     }
     // 08-18-manual-compact-command: typed builtin dispatch. With the
@@ -447,15 +454,22 @@ function onStop() {
 
 // B1 R2a: send is enabled for any non-empty text OR a non-empty
 // staging strip (pure-image sends).
+// F1 单按钮三态(2026-08-25 拍板):有草稿(文本或 staged 图)= 发送键
+// (流式中发送 = 排队,AC1 / design §6 P2);无草稿 + sending = Stop
+// 变形(PR5「空输入也可打断长流」)。Trade-off:流式中有草稿时无直接
+// Stop 入口 —— 先清空草稿按钮即变 Stop(空草稿时 Esc = Stop,P2-5)。
+const hasDraft = computed(
+  () => cm.input.value.trim().length > 0 || chatStore.stagedImages.length > 0,
+);
+const showStop = computed(() => props.sending && !hasDraft.value);
 const sendDisabled = (): boolean =>
-  (props.sending && isGroupChatSession.value) ||
-  (!cm.input.value.trim() && chatStore.stagedImages.length === 0);
+  (props.sending && isGroupChatSession.value) || !hasDraft.value;
 
 function onEscKeydown() {
   if (!props.sending) return;
   // F1 / P2-5 拍板:经典 session 流式中编辑器**非空**时 Esc 不触发
-  // Stop —— 防止打好的排队输入被"Stop 清队列"连带丢弃;要停点按钮。
-  // 群聊保持原语义(Esc 即打断)。
+  // Stop —— 防止打好的排队输入被"Stop 清队列"连带丢弃;要停先清空
+  // 草稿(按钮随即变 Stop)再点或按 Esc。群聊保持原语义(Esc 即打断)。
   if (!isGroupChatSession.value && cm.input.value.trim().length > 0) return;
   onStop();
 }
@@ -862,14 +876,15 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
         ref="host"
         class="chat-input__field"
         :class="{ 'chat-input__field--disabled': sendingEffective }"
-        :aria-disabled="sending ? 'true' : undefined"
+        :aria-disabled="sendingEffective ? 'true' : undefined"
       />
-      <!-- PR5: morph the send button into a Stop button while
-           `sending` is true. The button is always enabled (even
-           when the input is empty) so the user can interrupt a
-           long stream with no draft. -->
+      <!-- PR5 + F1 (2026-08-25) 单按钮三态:同一位置按状态变形 ——
+           有草稿 → 发送键(流式中发送 = 排队,AC1);无草稿 + 流式 →
+           Stop(空输入也可打断长流);无草稿 + 空闲 → 发送键 disabled。
+           群聊流式中输入框已锁无草稿,自然落到 Stop(cancel+resend 抢占,
+           AC4);`showStop`/`sendDisabled` 判定见 script 侧 F1 注释。 -->
       <button
-        v-if="sending"
+        v-if="showStop"
         class="chat-input__action chat-input__stop btn btn--danger btn--circle"
         aria-label="停止生成"
         @click="onStop"
