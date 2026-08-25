@@ -208,8 +208,8 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     execute_on(&backend, &query, count, SearchOpts::default()).await
 }
 
-/// 对给定后端执行(测试入口同路径):run_search + 错误文案/渲染。
-#[cfg(test)]
+/// 对给定后端执行(生产 `execute` 与测试共用同一路径):run_search +
+/// 错误文案/渲染。
 pub(crate) async fn execute_on(
     backend: &SearchBackend,
     query: &str,
@@ -413,9 +413,9 @@ pub async fn set_config_state(
 }
 
 // ---------------------------------------------------------------------------
-/// 重试环(design §7):所有尝试共用一个外层 `tokio::time::timeout`
-/// (整体预算,不为每次尝试另开)。只对 `Network(_)` 与 429/5xx 重试;
-/// 退避 `base * 2^n + jitter(0..base)`。
+// 重试环(design §7):所有尝试共用一个外层 `tokio::time::timeout`
+// (整体预算,不为每次尝试另开)。只对 `Network(_)` 与 429/5xx 重试;
+// 退避 `base * 2^n + jitter(0..base)`。
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn run_search(
@@ -519,12 +519,15 @@ fn render_hits(hits: &[SearchHit], query: &str, provider: &str) -> String {
 /// 路径)。401/432/433 是 Tavily 专属 key/额度语义,按 code 区分。
 fn error_to_llm_string(e: &SearchError, provider: &str) -> String {
     match e {
-        SearchError::RateLimited => format!(
-            "web_search: DuckDuckGo soft-blocked this client (HTTP 202 rate limit; \
-             NOT retried — retrying makes the block worse). Wait a while before \
-             searching again, or if you already know a relevant URL, read it \
-             directly with web_fetch."
-        ),
+        // DDG 专属终态:文案固定,不随 provider 插值(其他 provider 不会
+        // 产生 202)。
+        SearchError::RateLimited => concat!(
+            "web_search: DuckDuckGo soft-blocked this client (HTTP 202 rate limit; ",
+            "NOT retried — retrying makes the block worse). Wait a while before ",
+            "searching again, or if you already know a relevant URL, read it ",
+            "directly with web_fetch."
+        )
+        .to_string(),
         SearchError::HttpStatus(code) => match code {
             401 => format!(
                 "web_search: {provider} rejected the API key (HTTP 401). Check the key \

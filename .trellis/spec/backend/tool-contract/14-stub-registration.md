@@ -36,6 +36,10 @@ pub fn load_tool_schemas_def() -> ToolDef;
   → 3855)。该工具非 stub 候选(3 参数 schema;recall 类首次直用优于先 load
   再重试),stub 化也只省 ~140(3715 仍超线)— 线随新增注册工具基线整体平移。
   若未来再注册新工具逼近 3900,优先评估扩 `STUB_CANDIDATES` 而非继续平移)。
+  **2026-08-21 三次校准 3900→3960**(read_file 图片说明 +48 → 3903,见
+  stub.rs 测试注释)。**2026-08-25 F4 `web_search` 进候选(第 11 员,极短
+  摘要 `Search the web.`)→ 零平移**(实测余量 57,条目 ~33 tok);此后
+  余量 ~24 tok,下一个非 stub 新工具大概率要动线。
 - 不变量单测:`STUB_CANDIDATES ∩ {read_file,grep,glob,list_dir,use_skill} = ∅` —
   防未来候选/白名单扩员重新引入「直呼绕过 serial 自愈拦截」的洞。
 
