@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 109
+- **Total Sessions**: 110
 - **Last Active**: 2026-08-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~779 | Active |
+| `journal-4.md` | ~804 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 110 | 2026-08-25 | F4 web_search 工具全量落地(WP1-WP4) | `7508228`, `5a3ae99`, `a9a78d2`, `eb1be36`, `a50d3f9` | `main` |
 | 109 | 2026-08-25 | turn 流式持久化 + 崩溃恢复(RULE-PERSIST-001 P1 闭合) | `3c4850b`, `76765cd` | `main` |
 | 108 | 2026-08-24 | DB 备份(VACUUM INTO)+ daemon 日志轮转(P1/P2 债收口) | `5ef8ff0`, `88ec85c` | `main` |
 | 107 | 2026-08-21 | B1 图片收尾——自动压缩/拖拽/read_file 工具读图全链落地 | `36d46de` | `main` |

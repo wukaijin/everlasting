@@ -777,3 +777,28 @@ DEBT 最后一条 P1 全链收口。规划期研究推翻两认知:① 崩溃有
 ### Status
 
 [OK] **Completed**
+
+
+## Session 110: F4 web_search 工具全量落地(WP1-WP4)
+
+**Date**: 2026-08-25
+**Task**: F4 web_search 工具全量落地(WP1-WP4)
+**Branch**: `main`
+
+### Summary
+
+web_search 工具从规划审查到全量开闸:enum dispatch 双后端(Tavily keyed/DDG 兜底)+ 30s 整体预算重试环 + STUB 第 11 员 token 线零平移;key 三态 AEAD 配置(app_config,aad=web_search)+ Tauri command/daemon route/CMD_TO_DOMAIN 四处 IPC + Settings 第 7 tab(masked 回显);开闸五面(readonly allowlist/researcher vec+prompt/群聊白名单+prompt 枚举/frontmatter 四处含项目层)配运行时断言防 builtin-only 假绿。后端 1961 passed+1 已知 flaky、前端 1187+vue-tsc 0、clippy 零新增(clippy 抓到 execute_on cfg(test) 真 bug);live 冒烟经 7457 debug daemon 实跑 DDG 搜索全链路通(attribution/审计两行);spec 落档 tool-contract/16-web-search.md + stub 校准史补记。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7508228` | (see git log) |
+| `5a3ae99` | (see git log) |
+| `a9a78d2` | (see git log) |
+| `eb1be36` | (see git log) |
+| `a50d3f9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
