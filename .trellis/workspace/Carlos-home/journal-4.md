@@ -848,3 +848,48 @@ F1-A 用户连发档全程落地并归档。**核心链路**:经典 session 流�
 ### Next Steps
 
 - F1-B/C 档(优先级分档、daemon 统一入口服务化)仍开放;下一功能候选 F5 PDF/Office 阅读(无依赖、B1 通道可复用)
+
+
+## Session 112: F5 PDF/docx 原生文本提取落地(第一档)
+
+**Date**: 2026-08-26
+**Task**: F5 PDF/docx 原生文本提取落地(第一档)
+**Branch**: `main`
+
+### Summary
+
+F5 第一档(PDF+docx)全程落地:PR0 spike 判定 pdf-extract 过关(中文零乱码/扫描件 0 字符判据成立,不买 pdfium);doc_extract.rs 纯函数提取 + at_file Degraded 前分流(提取即注入,三级 cap 20MiB/32字符/150k)+ wire Extracted 变体 + 指令式自助占位文案(D3 分层)。后端 1982/前端 1201 全绿;live 冒烟 at_files_token=432 精确吻合 + 模型正确答出 PDF 标题。
+
+### Main Changes
+
+### Summary
+
+F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链**:六决议(范围 PDF+docx / 不引 Node.js(daemon 单二进制不变量)/ 高频内置+长尾 agent 自助分层 / PDF 库 spike 闸门 / 扫描件 MVP 占位 / 三级 cap),业界对照搜证(Claude Code=平台内置 vs Codex=skills 自助)支撑分层设计。**PR0 spike(PASS)**:headless Chromium 制中文样本 + pdftotext 对照,pdf-extract 中文零乱码、英文语义等价、扫描件 0 字符 → 不买 pdfium。**PR1 后端**:`agent/doc_extract.rs` 纯函数模块(pdf-extract 0.12 + lopdf re-export 页数;docx = zip deflate-only + quick-xml 提 w:t)+ at_file Degraded 前分流 + `<doc>` marker + wire additive `Extracted{format,chars,truncated}` + 占位文案指令式升级。**PR2 前端**:FileInjectionsHint extracted 三态(格式标签/截断徽标)。坑:quick-xml 0.42 实体走独立 GeneralRef 事件(不映射则静默丢字)、zip 默认拉 zstd-sys(收紧 deflate-only)、serde tag 字段撞名(format≠kind)、cargo init 在 workspace 内自挂 members、daemon.sh start 是前台命令。
+
+### Testing
+
+- [OK] 后端 cargo 1982/1982(doc_extract 7 + at_file F5 集成 3 新增;首跑 1 失败为已知满载 flaky 复跑过)
+- [OK] 前端 vitest 1201/1201(extracted 3 新增)+ vue-tsc 零错 + build 干净;clippy 零新增(fmt 过)
+- [OK] live:turn-smoke at_files_token=432(553 字符中文 PDF 精确吻合);手动轮 manifest {"kind":"extracted","format":"pdf","chars":553} + 模型正确答出「大语言模型 Agent 系统设计白皮书」
+
+### Next Steps
+
+- follow-up 档:xlsx/pptx 提取(docx 管线已通,表格形态需设计)/ pdfium 渲染扫描件走 B1 通道 / 正式 document skill(B4)
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] cargo 1982/1982 + vitest 1201/1201 + vue-tsc 零错
+- [OK] live:turn-smoke at_files_token=432(553 字符中文 PDF)+ manifest extracted 变体 + 模型正确答出文档标题
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- follow-up:xlsx/pptx 提取、pdfium 扫描件渲染、document skill
