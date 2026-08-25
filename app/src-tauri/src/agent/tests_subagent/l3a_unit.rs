@@ -10,14 +10,16 @@ use crate::agent::subagent::filter_tools_readonly;
 /// `filter_tools_readonly` (L3a unit guard): when applied to the
 /// full `builtin_tools()` set, the result contains exactly the
 /// read-only tools (read_file / grep / glob / list_dir / web_fetch /
-/// search_history) and nothing else. This is the 2nd layer of the
-/// 3-layer read-only guarantee; the unit test pins the function
+/// search_history / web_search) and nothing else. This is the 2nd layer
+/// of the 3-layer read-only guarantee; the unit test pins the function
 /// directly so a future tool added to `builtin_tools()` does NOT
 /// silently leak into the concurrent worker toolset. (`web_fetch`
 /// joined the read-only set on 2026-06-25, task
 /// 06-25-subagent-web-access — it is a read-only network op with its
 /// own SSRF guard in `tools/web_fetch.rs`. `search_history` joined
-/// on 2026-08-17, D2② — a read-only DB query, Tier 5 silent Allow.)
+/// on 2026-08-17, D2② — a read-only DB query, Tier 5 silent Allow.
+/// `web_search` joined on 2026-08-25, F4 — snippet-only fixed-endpoint
+/// search, read-only, Tier 5 silent Allow.)
 #[test]
 fn l3a_filter_tools_readonly_keeps_only_read_tools() {
     let all = crate::tools::builtin_tools();
@@ -25,8 +27,8 @@ fn l3a_filter_tools_readonly_keeps_only_read_tools() {
     let names: Vec<String> = filtered.iter().map(|t| t.name.clone()).collect();
     assert_eq!(
         names.len(),
-        6,
-        "exactly 6 read-only tools, got: {:?}",
+        7,
+        "exactly 7 read-only tools, got: {:?}",
         names
     );
     for required in &[
@@ -36,6 +38,7 @@ fn l3a_filter_tools_readonly_keeps_only_read_tools() {
         "list_dir",
         "web_fetch",
         "search_history",
+        "web_search",
     ] {
         assert!(
             names.iter().any(|n| n == required),

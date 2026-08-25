@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: "调研子代理 — 读 spec + 探索 codebase + 返回 findings"
-tools: [read_file, grep, glob, list_dir, web_fetch]
+tools: [read_file, grep, glob, list_dir, web_fetch, web_search]
 # researcher 只读(声明 tools 后 worker_is_writable 返回 false,并发派发时不再
 # 被强制开 worktree)。共享 cwd 既省 checkout 开销,又避免 worker 读原始项目根
 # 文件时 cwd/worktree_path 与项目根不一致导致的审批问题(隔离 worker 的

@@ -192,7 +192,16 @@ fn row_carries_any_tool_result(m: &ChatMessage, ids: &[String]) -> bool {
 /// to build its own speaker-rotation flow, hijacking the moderator's job. The
 /// whitelist is exhaustive: a newly added `builtin_tools` entry does NOT enter
 /// group chat unless explicitly added here, so this class of leak can't recur.
-const GROUP_CHAT_RESEARCH_TOOLS: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
+const GROUP_CHAT_RESEARCH_TOOLS: &[&str] = &[
+    "read_file",
+    "grep",
+    "glob",
+    "list_dir",
+    "web_fetch",
+    // F4 (2026-08-25): snippet-only web search — read-only fixed-endpoint
+    // op, same silent-Allow class as the others.
+    "web_search",
+];
 
 /// Tools the moderator gets ON TOP of the research whitelist: the two
 /// arbitration tools that drive the turn-taking loop. Participants never get
@@ -267,7 +276,7 @@ pub(crate) fn participant_system_prompt(name: &str, persona_md: Option<&str>) ->
          - Just say your own piece on the topic and respond to what others said.\n\
          \n\
          ## Research is allowed (08-07-group-chat-role-history-isolation follow-up)\n\
-         You MAY research the codebase to ground your remarks — read_file / grep / glob / list_dir / web_fetch\n\
+         You MAY research the codebase to ground your remarks — read_file / grep / glob / list_dir / web_fetch / web_search\n\
          are available to you, and a brief look at the\n\
          code before you speak is good (the moderator will verify / build on it).\n\
          But research is a MEANS, not the goal: after a short look, say your piece\n\

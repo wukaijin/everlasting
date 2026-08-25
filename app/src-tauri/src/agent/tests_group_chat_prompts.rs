@@ -31,6 +31,7 @@ mod tests {
             "glob",
             "list_dir",
             "web_fetch",
+            "web_search",
             NOMINATE_SPEAKER_TOOL_NAME,
             END_DISCUSSION_TOOL_NAME,
         ] {
@@ -50,6 +51,7 @@ mod tests {
             "glob",
             "list_dir",
             "web_fetch",
+            "web_search",
             NOMINATE_SPEAKER_TOOL_NAME,
             END_DISCUSSION_TOOL_NAME,
         ] {
@@ -98,7 +100,14 @@ mod tests {
         let p_names: Vec<&str> = p_tools.iter().map(|t| t.name.as_str()).collect();
 
         // Has exactly the research whitelist.
-        for required in ["read_file", "grep", "glob", "list_dir", "web_fetch"] {
+        for required in [
+            "read_file",
+            "grep",
+            "glob",
+            "list_dir",
+            "web_fetch",
+            "web_search",
+        ] {
             assert!(
                 p_names.contains(&required),
                 "participant must see {required}, got: {p_names:?}"
@@ -260,7 +269,7 @@ mod tests {
             "participant prompt must allow research: {p:?}"
         );
         assert!(
-            p.contains("read_file / grep / glob / list_dir / web_fetch"),
+            p.contains("read_file / grep / glob / list_dir / web_fetch / web_search"),
             "participant prompt must name the research whitelist: {p:?}"
         );
         assert!(

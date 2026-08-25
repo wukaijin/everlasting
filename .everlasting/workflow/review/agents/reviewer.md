@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: "评审子代理 — 读 prd/design + 项目代码 + 按维度给评审意见"
-tools: [read_file, grep, glob, list_dir, web_fetch]
+tools: [read_file, grep, glob, list_dir, web_fetch, web_search]
 # model: 留空,由 dispatch_subagent 的 model 参数(per-dispatch override)主导。
 ---
 

@@ -319,6 +319,7 @@ fn builtin_subagents_researcher_tool_allowlist() {
             "glob".to_string(),
             "list_dir".to_string(),
             "web_fetch".to_string(),
+            "web_search".to_string(),
         ]
     );
 }
@@ -360,6 +361,7 @@ fn filter_researcher_keeps_only_read_tools_and_strips_disabled() {
         tool("edit_file"),
         tool("shell"),
         tool("web_fetch"),
+        tool("web_search"),
         tool("use_skill"),
         tool("update_checklist"),
         tool("dispatch_subagent"),
@@ -375,6 +377,8 @@ fn filter_researcher_keeps_only_read_tools_and_strips_disabled() {
     assert!(names.contains(&"list_dir".to_string()));
     // web_fetch is now in the researcher allowlist (06-25-subagent-web-access).
     assert!(names.contains(&"web_fetch".to_string()));
+    // web_search joined on 2026-08-25 (F4) — search-then-read research.
+    assert!(names.contains(&"web_search".to_string()));
     // Read-only — no writes.
     assert!(!names.contains(&"write_file".to_string()));
     assert!(!names.contains(&"edit_file".to_string()));
@@ -399,6 +403,7 @@ fn filter_general_purpose_keeps_full_set_minus_disabled() {
         tool("glob"),
         tool("list_dir"),
         tool("web_fetch"),
+        tool("web_search"),
         tool("use_skill"),
         tool("update_checklist"),
         tool("dispatch_subagent"),

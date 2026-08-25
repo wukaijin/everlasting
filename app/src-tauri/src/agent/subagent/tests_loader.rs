@@ -520,6 +520,7 @@ mod tests {
                 "glob".to_string(),
                 "list_dir".to_string(),
                 "web_fetch".to_string(),
+                "web_search".to_string(),
             ]
         );
     }
@@ -1123,5 +1124,36 @@ mod tests {
             .expect("project plugin researcher must win");
         assert_eq!(l.source, SubagentSource::Plugin);
         assert_eq!(l.def.system_prompt, "CUSTOM_RESEARCHER");
+    }
+
+    /// F4 (2026-08-25, AC6): **runtime** assertion that THIS repo's
+    /// project-layer workflow agents actually load `web_search`.
+    /// The builtin copies (`resources/builtin-workflow/**`) are only a
+    /// compile-time fallback — the project layer shadows them at
+    /// runtime, so a builtin-only flip would leave this repo's live
+    /// researcher without the tool while grep-level checks stay green
+    /// (review P1-1). Resolves through the real loader (project >
+    /// builtin-plugin) against the repo root.
+    #[tokio::test]
+    async fn repo_workflow_agents_load_web_search() {
+        let repo_root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let cache = SubagentCache::arc();
+        for (workflow, agent) in [("dev", "researcher"), ("review", "reviewer")] {
+            let hit = cache
+                .lookup_with_workflow(repo_root, Some(workflow), agent)
+                .await
+                .unwrap_or_else(|| panic!("{workflow}/{agent} must resolve"));
+            // 项目层副本必须赢过 builtin fallback——否则断言的是错的层。
+            assert_eq!(
+                hit.source,
+                SubagentSource::Plugin,
+                "{workflow}/{agent}: expected the repo's project-layer copy to shadow the builtin"
+            );
+            assert!(
+                hit.def.tools.iter().any(|t| t == "web_search"),
+                "{workflow}/{agent} tools must include web_search, got: {:?}",
+                hit.def.tools
+            );
+        }
     }
 }

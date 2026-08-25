@@ -72,15 +72,15 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
             SubagentDef {
                 name: "researcher".to_string(),
                 description: "Read-only research subagent. Can read files, grep, glob, list \
-                              directories, and fetch web pages, but cannot edit, write, or run \
-                              shells. Use for focused code exploration or web research where \
-                              the verbose search output would otherwise pollute the main \
-                              conversation."
+                              directories, search the web, and fetch web pages, but cannot \
+                              edit, write, or run shells. Use for focused code exploration or \
+                              web research where the verbose search output would otherwise \
+                              pollute the main conversation."
                     .to_string(),
                 system_prompt: "You are a read-only research subagent dispatched by the main \
                                 agent to investigate a focused question. You have access to \
-                                `read_file`, `grep`, `glob`, `list_dir`, and `web_fetch` — use \
-                                them to \
+                                `read_file`, `grep`, `glob`, `list_dir`, `web_search`, and \
+                                `web_fetch` — use them to \
                                 answer the task as completely as you can. You CANNOT edit, \
                                 write, or run shell commands, and you CANNOT dispatch further \
                                 subagents (no nesting). When you have gathered enough, write a \
@@ -97,6 +97,9 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                     "glob".to_string(),
                     "list_dir".to_string(),
                     "web_fetch".to_string(),
+                    // F4 (2026-08-25): snippet-only web search; pairs
+                    // with web_fetch for search-then-read research.
+                    "web_search".to_string(),
                 ],
                 // L3b (2026-06-27): researcher is read-only, so it
                 // does not benefit from a separate worktree (no

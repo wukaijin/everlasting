@@ -132,6 +132,11 @@ pub const READONLY_TOOL_ALLOWLIST: &[&str] = &[
     "list_dir",
     "web_fetch",
     "search_history",
+    // F4 (2026-08-25): snippet-only web search — read-only fixed-endpoint
+    // network op (no user-controllable URL → no SSRF surface), Tier 5
+    // silent Allow via `ToolKind::Other`. Pairs naturally with `web_fetch`
+    // for "search then read" research flows in concurrent read-only workers.
+    "web_search",
 ];
 
 /// Force a worker's toolset down to read-only tools only (L3a,
