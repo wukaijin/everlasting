@@ -97,9 +97,9 @@ send()(前端,解锁后的编辑器)
 
 ## 8. 兼容与回滚
 
-- 空闲路径回归锁(AC3):闲且队列为空时,chat_inner 行为逐字节对齐现状(测试断言不改既有 harness 快照)。
+- 空闲路径回归锁(AC3):闲且队列为空时,可观测行为与现状一致(既有 harness 快照不改)。**机制差异(评审 Round 2 修正,原"逐字节对齐"说法作废)**:统一路径下闲时发送同样入队并由驱动器消费,LLM 请求历史从客户端 `messages` 改为 DB reload(群聊 D-B 同构,DB 是唯一事实源)——语义等价,非逐字节;若未来出现"仅存于客户端 history、未落库"的请求内容会被 reload 丢弃(当前无此形态,记录在案)。
 - 开关:`message_queue_enabled`(缺省 on,fail-open 同 memory_digest 先例);off 时退化为现状(忙时前端恢复锁定?否——开关只关后端入队,前端解锁跟随开关下发,实现期定最简方案)。
-- **返回形状扩展(向后兼容字段叠加,P2-1)**:`chat` 两入口现状返回 unit(Tauri `Result<(),_>` / REST `Json(())`);忙时改返 `{queued:true, position}`,闲时保持 unit 不变——调用方按返回值分支。`httpTransport.invoke("chat")` 需把返回值透传给调用方(transport 层一行检查)。新增 `ChatEvent::TurnContinuation` 为 additive 变体,无 rename。
+- **返回形状扩展(向后兼容字段叠加,P2-1;Round 2 补 `id`)**:`chat` 两入口现状返回 unit(Tauri `Result<(),_>` / REST `Json(())`);忙时改返 `{queued:true, id, position}`——`id` 是队列项 uuid(R8 撤销/退回的稳定寻址键:位置随增删漂移,前端占位必须按 id 寻址),闲时保持 unit 不变——调用方按返回值分支。`httpTransport.invoke("chat")` 需把返回值透传给调用方(transport 层一行检查)。新增 `ChatEvent::TurnContinuation` 为 additive 变体,无 rename。
 - 回滚单元 = 整个 PR:队列结构独立成模块(`agent/message_queue.rs`),chat_inner 改动集中在一处分流点,revert 单 commit 即可。
 - 无 DB migration、无 breaking wire rename。
 

@@ -79,28 +79,26 @@ const props = defineProps<{
 
 
 // F1 消息队列 (2026-08-25): R8 排队消息单条操作。
-// 占位气泡与队列视图按 position 对齐(entriesFor 有序数组);
-// not-found(已开始注入)由 store 统一 toast 并水合对账。
+// 寻址一律用后端 uuid(message.queued.id)—— position 随撤销漂移,
+// 按位寻址会撤错条或静默失效(评审 Round 2 P1);成功后同步移除
+// 占位气泡并重排位次(dropQueuedPlaceholder)。not-found(已开始
+// 注入)由 store 统一 toast 并水合对账。
 const queueStore = useMessageQueueStore();
 async function revokeQueued(): Promise<void> {
   const sid = useChatStore().currentSessionId;
-  if (!sid || !props.message.queued) return;
-  const entry = queueStore.entriesFor(sid)[props.message.queued.position - 1];
-  if (!entry) {
-    void queueStore.hydrate(sid);
-    return;
+  const qid = props.message.queued?.id;
+  if (!sid || !qid) return;
+  if (await queueStore.revoke(sid, qid)) {
+    controller.dropQueuedPlaceholder(sid, props.message.id);
   }
-  await queueStore.revoke(sid, entry);
 }
 async function recallQueued(): Promise<void> {
   const sid = useChatStore().currentSessionId;
-  if (!sid || !props.message.queued) return;
-  const entry = queueStore.entriesFor(sid)[props.message.queued.position - 1];
-  if (!entry) {
-    void queueStore.hydrate(sid);
-    return;
+  const qid = props.message.queued?.id;
+  if (!sid || !qid) return;
+  if (await queueStore.recallToComposer(sid, qid)) {
+    controller.dropQueuedPlaceholder(sid, props.message.id);
   }
-  await queueStore.recallToComposer(sid, entry);
 }
 
 const chatStore = useChatStore();

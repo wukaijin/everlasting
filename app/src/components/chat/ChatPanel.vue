@@ -45,6 +45,7 @@ import type { SessionSummary, StagedImage } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
+import { useStreamControllerStore } from "../../stores/streamController";
 import { useQuestionCardsStore } from "../../stores/questionCards";
 import { useMemoryStore } from "../../stores/memory";
 import {
@@ -73,10 +74,17 @@ const chatStore = useChatStore();
 
 // F1 消息队列 (2026-08-25): 切 session 时从后端 SoT 水合排队视图
 // (R8;页面刷新 / PWA 第二端同样靠它恢复徽标)。失败仅 toast 不阻塞。
+// R4(评审 Round 2 P2 修复):水合后把 SoT 队列项物化为占位气泡 ——
+// 刷新 / LRU 驱逐 / 第二端后内存占位已丢,只填 store 不渲染会让
+// 排队项"后端在队、前端不可见"。按 queued.id 去重,不与发送路径
+// 刚 push 的占位重复。
 watch(
   () => chatStore.currentSessionId,
   (sid) => {
-    if (sid) void useMessageQueueStore().hydrate(sid);
+    if (!sid) return;
+    void useMessageQueueStore().hydrate(sid).then((entries) => {
+      useStreamControllerStore().materializeQueuedPlaceholders(sid, entries);
+    });
   },
   { immediate: true },
 );

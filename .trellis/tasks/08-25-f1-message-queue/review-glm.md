@@ -114,3 +114,126 @@ design §3:"经典聊天前端 finalize 只认 Done → **中间态零改动**"�
 3. 拍板 P2 五项(chat 返回形状入账 / Stop 的 N 来源 / edit-resend 清队 toast / @@ 忙时拒绝 / Esc 默认行为),写入 design 对应小节。
 
 完成后可按 implement.md 顺序开工,PR1 后端队列模块本身无争议。
+
+---
+
+# Round 2 — 开发完成评审(2026-08-25,commit `92a480b`)
+
+> 对象:F1-A 实现 commit `92a480b`(67 文件,+2616/−112)+ 修订后三件套。方法:通读全部核心 diff(后端 chat.rs/message_queue.rs/驱动器,前端 streamEvents/messageQueueStore/ChatInput/MessageItem),关键断言以临时测试实证(已还原),全套测试本地复跑。
+> 结论先行:**不通过,需修复后重审**。发现 1 个 P0(生产环境经典聊天流式输出完全不可见,已实证)+ R8/R4 的一组前端占位生命周期缺陷。P0 修复量约几行;根因是 PR4 收尾验证(live 冒烟)未执行就提交。
+
+## TL;DR
+
+规划评审的两处 P1 修正都被高质量采纳——P1-2 的落地设计(新增 `TurnContinuation` 事件而非泛化 `start` 门控)甚至优于评审建议,实现者抓住了规划评审漏掉的细节(`start` 是 run 内每次 LLM 调用边界,泛化会拆散多工具轮)。后端路由临界区、驱动器循环、取消矩阵接线实现质量高。
+
+但 **`DriverSink` 丢事件(P0)** 让整条链路在生产上不可见:除 `Error` 外的所有事件(Start/Delta/TurnComplete/FileInjections/Recall…)都不会到达前端——`queue` 默认开启,所有经典聊天从此没有流式输出,直到 Done 触发 reload 才一次性显出全文。该 bug 已用临时单测实证(断言 Delta 穿透包装器,收到 0 条,失败)。4 个新集成测试恰好都断言绕过或巧合穿透包装器的通道(Done/TurnContinuation 由驱动器直发 inner sink;Error 是包装器唯一转发的分支),所以测试全绿也没抓住。
+
+## 验证结果(本地复跑)
+
+| 项 | 结果 |
+|---|---|
+| vitest | ✅ 1189/1189 |
+| `cargo test -p everlasting --lib` | 1969 过 / 1 失败(`plan_mode` 满载 flaky;单独重跑通过;commit 声称干净 HEAD 基线亦有,与前一 commit 15555c0 修的同族慢 CI 竞态,接受) |
+| DriverSink Delta 穿透(临时单测) | ❌ **失败:0 条到达 inner sink**(测试已还原,工作区干净) |
+| PR4 #16-18(live 冒烟/文档归档) | ⬜ 未执行(implement.md 未勾,ROADMAP 自述"留 follow-up") |
+
+## P0(阻塞)— DriverSink 丢弃全部常规事件
+
+`app/src-tauri/src/agent/message_queue.rs:318-339`:
+
+```rust
+fn forward(&self, payload: &ChatEventPayload) -> bool {
+    match &payload.event {
+        ChatEvent::Done { .. } => { /* 记录 */ false }        // 吞,正确
+        ChatEvent::Error { .. } => { self.inner.emit_chat_event(payload); /* 置位 */ true }
+        _ => true,                                             // ← 只返回 bool,没转发!
+    }
+}
+impl ChatEventSink for DriverSink {
+    fn emit_chat_event(&self, payload: &ChatEventPayload) {
+        self.forward(payload);   // ← 返回值被丢弃
+    }
+}
+```
+
+`_ => true` 分支不调用 `self.inner.emit_chat_event`,而 `emit_chat_event` 又忽略返回值——除 Error 外全部事件被吞。修复(注意 Error 分支要同时改为不自转发,否则按返回值转发会双发):
+
+```rust
+ChatEvent::Error { .. } => { self.status.lock()...errored = true; true }   // 去掉自转发
+...
+fn emit_chat_event(&self, payload: &ChatEventPayload) {
+    if self.forward(payload) { self.inner.emit_chat_event(payload); }
+}
+```
+
+并补一条单测锁契约:`DriverSink` 收 `Delta` → inner sink 收到 1 条(我的临时测试可直接复用)。**修复后必须跑一次 PR4 最小 live 冒烟**(重编 daemon + `turn-smoke.sh --turns 2` + 手工连发)——这个 P0 在任何一次真机流式里第一秒就会被发现,逃逸的唯一原因是收尾验证没做。
+
+## P1(功能不可用)— R8 前端占位生命周期未闭环
+
+三个关联缺陷,同根(占位气泡与 queue store 双份状态无同步):
+
+1. **撤销/退回不移除占位气泡**:`messageQueueStore.revoke/recallToComposer` 只更新 `queuedBySession`,不碰 `messagesBySession` 里的占位 → 操作后"排队中"气泡残留到下次 reload。
+2. **position 寻址漂移 → 撤错条/静默失效**:占位的 `queued.position` 在发送时定死;store 端撤销后位次重排,占位不更新。`MessageItem.vue:88/98` 的 `entriesFor(sid)[position-1]` 随即错位——轻则落进 `if (!entry) hydrate; return` 静默 no-op(撤销任意一条后,其右所有气泡的撤销/退回全部失灵),重则位次碰撞时**操作到错误条目**。AC8/AC9 的实操场景必现。
+3. **recall 草稿不回填当前 session**:`recallToComposer` 写 `recallDraft`,但唯一消费点是 `ChatInput.vue` 对 `currentSessionId` 的 watch——当前 session 内点"退回输入框"composer 不回填(AC9 不达);草稿滞留,用户之后切走再切回时幽灵回填。
+
+建议修法(一并解决三缺陷):后端 `ChatAcceptance::Queued` 增加 uuid 字段(wire additive;`push` 已生成 id 只是没返回),占位改存 id,撤销/退回按 id 直达后端(彻底去掉 position 寻址);成功后同步移除对应占位气泡;回填改为 watch `recallDraft` 本身或经事件回调直达 composer。
+
+## P2 — R4 水合后无渲染(刷新/第二端排队项不可见)
+
+`hydrate()` 只填 `queuedBySession`,而 `entriesFor` 的消费方只有 toast 计数与 MessageItem 寻址——**没有任何组件把水合结果渲染成占位气泡**;`rehydrateMessages` 不含 queued(占位纯内存),刷新后 messagesBySession 从 DB 重建自然没有它们。后果:页面刷新 / LRU 驱逐 / PWA 第二端——排队项后端在队、前端不可见,直到注入落库才随 reload 出现。日常单端切走再切回(LRU 内)时内存占位还在,感知不到;踩中的恰是 R4 声称覆盖的核心场景。修法:hydrate 成功后把 entries 物化为占位气泡 append 到该 session 消息尾部(与 turn_continuation 物化同构)。
+
+## P3 — 记录在案(不阻塞)
+
+- **implement #9 勾与实况不符**:三个子项(错误保留 + 新发送 FIFO 一起注入的顺序回归、反搁浅断言、AC4 chat_inner 层回归)无对应测试——4 个新测试均未覆盖;路由临界区本身零测试(测试头注已承认押给 live 冒烟,而 PR4 未执行)。至少应改勾并注明覆盖方式。
+- **turn_continuation 分支缺 design §3 ③ 的 `sealActiveThinking`/`flushPendingTimelineText` 兜底**:主路径由 `turn_complete` 的 seal 兜住,但防御性应补(与自身设计文档对齐)。
+- **design §8"闲且队列为空逐字节对齐现状"已不成立**:闲路径机制变为 入队→驱动器→DB reload(客户端 history 弃用)。语义等价(DB SoT,群聊 D-B 同构),但应改口径;附带记录:若未来出现"仅存于客户端 history、未落库"的请求内容会被 reload 丢弃(当前无此形态)。
+- **驱动器退出 `session_active_request.remove(&sid)` 无 rid 守卫**:近不可能场景(queue 运行中途被关闭/同 session 混入 legacy 3a 替换)下会误删新注册;`if map.get(&sid) == Some(&rid)` 一行更稳。
+- **跨 session edit/resend/retry 无清队 toast**(走 `controller.cancel` 而非 `chatStore.cancel`;当前 session 路径已覆盖,P2-3 常见面达标)。
+
+## 规划评审落实核查(Round 1 → 实现)
+
+| 项 | 落实情况 |
+|---|---|
+| P1-1 统一入队 | ✅ 临界区实现 + 锁序文档化(queues→active,区内无 await)+ preflight 失败全回滚且按 uuid 只弹自己那条;顺序回归测试缺(P3) |
+| P1-2 续轮渲染 | ✅ `TurnContinuation` 方案优于评审建议(实现者指出 `start` 是 run 内 LLM 调用边界——规划评审时我漏掉的);handler 挂尾部守卫之前、不泛化群聊门控;vitest 定点回归质量高。**但被 P0 连累,整链当前不可见** |
+| P2-1 返回形状 | ✅ `ChatAcceptance` additive(`{status:"started"|"queued",position}`)+ http transport 透传 + daemon `Json(acceptance)` |
+| P2-2 Stop toast N | ✅ `CancelOutcome.clearedQueued`,Tauri + REST 双入口 |
+| P2-3 edit/resend/retry toast | ✅ 当前 session 路径(`chatStore.cancel` 统一);跨 session 缺(P3) |
+| P2-4 @@ 忙时拒绝 | ✅ D8 拍板 + 前端拒绝 toast + 后端纵深防御(驱动器 round>0 强制 `forced_dispatch=None`) |
+| P2-5 Esc 规则 | ✅ 经典流式中编辑器非空不触发 Stop;群聊不变 |
+| P3 反搁浅 | ✅ 退出协议 + 注释说明滞留项随新驱动器首轮 drain 一起注入 |
+| d4f D-2(sendDisabled) | 实现顺带修正——d4f 称"AC1 未要求流式中可发送"系误读(AC1 明写"流式期间可成功发送 ≥2 条"),实现者驳回正确 |
+
+## 做得好的
+
+- `chat_inner` 路由临界区是整个 PR 质量最高的部分:锁序全仓文档化、区内零 await、忙/闲/legacy(群聊/关开关/无 user 尾条)三分干净,legacy 与 F1 前逐字节一致(AC4/AC3 的 legacy 面)。
+- 驱动器以 DB reload 为 SoT(群聊 D-B 同构)让 D-D guard 天然不触发、attachments 经 metadata 重建——implement #7/#8 的两个"核实"项被架构选择直接消解。
+- `run_chat_loop` 31 参 + 70 调用点机械补 `false` 的改动纪律好,群聊两处调用点注释明确(guard 仍是唯一清理者)。
+- 集成测试手法干净(`HangingThenCancel` 挂起破环、late-enqueue watcher 模拟忙时连发);vitest `messageQueueStream.test.ts` 把 P1-2 契约锁得很准。
+- 取消矩阵接线完整:cancel(rid→session 反查清队)/delete_session/clear_session_messages/edit_user_message(返回 `EditMessageOutcome`)全齐。
+- commit message 里显式记录评审甄别(采纳/驳回)——这是好的工程文化。
+
+## 重审门槛
+
+1. 修 P0(DriverSink 转发 + Error 分支去自转发)+ 补 Delta 穿透单测;
+2. 修 R8 三连(建议按 id 寻址方案)与 R4 水合渲染;
+3. 跑 PR4 最小 live 冒烟(重编 daemon → `turn-smoke.sh --turns 2` → 手工长 turn 连发 3 条含撤销/Stop)——P0 类 bug 只有真机能兜底;
+4. P3 清单酌情(至少 implement #9 的勾改实况)。
+
+---
+
+# Round 3 — 修复落地记录(2026-08-25 同日,评审人执行)
+
+Round 2 的门槛 1/2/4 已修复并验证(工作区未提交,14 文件);门槛 3(live 冒烟)仍开放。
+
+| 项 | 修复 | 验证 |
+|---|---|---|
+| P0 DriverSink | `emit_chat_event` 按 `forward` 返回值转发;Error 分支去自转发(防双发) | 新单测 2 例(常规事件穿透序 / Error 恰一次)+ driver 集成测试 2 处补 Delta 到达断言,全过 |
+| P1 寻址漂移 | `ChatAcceptance::Queued` 加 `id`(wire additive);占位 `queued:{id,position}`;`revoke`/`recallToComposer` 按 id 直达;新增 `dropQueuedPlaceholder` 删占位并重排位次(拒绝删非排队行) | vitest 新增 3 例(删行重排 / 拒删持久化行 / 按 id 调 IPC) |
+| P1 回填 | ChatInput 改 watch `recallDraft` 本身——当前 session 内 recall 立即回填 | vitest(recall 草稿取后端原文 + 一次性消费) |
+| P2 水合可见性 | `hydrate` 返回 entries → ChatPanel 接 `materializeQueuedPlaceholders`(按 queued.id 去重物化) | vitest(刷新形态物化 + 去重 + 位次重排) |
+| P3 三项 | turn_continuation 补 seal+flush(design §3 ③);驱动器 slot 注销加 rid 守卫(`retain`);design §8 AC3 口径修正 + implement #9 覆盖如实化 | 既有 8 例 vitest 回归过 |
+
+全套验证:vitest 1195/1195(含 6 新增)、`vue-tsc --noEmit` 零错、`cargo test --lib` 1971 过/1 失败(`plan_mode` 满载 flaky,单独重跑通过,修复前同现象,预存)、clippy 仅 2 条预存警告(经干净 HEAD 对照确认非本次引入)、`cargo fmt --check` 干净。
+
+遗留:PR4 #16-18(live 冒烟 + curl REST 排队分支 + 文档归档)待执行——重审门槛 3 仍然有效。

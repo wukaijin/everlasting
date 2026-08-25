@@ -181,6 +181,8 @@ export interface TurnLatency {
 /** F1 (2026-08-25): backend `ChatAcceptance` wire shape (camelCase)。 */
 export interface ChatAcceptanceView {
   status: "started" | "queued";
+  /** queued 时的队列项 uuid(R8 撤销/退回寻址键)。 */
+  id?: string;
   position?: number;
 }
 
@@ -1120,7 +1122,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         const ai = mmsgs.findIndex((m) => m.id === args.assistantMsg.id);
         if (ai >= 0) mmsgs.splice(ai, 1);
         const um = mmsgs.find((m) => m.id === args.userMsg.id);
-        if (um) um.queued = { position: acceptance.position ?? 0 };
+        // id = 后端队列项 uuid:R8 撤销/退回的稳定寻址键(评审
+        // Round 2 P1 —— position 会随撤销漂移,不可用于寻址)。
+        if (um) {
+          um.queued = {
+            id: acceptance.id ?? "",
+            position: acceptance.position ?? 0,
+          };
+        }
       }
       void useMessageQueueStore().hydrate(args.sessionId);
       return requestId;
@@ -1155,6 +1164,60 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       console.error("[streamController] cancel failed:", e);
       return null;
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // F1 消息队列(2026-08-25)—— 排队占位气泡的视图生命周期(评审
+  // Round 2 P1/P2 修复)。占位气泡(messagesBySession 里的内存行)与
+  // queue store 的视图副本(entries)是两份状态,此处是气泡侧的唯一
+  // 变更点:撤销/退回成功后删行重排;水合后物化恢复可见性。
+  // ---------------------------------------------------------------------
+
+  /** 重排某 session 内全部排队占位的 position(数组序 = FIFO 序)。 */
+  function renumberQueued(sessionId: string): void {
+    const msgs = messagesBySession.get(sessionId);
+    if (!msgs) return;
+    let pos = 1;
+    for (const m of msgs) {
+      if (m.queued) m.queued.position = pos++;
+    }
+  }
+
+  /** R8:删除一条排队占位气泡并重排剩余位次。撤销/退回 IPC 成功后
+   *  由 MessageItem 调用;只允许删带 queued 标记的行(防误删已持久
+   *  化的普通消息行)。 */
+  function dropQueuedPlaceholder(sessionId: string, messageId: string): void {
+    const msgs = messagesBySession.get(sessionId);
+    if (!msgs) return;
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0 || !msgs[idx].queued) return;
+    msgs.splice(idx, 1);
+    renumberQueued(sessionId);
+  }
+
+  /** R4:水合(SoT `list_queued_messages`)后把队列项物化为占位气泡,
+   *  恢复页面刷新 / LRU 驱逐 / PWA 第二端后的可见性。按 queued.id
+   *  去重(发送路径刚 push 的占位不重复物化);消息数组未加载(不在
+   *  map)时跳过,待下次切 session 的水合兜底。 */
+  function materializeQueuedPlaceholders(
+    sessionId: string,
+    entries: ReadonlyArray<{ id: string; text: string }>,
+  ): void {
+    const msgs = messagesBySession.get(sessionId);
+    if (!msgs || entries.length === 0) return;
+    const known = new Set(
+      msgs.filter((m) => m.queued).map((m) => m.queued!.id),
+    );
+    for (const e of entries) {
+      if (known.has(e.id)) continue;
+      msgs.push({
+        id: genId(),
+        role: "user",
+        content: e.text,
+        queued: { id: e.id, position: 0 },
+      });
+    }
+    renumberQueued(sessionId);
   }
 
 
@@ -1196,6 +1259,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     startRequest,
     cancel,
     currentRequestId,
+    // F1(2026-08-25):排队占位气泡的视图生命周期(MessageItem 的
+    // R8 撤销/退回、ChatPanel 的水合物化消费)。
+    dropQueuedPlaceholder,
+    materializeQueuedPlaceholders,
     // BUG FIX (06-08-06-08): exposed for tests so the 2013-wire-invariant
     // test can drive the full send-completion path without spinning up
     // a Tauri IPC + a real agent loop. Not part of the public API that

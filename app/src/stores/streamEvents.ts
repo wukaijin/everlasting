@@ -85,6 +85,18 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           toMaterialize--;
         }
       }
+      // design §3 ③(评审 Round 2 P3 补):seal 上一轮 thinking + flush
+      // 残留 pending 文本 —— 中间轮的 Done 被后端 DriverSink 吞掉,
+      // 主路径靠上一轮 turn_complete 的兜底;这里防御"未经 turn_complete
+      // 的异常边界",否则残留的 activeThinkingIdx 会在新气泡上越界。
+      // flush 目标是上一轮的 assistant 气泡(尾部排队行是 user,不可写)。
+      sealActiveThinking(req);
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "assistant") {
+          flushPendingTimelineText(req, msgs[i]);
+          break;
+        }
+      }
       msgs.push({ id: genId(), role: "assistant", content: "" });
       useMessageQueueStore().shiftFront(req.sessionId, count);
       return;

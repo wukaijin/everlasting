@@ -17,16 +17,16 @@
 
 - [x] 7. 续轮注入实现:drained 消息经 init.rs 现有 persist 链落库(seq 游标顺延,D-D guard 语义核对——排队项未落过库,不应触发 guard;attachments 若有,核实落盘时序从 turn 启动提前到入队时的最简做法)。
 - [x] 8. 注入形态:每条独立 `role:user` APPEND 到请求尾部(与 drive.rs 通知循环同构);确认 wire 层零改动(to_wire 连续 user 消息直通已有先例)。
-- [x] 9. 后端集成测试(harness 用 `make_harness_with_git_repo` / fake provider 先例):
-  - 忙时入队 → 当前轮结束后自动续轮,2+ 条消息按序注入、逐条落库;
-  - 错误终止后滞留项 + 新发送 → 统一路径下 FIFO 全队一起注入(P1-1 顺序回归);
-  - 每次续轮内层 run 前 `TurnContinuation` 事件到达(事件序断言);
-  - Stop(cancel)→ 队列清空,无续轮,cancel 返回清空计数;
-  - 错误终止 / 续轮上限触顶 → 队列保留、无续轮(Done 正常);
-  - 反搁浅:驱动器 break 与并发入队竞态窗口无消费者断言(退出协议回归);
-  - group_chat 忙时第二请求仍取消替换(AC4 回归);
-  - 空闲路径行为不变(AC3 回归,断言既有 harness 快照不改);
-  - 上限 20 拒绝。
+- [x] 9. 后端集成测试(harness 用 `make_harness_with_git_repo` / fake provider 先例)。**覆盖实况(Round 2 如实化,原勾含未覆盖项)**:
+  - ✅ 忙时入队 → 当前轮结束后自动续轮,2+ 条消息按序注入、逐条落库;
+  - ⬜ 错误终止后滞留项 + 新发送 → 统一路径下 FIFO 全队一起注入(P1-1 顺序回归;统一数据路径构造性保证,断言留 PR4 live);
+  - ✅ 每次续轮内层 run 前 `TurnContinuation` 事件到达(事件序断言)+ 内层 Delta 到达前端 sink(Round 2 补,P0 回归锁);
+  - ✅ Stop(cancel)→ 队列清空,无续轮,cancel 返回清空计数;
+  - ✅ 错误终止 → 队列保留、无续轮;⬜ 续轮上限触顶分支(live);
+  - ⬜ 反搁浅退出协议断言(窗口竞态,live);
+  - ⬜ group_chat 忙时第二请求取消替换(AC4;chat_inner 层未动 + 既有群聊测试锁行为,live 复验);
+  - ⬜ 空闲路径(AC3;既有 harness 快照不改 = 测试侧成立,chat_inner 生产路径差异见 design §8 修正口径,live 复验);
+  - ✅ 上限 20 拒绝(队列模块单测)。
 
 ### PR3 前端解锁 + 排队视图 + 续轮渲染
 
@@ -42,6 +42,15 @@
 - [ ] 16.(live 冒烟待重编 daemon 后执行:`./scripts/daemon.sh stop && cargo build --release -p everlasting --bin everlasting-daemon && ./scripts/daemon.sh start`;curl REST 排队分支 + 手工连发场景) clippy + cargo fmt + pnpm build 全绿;CI 双 job 本地预演。
 - [ ] 17. live 冒烟(AC2 cache 断点):重编 daemon → `scripts/turn-smoke.sh --turns 2` 对照双轮 cache 率不劣化(基线同 session 形态下取);手工场景:长 turn 中连发 3 条 → 续轮按序注入、逐条气泡呈现、单条撤销不再注入、Stop 清空 toast 正确;curl 打 `POST /api/v1/agent/chat` 验证 REST 排队分支(d4f G-3)。
 - [ ] 18. 文档归档:ROADMAP F1 行标注部分落地(A 档)+ ARCHITECTURE 输入侧 gate 小节 + tool-contract/agent-loop spec 沉淀注入契约(TurnContinuation 事件语义)+ IMPLEMENTATION 决策日志。
+
+## Round 2 修复(评审 review-glm 后,2026-08-25)
+
+- [x] **P0 DriverSink 转发**:`emit_chat_event` 按 `forward` 返回值转发,Error 分支去自转发(防双发);单测 2 例(常规事件穿透序 / Error 恰一次)+ driver 集成测试补 Delta 到达断言(单轮 + 续轮两处)。
+- [x] **P1 寻址改 uuid**:`ChatAcceptance::Queued` 加 `id`(wire additive);前端占位 `queued:{id,position}`;`revoke`/`recallToComposer` 按 id 直达;`dropQueuedPlaceholder` 删占位并重排位次(消除 position 漂移导致的撤错条/静默失效)。
+- [x] **P1 回填**:ChatInput 改 watch `recallDraft`(当前 session 内 recall 立即回填,消除"切回才幽灵回填")。
+- [x] **P2 水合可见性**:`hydrate` 返回 entries → ChatPanel 接 `materializeQueuedPlaceholders`(按 queued.id 去重物化占位,恢复刷新/LRU 驱逐/PWA 第二端后的可见性)。
+- [x] **P3**:turn_continuation 补 `sealActiveThinking` + flush(design §3 ③ 防御兜底);驱动器退出 session slot 注销加 rid 守卫;design §8 AC3"逐字节"口径修正;#9 覆盖标注如实化。
+- [ ] **遗留**:PR4 #16-18(live 冒烟含 curl REST 排队分支 + 文档归档)仍待执行 —— P0 类缺陷只有真机能兜底。
 
 ## 验证命令
 

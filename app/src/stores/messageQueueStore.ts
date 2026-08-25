@@ -4,7 +4,8 @@
 // **视图副本**(`list_queued_messages` 水合),用于:
 // 1. 切 session / 页面刷新后恢复排队徽标(消除"后端持有但看不见");
 // 2. Stop / 错误终止后的保留计数 toast;
-// 3. R8 单条撤销/退回的 id 寻址(占位气泡按 position 对齐)。
+// 3. R8 单条撤销/退回的视图同步(寻址一律按后端 uuid,见 revoke /
+//    recallToComposer —— 位置随增删漂移,不可用于寻址,评审 Round 2 P1)。
 //
 // 入队/撤销不广播事件(design §9):他端与本地都靠水合看到最终态,
 // 非实时是已接受的 MVP trade-off。归 chat store 家族(state-management
@@ -25,20 +26,23 @@ export interface QueuedEntry {
 export const useMessageQueueStore = defineStore("messageQueue", () => {
   // sessionId -> 有序排队项(位置升序)。
   const queuedBySession = ref(new Map<string, QueuedEntry[]>());
-  // R8「修改」= 退回输入框:跨组件传递回填文本(ChatInput watch)。
+  // R8「修改」= 退回输入框:跨组件传递回填文本(ChatInput watch 草稿
+  // 本身 —— 当前 session 内 recall 也要立即回填,评审 Round 2 P1)。
   const recallDraft = ref<{ sessionId: string; text: string } | null>(null);
 
   function entriesFor(sessionId: string | null | undefined): QueuedEntry[] {
     return (sessionId && queuedBySession.value.get(sessionId)) || [];
   }
 
-  /** 从后端 SoT 重建该 session 的排队视图(幂等)。 */
-  async function hydrate(sessionId: string): Promise<void> {
+  /** 从后端 SoT 重建该 session 的排队视图(幂等)。返回重建后的
+   *  entries(空数组 = 队列已空),供调用方物化占位气泡(R4)。 */
+  async function hydrate(sessionId: string): Promise<QueuedEntry[]> {
+    let entries: QueuedEntry[] = [];
     try {
       const rows = await transport.invoke<
         Array<{ id: string; message: { content: unknown }; position?: number }>
       >("list_queued_messages", { sessionId });
-      const entries: QueuedEntry[] = rows.map((r, i) => ({
+      entries = rows.map((r, i) => ({
         id: r.id,
         text: flattenText(r.message?.content),
         position: r.position ?? i + 1,
@@ -51,6 +55,7 @@ export const useMessageQueueStore = defineStore("messageQueue", () => {
         "warn",
       );
     }
+    return entries;
   }
 
   /** 续轮注入边界:同步弹走前 count 条(随后 hydrate 对账)。 */
@@ -64,14 +69,20 @@ export const useMessageQueueStore = defineStore("messageQueue", () => {
     if (sessionId) queuedBySession.value.delete(sessionId);
   }
 
-  /** R8 撤销:删除单条并从视图移除。失败(not-found = 已开始注入)
-   *  toast「已开始处理」。成功后重排剩余位次。*/
-  async function revoke(sessionId: string, entry: QueuedEntry): Promise<boolean> {
+  /** 视图内按 id 移除一条并重排剩余位次。 */
+  function dropEntryFromView(sessionId: string, id: string): void {
+    const list = queuedBySession.value.get(sessionId) ?? [];
+    const idx = list.findIndex((x) => x.id === id);
+    if (idx >= 0) list.splice(idx, 1);
+    list.forEach((x, i) => (x.position = i + 1));
+  }
+
+  /** R8 撤销:按后端 uuid 删除单条并同步视图。失败(not-found =
+   *  已开始注入)toast「已开始处理」。占位气泡的移除由调用方
+   *  (MessageItem)经 streamController.dropQueuedPlaceholder 完成。 */
+  async function revoke(sessionId: string, id: string): Promise<boolean> {
     try {
-      await transport.invoke("remove_queued_message", {
-        sessionId,
-        id: entry.id,
-      });
+      await transport.invoke("remove_queued_message", { sessionId, id });
     } catch (e) {
       useProjectsStore().showToast(
         `无法撤销：${extractErrorMessage(e)}`,
@@ -80,21 +91,18 @@ export const useMessageQueueStore = defineStore("messageQueue", () => {
       void hydrate(sessionId);
       return false;
     }
-    const list = queuedBySession.value.get(sessionId) ?? [];
-    const idx = list.findIndex((x) => x.id === entry.id);
-    if (idx >= 0) list.splice(idx, 1);
-    list.forEach((x, i) => (x.position = i + 1));
+    dropEntryFromView(sessionId, id);
     return true;
   }
 
-  /** R8 修改 = 单条退回输入框:recall IPC 取原文 → 回填 composer。
-   *  ChatInput 通过 takeRecallDraft 消费。*/
-  async function recallToComposer(sessionId: string, entry: QueuedEntry): Promise<boolean> {
-    let text = entry.text;
+  /** R8 修改 = 单条退回输入框:recall IPC 按 id 取原文 → 写回填草稿
+   *  (ChatInput watch recallDraft 消费)。 */
+  async function recallToComposer(sessionId: string, id: string): Promise<boolean> {
+    let text = "";
     try {
       const row = await transport.invoke<{
         message: { content: unknown };
-      }>("recall_queued_message", { sessionId, id: entry.id });
+      }>("recall_queued_message", { sessionId, id });
       text = flattenText(row.message?.content);
     } catch (e) {
       useProjectsStore().showToast(
@@ -104,10 +112,7 @@ export const useMessageQueueStore = defineStore("messageQueue", () => {
       void hydrate(sessionId);
       return false;
     }
-    const list = queuedBySession.value.get(sessionId) ?? [];
-    const idx = list.findIndex((x) => x.id === entry.id);
-    if (idx >= 0) list.splice(idx, 1);
-    list.forEach((x, i) => (x.position = i + 1));
+    dropEntryFromView(sessionId, id);
     recallDraft.value = { sessionId, text };
     return true;
   }

@@ -147,17 +147,19 @@ pub async fn chat(
 ///
 /// - `Started`:session 空闲,请求已认领 slot 并开跑 —— 响应形状与
 ///   F1 前的 unit 语义等价(流照常走事件通道)。
-/// - `Queued`:session 忙,消息已入队,本次 RPC 无流;`position`
-///   为 1-based 队尾位次(前端排队徽标用)。
+/// - `Queued`:session 忙,消息已入队,本次 RPC 无流;`id` 是队列项
+///   uuid(R8 撤销/退回的稳定寻址键 —— 位置随增删漂移,前端占位
+///   必须按 id 而非 position 寻址,评审 Round 2 P1 修复);
+///   `position` 为 1-based 队尾位次(前端排队徽标展示用)。
 ///
 /// wire 形状 `{ "status": "started" }` / `{ "status": "queued",
-/// "position": N }`(serde tag)。向后兼容:闲时字段叠加而非
-/// rename,旧前端把非 unit 返回值忽略也不影响流。
+/// "id": "...", "position": N }`(serde tag)。向后兼容:闲时字段
+/// 叠加而非 rename,旧前端把非 unit 返回值忽略也不影响流。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum ChatAcceptance {
     Started,
-    Queued { position: usize },
+    Queued { id: String, position: usize },
 }
 
 pub(crate) async fn chat_inner(
@@ -387,7 +389,12 @@ pub(crate) async fn chat_inner(
     }
     if let Some(position) = queued_position {
         if !drive_claimed {
-            return Ok(ChatAcceptance::Queued { position });
+            // id = 本条队列项的 uuid(`push` 已生成)——R8 撤销/退回
+            // 的稳定寻址键,前端占位存 id、按 id 直达(评审 Round 2)。
+            return Ok(ChatAcceptance::Queued {
+                id: pushed_id.unwrap_or_default(),
+                position,
+            });
         }
     }
 
@@ -1149,8 +1156,11 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
     // 队,路由临界区会看到"闲"并为新消息 spawn 新驱动器,滞留项随
     // 其首轮 drain 一起注入(统一数据路径保证顺序)。
     deps.cancellations.lock().await.remove(&deps.rid);
+    // rid 守卫(评审 Round 2 P3):仅当 slot 仍指向本驱动器时才注销 ——
+    // 近不可能的"运行中被 legacy 3a 替换重注册"场景下,无条件按
+    // session 删会误摘新请求的注册。
     deps.session_active_request
         .lock()
         .await
-        .remove(&deps.session_id);
+        .retain(|_sid, r| r != &deps.rid);
 }

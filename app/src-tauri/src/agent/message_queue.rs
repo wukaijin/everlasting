@@ -315,6 +315,11 @@ impl DriverSink {
         )
     }
 
+    /// 返回值 = 是否由调用方转发给 inner sink:`false` 吞掉(`Done`),
+    /// `true` 透传。**转发动作统一在 [`DriverSink::emit_chat_event`]
+    /// 按 return value 执行** —— 各分支不得自行调用
+    /// `self.inner.emit_chat_event`(Error 分支曾自转发,若调用方再按
+    /// 返回值转发会双发;评审 Round 2 P0 修复)。
     fn forward(&self, payload: &crate::state::ChatEventPayload) -> bool {
         match &payload.event {
             ChatEvent::Done { stop_reason, usage } => {
@@ -323,7 +328,6 @@ impl DriverSink {
                 false
             }
             ChatEvent::Error { .. } => {
-                self.inner.emit_chat_event(payload);
                 let mut st = self.status.lock().expect("driver status lock");
                 st.errored = true;
                 true
@@ -335,7 +339,14 @@ impl DriverSink {
 
 impl crate::state::ChatEventSink for DriverSink {
     fn emit_chat_event(&self, payload: &crate::state::ChatEventPayload) {
-        self.forward(payload);
+        // P0 修复(评审 Round 2):转发决定权在 `forward` 的返回值。
+        // 此前这里丢弃返回值且 `_` 分支不转发 —— 除 Error 外的
+        // 全部常规事件(Start/Delta/TurnComplete/FileInjections/…)
+        // 被静默吞掉,生产端流式完全不可见;单测
+        // `driver_sink_forwards_regular_events` 锁死该契约。
+        if self.forward(payload) {
+            self.inner.emit_chat_event(payload);
+        }
     }
     fn emit_tool_call(&self, payload: &crate::state::ToolCallPayload) {
         self.inner.emit_tool_call(payload);
@@ -345,5 +356,112 @@ impl crate::state::ChatEventSink for DriverSink {
     }
     fn emit_permission_ask(&self, payload: PermissionAskPayload) {
         self.inner.emit_permission_ask(payload);
+    }
+}
+
+#[cfg(test)]
+mod driver_sink_tests {
+    use super::*;
+    use crate::agent::permissions::PermissionAskPayload;
+    use crate::llm::types::ChatEvent;
+    use crate::state::{ChatEventPayload, ChatEventSink, ToolCallPayload, ToolResultPayload};
+    use std::sync::{Arc, Mutex};
+
+    /// 最小记录 sink —— 只关心 chat 事件序,不耦合 tests_common 的
+    /// harness(那套构造完整 AppState,这里单测包装器本身)。
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Mutex<Vec<ChatEvent>>,
+    }
+
+    impl ChatEventSink for RecordingSink {
+        fn emit_chat_event(&self, payload: &ChatEventPayload) {
+            self.events.lock().unwrap().push(payload.event.clone());
+        }
+        fn emit_tool_call(&self, _p: &ToolCallPayload) {}
+        fn emit_tool_result(&self, _p: &ToolResultPayload) {}
+        fn emit_permission_ask(&self, _p: PermissionAskPayload) {}
+    }
+
+    fn emit(sink: &DriverSink, event: ChatEvent) {
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".into(),
+            event,
+        });
+    }
+
+    /// 评审 Round 2 P0 回归锁:常规事件(Start/Delta/TurnComplete 等)
+    /// 必须穿透包装器到达 inner sink —— 曾经 `_ => true` 分支不转发、
+    /// 调用方又丢弃返回值,除 Error 外全部事件被吞,生产端流式不可见。
+    #[test]
+    fn driver_sink_forwards_regular_events() {
+        let inner = Arc::new(RecordingSink::default());
+        let (sink, _status) = DriverSink::new(inner.clone());
+
+        emit(&sink, ChatEvent::TurnContinuation { count: 1 });
+        emit(
+            &sink,
+            ChatEvent::Delta {
+                text: "hello".into(),
+            },
+        );
+        emit(
+            &sink,
+            ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            },
+        );
+        emit(
+            &sink,
+            ChatEvent::Delta {
+                text: "tail".into(),
+            },
+        );
+
+        let events = inner.events.lock().unwrap().clone();
+        // Start 层事件序:TurnContinuation → Delta → (Done 被吞) → Delta。
+        assert_eq!(
+            events,
+            vec![
+                ChatEvent::TurnContinuation { count: 1 },
+                ChatEvent::Delta {
+                    text: "hello".into()
+                },
+                ChatEvent::Delta {
+                    text: "tail".into()
+                },
+            ],
+            "regular events must pass through in order; Done must be swallowed"
+        );
+        // 被吞的 Done 记录在 status 里,供驱动器真退出时补发。
+        let st = _status.lock().unwrap();
+        assert!(matches!(st.last_done.as_ref(), Some((reason, _))
+            if reason.as_deref() == Some("end_turn")));
+        assert!(!st.errored);
+    }
+
+    /// Error 恰好转发一次(不因"分支自转发 + 调用方按返回值转发"双发)
+    /// 且置位 errored —— 驱动器据此走"不补发 Done"的错误退出路径。
+    #[test]
+    fn driver_sink_error_forwarded_exactly_once_and_flags() {
+        let inner = Arc::new(RecordingSink::default());
+        let (sink, status) = DriverSink::new(inner.clone());
+
+        emit(
+            &sink,
+            ChatEvent::Error {
+                message: "boom".into(),
+                category: crate::llm::types::LlmErrorCategory::Server,
+            },
+        );
+
+        let events = inner.events.lock().unwrap().clone();
+        let error_count = events
+            .iter()
+            .filter(|e| matches!(e, ChatEvent::Error { .. }))
+            .count();
+        assert_eq!(error_count, 1, "Error must be forwarded exactly once");
+        assert!(status.lock().unwrap().errored);
     }
 }

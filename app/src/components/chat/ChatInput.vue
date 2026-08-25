@@ -429,8 +429,11 @@ watchEffect(() => {
 
 
 // F1 R8「修改」= 排队消息退回输入框:消费 queue store 的回填草稿。
+// watch 草稿本身而非 currentSessionId —— 当前 session 内 recall 也
+// 要立即回填(原实现仅 session 切换时消费:退回后 composer 不回填,
+// 草稿滞留到下次切回才幽灵出现,评审 Round 2 P1 修复)。
 watch(
-  () => chatStore.currentSessionId,
+  () => useMessageQueueStore().recallDraft,
   () => {
     const text = useMessageQueueStore().takeRecallDraft(chatStore.currentSessionId);
     if (text != null) cm.input.value = text;

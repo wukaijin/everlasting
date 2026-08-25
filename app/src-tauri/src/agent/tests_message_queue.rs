@@ -153,6 +153,15 @@ async fn driver_single_round_injects_persists_and_reemits_one_done() {
     assert_eq!(rows, vec!["hello"]);
     // 单 Done 契约:整请求只补发一次(round 内层的 Done 被吞)。
     assert_eq!(done_count(&emitter), 1);
+    // 评审 Round 2 P0 回归锁:内层轮的常规事件(Delta)必须穿透
+    // DriverSink 到达前端 sink —— 曾经 `_ => true` 分支不转发,
+    // 流式在生产端完全不可见。
+    let deltas = emitter
+        .chat_events()
+        .iter()
+        .filter(|p| matches!(p.event, ChatEvent::Delta { .. }))
+        .count();
+    assert_eq!(deltas, 1, "inner-round deltas must reach the frontend sink");
     // round 0 不发 TurnContinuation。
     assert!(emitter
         .chat_events()
@@ -231,6 +240,16 @@ async fn driver_continuation_round_emits_turn_continuation_and_fifo_order() {
     );
     // 单 Done 契约:两轮内层各吞一次,真结束只补发一次。
     assert_eq!(done_count(&emitter), 1);
+    // 续轮流式可见性(P0 回归):两轮的 Delta 都要到达前端 sink。
+    let delta_texts: Vec<String> = emitter
+        .chat_events()
+        .iter()
+        .filter_map(|p| match &p.event {
+            ChatEvent::Delta { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delta_texts, vec!["one", "two"]);
 }
 
 #[tokio::test]

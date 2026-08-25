@@ -290,8 +290,12 @@ export interface ChatMessage {
    * 位次);驱动器续轮注入后由 `TurnContinuation` 物化为普通气泡,
    * 最终 reload 与 DB 行对齐。不落库、不入 rehydrate(同
    * `retrying` 先例)。
+   *
+   * `id` = 后端队列项 uuid(ChatAcceptance::Queued 返回)——R8
+   * 撤销/退回的稳定寻址键(位置随增删漂移,不可用于寻址);
+   * `position` 仅展示,由 `renumberQueued` 重排。
    */
-  queued?: { position: number };
+  queued?: { id: string; position: number };
   /** 交错思考: 按真实流序排列的内容块,reload 后由
    *  `rehydrateMessages` 从 DB `content` 数组透传(见
    *  `ContentBlockView` 头注释)。`MessageRunGroup` 优先用它做流式
