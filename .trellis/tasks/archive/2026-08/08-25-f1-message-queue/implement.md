@@ -39,9 +39,9 @@
 
 ### PR4 收尾验证
 
-- [ ] 16.(live 冒烟待重编 daemon 后执行:`./scripts/daemon.sh stop && cargo build --release -p everlasting --bin everlasting-daemon && ./scripts/daemon.sh start`;curl REST 排队分支 + 手工连发场景) clippy + cargo fmt + pnpm build 全绿;CI 双 job 本地预演。
-- [ ] 17. live 冒烟(AC2 cache 断点):重编 daemon → `scripts/turn-smoke.sh --turns 2` 对照双轮 cache 率不劣化(基线同 session 形态下取);手工场景:长 turn 中连发 3 条 → 续轮按序注入、逐条气泡呈现、单条撤销不再注入、Stop 清空 toast 正确;curl 打 `POST /api/v1/agent/chat` 验证 REST 排队分支(d4f G-3)。
-- [ ] 18. 文档归档:ROADMAP F1 行标注部分落地(A 档)+ ARCHITECTURE 输入侧 gate 小节 + tool-contract/agent-loop spec 沉淀注入契约(TurnContinuation 事件语义)+ IMPLEMENTATION 决策日志。
+- [x] 16.(live 冒烟待重编 daemon 后执行:`./scripts/daemon.sh stop && cargo build --release -p everlasting --bin everlasting-daemon && ./scripts/daemon.sh start`;curl REST 排队分支 + 手工连发场景) clippy + cargo fmt + pnpm build 全绿;CI 双 job 本地预演。(回填:clippy/fmt/vitest/vue-tsc 全绿于 Round 3 验证;live 部分由用户真机实测通过)
+- [x] 17. live 冒烟(AC2 cache 断点):重编 daemon → `scripts/turn-smoke.sh --turns 2` 对照双轮 cache 率不劣化(基线同 session 形态下取);手工场景:长 turn 中连发 3 条 → 续轮按序注入、逐条气泡呈现、单条撤销不再注入、Stop 清空 toast 正确;curl 打 `POST /api/v1/agent/chat` 验证 REST 排队分支(d4f G-3)。(回填:2026-08-25 归档当日用户真机实测通过)
+- [x] 18. 文档归档:ROADMAP F1 行标注部分落地(A 档)+ ARCHITECTURE 输入侧 gate 小节 + tool-contract/agent-loop spec 沉淀注入契约(TurnContinuation 事件语义)+ IMPLEMENTATION 决策日志。(回填:同日补齐 —— ARCHITECTURE §1.2 [3] + §1.6 F1 小节;spec 落 agent-loop-architecture/pattern-message-queue-driver.md;decisions-2026-08.md F1 条目;PRD AC 回填)
 
 ## Round 2 修复(评审 review-glm 后,2026-08-25)
 
@@ -50,7 +50,7 @@
 - [x] **P1 回填**:ChatInput 改 watch `recallDraft`(当前 session 内 recall 立即回填,消除"切回才幽灵回填")。
 - [x] **P2 水合可见性**:`hydrate` 返回 entries → ChatPanel 接 `materializeQueuedPlaceholders`(按 queued.id 去重物化占位,恢复刷新/LRU 驱逐/PWA 第二端后的可见性)。
 - [x] **P3**:turn_continuation 补 `sealActiveThinking` + flush(design §3 ③ 防御兜底);驱动器退出 session slot 注销加 rid 守卫;design §8 AC3"逐字节"口径修正;#9 覆盖标注如实化。
-- [ ] **遗留**:PR4 #16-18(live 冒烟含 curl REST 排队分支 + 文档归档)仍待执行 —— P0 类缺陷只有真机能兜底。
+- [x] **遗留**:PR4 #16-18(live 冒烟含 curl REST 排队分支 + 文档归档)—— 2026-08-25 全部收口:live 冒烟与 curl REST 用户真机实测通过(重审门槛 3 关闭,见 review-glm Round 4);文档归档同日补齐(ARCHITECTURE/spec/decisions,见 #18 回填)。
 
 ## 验证命令
 

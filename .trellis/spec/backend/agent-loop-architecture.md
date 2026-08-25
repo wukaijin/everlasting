@@ -85,3 +85,4 @@
 - [pattern-turn-limit-softcap](./agent-loop-architecture/pattern-turn-limit-softcap.md)
 - [pattern-budget-gate](./agent-loop-architecture/pattern-budget-gate.md)
 - [pattern-turn-checkpoint](./agent-loop-architecture/pattern-turn-checkpoint.md)
+- [pattern-message-queue-driver](./agent-loop-architecture/pattern-message-queue-driver.md)

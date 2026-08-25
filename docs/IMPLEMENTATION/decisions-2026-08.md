@@ -82,3 +82,14 @@
 - **决策 — 观测口径**:`CompactResult.method`(Summary/Mechanical/None)+ `summary_usage`(摘要 usage 不混入 `update_last_turn_usage`,只进 compaction_json;trace.rs 手工 json 三处联动)。TS 侧 `?? "none"` 兼容旧回看行。
 - **偏差记录**:① `preserved_region_and_question_survive_across_requests` 断言一度过严(要求缺席非空文本行最大 seq == cutoff,但被压区末组可能是空 text 的工具配对)——修为"边界行在 DB + 缺席最大非空 seq ≤ cutoff";② live 烟测未跑(catalog 无超线长 session 现场,需真机重编 daemon 后构造),AC1/AC2 的 live 半边留待;③ 全量测试 1 个预存 flaky(`dispatch_main guard` 满并发超时,单发 0.56s 过,基线同挂)。
 - 任务:`08-18-llm-context-compaction`(已归档)。spec:agent-loop-architecture "pattern-llm-compaction" + database-guidelines "compaction_summary" + token-usage-tracking "摘要旁路 usage"。后续任务:MAX_TURNS 软卡化 / 手动 `/compact` / handoff 接力(已立项)。
+
+### 2026-08-25 — F1 消息队列·用户连发档(输入侧排队 + 续轮批量注入)
+
+- **Context**:turn 串行且流式期间编辑器整体只读,连打字都不行。补输入侧队列最小闭环:turn 进行中可打字/发送/撤销/修改,轮结束批量注入下一轮;为 F2 定时 / F6 异步预留统一入口(生产者不实现)。双外部评审(review-glm / review-d4f)+ 三轮修复收口,live 冒烟与 curl REST 排队分支真机实测通过。
+- **决策 — 统一入队 vs 忙时特判**:选统一入队(所有发送一律先入队,「查忙 + 入队 + 注册/spawn」收进单一路由锁临界区,区内零 await,锁序 queues → active 全仓文档化)——一条路径让 Tauri IPC 与 daemon REST 天然一致(AC7),且错误终止后滞留项与下次新发送的 FIFO 顺序由构造保证;代价是空闲路径也过一次锁+队列入出(纳秒级)。
+- **决策 — `TurnContinuation` 独立事件 vs 泛化 `start` 门控**:续轮渲染边界必须是新事件(驱动器每次续轮内层 run 前 emit,群聊 `Speaker` 同位置同角色)。不能泛化 streamEvents 的 `groupChat` start 门控——`start` 是 run 内每次 LLM 调用的边界(tool_use 后下一轮也发),泛化会把经典多工具轮错误拆泡。规划评审时此点被漏掉,实现者修正(原"中间态零改动"断言作废)。
+- **决策 — uuid 寻址 vs position**:队列项与前端占位一律按 uuid 寻址(position 仅展示)。评审 Round 1 抓到 position 漂移三连缺陷(撤销后右移全部错位 → 撤错条/静默 no-op);`ChatAcceptance::Queued` 补 `id` 字段(wire additive),撤销/退回按 id 直达后端。
+- **决策 — 取消矩阵不对称**:user 主动终止(Stop/edit/resend/retry/defense-in-depth 替换)→ 清空 + `clearedQueued` 计数 toast;provider 错误/续轮触顶(50)→ 队列**保留**,下次发送统一入队自然消化(非 user 过错不丢输入)。
+- **决策 — 闲路径口径修正**(评审 Round 2):原"闲且队空逐字节对齐现状"作废——统一路径下闲时发送同样入队由驱动器消费,LLM 请求历史从客户端 `messages` 改为 DB reload(群聊 D-B 同构)。语义等价非逐字节;若未来出现"仅存于客户端 history、未落库"的请求内容会被 reload 丢弃(当前无此形态,记录在案)。
+- **偏差记录**:① P0 DriverSink 丢事件——`emit_chat_event` 未按 `forward` 返回值转发且 Error 分支自转发(双发),续轮 Delta 整链不可见,单测 2 例 + 集成 Delta 断言锁死;② F1 三命令漏 `CMD_TO_DOMAIN` 映射,开 session 即 unknown cmd(transport 层路由同步守卫断根);③ ChatInput 两道旧守卫(`sendDisabled`/readOnly 判定)吞掉流式发送,AC1 物理不可达——评审 d4f 称"AC1 未要求流式中可发送"系误读,实现者驳回正确;④ 跨设备可见性走 `list_queued_messages` 水合而非事件广播(省 wire 变体,代价非实时,MVP 接受)。
+- 任务:`08-25-f1-message-queue`(已归档)。spec:agent-loop-architecture "pattern-message-queue-driver"(注入契约 + TurnContinuation 事件语义 + 锁纪律)。B 档(优先级分档/抢占)与 C 档(daemon 统一入口服务化,F2/F6 生产者)留后续。

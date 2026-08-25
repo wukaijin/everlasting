@@ -50,15 +50,17 @@
 
 ## Acceptance Criteria
 
-- [ ] AC1 流式期间可打字并成功发送 ≥2 条消息,均显示排队态;当前轮结束后自动续轮按序注入,聊天历史逐条呈现、内容与输入一致。
-- [ ] AC2 注入后的请求中排队消息位于 messages 尾部(APPEND),双轮 cache 率不劣化(turn-smoke 对照)。
-- [ ] AC3 空闲且队列为空的 session 发送行为与现状一致(回归锁)。
-- [ ] AC4 群聊 session 发送仍是抢占语义(回归锁);handoff 忙时拒绝文案不变。
-- [ ] AC5 流式中 Stop → 当前轮取消 + 队列清空 + toast 数量正确(N = cancel 返回值)+ 占位回收,后续无自动续轮;edit/resend/retry 触发的清空同样有 toast。
-- [ ] AC6 队列上限有界(20),第 21 条被拒并有明确反馈。
-- [ ] AC7 daemon REST 路径(httpTransport/PWA)同样获得排队能力(Tauri IPC 与 HTTP 双入口一致性)。
-- [ ] AC8 排队中单条撤销后,该消息不再进入注入;其余消息顺序不受影响。
-- [ ] AC9 排队中单条修改(退回输入框)后,原队列项消失、composer 载入原文;not-found 场景有「已开始处理」提示。
+> 回填说明(2026-08-25 归档时):AC1-AC9 全部验证通过 —— 单测/集成/vitest(vitest 1195 含 6 新增,cargo 1971)+ live 真机实测(长 turn 连发含撤销/Stop + turn-smoke 双轮 cache 对照 + curl REST 排队分支)。覆盖细节见 implement.md #9 覆盖实况与 review-glm 核查表。
+
+- [x] AC1 流式期间可打字并成功发送 ≥2 条消息,均显示排队态;当前轮结束后自动续轮按序注入,聊天历史逐条呈现、内容与输入一致。
+- [x] AC2 注入后的请求中排队消息位于 messages 尾部(APPEND),双轮 cache 率不劣化(turn-smoke 对照)。
+- [x] AC3 空闲且队列为空的 session 发送行为与现状一致(回归锁)。
+- [x] AC4 群聊 session 发送仍是抢占语义(回归锁);handoff 忙时拒绝文案不变。
+- [x] AC5 流式中 Stop → 当前轮取消 + 队列清空 + toast 数量正确(N = cancel 返回值)+ 占位回收,后续无自动续轮;edit/resend/retry 触发的清空同样有 toast。
+- [x] AC6 队列上限有界(20),第 21 条被拒并有明确反馈。
+- [x] AC7 daemon REST 路径(httpTransport/PWA)同样获得排队能力(Tauri IPC 与 HTTP 双入口一致性)。
+- [x] AC8 排队中单条撤销后,该消息不再进入注入;其余消息顺序不受影响。
+- [x] AC9 排队中单条修改(退回输入框)后,原队列项消失、composer 载入原文;not-found 场景有「已开始处理」提示。
 
 ## Out of Scope(follow-up 档)
 

@@ -127,6 +127,15 @@
     invoke/fetch resolve 立即返回("已受理",非"已完成")
 
 [3] agent core(同一份 handler 代码,两种入口)
+    chat_inner 路由临界区(F1 输入侧 gate,2026-08-25 落地;单一 Mutex,锁序 queues → active,区内零 await):
+      所有发送一律入队( AppState.session_message_queues,per-session FIFO,上限 20,uuid 寻址)
+      ├─ 忙(session_active_request 命中)→ 返回 {queued:true, id, position}(本次 RPC 无流,事件仍按 session 广播)
+      └─ 闲 → 同临界区内注册 rid + spawn 队列驱动器,响应形状与现状一致(unit)
+    队列驱动器 loop(原 tokio::spawn 体):
+      run_chat_loop → cancelled 清队 break / 错误·续轮触顶(50) 保留队列 break
+      → drain 非空 → emit ChatEvent::TurnContinuation(前端续轮渲染边界,先于新 run 任何 delta)
+      → persist(drained) 为下一轮初始 user 输入(每条独立 APPEND,cache 断点不变量保持)→ 再进 run
+      退出协议:拿路由锁,队列空才注销 slot(反搁浅);DriverSink 单 rid 跨内层轮保活,只在真结束 emit Done
     SessionManager::handle_message(session_id, content)
       → 写入 SQLite (user message)
       → 触发 agent core
@@ -210,9 +219,17 @@
 
 **决策偏差记录**:Phase 3(dogfooding)在 dogfooding 前置条件未满足时由 epic 直接启动完成 —— 见决策日志对应条目。
 
-### 1.6 近期落地特性(2026-08-14~20)
+### 1.6 近期落地特性(2026-08-14~25)
 
-> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量)。横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)见 §2.5.10~15;本节按"用户可感知度"挑 3 个最显著的:**B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool**。08-19~20 批次中最重的 **unified-context-budget(统一 token 预算 + 关卡⑤硬卡)** 见 §2.5.14。
+> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量)+ F1 消息队列(2026-08-25)。横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)见 §2.5.10~15;本节按"用户可感知度"挑 4 个最显著的:**F1 消息队列 / B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool**。08-19~20 批次中最重的 **unified-context-budget(统一 token 预算 + 关卡⑤硬卡)** 见 §2.5.14。
+
+**F1 消息队列·用户连发档(2026-08-25 落地)**
+- 输入侧 gate:流式期间编辑器解锁(群聊保持锁定),所有发送统一入队经路由临界区分流(忙/闲同路径,详见 §1.2 [3]);后端 per-session 内存队列 `agent/message_queue.rs`(FIFO / uuid 寻址 / 上限 20)
+- 续轮协议:队列驱动器在 turn 边界 drain 全队批量注入下一轮(每条独立 user APPEND,cache 断点不变量保持);新 `ChatEvent::TurnContinuation` 作前端续轮渲染边界;DriverSink 单 rid 跨内层轮保活(群聊 stop_reason 白名单的经典聊天泛化)
+- 单条操作:排队消息可撤销(×)/ 退回输入框(recall 返回原文回填 composer),按 uuid 寻址;视图水合 `list_queued_messages`(刷新 / LRU 驱逐 / PWA 第二端可见)
+- 取消矩阵:Stop / edit / resend / retry 清队返回 `clearedQueued` 计数驱动 toast;provider 错误 / 续轮触顶(50)队列**保留**,下次发送 FIFO 一起注入
+- 前置为 F2 定时任务 / F6 异步任务预留统一入口(生产者未实现);优先级分档(B 档)与 daemon 服务化(C 档)留后续
+- 完整设计:见 [ROADMAP.md §1.2 F1-A](./ROADMAP.md) 行;spec 见 [pattern-message-queue-driver](../.trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md)
 
 **B1 image multimodal(2026-08-16/17 落地)**
 - 模型能力:`models.supports_images` 新列(`INTEGER NOT NULL DEFAULT 0`,B1 backfill `add_models_column_if_missing`,见 `db/migrations/schema.rs:1012`),UI Settings 配置 capability 标志
