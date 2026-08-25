@@ -163,6 +163,25 @@ describe("httpTransport.invoke", () => {
     );
   });
 
+  // F1 消息队列(2026-08-25)回归锚 —— 三条 queue command 曾漏加
+  // CMD_TO_DOMAIN,浏览器/sidecar/remote 模式打开 session 即报
+  // `unknown cmd "list_queued_messages"`(Tauri IPC 模式测不出)。
+  it("maps the F1 queue IPCs to the message_queue domain", async () => {
+    const t = await loadTransport();
+    await t.invoke("list_queued_messages", { sessionId: "s1" });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/message_queue/list_queued_messages",
+    );
+    await t.invoke("remove_queued_message", { sessionId: "s1", id: "q1" });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/message_queue/remove_queued_message",
+    );
+    await t.invoke("recall_queued_message", { sessionId: "s1", id: "q1" });
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/message_queue/recall_queued_message",
+    );
+  });
+
   it("throws TransportError with status + parsed body on HTTP !ok", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,

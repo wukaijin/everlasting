@@ -398,9 +398,16 @@ trellis-check 报告问题;commit `002ac90` 修复。
   编译失败但错误不直观)。
 - **daemon route 调用**: `daemon::server::tests::*` 用 `#[tokio::test]` + axum
   的 `Router` 直接调用,验证路由 + handler 联动。
-- **前端 transport 映射**: 该项目缺自动化测试;最容易漏的就是 `CMD_TO_DOMAIN`
-  一行。**手动 e2e 验证**:sidecar 模式 / 浏览器模式 各跑一次新命令。
-  trellis-check 跨层 review 也覆盖此项。
+- **前端 transport 映射**: **已有结构化守卫**(2026-08-25 落地):
+  `app/src/transport/http.routes-sync.test.ts` 解析 daemon Rust 路由源码
+  (`routes/mod.rs` 的 nest 映射 + 各域文件的 `.route(..., post(...))`),
+  断言每条 POST 路由都在 `CMD_TO_DOMAIN` 中且 domain 一致 —— 新增命令漏
+  加映射会在 `pnpm test` 直接红,不再依赖手动 e2e。历史同类遗漏四次:
+  `update_session_metadata`(group-chat)、`save_attachment`(B1)、
+  `get_web_search_config`(F4)、F1 三条 queue 命令。GET 路由(附件下载、
+  session 快照、health、SSE)走 `<img>`/EventSource 直连,不进该表,守卫
+  天然排除。仍建议 sidecar/浏览器模式各跑一次新命令做 e2e(守卫不校验
+  handler 行为)。
 
 ### 7. Wrong vs Correct
 

@@ -48,7 +48,10 @@ import { getDeviceToken, clearDeviceToken } from "./auth";
 // POST `{daemonBase}/api/v1/{domain}/cmd`。新增 command 时同步加这里
 // (Rust 侧 routes 注册 + 此映射是两处需手工对齐的点)。
 // ---------------------------------------------------------------------------
-const CMD_TO_DOMAIN: Record<string, string> = {
+// 导出供 `http.routes-sync.test.ts` 守卫测试消费(该测试解析 daemon
+// Rust 路由源码,断言每条 POST 路由都在本表 —— 防"新增 daemon 命令漏
+// 加映射"第三次发生:save_attachment → get_web_search_config → F1 三条)。
+export const CMD_TO_DOMAIN: Record<string, string> = {
   // agent
   chat: "agent",
   // B1 (2026-08-17): paste-image upload — 缺这行时前端报
@@ -86,6 +89,12 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   read_memory_layers: "memory",
   update_autonomous_memory: "memory",
   update_autonomous_memory_status: "memory",
+  // F1 消息队列(2026-08-25):缺这三行时浏览器/sidecar/remote 模式
+  // 打开 session 即报 `unknown cmd "list_queued_messages"`(排队视图
+  // 刷新失败;Tauri IPC 模式不经过本表,侥幸测不出)。
+  list_queued_messages: "message_queue",
+  remove_queued_message: "message_queue",
+  recall_queued_message: "message_queue",
   // panel
   get_skill_body: "panel",
   list_panel_items: "panel",
