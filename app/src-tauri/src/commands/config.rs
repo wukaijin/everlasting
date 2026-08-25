@@ -263,3 +263,49 @@ pub async fn get_tunnel_status(
 ) -> Result<Option<TunnelStatusPayload>, AppCommandError> {
     get_tunnel_status_inner(&state).await
 }
+
+// ---------------------------------------------------------------------------
+// F4 web_search 配置(2026-08-25, task `08-25-web-search-tool` WP2)。
+// 双形态三层同 tunnel config 先例:`_inner` 业务 + `#[tauri::command]`
+// 包装 + daemon route。业务逻辑(三值校验 / key 三态 AEAD / masked)
+// 单源在 `tools::web_search`(set_config_state / get_config_state)。
+// ---------------------------------------------------------------------------
+
+/// 读 web_search 配置。明文 key 永不出后端——只有 masked。
+pub async fn get_web_search_config_inner(
+    state: &Arc<AppState>,
+) -> Result<crate::tools::web_search::WebSearchConfigPayload, AppCommandError> {
+    let payload = crate::tools::web_search::get_config_state(&state.db)
+        .await
+        .map_err(|e| anyhow::anyhow!("get_web_search_config failed: {}", e))?;
+    Ok(payload)
+}
+
+#[tauri::command]
+pub async fn get_web_search_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::tools::web_search::WebSearchConfigPayload, AppCommandError> {
+    get_web_search_config_inner(&state).await
+}
+
+/// 写 web_search 配置。参数为**扁平标量**(IPC 形状铁律,08-21 实证:
+/// 嵌套 struct 参数在 HTTP 模式静默 miss)。`tavily_api_key` 三态:
+/// `Some(非空)` 重加密落盘 / `Some("")` 清除(删行)/ `None` 不动。
+pub async fn set_web_search_config_inner(
+    state: &Arc<AppState>,
+    provider: String,
+    tavily_api_key: Option<String>,
+) -> Result<(), AppCommandError> {
+    crate::tools::web_search::set_config_state(&state.db, &provider, tavily_api_key.as_deref())
+        .await
+        .map_err(|msg| AppCommandError::new(ErrorCategory::InvalidRequest, msg))
+}
+
+#[tauri::command]
+pub async fn set_web_search_config(
+    state: State<'_, Arc<AppState>>,
+    provider: String,
+    tavily_api_key: Option<String>,
+) -> Result<(), AppCommandError> {
+    set_web_search_config_inner(&state, provider, tavily_api_key).await
+}

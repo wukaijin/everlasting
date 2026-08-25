@@ -229,6 +229,11 @@ pub fn run() {
             commands::config::get_remote_config,
             commands::config::set_remote_config,
             commands::config::get_tunnel_status,
+            // F4 web_search 配置(2026-08-25, task 08-25-web-search-tool):
+            // provider 三值 + tavily key 三态(Some(非空)/Some("")清除/
+            // None 不动);明文 key 不出后端,GET 只回 masked。
+            commands::config::get_web_search_config,
+            commands::config::set_web_search_config,
             // S2 配对码生成(经 tunnel WSS 调 remote 内部 RPC)
             commands::pairing::generate_pairing_code,
             // Providers / models / default model

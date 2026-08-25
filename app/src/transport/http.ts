@@ -69,6 +69,10 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   get_remote_config: "config",
   set_remote_config: "config",
   get_tunnel_status: "config",
+  // F4 web_search 配置(2026-08-25):缺这两行时浏览器/sidecar 模式报
+  // `unknown cmd "get_web_search_config"`(Tauri Full 逃生侥幸走 IPC)。
+  get_web_search_config: "config",
+  set_web_search_config: "config",
   // S2 配对码生成(新 domain pairing)
   generate_pairing_code: "pairing",
   // files

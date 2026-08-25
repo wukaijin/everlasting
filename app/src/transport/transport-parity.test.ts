@@ -290,6 +290,42 @@ describe("transport parity — invoke 成功路径", () => {
     expect(lastCall?.args).toHaveProperty("session_id", "s1");
     expect(lastCall?.args).not.toHaveProperty("sessionId");
   });
+
+  // F4 web_search 配置命令(2026-08-25):set 的 `tavilyApiKey` 顶层
+  // camelCase 必须被扳成 `tavily_api_key`(daemon 路由结构体按 snake
+  // 反序列化,Option 字段 miss 不报错、静默漂移——08-21 铁律实证)。
+  it("web_search 配置命令:两 transport resolve 一致 + tavilyApiKey 扳正为 snake", async () => {
+    backend.setInvokeResult("get_web_search_config", {
+      provider: "auto",
+      tavilyKeySet: false,
+      tavilyKeyMasked: null,
+    });
+    backend.setInvokeResult("set_web_search_config", null);
+
+    const tauri = await loadTauriTransport();
+    const http = await loadHttpTransport();
+
+    const [tauriGet, httpGet] = await Promise.all([
+      tauri.invoke("get_web_search_config"),
+      http.invoke("get_web_search_config"),
+    ]);
+    expect(tauriGet).toEqual(httpGet);
+    expect(httpGet).toEqual({
+      provider: "auto",
+      tavilyKeySet: false,
+      tavilyKeyMasked: null,
+    });
+
+    backend.invokeCalls.length = 0;
+    await http.invoke("set_web_search_config", {
+      provider: "tavily",
+      tavilyApiKey: "tvly-x",
+    });
+    const lastCall = backend.invokeCalls[backend.invokeCalls.length - 1];
+    expect(lastCall?.args).toHaveProperty("tavily_api_key", "tvly-x");
+    expect(lastCall?.args).not.toHaveProperty("tavilyApiKey");
+    expect(lastCall?.args).toHaveProperty("provider", "tavily");
+  });
 });
 
 // ---------------------------------------------------------------------------

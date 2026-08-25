@@ -40,6 +40,8 @@ pub(crate) mod tavily;
 
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::llm::types::ToolDef;
 use crate::tools::ToolContext;
 use ddg::DdgClient;
@@ -311,6 +313,106 @@ async fn stored_tavily_key(pool: &sqlx::SqlitePool) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// 配置 get / set helper(WP2;commands/config.rs 与 daemon route 共用)
+// ---------------------------------------------------------------------------
+
+/// `get_web_search_config` 返回体。**明文 key 永不回前端**——只有
+/// masked 形态(`tvly-****` + 后 4 位,同 providers key 展示策略;新面
+/// 不扩大旧债)。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchConfigPayload {
+    /// `auto | tavily | ddg`(存储值;未存/空 → `auto`)。
+    pub provider: String,
+    /// 密文行存在且非空(解密失败也算 set——行在,只是不可预览)。
+    pub tavily_key_set: bool,
+    /// masked key,仅当密文可解密时返回。
+    pub tavily_key_masked: Option<String>,
+}
+
+/// 读配置。DB 读失败向上抛(配置面板要真错误,不 fail-open——与
+/// execute 时选路的 best-effort 读法有意相反)。
+pub async fn get_config_state(
+    pool: &sqlx::SqlitePool,
+) -> Result<WebSearchConfigPayload, sqlx::Error> {
+    let provider = crate::db::get_config_value(pool, KEY_PROVIDER)
+        .await?
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "auto".to_string());
+    let enc = crate::db::get_config_value(pool, KEY_TAVILY_API_KEY)
+        .await?
+        .unwrap_or_default();
+    let tavily_key_set = !enc.is_empty();
+    // masked 需要明文前 5 + 后 4 字符:解密失败 → None(行仍在,
+    // tavily_key_set 照实为 true)。
+    let tavily_key_masked = if tavily_key_set {
+        crate::crypto::derive_master_key()
+            .ok()
+            .and_then(|mk| crate::crypto::decrypt(&mk, &enc, KEY_AAD).ok())
+            .map(|k| mask_key(&k))
+    } else {
+        None
+    };
+    Ok(WebSearchConfigPayload {
+        provider,
+        tavily_key_set,
+        tavily_key_masked,
+    })
+}
+
+/// `tvly-****` + 后 4 位(design §5)。短 key(≤9 字符)整体打码,
+/// 不泄露可拼接的片段。
+fn mask_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() < 10 {
+        return "****".to_string();
+    }
+    let head: String = chars[..5].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}****{tail}")
+}
+
+/// 写配置。provider 三值校验(错值拒绝,**不写库**);key 三态语义
+/// (review P1-2):
+/// - `Some(非空)` → AEAD 重加密落盘;
+/// - `Some("")` → **清除**(删 `app_config` 行——切 ddg 停用后残留
+///   密文不会在切回 auto 时静默复活 Tavily);
+/// - `None` → 不动(前端「留空 = 不改」)。
+pub async fn set_config_state(
+    pool: &sqlx::SqlitePool,
+    provider: &str,
+    tavily_api_key: Option<&str>,
+) -> Result<(), String> {
+    if !matches!(provider, "auto" | "tavily" | "ddg") {
+        return Err(format!(
+            "invalid provider '{provider}' (expected \"auto\", \"tavily\", or \"ddg\")"
+        ));
+    }
+    match tavily_api_key {
+        Some(k) if !k.trim().is_empty() => {
+            let master_key = crate::crypto::derive_master_key()
+                .map_err(|e| format!("derive master key failed: {e}"))?;
+            let enc = crate::crypto::encrypt(&master_key, k.trim(), KEY_AAD)
+                .map_err(|e| format!("encrypt tavily key failed: {e}"))?;
+            crate::db::set_config_value(pool, KEY_TAVILY_API_KEY, &enc)
+                .await
+                .map_err(|e| format!("store tavily key failed: {e}"))?;
+        }
+        Some(_) => {
+            // 空串 = 显式清除动作。
+            crate::db::delete_config_value(pool, KEY_TAVILY_API_KEY)
+                .await
+                .map_err(|e| format!("clear tavily key failed: {e}"))?;
+        }
+        None => { /* 不动 */ }
+    }
+    crate::db::set_config_value(pool, KEY_PROVIDER, provider)
+        .await
+        .map_err(|e| format!("store provider failed: {e}"))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 /// 重试环(design §7):所有尝试共用一个外层 `tokio::time::timeout`
 /// (整体预算,不为每次尝试另开)。只对 `Network(_)` 与 429/5xx 重试;
 /// 退避 `base * 2^n + jitter(0..base)`。
@@ -579,5 +681,75 @@ mod tests {
         assert!(!is_retryable(&SearchError::RateLimited));
         assert!(!is_retryable(&SearchError::Timeout));
         assert!(!is_retryable(&SearchError::Parse("0 results".into())));
+    }
+
+    // ---- 配置 get / set(AC4:key 三态 + masked + 三值校验)----
+
+    async fn cfg_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::migrations::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn set_provider_validates_three_values() {
+        let pool = cfg_pool().await;
+        for ok in ["auto", "tavily", "ddg"] {
+            set_config_state(&pool, ok, None).await.unwrap();
+        }
+        let err = set_config_state(&pool, "brave", None).await.unwrap_err();
+        assert!(err.contains("brave"), "{err}");
+        // 拒绝时不写库
+        let st = get_config_state(&pool).await.unwrap();
+        assert_eq!(st.provider, "ddg", "上次合法值保留");
+    }
+
+    #[tokio::test]
+    async fn key_three_state_semantics() {
+        let pool = cfg_pool().await;
+        // 初始:无 key、provider 默认 auto
+        let st = get_config_state(&pool).await.unwrap();
+        assert_eq!(st.provider, "auto");
+        assert!(!st.tavily_key_set);
+        assert!(st.tavily_key_masked.is_none());
+
+        // Some(非空):加密落盘 + masked 回显
+        set_config_state(&pool, "auto", Some("tvly-abcdEFGH1234"))
+            .await
+            .unwrap();
+        let st = get_config_state(&pool).await.unwrap();
+        assert!(st.tavily_key_set);
+        assert_eq!(st.tavily_key_masked.as_deref(), Some("tvly-****1234"));
+        // DB 中无明文(sqlite3 层面验证在 route 测试 / AC4 冒烟)
+        let raw = crate::db::get_config_value(&pool, KEY_TAVILY_API_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!raw.contains("tvly-abcd"), "密文不得含明文片段: {raw}");
+
+        // None:不动(key 仍在)
+        set_config_state(&pool, "ddg", None).await.unwrap();
+        let st = get_config_state(&pool).await.unwrap();
+        assert_eq!(st.provider, "ddg");
+        assert!(st.tavily_key_set, "None = 不动,不清 key");
+
+        // Some(""):显式清除 → 行删除
+        set_config_state(&pool, "ddg", Some("")).await.unwrap();
+        let st = get_config_state(&pool).await.unwrap();
+        assert!(!st.tavily_key_set);
+        assert!(st.tavily_key_masked.is_none());
+        assert!(
+            crate::db::get_config_value(&pool, KEY_TAVILY_API_KEY)
+                .await
+                .unwrap()
+                .is_none(),
+            "清除 = 删行,非空串占位"
+        );
+    }
+
+    #[test]
+    fn mask_key_shapes() {
+        assert_eq!(mask_key("tvly-abcdEFGH1234"), "tvly-****1234");
+        assert_eq!(mask_key("short"), "****"); // ≤9 字符整体打码
     }
 }
