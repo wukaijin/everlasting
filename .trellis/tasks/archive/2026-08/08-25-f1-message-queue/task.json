@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "归档时遗留(2026-08-25):review-glm 重审门槛 3(live 冒烟:重编 daemon → turn-smoke.sh --turns 2 → 手工长 turn 连发 3 条含撤销/Stop)+ curl REST 排队分支验证未执行,留 follow-up(评审原话:P0 类 bug 只有真机能兜底,P0=DriverSink 丢事件已修但仅单测覆盖);ARCHITECTURE/spec 深度沉淀待补(ROADMAP §1.2 F1-A 条目已标注)。代码已全提交,评审 Round 2/3 修复落地,vitest 1195 + cargo 1971 全过。",
+  "notes": "遗留收口(2026-08-25):review-glm 重审门槛 3(live 冒烟 + curl REST 排队分支)归档当日用户真机实测通过关闭;ARCHITECTURE/spec 深度沉淀待补(ROADMAP §1.2 F1-A 条目已标注)。代码已全提交,评审 Round 2/3 修复落地,vitest 1195 + cargo 1971 全过。",
   "meta": {}
 }

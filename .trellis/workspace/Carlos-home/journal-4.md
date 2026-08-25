@@ -812,7 +812,7 @@ web_search 工具从规划审查到全量开闸:enum dispatch 双后端(Tavily k
 
 ### Summary
 
-F1-A 用户连发档:流式期间解锁输入,发送进后端 per-session 队列(agent/message_queue.rs),驱动器 turn 边界批量注入续轮(DriverSink 单 rid 保活 + TurnContinuation 事件);R8 撤销/退回 + Stop 清队 toast。评审三轮收口:Round 2 修 P0 DriverSink 丢事件 + R8 uuid 寻址 + 水合;收尾再修 CMD_TO_DOMAIN 三命令映射缺失与 ChatInput 旧守卫致 AC1 不可达。归档时遗留 live 冒烟(评审门槛 3)留 follow-up。
+F1-A 用户连发档:流式期间解锁输入,发送进后端 per-session 队列(agent/message_queue.rs),驱动器 turn 边界批量注入续轮(DriverSink 单 rid 保活 + TurnContinuation 事件);R8 撤销/退回 + Stop 清队 toast。评审三轮收口:Round 2 修 P0 DriverSink 丢事件 + R8 uuid 寻址 + 水合;收尾再修 CMD_TO_DOMAIN 三命令映射缺失与 ChatInput 旧守卫致 AC1 不可达。live 冒烟 + curl REST 排队分支归档当日真机实测通过,重审门槛 3 关闭。
 
 ### Main Changes
 
@@ -822,7 +822,7 @@ F1-A 用户连发档全程落地并归档。**核心链路**:经典 session 流�
 
 ### 遗留(follow-up)
 
-- review-glm 重审门槛 3:live 冒烟(重编 daemon → turn-smoke --turns 2 → 手工长 turn 连发 3 条含撤销/Stop)+ curl REST 排队分支——P0 修复(DriverSink)目前仅单测覆盖,真机验证未做
+- ~~review-glm 重审门槛 3:live 冒烟 + curl REST 排队分支~~ ✅ 2026-08-25 归档当日用户真机实测通过(P0 DriverSink 修复真机兜底完成)
 - ARCHITECTURE/spec 深度沉淀(锁序文档化等评审亮点未进 spec)
 
 
@@ -848,4 +848,3 @@ F1-A 用户连发档全程落地并归档。**核心链路**:经典 session 流�
 ### Next Steps
 
 - F1-B/C 档(优先级分档、daemon 统一入口服务化)仍开放;下一功能候选 F5 PDF/Office 阅读(无依赖、B1 通道可复用)
-- F1 live 冒烟 + curl REST 排队分支(follow-up,P0 修复需真机兜底)

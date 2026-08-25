@@ -237,3 +237,9 @@ Round 2 的门槛 1/2/4 已修复并验证(工作区未提交,14 文件);门槛 
 全套验证:vitest 1195/1195(含 6 新增)、`vue-tsc --noEmit` 零错、`cargo test --lib` 1971 过/1 失败(`plan_mode` 满载 flaky,单独重跑通过,修复前同现象,预存)、clippy 仅 2 条预存警告(经干净 HEAD 对照确认非本次引入)、`cargo fmt --check` 干净。
 
 遗留:PR4 #16-18(live 冒烟 + curl REST 排队分支 + 文档归档)待执行——重审门槛 3 仍然有效。
+
+---
+
+# Round 4 — 收尾确认(2026-08-25 归档日,补记)
+
+重审门槛 3 关闭:live 冒烟 + curl REST 排队分支由用户(carlos)归档当日真机实测通过(P0 DriverSink 修复获得真机兜底);任务文档归档至 `archive/2026-08/08-25-f1-message-queue/`。F1-A 评审全链闭环。后续仅剩 ARCHITECTURE/spec 深度沉淀(锁序文档化等)留 follow-up。
