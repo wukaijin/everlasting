@@ -802,3 +802,50 @@ web_search 工具从规划审查到全量开闸:enum dispatch 双后端(Tavily k
 ### Status
 
 [OK] **Completed**
+
+
+## Session 111: F1 消息队列·用户连发档落地 + 三轮评审收口归档
+
+**Date**: 2026-08-25
+**Task**: F1 消息队列·用户连发档落地 + 三轮评审收口归档
+**Branch**: `main`
+
+### Summary
+
+F1-A 用户连发档:流式期间解锁输入,发送进后端 per-session 队列(agent/message_queue.rs),驱动器 turn 边界批量注入续轮(DriverSink 单 rid 保活 + TurnContinuation 事件);R8 撤销/退回 + Stop 清队 toast。评审三轮收口:Round 2 修 P0 DriverSink 丢事件 + R8 uuid 寻址 + 水合;收尾再修 CMD_TO_DOMAIN 三命令映射缺失与 ChatInput 旧守卫致 AC1 不可达。归档时遗留 live 冒烟(评审门槛 3)留 follow-up。
+
+### Main Changes
+
+### Summary
+
+F1-A 用户连发档全程落地并归档。**核心链路**:经典 session 流式期间解锁输入(原编辑器整体只读),发送进后端 per-session 内存队列(`agent/message_queue.rs`,FIFO/uuid 寻址/上限 20),`run_queue_driver` 驱动器在 turn 边界 drain 全队批量注入下一轮(每条独立 user message APPEND,cache 断点不变量保持);单 rid 跨内层轮保活靠 `DriverSink` 吞中间 Done 真退出补发 + 新 `ChatEvent::TurnContinuation` 续轮渲染边界;guard 双抑制(`skip_cancellations` 尾参,70 处调用点机械补 false)驱动器自持 slot/token 生命周期。**配套**:R8 单条撤销/退回输入框三 IPC + 视图水合;Stop/edit/resend/retry 清队返回 `clearedQueued` 驱动 toast。**评审三轮**:review-glm 两 P1 实锤采纳(闲也入队 + streamEvents 渲染缺口),review-d4f 误读驳回;Round 2 修 P0 DriverSink 丢事件(Error 分支自转发双发)+ R8 占位按 uuid 寻址 + 水合可见性;Round 3 全套验证后同日又抓两收尾 bug——transport 层 F1 三命令漏 CMD_TO_DOMAIN 映射(开 session 即 unknown cmd)与 ChatInput 两道旧守卫吞掉流式发送(AC1 物理不可达),均已修复。
+
+### 遗留(follow-up)
+
+- review-glm 重审门槛 3:live 冒烟(重编 daemon → turn-smoke --turns 2 → 手工长 turn 连发 3 条含撤销/Stop)+ curl REST 排队分支——P0 修复(DriverSink)目前仅单测覆盖,真机验证未做
+- ARCHITECTURE/spec 深度沉淀(锁序文档化等评审亮点未进 spec)
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `92a480b` | (see git log) |
+| `f5fc9ba` | (see git log) |
+| `d687273` | (see git log) |
+| `48471e8` | (see git log) |
+
+### Testing
+
+- [OK] vitest 1195/1195(含 6 新增)+ vue-tsc --noEmit 零错
+- [OK] cargo test --lib 1971 过 / 1 预存 flaky(plan_mode 满载,复跑过,stash 对照确认预存)
+- [OK] clippy 零新增(干净 HEAD 对照)+ cargo fmt 干净
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- F1-B/C 档(优先级分档、daemon 统一入口服务化)仍开放;下一功能候选 F5 PDF/Office 阅读(无依赖、B1 通道可复用)
+- F1 live 冒烟 + curl REST 排队分支(follow-up,P0 修复需真机兜底)
