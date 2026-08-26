@@ -3,7 +3,7 @@
   "name": "f5-doc-reading",
   "title": "F5 PDF/Office 文档阅读(@文件原生注入)",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "Carlos-home",
   "assignee": "Carlos-home",
   "createdAt": "2026-08-26",
-  "completedAt": null,
+  "completedAt": "2026-08-26",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "2026-08-26 用户真机验证 F5 时发现 B2 遗留 bug(非 F5 链路,F5 本体验证通过):@ 面板对同项目内新放入的文件不可见 —— typhoon 项目先放的 docx 能 @ 到,后 copy 进项目根的 pdf 永远 @ 不到。根因:前端两层缓存只进不出 —— chatInputCodeMirror.ts 的 shallowLoaded 标志(面板重开跳过重拉,closeFilePalette 注释明确保留缓存)+ ChatInput.vue 模块级 fileCache(按 projectId);唯一失效途径 = 切项目往返或整窗重载。后端 files.rs 头注释声称『frontend re-fetches on each @ open anyway』与前端实际行为不符。绕过:切项目往返 / Ctrl+R。修复方向:面板打开即重拉浅层 walk(3 层小 walk 毫秒级,保留 in-flight 去重即可),或 fileCache 加 TTL;顺带对齐后端错误注释。‖ 2026-08-26 03:25 P0 级真机缺陷(PDF 验证踩中):用户真实中文 PDF(WPS/Word 导出,含非嵌入 STSong-Light 字体 + UniGB-UCS2-H 编码)触发 pdf-extract 0.12 panic(unsupported encoding,pdf-extract lib.rs:986);放大器:workspace [profile.release] panic=\"abort\" 使 doc_extract.rs 的 catch_unwind 兜底完全失效(abort 模式不 unwind)→ panic 直接杀死整个 daemon 进程,『turn 不死』硬约束被击穿。现象链:seq=2 user 消息 metadata 空(注入 manifest 未落库 → 前端无注入提示)、无 LLM 请求发出、SSE 无 Done/Error → 前端流永久挂起。排查注意:inject_at_tokens 每轮重展开全部历史 user 消息的 @token,日志会重复打印早轮注入行(docx chars=7654 重现),勿误读。已恢复:daemon.sh bg 重启(03:35,health OK)。修复方向:① pdf-extract 补 UniGB-UCS2-H CMap 支持(fork/patch 改返回 Err)或按 D4 预案升级 pdfium-render(连带解锁扫描件渲染);② panic 隔离:release profile panic=abort 改 unwind,或提取挪子进程;③ spike 教训:Chromium 打印样本不含非嵌入 CJK 字体形态,后续 spike 需补 WPS/Word 真实导出样本。‖ UX 缺口(2026-08-26 验证发现):@docx/@pdf 在输入框与发送后消息里『看起来是纯文本』——① 输入框:onFileSelect 纯文本拼接插入 @path,CodeMirror 无 Decoration 层(chatInputCodeMirror.ts 零 Decoration),选中后与手打文字无法区分;② 消息:气泡内 @token 无高亮,唯一标识是气泡下方 FileInjectionsHint 小字行(xt/次要色/mono,B2 PR3 有意低调),对比图片通道的 MessageImages 缩略图缺少同级视觉元素。数据链路本身完整(live file_injections 事件 + rehydrate 双路径),docx 轮 manifest 已落库、重载后 hint 必显示。改进方向:输入框 @token chip 化(ViewPlugin+Decoration.mark)、气泡内 token 高亮或附件卡片化、hint 行视觉升级。‖ 三问题(含 @面板缓存 bug)已立 follow-up 任务 08-26-f5-verify-followups(P1)收口,PRD 含完整诊断链与 AC1-AC6。",
   "meta": {}
 }

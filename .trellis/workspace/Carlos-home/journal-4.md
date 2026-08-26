@@ -893,3 +893,39 @@ F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链
 ### Next Steps
 
 - follow-up:xlsx/pptx 提取、pdfium 扫描件渲染、document skill
+- **B2 @面板缓存 bug**(2026-08-26 F5 真机验证发现,记入 task notes):同项目内新放入的文件 @ 不到 —— 先放的 docx 能找到,后 copy 进项目根的 pdf 永远不出现。根因两层缓存只进不出:`chatInputCodeMirror.ts` 的 shallowLoaded(重开面板跳过重拉)+ `ChatInput.vue` 模块级 fileCache(按 projectId),仅切项目往返/重载窗口才失效;`files.rs` 头注释「frontend re-fetches on each @ open」与实际行为不符。绕过:切项目往返或 Ctrl+R;修复方向:面板打开即重拉浅层 walk(3 层毫秒级,保留 in-flight 去重)或 fileCache 加 TTL,并同步修正后端注释。
+- **P0:pdf-extract panic × panic=abort 击穿 daemon**(2026-08-26 03:25 真机验证 xxx.pdf 踩中,详见 task notes):非嵌入 STSong-Light(UniGB-UCS2-H,WPS/Word 中文导出典型形态)触发 pdf-extract 0.12 panic;release profile `panic="abort"` 令 doc_extract 的 catch_unwind 失效 → daemon 整进程 abort,无注入提示、无 LLM 请求、SSE 无 Done → 前端流永久挂起。已重启 daemon 恢复(03:35)。修复方向:patch pdf-extract 补 CMap / 按D4 预案升级 pdfium-render / panic=unwind 或子进程隔离;spike 样本需补 WPS/Word 真实导出形态。
+- **UX 缺口:@文档引用视觉上像纯文本**(2026-08-26 验证发现,详见 task notes):输入框 onFileSelect 纯文本插入、CodeMirror 无 Decoration;消息气泡内 @token 无高亮,唯一标识是小号次要色的 hint 行(图片通道有缩略图,文档通道没有同级视觉元素)。数据链路完整非 bug,是 B2/F5 的设计缺口;方向:@token chip 化 + 附件卡片。
+- 上述三问题(含 @面板缓存 bug)已立 follow-up 任务 **08-26-f5-verify-followups**(P1,PRD 含完整诊断链 + AC1-AC6,三问题独立成 PR、问题 1 优先)。
+- **三问题当日修复完毕**(主线派发三个子代理串行实现,主线终验):① P0 = pdf-extract vendor patch(UCS2 家族码值即 Unicode 两层修:Name arm 收编 + decode_char identity 回退;未知编码降级不 panic)+ release 删 panic=abort(catch_unwind 复活,二进制 +1.52MiB);② P1 = @面板两层缓存拆除(shallowLoaded→in-flight promise + 代数守卫,fileCache 移除,system_root 例外保留);③ P2 = 输入框 chip(复用既有 cm-token-file 装饰层升级 CSS,顺修 `/` 路径正则)+ 气泡 @token 行内 code 包裹着色。终验:cargo 1983(flaky 复跑过)+ vitest 1219 + vue-tsc/build/clippy/fmt 全绿;**live 冒烟:真实 xxx.pdf(03:25 杀死 daemon 的同一输入)at_files_token=13862、模型正常回复、daemon 存活**。未 commit,改动在工作区。
+
+## Session 113: F5 验证三问题修复收口 + 双任务归档
+
+**Date**: 2026-08-26
+**Task**: 08-26-f5-verify-followups(+ 08-26-f5-doc-reading 归档)
+**Branch**: `main`
+
+### Summary
+
+三问题经三个子代理串行修复 + 主线终验全绿后,用户 GUI 实测又回捞一个 CJK 正则缺口,补修后双双归档(F5 本体 + follow-up)。vendored 上游 29 条预存警告以 crate 级 `[lints]` 声明式压制(path 依赖被完整 lint 而 registry 版被 --cap-lints 静默),clippy 信噪比恢复。
+
+### Main Changes
+
+- **P0**:pdf-extract 0.12 vendor 进 `vendor/pdf-extract/`(workspace exclude + path 依赖):UCS2 家族(Uni{GB,CNS,JIS,KS}-UCS2-{H,V},码值即 UCS-2 码位)两层修——Name arm 收编 + `decode_char` identity 回退(只修 panic 的话无 ToUnicode 字体会静默丢字);未知编码/兄弟 panic 全降级;release 删 `panic="abort"`(catch_unwind 复活,二进制 +1.52MiB/+9.2%)。
+- **P1**:面板两层缓存拆除:`shallowLoaded` → in-flight promise + 代数守卫(切项目丢弃迟到写回),模块级 `fileCache` 移除,`@` 打开即重拉;`@/` system_root 保留会话缓存;`files.rs` 错误注释对齐。
+- **P2**:输入框 chip(既有 `cm-token-file` 装饰层升级 CSS,顺修 `/` 路径正则)+ 气泡 @token 行内 code 包裹 + `file-ref` 着色。**CJK 回捞(用户实测)**:token 正则共三份且全 ASCII(`\w` 不匹配中文)→ pdf 有色、中文 docx 无色;抽 `FILE_TOKEN_BODY`(`\p{L}\p{N}`+`u`)单一常量三处共用,注释钉死「前端字符集不得窄于后端 `@([^\s@]+)`」。
+- vendored `[lints]` 压制(unused_variables/dead_code/non_upper_case_globals/hidden_glob_reexports/mismatched_lifetime_syntaxes/too_many_arguments)。
+
+### Testing
+
+- [OK] cargo --lib 1983(1 失败为 tunnel 时序 flaky,隔离复跑过,与改动无交集);doc_extract 9 + at_file 35;clippy 自有代码零警告;fmt 全绿
+- [OK] vitest 1221/1221(新增:doc_extract 3、面板重拉 5、chip/高亮 13、CJK 2)+ vue-tsc 零错 + build 过
+- [OK] live:真实 xxx.pdf(03:25 杀死 daemon 的同一输入)经 daemon 实跑 at_files_token=13862、模型正常回复、daemon 存活;CJK 补修后 dist 重建,用户 GUI 确认
+
+### Status
+
+[OK] **Completed**(08-26-f5-doc-reading + 08-26-f5-verify-followups 双归档)
+
+### Next Steps
+
+- F5 follow-up 档仍开放:xlsx/pptx 提取、pdfium 渲染扫描件(老编码家族 GB-EUC/B5pc 等届时连带覆盖)、正式 document skill
