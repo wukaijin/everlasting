@@ -102,4 +102,12 @@
 - **决策 — 提取是注入的一种形态**:doc_extract 纯函数模块(bytes 进文本出,零 IO),at_file 在 Degraded 兜底前分流;成功走与 Text 注入同构的 span 通道(`<doc>` marker + D10 同请求 span + at_files_token),失败落占位 turn 不死(B1 fail-open 同构)。三级 cap:源 20 MiB fail-fast → 扫描件 <32 字符 → 文本 150k 字符保头截断(≈CJK 50k tok)。
 - **决策 — wire 字段名避开 serde tag**:`InjectionAction` 内部 tag 即 `kind`,`Extracted` 变体的来源字段必须叫 `format`(撞名编译失败);TS 镜像同步。页数/段落数/原文规模只进 LLM marker 不进 wire。
 - **偏差记录**:① quick-xml 0.42 实体是独立 `GeneralRef` 事件(payload=实体名),不显式映射预定义五实体 + 字符引用会静默丢字("A & B" → "A B");空段 `<w:p/>` 走 Empty 事件同样要计数;② zip 默认 features 拉 zstd-sys(C 编译依赖)——收紧 `default-features=false, features=["deflate"]`;③ cargo init 在 workspace 目录内建 spike 项目会把自己挂进根 workspace members(污染 lock + 解析失败),spike 工程须仓库外或用后清理 members;④ `daemon.sh start` 是前台命令(后台用 `bg`),链式命令里误用 start 卡死后续冒烟;⑤ pdf-extract 有 unwrap 路径,catch_unwind 兜底为硬约束。
-- 任务:`08-26-f5-doc-reading`。spec:agent-loop-architecture "pattern-doc-extraction"。follow-up:xlsx/pptx 提取(管线已通,表格形态需单独设计)、pdfium 渲染扫描件走 B1 通道、正式 document skill(B4 体系)。
+- 任务:`08-26-f5-doc-reading`。spec:agent-loop-architecture "pattern-doc-extraction"。follow-up:**xlsx/xlsm 提取已落地(同日,`08-26-f5-xlsx-extraction`,calamine 0.36 + 每 sheet CSV 块形态;pptx 用户裁定不做)**、pdfium 渲染扫描件走 B1 通道、正式 document skill(B4 体系)。
+
+### 2026-08-26 — F5 follow-up:xlsx/xlsm 原生提取(CSV 形态)
+
+- **Context**:F5 PRD D1 明确「xlsx 表格→文本需单独形态设计」后增量。用户三选一拍板:**每 sheet 一段 CSV 块**(RFC4180 转义,sheet 标题行带维度;markdown 表格 token 翻倍被否,行记录式稠密表更啰嗦被否)。**pptx 用户裁定不做**。
+- **决策 — calamine 0.36 而非手搓 quick-xml**:xlsx 比 docx 多三层复杂度(workbook rels 解析/sharedStrings 间接寻址/序列日期 + numFmt 样式系统),手搓 bug 面大。依赖树核验:calamine 的 zip 同为 default-features=false + deflate-only(与项目契约一致,zstd-sys 不回归),chrono feature 启用后零新增 crate(chrono 已是直接依赖)。
+- **决策 — 单元格渲染契约(D5)**:字符串原样 / 数字最短表示 / bool true·false / 错误值保留 `#REF!` 形态 / 公式取缓存值 / 序列日期 chrono 转 ISO(`%Y-%m-%d`,非零点补时间)。xlsx 路径**不做 normalize_whitespace**(压空行/trim 破坏 CSV 行语义);全 sheet 无数据 → Err 走 Degraded 兜底。marker `sheets="N"`(units=sheet 数);`.xlsm` 复用 xlsx 通道,`.xls`(OLE2)/`.ods` 保持占位降级。
+- 坑:测试断言 needle 手写 RFC4180 转义多打一个引号——实现输出正确、断言写错(转义后的期望串应逐字符对照生成,别手抄)。
+- 任务:`08-26-f5-xlsx-extraction`。spec:pattern-doc-extraction(硬约束 +7 号 xlsx 节)。
