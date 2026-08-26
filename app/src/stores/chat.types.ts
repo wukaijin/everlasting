@@ -217,14 +217,15 @@ export type InjectionRecord =
       kind: "degraded";
       file_kind: "image" | "pdf" | "office" | "binary";
     }
-  | {
+    | {
       /** F5 (2026-08-26): PDF/docx 文本提取成功,提取文本按文本
-       *  span 注入。Wire shape mirrors the Rust `InjectionAction::
-       *  Extracted`(`format` 字段名避开 serde tag `kind`);
-       *  `chars` 为注入字符数(截断后);页数/段落数与原文规模
-       *  只进 LLM marker,不进 wire。 */
+       *  span 注入(xlsx 走 F5 follow-up 同链路)。Wire shape
+       *  mirrors the Rust `InjectionAction::Extracted`(`format`
+       *  字段名避开 serde tag `kind`);`chars` 为注入字符数(截断
+       *  后);页数/段落/sheet 数与原文规模只进 LLM marker,不进
+       *  wire。 */
       kind: "extracted";
-      format: "pdf" | "docx";
+      format: "pdf" | "docx" | "xlsx";
       chars: number;
       truncated: boolean;
     }

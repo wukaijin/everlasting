@@ -24,17 +24,26 @@
 //! CMap 名按「码值即 UCS-2 码位」零资源解码;② 未知编码家族(GB-EUC/
 //! B5pc 等)与畸形 ToUnicode 降级为跳过该字体,不再 panic。升级上游版本
 //! 时需重放 patch,清单见 vendor/pdf-extract/Cargo.toml 头注释。
+//!
+//! F5 follow-up(2026-08-26,task 08-26-f5-xlsx-extraction):xlsx 原生
+//! 提取(.xlsm 同管线;.xls OLE2/.ods/pptx 保持占位降级)。库选 calamine
+//! (纯 Rust;其 zip 依赖同为 deflate-only,特征并集不变)。表格→文本
+//! 形态(prd D3,用户拍板):每 sheet 一段 CSV 块,RFC4180 转义,sheet
+//! 标题行带维度;空 sheet 输出 `(空)`。单元格渲染(D5):字符串原样,
+//! 数字最短表示,布尔 true/false,错误值保留 `#REF!` 形态,公式取缓存
+//! 值(calamine 默认),序列日期经 chrono 转 ISO(纯日期不带时间)。
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
-/// 提取来源类型。wire snake_case(`"pdf"` / `"docx"`),进
+/// 提取来源类型。wire snake_case(`"pdf"` / `"docx"` / `"xlsx"`),进
 /// `InjectionAction::Extracted` 的前端判别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractKind {
     Pdf,
     Docx,
+    Xlsx,
 }
 
 /// 提取结果。`units` 不进 wire(前端只显示字符数),只进 LLM marker:
@@ -69,6 +78,7 @@ pub fn try_extract(kind: ExtractKind, bytes: &[u8]) -> Result<ExtractedText, Str
     match kind {
         ExtractKind::Pdf => extract_pdf(bytes),
         ExtractKind::Docx => extract_docx(bytes),
+        ExtractKind::Xlsx => extract_xlsx(bytes),
     }
 }
 
@@ -188,6 +198,99 @@ fn extract_docx(bytes: &[u8]) -> Result<ExtractedText, String> {
     Ok(cap(text, paras))
 }
 
+fn extract_xlsx(bytes: &[u8]) -> Result<ExtractedText, String> {
+    if !bytes.starts_with(b"PK") {
+        return Err("missing zip (PK) magic".into());
+    }
+    // 与 pdf 路径同姿态:第三方解析器对畸形输入的鲁棒性未经审计,
+    // catch_unwind 兜底(纯计算,无 IO 状态可污染;依赖 release profile
+    // 保持 panic=unwind,见 extract_pdf 注释)。
+    let (text, units) = std::panic::catch_unwind(|| render_xlsx_sheets(bytes))
+        .map_err(|_| "xlsx parser panicked".to_string())??;
+    Ok(cap(text, units))
+}
+
+/// calamine 解析 + CSV 渲染主体(供 catch_unwind 包裹)。返回
+/// (文本, sheet 数)。
+fn render_xlsx_sheets(bytes: &[u8]) -> Result<(String, usize), String> {
+    use calamine::Reader as _;
+    let mut book =
+        calamine::Xlsx::new(std::io::Cursor::new(bytes)).map_err(|e| format!("open xlsx: {e}"))?;
+    let sheets = book.worksheets();
+    let units = sheets.len();
+    if units == 0 {
+        return Err("xlsx workbook has no sheets".into());
+    }
+    let mut out = String::new();
+    let mut any_data = false;
+    for (name, range) in sheets {
+        let (h, w) = (range.height(), range.width());
+        if h == 0 || w == 0 {
+            out.push_str(&format!("## {name} (空)\n"));
+            continue;
+        }
+        any_data = true;
+        out.push_str(&format!("## {name} ({h}行×{w}列)\n"));
+        for row in range.rows() {
+            // 去尾随空单元格:稠密网格按 width 补齐,尾随 Empty 是
+            // 维度噪音,不产生一串逗号。
+            let mut end = row.len();
+            while end > 0 && matches!(row[end - 1], calamine::Data::Empty) {
+                end -= 1;
+            }
+            let line = row[..end]
+                .iter()
+                .map(render_cell)
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    if !any_data {
+        return Err("xlsx has no cell data".into());
+    }
+    Ok((out, units))
+}
+
+/// 单元格 → CSV 字段(prd D5)。注意 xlsx 路径不做 normalize_whitespace
+/// —— 那会压并空行、trim 行尾,破坏 CSV 行语义。
+fn render_cell(d: &calamine::Data) -> String {
+    use calamine::DataType as _;
+    let raw = match d {
+        calamine::Data::Empty => String::new(),
+        calamine::Data::Int(v) => v.to_string(),
+        calamine::Data::Float(v) if v.is_finite() => v.to_string(),
+        calamine::Data::Float(_) => String::new(),
+        calamine::Data::String(s) => s.clone(),
+        calamine::Data::Bool(b) => b.to_string(),
+        calamine::Data::DateTimeIso(s) | calamine::Data::DurationIso(s) => s.clone(),
+        calamine::Data::Error(e) => e.to_string(),
+        // 序列日期时间:chrono feature 的 as_datetime 统一换算(1900/
+        // 1904 日期系统 calamine 内部已归一);换算失败退回原始序列值。
+        d => match d.as_datetime() {
+            Some(ndt) => {
+                if ndt.time() == chrono::NaiveTime::MIN {
+                    ndt.format("%Y-%m-%d").to_string()
+                } else {
+                    ndt.format("%Y-%m-%d %H:%M:%S").to_string()
+                }
+            }
+            None => d.as_f64().map(|v| v.to_string()).unwrap_or_default(),
+        },
+    };
+    csv_escape(&raw)
+}
+
+/// RFC4180:含逗号/引号/换行的字段加引号,内部引号翻倍。
+fn csv_escape(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
 /// 头部截断到 [`MAX_EXTRACT_CHARS`],记录原文规模。
 fn cap(text: String, units: usize) -> ExtractedText {
     let orig_chars = text.chars().count();
@@ -246,6 +349,135 @@ pub(crate) mod test_fixtures {
     /// 必须存活,F2 Type0 /Encoding /GB-EUC-H(老家族,code ≠ Unicode,
     /// 无 CMap 资源不可解)的字形被跳过,提取整体不 panic。
     pub const MIXED_GB_EUC_PDF: &[u8] = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 138 >>\nstream\nBT /F1 12 Tf 72 720 Td (Fallback ASCII text survives when the CJK font is skipped entirely.) Tj ET\nBT /F2 12 Tf 72 690 Td <B4F3C8FD> Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n6 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /SimSun /Encoding /GB-EUC-H /DescendantFonts [7 0 R] >>\nendobj\n7 0 obj\n<< /Type /Font /Subtype /CIDFontType0 /BaseFont /SimSun /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 8 0 R /DW 1000 >>\nendobj\n8 0 obj\n<< /Type /FontDescriptor /FontName /SimSun /Flags 4 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>\nendobj\nxref\n0 9\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000251 00000 n \n0000000440 00000 n \n0000000510 00000 n \n0000000622 00000 n \n0000000796 00000 n \ntrailer\n<< /Size 9 /Root 1 0 R >>\nstartxref\n962\n%%EOF\n";
+
+    /// F5 follow-up(08-26-f5-xlsx-extraction):测试内构造最小合法
+    /// xlsx(zip writer 手写 OOXML 部件,需过 calamine 解析)。`sheets`
+    /// = (sheet 名, `<sheetData>` 内部行 XML);`shared_strings` 供
+    /// `t="s"` 单元格按下标引用;styles 固定带 numFmtId=164 yyyy-mm-dd
+    /// 自定义格式(日期用例以 s="1" 引用)。at_file 集成测试同用。
+    pub(crate) fn build_xlsx(sheets: &[(&str, &str)], shared_strings: &[&str]) -> Vec<u8> {
+        const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        const NS_PKG_REL: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            fn put<W: std::io::Write + std::io::Seek>(
+                w: &mut zip::ZipWriter<W>,
+                name: &str,
+                body: &str,
+            ) {
+                w.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                std::io::Write::write_all(w, body.as_bytes()).unwrap();
+            }
+
+            // [Content_Types].xml:calamine 宽容,但保持真实包形态。
+            let mut ct = String::from(
+                "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+                 <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+                 <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+                 <Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>",
+            );
+            for i in 1..=sheets.len() {
+                ct.push_str(&format!(
+                    "<Override PartName=\"/xl/worksheets/sheet{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+                ));
+            }
+            ct.push_str("</Types>");
+            put(&mut w, "[Content_Types].xml", &ct);
+
+            put(
+                &mut w,
+                "_rels/.rels",
+                &format!(
+                    "<Relationships xmlns=\"{NS_PKG_REL}\">\
+                     <Relationship Id=\"rId1\" Type=\"{NS_REL}/officeDocument\" Target=\"xl/workbook.xml\"/>\
+                     </Relationships>"
+                ),
+            );
+
+            // workbook.xml:sheet 声明按序 r:id=rId{i}(sheet 顺序即此序)。
+            let mut decls = String::new();
+            let mut rels = format!(
+                "<Relationships xmlns=\"{NS_PKG_REL}\">\
+                 <Relationship Id=\"rIdStyles\" Type=\"{NS_REL}/styles\" Target=\"styles.xml\"/>"
+            );
+            if !shared_strings.is_empty() {
+                rels.push_str(&format!(
+                    "<Relationship Id=\"rIdSst\" Type=\"{NS_REL}/sharedStrings\" Target=\"sharedStrings.xml\"/>"
+                ));
+            }
+            for (i, (name, _)) in sheets.iter().enumerate() {
+                decls.push_str(&format!(
+                    "<sheet name=\"{name}\" sheetId=\"{}\" r:id=\"rId{}\"/>",
+                    i + 1,
+                    i + 1
+                ));
+                rels.push_str(&format!(
+                    "<Relationship Id=\"rId{}\" Type=\"{NS_REL}/worksheet\" Target=\"worksheets/sheet{}.xml\"/>",
+                    i + 1,
+                    i + 1
+                ));
+            }
+            rels.push_str("</Relationships>");
+            put(
+                &mut w,
+                "xl/workbook.xml",
+                &format!(
+                    "<?xml version=\"1.0\"?><workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">\
+                     <sheets>{decls}</sheets></workbook>"
+                ),
+            );
+            put(&mut w, "xl/_rels/workbook.xml.rels", &rels);
+
+            if !shared_strings.is_empty() {
+                let items = shared_strings
+                    .iter()
+                    .map(|s| format!("<si><t>{s}</t></si>"))
+                    .collect::<String>();
+                put(
+                    &mut w,
+                    "xl/sharedStrings.xml",
+                    &format!(
+                        "<?xml version=\"1.0\"?><sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">{items}</sst>",
+                        shared_strings.len(),
+                        shared_strings.len()
+                    ),
+                );
+            }
+
+            // styles:cellXfs[1] 挂 numFmtId=164 yyyy-mm-dd(s="1" 引用)。
+            put(
+                &mut w,
+                "xl/styles.xml",
+                &format!(
+                    "<?xml version=\"1.0\"?><styleSheet xmlns=\"{NS_MAIN}\">\
+                     <numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"yyyy\\-mm\\-dd\"/></numFmts>\
+                     <fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>\
+                     <fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>\
+                     <borders count=\"1\"><border/></borders>\
+                     <cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\
+                     <cellXfs count=\"2\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>\
+                     <xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/></cellXfs>\
+                     </styleSheet>"
+                ),
+            );
+
+            for (i, (_, body)) in sheets.iter().enumerate() {
+                put(
+                    &mut w,
+                    &format!("xl/worksheets/sheet{}.xml", i + 1),
+                    &format!(
+                        "<?xml version=\"1.0\"?><worksheet xmlns=\"{NS_MAIN}\">\
+                         <sheetData>{body}</sheetData></worksheet>"
+                    ),
+                );
+            }
+            w.finish().unwrap();
+        }
+        buf.into_inner()
+    }
 }
 
 #[cfg(test)]
@@ -347,7 +579,6 @@ mod tests {
             ex.orig_chars, cjk, ex.units, ex.truncated
         );
     }
-
     #[test]
     fn pdf_corrupt_and_wrong_magic_fail_soft() {
         assert!(try_extract(ExtractKind::Pdf, b"not a pdf at all").is_err());
@@ -392,11 +623,105 @@ mod tests {
         );
     }
 
+    // --- F5 follow-up (2026-08-26): xlsx 原生提取 ---
+
+    #[test]
+    fn xlsx_cjk_shared_strings_and_csv_escape() {
+        let sst = ["月份", "备注,\"引\"注"];
+        let rows = concat!(
+            "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\"><v>12000</v></c><c r=\"B2\"><v>-0.05</v></c><c r=\"C2\" t=\"b\"><v>1</v></c></row>"
+        );
+        let bytes = test_fixtures::build_xlsx(&[("Sheet1", rows)], &sst);
+        let ex = try_extract(ExtractKind::Xlsx, &bytes).unwrap();
+        assert!(
+            ex.text.starts_with("## Sheet1 (2行×3列)\n"),
+            "sheet header with dims: {:?}",
+            ex.text
+        );
+        assert!(
+            ex.text.contains("月份,\"备注,\"\"引\"\"注\"\n"),
+            "RFC4180 逗号+引号转义: {:?}",
+            ex.text
+        );
+        assert!(
+            ex.text.contains("12000,-0.05,true"),
+            "数字最短表示 + bool: {:?}",
+            ex.text
+        );
+        assert_eq!(ex.units, 1, "units = sheet 数");
+    }
+
+    #[test]
+    fn xlsx_multi_sheet_order_and_empty_sheet() {
+        let rows = "<row r=\"1\"><c r=\"A1\"><v>7</v></c></row>";
+        let bytes = test_fixtures::build_xlsx(&[("数据", rows), ("空表", "")], &[]);
+        let ex = try_extract(ExtractKind::Xlsx, &bytes).unwrap();
+        let data_pos = ex.text.find("## 数据 (1行×1列)").expect("sheet 1 header");
+        let empty_pos = ex.text.find("## 空表 (空)").expect("empty sheet marker");
+        assert!(data_pos < empty_pos, "sheet 顺序保持: {:?}", ex.text);
+        assert_eq!(ex.units, 2);
+    }
+
+    /// 序列日期 → ISO(prd D5):numFmt yyyy-mm-dd 样式(s="1")下的
+    /// 整数序列 = 纯日期;带小数 = 补时间部分。44927 = 2023-01-01。
+    #[test]
+    fn xlsx_date_serial_to_iso() {
+        let rows = concat!(
+            "<row r=\"1\">",
+            "<c r=\"A1\" s=\"1\"><v>44927</v></c>",
+            "<c r=\"B1\" s=\"1\"><v>44927.5</v></c>",
+            "</row>"
+        );
+        let bytes = test_fixtures::build_xlsx(&[("日期", rows)], &[]);
+        let ex = try_extract(ExtractKind::Xlsx, &bytes).unwrap();
+        assert!(
+            ex.text.contains("2023-01-01,2023-01-01 12:00:00"),
+            "date/datetime ISO rendering: {:?}",
+            ex.text
+        );
+    }
+
+    #[test]
+    fn xlsx_inline_str_and_error_cells() {
+        let rows = concat!(
+            "<row r=\"1\">",
+            "<c r=\"A1\" t=\"inlineStr\"><is><t>行内串</t></is></c>",
+            "<c r=\"B1\" t=\"e\"><v>#REF!</v></c>",
+            "</row>"
+        );
+        let bytes = test_fixtures::build_xlsx(&[("S", rows)], &[]);
+        let ex = try_extract(ExtractKind::Xlsx, &bytes).unwrap();
+        assert!(
+            ex.text.contains("行内串,#REF!"),
+            "inlineStr + error cell passthrough: {:?}",
+            ex.text
+        );
+    }
+
+    #[test]
+    fn xlsx_corrupt_zip_wrong_magic_and_all_empty_fail_soft() {
+        assert!(try_extract(ExtractKind::Xlsx, b"not a zip at all").is_err());
+        assert!(try_extract(ExtractKind::Xlsx, b"PK\x03\x04 truncated").is_err());
+        let bytes = test_fixtures::build_xlsx(&[("空表", "")], &[]);
+        let err = try_extract(ExtractKind::Xlsx, &bytes).unwrap_err();
+        assert!(err.contains("no cell data"), "{err}");
+    }
+
+    #[test]
+    fn csv_escape_quotes_only_when_needed() {
+        assert_eq!(super::csv_escape("plain"), "plain");
+        assert_eq!(super::csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(super::csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(super::csv_escape("多\n行"), "\"多\n行\"");
+    }
+
     #[test]
     fn oversized_source_rejected_before_parse() {
         let big = vec![b'%'; MAX_EXTRACT_SOURCE_BYTES + 1];
         assert!(try_extract(ExtractKind::Pdf, &big).is_err());
         assert!(try_extract(ExtractKind::Docx, &big).is_err());
+        assert!(try_extract(ExtractKind::Xlsx, &big).is_err());
     }
 
     #[test]

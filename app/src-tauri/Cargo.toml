@@ -172,6 +172,11 @@ percent-encoding = "2"
 pdf-extract = { path = "../../vendor/pdf-extract", version = "0.12.0" }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 quick-xml = "0.42.0"
+# F5 follow-up(2026-08-26):xlsx 原生提取。纯 Rust;其 zip 依赖同为
+# default-features=false + deflate-only(特征并集不变,zstd-sys 不回归);
+# chrono feature 启用序列日期 → NaiveDateTime 转换(chrono 已是直接依赖,
+# 零新增 crate)。
+calamine = { version = "0.36", features = ["chrono"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -87,9 +87,10 @@ const rows = computed<Row[]>(() => {
       };
     }
     if (a.kind === "extracted") {
-      // F5 (2026-08-26): PDF/docx 原生提取注入。truncated 表示超
-      // 150k 字符截断(原文规模在 LLM marker 里,这里只亮状态)。
-      const kindLabel = a.format === "pdf" ? "PDF" : "docx";
+      // F5 (2026-08-26): PDF/docx 原生提取注入(xlsx 走 F5 follow-up
+      // 同链路)。truncated 表示超 150k 字符截断(原文规模在 LLM marker
+      // 里,这里只亮状态)。
+      const kindLabel = { pdf: "PDF", docx: "docx", xlsx: "XLSX" }[a.format];
       return {
         path: entry.path,
         glyph: "ok",

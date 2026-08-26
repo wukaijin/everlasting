@@ -69,11 +69,11 @@ const IMAGE_EXTS: &[&str] = &[
 /// PDF extension → placeholder (text-only channel).
 const PDF_EXTS: &[&str] = &[".pdf"];
 
-/// Office extensions → placeholder (would need mammoth/exceljs-equivalent
-/// parsers; PR2 deliberately avoids the dependency — the placeholder
-/// points the user at `pandoc` via the shell tool).
+/// Office extensions. F5 (2026-08-26) 起部分成员走原生提取(docx;F5
+/// follow-up 加 xlsx/xlsm),其余(.doc/.xls/.ppt/.od*/.rtf)落 Degraded
+/// 占位,占位文案指令式指向 pandoc/libreoffice 自助转换。
 const OFFICE_EXTS: &[&str] = &[
-    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf",
+    ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf",
 ];
 
 /// Binary extension blacklist → placeholder, never decoded. Union of
@@ -564,12 +564,16 @@ async fn expand_single(
     // F5 (2026-08-26): PDF / docx 先尝试原生文本提取(design §1 — 提取
     // 是注入的一种形态),失败(扫描件/corrupt/超限)落 Degraded 占位,
     // turn 不死。与 B1 fail-open 同构。
-    let extract_kind = if kind == FileKind::Pdf {
-        Some(crate::agent::doc_extract::ExtractKind::Pdf)
-    } else if kind == FileKind::Office && lower_ext(&resolved) == ".docx" {
-        Some(crate::agent::doc_extract::ExtractKind::Docx)
-    } else {
-        None
+    // F5 follow-up (2026-08-26): Office 分流扩到 xlsx/xlsm;.xls(OLE2)
+    // 与 .ods 保持占位降级(f5-xlsx-extraction prd D1)。
+    let extract_kind = match kind {
+        FileKind::Pdf => Some(crate::agent::doc_extract::ExtractKind::Pdf),
+        FileKind::Office => match lower_ext(&resolved).as_str() {
+            ".docx" => Some(crate::agent::doc_extract::ExtractKind::Docx),
+            ".xlsx" | ".xlsm" => Some(crate::agent::doc_extract::ExtractKind::Xlsx),
+            _ => None,
+        },
+        _ => None,
     };
     if let Some(ek) = extract_kind {
         match crate::agent::doc_extract::try_extract(ek, &bytes) {
@@ -732,6 +736,7 @@ fn render_extracted_marker(
     let (kind_str, unit_label) = match kind {
         ExtractKind::Pdf => ("pdf", "pages"),
         ExtractKind::Docx => ("docx", "paras"),
+        ExtractKind::Xlsx => ("xlsx", "sheets"),
     };
     let trunc = if ex.truncated {
         format!(" truncated=\"true\" orig_chars=\"{}\"", ex.orig_chars)
@@ -1191,6 +1196,73 @@ mod tests {
             out.contains("agent 可自行转换"),
             "self-serve wording: {out:?}"
         );
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Office
+            }
+        );
+    }
+
+    // --- F5 follow-up (2026-08-26): xlsx / xlsm native extraction ---
+
+    #[tokio::test]
+    async fn xlsx_native_extraction_is_injected() {
+        let tmp = tempdir().unwrap();
+        let bytes = crate::agent::doc_extract::test_fixtures::build_xlsx(
+            &[(
+                "Sheet1",
+                "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>F5 xlsx 注入测试</t></is></c></row>",
+            )],
+            &[],
+        );
+        std::fs::write(tmp.path().join("data.xlsx"), bytes).unwrap();
+        let (out, records, spans) =
+            expand_at_tokens("@data.xlsx", &ctx_at(&tmp), "sess-test", 0).await;
+        assert!(
+            out.contains("<doc path=\"data.xlsx\" kind=\"xlsx\" sheets=\"1\""),
+            "marker: {out:?}"
+        );
+        assert!(out.contains("F5 xlsx 注入测试"), "{out:?}");
+        assert_eq!(records.len(), 1);
+        assert!(matches!(
+            &records[0].action,
+            InjectionAction::Extracted {
+                format: crate::agent::doc_extract::ExtractKind::Xlsx,
+                ..
+            }
+        ));
+        // 与 Text/PDF/docx 注入同构:进同请求 spans(at_files_token 度量)
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].path, "data.xlsx");
+    }
+
+    #[tokio::test]
+    async fn xlsm_routes_to_extraction_and_legacy_xls_stays_degraded() {
+        let tmp = tempdir().unwrap();
+        // .xlsm(同为 OOXML zip 包)走提取;.xls(OLE2)保持占位降级。
+        let bytes = crate::agent::doc_extract::test_fixtures::build_xlsx(
+            &[("S", "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>")],
+            &[],
+        );
+        std::fs::write(tmp.path().join("m.xlsm"), bytes).unwrap();
+        std::fs::write(tmp.path().join("old.xls"), b"\xd0\xcf\x11\xe0 fake ole").unwrap();
+
+        let (out, records, _) = expand_at_tokens("@m.xlsm", &ctx_at(&tmp), "sess-test", 0).await;
+        assert!(
+            out.contains("<doc path=\"m.xlsm\" kind=\"xlsx\" sheets=\"1\""),
+            "xlsm marker reuses the xlsx kind: {out:?}"
+        );
+        assert!(matches!(
+            &records[0].action,
+            InjectionAction::Extracted {
+                format: crate::agent::doc_extract::ExtractKind::Xlsx,
+                ..
+            }
+        ));
+
+        let (out, records, _) = expand_at_tokens("@old.xls", &ctx_at(&tmp), "sess-test", 0).await;
+        assert!(out.contains("[binary: old.xls"), "got: {out:?}");
         assert_eq!(
             records[0].action,
             InjectionAction::Degraded {

@@ -111,4 +111,16 @@ describe("FileInjectionsHint — extracted (F5)", () => {
     const row = w.find(".file-injections-hint__row");
     expect(row.text()).toContain("注入 1200 字符(docx)");
   });
+
+  it("labels xlsx extraction with the XLSX kind (F5 follow-up)", () => {
+    const w = mountHint([
+      {
+        path: "data/sales.xlsx",
+        action: { kind: "extracted", format: "xlsx", chars: 4321, truncated: false },
+      },
+    ]);
+    const row = w.find(".file-injections-hint__row");
+    expect(row.find(".file-injections-hint__status--ok").exists()).toBe(true);
+    expect(row.text()).toContain("注入 4321 字符(XLSX)");
+  });
 });
