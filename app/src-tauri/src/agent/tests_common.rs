@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::permissions::new_permission_store;
 use crate::db;
+use crate::db::test_support::test_pool;
 use crate::llm::types::{ChatEvent, ChatMessage};
 use crate::llm::{MessageContent, Role};
 use crate::memory::MemoryCache;
@@ -152,16 +153,6 @@ impl ChatEventSink for MockEmitter {
         // emitted on the channel". Mirrors `emit_permission_ask`.
         self.tool_questions.lock().unwrap().push(payload.clone());
     }
-}
-
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    db::migrations::run_migrations(&pool).await.unwrap();
-    pool
 }
 
 /// Build a fresh AppState-equivalent for a test: in-memory DB +

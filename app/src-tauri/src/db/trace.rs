@@ -491,19 +491,10 @@ mod tests {
     use super::*;
     use crate::db::migrations::run_migrations;
     use crate::db::sessions::{create_session, persist_turn};
+    use crate::db::test_support::test_pool;
     use crate::llm::types::{MessageContent, Role, TokenUsage};
     use sqlx::SqlitePool;
     use uuid::Uuid;
-
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
-            .await
-            .unwrap();
-        run_migrations(&pool).await.unwrap();
-        pool
-    }
 
     async fn seed_session(pool: &SqlitePool) -> String {
         let row = create_session(

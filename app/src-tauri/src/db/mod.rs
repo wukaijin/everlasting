@@ -80,6 +80,10 @@ pub mod subagent_overrides;
 pub mod subagent_overrides_tests;
 pub mod subagent_runs;
 pub mod subagent_runs_tests;
+// Shared in-memory `test_pool()` fixture for the `*_tests` hosts
+// (RULE-TESTPOOL-001 dedup). cfg(test)-gated like its consumers.
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod trace;
 pub mod types;
 pub mod usage;

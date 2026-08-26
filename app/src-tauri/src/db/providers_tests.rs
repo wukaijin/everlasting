@@ -9,6 +9,7 @@
 //! - config set/get round-trip
 //! - `delete_provider` cascade does not touch unrelated models
 
+use super::test_support::test_pool;
 use sqlx::{Row, SqlitePool};
 
 use super::{
@@ -17,17 +18,6 @@ use super::{
     models::{create_model, delete_model, list_models, update_model},
     providers::{create_provider, delete_provider, list_providers, update_provider},
 };
-
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    // Mirror what `init_pool` does.
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    run_migrations(&pool).await.unwrap();
-    pool
-}
 
 async fn make_pool() -> SqlitePool {
     test_pool().await // alias for readability inside this section

@@ -169,19 +169,8 @@ pub async fn batch_reprobe_git_metadata(pool: &sqlx::SqlitePool) -> Result<usize
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::test_support::test_pool;
     use std::process::Command;
-
-    /// Mirrors `db::tests::test_pool` — kept private to this module
-    /// so the test fixture doesn't leak into a shared test helper.
-    async fn test_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
-            .await
-            .unwrap();
-        db::run_migrations(&pool).await.unwrap();
-        pool
-    }
 
     /// `git init` is a real shell-out; if the host has no `git` we
     /// skip rather than fail (mirrors `detector::tests`).

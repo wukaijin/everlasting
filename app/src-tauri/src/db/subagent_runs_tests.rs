@@ -9,6 +9,7 @@
 //! - R2 (2026-06-21): incomplete status + widen migration idempotency
 //! - 2026-06-22 (RULE-FrontSubagent-004): turn_count column
 
+use super::test_support::test_pool;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
@@ -16,7 +17,6 @@ use crate::llm::types::TokenUsage;
 use crate::projects::DEFAULT_PROJECT_ID;
 
 use super::{
-    migrations::run_migrations,
     sessions::{create_session, delete_session},
     subagent_runs::{
         get_run, insert_run, insert_run_with_id, list_runs_by_session,
@@ -24,17 +24,6 @@ use super::{
         SubagentStatusDb,
     },
 };
-
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    // Mirror what `init_pool` does.
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    run_migrations(&pool).await.unwrap();
-    pool
-}
 
 async fn make_pool() -> SqlitePool {
     test_pool().await // alias for readability inside this section

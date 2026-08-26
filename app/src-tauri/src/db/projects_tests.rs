@@ -7,7 +7,7 @@
 //! - Project CRUD (create / list / list_hidden / get / update_path /
 //!   update_name / hide / unhide / list_stale_git_probe / git_metadata)
 
-use sqlx::SqlitePool;
+use super::test_support::test_pool;
 
 use crate::projects::DEFAULT_PROJECT_ID;
 
@@ -20,16 +20,6 @@ use super::{
     },
 };
 
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    // Mirror what `init_pool` does.
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    run_migrations(&pool).await.unwrap();
-    pool
-}
 #[tokio::test]
 async fn migrations_are_idempotent() {
     let pool = test_pool().await;

@@ -41,6 +41,7 @@ use crate::agent::question_store::{ModeChangePayload, PendingInteraction, Questi
 use crate::commands::permissions::is_running_as_root;
 use crate::commands::question::resolve_mode_change_internal;
 use crate::db;
+use crate::db::test_support::test_pool;
 use crate::error::ErrorCategory;
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -48,20 +49,6 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Build a fresh in-memory SQLite pool with migrations applied.
-/// Mirrors the `test_pool` helper from `db/permissions_tests.rs` —
-/// duplicated here so the test file is self-contained (matches
-/// the `db/*_tests.rs` per-file copy precedent).
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    db::migrations::run_migrations(&pool).await.unwrap();
-    pool
-}
 
 /// Create a project + session in the DB so audit / mode writes
 /// have a valid FK target. Returns `(project_id, session_id)`.

@@ -7,20 +7,11 @@
 // path lives in `commands/subagent_runs.rs` tests; for the
 // tool path in `tests_subagent.rs`.
 
+use crate::db::test_support::test_pool;
 use crate::tools::merge_worker::*;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
-
-async fn test_pool() -> sqlx::SqlitePool {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    crate::db::migrations::run_migrations(&pool).await.unwrap();
-    pool
-}
 
 /// Init a git repo at `path`, add + commit a placeholder file
 /// so the project root is clean (required by `attach_session`).

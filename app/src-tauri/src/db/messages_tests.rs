@@ -7,6 +7,7 @@
 //!   + no-op fast path + atomic rollback)
 //! - D3 PR3: `record_message_resend_audit` round-trip + FK safety
 
+use super::test_support::test_pool;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -14,21 +15,9 @@ use crate::llm::types::{ContentBlock, MessageContent, Role};
 use crate::projects::DEFAULT_PROJECT_ID;
 
 use super::{
-    migrations::run_migrations,
     permissions::list_audit_events,
     sessions::{create_session, delete_session, edit_user_message, load_session, persist_turn},
 };
-
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    // Mirror what `init_pool` does.
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    run_migrations(&pool).await.unwrap();
-    pool
-}
 
 async fn make_pool() -> SqlitePool {
     test_pool().await // alias for readability inside this section

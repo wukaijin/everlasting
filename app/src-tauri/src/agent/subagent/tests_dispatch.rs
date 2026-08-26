@@ -249,18 +249,9 @@ mod tests {
     // back) / AC4 (ctx + display from model row).
     // -----------------------------------------------------------------------
 
+    use crate::db::test_support::test_pool;
     use crate::llm::provider::mock::MockProvider;
     use std::collections::HashMap;
-
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
-            .await
-            .unwrap();
-        crate::db::run_migrations(&pool).await.unwrap();
-        pool
-    }
 
     fn mock_provider() -> Arc<dyn Provider> {
         Arc::new(MockProvider::new(vec![]))

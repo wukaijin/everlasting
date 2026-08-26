@@ -2,22 +2,13 @@
 
 #![cfg(test)]
 
+use super::test_support::test_pool;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use super::usage::usage_window;
 use crate::db::trace::upsert_turn_trace_token;
 use crate::llm::types::TokenUsage;
-
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    crate::db::migrations::run_migrations(&pool).await.unwrap();
-    pool
-}
 
 async fn seed_provider(pool: &SqlitePool, name: &str) -> String {
     let row =

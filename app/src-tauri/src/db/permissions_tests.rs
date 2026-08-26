@@ -7,6 +7,7 @@
 //! - C4: audit event round-trip + wire-shape (camelCase)
 //! - Mode backfill on legacy rows
 
+use super::test_support::test_pool;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -20,17 +21,6 @@ use super::{
     },
     sessions::{create_session, delete_session, list_sessions, load_session},
 };
-
-async fn test_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    // Mirror what `init_pool` does.
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    run_migrations(&pool).await.unwrap();
-    pool
-}
 
 async fn make_pool() -> SqlitePool {
     test_pool().await // alias for readability inside this section

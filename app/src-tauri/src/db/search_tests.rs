@@ -5,6 +5,7 @@
 
 #![cfg(test)]
 
+use super::test_support::test_pool;
 use uuid::Uuid;
 
 use crate::db::memories::escape_fts5;
@@ -12,18 +13,6 @@ use crate::db::projects::create_project;
 use crate::db::search::{search_messages, SearchHitKind};
 use crate::db::sessions::{create_session, delete_session, persist_turn, rename_session};
 use crate::llm::types::{ContentBlock, MessageContent, Role};
-
-/// In-memory pool with migrations + FK pragma (project convention:
-/// each test domain copies the helper; no shared common module).
-async fn test_pool() -> sqlx::SqlitePool {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await
-        .unwrap();
-    crate::db::migrations::run_migrations(&pool).await.unwrap();
-    pool
-}
 
 /// Persist one text message into `session` at `seq`. Exercises the
 /// production insert path so the FTS insert trigger is what indexes
