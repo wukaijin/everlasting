@@ -950,3 +950,26 @@ F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链
 ### Status
 
 [OK] **Completed**
+
+
+## Session 115: PWA 多节点配对修复 + 配对/节点页互跳
+
+**Date**: 2026-08-26
+**Task**: PWA 多节点配对修复 + 配对/节点页互跳
+**Branch**: `main`
+
+### Summary
+
+修复远程配对只支持单节点:手机端 token 单值存储换成 nodeId→token map(auth.ts),配对按节点累积,/nodes 按 token 逐查合并多卡片;transport(invoke/SSE/附件 URL)按选中节点解析 token,401 只修剪失效节点;legacy 单 token 由 loadNodes 惰性迁移。新增 /nodes↔/pairing 互跳入口,点卡片切节点改整页重载(各 PC 数据隔离)。服务端零改动;1264 测试全绿 + vue-tsc 干净;spec transport-and-pwa-modes.md Signal 1 更新为多 token 模型
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a0253e6` | (see git log) |
+| `5860d5d` | (see git log) |
+| `cb1cd63` | (see git log) |
+
+### Status
+
+[OK] **Completed**

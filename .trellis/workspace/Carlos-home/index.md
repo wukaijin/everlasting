@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 114
+- **Total Sessions**: 115
 - **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~952 | Active |
+| `journal-4.md` | ~975 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 115 | 2026-08-26 | PWA 多节点配对修复 + 配对/节点页互跳 | `a0253e6`, `5860d5d`, `cb1cd63` | `main` |
 | 114 | 2026-08-26 | 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢) | `0eb5d89` | `main` |
 | 113 | 2026-08-26 | F5 验证三问题修复收口 + 双任务归档 | `9f3bad1`, `6caf4b8` | `main` |
 | 112 | 2026-08-26 | F5 PDF/docx 原生文本提取落地(第一档) | - | `main` |
