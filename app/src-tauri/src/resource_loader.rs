@@ -7,13 +7,16 @@
 //! a re-scan only happens when a file's mtime changed.
 //!
 //! Frontmatter parsing is **hand-rolled** (split `---` + `key: value`
-//! scalars). `serde_yml` / `serde_yaml` are both deprecated (TECH.md
-//! §1.4 is stale); the B3 command frontmatter is name / description /
-//! argument-hint only, so a ~40-line parser suffices. Future
-//! Skill / Memory / Role loaders with complex frontmatter can graduate
-//! to a maintained YAML crate (`serde_yaml_neo`) — the parser lives
-//! behind `parse_frontmatter` so the swap is local (TECH.md §5 shared
-//! loader contract).
+//! scalars) and **shared** with the skill / subagent loaders via the
+//! [`MdResource`] layer below (RULE-FM-001 dedup): this module owns the
+//! fence/line loop + `key: value` normalization once; each loader keeps
+//! only its `Frontmatter` struct + `apply_kv` field branches.
+//! `serde_yml` / `serde_yaml` are both deprecated (TECH.md §1.4 is
+//! stale); the frontmatter dialects here are scalars + single-line
+//! arrays only, so the hand-rolled parser suffices. A future graduate
+//! to a maintained YAML crate (`serde_yaml_neo`) swaps
+//! [`parse_md_resource`] in one place (TECH.md §5 shared loader
+//! contract).
 //!
 //! Precedence (high → low): **builtin > project > user**. A custom
 //! command whose name collides with a builtin is skipped with a `warn!`
@@ -134,32 +137,44 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Frontmatter parser (hand-rolled, ~40 lines)
+// Shared frontmatter layer (RULE-FM-001 dedup)
+//
+// One copy of the fence/line loop + `key: value` normalization shared
+// by the three markdown-resource loaders (B3 commands here, B4 skills
+// in `skill/loader/frontmatter.rs`, L3d subagents in
+// `agent/subagent/frontmatter.rs`). Each loader keeps its `Frontmatter`
+// struct and the `match k` branches of its `apply_kv`.
 // ---------------------------------------------------------------------------
 
-/// Parse a command file into `(frontmatter, body)`.
+/// A markdown resource parsed by the shared [`parse_md_resource`]
+/// fence/line loop. Implementations keep only their field-specific
+/// `apply_kv` branches (shared prefix normalization lives in
+/// [`split_kv`]).
+pub(crate) trait MdResource: Default {
+    /// Apply a single raw frontmatter line (fence-stripped).
+    fn apply_kv(&mut self, line: &str);
+}
+
+/// Parse a markdown resource file into `(frontmatter, body)`.
 ///
 /// Format:
 /// ```text
 /// ---
-/// name: commit
-/// description: 用约定格式提交当前变更
-/// argument-hint: [可选]
+/// key: value
 /// ---
 /// <markdown body...>
 /// ```
 ///
 /// Rules:
 /// - The opening `---` fence is optional; if absent, the whole file is
-///   the body and `name` is derived from the file stem by the caller.
-/// - Keys are single-line `key: value` scalars. Multi-line values /
-///   arrays are out of scope (graduates to a YAML crate later).
-/// - Values are trimmed; balanced surrounding quotes (`"` / `'`) are
-///   stripped. A leading `#` line is treated as a comment (skipped).
-/// - Unknown keys are ignored (forward-compat).
-fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
+///   the body and `T::default()` is returned (name derivation is the
+///   caller's business).
+/// - Frontmatter lines are delegated to `T::apply_kv` one by one.
+/// - The closing `---` fence is consumed; the remainder (joined with
+///   `\n`) is the body. Nothing after the fence → empty body.
+pub(crate) fn parse_md_resource<T: MdResource>(content: &str) -> (T, String) {
     let lines: Vec<&str> = content.lines().collect();
-    let mut fm = Frontmatter::default();
+    let mut fm = T::default();
 
     // Skip leading blank lines to find the opening fence.
     let mut idx = 0;
@@ -171,7 +186,7 @@ fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
         // Frontmatter block: collect key:value until the closing `---`.
         idx += 1;
         while idx < lines.len() && lines[idx].trim() != "---" {
-            apply_kv(&mut fm, lines[idx]);
+            fm.apply_kv(lines[idx]);
             idx += 1;
         }
         // Consume the closing fence.
@@ -191,16 +206,18 @@ fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
     (fm, body)
 }
 
-/// Apply a single `key: value` line to the frontmatter struct.
-fn apply_kv(fm: &mut Frontmatter, line: &str) {
+/// Normalize one frontmatter line into `(key, value)`.
+///
+/// Shared prefix of every `apply_kv` implementation: trim the line;
+/// skip blanks and `#` comments; split on the first `:`; trim both
+/// sides; strip one layer of balanced surrounding quotes (`"` / `'`)
+/// from the value. `None` = line ignored (blank / comment / no colon).
+pub(crate) fn split_kv(line: &str) -> Option<(&str, String)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
-        return;
+        return None;
     }
-    let Some((k, v)) = line.split_once(':') else {
-        return;
-    };
-    let k = k.trim();
+    let (k, v) = line.split_once(':')?;
     let mut v = v.trim().to_string();
     // Strip one layer of balanced surrounding quotes.
     if v.len() >= 2 {
@@ -210,11 +227,95 @@ fn apply_kv(fm: &mut Frontmatter, line: &str) {
             v = v[1..v.len() - 1].to_string();
         }
     }
+    Some((k.trim(), v))
+}
+
+/// Parse a single-line array value like `[a, b, c]` into a
+/// deduplicated, trimmed `Vec<String>` (stable first-occurrence order).
+///
+/// Shared by skills' `allowed-tools` and subagents' `tools`. Tolerant:
+/// surrounding quotes are stripped, then the value must be a
+/// single-line `[...]`; anything else (bare word, unbalanced brackets)
+/// yields an empty `Vec` + a `warn!` carrying `warn_prefix`
+/// ("skills: `allowed-tools`" / "subagent: `tools`") — a malformed
+/// array never aborts the rest of the resource load.
+pub(crate) fn parse_string_array(raw: &str, warn_prefix: &str) -> Vec<String> {
+    let raw = raw.trim();
+    // Strip surrounding quotes (the scalar apply path already does
+    // this, but a user may write `allowed-tools: "[a, b]"` and we want
+    // the array-strip to be the canonical form).
+    let raw = raw
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(raw)
+        .trim();
+    // Detect "looks like a single-line array" — must start with `[` and
+    // end with `]`. Anything else (multi-line, nested, bare word) is
+    // treated as malformed: empty Vec + warn, so the rest of the
+    // resource (name, description, body) still loads.
+    let inner = if let Some(stripped) = raw.strip_prefix('[') {
+        match stripped.strip_suffix(']') {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    raw = %raw,
+                    "{} value starts with `[` but does not end with `]`; ignoring",
+                    warn_prefix
+                );
+                return Vec::new();
+            }
+        }
+    } else {
+        tracing::warn!(
+            raw = %raw,
+            "{} is not a single-line `[a, b, c]` array; ignoring (tolerant parse)",
+            warn_prefix
+        );
+        return Vec::new();
+    };
+    // Split on comma, trim each item, drop empties, dedup (preserve
+    // first occurrence order — stable listing for tests + L0 blocks).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for part in inner.split(',') {
+        let t = part.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if seen.insert(t.to_string()) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// B3 command frontmatter (field branches only — shared logic above)
+// ---------------------------------------------------------------------------
+
+/// Parse a command file into `(frontmatter, body)` — thin wrapper over
+/// the shared [`parse_md_resource`] loop.
+fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
+    parse_md_resource(content)
+}
+
+/// Apply a single `key: value` line to the command frontmatter.
+fn apply_kv(fm: &mut Frontmatter, line: &str) {
+    let Some((k, v)) = split_kv(line) else {
+        return;
+    };
     match k {
         "name" => fm.name = Some(v),
         "description" => fm.description = Some(v),
         "argument-hint" | "argument_hint" => fm.argument_hint = Some(v),
         _ => {}
+    }
+}
+
+impl MdResource for Frontmatter {
+    fn apply_kv(&mut self, line: &str) {
+        apply_kv(self, line)
     }
 }
 

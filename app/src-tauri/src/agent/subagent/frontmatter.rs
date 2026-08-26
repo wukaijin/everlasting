@@ -1,7 +1,10 @@
 //! Subagent frontmatter 纯解析器(拆分自 loader.rs, 08-07-large-file-splitting)。
 //!
 //! 手写 frontmatter 解析(标量 + 单行内联数组,YAGNI,无 serde_yaml 依赖)
-//! —— 与 B3 resource_loader / B4 skill/loader 同一解析哲学。
+//! —— fence 循环 + `key: value` 归一化共用 `resource_loader` 的
+//! [`MdResource`] 共享层(RULE-FM-001 去重),本文件只留字段分支。
+
+use crate::resource_loader::{parse_md_resource, parse_string_array, split_kv, MdResource};
 
 /// Frontmatter parsed from an agent `.md` file (hand-rolled; scalars
 /// + one optional inline-array field `tools`, same parser shape as
@@ -49,10 +52,12 @@ pub(crate) struct Frontmatter {
 }
 
 // ---------------------------------------------------------------------------
-// Frontmatter parser (hand-rolled, mirrors B3 scalar path + B4 array path)
+// Frontmatter parser (field branches only — shared loop lives in
+// `resource_loader`'s MdResource layer)
 // ---------------------------------------------------------------------------
 
-/// Parse an agent `.md` into `(frontmatter, body)`.
+/// Parse an agent `.md` into `(frontmatter, body)` — thin wrapper over
+/// the shared `parse_md_resource` loop.
 ///
 /// Format:
 /// ```text
@@ -83,53 +88,14 @@ pub(crate) struct Frontmatter {
 ///   explicitly and stored (task 07-03-subagent-frontmatter-model; was
 ///   Q4 warn+discard when v1 used a single provider).
 pub(crate) fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut fm = Frontmatter::default();
-
-    let mut idx = 0;
-    while idx < lines.len() && lines[idx].trim().is_empty() {
-        idx += 1;
-    }
-
-    if idx < lines.len() && lines[idx].trim() == "---" {
-        idx += 1;
-        while idx < lines.len() && lines[idx].trim() != "---" {
-            apply_kv(&mut fm, lines[idx]);
-            idx += 1;
-        }
-        if idx < lines.len() && lines[idx].trim() == "---" {
-            idx += 1;
-        }
-    } else {
-        idx = 0;
-    }
-
-    let body = if idx >= lines.len() {
-        String::new()
-    } else {
-        lines[idx..].join("\n")
-    };
-    (fm, body)
+    parse_md_resource(content)
 }
 
 /// Apply a single `key: value` line to the frontmatter struct.
 pub(crate) fn apply_kv(fm: &mut Frontmatter, line: &str) {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return;
-    }
-    let Some((k, v)) = line.split_once(':') else {
+    let Some((k, v)) = split_kv(line) else {
         return;
     };
-    let k = k.trim();
-    let mut v = v.trim().to_string();
-    if v.len() >= 2 {
-        let first = v.chars().next().unwrap();
-        let last = v.chars().last().unwrap();
-        if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
-            v = v[1..v.len() - 1].to_string();
-        }
-    }
     match k {
         "name" => fm.name = Some(v),
         "description" => fm.description = Some(v),
@@ -163,6 +129,12 @@ pub(crate) fn apply_kv(fm: &mut Frontmatter, line: &str) {
     }
 }
 
+impl MdResource for Frontmatter {
+    fn apply_kv(&mut self, line: &str) {
+        apply_kv(self, line)
+    }
+}
+
 /// Parse the `isolation` frontmatter value (L3b, 2026-06-27).
 ///
 /// Accepts (case-insensitive):
@@ -188,9 +160,10 @@ pub(crate) fn parse_isolation(raw: &str) -> bool {
 }
 
 /// Parse a single-line `tools` array like `[read_file, grep, glob]`
-/// into a deduplicated, trimmed `Vec<String>`.
+/// into a deduplicated, trimmed `Vec<String>` — thin wrapper over the
+/// shared `parse_string_array` (RULE-FM-001 dedup).
 ///
-/// Tolerant (mirrors `skill/loader.rs::parse_allowed_tools`):
+/// Tolerant (mirrors skills' `parse_allowed_tools`):
 /// `not_an_array` / multi-line / nested / unbalanced brackets →
 /// empty `Vec` + `warn!`. The caller wraps the result in `Some(_)`
 /// so a malformed `tools: [...]` is treated as "declared empty"
@@ -200,41 +173,5 @@ pub(crate) fn parse_isolation(raw: &str) -> bool {
 /// then follows the general-purpose convention at filter time
 /// (empty = full set minus structural-disabled).
 pub(crate) fn parse_tools_array(raw: &str) -> Vec<String> {
-    let raw = raw.trim();
-    let raw = raw
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-        .unwrap_or(raw)
-        .trim();
-    let inner = if let Some(stripped) = raw.strip_prefix('[') {
-        match stripped.strip_suffix(']') {
-            Some(s) => s,
-            None => {
-                tracing::warn!(
-                    raw = %raw,
-                    "subagent: `tools` value starts with `[` but does not end with `]`; treating as empty"
-                );
-                return Vec::new();
-            }
-        }
-    } else {
-        tracing::warn!(
-            raw = %raw,
-            "subagent: `tools` is not a single-line `[a, b, c]` array; treating as empty (tolerant parse)"
-        );
-        return Vec::new();
-    };
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for part in inner.split(',') {
-        let t = part.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if seen.insert(t.to_string()) {
-            out.push(t.to_string());
-        }
-    }
-    out
+    parse_string_array(raw, "subagent: `tools`")
 }

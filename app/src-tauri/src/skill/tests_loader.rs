@@ -51,16 +51,9 @@ fn frontmatter_strips_quotes() {
     assert_eq!(fm.description.as_deref(), Some("s"));
 }
 
-#[test]
-fn apply_kv_ignores_comments_blank_unknown() {
-    let mut fm = Frontmatter::default();
-    apply_kv(&mut fm, "# comment");
-    apply_kv(&mut fm, "");
-    apply_kv(&mut fm, "weird: x");
-    apply_kv(&mut fm, "name: real");
-    assert_eq!(fm.name.as_deref(), Some("real"));
-    assert!(fm.description.is_none());
-}
+// `apply_kv_ignores_comments_blank_unknown` (comment / blank / unknown-key
+// tolerance) is shared-layer behavior — covered once in
+// `resource_loader::tests` next to `split_kv` (RULE-FM-001 test dedup).
 
 // ---- directory scan (subdir walk — the delta from B3) ----
 
