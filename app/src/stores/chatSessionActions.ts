@@ -102,6 +102,11 @@ export function createSessionActions(ctx: SessionActionsContext) {
       metadata,
     });
     currentSessionId.value = session.id;
+    // F1: a fresh session must be recorded as last-active here —
+    // this path never goes through switchSession / onProjectChange
+    // (the other two write points), so without an explicit write a
+    // create → send → quit round trip reopens the previous session.
+    configStore.writeLastSession(projectId, session.id);
     currentCwd.value = session.current_cwd ?? "";
     // Seed the controller's cache with an empty buffer for the new
     // session. `ensureLoaded` will do an IPC `load_session` call
