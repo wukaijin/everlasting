@@ -1,113 +1,48 @@
 ## Signature: `run_chat_loop`
 
-**Location**: `app/src-tauri/src/agent/chat_loop.rs`
+**Location**: `app/src-tauri/src/agent/chat_loop.rs:313`；套件对象定义在
+`app/src-tauri/src/agent/chat_loop/suite.rs`（经 `chat_loop.rs:82` 的
+`pub(crate) use suite::*;` 出口对内可见）。
 
 ```rust
-#[allow(clippy::too_many_arguments)]
 pub async fn run_chat_loop(
-    tool_defs: Vec<ToolDef>,                                                          // 1
-    provider: Arc<dyn Provider>,                                                       // 2
-    context_window: u32,                                                               // 3
-    rid: String,                                                                       // 4
-    session_id: String,                                                                // 5
-    messages: Vec<ChatMessage>,                                                        // 6
-    sink: Arc<dyn ChatEventSink>,                                                      // 7
-    db: SqlitePool,                                                                    // 8
-    cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,                     // 9
-    session_active_request: Arc<Mutex<HashMap<String, String>>>,                       // 10
-    read_guard: ReadGuard,                                                             // 11
-    memory_cache: Arc<MemoryCache>,                                                    // 12
-    skill_cache: Arc<SkillCache>,                                                      // 13
-    permission_asks: crate::agent::permissions::PermissionStore,                       // 14
-    token: CancellationToken,                                                          // 15
-    // D3 PR3 (2026-06-17): resend context. When `Some(seq)`, the
-    // user-message persist site writes a `resend_message` audit row
-    // pointing at the original user message's seq. `None` for normal
-    // first-time sends. Best-effort.
-    resend_seq: Option<i64>,                                                           // 16
-    // L1a (2026-06-19): cross-request background-shell registry.
-    // Threaded into `ToolContext` so the 3 L1a tools can call into it.
-    // The agent loop itself reads it once per turn (after C3 compaction,
-    // before `provider.send`) to drain completion notifications.
-    background_shells: crate::background_shell::DefaultRegistry,                        // 17
-    // B6 PR1a (2026-06-19): worker turn cap. `None` = default 50 (MAX_TURNS).
-    // `let turn_limit = max_turns.unwrap_or(MAX_TURNS); for turn in 1..=turn_limit`.
-    // Production + 9 base tests pass `None`; the worker path passes `Some(SUBAGENT_MAX_TURNS)` (= `Some(200)`).
-    max_turns: Option<usize>,                                                          // 18
-    // B6 PR1b (2026-06-19): when `true`, `CancellationGuard::drop` skips
-    // `session_active_request.remove(session_id)`. The worker path uses this
-    // so its Drop does NOT evict the parent's `session_active_request[parent_session_id]`
-    // entry (REVIEW-SUBAGENT-PRD #2 / RULE-E-005). Production + tests pass `false`.
-    skip_session_active: bool,                                                         // 19
-    // B6 PR1b (2026-06-19): when `true`, all DB writes inside `run_chat_loop`
-    // (persist_turn / update_message_metadata / touch_session / add_token_usage /
-    // record_*_audit / persist_turn_cwd — 18 sites total) are skipped. The
-    // worker path uses this so its intermediate turns stay in-memory only
-    // (the `SubagentBufferSink` transcript captures them; PR2 persists into
-    // `subagent_runs`). Skipping also avoids the UNIQUE-constraint collision
-    // with the parent's own `persist_turn` calls — both loops would otherwise
-    // write to the same `messages` table keyed by `(session_id, seq)`.
-    //
-    // **PR2a correction (2026-06-20, RULE-A-015)**: the 18 site count is
-    // actually 16 in the implementation as merged. PR2a fixed 2 over-broad
-    // gates that PR1b introduced: (a) `add_token_usage` — token-usage
-    // metadata belongs to the `sessions` table, not the `messages` table, so
-    // it should NOT be gated by `skip_persist` (worker must still stream its
-    // per-turn token usage into the parent's `sessions` accumulator so the
-    // parent's UI shows live total cost); (b) the terminal `Done` event
-    // emit — the `SubagentBufferSink` was the BOTH the consumer of the
-    // terminal `Done` and the data source for `transcript_snapshot()`, so
-    // gating it killed the worker's `was_cancelled` tracking. Both are
-    // now outside the gate. See "Pattern: PR2a corrected PR1 over-broad
-    // skip_persist gate (RULE-A-015)" below.
-    //
-    // **2026-06-26 reversal (task 06-26-fix-token-usage-snapshot)**: item (a)
-    // (`add_token_usage`) is REVERSED — worker token now stays OUT of the
-    // parent's sessions totals. Rationale: worker reuses parent session_id,
-    // so streaming its per-turn usage into the parent's accumulator polluted
-    // the parent's "context occupancy %" (subagent turns summed in → 1.7M /
-    // 100% blowup). Token usage switched to a per-turn **snapshot**
-    // (`update_last_turn_usage`, overwrites not accumulates) and is gated
-    // back inside `!skip_persist`; worker token lives in
-    // `subagent_runs.token_usage_json` only. Item (b) (terminal Done emit)
-    // stays outside the gate — that part of PR2a stands.
-    skip_persist: bool,                                                                // 20
-    // B6 PR2b (2026-06-20, RULE-A-014): when `Some(true)`, the
-    // `PermissionContext` built inside the loop carries `is_worker: true`,
-    // which makes the Tier 4 `ask_path` / `ask_shell` branches collapse
-    // to `Decision::Deny` instead of emitting a `permission:ask` (workers
-    // have no UI sink — a permission modal would hang forever on the
-    // oneshot). `None` falls back to the session-row mode's natural
-    // default (production-style = `false`, since no parent process is a
-    // worker). The worker path passes `Some(true)`; production + 35
-    // `agent_loop_*` integration tests pass `Some(false)` to make the
-    // production default explicit at the call site.
-    is_worker: Option<bool>,                                                           // 21
-    // B6 PR3 (2026-06-20, PR2 hotfix): optional Tauri `AppHandle` used
-    // ONLY by `run_subagent` to construct the worker's
-    // `SubagentBufferSink` with a live IPC emit path (the
-    // `subagent:event` channel). The agent loop body itself does NOT
-    // read this parameter — only `run_subagent` does, when building
-    // the worker sink. Production passes `Some(app.clone())` from the
-    // `chat` Tauri command; tests pass `None` (no Tauri runtime, the
-    // worker's IPC emit becomes a no-op). `AppHandle` is an `Arc`
-    // internally so the clone is cheap.
-    app_handle: Option<tauri::AppHandle>,                                              // 22
-    // 2026-06-21 fix (B6 review defect A): worker system prompt
-    // override. When `Some(p)`, the loop uses `p` directly as the
-    // system prompt (skipping `assemble_system_prompt(mode_prefix,
-    // base_prompt)`); when `None`, the loop builds the prompt from
-    // the project + session row. `run_subagent` (worker nested call)
-    // passes `Some(assemble_subagent_prompt(def, &task))`; the
-    // production `chat` command + 36 `agent_loop_*` integration
-    // tests pass `None` (parent path). 4 指令文件 prompt caching is
-    // unaffected — the 4 instructions live in a separate user-role
-    // synthetic message with its own `cache_control: Ephemeral`
-    // breakpoint (see `build_instructions_blocks`), independent of
-    // the system role.
-    system_prompt_override: Option<String>,                                            // 23
+    mut request: ChatLoopRequest,
+    deps: ChatLoopDeps,
+    role: CallerRole,
 ) { ... }
 ```
+
+2026-08-27 起（RULE-ARGS-001 一期），旧 38 个线性裸参收敛为三个领域对象。
+按「生命周期 + 所有权来源」归类：
+
+| 对象 | 角色 | 归入内容（字段全文见 `suite.rs` 各 doc comment） |
+|---|---|---|
+| `ChatLoopRequest` | 单次请求值，入口逐值构建 | tool_defs / provider / context_window / provider_id / rid / session_id / **messages** / sink / resend_seq / max_turns / workflow_ctx / group_chat_state / current_speaker |
+| `ChatLoopDeps` | AppState 派生长寿命套件 | db / cancellations / session_active_request / read_guard / memory_cache / skill_cache / permission_asks / token / background_shells / stub_loaded / question_store / subagent_cache |
+| `CallerRole` | 调用方角色旗标（单请求常量） | is_worker / skip_session_active / skip_persist / skip_cancellations / worker_catalog / worker_event_sink / system_prompt_override / worker_run_id / run_grants / worktree_override / project_main_override / app_data_dir / forced_dispatch |
+| `TurnCarry` + `TurnFrame<'a>` / `TurnHot` | 每-turn 可变状态与派生上下文（by-value / 借用，不进 deps） | TurnCarry = drive.rs 十人名单（messages / seq / head_sha / system_prompt / permission_ctx / loop_window / loop_hit_count / last_usage_terminal / workflow_ctx / summary_anchor）；TurnFrame = LoopInit 派生常量引用 + `turn`/`force_compaction` 控制标量；TurnHot = cwd 对 |
+
+每个字段的原始位参编号（`#22 (RULE-A-014)` 式锚点）与历史决策注释已随迁到
+`suite.rs` 字段 doc comment —— 查"这个参数当年为什么加"看那里，不在本文。
+
+链上函数同批收编（签名变更由编译器强制全量迁移调用点，RULE-A-006 同款语义）：
+
+| 函数 | 旧参 | 新签名（参量主体为三套件引用 `&req/&deps/&role`） | 位置 |
+|---|---|---|---|
+| `run_chat_loop` | 38 | `(mut request, deps, role)`（3） | `chat_loop.rs:313` |
+| `prepare_loop_state` | 19 | `(&mut request, &deps, &role)`（3） | `chat_loop/init.rs:126` |
+| `drive_turn` | 49 | `(&req, &deps, &role, frame: &mut TurnFrame, carry: TurnCarry, hot: &TurnHot)`（6） | `chat_loop/drive.rs:173` |
+| `dispatch_tool_calls` | 33 | `(&req, &deps, &role, ctx: DispatchCtx)`（4） | `chat_loop/tools.rs:52` |
+| `finalize_turn` | 11 | `(&req, &deps, &role, fx: FinalizeFrame)`（4） | `chat_loop/tools.rs:1787` |
+| `attempt_summary_compaction` | 13 | `(&req, &deps, frame, job: SummaryCompactionJob)`（4） | `chat_loop/drive.rs:2482` |
+| `ask_turn_limit_softcap` | 13 | `(&req, &deps, &role, ask: TurnBudgetAsk)`（4） | `chat_loop.rs:1020` |
+| `emit_max_turns_terminal` | 8 | `(&req, &deps, &role, tail: HardTurnsTerminal)`（4） | `chat_loop.rs:944` |
+
+最外层入口同步收敛：`agent/chat.rs::chat_inner` 9 参 → `(state: &Arc<AppState>,
+entry: ChatEntry)` 二元（`ChatEntry` 为 transport 入口载荷具名包），Tauri `chat`
+命令与 daemon `routes/agent.rs` 两个 caller 共用。本次迁移共移除 10 处
+`#[allow(clippy::too_many_arguments)]`（本家族 8 函数 + chat_inner +
+LlmRetrySink 孤儿），AC 口径下 `chat_loop*` 范围内该豁免为 0。
 
 > **Warning — Entry invariant: "the tail user message is a fresh, not-yet-persisted send".**
 >
@@ -144,23 +79,81 @@ pub async fn run_chat_loop(
 > judged already-persisted and skipped — one text row lost, no tool-pair
 > breakage, no 400.
 
-### Why 23 parameters (and not a config struct)?
+**套件化后的携带路径（不变量本体不受影响）**：`messages` 现随
+`ChatLoopRequest.messages` 进门（doc comment 内嵌本不变量摘要），由
+`prepare_loop_state` 以 `mem::take` 移交、加工后经 `LoopInit.messages`
+回流、此后逐 turn 在 `TurnCarry.messages` 里 by-value 穿线。D-D 入口守卫
+（dd_guard_hit / user_message_matches）原样活在 init 段——判据仍读
+request 侧 messages 与 `loaded_session`，未随字段搬家而变化。
 
-The 23 parameters look excessive, but they are the **exact set of state pieces
-the agent loop body needs**, and grouping them into a config struct would:
+### 现行契约：三套件对象模型与扩展规则（RULE-ARGS-001）
 
-1. Hide the dependency surface (a struct named `RunChatLoopArgs` would tempt
-   callers to add fields that are *only* test-internal)
-2. Add a layer of indirection without adding safety (Rust's borrow checker
-   already enforces "use what you need")
-3. Obscure the 1:1 correspondence between production and test call sites
-   (the 36 `agent_loop_*` integration tests, including the 5 B6 worker tests
-   and 1 B6 PR2b end-to-end test, pass them in the same order, with the same
-   types — a config struct would let them diverge silently)
+取代旧文"Do not refactor this into a struct"的方向性警告——parameter object
+已是既成形态，今后加 feature 的规矩如下：
 
-`#[allow(clippy::too_many_arguments)]` is the deliberate cost of keeping the
-dependency surface explicit. **Do not refactor this into a struct** without
-re-running all 36 integration tests + cargo check.
+1. **新状态进对应 struct 的具名新增字段，不往函数签名尾部追加裸参。**
+   尾部追加约定（演化表里 "28→29 trailing expansion" 一类流水账）已随本次
+   迁移终止。归属判据沿用上表的「生命周期 + 所有权来源」：
+   - AppState 派生的长寿命资源 → `ChatLoopDeps`；
+   - 单次请求值（含 per-request 域上下文 workflow 三件套）→ `ChatLoopRequest`；
+   - 调用方身份决定的隔离 / skip / override 族 → `CallerRole`。
+     其中 **`is_worker` 的显式传播链以该字段为载体**：
+     `role.is_worker → prepare_loop_state 的 effective_is_worker →
+     PermissionContext`（RULE-A-014 保真约束，回归测试
+     `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`
+     断言 <15s 退出）。勿把这条链隐式化或改从环境/session 推断；
+   - 每-turn 可变状态走 `TurnCarry` / `TurnHot` by-value（沿
+     LoopInit → DriveTurnOutcome 管道惯例），**不进 deps**。
+2. **构造路径统一**：能从 `AppState` 取到的资源先扩
+   `ChatLoopDeps::from_app_state(&AppState, token)`
+   （`suite.rs:155`；`token` 是每请求新建并注册进 `cancellations` 的，
+   故显式带参而非从 state 派生），再扩消费者。非 AppState 来源用
+   `From<ChatLoopDepsParts>` 具名字段 literal 拼装——刻意不设多参 fn
+   组装器，新增 deps 字段时编译器强制所有生产构造点对齐（防漂移能力
+   等价于旧位参全量迁移）。既有转换实现：`From<&QueueDriverDeps>`
+   （`chat.rs:917`）。
+3. **命名惯例**：入口聚合套件 `XxxDeps`（比照先例 `QueueDriverDeps`）；
+   IPC 入口一次解析随 request 穿线的域上下文 `XxxCtx`（比照
+   `WorkflowCtx` / `GroupChatCtx`）；每 turn 状态包沿 by-value 出入参
+   包命名。**禁 `RunChatLoopArgs` 式命名**（既不表生命周期也不表来源）。
+4. **回归护栏保持强制门槛**：凡改动本签族（含任一套件增删字段），
+   全量 `cargo test -p everlasting --lib` + 
+   `cargo clippy -p everlasting --lib -- -D warnings` 仍是变更时的必过门
+   （CI 已 `-D warnings`）。这条是旧警告的存活部分——结构化不减测试义务。
+
+### （历史，已封档）Why 23 parameters — and how the era ended
+
+以下论证保留为历史记录，回答"为什么曾经容忍位参堆叠"。写作当时
+（2026-06，23 参形态）成立：
+
+> The parameters look excessive, but they are the **exact set of state pieces
+> the agent loop body needs**, and grouping them into a config struct would:
+>
+> 1. Hide the dependency surface (a struct named `RunChatLoopArgs` would tempt
+>    callers to add fields that are *only* test-internal)
+> 2. Add a layer of indirection without adding safety (Rust's borrow checker
+>    already enforces "use what you need")
+> 3. Obscure the 1:1 correspondence between production and test call sites
+>    (integration tests pass them in the same order, with the same types)
+>
+> `#[allow(clippy::too_many_arguments)]` was accepted as the deliberate cost
+> of keeping the dependency surface explicit.
+
+**终点标注（2026-08-27）**：该警告的前提被自身增长推翻——23 → 38 参的
+持续尾部追加（见下表 + 表后明细）叠加测试侧 70 处位参调用点，"依赖面
+显式"已成负债。RULE-ARGS-001 以 parameter object 收编终结了这个时代：
+三套件按生命周期拆分后，上述三条反对理由分别由新机制替代——
+
+- 反对理由 1（test-only 字段藏进 struct）→ 由「CallerRole 只收调用方
+  身份族」的字段归属纪律约束；
+- 反对理由 2（间接层无安全增益）→ 反转：`Parts` 具名字段 literal 让编译器
+  承担了原本靠人眼维护的对齐检查；
+- 反对理由 3（生产/测试调用点 1:1 对应）→ 未丢失：三套件两侧同构构建
+  （见下方 call-site parity 节），且 RULE-A-006 的编译器强制迁移语义不变。
+
+原句 "Do not refactor this into a struct without re-running all integration
+tests + cargo check" 就此退役——重构已发生，其保留义务并入现行契约第 4 条
+的回归护栏。
 
 #### Evolution log (parameter count grew with new features)
 
@@ -173,93 +166,44 @@ re-running all 36 integration tests + cargo check.
 | 2026-06-19 | 19 | B6 PR1b | `skip_session_active: bool` | worker guard Drop skips `session_active_request.remove` |
 | 2026-06-19 | 20 | B6 PR1b | `skip_persist: bool` | persist-site gates inside the function body (PR1 spec: 18 sites; PR2a actual: 16 — see RULE-A-015) |
 | 2026-06-20 | 21 | B6 PR2b (RULE-A-014) | `is_worker: Option<bool>` | thread `is_worker` to nested `run_chat_loop` so Tier 4 `ask_path` / `ask_shell` collapses to `Deny` on the worker path (workers have no UI sink) |
-| 2026-06-20 | 22 | B6 PR3 (PR2 hotfix) | `app_handle: Option<tauri::AppHandle>` | thread the parent's `AppHandle` through so `run_subagent` can wire the worker's `SubagentBufferSink` with a live `subagent:event` IPC emit path (live transcript streaming for the PR3b `<SubagentDrawer>`); tests pass `None` |
-| 2026-06-21 | 23 | `06-21-fix-worker-system-prompt-dead-code` (B6 review defect A) | `system_prompt_override: Option<String>` | thread the worker's `SubagentDef.system_prompt` through as the override (pre-fix `_worker_system_prompt` was dead code; the worker silently inherited the parent's `assemble_system_prompt` output, causing prompt/permission contradictions in Edit/Plan mode); production + 36 `agent_loop_*` tests pass `None`, the worker nested call passes `Some(assemble_subagent_prompt(def, &task))` |
-| 2026-06-30 | 24 | `06-30-explicit-agent-dispatch` | `forced_dispatch: Option<ForcedDispatch>` | user `@@<agent> <task>` prefix → turn-1 short-circuit bypasses `provider.stream` (parent LLM zero calls) + reuses `run_subagent` directly; production passes the parsed `ForcedDispatch` (or `None`), worker nested + all tests pass `None` |
-| 2026-07-03 | 25 | `07-03-subagent-per-agent-model-ui` (B6+ C) | (no new `run_chat_loop` param) | per-agent model priority chain `DB override > frontmatter > parent` lives in `agent::subagent::dispatch::resolve_final_model`, called by `run_subagent` BEFORE `resolve_worker_provider`; the resolver itself is **unchanged** (6 existing tests stay green); the new `subagent_model_overrides` table (`db::subagent_overrides`) is the global DB row that wins over the file-declared `model:` |
-| 2026-07-07 | 26 | `07-06-b6plus-b-dispatch-model-arg` (B6+ B) | (no new `run_chat_loop` param) | per-dispatch model override extends the priority chain to **`dispatch > DB > frontmatter > parent`**. The overlay is one line in `run_subagent`: `final_model = dispatch_model.or(resolved_lower)` where `dispatch_model` is parsed from `input.model` (LLM path sends a display_name from the schema enum; user `@@agent --model=` path sends an id resolved by the frontend). A new `resolve_model_by_name_or_id(db, input)` does display_name→id reverse-lookup (id passthrough first, then `list_models` first-match on display_name; miss → `None` → falls through to `resolve_final_model`). `resolve_final_model` / `resolve_worker_provider` are **unchanged** (their tests stay green). The `dispatch_subagent` schema gains a `model` property with a dynamic enum built from a per-`run_chat_loop` `list_models` snapshot (`Vec<ModelBrief>`, display_name values — the system prompt does not list models so the enum is the LLM's only discovery channel). `ForcedDispatch` gains `model_id: Option<String>` (`#[serde(default)]`, wire snake_case). |
+| 2026-06-20 | 22 | B6 PR3 (PR2 hotfix) | `app_handle: Option<tauri::AppHandle>` | thread the parent's `AppHandle` through so `run_subagent` can wire the worker's `SubagentBufferSink` with a live `subagent:event` IPC emit path (live transcript streaming for the PR3b `<SubagentDrawer>`); tests pass `None`. *后注：P2.4 C5（07-22）以此参换血为 transport 无关的 `worker_catalog` + `worker_event_sink` 双件* |
+| 2026-06-21 | 23 | `06-21-fix-worker-system-prompt-dead-code` (B6 review defect A) | `system_prompt_override: Option<String>` | thread the worker's `SubagentDef.system_prompt` through as the override; production + tests pass `None` |
+| 2026-06-30 | 24 | `06-30-explicit-agent-dispatch` | `forced_dispatch: Option<ForcedDispatch>` | user `@@<agent> <task>` prefix → turn-1 short-circuit bypasses `provider.stream` |
+| 2026-07-03 | 25→26 | `07-03-subagent-per-agent-model-ui` / `07-06-b6plus-b-dispatch-model-arg` | (no new `run_chat_loop` param) | per-agent model priority chain lives upstream in `run_subagent`（`resolve_final_model` / dispatch overlay），`run_chat_loop` 签名不动 |
 
-The B6 cluster (PR1a + PR1b + PR2b + PR3, adding 5 params across 4 sub-PRs in a
-single 2-week window) is the largest single jump. It is justified because
-the worker is a **structural** extension of the agent loop (it re-uses
-`run_chat_loop` recursively via `Box::pin`, see "Pattern: Worker Subagent"
-below), and the 5 params are the minimal surface needed to keep
-production + worker behavior isolated (session mapping cleanup + DB
-isolation + turn cap + Tier 4 collapse without hang + IPC emit path).
-The follow-up `system_prompt_override` param (2026-06-21, B6 review defect A)
-is a one-shot fix for a dead-code bug in the worker path — it restores the
-worker to its `SubagentDef.system_prompt` after PR1b's nested call had
-silently inherited the parent's `assemble_system_prompt` output (causing
-prompt / permission contradictions in Edit/Plan mode). The 6 total B6 params
-across 5 PRs remain the minimum surface needed.
+*（表止于此快照。25→38 的后续追加未逐条入表，明细与行号锚点见
+`.trellis/tasks/08-27-rule-args-001-param-object/research/run-chat-loop-signature-inventory.md`
+§1.1：worker_run_id(06-22)/subagent_cache(L3d)/run_grants(06-26)/
+worktree+project_main_override+app_data_dir(L3b·07-29)/question_store/
+workflow_ctx(W1·07-08)/group_chat_state/current_speaker(TODO-A)/
+provider_id(WP2·08-20)/stub_loaded(C7D)/skip_cancellations(F1·08-25)。）*
 
-**B6+ C (2026-07-03, task `07-03-subagent-per-agent-model-ui`) does NOT
-add a new `run_chat_loop` param** — the per-agent model priority chain
-`DB override > frontmatter > parent` is enforced **upstream** of
-`resolve_worker_provider` (a new `resolve_final_model` helper in
-`agent::subagent::dispatch` collapses the two priority arms into a
-single `Option<model_id>`; the resolver itself is unchanged so its
-6 existing tests stay green). The chain lives entirely in `run_subagent`
-body, which already had the `catalog` (added by task 07-03) and now
-also reads from the `subagent_model_overrides` table via a single
-DB call. The Settings-UI surface (`list_subagents_with_model` +
-`set_subagent_model` commands in `commands::subagents`) is the only
-new IPC pair. **`run_chat_loop`'s 24-param signature stays unchanged**
-in this task — the upstream priority resolution is the architectural
-decision; the alternative (adding a `model_override` param to
-`run_chat_loop` so the parent path could also benefit from per-session
-overrides) is deferred to a follow-up.
+**表终点：38 参时代于 2026-08-27 被 parameter object 收编终结**
+（RULE-ARGS-001 一期，旧 38 参 → `(request, deps, role)` 三元，家族函数
+49/33/19/11/13 同批塌缩）。本演化史封档；此后的形态演进走上文
+「现行契约」的新增字段规矩，不再有参数计数这一说。
 
-**B6+ B (2026-07-07, task `07-06-b6plus-b-dispatch-model-arg`) also
-does NOT add a `run_chat_loop` param** — it extends the C priority
-chain upward by one tier to `dispatch > DB > frontmatter > parent`.
-The overlay is `final_model = dispatch_model.or(resolved_lower)` in
-`run_subagent` (one line; `dispatch_model=None` collapses to C's
-behavior, so A/C zero-regression). `dispatch_model` is parsed from
-`input.get("model")` — both entry points converge on this field:
-the LLM-driven `dispatch_subagent({model})` path sends a display_name
-(the schema `model` enum lists display_names), and the user `@@agent
---model=<X>` path sends an id (the frontend's `resolveModelInput`
-reverse-resolves display_name→id before IPC). The display_name→id
-reverse-lookup is `resolve_model_by_name_or_id(db, input)` (id
-passthrough first, then `list_models` first-match; miss → `None` →
-graceful degrade to `resolve_final_model`). A miss / typo does NOT
-fail the dispatch — it logs `warn!` and falls through to the agent's
-configured default. The `dispatch_subagent` schema `model` enum is
-fed by a per-`run_chat_loop` snapshot of `list_models` projected into
-`Vec<ModelBrief>` (display_name values; built once outside the turn
-loop — CRUD during a session reflects next session + catalog-miss
-fallback covers the lag).
+### Production + test call-site parity（套件化后形态）
 
-### Production + test call site parity
-
-- **Production**: `app/src-tauri/src/agent/chat.rs::chat` Tauri command's
-  `tauri::async_runtime::spawn` body, after pre-flight (provider lookup +
-  cancel token registration + sink build). The call site passes `None` for
-  `resend_seq` + `max_turns`, `false` for both `skip_session_active` and
-  `skip_persist`, `Some(false)` for `is_worker` (production is never a
-  worker; the explicit `Some(false)` makes the production-style default
-  obvious at the call site, matching PR2b's contract),
-  `Some(app.clone())` for `app_handle` (PR2 hotfix: production threads a
-  real `AppHandle` so the worker's `SubagentBufferSink` can emit
-  `subagent:event` to the frontend), and `None` for
-  `system_prompt_override` (production is never a worker, so the parent's
-  `assemble_system_prompt(mode_prefix, base_prompt)` path runs unchanged).
-- **Tests**: `app/src-tauri/src/agent/tests.rs::agent_loop_basic_text_only_completes`
-  and 35 sibling tests pass a `MockProvider` + `MockEmitter` for the
-  `Arc<dyn Provider>` and `Arc<dyn ChatEventSink>` parameters. Other
-  parameters are real (test DB, real `MemoryCache`, real `PermissionStore`,
-  real `ReadGuard`). Tests pass `Some(false)` for `is_worker` to make the
-  non-worker test surface explicit, `None` for `app_handle` (no Tauri
-  runtime — the worker's IPC emit path becomes a no-op; the worker's
-  `SubagentBufferSink` is constructed via
-  `SubagentBufferSink::new_without_app_handle` so transcript accumulation
-  still works), and `None` for `system_prompt_override` (the production +
-  test path runs through `assemble_system_prompt(mode_prefix,
-  base_prompt)` unchanged).
-
-The 23-parameter signature is **production-ready as written** — no test-only
-gating (no `#[cfg(test)]`), no compile-time `dead_code` allowance, no
-runtime branching on `cfg!(test)`.
+- **生产构造点共用同一构造面**：
+  - `chat_inner` 经典分支：spawn 前 `ChatLoopDeps::from_app_state(state, token.clone())`
+    统一构建 deps（`chat.rs:546`）；闭包顶解构还原同名局部；
+  - 队列驱动器每续轮：`ChatLoopDeps::from(&deps)`（`From<&QueueDriverDeps>`
+    转正），Role 为双抑制 guard（skip_session_active + skip_cancellations
+    双 true），Request 用 reload 后历史重建；
+  - `run_group_chat_loop` ×2（moderator/participant）：`ChatLoopDepsParts`
+    具名拼装 + Request/Role 显式构建（外层 23 参签名一期未收缩，二期候选）;
+  - worker 嵌套递归（`subagent/dispatch/drive.rs::drive_worker`）：从入参
+    机械映射到三套件字段（`Box::pin` 递归保留；dispatch 子系统其余签名
+    二期再收编）。
+- **Role 默认值契约**（两侧一致）：production / 测试的非 worker 调用点
+  显式 `is_worker: Some(false)`（把 production-style default 摆在调用点，
+  RULE-A-014 契约）、三个 skip 位 `false`；worker 路径才置
+  `Some(true)` + `skip_persist` 等。迁移后新增字段同样适用"默认值显式
+  写在调用点"纪律。
+- **测试侧**：沿用与生产相同的具名拼装路径构建三套件（deps 走 Parts
+  直构 + in-memory pool 与真 Arc registry；request 含 MockProvider /
+  MockEmitter），不加 `#[cfg(test)]` 分叉、不设新旧双签名并存路径
+  （debt-linkage.md 防分叉条款继续有效）。
 
 ---

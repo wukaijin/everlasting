@@ -1,6 +1,8 @@
 ## Pattern: Worker Worktree Override (`worktree_override` param, L3b PR1, 2026-06-27)
 
-L3b PR1 introduces two new parameters to `run_chat_loop`:
+> **状态注记（2026-08-27）**：下文的参数位次与"不拆 config struct"论证已随 RULE-ARGS-001 parameter object 收编失效——`worktree_override` / `app_data_dir` 现居 `CallerRole` 套件字段（见 signature-run-chat-loop.md §现行契约）。本文其余语义章节仍然有效。
+
+L3b PR1 introduced two new parameters to `run_chat_loop`:
 
 - **25th `worktree_override: Option<PathBuf>`** — when `Some(path)`, the loop uses `path` as the worker's worktree root INSTEAD of `loaded_session.session.worktree_path` (which is the parent session's worktree — the root cause of worker reuse of the parent's checkout, see `git/diff.rs::diff_against_branch` for the diff-side contract).
 - **26th `app_data_dir: PathBuf`** — pass-through to the dispatch_subagent interceptor (the agent loop body itself does NOT read it; only `run_subagent` does, when creating the worker worktree path).
@@ -11,9 +13,11 @@ Mirrors the existing `system_prompt_override` (23rd param) override pattern: per
 
 When `worktree_override.is_some()`, `current_cwd` defaults to `worktree_path` (the override). The parent session's `current_cwd` history is meaningless for a worker (it points at a path inside the parent's checkout, not the worker's). When `None`, `current_cwd` falls through to `loaded_session.session.current_cwd` (legacy behavior, unchanged).
 
-### Why 26 parameters (and not a config struct)?
+### Why 26 parameters (and not a config struct)? （历史论证，已封档）
 
-Same argument as the existing 23-param `run_chat_loop` (see "Why 23 parameters" section above). The 2 added parameters follow the same precedent — per-call overrides are clearer than a config struct that grows every time. Tradeoff: marginal cost (each new override = 1 more param) vs one-time refactor cost.
+> 本节论点于 2026-08-27 被 parameter object 收编推翻：边际成本线性增长路线在 38 参时代被终结，override 类参数现归入 `CallerRole` 具名字段。保留作历史记录。
+
+（历史）Same argument as the existing 23-param `run_chat_loop` (see archived "Why 23 parameters"). The 2 added parameters follow the same precedent — per-call overrides were clearer than a config struct at the time.
 
 ### Interaction with `STRUCTURALLY_DISABLED` + worker nesting gate
 
