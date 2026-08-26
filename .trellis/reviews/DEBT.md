@@ -58,22 +58,134 @@
 
 > 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
-## P2 — 健壮性 + 债务,中长期清理 [1 items]
+## P2 — 健壮性 + 债务,中长期清理 [2 items]
 
 > RULE-CI-001 / RULE-FM-001 / RULE-TESTPOOL-001 于 2026-08-26 由 `.trellis/tasks/08-26-p2-debt-cleanup` 闭合(clippy gate 落地 / frontmatter 解析收敛 `parse_md_resource` + `parse_string_array` / `db/test_support.rs` 共享 `test_pool()` 15 处替换),详见 git log。
 
-### RULE-ARGS-001
+> RULE-ARGS-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-args-001-param-object` 闭合:parameter object 落地(`run_chat_loop` 38→3 参,drive_turn 49→6、dispatch_tool_calls 33→4;ChatLoopDeps/ChatLoopRequest/CallerRole 三套件统一经 `ChatLoopDeps::from_app_state` 构造),chat_loop 家族 `too_many_arguments` 豁免归零(全库 46→34);全量回归 + clippy gate 验证通过;spec `signature-run-chat-loop.md` 同步重写为三套件契约。详见 git log。
+
+### RULE-SHELL-001
 
 - **Level**: P2
-- **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat_loop.rs:319`(`run_chat_loop` 18 参)、`chat_loop/drive.rs:82`(drive_turn)、`chat_loop/tools.rs:1779`(finalize_turn);grep "too_many_arguments" 全库 43 处
-- **Description**: 项目穿状态的方式是线性参数管道(每次新 feature 往既有签名追加参数 + 注释块);chat_loop 已物理拆成 `chat_loop/{drive,init,tools}.rs` 但超长签名原样存活在子文件——拆分只做了形式没做实质
-- **Fix**: parameter object 重构(provider / cancel / cache / subagent 套件聚类),目标 43 处非单函数(中等 epic 量级)
+- **Subsystem**: Tools
+- **File**: `app/src-tauri/src/background_shell/in_memory.rs:76`、`:353`(两处 "TODO: PR3 or follow-up" sweeper 注释)
+- **Description**: 已结束的 background shell 条目永不从 map 清除,sweeper 自桌面 app 时代排起至今未落("PR3 or follow-up")。daemon 化后进程长驻,`shells` map 无上界增长成为真实 OOM 面——当前唯一护栏是"LLM 不会反复查旧 shell"的行为假设加通知队列有界
+- **Fix**: 定时清扫超龄已结束条目(约半天含测试)
 - **Owner**: carlos
 - **Related Task**: null
-- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描,代码 TODO + journal 未销账项收编)
 
-## P3 — 轻微(文档/一致性) [1 items]
+### RULE-FE-001
+
+- **Level**: P2
+- **Subsystem**: Frontend
+- **File**: `app/src/stores/chatSendActions.ts:471-477`(TODO(B1 follow-up))
+- **Description**: 发消息释放 staging strip 时,乐观渲染产生的图片 objectURL 从不 revoke,blob 内存持续占用到切 session / 刷新页面才释放;卡点是需要在 `reloadAfterFinalize` 上加替换钩子
+- **Fix**: 给 reloadAfterFinalize 加替换钩子触发 URL.revokeObjectURL(≤1 天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描,代码 TODO 收编)
+
+## P3 — 轻微(文档/一致性) [10 items]
+
+### RULE-ALLOW-001
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `app/src-tauri/src/db/memories.rs:14-42`(模块级 `#![allow(dead_code)]`,注释自承诺"P2 落地后替换为逐项 allow")、`agent/workflow/{def,state,task}.rs`(三个模块级大伞待审计)、subagent transcript/sink/event_sink 观测预留面
+- **Description**: 模块级 dead_code 大伞掩盖 typo/refactor 孤儿函数,memory P2–P5 已全部上线但收窄承诺未兑现;对照组 auto_reflect.rs 同类 allow 已按承诺拆除
+- **Fix**: memories 模块逐项收窄(约半天)+ workflow/subagent 预留面逐个审计后拆除或登记真实用途
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
+
+### RULE-SHIM-001
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `commands/question.rs:529`(`get_pending_question` 标 deprecated,lib.rs:423 注册 + `#[allow(deprecated)]`)、`commands/providers.rs:367`(`test_provider` 标 DEPRECATED,前端已走 `test_model`)、`components/chat/messageTimeline.ts:18`(contentBlocks ↔ 旧三桶数组双渲染路径)
+- **Description**: 弃用兼容面长期并存且无下线时间表,靠压制属性维持编译静默;风险是新旧路径行为漂移无人察觉
+- **Fix**: 确认实际调用方归零后从注册表删除,或写明下线节点(合计约半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
+
+### RULE-PERM-001
+
+- **Level**: P3
+- **Subsystem**: Permission
+- **File**: `app/src-tauri/src/commands/permissions.rs:367-371`
+- **Description**: 审计事件查询 MVP 全量拉取,无分页无虚拟滚动(PRD Edge Cases 标 TODO ">500 条事件的 session");索引让 ORDER BY 够快故暂无实测投诉
+- **Fix**: LIMIT/OFFSET 或 keyset 分页(1–2 天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
+
+### RULE-HEALTH-001
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `app/src-tauri/src/daemon/routes/health.rs:102`(TODO(P2.5))
+- **Description**: health 接口以 `-1` 哨兵上报 session_count;带 AppState 的完整变体与 `/api/v1/health/detailed` 显式推迟 P2.5 至今未动(Q1 需要 stateless router 先应答端口探测)
+- **Fix**: 接线 AppState 或删哨兵语义,动手前先确认 sidecar 握手是否有消费方(半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
+
+### RULE-DOC-002
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `agent/subagent/mod.rs:28`(注释 `max_turns: Some(20)` vs 实际 `SUBAGENT_MAX_TURNS`=200,journal-3:18 known drift)、`.trellis/spec/frontend/state-management.md:517`(仍在描述已迁入 MessageItemEdit.vue 的 MessageItem 内联编辑)、`app/src-tauri/TECH.md` §1.4(serde_yaml 段与 frontmatter 手写解析现状不符)
+- **Description**: 实现↔文档三处漂移,均已发现并躺 journal 但未销账;journal 不是 open 债台账故收编于此
+- **Fix**: 三处各一小段修正(合计约半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(journal 未销账项收编)
+
+### RULE-FE-002
+
+- **Level**: P3
+- **Subsystem**: Frontend
+- **File**: `app/src/stores/chatModeActions.ts:225-232`
+- **Description**: Yolo 确认后 `resolve_mode_change` 失败只写 console.error,不进 toast/pending 卡片,用户无从得知模式切换失败(follow-up 注释指明可复用现有 pending-card re-mount 路径)
+- **Fix**: 失败分支接入现有提示通道(约半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
+
+### RULE-BUILD-001
+
+- **Level**: P3
+- **Subsystem**: Frontend
+- **File**: `app/vite.config.ts`(产物超限 chunk 警告)
+- **Description**: 前端构建存在超限 chunk,vite 每次构建输出告警;manualChunks 拆分方案已在 journal 定向但被标"单独任务"搁置(journal-3:283)
+- **Fix**: manualChunks 按 vendor/UI 分包 + 构建体积复核(约半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(journal 未销账项收编)
+
+### RULE-TEST-001
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `agent/tests_request_mode_change.rs:32`(`resolve_mode_change` IPC 的 DB 更新链路零覆盖,"TODO: future task")、`components/common/MarkdownDetailModal.test.ts:383-390`(jsdom 无法模拟 pointerdown-outside,仅占位守护)
+- **Description**: 两处测试基建缺口:mode change 持久化链路零集成覆盖(目前靠共享纯函数既有测试垫底);项目无真浏览器 runner,跨组件指针交互类回归无可靠守护手段
+- **Fix**: 该链路补 1 条集成用例 + playwright 选型评估
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
+
+### RULE-TEST-002
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: workflow 角色门(`check_workflow_role_gate`,W1)集成测试面——多轮 agent loop 中 task 状态变更后门判定刷新无任何集成断言
+- **Description**: RULE-ARGS-001 迁移期间一处真实的活引用↔入口快照漂移(workflow_ctx 经 DispatchCtx 穿透,已于任务内修复)全量测试未抓、仅人工 diff 审计捕获——正是该测试面缺口的存在性证明
+- **Fix**: 补 1 条"多轮 loop 中 task.json 变更后角色门判定刷新"的集成用例(约半天)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 RULE-ARGS-001 trellis-check 复核(migration log §复核记录 F-1/O-1)
 
 ### RULE-DOC-001
 
@@ -95,9 +207,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 1 | 健壮性 + 债务,中长期清理(RULE-CI/FM/TESTPOOL-001 已闭合) |
-| P3 | 1 | 文档 + 一致性,可延后 |
-| **Total** | **2** | 当前 open items |
+| P2 | 2 | 健壮性 + 债务,中长期清理(RULE-CI/FM/TESTPOOL/ARGS-001 已闭合) |
+| P3 | 10 | 文档 + 一致性 + 待兑现承诺,可延后 |
+| **Total** | **12** | 当前 open items |
 
 ---
 
