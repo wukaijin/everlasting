@@ -58,40 +58,9 @@
 
 > 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
-## P2 — 健壮性 + 债务,中长期清理 [4 items]
+## P2 — 健壮性 + 债务,中长期清理 [1 items]
 
-### RULE-CI-001
-
-- **Level**: P2
-- **Subsystem**: Cross
-- **File**: `.github/workflows/ci.yml`(仅 cargo fmt --check + cargo test --lib,无 clippy)
-- **Description**: E1(07-05)"clippy 留 follow-up(先本地清 warning 再加 gate)"至今未兑现;此后 +400 测试,clippy warning 回潮无机器把关
-- **Fix**: 本地清 warning 后 CI 加 `cargo clippy -- -D warnings`(或先 `-- -W clippy::all` 观察)(~10 行 + 一次本地清理)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 harness 缺口评估会话(非 formal review 文件)
-
-### RULE-FM-001
-
-- **Level**: P2
-- **Subsystem**: Tools
-- **File**: `app/src-tauri/src/resource_loader.rs:160/195`、`app/src-tauri/src/skill/loader/frontmatter.rs:48/79`、`app/src-tauri/src/agent/subagent/frontmatter.rs:85/116`
-- **Description**: frontmatter 解析器 3 份复制(`parse_frontmatter` + `apply_kv` 逐字相同,仅字段不同;`parse_tools_array` / `parse_allowed_tools` 并存);测试断言也复制(`apply_kv_ignores_comments_blank_unknown` 在 resource_loader.rs:558 + skill/tests_loader.rs:55 两处)——一个行为变更 = 改 3 实现 + ≥3 测试
-- **Fix**: 在 resource_loader 之上抽泛型 `parse_md_resource<T>(content, T::default, T::apply_kv)`,三 loader 各留 `apply_kv` + 字段定义(~半天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
-
-### RULE-TESTPOOL-001
-
-- **Level**: P2
-- **Subsystem**: Cross
-- **File**: `app/src-tauri/src/`(grep "fn test_pool" 命中 15 处:db/sessions_tests/mod.rs:23、db/subagent_runs_tests.rs:28、db/messages_tests.rs:22、projects/store.rs:176、db/memories_tests/mod.rs:23、commands/tests_resolve_mode_change.rs:56、agent/tests_common.rs:157、tools/tests_merge_worker.rs:15、db/search_tests.rs:18、db/usage_tests.rs:12、db/providers_tests.rs:21、db/permissions_tests.rs:24、db/trace.rs:498、db/projects_tests.rs:23、agent/subagent/tests_dispatch.rs:255)
-- **Description**: in-memory 测试池构建函数 15 处手写复制(connect + PRAGMA foreign_keys + migrations::run),migrations 变更要同步 15 处
-- **Fix**: 抽 `db/test_support.rs` 共享 `test_pool()`,15 处改调用(~120 行净删)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
+> RULE-CI-001 / RULE-FM-001 / RULE-TESTPOOL-001 于 2026-08-26 由 `.trellis/tasks/08-26-p2-debt-cleanup` 闭合(clippy gate 落地 / frontmatter 解析收敛 `parse_md_resource` + `parse_string_array` / `db/test_support.rs` 共享 `test_pool()` 15 处替换),详见 git log。
 
 ### RULE-ARGS-001
 
@@ -126,9 +95,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 4 | 健壮性 + 债务,中长期清理 |
+| P2 | 1 | 健壮性 + 债务,中长期清理(RULE-CI/FM/TESTPOOL-001 已闭合) |
 | P3 | 1 | 文档 + 一致性,可延后 |
-| **Total** | **5** | 当前 open items |
+| **Total** | **2** | 当前 open items |
 
 ---
 
