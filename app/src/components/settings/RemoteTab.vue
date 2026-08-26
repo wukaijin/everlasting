@@ -2,18 +2,20 @@
 // RemoteTab — Settings tab for the PC-side remote tunnel configuration
 // (S4 Step 3, design §3).
 //
-// Four sections, each a thin wrapper over one of the four daemon IPCs
-// wired in S2 (commands/{config,pairing}.rs + CMD_TO_DOMAIN):
+// Sections, thin wrappers over the daemon IPCs wired in S2
+// (commands/{config,pairing}.rs + CMD_TO_DOMAIN):
 //
 //   1. Config    — `get_remote_config` / `set_remote_config`
 //   2. Status    — `get_tunnel_status` (polled every 2s while mounted)
 //   3. Pairing   — `generate_pairing_code` + 60s countdown
-//   4. Node info — read-only `nodeId` from the status snapshot
+//   4. Node info — 生效 `nodeId`（status 轮询）+ 自定义编辑
+//                  （`set_tunnel_node_id`，08-26-custom-node-id）
 //
-// P3-1 (design §3.1): the node info area shows `nodeId` ONLY. The
-// `TunnelStatusPayload` (config.rs:152) carries no `displayName`; the
-// display name lives in the remote nodes table, unreachable from the PC
-// without a Rust change (forbidden by S4 hard constraint).
+// P3-1 (design §3.1, 08-26 解除): the node info area edits BOTH the custom
+// `nodeId`（同 hostname 两台机器各设一个自定义 id 即可在 remote 侧消歧
+// 互踢）and the `displayName`（`set_tunnel_display_name`，同日增补——
+// S4 当时"PC 端够不着 displayName"的约束已由本任务解除；status 快照仍
+// 不带 displayName，自定义值经 `get_remote_config` 回显）。
 //
 // Style mirrors ProvidersTab (reka-ui `Label` + native `<input>`) and
 // SubagentsTab (per-row error banner + toast on failure).
@@ -31,6 +33,16 @@ const projects = useProjectsStore();
 const form = ref({ remoteUrl: "", sharedSecret: "" });
 const saving = ref(false);
 const configError = ref<string | null>(null);
+
+// --- custom node id form (08-26-custom-node-id) ---
+const nodeIdForm = ref("");
+const nodeIdSaving = ref(false);
+const nodeIdError = ref<string | null>(null);
+
+// --- custom display name form (08-26 增补) ---
+const displayNameForm = ref("");
+const displayNameSaving = ref(false);
+const displayNameError = ref<string | null>(null);
 
 // --- pairing code countdown ---
 const codeError = ref<string | null>(null);
@@ -96,6 +108,40 @@ async function save() {
   }
 }
 
+/** 保存自定义 node_id（空串 = 清除，回自动派生）。非法值由 daemon 校验
+ *  拒绝（InvalidRequest），inline 显示后端中文消息。 */
+async function saveNodeId() {
+  nodeIdError.value = null;
+  nodeIdSaving.value = true;
+  try {
+    await remoteConfig.saveNodeId(nodeIdForm.value.trim());
+    projects.showToast("Node ID 已保存", "info");
+  } catch (e) {
+    const msg = extractErrorMessage(e);
+    nodeIdError.value = msg;
+    projects.showToast(`保存 Node ID 失败：${msg}`, "error");
+  } finally {
+    nodeIdSaving.value = false;
+  }
+}
+
+/** 保存自定义显示名（空串 = 清除，回默认 hostname）。空白 / 超 64 字符
+ *  由 daemon 校验拒绝（InvalidRequest），inline 显示后端中文消息。 */
+async function saveDisplayName() {
+  displayNameError.value = null;
+  displayNameSaving.value = true;
+  try {
+    await remoteConfig.saveDisplayName(displayNameForm.value.trim());
+    projects.showToast("显示名已保存", "info");
+  } catch (e) {
+    const msg = extractErrorMessage(e);
+    displayNameError.value = msg;
+    projects.showToast(`保存显示名失败：${msg}`, "error");
+  } finally {
+    displayNameSaving.value = false;
+  }
+}
+
 async function generateCode() {
   codeError.value = null;
   generating.value = true;
@@ -151,6 +197,9 @@ onMounted(async () => {
       form.value.remoteUrl = remoteConfig.config.remoteUrl;
       form.value.sharedSecret = remoteConfig.config.sharedSecret;
     }
+    // 自定义 node_id / 显示名预填（null / 未配置 remote = 空 = 自动/默认）。
+    nodeIdForm.value = remoteConfig.config?.nodeId ?? "";
+    displayNameForm.value = remoteConfig.config?.displayName ?? "";
   } catch (e) {
     configError.value = extractErrorMessage(e);
   }
@@ -287,7 +336,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 4. Node info (P3-1: nodeId only, no displayName) -->
+    <!-- 4. Node info（生效 nodeId 展示 + 自定义编辑，08-26-custom-node-id） -->
     <section class="remote-tab__section">
       <h3 class="remote-tab__section-title">节点信息</h3>
       <div class="remote-tab__node-info">
@@ -295,6 +344,75 @@ onUnmounted(() => {
         <code class="remote-tab__node-id">{{
           remoteConfig.status?.nodeId || "—"
         }}</code>
+      </div>
+      <div class="remote-tab__form">
+        <Label class="remote-tab__field">
+          <span class="remote-tab__label">自定义 Node ID</span>
+          <input
+            v-model="nodeIdForm"
+            type="text"
+            class="remote-tab__input"
+            placeholder="留空 = 自动（hostname 派生）"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </Label>
+        <div class="remote-tab__form-actions">
+          <button
+            type="button"
+            class="remote-tab__btn remote-tab__btn--primary btn btn--primary"
+            :disabled="nodeIdSaving"
+            @click="saveNodeId"
+          >
+            {{ nodeIdSaving ? "保存中…" : "保存" }}
+          </button>
+        </div>
+        <p
+          v-if="nodeIdError"
+          class="remote-tab__error"
+          role="alert"
+        >
+          {{ nodeIdError }}
+        </p>
+        <p class="remote-tab__hint">
+          两台机器 hostname 相同时会在 remote 侧互相踢线，可分别设置不同的
+          ID 消歧；仅限小写字母、数字和连字符。修改后已配对设备绑定的是
+          旧 ID，需重新配对。
+        </p>
+      </div>
+      <div class="remote-tab__form">
+        <Label class="remote-tab__field">
+          <span class="remote-tab__label">显示名</span>
+          <input
+            v-model="displayNameForm"
+            type="text"
+            class="remote-tab__input"
+            placeholder="留空 = 自动（hostname）"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </Label>
+        <div class="remote-tab__form-actions">
+          <button
+            type="button"
+            class="remote-tab__btn remote-tab__btn--primary btn btn--primary"
+            :disabled="displayNameSaving"
+            @click="saveDisplayName"
+          >
+            {{ displayNameSaving ? "保存中…" : "保存" }}
+          </button>
+        </div>
+        <p
+          v-if="displayNameError"
+          class="remote-tab__error"
+          role="alert"
+        >
+          {{ displayNameError }}
+        </p>
+        <p class="remote-tab__hint">
+          这是手机 App / 远程节点列表里显示的名字，支持中文，最长 64 个
+          字符。修改后隧道会以新名字重连。
+        </p>
       </div>
     </section>
   </div>

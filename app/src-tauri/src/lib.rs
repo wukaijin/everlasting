@@ -231,6 +231,8 @@ pub fn run() {
             // 下写入 DB + 通知空壳 manager,行为安全)。
             commands::config::get_remote_config,
             commands::config::set_remote_config,
+            commands::config::set_tunnel_node_id,
+            commands::config::set_tunnel_display_name,
             commands::config::get_tunnel_status,
             // F4 web_search 配置(2026-08-25, task 08-25-web-search-tool):
             // provider 三值 + tavily key 三态(Some(非空)/Some("")清除/

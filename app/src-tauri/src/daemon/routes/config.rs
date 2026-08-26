@@ -13,8 +13,9 @@ use serde::Deserialize;
 
 use crate::commands::config::{
     get_home_dir_inner, get_llm_config_inner, get_remote_config_inner, get_tunnel_status_inner,
-    get_web_search_config_inner, set_remote_config_inner, set_web_search_config_inner,
-    PublicLlmConfig, RemoteConfigPayload, TunnelStatusPayload,
+    get_web_search_config_inner, set_remote_config_inner, set_tunnel_display_name_inner,
+    set_tunnel_node_id_inner, set_web_search_config_inner, PublicLlmConfig, RemoteConfigPayload,
+    TunnelStatusPayload,
 };
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -61,6 +62,38 @@ pub async fn set_remote_config(
     Ok(Json(()))
 }
 
+/// `set_tunnel_node_id` 请求体(snake_case,与 Tauri command 扁平标量参数
+/// 一一对应;`node_id` 三态:Some(非空) 设置 / Some("") 清除 / 缺省不动)。
+#[derive(Deserialize)]
+pub struct SetTunnelNodeIdRequest {
+    #[serde(default)]
+    pub node_id: Option<String>,
+}
+
+pub async fn set_tunnel_node_id(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetTunnelNodeIdRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    set_tunnel_node_id_inner(&state, body.node_id).await?;
+    Ok(Json(()))
+}
+
+/// `set_tunnel_display_name` 请求体(snake_case,三态同 node_id:
+/// Some(非空) 设置 / Some("") 清除 / 缺省不动)。
+#[derive(Deserialize)]
+pub struct SetTunnelDisplayNameRequest {
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+pub async fn set_tunnel_display_name(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetTunnelDisplayNameRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    set_tunnel_display_name_inner(&state, body.display_name).await?;
+    Ok(Json(()))
+}
+
 pub async fn get_tunnel_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Option<TunnelStatusPayload>>, AppCommandError> {
@@ -100,6 +133,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/get_home_dir", post(get_home_dir))
         .route("/get_remote_config", post(get_remote_config))
         .route("/set_remote_config", post(set_remote_config))
+        .route("/set_tunnel_node_id", post(set_tunnel_node_id))
+        .route("/set_tunnel_display_name", post(set_tunnel_display_name))
         .route("/get_tunnel_status", post(get_tunnel_status))
         .route("/get_web_search_config", post(get_web_search_config))
         .route("/set_web_search_config", post(set_web_search_config))
@@ -215,5 +250,259 @@ mod tests {
         assert_eq!(v["provider"], "ddg");
         assert_eq!(v["tavilyKeySet"], false);
         assert_eq!(v["tavilyKeyMasked"], serde_json::Value::Null);
+    }
+
+    /// 自定义 node_id(08-26-custom-node-id)全链:set 合法值 → key 落库 +
+    /// `build_tunnel_config` 换新 id;非法值(大写/下划线/连续连字符/首尾
+    /// 连字符/纯中文/纯空格)→ 4xx 且库中无写入;Some("") → key 行删除
+    /// (回自动派生);get_remote_config 回显 `nodeId`。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tunnel_node_id_set_validate_clear_roundtrip() {
+        use crate::daemon::tunnel::config::{KEY_REMOTE_URL, KEY_TUNNEL_NODE_ID};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let app = router(state.clone());
+
+        async fn post_json(
+            app: &axum::Router,
+            uri: &str,
+            body: &str,
+        ) -> (StatusCode, serde_json::Value) {
+            use tower::ServiceExt;
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        // 非法值全部 4xx,且 key 不写库(校验失败不落库)
+        for bad in [
+            "Carlos-Office",  // 大写
+            "carlos_office",  // 下划线
+            "carlos--office", // 连续连字符
+            "-carlos",        // 首连字符
+            "carlos-",        // 尾连字符
+            "卡洛斯",         // 纯中文
+            "   ",            // 纯空格(trim 后空 → 不能当合法值写库)
+        ] {
+            let (code, body) = post_json(
+                &app,
+                "/set_tunnel_node_id",
+                &format!(r#"{{"node_id":"{bad}"}}"#),
+            )
+            .await;
+            assert_ne!(code, StatusCode::OK, "非法值 {bad:?} 必须拒绝: {body}");
+            let stored = crate::db::get_config_value(&state.db, KEY_TUNNEL_NODE_ID)
+                .await
+                .unwrap();
+            assert_eq!(stored, None, "拒绝 {bad:?} 后不得写库");
+        }
+
+        // 合法值:落库(去首尾空白)
+        let (code, v) = post_json(
+            &app,
+            "/set_tunnel_node_id",
+            r#"{"node_id":" carlos-office "}"#,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert_eq!(
+            crate::db::get_config_value(&state.db, KEY_TUNNEL_NODE_ID)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("carlos-office")
+        );
+
+        // 配好 remote 后再改 id → build_tunnel_config 用新 id 重建配置
+        crate::db::set_config_value(&state.db, KEY_REMOTE_URL, "wss://remote.example.com")
+            .await
+            .unwrap();
+        let (code, v) =
+            post_json(&app, "/set_tunnel_node_id", r#"{"node_id":"carlos-home"}"#).await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        let cfg = state.tunnel_manager.current_config();
+        assert_eq!(
+            cfg.as_ref().map(|c| c.node_id.as_str()),
+            Some("carlos-home"),
+            "set 后 tunnel 配置必须带新 node_id"
+        );
+
+        // get_remote_config 回显自定义 nodeId
+        let (code, v) = post_json(&app, "/get_remote_config", "{}").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(v["nodeId"], "carlos-home");
+
+        // Some(""):显式清除 → key 行删除、回显回 null、配置回 hostname 派生
+        let (code, v) = post_json(&app, "/set_tunnel_node_id", r#"{"node_id":""}"#).await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert_eq!(
+            crate::db::get_config_value(&state.db, KEY_TUNNEL_NODE_ID)
+                .await
+                .unwrap(),
+            None
+        );
+        let cfg = state.tunnel_manager.current_config();
+        assert_eq!(
+            cfg.as_ref().map(|c| c.node_id.as_str()),
+            Some(
+                crate::daemon::tunnel::node_id::sanitize(
+                    &hostname::get()
+                        .unwrap()
+                        .into_string()
+                        .expect("test env has hostname")
+                )
+                .as_str()
+            ),
+            "清除后 node_id 回 hostname 派生"
+        );
+        let (code, v) = post_json(&app, "/get_remote_config", "{}").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(v["nodeId"], serde_json::Value::Null);
+    }
+
+    /// 自定义 display_name(08-26 增补需求 6/7)全链,镜像 node_id roundtrip:
+    /// 合法值(含中文,无字符集限制)落库 + `build_tunnel_config` 取到;
+    /// trim 空 / 超 64 字符拒绝且不写库;Some("") → key 删行回默认
+    /// hostname;get_remote_config 回显 `displayName`。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tunnel_display_name_set_validate_clear_roundtrip() {
+        use crate::daemon::tunnel::config::{KEY_REMOTE_URL, KEY_TUNNEL_DISPLAY_NAME};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let app = router(state.clone());
+
+        async fn post_json(
+            app: &axum::Router,
+            uri: &str,
+            body: &str,
+        ) -> (StatusCode, serde_json::Value) {
+            use tower::ServiceExt;
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        // 非法值全部 4xx,且 key 不写库(空白串 / 超 64 字符——长度按字符数
+        // 计,65 个中文不能因 UTF-8 字节数被误判,65 个 ASCII 同样拒绝)
+        for bad in ["   ", &"名".repeat(65), &"a".repeat(65)] {
+            let (code, body) = post_json(
+                &app,
+                "/set_tunnel_display_name",
+                &serde_json::json!({ "display_name": bad }).to_string(),
+            )
+            .await;
+            assert_ne!(
+                code,
+                StatusCode::OK,
+                "非法值({} 字符)必须拒绝: {body}",
+                bad.chars().count()
+            );
+            let stored = crate::db::get_config_value(&state.db, KEY_TUNNEL_DISPLAY_NAME)
+                .await
+                .unwrap();
+            assert_eq!(stored, None, "拒绝后不得写库");
+        }
+
+        // 合法值:含中文、去首尾空白、64 字符边界(恰好 64 个中文)通过
+        let (code, v) = post_json(
+            &app,
+            "/set_tunnel_display_name",
+            r#"{"display_name":" 卡洛斯的办公机 "}"#,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert_eq!(
+            crate::db::get_config_value(&state.db, KEY_TUNNEL_DISPLAY_NAME)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("卡洛斯的办公机")
+        );
+        let (code, v) = post_json(
+            &app,
+            "/set_tunnel_display_name",
+            &serde_json::json!({ "display_name": "名".repeat(64) }).to_string(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "64 字符边界必须通过: {v}");
+
+        // 配好 remote 后 set → build_tunnel_config 用新 display_name 重建配置
+        crate::db::set_config_value(&state.db, KEY_REMOTE_URL, "wss://remote.example.com")
+            .await
+            .unwrap();
+        let (code, v) = post_json(
+            &app,
+            "/set_tunnel_display_name",
+            r#"{"display_name":"公司台式机"}"#,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        let cfg = state.tunnel_manager.current_config();
+        assert_eq!(
+            cfg.as_ref().map(|c| c.display_name.as_str()),
+            Some("公司台式机"),
+            "set 后 tunnel 配置必须带新 display_name"
+        );
+
+        // get_remote_config 回显自定义 displayName
+        let (code, v) = post_json(&app, "/get_remote_config", "{}").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(v["displayName"], "公司台式机");
+
+        // Some(""):显式清除 → key 行删除、回显回 null、配置回默认 hostname
+        // (default_display_name = hostname 原文,不净化)
+        let (code, v) = post_json(&app, "/set_tunnel_display_name", r#"{"display_name":""}"#).await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert_eq!(
+            crate::db::get_config_value(&state.db, KEY_TUNNEL_DISPLAY_NAME)
+                .await
+                .unwrap(),
+            None
+        );
+        let cfg = state.tunnel_manager.current_config();
+        let host = hostname::get()
+            .unwrap()
+            .into_string()
+            .expect("test env has hostname");
+        assert_eq!(
+            cfg.as_ref().map(|c| c.display_name.as_str()),
+            Some(host.as_str()),
+            "清除后 display_name 回默认 hostname"
+        );
+        let (code, v) = post_json(&app, "/get_remote_config", "{}").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(v["displayName"], serde_json::Value::Null);
     }
 }

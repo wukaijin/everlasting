@@ -72,6 +72,11 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   get_remote_config: "config",
   set_remote_config: "config",
   get_tunnel_status: "config",
+  // 自定义 node_id / 显示名(08-26-custom-node-id 及同日增补):缺这两行
+  // 时浏览器/sidecar 模式报 `unknown cmd "set_tunnel_node_id"`(Tauri Full
+  // 模式侥幸走 IPC)。
+  set_tunnel_node_id: "config",
+  set_tunnel_display_name: "config",
   // F4 web_search 配置(2026-08-25):缺这两行时浏览器/sidecar 模式报
   // `unknown cmd "get_web_search_config"`(Tauri Full 逃生侥幸走 IPC)。
   get_web_search_config: "config",

@@ -137,12 +137,15 @@ pub fn get_home_dir(app: AppHandle) -> Option<String> {
 // `daemon::tunnel::config`(load_remote_config 等共用)。
 // ---------------------------------------------------------------------------
 
-/// `get_remote_config` 返回体(design §3.1:`{remoteUrl, sharedSecret} | null`)。
+/// `get_remote_config` 返回体(design §3.1:`{remoteUrl, sharedSecret} | null`;
+/// `nodeId` / `displayName` 为附加字段:自定义值原文,`None` = 未设置/自动)。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteConfigPayload {
     pub remote_url: String,
     pub shared_secret: String,
+    pub node_id: Option<String>,
+    pub display_name: Option<String>,
 }
 
 /// `get_tunnel_status` 返回体(design §3.1:
@@ -176,9 +179,32 @@ pub async fn get_remote_config_inner(
             .await
             .map_err(|e| anyhow::anyhow!("get_remote_config failed: {}", e))?
             .unwrap_or_default();
+    // 自定义 node_id / display_name 原文回显(空串 / 全空白归一成
+    // None = 自动派生 / 默认 hostname)。
+    let normalize = |v: Option<String>| {
+        v.and_then(|s| {
+            let t = s.trim().to_string();
+            (!t.is_empty()).then_some(t)
+        })
+    };
+    let node_id = normalize(
+        db::get_config_value(&state.db, crate::daemon::tunnel::config::KEY_TUNNEL_NODE_ID)
+            .await
+            .map_err(|e| anyhow::anyhow!("get_remote_config failed: {}", e))?,
+    );
+    let display_name = normalize(
+        db::get_config_value(
+            &state.db,
+            crate::daemon::tunnel::config::KEY_TUNNEL_DISPLAY_NAME,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("get_remote_config failed: {}", e))?,
+    );
     Ok(Some(RemoteConfigPayload {
         remote_url,
         shared_secret,
+        node_id,
+        display_name,
     }))
 }
 
@@ -239,6 +265,149 @@ pub async fn set_remote_config(
     shared_secret: String,
 ) -> Result<(), AppCommandError> {
     set_remote_config_inner(&state, remote_url, shared_secret).await
+}
+
+/// 写自定义 node_id + 按 DB 现状刷新 tunnel 配置(`TunnelConfig` 变化经
+/// supervisor `cfg != current` 自动重启隧道,不另加机制)。
+///
+/// `node_id` 三态(照 `set_web_search_config` 的 `tavily_api_key` 先例):
+/// - `Some(非空)` → trim 后须满足 `sanitize(x) == x`(小写字母/数字/连字
+///   符,连字符不连续、不在首尾),失败返 `InvalidRequest` **不写库**;
+/// - `Some("")` → 删 key(回到自动派生:hostname → fallback UUID);
+/// - `None` → 不动 key。
+///
+/// 两台 hostname 相同的机器各设一个自定义 id 即可在 remote 侧消歧
+/// (同 node_id 会互踢,任务 `08-26-custom-node-id`)。
+pub async fn set_tunnel_node_id_inner(
+    state: &Arc<AppState>,
+    node_id: Option<String>,
+) -> Result<(), AppCommandError> {
+    use crate::daemon::tunnel::config::{
+        build_tunnel_config, KEY_REMOTE_URL, KEY_SHARED_SECRET, KEY_TUNNEL_NODE_ID,
+    };
+    use crate::daemon::tunnel::node_id::sanitize;
+
+    match node_id {
+        // 空串 = 显式清除动作(删行,照 web_search 清 key 先例)。
+        Some(v) if v.is_empty() => {
+            db::delete_config_value(&state.db, KEY_TUNNEL_NODE_ID)
+                .await
+                .map_err(|e| anyhow::anyhow!("set_tunnel_node_id failed: {}", e))?;
+        }
+        Some(v) => {
+            // 非空串:trim 后须非空且 sanitize 幂等(空白串视同非法值拒绝,
+            // 与 Some("") 的清除语义区分)。
+            let trimmed = v.trim();
+            if trimmed.is_empty() || sanitize(trimmed) != trimmed {
+                return Err(AppCommandError::new(
+                    ErrorCategory::InvalidRequest,
+                    "node_id 不能为空白,且只能包含小写字母、数字和连字符,连字符不能连续或位于首尾"
+                        .to_string(),
+                ));
+            }
+            db::set_config_value(&state.db, KEY_TUNNEL_NODE_ID, trimmed)
+                .await
+                .map_err(|e| anyhow::anyhow!("set_tunnel_node_id failed: {}", e))?;
+        }
+        None => { /* 不动 */ }
+    }
+
+    // 从 DB 重建 tunnel 配置(url 为空 → 停用;非空 → 新 node_id 经
+    // derive_node_id ① 臂生效)。
+    let remote_url = db::get_config_value(&state.db, KEY_REMOTE_URL)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_tunnel_node_id failed: {}", e))?
+        .unwrap_or_default();
+    let cfg = if remote_url.trim().is_empty() {
+        None
+    } else {
+        let shared_secret = db::get_config_value(&state.db, KEY_SHARED_SECRET)
+            .await
+            .map_err(|e| anyhow::anyhow!("set_tunnel_node_id failed: {}", e))?
+            .unwrap_or_default();
+        Some(build_tunnel_config(&state.db, remote_url.trim().to_string(), shared_secret).await)
+    };
+    state.tunnel_manager.set_config(cfg);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_tunnel_node_id(
+    state: State<'_, Arc<AppState>>,
+    node_id: Option<String>,
+) -> Result<(), AppCommandError> {
+    set_tunnel_node_id_inner(&state, node_id).await
+}
+
+/// 写自定义 display_name + 按 DB 现状刷新 tunnel 配置(镜像
+/// [`set_tunnel_node_id_inner`] 的三态与重连路径)。
+///
+/// 显示名给人看(手机/远程节点列表),**无字符集限制**(允许中文,传输
+/// 已有 percent-encode);仅约束 trim 后非空且 ≤ 64 字符。
+/// - `Some(非空)` → 校验通过落 `tunnel_display_name`,重连后 remote 侧
+///   经 upsert 刷新 nodes.display_name;
+/// - `Some("")` → 删 key(回默认 hostname → node_id,读取逻辑在
+///   `build_tunnel_config` 不动);
+/// - `None` → 不动 key。
+///
+/// 非法(trim 空 / 超长)返 `InvalidRequest` **不写库**(08-26 增补需求 6)。
+pub async fn set_tunnel_display_name_inner(
+    state: &Arc<AppState>,
+    display_name: Option<String>,
+) -> Result<(), AppCommandError> {
+    use crate::daemon::tunnel::config::{
+        build_tunnel_config, KEY_REMOTE_URL, KEY_SHARED_SECRET, KEY_TUNNEL_DISPLAY_NAME,
+    };
+
+    match display_name {
+        // 空串 = 显式清除动作(删行,同 node_id 清除写法)。
+        Some(v) if v.is_empty() => {
+            db::delete_config_value(&state.db, KEY_TUNNEL_DISPLAY_NAME)
+                .await
+                .map_err(|e| anyhow::anyhow!("set_tunnel_display_name failed: {}", e))?;
+        }
+        Some(v) => {
+            // 非空串:trim 后须非空且 ≤ 64 字符(空白串视同非法值拒绝,
+            // 与 Some("") 的清除语义区分)。长度按字符数计(中文不是字节)。
+            let trimmed = v.trim();
+            if trimmed.is_empty() || trimmed.chars().count() > 64 {
+                return Err(AppCommandError::new(
+                    ErrorCategory::InvalidRequest,
+                    "显示名不能为空白,且长度不能超过 64 个字符".to_string(),
+                ));
+            }
+            db::set_config_value(&state.db, KEY_TUNNEL_DISPLAY_NAME, trimmed)
+                .await
+                .map_err(|e| anyhow::anyhow!("set_tunnel_display_name failed: {}", e))?;
+        }
+        None => { /* 不动 */ }
+    }
+
+    // 从 DB 重建 tunnel 配置(url 为空 → 停用;非空 → 新 display_name 经
+    // build_tunnel_config 的 key 读取生效)。
+    let remote_url = db::get_config_value(&state.db, KEY_REMOTE_URL)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_tunnel_display_name failed: {}", e))?
+        .unwrap_or_default();
+    let cfg = if remote_url.trim().is_empty() {
+        None
+    } else {
+        let shared_secret = db::get_config_value(&state.db, KEY_SHARED_SECRET)
+            .await
+            .map_err(|e| anyhow::anyhow!("set_tunnel_display_name failed: {}", e))?
+            .unwrap_or_default();
+        Some(build_tunnel_config(&state.db, remote_url.trim().to_string(), shared_secret).await)
+    };
+    state.tunnel_manager.set_config(cfg);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_tunnel_display_name(
+    state: State<'_, Arc<AppState>>,
+    display_name: Option<String>,
+) -> Result<(), AppCommandError> {
+    set_tunnel_display_name_inner(&state, display_name).await
 }
 
 /// tunnel 状态查询。未配置 remote → `None`;已配置 → 状态快照。
