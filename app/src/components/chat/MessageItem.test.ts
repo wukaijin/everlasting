@@ -763,3 +763,105 @@ describe("MessageItem — handoff summary row", () => {
     expect(wrapper.find(".msg-compact-summary__link").exists()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------
+// 08-26-f5-verify-followups P2: user 气泡内 @token 引用标识。
+// 用户消息走 markdown 渲染(v-html),实现为「渲染前把普通文本段的
+// @token 包成行内 code span + sanitized 后打 file-ref class」——
+// 此处钉住:
+//   - user 消息含 @token → 渲染出 code.file-ref(chip 样式挂点);
+//   - 纯文本 / 邮箱 → 不产生 file-ref;
+//   - 代码上下文(``` 围栏、行内 code、紧跟 code span 的 @)不包裹
+//     (包裹会破坏用户刻意写的 markdown 结构);
+//   - assistant 消息的 @ 不动(不属于用户引用标识范畴)。
+// 气泡经 50ms 防抖渲染,断言统一用 vi.waitFor 等最终帧。
+// ---------------------------------------------------------------------
+
+describe("MessageItem — user bubble @token highlight (08-26-f5 P2)", () => {
+  function makeUserMessage(content: string): ChatMessage {
+    return { id: "msg-user-1", role: "user", content };
+  }
+
+  it("renders @token in a user bubble as code.file-ref", async () => {
+    const wrapper = mountItem(makeUserMessage("@a.pdf 帮我总结要点"), pinia);
+    await vi.waitFor(() => {
+      const chip = wrapper.find(".msg__markdown code.file-ref");
+      expect(chip.exists()).toBe(true);
+      expect(chip.text()).toBe("@a.pdf");
+    });
+    // 正文其余部分不受影响。
+    expect(wrapper.find(".msg__markdown").text()).toContain("帮我总结要点");
+  });
+
+  it("renders CJK-filename @token as file-ref (Unicode FILE_RE)", async () => {
+    const wrapper = mountItem(
+      makeUserMessage("@台风智能体文档.docx 这个文档是什么"),
+      pinia,
+    );
+    await vi.waitFor(() => {
+      const chip = wrapper.find(".msg__markdown code.file-ref");
+      expect(chip.exists()).toBe(true);
+      expect(chip.text()).toBe("@台风智能体文档.docx");
+    });
+  });
+
+  it("marks multiple tokens and the @/absolute-path form", async () => {
+    const wrapper = mountItem(
+      makeUserMessage("@a.md 和 @/etc/hosts 对比一下"),
+      pinia,
+    );
+    await vi.waitFor(() => {
+      expect(
+        wrapper.findAll(".msg__markdown code.file-ref").map((c) => c.text()),
+      ).toEqual(["@a.md", "@/etc/hosts"]);
+    });
+  });
+
+  it("plain text and emails produce no file-ref", async () => {
+    const wrapper = mountItem(
+      makeUserMessage("普通一句话,发到 name@host.com 即可"),
+      pinia,
+    );
+    // 防抖落定后(气泡已有正文)仍不应出现任何 file-ref。
+    await vi.waitFor(() => {
+      expect(wrapper.find(".msg__markdown").text()).toContain("name@host.com");
+    });
+    expect(wrapper.find(".msg__markdown code.file-ref").exists()).toBe(false);
+  });
+
+  it("does NOT wrap @tokens inside fenced code blocks", async () => {
+    const wrapper = mountItem(
+      makeUserMessage("配置在:\n```\n@fenced.md\n```\n参考一下"),
+      pinia,
+    );
+    await vi.waitFor(() => {
+      expect(wrapper.find(".msg__markdown pre").exists()).toBe(true);
+    });
+    // 围栏内的 @ 保持字面量(若被包裹,围栏会被提前闭合并冒出
+    // code.file-ref —— 该断言同时钉住两种退化)。
+    expect(wrapper.find(".msg__markdown pre").text()).toContain("@fenced.md");
+    expect(wrapper.find(".msg__markdown code.file-ref").exists()).toBe(false);
+  });
+
+  it("does NOT wrap an @token glued right after an inline code span", async () => {
+    // 紧贴 code span 的 @ 不是词边界(与输入框 currentAtToken 规则
+    // 一致),不得包裹。
+    const wrapper = mountItem(makeUserMessage("看`x`@after.md 的说明"), pinia);
+    await vi.waitFor(() => {
+      expect(wrapper.find(".msg__markdown code").exists()).toBe(true);
+    });
+    expect(wrapper.find(".msg__markdown code.file-ref").exists()).toBe(false);
+    expect(wrapper.find(".msg__markdown").text()).toContain("@after.md");
+  });
+
+  it("leaves assistant messages untouched (no file-ref)", async () => {
+    const wrapper = mountItem(
+      { id: "msg-asst-1", role: "assistant", content: "看看 @some.md 吧" },
+      pinia,
+    );
+    await vi.waitFor(() => {
+      expect(wrapper.find(".msg__markdown").text()).toContain("@some.md");
+    });
+    expect(wrapper.find(".msg__markdown code.file-ref").exists()).toBe(false);
+  });
+});

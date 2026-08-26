@@ -68,22 +68,34 @@ interface TokenKind {
 const COMMAND_RE = /(^|[\s])(\/[A-Za-z][\w-]*)/g;
 
 /**
- * File token: `@` followed by a path-shaped run `[\w/.-]+`. The first
- * char after `@` MUST be a word char OR a `.` (i.e. `[.\w]`) so we
- * cover hidden / dotfiles like `.gitignore`, `.env`, `.babelrc`,
- * `.eslintrc`. The first char still MUST NOT be another `@` (the
- * `[.\w]` class excludes `@`), which guards against email-style runs
- * like `user@@host`. Must be preceded by whitespace or line start so
- * `name@host.com` emails stay uncolored — the `(^|[\s])` boundary
- * kills the `name@host` shape because `@` follows a word char, not
- * whitespace.
+ * @token 的「本体」pattern(不含边界组)。三处共用一份构造,防漂移:
+ * 输入框 chip 的 FILE_RE(带 `^|\s` 边界组)、MessageItem 气泡包裹的
+ * AT_FILE_TOKEN_G(= FILE_RE 克隆)、气泡 <code> 打 class 的
+ * CODE_AT_TOKEN_RE(无边界组)。2026-08-26 CJK 补修前这里曾各写一份
+ * ASCII `\w` 版本,漂移出「pdf 有色、中文 docx 无色」。
+ *
+ * 字符集约束:不得窄于后端 at_token_regex(`@([^\s@]+)`,at_file.rs)
+ * —— 否则出现「面板能选、注入成功、但前端无颜色」的形态断层。首字符
+ * 排除 `@`(防 `user@@host`);JS 的 `\w` 永远只匹配 ASCII,CJK 文件名
+ * 必须走 `\p{L}\p{N}` + `u` flag。
  */
-const FILE_RE = /(^|[\s])(@[.\w][\w/.-]*)/g;
+export const FILE_TOKEN_BODY = String.raw`@[\p{L}\p{N}./][\p{L}\p{N}./_-]*`;
+
+/**
+ * File token(带边界组):`@` + path 形态 run。`.` 覆盖 dotfile
+ * (`.gitignore` / `.env`),`/` 覆盖系统根形态 `@/etc/hosts`(P2 扩展),
+ * `\p{L}\p{N}` 覆盖 CJK 文件名。Must be preceded by whitespace or line
+ * start so `name@host.com` emails stay uncolored — the `(^|[\s])`
+ * boundary kills the `name@host` shape because `@` follows a word
+ * char, not whitespace. See FILE_TOKEN_BODY for the shared-body
+ * contract.
+ */
+export const FILE_RE = new RegExp(`(^|[\\s])(${FILE_TOKEN_BODY})`, "gu");
 
 /**
  * Agent token (explicit-agent-dispatch, 2026-06-30): `@@` followed by
  * an agent-name run `[A-Za-z0-9_-]+`. Mutually exclusive with FILE_RE
- * at the same offset — FILE_RE's `[.\w]` first class excludes `@`, so
+ * at the same offset — FILE_RE's first char class excludes `@`, so
  * `@@name` never matches FILE_RE, and AGENT_RE never matches `@file`
  * (needs the leading `@@`). Boundary rule (`(^|[\s])`) mirrors FILE_RE
  * so `x@@y` mid-word stays uncolored.

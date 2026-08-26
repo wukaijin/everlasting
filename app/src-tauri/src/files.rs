@@ -16,8 +16,10 @@
 //! **Synchronous** (std::fs + libgit2 are blocking); the Tauri command
 //! wraps [`walk_files`] in `spawn_blocking`. **No mtime cache**: unlike
 //! B3's command files (a handful, rarely change), a source tree churns
-//! constantly, and the frontend re-fetches on each `@` open anyway — a
-//! read-through fence would add complexity for no freshness win.
+//! constantly — and the frontend genuinely re-fetches the default `@`
+//! shallow list on every panel open (08-26-f5-verify-followups P1;
+//! only the `@/` system-root list stays session-cached), so a
+//! read-through fence here would add complexity for no freshness win.
 
 use std::path::{Path, PathBuf};
 

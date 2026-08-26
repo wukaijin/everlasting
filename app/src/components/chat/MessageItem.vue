@@ -44,6 +44,7 @@ import { askCardPropsFor as askCardPropsResolved } from "./messageCards/askCard"
 import { modeChangeCardPropsFor as modeChangeCardPropsResolved } from "./messageCards/modeChangeCard";
 import { taskStateTransitionCardPropsFor as taskStateTransitionCardPropsResolved } from "./messageCards/taskStateTransitionCard";
 import { buildTimeline, shouldUseTimeline, speakerAccentOf, speakerLabelOf, showSpeakerChipFor } from "./messageTimeline";
+import { FILE_RE, FILE_TOKEN_BODY } from "./chatInputTokens";
 import { useMessageEditing } from "./useMessageEditing";
 import { getToolResult } from "../../utils/messageFormat";
 import { createDebouncedRenderer, renderMarkdown } from "../../utils/markdown";
@@ -220,10 +221,138 @@ const {
 // the bubble is unmounted).
 const { rendered, schedule, flush, dispose } = createDebouncedRenderer(50);
 
+// --- 08-26-f5-verify-followups P2: user 气泡 @token 引用标识 -------------
+// 用户消息与 assistant 同走 markdown 渲染(v-html),无法走纯插值切分;
+// 采用「渲染前包裹」:把普通文本段里的 @token 包成行内 code span
+// (`@foo.md`)。选 code span 而非注入裸 HTML:内容经 marked 的
+// code-span 路径逐字转义输出,token 里的 `_`/`-` 等不会与强调等
+// markdown 语法互相污染。包裹前按 CommonMark 形态避开代码上下文
+// (``` / ~~~ 围栏、行内 code span)—— 用户刻意写进代码里的 @ 不动,
+// 避免插入的反引号破坏其原有结构。token 正则复用 chatInputTokens.ts
+// 的 FILE_RE(与输入框 chip 同一套定义,防两处漂移);克隆实例仅为
+// 隔离 lastIndex,/g replace 本身不残留状态。
+const AT_FILE_TOKEN_G = new RegExp(FILE_RE.source, FILE_RE.flags);
+
+function wrapAtFileTokensOutsideCode(src: string): string {
+  const n = src.length;
+  let out = "";
+  let plain = "";
+  // 普通文本段首字符(跨段视角)的前一个字符是否构成 token 边界
+  // (行首/空白)。紧跟行内 code span 的 @ 不是边界(与输入框
+  // currentAtToken 的边界规则一致),不包裹。
+  let prevBoundary = true;
+  // 段首边界必须在「段开始那一刻」捕获 —— prevBoundary 会随段内每个
+  // 字符更新,flush 时读到的已是段尾状态。
+  let plainStartBoundary = true;
+  const flushPlain = () => {
+    if (!plain) return;
+    const boundaryAtSegStart = plainStartBoundary;
+    out += plain.replace(AT_FILE_TOKEN_G, (whole, boundary: string, token: string, offset: number) => {
+      if (offset === 0 && !boundaryAtSegStart) return whole;
+      return `${boundary}\`${token}\``;
+    });
+    plain = "";
+  };
+  let i = 0;
+  while (i < n) {
+    const ch = src[i];
+    // 行首围栏(``` / ~~~):整段到闭合围栏行行尾(含换行)跳过,未闭合
+    // 吞到 EOF(CommonMark 同语义)。简化点:闭合判定只认同字符 >=3,
+    // 不校验「不短于开栏长度」—— 聊天输入里 5+ 长度围栏配短闭栏的
+    // 构造足以忽略,退化也只是多包一个 token,不改写原文本。
+    if (
+      (i === 0 || src[i - 1] === "\n") &&
+      (ch === "`" || ch === "~") &&
+      src[i + 1] === ch &&
+      src[i + 2] === ch
+    ) {
+      let lineStart = src.indexOf("\n", i) + 1;
+      let closed = -1;
+      while (lineStart > 0 && lineStart <= n) {
+        let cnt = 0;
+        while (lineStart + cnt < n && src[lineStart + cnt] === ch) cnt++;
+        const after = lineStart + cnt < n ? src[lineStart + cnt] : "";
+        if (cnt >= 3 && (after === "" || /\s/.test(after))) {
+          const lineEnd = src.indexOf("\n", lineStart + cnt);
+          closed = lineEnd === -1 ? n : lineEnd + 1;
+          break;
+        }
+        const nl = src.indexOf("\n", lineStart);
+        if (nl === -1) break;
+        lineStart = nl + 1;
+      }
+      const segEnd = closed !== -1 ? closed : n;
+      flushPlain();
+      out += src.slice(i, segEnd);
+      prevBoundary = true;
+      i = segEnd;
+      continue;
+    }
+    // 行内 code span:等长反引号串开闭(CommonMark);找不到等长闭合
+    // 串时整个 run 按普通文本消费(此时它本就是字面量)。
+    if (ch === "`") {
+      let run = 1;
+      while (i + run < n && src[i + run] === "`") run++;
+      let j = i + run;
+      let close = -1;
+      while (j < n) {
+        if (src[j] === "`") {
+          let r2 = 1;
+          while (j + r2 < n && src[j + r2] === "`") r2++;
+          if (r2 === run) {
+            close = j;
+            break;
+          }
+          j += r2;
+        } else {
+          j++;
+        }
+      }
+      if (close !== -1) {
+        flushPlain();
+        out += src.slice(i, close + run);
+        prevBoundary = false;
+        i = close + run;
+        continue;
+      }
+      plain += "`".repeat(run);
+      prevBoundary = false;
+      i += run;
+      continue;
+    }
+    if (plain === "") plainStartBoundary = prevBoundary;
+    plain += ch;
+    prevBoundary = /\s/.test(ch);
+    i++;
+  }
+  flushPlain();
+  return out;
+}
+
+/** sanitized 输出里的 `<code>@token</code>`(包裹产物,以及用户手打的
+ *  同形 inline code)→ 打 file-ref class,样式层与普通 code 区分。
+ *  token 本体复用 FILE_TOKEN_BODY —— 此前这里独立写了一份 ASCII `\w`
+ *  版本,FILE_RE 修成 Unicode 后它没跟上,出现过「pdf 有色、中文 docx
+ *  无色」的三处漂移(输入框 chip / 气泡包裹 / 打 class)。 */
+const CODE_AT_TOKEN_RE = new RegExp(`<code>(${FILE_TOKEN_BODY})</code>`, "gu");
+
+/** 气泡最终 HTML:user 行在 rendered 基础上补 file-ref class;其余角色
+ *  (assistant markdown / 摘要行)原样 —— assistant 的 @ 不属于用户引用
+ *  标识范畴,保持 markdown 语义不动。 */
+const bubbleHtml = computed<string>(() =>
+  props.message.role === "user"
+    ? rendered.value.replace(CODE_AT_TOKEN_RE, '<code class="file-ref">$1</code>')
+    : rendered.value,
+);
+
 watch(
   () => props.message.content,
   (next) => {
-    schedule(next);
+    schedule(
+      props.message.role === "user" && typeof next === "string"
+        ? wrapAtFileTokensOutsideCode(next)
+        : next,
+    );
   },
   { immediate: true },
 );
@@ -852,10 +981,12 @@ const messageImages = computed<
     />
 
     <div v-else-if="showBubble && !useTimeline" class="msg__bubble">
+      <!-- 08-26-f5-verify-followups P2:user 行经 bubbleHtml(@token 包裹 +
+           file-ref class);其余角色与原 rendered 等价。 -->
       <span
         v-if="hasVisibleBubble || message.content"
         class="msg__markdown"
-        v-html="rendered"
+        v-html="bubbleHtml"
       />
       <span v-if="message.streaming" class="msg__cursor" aria-hidden="true"
         >▍</span
@@ -1464,6 +1595,19 @@ const messageImages = computed<
   border-radius: 3px;
   background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
   border: 1px solid var(--color-bg-border-strong);
+}
+
+/* 08-26-f5-verify-followups P2: user 气泡内 @token 引用标识。基座复用
+   上面 code 的 chip 形状(mono / padding / radius / 边框),只把配色切
+   到 read 家族 —— 与输入框 cm-token-file chip、TriggerMenu 文件项的
+   source chip 同一套 color-mix 配比,"用户引用了一个文件"在发送后仍
+   可辨。break-all:窄屏长路径可断行,不撑破气泡。 */
+.msg__markdown :deep(code.file-ref) {
+  color: var(--color-tool-read);
+  font-weight: var(--weight-semibold);
+  background: color-mix(in srgb, var(--color-tool-read) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-tool-read) 40%, transparent);
+  word-break: break-all;
 }
 
 .msg__markdown :deep(pre) {

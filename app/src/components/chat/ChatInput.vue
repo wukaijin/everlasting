@@ -1,28 +1,17 @@
 <script lang="ts">
-// Module-scope IPC cache for `@`-mention file lists. Lives outside
-// `<script setup>` so it survives ChatInput remounts (e.g. when the
-// chat panel is destroyed and re-created on session switch).
+// `@`-mention 文件列表的模块级缓存。放在 `<script setup>` 之外,使其
+// 在 ChatInput 重挂载后(session 切换销毁重建 chat panel)也能存活。
 //
-// Two independent caches:
-//   - `fileCache: Map<projectId, shallow[]>` — per-project shallow
-//     (3-layer) walk under `project.path`. Invalidated when
-//     `projectsStore.currentProjectId` changes (see the `watch`
-//     in `<script setup>`).
-//   - `systemRootCache: TriggerMenuItem[] | null` — the literal `/`
-//     walk served by `list_files_at`. Project-independent (the
-//     filesystem root doesn't change with the project), so it
-//     survives project switches and only resets when the app
-//     reloads the cache (no automatic invalidation today).
+// 08-26-f5-verify-followups P1 之后这里只剩一份缓存:
+//   - `systemRootCache: TriggerMenuItem[] | null` — `@/` 字面根
+//     walk(`list_files_at("/")`,~1s + 5000 文件 cap)。与项目无关
+//     (文件系统根不随项目变),会话级缓存、跨项目切换保留。
 //
-// The composable owns the reactive `fileItems` / `fileSystemRootItems`
-// refs and the per-mode `loaded` flags; `resetFilePanelState` on
-// project switch clears those + the per-project `fileCache` entry.
-
-interface FileCacheEntry {
-  shallow?: import("./TriggerMenu.vue").TriggerMenuItem[];
-}
-
-const fileCache = new Map<string, FileCacheEntry>();
+// 浅层(`@` 默认 3 层 walk)曾有按 projectId 的 `fileCache`,与
+// composable 的 shallowLoaded 标志构成两层只进不出的缓存 —— 同项目
+// 新 copy 的文件在面板里永远不可见,只能切项目往返或重载窗口。现已
+// 移除:浅层列表每次面板打开即重拉(in-flight 去重在 composable
+// 侧),3 层小 walk 毫秒级,重拉开销可接受。
 
 let systemRootCache: import("./TriggerMenu.vue").TriggerMenuItem[] | null = null;
 
@@ -307,7 +296,7 @@ const cm = useChatInputCodeMirror({
         return await getOrLoadSystemRoot();
       }
       if (!projectId) return [];
-      return await getOrLoadShallow(projectId);
+      return await fetchShallowFiles(projectId);
     } catch (e) {
       console.error("list_files failed:", e);
       return [];
@@ -333,12 +322,13 @@ const cm = useChatInputCodeMirror({
   },
 });
 
-// === `@`-mention file list cache =================================
+// === `@`-mention file list loading =================================
 //
-// Two paths through `getOrLoad*`:
-// - `getOrLoadShallow(projectId)` → `list_files(projectId, 3)` —
-//   the default-`@` 3-layer walk under project root. Cached per
-//   project.
+// Two paths through `fileItemsSource`:
+// - `fetchShallowFiles(projectId)` → `list_files(projectId, 3)` —
+//   the default-`@` 3-layer walk under project root. NOT cached:
+//   re-fetched on every panel open (08-26-f5-verify-followups P1)
+//   so files newly copied into the project show up on re-open.
 // - `getOrLoadSystemRoot()` → `list_files_at("/", 4)` — the literal
 //   filesystem root walk served when the user types `@/` (e.g. to
 //   mention `/etc/hosts`). Cached globally (project-independent).
@@ -356,19 +346,17 @@ const FILE_SHALLOW_DEPTH = 3;
  *  alone exceeds the 5000-file IPC cap and the picker degrades. */
 const FILE_SYSTEM_ROOT_DEPTH = 4;
 
-async function getOrLoadShallow(
+/** 浅层列表:每次直连 `list_files`(3 层 walk),不缓存 —— 面板每次
+ *  打开都应看到当前磁盘状态。速率保护在 composable 侧(in-flight
+ *  去重),不在 IPC 层。 */
+async function fetchShallowFiles(
   projectId: string,
 ): Promise<TriggerMenuItem[]> {
-  const entry = fileCache.get(projectId);
-  if (entry?.shallow) return entry.shallow;
-
   const paths = await transport.invoke<string[]>("list_files", {
     projectId,
     maxDepth: FILE_SHALLOW_DEPTH,
   });
-  const items = paths.map((p) => ({ key: p, name: p }));
-  fileCache.set(projectId, { shallow: items });
-  return items;
+  return paths.map((p) => ({ key: p, name: p }));
 }
 
 async function getOrLoadSystemRoot(): Promise<TriggerMenuItem[]> {
@@ -385,21 +373,16 @@ async function getOrLoadSystemRoot(): Promise<TriggerMenuItem[]> {
   return items;
 }
 
-/** On project switch: wipe BOTH the IPC cache (this module's
- *  module-scope `fileCache`) and the composable's reactive panel
- *  state (`fileItems` / `fileSystemRootItems` / loaded flags).
- *  `systemRootCache` is deliberately preserved — the filesystem
- *  root doesn't change with the project, and clearing it forces a
- *  fresh `/` walk (~1s) for no gain. Skipping the composable reset
- *  is what caused the original bug — the IPC cache was cleared but
- *  `cm.fileItems.value` still held the previous project's list, so
- *  the next `@` open rendered stale paths because `shallowLoaded`
- *  was still true and the IPC fetch was skipped. */
+/** 项目切换:重置 composable 的面板状态(items / system_root 的
+ *  loaded 标志 / 视图模式),并通过代数 +1 detach 进行中的浅层
+ *  fetch(迟到写回被 gen 守卫丢弃)。浅层的按项目 IPC 缓存
+ *  (`fileCache`)已随 08-26-f5-verify-followups P1 移除,无需在此
+ *  清理;`systemRootCache` 有意保留 —— 文件系统根不随项目变,清掉
+ *  只会白白重跑 ~1s 的 `/` walk。 */
 watch(
   () => projectsStore.currentProjectId,
   (newId, oldId) => {
     if (oldId && newId !== oldId) {
-      fileCache.delete(oldId);
       cm.resetFilePanelState();
     }
   },
@@ -1159,20 +1142,33 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
   font-weight: var(--weight-semibold);
 }
 
-:deep(.chat-input__field .cm-editor .cm-content .cm-token-file) {
-  color: var(--color-tool-read);
-  font-weight: var(--weight-semibold);
-}
-
-:deep(.chat-input__field .cm-editor .cm-content .cm-token-skill) {
-  color: var(--color-tool-thinking);
-  font-weight: var(--weight-semibold);
-}
-
 /* explicit-agent-dispatch (2026-06-30): @@agent token. Uses the
    thinking color (violet) — the agent dispatch is a directive layer
    akin to skills, distinct from file (read cyan) + command (accent). */
 :deep(.chat-input__field .cm-editor .cm-content .cm-token-agent) {
+  color: var(--color-tool-thinking);
+  font-weight: var(--weight-semibold);
+}
+
+/* 08-26-f5-verify-followups P2: `@file` token chip 化 —— 只上文字色
+   时与手打正文区分度不足(真机验证反馈)。背景/边框走 read 家族
+   (与 TriggerMenu 文件项的 source chip 同一套 color-mix 配比),
+   保持 mark 装饰(无 widget,IME 安全);padding 只给横向 —— inline
+   span 的纵向 padding 不参与行盒高度,给 0 避免行高漂移。
+   break-all:超长路径在窄屏可断行,不撑爆输入框;box-decoration-break
+   让 chip 跨 CM 软换行时每个片段都保留完整圆角形状。 */
+:deep(.chat-input__field .cm-editor .cm-content .cm-token-file) {
+  color: var(--color-tool-read);
+  font-weight: var(--weight-semibold);
+  background: color-mix(in srgb, var(--color-tool-read) 12%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  word-break: break-all;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+:deep(.chat-input__field .cm-editor .cm-content .cm-token-skill) {
   color: var(--color-tool-thinking);
   font-weight: var(--weight-semibold);
 }

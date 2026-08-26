@@ -122,12 +122,15 @@ export interface ChatInputCodeMirrorApi {
    *  (`@/`-prefixed). Driven by the filter string —
    *  `filter.startsWith("/")` → system_root. */
   fileViewMode: Ref<FileViewMode>;
-  /** Wipe file-panel state: items arrays, per-mode loaded flags,
-   *  view mode, and any open palette. Use this when the surrounding
-   *  context changes (e.g. project switch) and stale lists would
-   *  otherwise leak across. `opts.fileItemsSource` is NOT re-invoked
-   *  until the user types `@` again — the parent's IPC cache is the
-   *  source of truth for what's already known about the new context. */
+  /** Wipe file-panel state: items arrays, the system-root loaded
+   *  flag, view mode, and any open palette. Use this when the
+   *  surrounding context changes (e.g. project switch) and stale
+   *  lists would otherwise leak across. In-flight shallow fetches
+   *  are detached via a generation bump (their late writes are
+   *  dropped by a gen guard). `opts.fileItemsSource` is re-invoked
+   *  on the next `@` open — shallow re-fetches on every open anyway
+   *  (08-26-f5-verify-followups P1), and the parent keeps no
+   *  shallow-side cache to fall back on. */
   resetFilePanelState: () => void;
   // --- explicit-agent-dispatch (2026-06-30): @@-trigger agent panel
   /** Read the `@@` token at the caret. Null when not on a `@@` line.
@@ -234,8 +237,11 @@ export interface UseChatInputCodeMirrorOpts {
   commandItemsSource?: () => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
   /** Optional callback invoked from `syncFilePalette` to refresh
    *  the file panel's items. The composable passes the desired view
-   *  mode so the parent can serve a shallow (cheap, default) or full
-   *  (cached, slower) list without re-walking. */
+   *  mode — the contract differs per mode (08-26-f5-verify-followups
+   *  P1): shallow (cheap 3-layer walk) is fetched FRESH on every
+   *  panel open (in-flight deduped; the parent must NOT cache it),
+   *  while system_root (slow `/` walk, 5000-file cap) is fetched
+   *  once and cached for the session on the parent side. */
   fileItemsSource?: (mode: FileViewMode) => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
   /** B1 (2026-08-16) image-multimodal: invoked when a paste event
    *  carries image files. The composable intercepts the paste
@@ -279,7 +285,22 @@ export function useChatInputCodeMirror(
   const fileViewMode = ref<FileViewMode>("shallow");
   // Marker so we don't refetch on every keystroke. Cleared on close.
   let commandsLoaded = false;
-  let shallowLoaded = false;
+  // 08-26-f5-verify-followups P1:浅层列表(`@` 默认 3 层 walk)改为
+  // 「每次面板打开即重拉」,只保留 in-flight 去重 —— `shallowInFlight`
+  // 持有进行中的 fetch,并发调用共享同一次;settle 后置 null,下一次
+  // openFilePalette 可以再次触发。不再有"已加载即跳过"的 loaded 标志
+  // (旧 `shallowLoaded` 导致同项目新 copy 的文件在面板里永远不可见,
+  // 只能切项目往返或重载窗口)。3 层小 walk 毫秒级,重拉开销可接受。
+  let shallowInFlight: Promise<void> | null = null;
+  // 浅层 fetch 的代数计数:resetFilePanelState(项目切换)时 +1 并
+  // detach in-flight;迟到的旧 fetch 即使 settle 也不得写回 items /
+  // 清掉新 fetch 的 in-flight 槽位(gen 守卫),否则会把上一个项目
+  // 的列表泄漏进新项目的面板。
+  let shallowFetchGen = 0;
+  // system_root(`@/` 字面根 walk)维持会话级 loaded 缓存:该 walk
+  // ~1s 且带 5000 文件 IPC cap,每次重开都重跑得不偿失;文件系统根
+  // 在会话内基本不变,陈旧风险远低于项目目录 —— 与浅层的差异是
+  // 有意为之,勿"顺手统一"。
   let systemRootLoaded = false;
 
   // TriggerMenu ref handles — the parent sets these via
@@ -535,31 +556,43 @@ export function useChatInputCodeMirror(
     return filter.startsWith("/") ? "system_root" : "shallow";
   }
 
-  /** Load (or return the cached) list for the given mode. The actual
-   *  caching is done in the parent — the composable just guards
-   *  against duplicate in-flight fetches by flipping a loaded flag. */
+  /** 按模式加载文件列表。两种模式语义刻意不同(见上方状态声明):
+   *  - shallow:每次调用都发起 fetch,仅做 in-flight 去重(并发调用
+   *    共享同一 promise);settle 后清除,下次面板打开重拉 —— 这是
+   *    "同项目新 copy 的文件重开面板即可见"的唯一保证。
+   *  - system_root:loaded-flag 会话级缓存(`/` walk ~1s + 5000 文件
+   *    cap,重开重跑得不偿失);出错也置 loaded,坏根目录不至于
+   *    每次触发重 walk,空列表即用户可见信号。
+   *  shallow 出错不缓存:没有 loaded 标志,下一次面板打开自然重试。 */
   async function loadFilesForMode(mode: FileViewMode): Promise<void> {
-    const loaded = mode === "system_root" ? systemRootLoaded : shallowLoaded;
-    if (loaded || !opts.fileItemsSource) return;
-    try {
-      const items = await opts.fileItemsSource(mode);
-      if (mode === "system_root") {
-        fileSystemRootItems.value = items;
-      } else {
-        fileShallowItems.value = items;
-      }
-      if (mode === "system_root") systemRootLoaded = true; else shallowLoaded = true;
-    } catch (e) {
-      console.error("fileItemsSource failed:", e);
-      if (mode === "system_root") {
+    const source = opts.fileItemsSource;
+    if (!source) return;
+    if (mode === "system_root") {
+      if (systemRootLoaded) return;
+      try {
+        fileSystemRootItems.value = await source(mode);
+        systemRootLoaded = true;
+      } catch (e) {
+        console.error("fileItemsSource failed:", e);
         fileSystemRootItems.value = [];
-      } else {
-        fileShallowItems.value = [];
+        systemRootLoaded = true;
       }
-      // Mark loaded even on error so a bad project doesn't re-throw
-      // on every keystroke. The empty list is the user-visible signal.
-      if (mode === "system_root") systemRootLoaded = true; else shallowLoaded = true;
+      return;
     }
+    if (shallowInFlight) return shallowInFlight;
+    const gen = shallowFetchGen;
+    shallowInFlight = (async () => {
+      try {
+        const items = await source(mode);
+        if (gen === shallowFetchGen) fileShallowItems.value = items;
+      } catch (e) {
+        console.error("fileItemsSource failed:", e);
+        if (gen === shallowFetchGen) fileShallowItems.value = [];
+      } finally {
+        if (gen === shallowFetchGen) shallowInFlight = null;
+      }
+    })();
+    return shallowInFlight;
   }
 
   /** Items the TriggerMenu should render. Picks one of the two
@@ -584,10 +617,11 @@ export function useChatInputCodeMirror(
 
   function closeFilePalette(): void {
     filePaletteOpen.value = false;
-    // Keep shallowLoaded / fullLoaded + the cached arrays. The parent
-    // owns the IPC cache; re-opening `@` (or `@/`) should be instant
-    // when the previous fetch succeeded. Only `fileFilter` resets so
-    // the panel doesn't keep stale text after a close+reopen cycle.
+    // 关闭不重置 items 数组:重开瞬间先渲染上一轮列表,新数据到达后
+    // 原位替换 —— 这是"每次打开重拉"语义下的体验兜底(fetch 进行中
+    // 面板不至于闪空)。浅层没有 loaded 标志,重开必重拉(见
+    // loadFilesForMode);system_root 的缓存由 systemRootLoaded 维持。
+    // 只有 fileFilter 重置,避免 close+reopen 后残留上次的过滤词。
     fileFilter.value = "";
   }
 
@@ -601,7 +635,10 @@ export function useChatInputCodeMirror(
     fileSystemRootItems.value = [];
     fileFilter.value = "";
     fileViewMode.value = "shallow";
-    shallowLoaded = false;
+    // 浅层:代数 +1 并 detach in-flight —— 迟到的旧 fetch 被 gen
+    // 守卫丢弃,下一次面板打开发起全新 fetch。
+    shallowFetchGen++;
+    shallowInFlight = null;
     systemRootLoaded = false;
   }
 
