@@ -931,7 +931,7 @@ F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链
 - F5 follow-up 档仍开放:xlsx/pptx 提取、pdfium 渲染扫描件(老编码家族 GB-EUC/B5pc 等届时连带覆盖)、正式 document skill
 
 
-## Session 113: 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢)
+## Session 114: 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢)
 
 **Date**: 2026-08-26
 **Task**: 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢)

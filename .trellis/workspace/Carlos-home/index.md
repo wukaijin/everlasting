@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 113
+- **Total Sessions**: 114
 - **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
@@ -32,7 +32,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 113 | 2026-08-26 | 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢) | `0eb5d89` | `main` |
+| 114 | 2026-08-26 | 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢) | `0eb5d89` | `main` |
+| 113 | 2026-08-26 | F5 验证三问题修复收口 + 双任务归档 | `9f3bad1`, `6caf4b8` | `main` |
 | 112 | 2026-08-26 | F5 PDF/docx 原生文本提取落地(第一档) | - | `main` |
 | 111 | 2026-08-25 | F1 消息队列·用户连发档落地 + 三轮评审收口归档 | `92a480b`, `f5fc9ba`, `d687273`, `48471e8` | `main` |
 | 110 | 2026-08-25 | F4 web_search 工具全量落地(WP1-WP4) | `7508228`, `5a3ae99`, `a9a78d2`, `eb1be36`, `a50d3f9` | `main` |
