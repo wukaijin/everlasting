@@ -35,7 +35,7 @@ use tauri::{AppHandle, State};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::chat_loop::{run_chat_loop, CallerRole, ChatLoopDeps, ChatLoopRequest};
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
 use crate::agent::subagent::{AppHandleSubagentSink, SubagentEventSink};
 use crate::error::AppCommandError;
@@ -103,14 +103,16 @@ pub async fn chat(
         Arc::new(AppHandleSubagentSink { app: app.clone() });
     chat_inner(
         state.inner(),
-        request_id,
-        session_id,
-        messages,
-        sink,
-        Some(state.inner().catalog.clone()),
-        worker_event_sink,
-        resendSeq,
-        forcedDispatch,
+        crate::agent::chat::ChatEntry {
+            request_id,
+            session_id,
+            messages,
+            sink,
+            worker_catalog: Some(state.inner().catalog.clone()),
+            worker_event_sink,
+            resend_seq: resendSeq,
+            forced_dispatch: forcedDispatch,
+        },
     )
     .await
 }
@@ -142,7 +144,7 @@ pub async fn chat(
 /// gets live worker events via `HttpSseSubagentSink`) is deferred to
 /// a follow-up — see task `07-20-remote-access-daemon-split` implement.md
 /// C5 "完整 subagent sink 注入" 复盘点.
-#[allow(clippy::too_many_arguments)]
+///
 /// F1 消息队列(2026-08-25):`chat` 入口的受理结果(design §2/§8)。
 ///
 /// - `Started`:session 空闲,请求已认领 slot 并开跑 —— 响应形状与
@@ -162,25 +164,43 @@ pub enum ChatAcceptance {
     Queued { id: String, position: usize },
 }
 
-// See DEBT.md RULE-ARGS-001 (parameter-object epic, tracked separately).
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn chat_inner(
-    state: &Arc<AppState>,
-    request_id: String,
-    session_id: String,
-    messages: Vec<ChatMessage>,
-    sink: Arc<dyn ChatEventSink>,
+/// 传输层入口载荷（RULE-ARGS-001：chat_inner 收敛为二元签名 —— state +
+/// 本包；原 9 位参的具名化）。Tauri 命令与 daemon HTTP 两条传输各自构造。
+pub(crate) struct ChatEntry {
+    pub(crate) request_id: String,
+    pub(crate) session_id: String,
+    pub(crate) messages: Vec<ChatMessage>,
+    /// 由传输层预先构建（AppHandleSink / HttpSseSink）。
+    pub(crate) sink: Arc<dyn ChatEventSink>,
     // P2.4 C5 (2026-07-22): worker dispatch context (replaces
-    // `app_opt: Option<AppHandle>`). Forwarded to `run_chat_loop`'s
+    // `app_opt: Option<AppHandle>`). Forwarded to the loop's
     // `worker_catalog` + `worker_event_sink`. Tauri passes
     // (state.catalog, AppHandleSubagentSink); daemon passes
-    // (state.catalog, HttpSseSubagentSink) — the daemon path now
-    // gets live worker `subagent:event` (was buffer-only pre-C5).
-    worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
-    worker_event_sink: Arc<dyn SubagentEventSink>,
-    resend_seq: Option<i64>,
-    forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
+    // (state.catalog, HttpSseSubagentSink) — both get live worker
+    // `subagent:event`.
+    pub(crate) worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
+    pub(crate) worker_event_sink: Arc<dyn SubagentEventSink>,
+    // D3 PR3 (2026-06-17): resend context — see suite.rs /
+    // CallerRole docs for downstream semantics.
+    pub(crate) resend_seq: Option<i64>,
+    // explicit-agent-dispatch (2026-06-30): `@@<agent> <task>` prefix.
+    pub(crate) forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
+}
+
+pub(crate) async fn chat_inner(
+    state: &Arc<AppState>,
+    entry: ChatEntry,
 ) -> Result<ChatAcceptance, AppCommandError> {
+    let crate::agent::chat::ChatEntry {
+        request_id,
+        session_id,
+        messages,
+        sink,
+        worker_catalog,
+        worker_event_sink,
+        resend_seq,
+        forced_dispatch,
+    } = entry;
     let tool_defs = state.tools.clone();
     // B1 (2026-08-16): image-attachment caps, enforced at the shared
     // entry so both transports return a clear error instead of a
@@ -224,19 +244,6 @@ pub(crate) async fn chat_inner(
     let cancellations = state.cancellations.clone();
     let session_active_request = state.session_active_request.clone();
     let inflight_exits = state.inflight_exits.clone();
-    let read_guard = state.read_guard.clone();
-    let memory_cache = state.memory_cache.clone();
-    let skill_cache = state.skill_cache.clone();
-    let permission_asks = state.permission_asks.clone();
-    // 2026-06-30 (`ask_user_question` task): clone the parallel
-    // `QuestionStore` from `AppState`. Source-of-truth for the
-    // in-flight `ask_user_question` oneshot map (frontend IPC
-    // resolves through `commands::question::resolve_tool_question`).
-    // Must be cloned BEFORE the spawn closure so the captured
-    // value doesn't outlive the borrowed `state`'s lifetime
-    // (the borrow checker rejects `state.foo` references inside
-    // an `async move` block on `tokio::spawn`).
-    let question_store = state.question_store.clone();
     // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
     // build the per-session workflow context BEFORE the spawn.
     // Async, resolves `sessions.workflow_enabled` from the DB
@@ -270,12 +277,6 @@ pub(crate) async fn chat_inner(
             None
         }
     };
-    // L1a (2026-06-19): clone the cross-request background-shell
-    // registry BEFORE the spawn so the move closure doesn't
-    // capture a borrowed `state`. Threaded into `run_chat_loop` so
-    // the agent loop can drain completion notifications each turn
-    // and the 3 L1a tools can call into it from `ToolContext`.
-    let background_shells = state.background_shells.clone();
     // Group chat (07-29-group-chat): resolve the group-chat context
     // BEFORE the spawn, mirroring `build_workflow_ctx`. `None` for
     // classic-chat sessions (zero overhead). When `Some`, the spawn
@@ -293,21 +294,9 @@ pub(crate) async fn chat_inner(
                 None
             }
         };
-    // L3d (2026-06-25): clone the subagent cache so the agent loop
-    // can build the dynamic `dispatch_subagent` enum + look up
-    // workers by name. Same closure-capture pattern as the other
-    // `Arc<...>` handles above.
-    let subagent_cache = state.subagent_cache.clone();
-    // L3b (2026-06-27): clone the app data dir so the spawn closure
-    // can capture it by value (state is borrowed — the closure
-    // must not borrow from it).
+    // L3b (2026-06-27): app data dir（role 字段，不入 ChatLoopDeps ——
+    // worker 嵌套会传不同值，见 CallerRole.app_data_dir 文档）。
     let app_data_dir = state.app_data_dir.clone();
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): clone the
-    // session-keyed stub loaded-set registry for the spawn closure.
-    // The classic-chat path's `run_chat_loop` uses it for stubify
-    // (第 4 环) + the load_tool_schemas / 直呼自愈 interception
-    // (跨 request 粘性 — AC4)。
-    let stub_loaded = state.stub_loaded.clone();
     let rid = request_id;
     let sink_for_spawn = sink.clone();
 
@@ -550,7 +539,29 @@ pub(crate) async fn chat_inner(
     // `chat_loop.rs` uses the same trait for ALL emits, so tests
     // get a single MockEmitter sink.
 
+    // RULE-ARGS-001 统一构造路径：三条分发分支（群聊编排 / 队列驱动器 /
+    // 经典单聊）共享同一份 AppState 派生套件，杜绝三处分头拼装漂移。
+    // token 是每请求新建并在下方注册进 cancellations 的（不能从
+    // AppState 派生），故作为构造参数显式传入。
+    let loop_deps = ChatLoopDeps::from_app_state(state, token.clone());
+
     tokio::spawn(async move {
+        // RULE-ARGS-001：套件解构 —— 还原与旧闭包捕获同名的局部绑定，
+        // 三条分支的既有实参表达式逐字节保持。
+        let crate::agent::chat_loop::ChatLoopDeps {
+            db,
+            cancellations,
+            session_active_request,
+            read_guard,
+            memory_cache,
+            skill_cache,
+            permission_asks,
+            token,
+            background_shells,
+            stub_loaded,
+            question_store,
+            subagent_cache,
+        } = loop_deps;
         // Agent loop body is now unified with `chat_loop::run_chat_loop`
         // (P1 RULE-A-006 closure, 2026-06-15). The original inline
         // ~1000-line closure was a faithful copy of `run_chat_loop`;
@@ -634,15 +645,14 @@ pub(crate) async fn chat_inner(
             })
             .await;
         } else {
-            run_chat_loop(
-                tool_defs,
-                provider,
-                context_window,
-                provider_id,
-                rid.clone(),
-                session_id.clone(),
-                messages,
-                sink_for_spawn,
+            // RULE-ARGS-001：经典单聊主路 —— 三套件构建。
+            // - max_turns=None（生产默认 MAX_TURNS 预算）；
+            // - skip 三兄弟全 false（guard-owned 清理 / 全量持久化 /
+            //   单发路径守卫归 loop 所有，见各字段文档）；
+            // - is_worker=Some(false)：RULE-A-014 的调用点显式契约；
+            // - worker 双件与 overrides 均按父路语义传 None；
+            // - group_chat_state/current_speaker=None（群聊走上面的编排分支）。
+            let deps = ChatLoopDeps::from(crate::agent::chat_loop::ChatLoopDepsParts {
                 db,
                 cancellations,
                 session_active_request,
@@ -651,149 +661,44 @@ pub(crate) async fn chat_inner(
                 skill_cache,
                 permission_asks,
                 token,
-                // D3 PR3 (2026-06-17): pass the resend context
-                // through so the user-message persist site can
-                // fire the `resend_message` audit row when set.
-                // `None` for normal sends (the common case).
-                resend_seq,
-                // L1a (2026-06-19): cross-request registry. Threaded
-                // through so the 3 L1a tools can start / query / kill
-                // background processes and the agent loop can drain
-                // completion notifications each turn.
-                background_shells.clone(),
-                // B6 Subagent (2026-06-19, review #4): `None` keeps
-                // the default `MAX_TURNS` (50) budget for the
-                // production chat path. Worker agents (PR1b) pass
-                // `Some(20)` to bound their own turn budget.
-                None,
-                // B6 Subagent (PR1b review #2): production chat owns
-                // the session's "active request" slot, so the guard's
-                // Drop must clear it. Workers pass `true` to skip.
-                false,
-                // B6 Subagent (PR1b): production chat persists every
-                // turn normally. Workers pass `true` so their
-                // intermediate turns stay in-memory only (the
-                // SubagentBufferSink captures them; PR2 persists the
-                // transcript into `subagent_runs`). Production MUST
-                // persist — the user's turns are the source of truth.
-                false,
-                // B6 Subagent PR2b (RULE-A-014, 2026-06-20): production
-                // chat is never a worker. `Some(false)` makes the
-                // production-style default explicit at the call site;
-                // inside `run_chat_loop` this falls through to the
-                // session-row mode (Edit/Plan/Yolo) with
-                // `PermissionContext.is_worker = false` — Tier 4 ask
-                // is reachable (permission:ask modal works normally).
-                Some(false),
-                // P2.4 C5 (2026-07-22): forward the worker dispatch
-                // context (catalog + event sink) to `run_chat_loop`'s
-                // 22nd/23rd params. Closes the daemon-path gap — worker
-                // `subagent:event` now reaches the transport live (was
-                // buffer-only pre-C5).
-                worker_catalog.clone(),
-                worker_event_sink.clone(),
-                // 2026-06-21 fix (B6 review defect A): production
-                // chat is never a worker, so the parent's
-                // `assemble_system_prompt(mode_prefix, base_prompt)`
-                // path runs unchanged (`None` override → the loop
-                // builds the prompt from the project + session
-                // row). The worker nested call (in `run_subagent`)
-                // passes `Some(assemble_subagent_prompt(def, &task))`
-                // to fully replace the parent's prompt with the
-                // worker's `SubagentDef.system_prompt`. See the
-                // doc comment on `run_chat_loop.system_prompt_override`
-                // for the full rationale + the review reference.
-                None,
-                // 2026-06-22 (RULE-FrontSubagent-003 fix): production
-                // chat is never a worker, so `worker_run_id` is
-                // `None`. The nested `run_subagent` call passes
-                // `Some(worker_run_id_opt)` so the worker's
-                // `PermissionContext.worker_run_id` is populated and
-                // `ask_path` can route the interactive ask via the
-                // `"worker:<worker_run_id>"` permission session id.
-                None,
-                // L3d (2026-06-25): thread the subagent cache so the
-                // loop's per-turn tool list construction can append the
-                // dynamic `dispatch_subagent` ToolDef
-                // (`definition_with_cache`) and `run_subagent` can look
-                // up workers by name across builtin + user + project
-                // layers.
-                subagent_cache,
-                // 2026-06-26 (task 06-26-subagent-per-run-grant):
-                // production chat is the parent path — pass `None` so
-                // the parent's `PermissionContext.run_grants` is `None`
-                // and the Tier 4 grant-check branches in `check.rs`
-                // skip the cache lookup entirely. Parent session grants
-                // continue to use the `session_tool_permissions` DB
-                // table (unchanged behavior). Only the worker nested
-                // call (in `run_subagent`) passes `Some(Arc<...>)`.
-                None,
-                // L3b (2026-06-27): production chat is the parent path —
-                // pass `None` so the loop builds the worktree_path from
-                // the session row (the parent's session worktree, or
-                // the project root if no worktree). Only the isolated
-                // worker nested call (in `run_subagent`) passes
-                // `Some(worker_worktree_path)` to redirect the worker's
-                // tools into an isolated checkout.
-                None,
-                // project_main_override (2026-07-29): production chat is
-                // the parent path → `None` (the loop falls back to
-                // worktree_path, which IS the project root here). Only the
-                // isolated worker nested call passes Some(project_main).
-                None,
-                // L3b (2026-06-27): thread the app data dir so the
-                // dispatch_subagent interceptor (`run_subagent`) can
-                // compute the worker worktree path when isolation is
-                // active. Pass-through — the agent loop body itself
-                // does not read this.
-                app_data_dir,
-                // explicit-agent-dispatch: thread the user-forced
-                // dispatch into the loop's turn-1 short-circuit
-                // (trailing `forced_dispatch` parameter).
-                forced_dispatch,
-                // 2026-06-30 (`ask_user_question` task): pass the
-                // `QuestionStore` cloned above (captured-by-value in
-                // the spawn closure). The `ask_user_question`
-                // interception in `chat_loop.rs` reads it; workers
-                // won't (the tool is in `STRUCTURALLY_DISABLED` so
-                // the worker's tool list strips it).
-                question_store,
-                // W1 (Workflow integration, Phase 0 Step 0.5
-                // — 2026-07-08): per-session workflow context.
-                // Eagerly resolved at IPC entry (DB read + at
-                // most a handful of small task.json reads,
-                // ~10 ms cost on a warm pool); cached for the
-                // entire 200-turn loop. `None` for non-workflow
-                // sessions — the per-turn helper short-circuits
-                // and the session behaves byte-identically to
-                // pre-Step-0.5.
-                workflow_ctx,
-                // Group chat (07-29-group-chat): `None` here at the
-                // classic-chat call site. The group-chat orchestration
-                // (Phase 3.5) wraps this call — when the session is
-                // group_chat, `run_group_chat_loop` is entered instead
-                // and IT constructs the `SharedTurnState` to thread
-                // through its own `run_chat_loop` calls. So the
-                // classic-chat path stays None (the nominate/end
-                // interception no-ops if somehow invoked).
-                None,
-                // Group chat (07-29-group-chat, Phase 4 TODO-A): the
-                // classic-chat path never carries a speaker — its
-                // assistant turns persist with `speaker = NULL` (the
-                // pre-Phase 4 default, unchanged). The
-                // `run_group_chat_loop` orchestration passes
-                // `Some("moderator")` / `Some(participant.name)` for
-                // its own dispatch sites.
-                None,
-                // D (2026-08-14): thread the stub loaded-set registry
-                // (classic-chat path — stubify + interception use it).
+                background_shells,
                 stub_loaded,
-                // F1 queue driver: the driver suppresses both guard
-                // cleanups on every inner round (see skip_cancellations
-                // param doc). This single-shot call site is only reached
-                // by legacy paths (queue disabled / group chat) — keep
-                // guard-owned cleanup.
-                false,
+                question_store,
+                subagent_cache,
+            });
+            let role = CallerRole {
+                is_worker: Some(false),
+                skip_session_active: false,
+                skip_persist: false,
+                skip_cancellations: false,
+                worker_catalog,
+                worker_event_sink,
+                system_prompt_override: None,
+                worker_run_id: None,
+                run_grants: None,
+                worktree_override: None,
+                project_main_override: None,
+                app_data_dir,
+                forced_dispatch,
+            };
+            run_chat_loop(
+                ChatLoopRequest {
+                    tool_defs,
+                    provider,
+                    context_window,
+                    provider_id,
+                    rid: rid.clone(),
+                    session_id: session_id.clone(),
+                    messages,
+                    sink: sink_for_spawn,
+                    resend_seq,
+                    max_turns: None,
+                    workflow_ctx,
+                    group_chat_state: None,
+                    current_speaker: None,
+                },
+                deps,
+                role,
             )
             .await;
         } // end else (classic-chat path)
@@ -1009,6 +914,25 @@ pub(crate) struct QueueDriverDeps {
     pub(crate) queues: crate::agent::message_queue::SharedQueues,
 }
 
+impl From<&QueueDriverDeps> for crate::agent::chat_loop::ChatLoopDeps {
+    fn from(d: &QueueDriverDeps) -> Self {
+        Self::from(crate::agent::chat_loop::ChatLoopDepsParts {
+            db: d.db.clone(),
+            cancellations: d.cancellations.clone(),
+            session_active_request: d.session_active_request.clone(),
+            read_guard: d.read_guard.clone(),
+            memory_cache: d.memory_cache.clone(),
+            skill_cache: d.skill_cache.clone(),
+            permission_asks: d.permission_asks.clone(),
+            token: d.token.clone(),
+            background_shells: d.background_shells.clone(),
+            stub_loaded: d.stub_loaded.clone(),
+            question_store: d.question_store.clone(),
+            subagent_cache: d.subagent_cache.clone(),
+        })
+    }
+}
+
 /// 队列驱动器主循环。
 ///
 /// ```text
@@ -1069,49 +993,44 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
             (None, None)
         };
 
+        // RULE-ARGS-001：驱动器每轮把自身依赖包转正为套件；Request 每轮重建（reload 的 DB 历史
+        // 不同），CallerRole 固定为双抑制 guard（skip_session_active +
+        // skip_cancellations）—— slot/rid 条目跨轮存活，由驱动器最终退出
+        // 时统一清理（语义与旧位参逐字对应，见各字段文档）。
+        let deps_suite = ChatLoopDeps::from(&deps);
+        let role = CallerRole {
+            is_worker: Some(false),
+            skip_session_active: true,
+            skip_persist: false,
+            skip_cancellations: true,
+            worker_catalog: deps.worker_catalog.clone(),
+            worker_event_sink: deps.worker_event_sink.clone(),
+            system_prompt_override: None,
+            worker_run_id: None,
+            run_grants: None,
+            worktree_override: None,
+            project_main_override: None,
+            app_data_dir: deps.app_data_dir.clone(),
+            forced_dispatch: round_forced,
+        };
         run_chat_loop(
-            deps.tool_defs.clone(),
-            deps.provider.clone(),
-            deps.context_window,
-            deps.provider_id.clone(),
-            deps.rid.clone(),
-            deps.session_id.clone(),
-            turn_messages,
-            driver_sink.clone(),
-            deps.db.clone(),
-            deps.cancellations.clone(),
-            deps.session_active_request.clone(),
-            deps.read_guard.clone(),
-            deps.memory_cache.clone(),
-            deps.skill_cache.clone(),
-            deps.permission_asks.clone(),
-            deps.token.clone(),
-            round_resend,
-            deps.background_shells.clone(),
-            // max_turns=None(生产预算);skip_session_active=true 与
-            // skip_cancellations=true —— slot/rid 条目跨轮存活,由驱
-            // 动器在最终退出时统一清理(guard 全程被抑制)。
-            None,
-            true,
-            // skip_persist=false:注入轮必须落库(用户消息是事实源)。
-            false,
-            Some(false),
-            deps.worker_catalog.clone(),
-            deps.worker_event_sink.clone(),
-            None,
-            None,
-            deps.subagent_cache.clone(),
-            None,
-            None,
-            None,
-            deps.app_data_dir.clone(),
-            round_forced,
-            deps.question_store.clone(),
-            deps.workflow_ctx.clone(),
-            None,
-            None,
-            deps.stub_loaded.clone(),
-            true,
+            ChatLoopRequest {
+                tool_defs: deps.tool_defs.clone(),
+                provider: deps.provider.clone(),
+                context_window: deps.context_window,
+                provider_id: deps.provider_id.clone(),
+                rid: deps.rid.clone(),
+                session_id: deps.session_id.clone(),
+                messages: turn_messages,
+                sink: driver_sink.clone(),
+                resend_seq: round_resend,
+                max_turns: None,
+                workflow_ctx: deps.workflow_ctx.clone(),
+                group_chat_state: None,
+                current_speaker: None,
+            },
+            deps_suite,
+            role,
         )
         .await;
 

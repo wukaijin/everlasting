@@ -58,14 +58,16 @@ pub async fn chat(
     });
     let acceptance = chat_inner(
         &state,
-        req.request_id,
-        req.session_id,
-        req.messages,
-        sink,
-        Some(state.catalog.clone()),
-        worker_event_sink,
-        req.resend_seq,
-        req.forced_dispatch,
+        crate::agent::chat::ChatEntry {
+            request_id: req.request_id,
+            session_id: req.session_id,
+            messages: req.messages,
+            sink,
+            worker_catalog: Some(state.catalog.clone()),
+            worker_event_sink,
+            resend_seq: req.resend_seq,
+            forced_dispatch: req.forced_dispatch,
+        },
     )
     .await?;
     Ok(Json(acceptance))

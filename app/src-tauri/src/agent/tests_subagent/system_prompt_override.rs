@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, test_messages, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::system_prompt::build_system_prompt;
 use crate::db;
@@ -58,66 +58,35 @@ async fn system_prompt_override_worker_path_sends_override() {
     let worker_prompt = assemble_subagent_prompt(def, "summarize the docs");
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-worker-override".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        // B6 PR2b: production-style caller is NOT a worker
-        // (this is the worker-path test, so the
-        // `is_worker` flag itself is `Some(false)` — the
-        // "worker-ness" is conveyed by the
-        // `system_prompt_override` param, not by `is_worker`).
-        // The `is_worker` flag governs the ⑨ 关 Tier 4
-        // collapse; the override is a separate concern.
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        // The actual fix being tested.
-        Some(worker_prompt.clone()),
-        // 2026-06-22 (RULE-FrontSubagent-003 fix): this test
-        // exercises the worker prompt override (B6 review defect
-        // A); it's NOT a worker ask test. The
-        // `is_worker=Some(false)` already routes ask_path to the
-        // parent branch. worker_run_id stays None.
-        None,
-        h.subagent_cache.clone(),
-        None,
-        // L3b (2026-06-27): production-style caller → worktree_override = None.
-        None,
-        None, // project_main_override (2026-07-29)
-        // L3b (2026-06-27): thread the test harness's app_data_dir.
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-worker-override".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        {
+            let mut role = parent_role(&h);
+            // B6 PR2b: production-style caller is NOT a worker
+            // (this is the worker-path test, so the
+            // `is_worker` flag itself is `Some(false)` — the
+            // "worker-ness" is conveyed by the
+            // `system_prompt_override` param, not by `is_worker`).
+            // The `is_worker` flag governs the ⑨ 关 Tier 4
+            // collapse; the override is a separate concern.
+            //
+            // 2026-06-22 (RULE-FrontSubagent-003 fix): this test
+            // exercises the worker prompt override (B6 review defect
+            // A); it's NOT a worker ask test. The
+            // `is_worker=Some(false)` already routes ask_path to the
+            // parent branch. worker_run_id stays None.
+            // The actual fix being tested.
+            role.system_prompt_override = Some(worker_prompt.clone());
+            role
+        },
     )
     .await;
 
@@ -169,56 +138,17 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
     ])]));
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-parent-override-none".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        // Production path: `None` override.
-        None,
-        // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
-        // caller — no worker context — worker_run_id is None.
-        None,
-        h.subagent_cache.clone(),
-        None,
-        // L3b (2026-06-27): production-style caller → worktree_override = None.
-        None,
-        None, // project_main_override (2026-07-29)
-        // L3b (2026-06-27): thread the test harness's app_data_dir.
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-parent-override-none".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 

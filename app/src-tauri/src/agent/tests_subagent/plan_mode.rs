@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, test_messages, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, TokenUsage};
@@ -129,81 +129,29 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
     // not `tokio::spawn`), so the parent task's scope is visible all
     // the way down. See `with_ask_timeout_for_test` in `ask.rs`.
     //
-    // The outer `tokio::time::timeout(2s)` is a hang backstop — ample
-    // headroom over the 50ms inner timeout while still failing fast if
-    // the worker's ask round-trip regresses into a real hang (the
-    // pre-PR2b symptom). Was 130s under the real-timeout design.
+    // The outer `tokio::time::timeout` is a hang backstop — vastly
+    // looser than the 50ms inner timeout, so only a genuine ask-roundtrip
+    // regression into a real hang (the pre-PR2b symptom) can trip it.
+    // 15s because the parent→worker→worker→parent mock chain runs ~0.6s
+    // solo but exceeds 2s on fully-loaded multi-thread test runners
+    // (2026-08-27 RULE-ARGS-001 终验连续三轮满载误报的根因); was 2s
+    // (and 130s under the even older real-timeout design).
     let run_result = crate::agent::permissions::ask::with_ask_timeout_for_test(
         std::time::Duration::from_millis(50),
         tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(15),
             run_chat_loop(
-                vec![],
-                mock.clone(),
-                200_000,
-                None,
-                "rid-rule-a-014".into(),
-                h.session_id.clone(),
-                test_messages(),
-                emitter.clone(),
-                h.db.clone(),
-                h.cancellations,
-                h.session_active_request,
-                h.read_guard,
-                h.memory_cache,
-                h.skill_cache,
-                h.permission_asks,
-                CancellationToken::new(),
-                None,
-                h.background_shells.clone(),
-                None,
-                false,
-                false,
-                // B6 Subagent PR2b (RULE-A-014, 2026-06-20):
-                // production-style caller → Some(false). The parent
-                // loop is NOT a worker; only the nested worker call
-                // passes Some(true) (at chat_loop.rs:2155). Mirrors
-                // the production chat.rs call site.
-                Some(false),
-                // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None
-                // (no Tauri runtime).
-                None,
-                std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-                // 2026-06-21 fix (B6 review defect A): tests pass
-                // `None` (production-style caller — not a worker,
-                // so the parent's `assemble_system_prompt(mode_prefix,
-                // base_prompt)` path runs unchanged). The worker
-                // nested call in `run_subagent` passes `Some(...)` to
-                // fully replace the parent's prompt with the worker's
-                // `SubagentDef.system_prompt`.
-                None,
-                // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
-                // caller — no worker context — worker_run_id is None.
-                None,
-                h.subagent_cache.clone(),
-                None,
-                // L3b (2026-06-27): production-style caller → worktree_override = None.
-                None,
-                None, // project_main_override (2026-07-29)
-                // L3b (2026-06-27): thread the test harness's app_data_dir.
-                h.app_data_dir.clone(),
-                None,
-                // 2026-06-30 (ask_user_question task): per-test QuestionStore.
-                h.question_store.clone(),
-                // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-                // workflow_ctx = None (tests don't exercise the workflow
-                // breadcrumb injection seam; that lives in separate
-                // `agent::workflow::inject` tests).
-                None,
-                // group_chat_state = None (tests don't exercise group chat).
-                None,
-                None,
-                // D (2026-08-14): stub loaded-set registry(测试默认
-                // 开关 off 路径不 stub;interception 测试用 harness 的)。
-                h.stub_loaded.clone(),
-                // F1 queue driver (2026-08-25): single-shot call site —
-                // guard-owned cleanup (not a continuation round).
-                false,
+                chat_loop_request(
+                    vec![],
+                    mock.clone(),
+                    200_000,
+                    "rid-rule-a-014".into(),
+                    h.session_id.clone(),
+                    test_messages(),
+                    emitter.clone(),
+                ),
+                chat_loop_deps(&h),
+                parent_role(&h),
             ),
         ),
     )

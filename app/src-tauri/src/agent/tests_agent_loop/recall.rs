@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, ChatMessage, TokenUsage};
@@ -75,50 +75,17 @@ async fn agent_loop_emits_recall_on_fts_hit() {
     }];
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-recall-fts".into(),
-        h.session_id.clone(),
-        messages,
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None, // project_main_override (2026-07-29)
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-recall-fts".into(),
+            h.session_id.clone(),
+            messages,
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -235,50 +202,17 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
     }];
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-recall-pitfall".into(),
-        h.session_id.clone(),
-        messages,
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None, // project_main_override (2026-07-29)
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-recall-pitfall".into(),
+            h.session_id.clone(),
+            messages,
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 

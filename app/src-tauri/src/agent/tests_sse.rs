@@ -20,7 +20,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::tests_common::{make_harness, test_messages, TestHarness};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, TestHarness,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::daemon::sse::{HttpSseSink, SseFrame, SseRegistry};
 use crate::llm::provider::mock::{MockProvider, MockResponse};
@@ -42,46 +44,21 @@ async fn run_loop_with_sink(
     token: CancellationToken,
 ) {
     run_chat_loop(
-        tool_defs,
-        mock.clone(),
-        200_000,
-        None,
-        rid.into(),
-        h.session_id.clone(),
-        test_messages(),
-        sink,
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        token,
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None, // project_main_override (2026-07-29)
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            tool_defs,
+            mock.clone(),
+            200_000,
+            rid.into(),
+            h.session_id.clone(),
+            test_messages(),
+            sink,
+        ),
+        {
+            let mut deps = chat_loop_deps(&h);
+            deps.token = token;
+            deps
+        },
+        parent_role(&h),
     )
     .await;
 }

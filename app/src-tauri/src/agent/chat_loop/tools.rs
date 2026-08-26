@@ -33,7 +33,8 @@ use crate::tools::ToolContext;
 
 use super::{
     classify_dispatch_batch, delegation_max_concurrent_children, emit_persist_failure,
-    is_parallel_eligible, DispatchBatch,
+    is_parallel_eligible, CallerRole, ChatLoopDeps, ChatLoopRequest, DispatchBatch, DispatchCtx,
+    FinalizeFrame,
 };
 
 pub(crate) struct DispatchOutcome {
@@ -43,50 +44,59 @@ pub(crate) struct DispatchOutcome {
     pub(crate) last_cwd: Option<PathBuf>,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 33 参 → 四元）：三套件引用 +
+/// [`DispatchCtx`]（工具批 / 权限上下文 / cwd 状态对 / LoopInit 派生
+/// 常量）。体内头部做与旧位参同名同形的重绑定 —— 旧按值位参取一次
+/// owned 镜像（等价旧调用点实参克隆），旧引用形参改走套件字段借用，
+/// 自此正文逐字节保持。返回 [`DispatchOutcome`]（cwd 回传）语义不变。
 pub(crate) async fn dispatch_tool_calls(
-    tool_calls: Vec<(String, String, serde_json::Value)>,
-    permission_ctx: PermissionContext,
-    provider: Arc<dyn Provider>,
-    db: SqlitePool,
-    sink: Arc<dyn ChatEventSink>,
-    rid: String,
-    session_id: String,
-    read_guard: ReadGuard,
-    skill_cache: Arc<SkillCache>,
-    current_ctx: ToolContext,
-    last_cwd: Option<PathBuf>,
-    cancelled: bool,
-    token: CancellationToken,
-    permission_asks: crate::agent::permissions::PermissionStore,
-    memory_cache: Arc<MemoryCache>,
-    cancellations: Arc<Mutex<std::collections::HashMap<String, CancellationToken>>>,
-    session_active_request: Arc<Mutex<std::collections::HashMap<String, String>>>,
-    background_shells: crate::background_shell::DefaultRegistry,
-    worker_event_sink: Arc<dyn SubagentEventSink>,
-    worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
-    context_window: u32,
-    workflow_ctx: &Option<crate::agent::workflow::WorkflowCtx>,
-    subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
-    app_data_dir: PathBuf,
-    question_store: crate::agent::question_store::QuestionStore,
-    group_chat_state: &Option<crate::tools::nominate_speaker::SharedTurnState>,
-    session_mode: crate::db::Mode,
-    failure_tracker: Arc<Mutex<crate::agent::auto_reflect::FailureTracker>>,
-    soft_blocked: Arc<Mutex<std::collections::HashSet<String>>>,
-    seq: i64,
-    skip_persist: bool,
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 开关 +
-    // stub registry,供 serial 顶部拦截(`load_tool_schemas` / 直呼
-    // 自愈)读写。gate 信号从既有参数取:`permission_ctx.is_worker`
-    // (worker 不 stub 也不拦截)、`group_chat_state.is_some()`
-    // (群聊不 stub 不拦截 — 与 drive 侧 stubify/append gate 同源)。
-    stub_on: bool,
-    stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
+    request: &ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    role: &CallerRole,
+    ctx: DispatchCtx<'_>,
 ) -> DispatchOutcome {
+    let DispatchCtx {
+        tool_calls,
+        permission_ctx,
+        current_ctx,
+        last_cwd,
+        cancelled,
+        session_mode,
+        failure_tracker,
+        soft_blocked,
+        seq,
+        stub_on,
+        workflow_ctx,
+    } = ctx;
     let mut cancelled = cancelled;
     let mut current_ctx = current_ctx;
     let mut last_cwd = last_cwd;
+    // RULE-ARGS-001 重绑定表：所有权来源迁至三套件。
+    let provider = request.provider.clone();
+    let db = deps.db.clone();
+    let sink = request.sink.clone();
+    let rid = request.rid.clone();
+    let session_id = request.session_id.clone();
+    let read_guard = deps.read_guard.clone();
+    let skill_cache = deps.skill_cache.clone();
+    let token = deps.token.clone();
+    let permission_asks = deps.permission_asks.clone();
+    let memory_cache = deps.memory_cache.clone();
+    let cancellations = deps.cancellations.clone();
+    let session_active_request = deps.session_active_request.clone();
+    let background_shells = deps.background_shells.clone();
+    let worker_event_sink = role.worker_event_sink.clone();
+    let worker_catalog = role.worker_catalog.clone();
+    let context_window = request.context_window;
+    // workflow_ctx 已在上方 DispatchCtx 解构中拿到（run_chat_loop 函数域
+    // 活绑定的引用，每 turn 随 DriveTurnOutcome 刷新）—— 不能读
+    // `request.workflow_ctx`（入口快照），否则 W1 角色门看到过期状态。
+    let subagent_cache = deps.subagent_cache.clone();
+    let app_data_dir = role.app_data_dir.clone();
+    let question_store = deps.question_store.clone();
+    let group_chat_state = &request.group_chat_state;
+    let skip_persist = role.skip_persist;
+    let stub_loaded = deps.stub_loaded.clone();
     let mut result_blocks: Vec<ContentBlock> = Vec::new();
     if is_parallel_eligible(&tool_calls, &permission_ctx.project_main_path) {
         // ---- L2 parallel path (read-only batch) ----
@@ -1775,20 +1785,27 @@ pub(crate) async fn dispatch_tool_calls(
 ///
 /// Split off `run_chat_loop` (08-08-a-class-chat-loop-split). No behavior
 /// change — pure lift.
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 11 参 → 四元 ≤6）：三套件引用 +
+/// [`FinalizeFrame`]。头部重绑定保持正文逐字节不变。
 pub(crate) async fn finalize_turn(
-    mut result_blocks: Vec<ContentBlock>,
-    loop_hint: &Option<String>,
-    cancelled: bool,
-    skip_persist: bool,
-    db: &SqlitePool,
-    sink: &Arc<dyn ChatEventSink>,
-    rid: &str,
-    session_id: &str,
-    seq: i64,
-    messages: &mut Vec<ChatMessage>,
-    last_cwd: &Option<PathBuf>,
+    request: &ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    role: &CallerRole,
+    fx: FinalizeFrame<'_>,
 ) -> Result<(), ()> {
+    let FinalizeFrame {
+        mut result_blocks,
+        loop_hint,
+        cancelled,
+        seq,
+        messages,
+        last_cwd,
+    } = fx;
+    let skip_persist = role.skip_persist;
+    let db = &deps.db;
+    let sink = &request.sink;
+    let rid = &request.rid;
+    let session_id = &request.session_id;
     // ⑬ loop detection (C2): if this turn tripped the detector,
     // append the hint as a Text block AT THE END of the
     // tool_results. Soft nudge only — execution was NOT skipped

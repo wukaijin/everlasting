@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use super::tests_common::{make_harness, MockEmitter, TestHarness};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, MockEmitter, TestHarness,
+};
 use crate::agent::chat_loop::{run_chat_loop, TURN_LIMIT_GRANT};
 use crate::agent::compaction::{compaction_registry, COMPACTION_SUMMARY_KIND};
 use crate::agent::question_store::{
@@ -218,8 +220,8 @@ fn done_reasons(emitter: &MockEmitter) -> Vec<String> {
         .collect()
 }
 
-/// 标准 run_chat_loop 调用(36 参,compaction_summary.rs 的 run_loop
-/// 模板 + max_turns / token / is_worker / skip_persist 可调)。
+/// 标准 run_chat_loop 调用(compaction_summary.rs 的 run_loop 模板,
+/// fixture 缺省 + max_turns / token / is_worker / skip_persist 可调)。
 #[allow(clippy::too_many_arguments)]
 async fn run_loop(
     h: &TestHarness,
@@ -233,46 +235,30 @@ async fn run_loop(
     skip_persist: bool,
 ) {
     run_chat_loop(
-        vec![],
-        provider,
-        WINDOW,
-        None,
-        rid.into(),
-        h.session_id.clone(),
-        messages,
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        token,
-        None,
-        h.background_shells.clone(),
-        max_turns,
-        false,
-        skip_persist,
-        Some(is_worker),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        {
+            let mut request = chat_loop_request(
+                vec![],
+                provider,
+                WINDOW,
+                rid.into(),
+                h.session_id.clone(),
+                messages,
+                emitter.clone(),
+            );
+            request.max_turns = max_turns;
+            request
+        },
+        {
+            let mut deps = chat_loop_deps(&h);
+            deps.token = token;
+            deps
+        },
+        {
+            let mut role = parent_role(&h);
+            role.skip_persist = skip_persist;
+            role.is_worker = Some(is_worker);
+            role
+        },
     )
     .await;
 }
@@ -711,47 +697,23 @@ async fn softcap_group_chat_breaks_without_ask() {
     );
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        WINDOW,
-        None,
-        "rid-sc-group".into(),
-        h.session_id.clone(),
-        vec![user("hello")],
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        Some(2),
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        // group_chat_state = Some → 群聊 speaker 段,软卡不触发。
-        Some(turn_state),
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        {
+            let mut request = chat_loop_request(
+                vec![],
+                mock.clone(),
+                WINDOW,
+                "rid-sc-group".into(),
+                h.session_id.clone(),
+                vec![user("hello")],
+                emitter.clone(),
+            );
+            request.max_turns = Some(2);
+            // group_chat_state = Some → 群聊 speaker 段,软卡不触发。
+            request.group_chat_state = Some(turn_state);
+            request
+        },
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 

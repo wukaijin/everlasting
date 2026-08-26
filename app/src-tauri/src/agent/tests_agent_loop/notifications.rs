@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
 use super::messages_to_text;
-use super::tests_common::{make_harness, test_messages, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::db;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
@@ -70,84 +70,17 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
     ]));
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-bg-drain".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (200) budget for all 9 agent_loop_*
-        // integration tests (RULE-A-006 parity with production).
-        None,
-        // B6 Subagent (PR1b review #2): production-style caller,
-        // so skip_session_active = false (guard clears the slot).
-        false,
-        // B6 Subagent (PR1b): production-style caller persists
-        // every turn normally (RULE-A-006 parity with production).
-        false,
-        // B6 Subagent PR2b (RULE-A-014, 2026-06-20): production-
-        // style caller → Some(false). Inside run_chat_loop this
-        // falls through to `PermissionContext.is_worker = false` —
-        // Tier 4 ask is reachable (permission:ask modal works
-        // normally, the loop is not a worker). Mirrors the
-        // production chat.rs call site.
-        Some(false),
-        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        // 2026-06-21 fix (B6 review defect A): tests pass
-        // `None` (production-style caller — not a worker,
-        // so the parent's `assemble_system_prompt(mode_prefix,
-        // base_prompt)` path runs unchanged). The worker
-        // nested call in `run_subagent` passes `Some(...)`
-        // to fully replace the parent's prompt with the
-        // worker's `SubagentDef.system_prompt`.
-        None,
-        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
-        // `None` (production-style caller — not a worker, so
-        // the PermissionContext.worker_run_id is unused by the
-        // ask_path parent branch). The worker nested call in
-        // `run_subagent` passes `Some(worker_run_id_opt)`.
-        None,
-        h.subagent_cache.clone(),
-        None,
-        // L3b (2026-06-27): production-style caller (and non-isolated
-        // worker path) → worktree_override = None (use the session
-        // row's worktree_path). Only the isolated worker path passes
-        // Some(worker_worktree_path).
-        None,
-        None, // project_main_override (2026-07-29)
-        // L3b (2026-06-27): thread the test harness's app_data_dir
-        // (a fresh tempdir per test). Tests that don't exercise
-        // worker isolation never read it.
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-bg-drain".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -261,84 +194,17 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
     ]));
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-bg-empty".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (200) budget for all 9 agent_loop_*
-        // integration tests (RULE-A-006 parity with production).
-        None,
-        // B6 Subagent (PR1b review #2): production-style caller,
-        // so skip_session_active = false (guard clears the slot).
-        false,
-        // B6 Subagent (PR1b): production-style caller persists
-        // every turn normally (RULE-A-006 parity with production).
-        false,
-        // B6 Subagent PR2b (RULE-A-014, 2026-06-20): production-
-        // style caller → Some(false). Inside run_chat_loop this
-        // falls through to `PermissionContext.is_worker = false` —
-        // Tier 4 ask is reachable (permission:ask modal works
-        // normally, the loop is not a worker). Mirrors the
-        // production chat.rs call site.
-        Some(false),
-        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        // 2026-06-21 fix (B6 review defect A): tests pass
-        // `None` (production-style caller — not a worker,
-        // so the parent's `assemble_system_prompt(mode_prefix,
-        // base_prompt)` path runs unchanged). The worker
-        // nested call in `run_subagent` passes `Some(...)`
-        // to fully replace the parent's prompt with the
-        // worker's `SubagentDef.system_prompt`.
-        None,
-        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
-        // `None` (production-style caller — not a worker, so
-        // the PermissionContext.worker_run_id is unused by the
-        // ask_path parent branch). The worker nested call in
-        // `run_subagent` passes `Some(worker_run_id_opt)`.
-        None,
-        h.subagent_cache.clone(),
-        None,
-        // L3b (2026-06-27): production-style caller (and non-isolated
-        // worker path) → worktree_override = None (use the session
-        // row's worktree_path). Only the isolated worker path passes
-        // Some(worker_worktree_path).
-        None,
-        None, // project_main_override (2026-07-29)
-        // L3b (2026-06-27): thread the test harness's app_data_dir
-        // (a fresh tempdir per test). Tests that don't exercise
-        // worker isolation never read it.
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-bg-empty".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -437,52 +303,17 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
     ]));
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-loop".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,        // max_turns (default MAX_TURNS)
-        false,       // skip_session_active
-        false,       // skip_persist
-        Some(false), // is_worker (production-style)
-        None,        // worker_catalog
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,        // system_prompt_override
-        None,        // worker_run_id
-        h.subagent_cache.clone(), // L3d subagent cache
-        None,
-        // L3b (2026-06-27): production-style caller → worktree_override = None.
-        None,
-        None, // project_main_override (2026-07-29)
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-loop".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -562,58 +393,17 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
     ]));
 
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-no-loop".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        // L3b (2026-06-27): production-style caller (and non-isolated
-        // worker path) → worktree_override = None (use the session
-        // row's worktree_path). Only the isolated worker path passes
-        // Some(worker_worktree_path).
-        None,
-        None, // project_main_override (2026-07-29)
-        // L3b (2026-06-27): thread the test harness's app_data_dir
-        // (a fresh tempdir per test). Tests that don't exercise
-        // worker isolation never read it.
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-no-loop".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 

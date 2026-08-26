@@ -361,6 +361,102 @@ pub(crate) fn test_messages() -> Vec<ChatMessage> {
 }
 
 // ---------------------------------------------------------------------------
+// RULE-ARGS-001 (2026-08-27): parameter-object fixtures for the migrated
+// `run_chat_loop(request, deps, role)` test call sites. 旧 38 位参时代每个
+// 测试手写的「默认全身像」（basic.rs 模板，与 tests_message_queue.rs 的
+// QueueDriverDeps 直构习惯同源）在此收口为三个缺省组装器 —— 调用点只写
+// 差异字段（design D4：单点翻译，翻译错误由对应场景测试兜底）。
+//
+// 默认值与旧位参逐位对应；各字段的历史契约文档（RULE-A-014 /
+// RULE-A-015 / RULE-E-005 / B6 / F1 双抑制 / L1a / L3b / W1 / WP2 等）
+// 原文居于 `agent/chat_loop/suite.rs` 对应字段的 doc comment，此处不重复。
+//
+// - deps：harness 字段逐一 clone（旧 #9–#14/#17/#18/#26/#32/#33/#36 各位），
+//   token = 未注册的 `CancellationToken::new()`（旧 #15 缺省）；取消类
+//   测试在调用点覆盖 `deps.token`（句柄与注册皆由测试自持，语义照旧）。
+// - request：身份七件套 tool_defs / provider / context_window / rid /
+//   session_id / messages / sink 必填（沿旧位参 #1–#7 阅读序，跳过恒为
+//   None 的 #4 provider_id）；其余六字段缺省 None，差异在调用点对返回值
+//   具名赋值（如 `request.max_turns = Some(2);`）。
+// - role：parent 全集 —— `is_worker: Some(false)`（RULE-A-014 生产式
+//   显式值）、skip 三兄弟 false、worker 双件 None/
+//   ThreadLocalSubagentSink、四 override None、app_data_dir 取 harness
+//   tempdir（旧 #30）。worker 形态（stub 自愈直呼 / RULE-A-014 回归）
+//   由调用点具名覆盖，见 tests_agent_loop/stub.rs 先例。
+// ---------------------------------------------------------------------------
+
+/// 旧位参 #1–#7 → 单次请求值；#4 `provider_id` 测试恒传 `None`，由本
+/// 构造器代置。`rid` 收具体 `String`（不用 `impl Into` —— 调用点实参
+/// 已是 `.into()`/`format!` 产物，泛型会与 `"x".into()` 打成推理循环）。
+pub(crate) fn chat_loop_request(
+    tool_defs: Vec<crate::llm::ToolDef>,
+    provider: Arc<dyn crate::llm::Provider>,
+    context_window: u32,
+    rid: String,
+    session_id: String,
+    messages: Vec<ChatMessage>,
+    sink: Arc<dyn ChatEventSink>,
+) -> crate::agent::chat_loop::ChatLoopRequest {
+    crate::agent::chat_loop::ChatLoopRequest {
+        tool_defs,
+        provider,
+        context_window,
+        provider_id: None,
+        rid,
+        session_id,
+        messages,
+        sink,
+        resend_seq: None,
+        max_turns: None,
+        workflow_ctx: None,
+        group_chat_state: None,
+        current_speaker: None,
+    }
+}
+
+/// 旧位参 #9–#18/#26/#32/#33/#36 → AppState 派生长寿命套件的测试组装
+/// （比照 [`TestHarness`] 字段来源与生产 `from_app_state` 解包序）。
+pub(crate) fn chat_loop_deps(harness: &TestHarness) -> crate::agent::chat_loop::ChatLoopDeps {
+    use crate::agent::chat_loop::{ChatLoopDeps, ChatLoopDepsParts};
+    ChatLoopDeps::from(ChatLoopDepsParts {
+        db: harness.db.clone(),
+        cancellations: harness.cancellations.clone(),
+        session_active_request: harness.session_active_request.clone(),
+        read_guard: harness.read_guard.clone(),
+        memory_cache: harness.memory_cache.clone(),
+        skill_cache: harness.skill_cache.clone(),
+        permission_asks: harness.permission_asks.clone(),
+        // 旧 #15 缺省：孤儿令牌（不入 cancellations map）。取消类测试
+        // 在调用点 `deps.token = <已注册令牌>;` 覆盖。
+        token: CancellationToken::new(),
+        background_shells: harness.background_shells.clone(),
+        stub_loaded: harness.stub_loaded.clone(),
+        question_store: harness.question_store.clone(),
+        subagent_cache: harness.subagent_cache.clone(),
+    })
+}
+
+/// 旧位参 #19–#25/#27–#31/#37 → production-style caller 的角色全集
+/// （basic.rs 模板展开）。字段语义见 suite.rs `CallerRole` doc comments。
+pub(crate) fn parent_role(harness: &TestHarness) -> crate::agent::chat_loop::CallerRole {
+    crate::agent::chat_loop::CallerRole {
+        is_worker: Some(false),
+        skip_session_active: false,
+        skip_persist: false,
+        skip_cancellations: false,
+        worker_catalog: None,
+        worker_event_sink: Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        system_prompt_override: None,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_override: None,
+        project_main_override: None,
+        app_data_dir: harness.app_data_dir.clone(),
+        forced_dispatch: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared git-repo test helpers (L3b, 2026-06-27)
 //
 // Promoted from `git/worktree.rs::tests`'s private `init_repo` /

@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, test_messages, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::db;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
@@ -57,61 +57,32 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         }),
     ])]));
 
+    // 2026-06-30 (ask_user_question task): per-test
+    // QuestionStore. The forced-dispatch test exercises the
+    // worker path, where `ask_user_question` is stripped via
+    // STRUCTURALLY_DISABLED — the store sits unused on this
+    // thread but is signature-required.
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-forced".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None, // resend_seq
-        h.background_shells.clone(),
-        None,                                                                 // max_turns
-        false,                                                                // skip_session_active
-        false,                                                                // skip_persist
-        Some(false),                                                          // is_worker
-        None,                                                                 // worker_catalog
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None, // system_prompt_override
-        None, // worker_run_id
-        h.subagent_cache.clone(),
-        None,
-        None, // worktree_override
-        None, // project_main_override (2026-07-29)
-        h.app_data_dir.clone(),
-        // explicit-agent-dispatch: forced dispatch of `researcher`.
-        Some(crate::agent::subagent::ForcedDispatch {
-            subagent: "researcher".into(),
-            task: "Find all .rs files under src/.".into(),
-            model_id: None,
-        }),
-        // 2026-06-30 (ask_user_question task): per-test
-        // QuestionStore. The forced-dispatch test exercises the
-        // worker path, where `ask_user_question` is stripped via
-        // STRUCTURALLY_DISABLED — the store sits unused on this
-        // thread but is signature-required.
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-forced".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        {
+            let mut role = parent_role(&h);
+            // explicit-agent-dispatch: forced dispatch of `researcher`.
+            role.forced_dispatch = Some(crate::agent::subagent::ForcedDispatch {
+                subagent: "researcher".into(),
+                task: "Find all .rs files under src/.".into(),
+                model_id: None,
+            });
+            role
+        },
     )
     .await;
 

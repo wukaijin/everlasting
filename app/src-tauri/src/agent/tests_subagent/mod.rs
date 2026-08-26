@@ -19,6 +19,7 @@ mod system_prompt_override;
 use std::sync::Arc;
 
 use super::tests_common::MockEmitter;
+use super::tests_common::{chat_loop_deps, chat_loop_request, parent_role};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::llm::provider::mock::MockProvider;
 
@@ -35,53 +36,21 @@ pub(super) async fn run_loop(
     token: tokio_util::sync::CancellationToken,
 ) {
     run_chat_loop(
-        vec![],
-        mock,
-        200_000,
-        None,
-        rid.into(),
-        h.session_id.clone(),
-        messages,
-        emitter,
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        token,
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        // L3b (2026-06-27): production-style caller → worktree_override = None.
-        None,
-        None, // project_main_override (2026-07-29)
-        // L3b (2026-06-27): thread the test harness's app_data_dir.
-        h.app_data_dir.clone(),
-        None,
-        // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock,
+            200_000,
+            rid.into(),
+            h.session_id.clone(),
+            messages,
+            emitter,
+        ),
+        {
+            let mut deps = chat_loop_deps(&h);
+            deps.token = token;
+            deps
+        },
+        parent_role(&h),
     )
     .await;
 }

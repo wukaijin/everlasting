@@ -66,7 +66,9 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::chat_loop::{
+    run_chat_loop, CallerRole, ChatLoopDeps, ChatLoopDepsParts, ChatLoopRequest,
+};
 use crate::agent::group_chat::GroupChatCtx;
 use crate::agent::group_chat_prompts::{
     group_chat_tool_defs, moderator_system_prompt, participant_system_prompt, role_history,
@@ -299,76 +301,64 @@ pub async fn run_group_chat_loop(
             // guidance ("research then nominate") lives in the prompt
             // itself (R3), not in a dynamically-appended nudge.
             let prompt = moderator_prompt.clone();
+            // RULE-ARGS-001：每 speaker 重建三套件（moderator）。
+            // 历史契约注记迁入 suite.rs 对应字段文档：
+            // - max_turns=Some(1)（08-04 follow-up「moderator 单轮」，用户决议）；
+            // - system_prompt_override=Some(prompt) —— 完全替换父提示词；
+            // - group_chat_state=Some(turn_state)：nominate/end 拦截回写点；
+            // - current_speaker="moderator"（Phase 4 TODO-A 固定标识）；
+            // - is_worker=Some(false)、skip 三兄弟 false（moderator 回合
+            //   属于会话记录，guard-owned 清理照旧）；
+            // - 群聊传空 stub registry：stubify/append gate `!is_group_chat`
+            //   与拦截 gate（group_chat_state.is_some()）都会挡掉本路径，
+            //   registry 不被读写，只作占位。
+            let deps = ChatLoopDeps::from(ChatLoopDepsParts {
+                db: db.clone(),
+                cancellations: cancellations.clone(),
+                session_active_request: session_active_request.clone(),
+                read_guard: read_guard.clone(),
+                memory_cache: memory_cache.clone(),
+                skill_cache: skill_cache.clone(),
+                permission_asks: permission_asks.clone(),
+                token: token.clone(),
+                background_shells: background_shells.clone(),
+                stub_loaded: std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
+                question_store: question_store.clone(),
+                subagent_cache: subagent_cache.clone(),
+            });
+            let role = CallerRole {
+                is_worker: Some(false),
+                skip_session_active: false,
+                skip_persist: false,
+                skip_cancellations: false,
+                worker_catalog: worker_catalog.clone(),
+                worker_event_sink: worker_event_sink.clone(),
+                system_prompt_override: Some(prompt),
+                worker_run_id: None,
+                run_grants: None,
+                worktree_override: None,
+                project_main_override: None,
+                app_data_dir: app_data_dir.clone(),
+                forced_dispatch: None,
+            };
             run_chat_loop(
-                // R1 (08-07-group-chat-toolset-and-identity): moderator gets
-                // the research whitelist + arbitration tools (not the full
-                // builtin_tools set — that leaked update_checklist/use_skill/
-                // shell into group chat, which weak models abused).
-                group_chat_tool_defs(&tool_defs, true),
-                provider.clone(),
-                context_window,
-                moderator_provider_id.clone().or(provider_id.clone()),
-                rid.clone(),
-                session_id.clone(),
-                history,
-                sink.clone(),
-                db.clone(),
-                cancellations.clone(),
-                session_active_request.clone(),
-                read_guard.clone(),
-                memory_cache.clone(),
-                skill_cache.clone(),
-                permission_asks.clone(),
-                token.clone(),
-                resend_seq,
-                background_shells.clone(),
-                // Single turn (08-04 follow-up, user-approved "moderator
-                // 单轮"): the moderator must nominate / end in ONE turn.
-                // The pre-follow-up `Some(3)` let it burn a second LLM
-                // call on turn-2 filler text ("（已把话筒交给 M3，等待发
-                // 言…）") — that filler is first-person arbitration
-                // narration which weak participants misread as their own
-                // voice (identity confusion, DB session b144cc2a seq 3-4).
-                // With max_turns=1 the turn ends right after the
-                // tool_result, and the moderator only speaks again on its
-                // next round (retry / nomination loop).
-                Some(1),
-                false, // owns session_active slot
-                false, // persist (moderator turns are part of the record)
-                Some(false),
-                worker_catalog.clone(),
-                worker_event_sink.clone(),
-                Some(prompt),
-                None,
-                subagent_cache.clone(),
-                None,
-                None,
-                None,
-                app_data_dir.clone(),
-                None, // forced_dispatch
-                question_store.clone(),
-                None, // workflow_ctx
-                Some(turn_state.clone()),
-                // Group chat (Phase 4 TODO-A): the moderator is a
-                // distinct speaker — its assistant turns persist with
-                // `speaker = "moderator"` (the fixed identifier; the
-                // moderator's own persona is the built-in
-                // `moderator_system_prompt` template, NOT a per-
-                // session customizable config). The frontend renders
-                // this as the "主持人" chip; reload reads it back
-                // from the same column so cross-turn visibility is
-                // preserved.
-                Some("moderator".to_string()),
-                // D (2026-08-14, `08-14-c7d-tools-stub-registration`):
-                // 群聊传空 registry — stubify/append gate
-                // `!is_group_chat` 与拦截 gate(`group_chat_state.
-                // is_some()`)都会挡掉本路径,registry 不会被读写,
-                // 只作签名占位。
-                std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
-                // F1 queue driver (2026-08-25): guard-owned cleanup — this call
-                // site is single-shot per invocation (speaker / worker), not a
-                // continuation round; keep the guard as sole owner.
-                false,
+                ChatLoopRequest {
+                    tool_defs: group_chat_tool_defs(&tool_defs, true),
+                    provider: provider.clone(),
+                    context_window,
+                    provider_id: moderator_provider_id.clone().or(provider_id.clone()),
+                    rid: rid.clone(),
+                    session_id: session_id.clone(),
+                    messages: history,
+                    sink: sink.clone(),
+                    resend_seq,
+                    max_turns: Some(1),
+                    workflow_ctx: None,
+                    group_chat_state: Some(turn_state.clone()),
+                    current_speaker: Some("moderator".to_string()),
+                },
+                deps,
+                role,
             )
             .await;
         }
@@ -503,86 +493,62 @@ pub async fn run_group_chat_loop(
         //
         // The participant's system prompt is its persona (fully
         // replaces the parent prompt).
+        // RULE-ARGS-001：每 speaker 重建三套件（participant）。
+        // 历史契约注记迁入 suite.rs 对应字段文档：
+        // - max_turns=Some(20)（08-07 R3 participant 多轮调研预算，
+        //   外层 MAX_ORCHESTRATION_ROUNDS 是硬帽）；
+        // - system_prompt_override=Some(persona)，完全替换父提示词；
+        // - group_chat_state 同样 Some（D-D 守卫的范围条件需要——参与者
+        //   视图的尾条 user 也是已落库行，避免重持久化；仲裁工具已被
+        //   白名单剥离，拦截分支不会触发，design deviation note 见旧注释）；
+        // - current_speaker=Some(name)：Phase 4 TODO-A 归因持久化。
+        let deps = ChatLoopDeps::from(ChatLoopDepsParts {
+            db: db.clone(),
+            cancellations: cancellations.clone(),
+            session_active_request: session_active_request.clone(),
+            read_guard: read_guard.clone(),
+            memory_cache: memory_cache.clone(),
+            skill_cache: skill_cache.clone(),
+            permission_asks: permission_asks.clone(),
+            token: token.clone(),
+            background_shells: background_shells.clone(),
+            stub_loaded: std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
+            question_store: question_store.clone(),
+            subagent_cache: subagent_cache.clone(),
+        });
+        let role = CallerRole {
+            is_worker: Some(false),
+            skip_session_active: false,
+            skip_persist: false,
+            skip_cancellations: false,
+            worker_catalog: worker_catalog.clone(),
+            worker_event_sink: worker_event_sink.clone(),
+            system_prompt_override: Some(participant_prompt),
+            worker_run_id: None,
+            run_grants: None,
+            worktree_override: None,
+            project_main_override: None,
+            app_data_dir: app_data_dir.clone(),
+            forced_dispatch: None,
+        };
         run_chat_loop(
-            // R1 (08-07-group-chat-toolset-and-identity): participant gets the
-            // research whitelist ONLY (read_file/grep/glob/list_dir/web_fetch).
-            // No arbitration tools (only the moderator arbitrates) AND no
-            // write/execute/skill/checklist tools — DB session 8be4687f seq 9
-            // showed a participant abusing use_skill (hallucinated
-            // "group-chat-director") + update_checklist (self-built speaker
-            // rotation) to hijack the moderator. The whitelist supersedes the
-            // old `participant_tool_defs` blacklist, which only stripped the
-            // two arbitration tools and leaked everything else.
-            group_chat_tool_defs(&tool_defs, false),
-            provider,
-            context_window,
-            participant_provider_id.or(provider_id.clone()),
-            rid.clone(),
-            session_id.clone(),
-            // Per-role history: the participant's own assistant rows
-            // verbatim + other speakers' remarks as user — the tail user
-            // row is an already-persisted message (the entry guard skips
-            // re-persisting it) and the moderator's tool interaction is
-            // invisible to the participant.
-            history,
-            sink.clone(),
-            db.clone(),
-            cancellations.clone(),
-            session_active_request.clone(),
-            read_guard.clone(),
-            memory_cache.clone(),
-            skill_cache.clone(),
-            permission_asks.clone(),
-            token.clone(),
-            None,
-            background_shells.clone(),
-            Some(20), // participant multi-turn — may read the codebase before speaking
-            false,
-            false,
-            Some(false),
-            worker_catalog.clone(),
-            worker_event_sink.clone(),
-            Some(participant_prompt),
-            None,
-            subagent_cache.clone(),
-            None,
-            None,
-            None,
-            app_data_dir.clone(),
-            None,
-            question_store.clone(),
-            None,
-            // group_chat_state — the participant shares the SAME
-            // turn_state Arc so the D-D entry guard's scope condition
-            // (`group_chat_state.is_some()`) holds and it skips
-            // re-persisting the already-persisted tail user message
-            // (e.g. the round-0 human text), satisfying PRD AC2
-            // "无多写" / implement.md "round-0 人类消息恰 1 条".
-            //
-            // Deviation note (design.md §6 wrote `None` here): the
-            // guard needs this scope for the participant too — design
-            // §5's own reliability argument covers "每个 speaker 入口
-            // transcript 的尾部 user 消息必是已落库行 → 跳过", which
-            // only holds when the participant also passes Some.
-            // Arbitration safety is NOT weakened: `participant_tool_defs`
-            // above already strips nominate_speaker / end_discussion
-            // from the participant's schema, so the interception branch
-            // can never fire for a participant.
-            Some(turn_state.clone()),
-            // Group chat (Phase 4 TODO-A): each participant's
-            // assistant turns persist with `speaker = participant.name`
-            // (the user-visible display name + session-scoped unique
-            // identifier). The reload fuses these into the next
-            // speaker's view so every participant sees the full
-            // transcript with the correct attribution.
-            Some(participant.name.clone()),
-            // D (2026-08-14): 群聊传空 registry(同 moderator 调用点 —
-            // gate 挡掉,只作占位)。
-            std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
-            // F1 queue driver (2026-08-25): guard-owned cleanup — this call
-            // site is single-shot per invocation (speaker / worker), not a
-            // continuation round; keep the guard as sole owner.
-            false,
+            ChatLoopRequest {
+                tool_defs: group_chat_tool_defs(&tool_defs, false),
+                provider,
+                context_window,
+                provider_id: participant_provider_id.or(provider_id.clone()),
+                rid: rid.clone(),
+                session_id: session_id.clone(),
+                messages: history,
+                sink: sink.clone(),
+                resend_seq: None,
+                max_turns: Some(20),
+                workflow_ctx: None,
+                group_chat_state: Some(turn_state.clone()),
+                current_speaker: Some(participant.name.clone()),
+            },
+            deps,
+            role,
         )
         .await;
 

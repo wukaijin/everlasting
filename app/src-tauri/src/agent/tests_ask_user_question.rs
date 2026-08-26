@@ -47,7 +47,9 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::tests_common::{make_harness, test_messages, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::question_store::{
     InteractionResponse, Question, QuestionAnswer, QuestionOption, ToolQuestionPayload,
@@ -179,50 +181,21 @@ async fn run_loop(
     token: CancellationToken,
 ) {
     run_chat_loop(
-        tool_defs,
-        mock.clone(),
-        200_000,
-        None,
-        rid.into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        token,
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None, // project_main_override (2026-07-29)
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            tool_defs,
+            mock.clone(),
+            200_000,
+            rid.into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        {
+            let mut deps = chat_loop_deps(&h);
+            deps.token = token;
+            deps
+        },
+        parent_role(&h),
     )
     .await;
 }

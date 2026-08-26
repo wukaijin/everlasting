@@ -20,7 +20,9 @@ use crate::skill::loader::SkillCache;
 use crate::state::ChatEventSink;
 use crate::tools::ToolContext;
 
-use super::{dd_guard_hit, emit_persist_failure, load_for_session};
+use super::{
+    dd_guard_hit, emit_persist_failure, load_for_session, CallerRole, ChatLoopDeps, ChatLoopRequest,
+};
 
 /// Output of [`prepare_loop_state`]: everything the turn loop + forced_dispatch
 /// path needs after session/context/messages preparation. Early-return paths
@@ -117,29 +119,36 @@ pub(crate) struct LoopInit {
 /// 的 emit 原样留在本函数内部,`return Err(())` 通知 hub 直接退出。
 ///
 /// Split off `run_chat_loop` (08-08-a-class-chat-loop-split, strategy C).
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 19 参 → 三元）：request/deps/role 三套件引用。
+/// 入参克隆集与旧位参逐一对应（worktree/project_main 两 override 由
+/// 按值移交改为入口 clone —— role 借用不可移出，其余 clone 表达式与
+/// 旧调用点逐字一致）。体内正文保持不变。
 pub(crate) async fn prepare_loop_state(
-    db: SqlitePool,
-    sink: Arc<dyn ChatEventSink>,
-    rid: String,
-    session_id: String,
-    messages: Vec<ChatMessage>,
-    memory_cache: Arc<MemoryCache>,
-    skill_cache: Arc<SkillCache>,
-    worktree_override: Option<PathBuf>,
-    project_main_override: Option<PathBuf>,
-    background_shells: crate::background_shell::DefaultRegistry,
-    app_data_dir: PathBuf,
-    workflow_ctx: &Option<crate::agent::workflow::WorkflowCtx>,
-    is_worker: Option<bool>,
-    worker_run_id: Option<String>,
-    run_grants: Option<std::sync::Arc<crate::agent::permissions::RunGrantCache>>,
-    system_prompt_override: Option<String>,
-    skip_persist: bool,
-    resend_seq: Option<i64>,
-    group_chat_state: &Option<crate::tools::nominate_speaker::SharedTurnState>,
+    request: &mut ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    role: &CallerRole,
 ) -> Result<LoopInit, ()> {
-    let mut messages = messages;
+    // RULE-ARGS-001：messages 以 mem::take 从 request 移交（旧为按值位参；
+    // 加工后经 LoopInit.messages 回流，调用方 request.messages 从此弃用）。
+    let mut messages = std::mem::take(&mut request.messages);
+    let db = deps.db.clone();
+    let sink = request.sink.clone();
+    let rid = request.rid.clone();
+    let session_id = request.session_id.clone();
+    let memory_cache = deps.memory_cache.clone();
+    let skill_cache = deps.skill_cache.clone();
+    let worktree_override = role.worktree_override.clone();
+    let project_main_override = role.project_main_override.clone();
+    let background_shells = deps.background_shells.clone();
+    let app_data_dir = role.app_data_dir.clone();
+    let workflow_ctx = &request.workflow_ctx;
+    let is_worker = role.is_worker;
+    let worker_run_id = role.worker_run_id.clone();
+    let run_grants = role.run_grants.clone();
+    let system_prompt_override = role.system_prompt_override.clone();
+    let skip_persist = role.skip_persist;
+    let resend_seq = request.resend_seq;
+    let group_chat_state = &request.group_chat_state;
 
     // Start seq from the highest existing seq in this session + 1.
     let loaded_session = match crate::db::load_session(&db, &session_id).await {

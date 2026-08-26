@@ -16,16 +16,18 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use super::tests_common::{make_harness, test_messages, MockEmitter, TestHarness};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+    TestHarness,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::db;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Role};
 
 /// File-local wrapper: production-style `run_chat_loop` invocation
-/// (mirrors `error_persist.rs` positional-arg shape; one helper per file
-/// keeps each cluster file self-contained per repo convention).
-#[allow(clippy::too_many_arguments)]
+/// (routes through the `tests_common` fixtures per RULE-ARGS-001;
+/// one helper per file keeps each cluster file self-contained).
 async fn run_loop(
     h: &TestHarness,
     mock: Arc<MockProvider>,
@@ -33,47 +35,24 @@ async fn run_loop(
     messages: Vec<ChatMessage>,
     token: CancellationToken,
 ) {
+    // production-style caller — skip_persist = false: turn
+    // checkpoints are ACTIVE (persisted like production).
     run_chat_loop(
-        vec![],
-        mock,
-        200_000,
-        None,
-        format!("rid-{}", uuid::Uuid::new_v4()),
-        h.session_id.clone(),
-        messages,
-        emitter,
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        token,
-        None, // resend_seq
-        h.background_shells.clone(),
-        None,  // max_turns
-        false, // skip_session_active
-        false, // skip_persist — production-style: checkpoints ACTIVE
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None, // system_prompt_override
-        None, // worker_run_id
-        h.subagent_cache.clone(),
-        None, // max_turns fallback unused
-        None, // worktree_override
-        None, // project_main_override
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None, // workflow_ctx
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            mock,
+            200_000,
+            format!("rid-{}", uuid::Uuid::new_v4()),
+            h.session_id.clone(),
+            messages,
+            emitter,
+        ),
+        {
+            let mut deps = chat_loop_deps(&h);
+            deps.token = token;
+            deps
+        },
+        parent_role(&h),
     )
     .await;
 }

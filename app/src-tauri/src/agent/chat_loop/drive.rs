@@ -35,7 +35,9 @@ use crate::state::{ChatEventSink, ToolCallPayload};
 use crate::tools::ToolContext;
 
 use super::{
-    build_turn_latency, emit_persist_failure, finalize_pending_tool_results, LlmRetrySink,
+    build_turn_latency, emit_persist_failure, finalize_pending_tool_results, CallerRole,
+    ChatLoopDeps, ChatLoopRequest, LlmRetrySink, SummaryCompactionJob, TurnCarry, TurnFrame,
+    TurnHot,
 };
 
 /// [`DispatchOutcome`] carrying the `result_blocks` Vec (tool_results in
@@ -162,104 +164,82 @@ fn snapshot_checkpoint_blocks(
     snap
 }
 
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 49 参 → 六元）：三套件引用 +
+/// [`TurnFrame`]（每轮常量派生帧，含轮计数）+ [`TurnCarry`]（by-value
+/// 十人可变名单，design D2）+ [`TurnHot`]（cwd 状态对的只读视图——
+/// 本函数不产 cwd 突变；shell cd 经 dispatch 的 DispatchOutcome 回写）。
+/// 返回值 [`DriveTurnOutcome`] 语义不变。体内头部做与旧位参同名同形的
+/// 解包/重绑定，正文自注释块之后逐字节保持。
 pub(crate) async fn drive_turn(
-    turn: usize,
-    messages: Vec<ChatMessage>,
-    seq: i64,
-    head_sha: String,
-    system_prompt: String,
-    permission_ctx: PermissionContext,
-    loop_window: VecDeque<loop_detection::ToolCall>,
-    loop_hit_count: u32,
-    last_usage_terminal: Option<crate::llm::types::TokenUsage>,
-    workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
-    loaded_session: &crate::db::LoadedSession,
-    project: crate::projects::ProjectRow,
-    worktree_path: PathBuf,
-    last_cwd: &Option<PathBuf>,
-    current_ctx: &ToolContext,
-    mode_prefix: &'static str,
-    model_briefs: Vec<crate::agent::subagent::ModelBrief>,
-    session_mode: crate::db::Mode,
-    effective_is_worker: bool,
-    system_prompt_override: &Option<String>,
-    tool_defs: Vec<ToolDef>,
-    subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
-    provider: Arc<dyn Provider>,
-    context_window: u32,
-    // 08-20-turn-usage-event-quota-view WP2: 解析模型的 provider 行 id,
-    // Done 臂 upsert 落 turn_trace.provider_id(5h 窗口聚合分组键)。
-    provider_id: Option<String>,
-    rid: String,
-    session_id: String,
-    sink: Arc<dyn ChatEventSink>,
-    db: SqlitePool,
-    token: CancellationToken,
-    background_shells: &crate::background_shell::DefaultRegistry,
-    skip_persist: bool,
-    // 08-20-worker-turn-trace-persist: worker 的 `subagent_runs.id`
-    // (`run_chat_loop` 已有 `worker_run_id: Option<String>` 的 &str
-    // 视图)。`None` / `Some("")` 都归一为空 run_key —— insert_run 失败
-    // 的降级语义(D6):worker 写点自然不写,不造孤儿命名空间。
-    // 主路 / 群聊恒 None(签名 +1 参,调用点唯一 —— chat_loop.rs,
-    // 已知 ~45 参债务,不为此小额任务重构)。
-    worker_run_id: Option<&str>,
-    current_speaker: &Option<String>,
-    question_store: &crate::agent::question_store::QuestionStore,
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 开关
-    // (每 request 读一次,best-effort 缺省 on)+ stub registry。
-    // stubify 是第 4 环,gate `开关 && !effective_is_worker &&
-    // !is_group_chat`;registry 决定候选工具是 stub 还是全量(粘性)。
-    stub_on: bool,
-    stub_loaded: &crate::tools::stub::StubRegistry,
-    // memory-block-governance WP1 (2026-08-15): cl100k estimate of
-    // the memory instruction blocks injected this request (computed
-    // once in `prepare_loop_state`, threaded via `LoopInit`). A
-    // per-request constant — written to every turn row at the Done
-    // event. `None` = no memory layers (fresh install).
-    memory_token: Option<u32>,
-    // WP2: digest gate(注入同源,经 LoopInit 穿入)— 决定是否侧挂
-    // `load_memory_sections` 元工具 def。
-    digest_on: bool,
-    // C3 摘要压缩 PR2 (08-18-llm-context-compaction):水位锚点
-    // (init 种子;成功压缩后经 DriveTurnOutcome 更新)、合成头长度
-    // (待压区/保留区起算,design §4.1)、摘要 gate(开关 && !worker
-    // && !群聊,init 同源)。熔断 registry 走进程级单例,不穿参。
-    summary_anchor: Option<crate::agent::compaction::SummaryAnchor>,
-    synthetic_prefix_len: usize,
-    compaction_on: bool,
-    // unified-context-budget WP1 (2026-08-19): system 切片(init 计,
-    // system prompt 本体 + skill listing 归因)与 @文件切片聚合 +
-    // 同请求 spans(prd D10 临时产物 —— WP2 budget gate 消费,PR1
-    // 只穿到 Done 写点落列)。
-    system_token: u32,
-    at_files_token: u32,
-    at_file_spans: Vec<crate::agent::at_file::AtFileSpan>,
-    // unified-context-budget WP2 (2026-08-19): 关卡⑤硬卡输入 ——
-    // 当前 turn user 槽位(裁剪保护边界)、memory 目录态快照(臂 3
-    // 回退目标)、config 开关(gate = budget_on && !worker && !群聊,
-    // prd D5/R6)。
-    current_user_msg_idx: usize,
-    memory_catalog_blocks: Option<Vec<crate::llm::types::ContentBlock>>,
-    budget_on: bool,
-    // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」的
-    // 一次性 force 标志 —— 只绕过下方 C3 块的 token 触发线,gate
-    // 本身(开关/worker/熔断/skip_persist)与空待压区
-    // (cut == synthetic_prefix_len → 机械路径)全部照旧
-    // (design §2.2)。chat_loop 在本函数返回后置 false(一次性)。
-    force_compaction: bool,
+    request: &ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    role: &CallerRole,
+    frame: &mut TurnFrame<'_>,
+    carry: TurnCarry,
+    hot: &TurnHot,
 ) -> Result<DriveTurnOutcome, ()> {
-    let mut messages = messages;
-    let mut seq = seq;
-    let mut head_sha = head_sha;
-    let mut system_prompt = system_prompt;
-    let mut permission_ctx = permission_ctx;
-    let mut loop_window = loop_window;
-    let mut loop_hit_count = loop_hit_count;
-    let mut last_usage_terminal = last_usage_terminal;
-    let mut workflow_ctx = workflow_ctx;
-    let mut summary_anchor = summary_anchor;
+    // RULE-ARGS-001（design D2）：跨 turn 可变状态的十人名单解包 ——
+    // 等价旧签名首十个位参的 `let mut x = x;` 重绑定块。
+    let TurnCarry {
+        mut messages,
+        mut seq,
+        mut head_sha,
+        mut system_prompt,
+        mut permission_ctx,
+        mut loop_window,
+        mut loop_hit_count,
+        mut last_usage_terminal,
+        mut workflow_ctx,
+        mut summary_anchor,
+    } = carry;
+    // -----------------------------------------------------------------
+    // RULE-ARGS-001 重绑定表（旧位参名 → 新来源），形态逐一对应：
+    //   旧按引用形参      → 引用别名（零克隆）
+    //   旧按值形参        → owned 镜像（一次 clone ≡ 旧调用点实参克隆）
+    //   LoopInit 常量     → frame.* 只读/Copy 出
+    // 轮计数与 softcap force 标志同样 Copy 出帧，正文文本不受影响。
+    let turn = frame.turn;
+    let force_compaction = frame.force_compaction;
+    let loaded_session = frame.loaded_session;
+    let project = frame.project;
+    let worktree_path = frame.worktree_path;
+    let mode_prefix = frame.mode_prefix;
+    let model_briefs = frame.model_briefs;
+    let session_mode = frame.session_mode;
+    let effective_is_worker = frame.effective_is_worker;
+    let stub_on = frame.stub_on;
+    let budget_on = frame.budget_on;
+    let memory_token = frame.memory_token;
+    let digest_on = frame.digest_on;
+    let synthetic_prefix_len = frame.synthetic_prefix_len;
+    let compaction_on = frame.compaction_on;
+    let system_token = frame.system_token;
+    let at_files_token = frame.at_files_token;
+    let at_file_spans = frame.at_file_spans;
+    let current_user_msg_idx = frame.current_user_msg_idx;
+    let memory_catalog_blocks = frame.memory_catalog_blocks;
+
+    let last_cwd = &hot.last_cwd;
+    let current_ctx = &hot.current_ctx;
+    let system_prompt_override = &role.system_prompt_override;
+    let worker_run_id = role.worker_run_id.as_deref();
+    let current_speaker = &request.current_speaker;
+    let question_store = &deps.question_store;
+    let background_shells = &deps.background_shells;
+    let stub_loaded = &deps.stub_loaded;
+    let skip_persist = role.skip_persist;
+
+    let tool_defs = request.tool_defs.clone();
+    let subagent_cache = deps.subagent_cache.clone();
+    let provider = request.provider.clone();
+    let context_window = request.context_window;
+    let provider_id = request.provider_id.clone();
+    let rid = request.rid.clone();
+    let session_id = request.session_id.clone();
+    let sink = request.sink.clone();
+    let db = deps.db.clone();
+    let token = deps.token.clone();
+
     permission_ctx.turn_seq = Some(seq);
     // 08-20-worker-turn-trace-persist: run 维度写键。'' = 主行(worker
     // 未跑或 insert_run 失败降级);非空 = worker 行的 turn_trace 键
@@ -291,11 +271,11 @@ pub(crate) async fn drive_turn(
     // breakpoint (see prd §6.1 + the `build_instructions_blocks`
     // docstring in `memory/loader.rs`).
     if system_prompt_override.as_ref().is_none() {
-        head_sha = crate::agent::system_prompt::lookup_head_sha(&worktree_path);
+        head_sha = crate::agent::system_prompt::lookup_head_sha(worktree_path);
         let base_prompt = crate::agent::system_prompt::build_system_prompt(
             &loaded_session.session,
-            &project,
-            &worktree_path,
+            project,
+            worktree_path,
             &head_sha,
         );
         system_prompt =
@@ -379,7 +359,7 @@ pub(crate) async fn drive_turn(
             &subagent_cache,
             &project_path,
             workflow_name,
-            &model_briefs,
+            model_briefs,
         )
         .await;
         turn_tool_defs.push(dispatch_def);
@@ -502,21 +482,20 @@ pub(crate) async fn drive_turn(
             // 机械路径(design §4.1 / 评审 P3)。
             if cut > synthetic_prefix_len {
                 match attempt_summary_compaction(
-                    provider.clone(),
-                    &token,
-                    &db,
-                    &session_id,
-                    &messages,
-                    synthetic_prefix_len,
-                    cut,
-                    summary_anchor.clone(),
-                    &loaded_session.messages,
-                    seq,
-                    tokens_pre,
-                    context_window,
-                    // MAX_TURNS softcap:观测区分 force 路径(「压缩
-                    // 后续跑」→ "softcap")与常规超线路径("auto")。
-                    if force_compaction { "softcap" } else { "auto" },
+                    request,
+                    deps,
+                    frame,
+                    SummaryCompactionJob {
+                        messages: &messages,
+                        db_rows: &loaded_session.messages,
+                        prior: summary_anchor.clone(),
+                        cut,
+                        seq,
+                        tokens_before: tokens_pre,
+                        // MAX_TURNS softcap:观测区分 force 路径(「压缩
+                        // 后续跑」→ "softcap")与常规超线路径("auto")。
+                        trigger_label: if force_compaction { "softcap" } else { "auto" },
+                    },
                 )
                 .await
                 {
@@ -1028,7 +1007,7 @@ pub(crate) async fn drive_turn(
             &system_prompt,
             &tools_json,
             &mut turn_messages,
-            &at_file_spans,
+            at_file_spans,
             current_user_msg_idx,
             memory_catalog_blocks.as_deref(),
             context_window,
@@ -2496,25 +2475,31 @@ enum SummaryOutcome {
 /// "Output ONLY the summary" 指令约束 + 采集时忽略 ThinkingDelta
 /// (thinking 内容对摘要正文无贡献);输出超长由
 /// `clamp_summary_output` 按 4k token 截断兜底。
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 13 参 → 四元）：三套件中的两个
+/// （request/deps）+ [`TurnFrame`]（synthetic_prefix_len 派生常量）
+/// + [`SummaryCompactionJob`]。体内头部重绑定保持正文逐字节不变；
+/// 熔断 registry 依旧走进程级单例，不经参数。
 async fn attempt_summary_compaction(
-    provider: Arc<dyn Provider>,
-    token: &CancellationToken,
-    db: &SqlitePool,
-    session_id: &str,
-    messages: &[ChatMessage],
-    synthetic_prefix_len: usize,
-    cut: usize,
-    prior: Option<crate::agent::compaction::SummaryAnchor>,
-    db_rows: &[crate::db::MessageRow],
-    seq: i64,
-    tokens_before: u32,
-    context_window: u32,
-    // MAX_TURNS softcap (08-18-max-turns-softcap):metadata `trigger`
-    // 字段的来源标注 —— auto 路径传 "auto",软卡 force 路径传
-    // "softcap"(观测可区分)。
-    trigger_label: &'static str,
+    request: &ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    frame: &TurnFrame<'_>,
+    job: SummaryCompactionJob<'_>,
 ) -> SummaryOutcome {
+    let provider = request.provider.clone();
+    let token = &deps.token;
+    let db = &deps.db;
+    let session_id = &request.session_id;
+    let context_window = request.context_window;
+    let synthetic_prefix_len = frame.synthetic_prefix_len;
+    let SummaryCompactionJob {
+        messages,
+        db_rows,
+        prior,
+        cut,
+        seq,
+        tokens_before,
+        trigger_label,
+    } = job;
     use crate::agent::compaction::{
         build_compaction_prompt, build_summary_chat_message, clamp_summary_output,
         compressible_cutoff_seq, send_summary_completion, SummaryStreamError,

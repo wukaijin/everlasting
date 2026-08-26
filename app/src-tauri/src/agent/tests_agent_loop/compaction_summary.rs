@@ -15,9 +15,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, MockEmitter, TestHarness};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, MockEmitter, TestHarness,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::compaction::{compaction_registry, COMPACTION_SUMMARY_KIND};
 use crate::llm::provider::mock::{MockProvider, MockResponse};
@@ -237,9 +237,8 @@ fn reload_wire(loaded: &crate::db::LoadedSession) -> Vec<ChatMessage> {
         .collect()
 }
 
-/// 标准(非 worker / 非群聊)run_chat_loop 调用。36 参对齐
-/// tests_agent_loop/basic.rs 的模板。
-#[allow(clippy::too_many_arguments)]
+/// 标准(非 worker / 非群聊)run_chat_loop 调用。fixture 缺省 +
+/// `is_worker` 具名差异(RULE-ARGS-001)。
 async fn run_loop(
     h: &TestHarness,
     provider: Arc<MockProvider>,
@@ -250,47 +249,23 @@ async fn run_loop(
     session_id: String,
 ) {
     run_chat_loop(
-        vec![],
-        provider,
-        WINDOW,
-        None,
-        rid.into(),
-        session_id,
-        messages,
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        // worker gate 测试:skip_persist = is_worker。
-        is_worker,
-        Some(is_worker),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            provider,
+            WINDOW,
+            rid.into(),
+            session_id,
+            messages,
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        {
+            let mut role = parent_role(&h);
+            // worker gate 测试:skip_persist = is_worker。
+            role.skip_persist = is_worker;
+            role.is_worker = Some(is_worker);
+            role
+        },
     )
     .await;
 }

@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, test_messages, MockEmitter};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, TokenUsage};
@@ -88,46 +88,17 @@ async fn agent_loop_load_tool_schemas_intercepts_and_sticky() {
     ]));
 
     run_chat_loop(
-        crate::tools::builtin_tools(),
-        mock.clone(),
-        200_000,
-        None,
-        "rid-stub-load".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            crate::tools::builtin_tools(),
+            mock.clone(),
+            200_000,
+            "rid-stub-load".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -182,46 +153,17 @@ async fn agent_loop_load_tool_schemas_intercepts_and_sticky() {
     let emitter2 = Arc::new(MockEmitter::new());
     let mock2 = Arc::new(MockProvider::new(vec![text_turn("second request")]));
     run_chat_loop(
-        crate::tools::builtin_tools(),
-        mock2.clone(),
-        200_000,
-        None,
-        "rid-stub-load2".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter2.clone(),
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            crate::tools::builtin_tools(),
+            mock2.clone(),
+            200_000,
+            "rid-stub-load2".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter2.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
     let sent2 = mock2.sent_tools();
@@ -250,46 +192,17 @@ async fn agent_loop_stub_direct_call_self_heals() {
     ]));
 
     run_chat_loop(
-        crate::tools::builtin_tools(),
-        mock.clone(),
-        200_000,
-        None,
-        "rid-stub-selfheal".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            crate::tools::builtin_tools(),
+            mock.clone(),
+            200_000,
+            "rid-stub-selfheal".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -328,46 +241,17 @@ async fn agent_loop_stub_off_full_schemas_no_meta_tool() {
     let mock = Arc::new(MockProvider::new(vec![text_turn("hi")]));
 
     run_chat_loop(
-        crate::tools::builtin_tools(),
-        mock.clone(),
-        200_000,
-        None,
-        "rid-stub-off".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            crate::tools::builtin_tools(),
+            mock.clone(),
+            200_000,
+            "rid-stub-off".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -397,48 +281,27 @@ async fn agent_loop_worker_never_stubbed() {
     let mock = Arc::new(MockProvider::new(vec![text_turn("worker done")]));
 
     run_chat_loop(
-        crate::tools::builtin_tools(),
-        mock.clone(),
-        200_000,
-        None,
-        "rid-stub-worker".into(),
-        h.session_id.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        // worker 路径:skip_session_active=true / skip_persist=true /
-        // is_worker=Some(true) / system_prompt_override=Some(worker prompt)。
-        true,
-        true,
-        Some(true),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        Some("worker system prompt".to_string()),
-        Some("worker-run-id".to_string()),
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            crate::tools::builtin_tools(),
+            mock.clone(),
+            200_000,
+            "rid-stub-worker".into(),
+            h.session_id.clone(),
+            test_messages(),
+            emitter.clone(),
+        ),
+        chat_loop_deps(&h),
+        {
+            let mut role = parent_role(&h);
+            // worker 路径:skip_session_active=true / skip_persist=true /
+            // is_worker=Some(true) / system_prompt_override=Some(worker prompt)。
+            role.skip_session_active = true;
+            role.skip_persist = true;
+            role.is_worker = Some(true);
+            role.system_prompt_override = Some("worker system prompt".to_string());
+            role.worker_run_id = Some("worker-run-id".to_string());
+            role
+        },
     )
     .await;
 
@@ -487,46 +350,27 @@ async fn agent_loop_group_chat_never_stubbed() {
     );
 
     run_chat_loop(
-        crate::tools::builtin_tools(),
-        mock.clone(),
-        200_000,
-        None,
-        "rid-stub-group".into(),
-        gc_sid.clone(),
-        test_messages(),
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        Some(1),
-        false,
-        false,
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        Some("moderator prompt".to_string()),
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        Some(turn_state),
-        Some("moderator".to_string()),
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        {
+            let mut request = chat_loop_request(
+                crate::tools::builtin_tools(),
+                mock.clone(),
+                200_000,
+                "rid-stub-group".into(),
+                gc_sid.clone(),
+                test_messages(),
+                emitter.clone(),
+            );
+            request.max_turns = Some(1);
+            request.group_chat_state = Some(turn_state);
+            request.current_speaker = Some("moderator".to_string());
+            request
+        },
+        chat_loop_deps(&h),
+        {
+            let mut role = parent_role(&h);
+            role.system_prompt_override = Some("moderator prompt".to_string());
+            role
+        },
     )
     .await;
 

@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
-use super::tests_common::{make_harness, MockEmitter, TestHarness};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, MockEmitter, TestHarness,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, ChatMessage, MessageContent, Role, TokenUsage};
@@ -49,46 +49,17 @@ async fn run_loop_with_emitter(
     emitter: Arc<MockEmitter>,
 ) {
     run_chat_loop(
-        vec![],
-        provider,
-        WINDOW,
-        None,
-        "rid-turn-usage-it".into(),
-        h.session_id.clone(),
-        messages,
-        emitter,
-        h.db.clone(),
-        h.cancellations.clone(),
-        h.session_active_request.clone(),
-        h.read_guard.clone(),
-        h.memory_cache.clone(),
-        h.skill_cache.clone(),
-        h.permission_asks.clone(),
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        None,
-        false,
-        false,
-        Some(false),
-        None,
-        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None,
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        chat_loop_request(
+            vec![],
+            provider,
+            WINDOW,
+            "rid-turn-usage-it".into(),
+            h.session_id.clone(),
+            messages,
+            emitter,
+        ),
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 }

@@ -28,7 +28,10 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use super::tests_common::{make_harness, test_messages, MockEmitter, TestHarness};
+use super::tests_common::{
+    chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
+    TestHarness,
+};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::group_chat::{GroupChatCtx, ParticipantConfig};
 use crate::agent::group_chat_loop::run_group_chat_loop;
@@ -536,46 +539,21 @@ async fn entry_guard_does_not_skip_when_group_chat_state_none() {
 
     let mock = Arc::new(MockProvider::new(vec![text_turn("reply")]));
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-guard-none".to_string(),
-        h.session_id.clone(),
-        messages,
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        Some(1), // single turn
-        false,
-        false,
-        Some(false),
-        None, // worker_catalog
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None, // system_prompt_override
-        None, // worker_run_id
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        None, // group_chat_state = None → guard must NOT skip
-        None, // current_speaker
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        {
+            let mut request = chat_loop_request(
+                vec![],
+                mock.clone(),
+                200_000,
+                "rid-guard-none".to_string(),
+                h.session_id.clone(),
+                messages,
+                emitter.clone(),
+            );
+            request.max_turns = Some(1); // single turn
+            request
+        },
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 
@@ -618,46 +596,23 @@ async fn entry_guard_skips_when_group_chat_state_some_and_tail_matches_db() {
         tokio::sync::Mutex::new(crate::tools::nominate_speaker::GroupChatTurnState::default()),
     );
     run_chat_loop(
-        vec![],
-        mock.clone(),
-        200_000,
-        None,
-        "rid-guard-some".to_string(),
-        h.session_id.clone(),
-        messages,
-        emitter.clone(),
-        h.db.clone(),
-        h.cancellations,
-        h.session_active_request,
-        h.read_guard,
-        h.memory_cache,
-        h.skill_cache,
-        h.permission_asks,
-        CancellationToken::new(),
-        None,
-        h.background_shells.clone(),
-        Some(1),
-        false,
-        false,
-        Some(false),
-        None,
-        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
-        None,
-        None,
-        h.subagent_cache.clone(),
-        None,
-        None,
-        None,
-        h.app_data_dir.clone(),
-        None,
-        h.question_store.clone(),
-        None,
-        Some(turn_state), // group_chat_state = Some → guard skips
-        None,
-        h.stub_loaded.clone(),
-        // F1 queue driver (2026-08-25): single-shot call site —
-        // guard-owned cleanup (not a continuation round).
-        false,
+        {
+            let mut request = chat_loop_request(
+                vec![],
+                mock.clone(),
+                200_000,
+                "rid-guard-some".to_string(),
+                h.session_id.clone(),
+                messages,
+                emitter.clone(),
+            );
+            request.max_turns = Some(1); // single turn
+                                         // group_chat_state = Some → guard skips the reloaded user message.
+            request.group_chat_state = Some(turn_state);
+            request
+        },
+        chat_loop_deps(&h),
+        parent_role(&h),
     )
     .await;
 

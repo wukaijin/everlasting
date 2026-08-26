@@ -42,8 +42,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
-use tokio::sync::{Mutex, RwLock};
-use tokio_util::sync::CancellationToken;
 // A5+ (2026-07-04): LLM first-byte-safe retry open.
 use crate::llm::retry::{RetrySink, RetryingEvent};
 
@@ -55,16 +53,11 @@ use crate::agent::question_store::{
     InteractionResponse, PendingInteraction, Question, QuestionAnswer, QuestionOption,
     ToolQuestionPayload,
 };
-use crate::agent::subagent::SubagentEventSink;
 use crate::agent::MAX_TURNS;
-use crate::llm::{
-    ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Provider, Role, ToolDef,
-};
+use crate::llm::{ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role};
 use crate::memory::MemoryCache;
 use crate::projects::boundary::is_within_root;
-use crate::skill::loader::SkillCache;
-use crate::state::{ChatEventSink, ProviderCatalog, ToolCallPayload};
-use crate::tools::read_guard::ReadGuard;
+use crate::state::{ChatEventSink, ToolCallPayload};
 use std::collections::VecDeque;
 
 // 08-08-a-class-chat-loop-split: `chat_loop.rs` is now a hub. The per-turn
@@ -79,11 +72,14 @@ use std::collections::VecDeque;
 // / L2 parallel-eligibility / DispatchBatch 分类等辅助函数。
 pub(crate) mod drive;
 pub(crate) mod init;
+pub(crate) mod suite;
 pub(crate) mod tools;
 #[allow(unused_imports)]
 pub(crate) use drive::*;
 #[allow(unused_imports)]
 pub(crate) use init::*;
+#[allow(unused_imports)]
+pub(crate) use suite::*;
 #[allow(unused_imports)]
 pub(crate) use tools::*;
 
@@ -145,7 +141,6 @@ pub(crate) use tools::*;
 /// every exit path (normal / error / cancel / max_turns /
 /// StillOver). The chat command's pre-flight inserts those
 /// entries; the agent loop's own RAII Drop cleans them up.
-#[allow(clippy::too_many_arguments)]
 /// A5+ (2026-07-04, R8): `RetrySink` adapter that forwards retry
 /// notices onto the regular `chat-event` IPC channel as a
 /// `ChatEvent::Retrying` payload. The frontend `streamController`
@@ -315,303 +310,42 @@ pub(crate) fn dd_guard_hit(
         })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_chat_loop(
-    tool_defs: Vec<ToolDef>,
-    provider: Arc<dyn Provider>,
-    context_window: u32,
-    // 08-20-turn-usage-event-quota-view WP2: 解析模型的 provider 行 id,
-    // 落 `turn_trace.provider_id`(5h 窗口配额聚合分组键)。`None` =
-    // catalog miss 等极端路径(落 NULL,聚合归 unknown 桶)。主路来自
-    // `ResolvedChatProviderWrapper.provider_id`,worker 路来自
-    // `resolve_worker_provider` 扩展返回值。
-    provider_id: Option<String>,
-    rid: String,
-    session_id: String,
-    messages: Vec<ChatMessage>,
-    sink: Arc<dyn ChatEventSink>,
-    db: SqlitePool,
-    cancellations: Arc<Mutex<std::collections::HashMap<String, CancellationToken>>>,
-    session_active_request: Arc<Mutex<std::collections::HashMap<String, String>>>,
-    read_guard: ReadGuard,
-    memory_cache: Arc<MemoryCache>,
-    skill_cache: Arc<SkillCache>,
-    permission_asks: crate::agent::permissions::PermissionStore,
-    token: CancellationToken,
-    // D3 PR3 (2026-06-17): resend context. When `Some(seq)`,
-    // the user-message persist site (just after this function
-    // captures `last_user_snapshot`) writes a `resend_message`
-    // audit row pointing at the original user message's seq.
-    // `None` for normal first-time sends. Best-effort (DB
-    // audit failure does NOT abort the chat — the user has
-    // already seen the assistant's new turn stream).
-    resend_seq: Option<i64>,
-    // L1a (2026-06-19): cross-request background-shell registry.
-    // Threaded into the per-turn `ToolContext` so the 3 L1a tools
-    // (`run_background_shell` / `shell_status` / `shell_kill`) can
-    // call into it. The agent loop itself reads it once per turn
-    // (after C3 compaction, before `provider.send`) to drain
-    // pending completion notifications and inject them as
-    // user-role messages.
-    background_shells: crate::background_shell::DefaultRegistry,
-    // B6 Subagent (2026-06-19, review #4): per-invocation turn
-    // budget. `None` (production + 9 tests) falls back to the
-    // global `MAX_TURNS` (50) — preserves RULE-A-006 single-
-    // source-of-truth semantics for the production path. The
-    // worker agent path (PR1b) passes `Some(20)` so a runaway
-    // subagent cannot burn the parent's full 50-turn budget.
-    // C3 compaction and the max_turns terminal event both
-    // honor this limit identically to the const case.
-    max_turns: Option<usize>,
-    // B6 Subagent (2026-06-19, PR1b review #2): when `true`, the
-    // per-invocation `CancellationGuard`'s Drop skips the
-    // `session_active_request.remove(&session_id)` step (the
-    // `cancellations.remove(&rid)` still runs). Workers reuse the
-    // parent's `session_id` for audit / DB linkage but their rid
-    // must NOT own the session's "active request" slot — removing
-    // the parent's entry on worker exit would corrupt
-    // `cancel_inflight_for_session` (RULE-E-005). Production +
-    // tests pass `false`; the worker path passes `true`.
-    skip_session_active: bool,
-    // B6 Subagent (PR1b): when `true`, the loop skips ALL DB writes
-    // (`persist_turn` / `update_message_metadata` / `touch_session` /
-    // `update_last_turn_usage` / `record_*_audit`). The worker agent path
-    // uses this so its intermediate turns stay in-memory only (the
-    // `SubagentBufferSink` transcript captures them; PR2 will
-    // persist the transcript into `subagent_runs`). Skipping the DB
-    // also avoids a UNIQUE-constraint collision with the parent's
-    // own `persist_turn` calls — both loops would otherwise write
-    // to the same `messages` table keyed by `(session_id, seq)`.
-    // Production + tests pass `false` (full persistence); the
-    // worker path passes `true`.
-    skip_persist: bool,
-    // B6 Subagent PR2b (2026-06-20, RULE-A-014): when `Some(true)`,
-    // the `PermissionContext` built inside this loop carries
-    // `is_worker: true`, which gates `ask_path` into the worker's
-    // interactive round-trip branch (the 2026-06-22 fix replaced
-    // the pre-fix Tier 4 collapse-to-Deny with a `register_ask` +
-    // `tokio::select!{cancel, timeout, oneshot}` flow keyed under
-    // the worker-owned permission session id). `None` falls back
-    // to the session-row mode's natural default (production =
-    // `false`, since no parent process is a worker). The worker
-    // path passes `Some(true)`; production + 35 `agent_loop_*`
-    // integration tests pass `Some(false)` to make the
-    // production-style default explicit at the call site.
-    is_worker: Option<bool>,
-    // P2.4 C5 (2026-07-22): the worker dispatch context, replacing
-    // the `app_handle: Option<AppHandle>` 22nd parameter. The old
-    // param served two uses — (1) wiring the worker's
-    // `SubagentBufferSink` IPC emit, (2) snapshotting
-    // `AppState.catalog` for worker model resolution. Both are now
-    // explicit + transport-agnostic so the daemon path (no
-    // `AppHandle`) gets them too:
-    //   - `worker_catalog`: `Some(state.catalog.clone())` in
-    //     production (Tauri + daemon); `None` in tests.
-    //   - `worker_event_sink`: `AppHandleSubagentSink` (Tauri IPC),
-    //     `HttpSseSubagentSink` (daemon SSE — was buffer-only
-    //     pre-C5), `ThreadLocalSubagentSink` (tests).
-    // The agent loop body itself does NOT use either — only
-    // `run_subagent` does, when constructing the worker sink.
-    worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
-    worker_event_sink: Arc<dyn SubagentEventSink>,
-    // 2026-06-21 fix (B6 review defect A): the worker's
-    // `assemble_subagent_prompt(def, task)` output was previously
-    // dead code (`_worker_system_prompt` discarded at
-    // `chat_loop.rs:2052`); the worker actually inherited the
-    // parent's `assemble_system_prompt(mode_prefix, base_prompt)`
-    // output, which made `SubagentDef.system_prompt` effectively
-    // documentation-only and produced prompt/permission
-    // contradictions in Edit/Plan mode. The fix threads the
-    // worker's overridden prompt as a parameter: when `Some(p)`,
-    // the loop uses `p` directly (skipping the parent's
-    // `assemble_system_prompt` step). When `None`, the loop
-    // builds the prompt from the project + session row (the
-    // production + test path). The `run_subagent` worker
-    // nested call passes `Some(assemble_subagent_prompt(def,
-    // &task))`; the production `chat` command passes `None`.
-    // 4 指令文件 prompt caching is unaffected — the 4
-    // instructions live in a separate user-role synthetic
-    // message with its own `cache_control: Ephemeral`
-    // breakpoint (see `build_instructions_blocks`), independent
-    // of the system role.
-    system_prompt_override: Option<String>,
-    // 2026-06-22 (RULE-FrontSubagent-003 fix): the worker's
-    // `subagent_runs.id` (DB row UUID, NOT the human-readable
-    // `worker_rid`). Threaded into the `PermissionContext` built
-    // inside this loop so `ask_path` can:
-    //
-    // 1. Build the worker-owned permission session id
-    //    (`"worker:<worker_run_id>"`) so the oneshot map entry
-    //    does not collide with the parent's pending asks.
-    // 2. Populate `PermissionAskPayload.worker_run_id` so the
-    //    frontend `<SubagentDrawer>` routes the ask to the
-    //    correct worker row instead of the global
-    //    `<PermissionModal>`.
-    //
-    // `None` for the parent path (production chat + 35
-    // `agent_loop_*` integration tests); `Some(worker_run_id)`
-    // for the nested call inside `run_subagent` (B6 PR1a+
-    // 2026-06-22 follow-up). The companion `is_worker: Some(true)`
-    // gates the worker's `ask_path` branch — this field carries
-    // the routing key.
-    worker_run_id: Option<String>,
-    // L3d (2026-06-25): the process-wide subagent cache. Used by
-    // the loop's per-turn tool list construction (line ~957) to
-    // append the dynamic `dispatch_subagent` ToolDef via
-    // `definition_with_cache(&subagent_cache, project_path)`, and
-    // by `run_subagent` to look up the dispatched subagent across
-    // builtin + user + project layers (`cache.lookup(project_path,
-    // name)` replaces the static `lookup_subagent(name)`).
-    //
-    // Threaded here (rather than read off `AppState` mid-loop)
-    // because the loop's signature already carries every other
-    // `Arc<...>` handle (memory_cache / skill_cache / etc.) —
-    // uniform treatment keeps the test + production paths
-    // shape-identical. The cache is read-through + mtime-fenced
-    // so adding / editing / deleting a `.md` is picked up on the
-    // next chat turn without a reload command.
-    subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
-    // 2026-06-26 (task `06-26-subagent-per-run-grant`): per-run
-    // in-memory grant cache for worker subagents. `Some(Arc<...>)`
-    // on the worker path (the Arc is constructed fresh in
-    // `run_subagent` per worker); `None` on the parent path
-    // (production chat + tests — never read, never written).
-    //
-    // Threaded into `PermissionContext.run_grants` so `check.rs`
-    // Tier 4's three branches (Path / Shell / WebFetch) can
-    // consult the cache before falling through to `ask_path`, and
-    // `ask_path`'s worker `AllowAlways` arm can write to it. The
-    // cache dies with the worker's `run_chat_loop` invocation —
-    // it does NOT persist to `session_tool_permissions`
-    // (RULE-A-016 isolation: worker grants must not cross the
-    // privilege boundary into the parent session's grant table).
-    run_grants: Option<std::sync::Arc<crate::agent::permissions::RunGrantCache>>,
-    // L3b (2026-06-27): worker worktree isolation override. When
-    // `Some(path)`, the loop uses `path` as the worker's worktree
-    // root INSTEAD of the session row's `worktree_path` (which is
-    // the PARENT session's worktree — the root cause of worker
-    // reuse of the parent's checkout). The path is also the basis
-    // for the worker's `cwd` (initialized to the path itself,
-    // since a fresh worktree has no `current_cwd`). The path is
-    // assumed to be inside the project root (the caller —
-    // `run_subagent` — verifies via `assert_within_root` before
-    // passing it).
-    //
-    // When `None`, the loop builds the worktree_path + cwd from
-    // the session row as before (the production chat + test path,
-    // AND the non-isolated worker path).
-    //
-    // Mirrors the `system_prompt_override` pattern (override the
-    // session-row-derived value at the loop's ToolContext
-    // construction site). Production chat + tests pass `None`; the
-    // worker path passes `Some(worker_worktree_path)` when
-    // isolation is active, `None` otherwise.
-    worktree_override: Option<PathBuf>,
-    // project_main_override (2026-07-29): the worker's ORIGINAL project
-    // main repo path when `worktree_override` is `Some` (i.e. the worker is
-    // isolated). Threads into `PermissionContext.project_main_path` so the
-    // permission layer's inside-check anchors on the project root, NOT the
-    // worker's own checkout subtree. `None` for production chat, non-isolated
-    // workers, and tests — in those cases `project_main_path` falls back to
-    // `worktree_path` (which IS the project root for them).
-    project_main_override: Option<PathBuf>,
-    // L3b (2026-06-27): the app's data directory, threaded so the
-    // dispatch_subagent interceptor can compute the worker
-    // worktree path (`<app_data_dir>/worktrees/<project_uuid>/
-    // worker/<run_id>`) when isolation is active. Production
-    // threads `AppState.app_data_dir.clone()`; tests pass an
-    // empty path (most tests dispatch non-isolated workers or
-    // `researcher` which never needs a worktree).
-    //
-    // This is a pass-through parameter — the agent loop body
-    // itself does NOT read it; only `run_subagent` (the
-    // dispatch_subagent interceptor) does, when creating the
-    // worker worktree.
-    app_data_dir: PathBuf,
-    // explicit-agent-dispatch (2026-06-30): when `Some(fd)`, the
-    // loop's turn-1 prefix short-circuits the LLM — it synthesizes a
-    // `dispatch_subagent` tool_use from `fd` and calls `run_subagent`
-    // directly (NO `provider.stream`), then emits the worker's summary
-    // as the turn's assistant text and exits. `None` = normal LLM-
-    // driven loop (production chat without `@@` prefix + worker nested
-    // calls + all tests). See `ForcedDispatch` + the prefix block
-    // below the user-message persist site.
-    forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
-    // 2026-06-30 (`ask_user_question` task): parallel
-    // `QuestionStore` for the blocking reverse-question tool.
-    // Threads through so `chat_loop.rs`'s
-    // `tool_name == "ask_user_question"` interception can call
-    // `ask_user_question::execute_blocking(input, session_id,
-    // tool_use_id, &question_store, &sink, &token)`. The
-    // production `chat` Tauri command sources it from
-    // `AppState.question_store.clone()`; tests pass
-    // `h.question_store.clone()` (each test gets a fresh
-    // registry). Worker nested calls (via `run_subagent`) carry
-    // the parent's — but since `ask_user_question` is in
-    // `STRUCTURALLY_DISABLED`, a worker never reaches the
-    // intercept, so the store is unused on the worker path.
-    // Appended at the tail rather than inserted mid-signature
-    // so the 28→29 expansion is one trailing argument — tests
-    // need only add a final positional `h.question_store.clone()
-    // // 29` (or `None` for legacy 28-arg tests).
-    question_store: crate::agent::question_store::QuestionStore,
-    // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-    // per-session workflow context. `None` for non-workflow
-    // sessions (zero overhead — the per-turn loop short-
-    // circuits). When `Some(ctx)`, `messages[0]` gets the
-    // state breadcrumb + current-task metadata appended on
-    // every turn (mirrors `memory_recall`'s per-turn
-    // injection seam; same S-B guard — no prepend of
-    // synthetic user messages).
-    //
-    // 29→30 arg. Still appended at the tail per the same
-    // convention as `question_store` (keeps existing
-    // test fixtures on one-line edits when they upgrade
-    // from 29 to 30).
-    mut workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
-    // Group chat (07-29-group-chat): shared turn state for the
-    // `nominate_speaker` / `end_discussion` interception. `None`
-    // for classic-chat + worker paths (the interception no-ops with
-    // an error tool_result if these tools are somehow invoked
-    // outside group chat). Appended at the tail per the same
-    // convention as `workflow_ctx` (one-line test-fixture edits).
-    group_chat_state: Option<crate::tools::nominate_speaker::SharedTurnState>,
-    // Group chat (07-29-group-chat, Phase 4 TODO-A): per-turn
-    // speaker. `None` for normal chat / subagent / review /
-    // moderator-of-self paths; `Some("moderator")` for the
-    // moderator turn in group_chat; `Some(participant.name)` for
-    // the participant turn. Carried into the assistant persist
-    // site (line ~2129) so messages are stored with the
-    // originating speaker for frontend speaker-chip rendering +
-    // reload consistency. Read-only — never affects tool routing,
-    // role mapping, or wire shape (the wire layer operates on
-    // `Role::User`/`Role::Assistant` regardless). Live tests
-    // (~58 callsites) + 4 production callsites pass `None`; the
-    // two `run_group_chat_loop` dispatch sites pass `Some(name)`.
-    current_speaker: Option<String>,
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): the
-    // session → loaded-set stub registry (渐进式披露 D 的粘性
-    // loaded-set). `drive_turn` 的第 4 环 stubify 读它(候选未
-    // loaded → stub,已 loaded → 全量);`chat_loop/tools.rs` 的
-    // `load_tool_schemas` / 直呼自愈拦截写它。跨 request 存活
-    // (registry 挂 `AppState`,AC4 粘性)。
-    //
-    // 生产(chat.rs / group_chat_loop.rs)传 `state.stub_loaded`;
-    // worker 嵌套调用(`run_subagent` → `dispatch/drive.rs`)传
-    // 每次新建的空 registry — worker 永不 stub(gate
-    // `!effective_is_worker`),registry 只是签名占位,不会被读写。
-    stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
-    // F1 消息队列(2026-08-25):`true` 时入口 CancellationGuard 的
-    // Drop 连 `cancellations.remove(&rid)` 一起跳过(与
-    // `skip_session_active` 独立)。队列驱动器(`agent/chat.rs`
-    // `run_queue_driver`)对**每一轮**内层调用传双 true——rid 与
-    // session slot 必须跨轮存活,否则轮间隙并发入队会误判"闲"并
-    // 在同一 session 上 spawn 第二个驱动器;驱动器自身在最终退出
-    // 时清两个 map。其余全部调用点(单发 chat / 群聊 speaker /
-    // worker / 全部测试)传 `false`,guard 仍是唯一清理者,行为与
-    // F1 前逐字节一致。尾部追加,同既有约定(测试夹具一行改)。
-    skip_cancellations: bool,
-) {
+pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, role: CallerRole) {
+    // -------------------------------------------------------------
+    // RULE-ARGS-001 本地重绑定：与旧 38 位参同名、同类型的一次性 owned
+    // 重绑定，所有权来源改为三个套件对象。克隆次数与迁移前的实参传递
+    // 一一对应 —— 函数体自此刻起保持旧名引用逐字节不变（design D3）。
+    // 各字段的历史契约文档（WP2/D3/L1a/B6/RULE-A-014/RULE-A-015 等）
+    // 见 suite.rs 对应字段的 doc comment。
+    let provider = request.provider.clone();
+    let context_window = request.context_window;
+    let rid = request.rid.clone();
+    let session_id = request.session_id.clone();
+    let sink = request.sink.clone();
+    let max_turns = request.max_turns;
+    let mut workflow_ctx = request.workflow_ctx.clone();
+    let group_chat_state = request.group_chat_state.clone();
+
+    let db = deps.db.clone();
+    let cancellations = deps.cancellations.clone();
+    let session_active_request = deps.session_active_request.clone();
+    let read_guard = deps.read_guard.clone();
+    let memory_cache = deps.memory_cache.clone();
+    let skill_cache = deps.skill_cache.clone();
+    let permission_asks = deps.permission_asks.clone();
+    let token = deps.token.clone();
+    let background_shells = deps.background_shells.clone();
+    let question_store = deps.question_store.clone();
+    let subagent_cache = deps.subagent_cache.clone();
+
+    let worker_catalog = role.worker_catalog.clone();
+    let worker_event_sink = role.worker_event_sink.clone();
+    let forced_dispatch = role.forced_dispatch.clone();
+    let app_data_dir = role.app_data_dir.clone();
+    let skip_persist = role.skip_persist;
+    let skip_session_active = role.skip_session_active;
+    let skip_cancellations = role.skip_cancellations;
+
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
     // guard. The `tauri::async_runtime::spawn` inside `Drop` is
@@ -650,29 +384,10 @@ pub async fn run_chat_loop(
         Ok(Some(v)) => v != "false",
         _ => true,
     };
-    let init = match prepare_loop_state(
-        db.clone(),
-        sink.clone(),
-        rid.clone(),
-        session_id.clone(),
-        messages,
-        memory_cache.clone(),
-        skill_cache.clone(),
-        worktree_override,
-        project_main_override,
-        background_shells.clone(),
-        app_data_dir.clone(),
-        &workflow_ctx,
-        is_worker,
-        worker_run_id.clone(),
-        run_grants.clone(),
-        system_prompt_override.clone(),
-        skip_persist,
-        resend_seq,
-        &group_chat_state,
-    )
-    .await
-    {
+    // RULE-ARGS-001：原 19 参收敛为三套件引用。messages 经 mem::take
+    // 移交（prepare 内加工后经 LoopInit.messages 回流，与旧按值移交等价；
+    // request 整体随后续 helper 引用保持存活）。
+    let init = match prepare_loop_state(&mut request, &deps, &role).await {
         Ok(i) => i,
         Err(()) => return,
     };
@@ -687,8 +402,8 @@ pub async fn run_chat_loop(
         loaded_session,
         project,
         worktree_path,
-        mut current_ctx,
-        mut last_cwd,
+        current_ctx,
+        last_cwd,
         mut last_usage_terminal,
         failure_tracker,
         soft_blocked,
@@ -963,18 +678,43 @@ pub async fn run_chat_loop(
     // Unset/unparseable → `turn_limit`, byte-identical to today's
     // `turn > turn_limit` judgment.
     let mut turns_budget = softcap_boundary(turn_limit);
-    let mut turn = 0usize;
-    // Set by the softcap「压缩后续跑」answer; consumed (reset to
-    // false) right after the next drive_turn call — one-shot.
-    let mut force_compaction = false;
+    // RULE-ARGS-001（design D2/TurnFrame）：每轮常量派生帧 + 轮计数 +
+    // softcap force 标志并入帧，由轮间逻辑推进（替代旧裸局部
+    // `turn` / `force_compaction`）。cwd 状态对独立为 TurnHot。
+    let mut frame = TurnFrame {
+        loaded_session: &loaded_session,
+        project: &project,
+        worktree_path: &worktree_path,
+        mode_prefix,
+        model_briefs: &model_briefs,
+        session_mode,
+        effective_is_worker,
+        stub_on,
+        budget_on,
+        memory_token,
+        digest_on,
+        synthetic_prefix_len,
+        compaction_on,
+        system_token,
+        at_files_token,
+        at_file_spans: &at_file_spans,
+        current_user_msg_idx,
+        memory_catalog_blocks: &memory_catalog_blocks,
+        turn: 0usize,
+        force_compaction: false,
+    };
+    let mut hot = TurnHot {
+        current_ctx,
+        last_cwd,
+    };
     // Set when the softcap helper already emitted the terminal
     // (Done{max_turns} / Done{cancelled}) so the post-loop tail
     // does not double-emit. Worker break leaves it false → the
     // tail emits exactly as today.
     let mut softcap_terminal_emitted = false;
     loop {
-        turn += 1;
-        if turn > turns_budget {
+        frame.turn += 1;
+        if frame.turn > turns_budget {
             if effective_is_worker || group_chat_state.is_some() {
                 // Worker / group-chat path: hard cap unchanged —
                 // break into the post-loop hard terminal (worker
@@ -989,19 +729,17 @@ pub async fn run_chat_loop(
                 break;
             }
             match ask_turn_limit_softcap(
-                &question_store,
-                &sink,
-                &rid,
-                &session_id,
-                &db,
-                &token,
-                skip_persist,
-                turn,
-                turns_budget,
-                compaction_on,
-                last_usage_terminal,
-                last_cwd.as_deref(),
-                seq,
+                &request,
+                &deps,
+                &role,
+                TurnBudgetAsk {
+                    turn: frame.turn,
+                    turns_budget,
+                    compaction_on,
+                    seq,
+                    last_usage_terminal,
+                    last_cwd: hot.last_cwd.as_deref(),
+                },
             )
             .await
             {
@@ -1010,7 +748,7 @@ pub async fn run_chat_loop(
                 }
                 SoftcapOutcome::CompactContinue => {
                     turns_budget += TURN_LIMIT_GRANT;
-                    force_compaction = true;
+                    frame.force_compaction = true;
                 }
                 SoftcapOutcome::Terminal => {
                     softcap_terminal_emitted = true;
@@ -1025,80 +763,23 @@ pub async fn run_chat_loop(
         // permission context so `record_audit` can pass it to
         // `record_audit_event` for audit turn alignment.
         let drive_outcome = match drive_turn(
-            turn,
-            messages,
-            seq,
-            head_sha,
-            system_prompt,
-            permission_ctx.clone(),
-            loop_window,
-            loop_hit_count,
-            last_usage_terminal,
-            workflow_ctx.clone(),
-            &loaded_session,
-            project.clone(),
-            worktree_path.clone(),
-            &last_cwd,
-            &current_ctx,
-            mode_prefix,
-            model_briefs.clone(),
-            session_mode,
-            effective_is_worker,
-            &system_prompt_override,
-            tool_defs.clone(),
-            subagent_cache.clone(),
-            provider.clone(),
-            context_window,
-            provider_id.clone(),
-            rid.clone(),
-            session_id.clone(),
-            sink.clone(),
-            db.clone(),
-            token.clone(),
-            &background_shells,
-            skip_persist,
-            // 08-20-worker-turn-trace-persist: worker 的 subagent_runs.id
-            // 透传(&str 视图)—— drive_turn 的 Done 臂 / 旁路写点按它
-            // 路由 worker turn_trace 行;主路 / 群聊恒 None(run_key='')。
-            worker_run_id.as_deref(),
-            &current_speaker,
-            &question_store,
-            // D (2026-08-14): stubify 开关 + session 粘性 loaded-set。
-            stub_on,
-            &stub_loaded,
-            // memory-block-governance WP1 (2026-08-15): per-request
-            // memory injection estimate (LoopInit), consumed at the
-            // Done-event trace upsert alongside tools_token.
-            memory_token,
-            // WP2: digest gate(注入与元工具 append 同源)。
-            digest_on,
-            // C3 摘要压缩 PR2 (08-18-llm-context-compaction):水位
-            // 锚点(跨 turn 可变,drive 成功压缩后更新)、合成头长度
-            // (待压区/保留区起算)、摘要 gate(开关 && !worker &&
-            // !群聊)。熔断 registry 走进程级单例
-            // (`compaction::compaction_registry()`),不经参数 ——
-            // run_chat_loop 签名是硬约束。
-            summary_anchor,
-            synthetic_prefix_len,
-            compaction_on,
-            // unified-context-budget WP1 (2026-08-19): system/@files
-            // 切片 + 同请求 spans(D10)。请求常量穿参;spans 每轮
-            // clone(WP2 gate 只读消费,PR1 落 trace 列)。
-            system_token,
-            at_files_token,
-            at_file_spans.clone(),
-            // WP2: 硬卡 gate 输入 —— 当前 turn 槽位 + 目录态快照 +
-            // config 开关(gate = budget_on && !worker && !群聊,豁免
-            // 口径与 digest/compaction 同源,prd D5)。
-            current_user_msg_idx,
-            memory_catalog_blocks.clone(),
-            budget_on,
-            // MAX_TURNS softcap (08-18-max-turns-softcap):「压缩后续跑」
-            // 的一次性 force 标志 —— 只绕过 C3 的 token 触发线,gate
-            // (开关/worker/熔断/skip_persist)与空待压区照旧
-            // (drive.rs C3 块;design §2.2)。drive_turn 按值收参,
-            // 返回后立即置 false 消费。
-            force_compaction,
+            &request,
+            &deps,
+            &role,
+            &mut frame,
+            TurnCarry {
+                messages,
+                seq,
+                head_sha,
+                system_prompt,
+                permission_ctx,
+                loop_window,
+                loop_hit_count,
+                last_usage_terminal,
+                workflow_ctx,
+                summary_anchor,
+            },
+            &hot,
         )
         .await
         {
@@ -1109,7 +790,7 @@ pub async fn run_chat_loop(
         // the softcap「压缩后续跑」answer applied to exactly this
         // drive_turn call — compaction failure / gate-off fall
         // through naturally, the flag never leaks into later turns.
-        force_compaction = false;
+        frame.force_compaction = false;
         // Write the cross-turn state back to the function-scope bindings
         // (these are declared above the loop and must persist across turns —
         // a `let` destructure inside the loop body would shadow + drop them
@@ -1131,64 +812,45 @@ pub async fn run_chat_loop(
         let mut cancelled = drive_outcome.cancelled;
 
         let dispatch_outcome = dispatch_tool_calls(
-            tool_calls,
-            permission_ctx.clone(),
-            provider.clone(),
-            db.clone(),
-            sink.clone(),
-            rid.clone(),
-            session_id.clone(),
-            read_guard.clone(),
-            skill_cache.clone(),
-            current_ctx.clone(),
-            last_cwd.clone(),
-            cancelled,
-            token.clone(),
-            permission_asks.clone(),
-            memory_cache.clone(),
-            cancellations.clone(),
-            session_active_request.clone(),
-            background_shells.clone(),
-            worker_event_sink.clone(),
-            worker_catalog.clone(),
-            context_window,
-            &workflow_ctx,
-            subagent_cache.clone(),
-            app_data_dir.clone(),
-            question_store.clone(),
-            &group_chat_state,
-            session_mode,
-            failure_tracker.clone(),
-            soft_blocked.clone(),
-            seq,
-            skip_persist,
-            // D (2026-08-14): stub 开关 + registry,供 serial 顶部
-            // 拦截(load_tool_schemas / 直呼自愈)使用。
-            stub_on,
-            stub_loaded.clone(),
+            &request,
+            &deps,
+            &role,
+            DispatchCtx {
+                tool_calls,
+                permission_ctx: permission_ctx.clone(),
+                current_ctx: hot.current_ctx.clone(),
+                last_cwd: hot.last_cwd.clone(),
+                cancelled,
+                session_mode,
+                failure_tracker: failure_tracker.clone(),
+                soft_blocked: soft_blocked.clone(),
+                seq,
+                stub_on,
+                workflow_ctx: &workflow_ctx,
+            },
         )
         .await;
         // Write the mutated fields back to their function/turn-loop bindings
         // (current_ctx / last_cwd are function-scope and must persist across
         // turns; cancelled is turn-loop-local). result_blocks is the dispatch
-        // output consumed by the persist site below.
+        // output consumed by the persist site below. （RULE-ARGS-001：二者现居 TurnHot）
         cancelled = dispatch_outcome.cancelled;
-        current_ctx = dispatch_outcome.current_ctx;
-        last_cwd = dispatch_outcome.last_cwd;
+        hot.current_ctx = dispatch_outcome.current_ctx;
+        hot.last_cwd = dispatch_outcome.last_cwd;
         let result_blocks = dispatch_outcome.result_blocks;
 
         if finalize_turn(
-            result_blocks,
-            &loop_hint,
-            cancelled,
-            skip_persist,
-            &db,
-            &sink,
-            &rid,
-            &session_id,
-            seq,
-            &mut messages,
-            &last_cwd,
+            &request,
+            &deps,
+            &role,
+            FinalizeFrame {
+                result_blocks,
+                loop_hint: &loop_hint,
+                cancelled,
+                seq,
+                messages: &mut messages,
+                last_cwd: &hot.last_cwd,
+            },
         )
         .await
         .is_err()
@@ -1204,14 +866,14 @@ pub async fn run_chat_loop(
     // terminal (Done{max_turns} stop / timeout stop / Done{cancelled}).
     if !softcap_terminal_emitted {
         emit_max_turns_terminal(
-            &db,
-            &session_id,
-            &sink,
-            &rid,
-            skip_persist,
-            turns_budget,
-            last_usage_terminal,
-            last_cwd.as_deref(),
+            &request,
+            &deps,
+            &role,
+            HardTurnsTerminal {
+                budget: turns_budget,
+                last_usage_terminal,
+                last_cwd: hot.last_cwd.as_deref(),
+            },
         )
         .await;
     }
@@ -1277,18 +939,25 @@ fn softcap_boundary(turn_limit: usize) -> usize {
 ///   exactly as the old inline `if !skip_persist` did, AC4);
 /// - the softcap 停止 / 超时停止 / register 降级 paths (AC2:
 ///   "与今日 max_turns 终态等价" 字面成立 —— 同一函数体).
-// See DEBT.md RULE-ARGS-001 (parameter-object epic, tracked separately).
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 8 参 → 四元）：终态预算参数并入
+/// [`HardTurnsTerminal`]。体内在头部做与旧位参同名同形的重绑定，
+/// 正文逐字节不变。
 pub(crate) async fn emit_max_turns_terminal(
-    db: &SqlitePool,
-    session_id: &str,
-    sink: &Arc<dyn ChatEventSink>,
-    rid: &str,
-    skip_persist: bool,
-    budget: usize,
-    last_usage_terminal: Option<crate::llm::types::TokenUsage>,
-    last_cwd: Option<&Path>,
+    request: &ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    role: &CallerRole,
+    tail: HardTurnsTerminal<'_>,
 ) {
+    let db = &deps.db;
+    let session_id = &request.session_id;
+    let sink = &request.sink;
+    let rid = &request.rid;
+    let skip_persist = role.skip_persist;
+    let HardTurnsTerminal {
+        budget,
+        last_usage_terminal,
+        last_cwd,
+    } = tail;
     tracing::warn!(max_turns = budget, "agent loop: max turns reached");
     // B6 PR1b: skip the max_turns terminal persists in worker mode.
     if !skip_persist {
@@ -1347,22 +1016,29 @@ enum SoftcapOutcome {
 /// (继续 / 压缩后续跑 / 停止),否则两选项(卡片不展示选了
 /// 也无效的选项)。解析按 label 精确匹配,未匹配 / 畸形 → 停止
 /// (防御默认,C2+ 同款)。
-#[allow(clippy::too_many_arguments)]
+/// RULE-ARGS-001 收编（原 13 参 → 四元）：套件三引用 + [`TurnBudgetAsk`]。
+/// 体内头部重绑定保持正文逐字节不变。
 async fn ask_turn_limit_softcap(
-    question_store: &crate::agent::question_store::QuestionStore,
-    sink: &Arc<dyn ChatEventSink>,
-    rid: &str,
-    session_id: &str,
-    db: &SqlitePool,
-    token: &CancellationToken,
-    skip_persist: bool,
-    turn: usize,
-    turns_budget: usize,
-    compaction_on: bool,
-    last_usage_terminal: Option<crate::llm::types::TokenUsage>,
-    last_cwd: Option<&Path>,
-    seq: i64,
+    request: &ChatLoopRequest,
+    deps: &ChatLoopDeps,
+    role: &CallerRole,
+    ask: TurnBudgetAsk<'_>,
 ) -> SoftcapOutcome {
+    let question_store = &deps.question_store;
+    let sink = &request.sink;
+    let rid = &request.rid;
+    let session_id = &request.session_id;
+    let db = &deps.db;
+    let token = &deps.token;
+    let skip_persist = role.skip_persist;
+    let TurnBudgetAsk {
+        turn,
+        turns_budget,
+        compaction_on,
+        seq,
+        last_usage_terminal,
+        last_cwd,
+    } = ask;
     let continue_label = format!("继续(+{} 轮)", TURN_LIMIT_GRANT);
     let compact_label = "压缩后续跑";
     let stop_label = "停止";
@@ -1439,113 +1115,134 @@ async fn ask_turn_limit_softcap(
             );
             // Four-arm biased select: cancel / timeout / rx(design §2.1).
             tokio::select! {
-                biased;
-                _ = token.cancelled() => {
-                    // User hit Stop while the question was pending:
-                    // clear the slot, emit Done{cancelled}(循环边界
-                    // 无孤儿 tool_use,无需 finalize_pending_tool_results)。
-                    question_store.remove(session_id).await;
-                    let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                        db, session_id, turn, turns_budget, "cancelled", Some(seq),
-                    ).await;
-                    if !skip_persist {
-                        persist_turn_cwd(db, session_id, last_cwd).await;
-                        let _ = crate::db::touch_session(db, session_id).await;
-                    }
-                    emit_chat_event_via_sink(
-                        sink,
-                        rid,
-                        &ChatEvent::Done {
-                            stop_reason: Some("cancelled".to_string()),
-                            usage: None,
-                        },
-                    );
-                    SoftcapOutcome::Terminal
-                }
-                _ = tokio::time::sleep(softcap_ask_timeout()) => {
-                    // 10min(缺省)无响应 → 停止(决议:unattended
-                    // 不替用户确认烧钱;停止 = 今日行为零回归)。
-                    question_store.remove(session_id).await;
-                    let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                        db, session_id, turn, turns_budget, "timeout_stopped", Some(seq),
-                    ).await;
-                    emit_max_turns_terminal(
-                        db, session_id, sink, rid, skip_persist,
-                        turns_budget, last_usage_terminal, last_cwd,
-                    ).await;
-                    SoftcapOutcome::Terminal
-                }
-                resp = rx => {
-                    // resolve 已原子移除槽位(Answered / Cancelled 路径)。
-                    match resp {
-                        Ok(InteractionResponse::Answered(value)) => {
-                            let answers: Vec<QuestionAnswer> =
-                                serde_json::from_value(value).unwrap_or_default();
-                            let chosen = answers
-                                .first()
-                                .map(|a| a.options.first().cloned().unwrap_or_default())
-                                .unwrap_or_default();
-                            if chosen == continue_label {
+                            biased;
+                            _ = token.cancelled() => {
+                                // User hit Stop while the question was pending:
+                                // clear the slot, emit Done{cancelled}(循环边界
+                                // 无孤儿 tool_use,无需 finalize_pending_tool_results)。
+                                question_store.remove(session_id).await;
                                 let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                                    db, session_id, turn, turns_budget, "continued", Some(seq),
+                                    db, session_id, turn, turns_budget, "cancelled", Some(seq),
                                 ).await;
-                                SoftcapOutcome::Continue
-                            } else if chosen == compact_label && compaction_on {
-                                let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                                    db, session_id, turn, turns_budget, "compacted_continued", Some(seq),
-                                ).await;
-                                SoftcapOutcome::CompactContinue
-                            } else {
-                                // 「停止」/ 未匹配畸形载荷 → 防御默认停止
-                                // (C2+ 同款)。
-                                let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                                    db, session_id, turn, turns_budget, "stopped", Some(seq),
-                                ).await;
-                                emit_max_turns_terminal(
-                                    db, session_id, sink, rid, skip_persist,
-                                    turns_budget, last_usage_terminal, last_cwd,
-                                ).await;
+                                if !skip_persist {
+                                    persist_turn_cwd(db, session_id, last_cwd).await;
+                                    let _ = crate::db::touch_session(db, session_id).await;
+                                }
+                                emit_chat_event_via_sink(
+                                    sink,
+                                    rid,
+                                    &ChatEvent::Done {
+                                        stop_reason: Some("cancelled".to_string()),
+                                        usage: None,
+                                    },
+                                );
                                 SoftcapOutcome::Terminal
                             }
-                        }
-                        Ok(InteractionResponse::Cancelled) => {
-                            // 用户点「跳过」→ 视同停止(安全默认,
-                            // C2+ cancel 同款)。
-                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                                db, session_id, turn, turns_budget, "stopped", Some(seq),
-                            ).await;
-                            emit_max_turns_terminal(
-                                db, session_id, sink, rid, skip_persist,
-                                turns_budget, last_usage_terminal, last_cwd,
-                            ).await;
-                            SoftcapOutcome::Terminal
-                        }
-                        Err(_recv_err) => {
-                            // Sender dropped(槽位被 remove 等)→ 视同
-                            // cancel(C2+ 同款安全默认)。
-                            tracing::warn!(
-                                "turn-limit softcap oneshot dropped without response — treating as cancelled"
-                            );
-                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
-                                db, session_id, turn, turns_budget, "cancelled", Some(seq),
-                            ).await;
-                            if !skip_persist {
-                                persist_turn_cwd(db, session_id, last_cwd).await;
-                                let _ = crate::db::touch_session(db, session_id).await;
+                            _ = tokio::time::sleep(softcap_ask_timeout()) => {
+                                // 10min(缺省)无响应 → 停止(决议:unattended
+                                // 不替用户确认烧钱;停止 = 今日行为零回归)。
+                                question_store.remove(session_id).await;
+                                let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                    db, session_id, turn, turns_budget, "timeout_stopped", Some(seq),
+                                ).await;
+                                emit_max_turns_terminal(
+                                    request,
+                                    deps,
+                                    role,
+                                    HardTurnsTerminal {
+                                        budget: turns_budget,
+                                        last_usage_terminal,
+                                        last_cwd,
+                                    },
+                                )
+                                .await;
+                                SoftcapOutcome::Terminal
                             }
-                            emit_chat_event_via_sink(
-                                sink,
-                                rid,
-                                &ChatEvent::Done {
-                                    stop_reason: Some("cancelled".to_string()),
-                                    usage: None,
-                                },
-                            );
-                            SoftcapOutcome::Terminal
+                            resp = rx => {
+                                // resolve 已原子移除槽位(Answered / Cancelled 路径)。
+                                match resp {
+                                    Ok(InteractionResponse::Answered(value)) => {
+                                        let answers: Vec<QuestionAnswer> =
+                                            serde_json::from_value(value).unwrap_or_default();
+                                        let chosen = answers
+                                            .first()
+                                            .map(|a| a.options.first().cloned().unwrap_or_default())
+                                            .unwrap_or_default();
+                                        if chosen == continue_label {
+                                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                                db, session_id, turn, turns_budget, "continued", Some(seq),
+                                            ).await;
+                                            SoftcapOutcome::Continue
+                                        } else if chosen == compact_label && compaction_on {
+                                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                                db, session_id, turn, turns_budget, "compacted_continued", Some(seq),
+                                            ).await;
+                                            SoftcapOutcome::CompactContinue
+                                        } else {
+                                            // 「停止」/ 未匹配畸形载荷 → 防御默认停止
+                                            // (C2+ 同款)。
+                                            let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                                db, session_id, turn, turns_budget, "stopped", Some(seq),
+                                            ).await;
+            emit_max_turns_terminal(
+                                                request,
+                                                deps,
+                                                role,
+                                                HardTurnsTerminal {
+                                                    budget: turns_budget,
+                                                    last_usage_terminal,
+                                                    last_cwd,
+                                                },
+                                            )
+                                            .await;
+                                            SoftcapOutcome::Terminal
+                                        }
+                                    }
+                                    Ok(InteractionResponse::Cancelled) => {
+                                        // 用户点「跳过」→ 视同停止(安全默认,
+                                        // C2+ cancel 同款)。
+                                        let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                            db, session_id, turn, turns_budget, "stopped", Some(seq),
+                                        ).await;
+            emit_max_turns_terminal(
+                                            request,
+                                            deps,
+                                            role,
+                                            HardTurnsTerminal {
+                                                budget: turns_budget,
+                                                last_usage_terminal,
+                                                last_cwd,
+                                            },
+                                        )
+                                        .await;
+                                        SoftcapOutcome::Terminal
+                                    }
+                                    Err(_recv_err) => {
+                                        // Sender dropped(槽位被 remove 等)→ 视同
+                                        // cancel(C2+ 同款安全默认)。
+                                        tracing::warn!(
+                                            "turn-limit softcap oneshot dropped without response — treating as cancelled"
+                                        );
+                                        let _ = crate::agent::permissions::audit::record_turn_limit_softcap_audit(
+                                            db, session_id, turn, turns_budget, "cancelled", Some(seq),
+                                        ).await;
+                                        if !skip_persist {
+                                            persist_turn_cwd(db, session_id, last_cwd).await;
+                                            let _ = crate::db::touch_session(db, session_id).await;
+                                        }
+                                        emit_chat_event_via_sink(
+                                            sink,
+                                            rid,
+                                            &ChatEvent::Done {
+                                                stop_reason: Some("cancelled".to_string()),
+                                                usage: None,
+                                            },
+                                        );
+                                        SoftcapOutcome::Terminal
+                                    }
+                                }
+                            }
                         }
-                    }
-                }
-            }
         }
         // AlreadyPending(理论上不可达:turn 内 ask_user_question 在
         // finalize 前已 resolve;防御)→ warn + 降级为今日硬停行为。
@@ -1564,14 +1261,14 @@ async fn ask_turn_limit_softcap(
             )
             .await;
             emit_max_turns_terminal(
-                db,
-                session_id,
-                sink,
-                rid,
-                skip_persist,
-                turns_budget,
-                last_usage_terminal,
-                last_cwd,
+                request,
+                deps,
+                role,
+                HardTurnsTerminal {
+                    budget: turns_budget,
+                    last_usage_terminal,
+                    last_cwd,
+                },
             )
             .await;
             SoftcapOutcome::Terminal
@@ -1592,14 +1289,14 @@ async fn ask_turn_limit_softcap(
             )
             .await;
             emit_max_turns_terminal(
-                db,
-                session_id,
-                sink,
-                rid,
-                skip_persist,
-                turns_budget,
-                last_usage_terminal,
-                last_cwd,
+                request,
+                deps,
+                role,
+                HardTurnsTerminal {
+                    budget: turns_budget,
+                    last_usage_terminal,
+                    last_cwd,
+                },
             )
             .await;
             SoftcapOutcome::Terminal
