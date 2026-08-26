@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 入口(Pre-Development Checklist)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "app_config KV 读写约定(get/set_config_value)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppCommandError/InvalidRequest 错误约定(校验失败不写库)"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon IPC 三层落地律(_inner + tauri command + HTTP route)"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "CMD_TO_DOMAIN 注册 + camelCase/snake_case wire 规则(缺行则浏览器模式 unknown cmd)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "RemoteTab 表单沿用 reka-ui Label + 原生 input 先例"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "新增 UI 元素用 design tokens,禁硬编码"}
