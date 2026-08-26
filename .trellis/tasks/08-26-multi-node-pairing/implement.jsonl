@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "token 两信号模型/401 choke point/wire casing 约定 —— 本任务改的就是 Signal 1 的存储形态,必须延续既有约定"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "两个视图新增按钮/文字链要用全局 .btn 家族与 token,禁手写 hex/px"}
+{"file": ".trellis/tasks/08-26-multi-node-pairing/research/code-findings.md", "reason": "单节点问题 file:line 定位 + redeem 响应含 nodeId + /nodes wire 形状 + localStorage 键盘点(迁移依据)"}

@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "核对 401 仍在 transport choke point 拦截、remote-native 端点未进 CMD_TO_DOMAIN、wire casing 未破坏"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "新增 UI 元素是否走 token/全局按钮家族"}
+{"file": ".trellis/tasks/08-26-multi-node-pairing/research/code-findings.md", "reason": "验收对照:修复是否落在 app 层且服务端零改动;localStorage 迁移路径是否如 design"}

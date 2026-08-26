@@ -16,15 +16,23 @@ Because daemon and remote **both** same-origin serve the SPA, you **cannot** dis
 
 ## Two independent signals (don't conflate them)
 
-### Signal 1 — Transport routing: `hasDeviceToken()` (localStorage)
+### Signal 1 — Transport routing: `hasPairedNode()` (localStorage, 08-26 multi-node)
 
 Drives **auth injection + proxy prefix** in `httpTransport`:
 
-- Token present → pwa-remote: `invoke` adds `Authorization: Bearer` + URL prefix `/api/v1/proxy`; EventSource appends `?access_token=`.
-- No token → direct to daemon (browser-local / Tauri): current behavior, no auth, no prefix.
+- A paired node exists → pwa-remote: `invoke` adds `Authorization: Bearer` + URL prefix `/api/v1/proxy`; EventSource appends `?access_token=`.
+- None → direct to daemon (browser-local / Tauri): current behavior, no auth, no prefix.
+
+Since 08-26 (`08-26-multi-node-pairing`) the storage is a **per-node token map** (`transport/auth.ts`), not a single value — pairings accumulate, one `device_token` per PC:
+
+- `everlasting_node_tokens` — JSON `Record<nodeId, token>`; written by `setNodeToken` (redeem response carries both fields).
+- `everlasting_device_token` — legacy pre-multi-node single value; READ-ONLY migration source, resolved lazily by `nodes.loadNodes()` (one `/nodes` call reveals its nodeId → moved into the map).
+- `everlasting_selected_node` — the picked node; **`currentDeviceToken()` resolves the transport token from it** (selected entry → sole entry → legacy → null). Ambiguous (2+ entries, no selection) → null; the router guard keeps the user on `/nodes` until they pick, so no app command runs tokenless.
+- `hasPairedNode()` — "any pairing exists" (map OR legacy); navigation-gating successor of the old `hasDeviceToken()`.
+- 401 at the transport choke point calls `dropCurrentNodeToken()` (only the failing node's pairing is dropped; App routes to `/nodes` while siblings survive, `/pairing` when the last one died).
 
 ```ts
-const token = getDeviceToken();
+const token = currentDeviceToken();
 const proxyPrefix = token ? "/api/v1/proxy" : "";
 const url = `${base}${proxyPrefix}/api/v1/${domain}/${cmd}`;
 ```
@@ -56,9 +64,14 @@ Don't shoehorn pairing/nodes into `CMD_TO_DOMAIN` — their URLs don't follow th
 
 ## 401 handling: intercept in the transport, not the error bus
 
-`transport.invoke` is the **single choke point** for all app commands. Intercept 401 there (clear token + reset EventSource + fire callback) regardless of whether the calling store catches the error.
+`transport.invoke` is the **single choke point** for all app commands. Intercept 401 there (drop the current node's token + reset EventSource + fire callback) regardless of whether the calling store catches the error.
 
 The `errorBus` (`window.unhandledrejection`) only fires for **uncaught** errors; existing stores systematically `try/catch + console.error` invoke results, so a 401 would be swallowed silently. Don't rely on errorBus for auth-state transitions.
+
+Multi-node nuance (08-26): a 401 means ONE pairing died — route to `/nodes`
+while siblings remain (App's `onAuthFailed` checks `hasPairedNode()`), not
+straight to `/pairing`. `nodes.loadNodes()` prunes per-token 401s the same
+way (direct fetch path, outside the transport choke point).
 
 ## `stream-resync` sentinel: oracle-trigger, never proof (2026-08-24)
 

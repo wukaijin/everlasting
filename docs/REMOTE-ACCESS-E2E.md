@@ -289,7 +289,7 @@ https://remote.yourdomain.com
 
 ### 5.4 第二台 PC(家里,验证多节点)
 
-家里电脑重复 Step 2(起 daemon + 配同一个 remote + 同一个 shared_secret)+ 生成配对码 → 手机第二次配对(输新码)→ `/nodes` 应显示两张 PC 卡片,各自在线/离线状态独立。
+家里电脑重复 Step 2(起 daemon + 配同一个 remote + 同一个 shared_secret)+ 生成配对码 → 手机在 `/nodes` 页点 **＋ 配对新设备** → 输新码配对 → `/nodes` 应显示两张 PC 卡片,各自在线/离线状态独立。(08-26-multi-node-pairing 起配对按节点累积,不再互相顶掉;点卡片切节点时整页重载一次 —— 各 PC 数据隔离,重载即重置。)
 
 ---
 
@@ -347,7 +347,7 @@ sqlite3 ~/.local/share/dev.everlasting.remote/remote.db
 
 ### 多 PC
 
-每台 PC 独立起 daemon + 配同一个 remote + 同一个 shared_secret。各自配对(每个 PC 生成自己的码,手机各配一次)。手机 /nodes 看到多张卡片,数据隔离(各 PC 独立 SQLite)。
+每台 PC 独立起 daemon + 配同一个 remote + 同一个 shared_secret。各自配对(每个 PC 生成自己的码,手机各配一次;`/nodes` 页有"＋ 配对新设备"入口)。手机 /nodes 看到多张卡片,数据隔离(各 PC 独立 SQLite)。点卡片即切到该 PC(整页重载重置状态);吊销某一台的 token(删 devices 行)只影响那一台,其余配对不受影响。
 
 ### remote 升级
 
