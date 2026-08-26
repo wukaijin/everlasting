@@ -9,6 +9,10 @@
 // fetch, D4), persists the returned device token, and navigates to
 // /nodes.
 //
+// 08-26-multi-node-pairing: pairings accumulate per node, so this view
+// stays useful with existing pairings — "前往选择 →" links to /nodes
+// (e.g. user came here to add a second PC but changed their mind).
+//
 // MVP input: a single text field with auto-uppercase + a 6-char maxlength.
 // A 6-box OTP layout is left for a later polish pass (the design notes
 // MVP is fine with one input).
@@ -16,9 +20,17 @@
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { usePairingStore } from "../stores/pairing";
+import { hasPairedNode } from "../transport/auth";
 
 const router = useRouter();
 const pairing = usePairingStore();
+// 已有配对时才显示"前往选择"入口;挂载时判定一次即可(redeem 成功后
+// 本视图即被导航离开)。
+const hasExistingPairs = hasPairedNode();
+
+function goNodes() {
+  void router.push("/nodes");
+}
 
 const code = ref("");
 const deviceName = ref("");
@@ -48,9 +60,9 @@ async function submit() {
   errorMessage.value = null;
   try {
     await pairing.redeem(code.value, deviceName.value.trim());
-    // Success: token is now in localStorage (pwa-remote mode active) +
-    // the SSE stream was reset. Navigate to the node picker; the guard
-    // will let us through now that hasDeviceToken() is true.
+    // Success: the node's token is now in the auth map (pwa-remote mode
+    // active) + the SSE stream was reset. Navigate to the node picker;
+    // the guard will let us through now that hasPairedNode() is true.
     void router.push("/nodes");
   } catch (e) {
     // The store throws Error instances with user-facing Chinese
@@ -116,6 +128,15 @@ async function submit() {
           {{ errorMessage }}
         </p>
       </form>
+
+      <button
+        v-if="hasExistingPairs"
+        type="button"
+        class="pairing-card__goto-nodes"
+        @click="goNodes"
+      >
+        已配对设备？前往选择 →
+      </button>
     </div>
   </div>
 </template>
@@ -257,5 +278,21 @@ async function submit() {
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border-left: 3px solid var(--color-tool-error);
   border-radius: var(--radius-sm);
+}
+
+/* 已有配对时的次级出口:文字链形态(accent 作墨,design-tokens
+ * "accent as ink"),弱于主 CTA。 */
+.pairing-card__goto-nodes {
+  border: none;
+  padding: 0;
+  background: none;
+  font-size: var(--text-sm);
+  color: var(--color-accent-text);
+  cursor: pointer;
+  text-align: center;
+}
+
+.pairing-card__goto-nodes:hover {
+  text-decoration: underline;
 }
 </style>

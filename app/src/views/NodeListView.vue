@@ -1,14 +1,24 @@
 <script setup lang="ts">
 // NodeListView — mobile / remote-browser node picker (S4 Step 5,
-// design §5.4).
+// design §5.4; 08-26-multi-node-pairing).
 //
-// The home view once paired: lists the PCs bound to the current device
-// token (GET /api/v1/nodes via the nodes store). The user taps an online
+// The home view once paired: lists every paired PC (one card per stored
+// device token, merged by the nodes store). The user taps an online
 // node to enter the full chat experience (/chat). Offline nodes show a
 // transient "该 PC 离线" notice instead of navigating (the proxied
 // connection would just hang / fail).
 //
-// Logout clears the device token and routes back to /pairing.
+// 08-26: tapping a node does a FULL page navigation
+// (`window.location.assign("/chat")`), not a router.push — switching
+// nodes switches machines (each PC runs its own daemon + SQLite), so
+// every pinia store and the token-bound SSE stream must reset. A fresh
+// SPA boot is the only reliable reset; the /chat deep link works
+// (ServeDir SPA fallback already serves history-mode routes).
+//
+// "＋ 配对新设备" navigates to /pairing to add another PC without
+// logging out (pairings accumulate in the auth token map).
+//
+// Logout clears ALL device tokens and routes back to /pairing.
 //
 // The view is mounted by <router-view /> at the app root, OUTSIDE the
 // AppShell — so the projects-store toast (rendered in the Sidebar) is
@@ -56,12 +66,19 @@ function showNotice(msg: string) {
 function onClickNode(node: NodeInfo) {
   if (node.status === "online") {
     nodes.selectNode(node.nodeId);
-    void router.push("/chat");
+    // 跨节点 = 换一台机器的数据(各 PC 独立 daemon + SQLite):全量重启
+    // SPA 重置所有 store 与 token 绑定的 SSE。深链 /chat 由 SPA fallback
+    // 直接服务(刷新 /chat 是既有场景)。
+    window.location.assign("/chat");
   } else {
     // Offline: the proxied WSS to that node is down, so entering chat
     // would just stall. Surface a notice instead of a dead screen.
     showNotice("该 PC 离线，无法连接。");
   }
+}
+
+function goPairing() {
+  void router.push("/pairing");
 }
 
 async function refresh() {
@@ -153,8 +170,17 @@ onMounted(refresh);
       </ul>
 
       <div v-else-if="nodes.loaded" class="node-list-view__empty">
-        没有已配对的设备。请在 PC 上生成配对码并重新配对。
+        没有已配对的设备。
       </div>
+
+      <button
+        v-if="nodes.loaded"
+        type="button"
+        class="node-list-view__add btn btn--outline"
+        @click="goPairing"
+      >
+        ＋ 配对新设备
+      </button>
     </div>
   </div>
 </template>
@@ -256,6 +282,12 @@ onMounted(refresh);
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* 配对新设备入口:全局 .btn outline 家族,整宽弱化(次级动作,主操作
+ * 是选卡进 chat)。 */
+.node-list-view__add {
+  width: 100%;
 }
 
 .node-card {
