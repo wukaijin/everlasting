@@ -162,6 +162,8 @@ pub enum ChatAcceptance {
     Queued { id: String, position: usize },
 }
 
+// See DEBT.md RULE-ARGS-001 (parameter-object epic, tracked separately).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn chat_inner(
     state: &Arc<AppState>,
     request_id: String,

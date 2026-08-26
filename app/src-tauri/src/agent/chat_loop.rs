@@ -1277,6 +1277,8 @@ fn softcap_boundary(turn_limit: usize) -> usize {
 ///   exactly as the old inline `if !skip_persist` did, AC4);
 /// - the softcap 停止 / 超时停止 / register 降级 paths (AC2:
 ///   "与今日 max_turns 终态等价" 字面成立 —— 同一函数体).
+// See DEBT.md RULE-ARGS-001 (parameter-object epic, tracked separately).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_max_turns_terminal(
     db: &SqlitePool,
     session_id: &str,

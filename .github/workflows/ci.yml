@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust (cargo test --lib + fmt)
+    name: Rust (cargo test --lib + fmt + clippy)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,7 +49,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       # rust-cache 兜住 vendored-libgit2 的 C 编译产物 (~60s/次)
       # 2026-08-11 workspace 翻转(task 08-11-remote-daemon-core)后
@@ -79,6 +79,13 @@ jobs:
       # 代价:CI 首次多 ~2min 编译 daemon;rust-cache 命中后增量很快。
       - name: cargo build daemon sidecar (stages binaries/ for externalBin)
         run: cargo build --bin everlasting-daemon
+
+      # clippy gate (RULE-CI-001, 08-26-p2-debt-cleanup):`--lib` 只 gate
+      # app crate(与 test 同范围);必须在 daemon sidecar build 之后 ——
+      # clippy 的 check 编译同样触发 build.rs 的 externalBin 校验。
+      # 剩余的 too_many_arguments 豁免见 DEBT.md RULE-ARGS-001(epic 单独排期)。
+      - name: cargo clippy --lib
+        run: cargo clippy --lib -- -D warnings
 
       - name: cargo test --lib
         run: cargo test --lib
