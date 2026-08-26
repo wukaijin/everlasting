@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 115
-- **Last Active**: 2026-08-26
+- **Total Sessions**: 116
+- **Last Active**: 2026-08-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~975 | Active |
+| `journal-4.md` | ~999 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 116 | 2026-08-27 | RULE-ARGS-001 参数对象化落地 + 全库技术债盘点收编 | `21776cb`, `abd9662`, `a6a71f7`, `8d1b529` | `main` |
 | 115 | 2026-08-26 | PWA 多节点配对修复 + 配对/节点页互跳 | `a0253e6`, `5860d5d`, `cb1cd63` | `main` |
 | 114 | 2026-08-26 | 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢) | `0eb5d89` | `main` |
 | 113 | 2026-08-26 | F5 验证三问题修复收口 + 双任务归档 | `9f3bad1`, `6caf4b8` | `main` |

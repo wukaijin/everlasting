@@ -973,3 +973,27 @@ F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链
 ### Status
 
 [OK] **Completed**
+
+
+## Session 116: RULE-ARGS-001 参数对象化落地 + 全库技术债盘点收编
+
+**Date**: 2026-08-27
+**Task**: RULE-ARGS-001 参数对象化落地 + 全库技术债盘点收编
+**Branch**: `main`
+
+### Summary
+
+盘点扫描收编 11 条未入账债进 DEBT.md(P2×2:background_shell sweeper OOM 面/objectURL 泄漏;P3×9)。RULE-ARGS-001 落地:run_chat_loop 38→3 参三套件模型(ChatLoopDeps/ChatLoopRequest/CallerRole 经 from_app_state 统一构造),drive_turn 49→6、dispatch 33→4,70 测试位点 fixture 化,chat_loop 家族 too_many_arguments 豁免清零(全库 46→34),净删 ~3.2k 行。trellis-check 捕获并修复 workflow_ctx 入口快照漂移 P0(多轮 workflow 角色门会拿过期 task 状态),盲区登记 RULE-TEST-002。plan_mode 兜底 2s→15s 消除满载计时误报(基线即有竞态)。验证:clippy -D warnings 绿+全量 lib 回归+remote 89 绿+turn-smoke 实链路一轮 LLM 通过(turn_trace 台账正常)。spec signature-run-chat-loop.md 重写为三套件契约(旧拆 struct 警告按其兑现条件封档)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `21776cb` | (see git log) |
+| `abd9662` | (see git log) |
+| `a6a71f7` | (see git log) |
+| `8d1b529` | (see git log) |
+
+### Status
+
+[OK] **Completed**
