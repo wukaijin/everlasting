@@ -25,6 +25,13 @@ default-members = [
     "crates/everlasting-remote-protocol",
 ]
 
+# Vendored pdf-extract 0.12.0(2026-08-26, task 08-26-f5-verify-followups
+# 问题 1):上游对 /Encoding Name 形式的 UniGB-UCS2-H 等非嵌入 CJK 编码
+# panic,且未知编码家族/畸形 ToUnicode 全是 panic/todo! 路径。exclude 使
+# vendored 副本保持独立 package(path 依赖仍生效),不进 workspace 成员;
+# patch 内容见 vendor/pdf-extract/Cargo.toml 头注释。
+exclude = ["vendor/pdf-extract"]
+
 # Profile settings lifted from app/src-tauri/Cargo.toml when the workspace
 # was flipped (2026-08-11). Profiles MUST live at the workspace root; member
 # `[profile.*]` is silently ignored by cargo.
@@ -35,6 +42,9 @@ incremental = true
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+# 2026-08-26: 删除 panic = "abort" 回到默认 unwind。abort 模式下任何第三方
+# 库的 panic(实证:pdf-extract 对 UniGB-UCS2-H)直接击穿 daemon 整进程,
+# doc_extract.rs 的 catch_unwind 兜底是死代码 —— 与「turn 不死」硬约束
+# 结构性冲突。不得回设 abort,除非先把文档提取挪进独立子进程。
 strip = true
 

@@ -165,7 +165,11 @@ everlasting-remote-protocol = { path = "../../crates/everlasting-remote-protocol
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 hostname = "0.4"
 percent-encoding = "2"
-pdf-extract = "0.12.0"
+# F5 后续(2026-08-26):vendored 副本,修上游 panic + 静默丢字两层
+# (Uni*-UCS2-{H,V} 家族解码;未知编码家族降级跳过字体)。patch 清单见
+# vendor/pdf-extract/Cargo.toml 头注释;版本号与上游 0.12.0 保持一致,
+# 升级时需重放。
+pdf-extract = { path = "../../vendor/pdf-extract", version = "0.12.0" }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 quick-xml = "0.42.0"
 

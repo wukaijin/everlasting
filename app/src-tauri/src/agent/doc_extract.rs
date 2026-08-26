@@ -15,6 +15,15 @@
 //! 英文单词按 kerning 拆开("Ag en t")。启发式合并(短 token 链拼接)对
 //! 真实文本("to do"/"I am")的误伤风险大于收益,LLM 对此鲁棒 —— 保持
 //! 原样,marker 不动文本。
+//!
+//! F5 验证后续(2026-08-26,task 08-26-f5-verify-followups 问题 1):
+//! pdf-extract 0.12 对非嵌入 CJK 字体的 `/Encoding /UniGB-UCS2-H` 形态
+//! panic(WPS/Word 中文导出主流形态),且无 ToUnicode 时全部字符被静默
+//! 吞成 ""。现依赖 vendored 副本(`vendor/pdf-extract/`,path 依赖,
+//! 版本号与上游 0.12.0 一致):① Uni{GB,CNS,JIS,KS}-UCS2-{H,V} 8 个
+//! CMap 名按「码值即 UCS-2 码位」零资源解码;② 未知编码家族(GB-EUC/
+//! B5pc 等)与畸形 ToUnicode 降级为跳过该字体,不再 panic。升级上游版本
+//! 时需重放 patch,清单见 vendor/pdf-extract/Cargo.toml 头注释。
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -69,6 +78,9 @@ fn extract_pdf(bytes: &[u8]) -> Result<ExtractedText, String> {
     }
     // pdf-extract 内部对畸形输入有 unwrap 路径;turn 不死是硬约束,
     // catch_unwind 兜底(提取是纯计算,无 IO 状态可污染)。
+    // 注意:catch_unwind 依赖 panic=unwind —— workspace 根 Cargo.toml 的
+    // release profile 不得回设 panic="abort"(abort 不 unwind,任何第三
+    // 方库 panic 都会直接杀掉 daemon 进程,此处兜底沦为死代码)。
     let raw = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(bytes))
         .map_err(|_| "pdf extractor panicked".to_string())?
         .map_err(|e| format!("pdf extract: {e:?}"))?;
@@ -220,12 +232,26 @@ pub(crate) mod test_fixtures {
     pub const MINI_TEXT_PDF: &[u8] = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 73 >>\nstream\nBT /F1 12 Tf 72 720 Td (Hello PDF native text layer fixture for F5) Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000364 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n434\n%%EOF\n";
 
     pub const MINI_SCAN_PDF: &[u8] = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 33 >>\nstream\n1 w 0 0 1 RG 72 700 m 540 700 l S\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000324 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n394\n%%EOF\n";
+
+    /// F5 后续回归样本(2026-08-26):非嵌入 Type0 中文字体形态 ——
+    /// /Encoding /UniGB-UCS2-H、DescendantFonts CIDFontType0
+    /// (Adobe-GB1)、**无 ToUnicode**(真机 WPS/Word 导出同形态,
+    /// pdffonts uni=no)。content stream 的 Tj 用 2 字节大端 UCS-2
+    /// 码位 hex string 直出 34 个中文字符。上游 pdf-extract 0.12 对
+    /// 该形态 panic(unsupported encoding)+ ToUnicode miss 静默吞字,
+    /// vendored patch 后应完整恢复。xref/Length 由生成脚本精确计算。
+    pub const UNIGB_UCS2_PDF: &[u8] = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 167 >>\nstream\nBT /F1 12 Tf 72 720 Td <98847B976CBB74064E0E4E2D658763D053D66D4B8BD5003A975E5D4C51655B574F5363097EDF4E0078014F4D76F451FA002C9A8C8BC15C424E8C89E378018DEF5F843002> Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >>\nendobj\n6 0 obj\n<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor 7 0 R /DW 1000 >>\nendobj\n7 0 obj\n<< /Type /FontDescriptor /FontName /STSong-Light /Flags 4 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>\nendobj\nxref\n0 8\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000459 00000 n \n0000000581 00000 n \n0000000761 00000 n \ntrailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n933\n%%EOF\n";
+
+    /// F5 后续回归样本:未知编码家族降级 —— F1 Helvetica 的 ASCII 文本
+    /// 必须存活,F2 Type0 /Encoding /GB-EUC-H(老家族,code ≠ Unicode,
+    /// 无 CMap 资源不可解)的字形被跳过,提取整体不 panic。
+    pub const MIXED_GB_EUC_PDF: &[u8] = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 138 >>\nstream\nBT /F1 12 Tf 72 720 Td (Fallback ASCII text survives when the CJK font is skipped entirely.) Tj ET\nBT /F2 12 Tf 72 690 Td <B4F3C8FD> Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n6 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /SimSun /Encoding /GB-EUC-H /DescendantFonts [7 0 R] >>\nendobj\n7 0 obj\n<< /Type /Font /Subtype /CIDFontType0 /BaseFont /SimSun /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 8 0 R /DW 1000 >>\nendobj\n8 0 obj\n<< /Type /FontDescriptor /FontName /SimSun /Flags 4 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>\nendobj\nxref\n0 9\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000251 00000 n \n0000000440 00000 n \n0000000510 00000 n \n0000000622 00000 n \n0000000796 00000 n \ntrailer\n<< /Size 9 /Root 1 0 R >>\nstartxref\n962\n%%EOF\n";
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_fixtures::{MINI_SCAN_PDF, MINI_TEXT_PDF};
+    use test_fixtures::{MINI_SCAN_PDF, MINI_TEXT_PDF, MIXED_GB_EUC_PDF, UNIGB_UCS2_PDF};
 
     /// 测试内构造 docx:zip writer 写 word/document.xml(段落结构由
     /// w:p/w:t/w:tab 组成,覆盖 CJK / entity / tab / 空段)。
@@ -258,6 +284,68 @@ mod tests {
     fn pdf_scanned_no_text_layer_degrades() {
         let err = try_extract(ExtractKind::Pdf, MINI_SCAN_PDF).unwrap_err();
         assert!(err.contains("no text layer"), "{err}");
+    }
+
+    /// 层 1 + 层 2 联合回归(F5 后续):非嵌入 Type0 中文字体
+    /// (/UniGB-UCS2-H,无 ToUnicode)—— 上游 0.12 panic 的形态,vendored
+    /// patch 后应完整恢复中文(码值即 UCS-2 码位直出,非静默空串)。
+    #[test]
+    fn pdf_unigb_ucs2_cjk_extraction() {
+        let ex = try_extract(ExtractKind::Pdf, UNIGB_UCS2_PDF).unwrap();
+        assert!(
+            ex.text.contains("预算治理与中文提取测试"),
+            "UCS2 identity 解码失败: {:?}",
+            ex.text
+        );
+        assert!(
+            ex.text.contains("验证层二解码路径"),
+            "整句应完整恢复: {:?}",
+            ex.text
+        );
+        assert_eq!(ex.units, 1, "page count via lopdf");
+    }
+
+    /// 层 1 降级回归:未知编码家族(/GB-EUC-H)不再 panic —— 直接打
+    /// pdf-extract(不经 catch_unwind,panic 会让本测试直接挂)证明层 1
+    /// 修复真实生效;该字体字形被跳过,同页 Helvetica ASCII 照常提取。
+    #[test]
+    fn pdf_unknown_cid_encoding_skips_font_without_panicking() {
+        let _ = pdf_extract::extract_text_from_mem(MIXED_GB_EUC_PDF)
+            .expect("well-formed pdf parses; unknown encoding only skips the font");
+        let ex = try_extract(ExtractKind::Pdf, MIXED_GB_EUC_PDF).unwrap();
+        assert!(
+            ex.text.contains("Fallback ASCII text survives"),
+            "其余字体照常提取: {:?}",
+            ex.text
+        );
+    }
+
+    /// 真机文件手动验证(#[ignore],不进 CI):`out/xxx.pdf` 是
+    /// /usr/local/code/typhoon/xxx.pdf 的本地副本(含用户数据,已
+    /// gitignore,绝不提交)。跑法:
+    /// `cargo test --lib -- --ignored real_world_unigb_pdf --nocapture`
+    #[test]
+    #[ignore]
+    fn real_world_unigb_pdf_manual_check() {
+        let path = std::path::Path::new("../../out/xxx.pdf");
+        let bytes = std::fs::read(path).unwrap_or_else(|e| {
+            panic!("fixture {path:?} missing ({e}); copy the real pdf to out/ first")
+        });
+        let ex = try_extract(ExtractKind::Pdf, &bytes).unwrap();
+        let cjk = ex
+            .text
+            .chars()
+            .filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c))
+            .count();
+        assert!(
+            cjk > 100,
+            "expected substantial CJK text, got {cjk} in {} chars",
+            ex.text.chars().count()
+        );
+        println!(
+            "real pdf: {} chars ({} CJK), {} pages, truncated={}",
+            ex.orig_chars, cjk, ex.units, ex.truncated
+        );
     }
 
     #[test]
