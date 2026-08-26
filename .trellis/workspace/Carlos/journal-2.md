@@ -485,3 +485,24 @@ F5 follow-up(xlsx 提取,pptx 用户裁定不做)从计划到 live 收口。选�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 41: P2 债务清理:clippy gate + frontmatter 去重 + test_pool 去重全程收尾
+
+**Date**: 2026-08-26
+**Task**: P2 债务清理:clippy gate + frontmatter 去重 + test_pool 去重全程收尾
+**Branch**: `main`
+
+### Summary
+
+DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:frontmatter 解析收敛 resource_loader 泛型 parse_md_resource<T: MdResource> + 共享 parse_string_array,三 loader(B3 command/skill/subagent)只留 Frontmatter struct + apply_kv 字段分支 + trait impl,parse_frontmatter/parse_allowed_tools/parse_tools_array 全变一行 thin wrapper;重复测试 apply_kv_ignores_comments_blank_unknown 收敛到共享层一份。R2:新建 db/test_support.rs(#[cfg(test)] 门控)test_pool(),15 处手写复制逐处 diff 全部逐字节等价替换零偏差(sessions/memories 测试簇 hub 用 pub(super) re-export 保持子文件 import 不动);check 代理核了全部 15 处原始实现(git show HEAD 对照)+ 孤儿 import 无残留。R3:CI 加 cargo clippy --lib -- -D warnings(排在 daemon sidecar build 后——clippy check 编译同样触发 build.rs externalBin 校验),仅剩 2 个 too_many_arguments(chat_inner/emit_max_turns_terminal)按 PRD 裁定显式 #[allow] + See DEBT.md RULE-ARGS-001 豁免。验证:fmt 干净、clippy -D warnings 零告警、cargo test --lib 1997 过/0 挂/1 ignored(基线 1991+增量-1 收敛测试),已知 flaky 未触发。注记:clippy --lib 不覆盖 #[cfg(test)] 代码,测试文件 import 卫生靠 review;共享 parse_string_array 统一了 warn 文案后缀(解析输出逐字节不变)。DEBT.md 清账 P2 4→1(剩 RULE-ARGS-001 epic + P3 RULE-DOC-001);spec 沉淀三约定到 backend/quality-guidelines.md(clippy gate 零告警硬标准 / MdResource 扩展路径禁复制解析循环 / test_pool 禁手写三件套+不往共享版加参数分支)。PRD AC1-AC5 全勾,四工作提交+归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `333b8bc` | (see git log) |
+
+### Status
+
+[OK] **Completed**
