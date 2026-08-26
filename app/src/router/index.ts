@@ -20,7 +20,7 @@
 // context → direct /chat. This preserves the escape hatch.
 
 import { createRouter, createWebHistory } from "vue-router";
-import { hasDeviceToken } from "../transport/auth";
+import { hasPairedNode } from "../transport/auth";
 import { useNodesStore } from "../stores/nodes";
 
 /** D6 (P1-1): is this SPA being served by the remote daemon?
@@ -55,7 +55,7 @@ const routes = [
     path: "/",
     redirect: () => {
       if (!isRemoteContext()) return "/chat"; // daemon/Tauri: straight into the app (current behavior)
-      if (!hasDeviceToken()) return "/pairing"; // remote, unpaired
+      if (!hasPairedNode()) return "/pairing"; // remote, unpaired
       return "/nodes"; // remote, paired, no node selected yet
     },
   },
@@ -84,7 +84,8 @@ router.beforeEach((to) => {
     return to.name === "chat" ? true : { name: "chat" };
   }
   // remote-served context: token + selected-node gating.
-  if (!hasDeviceToken()) return { name: "pairing" };
+  // 08-26 多节点:hasPairedNode = token map(或 legacy 单值)非空。
+  if (!hasPairedNode()) return { name: "pairing" };
   if (to.name === "chat" && !useNodesStore().selectedNodeId) {
     return { name: "nodes" };
   }

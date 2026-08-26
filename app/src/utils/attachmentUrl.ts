@@ -24,7 +24,7 @@
 //     clean GET to the bound PC daemon.
 
 import { daemonBase } from "../transport/http";
-import { getDeviceToken } from "../transport/auth";
+import { currentDeviceToken } from "../transport/auth";
 
 /** Absolute URL for one attachment's bytes. `file` is the
  *  server-generated name from `save_attachment` (uuid + extension),
@@ -33,7 +33,8 @@ export function attachmentUrl(sessionId: string, file: string): string {
   const base = daemonBase().replace(/\/+$/, "");
   const sid = encodeURIComponent(sessionId);
   const name = encodeURIComponent(file);
-  const token = getDeviceToken();
+  // 08-26 多节点:与 invoke/SSE 同源,取"当前选中节点"的 token。
+  const token = currentDeviceToken();
   if (token) {
     // pwa-remote: proxy + query token (GET binary pass-through).
     return `${base}/api/v1/proxy/api/v1/attachments/${sid}/${name}?access_token=${encodeURIComponent(token)}`;

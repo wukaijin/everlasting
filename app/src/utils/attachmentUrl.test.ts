@@ -4,21 +4,21 @@
 //   3. pwa-remote (device token present → remote proxy path +
 //      `?access_token=` query, the SSE EventSource auth channel)
 //
-// `daemonBase` / `getDeviceToken` are module-mocked so each mode is
+// `daemonBase` / `currentDeviceToken` are module-mocked so each mode is
 // driven explicitly instead of relying on vitest's `import.meta.env`
 // defaults.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../transport/http", () => ({ daemonBase: vi.fn() }));
-vi.mock("../transport/auth", () => ({ getDeviceToken: vi.fn() }));
+vi.mock("../transport/auth", () => ({ currentDeviceToken: vi.fn() }));
 
 import { attachmentUrl } from "./attachmentUrl";
 import { daemonBase } from "../transport/http";
-import { getDeviceToken } from "../transport/auth";
+import { currentDeviceToken } from "../transport/auth";
 
 const daemonBaseMock = vi.mocked(daemonBase);
-const getTokenMock = vi.mocked(getDeviceToken);
+const getTokenMock = vi.mocked(currentDeviceToken);
 
 describe("attachmentUrl", () => {
   beforeEach(() => {

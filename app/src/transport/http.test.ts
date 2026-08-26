@@ -314,25 +314,33 @@ describe("httpTransport.listen", () => {
 // ---------------------------------------------------------------------------
 // S4 pwa-remote 模式(design §2.2 / D3):localStorage 有 device token →
 // invoke 加 `/api/v1/proxy` 前缀 + Bearer 头;EventSource 加 proxy + query。
-// 无 token → 行为完全不变(回归)。401 + token → 清 token + 关 ES + 回调。
+// 无 token → 行为完全不变(回归)。401 + token → 修剪当前节点 token +
+// 关 ES + 回调。08-26 多节点:token 来自 auth 的 `{nodeId→token}` map
+// (currentDeviceToken 按选中节点解析),legacy 单值 key 仍作迁移前兜底。
 // ---------------------------------------------------------------------------
 describe("httpTransport pwa-remote mode (device token)", () => {
   const TOKEN_KEY = "everlasting_device_token";
+  const TOKENS_KEY = "everlasting_node_tokens";
+  const SELECTED_KEY = "everlasting_selected_node";
 
   beforeEach(() => {
-    try {
-      localStorage.removeItem(TOKEN_KEY);
-    } catch {
-      // jsdom always has localStorage; defensive.
-    }
+    [TOKEN_KEY, TOKENS_KEY, SELECTED_KEY].forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        // jsdom always has localStorage; defensive.
+      }
+    });
   });
 
   afterEach(() => {
-    try {
-      localStorage.removeItem(TOKEN_KEY);
-    } catch {
-      // fail silently
-    }
+    [TOKEN_KEY, TOKENS_KEY, SELECTED_KEY].forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        // fail silently
+      }
+    });
   });
 
   it("with token: invoke URL gets /api/v1/proxy prefix + Authorization header", async () => {
@@ -394,6 +402,23 @@ describe("httpTransport pwa-remote mode (device token)", () => {
     );
   });
 
+  it("multi-node map: invoke attaches the SELECTED node's token", async () => {
+    localStorage.setItem(
+      TOKENS_KEY,
+      JSON.stringify({ "pc-1": "t1", "pc-2": "t2" }),
+    );
+    localStorage.setItem(SELECTED_KEY, "pc-2");
+    const t = await loadTransport();
+    await t.invoke("list_sessions");
+
+    expect(lastFetchCall?.url).toBe(
+      "http://localhost:7456/api/v1/proxy/api/v1/sessions/list_sessions",
+    );
+    expect(
+      (lastFetchCall?.init.headers as Record<string, string>).Authorization,
+    ).toBe("Bearer t2");
+  });
+
   it("on 401 + token: clears device token, closes EventSource, fires onAuthFailed, still throws", async () => {
     localStorage.setItem(TOKEN_KEY, "tok-123");
     const mod = await import("./http");
@@ -422,6 +447,39 @@ describe("httpTransport pwa-remote mode (device token)", () => {
 
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
     expect(closeSpy).toHaveBeenCalled();
+    expect(fired).toEqual([1]);
+
+    mod.setOnAuthFailed(null);
+  });
+
+  it("on 401 + multi-node map: drops only the selected node's token, sibling pairing survives", async () => {
+    localStorage.setItem(
+      TOKENS_KEY,
+      JSON.stringify({ "pc-1": "t1", "pc-2": "t2" }),
+    );
+    localStorage.setItem(SELECTED_KEY, "pc-2");
+    const mod = await import("./http");
+    const t = mod.httpTransport;
+
+    const fired: number[] = [];
+    mod.setOnAuthFailed(() => fired.push(1));
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ kind: "Auth", message: "revoked" }),
+      text: async () => '{"kind":"Auth","message":"revoked"}',
+    } as Response);
+
+    await expect(t.invoke("list_sessions")).rejects.toMatchObject({
+      status: 401,
+    });
+
+    // 只有选中节点(pc-2)的配对被修剪;pc-1 保留,下一次 invoke 会自动
+    // 退回它的 token(单条 map → currentDeviceToken 直接命中)。
+    expect(JSON.parse(localStorage.getItem(TOKENS_KEY)!)).toEqual({
+      "pc-1": "t1",
+    });
     expect(fired).toEqual([1]);
 
     mod.setOnAuthFailed(null);

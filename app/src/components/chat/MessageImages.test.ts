@@ -19,7 +19,7 @@ vi.mock("../../transport/http", () => ({
   daemonBase: vi.fn(() => "http://localhost:7456"),
 }));
 vi.mock("../../transport/auth", () => ({
-  getDeviceToken: vi.fn(() => null),
+  currentDeviceToken: vi.fn(() => null),
 }));
 
 import MessageImages from "./MessageImages.vue";

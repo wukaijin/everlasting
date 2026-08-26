@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { daemonBase, resetEventSource } from "../transport/http";
-import { setDeviceToken } from "../transport/auth";
+import { setNodeToken } from "../transport/auth";
 
 // Pairing store (S4 Step 4, design §2.4 / §6.1).
 //
@@ -23,10 +23,10 @@ import { setDeviceToken } from "../transport/auth";
 //   failure 429   — per-IP rate limit (10/min, pairing.rs:37)
 //
 // P2-2 (review): the response is destructured camelCase, NOT snake_case.
-// On success the device token is persisted (activates pwa-remote mode
-// on the next transport.invoke) and the EventSource is reset so the SSE
-// stream rebuilds with the new auth (design §6.1).
-
+// On success the node's device token is persisted — 08-26 多节点:按
+// nodeId 累积进 `{ nodeId → token }` map(setNodeToken),不再覆盖唯一
+// token,之前配对的 PC 保留 —— /nodes 才能显示多张卡片。SSE 流也重
+// 建(resetEventSource,design §6.1)。
 export const usePairingStore = defineStore("pairing", () => {
   /** Redeem a pairing code. On success: persists the device token +
    *  resets the SSE stream, then returns the bound `nodeId` (the caller
@@ -70,7 +70,7 @@ export const usePairingStore = defineStore("pairing", () => {
       nodeId: string;
       nodeDisplayName: string;
     };
-    setDeviceToken(deviceToken);
+    setNodeToken(nodeId, deviceToken);
     // Rebuild the SSE stream with auth (the pre-pairing EventSource, if
     // any, was a token-less direct connection to the daemon base).
     resetEventSource();

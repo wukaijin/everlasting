@@ -40,7 +40,7 @@
 //   TS 类型(渐进,先 SSE + chat 精确,其余 `unknown`)。
 
 import type { Transport, UnlistenFn } from "./types";
-import { getDeviceToken, clearDeviceToken } from "./auth";
+import { currentDeviceToken, dropCurrentNodeToken } from "./auth";
 
 // ---------------------------------------------------------------------------
 // cmd → domain 映射(81 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
@@ -280,10 +280,11 @@ let eventSource: EventSource | null = null;
 function ensureEventSource(): void {
   if (eventSource) return;
   const base = daemonBase();
-  const token = getDeviceToken();
+  // 08-26 多节点:token 按"当前选中节点"解析(currentDeviceToken)。
   // S4 pwa-remote(token 存在):SSE 经 proxy + access_token query。
   // EventSource 不能设 header,走 remote `auth.rs` 的 query 通道。
   // browser-local(无 token):直连 daemon(现状不变)。
+  const token = currentDeviceToken();
   const url = token
     ? `${base}/api/v1/proxy/api/v1/stream?access_token=${encodeURIComponent(token)}`
     : `${base}/api/v1/stream`;
@@ -350,7 +351,8 @@ export const httpTransport: Transport = {
     // S4 pwa-remote 模式(D3):有 token → app 命令经 remote proxy 透传到
     // 绑定的 PC 节点(加 `/api/v1/proxy` 前缀 + Bearer auth);无 token →
     // browser-local 直连 daemon(现状不变,proxyPrefix 为空 + 无 auth 头)。
-    const token = getDeviceToken();
+    // 08-26 多节点:token = 当前选中节点的那条(currentDeviceToken)。
+    const token = currentDeviceToken();
     const proxyPrefix = token ? "/api/v1/proxy" : "";
     const url = `${base}${proxyPrefix}/api/v1/${domain}/${cmd}`;
     const headers: Record<string, string> = {
@@ -364,11 +366,12 @@ export const httpTransport: Transport = {
     });
     if (!resp.ok) {
       // P2-1(design §6.2):token 失效(吊销/过期)remote 返 401。在抛
-      // TransportError 前先做副作用 —— 清 token(回退 browser-local)+ 关
-      // EventSource(下次重建无 auth)+ 触发 App 注册的跳转回调(→ /pairing)。
-      // 调用方 catch 与否都必过此处,避免 401 静默。
-      if (resp.status === 401 && getDeviceToken()) {
-        clearDeviceToken();
+      // TransportError 前先做副作用 —— 修剪当前节点的 token(drop 语义:
+      // 多配对下只掉这一个,其余节点照常;见 auth.ts)+ 关 EventSource
+      // (下次重建无 auth)+ 触发 App 注册的跳转回调(→ /nodes 或
+      // /pairing,按剩余配对)。调用方 catch 与否都必过此处,避免 401 静默。
+      if (resp.status === 401 && currentDeviceToken()) {
+        dropCurrentNodeToken();
         resetEventSource();
         onAuthFailed?.();
       }

@@ -11,19 +11,22 @@
 // try/catch+swallows errors (ProvidersTab, etc.) — a 401 there would
 // never reach the errorBus and would silently fail. So the 401
 // interception lives in `transport/http.ts` (the single choke point all
-// app commands pass through), which clears the token + tears down the
-// SSE stream + invokes the `onAuthFailed` callback registered here.
-// We wire that callback to `router.push("/pairing")` so a revoked /
-// expired token bounces the user back to pairing. This only fires when
-// a device token was present (i.e. pwa-remote mode); daemon/Tauri never
-// carry a token, so the registration is inert there.
+// app commands pass through), which drops the CURRENT node's token
+// (08-26 multi-node: other pairings survive) + tears down the SSE
+// stream + invokes the `onAuthFailed` callback registered here. We
+// wire that callback to /nodes while other pairings remain, else
+// /pairing — a revoked token only bounces the user all the way back to
+// pairing when it was the last one. This only fires when a device
+// token was present (i.e. pwa-remote mode); daemon/Tauri never carry a
+// token, so the registration is inert there.
 import { onMounted, onUnmounted } from "vue";
 import { router } from "./router";
 import { setOnAuthFailed } from "./transport/http";
+import { hasPairedNode } from "./transport/auth";
 
 onMounted(() => {
   setOnAuthFailed(() => {
-    void router.push("/pairing");
+    void router.push(hasPairedNode() ? "/nodes" : "/pairing");
   });
 });
 
