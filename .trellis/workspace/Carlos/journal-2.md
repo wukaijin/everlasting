@@ -463,3 +463,25 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 40: F5 follow-up:xlsx/xlsm 原生提取(每 sheet CSV 形态)全程落地
+
+**Date**: 2026-08-26
+**Task**: F5 follow-up:xlsx/xlsm 原生提取(每 sheet CSV 形态)全程落地
+**Branch**: `main`
+
+### Summary
+
+F5 follow-up(xlsx 提取,pptx 用户裁定不做)从计划到 live 收口。选型:calamine 0.36 纯 Rust——依赖树核验其 zip 同为 default-features=false + deflate-only(zstd-sys 不回归),chrono feature 零新增 crate;表格→文本形态经用户三选一拍板为每 sheet CSV 块(RFC4180 转义 + 维度标题行,空 sheet 占位)。实现:ExtractKind::Xlsx + extract_xlsx(catch_unwind 包裹,xlsx 路径不做 normalize_whitespace,全空 Err 走 Degraded 兜底)+ at_file Office 分流扩 .xlsx/.xlsm(marker sheets=N;.xls/.ods 保持降级);前端 format 联合类型加 xlsx + hint 标签查找表(XLSX)。测试沿用 fixture 即代码:test_fixtures::build_xlsx 运行时手写 OOXML 部件过 calamine 解析,覆盖 CJK sharedStrings/CSV 转义/多 sheet 顺序+空表/序列日期 ISO(44927→2023-01-01)/inlineStr+#REF!/corrupt fail-soft + at_file 集成(.xlsx/.xlsm 注入,.xls Degraded)。坑:RFC4180 转义断言 needle 手抄多打一个引号(实现正确断言错)——转义期望串应逐字符对照生成。验证:后端 1991 过(1 plan_mode 满载预存 flaky 隔离复跑 0.68s 过)、vitest 1225、vue-tsc/build/clippy/fmt 基线干净;live 冒烟真实样本 xlsx(中文表头/日期/负浮点/含逗号备注/空 sheet)经 daemon 实跑 at_files_token=132、manifest {kind:extracted,format:xlsx,chars:142} 正确落库,模型精确读表并识别埋的无月份大数字歧义行。spec pattern-doc-extraction 增硬约束 #7 + xlsx 依赖结论;ROADMAP/decisions-2026-08 沉淀。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4c35080` | (see git log) |
+| `06cf2da` | (see git log) |
+
+### Status
+
+[OK] **Completed**
