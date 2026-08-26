@@ -929,3 +929,24 @@ F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链
 ### Next Steps
 
 - F5 follow-up 档仍开放:xlsx/pptx 提取、pdfium 渲染扫描件(老编码家族 GB-EUC/B5pc 等届时连带覆盖)、正式 document skill
+
+
+## Session 113: 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢)
+
+**Date**: 2026-08-26
+**Task**: 自定义 tunnel node_id/显示名 + Settings 编辑(修同 hostname 双机互踢)
+**Branch**: `main`
+
+### Summary
+
+排查公司/本机 hostname 同为 carlos 导致 node_id 撞车、remote 侧互踢循环的问题;实施 08-26-custom-node-id 任务:tunnel_node_id 改为设置即优先(三级派生:自定义/fallback UUID → hostname → UUID 兜底,顺带修正注释宣称 DB 即身份但实现漂移的矛盾),新增 set_tunnel_node_id / set_tunnel_display_name 双 IPC(三态,校验失败不写库),get_remote_config 回显 nodeId/displayName,RemoteTab 节点信息区双编辑框;remote nodes 表 upsert 刷新显示名。Rust 1989 测试 + 前端 1227 测试全绿(1 个预存负载型 flaky 隔离复跑通过),spec daemon-server.md 沉淀 node_id 派生契约 + 同 hostname 撞车 gotcha Scenario。用户后续需重建 daemon 生效显示名编辑;公司机需另设 node_id。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0eb5d89` | (see git log) |
+
+### Status
+
+[OK] **Completed**
