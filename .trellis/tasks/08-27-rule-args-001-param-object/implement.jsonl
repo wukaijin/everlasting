@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 总契约:messages[0] cache_control 断点顺序、单一事实源、P3/P4 seam 挂载点不可动"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/signature-run-chat-loop.md", "reason": "23 参时代快照+未撤销的拆 struct 警告:重构必须以全量回归兑现其前提,收尾时重写演进表"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/debt-linkage.md", "reason": "RULE-A-006/014/015/016 与防分叉条款:is_worker 显式传播、skip_persist 门、worker 隔离、禁 v1/v2 共存"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "clippy -D warnings gate 的范围与豁免纪律,AC 依据"}
+{"file": ".trellis/tasks/08-27-rule-args-001-param-object/research/run-chat-loop-signature-inventory.md", "reason": "38/49/33 参签名全文、参数聚类表、调用图、70 测试位点分布、库内 XxxDeps/XxxCtx 先例"}

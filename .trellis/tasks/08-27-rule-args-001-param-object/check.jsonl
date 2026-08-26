@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture/debt-linkage.md", "reason": "逐条核验 RULE-A-014 is_worker 链路与回归测试存活、A-015 门语义、A-016 隔离未被重构破坏"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "四文件 allow 归零核查与 clippy gate 通过标准"}
+{"file": ".trellis/tasks/08-27-rule-args-001-param-object/research/run-chat-loop-signature-inventory.md", "reason": "对照 D6 复检单与参数去向映射查位序翻译错漏;QueueDriverDeps 先例一致性"}
