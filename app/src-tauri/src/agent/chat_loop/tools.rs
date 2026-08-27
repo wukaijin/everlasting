@@ -226,6 +226,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: true,
@@ -282,6 +283,7 @@ pub(crate) async fn dispatch_tool_calls(
                     if !pitfall_rows.is_empty() {
                         crate::agent::memory_recall::emit_recall_event(
                             sink.as_ref(),
+                            &session_id,
                             &rid,
                             &pitfall_rows,
                             "pitfall",
@@ -305,6 +307,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: false,
@@ -429,6 +432,7 @@ pub(crate) async fn dispatch_tool_calls(
                     );
                     sink.emit_tool_result(&crate::state::ToolResultPayload {
                         request_id: rid.clone(),
+                        session_id: session_id.clone(),
                         tool_use_id: id.clone(),
                         content: envelope_str.clone(),
                         is_error,
@@ -516,6 +520,7 @@ pub(crate) async fn dispatch_tool_calls(
                     );
                     sink.emit_tool_result(&crate::state::ToolResultPayload {
                         request_id: rid.clone(),
+                        session_id: session_id.clone(),
                         tool_use_id: id.clone(),
                         content: envelope_str.clone(),
                         is_error: true,
@@ -676,6 +681,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 );
                                 sink.emit_tool_result(&crate::state::ToolResultPayload {
                                     request_id: rid.clone(),
+                                    session_id: session_id.clone(),
                                     tool_use_id: id.clone(),
                                     content: envelope.clone(),
                                     is_error: true,
@@ -786,6 +792,7 @@ pub(crate) async fn dispatch_tool_calls(
                             );
                             sink.emit_tool_result(&crate::state::ToolResultPayload {
                                 request_id: rid.clone(),
+                                session_id: session_id.clone(),
                                 tool_use_id: id.clone(),
                                 content: envelope_str.clone(),
                                 is_error,
@@ -872,6 +879,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
@@ -936,6 +944,7 @@ pub(crate) async fn dispatch_tool_calls(
                             );
                             sink.emit_tool_result(&crate::state::ToolResultPayload {
                                 request_id: rid.clone(),
+                                session_id: session_id.clone(),
                                 tool_use_id: id.clone(),
                                 content: envelope_str.clone(),
                                 is_error,
@@ -1006,6 +1015,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 );
                                 sink.emit_tool_result(&crate::state::ToolResultPayload {
                                     request_id: rid.clone(),
+                                    session_id: session_id.clone(),
                                     tool_use_id: id.clone(),
                                     content: envelope_str.clone(),
                                     is_error: true,
@@ -1054,6 +1064,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: true,
@@ -1138,6 +1149,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
@@ -1206,6 +1218,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
@@ -1301,6 +1314,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
@@ -1431,6 +1445,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
@@ -1563,6 +1578,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope_str.clone(),
                             is_error,
@@ -1611,6 +1627,7 @@ pub(crate) async fn dispatch_tool_calls(
                     if !pitfall_rows.is_empty() {
                         crate::agent::memory_recall::emit_recall_event(
                             sink.as_ref(),
+                            &session_id,
                             &rid,
                             &pitfall_rows,
                             "pitfall",
@@ -1632,6 +1649,7 @@ pub(crate) async fn dispatch_tool_calls(
                         );
                         sink.emit_tool_result(&crate::state::ToolResultPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             tool_use_id: id.clone(),
                             content: envelope.clone(),
                             is_error: false,
@@ -1748,6 +1766,7 @@ pub(crate) async fn dispatch_tool_calls(
                     );
                     sink.emit_tool_result(&crate::state::ToolResultPayload {
                         request_id: rid.clone(),
+                        session_id: session_id.clone(),
                         tool_use_id: id.clone(),
                         content: envelope_str.clone(),
                         is_error,
@@ -1884,6 +1903,7 @@ pub(crate) async fn finalize_turn(
         // tool_result with `status=cancelled`).
         emit_chat_event_via_sink(
             sink,
+            session_id,
             rid,
             &ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
@@ -1918,7 +1938,7 @@ pub(crate) async fn finalize_turn(
         )
         .await
         {
-            emit_persist_failure(sink, rid, &e);
+            emit_persist_failure(sink, session_id, rid, &e);
             return Err(());
         }
     }

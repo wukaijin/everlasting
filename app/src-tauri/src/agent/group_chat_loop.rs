@@ -290,6 +290,7 @@ pub async fn run_group_chat_loop(
         // `start` applies it to the freshly-pushed placeholder.
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Speaker {
                 speaker: "moderator".to_string(),
@@ -419,6 +420,7 @@ pub async fn run_group_chat_loop(
                 tracing::warn!(round, nominee=%nominee_name, "group_chat: nominee not in roster; skipping turn");
                 emit_chat_event_via_sink(
                     &sink,
+                    &session_id,
                     &rid,
                     &ChatEvent::Done {
                         stop_reason: Some(STOP_REASON_NOMINEE_UNKNOWN.to_string()),
@@ -440,6 +442,7 @@ pub async fn run_group_chat_loop(
             tracing::warn!(round, model=%participant.model, "group_chat: participant provider unresolved; skipping turn");
             emit_chat_event_via_sink(
                 &sink,
+                &session_id,
                 &rid,
                 &ChatEvent::Done {
                     stop_reason: Some(STOP_REASON_PARTICIPANT_UNRESOLVED.to_string()),
@@ -467,6 +470,7 @@ pub async fn run_group_chat_loop(
         // placeholder about to stream.
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Speaker {
                 speaker: participant.name.clone(),
@@ -600,6 +604,7 @@ pub async fn run_group_chat_loop(
         };
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Done {
                 stop_reason: Some(stop_reason.to_string()),

@@ -28,6 +28,7 @@ mod tests {
     fn done_with_usage(input: u32, output: u32) -> ChatEventPayload {
         ChatEventPayload {
             request_id: "rid-u".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("end_turn".to_string()),
                 usage: Some(TokenUsage {
@@ -56,6 +57,7 @@ mod tests {
         for t in ["hello", " ", "world"] {
             sink.emit_chat_event(&ChatEventPayload {
                 request_id: rid.clone(),
+                session_id: "sess-test".into(),
                 event: ChatEvent::Delta {
                     text: t.to_string(),
                 },
@@ -70,6 +72,7 @@ mod tests {
         let rid = "rid-cancel".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -86,6 +89,7 @@ mod tests {
         let rid = "rid-err".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Error {
                 message: "boom".to_string(),
                 category: LlmErrorCategory::Server,
@@ -101,16 +105,19 @@ mod tests {
         let rid = "rid-transcript".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Start,
         });
         sink.emit_tool_call(&ToolCallPayload {
             request_id: rid.clone(),
+            session_id: "sess-test".into(),
             id: "toolu_1".to_string(),
             name: "read_file".to_string(),
             input: serde_json::json!({"path": "/x"}),
         });
         sink.emit_tool_result(&ToolResultPayload {
             request_id: rid,
+            session_id: "sess-test".into(),
             tool_use_id: "toolu_1".to_string(),
             content: "ok".to_string(),
             is_error: false,
@@ -135,6 +142,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-u".into(),
+            session_id: "sess-test".into(),
             event: ChatEvent::TurnUsage {
                 request_id: "rid-u".into(),
                 seq: 1,
@@ -150,6 +158,7 @@ mod tests {
         });
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-u".into(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Start,
         });
         let transcript = sink.transcript_snapshot();
@@ -190,6 +199,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -220,6 +230,7 @@ mod tests {
         };
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
                 usage: Some(t_last),
@@ -245,6 +256,7 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -276,6 +288,7 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -294,6 +307,7 @@ mod tests {
         }
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
                 usage: Some(TokenUsage {
@@ -322,6 +336,7 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(50, 10));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -340,6 +355,7 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
                 usage: None,
@@ -363,6 +379,7 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
                 usage: None,
@@ -385,6 +402,7 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Done {
                 stop_reason: Some("end_turn".to_string()),
                 usage: None,
@@ -416,16 +434,19 @@ mod tests {
 
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-pr2".into(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Start,
         });
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid-pr2".into(),
+            session_id: "sess-test".into(),
             id: "toolu_1".into(),
             name: "read_file".into(),
             input: serde_json::json!({"path": "/x"}),
         });
         sink.emit_tool_result(&ToolResultPayload {
             request_id: "rid-pr2".into(),
+            session_id: "sess-test".into(),
             tool_use_id: "toolu_1".into(),
             content: "ok".into(),
             is_error: false,
@@ -479,6 +500,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid-noop".into(), "sid-noop".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-noop".into(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Start,
         });
         assert_eq!(sink.transcript_snapshot().len(), 1);
@@ -497,6 +519,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             id: "toolu_42".into(),
             name: "read_file".into(),
             input: serde_json::json!({"path": "/foo"}),
@@ -528,6 +551,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             id: "toolu_p".into(),
             name: "shell".into(),
             input: serde_json::json!({"command": "ls"}),
@@ -535,6 +559,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
         sink.emit_tool_result(&ToolResultPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             tool_use_id: "toolu_p".into(),
             content: "ok".into(),
             is_error: false,
@@ -574,6 +599,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_tool_result(&ToolResultPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             tool_use_id: "toolu_orphan".into(),
             content: "partial".into(),
             is_error: false,
@@ -601,6 +627,7 @@ mod tests {
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             id: "toolu_a".into(),
             name: "read_file".into(),
             input: serde_json::json!({}),
@@ -608,6 +635,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         sink.emit_tool_result(&ToolResultPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             tool_use_id: "toolu_a".into(),
             content: "a".into(),
             is_error: false,
@@ -615,6 +643,7 @@ mod tests {
         });
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             id: "toolu_b".into(),
             name: "read_file".into(),
             input: serde_json::json!({}),
@@ -622,6 +651,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(8));
         sink.emit_tool_result(&ToolResultPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             tool_use_id: "toolu_b".into(),
             content: "b".into(),
             is_error: false,
@@ -899,6 +929,7 @@ mod tests {
         // IPC, just local buffer).
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-recall".into(),
+            session_id: "sess-test".into(),
             event: ChatEvent::Recall {
                 hits: vec![crate::llm::types::RecallHit {
                     memory_id: "m1".into(),

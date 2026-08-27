@@ -686,6 +686,7 @@ pub(crate) async fn drive_turn(
                 );
                 sink.emit_chat_event(&crate::state::ChatEventPayload {
                     request_id: rid.clone(),
+                    session_id: session_id.clone(),
                     event: ChatEvent::Error {
                         message: msg,
                         category: LlmErrorCategory::InvalidRequest,
@@ -880,6 +881,7 @@ pub(crate) async fn drive_turn(
                     // check here.
                     crate::agent::memory_recall::emit_recall_event(
                         sink.as_ref(),
+                        &session_id,
                         &rid,
                         &recall_rows,
                         "fts",
@@ -1035,6 +1037,7 @@ pub(crate) async fn drive_turn(
             // 非持久化只读事件(同 Retrying 先例;前端瞬时 chip)。
             emit_chat_event_via_sink(
                 &sink,
+                &session_id,
                 &rid,
                 &ChatEvent::BudgetTrim {
                     request_id: rid.clone(),
@@ -1089,6 +1092,7 @@ pub(crate) async fn drive_turn(
             );
             sink.emit_chat_event(&crate::state::ChatEventPayload {
                 request_id: rid.clone(),
+                session_id: session_id.clone(),
                 event: ChatEvent::Error {
                     message: msg,
                     category: LlmErrorCategory::InvalidRequest,
@@ -1134,6 +1138,7 @@ pub(crate) async fn drive_turn(
     let mut rng = fastrand::Rng::new();
     let retry_sink = LlmRetrySink {
         sink: sink.clone(),
+        session_id: session_id.clone(),
         rid: rid.clone(),
     };
     let outcome = retry_open(
@@ -1247,7 +1252,7 @@ pub(crate) async fn drive_turn(
                 };
                 match &event {
                     ChatEvent::Start => {
-                        emit_chat_event_via_sink(&sink, &rid, &event);
+                        emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::Delta { text } => {
                         // RULE-PERSIST-001 写点②: 时间门检查点(见
@@ -1299,7 +1304,7 @@ pub(crate) async fn drive_turn(
                         if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
                             turn_thinking_done = Some(Instant::now());
                         }
-                        emit_chat_event_via_sink(&sink, &rid, &event);
+                        emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::ThinkingDelta { text } => {
                         // RULE-PERSIST-001 写点②: 时间门检查点(1s
@@ -1342,12 +1347,12 @@ pub(crate) async fn drive_turn(
                         if turn_thinking_start.is_none() {
                             turn_thinking_start = Some(Instant::now());
                         }
-                        emit_chat_event_via_sink(&sink, &rid, &event);
+                        emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::SignatureDelta { signature } => {
                         let p = pending_thinking.get_or_insert_with(PendingThinking::default);
                         p.signature.push_str(signature);
-                        emit_chat_event_via_sink(&sink, &rid, &event);
+                        emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::RedactedThinkingDelta { data } => {
                         // 流序: redacted 到达前先 flush 可能 pending 的
@@ -1356,7 +1361,7 @@ pub(crate) async fn drive_turn(
                         flush_ordered_thinking(&mut finalized_thinking, &mut ordered_blocks);
                         flush_pending_text(&mut pending_text, &mut ordered_blocks);
                         ordered_blocks.push(ContentBlock::RedactedThinking { data: data.clone() });
-                        emit_chat_event_via_sink(&sink, &rid, &event);
+                        emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::ToolCall { id, name, input } => {
                         // 流序: 工具调用前先 flush pending thinking + text。
@@ -1374,6 +1379,7 @@ pub(crate) async fn drive_turn(
                         });
                         sink.emit_tool_call(&ToolCallPayload {
                             request_id: rid.clone(),
+                            session_id: session_id.clone(),
                             id: id.clone(),
                             name: name.clone(),
                             input: input.clone(),
@@ -1491,7 +1497,7 @@ pub(crate) async fn drive_turn(
                                 // 退化等 loadHistory)。worker 事件落 SubagentBufferSink
                                 // transcript(drawer 未知 kind switch 静默忽略),
                                 // 不达主 chat activeRequests gate。
-                                emit_chat_event_via_sink(&sink, &rid, &ChatEvent::TurnUsage {
+                                emit_chat_event_via_sink(&sink, &session_id, &rid, &ChatEvent::TurnUsage {
                                     request_id: rid.clone(),
                                     seq,
                                     run_id: run_key.to_string(),
@@ -1510,7 +1516,7 @@ pub(crate) async fn drive_turn(
                         if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
                             turn_thinking_done = Some(Instant::now());
                         }
-                        emit_chat_event_via_sink(&sink, &rid, &event);
+                        emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                         had_error = true;
                     }
                     ChatEvent::TurnComplete { .. } => {
@@ -1772,7 +1778,7 @@ pub(crate) async fn drive_turn(
                     );
                     return Err(());
                 } else {
-                    emit_persist_failure(&sink, &rid, &e);
+                    emit_persist_failure(&sink, &session_id, &rid, &e);
                     return Err(());
                 }
             }
@@ -1791,6 +1797,7 @@ pub(crate) async fn drive_turn(
         if !skip_persist {
             emit_chat_event_via_sink(
                 &sink,
+                &session_id,
                 &rid,
                 &ChatEvent::TurnComplete {
                     seq,
@@ -1844,6 +1851,7 @@ pub(crate) async fn drive_turn(
         // tool_result with `status=cancelled`).
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Done {
                 stop_reason: Some("cancelled".to_string()),
@@ -1952,6 +1960,7 @@ pub(crate) async fn drive_turn(
         // load-bearing for the worker's transcript.
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Done {
                 stop_reason,
@@ -2072,6 +2081,7 @@ pub(crate) async fn drive_turn(
             }
             emit_chat_event_via_sink(
                 &sink,
+                &session_id,
                 &rid,
                 &ChatEvent::Done {
                     stop_reason: Some("loop_terminated".to_string()),
@@ -2187,6 +2197,7 @@ pub(crate) async fn drive_turn(
                         }
                         emit_chat_event_via_sink(
                             &sink,
+                            &session_id,
                             &rid,
                             &ChatEvent::Done {
                                 stop_reason: Some("cancelled".to_string()),
@@ -2296,6 +2307,7 @@ pub(crate) async fn drive_turn(
                                     }
                                     emit_chat_event_via_sink(
                                         &sink,
+                                        &session_id,
                                         &rid,
                                         &ChatEvent::Done {
                                             stop_reason: Some("loop_terminated".to_string()),
@@ -2339,6 +2351,7 @@ pub(crate) async fn drive_turn(
                                 }
                                 emit_chat_event_via_sink(
                                     &sink,
+                                    &session_id,
                                     &rid,
                                     &ChatEvent::Done {
                                         stop_reason: Some("loop_terminated".to_string()),
@@ -2378,6 +2391,7 @@ pub(crate) async fn drive_turn(
                                 }
                                 emit_chat_event_via_sink(
                                     &sink,
+                                    &session_id,
                                     &rid,
                                     &ChatEvent::Done {
                                         stop_reason: Some("cancelled".to_string()),

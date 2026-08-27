@@ -194,6 +194,11 @@ export interface CancelOutcomeView {
 
 export interface ChatEventPayload {
   request_id: string;
+  /** 2026-08-27 跨客户端实时认领:轮次发起端之外的客户端(remote
+   *  PWA 观看 local 发起的轮次)没有该 rid 的 activeRequests 映射,
+   *  靠此字段按 session 认领。旧后端 wire 无此字段(undefined 时
+   *  维持原「未知 request 即丢弃」语义 —— 新旧版本兼容)。 */
+  session_id?: string;
   kind:
     | "start"
     | "delta"
@@ -409,6 +414,9 @@ interface TokenUsagePayload {
 
 export interface ToolCallPayload {
   request_id: string;
+  /** 跨客户端实时认领(2026-08-27),语义同
+   *  [`ChatEventPayload.session_id`](#ChatEventPayload)。 */
+  session_id?: string;
   id: string;
   name: string;
   input: Record<string, unknown>;
@@ -416,6 +424,8 @@ export interface ToolCallPayload {
 
 export interface ToolResultPayload {
   request_id: string;
+  /** 跨客户端实时认领(2026-08-27),语义同 ChatEventPayload。 */
+  session_id?: string;
   tool_use_id: string;
   content: string;
   is_error: boolean;
@@ -1290,6 +1300,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // in the same function as the per-tool timing
     // means the two concerns share a test surface.
     handleToolCall: events.handleToolCall,
+    // 2026-08-27 cross-client adoption: exposed for the tool:result
+    // adoption test (mirrors the sibling handleToolCall exposure —
+    // the tool-result card render path needs the same direct-drive
+    // test surface).
+    handleToolResult: events.handleToolResult,
     // F5 follow-up debug: exposed for the full-streaming
     // flow test (thinking_delta → delta → done path).
     // The test asserts that the per-message

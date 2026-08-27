@@ -157,6 +157,7 @@ pub(crate) async fn prepare_loop_state(
             tracing::warn!(session_id = %session_id, "session not found");
             sink.emit_chat_event(&crate::state::ChatEventPayload {
                 request_id: rid.clone(),
+                session_id: session_id.clone(),
                 event: ChatEvent::Error {
                     message: format!("session {} not found", session_id),
                     category: LlmErrorCategory::InvalidRequest,
@@ -186,6 +187,7 @@ pub(crate) async fn prepare_loop_state(
         Ok(None) => {
             sink.emit_chat_event(&crate::state::ChatEventPayload {
                 request_id: rid.clone(),
+                session_id: session_id.clone(),
                 event: ChatEvent::Error {
                     message: format!(
                         "project {} not found for this session",
@@ -229,6 +231,7 @@ pub(crate) async fn prepare_loop_state(
             tracing::error!(session_id = %session_id, error = %e, "session root invalid");
             sink.emit_chat_event(&crate::state::ChatEventPayload {
                 request_id: rid.clone(),
+                session_id: session_id.clone(),
                 event: ChatEvent::Error {
                     message: format!("session root is invalid: {}", e),
                     category: LlmErrorCategory::InvalidRequest,
@@ -832,7 +835,7 @@ pub(crate) async fn prepare_loop_state(
                     )
                     .await
                     {
-                        emit_persist_failure(&sink, &rid, &e);
+                        emit_persist_failure(&sink, &session_id, &rid, &e);
                         return Err(());
                     }
                 }
@@ -1019,6 +1022,7 @@ pub(crate) async fn prepare_loop_state(
         // by `request_id` + `message_seq`.
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::FileInjections {
                 request_id: rid.clone(),

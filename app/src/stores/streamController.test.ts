@@ -2522,3 +2522,171 @@ describe("streamController — R3 stream-resync interrupted finalize", () => {
     expect(msgs[msgs.length - 1].error).toBeUndefined();
   });
 });
+
+// =====================================================================
+// 跨客户端实时认领(2026-08-27):remote PWA 观看 local 发起的轮次时,
+// 事件 payload 带 session_id,前端对未知 rid 按 session 认领 —— 不再
+// 只能刷新看。守卫语义:无 session_id 的旧 wire 维持丢弃;rid 已完结
+// 的迟到事件丢弃;session 未加载只注册请求不建占位(done 后权威重拉)。
+// =====================================================================
+describe("streamController — cross-client foreign request adoption", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    const invoke = vi.mocked(transport.invoke);
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+  });
+
+  it("adopts an unknown request on the first chat event and streams deltas into a fresh placeholder", () => {
+    const stream = useStreamControllerStore();
+    const sid = "foreign-sid";
+    const rid = "foreign-rid";
+    // 别的客户端发起的轮次:本端内存有历史(普通聊天场景),但
+    // activeRequests 无该 rid 映射。
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "你好"), asst(1, "上一条回复", [])]),
+      false,
+    );
+
+    // 首条 delta(带 session_id)→ 认领 + 补占位。
+    stream.handleChatEvent({
+      request_id: rid,
+      session_id: sid,
+      kind: "delta",
+      text: "hi",
+    });
+
+    const req = stream.activeRequests.get(rid);
+    expect(req).toBeTruthy();
+    expect(req!.sessionId).toBe(sid);
+    expect(stream.pinnedSessions.has(sid)).toBe(true);
+
+    const msgs = stream.getMessages(sid)!;
+    // 认领补的占位是**新** assistant(恒新建,不复用上一条已完成的
+    // 回复)—— 实时 delta 落在占位上,上一轮回复原样保留。
+    const last = msgs[msgs.length - 1];
+    expect(msgs).toHaveLength(3);
+    expect(msgs[1].role).toBe("assistant");
+    expect(msgs[1].content).toBe("上一条回复");
+    expect(last.role).toBe("assistant");
+    expect(last.streaming).toBe(true);
+    expect(last.content).toBe("hi");
+
+    // 后续 delta 走既有路径继续追加。
+    stream.handleChatEvent({
+      request_id: rid,
+      session_id: sid,
+      kind: "delta",
+      text: " there",
+    });
+    expect(stream.getMessages(sid)![msgs.length - 1].content).toBe("hi there");
+
+    // done → finalize(activeRequests 清空 + unpin)。
+    stream.handleChatEvent({ request_id: rid, session_id: sid, kind: "done" });
+    expect(stream.activeRequests.has(rid)).toBe(false);
+    expect(stream.pinnedSessions.has(sid)).toBe(false);
+  });
+
+  it("does NOT adopt when the payload has no session_id (old-wire parity)", () => {
+    const stream = useStreamControllerStore();
+    const sid = "legacy-sid";
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "q"), asst(1, "a", [])]),
+      false,
+    );
+
+    stream.handleChatEvent({ request_id: "legacy-rid", kind: "delta", text: "x" });
+    expect(stream.activeRequests.has("legacy-rid")).toBe(false);
+    const msgs = stream.getMessages(sid)!;
+    expect(msgs[msgs.length - 1].content).toBe("a"); // 未新建占位、未追加
+  });
+
+  it("does NOT adopt late events for an already-finished request", () => {
+    const stream = useStreamControllerStore();
+    const sid = "late-sid";
+    const rid = "late-rid";
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "q"), asst(1, "a", [])]),
+      false,
+    );
+
+    // 完整跑一轮:认领 → done(finalize 把 rid 移入 completedRequests)。
+    stream.handleChatEvent({ request_id: rid, session_id: sid, kind: "start" });
+    stream.handleChatEvent({ request_id: rid, session_id: sid, kind: "done" });
+    expect(stream.activeRequests.has(rid)).toBe(false);
+
+    // done 之后迟到的 delta:completedRequests 命中 → 不认领、不复活。
+    stream.handleChatEvent({ request_id: rid, session_id: sid, kind: "delta", text: "late" });
+    expect(stream.activeRequests.has(rid)).toBe(false);
+    const msgs = stream.getMessages(sid)!;
+    expect(msgs[msgs.length - 1].content).not.toContain("late");
+  });
+
+  it("registers the request even when the session is not loaded (no placeholder; done still pulls authoritative state)", async () => {
+    const stream = useStreamControllerStore();
+    const sid = "unloaded-sid";
+    const rid = "unloaded-rid";
+    // session 未加载进内存:messagesBySession 无该 session。
+    expect(stream.getMessages(sid)).toBeUndefined();
+
+    // done 的 reloadAfterFinalize 走 load_session —— 模拟 DB 里有完整轮次。
+    vi.mocked(transport.invoke).mockImplementation(async (cmd: unknown) => {
+      if (cmd === "load_session") {
+        return {
+          session: { id: sid },
+          messages: [usrTyped(0, "q"), asst(1, "远端回答", [])],
+        };
+      }
+      return null;
+    });
+
+    stream.handleChatEvent({ request_id: rid, session_id: sid, kind: "done" });
+
+    // done 前已认领(streamingSessionIds 侧栏指示器亮了);finalize 异步
+    // reload 完成后 activeRequests 清空 + 权威缓冲就位。
+    await vi.waitFor(() => {
+      expect(stream.activeRequests.has(rid)).toBe(false);
+    });
+    await vi.waitFor(() => {
+      const msgs = stream.getMessages(sid)!;
+      expect(msgs[msgs.length - 1].content).toBe("远端回答");
+    });
+    expect(stream.pinnedSessions.has(sid)).toBe(false);
+  });
+
+  it("adopts through the tool:call and tool:result channels too", () => {
+    const stream = useStreamControllerStore();
+    const sid = "tool-sid";
+    const rid = "tool-rid";
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "q"), asst(1, "", [])]),
+      false,
+    );
+
+    stream.handleToolCall({
+      request_id: rid,
+      session_id: sid,
+      id: "call_1",
+      name: "shell",
+      input: { command: "ls" },
+    });
+    expect(stream.activeRequests.has(rid)).toBe(true);
+
+    stream.handleToolResult({
+      request_id: rid,
+      session_id: sid,
+      tool_use_id: "call_1",
+      content: "file1",
+      is_error: false,
+    });
+
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+    expect(last.toolCalls?.some((tc) => tc.id === "call_1")).toBe(true);
+    expect(last.toolResults?.some((tr) => tr.toolUseId === "call_1")).toBe(true);
+  });
+});

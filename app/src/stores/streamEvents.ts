@@ -59,11 +59,106 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
   // Event handlers (one global listener; routes by request_id)
   // ---------------------------------------------------------------------
 
+  /** 跨客户端实时认领(2026-08-27)。事件只带 `request_id` 的年代,
+   *  非发起端的 `activeRequests` 没有该 rid 映射,handleChatEvent /
+   *  handleToolCall / handleToolResult 的未知-request 守卫把本地发
+   *  起(remote 观看)或裸 HTTP 发起的轮次事件全部静默丢弃 —— 只能
+   *  刷新从 DB 重拉。后端补齐 wire `session_id` 后,这里按 session
+   *  认领:注册一个"外来 RequestState"(占位 assistant 由本函数视
+   *  尾部情况补),后续 delta / tool / done 走既有路径 —— done 的
+   *  `reloadAfterFinalize` 会用 DB 权威形状整体替换缓冲(user 行、
+   *  seq 等外来态天然自愈)。
+   *
+   *  守卫语义与旧实现兼容:
+   *  - payload 无 `session_id`(旧 daemon)→ 不认领,维持丢弃;
+   *  - rid 已完结(completedRequests,如 done 后的迟到帧)→ 不认领;
+   *  - session 未加载进内存 → 只注册请求(streamingSessionIds 侧栏
+   *    指示器亮起 + done 后权威重拉),不建占位(`msgs` 缺失的守卫
+   *    自然跳过逐条渲染)。
+   *
+   *  供三个 handler 的入口守卫调用;返回认领后的 RequestState(或
+   *  null = 维持旧丢弃语义)。 */
+  function adoptForeignRequest(
+    requestId: string,
+    sessionId: string,
+  ): RequestState | null {
+    if (!requestId || !sessionId) return null;
+    // 已完结请求的迟到事件:与旧「unknown / already-finished — drop」一致。
+    if (completedRequests.has(requestId)) return null;
+    if (activeRequests.has(requestId)) return activeRequests.get(requestId)!;
+
+    const msgs = messagesBySession.get(sessionId);
+    let assistantMsgId = "";
+    if (msgs) {
+      // 恒新建占位(镜像 chatSendActions:每轮 user + assistant 占位)。
+      // 不复用尾部 assistant —— 外来轮次的 delta 不能追加到上一轮已
+      // 完成的回复上;done 的 reloadAfterFinalize 会用 DB 权威形状
+      // 整体替换缓冲,占位只是实时落点。
+      msgs.push({ id: genId(), role: "assistant", content: "" });
+      const last = msgs[msgs.length - 1];
+      // 外来流在途:占位即刻亮光标(delta-first 时 start 不会来设置)。
+      last.streaming = true;
+      assistantMsgId = last.id;
+    }
+
+    const state: RequestState = {
+      requestId,
+      sessionId,
+      // 外来请求拿不到发起端 projectId;streamingProjectIds 的项目红点
+      // 对 cross-client 流暂不亮(done 后 reload 不受影响)。
+      projectId: "",
+      userMsgId: "",
+      assistantMsgId,
+      groupChat: false,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      history: [],
+      sendAt: Date.now(),
+      firstDeltaAt: null,
+      toolStartedAt: new Map(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+    };
+    activeRequests.set(requestId, state);
+    pinnedSessions.add(sessionId);
+    return state;
+  }
+
+  /** 三个 payload 通道共用的入口解析:先查已知映射,未命中且带
+   *  session_id 则认领。 */
+  function resolveRequest(
+    requestId: string,
+    sessionId?: string,
+  ): RequestState | null {
+    const known = activeRequests.get(requestId);
+    if (known) return known;
+    if (!sessionId) return null;
+    return adoptForeignRequest(requestId, sessionId);
+  }
+
   function handleChatEvent(event: ChatEventPayload): void {
-    const req = activeRequests.get(event.request_id);
+    const req = resolveRequest(event.request_id, event.session_id);
     if (!req) return; // event for unknown / already-finished request — drop
+
+    // 终结判定提前(done 的 group-chat 逐轮 done 非终结;error 恒终结;
+    // 其余 kind 恒 false)。跨客户端认领场景:session 未加载/尾部非
+    // assistant 时,终结事件仍必须 finalize(否则 rid 永远留在
+    // activeRequests),非终结事件无落点直接丢弃。
+    const isTerminal =
+      event.kind === "error" ||
+      (event.kind === "done" &&
+        (!req.groupChat ||
+          event.stop_reason === "group_chat_end" ||
+          event.stop_reason === "cancelled" ||
+          event.stop_reason === "max_rounds"));
+
     const msgs = messagesBySession.get(req.sessionId);
-    if (!msgs) return; // session was evicted mid-stream — shouldn't happen because pinned, but guard
+    if (!msgs) {
+      if (isTerminal) finalizeRequest(req.requestId, req.sessionId, event.kind === "error");
+      return; // session was evicted mid-stream — shouldn't happen because pinned, but guard
+    }
 
     // F1 消息队列 (2026-08-25): 续轮渲染边界。必须在 assistant 尾部
     // 不变量检查**之前**处理 —— 事件到达时尾部恰是排队 user 占位,
@@ -103,7 +198,10 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     }
 
     let last = msgs[msgs.length - 1];
-    if (!last || last.role !== "assistant") return;
+    if (!last || last.role !== "assistant") {
+      if (isTerminal) finalizeRequest(req.requestId, req.sessionId, event.kind === "error");
+      return;
+    }
 
     switch (event.kind) {
       case "start":
@@ -833,7 +931,7 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
   }
 
   function handleToolCall(payload: ToolCallPayload): void {
-    const req = activeRequests.get(payload.request_id);
+    const req = resolveRequest(payload.request_id, payload.session_id);
     if (!req) return;
     const msgs = messagesBySession.get(req.sessionId);
     if (!msgs) return;
@@ -909,7 +1007,7 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
   }
 
   function handleToolResult(payload: ToolResultPayload): void {
-    const req = activeRequests.get(payload.request_id);
+    const req = resolveRequest(payload.request_id, payload.session_id);
     if (!req) return;
     const msgs = messagesBySession.get(req.sessionId);
     if (!msgs) return;

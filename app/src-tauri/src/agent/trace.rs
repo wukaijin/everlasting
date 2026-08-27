@@ -67,7 +67,7 @@ pub async fn record_compaction(
         degradation: degradation.clone(),
         method,
     };
-    emit_chat_event_via_sink(sink, rid, &event);
+    emit_chat_event_via_sink(sink, session_id, rid, &event);
 
     let payload = serde_json::json!({
         "tokens_before": result.tokens_before,
@@ -120,7 +120,7 @@ pub async fn record_loop_hint(
         hit_count,
         verdict_kind: verdict_kind.to_string(),
     };
-    emit_chat_event_via_sink(sink, rid, &event);
+    emit_chat_event_via_sink(sink, session_id, rid, &event);
 
     let payload = serde_json::json!({
         "hit_count": hit_count,
@@ -172,7 +172,7 @@ pub async fn record_breadcrumb(
         status: status.map(|s| s.to_string()),
         breadcrumb_text: breadcrumb_text.to_string(),
     };
-    emit_chat_event_via_sink(sink, rid, &event);
+    emit_chat_event_via_sink(sink, session_id, rid, &event);
 
     let payload = serde_json::json!({
         "task_slug": task_slug,

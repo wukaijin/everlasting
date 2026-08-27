@@ -19,11 +19,14 @@
 //!
 //! 1. **全局单流 + `request_id` 路由**:`ChatEventPayload` /
 //!    `ToolCallPayload` / `ToolResultPayload` 等 7 类 chat 事件
-//!    payload 只带 `request_id`,不带 `session_id`。因此 buffer
-//!    是**全局的**(所有 session 的事件混排),前端靠
-//!    `streamController` 现有的 `request_id → session` 路由过滤,
-//!    与 Tauri 全局 `emit` 语义完全一致。design §1.3 设想的
-//!    "session_id 双重过滤"在当前 payload 形状下不成立。
+//!    payload 带 `request_id`(发起端生成)+ `session_id`(后端回填,
+//!    2026-08-27 跨客户端实时)。buffer 是**全局的**(所有 session 的
+//!    事件混排),前端靠 `streamController` 的 `request_id → session`
+//!    路由过滤 —— 发起端有映射走正常路径;非发起端(remote PWA 观看
+//!    local 发起的轮次)靠 `session_id` 按 session 认领,与 Tauri
+//!    全局 `emit` 语义一致。design §1.3 设想的"session_id 双重过滤"
+//!    在当前 payload 形状下不成立(事件不带发起方标识,session 维度
+//!    由前端认领而非服务端分发)。
 //! 2. **`Vec<Sender>` 而非 `HashMap<event_name, Vec<Sender>>`**:
 //!    `/api/v1/stream` 是单全局流,每条事件广播给所有连接;
 //!    event-name 维度的订阅过滤在**前端** `httpTransport.listen`

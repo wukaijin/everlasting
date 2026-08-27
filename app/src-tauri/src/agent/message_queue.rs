@@ -386,6 +386,7 @@ mod driver_sink_tests {
     fn emit(sink: &DriverSink, event: ChatEvent) {
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".into(),
+            session_id: "sess-test".into(),
             event,
         });
     }

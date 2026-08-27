@@ -417,6 +417,7 @@ pub(crate) async fn chat_inner(
             // translate to the Phase 2 HTTP transport anyway.
             sink.emit_chat_event(&ChatEventPayload {
                 request_id: rid.clone(),
+                session_id: session_id.clone(),
                 event: ChatEvent::Error {
                     message: msg,
                     category,
@@ -973,6 +974,7 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
             // 见 ChatEvent::TurnContinuation 文档 —— 不能用 Start 兼任。
             deps.inner_sink.emit_chat_event(&ChatEventPayload {
                 request_id: deps.rid.clone(),
+                session_id: deps.session_id.clone(),
                 event: ChatEvent::TurnContinuation {
                     count: drained.len(),
                 },
@@ -1065,6 +1067,7 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
             if let Some((stop_reason, usage)) = st.last_done.clone() {
                 deps.inner_sink.emit_chat_event(&ChatEventPayload {
                     request_id: deps.rid.clone(),
+                    session_id: deps.session_id.clone(),
                     event: ChatEvent::Done { stop_reason, usage },
                 });
             }

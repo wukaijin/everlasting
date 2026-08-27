@@ -446,9 +446,19 @@ pub const INTERRUPTED_MARKER: &str = "[异常中断已恢复]";
 /// [`crate::agent::chat_loop::run_chat_loop`] (P1 RULE-A-006
 /// closure, 2026-06-15). Every chat-event emit on the agent
 /// loop's per-event select! arm goes through this helper.
-pub fn emit_chat_event_via_sink(sink: &Arc<dyn ChatEventSink>, rid: &str, event: &ChatEvent) {
+///
+/// `sid` 进入 payload 的 `session_id`(2026-08-27 跨客户端实时,
+/// 见 [`crate::state::ChatEventPayload`])—— 与 rid 同源于
+/// `ChatLoopRequest`,非测试调用点都在 loop 作用域内。
+pub fn emit_chat_event_via_sink(
+    sink: &Arc<dyn ChatEventSink>,
+    sid: &str,
+    rid: &str,
+    event: &ChatEvent,
+) {
     let payload = ChatEventPayload {
         request_id: rid.to_string(),
+        session_id: sid.to_string(),
         event: event.clone(),
     };
     sink.emit_chat_event(&payload);

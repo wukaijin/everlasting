@@ -641,17 +641,29 @@ impl Drop for CancellationGuard {
 /// Event payload for the high-frequency `chat-event` channel
 /// (start / delta / thinking_delta / signature_delta /
 /// redacted_thinking_delta / done / error).
+///
+/// `session_id`(2026-08-27 跨客户端实时): `request_id` 由发起端
+/// 生成,其他客户端(remote PWA 观看 local 发起的轮次)的
+/// `activeRequests` 里没有该映射,事件会被前端未知-request 守卫
+/// 静默丢弃。带 session_id 后前端可按 session 认领(建外来
+/// RequestState + 占位),实时流不再只在发起端可见。与 sibling
+/// payload(`ToolQuestionPayload` 等)已有的 `session_id` 字段
+/// 对齐:snake_case、必填。
 #[derive(Serialize, Clone)]
 pub struct ChatEventPayload {
     pub request_id: String,
+    pub session_id: String,
     #[serde(flatten)]
     pub event: ChatEvent,
 }
 
 /// Event payload for the low-frequency `tool:call` channel.
+///
+/// `session_id`:同 [`ChatEventPayload`] 的跨客户端路由契约。
 #[derive(Serialize, Clone)]
 pub struct ToolCallPayload {
     pub request_id: String,
+    pub session_id: String,
     pub id: String,
     pub name: String,
     pub input: serde_json::Value,
@@ -667,6 +679,7 @@ pub struct ToolCallPayload {
 #[derive(Serialize, Clone)]
 pub struct ToolResultPayload {
     pub request_id: String,
+    pub session_id: String,
     pub tool_use_id: String,
     pub content: String,
     pub is_error: bool,

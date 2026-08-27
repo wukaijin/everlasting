@@ -153,6 +153,7 @@ pub(crate) use tools::*;
 /// notice maps onto the right active request on the frontend.
 pub(crate) struct LlmRetrySink {
     pub(crate) sink: Arc<dyn ChatEventSink>,
+    pub(crate) session_id: String,
     pub(crate) rid: String,
 }
 impl RetrySink for LlmRetrySink {
@@ -169,6 +170,7 @@ impl RetrySink for LlmRetrySink {
         );
         emit_chat_event_via_sink(
             &self.sink,
+            &self.session_id,
             &self.rid,
             &ChatEvent::Retrying {
                 attempt: event.attempt,
@@ -470,9 +472,10 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
         // ① open the assistant message + emit the synthetic
         //    dispatch_subagent tool_use so the UI renders the same
         //    tool card + opens the SubagentDrawer.
-        emit_chat_event_via_sink(&sink, &rid, &ChatEvent::Start);
+        emit_chat_event_via_sink(&sink, &session_id, &rid, &ChatEvent::Start);
         sink.emit_tool_call(&ToolCallPayload {
             request_id: rid.clone(),
+            session_id: session_id.clone(),
             id: tool_use_id.clone(),
             name: dispatch_name.to_string(),
             input: input.clone(),
@@ -554,6 +557,7 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
             crate::agent::helpers::tool_result_envelope(&content, &current_ctx.worktree_path);
         sink.emit_tool_result(&crate::state::ToolResultPayload {
             request_id: rid.clone(),
+            session_id: session_id.clone(),
             tool_use_id: tool_use_id.clone(),
             content: envelope_str,
             is_error,
@@ -567,6 +571,7 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
         //    the main conversation).
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Delta {
                 text: content.clone(),
@@ -608,11 +613,12 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
             )
             .await
             {
-                emit_persist_failure(&sink, &rid, &e);
+                emit_persist_failure(&sink, &session_id, &rid, &e);
                 return;
             }
             emit_chat_event_via_sink(
                 &sink,
+                &session_id,
                 &rid,
                 &ChatEvent::TurnComplete {
                     seq,
@@ -632,6 +638,7 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
         // ⑧ terminal Done. cancelled → "cancelled"; else "end_turn".
         emit_chat_event_via_sink(
             &sink,
+            &session_id,
             &rid,
             &ChatEvent::Done {
                 stop_reason: Some(if cancelled { "cancelled" } else { "end_turn" }.to_string()),
@@ -965,6 +972,7 @@ pub(crate) async fn emit_max_turns_terminal(
         let _ = crate::db::touch_session(db, session_id).await;
         emit_chat_event_via_sink(
             sink,
+            &session_id,
             rid,
             &ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
@@ -1130,6 +1138,7 @@ async fn ask_turn_limit_softcap(
                                 }
                                 emit_chat_event_via_sink(
                                     sink,
+                                    &session_id,
                                     rid,
                                     &ChatEvent::Done {
                                         stop_reason: Some("cancelled".to_string()),
@@ -1232,6 +1241,7 @@ async fn ask_turn_limit_softcap(
                                         }
                                         emit_chat_event_via_sink(
                                             sink,
+                                            &session_id,
                                             rid,
                                             &ChatEvent::Done {
                                                 stop_reason: Some("cancelled".to_string()),
@@ -1360,10 +1370,16 @@ fn instant_delta_ms(start: Option<Instant>, end: Option<Instant>) -> Option<i64>
 /// this — they stay `tracing::error!`-only so the loop still emits
 /// its single terminal cancelled `Done` event instead of two
 /// terminal events (Error + Done) that would conflict.
-pub(crate) fn emit_persist_failure(sink: &Arc<dyn ChatEventSink>, rid: &str, err: &sqlx::Error) {
+pub(crate) fn emit_persist_failure(
+    sink: &Arc<dyn ChatEventSink>,
+    sid: &str,
+    rid: &str,
+    err: &sqlx::Error,
+) {
     tracing::error!(error = %err, "agent loop: persist_turn failed");
     sink.emit_chat_event(&crate::state::ChatEventPayload {
         request_id: rid.to_string(),
+        session_id: sid.to_string(),
         event: ChatEvent::Error {
             message: format!(
                 "保存对话记录失败(可能磁盘满或数据库被占用),请重试。详情: {}",

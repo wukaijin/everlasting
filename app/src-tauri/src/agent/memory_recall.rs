@@ -218,7 +218,13 @@ pub async fn build_recall_text_with_rows(
 /// the in-flight assistant placeholder; the frontend
 /// `lastRecallHits` chip keys off the request id, not the
 /// session id, so concurrent requests don't bleed).
-pub fn emit_recall_event(sink: &dyn ChatEventSink, rid: &str, rows: &[MemoryRow], source: &str) {
+pub fn emit_recall_event(
+    sink: &dyn ChatEventSink,
+    sid: &str,
+    rid: &str,
+    rows: &[MemoryRow],
+    source: &str,
+) {
     if rows.is_empty() {
         return;
     }
@@ -233,6 +239,7 @@ pub fn emit_recall_event(sink: &dyn ChatEventSink, rid: &str, rows: &[MemoryRow]
         .collect();
     sink.emit_chat_event(&ChatEventPayload {
         request_id: rid.to_string(),
+        session_id: sid.to_string(),
         event: ChatEvent::Recall { hits },
     });
 }
