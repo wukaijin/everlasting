@@ -550,6 +550,15 @@ export interface SessionSummary {
    *  `update_session_metadata` IPC (Phase 4 Step 3) writes
    *  this column for runtime re-edit. */
   metadata: Record<string, any> | null;
+  /** F6 异步 agent 任务(2026-08-27):runtime「已接受在途」信号 —
+   *  该 session 有一个已 claim 的轮次(loop 在跑,或其 spawn 闭包
+   *  还在等全局 loop 信号量许可)时为 true。非 DB 属性:后端 DB 层
+   *  恒 false,`list_sessions_inner` 从 `session_active_request`
+   *  enrich(双 transport 单点)。侧栏红点 = 本端 streamingSessionIds
+   *  ∪ 本字段;streamEvents 的 finalize 公共出口把它翻回 false。
+   *  旧 daemon 不回该字段 → undefined,falsy,红点退化为纯本端
+   *  推断(向后兼容)。 */
+  busy?: boolean;
 }
 
 /** Group chat (07-29-group-chat, Phase 4 TODO-D2): one

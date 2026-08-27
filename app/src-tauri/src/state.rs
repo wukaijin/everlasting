@@ -137,6 +137,27 @@ pub struct AppState {
             HashMap<String, std::collections::VecDeque<crate::agent::message_queue::QueuedMessage>>,
         >,
     >,
+    /// F3 并发闸(2026-08-27, `08-27-f6-async-agent-task`):跨 session
+    /// 的全局 agent loop 并发上限。许可在 `chat_inner` spawn 闭包
+    /// **开头**获取(不阻塞 handler,`ChatAcceptance` 立返;等闸的
+    /// Start 事件延迟到拿到许可),持有者 = 一个 loop 实例(队列
+    /// 驱动器跨内层多轮全程持 1 个)。容量 = app_config
+    /// `max_concurrent_loops`(缺省 4,parse 失败回退 4),**启动时
+    /// 读入 —— Semaphore 容量不可动态改,改配置需重启 daemon**。
+    ///
+    /// 两条铁律(违反即回归,详见 spec pattern-message-queue-driver
+    /// 硬约束 1 + design R3):
+    /// 1. **禁止把 acquire 挪进 `chat_inner` 路由临界区**:临界区持
+    ///    全局 `message_queues` 锁,await 许可会队头阻塞所有 session
+    ///    的发送,并与驱动器 turn 边界 `drain_all` 的队列锁构成
+    ///    死锁(持许可者等锁 ↔ 持锁者等许可)。
+    /// 2. 等闸期间 cancel 的请求必须完整回滚 claim 注册(cancellations
+    ///    / session_active_request(rid 守卫)/ inflight_exits +
+    ///    done_tx),否则 session 被一个永远不会跑的假在途请求卡死。
+    /// worker loop 不经 `chat_inner`,不在本闸管辖
+    /// (`DELEGATION_MAX_CONCURRENT_CHILDREN` 自限);群聊经
+    /// `chat_inner`,受闸。
+    pub loop_permits: Arc<tokio::sync::Semaphore>,
     /// Per-session read fingerprints. The `edit_file` tool consults
     /// this guard to ensure the LLM (a) read the file in the current
     /// session and (b) the file hasn't been modified on disk since.
@@ -432,6 +453,27 @@ impl AppState {
             }
         });
 
+        // F3 并发闸(2026-08-27):容量启动时读入,缺省 4;仅正整数
+        // 生效,0/垃圾值回退缺省(闸关不掉到 0 —— 语义上 0 = 所有
+        // loop 永久排队,没有合理用例)。须在 `Self { db, .. }` move
+        // 之前计算。
+        let loop_permits = {
+            let permits = crate::db::config::get_config_value(&db, "max_concurrent_loops")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(4);
+            if permits != 4 {
+                tracing::info!(
+                    permits,
+                    "loop semaphore capacity from app_config (default 4)"
+                );
+            }
+            Arc::new(tokio::sync::Semaphore::new(permits))
+        };
+
         Self {
             tools,
             db,
@@ -443,6 +485,7 @@ impl AppState {
             // F1 message queue (2026-08-25): per-session in-memory
             // FIFO of user messages enqueued while a turn runs.
             message_queues: Arc::new(Mutex::new(HashMap::new())),
+            loop_permits,
             read_guard: ReadGuard::new(),
             memory_cache,
             command_cache,

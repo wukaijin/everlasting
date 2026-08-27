@@ -86,5 +86,6 @@
 - [pattern-budget-gate](./agent-loop-architecture/pattern-budget-gate.md)
 - [pattern-turn-checkpoint](./agent-loop-architecture/pattern-turn-checkpoint.md)
 - [pattern-message-queue-driver](./agent-loop-architecture/pattern-message-queue-driver.md)
+- [pattern-global-loop-semaphore](./agent-loop-architecture/pattern-global-loop-semaphore.md)
 - [pattern-doc-extraction](./agent-loop-architecture/pattern-doc-extraction.md)
 - [pattern-terminal-done-event](./agent-loop-architecture/pattern-terminal-done-event.md)

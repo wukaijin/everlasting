@@ -972,7 +972,7 @@ pub(crate) async fn emit_max_turns_terminal(
         let _ = crate::db::touch_session(db, session_id).await;
         emit_chat_event_via_sink(
             sink,
-            &session_id,
+            session_id,
             rid,
             &ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
@@ -1138,7 +1138,7 @@ async fn ask_turn_limit_softcap(
                                 }
                                 emit_chat_event_via_sink(
                                     sink,
-                                    &session_id,
+                                    session_id,
                                     rid,
                                     &ChatEvent::Done {
                                         stop_reason: Some("cancelled".to_string()),
@@ -1241,7 +1241,7 @@ async fn ask_turn_limit_softcap(
                                         }
                                         emit_chat_event_via_sink(
                                             sink,
-                                            &session_id,
+                                            session_id,
                                             rid,
                                             &ChatEvent::Done {
                                                 stop_reason: Some("cancelled".to_string()),

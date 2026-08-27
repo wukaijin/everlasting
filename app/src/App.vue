@@ -23,6 +23,9 @@ import { onMounted, onUnmounted } from "vue";
 import { router } from "./router";
 import { setOnAuthFailed } from "./transport/http";
 import { hasPairedNode } from "./transport/auth";
+// F6(2026-08-27):Tauri 壳窗口关闭确认(有在跑会话时拦截)。根组件
+// 挂载一次(组件内部 isTauriWebview 守卫,Web/PWA 为空操作)。
+import CloseGuardDialog from "./components/layout/CloseGuardDialog.vue";
 
 onMounted(() => {
   setOnAuthFailed(() => {
@@ -56,4 +59,5 @@ onUnmounted(() => {
       <component :is="Component" />
     </Transition>
   </router-view>
+  <CloseGuardDialog />
 </template>

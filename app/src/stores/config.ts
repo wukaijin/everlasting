@@ -111,6 +111,12 @@ export const useConfigStore = defineStore("config", () => {
     writeLastActive(id);
   });
 
+  // F6 异步 agent 任务(2026-08-27):跨 session 轮次完成 toast 总开关。
+  // 缺省 true(fail-open,与后端 `turn_complete_notify_enabled` 读法一致);
+  // 仅当后端 app_config 显式存了 "false" 才关。加载失败维持 true ——
+  // 通知是观测层增强,配置读失败不应静默吞掉它。
+  const turnCompleteNotify = ref(true);
+
   async function load() {
     // Load providers + models from the catalog (replaces the old
     // `get_llm_config` env path). Store references are obtained at
@@ -135,6 +141,17 @@ export const useConfigStore = defineStore("config", () => {
     } finally {
       loaded.value = true;
     }
+
+    // F6: app_config 开关面,同样 best-effort(旧 daemon 无此命令时
+    // 维持缺省 true)。
+    try {
+      const appConfig = await transport.invoke<{
+        turnCompleteNotifyEnabled: boolean;
+      }>("get_app_config");
+      turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
+    } catch (e) {
+      console.warn("get_app_config unavailable, keep toast default on:", e);
+    }
   }
 
   return {
@@ -143,6 +160,7 @@ export const useConfigStore = defineStore("config", () => {
     configured,
     loaded,
     homeDir,
+    turnCompleteNotify,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,

@@ -319,6 +319,16 @@ signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
 
 ---
 
+## Pattern: SessionSummary 运行时态 enrich(busy 字段,F6 2026-08-27)
+
+DB 层恒 `busy:false`,**单点 enrich 在 `list_sessions_inner`**(`commands/sessions.rs`)——Tauri IPC 与 daemon REST 双入口共用,读 `session_active_request` map 置真。要点:
+
+1. **运行时态不入库、不加列**:busy 是进程内存态(`session_active_request` 含即忙),DB schema 零改动;重启后自然 false(recover 链路另行标 interrupted)。
+2. **claim 即注册 = busy 即亮**:F1-A 路由临界区 claim 后、F3 等闸期间也算在途(「已接受在途」语义),红点/关闭确认据此计数。
+3. **enrich 只做单点**:严禁在 transport 各自的 handler 里分头 enrich(F1-A「路由口径统一」教训——双处 enrich 必漂移)。
+4. **wire 是 additive 可选字段**:`SessionSummary.busy` 序列化恒出(新 daemon)、前端类型标 `busy?: boolean`(旧 daemon 无此字段不炸)。
+5. 测试:daemon route 测试用 `serde_json::Value` + `is_boolean()` 断言(SessionSummary 无 Deserialize,不能走强类型往返);idle→busy→idle 三段断言。
+
 ## Scenario: 新增一个 IPC 命令(2026-08 + Phase 4 group-chat 沉淀)
 
 ### 1. Scope / Trigger

@@ -6,6 +6,7 @@ import { useChecklistStore, CHECKLIST_TOOL_NAME } from "./checklist";
 import { useMemoryStore } from "./memory";
 import { useQuestionCardsStore } from "./questionCards";
 import { useProjectsStore } from "./projects";
+import { useConfigStore } from "./config";
 import { useMessageQueueStore } from "./messageQueueStore";
 import {
   GET_PENDING_INTERACTION_CMD,
@@ -27,7 +28,7 @@ import type {
   ToolResultPayload,
   TurnLatency,
 } from "./streamController";
-import { buildPendingNotification, genId, groupChatNotice } from "./streamController";
+import { buildPendingNotification, buildTurnFinishedNotification, genId, groupChatNotice } from "./streamController";
 import { rehydrateMessages, type LoadedSession } from "./streamRehydrate";
 
 /** R3 (08-24-p1-turn-crash-recovery): marker the daemon's startup
@@ -153,6 +154,18 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           event.stop_reason === "group_chat_end" ||
           event.stop_reason === "cancelled" ||
           event.stop_reason === "max_rounds"));
+
+    // F6 异步 agent 任务(2026-08-27):终结事件 → 跨 session 完成/
+    // 失败 toast。挂在 msgs 守卫**之前**:后台任务的核心场景就是用户
+    // 不在那个 session(未加载/被逐出),toast 恰恰只有这时有意义。
+    // `cancelled` 抑制:用户主动停止不是「完成」,Stop 操作自身已有
+    // 反馈(清队 toast / [已停止] 气泡),再弹会打架。
+    if (isTerminal && event.stop_reason !== "cancelled") {
+      maybeNotifyTurnFinished(
+        req.sessionId,
+        event.kind === "error" ? "error" : "done",
+      );
+    }
 
     const msgs = messagesBySession.get(req.sessionId);
     if (!msgs) {
@@ -1229,6 +1242,29 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     }
   }
 
+  /** F6 异步 agent 任务(2026-08-27):轮次终结的跨 session toast。
+   *  开关 = configStore.turnCompleteNotify(app_config
+   *  `turn_complete_notify_enabled`,fail-open 缺省开);抑制规则与
+   *  文案在纯函数 `buildTurnFinishedNotification` 里(可单测)。 */
+  function maybeNotifyTurnFinished(
+    sessionId: string,
+    kind: "done" | "error",
+  ): void {
+    if (!useConfigStore().turnCompleteNotify) return;
+    const chatStore = useChatStore();
+    const n = buildTurnFinishedNotification(
+      sessionId,
+      kind,
+      chatStore.currentSessionId,
+      chatStore.sessions,
+    );
+    if (n) {
+      useProjectsStore().showToast(n.message, "info", 6000, {
+        sessionId: n.sessionId,
+      });
+    }
+  }
+
   /** Push a `task:state:transition:request` event payload into the
    *  questionCards store as a tagged-union
    *  `{ kind: "task_state_transition", payload }`. Sibling of
@@ -1294,7 +1330,14 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     }
     activeRequests.delete(requestId);
     pinnedSessions.delete(sessionId);
-    useChatStore().invalidateDiff(sessionId);
+    const chatStore = useChatStore();
+    chatStore.invalidateDiff(sessionId);
+    // F6 (2026-08-27): serverBusy 消解的公共出口——轮次终结,侧栏
+    // busy 翻回 false。不依赖 adoptForeignRequest 认领分支:finalize
+    // 的全部四条路径(未加载守卫 / 尾部非 assistant / done / error)
+    // 都走这里,一处覆盖;下一次 list_sessions reload 自然重校准。
+    const summary = chatStore.sessions.find((s) => s.id === sessionId);
+    if (summary) summary.busy = false;
     // Fire-and-forget: replace streaming buffer with DB version.
     // Old buffer stays visible until DB load completes.
     void reloadAfterFinalize(sessionId, requestId);

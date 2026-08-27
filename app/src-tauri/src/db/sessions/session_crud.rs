@@ -206,6 +206,9 @@ pub async fn list_sessions(
                 plugin_name: r.try_get("plugin_name")?,
                 session_type: crate::db::SessionType::from_str_opt(&session_type_str),
                 metadata,
+                // Runtime state, not DB state — enriched by
+                // `list_sessions_inner` from `session_active_request`.
+                busy: false,
             })
         })
         .collect()

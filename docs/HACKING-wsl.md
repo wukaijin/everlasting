@@ -636,6 +636,17 @@ ss -tlnp | grep 7456
 
 > ⚠️ **多实例反模式(Q1)**:**不要同时跑两个 daemon**(比如一个 `scripts/daemon.sh start` + 一个裸 `everlasting-daemon --port 7457`)。两个 daemon 各自打开(或试图打开)同一个 SQLite,会出现:① 写竞争 / `SQLITE_BUSY`;② 各自 `reap_orphaned_runs` 互踩;③ 如果落到不同 `data_dir`(见 [DEBUG_DB §1.0 孤儿 DB 坑](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步)),数据分裂成两份历史。要换端口做 A/B,先 `stop` 旧的。`scripts/daemon.sh` 用单 PID 文件做了防多实例,裸跑没有这层保护。
 
+### detach 边界:后台任务的存活由 daemon 进程决定(F6,2026-08-27)
+
+agent loop 是 daemon 进程里的 fire-and-forget tokio task —— **客户端断开绝不是取消源**(cancel 只有三个来源:Stop 按钮 / 破坏性命令 / daemon 停机)。由此两种「关闭」语义截然不同:
+
+| 关闭方式 | 任务命运 | 交互 |
+|---|---|---|
+| **Web / PWA**:关标签(Ctrl+W)/ 杀 App / 锁屏 | **照常跑完**,结果落 DB,回来刷新可见 | 无弹窗(standalone daemon 独立存活,拦不住也不该拦) |
+| **桌面 GUI(Tauri 壳)**:窗口 X / Alt+F4 / 任务栏关闭 | **全部终止**(GUI 退出回收 sidecar daemon) | 有在跑会话时弹确认「终止并关闭」;无在跑直接关 |
+
+要真正的耐久后台(关掉一切窗口任务继续跑):用 `scripts/daemon.sh` 起独立 daemon,浏览器/PWA 访问。配套可观测性:`list_sessions` 的 `busy` 字段跨端可见哪些 session 在跑,轮次终结(非当前 session)有完成 toast(`app_config` `turn_complete_notify_enabled` 可关);跨 session 并发上限 `max_concurrent_loops`(缺省 4,改后需重启 daemon)。
+
 ### 生产模式(裸二进制,手动部署)
 
 daemon 自己 serve 前端 + API,同源无 CORS,Windows 宿主浏览器 `http://localhost:7456` 直达。

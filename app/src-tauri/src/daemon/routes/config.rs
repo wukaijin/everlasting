@@ -138,7 +138,17 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/get_tunnel_status", post(get_tunnel_status))
         .route("/get_web_search_config", post(get_web_search_config))
         .route("/set_web_search_config", post(set_web_search_config))
+        .route("/get_app_config", post(get_app_config))
         .with_state(state)
+}
+
+/// F6(2026-08-27):前端可读 app_config 开关面。无请求体(同
+/// `get_web_search_config`)。
+pub async fn get_app_config(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<crate::commands::config::AppConfigPayload>, AppCommandError> {
+    let result = crate::commands::config::get_app_config_inner(&state).await?;
+    Ok(Json(result))
 }
 
 #[cfg(test)]

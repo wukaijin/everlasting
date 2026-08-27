@@ -418,6 +418,15 @@ pub struct SessionSummary {
     /// (see `SessionRow::metadata`). The sidebar reads the
     /// participants config from here.
     pub metadata: Option<serde_json::Value>,
+    /// F6 async agent task (2026-08-27): runtime "accepted in-flight"
+    /// signal — true while this session has a claimed turn (loop
+    /// running, or its spawn closure still waiting on the global
+    /// loop-semaphore permit). NOT a DB property: the DB layer always
+    /// returns false; `list_sessions_inner` patches it from
+    /// `AppState::session_active_request` so both transports (Tauri
+    /// IPC + daemon REST) agree. Additive on the wire — old clients
+    /// ignore the extra field.
+    pub busy: bool,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

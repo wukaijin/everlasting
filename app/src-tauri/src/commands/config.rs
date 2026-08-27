@@ -478,3 +478,40 @@ pub async fn set_web_search_config(
 ) -> Result<(), AppCommandError> {
     set_web_search_config_inner(&state, provider, tavily_api_key).await
 }
+
+// ---------------------------------------------------------------------------
+// F6 异步 agent 任务(2026-08-27):前端可读的 app_config 开关面。
+// ---------------------------------------------------------------------------
+
+/// `get_app_config` 响应(wire: camelCase,同 `WebSearchConfigPayload`
+/// 先例)。当前只暴露前端需要消费的开关;后续新开关在此 struct 加字段
+/// (additive)即可,不再为新标志位单开命令。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfigPayload {
+    /// 跨 session 轮次完成 toast 的总开关。app_config 键
+    /// `turn_complete_notify_enabled`,fail-open 缺省开——读法对齐
+    /// `tools_stub_enabled`(`chat_loop.rs` 同款:仅字面 `"false"` 关)。
+    pub turn_complete_notify_enabled: bool,
+}
+
+pub async fn get_app_config_inner(
+    state: &Arc<AppState>,
+) -> Result<AppConfigPayload, AppCommandError> {
+    let on = match crate::db::config::get_config_value(&state.db, "turn_complete_notify_enabled")
+        .await
+    {
+        Ok(Some(v)) => v != "false",
+        _ => true,
+    };
+    Ok(AppConfigPayload {
+        turn_complete_notify_enabled: on,
+    })
+}
+
+#[tauri::command]
+pub async fn get_app_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<AppConfigPayload, AppCommandError> {
+    get_app_config_inner(&state).await
+}

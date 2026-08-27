@@ -330,6 +330,15 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   return { backgroundColor: hexToRgba(hex, 0.1), borderLeftColor: hex };
 }
 
+/** F6 异步 agent 任务(2026-08-27):会话忙判定 = 本端推断(发起端/
+ *  认领端的 streamingSessionIds)**∪** 服务端 busy(list_sessions 带回
+ *  的 runtime 信号,覆盖其他端发起/冷启动可见的轮次,含 F3 等闸轮)。
+ *  两处 v-for 模板共用,驱动 `.session-item--busy` 流光边框;busy 在
+ *  streamEvents 的 finalize 公共出口翻回 false。 */
+function isSessionBusy(s: SessionSummary): boolean {
+  return streamController.streamingSessionIds.has(s.id) || s.busy === true;
+}
+
 /** Pending interaction badge info (mode change / ask_user_question)
  *  for the session-list row's cross-session indicator — A档 of
  *  2026-07-08 `cross-session-pending-indicator`. Mirrors
@@ -454,7 +463,7 @@ watch(() => props.searchActive, (active) => {
     <li
       v-for="s in searchedSessions"
       :key="s.id"
-      :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
+      :class="['session-item', { 'session-item--active': s.id === store.currentSessionId, 'session-item--busy': isSessionBusy(s) }]"
       :style="cardStyle(s)"
       role="button"
       tabindex="0"
@@ -480,12 +489,6 @@ watch(() => props.searchActive, (active) => {
             @click.stop
           />
           <span v-else class="session-item__title">{{ s.title }}</span>
-          <span
-            v-if="streamController.streamingSessionIds.has(s.id)"
-            class="session-item__streaming"
-            aria-hidden="true"
-            title="正在生成"
-          />
           <span
             v-if="permStore.hasPending(s.id)"
             class="session-item__pending-approval"
@@ -547,7 +550,7 @@ watch(() => props.searchActive, (active) => {
           <li
             v-for="s in slicedGroups.get(key)!.visible"
             :key="s.id"
-            :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
+            :class="['session-item', { 'session-item--active': s.id === store.currentSessionId, 'session-item--busy': isSessionBusy(s) }]"
             :style="cardStyle(s)"
             role="button"
             tabindex="0"
@@ -573,12 +576,6 @@ watch(() => props.searchActive, (active) => {
                   @click.stop
                 />
                 <span v-else class="session-item__title">{{ s.title }}</span>
-                <span
-                  v-if="streamController.streamingSessionIds.has(s.id)"
-                  class="session-item__streaming"
-                  aria-hidden="true"
-                  title="正在生成"
-                />
                 <span
                   v-if="permStore.hasPending(s.id)"
                   class="session-item__pending-approval"
@@ -720,6 +717,8 @@ watch(() => props.searchActive, (active) => {
   padding: 8px 10px;
   border-radius: var(--radius-md);
   cursor: pointer;
+  /* positioned ancestor for the --busy ::before 流光环(inset 定位) */
+  position: relative;
   transition: background-color var(--duration-fast) var(--ease-out),
               border-left-color var(--duration-fast) var(--ease-out);
   border-left: 2px solid transparent;
@@ -751,11 +750,6 @@ watch(() => props.searchActive, (active) => {
   width: 6px;
   height: 6px;
   margin-top: 5px;
-}
-
-.session-list--compact .session-item__streaming {
-  width: 5px;
-  height: 5px;
 }
 
 .session-item:hover {
@@ -852,14 +846,56 @@ watch(() => props.searchActive, (active) => {
   background: var(--color-accent);
 }
 
-.session-item__streaming {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  animation: pulseDot 1.5s ease-in-out infinite;
-  margin-top: 1px;
+/* F6 busy 流光边框(2026-08-28):忙会话(本端在流 ∪ 服务端 busy,含
+   等闸轮)整项套一圈缓慢旋转的 conic-gradient 流光环,与 ChatInput
+   流式环(ChatInput.vue `chat-input-stream-glow` 注释)同一配方与视觉
+   语言:同 token 渐变、同 mask-composite 环形裁剪、同 3.6s/rev 节奏
+   (刻意慢于 1.8s 呼吸类动画,不打拍)。差异:不加呼吸辉光 —— 侧栏
+   是窄 surfaces,常驻多个列表项,辉光会噪;环本身就是信号。旧脉动
+   小圆点已删,信号从「标题旁的点」上移为「整项边框」。@property 独立
+   命名(不复用 chat-input 的:动画状态互不共享,重复注册同名反而易漂移);
+   旧引擎(无 @property)降级为 0deg 静态渐变环,可见性不丢。 */
+@property --session-busy-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.session-item--busy::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--session-busy-angle, 0deg),
+    var(--color-accent-text),
+    var(--color-tool-read) 33%,
+    var(--color-tool-thinking) 66%,
+    var(--color-accent-text)
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: session-busy-rotate calc(var(--duration-pulse) * 2) linear infinite;
+}
+
+@keyframes session-busy-rotate {
+  to {
+    --session-busy-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-item--busy::before {
+    animation: none;
+  }
 }
 
 /* 2026-06-16: marks sessions with a pending permission ask so the

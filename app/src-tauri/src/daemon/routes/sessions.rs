@@ -585,4 +585,120 @@ mod tests {
         let text = String::from_utf8_lossy(&body).to_string();
         assert!(text.contains("群聊"), "group gate message: {text}");
     }
+
+    /// F6 (2026-08-27) `busy` enrichment route smoke: `list_sessions`
+    /// patches the runtime busy signal from `session_active_request`
+    /// (single enrichment point = `list_sessions_inner`, both
+    /// transports). Covers idle → busy → idle transitions AND the
+    /// additive-wire contract (the `busy` field round-trips through
+    /// the JSON body — old clients ignore the extra field).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_sessions_route_busy_reflects_active_request_map() {
+        /// POST /list_sessions, returning the raw JSON array (the
+        /// wire contract — `busy` must be present as a bool on every
+        /// element; `SessionSummary` is Serialize-only so we assert
+        /// on `serde_json::Value` instead of round-tripping the type).
+        async fn list_all(state: &Arc<AppState>, project_id: &str) -> Vec<serde_json::Value> {
+            let app = router(state.clone());
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/list_sessions")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "project_id": project_id }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let arr: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+            for v in &arr {
+                assert!(
+                    v["busy"].is_boolean(),
+                    "busy must be a bool on the wire: {v}"
+                );
+            }
+            arr
+        }
+
+        fn busy_of(arr: &[serde_json::Value], id: &str) -> bool {
+            arr.iter()
+                .find(|v| v["id"].as_str() == Some(id))
+                .and_then(|v| v["busy"].as_bool())
+                .unwrap_or_else(|| panic!("session {id} missing from list"))
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let pool = &state.db;
+        let project = db::projects::create_project(pool, "f6busy", "/tmp/f6_busy", false, None)
+            .await
+            .unwrap();
+        let busy_session = db::sessions::create_session(
+            pool,
+            "f6-busy-sess",
+            &project.id,
+            "/tmp/f6_busy",
+            "GLM-4.7",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let idle_session = db::sessions::create_session(
+            pool,
+            "f6-idle-sess",
+            &project.id,
+            "/tmp/f6_busy",
+            "GLM-4.7",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Idle: DB layer's hardcoded false passes through untouched.
+        let sessions = list_all(&state, &project.id).await;
+        assert!(
+            sessions.iter().all(|v| v["busy"] == false),
+            "idle: {sessions:?}"
+        );
+
+        // Claimed → busy (the map is keyed by session_id → rid; a real
+        // claim happens in chat_inner's routing section before spawn).
+        state
+            .session_active_request
+            .lock()
+            .await
+            .insert(busy_session.id.clone(), "f6-test-rid".to_string());
+        let sessions = list_all(&state, &project.id).await;
+        assert!(
+            busy_of(&sessions, &busy_session.id),
+            "claimed session must be busy"
+        );
+        assert!(
+            !busy_of(&sessions, &idle_session.id),
+            "idle session must stay false"
+        );
+
+        // Released → idle again (the spawn closure deregisters on exit).
+        state
+            .session_active_request
+            .lock()
+            .await
+            .remove(&busy_session.id);
+        let sessions = list_all(&state, &project.id).await;
+        assert!(
+            sessions.iter().all(|v| v["busy"] == false),
+            "released: {sessions:?}"
+        );
+    }
 }

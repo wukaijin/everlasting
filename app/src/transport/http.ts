@@ -81,6 +81,8 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // `unknown cmd "get_web_search_config"`(Tauri Full 逃生侥幸走 IPC)。
   get_web_search_config: "config",
   set_web_search_config: "config",
+  // F6 异步 agent 任务(2026-08-27):app_config 开关面读出口。
+  get_app_config: "config",
   // S2 配对码生成(新 domain pairing)
   generate_pairing_code: "pairing",
   // files

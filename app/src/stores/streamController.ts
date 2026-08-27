@@ -486,6 +486,31 @@ export function buildPendingNotification(
   return { message, sessionId };
 }
 
+/** F6 异步 agent 任务(2026-08-27):跨 session 轮次**终结** toast 的
+ *  纯决策 + 文案构造(与 `buildPendingNotification` 同族:导出顶层纯
+ *  函数,当前-session 抑制 + sessionId 附着 + 标题回退,可脱 store 单测)。
+ *
+ *  触发语义(AC2):
+ *  - `kind: "done"` — 终结 `done`(经典首轮 done / 群聊 group_chat_end·
+ *    max_rounds);`cancelled` 由调用方抑制(用户主动停止不是「完成」,
+ *    停止的 toast 会与 Stop 操作的既有反馈打架)。
+ *  - `kind: "error"` — 终结 `error`(错误语义文案)。
+ *  - 当前 session 恒不弹(该 session 的气泡就在眼前);群聊**中间轮**
+ *    done 非终结,不会走到这里(调用方在 isTerminal 门后挂)。 */
+export function buildTurnFinishedNotification(
+  sessionId: string,
+  kind: "done" | "error",
+  currentSessionId: string | null,
+  sessions: { id: string; title: string }[],
+): { message: string; sessionId: string } | null {
+  if (sessionId === currentSessionId) return null;
+  const title = sessions.find((s) => s.id === sessionId)?.title;
+  const who = title ? `「${title}」` : "另一项目的会话";
+  const message =
+    kind === "error" ? `${who} 任务出错停止` : `${who} 任务已完成`;
+  return { message, sessionId };
+}
+
 /** 08-07-group-chat-review-fixes R2: map a group-chat orchestrator
  *  boundary `stop_reason` to a user-facing notice string. Returns
  *  `null` for any reason that is not an orchestrator boundary signal

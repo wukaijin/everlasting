@@ -25,9 +25,24 @@ pub async fn list_sessions_inner(
     state: &Arc<AppState>,
     project_id: String,
 ) -> Result<Vec<db::SessionSummary>, AppCommandError> {
-    db::list_sessions(&state.db, &project_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("list_sessions failed: {}", e).into())
+    let mut sessions =
+        db::list_sessions(&state.db, &project_id)
+            .await
+            .map_err(|e| -> AppCommandError {
+                anyhow::anyhow!("list_sessions failed: {}", e).into()
+            })?;
+    // F6 (2026-08-27): `busy` is runtime state — the DB layer hardcodes
+    // false and this is the single enrichment point (both transports hit
+    // this fn, Q0 single source of truth). Semantics: busy = accepted
+    // in-flight, INCLUDING loops still waiting on the global loop
+    // semaphore permit (claim registers before spawn acquires).
+    if !sessions.is_empty() {
+        let active = state.session_active_request.lock().await;
+        for s in sessions.iter_mut() {
+            s.busy = active.contains_key(&s.id);
+        }
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]

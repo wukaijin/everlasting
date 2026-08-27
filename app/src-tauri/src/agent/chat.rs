@@ -28,6 +28,7 @@
 //! `RULE-A-006`'s "partial" status has been removed — the 9
 //! `agent_loop_*` integration tests now cover production.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -244,6 +245,8 @@ pub(crate) async fn chat_inner(
     let cancellations = state.cancellations.clone();
     let session_active_request = state.session_active_request.clone();
     let inflight_exits = state.inflight_exits.clone();
+    // F3 并发闸(2026-08-27):spawn 闭包内获取(不阻塞 handler)。
+    let loop_permits = state.loop_permits.clone();
     // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
     // build the per-session workflow context BEFORE the spawn.
     // Async, resolves `sessions.workflow_enabled` from the DB
@@ -563,6 +566,38 @@ pub(crate) async fn chat_inner(
             question_store,
             subagent_cache,
         } = loop_deps;
+
+        // F3 并发闸(2026-08-27, `08-27-f6-async-agent-task`):全局
+        // loop 并发上限,在**分发任何 loop 之前**获取。刻意放 spawn
+        // 闭包内而非 handler/路由临界区:handler 立返契约保持
+        // (`ChatAcceptance::Started` 照常),等闸的 session 已在
+        // 临界区 claim(busy 即亮 ——「已接受在途」语义),Start 事件
+        // 延迟到拿到许可。等闸期间被取消 → 完整回滚 claim 注册并补
+        // cancelled 终态(否则 session 被假在途请求卡死 + 前端 rid
+        // 悬挂);队列已被 `cancel_chat` 侧清空,这里不重复处理。
+        let _loop_permit = match acquire_loop_permit(&loop_permits, &token).await {
+            Some(p) => p,
+            None => {
+                sink_for_spawn.emit_chat_event(&ChatEventPayload {
+                    request_id: rid.clone(),
+                    session_id: session_id.clone(),
+                    event: ChatEvent::Done {
+                        stop_reason: Some("cancelled".to_string()),
+                        usage: None,
+                    },
+                });
+                rollback_claim_before_loop(
+                    &cancellations,
+                    &session_active_request,
+                    &inflight_exits,
+                    &rid,
+                    &session_id,
+                    done_tx,
+                )
+                .await;
+                return;
+            }
+        };
         // Agent loop body is now unified with `chat_loop::run_chat_loop`
         // (P1 RULE-A-006 closure, 2026-06-15). The original inline
         // ~1000-line closure was a faithful copy of `run_chat_loop`;
@@ -934,6 +969,55 @@ impl From<&QueueDriverDeps> for crate::agent::chat_loop::ChatLoopDeps {
     }
 }
 
+// ---------------------------------------------------------------------------
+// F3 并发闸 helpers(2026-08-27, `08-27-f6-async-agent-task`)
+// ---------------------------------------------------------------------------
+
+/// 获取一个全局 loop 许可;等闸期间 token 被取消则返回 `None`
+/// (调用方走回滚路径)。`biased` 让取消臂先行 —— 已取消的请求不必
+/// 再排队领许可(领了也得立刻还,白排一次队)。
+///
+/// **禁止在 `chat_inner` 路由临界区内调用本函数**(spec
+/// pattern-message-queue-driver 硬约束 1):临界区持全局
+/// `message_queues` 锁,在这里 await 会队头阻塞所有发送,并与驱动器
+/// turn 边界 `drain_all` 的队列锁构成死锁。唯一合法调用点是 spawn
+/// 闭包开头(handler 已返回)。
+pub(crate) async fn acquire_loop_permit(
+    permits: &Arc<tokio::sync::Semaphore>,
+    token: &tokio_util::sync::CancellationToken,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => None,
+        // Semaphore 永不 close(进程级静态闸),Err 分支不可达。
+        p = permits.clone().acquire_owned() => Some(p.expect("loop semaphore never closed")),
+    }
+}
+
+/// 等闸取消(或任何「已 claim、loop 未起动」)路径的注册回滚 ——
+/// pre-flight 失败回滚(chat_inner :429-439)的同族清理,差异点是
+/// `session_active_request` 按 **rid 守卫**摘除(镜像驱动器退出
+/// 注释的近不可能替换场景,无条件按 session 删会误摘新请求注册)。
+/// `done_tx` 一并消耗,让 `await_inflight_exit` 的等待方(破坏性
+/// 命令)立即放行。
+pub(crate) async fn rollback_claim_before_loop(
+    cancellations: &Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
+    session_active_request: &Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    inflight_exits: &Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Receiver<()>>>>,
+    rid: &str,
+    session_id: &str,
+    done_tx: tokio::sync::oneshot::Sender<()>,
+) {
+    cancellations.lock().await.remove(rid);
+    session_active_request
+        .lock()
+        .await
+        .retain(|_sid, r| r != rid);
+    let _ = done_tx.send(());
+    inflight_exits.lock().await.remove(rid);
+    tracing::info!(request_id = %rid, session_id = %session_id, "loop aborted before start: claim rolled back");
+}
+
 /// 队列驱动器主循环。
 ///
 /// ```text
@@ -1087,4 +1171,205 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
         .lock()
         .await
         .retain(|_sid, r| r != &deps.rid);
+}
+
+#[cfg(test)]
+mod f3_gate_tests {
+    //! F3 并发闸(2026-08-27)机制测试:许可获取的取消/FIFO 语义 +
+    //! 等闸取消的注册回滚 + AppState 容量的 app_config 解析。
+    //! 端到端(ChatAcceptance 立返 / Start 延迟)由 turn-smoke live
+    //! 验证覆盖(catalog 造真 provider,无法注入 mock)。
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn acquire_returns_none_when_cancelled_while_waiting() {
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let token = CancellationToken::new();
+        // 闸满:唯一许可被外部持有。
+        let _held = permits.clone().acquire_owned().await.unwrap();
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let permits2 = permits.clone();
+        let token2 = token.clone();
+        tokio::spawn(async move {
+            let r = acquire_loop_permit(&permits2, &token2).await;
+            let _ = tx.send(r.is_none());
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        token.cancel();
+        assert!(rx.await.unwrap(), "cancelled while queued → None");
+        assert_eq!(permits.available_permits(), 0, "no permit leaked");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn acquire_is_fifo_across_waiters() {
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let token = CancellationToken::new();
+        let held = permits.clone().acquire_owned().await.unwrap();
+
+        // 两个等闸者,先到先得。
+        let first = {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let p = permits.clone();
+            let t = token.clone();
+            tokio::spawn(async move {
+                let permit = acquire_loop_permit(&p, &t).await.unwrap();
+                tx.send(()).unwrap();
+                drop(permit);
+            });
+            rx
+        };
+        let second = {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let p = permits.clone();
+            let t = token.clone();
+            tokio::spawn(async move {
+                let permit = acquire_loop_permit(&p, &t).await.unwrap();
+                tx.send(()).unwrap();
+                drop(permit);
+            });
+            rx
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        drop(held);
+        // 两个等闸者依次拿到许可(事件序断言,不用 sleep 计时)。
+        tokio::time::timeout(std::time::Duration::from_secs(2), first)
+            .await
+            .expect("first waiter acquires after release")
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), second)
+            .await
+            .expect("second waiter acquires after first drops")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rollback_clears_registrations_and_signals_exit() {
+        let token = CancellationToken::new();
+        let cancellations: Arc<tokio::sync::Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let session_active_request: Arc<tokio::sync::Mutex<HashMap<String, String>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let inflight_exits: Arc<
+            tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Receiver<()>>>,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+        // claim 注册形态(临界区 claim 即注册)。done_rx 模拟已被
+        // 破坏性命令经 cancel_inflight_for_session 摘走持有(map 里
+        // 是另一个已死的占位)—— 回滚的 done_tx.send 必须让它立即
+        // 放行,否则 delete_session 会等到超时。
+        cancellations
+            .lock()
+            .await
+            .insert("rid-x".into(), token.clone());
+        session_active_request
+            .lock()
+            .await
+            .insert("sess".into(), "rid-x".into());
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let (dummy_tx, dummy_rx) = tokio::sync::oneshot::channel::<()>();
+        drop(dummy_tx); // 已死占位:回滚 remove 时无人接收
+        inflight_exits.lock().await.insert("rid-x".into(), dummy_rx);
+
+        rollback_claim_before_loop(
+            &cancellations,
+            &session_active_request,
+            &inflight_exits,
+            "rid-x",
+            "sess",
+            done_tx,
+        )
+        .await;
+
+        assert!(cancellations.lock().await.get("rid-x").is_none());
+        assert!(session_active_request.lock().await.get("sess").is_none());
+        assert!(inflight_exits.lock().await.get("rid-x").is_none());
+        // 等待方(done_rx 的持有者)立即收到退出信号。
+        tokio::time::timeout(std::time::Duration::from_secs(1), done_rx)
+            .await
+            .expect("exit signal resolves for awaiting destructive command")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rollback_keeps_registration_of_a_replacement_rid() {
+        // rid 守卫:slot 已被新请求顶替(近不可能的 3a 替换场景)时,
+        // 回滚不得误摘新请求的注册。
+        let token = CancellationToken::new();
+        let cancellations: Arc<tokio::sync::Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let session_active_request: Arc<tokio::sync::Mutex<HashMap<String, String>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let inflight_exits: Arc<
+            tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Receiver<()>>>,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+        cancellations
+            .lock()
+            .await
+            .insert("rid-old".into(), token.clone());
+        session_active_request
+            .lock()
+            .await
+            .insert("sess".into(), "rid-new".into()); // 已顶替
+        let (done_tx, _done_rx) = tokio::sync::oneshot::channel::<()>();
+        inflight_exits
+            .lock()
+            .await
+            .insert("rid-old".into(), _done_rx);
+
+        rollback_claim_before_loop(
+            &cancellations,
+            &session_active_request,
+            &inflight_exits,
+            "rid-old",
+            "sess",
+            done_tx,
+        )
+        .await;
+
+        assert_eq!(
+            session_active_request
+                .lock()
+                .await
+                .get("sess")
+                .map(String::as_str),
+            Some("rid-new"),
+            "replacement registration must survive"
+        );
+        assert!(inflight_exits.lock().await.get("rid-old").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn app_state_reads_max_concurrent_loops_from_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        // 缺省:无配置行 → 4。
+        {
+            let state = crate::state::AppState::load_from_dir(dir.clone()).await;
+            assert_eq!(state.loop_permits.available_permits(), 4);
+        }
+        // 显式 2 → 2(改配置需重启:重新 load_from_dir 模拟重启)。
+        {
+            let state = crate::state::AppState::load_from_dir(dir.clone()).await;
+            crate::db::config::set_config_value(&state.db, "max_concurrent_loops", "2")
+                .await
+                .unwrap();
+        }
+        {
+            let state = crate::state::AppState::load_from_dir(dir.clone()).await;
+            assert_eq!(state.loop_permits.available_permits(), 2);
+        }
+        // 垃圾值 → 回退 4。
+        {
+            let state = crate::state::AppState::load_from_dir(dir.clone()).await;
+            crate::db::config::set_config_value(&state.db, "max_concurrent_loops", "not-a-number")
+                .await
+                .unwrap();
+        }
+        {
+            let state = crate::state::AppState::load_from_dir(dir).await;
+            assert_eq!(state.loop_permits.available_permits(), 4);
+        }
+    }
 }

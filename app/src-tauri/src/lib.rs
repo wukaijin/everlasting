@@ -239,6 +239,9 @@ pub fn run() {
             // None 不动);明文 key 不出后端,GET 只回 masked。
             commands::config::get_web_search_config,
             commands::config::set_web_search_config,
+            // F6 异步 agent 任务(2026-08-27):前端可读 app_config
+            // 开关面(当前仅 turn_complete_notify_enabled)。
+            commands::config::get_app_config,
             // S2 配对码生成(经 tunnel WSS 调 remote 内部 RPC)
             commands::pairing::generate_pairing_code,
             // Providers / models / default model
