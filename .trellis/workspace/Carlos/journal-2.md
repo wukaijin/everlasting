@@ -551,3 +551,24 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+
+## Session 44: 清理 RULE-SMOKE-001 / RULE-PERM-002
+
+**Date**: 2026-08-27
+**Task**: 清理 RULE-SMOKE-001 / RULE-PERM-002
+**Branch**: `main`
+
+### Summary
+
+闭合两条 P3 债:turn-smoke.sh send_and_wait 改等 SSE 请求终态(kind=done 每请求恰一次),多轮工具 turn 不再被 delete_session 腰斩(live 双场景验证);grant 入口按 classify_tool 校验 kind↔类别矩阵拒绝死授权;顺带修同族坑 check_prefix_grant 读侧放宽 run_background_shell。全量 2006 测试 + clippy + fmt 绿;spec 收编 permission-layer §4.3 + pattern-terminal-done-event;P3 12→10。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b7ddf050` | (see git log) |
+
+### Status
+
+[OK] **Completed**
