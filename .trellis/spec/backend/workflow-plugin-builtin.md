@@ -31,6 +31,15 @@ app/src-tauri/resources/builtin-workflow/<plugin>/
 
 **source of truth = builtin 源目录**。项目示例 `.everlasting/workflow/<plugin>/` 是 byte-identical 镜像
 （人工同步，不写脚本 —— 同 dev 约定）。改内容先改 builtin 源，再同步镜像。
+镜像范围 = workflow.json + agents/ + skills/；`dev/README.md` 仅存在于 builtin 侧、不参与镜像
+（`diff -r --exclude=README.md` 为验收口径）。
+
+> workflow.json ↔ Rust 镜像的等价性（2026-08-27 起部分机制化）：builtin 层 dev JSON 反序列化后与
+> `default_workflow()` 全字段相等由单测 `builtin_dev_json_equals_default_workflow_constant`
+> （builtin.rs，WorkflowDef derive PartialEq/Eq）守护 —— 改 JSON 漏改 def.rs 会被测试拦下；
+> 但 JSON 文本级逐字一致与 agents/*.md 的镜像仍纯靠人工（diff -r 是唯一防线）。
+> 另：**Rust 测试可能锚定提示词字面量**（workflow/mod.rs 曾断言模板 `contains("cargo test")`）——
+> 改内置提示词文案前先 grep src 里对旧文案的测试断言（08-27 任务即被迫连带修了一处）。
 
 ## 新增一个 builtin plugin 必须改的清单（N 处，缺一不可）
 
@@ -65,6 +74,22 @@ C3 的 review 就是因为 07-09 把这两处写死 "dev" 而必须扩 match。
   空 `roles_by_state` 合法；回环 transition（from==某 state 已出现过）合法（review 的 revising→reviewing 依赖此）。
   C3 design.md §1 起草时手抖把 "reviewing" 写了两次，靠 `validate()` + 单测兜底 —— **永远靠单测兜底 states 唯一性**。
 
+## 提示词内容约定（08-27-builtin-agent-prompt-generalize 落地）
+
+loader/frontmatter 之外的**内容级**强约束 —— builtin 插件的 agent.md / SKILL.md / delegation_templates
+是编译进二进制发给所有用户的提示词：
+
+1. **栈中立**：不得硬编码特定技术栈的可执行命令（`cargo test --lib` / `cargo clippy` / `pnpm test` 等）。
+   写探测指引：项目 `AGENTS.md`/`CLAUDE.md` 记载的验证命令 → 清单文件推断（`Cargo.toml` 注意 workspace
+   default-members 陷阱、`package.json` 由 lockfile 定包管理器、`pyproject.toml`/`go.mod`/`pom.xml`/
+   `build.gradle.*`）→ 找不到全量套件则按改动文件做最小验证并显式标注。报告模板用 `<test cmd>: X passed`
+   占位字段。本仓库自己的特化命令只活在根 `AGENTS.md`——**不进 builtin，也不进项目层镜像**
+   （"项目层可保留仓库特化"是误解：dev 插件曾据此错误分叉出 implement/check 旧状态词汇表）。
+2. **无 dogfood 泄漏**：session id、内部 DB 字段名、commit hash、"见 Q7"式内部引用不得进 builtin 提示词。
+   教训类内容收编时先去标识化、只留纪律本身（反例与正例都在 review/wf-review-method 的 model 漏传教训段）。
+3. **不承诺 ask 行为**：子代理约束清单未声明 ask 类工具（checker 还只读 + 禁 dispatch），提示词不得写
+   "问用户"；向用户澄清一律由主 LLM 依据子代理报告发起。
+
 ## 验证命令
 
 ```bash
@@ -84,6 +109,9 @@ diff -r app/src-tauri/resources/builtin-workflow/<plugin> .everlasting/workflow/
 - ❌ **不要**改 `write_file` 全局行为来满足单 plugin 的原子写需求 —— 那是全局改动，应另立 task。
 - ❌ **不要**只改 `BUILTIN_PLUGIN_NAMES` 就以为内置化完成 —— 漏 #6/#7 会导致 plugin 可选但内容空。
 - ❌ **不要**让 skill slug 与 frontmatter name 不一致 —— loader 会用错名字或解析失败。
+- ❌ **不要**在 builtin 提示词硬编码技术栈命令 / dogfood 细节 / "问用户"承诺（见上文「提示词内容约定」三条）。
+- ❌ **不要**以为 workflow.json ↔ def.rs 靠"注释声明等价"就安全 —— 现在有测试兜底
+  （`builtin_dev_json_equals_default_workflow_constant`），漏改会被拦；agents/*.md 没有这层，diff -r 别省。
 
 ## 已知前置：C0 TaskStatus / C1 resume
 
