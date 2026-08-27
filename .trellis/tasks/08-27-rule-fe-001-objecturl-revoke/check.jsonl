@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 Quality Check 对照"}
+{"file": ".trellis/tasks/08-27-rule-fe-001-objecturl-revoke/research/codebase-findings.md", "reason": "核对面板:上传失败不 revoke/strip 保留、reloadAfterFinalize 零改动、乐观 manifest 保留 localUrl 字段等约束是否被实现尊重"}

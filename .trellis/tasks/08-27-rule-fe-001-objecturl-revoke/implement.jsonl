@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chatSendActions 拆分契约 + store-owned staging strip 生命周期(design §5.1)—— Stream Controller Pattern 一节是本 store 的结构约束"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量红线与测试风格,Vitest 单测须遵守"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "StagedImage/AttachmentView 类型注释同步涉及前端类型注释惯例"}
+{"file": ".trellis/tasks/08-27-rule-fe-001-objecturl-revoke/research/codebase-findings.md", "reason": "泄漏面画像 + 债条前提证伪(乐观渲染 file 优先)+ localUrl 全消费方清单 + 方案选型依据"}
