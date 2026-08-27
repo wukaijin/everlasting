@@ -620,3 +620,24 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+
+## Session 47: chat 事件 payload 补 session_id:跨客户端实时认领
+
+**Date**: 2026-08-27
+**Task**: chat 事件 payload 补 session_id:跨客户端实时认领
+**Branch**: `main`
+
+### Summary
+
+修复 remote PWA 看不到 local 发起的轮次实时流(只能刷新看)。根因:事件 payload 只带发起端 request_id,非发起端 activeRequests 无映射,未知-request 守卫静默丢弃。后端 3 个高频通道(ChatEvent/ToolCall/ToolResult)补必填 session_id(permission/question/mode/task 本就带);前端 streamEvents 新增 adoptForeignRequest/resolveRequest 按 session 认领(恒建新 assistant 占位 + pin session),旧 wire 无 session_id 维持丢弃语义,done/error 终结判定提前防 rid 泄漏。验证:cargo test 2008 全绿、pnpm test 1273 全绿(5 个新认领用例)、turn-smoke.sh 真实 LLM 冒烟通过、SSE wire 实测事件均带 session_id。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `68f7cadc` | (see git log) |
+
+### Status
+
+[OK] **Completed**

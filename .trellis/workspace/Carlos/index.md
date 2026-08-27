@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 46
+- **Total Sessions**: 47
 - **Last Active**: 2026-08-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~622 | Active |
+| `journal-2.md` | ~643 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 47 | 2026-08-27 | chat 事件 payload 补 session_id:跨客户端实时认领 | `68f7cadc` | `main` |
 | 46 | 2026-08-27 | RULE-TEST-002 角色门多轮刷新集成测试落地 + clippy 债务盘点 | `e0649017`, `a45e897b`, `e336b888`, `6133c5d7`, `176e5626` | `main` |
 | 45 | 2026-08-27 | 内置 dev/review 插件提示词脱栈通用化(builtin-agent-prompt-generalize) | `b1025153`, `77dbda53`, `ea69106f` | `main` |
 | 44 | 2026-08-27 | 清理 RULE-SMOKE-001 / RULE-PERM-002 | `b7ddf050` | `main` |
