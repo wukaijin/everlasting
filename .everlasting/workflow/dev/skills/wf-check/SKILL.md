@@ -4,7 +4,7 @@ description: 验收方法:lint/typecheck/测试/跨层一致性/spec 合规
 allowed-tools: []
 ---
 
-# 验收方法(implement 每项后 / check)
+# 验收方法(in_progress 每项后)
 
 ## 验收维度
 - lint(cargo clippy / eslint 等,按项目)
@@ -19,4 +19,4 @@ allowed-tools: []
 
 ## 不通过怎么办
 - 报告具体问题(文件:行 + 描述 + 建议修法)
-- 回 implement 修(ask_user_question 协商,或继续 implement state 内修)
+- 在 in_progress 内继续修(主 LLM 派 implementer 修,修完再派 checker 验收,直到 PASS)

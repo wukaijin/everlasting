@@ -8,7 +8,7 @@ allowed-tools: []
 
 本 skill 是 `review` workflow(多模型评审流)的完整说明。当你处于 workflow session 且 breadcrumb 显示 review workflow 时,读这个 skill 理解整个流程。
 
-> ⚠️ **别去读 `.trellis/workflow.md`** —— 那是 Trellis 框架给人看的开发流程文档,与 review plugin 无关。review 的状态机定义在 `.everlasting/workflow/review/workflow.json`,但**你不需要手动读它** —— breadcrumb(每轮在 messages[0])和本系列 skill 已给你全部状态信息。手动读配置文件是误入歧途的信号。
+> ⚠️ **不要手动去读状态机配置** —— review 的状态机定义在 `.everlasting/workflow/review/workflow.json`,但**你不需要读它**:breadcrumb(每轮在 messages[0])和本系列 skill 已给你全部状态信息。手动读配置文件是误入歧途的信号。
 
 ## 整体流程(4 个 state,带回环)
 

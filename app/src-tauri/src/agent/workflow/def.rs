@@ -184,7 +184,11 @@ impl<'de> serde::Deserialize<'de> for Coordination {
 /// `coordination = Pipeline`) still parses — the validator
 /// below rejects the structurally-broken cases, but the
 /// cosmetic / empty-default cases ride through.
-#[derive(Debug, Clone, serde::Deserialize)]
+///
+/// `PartialEq` / `Eq` back the mirror-equivalence test
+/// (builtin.rs): the builtin `workflow.json`, deserialized,
+/// must equal `default_workflow()` field-for-field.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct WorkflowDef {
     /// Stable plugin identifier (e.g. `"dev"`). Matches
     /// the trailing path segment of
@@ -424,11 +428,11 @@ pub fn default_workflow() -> WorkflowDef {
             ),
             (
                 "implementer".to_string(),
-                "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完 cargo check + cargo test --lib 确认不破坏现有行为。".to_string(),
+                "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完运行项目验证(typecheck / lint / 测试,按项目探测)确认不破坏现有行为。".to_string(),
             ),
             (
                 "checker".to_string(),
-                "你是 dev workflow 的 checker 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请跑 cargo test --lib + cargo clippy + 检查 spec 合规;返回 PASS / FAIL + 具体原因给主 LLM。".to_string(),
+                "你是 dev workflow 的 checker 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请运行项目验证(typecheck / lint / 测试,按项目探测)+ 检查 spec 合规;返回 PASS / FAIL + 具体原因给主 LLM。".to_string(),
             ),
         ]),
         coordination: Coordination::Pipeline,

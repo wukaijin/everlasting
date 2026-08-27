@@ -295,7 +295,12 @@ mod tests {
 
         let c = delegation_template_for(&w, "checker").expect("checker template");
         assert!(c.contains("checker"));
-        assert!(c.contains("cargo test"));
+        // 08-27-builtin-agent-prompt-generalize:模板已脱栈通用化(原断言
+        // `contains("cargo test")` 随 cargo 硬编码一并移除),改为锚定
+        // 通用验证 + PASS/FAIL 判定结构。
+        assert!(c.contains("项目验证"));
+        assert!(c.contains("PASS"));
+        assert!(c.contains("FAIL"));
     }
 
     #[test]

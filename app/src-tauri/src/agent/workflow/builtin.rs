@@ -12,6 +12,8 @@
 
 /// 内置 dev 的 workflow.json 文本(与 `default_workflow()` 常量逐字等价,
 /// 但走 serde 解析路径,保证"内置层结构 == 项目层结构")。
+/// 等价性由测试 `builtin_dev_json_equals_default_workflow_constant` 兜底
+/// (反序列化后全字段相等;文本级逐字等价靠人工同步维持)。
 pub const BUILTIN_DEV_WORKFLOW_JSON: &str =
     include_str!("../../../resources/builtin-workflow/dev/workflow.json");
 
@@ -108,7 +110,7 @@ pub fn builtin_workflow_json(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::workflow::{validate, WorkflowDef};
+    use crate::agent::workflow::{default_workflow, validate, WorkflowDef};
 
     #[test]
     fn builtin_dev_workflow_json_validates() {
@@ -120,6 +122,20 @@ mod tests {
         );
         assert_eq!(def.name, "dev");
         assert_eq!(def.initial, "planning");
+    }
+
+    // 08-27-builtin-agent-prompt-generalize (R3/R5):builtin workflow.json ↔
+    // default_workflow() 的逐字等价此前只是 builtin.rs 头部注释声明,这里用测试兜底 ——
+    // 反序列化后的内置 JSON 必须与内存常量全字段相等,哪一层漂移都会在这里红。
+    #[test]
+    fn builtin_dev_json_equals_default_workflow_constant() {
+        let parsed: WorkflowDef =
+            serde_json::from_str(BUILTIN_DEV_WORKFLOW_JSON).expect("builtin dev JSON parses");
+        assert_eq!(
+            parsed,
+            default_workflow(),
+            "BUILTIN_DEV_WORKFLOW_JSON must stay field-for-field equal to default_workflow() after deserialization (sync both sides on any template/breadcrumb edit)"
+        );
     }
 
     #[test]

@@ -27,8 +27,8 @@
   },
   "delegation_templates": {
     "researcher": "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。",
-    "implementer": "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完 cargo check + cargo test --lib 确认不破坏现有行为。",
-    "checker": "你是 dev workflow 的 checker 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请跑 cargo test --lib + cargo clippy + 检查 spec 合规;返回 PASS / FAIL + 具体原因给主 LLM。"
+    "implementer": "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完运行项目验证(typecheck / lint / 测试,按项目探测)确认不破坏现有行为。",
+    "checker": "你是 dev workflow 的 checker 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请运行项目验证(typecheck / lint / 测试,按项目探测)+ 检查 spec 合规;返回 PASS / FAIL + 具体原因给主 LLM。"
   },
   "coordination": "pipeline",
   "gather_strategy": {}

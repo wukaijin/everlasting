@@ -40,4 +40,4 @@ State: planning
 
 ## 输出格式
 
-保持 findings 紧凑(< 2000 tokens),重点突出。主 LLM 会基于你的 findings 决定是否进 implement 状态。
+保持 findings 紧凑(< 2000 tokens),重点突出。主 LLM 会基于你的 findings 决定是否进 in_progress 状态。
