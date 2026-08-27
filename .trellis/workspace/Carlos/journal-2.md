@@ -641,3 +641,27 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+## Session 48: F6 异步 agent 任务(可观测性 + F3 并发闸 + 关闭边界)
+
+**Date**: 2026-08-27/28
+**Task**: 08-27-f6-async-agent-task
+**Branch**: `main`
+
+### Summary
+
+F6 落地(detach 语义本就 free——chat_inner spawn fire-and-forget、SSE 零订阅静默丢、客户端断连非取消源;F6 纯编排层,零新表零迁移)。PR1 SessionSummary.busy 运行时态(list_sessions_inner 单点 enrich,双 transport 共用,wire additive);PR2 前端红点双源合流(streamingSessionIds ∪ serverBusy)+ finalizeRequest 公共出口消解 + buildTurnFinishedNotification 完成 toast(current-session/cancelled 抑制,configStore 开关 get_app_config fail-open);PR3 F3 全局 loop 信号量(AppState.loop_permits,max_concurrent_loops 缺省 4;spawn 闭包头 biased-select acquire,等闸取消走 rollback_claim_before_loop 四件套回滚;外模型评审 P1「临界区内 acquire」以死锁环论证拒绝并固化进 spec);PR4 CloseGuardDialog(isTauriWebview 门,非 transport 种类)+ ROADMAP/HACKING detach 边界。验证:backend 2014 / frontend 1287 全绿,vue-tsc/clippy/fmt/build 绿,turn-smoke live 过,busy/get_app_config live 实证,队列续轮 + 各阶段 cancel(前首字节/流中/完成后)+ 8 轮 cancel-race stress 时序矩阵全绿零 panic。
+
+**「cancel_chat 死锁」复盘为观测假象**:daemon 启动命令带 `| head -30` 截断了全部后续日志(「loop 无下文」实为丢弃);f6-c2 的 cancel 探针打错路径(/api/v1/cancel_chat → 405 空回复被误读为悬挂;正确为 /api/v1/cancel/cancel_chat + request_id snake_case);叠加 orphan daemon 抢端口串台。stranded busy 随进程消亡不可复现,read_timeout(60s) 保证上游静默流最迟 60s 走错误路径自了。教训入 validation.md:live 探测 daemon 必须全量落日志文件,禁止 head/tail 管道;cancel 探针先核 405。
+
+Spec 沉淀:pattern-global-loop-semaphore(含 P1 拒绝依据)、daemon-server busy enrich 模式、frontend session-busy-visibility 契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (pending) | F6 全量(待用户确认后提交) |
+
+### Status
+
+[OK] Completed(AC1/AC2/AC4 手动验收与 daemon 重启恢复项留用户)
