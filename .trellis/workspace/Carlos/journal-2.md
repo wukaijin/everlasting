@@ -527,3 +527,27 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+
+## Session 43: RULE-FE-001 staged 图片 objectURL 发送后 revoke(P2 闭合)
+
+**Date**: 2026-08-27
+**Task**: RULE-FE-001 staged 图片 objectURL 发送后 revoke(P2 闭合)
+**Branch**: `main`
+
+### Summary
+
+闭合 DEBT.md §RULE-FE-001(P2 清零):send 成功释放 staging strip 时逐 uploaded[].localUrl revoke(~3 行,镜像 discardStagedImages 先例)。关键发现:债条登记的 reloadAfterFinalize 替换钩子方向前提已证伪——MessageImages.urlFor 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退(upload 先于乐观 push,失败即整轮中止),故无需动 reload 枢纽;localUrl 从不上 wire/不落库。新增 chatSendActions.test.ts 4 用例(B1 strip 生命周期此前零覆盖,含 jsdom 无原生 objectURL 的 spy 注入 + watch(currentSessionId) 需先 nextTick 排干两个 gotcha),1268 前端测试 + vue-tsc 全绿;trellis-check 零缺陷。spec state-management.md 收编 staging strip objectURL 生命周期契约(三路 revoke + file-first 论证)并修正过时 module layout 行;DEBT.md 删条目、P2 1→0、Total 13→12。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2dd9adc1` | (see git log) |
+| `40fe85fe` | (see git log) |
+| `39c9f425` | (see git log) |
+| `b3407214` | (see git log) |
+
+### Status
+
+[OK] **Completed**

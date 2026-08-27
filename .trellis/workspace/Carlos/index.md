@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 42
+- **Total Sessions**: 43
 - **Last Active**: 2026-08-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~529 | Active |
+| `journal-2.md` | ~553 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 43 | 2026-08-27 | RULE-FE-001 staged 图片 objectURL 发送后 revoke(P2 闭合) | `2dd9adc1`, `40fe85fe`, `39c9f425`, `b3407214` | `main` |
 | 42 | 2026-08-27 | RULE-SHELL-001 sweeper 落地 + daemon 活体验证 | `c4c6cf07` | `main` |
 | 41 | 2026-08-26 | P2 债务清理:clippy gate + frontmatter 去重 + test_pool 去重全程收尾 | `333b8bc` | `main` |
 | 40 | 2026-08-26 | F5 follow-up:xlsx/xlsm 原生提取(每 sheet CSV 形态)全程落地 | `4c35080`, `06cf2da` | `main` |
