@@ -595,3 +595,28 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+
+## Session 46: RULE-TEST-002 角色门多轮刷新集成测试落地 + clippy 债务盘点
+
+**Date**: 2026-08-27
+**Task**: RULE-TEST-002 角色门多轮刷新集成测试落地 + clippy 债务盘点
+**Branch**: `main`
+
+### Summary
+
+盘点 clippy 相关技术债:确认 RULE-CI-001/RULE-ARGS-001 已闭合,剩余 33 处 too_many_arguments 为有意豁免;ci.yml 过时注释同步闭合现状。做 RULE-TEST-002(全流程 Trellis):新增 role_gate_refresh.rs 集成用例——round-1 denial(planning 拒 checker)、mock LLM 同轮 write_file 翻盘 task.json、round-2 经 drive_turn 轮顶 resolve_current_task 刷新后放行;变异验证两类回归(门误接入口快照/轮顶刷新移除)均精确转红后复原;全量 2008 后端测试 + fmt/clippy 绿,生产代码零 diff。spec tests-required 收编第 29 条并注明已知边界(resolve_current_task 恒返 None 的第三类回归未覆盖);DEBT.md 销账,P3 余 9 条。附带核实 RULE-FE-002 现状:87886ba9 修的是 confirmYolo 第一 catch(IPC 失败),登记的 :225 第二 catch(resolve-after-success)仍在且注释自证 by-design,处置建议销账待定;cancelYolo :268 同族 console-only 亦未定性。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e0649017` | (see git log) |
+| `a45e897b` | (see git log) |
+| `e336b888` | (see git log) |
+| `6133c5d7` | (see git log) |
+| `176e5626` | (see git log) |
+
+### Status
+
+[OK] **Completed**
