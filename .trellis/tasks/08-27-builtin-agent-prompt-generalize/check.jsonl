@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/workflow-plugin-builtin.md", "reason": "验收强约束(slug==name、逐字等价、diff -r 镜像)与验证命令来源"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量基线"}
+{"file": ".trellis/tasks/08-27-builtin-agent-prompt-generalize/research/01-prompt-coupling-evidence.md", "reason": "对照原始证据核验修复完整性"}
