@@ -262,6 +262,18 @@ signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
 **不要**把 spawn 挪进 bin 内联 —— lib 的 `db` 模块私有,沿用
 "wrapper so the bin never touches private modules" 先例。
 
+**background shell sweeper**(RULE-SHELL-001 闭合 2026-08-27,任务
+`08-27-rule-shell-001-sweeper`):同款装配 —— bin 在 backup task 后调
+`server::spawn_shell_sweeper(&state)`,5min interval 调
+`background_shells.sweep_completed_shells(SHELL_RETENTION_MS)`,清除
+「Done 且完成超 1h」条目(内存大头是 Done 条目的完整 stdout/stderr 缓冲)。
+约束:只扫 Done(Running 携带 kill_tx,移除即孤儿化 kill 通道);通知队列
+与 spill 文件不在清扫面(通知自包含 outcome/exit_code,是 1h retention
+正当性来源);`AppState::load` / `default_registry()`(~30 处测试构造点)
+绝不 spawn —— "no timer tasks in the GUI main process" + 测试运行时零污染。
+清扫后 `shell_status` 返 NotFound 是 `BackgroundShellRegistry::status`
+文档既有语义("or was already cleaned up"),非行为破坏。
+
 **日志文件**(仅 `daemon.sh bg/restart` 的 standalone 模式;前台模式照旧
 打终端,Rust stdout tracing 不动、零依赖):
 
