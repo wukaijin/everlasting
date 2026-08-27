@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 41
-- **Last Active**: 2026-08-26
+- **Total Sessions**: 42
+- **Last Active**: 2026-08-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~508 | Active |
+| `journal-2.md` | ~529 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 42 | 2026-08-27 | RULE-SHELL-001 sweeper 落地 + daemon 活体验证 | `c4c6cf07` | `main` |
 | 41 | 2026-08-26 | P2 债务清理:clippy gate + frontmatter 去重 + test_pool 去重全程收尾 | `333b8bc` | `main` |
 | 40 | 2026-08-26 | F5 follow-up:xlsx/xlsm 原生提取(每 sheet CSV 形态)全程落地 | `4c35080`, `06cf2da` | `main` |
 | 39 | 2026-08-19 | 统一 token 预算表 + 关卡⑤硬卡(unified-context-budget)全程落地 | `ca675a1`, `484541a`, `325ad19`, `415c2fa`, `8980c5b` | `main` |

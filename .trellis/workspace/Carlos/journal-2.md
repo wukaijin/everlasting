@@ -506,3 +506,24 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+
+## Session 42: RULE-SHELL-001 sweeper 落地 + daemon 活体验证
+
+**Date**: 2026-08-27
+**Task**: RULE-SHELL-001 sweeper 落地 + daemon 活体验证
+**Branch**: `main`
+
+### Summary
+
+闭合 DEBT P2 RULE-SHELL-001:InMemoryBackgroundShellRegistry 新增 sweep_completed_shells(只清 Done 超龄条目,retention 1h/interval 5min),daemon bin 经 spawn_shell_sweeper 装配(仿 backup task,GUI 零改动),4 新单测 + 全量 2001 绿 + clippy 净。trellis-implement/check 双代理流水线,外部 review 甄别(误判 1/有效 2/拒绝 1)。daemon 活体验证通过:真实 LLM 调工具 + SSE 权限应答 + 17.9s 清扫时序精确吻合;过程中发现并登记 2 条新债(RULE-SMOKE-001 turn-smoke 误杀在途 turn / RULE-PERM-002 shell 类 tool 级 grant 不生效无警告)。spec daemon-server.md 运维伴生物 Pattern 收编 sweeper。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c4c6cf07` | (see git log) |
+
+### Status
+
+[OK] **Completed**
