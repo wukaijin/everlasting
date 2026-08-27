@@ -68,9 +68,11 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [10 items]
+## P3 — 轻微(文档/一致性) [9 items]
 
 > RULE-SMOKE-001 / RULE-PERM-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-smoke-perm-cleanup` 闭合:turn-smoke.sh 的 send_and_wait 改等 SSE 请求终态(`chat-event` `kind=done`,每请求恰一次;常驻订阅 + trap 清理,--assert-turn-usage 复用同一日志),多轮工具 turn 不再被 delete_session 腰斩(live 双场景验证);grant 入口 `grant_tool_permission_inner` 按 `classify_tool` 校验 kind↔类别矩阵(Shell 只许 prefix 等,InvalidRequest 拒绝死数据组合);同任务顺带修复同族坑 —— AllowAlways 在 run_background_shell 上写的 prefix 行因 `check_prefix_grant` 硬编码 `tool_name='shell'` 永不命中,读侧放宽 `IN ('shell','run_background_shell')`。校验矩阵 + 终态 Done 不变量收编 spec `permission-layer.md` §4.3 与 `agent-loop-architecture/pattern-terminal-done-event.md`。详见 git log。
+
+> RULE-TEST-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-test-002-role-gate-it` 闭合:新增集成用例 `role_gate_denies_then_allows_after_mid_loop_task_json_status_change`(`tests_agent_loop/role_gate_refresh.rs`)——round-1 denial(planning 拒 checker)→ mock LLM 同轮 write_file 翻盘 task.json status(in_progress,事故真实形态)→ round-2 经 drive_turn 轮顶刷新后同一 dispatch 放行(worker marker + call_count==4);变异验证覆盖两类回归(门误接入口快照 / R4 轮顶刷新移除),均精确转红后复原。已知边界:若 `resolve_current_task` 中途恒返 None 门会静默开放,该第三类未覆盖(spec tests-required 条目已注明)。全量 2008 后端测试 + fmt/clippy 绿,生产代码零 diff。详见 git log。
 
 ### RULE-ALLOW-001
 
@@ -159,17 +161,6 @@
 - **Owner**: carlos
 - **Related Task**: null
 - **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
-
-### RULE-TEST-002
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: workflow 角色门(`check_workflow_role_gate`,W1)集成测试面——多轮 agent loop 中 task 状态变更后门判定刷新无任何集成断言
-- **Description**: RULE-ARGS-001 迁移期间一处真实的活引用↔入口快照漂移(workflow_ctx 经 DispatchCtx 穿透,已于任务内修复)全量测试未抓、仅人工 diff 审计捕获——正是该测试面缺口的存在性证明
-- **Fix**: 补 1 条"多轮 loop 中 task.json 变更后角色门判定刷新"的集成用例(约半天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 RULE-ARGS-001 trellis-check 复核(migration log §复核记录 F-1/O-1)
 
 ### RULE-DOC-001
 
