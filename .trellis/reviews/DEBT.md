@@ -58,22 +58,13 @@
 
 > 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
-## P2 — 健壮性 + 债务,中长期清理 [2 items]
+## P2 — 健壮性 + 债务,中长期清理 [1 item]
 
 > RULE-CI-001 / RULE-FM-001 / RULE-TESTPOOL-001 于 2026-08-26 由 `.trellis/tasks/08-26-p2-debt-cleanup` 闭合(clippy gate 落地 / frontmatter 解析收敛 `parse_md_resource` + `parse_string_array` / `db/test_support.rs` 共享 `test_pool()` 15 处替换),详见 git log。
 
 > RULE-ARGS-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-args-001-param-object` 闭合:parameter object 落地(`run_chat_loop` 38→3 参,drive_turn 49→6、dispatch_tool_calls 33→4;ChatLoopDeps/ChatLoopRequest/CallerRole 三套件统一经 `ChatLoopDeps::from_app_state` 构造),chat_loop 家族 `too_many_arguments` 豁免归零(全库 46→34);全量回归 + clippy gate 验证通过;spec `signature-run-chat-loop.md` 同步重写为三套件契约。详见 git log。
 
-### RULE-SHELL-001
-
-- **Level**: P2
-- **Subsystem**: Tools
-- **File**: `app/src-tauri/src/background_shell/in_memory.rs:76`、`:353`(两处 "TODO: PR3 or follow-up" sweeper 注释)
-- **Description**: 已结束的 background shell 条目永不从 map 清除,sweeper 自桌面 app 时代排起至今未落("PR3 or follow-up")。daemon 化后进程长驻,`shells` map 无上界增长成为真实 OOM 面——当前唯一护栏是"LLM 不会反复查旧 shell"的行为假设加通知队列有界
-- **Fix**: 定时清扫超龄已结束条目(约半天含测试)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描,代码 TODO + journal 未销账项收编)
+> RULE-SHELL-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-shell-001-sweeper` 闭合:daemon 侧 `spawn_shell_sweeper` 落地(5min interval 调 `sweep_completed_shells(SHELL_RETENTION_MS=1h)`,只清 Done 超龄条目,释放 stdout/stderr 缓冲;Running/通知队列/spill 文件不动;GUI 路径零改动);装配契约收编 spec `daemon-server.md` §运维伴生物。详见 git log。
 
 ### RULE-FE-001
 
@@ -86,7 +77,7 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描,代码 TODO 收编)
 
-## P3 — 轻微(文档/一致性) [10 items]
+## P3 — 轻微(文档/一致性) [12 items]
 
 ### RULE-ALLOW-001
 
@@ -198,6 +189,28 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
 
+### RULE-SMOKE-001
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `scripts/turn-smoke.sh:156-159`(send_and_wait 轮询条件)
+- **Description**: turn_trace 行在 turn 流式进行中即落库,轮询提前命中 → 脚本退出 → 非 --keep 模式下 EXIT trap 删 session,`delete_session` 取消进行中的 chat(实测多轮工具 turn 被"cancelled in-flight chat"腰斩)。多轮工具 turn(先 load_tool_schemas 再目标工具)必踩,削弱其"tools 链路实跑一轮"的核心用途
+- **Fix**: 轮询条件改为等 turn 结束(如盯 SSE turn-end 事件或 trace 行稳定),或工具链路场景默认 --keep(半天内)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 RULE-SHELL-001 daemon 活体验证(证据:`.trellis/tasks/archive/2026-08/08-27-rule-shell-001-sweeper/research/live-smoke-daemon.md` 踩坑记录)
+
+### RULE-PERM-002
+
+- **Level**: P3
+- **Subsystem**: Permission
+- **File**: `app/src-tauri/src/commands/permissions.rs:217`(grant_tool_permission_inner)
+- **Description**: grant API 对 shell 类工具(run_background_shell/shell,分类 ToolKind::Shell)接受 `match_kind="tool"` 授权并成功入库,但 Tier 4 Shell 分支只消费 prefix 授权——tool 级行永不生效且无警告。前端 UI 只发 prefix 不踩,仅裸 API 调用方(自动化脚本)会写入死数据
+- **Fix**: grant 入口按 classify_tool 校验:Shell 类工具拒绝 tool 级 match_kind 或自动转译(半天内含测试)
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-27 RULE-SHELL-001 daemon 活体验证(同上 live-smoke 笔记,根因已查实于 check/permission.rs Tier 4 分支)
+
 
 ---
 
@@ -207,9 +220,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 2 | 健壮性 + 债务,中长期清理(RULE-CI/FM/TESTPOOL/ARGS-001 已闭合) |
-| P3 | 10 | 文档 + 一致性 + 待兑现承诺,可延后 |
-| **Total** | **12** | 当前 open items |
+| P2 | 1 | 健壮性 + 债务,中长期清理(RULE-CI/FM/TESTPOOL/ARGS/SHELL-001 已闭合) |
+| P3 | 12 | 文档 + 一致性 + 待兑现承诺,可延后 |
+| **Total** | **13** | 当前 open items |
 
 ---
 
