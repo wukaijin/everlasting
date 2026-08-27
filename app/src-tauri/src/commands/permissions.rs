@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
+use crate::agent::permissions::check::{classify_tool, ToolKind};
 use crate::agent::permissions::PermissionResponse;
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -206,6 +207,15 @@ pub async fn permission_response(
 ///
 /// **Validation** (re-grill Q6 schema lock):
 /// - `match_kind` MUST be one of `"tool"` / `"prefix"` / `"path"`.
+/// - `match_kind` MUST be the single legal kind for the tool's
+///   class (RULE-PERM-002, 2026-08-27): Path tools (read_file /
+///   write_file / edit_file / list_dir / grep / glob) → `"path"`;
+///   `shell` / `run_background_shell` → `"prefix"`; everything
+///   else (web_fetch / merge_worker / discard_worker / unknown
+///   tools) → `"tool"`. A mismatch is rejected with
+///   `ErrorCategory::InvalidRequest` instead of inserting a row
+///   the Tier 4 read side would never consume (e.g.
+///   `grant(shell, "tool", None)` used to insert dead data).
 /// - `match_value` MUST be `None` when `match_kind = "tool"`.
 /// - `match_value` MUST be `Some` for `prefix` and `path`.
 ///
@@ -225,6 +235,10 @@ pub async fn grant_tool_permission_inner(
     // (back-compat with the pre-re-grill IPC, which only
     // wrote tool-level grants).
     let kind = match_kind.as_deref().unwrap_or("tool");
+    // RULE-PERM-002 (2026-08-27): kind must be the single legal
+    // kind for the tool's class — anything else would insert a
+    // row Tier 4 never reads (silent dead data).
+    validate_grant_match_kind(&tool_name, kind)?;
     // Validation: match_value must be Some for prefix / path.
     match kind {
         "tool" => {
@@ -274,6 +288,43 @@ pub async fn grant_tool_permission(
     match_value: Option<String>,
 ) -> Result<(), AppCommandError> {
     grant_tool_permission_inner(&state, session_id, tool_name, match_kind, match_value).await
+}
+
+/// Validate that `kind` is the single legal `match_kind` for the
+/// tool's class (RULE-PERM-002, 2026-08-27). Dispatch mirrors
+/// [`classify_tool`] — the same dispatch the Tier 4 read side uses —
+/// so a row that passes this check is guaranteed consumable:
+///
+/// | ToolKind | tools | legal match_kind |
+/// |---|---|---|
+/// | Path | read_file / write_file / edit_file / list_dir / grep / glob | `"path"` |
+/// | Shell | shell / run_background_shell | `"prefix"` |
+/// | WebFetch / GitMutation / Other | web_fetch / merge_worker / discard_worker / unknown | `"tool"` |
+///
+/// This mirrors `permissions::match_value_for_allow_always` (the
+/// write side's auto-pick on an AllowAlways click); keeping the two
+/// matrices identical is what makes IPC-granted rows equivalent to
+/// agent-loop-granted ones.
+pub(crate) fn validate_grant_match_kind(
+    tool_name: &str,
+    kind: &str,
+) -> Result<(), AppCommandError> {
+    let expected = match classify_tool(tool_name) {
+        ToolKind::Path => "path",
+        ToolKind::Shell => "prefix",
+        ToolKind::WebFetch | ToolKind::GitMutation | ToolKind::Other => "tool",
+    };
+    if kind == expected {
+        return Ok(());
+    }
+    Err(AppCommandError::new(
+        ErrorCategory::InvalidRequest,
+        format!(
+            "grant_tool_permission: match_kind '{}' is not valid for tool '{}' \
+             (this tool only accepts match_kind '{}')",
+            kind, tool_name, expected
+        ),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -454,4 +505,93 @@ pub async fn clear_session_trace(
     session_id: String,
 ) -> Result<(), AppCommandError> {
     clear_session_trace_inner(&state, session_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pure-function tests for [`validate_grant_match_kind`]
+    //! (RULE-PERM-002, 2026-08-27). The kind↔tool-class matrix
+    //! must stay in lockstep with `classify_tool` + the Tier 4
+    //! read side (`check::permission`) + `match_value_for_allow_always`.
+
+    use super::validate_grant_match_kind;
+    use crate::error::ErrorCategory;
+
+    /// Full legal matrix: every `ToolKind` class accepts exactly
+    /// its one legal kind (Path → path, Shell → prefix both sync
+    /// and background forms, WebFetch / GitMutation / unknown → tool).
+    #[test]
+    fn grant_kind_validation_accepts_full_legal_matrix() {
+        // Path 工具(6 个里抽 read_file / edit_file 代表)。
+        assert!(validate_grant_match_kind("read_file", "path").is_ok());
+        assert!(validate_grant_match_kind("edit_file", "path").is_ok());
+        // Shell 类:同步 shell + run_background_shell 同族。
+        assert!(validate_grant_match_kind("shell", "prefix").is_ok());
+        assert!(validate_grant_match_kind("run_background_shell", "prefix").is_ok());
+        // WebFetch / GitMutation / 未知工具 → tool。
+        assert!(validate_grant_match_kind("web_fetch", "tool").is_ok());
+        assert!(validate_grant_match_kind("merge_worker", "tool").is_ok());
+        assert!(validate_grant_match_kind("some_future_tool", "tool").is_ok());
+    }
+
+    /// 债项原始场景(RULE-PERM-002):`grant(shell, match_kind=None →
+    /// "tool", None)` 旧实现入库成功但 Shell 分支只消费 prefix 行 →
+    /// 死数据。现在必须在入口拒绝,且报 InvalidRequest。
+    #[test]
+    fn grant_kind_validation_rejects_shell_with_default_tool_kind() {
+        let err = validate_grant_match_kind("shell", "tool").unwrap_err();
+        assert_eq!(err.category, ErrorCategory::InvalidRequest);
+        let msg = err.message;
+        assert!(msg.contains("shell"), "error names the tool: {msg}");
+        assert!(
+            msg.contains("'tool'"),
+            "error names the received kind: {msg}"
+        );
+        assert!(
+            msg.contains("'prefix'"),
+            "error names the single legal kind: {msg}"
+        );
+    }
+
+    /// Cross-class rejection the other way: a Path tool with a
+    /// Shell-legal kind is dead data too (Tier 4's path branch only
+    /// queries `match_kind='path'` rows).
+    #[test]
+    fn grant_kind_validation_rejects_path_tool_with_prefix_kind() {
+        let err = validate_grant_match_kind("edit_file", "prefix").unwrap_err();
+        assert_eq!(err.category, ErrorCategory::InvalidRequest);
+        let msg = err.message;
+        assert!(msg.contains("edit_file"), "error names the tool: {msg}");
+        assert!(
+            msg.contains("'prefix'"),
+            "error names the received kind: {msg}"
+        );
+        assert!(
+            msg.contains("'path'"),
+            "error names the single legal kind: {msg}"
+        );
+    }
+
+    /// The error message must tell the caller the legal kind for the
+    /// tool (so a bare-API / automation script can self-correct in
+    /// one retry instead of guessing).
+    #[test]
+    fn grant_kind_validation_error_names_legal_kind() {
+        for (tool, bad_kind, legal) in [
+            ("grep", "tool", "'path'"),
+            ("run_background_shell", "tool", "'prefix'"),
+            ("web_fetch", "path", "'tool'"),
+            ("merge_worker", "prefix", "'tool'"),
+            ("totally_unknown_tool", "path", "'tool'"),
+        ] {
+            let err = validate_grant_match_kind(tool, bad_kind).unwrap_err();
+            assert!(
+                err.message.contains(tool) && err.message.contains(legal),
+                "error for '{}' must name the tool + legal kind {}: {}",
+                tool,
+                legal,
+                err.message
+            );
+        }
+    }
 }

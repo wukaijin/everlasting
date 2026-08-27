@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/turn-smoke.sh — daemon 单轮烟测(经 HTTP API 跑一轮真实 LLM turn,
-# 轮询 turn_trace 落库结果并报 per-turn token)。
+# 等 SSE 请求终态后报 turn_trace 落库的 per-turn token)。
 #
 # 源起 C7(08-14)AC1 live 烟测的手工流程沉淀:建临时 session → 发一句
 # 问候 → 等 turn_trace 行出现 → 报 tools_token / context_input / 占比 →
@@ -10,6 +10,13 @@
 # memory-block-governance WP1(08-15):报告加 memory_token / mem_pct 列;
 # 新增 --turns N(同 session 连发 N 条消息)——AC4 的"第二轮起 cache_read
 # 率"对比依赖双轮(--turns 2)。
+#
+# RULE-SMOKE-001(08-27-rule-smoke-perm-cleanup):send_and_wait 的等待条件
+# 从"turn_trace 行出现"改为"SSE 流上出现本请求终态(kind=done)"——多轮
+# 工具 turn 的内层 LLM 调用 Done 时行已落库但请求仍在跑,旧轮询提前命中 →
+# EXIT trap delete_session 把进行中 chat 腰斩(daemon 取消)。脚本启动即挂
+# 常驻 /api/v1/stream 订阅(须先挂再发,新连接不回放历史;EXIT trap 清理),
+# --assert-turn-usage 复用同一份日志。
 #
 # 前置:
 #   - daemon 在跑(默认 :7456;`./scripts/daemon.sh bg` 可拉起)
@@ -43,7 +50,7 @@
 #                                               # 验 AC1 的一致性半边);WP2 顺带
 #                                               # 断言 provider_id 列落值。
 #   ./scripts/turn-smoke.sh --keep              # 保留烟测 session(默认跑完即删)
-#   ./scripts/turn-smoke.sh --timeout 300       # 等 turn_trace 的超时秒数(默认 180)
+#   ./scripts/turn-smoke.sh --timeout 300       # 等请求终态(kind=done)的超时秒数(默认 180)
 #
 # DB 路径见 AGENTS.md「DB / 烟测速查」;只读查询,daemon 可继续跑。
 set -euo pipefail
@@ -85,7 +92,13 @@ curl -sf -m 3 "$BASE/health" >/dev/null || { echo "ERR: daemon not reachable at 
 SID=""
 PARENT_SID=""
 CHILD_SID=""
+SSE_LOG=""
+SSE_PID=""
 cleanup() {
+  # 常驻 SSE 订阅先收线(set -euo pipefail 下 kill 失败不得打断清理链)。
+  if [ -n "$SSE_PID" ]; then
+    kill "$SSE_PID" 2>/dev/null || true
+  fi
   if [ "$KEEP" != "1" ]; then
     # --handoff 会把 SID 切到子 session;三个变量覆盖 parent/child 双引用
     # (--handoff 后 SID==CHILD_SID,重复 delete 是幂等 no-op)。
@@ -94,6 +107,7 @@ cleanup() {
         -H 'Content-Type: application/json' -d "{\"session_id\":\"$s\"}" >/dev/null 2>&1 || true
     done
   fi
+  [ -n "$SSE_LOG" ] && rm -f "$SSE_LOG" || true
 }
 trap cleanup EXIT
 
@@ -126,7 +140,11 @@ max_seq() {
 }
 
 send_and_wait() {
-  # $1 = 消息文本;发一条 user 消息,轮询直到出现 seq 更大的 turn_trace 行。
+  # $1 = 消息文本;发一条 user 消息,轮询直到 SSE 流上出现本请求终态
+  # (kind=done)。RULE-SMOKE-001(08-27):旧"seq 更大的 turn_trace 行"条件
+  # 在多轮工具 turn 上提前命中(第一段内层 Done 落库时请求仍在跑),会让
+  # EXIT trap 的 delete_session 取消进行中 chat;循环层终端 Done 每请求
+  # 只 emit 一次且必然在请求真正结束。
   # --compact / --handoff 模式发**全量 wire**(DB 行 text 列 + 新消息,
   # 镜像真实前端 rehydrate + reloadAfterFinalize 行为)—— 水位折叠的
   # wire↔DB 对齐前提依赖全量 wire;单条 wire 会让对齐防御 fail-open,
@@ -152,36 +170,49 @@ print(json.dumps({"request_id":os.environ["REQ_ID"],"session_id":os.environ["SID
   # body 走 stdin(--compact 的大消息 ~90KB,走 -d argv 会撞单参数上限)。
   printf '%s' "$BODY" | curl -sf -X POST "$BASE/api/v1/agent/chat" \
     -H 'Content-Type: application/json' -d @- >/dev/null
-  echo "turn sent (request_id=$REQ_ID), polling turn_trace..."
+  echo "turn sent (request_id=$REQ_ID), waiting for terminal event (kind=done)..."
+  local DONE_LINE STOP_REASON ERR_LINE
   while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-    [ "$(max_seq)" -gt "$BEFORE_SEQ" ] && return 0
+    # compact JSON 无空格,request_id 与 kind 同行,两个 grep 串联即可。
+    # 管道一律 `|| true` 兜底:set -o pipefail 下 grep -q 命中即退会让上游
+    # grep 撞 SIGPIPE(141),整管道判失败 → 错误终态被漏读;变量捕获 +
+    # tail(读全量不早退)无此问题。
+    DONE_LINE="$(grep -a "\"request_id\":\"$REQ_ID\"" "$SSE_LOG" 2>/dev/null \
+      | grep "\"kind\":\"done\"" | tail -n 1 || true)"
+    if [ -n "$DONE_LINE" ]; then
+      STOP_REASON="$(printf '%s' "$DONE_LINE" | grep -o '"stop_reason":"[^"]*"' \
+        | cut -d'"' -f4 || true)"
+      echo "turn done (request_id=$REQ_ID, stop_reason=${STOP_REASON:-null})"
+      return 0
+    fi
+    ERR_LINE="$(grep -a "\"request_id\":\"$REQ_ID\"" "$SSE_LOG" 2>/dev/null \
+      | grep "\"kind\":\"error\"" | tail -n 1 || true)"
+    if [ -n "$ERR_LINE" ]; then
+      echo "ERR: chat request $REQ_ID ended with kind=error (check daemon logs: ./scripts/daemon.sh logs)" >&2
+      return 1
+    fi
     sleep 5; ELAPSED=$((ELAPSED+5))
   done
-  echo "ERR: no new turn_trace row after ${TIMEOUT}s (check daemon logs: ./scripts/daemon.sh logs)" >&2
+  echo "ERR: no terminal chat event (kind=done) for request $REQ_ID after ${TIMEOUT}s (check daemon logs: ./scripts/daemon.sh logs)" >&2
   return 1
 }
 
 TURN_MSG="$MESSAGE"
 T=1
-# --assert-turn-usage:先挂 SSE 订阅再发轮(事件随 turn 推出,迟挂会漏)。
-TURN_USAGE_LOG=""
-SSE_PID=""
-cleanup_sse() {
-  [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null || true
-}
-if [ "$ASSERT_TURN_USAGE" = "1" ]; then
-  TURN_USAGE_LOG="$(mktemp /tmp/turn-smoke-sse.XXXXXX)"
-  curl -sN --max-time $((TIMEOUT * TURNS + 60)) "$BASE/api/v1/stream" \
-    >"$TURN_USAGE_LOG" 2>/dev/null &
-  SSE_PID=$!
-fi
+# 常驻 SSE 订阅(RULE-SMOKE-001,08-27):send_and_wait 等本请求终态
+# (kind=done)、--assert-turn-usage 断言都读这一份日志;须在发第一轮之前
+# 挂好(新连接不回放历史,迟挂会漏)。不用 --max-time —— compact /
+# handoff 模式多轮合并,时长不可预知,靠 EXIT trap kill 收线。
+SSE_LOG="$(mktemp /tmp/turn-smoke-sse.XXXXXX)"
+curl -sN "$BASE/api/v1/stream" >"$SSE_LOG" 2>/dev/null &
+SSE_PID=$!
 while [ "$T" -le "$TURNS" ]; do
   [ "$T" -gt 1 ] && TURN_MSG="$FOLLOWUP_MESSAGE"
   send_and_wait "$TURN_MSG"
   T=$((T+1))
 done
-# 稍等尾部帧 flush 再收线。
-if [ -n "$SSE_PID" ]; then sleep 3; cleanup_sse; fi
+# 订阅保持存活到脚本退出(--compact / --handoff 后续轮仍要等终态),
+# 3.5 断言读共享日志前再小睡兜 curl 写盘 flush。
 
 # ── 2.5 手动 /compact live 冒烟(08-18-manual-compact-command) ────────
 # 布局:小轮(上面)+ 大消息轮(下面)。保留区预算 clamp 下限 15k token,
@@ -333,7 +364,10 @@ fi
 
 # -- 3.5 --assert-turn-usage assertion (08-20 WP1 AC8) -------------------------
 if [ "$ASSERT_TURN_USAGE" = "1" ]; then
-  TURN_USAGE_CHECK="$(SID="$SID" DB_PATH="$DB_PATH" LOG="$TURN_USAGE_LOG" python3 - << 'PYEOF2'
+  # RULE-SMOKE-001(08-27):复用常驻订阅日志;done 已见则 turn_usage 必然
+  # 先到,小睡兜 curl 写盘 flush。临时文件统一由 EXIT trap 清理。
+  sleep 3
+  TURN_USAGE_CHECK="$(SID="$SID" DB_PATH="$DB_PATH" LOG="$SSE_LOG" python3 - << 'PYEOF2'
 import json, os, sqlite3
 
 sid, db_path, log = os.environ["SID"], os.environ["DB_PATH"], os.environ["LOG"]
@@ -372,9 +406,8 @@ assert prov and prov[0], f"fresh main row provider_id is NULL: {prov}"
 print(f"turn_usage events ok: {len(events)} captured, "
       f"{len(ev_by_seq)} seq-consistent with DB, provider_id={prov[0][:8]}...")
 PYEOF2
-)" || { echo "ERR: turn_usage event assertion failed (see above)" >&2; rm -f "$TURN_USAGE_LOG"; exit 1; }
+)" || { echo "ERR: turn_usage event assertion failed (see above)" >&2; exit 1; }
   echo "$TURN_USAGE_CHECK"
-  rm -f "$TURN_USAGE_LOG"
 fi
 
 # ── 4. 报告 ───────────────────────────────────────────────────────────

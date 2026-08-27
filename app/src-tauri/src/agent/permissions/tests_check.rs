@@ -898,6 +898,71 @@ async fn tier4_shell_prefix_grant_short_circuits_for_single_segment() {
     );
 }
 
+/// RULE-PERM-002 同族收口(2026-08-27,08-27-rule-smoke-perm-cleanup):
+/// AllowAlways 在 `run_background_shell` 上写的是
+/// `(run_background_shell, prefix, <token>)` 行(ask.rs 直写原始
+/// tool_name),而 `check_prefix_grant` 旧查询硬编码
+/// `tool_name='shell'` → 该行永不命中,"始终允许"不粘轮。读侧
+/// 放宽为 `IN ('shell','run_background_shell')` 后,单段命令经
+/// run_background_shell 也命中 prefix 行短路 Allow。
+#[tokio::test]
+async fn tier4_prefix_grant_under_run_background_shell_short_circuits() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    // Seed 镜像 ask.rs 的 AllowAlways 写入形状:原始 tool_name 直写。
+    sqlx::query(
+        r#"
+        INSERT INTO session_tool_permissions (session_id, tool_name, match_kind, match_value)
+        VALUES (?, 'run_background_shell', 'prefix', 'ls')
+        "#,
+    )
+    .bind("parent-sess")
+    .execute(&pool)
+    .await
+    .expect("seed run_background_shell prefix grant");
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "run_background_shell",
+            &serde_json::json!({"command": "ls -la"}),
+            "tu-grant-bg-shell",
+            &token,
+        ),
+    )
+    .await
+    .expect("regression: run_background_shell prefix grant miss would hang on ask_path oneshot");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "single-segment `ls` via run_background_shell with a prefix grant row \
+         under the raw tool_name must short-circuit to Allow"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "run_background_shell prefix grant hit must NOT emit permission:ask"
+    );
+}
+
 /// Compound `ls; rm x` with a prefix grant on `ls` → does NOT
 /// short-circuit. Falls through to classify_prefix, which produces
 /// Ask (max(ReadOnly, Ask)), so Plan mode surfaces a modal. This is

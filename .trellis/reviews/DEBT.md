@@ -68,7 +68,9 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [12 items]
+## P3 — 轻微(文档/一致性) [10 items]
+
+> RULE-SMOKE-001 / RULE-PERM-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-smoke-perm-cleanup` 闭合:turn-smoke.sh 的 send_and_wait 改等 SSE 请求终态(`chat-event` `kind=done`,每请求恰一次;常驻订阅 + trap 清理,--assert-turn-usage 复用同一日志),多轮工具 turn 不再被 delete_session 腰斩(live 双场景验证);grant 入口 `grant_tool_permission_inner` 按 `classify_tool` 校验 kind↔类别矩阵(Shell 只许 prefix 等,InvalidRequest 拒绝死数据组合);同任务顺带修复同族坑 —— AllowAlways 在 run_background_shell 上写的 prefix 行因 `check_prefix_grant` 硬编码 `tool_name='shell'` 永不命中,读侧放宽 `IN ('shell','run_background_shell')`。校验矩阵 + 终态 Done 不变量收编 spec `permission-layer.md` §4.3 与 `agent-loop-architecture/pattern-terminal-done-event.md`。详见 git log。
 
 ### RULE-ALLOW-001
 
@@ -180,28 +182,6 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
 
-### RULE-SMOKE-001
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `scripts/turn-smoke.sh:156-159`(send_and_wait 轮询条件)
-- **Description**: turn_trace 行在 turn 流式进行中即落库,轮询提前命中 → 脚本退出 → 非 --keep 模式下 EXIT trap 删 session,`delete_session` 取消进行中的 chat(实测多轮工具 turn 被"cancelled in-flight chat"腰斩)。多轮工具 turn(先 load_tool_schemas 再目标工具)必踩,削弱其"tools 链路实跑一轮"的核心用途
-- **Fix**: 轮询条件改为等 turn 结束(如盯 SSE turn-end 事件或 trace 行稳定),或工具链路场景默认 --keep(半天内)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 RULE-SHELL-001 daemon 活体验证(证据:`.trellis/tasks/archive/2026-08/08-27-rule-shell-001-sweeper/research/live-smoke-daemon.md` 踩坑记录)
-
-### RULE-PERM-002
-
-- **Level**: P3
-- **Subsystem**: Permission
-- **File**: `app/src-tauri/src/commands/permissions.rs:217`(grant_tool_permission_inner)
-- **Description**: grant API 对 shell 类工具(run_background_shell/shell,分类 ToolKind::Shell)接受 `match_kind="tool"` 授权并成功入库,但 Tier 4 Shell 分支只消费 prefix 授权——tool 级行永不生效且无警告。前端 UI 只发 prefix 不踩,仅裸 API 调用方(自动化脚本)会写入死数据
-- **Fix**: grant 入口按 classify_tool 校验:Shell 类工具拒绝 tool 级 match_kind 或自动转译(半天内含测试)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 RULE-SHELL-001 daemon 活体验证(同上 live-smoke 笔记,根因已查实于 check/permission.rs Tier 4 分支)
-
 
 ---
 
@@ -212,8 +192,8 @@
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
 | P2 | 0 | 全部 closed(RULE-CI/FM/TESTPOOL/ARGS/SHELL/FE-001 已闭合) |
-| P3 | 12 | 文档 + 一致性 + 待兑现承诺,可延后 |
-| **Total** | **12** | 当前 open items |
+| P3 | 10 | 文档 + 一致性 + 待兑现承诺,可延后 |
+| **Total** | **10** | 当前 open items |
 
 ---
 

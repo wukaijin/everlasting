@@ -770,14 +770,22 @@ async fn check_tool_grant(
 }
 
 /// Check `session_tool_permissions` for a shell-prefix grant.
-/// Returns `Ok(true)` if any row has `tool_name='shell'`,
-/// `match_kind='prefix'`, and `match_value = first_token` (exact
-/// match — prefix grants store the bare command name like
-/// `cargo`, not a glob).
+/// Returns `Ok(true)` if any row has `tool_name` in
+/// `('shell', 'run_background_shell')`, `match_kind='prefix'`,
+/// and `match_value = first_token` (exact match — prefix grants
+/// store the bare command name like `cargo`, not a glob).
 ///
 /// Closes the old gap where `match_value_for_allow_always` wrote
 /// `match_kind='prefix'` rows for shell but Tier 4 never queried
 /// them: a user's "始终允许" on a shell command now sticks.
+///
+/// RULE-PERM-002 同族收口(2026-08-27):AllowAlways on
+/// `run_background_shell` writes the row under the **raw**
+/// tool_name (ask.rs 直写 db),而旧查询硬编码
+/// `tool_name='shell'` → 该行永不命中。读侧放宽为
+/// `IN ('shell','run_background_shell')`,使两条写路径
+/// (IPC grant / AllowAlways)与存量行都被消费(不做写侧
+/// 归一化 —— 归一化救不回已入库死行,且 leave 双名并存)。
 async fn check_prefix_grant(
     db: &SqlitePool,
     session_id: &str,
@@ -790,7 +798,7 @@ async fn check_prefix_grant(
         r#"
         SELECT 1 FROM session_tool_permissions
         WHERE session_id = ?
-          AND tool_name = 'shell'
+          AND tool_name IN ('shell', 'run_background_shell')
           AND match_kind = 'prefix'
           AND match_value = ?
         LIMIT 1
