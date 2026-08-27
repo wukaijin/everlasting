@@ -62,7 +62,9 @@ controller)。当 store 体量超 1200 行时,按职责簇拆为 `createXxxActio
   `createModeActions(ctx)`)
 - `chatMessageActions.ts` — edit / resend / retry(3 个 action,
   `createMessageActions(ctx)`)
-- `chatSendActions.ts` — send(`createSendActions(ctx)`)
+- `chatSendActions.ts` — send + B1(2026-08-16)起拥有的 paste-staging
+  strip 状态(`stagedImages` + add/remove/discard,`createSendActions(ctx)`;
+  生命周期契约见下节)
 
 **拆分契约(必须遵守)**——与 streamEvents 同构,补充 chat 特有约束:
 
@@ -86,6 +88,33 @@ controller)。当 store 体量超 1200 行时,按职责簇拆为 `createXxxActio
   resendMessage/retryChat/会话 CRUD/mode-workflow 全套)必须经 return 块
   re-export;三个 chat 测试文件(chat.test.ts / chatMode.test.ts /
   chatSend.test.ts)全经 `useChatStore().X` 调用,**拆分后零改动**。
+
+### Convention: staging strip objectURL 生命周期(RULE-FE-001,2026-08-27 沉淀)
+
+**What**:`chatSendActions.ts` 里每个 `URL.createObjectURL` 都有确定的
+revoke 点,共三路——`removeStagedImage`(✕ 单张)、`discardStagedImages`
+(session 切换 / 项目变更 watcher)、`send` 成功释放 strip 时(遍历
+`uploaded[].localUrl`)。上传失败早退**不 revoke**(strip 保留供重试)。
+
+**Why**:send 时 revoke 之所以安全,是因为渲染层 **file 优先**——
+`MessageImages.vue` 的 `urlFor` 优先走 `attachmentUrl(sessionId, file)`
+(daemon GET 路由),`localUrl` 只是 file 缺失的防御回退,而 send 流程
+upload 先于乐观 push 完成、失败即整轮中止,故乐观 manifest 每条必有
+`file`,blob URL 实际从不被渲染。`localUrl` 也从不上 wire
+(`toPayloadAttachments` 只读 `file`)、从不落库(rehydrate 产物是
+snake_case 服务端形态)。**教训**:RULE-FE-001 登记时记录的修复方向
+("给 reloadAfterFinalize 加替换钩子")建立在"乐观渲染依赖 localUrl"的
+错误前提上——动 strip 生命周期前先核对 `urlFor` 的实际取 URL 顺序,
+别信 TODO 注释里的渲染链描述。
+
+**Test gotcha**:jsdom 无 `URL.createObjectURL` / `revokeObjectURL`
+原生实现——测 strip 生命周期时用 `Object.defineProperty(URL,
+"revokeObjectURL", ...)` 注入 spy,并手工构造 `StagedImage`(假
+`url` 字符串)经 `send(text, staged)` 驱动,绕过 `addStagedImages`
+的压缩/读尺寸链路(先例:`chatSendActions.test.ts`)。另注意 hub 的
+`watch(currentSessionId, discardStagedImages)` 是 deferred watcher:
+测试里 seed strip 前先 `await nextTick()` 排干它,否则 watcher 回调会在
+send 的首个 await 处清空 strip 污染断言。
 
 ---
 
