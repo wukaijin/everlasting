@@ -18,6 +18,7 @@ mod notifications;
 mod parallel_dispatch;
 mod recall;
 mod resilience;
+mod role_gate_refresh;
 mod softcap;
 mod stub;
 mod turn_checkpoint;
