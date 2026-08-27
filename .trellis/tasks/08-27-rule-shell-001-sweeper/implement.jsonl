@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "spawn_backup_task 运维伴生物 Pattern(no timer tasks in GUI、wrapper 不进 bin 内联)是 sweeper 装配的强约束先例"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "sweep 的 info!/warn! 日志须符合项目结构化日志规范"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust 质量红线(禁模式/测试风格),background_shell 改动需遵守"}
+{"file": ".trellis/tasks/08-27-rule-shell-001-sweeper/research/codebase-findings.md", "reason": "泄漏面画像 + 触发机制选型 + 既有语义依赖(status already-cleaned-up 文档、写回竞态安全)的现场核对结论"}
