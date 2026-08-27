@@ -58,7 +58,7 @@
 
 > 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
-## P2 — 健壮性 + 债务,中长期清理 [1 item]
+## P2 — 健壮性 + 债务,中长期清理 [0 items]
 
 > RULE-CI-001 / RULE-FM-001 / RULE-TESTPOOL-001 于 2026-08-26 由 `.trellis/tasks/08-26-p2-debt-cleanup` 闭合(clippy gate 落地 / frontmatter 解析收敛 `parse_md_resource` + `parse_string_array` / `db/test_support.rs` 共享 `test_pool()` 15 处替换),详见 git log。
 
@@ -66,16 +66,7 @@
 
 > RULE-SHELL-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-shell-001-sweeper` 闭合:daemon 侧 `spawn_shell_sweeper` 落地(5min interval 调 `sweep_completed_shells(SHELL_RETENTION_MS=1h)`,只清 Done 超龄条目,释放 stdout/stderr 缓冲;Running/通知队列/spill 文件不动;GUI 路径零改动);装配契约收编 spec `daemon-server.md` §运维伴生物。详见 git log。
 
-### RULE-FE-001
-
-- **Level**: P2
-- **Subsystem**: Frontend
-- **File**: `app/src/stores/chatSendActions.ts:471-477`(TODO(B1 follow-up))
-- **Description**: 发消息释放 staging strip 时,乐观渲染产生的图片 objectURL 从不 revoke,blob 内存持续占用到切 session / 刷新页面才释放;卡点是需要在 `reloadAfterFinalize` 上加替换钩子
-- **Fix**: 给 reloadAfterFinalize 加替换钩子触发 URL.revokeObjectURL(≤1 天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描,代码 TODO 收编)
+> RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
 ## P3 — 轻微(文档/一致性) [12 items]
 
@@ -220,9 +211,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 1 | 健壮性 + 债务,中长期清理(RULE-CI/FM/TESTPOOL/ARGS/SHELL-001 已闭合) |
+| P2 | 0 | 全部 closed(RULE-CI/FM/TESTPOOL/ARGS/SHELL/FE-001 已闭合) |
 | P3 | 12 | 文档 + 一致性 + 待兑现承诺,可延后 |
-| **Total** | **13** | 当前 open items |
+| **Total** | **12** | 当前 open items |
 
 ---
 
