@@ -572,3 +572,26 @@ DEBT.md 三条 P2 债(RULE-CI/FM/TESTPOOL-001)打包闭合,净删 180 行。R1:f
 ### Status
 
 [OK] **Completed**
+
+
+## Session 45: 内置 dev/review 插件提示词脱栈通用化(builtin-agent-prompt-generalize)
+
+**Date**: 2026-08-27
+**Task**: 内置 dev/review 插件提示词脱栈通用化(builtin-agent-prompt-generalize)
+**Branch**: `main`
+
+### Summary
+
+调查确认 builtin workflow 插件提示词硬编码 cargo/pnpm(经 include_str! 发给所有用户);PRD 经外部 LLM 审查修正 5 项(等价测试不存在、review 镜像漂移、README 口径、ask 边界、research 归档)。实施:checker/implementer/workflow.json 脱栈改探测链(AGENTS.md→清单文件→最小验证),.trellis 残留 3 处清零,def.rs 镜像同步并新增 builtin_dev_json_equals_default_workflow_constant 等价性测试(WorkflowDef derive PartialEq/Eq),dev+review 项目层 byte-identical 重灌消灭旧 implement/check 状态词汇表漂移,6b313ce4 model 漏传教训去标识化收编。验证:2007 tests passed,diff -r 双插件零差异,.trellis grep 零命中,lib-only clippy 干净。spec 沉淀三条内容约定;遗留:全仓 clippy --tests 有 14 个 pre-existing 错误(tests_agent_loop/at_file/db/trace 等)待立债任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b1025153` | (see git log) |
+| `77dbda53` | (see git log) |
+| `ea69106f` | (see git log) |
+
+### Status
+
+[OK] **Completed**

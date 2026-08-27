@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 44
+- **Total Sessions**: 45
 - **Last Active**: 2026-08-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~574 | Active |
+| `journal-2.md` | ~597 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-08-27 | 内置 dev/review 插件提示词脱栈通用化(builtin-agent-prompt-generalize) | `b1025153`, `77dbda53`, `ea69106f` | `main` |
 | 44 | 2026-08-27 | 清理 RULE-SMOKE-001 / RULE-PERM-002 | `b7ddf050` | `main` |
 | 43 | 2026-08-27 | RULE-FE-001 staged 图片 objectURL 发送后 revoke(P2 闭合) | `2dd9adc1`, `40fe85fe`, `39c9f425`, `b3407214` | `main` |
 | 42 | 2026-08-27 | RULE-SHELL-001 sweeper 落地 + daemon 活体验证 | `c4c6cf07` | `main` |
