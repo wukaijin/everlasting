@@ -83,7 +83,9 @@ jobs:
       # clippy gate (RULE-CI-001, 08-26-p2-debt-cleanup):`--lib` 只 gate
       # app crate(与 test 同范围);必须在 daemon sidecar build 之后 ——
       # clippy 的 check 编译同样触发 build.rs 的 externalBin 校验。
-      # 剩余的 too_many_arguments 豁免见 DEBT.md RULE-ARGS-001(epic 单独排期)。
+      # 剩余 too_many_arguments 为有意豁免(db CRUD/tauri 命令等参数镜像面);
+      # chat_loop 家族重灾区已由 08-27-rule-args-001-param-object 清零闭合,
+      # 债务台账见 .trellis/reviews/DEBT.md(RULE-ARGS-001)。
       - name: cargo clippy --lib
         run: cargo clippy --lib -- -D warnings
 
