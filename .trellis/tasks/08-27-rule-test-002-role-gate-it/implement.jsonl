@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture/signature-run-chat-loop.md", "reason": "run_chat_loop 三套件契约——测试直驱 loop 与 ChatLoopDeps 装配的权威入口"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "agent-loop 测试的 MockProvider 契约与既有跑法约定"}
+{"file": ".trellis/spec/backend/workflow-plugin-builtin.md", "reason": "builtin 插件 def 与 roles_by_state 词汇——门判定数据源"}
+{"file": ".trellis/tasks/08-27-rule-test-002-role-gate-it/research/role-gate-call-graph.md", "reason": "角色门调用链 file:line 寻路图 + 测试设计草图 + 变异验证方案"}
