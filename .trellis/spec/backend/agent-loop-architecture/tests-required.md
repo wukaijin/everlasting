@@ -30,8 +30,9 @@
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |
 | `system_prompt_override_worker_path_sends_override` | B6 review defect A fix (2026-06-21): worker path passes `Some(assemble_subagent_prompt(def, &task))` as the 23rd `system_prompt_override` parameter; `MockProvider::sent_systems()` captures the system prompt the LLM actually receives, and the test asserts it equals `SubagentDef.system_prompt` (NOT the parent's `assemble_system_prompt(mode_prefix, base_prompt)` output — which was the pre-fix bug). The negative guard `!received.contains("Yolo mode"|"Edit mode"|"Plan mode")` locks that the parent's `mode_prefix` does not leak into the worker's prompt. |
 | `system_prompt_override_none_path_uses_parent_assembly` | B6 review defect A fix (2026-06-21): regression guard that the parent path (`None` override) still goes through `assemble_system_prompt(mode_prefix, base_prompt)` unchanged — recomputes the expected prompt for the harness's project + session row and asserts the LLM received that exact string |
+| `role_gate_denies_then_allows_after_mid_loop_task_json_status_change` | RULE-TEST-002 (2026-08-27): workflow role-gate refresh across turns. Round-1 `dispatch_subagent{subagent:"checker"}` denied at state `planning` (mock LLM's same-turn `write_file` flips task.json to `in_progress` first); round-2 same-role dispatch allowed because `drive_turn`'s turn-top `resolve_current_task` refresh feeds the live-ref `DispatchCtx::workflow_ctx`. Mutation-verified against both drift classes (gate rebound to entry snapshot / refresh block removed). Known boundary: the gate opens silently if `resolve_current_task` were to return None mid-loop — third regression class, intentionally not covered. |
 
-All 28 must pass on every change to `run_chat_loop`. If any fails, the
+All 29 must pass on every change to `run_chat_loop`. If any fails, the
 production call site in `chat.rs` is **at risk** of the same defect
 (failing the integration test means production would also fail).
 
