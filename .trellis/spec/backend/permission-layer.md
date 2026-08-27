@@ -199,6 +199,41 @@ whitelist / asklist 完整表见 `app/src-tauri/src/agent/permissions/shell_trus
 - `recall_pitfall_footnote_command_pattern_mismatch_returns_none`
 - `recall_pitfall_footnote_empty_db_returns_none`
 
+#### 4.3. grant 入口 kind↔类别校验 + prefix 读侧消费(RULE-PERM-002 闭合,2026-08-27)
+
+> 来源:任务 `.trellis/tasks/archive/2026-08/08-27-rule-smoke-perm-cleanup/`。
+
+**契约**:Tier 4 消费矩阵决定 `(tool, match_kind)` 只有唯一合法组合 —— 写侧
+grant 入口(`grant_tool_permission_inner`,IPC + daemon route 共用)按
+`classify_tool` 拒绝一切其它组合(`ErrorCategory::InvalidRequest`),杜绝
+"入库成功但永不生效"的死授权行:
+
+| classify_tool | 工具 | 唯一合法 match_kind | 消费方(Tier 4) |
+|---|---|---|---|
+| `Path` | read_file / write_file / edit_file / list_dir / grep / glob | `path`(带 glob) | `check_path_grant`(只查 kind='path' 行) |
+| `Shell` | shell / run_background_shell | `prefix`(带首 token) | `check_prefix_grant` |
+| `WebFetch` / `GitMutation` / `Other` | web_fetch / merge_worker / discard_worker / 未知 | `tool`(value NULL) | `has_tool_permission` 族 |
+
+- 校验函数 `commands::permissions::validate_grant_match_kind` **必须复用
+  `classify_tool`**(经 `agent::permissions::check` re-export),不许出现第二份
+  分类逻辑;矩阵与写侧自动挑 kind 的 `match_value_for_allow_always` 逐类一致
+  (该函数产出的组合天然过校验,AllowAlways 路径零影响)。
+- **拒绝而非转译**:tool→prefix 无从推导前缀,空 match_value 前缀 = 全放行,
+  是提权不是兼容。默认 `match_kind=None → "tool"` 的回退**先解析再校验**
+  —— `grant(shell, None)` 落在债项原始场景上,必须被拒。
+- **prefix 读侧消费 `tool_name IN ('shell','run_background_shell')`**:
+  AllowAlways(ask.rs)用原始 tool_name 直写 DB,在 `run_background_shell`
+  上点击会写 `(run_background_shell, prefix, <token>)` 行;读侧若硬编码
+  `tool_name='shell'` 该行永不命中(用户"始终允许"不粘轮)。读侧放宽同时
+  救活两条写路径与存量行;worker 的 `RunGrantCache`(内存,raw tool_name
+  精确相等)不经 DB,不在此契约内。
+
+**Tests**:`commands/permissions.rs` tests 模块(`grant_kind_validation_*` 4 条:
+全矩阵合法组合 / shell+默认 tool 拒绝 / path+prefix 拒绝 / 文案含唯一合法 kind)
++ `permissions/tests_check.rs`
+(`tier4_prefix_grant_under_run_background_shell_short_circuits`:run_background_shell
+名下 prefix 行命中短路 Allow)。
+
 ### 5. ⑨ 关 ↔ `permission:ask` IPC 协议
 
 **Server → Client**:后端 `agent::permissions::check` Tier 3 发:

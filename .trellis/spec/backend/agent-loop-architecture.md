@@ -87,3 +87,4 @@
 - [pattern-turn-checkpoint](./agent-loop-architecture/pattern-turn-checkpoint.md)
 - [pattern-message-queue-driver](./agent-loop-architecture/pattern-message-queue-driver.md)
 - [pattern-doc-extraction](./agent-loop-architecture/pattern-doc-extraction.md)
+- [pattern-terminal-done-event](./agent-loop-architecture/pattern-terminal-done-event.md)
