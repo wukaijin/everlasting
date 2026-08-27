@@ -249,10 +249,11 @@ export interface InjectionEntry {
 /** B1 (2026-08-16) image-multimodal: one image sitting in the
  *  paste-staging strip (in-memory only — never persisted). `url`
  *  is a `URL.createObjectURL` blob URL revoked on remove /
- *  session switch; `tokensEst` is the `(w×h)/750` Anthropic-style
- *  estimate computed at stage time. Lives on the chat store (not
- *  ChatInput component state) so send / clear / session-switch
- *  lifecycle is store-owned (design §5.1). */
+ *  session switch / successful send (RULE-FE-001); `tokensEst` is
+ *  the `(w×h)/750` Anthropic-style estimate computed at stage
+ *  time. Lives on the chat store (not ChatInput component state)
+ *  so send / clear / session-switch lifecycle is store-owned
+ *  (design §5.1). */
 export interface StagedImage {
   /** objectURL of the pasted File (thumbnail + optimistic render). */
   url: string;

@@ -167,8 +167,8 @@ export function createSendActions(ctx: SendActionsContext) {
   }
 
   /** Drop the whole strip WITH revoke — session switch / project
-   *  change. NOT used after a successful send: the optimistic
-   *  message still renders from the localUrls (see `send`). */
+   *  change. No-op after a successful send: `send` revokes on its
+   *  own strip-release path (see below). */
   function discardStagedImages(): void {
     for (const s of stagedImages.value) URL.revokeObjectURL(s.url);
     stagedImages.value = [];
@@ -388,8 +388,9 @@ export function createSendActions(ctx: SendActionsContext) {
       role: "user",
       content: body,
       // B1: optimistic attachment manifest — camelCase + `localUrl`
-      // for the pre-DB render (`MessageImages.vue` reads localUrl
-      // first); `file` (server name) makes `toPayloadAttachments`
+      // for the pre-DB render (`MessageImages.urlFor` is file-first;
+      // `localUrl` is the pre-upload defensive fallback); `file`
+      // (server name) makes `toPayloadAttachments`
       // map it onto the wire history entry. The finalize reload
       // replaces this whole object with the backend's snake_case
       // manifest.
@@ -468,13 +469,19 @@ export function createSendActions(ctx: SendActionsContext) {
       groupChat: currentSession.value?.session_type === "group_chat",
     });
 
-    // B1: release the staging strip. The objectURLs are NOT revoked
-    // here — the optimistic user message still renders from
-    // `metadata.attachments[].localUrl` until the finalize reload
-    // replaces it with server-file refs. TODO(B1 follow-up): revoke
-    // on message replacement (needs a hook into
-    // `reloadAfterFinalize`); until then the URLs live until
-    // session switch / page unload.
+    // B1: release the staging strip. RULE-FE-001 (2026-08-27): revoke
+    // the uploaded objectURLs here — staged objectURLs are now revoked
+    // on all three strip exit paths (remove ✕ / discard on session
+    // switch / successful send). Safe for the optimistic render:
+    // `MessageImages.urlFor` is file-first (daemon `attachmentUrl`
+    // route; `localUrl` is the pre-upload fallback), and every
+    // manifest entry carries `file` because `uploadStagedImages`
+    // resolved before the optimistic push — so revoking here is
+    // invisible to the render and the blobs stop pinning memory
+    // (previously they lived until session switch / page unload).
+    // The upload-failure early return above keeps the strip WITHOUT
+    // revoking (P1-3 retry contract).
+    for (const u of uploaded) URL.revokeObjectURL(u.localUrl);
     stagedImages.value = [];
   }
 
