@@ -157,6 +157,13 @@ async fn main() -> ExitCode {
     // See `spawn_backup_task` for the full contract.
     server::spawn_backup_task(&state, &data_dir);
 
+    // RULE-SHELL-001 sweeper (2026-08-27, task
+    // `08-27-rule-shell-001-sweeper`): every 5min prune Done
+    // background-shell entries past the 1h retention, releasing
+    // their stdout/stderr buffers (unbounded growth in a
+    // long-lived daemon). Daemon-only; GUI stays timer-free.
+    server::spawn_shell_sweeper(&state);
+
     // S2 tunnel client (2026-08-11, task `08-11-tunnel-client`,design §2.4
     // / §4.2 P1-1 修订):**只有这里** spawn tunnel —— lib.rs 零改动,
     // Tauri GUI(Thin/Full)持有空壳 manager 但从不 start()。双进程同

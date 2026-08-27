@@ -29,7 +29,12 @@
 //! - **Resource bounds (Q6)**: each shell takes an optional
 //!   `max_runtime_ms`; default 86_400_000 (24h), no upper cap.
 //!   When the timer fires, the process group is killed and a
-//!   "timed out" notification is pushed.
+//!   "timed out" notification is pushed. Completed entries
+//!   (with their stdout/stderr buffers) are kept for
+//!   `in_memory::SHELL_RETENTION_MS` (1h) and then pruned by the
+//!   daemon sweeper (`daemon::server::spawn_shell_sweeper`,
+//!   RULE-SHELL-001); after that, `status` / `kill` return
+//!   NotFound ("already cleaned up").
 //! - **Notification queue (PRD §error-handling)**: each session
 //!   has a bounded `VecDeque` of completion notifications (cap
 //!   100). When a new notification would overflow, the oldest is

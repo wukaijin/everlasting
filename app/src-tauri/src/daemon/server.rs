@@ -37,6 +37,7 @@ use tokio::signal;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::background_shell::in_memory::{SHELL_RETENTION_MS, SWEEP_INTERVAL_MS};
 use crate::daemon::routes;
 use crate::db::backup;
 use crate::state::AppState;
@@ -110,6 +111,42 @@ pub fn spawn_backup_task(state: &AppState, data_dir: &Path) {
                 Err(e) => {
                     tracing::warn!(error = %e, "prune database backups failed (non-fatal)")
                 }
+            }
+        }
+    });
+}
+
+/// Spawn the RULE-SHELL-001 completed-shell sweeper for the daemon
+/// bin (2026-08-27, task `08-27-rule-shell-001-sweeper`): every
+/// [`SWEEP_INTERVAL_MS`] (5min), prune Done shell entries older
+/// than [`SHELL_RETENTION_MS`] (1h) from `state.background_shells`,
+/// releasing their stdout/stderr buffers. Without this, a
+/// weeks-long daemon process grows the `shells` map without bound
+/// (Done entries keep their full output buffers even after the
+/// disk spill). Exposed here with the same rationale as
+/// [`load_daemon_state`] / [`spawn_backup_task`]: the bin never
+/// touches the private `background_shell` module directly.
+///
+/// Detached spawn (never joined) following the backup-task
+/// pattern. Each run is a pure in-memory map pass; a removal
+/// count of 0 stays silent, > 0 logs at `info!` (no per-shell
+/// details — session ids are not log-relevant here). The interval's
+/// first tick fires immediately: a fresh daemon starts with an
+/// empty map, so the startup sweep is a harmless no-op. The GUI
+/// paths (Tauri Full mode, tests) deliberately do NOT assemble
+/// this — "no timer tasks in the GUI main process"; GUI processes
+/// are short-lived and `kill_all` on exit.
+pub fn spawn_shell_sweeper(state: &AppState) {
+    // Cheap Arc clone; the task holds it for the process lifetime
+    // alongside the server's own handle.
+    let shells = state.background_shells.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(SWEEP_INTERVAL_MS));
+        loop {
+            interval.tick().await;
+            let removed = shells.sweep_completed_shells(SHELL_RETENTION_MS).await;
+            if removed > 0 {
+                tracing::info!(count = removed, "swept completed background shell entries");
             }
         }
     });

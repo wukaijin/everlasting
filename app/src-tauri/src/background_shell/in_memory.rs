@@ -42,6 +42,26 @@ pub(crate) const MAX_NOTIFICATIONS_PER_SESSION: usize = 100;
 /// 86_400_000 ms = 24h. Matches the L1 PRD Q6 decision.
 pub(crate) const DEFAULT_MAX_RUNTIME_MS: u64 = 86_400_000;
 
+/// How long a completed (Done) shell entry stays in the registry
+/// before the daemon sweeper prunes it. 3_600_000 ms = 1h
+/// (RULE-SHELL-001, design D3): completion notifications are
+/// drained at the very next turn and LLM `shell_status` queries
+/// cluster within seconds-to-minutes of completion, so 1h covers
+/// the query window; a latecomer past the window still gets the
+/// outcome + exit_code from the self-contained notification and
+/// only loses the stdout preview (`status()` → NotFound is the
+/// documented "already cleaned up" semantics). Layered apart
+/// from [`DEFAULT_MAX_RUNTIME_MS`]: 24h run cap vs 1h result
+/// retention.
+pub(crate) const SHELL_RETENTION_MS: u64 = 3_600_000;
+
+/// How often the daemon sweeper calls
+/// [`InMemoryBackgroundShellRegistry::sweep_completed_shells`].
+/// 300_000 ms = 5min (RULE-SHELL-001, design D3): the sweep is a
+/// timestamp comparison over a small map (cost ≈ 0), and ±5min
+/// drift is imperceptible against the 1h retention.
+pub(crate) const SWEEP_INTERVAL_MS: u64 = 300_000;
+
 /// Head/tail preview size for `shell_status::stdout_preview` /
 /// `stderr_preview`. Matches [`crate::tools::shell`]'s
 /// `PREVIEW_BYTES`.
@@ -73,10 +93,10 @@ struct Inner {
     /// All live (running) and recently-completed shells, keyed by
     /// `(session_id, shell_session_id)`. Entries are NOT removed
     /// on completion — they stay so `shell_status` can still
-    /// answer. A separate sweeper (TODO: PR3 or follow-up) can
-    /// prune entries older than N minutes; for now the LLM's
-    /// natural "don't re-query old shells" behavior + the
-    /// bounded notifications queue keep memory in check.
+    /// answer. Done entries are pruned by the daemon sweeper
+    /// ([`InMemoryBackgroundShellRegistry::sweep_completed_shells`])
+    /// once past [`SHELL_RETENTION_MS`], releasing their
+    /// stdout/stderr buffers; Running entries are never pruned.
     shells: HashMap<(String, String), ShellEntry>,
     /// Pending completion notifications per session. Drained by
     /// the agent loop each turn.
@@ -147,6 +167,48 @@ impl InMemoryBackgroundShellRegistry {
     /// `start()`.
     pub fn mint_shell_id() -> String {
         format!("bsh_{}", Uuid::new_v4().simple())
+    }
+
+    /// Prune completed-shell entries older than `retention_ms`
+    /// (RULE-SHELL-001, design D1). Removes entries whose state is
+    /// `Done` AND `now - completed_at > retention_ms`, returning
+    /// the number removed.
+    ///
+    /// **Never touches Running entries** — removing one would
+    /// orphan its `kill_tx` (the LLM loses the kill channel for a
+    /// live process group); the max-runtime timer (default 24h)
+    /// guarantees Running eventually becomes Done and a later pass
+    /// sweeps it. Race-safe against `run_background_task`: the
+    /// write-back uses `if let Some(entry)`, so an entry vanishing
+    /// mid-flight is tolerated by design.
+    ///
+    /// Pure in-lock map traversal + timestamp comparison: no I/O,
+    /// no nested await. Removing an entry drops its stdout/stderr
+    /// buffers — the memory-heavy part of a Done entry (the disk
+    /// spill is an extra copy, the in-memory buffer is kept only
+    /// for status previews). After the sweep, `status()` / `kill()`
+    /// for a removed shell return `NotFound`, which is the
+    /// documented "already cleaned up" semantics of
+    /// [`BackgroundShellRegistry::status`].
+    ///
+    /// Inherent method (NOT on the [`BackgroundShellRegistry`]
+    /// trait): sweeping is impl-private lifecycle management, not
+    /// an LLM tool surface. Called by the daemon sweeper task
+    /// (`daemon::server::spawn_shell_sweeper`) with
+    /// [`SHELL_RETENTION_MS`]; `retention_ms` is injectable so
+    /// tests never wait out a real retention window.
+    pub async fn sweep_completed_shells(&self, retention_ms: u64) -> usize {
+        let now = now_ms();
+        let mut g = self.inner.lock().await;
+        let before = g.shells.len();
+        g.shells.retain(|_, entry| {
+            !matches!(
+                &entry.state,
+                ShellState::Done { notification, .. }
+                    if now.saturating_sub(notification.completed_at) > retention_ms
+            )
+        });
+        before - g.shells.len()
     }
 }
 
@@ -349,8 +411,9 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         // spawned tasks to finish — `delete_session` is the
         // caller and would block the IPC response. The spawned
         // tasks observe the kill signal, tear down the process
-        // group, write their Done entry, and the entry just
-        // sits in the map until pruned (TODO: PR3 lifecycle).
+        // group, write their Done entry, and the entry is later
+        // pruned by the daemon sweeper
+        // (`sweep_completed_shells`, RULE-SHELL-001).
         Ok(())
     }
 
@@ -770,6 +833,16 @@ mod tests {
         assert_eq!(MAX_NOTIFICATIONS_PER_SESSION, 100);
     }
 
+    /// Sweep bounds are anchored (RULE-SHELL-001 design D3):
+    /// result retention 1h, sweep interval 5min. Guards against
+    /// accidental re-tuning; style follows
+    /// `notification_queue_cap_is_100`.
+    #[test]
+    fn sweep_bounds_anchored() {
+        assert_eq!(SHELL_RETENTION_MS, 3_600_000);
+        assert_eq!(SWEEP_INTERVAL_MS, 300_000);
+    }
+
     // ----- Async tests (need #[tokio::test]) -----
 
     use std::time::Duration;
@@ -1098,5 +1171,101 @@ mod tests {
             }
         }
         panic!("did not reach cap within timeout");
+    }
+
+    // ----- Sweep tests (RULE-SHELL-001, design D5) -----
+
+    /// Helper: start `true`, poll until the registry records the
+    /// Completed state (same wait pattern as
+    /// `status_after_completion_returns_completed_with_preview`).
+    async fn start_and_wait_done(
+        reg: &InMemoryBackgroundShellRegistry,
+        tmp: &tempfile::TempDir,
+    ) -> String {
+        let shell_id = reg
+            .start(
+                "s1",
+                "true".to_string(),
+                tmp.path().to_path_buf(),
+                Some(5000),
+            )
+            .await
+            .expect("start ok");
+        for _ in 0..40 {
+            if let BackgroundShellStatus::Completed { .. } =
+                reg.status("s1", &shell_id).await.unwrap()
+            {
+                return shell_id;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("shell did not reach Completed within 2s");
+    }
+
+    /// Sweep removes Done entries past the retention window:
+    /// after `true` completes, sweep(retention=0) returns 1 and
+    /// `status` for the shell becomes NotFound (the documented
+    /// "already cleaned up" semantics).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sweep_removes_done_beyond_retention() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let shell_id = start_and_wait_done(&reg, &tmp).await;
+        // The sweep predicate is strict (`now - completed_at >
+        // retention`), so with retention=0 at least 1ms of
+        // monotonic progress must elapse after completion before
+        // the sweep can remove the entry.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let removed = reg.sweep_completed_shells(0).await;
+        assert_eq!(removed, 1);
+        let err = reg.status("s1", &shell_id).await.unwrap_err();
+        assert!(matches!(err, BackgroundShellError::NotFound { .. }));
+    }
+
+    /// Sweep keeps Done entries inside the retention window:
+    /// after completion, sweep(24h retention) removes nothing and
+    /// `status` still answers Completed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sweep_keeps_recent_done() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let shell_id = start_and_wait_done(&reg, &tmp).await;
+        let removed = reg.sweep_completed_shells(86_400_000).await;
+        assert_eq!(removed, 0);
+        assert!(matches!(
+            reg.status("s1", &shell_id).await.unwrap(),
+            BackgroundShellStatus::Completed { .. }
+        ));
+    }
+
+    /// Sweep never removes Running entries (RULE-SHELL-001 R2) —
+    /// removal would orphan the kill channel. `sleep 30` only
+    /// serves to keep the entry in Running; `start()` inserts the
+    /// Running entry synchronously (step 4), so NO waiting is
+    /// needed (design D5 test 3): sweep(0) immediately after
+    /// start must return 0 and leave status Running. Kill at the
+    /// end for cleanup; the whole test runs in ~1-2s (we never
+    /// wait out the 30s).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sweep_keeps_running_entries() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let shell_id = reg
+            .start(
+                "s1",
+                "sleep 30".to_string(),
+                tmp.path().to_path_buf(),
+                Some(60_000),
+            )
+            .await
+            .unwrap();
+        let removed = reg.sweep_completed_shells(0).await;
+        assert_eq!(removed, 0);
+        assert!(matches!(
+            reg.status("s1", &shell_id).await.unwrap(),
+            BackgroundShellStatus::Running { .. }
+        ));
+        // Cleanup — don't leave the 30s child running.
+        let _ = reg.kill("s1", &shell_id).await;
     }
 }
