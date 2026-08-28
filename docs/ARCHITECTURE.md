@@ -228,7 +228,7 @@
 - 续轮协议:队列驱动器在 turn 边界 drain 全队批量注入下一轮(每条独立 user APPEND,cache 断点不变量保持);新 `ChatEvent::TurnContinuation` 作前端续轮渲染边界;DriverSink 单 rid 跨内层轮保活(群聊 stop_reason 白名单的经典聊天泛化)
 - 单条操作:排队消息可撤销(×)/ 退回输入框(recall 返回原文回填 composer),按 uuid 寻址;视图水合 `list_queued_messages`(刷新 / LRU 驱逐 / PWA 第二端可见)
 - 取消矩阵:Stop / edit / resend / retry 清队返回 `clearedQueued` 计数驱动 toast;provider 错误 / 续轮触顶(50)队列**保留**,下次发送 FIFO 一起注入
-- 前置为 F2 定时任务 / F6 异步任务预留统一入口(生产者未实现);优先级分档(B 档)与 daemon 服务化(C 档)留后续
+- 前置为 F2 定时任务 / F6 异步任务预留统一入口(F2 cron 消费者 2026-08-28 已接入:调度器经 `ChatEntry.origin` 走同一「闲也入队」路由;LLM detached dispatch 仍未实现);优先级分档(B 档)留后续
 - 完整设计:见 [ROADMAP.md §1.2 F1-A](./ROADMAP.md) 行;spec 见 [pattern-message-queue-driver](../.trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md)
 
 **B1 image multimodal(2026-08-16/17 落地)**

@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门:clippy -D warnings / fmt / test_pool 禁手写"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门与检查约定"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "核验 wrapper Pattern 合规(不在 load spawn/shutdown 挂载正确)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核验临界区锁纪律与 origin 链无 await/无自拼临界区"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md", "reason": "核验 push/drain 既有语义未被 origin 字段破坏"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验迁移幂等与 FK 级联"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "核验 store/stream 路由合规(不违 spec 硬规则)"}

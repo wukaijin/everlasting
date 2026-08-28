@@ -274,6 +274,20 @@ signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
 清扫后 `shell_status` 返 NotFound 是 `BackgroundShellRegistry::status`
 文档既有语义("or was already cleaned up"),非行为破坏。
 
+**task scheduler**(F2 定时任务,2026-08-28,任务
+`08-28-f2-scheduled-tasks`):第 4 个 spawn,bin 在 sweeper 旁调
+`server::spawn_task_scheduler(&state)`,30s tick 扫 `scheduled_tasks`
+到期任务经 `chat_inner` 注入(契约细节见
+[scheduled-tasks](scheduled-tasks.md))。**停机变体**:backup/sweeper
+是纯 detached(进程退出即亡),scheduler 因 fire 有副作用、需要即时停
+—— `AppState.scheduler_cancel: CancellationToken` 字段(load_inner 纯
+分配,不违 RULE-DAEMON-001;`CancellationToken::new()` 无 spawn 语义),
+循环体 `tokio::select!` biased 监听 cancel(沿 tunnel 心跳样板
+`tunnel/client.rs`),`shutdown_signal` 在 tunnel stop 之后插
+`state.scheduler_cancel.cancel()`。新教训:**需要协作停机的周期任务,
+token 挂 AppState 字段**(无 OnceLock 必要——纯分配直接构造);不需要
+的才用纯 detached。
+
 **日志文件**(仅 `daemon.sh bg/restart` 的 standalone 模式;前台模式照旧
 打终端,Rust stdout tracing 不动、零依赖):
 

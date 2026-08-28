@@ -647,6 +647,10 @@ agent loop 是 daemon 进程里的 fire-and-forget tokio task —— **客户端
 
 要真正的耐久后台(关掉一切窗口任务继续跑):用 `scripts/daemon.sh` 起独立 daemon,浏览器/PWA 访问。配套可观测性:`list_sessions` 的 `busy` 字段跨端可见哪些 session 在跑,轮次终结(非当前 session)有完成 toast(`app_config` `turn_complete_notify_enabled` 可关);跨 session 并发上限 `max_concurrent_loops`(缺省 4,改后需重启 daemon)。
 
+### 调度边界:定时任务只在 daemon 进程跑(F2,2026-08-28)
+
+`spawn_task_scheduler` 与 backup/sweeper 同款**只在 `bin/everlasting-daemon.rs` 装配**——GUI Full 模式(`?transport=tauri` 逃生)零 timer,**Settings「定时任务」面板可建/改任务但永不触发**(面板顶部有提示)。30s tick;停机跨过 fire 点重启后补跑一次(`last_fired_at` 判定);显式 disable→enable 不补跑存量。全局 kill switch `app_config` `scheduled_tasks_enabled`(fail-open)。
+
 ### 生产模式(裸二进制,手动部署)
 
 daemon 自己 serve 前端 + API,同源无 CORS,Windows 宿主浏览器 `http://localhost:7456` 直达。

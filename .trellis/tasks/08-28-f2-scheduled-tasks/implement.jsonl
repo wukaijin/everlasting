@@ -1,0 +1,15 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 索引入口"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "spawn_task_scheduler 必须遵守 wrapper Pattern(backup/sweeper 先例、RULE-DAEMON-001 load 绝不 spawn)与 shutdown 链结构(步骤①.6 cancel 插入点)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_inner 路由临界区/锁纪律(先 queues 后 active_request、区内无 await)/ChatLoopRequest 契约——origin 链四处改动全部落在这里"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md", "reason": "F1-A 队列驱动器契约(push/drain/去重 uuid 语义/RULE-QUEUE-001 背景),QueuedMessage.origin 是 additive 改动"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "scheduled_tasks 新表迁移守则(幂等重放/IF NOT EXISTS/FK 级联)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "新增 commands/scheduled_tasks.rs 的 AppCommandError 模式"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "AuditKind 扩展与 record_audit_event 惯例(ScheduledTaskFired 六动作枚举)"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新模块落点(scheduler/db/commands)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "clippy gate 零告警/test_pool/MdResource 等强制约定"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend spec 索引入口"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 模式(scheduledTasks.ts 沿 audit/memory store 先例)与 streamEvents 路由约束"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "http.ts 命令→域映射与双 transport 单源约定(4 条新映射)"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Settings 第 8 个 tab 组件规范"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "S6b 移动端适配约定(Settings 新 tab 需过 320-430px)"}

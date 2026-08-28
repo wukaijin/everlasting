@@ -58,7 +58,18 @@
 
 > 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
-## P2 — 健壮性 + 债务,中长期清理 [0 items]
+## P2 — 健壮性 + 债务,中长期清理 [1 item]
+
+### RULE-QUEUE-001
+
+- **Level**: P2
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/agent/chat.rs:1069-1072`(驱动器 `drain_all` 全队 extend 进 turn 输入)+ `app/src-tauri/src/agent/chat_loop/init.rs:783-784`(persist 点 `messages.iter().rev().find(...)` 只写尾条 user message)
+- **Description**: F1-A 消息队列多 drain 场景丢消息:驱动器每轮把**全部** drained 条目塞进 LLM 请求,但持久化只写尾条——同轮 drain ≥2 条时非尾条 user message 无 DB 行,reload 后从时间线消失(LLM 单次看到、历史不落库)。F1-A 时手动连发窗口小,概率低;F2 定时注入(F2 条目常驻队列等待消费)会放大触发率。F2 侧已做缓解:去重(本任务上次条目滞留即跳过)+ `lost` 审计 + 钉行为测试(见 `.trellis/tasks/08-28-f2-scheduled-tasks/` design.md §9)。
+- **Fix**: 驱动器/init 对全部非尾 drained user 条目补持久化(或 persist 循环覆盖 drained 全体);注意 seq 分配(MAX+1 契约)与 FTS 触发器;补多 drain 集成测试
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/08-28-f2-scheduled-tasks`(发现于其规划评审;根治独立立项)
+- **Discovered In**: F2 planning review 2026-08-28(外部评审代理,grep 实证无第二处持久化路径;标注「未实跑多 drain 场景」)
 
 > RULE-CI-001 / RULE-FM-001 / RULE-TESTPOOL-001 于 2026-08-26 由 `.trellis/tasks/08-26-p2-debt-cleanup` 闭合(clippy gate 落地 / frontmatter 解析收敛 `parse_md_resource` + `parse_string_array` / `db/test_support.rs` 共享 `test_pool()` 15 处替换),详见 git log。
 
@@ -182,9 +193,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 0 | 全部 closed(RULE-CI/FM/TESTPOOL/ARGS/SHELL/FE-001 已闭合) |
+| P2 | 1 | RULE-QUEUE-001(F1-A 多 drain 非尾条不落库,F2 planning review 2026-08-28 登记) |
 | P3 | 10 | 文档 + 一致性 + 待兑现承诺,可延后 |
-| **Total** | **10** | 当前 open items |
+| **Total** | **11** | 当前 open items |
 
 ---
 
