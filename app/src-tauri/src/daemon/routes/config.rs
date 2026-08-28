@@ -139,6 +139,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/get_web_search_config", post(get_web_search_config))
         .route("/set_web_search_config", post(set_web_search_config))
         .route("/get_app_config", post(get_app_config))
+        .route("/set_app_config_flag", post(set_app_config_flag))
         .with_state(state)
 }
 
@@ -149,6 +150,24 @@ pub async fn get_app_config(
 ) -> Result<Json<crate::commands::config::AppConfigPayload>, AppCommandError> {
     let result = crate::commands::config::get_app_config_inner(&state).await?;
     Ok(Json(result))
+}
+
+// ---- Settings「通用」开关写入口(2026-08-29, settings-shell 重构)----
+
+/// `set_app_config_flag` 请求体(snake_case,与 Tauri command 扁平标量
+/// 参数一一对应;白名单校验在 `_inner`)。
+#[derive(Deserialize)]
+pub struct SetAppConfigFlagRequest {
+    pub key: String,
+    pub value: bool,
+}
+
+pub async fn set_app_config_flag(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetAppConfigFlagRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::config::set_app_config_flag_inner(&state, body.key, body.value).await?;
+    Ok(Json(()))
 }
 
 #[cfg(test)]
@@ -514,5 +533,82 @@ mod tests {
         let (code, v) = post_json(&app, "/get_remote_config", "{}").await;
         assert_eq!(code, StatusCode::OK);
         assert_eq!(v["displayName"], serde_json::Value::Null);
+    }
+
+    /// Settings「通用」开关(2026-08-29 settings-shell)route 全链:
+    /// set false → get_app_config 读回 false;set true 回 true;
+    /// 白名单外 key → 4xx 且不落库。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_app_config_flag_route_set_reject_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let app = router(state.clone());
+
+        async fn post_json(
+            app: &axum::Router,
+            uri: &str,
+            body: &str,
+        ) -> (StatusCode, serde_json::Value) {
+            use tower::ServiceExt;
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        for (key, field) in [
+            ("turn_complete_notify_enabled", "turnCompleteNotifyEnabled"),
+            ("scheduled_tasks_enabled", "scheduledTasksEnabled"),
+        ] {
+            let (code, v) = post_json(
+                &app,
+                "/set_app_config_flag",
+                &serde_json::json!({ "key": key, "value": false }).to_string(),
+            )
+            .await;
+            assert_eq!(code, StatusCode::OK, "{key}: {v}");
+            let (_, v) = post_json(&app, "/get_app_config", "{}").await;
+            assert_eq!(
+                v[field], false,
+                "{key} 写 false 后 get_app_config 应读回 false"
+            );
+
+            let (code, v) = post_json(
+                &app,
+                "/set_app_config_flag",
+                &serde_json::json!({ "key": key, "value": true }).to_string(),
+            )
+            .await;
+            assert_eq!(code, StatusCode::OK, "{key}: {v}");
+            let (_, v) = post_json(&app, "/get_app_config", "{}").await;
+            assert_eq!(v[field], true);
+        }
+
+        // 白名单外 key → 4xx(InvalidRequest),不落库
+        let (code, body) = post_json(
+            &app,
+            "/set_app_config_flag",
+            r#"{"key":"remote_url","value":true}"#,
+        )
+        .await;
+        assert_ne!(code, StatusCode::OK, "白名单外 key 必须拒绝: {body}");
+        let stored = crate::db::get_config_value(&state.db, "remote_url")
+            .await
+            .unwrap();
+        assert_eq!(stored, None, "拒绝的 key 不得写库");
     }
 }

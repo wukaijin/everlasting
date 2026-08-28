@@ -83,6 +83,9 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   set_web_search_config: "config",
   // F6 异步 agent 任务(2026-08-27):app_config 开关面读出口。
   get_app_config: "config",
+  // Settings「通用」开关写入口(2026-08-29 settings-shell):缺这行时
+  // 浏览器/sidecar 模式报 `unknown cmd "set_app_config_flag"`。
+  set_app_config_flag: "config",
   // S2 配对码生成(新 domain pairing)
   generate_pairing_code: "pairing",
   // files

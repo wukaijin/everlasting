@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // MemoryTab — Settings page tab content for the B5 memory preview.
 //
-// The Settings page is project-agnostic: it shows the 2 User
+// The Settings "全局" scope is project-agnostic: it shows the 2 User
 // layers (User CLAUDE.md + User AGENTS.md) only, since those
-// are global across all projects. The Project layers are
-// scoped to the active project and live behind the ProjectTabs
-// "Memory" dropdown, not here.
+// are global across all projects. The Project layers are scoped to
+// the selected project and live behind the ProjectTabs "Memory"
+// dropdown AND the Settings「项目」scope (ProjectMemoryTab,
+// 2026-08-29 settings-shell) — not here.
 //
 // Wraps `MemoryPreview` with `kind="user"`. The preview handles
 // loading / error / refresh state itself; this component is

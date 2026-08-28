@@ -307,6 +307,25 @@ existing `:deep()` rule applies verbatim. See the
 :deep(.providers-tab__option[data-state="checked"]) { ... }
 ```
 
+> **Warning (2026-08-29): do NOT add `position: fixed` to the
+> SelectContent itself.** The example above carries it historically
+> (ProvidersTab / SubagentsTab), and it *looks* harmless there — pinned
+> `width: trigger-width` + default `align="start"` make the placement
+> error invisible. But reka's popper **wrapper** (which already has
+> `position: fixed` and carries the floating-ui transform) is what
+> positions the panel; if the content element takes itself out of the
+> wrapper's flow, the wrapper collapses to 0×0, floating-ui computes
+> alignment/collision for a zero-width box, and:
+> - `align="end"` silently does nothing (panel's left edge lands on the
+>   trigger's right edge and overflows the viewport right — measured
+>   2026-08-29 in the Settings project picker), and
+> - viewport collision shift never kicks in.
+>
+> The content element must stay `position: static` (default) inside the
+> wrapper. The unpinned-width picker in `SettingsModal.vue`
+> (`.settings-modal__picker-content`, `align="end"`) is the reference
+> implementation.
+
 **Diagnosis tip — how to confirm this is the bug you're
 hitting, not a z-index / specificity issue**:
 

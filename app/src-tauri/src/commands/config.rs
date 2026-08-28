@@ -528,3 +528,107 @@ pub async fn get_app_config(
 ) -> Result<AppConfigPayload, AppCommandError> {
     get_app_config_inner(&state).await
 }
+
+// ---------------------------------------------------------------------------
+// Settings「通用」开关写入口(2026-08-29, settings-shell 重构)。
+// 与 `get_app_config` 组成读写对;存值语义不变(仅字面 `"false"` 关,
+// fail-open 缺省开),写入即 `"true"` / `"false"` 字面量。
+// ---------------------------------------------------------------------------
+
+/// `set_app_config_flag` 允许写的 key 白名单。防呆:app_config 里还有
+/// remote_url / web_search key 等敏感键(各有自己的校验命令),不能被
+/// 这个通用布尔入口绕过;新增可 UI 切换的标志位时在此扩名单 +
+/// `AppConfigPayload` 加读字段。
+const SETTABLE_APP_FLAGS: &[&str] = &["turn_complete_notify_enabled", "scheduled_tasks_enabled"];
+
+/// 写 app_config 布尔开关(白名单内)。key 不在白名单 → `InvalidRequest`
+/// 不写库。参数为**扁平标量**(IPC 形状铁律)。
+pub async fn set_app_config_flag_inner(
+    state: &Arc<AppState>,
+    key: String,
+    value: bool,
+) -> Result<(), AppCommandError> {
+    if !SETTABLE_APP_FLAGS.contains(&key.as_str()) {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("unknown app_config flag: {key}"),
+        ));
+    }
+    db::set_config_value(&state.db, &key, if value { "true" } else { "false" })
+        .await
+        .map_err(|e| anyhow::anyhow!("set_app_config_flag failed: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_app_config_flag(
+    state: State<'_, Arc<AppState>>,
+    key: String,
+    value: bool,
+) -> Result<(), AppCommandError> {
+    set_app_config_flag_inner(&state, key, value).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 白名单内 key:写 `"false"` → `get_app_config_inner` 读回 false;
+    /// 写 `"true"` 回 true。与读路径(fail-open 仅字面 `"false"` 关)闭环。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_flag_roundtrip_through_get_app_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+
+        // 缺省(未写)双开关为 true
+        let cfg = get_app_config_inner(&state).await.unwrap();
+        assert!(cfg.turn_complete_notify_enabled && cfg.scheduled_tasks_enabled);
+
+        for key in SETTABLE_APP_FLAGS {
+            set_app_config_flag_inner(&state, key.to_string(), false)
+                .await
+                .unwrap();
+            let cfg = get_app_config_inner(&state).await.unwrap();
+            let off = match *key {
+                "turn_complete_notify_enabled" => cfg.turn_complete_notify_enabled,
+                "scheduled_tasks_enabled" => cfg.scheduled_tasks_enabled,
+                _ => unreachable!(),
+            };
+            assert!(!off, "{key} 写 false 后应读回 false");
+
+            set_app_config_flag_inner(&state, key.to_string(), true)
+                .await
+                .unwrap();
+        }
+        let cfg = get_app_config_inner(&state).await.unwrap();
+        assert!(cfg.turn_complete_notify_enabled && cfg.scheduled_tasks_enabled);
+    }
+
+    /// 白名单外 key 拒绝(`InvalidRequest`),且不落库。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_flag_rejects_non_whitelisted_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+
+        // default_model_id 建库即被 seed,不能当"未写入"断言对象;
+        // 这几个键在新库均为空。
+        for bad in [
+            "remote_url",
+            "shared_secret",
+            "web_search.provider",
+            "future_flag_x",
+        ] {
+            let err = set_app_config_flag_inner(&state, bad.to_string(), true)
+                .await
+                .unwrap_err();
+            assert_eq!(err.category, ErrorCategory::InvalidRequest, "{bad}");
+            assert!(
+                db::get_config_value(&state.db, bad)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "拒绝的 key 不得写库: {bad}"
+            );
+        }
+    }
+}

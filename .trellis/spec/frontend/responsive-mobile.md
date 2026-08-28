@@ -333,6 +333,39 @@ teleport. They don't enter the global block; they already use
 `width:100%` and shrink fine. Only their buttons need touch-target
 uplift.
 
+### 5.4 Gotcha: scoped desktop `height` beats the global block (twice-bitten)
+
+**Symptom**: modal renders fullscreen-wide on mobile but stops short of
+the viewport bottom (hard horizontal edge + dead backdrop band below).
+2026-08-29 settings-shell refactor: modal measured at exactly `700px`
+tall in a 844px viewport.
+
+**Cause**: in the §5.2 global block, `width` / `inset` / `transform`
+carry `!important` but **`height` / `max-height` do not**. A component's
+scoped desktop declaration like `.settings-modal[data-v-x] { height:
+min(700px, 85vh) }` has higher specificity (class + attribute = 0,2,0)
+than the global `.settings-modal` (0,1,0), so the scoped height wins on
+mobile too.
+
+**Fix**: the component's own `@media (max-width: 767px)` block must
+re-assert the fullscreen height (same-specificity, later source order):
+
+```css
+@media (max-width: 767px) {
+  .settings-modal {
+    height: var(--app-height);
+    max-height: var(--app-height);
+  }
+}
+```
+
+**History**: same root cause, first strike 2026-08-13 (old SettingsModal
+`max-height: 80vh` clamped the global height — fixed in-component with
+`max-height: 100vh`); second strike 2026-08-29 (new shell introduced a
+desktop `height`, which needed the same in-component override). Any new
+modal that declares a desktop `height`/`max-height` must repeat this
+override — the global block will not do it for you.
+
 ---
 
 ## 6. Touch targets (Apple HIG 44px)

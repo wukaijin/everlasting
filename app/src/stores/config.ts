@@ -162,6 +162,34 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Settings「通用」开关写入口(2026-08-29 settings-shell)。写成功后才
+  // 更新本地 ref(失败时调用方 toast,本地值保持 DB 现状);key 常量与
+  // 后端 `SETTABLE_APP_FLAGS` 白名单一一对应。
+  // -----------------------------------------------------------------------
+
+  /** Toggle the per-turn completion toast (app_config
+   *  `turn_complete_notify_enabled`). Throws on transport error —
+   *  the caller keeps the switch on the pre-toggle value. */
+  async function setTurnCompleteNotify(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "turn_complete_notify_enabled",
+      value: on,
+    });
+    turnCompleteNotify.value = on;
+  }
+
+  /** Toggle the scheduled-tasks global kill switch (app_config
+   *  `scheduled_tasks_enabled`). Fail-open semantics upstream:
+   *  only a literal `"false"` disables the scheduler tick. */
+  async function setScheduledTasksEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "scheduled_tasks_enabled",
+      value: on,
+    });
+    scheduledTasksEnabled.value = on;
+  }
+
   return {
     model,
     baseUrl,
@@ -173,6 +201,8 @@ export const useConfigStore = defineStore("config", () => {
     lastActiveProjectId,
     readLastSession,
     writeLastSession,
+    setTurnCompleteNotify,
+    setScheduledTasksEnabled,
     load,
   };
 });
