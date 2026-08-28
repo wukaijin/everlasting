@@ -4,11 +4,16 @@
 //
 // 一面两区:
 //   1. 任务卡片列表 —— 名称 / 目标 session·project / schedule 人话 /
-//      prompt 摘要 / 上次·下次触发 / 启停 switch / 删除(ConfirmDialog
-//      确认)。停用行灰显,仍展示 schedule 下一到期点(存库展示值)。
+//      prompt 摘要 / 上次·下次触发 / 触发进度(已触发 N/M 次 · 至日期)/
+//      启停 switch / 删除(ConfirmDialog 确认)。停用行灰显;F2b 自动
+//      完成的任务显示「已完成/已结束」(区别于手动停用)。
 //   2. 新建/编辑表单 —— project 下拉 → session 下拉(按 project 过滤,
-//      仅 classic;勾选「新建专用 session」则不选)→ 档位(daily 时间 /
-//      interval 数字 / weekly 周几+时间)→ prompt textarea。
+//      仅 classic;勾选「新建专用 session」则不选)→ 档位(F2b 6 档:
+//      每小时 分钟 / 每天 时分 / 每工作日 时分 / 每周 周几+时分 /
+//      每月 几号+时分 / 固定频率 数量+单位[分钟/小时/天/周,提交换算
+//      every_min])→ 结束条件(F2b:固定时间 = 永不/次数 N;固定频率 =
+//      永不/结束日期[含当日,提交转当日 23:59:59.999 本地 ms])→
+//      prompt textarea。
 //      同 session 已有 enabled 任务 → **软警示**(不硬拒;调度器对同
 //      session 同 tick 串行化,设计 §9)。
 //
@@ -58,6 +63,12 @@ import {
   formatFireTime,
   summarizePrompt,
   WEEKDAY_OPTIONS,
+  INTERVAL_UNITS,
+  splitEveryMin,
+  describeRunCount,
+  describeEndDate,
+  completedByRunLimit,
+  completedByEndDate,
 } from "../../utils/scheduledTaskFormat";
 
 const store = useScheduledTasksStore();
@@ -141,7 +152,35 @@ async function confirmDelete(): Promise<void> {
 
 // --- 表单区(新建 / 编辑共用) --------------------------------------------
 
-type FormKind = "daily" | "interval" | "weekly";
+/** F2b:档位扩到 6 个 —— 固定时间(hourly/daily/weekdays/weekly/monthly)
+ *  + 固定频率(interval,单位换算后仍存 every_min)。 */
+type FormKind =
+  | "hourly"
+  | "daily"
+  | "weekdays"
+  | "weekly"
+  | "monthly"
+  | "interval";
+
+/** 档位下拉选项(固定时间在前、固定频率殿后,与两类任务的分组直觉一致)。 */
+const KIND_OPTIONS: ReadonlyArray<{ value: FormKind; label: string }> = [
+  { value: "hourly", label: "每小时" },
+  { value: "daily", label: "每天" },
+  { value: "weekdays", label: "每工作日" },
+  { value: "weekly", label: "每周" },
+  { value: "monthly", label: "每月" },
+  { value: "interval", label: "固定频率" },
+];
+
+/** 固定时间类档位(F2b 类型 A):结束条件 = 永不 / 次数;固定频率
+ *  (类型 B)= 永不 / 结束日期(prd D10:UI 按类型限定,后端两列通用)。 */
+const FIXED_TIME_KINDS: ReadonlySet<string> = new Set([
+  "hourly",
+  "daily",
+  "weekdays",
+  "weekly",
+  "monthly",
+]);
 
 /** reka `update:model-value` 载荷归一化(SubagentsTab onModelChange
  *  同款:单选场景收掉防御性的数组分支)。 */
@@ -161,7 +200,18 @@ function onPickSession(v: unknown): void {
 
 function onPickKind(v: unknown): void {
   const k = normalizeSelectValue(v);
-  if (k === "daily" || k === "interval" || k === "weekly") form.kind = k;
+  if (KIND_OPTIONS.some((o) => o.value === k)) {
+    form.kind = k as FormKind;
+    // 切换类型时收窄结束条件选项:固定频率没有「次数」、固定时间没有
+    // 「日期」,残留的 endMode 立即回落到「永不」避免提交非法组合。
+    if (form.endMode === "count" && !FIXED_TIME_KINDS.has(k)) form.endMode = "never";
+    if (form.endMode === "date" && FIXED_TIME_KINDS.has(k)) form.endMode = "never";
+  }
+}
+
+function onPickIntervalUnit(v: unknown): void {
+  const u = normalizeSelectValue(v);
+  if (INTERVAL_UNITS.some((x) => x.value === u)) form.intervalUnit = u;
 }
 
 const formOpen = ref(false);
@@ -176,10 +226,24 @@ const form = reactive({
   targetSessionId: "",
   kind: "daily" as FormKind,
   at: "09:00",
-  everyMin: 30,
+  /** hourly:每小时第几分钟(0-59)。 */
+  hourlyMinute: 30,
+  /** monthly:每月几号(1-31)。 */
+  monthlyDay: 1,
   weekday: "mon",
+  /** interval:数量 + 单位(提交时换算 every_min = 数量 × 单位分钟数)。 */
+  intervalCount: 30,
+  intervalUnit: "minute",
+  /** F2b 结束条件:never / count(固定时间)/ date(固定频率)。 */
+  endMode: "never" as "never" | "count" | "date",
+  maxRuns: 5,
+  /** yyyy-MM-dd(input[type=date] 值;提交转当日 23:59:59.999 本地 ms)。 */
+  endDate: "",
   prompt: "",
 });
+
+/** 固定时间类档位(决定结束条件选项与档位字段渲染)。 */
+const isFixedTime = computed(() => FIXED_TIME_KINDS.has(form.kind));
 
 /** 所选 project 下的 classic session 选项(群聊不是合法目标,AC7)。 */
 const sessionOptions = computed<SessionSummary[]>(() => {
@@ -202,6 +266,24 @@ const softWarning = computed<string | null>(() => {
   return `该 session 已有定时任务 ${names},同时触发将合并为一轮处理`;
 });
 
+/** 本地 `yyyy-MM-dd` → 当日 23:59:59.999 的 epoch ms(D9:结束日含当日,
+ *  当天到期点照常触发,次日起不再)。非法 → null。 */
+function endOfDayMs(dateStr: string): number | null {
+  const parts = dateStr.split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const [y, m, d] = parts as [number, number, number];
+  const dt = new Date(y, m - 1, d, 23, 59, 59, 999);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.getTime();
+}
+
+/** epoch ms → 本地 `yyyy-MM-dd`(编辑回填 `input[type=date]`)。 */
+function msToDateStr(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function resetForm(): void {
   form.name = "";
   form.projectId = projects.currentProjectId ?? "";
@@ -209,8 +291,14 @@ function resetForm(): void {
   form.targetSessionId = "";
   form.kind = "daily";
   form.at = "09:00";
-  form.everyMin = 30;
+  form.hourlyMinute = 30;
+  form.monthlyDay = 1;
   form.weekday = "mon";
+  form.intervalCount = 30;
+  form.intervalUnit = "minute";
+  form.endMode = "never";
+  form.maxRuns = 5;
+  form.endDate = "";
   form.prompt = "";
 }
 
@@ -228,19 +316,47 @@ function openEdit(task: ScheduledTask): void {
   form.newDedicated = false;
   form.targetSessionId = task.target_session_id;
   const spec = task.schedule;
-  if (spec?.kind === "daily") {
+  if (spec?.kind === "hourly") {
+    form.kind = "hourly";
+    form.hourlyMinute = spec.minute;
+  } else if (spec?.kind === "daily") {
     form.kind = "daily";
     form.at = spec.at;
-  } else if (spec?.kind === "interval") {
-    form.kind = "interval";
-    form.everyMin = spec.every_min;
+  } else if (spec?.kind === "weekdays") {
+    form.kind = "weekdays";
+    form.at = spec.at;
   } else if (spec?.kind === "weekly") {
     form.kind = "weekly";
     form.weekday = spec.weekday;
     form.at = spec.at;
+  } else if (spec?.kind === "monthly") {
+    form.kind = "monthly";
+    form.monthlyDay = spec.day;
+    form.at = spec.at;
+  } else if (spec?.kind === "interval") {
+    form.kind = "interval";
+    const { n, unit } = splitEveryMin(spec.every_min);
+    form.intervalCount = n;
+    form.intervalUnit = unit;
   } else {
     form.kind = "daily";
     form.at = "09:00";
+  }
+  // 结束条件回填:按当前档位类型取可表达的(UI 限定单一条件;另一列
+  // 提交时显式清空,保持 wire 与表单模型一致)。
+  if (form.kind === "interval") {
+    if (task.ends_at !== null) {
+      form.endMode = "date";
+      form.endDate = msToDateStr(task.ends_at);
+    } else {
+      form.endMode = "never";
+      form.endDate = "";
+    }
+  } else if (task.max_runs !== null) {
+    form.endMode = "count";
+    form.maxRuns = task.max_runs;
+  } else {
+    form.endMode = "never";
   }
   form.prompt = task.prompt;
   formOpen.value = true;
@@ -254,17 +370,31 @@ function cancelForm(): void {
   formError.value = null;
 }
 
-/** 表单态 → schedule preset 对象。interval 非法(非正整数)返回 null。 */
+/** 表单态 → schedule preset 对象。字段非法(负数/越界)返回 null
+ *  (submitForm 已前置校验,这里是防御兜底)。 */
 function buildScheduleSpec(): ScheduleSpec | null {
   switch (form.kind) {
+    case "hourly": {
+      const m = Math.floor(Number(form.hourlyMinute));
+      if (!Number.isFinite(m) || m < 0 || m > 59) return null;
+      return { kind: "hourly", minute: m };
+    }
     case "daily":
       return { kind: "daily", at: form.at };
+    case "weekdays":
+      return { kind: "weekdays", at: form.at };
     case "weekly":
       return { kind: "weekly", weekday: form.weekday, at: form.at };
+    case "monthly": {
+      const d = Math.floor(Number(form.monthlyDay));
+      if (!Number.isFinite(d) || d < 1 || d > 31) return null;
+      return { kind: "monthly", day: d, at: form.at };
+    }
     case "interval": {
-      const n = Math.floor(Number(form.everyMin));
-      if (!Number.isFinite(n) || n < 1) return null;
-      return { kind: "interval", every_min: n };
+      const n = Math.floor(Number(form.intervalCount));
+      const unit = INTERVAL_UNITS.find((u) => u.value === form.intervalUnit);
+      if (!unit || !Number.isFinite(n) || n < 1 || n * unit.minutes < 1) return null;
+      return { kind: "interval", every_min: n * unit.minutes };
     }
   }
 }
@@ -289,20 +419,70 @@ async function submitForm(): Promise<void> {
     formError.value = "请选择目标 session,或勾选「新建专用 session」";
     return;
   }
+  // 档位字段(按档位细分错误信息)。
+  if (form.kind === "hourly") {
+    const m = Math.floor(Number(form.hourlyMinute));
+    if (!Number.isFinite(m) || m < 0 || m > 59) {
+      formError.value = "分钟必须在 0-59 之间";
+      return;
+    }
+  }
+  if (form.kind === "monthly") {
+    const d = Math.floor(Number(form.monthlyDay));
+    if (!Number.isFinite(d) || d < 1 || d > 31) {
+      formError.value = "每月几号必须在 1-31 之间";
+      return;
+    }
+  }
+  if (form.kind === "interval") {
+    const n = Math.floor(Number(form.intervalCount));
+    if (!Number.isFinite(n) || n < 1) {
+      formError.value = "频率数量必须为正整数";
+      return;
+    }
+  }
+  // F2b 结束条件。
+  let maxRuns: number | null = null;
+  let endsAt: number | null = null;
+  if (form.endMode === "count") {
+    const m = Math.floor(Number(form.maxRuns));
+    if (!Number.isFinite(m) || m < 1) {
+      formError.value = "次数上限必须是不小于 1 的整数";
+      return;
+    }
+    maxRuns = m;
+  } else if (form.endMode === "date") {
+    const t = endOfDayMs(form.endDate);
+    if (t === null) {
+      formError.value = "请选择结束日期";
+      return;
+    }
+    // 今天合法(当日 23:59:59.999 仍未来临,当天到期点照常触发);
+    // 早于今天 → 已结束的任务无意义。
+    if (t <= Date.now()) {
+      formError.value = "结束日期不能早于今天";
+      return;
+    }
+    endsAt = t;
+  }
   const spec = buildScheduleSpec();
   if (!spec) {
-    formError.value = "interval 分钟数必须为正整数";
+    formError.value = "触发计划字段不合法";
     return;
   }
   saving.value = true;
   try {
     const schedule = JSON.stringify(spec);
     if (editingId.value) {
+      // update 显式带 maxRuns/endsAt(null = 清空):切换结束方式后旧值
+      // 不残留(表单模型每档位只有一个条件)。
       await store.update(editingId.value, {
         name,
         prompt,
         schedule,
         ...(form.newDedicated ? {} : { targetSessionId: form.targetSessionId }),
+        maxRuns,
+        endsAt,
       });
       projects.showToast("任务已更新", "info");
     } else {
@@ -312,6 +492,8 @@ async function submitForm(): Promise<void> {
         name,
         prompt,
         schedule,
+        ...(maxRuns !== null ? { maxRuns } : {}),
+        ...(endsAt !== null ? { endsAt } : {}),
       });
       projects.showToast("任务已创建", "info");
     }
@@ -323,6 +505,29 @@ async function submitForm(): Promise<void> {
   } finally {
     saving.value = false;
   }
+}
+
+// --- 列表卡(F2b 状态徽章 + 触发进度) -------------------------------------
+
+/** 状态徽章文案:自动完成的「已完成/已结束」区别于手动停用的「已停用」
+ *  (F2b D8:完成任务保留在列表,可重新启用,计数清零)。 */
+function stateLabel(task: ScheduledTask): string {
+  if (task.enabled) return "启用中";
+  if (completedByRunLimit(task)) return "已完成";
+  if (completedByEndDate(task)) return "已结束";
+  return "已停用";
+}
+
+/** 卡片的触发进度行:已触发 N/M 次 · 至 YYYY-MM-DD(任一结束条件设置时
+ *  才渲染;纯「永不结束」任务的上次触发时间已有展示,不重复)。 */
+function cardEndSummary(task: ScheduledTask): string {
+  const parts = [`已触发 ${describeRunCount(task.run_count, task.max_runs)}`];
+  if (task.ends_at !== null) parts.push(describeEndDate(task.ends_at));
+  return parts.join(" · ");
+}
+
+function hasEndCondition(task: ScheduledTask): boolean {
+  return task.max_runs !== null || task.ends_at !== null;
 }
 
 onMounted(async () => {
@@ -473,34 +678,38 @@ onMounted(async () => {
                 :side-offset="4"
               >
                 <SelectViewport class="sched-tab__dropdown-viewport">
-                  <SelectItem value="daily" class="sched-tab__option">
-                    <SelectItemText>每天</SelectItemText>
-                  </SelectItem>
-                  <SelectItem value="interval" class="sched-tab__option">
-                    <SelectItemText>间隔</SelectItemText>
-                  </SelectItem>
-                  <SelectItem value="weekly" class="sched-tab__option">
-                    <SelectItemText>每周</SelectItemText>
+                  <SelectItem
+                    v-for="k in KIND_OPTIONS"
+                    :key="k.value"
+                    :value="k.value"
+                    class="sched-tab__option"
+                  >
+                    <SelectItemText>{{ k.label }}</SelectItemText>
                   </SelectItem>
                 </SelectViewport>
               </SelectContent>
             </SelectPortal>
           </SelectRoot>
-          <template v-if="form.kind === 'daily'">
-            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
-          </template>
-          <template v-else-if="form.kind === 'interval'">
+          <template v-if="form.kind === 'hourly'">
             <input
-              v-model.number="form.everyMin"
+              v-model.number="form.hourlyMinute"
               type="number"
-              min="1"
+              min="0"
+              max="59"
               step="1"
               class="sched-tab__input sched-tab__minutes"
-              data-testid="sched-every-min"
+              data-testid="sched-hourly-minute"
             />
-            <span class="sched-tab__unit">分钟</span>
+            <span class="sched-tab__unit">分钟(每小时第几分钟)</span>
           </template>
-          <template v-else>
+          <template v-else-if="form.kind === 'daily'">
+            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+          </template>
+          <template v-else-if="form.kind === 'weekdays'">
+            <span class="sched-tab__unit">周一至五</span>
+            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+          </template>
+          <template v-else-if="form.kind === 'weekly'">
             <SelectRoot v-model="form.weekday">
               <SelectTrigger
                 class="sched-tab__trigger sched-tab__weekday"
@@ -532,6 +741,100 @@ onMounted(async () => {
             </SelectRoot>
             <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
           </template>
+          <template v-else-if="form.kind === 'monthly'">
+            <span class="sched-tab__unit">每月</span>
+            <input
+              v-model.number="form.monthlyDay"
+              type="number"
+              min="1"
+              max="31"
+              step="1"
+              class="sched-tab__input sched-tab__minutes"
+              data-testid="sched-monthly-day"
+            />
+            <span class="sched-tab__unit">号</span>
+            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+          </template>
+          <template v-else>
+            <input
+              v-model.number="form.intervalCount"
+              type="number"
+              min="1"
+              step="1"
+              class="sched-tab__input sched-tab__minutes"
+              data-testid="sched-interval-count"
+            />
+            <SelectRoot
+              :model-value="form.intervalUnit"
+              @update:model-value="onPickIntervalUnit"
+            >
+              <SelectTrigger
+                class="sched-tab__trigger sched-tab__weekday"
+                data-testid="sched-interval-unit"
+                aria-label="频率单位"
+              >
+                <SelectValue />
+                <SelectIcon class="sched-tab__trigger-icon">
+                  <Icon name="chevron-down" :size="12" />
+                </SelectIcon>
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectContent
+                  class="sched-tab__dropdown"
+                  position="popper"
+                  :side-offset="4"
+                >
+                  <SelectViewport class="sched-tab__dropdown-viewport">
+                    <SelectItem
+                      v-for="u in INTERVAL_UNITS"
+                      :key="u.value"
+                      :value="u.value"
+                      class="sched-tab__option"
+                    >
+                      <SelectItemText>每 {{ u.label }}</SelectItemText>
+                    </SelectItem>
+                  </SelectViewport>
+                </SelectContent>
+              </SelectPortal>
+            </SelectRoot>
+          </template>
+        </div>
+      </div>
+
+      <!-- F2b 结束条件:固定时间 → 永不/次数;固定频率 → 永不/结束日期
+           (prd D10:UI 按类型限定,提交时另一条件显式清空)。 -->
+      <div class="sched-tab__field">
+        <span class="sched-tab__label">结束条件</span>
+        <div class="sched-tab__end-row" role="radiogroup" aria-label="结束条件">
+          <label class="sched-tab__end-option">
+            <input v-model="form.endMode" type="radio" value="never" name="sched-end" />
+            永不结束
+          </label>
+          <label v-if="isFixedTime" class="sched-tab__end-option">
+            <input v-model="form.endMode" type="radio" value="count" name="sched-end" />
+            限定
+            <input
+              v-model.number="form.maxRuns"
+              type="number"
+              min="1"
+              step="1"
+              class="sched-tab__input sched-tab__count"
+              data-testid="sched-max-runs"
+              :disabled="form.endMode !== 'count'"
+            />
+            次
+          </label>
+          <label v-else class="sched-tab__end-option">
+            <input v-model="form.endMode" type="radio" value="date" name="sched-end" />
+            结束日期
+            <input
+              v-model="form.endDate"
+              type="date"
+              class="sched-tab__input sched-tab__date"
+              data-testid="sched-end-date"
+              :disabled="form.endMode !== 'date'"
+            />
+          </label>
         </div>
       </div>
 
@@ -596,9 +899,13 @@ onMounted(async () => {
               <span class="sched-tab__card-name" :title="task.name">{{ task.name }}</span>
               <span
                 class="sched-tab__card-state"
-                :class="{ 'sched-tab__card-state--off': !task.enabled }"
+                :class="{
+                  'sched-tab__card-state--off': !task.enabled && stateLabel(task) === '已停用',
+                  'sched-tab__card-state--done':
+                    !task.enabled && stateLabel(task) !== '已停用',
+                }"
               >
-                {{ task.enabled ? "启用中" : "已停用" }}
+                {{ stateLabel(task) }}
               </span>
             </div>
             <div class="sched-tab__card-meta">
@@ -615,6 +922,7 @@ onMounted(async () => {
             <div class="sched-tab__card-fires">
               <span>上次:{{ formatFireTime(task.last_fired_at) }}</span>
               <span>下次:{{ formatFireTime(task.next_fire_at) }}</span>
+              <span v-if="hasEndCondition(task)">{{ cardEndSummary(task) }}</span>
             </div>
           </div>
           <div class="sched-tab__card-actions">
@@ -896,6 +1204,45 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
+/* F2b 结束条件:radiogroup + 内联的条件参数(次数 / 日期)。 */
+.sched-tab__end-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.sched-tab__end-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  min-height: 44px; /* 触控目标(settings-modal 44px 规则)。 */
+}
+
+.sched-tab__end-option input[type="radio"] {
+  accent-color: var(--color-accent, currentcolor);
+  margin: 0;
+}
+
+.sched-tab__end-option input[type="radio"]:focus-visible {
+  outline: 2px solid var(--color-accent, currentcolor);
+  outline-offset: 2px;
+}
+
+.sched-tab__count {
+  width: 72px;
+  flex: 0 0 72px;
+}
+
+.sched-tab__date {
+  flex: 1 1 140px;
+  max-width: 200px;
+}
+
 .sched-tab__prompt {
   resize: vertical;
   min-height: 72px;
@@ -996,12 +1343,17 @@ onMounted(async () => {
 
 .sched-tab__card-state {
   flex-shrink: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--text-2-xs);
   color: var(--color-tool-write);
 }
 
 .sched-tab__card-state--off {
   color: var(--color-text-muted);
+}
+
+/* F2b 完成态(自动停用,区别于手动停用的灰显)。 */
+.sched-tab__card-state--done {
+  color: var(--color-status-success);
 }
 
 .sched-tab__card-meta {

@@ -304,7 +304,7 @@ const uiDiffAppliedSummary = computed<string>(() => {
 });
 
 /** F2 定时任务 (2026-08-28): scheduler fire lifecycle summary. Format:
- *  `「任务名」 · 触发/补跑/去重跳过/队列关闭跳过/丢失/失败[ · reason]`.
+ *  `「任务名」 · 触发/补跑/去重跳过/队列关闭跳过/丢失/失败/已完成[ · reason]`.
  *  Renders empty for non-scheduled_task_fired kinds. */
 const scheduledTaskSummary = computed<string>(() => {
   if (parsed.value.kind !== "scheduled_task_fired") return "";
@@ -324,11 +324,23 @@ const scheduledTaskSummary = computed<string>(() => {
         return "丢失";
       case "error":
         return "失败";
+      case "completed":
+        return "已完成";
       default:
         return p.action ?? "?";
     }
   })();
-  const reason = p.reason ? ` · ${p.reason}` : "";
+  // F2b completed 的 reason(max_runs / end_date)翻译成人话;其余动作
+  // 的 reason 原样(如 queue_full)。
+  const reasonLabel =
+    p.action === "completed"
+      ? p.reason === "max_runs"
+        ? "达次数上限"
+        : p.reason === "end_date"
+          ? "已达结束日期"
+          : p.reason
+      : p.reason;
+  const reason = reasonLabel ? ` · ${reasonLabel}` : "";
   return `「${name}」 · ${actionLabel}${reason}`;
 });
 

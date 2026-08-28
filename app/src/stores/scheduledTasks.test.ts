@@ -29,6 +29,9 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     created_at: 1_000,
     last_fired_at: null,
     next_fire_at: 2_000,
+    run_count: 0,
+    max_runs: null,
+    ends_at: null,
     ...overrides,
   };
 }
@@ -113,6 +116,50 @@ describe("scheduledTasks store", () => {
     expect(call?.[1]).toEqual({ id: "task-1", enabled: false, name: "晚报" });
     expect(call?.[1]).not.toHaveProperty("prompt");
     expect(call?.[1]).not.toHaveProperty("targetSessionId");
+  });
+
+  it("F2b:create 携带 maxRuns / endsAt;缺省不进 args", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task") return row({ max_runs: 5 });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    const store = useScheduledTasksStore();
+    await store.create({
+      projectId: "p1",
+      name: "限次",
+      prompt: "p",
+      schedule: '{"kind":"daily","at":"09:00"}',
+      maxRuns: 5,
+      endsAt: 4_102_444_800_000,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_scheduled_task", {
+      projectId: "p1",
+      name: "限次",
+      prompt: "p",
+      schedule: '{"kind":"daily","at":"09:00"}',
+      maxRuns: 5,
+      endsAt: 4_102_444_800_000,
+    });
+  });
+
+  it("F2b:update 的 maxRuns/endsAt 显式 null 透传(wire null = 清空为不限)", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task")
+        return row({ max_runs: null, ends_at: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    const store = useScheduledTasksStore();
+    await store.update("task-1", { maxRuns: null, endsAt: 4_102_444_800_000 });
+    const call = invokeMock.mock.calls.find(
+      (c) => c[0] === "update_scheduled_task",
+    );
+    expect(call?.[1]).toEqual({
+      id: "task-1",
+      maxRuns: null,
+      endsAt: 4_102_444_800_000,
+    });
   });
 
   it("remove 返回后端真删布尔并重拉", async () => {

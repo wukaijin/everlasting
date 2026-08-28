@@ -204,12 +204,14 @@ export interface UiDiffAppliedAuditPayload {
  *  `catchup` (停机错过补跑一次), `skipped_dedup` (上次注入仍滞留队列,
  *  跳过防堆积), `skipped_queue_disabled` (message_queue 关闭,legacy
  *  分支会砍在跑轮), `lost` (Stop 清队丢带 origin 条目,best-effort
- *  兜底), `error` (fire 失败,附 `reason`,如 queue_full)。 */
+ *  兜底), `error` (fire 失败,附 `reason`,如 queue_full),`completed`
+ *  (F2b:达次数上限 / 结束日期自动停用,`reason` = max_runs / end_date)。 */
 export interface ScheduledTaskAuditPayload {
   task_id?: string;
   task_name?: string;
   action?: string;
-  /** `error` 动作附带的失败原因(如 queue_full);其余动作缺省。 */
+  /** `error` / `completed` 动作附带的原因(error 如 queue_full;
+   *  completed 为 max_runs / end_date);其余动作缺省。 */
   reason?: string;
 }
 
