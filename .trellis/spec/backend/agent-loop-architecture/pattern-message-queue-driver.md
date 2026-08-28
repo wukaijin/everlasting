@@ -20,6 +20,10 @@ chat_inner 路由临界区(单一 Mutex,锁序 queues → active):
   → had_error      → 队列保留, break   // 非 user 过错不丢输入,下次发送 FIFO 一起注入
   → 续轮上限(50)   → 队列保留, break
   → drain 非空     → emit TurnContinuation → persist(drained) → 作为下一轮初始 user 输入再进 run
+                    // persist 分工(RULE-QUEUE-001 根治,08-29):非尾条由
+                    // init.rs persist 循环补写(带 origin/附件的行随行落
+                    // metadata 信封),尾条由既有尾条 persist 点写;seq 同
+                    // 一 next_seq 起算连续自增。多 drain 全部落库,reload 完整。
   → drain 空       → break(emit Done)
   退出协议:拿路由锁 → 队列空才注销 session_active_request;非空继续循环(反搁浅)
 ```
@@ -56,6 +60,6 @@ case 'turn_continuation':
 ## Tests
 
 - `agent/message_queue.rs` 单测:FIFO 序 / 上限 20 拒 / remove(id) / recall(id) / not-found
-- driver 集成测试:忙时入队 → 续轮按序注入逐条落库 / `TurnContinuation` 事件序 + 内层 Delta 到达 sink(P0 回归锁)/ Stop 清队返回计数 / 错误终止队列保留
+- driver 集成测试:忙时入队 → 续轮按序注入逐条落库 / `TurnContinuation` 事件序 + 内层 Delta 到达 sink(P0 回归锁)/ Stop 清队返回计数 / 错误终止队列保留 / **多 drain 全落库**(RULE-QUEUE-001:`multi_drain_persists_all_drained_user_rows_rule_queue_001` + 全 manual 对照 `multi_drain_all_manual_persists_every_row_without_metadata`)
 - vitest `messageQueueStream.test.ts`:续轮物化 + 新 assistant 占位 + delta 不被尾部守卫丢弃;`dropQueuedPlaceholder` 按 id 删占位重排位次;水合物化去重
 - live 冒烟(真机):长 turn 连发 3 条 + 单条撤销 + Stop toast + curl REST 排队分支

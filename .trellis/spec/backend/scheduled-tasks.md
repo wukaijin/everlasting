@@ -121,7 +121,7 @@ CREATE TABLE scheduled_tasks (
 - 纯函数:`scheduler::compute` — daily/weekly 跨日跨周、interval 逆推、`most_recent_due` 的 not_before 约束三态、**漂移不变量**(`interval_has_no_cumulative_drift_with_tick_jitter`:连续模拟 + 抖动,断言相邻 due 恒等步长)。
 - DB:`fk_cascade_on_session_and_project_delete`、false→true 重置基准(true→false 不动)。
 - tick 集成(`scheduler/tests_tick.rs`):fired/catchup 动作 + 落账 ≈ due(容差断言,记 now 会偏差一个 tick)、deferral(顺延者 last_fired_at 不动)、去重/消费后放行、kill switch、queue-disabled、error reason、Started 不记 uuid。
-- origin 全链(`tests_message_queue.rs` / `tests_lost.rs`):`scheduled_origin_persists_scheduled_metadata`(MockProvider 端到端断言三键 + 无 FileInjections + 对照组 metadata None)、lost 正负向、**多 drain 钉现状**(RULE-QUEUE-001 根治前防漂移)。
+- origin 全链(`tests_message_queue.rs` / `tests_lost.rs`):`scheduled_origin_persists_scheduled_metadata`(MockProvider 端到端断言三键 + 无 FileInjections + 对照组 metadata None)、lost 正负向、**多 drain 全落库**(RULE-QUEUE-001 已根治,2026-08-29:`multi_drain_persists_all_drained_user_rows_rule_queue_001` + 全 manual 对照 `multi_drain_all_manual_persists_every_row_without_metadata`)。
 - parity:`daemon/routes/scheduled_tasks.rs` Router oneshot——CRUD roundtrip(含缺省新建专用 session 分支)+ 校验矩阵全臂。
 - **F2b**:compute 三新档的窗口边界 + 两函数互相一致 + monthly 短月跳过(day=31 回看两月);db 的 mark_fired 计数语义(count_fire bool)/ mark_task_completed 只翻 enabled / update 双层 Option(缺省≠null)/ 重启用清零;tick 的四道 gate(max_runs 达限完成恰好审计一次、due>ends_at 不 fire、ends_at 含当日 fire 后完成、dedup 不计数);route 的 end-condition roundtrip(monthly 档过 wire、显式 null 清空、max_runs=0 与过去 ends_at 400);前端 format/store/tab(单位换算、结束条件 args 形状、完成态徽章)。
 
@@ -169,9 +169,9 @@ mark_task_fired(task.id, due, next_fire_display(&spec, due));
 
 ### 3. Contracts
 
-- 链路:`ChatEntry.origin` →(路由临界区内 `push_with_origin` 纯赋值拷入)→ `QueuedMessage.origin` →(驱动器每轮取 `drained.last()`)→ `ChatLoopRequest.origin` → init.rs persist 门控 + `metadata.scheduled` 信封。
+- 链路:`ChatEntry.origin` →(路由临界区内 `push_with_origin` 纯赋值拷入)→ `QueuedMessage.origin` →(驱动器每轮 move 全量 drained)→ `ChatLoopRequest.drained: Vec<QueuedMessage>` → init.rs:尾条 origin 派生 `drained.last()` 供 persist 门控 + `metadata.scheduled` 信封;非尾条由 persist 循环(RULE-QUEUE-001 根治,2026-08-29)逐条补写并各带各的 `scheduled` 信封。
 - `TaskOrigin` 是 internally-tagged enum(`#[serde(tag="kind")]`),**会随 `QueuedMessage: Serialize` 进入 `list_queued_messages` wire**(前端排队占位「定时」徽标的依据)——这是有意定案,不是泄漏;但**不进 chat 事件主链**。
-- `origin: Option` 恒为 None 的路径(用户发送/群聊/worker/legacy)行为逐字节不变;多 drain 时只有尾条(被持久化那条)的 origin 生效——与「persist 只写尾条」对齐。
+- `drained` 恒空的路径(用户发送/群聊/worker/legacy)行为逐字节不变;多 drain 时每行 origin 各随各行落 metadata(persist 循环 + 尾条 persist 点双写),不再有「只有尾条 origin 生效」的缺口(该缺口即 DEBT §RULE-QUEUE-001,已根治)。
 
 ### 4. Wrong vs Correct
 
@@ -187,8 +187,8 @@ pub struct ChatEntry { ..., pub origin: Option<TaskOrigin> }
 
 ```rust
 // ChatEntry(入口)+ QueuedMessage(载体)+ ChatLoopRequest(传递)三点齐加,
-// 临界区内纯赋值拷入,驱动器尾条取值
-let origin = drained.last().and_then(|qm| qm.origin.clone());
+// 临界区内纯赋值拷入;init.rs 侧尾条派生 + 非尾条 persist 循环各带各的 origin
+let task_origin = request.drained.last().and_then(|qm| qm.origin.clone());
 ```
 
 ### 5. Tests Required

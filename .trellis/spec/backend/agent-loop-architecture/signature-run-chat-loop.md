@@ -17,7 +17,7 @@ pub async fn run_chat_loop(
 
 | 对象 | 角色 | 归入内容（字段全文见 `suite.rs` 各 doc comment） |
 |---|---|---|
-| `ChatLoopRequest` | 单次请求值，入口逐值构建 | tool_defs / provider / context_window / provider_id / rid / session_id / **messages** / sink / resend_seq / max_turns / workflow_ctx / group_chat_state / current_speaker |
+| `ChatLoopRequest` | 单次请求值，入口逐值构建 | tool_defs / provider / context_window / provider_id / rid / session_id / **messages** / sink / resend_seq / max_turns / workflow_ctx / group_chat_state / current_speaker / drained(队列驱动器本轮 drained 全量,RULE-QUEUE-001 后替代原 `origin` 尾条字段;非驱动器路径恒空) |
 | `ChatLoopDeps` | AppState 派生长寿命套件 | db / cancellations / session_active_request / read_guard / memory_cache / skill_cache / permission_asks / token / background_shells / stub_loaded / question_store / subagent_cache |
 | `CallerRole` | 调用方角色旗标（单请求常量） | is_worker / skip_session_active / skip_persist / skip_cancellations / worker_catalog / worker_event_sink / system_prompt_override / worker_run_id / run_grants / worktree_override / project_main_override / app_data_dir / forced_dispatch |
 | `TurnCarry` + `TurnFrame<'a>` / `TurnHot` | 每-turn 可变状态与派生上下文（by-value / 借用，不进 deps） | TurnCarry = drive.rs 十人名单（messages / seq / head_sha / system_prompt / permission_ctx / loop_window / loop_hit_count / last_usage_terminal / workflow_ctx / summary_anchor）；TurnFrame = LoopInit 派生常量引用 + `turn`/`force_compaction` 控制标量；TurnHot = cwd 对 |
