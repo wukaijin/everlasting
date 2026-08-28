@@ -744,9 +744,8 @@ pub(crate) async fn chat_inner(
                     workflow_ctx,
                     group_chat_state: None,
                     current_speaker: None,
-                    // 经典单聊无来源标记(origin 载体只在队列项上,
-                    // 驱动器路径传)。
-                    origin: None,
+                    // 经典单聊不经队列驱动器(drained 载体只在驱动器路径)。
+                    drained: Vec::new(),
                 },
                 deps,
                 role,
@@ -1114,11 +1113,11 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
             app_data_dir: deps.app_data_dir.clone(),
             forced_dispatch: round_forced,
         };
-        // F2 origin(design §4.1):取 `drained.last()`(= 本轮被持久化的
-        // 尾条)的来源标记,经 ChatLoopRequest 传入 init.rs 的 persist
-        // 门控点。多 drain 时取尾条与「persist 只写尾条」对齐(RULE-QUEUE-
-        // 001 缺口面,origin 跟随权威行)。
-        let round_origin = drained.last().and_then(|qm| qm.origin.clone());
+        // RULE-QUEUE-001 根治(08-29-rule-queue-001-multi-drain-persist):
+        // drained 全量 move 进请求 —— 非尾条由 init.rs 的 persist 循环
+        // 补写(带 origin 的行随行落 metadata 信封),尾条 persist 点 +
+        // origin 派生(drained.last())照旧。旧 `origin` 单独字段已并入
+        // `drained`(F2 design §4.1 载体链契约的载体形状演进)。
         run_chat_loop(
             ChatLoopRequest {
                 tool_defs: deps.tool_defs.clone(),
@@ -1134,7 +1133,7 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
                 workflow_ctx: deps.workflow_ctx.clone(),
                 group_chat_state: None,
                 current_speaker: None,
-                origin: round_origin,
+                drained,
             },
             deps_suite,
             role,

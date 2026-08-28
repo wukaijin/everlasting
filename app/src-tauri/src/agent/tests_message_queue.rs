@@ -504,21 +504,20 @@ async fn driver_cancel_audits_lost_for_scheduled_entries() {
     assert_eq!(payloads[0]["task_name"], "定时早报");
 }
 
-/// **多 drain 钉现状**(AC8 / prd R4,DEBT §RULE-QUEUE-001 根治前防漂移):
-/// scheduled 条目 + 手动条目同轮 drain 时,驱动器把**全部** drained 条目
-/// 喂给 LLM(sent 尾条 = 手动条目),但 persist 点只写**尾条** user 行
-/// —— 非尾条 scheduled prompt 无 DB 行、「定时」metadata 随失。这是
-/// **现状行为**的显式断言,不是期望行为;根治(持久化全部非尾条)时
-/// 本测试**应当**被改写。
+/// **RULE-QUEUE-001 根治后行为**(08-29-rule-queue-001-multi-drain-persist;
+/// 原为「钉现状」防漂移测试,根治后按其自述改写):scheduled 条目 + 手动
+/// 条目同轮 drain 时,驱动器把全部 drained 喂给 LLM(不变),**且全部条目
+/// 落库** —— 非尾条由 init persist 循环补写(带 origin 的行写 metadata
+/// `scheduled` 信封),尾条走既有 persist 点。reload 后时间线完整。
 #[tokio::test]
-async fn multi_drain_pins_current_tail_only_persist_rule_queue_001() {
+async fn multi_drain_persists_all_drained_user_rows_rule_queue_001() {
     let h = make_harness().await;
     let queues: SharedQueues = Default::default();
     {
         let mut map = queues.lock().await;
         let q = map.entry(h.session_id.clone()).or_default();
-        // 调度条目在队列头,手动条目尾随(= 本轮被持久化的尾条)。
-        // 同 tick 串行化(design §9)之外的残余窗口:二者仍可同轮 drain。
+        // 调度条目在队列头,手动条目尾随。同 tick 串行化(design §9)
+        // 之外的残余窗口:二者仍可同轮 drain。
         message_queue::push_with_origin(
             q,
             user_msg("scheduled body"),
@@ -550,7 +549,8 @@ async fn multi_drain_pins_current_tail_only_persist_rule_queue_001() {
     .await;
 
     assert_eq!(mock.call_count(), 1, "single round drains the whole queue");
-    // LLM 单次看到全部 drained 条目:FIFO 尾两条 = scheduled → manual。
+    // LLM 单次看到全部 drained 条目(既有契约不变):FIFO 尾两条 =
+    // scheduled → manual。
     let sent = mock.sent_messages();
     let texts: Vec<String> = sent[0]
         .iter()
@@ -564,14 +564,30 @@ async fn multi_drain_pins_current_tail_only_persist_rule_queue_001() {
         .collect();
     assert_eq!(texts, vec!["scheduled body", "manual body"]);
 
-    // 现状(钉):DB 只落尾条 user 行;非尾条 scheduled prompt 无行,
-    // 其 origin 亦无处安放(metadata 只写在被持久化的尾条上)。
+    // 根治后:DB 全部落库,顺序 = drain 顺序(FIFO)。
     let rows = persisted_user_texts(&h).await;
-    assert_eq!(rows, vec!["manual body"], "only the tail entry persists");
+    assert_eq!(rows, vec!["scheduled body", "manual body"]);
     let loaded = crate::db::load_session(&h.db, &h.session_id)
         .await
         .expect("load_session")
         .expect("session row");
+    // 非尾条 scheduled 行:metadata 带 `scheduled` 信封(三键齐全)。
+    let scheduled_row = loaded
+        .messages
+        .iter()
+        .find(|m| m.role == "user" && m.text == "scheduled body")
+        .expect("non-tail scheduled row persisted (RULE-QUEUE-001)");
+    let meta = scheduled_row
+        .metadata
+        .as_ref()
+        .expect("scheduled row carries metadata envelope");
+    let sched = meta
+        .get("scheduled")
+        .expect("scheduled key on origin-bearing row");
+    assert_eq!(sched["task_id"], "task-pin");
+    assert_eq!(sched["task_name"], "定时早报");
+    assert!(sched["fired_at"].is_i64(), "fired_at rides the envelope");
+    // 尾条 manual 行(origin-less)metadata 恒 None(R4 对照)。
     let manual_row = loaded
         .messages
         .iter()
@@ -580,5 +596,61 @@ async fn multi_drain_pins_current_tail_only_persist_rule_queue_001() {
     assert!(
         manual_row.metadata.is_none(),
         "tail (manual, origin-less) row carries no metadata"
+    );
+}
+
+/// RULE-QUEUE-001 对照组(防 additive 字段漂移,镜像 scheduled-tasks
+/// spec §5「无 origin 路径 metadata 恒 None」):全手动三条 multi-drain
+/// 全部落库、seq 连续有序、metadata 全 None。
+#[tokio::test]
+async fn multi_drain_all_manual_persists_every_row_without_metadata() {
+    let h = make_harness().await;
+    let queues: SharedQueues = Default::default();
+    preload(&queues, &h.session_id, &["first", "second", "third"]).await;
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Delta {
+            text: "reply".into(),
+        }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+    let emitter = Arc::new(MockEmitter::new());
+
+    run_driver(
+        &h,
+        mock.clone(),
+        emitter.clone(),
+        queues.clone(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(mock.call_count(), 1, "single round drains the whole queue");
+    let rows = persisted_user_texts(&h).await;
+    assert_eq!(
+        rows,
+        vec!["first", "second", "third"],
+        "all three drained entries persist in FIFO order"
+    );
+    let loaded = crate::db::load_session(&h.db, &h.session_id)
+        .await
+        .expect("load_session")
+        .expect("session row");
+    let user_rows: Vec<_> = loaded
+        .messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .collect();
+    let seqs: Vec<i64> = user_rows.iter().map(|m| m.seq).collect();
+    assert_eq!(
+        seqs,
+        vec![0, 1, 2],
+        "persist loop allocates contiguous FIFO seqs"
+    );
+    assert!(
+        user_rows.iter().all(|m| m.metadata.is_none()),
+        "manual entries (no origin / no attachments) carry no metadata"
     );
 }

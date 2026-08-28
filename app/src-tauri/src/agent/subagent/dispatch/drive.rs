@@ -145,8 +145,8 @@ pub(crate) async fn drive_worker(
             workflow_ctx: None,
             group_chat_state: None,
             current_speaker: None,
-            // worker 路径无来源标记(F2 origin 载体只走队列驱动器)。
-            origin: None,
+            // worker 路径不经队列驱动器(drained 载体只在驱动器路径)。
+            drained: Vec::new(),
         },
         ChatLoopDeps::from(ChatLoopDepsParts {
             db: db.clone(),

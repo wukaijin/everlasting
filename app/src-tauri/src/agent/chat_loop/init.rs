@@ -149,10 +149,11 @@ pub(crate) async fn prepare_loop_state(
     let skip_persist = role.skip_persist;
     let resend_seq = request.resend_seq;
     let group_chat_state = &request.group_chat_state;
-    // F2 定时任务(design §4.1):来源标记。驱动器取 drained 尾条经
-    // ChatLoopRequest 传入;用于放宽 metadata persist 门控 + 信封
-    // `scheduled` 键。其余路径恒 None(行为逐字节不变)。
-    let task_origin = request.origin.clone();
+    // F2 定时任务(design §4.1):来源标记 = drained 尾条的 origin。
+    // RULE-QUEUE-001 后 ChatLoopRequest 携带全量 drained,尾条 origin 在此
+    // 派生;用于放宽 metadata persist 门控 + 信封 `scheduled` 键。非驱动器
+    // 路径 drained 恒空 → None(行为逐字节不变)。
+    let task_origin = request.drained.last().and_then(|qm| qm.origin.clone());
 
     // Start seq from the highest existing seq in this session + 1.
     let loaded_session = match crate::db::load_session(&db, &session_id).await {
@@ -784,6 +785,78 @@ pub(crate) async fn prepare_loop_state(
     // user row), anchoring `seq` on the tail-most user row, and its
     // `None` snapshot disables the at_file injection pass below for
     // those rows.
+    // RULE-QUEUE-001 根治(08-29-rule-queue-001-multi-drain-persist):
+    // 非尾条 drained user 条目补持久化。驱动器每轮把 drained 全量喂给
+    // LLM,但下方 persist 点只写尾条 —— 旧世界同轮 drain ≥2 条时非尾条
+    // 无 DB 行,reload 后从时间线消失;F2 定时注入使多 drain 常态化后
+    // 触发率被结构性放大(DEBT §RULE-QUEUE-001,本循环根治)。
+    //
+    // 位置在尾条 persist 块之前:seq 自 next_seq 起逐条自增,尾条块无缝
+    // 接上。init 开头的 load_session 先于一切写入完成,驱动器是队列唯一
+    // 消费者,无交错写者。persist_turn 是裸 INSERT,FTS5 AFTER INSERT
+    // trigger 自动同步;auto-title 带 '新对话' CASE 守卫,不污染标题。
+    if let Some((_, prior)) = request.drained.split_last() {
+        for qm in prior {
+            // 防御:队列今日恒 user 条目(F1 连发原文 / F2 fire prompt)。
+            if qm.message.role != Role::User {
+                continue;
+            }
+            // B6 worker 路径镜像尾条块:不写父会话 DB,内存 seq 照走
+            // 保 loop 连贯(见 skip_persist docstring)。
+            if !skip_persist {
+                if let Err(e) = crate::db::persist_turn(
+                    &db,
+                    &session_id,
+                    qm.message.role,
+                    &qm.message.content,
+                    seq,
+                    None,
+                    qm.message.speaker.as_deref(),
+                )
+                .await
+                {
+                    // RULE-A-003 同理:继续跑会让 LLM 答 DB 没记过的
+                    // 消息(正是本债病灶),可见失败优于静默丢失。
+                    emit_persist_failure(&sink, &session_id, &rid, &e);
+                    return Err(());
+                }
+                // metadata 信封镜像尾条形状(B1 attachments + F2
+                // scheduled)。`injections` 恒空数组:非尾条不产 manifest
+                // (`inject_at_tokens` 只返回尾条那份),DB 行存原始
+                // @relpath 文本、reload 重展开,内容无损(已知边界,见
+                // 任务 design §5)。gate 与尾条 F2 放宽同构:无附件且无
+                // origin 的手动条目不写;update_message_metadata 对刚
+                // 写入的 NULL metadata 行是纯新增。
+                let has_attachments = qm
+                    .message
+                    .attachments
+                    .as_ref()
+                    .is_some_and(|a| !a.is_empty());
+                if has_attachments || qm.origin.is_some() {
+                    let mut meta = serde_json::json!({ "injections": [] });
+                    if has_attachments {
+                        meta["attachments"] =
+                            serde_json::json!(qm.message.attachments.clone().unwrap_or_default());
+                    }
+                    if let Some(origin) = &qm.origin {
+                        meta["scheduled"] = serde_json::json!(origin);
+                    }
+                    if let Err(e) =
+                        crate::db::update_message_metadata(&db, &session_id, seq, &meta).await
+                    {
+                        tracing::warn!(
+                            request_id = %rid,
+                            session_id = %session_id,
+                            message_seq = seq,
+                            error = %e,
+                            "agent loop: failed to persist queued-entry metadata (non-fatal)"
+                        );
+                    }
+                }
+            }
+            seq += 1;
+        }
+    }
     let (last_user_snapshot, last_user_seq) =
         if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
             let msg = last_user.clone();

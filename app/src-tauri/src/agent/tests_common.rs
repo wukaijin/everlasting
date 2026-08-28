@@ -411,8 +411,8 @@ pub(crate) fn chat_loop_request(
         workflow_ctx: None,
         group_chat_state: None,
         current_speaker: None,
-        // F2 origin:测试默认 None(来源载体链场景在调用点具名覆盖)。
-        origin: None,
+        // 测试默认空 drain(队列驱动器场景在 tests_message_queue 具名覆盖)。
+        drained: Vec::new(),
     }
 }
 

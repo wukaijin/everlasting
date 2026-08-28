@@ -357,7 +357,8 @@ pub async fn run_group_chat_loop(
                     workflow_ctx: None,
                     group_chat_state: Some(turn_state.clone()),
                     current_speaker: Some("moderator".to_string()),
-                    origin: None,
+                    // 群聊不经队列驱动器(drained 载体只在驱动器路径)。
+                    drained: Vec::new(),
                 },
                 deps,
                 role,
@@ -551,7 +552,8 @@ pub async fn run_group_chat_loop(
                 workflow_ctx: None,
                 group_chat_state: Some(turn_state.clone()),
                 current_speaker: Some(participant.name.clone()),
-                origin: None,
+                // 群聊不经队列驱动器(drained 载体只在驱动器路径)。
+                drained: Vec::new(),
             },
             deps,
             role,

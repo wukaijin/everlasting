@@ -217,12 +217,23 @@ pub(crate) struct ChatLoopRequest {
     // persist site so messages store the originating speaker. Read-only —
     // never affects tool routing or wire shape.
     pub(crate) current_speaker: Option<String>,
-    // F2 定时任务(2026-08-28, `08-28-f2-scheduled-tasks` design §4.1):
-    // 消息来源标记。驱动器每轮取 `drained.last()` 的 origin 经此传入;
-    // init.rs 的 persist 门控据 `is_some()` 放宽并把来源写进 metadata
-    // 信封 `scheduled` 键。其余全部调用点(classic / 群聊 / worker)恒
-    // `None` —— 既有路径行为逐字节不变。
-    pub(crate) origin: Option<crate::scheduler::TaskOrigin>,
+    // F1 队列驱动器本轮的 drained 全量(RULE-QUEUE-001 根治,2026-08-29,
+    // `08-29-rule-queue-001-multi-drain-persist`)。驱动器是唯一非空调用点;
+    // 其余(classic / 群聊 / worker)恒空 vec。
+    //
+    // 消费两端(均在 init.rs):
+    // - 非尾条:persist 循环逐条补写 —— 旧世界非尾条无 DB 行,reload 后
+    //   从时间线消失(LLM 单次看到、历史不落库);带 origin / 附件的行
+    //   另写 metadata 信封(`scheduled` / `attachments`)。
+    // - 尾条:origin 派生自 `drained.last()`,供 persist 门控放宽 + 信封
+    //   `scheduled` 键(F2 `08-28-f2-scheduled-tasks` design §4.1 契约
+    //   延续;原独立 `origin: Option<TaskOrigin>` 字段已并入此处)。
+    //
+    // 不变量:`drained` 非空 ⇒ 尾条 == `messages` 尾条 user(驱动器
+    // append 顺序保证),且 `group_chat_state` 恒 None(队列只在 classic
+    // 单聊装配)。载体的 payload 必须在队列项上:忙时 fire 的条目由另一个
+    // 请求的驱动器在 round>0 消费,请求级上下文在 round>0 一律丢弃。
+    pub(crate) drained: Vec<crate::agent::message_queue::QueuedMessage>,
 }
 
 /// 调用方角色旗标（design 表第三行；暂名 CallerRole）。由调用方身份决定
