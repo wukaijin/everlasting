@@ -3,7 +3,7 @@
 > **状态**:实施路线图(2026-07-20)。本文档是 [REMOTE-ACCESS-RESEARCH.md](./_archive/2026-07-20-remote-access-research.md) 调研评估的**可执行版本**,把 Phase 1/2/3 拆成可独立验证、独立交付的子阶段。
 > **进度(2026-08-13 同步)**:Phase 1/2 已于 2026-07 实施;Phase 3 已由 **remote-control epic(S1~S6b)** 于 2026-08-11~13 落地(merge `94828cb` 合入 main)。本文档转为"历史规划 + 已实施对照"。
 > **定位**:RESEARCH.md 是"为什么这么做",本文是"具体怎么做、怎么验证"。每个子阶段都满足三个条件:① 能独立提交 ② 有明确的验证标准 ③ Tauri 版始终可用(不破坏现状)。
-> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10/B11](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正) / Phase 3 权威对照见 epic PRD `.trellis/tasks/08-11-remote-control-epic/prd.md`
+> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10/B11](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正) / Phase 3 权威对照见 epic PRD `.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md`
 
 ---
 
@@ -364,7 +364,7 @@ cargo test --package everlasting-daemon --test e2e large_payload
 
 ## Phase 3:认证 + 跨设备远程(✅ 已实施 2026-08,remote-control epic)
 
-> 📌 **已落地(2026-08-11~13,remote-control epic S1~S6b,merge `94828cb`)**。原"远期规划"前置条件(dogfooding 1 个月)未满足即启动,记录为决策偏差。权威实施对照见 epic PRD `.trellis/tasks/08-11-remote-control-epic/prd.md`(其中"与 ROADMAP 的关系"表),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)。
+> 📌 **已落地(2026-08-11~13,remote-control epic S1~S6b,merge `94828cb`)**。原"远期规划"前置条件(dogfooding 1 个月)未满足即启动,记录为决策偏差。权威实施对照见 epic PRD `.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md`(其中"与 ROADMAP 的关系"表),部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),E2E 验收见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)。
 
 **落地时拆的子阶段与实际状态**:
 - P3.1 配对码流程 + `devices` 表 + token 校验中间件 → ✅ **已落地**:配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分),redeem 换 64-hex device_token;`crates/everlasting-remote/src/routes/pairing.rs` + `db/schema.rs` 的 `nodes/devices/pairing_codes` 三表 + `auth.rs`(shared_secret + device_token 双通道);PC 侧 `daemon/routes/pairing.rs` + `commands/pairing.rs` 镜像

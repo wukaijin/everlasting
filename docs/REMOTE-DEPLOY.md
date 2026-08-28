@@ -5,7 +5,7 @@
 提供配对 + 反向代理。**ubuntu 原生二进制,零系统库依赖,无 docker 无
 runtime。**
 
-架构决策见 `.trellis/tasks/08-11-remote-control-epic/prd.md`(single
+架构决策见 `.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md`(single
 source of truth);本节只讲运维。
 
 ## 1. 编译

@@ -163,10 +163,10 @@ curl https://remote.yourdomain.com/
 ```bash
 # 方式 A:release daemon(serve 前端 + API,生产形态)
 ./scripts/daemon.sh start --no-build   # 前台起 release daemon,默认 :7456
-#   ⚠️ 别用 daemon.sh bg —— 已失效:daemon bin 带 prctl(PDEATHSIG)孤儿守卫,
-#   脚本退出后 1-2s 内后台 daemon 被 SIGTERM 杀。要后台化:先 start --no-build
-#   前台起,再 Ctrl+Z 挂起 → bg 放后台(父 shell 存活);详见
-#   [HACKING-wsl.md](./HACKING-wsl.md) 的「bg 模式失效」。
+./scripts/daemon.sh bg --no-build      # 后台起(日志写 /tmp/everlasting-daemon.log)
+#   注:2026-08-24 起孤儿守卫(PDEATHSIG)只 gate 到 sidecar 模式
+#   (EVERLASTING_SIDECAR=1,GUI spawn 注入),standalone 的 bg 已恢复可用;
+#   见 bin/everlasting-daemon.rs 的 gate 注释。
 
 # 方式 B:dev 模式(vite HMR 前端 + daemon API,开发态)
 cd app && pnpm dev:all              # vite(:1420) + daemon(:7456) 并行
