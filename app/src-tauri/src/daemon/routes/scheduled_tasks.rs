@@ -59,6 +59,9 @@ pub async fn create_scheduled_task(
         req.prompt,
         req.schedule,
         req.enabled,
+        // wire 面恒 'user'(作者面分离:HTTP/IPC 只属用户;'agent' 仅
+        // LLM schedule_task tool 路径,08-29-schedule-task-tool)。
+        "user".to_string(),
         req.max_runs,
         req.ends_at,
     )

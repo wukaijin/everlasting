@@ -53,6 +53,20 @@ fn classify_tool_dispatch() {
     assert_eq!(classify_tool("unknown_future_tool"), ToolKind::Other);
 }
 
+/// 08-29-schedule-task-tool (AC6/R6): the scheduling family has NO
+/// classify arm by design — `ToolKind::Other` fallthrough = Tier 5
+/// silent Allow (compensating controls: per-project cap, worker /
+/// group-chat isolation, kill-switch create gate). This test pins
+/// the absence of an arm: if someone later routes the family to a
+/// Tier 4 kind, the PRD Q2 定案 is being changed and must be
+/// re-reviewed.
+#[test]
+fn classify_tool_keeps_schedule_family_silent_allow() {
+    assert_eq!(classify_tool("schedule_task"), ToolKind::Other);
+    assert_eq!(classify_tool("schedule_status"), ToolKind::Other);
+    assert_eq!(classify_tool("schedule_cancel"), ToolKind::Other);
+}
+
 /// L1a (2026-06-19): `run_background_shell` is High risk (same
 /// as `shell`). `shell_status` / `shell_kill` are Low (read-only
 /// inspection / kill of an already-existing process; no new

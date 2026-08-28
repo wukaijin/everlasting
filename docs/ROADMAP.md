@@ -100,6 +100,7 @@
 | **F5** PDF/docx/xlsx 原生提取 | 08-26 | doc_extract 纯函数 + 指令式自助兜底;xlsx CSV 块(spec [pattern-doc-extraction](../.trellis/spec/backend/agent-loop-architecture/pattern-doc-extraction.md)) |
 | **F6** 异步 agent 任务 + **F3** 全局并发闸 | 08-27 | SessionSummary.busy + 跨 session toast + max_concurrent_loops(spec [pattern-global-loop-semaphore](../.trellis/spec/backend/agent-loop-architecture/pattern-global-loop-semaphore.md)) |
 | **F2/F2b** 定时任务 | 08-28 | scheduler 30s tick + due 落账 + origin 链;6 档 + 结束条件(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
+| **LLM schedule_task 家族**(F2 detached dispatch 收口) | 08-29 | 三件套(create/status/cancel,作者面分离 created_by='agent',tool 侧双 gate;spec [tool-contract 17](../.trellis/spec/backend/tool-contract/17-schedule-task-family.md)) |
 
 ---
 
@@ -142,7 +143,7 @@
 | ~~B6+~~ | ~~subagent 多模型支持（A frontmatter / B 动态选模型 / C UI+DB override）~~ | ✅ A 07-03 / C 07-03 / **B 07-06 全落地**，优先级链 `dispatch > DB > frontmatter > parent`，见 §1.2 |
 | ~~L3b PR1~~ | ~~worker worktree 隔离核心(PR1 落地,见 §1.2)~~ | 06-27 PR1 已落地,见 §1.2;PR2-4 拆为 follow-up tasks |
 | ~~C7~~ | ~~工具上下文渐进式披露(tools[] token 治理)~~ | ✅ 08-14 落地(R1 度量 + R3 静态裁剪;live 实测 tools 占首轮 context 38.5% → D(Stub)Phase 2 触发线 >15% 已过),见 §1.2 |
-| ~~F1~~ | ~~消息队列(输入排队 / 优先级 / 批量注入)~~ | ✅ **A 档(用户连发)2026-08-25 落地**(排队+续轮批量注入+撤销/退回+Stop 清队;`TurnContinuation` 续轮边界事件),见 §1.2。B 档(优先级分档/抢占)仍开放 —— **C 档 cron 消费者已由 F2 交付(2026-08-28,统一入口 = chat_inner「闲也入队」路由);LLM detached dispatch(`schedule_task` tool)仍开放** |
+| ~~F1~~ | ~~消息队列(输入排队 / 优先级 / 批量注入)~~ | ✅ **A 档(用户连发)2026-08-25 落地**(排队+续轮批量注入+撤销/退回+Stop 清队;`TurnContinuation` 续轮边界事件),见 §1.2。B 档(优先级分档/抢占)仍开放 —— **C 档 cron 消费者已由 F2 交付(2026-08-28,统一入口 = chat_inner「闲也入队」路由);**LLM detached dispatch 已由 schedule_task 家族交付(2026-08-29)** |
 | **F3** | 资源治理(系统级限损框架) | context/token 治理已落地(unified-context-budget / C7 / memory-gov / B1,见 §1.2);**agent loop 并发上限已落地**(F6 2026-08-27:全局信号量 `max_concurrent_loops` 缺省 4,见 §1.2);余下:进程 / 内存、磁盘(worktree / attachments / 日志),与 F1 反压联动。**边界**:不含 Provider API 限流(C5 已移除,见 §3) |
 | ~~F4~~ | ~~Web 搜索工具~~ | ✅ 08-25 落地(`web_search` snippet-only 搜索 + `web_fetch` 全文两段式;Tavily/DDG 双后端;固定端点无 SSRF 面,非原设想"复用 web_fetch 安全模型"),见 §1.2 |
 | ~~F5~~ | ~~PDF/Office 文档阅读~~ | ✅ **第一档(PDF + docx)2026-08-26 落地**;**follow-up xlsx/xlsm 提取同日落地**(每 sheet CSV 块,calamine 纯 Rust);pptx 用户裁定不做;pdfium 渲染扫描件、正式 document skill 仍留 follow-up,见 §1.2 |
@@ -156,7 +157,7 @@
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |
 | A2+ P3 | shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail) | A2+ P1+P2 **判定层** 07-04 落地(见 §1.2);P3 是判定层之下的独立**限损层** — 判定错了也限损(盲区 `VAR=val cmd` / `$var` 展开 / 拆分器引号极端误判靠它兜底)。前置 WSL userns spike。拆自 parent `07-04-a2-shell-classification`(已 archive,P1+P2 收口)。源方案 [docs/_history/2026-08-28-a2-shell-classification.md](./_history/2026-08-28-a2-shell-classification.md) §4 远期候选 |
-| ~~F2~~  | ~~定时任务(本地 cron 式)~~ | ✅ **2026-08-28 落地**(daemon 常驻调度器 + preset 档位 + origin 标记链 + Settings 管理面;触发源 MVP 只做系统时间;catch-up 补跑一次;经两道外部评审,见 §1.2)。**F2b 调度模型扩展同日落地**(6 档 + 次数/日期结束条件,见 §1.2 F2b 行)。余下:fs 事件 / 本地 webhook 触发源、LLM `schedule_task` tool(detached dispatch)留 follow-up |
+| ~~F2~~  | ~~定时任务(本地 cron 式)~~ | ✅ **2026-08-28 落地**(daemon 常驻调度器 + preset 档位 + origin 标记链 + Settings 管理面;触发源 MVP 只做系统时间;catch-up 补跑一次;经两道外部评审,见 §1.2)。**F2b 调度模型扩展同日落地**(6 档 + 次数/日期结束条件,见 §1.2 F2b 行)。**LLM `schedule_task` 家族(detached dispatch)2026-08-29 落地**(create/status/cancel、`created_by='agent'` 作者面分离、tool 侧 kill-switch/上限双 gate,见 §1.2 与 spec tool-contract 17)。余下:fs 事件 / 本地 webhook 触发源 |
 | ~~F6~~ | ~~异步 agent 任务(detach 后台跑)~~ | ✅ **编排面 2026-08-27 落地**(detach 运行时语义本就成立;补跨端 busy 可见性 + 完成 toast + F3 信号量 + 关闭确认,见 §1.2)。余下增强(系统级通知 / unread 持久化 / 等待态心跳)按需另立 |
 
 ---

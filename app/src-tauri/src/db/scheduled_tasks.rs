@@ -54,6 +54,10 @@ pub struct NewScheduledTask {
     /// 已过 [`crate::scheduler::compute::parse_schedule`] 校验的 JSON。
     pub schedule_json: String,
     pub enabled: bool,
+    /// 作者:`'user'`(UI/IPC 路径)或 `'agent'`(LLM `schedule_task`
+    /// tool 路径,`08-29-schedule-task-tool`)。列自 F2 起存在,当时
+    /// MVP 恒写 `'user'`;参数化即本任务兑现的预告。
+    pub created_by: String,
     pub next_fire_at: i64,
     pub max_runs: Option<i64>,
     pub ends_at: Option<i64>,
@@ -105,8 +109,8 @@ fn row_from(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduledTaskRow, sqlx::Err
 const SELECT_COLS: &str = "id, project_id, target_session_id, name, prompt, schedule, \
      enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at";
 
-/// 新建任务。id 服务端生成(uuid);`created_by` 恒 `'user'`(MVP;
-/// F2+ agent 复用同表时改由参数区分,prd D5)。
+/// 新建任务。id 服务端生成(uuid);`created_by` 随载荷(`'user'` =
+/// UI/IPC 路径,`'agent'` = LLM `schedule_task` tool)。
 pub async fn insert_scheduled_task(
     pool: &SqlitePool,
     new: NewScheduledTask,
@@ -117,7 +121,7 @@ pub async fn insert_scheduled_task(
         r#"
  INSERT INTO scheduled_tasks
  (id, project_id, target_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at)
- VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, NULL, ?, 0, ?, ?)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)
  "#,
     )
     .bind(&id)
@@ -127,6 +131,7 @@ pub async fn insert_scheduled_task(
     .bind(&new.prompt)
     .bind(&new.schedule_json)
     .bind(new.enabled as i64)
+    .bind(&new.created_by)
     .bind(created_at)
     .bind(new.next_fire_at)
     .bind(new.max_runs)
@@ -143,24 +148,53 @@ pub async fn list_scheduled_tasks(
     pool: &SqlitePool,
     project_id: Option<&str>,
 ) -> Result<Vec<ScheduledTaskRow>, sqlx::Error> {
-    let rows = match project_id {
-        Some(pid) => {
-            sqlx::query(&format!(
-                "SELECT {SELECT_COLS} FROM scheduled_tasks WHERE project_id = ? ORDER BY created_at ASC, id ASC"
-            ))
-            .bind(pid)
-            .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query(&format!(
-                "SELECT {SELECT_COLS} FROM scheduled_tasks ORDER BY created_at ASC, id ASC"
-            ))
-            .fetch_all(pool)
-            .await?
-        }
-    };
+    list_scheduled_tasks_filtered(pool, project_id, None).await
+}
+
+/// 带作者过滤的列表变体。`created_by = Some("agent")` 供 LLM
+/// `schedule_status` tool 只看自己建的任务(`08-29-schedule-task-tool`,
+/// 作者面分离:用户建的任务仍归 Settings UI);`None` = 不过滤(既有
+/// UI/IPC 路径)。两过滤器自由组合。
+pub async fn list_scheduled_tasks_filtered(
+    pool: &SqlitePool,
+    project_id: Option<&str>,
+    created_by: Option<&str>,
+) -> Result<Vec<ScheduledTaskRow>, sqlx::Error> {
+    let mut sql = format!("SELECT {SELECT_COLS} FROM scheduled_tasks WHERE 1=1");
+    if project_id.is_some() {
+        sql.push_str(" AND project_id = ?");
+    }
+    if created_by.is_some() {
+        sql.push_str(" AND created_by = ?");
+    }
+    sql.push_str(" ORDER BY created_at ASC, id ASC");
+    let mut q = sqlx::query(&sql);
+    if let Some(pid) = project_id {
+        q = q.bind(pid);
+    }
+    if let Some(by) = created_by {
+        q = q.bind(by);
+    }
+    let rows = q.fetch_all(pool).await?;
     rows.iter().map(row_from).collect()
+}
+
+/// 指定 project + 作者的 enabled(活跃)任务数。LLM `schedule_task`
+/// 反滥用上限的计数来源(`08-29-schedule-task-tool` D3;上限只约束
+/// agent 路径,UI 创建不限)。
+pub async fn count_enabled_by_creator(
+    pool: &SqlitePool,
+    project_id: &str,
+    created_by: &str,
+) -> Result<i64, sqlx::Error> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM scheduled_tasks WHERE project_id = ? AND created_by = ? AND enabled = 1",
+    )
+    .bind(project_id)
+    .bind(created_by)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
 }
 
 /// enabled 任务的调度扫描序:`last_fired_at` NULLS FIRST(从未触发的
@@ -400,6 +434,7 @@ mod tests {
                 prompt: "汇总昨日进展".into(),
                 schedule_json: spec_json(r#"{"kind":"daily","at":"09:00"}"#),
                 enabled: true,
+                created_by: "user".into(),
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
@@ -466,6 +501,7 @@ mod tests {
                 prompt: "p".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
                 enabled: true,
+                created_by: "user".into(),
                 next_fire_at: 2_000,
                 max_runs: None,
                 ends_at: None,
@@ -482,6 +518,7 @@ mod tests {
                 prompt: "p".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":60}"#),
                 enabled: false,
+                created_by: "user".into(),
                 next_fire_at: 3_000,
                 max_runs: None,
                 ends_at: None,
@@ -742,6 +779,7 @@ mod tests {
                 prompt: "p".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
                 enabled: true,
+                created_by: "user".into(),
                 next_fire_at: 1_000,
                 max_runs: Some(3),
                 ends_at: Some(9_999_999),
@@ -843,5 +881,41 @@ mod tests {
             upd.last_fired_at.is_some(),
             "re-enable also resets the basis (existing semantics)"
         );
+    }
+
+    #[tokio::test]
+    async fn created_by_agent_persists_and_filters_by_creator() {
+        let pool = test_pool().await;
+        let (project_id, session_id) = seed_project_session(&pool).await;
+        let agent_row = insert_scheduled_task(
+            &pool,
+            NewScheduledTask {
+                project_id: project_id.clone(),
+                target_session_id: session_id.clone(),
+                name: "agent 排的".into(),
+                prompt: "每小时检查".into(),
+                schedule_json: spec_json(r#"{"kind":"interval","every_min":60}"#),
+                enabled: true,
+                created_by: "agent".into(),
+                next_fire_at: 1_000,
+                max_runs: None,
+                ends_at: None,
+            },
+        )
+        .await
+        .expect("insert agent row");
+        assert_eq!(agent_row.created_by, "agent");
+        let _user_row = insert_sample(&pool, &project_id, &session_id).await;
+
+        // created_by 过滤正负向(作者面分离:schedule_status 只见 agent 行)。
+        let agent_only = list_scheduled_tasks_filtered(&pool, Some(&project_id), Some("agent"))
+            .await
+            .expect("list agent");
+        assert_eq!(agent_only.len(), 1);
+        assert_eq!(agent_only[0].id, agent_row.id);
+        let all = list_scheduled_tasks(&pool, Some(&project_id))
+            .await
+            .expect("list all");
+        assert_eq!(all.len(), 2, "None 过滤不受影响(UI 路径行为零变化)");
     }
 }

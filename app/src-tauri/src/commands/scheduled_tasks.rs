@@ -36,6 +36,8 @@ pub struct ScheduledTaskPayload {
     pub prompt: String,
     pub schedule: serde_json::Value,
     pub enabled: bool,
+    /// 作者:`'user'`(UI/IPC)或 `'agent'`(LLM `schedule_task` tool)。
+    pub created_by: String,
     /// epoch ms。
     pub created_at: i64,
     /// epoch ms;`None` = 从未触发。
@@ -61,6 +63,7 @@ impl From<&st::ScheduledTaskRow> for ScheduledTaskPayload {
             prompt: row.prompt.clone(),
             schedule,
             enabled: row.enabled,
+            created_by: row.created_by.clone(),
             created_at: row.created_at,
             last_fired_at: row.last_fired_at,
             next_fire_at: row.next_fire_at,
@@ -116,7 +119,9 @@ pub async fn list_scheduled_tasks(
 /// `create_scheduled_task` — `target_session_id` 为 `None` / 空串时新建
 /// 专用 session(标题同任务名,cwd 取 project 根);为 `Some` 时校验存在
 /// 且 classic 且 project 归属一致。`max_runs` / `ends_at` 是 F2b 结束条件
-/// (None = 不限)。返回新行(id 服务端生成)。
+/// (None = 不限)。`created_by` 标作者:`'user'`(UI/IPC 路径,两个
+/// transport 包装恒传)或 `'agent'`(LLM `schedule_task` tool)。返回新行
+/// (id 服务端生成)。
 /// 参数保持扁平标量(IPC 形状铁律,providers.rs 同款 allow)。
 #[allow(clippy::too_many_arguments)]
 pub async fn create_scheduled_task_inner(
@@ -127,6 +132,39 @@ pub async fn create_scheduled_task_inner(
     prompt: String,
     schedule: String,
     enabled: Option<bool>,
+    created_by: String,
+    max_runs: Option<i64>,
+    ends_at: Option<i64>,
+) -> Result<ScheduledTaskPayload, AppCommandError> {
+    create_scheduled_task_in_pool(
+        &state.db,
+        project_id,
+        target_session_id,
+        name,
+        prompt,
+        schedule,
+        enabled,
+        created_by,
+        max_runs,
+        ends_at,
+    )
+    .await
+}
+
+/// [`create_scheduled_task_in_pool`] 的 pool 级核心:只依赖 DB,不依赖
+/// `AppState`(`08-29-schedule-task-tool` D2 —— tool 层只有
+/// `ToolContext.db`;Q0 单源不变,`_inner` 是薄包装,专用 session 分支
+/// 经 [`crate::commands::sessions::create_session_in_pool`] 同理)。
+#[allow(clippy::too_many_arguments)]
+pub async fn create_scheduled_task_in_pool(
+    db: &sqlx::SqlitePool,
+    project_id: String,
+    target_session_id: Option<String>,
+    name: String,
+    prompt: String,
+    schedule: String,
+    enabled: Option<bool>,
+    created_by: String,
     max_runs: Option<i64>,
     ends_at: Option<i64>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
@@ -145,7 +183,7 @@ pub async fn create_scheduled_task_inner(
     let schedule_json =
         serde_json::to_string(&spec).map_err(|e| invalid(format!("schedule 序列化失败: {e}")))?;
 
-    let project = crate::db::get_project(&state.db, &project_id)
+    let project = crate::db::get_project(db, &project_id)
         .await
         .map_err(|e| anyhow::anyhow!("create_scheduled_task: load project failed: {}", e))?
         .ok_or_else(|| invalid(format!("project {project_id} 不存在")))?;
@@ -155,7 +193,7 @@ pub async fn create_scheduled_task_inner(
     let trimmed_target = target_session_id.as_deref().map(str::trim);
     let target_session_id = match trimmed_target.filter(|s| !s.is_empty()) {
         Some(sid) => {
-            st::validate_target_session(&state.db, sid)
+            st::validate_target_session(db, sid)
                 .await
                 .map_err(invalid)?;
             // project 归属一致(design §6):任务挂 A project、目标 session
@@ -163,7 +201,7 @@ pub async fn create_scheduled_task_inner(
             let session_project: Option<(String,)> =
                 sqlx::query_as("SELECT project_id FROM sessions WHERE id = ?")
                     .bind(sid)
-                    .fetch_optional(&state.db)
+                    .fetch_optional(db)
                     .await
                     .map_err(|e| {
                         anyhow::anyhow!("create_scheduled_task: load session failed: {}", e)
@@ -177,8 +215,8 @@ pub async fn create_scheduled_task_inner(
             sid.to_string()
         }
         None => {
-            let session = crate::commands::sessions::create_session_inner(
-                state,
+            let session = crate::commands::sessions::create_session_in_pool(
+                db,
                 project_id.clone(),
                 project.path.clone(),
                 None,
@@ -187,7 +225,7 @@ pub async fn create_scheduled_task_inner(
             )
             .await?;
             // 标题同任务名(design §6);rename 截断 80 字符(db 层)。
-            crate::db::rename_session(&state.db, &session.id, &name)
+            crate::db::rename_session(db, &session.id, &name)
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!(
@@ -203,7 +241,7 @@ pub async fn create_scheduled_task_inner(
     let next_fire_at =
         crate::scheduler::compute::next_fire_display(&spec, crate::scheduler::now_epoch_ms());
     let row = st::insert_scheduled_task(
-        &state.db,
+        db,
         st::NewScheduledTask {
             project_id,
             target_session_id,
@@ -211,6 +249,7 @@ pub async fn create_scheduled_task_inner(
             prompt,
             schedule_json,
             enabled,
+            created_by,
             next_fire_at,
             max_runs,
             ends_at,
@@ -242,6 +281,7 @@ pub async fn create_scheduled_task(
         prompt,
         schedule,
         enabled,
+        "user".to_string(),
         max_runs,
         ends_at,
     )

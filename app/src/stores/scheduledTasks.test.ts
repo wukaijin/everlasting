@@ -26,6 +26,7 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     prompt: "汇总进展",
     schedule: { kind: "daily", at: "09:00" },
     enabled: true,
+    created_by: "user",
     created_at: 1_000,
     last_fired_at: null,
     next_fire_at: 2_000,

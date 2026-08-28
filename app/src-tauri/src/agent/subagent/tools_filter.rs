@@ -62,11 +62,18 @@ pub(crate) const STRUCTURALLY_DISABLED: &[&str] = &[
     // same rationale as `ask_user_question` /
     // `request_mode_change` above — worker subagents must not
     // block on user input (no UI sink, the blocking oneshot
-    // would hang the worker's tokio task until parent cancel).
-    // Worker subagents that want to suggest a state transition
-    // must return a result and let the parent surface the
-    // transition request on the user's behalf.
+    // would hang the worker's tokio task until parent
+    // cancel). Worker subagents that want to suggest a state transition
+    // must return a result and let the parent surface
+    // the transition request on the user's behalf.
     "request_task_state_transition",
+    // 08-29-schedule-task-tool: the scheduling family is the
+    // orchestrator's surface (same rationale as `create_task` — a
+    // worker must not seed detached tasks; task lifecycle belongs to
+    // the parent / user).
+    "schedule_task",
+    "schedule_status",
+    "schedule_cancel",
 ];
 
 /// Filter `builtin_tools()` for a worker.

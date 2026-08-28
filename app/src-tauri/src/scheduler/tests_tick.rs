@@ -89,6 +89,7 @@ async fn seed_task(
             prompt: "汇总昨夜进展".into(),
             schedule_json: serde_json::to_string(&spec).unwrap(),
             enabled: true,
+            created_by: "user".into(),
             next_fire_at: scheduler::now_epoch_ms() + step_ms,
             max_runs: None,
             ends_at: None,

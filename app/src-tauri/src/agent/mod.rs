@@ -79,6 +79,7 @@ pub mod tests_group_chat_prompts;
 pub mod tests_message_queue;
 pub mod tests_prompts;
 pub mod tests_request_mode_change;
+pub mod tests_schedule_task_family;
 pub mod tests_sse;
 pub mod tests_subagent;
 pub mod thinking;

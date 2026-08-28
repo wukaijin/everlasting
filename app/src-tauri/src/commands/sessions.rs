@@ -71,6 +71,30 @@ pub async fn create_session_inner(
     // `sessions.metadata` (TEXT column, JSON string).
     metadata: Option<serde_json::Value>,
 ) -> Result<db::SessionRow, AppCommandError> {
+    create_session_in_pool(
+        &state.db,
+        project_id,
+        initial_cwd,
+        model,
+        session_type,
+        metadata,
+    )
+    .await
+}
+
+/// [`create_session_in_pool`] 的 pool 级核心:只依赖 DB,不依赖
+/// `AppState`。`create_scheduled_task_in_pool` 的「target 缺省 = 新建
+/// 专用 session」分支经此复用(`08-29-schedule-task-tool` D2:tool 层
+/// 只有 `ToolContext.db`,拿不到 AppState;Q0 单源不变 —— 本函数是
+/// 唯一 INSERT 点,`create_session_inner` 是薄包装)。
+pub async fn create_session_in_pool(
+    db: &sqlx::SqlitePool,
+    project_id: String,
+    initial_cwd: String,
+    model: Option<String>,
+    session_type: Option<String>,
+    metadata: Option<serde_json::Value>,
+) -> Result<db::SessionRow, AppCommandError> {
     // `model` defaults to an empty string when the caller doesn't
     // pass one. The frontend's `create_session` call never sends a
     // model, and the actual provider/model used for chat is resolved
@@ -109,7 +133,7 @@ pub async fn create_session_inner(
     // session is created in `WorktreeState::None`; the user calls
     // `attach_worktree` separately if they want isolation. Non-git
     // projects can now create sessions and send messages.
-    let _project = match db::get_project(&state.db, &project_id).await {
+    let _project = match db::get_project(db, &project_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
             return Err(AppCommandError::new(
@@ -126,13 +150,13 @@ pub async fn create_session_inner(
 
     // Read the current default model_id so the session is bound to
     // a specific model at creation time (not just a free-text name).
-    let model_id = db::get_config_value(&state.db, "default_model_id")
+    let model_id = db::get_config_value(db, "default_model_id")
         .await
         .ok()
         .flatten();
 
     db::create_session(
-        &state.db,
+        db,
         &session_id,
         &project_id,
         &initial_cwd,

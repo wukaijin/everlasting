@@ -46,6 +46,9 @@ export interface ScheduledTask {
   prompt: string;
   schedule: ScheduleSpec | null;
   enabled: boolean;
+  /** 作者:'user'(设置 UI/IPC)或 'agent'(LLM schedule_task tool,
+   *  08-29-schedule-task-tool)。列表卡据此渲染来源徽标。 */
+  created_by: string;
   /** epoch ms。 */
   created_at: number;
   /** epoch ms;null = 从未触发。 */

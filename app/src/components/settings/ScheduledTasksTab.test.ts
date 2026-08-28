@@ -52,6 +52,7 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     prompt: "汇总昨日进展",
     schedule: { kind: "daily", at: "09:00" },
     enabled: true,
+    created_by: "user",
     created_at: 1_000,
     last_fired_at: null,
     next_fire_at: 4_000_000_000,
@@ -129,6 +130,16 @@ describe("ScheduledTasksTab 列表", () => {
     expect(card.text()).toContain("每天 09:00");
     expect(card.text()).toContain("启用中");
     expect(w.find('[data-testid="sched-toggle-task-1"]').exists()).toBe(true);
+  });
+
+  it("agent 来源徽标:created_by='agent' 渲染,user 不渲染(08-29-schedule-task-tool)", async () => {
+    stubBackend([row(), row({ id: "task-2", name: "agent 排的", created_by: "agent" })]);
+    const w = await mountTab();
+    const userCard = w.get('[data-testid="sched-card-task-1"]');
+    const agentCard = w.get('[data-testid="sched-card-task-2"]');
+    expect(userCard.find(".sched-tab__card-origin").exists()).toBe(false);
+    expect(agentCard.find(".sched-tab__card-origin").exists()).toBe(true);
+    expect(agentCard.find(".sched-tab__card-origin").text()).toBe("agent");
   });
 
   it("停用行灰显且状态标「已停用」", async () => {

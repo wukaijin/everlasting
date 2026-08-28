@@ -31,7 +31,7 @@ use crate::llm::types::ToolDef;
 /// 候选 stub 工具集(prd Decision 1 的 10 个,方案 A 保守档;
 /// 2026-08-25 F4 +`web_search` 第 11 员)。顺序是集合语义,不影响
 /// `stubify` 输出顺序(见模块注释不变量 2)。
-pub const STUB_CANDIDATES: [&str; 11] = [
+pub const STUB_CANDIDATES: [&str; 14] = [
     "use_ui",
     "remember",
     "update_checklist",
@@ -43,6 +43,12 @@ pub const STUB_CANDIDATES: [&str; 11] = [
     "merge_worker",
     "discard_worker",
     "request_mode_change",
+    // 08-29-schedule-task-tool:调度家族三件,大 schema(schema 内
+    // 枚举 6 档形状)符合 stub 候选画像;写性/管理性操作不在 L2 并行
+    // 白名单,∩ 不变量天然满足。
+    "schedule_task",
+    "schedule_status",
+    "schedule_cancel",
 ];
 
 /// L2 并行只读白名单(chat_loop/tools.rs `is_parallel_eligible`)。
@@ -59,7 +65,7 @@ pub const PARALLEL_WHITELIST: [&str; 5] = ["read_file", "grep", "glob", "list_di
 /// 每工具超短语义摘要(手工维护,不从原 description 裁剪 — 确定性;
 /// 摘要末尾统一附 load_tool_schemas 指引)。长度受 AC1 预算约束
 /// (静态度量单测锁定 ≤3700,2026-08-14 用户两轮拍板)。
-const STUB_DESCRIPTIONS: [(&str, &str); 11] = [
+const STUB_DESCRIPTIONS: [(&str, &str); 14] = [
     ("use_ui", "Render interactive UI cards in the chat."),
     ("remember", "Write a long-term memory."),
     ("update_checklist", "Replace the current checklist."),
@@ -71,6 +77,9 @@ const STUB_DESCRIPTIONS: [(&str, &str); 11] = [
     ("merge_worker", "Merge a worker's branch."),
     ("discard_worker", "Discard a worker's branch."),
     ("request_mode_change", "Request a mode switch."),
+    ("schedule_task", "Schedule a future agent task."),
+    ("schedule_status", "List your scheduled tasks."),
+    ("schedule_cancel", "Cancel a scheduled task."),
 ];
 
 /// Stub 形态的一句话描述:极短语义摘要 + 明确的「先 load」指引。
@@ -324,6 +333,11 @@ mod tests {
     ///    read_file description 增补图片块说明(向 LLM 披露新能力,
     ///    ~+48 tok → 实测 3903)。read_file 是核心工具不 stub 化;
     ///    披露文案已精简到最短。线随既有工具描述增长平移。
+    /// 5. **3960 → 4100(2026-08-29,schedule-task-tool 步骤 4)**:
+    ///    注册调度家族三件(schedule_task/status/cancel)+ 扩
+    ///    STUB_CANDIDATES 11 → 14(校准注 3 政策的情形:新工具以
+    ///    stub 化入列),stub 摘要 ~+128 tok → 实测 4031。线随新增
+    ///    基线平移。
     /// dispatch 校准:生产 `model_briefs = list_models`(实测 5 模型),
     /// 用真实 display_name 列表模拟(不是 2 模型的低估值)。
     #[tokio::test]
@@ -364,8 +378,8 @@ mod tests {
         let json = serde_json::to_string(&defs).unwrap_or_default();
         let tokens = crate::memory::tokens::count_tokens(&json).await;
         assert!(
-            tokens <= 3960,
-            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 3960(AC1 线,校准史见上)"
+            tokens <= 4100,
+            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 4100(AC1 线,校准史见上)"
         );
     }
 

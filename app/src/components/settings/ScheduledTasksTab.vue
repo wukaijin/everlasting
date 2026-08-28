@@ -897,6 +897,15 @@ onMounted(async () => {
           <div class="sched-tab__card-main">
             <div class="sched-tab__card-head">
               <span class="sched-tab__card-name" :title="task.name">{{ task.name }}</span>
+              <!-- 来源徽标(08-29-schedule-task-tool):agent 创建的显式标注,
+                   user 创建不标(缺省态零噪音)。 -->
+              <span
+                v-if="task.created_by === 'agent'"
+                class="sched-tab__card-origin"
+                title="该任务由 agent 在对话中创建"
+              >
+                agent
+              </span>
               <span
                 class="sched-tab__card-state"
                 :class="{
@@ -1345,6 +1354,18 @@ onMounted(async () => {
   flex-shrink: 0;
   font-size: var(--text-2-xs);
   color: var(--color-tool-write);
+}
+
+/* 来源徽标:agent 创建的任务(08-29-schedule-task-tool)。与状态徽章
+   同排、更低调(描边式,user 任务不渲染 = 缺省态零噪音)。 */
+.sched-tab__card-origin {
+  flex-shrink: 0;
+  font-size: var(--text-2-xs);
+  line-height: 1;
+  padding: 2px 5px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
 }
 
 .sched-tab__card-state--off {

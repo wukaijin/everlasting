@@ -63,6 +63,11 @@ pub const SCHEDULER_TICK_SECS: u64 = 30;
 /// (design §4,宽限 = 2×tick)。
 pub const CATCHUP_GRACE_MS: i64 = 60_000;
 
+/// kill switch 的 config 键(fail-open:仅字面 `"false"` 关)。tick
+/// fire 判定与 LLM `schedule_task` tool 的创建侧 gate 共用此常量
+/// (`08-29-schedule-task-tool` D3:同键同语义,防两处字面漂移)。
+pub const SCHEDULED_TASKS_ENABLED_KEY: &str = "scheduled_tasks_enabled";
+
 /// 消息来源标记。internally-tagged wire 形状
 /// `{"kind":"scheduled","task_id":..,"task_name":..,"fired_at":..}`
 /// (字段名按声明形态序列化,与 `QueuedMessage` 同为 snake_case)。
@@ -229,7 +234,7 @@ pub(crate) async fn scheduler_tick_with_fire(
     // kill switch:`scheduled_tasks_enabled`(fail-open,仅字面 "false"
     // 关 —— 同 memory_digest / tools_stub 先例)。
     let enabled =
-        match crate::db::config::get_config_value(&state.db, "scheduled_tasks_enabled").await {
+        match crate::db::config::get_config_value(&state.db, SCHEDULED_TASKS_ENABLED_KEY).await {
             Ok(Some(v)) => v != "false",
             _ => true,
         };

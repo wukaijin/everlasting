@@ -32,6 +32,7 @@ pub mod remember;
 pub mod request_mode_change;
 pub mod request_task_state_transition;
 pub mod run_background_shell;
+pub mod scheduled_task_family;
 pub mod search_history;
 pub mod shell;
 pub mod shell_kill;
@@ -249,6 +250,21 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // the `stub.rs` disjointness invariant). Plain dispatch, no
         // chat_loop interception. Appended LAST (prefix cache).
         web_search::definition(),
+        // 08-29-schedule-task-tool: LLM-facing surface of the F2
+        // scheduler (ROADMAP F1/F2 "LLM detached dispatch" follow-up).
+        // Family of three (task / status / cancel), plain dispatch (no
+        // chat_loop interception — creation is a fast DB write), Tier 5
+        // silent Allow via `ToolKind::Other` fallthrough. Author-plane
+        // separation: rows carry / require `created_by='agent'`; the
+        // per-project active cap + kill-switch create gate live in the
+        // tool layer only (UI/IPC path untouched). Workers stripped via
+        // `STRUCTURALLY_DISABLED`; group chat excluded by the
+        // `group_chat_tool_defs` whitelist (zero change needed there).
+        // C7D stub candidates. Appended LAST, family-adjacent (prefix
+        // cache).
+        scheduled_task_family::definition(),
+        scheduled_task_family::status_definition(),
+        scheduled_task_family::cancel_definition(),
     ]
 }
 
@@ -549,6 +565,21 @@ async fn execute_tool_inner(
         // app_config) happens inside the tool on every execute.
         "web_search" => {
             let (out, is_err) = web_search::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default(), None, None)
+        }
+        // 08-29-schedule-task-tool: scheduling family, plain dispatch.
+        // `schedule_task` needs `session_id` for in_current_session;
+        // status/cancel are project-scoped via ctx.
+        "schedule_task" => {
+            let (out, is_err) = scheduled_task_family::execute(input, ctx, session_id).await;
+            (out, is_err, ToolContextUpdate::default(), None, None)
+        }
+        "schedule_status" => {
+            let (out, is_err) = scheduled_task_family::status_execute(ctx).await;
+            (out, is_err, ToolContextUpdate::default(), None, None)
+        }
+        "schedule_cancel" => {
+            let (out, is_err) = scheduled_task_family::cancel_execute(input, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "use_skill" => match skill_cache {
