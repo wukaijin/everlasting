@@ -997,3 +997,24 @@ F5 第一档(PDF + docx)从 brainstorm 到 live 验证全程落地。**决策链
 ### Status
 
 [OK] **Completed**
+
+
+## Session 117: RULE-QUEUE-001 多 drain 丢消息根治(非尾 drained 条目补持久化)
+
+**Date**: 2026-08-29
+**Task**: RULE-QUEUE-001 多 drain 丢消息根治(非尾 drained 条目补持久化)
+**Branch**: `main`
+
+### Summary
+
+F1 队列多 drain 丢消息病灶根治:ChatLoopRequest.origin(尾条单传)替换为 drained: Vec<QueuedMessage> 全量载体(驱动器唯一非空点,其余 5 构造点空 vec);init 段尾条 persist 块前循环补写非尾条 user 行,seq 自 next_seq 连续自增,失败镜像 RULE-A-003 可见终止;带 origin/附件行随行写 metadata 信封(scheduled/attachments),手动条目零写入;FTS trigger/auto-title/skip_persist 全部复用既有契约。钉现状测试改写为根治断言 + 全 manual 对照;spec 三处收口(driver pattern/scheduled-tasks origin 链/signature 字段表),DEBT P2 归零。验证:2076 后端测试 + clippy -D warnings + fmt 全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ff54c1f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
