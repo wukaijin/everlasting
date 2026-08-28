@@ -35,7 +35,7 @@
 
 ## 1. 输入层扩展
 
-> 状态与排期归 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)(B2 @文件 + B3 /command 已落地;多模态见 [ROADMAP §2 第三档](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排))。
+> 状态与排期归 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)(B2 @文件 + B3 /command 已落地;多模态 **B1 已于 2026-08-16/17 落地**迁 §1.2,见 [ROADMAP §1.2 B1 行](./ROADMAP.md#12-路线图外完成))。
 
 ---
 
@@ -76,7 +76,7 @@
 | /command    | 模板执行用户代码                | 模板只插值,不 exec            |
 | Skill       | 第三方 skill 注入               | 文件位置隔离 + 显式 approve   |
 | Memory      | 改文件不通知                    | banner 提示                   |
-| 生成式 UI   | 按钮 action 越权            | B9 当前落地范围:selector(复用 ask_user_question)/ code_block(hljs + 复制)/ diff(复用 DiffView),**无独立 button + action surface**;独立 button + action 白名单推 D3 后期 |
+| 生成式 UI   | 按钮 action 越权            | B9+ 已落地(2026-07-13):selector(复用 ask_user_question)/ code_block(hljs + 复制)/ diff(复用 DiffView)+ **D3 通用 button + D4 diff 应用 + `UiDiffApplied` 审计**;剩余 session 开关等细节见 [ROADMAP §1.2 B9+ 行](./ROADMAP.md#12-路线图外完成) |
 | 飞书        | 消息内容外泄                    | 不在飞书存 session 历史       |
 | 云端        | 请求流经中继(remote epic)      | 流经不落盘 + 配对码 60s 一次性 + device_token + shared_secret + per-IP 限速(10 次/分) |
 

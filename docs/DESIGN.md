@@ -13,7 +13,7 @@
 - 之后再回来能快速回到上下文
 - 讨论时有共同语言
 
-讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions-2026-{06,07,08}.md 决策日志](./IMPLEMENTATION/)(按月分卷,无 `decisions.md`)。
+讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions-2026-{06,07,08}.md 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 `decisions.md`)。
 
 ---
 
@@ -54,7 +54,7 @@
 **已具备**(完整 commit 走 `git log`,粗粒度状态见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成)):
 
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
-- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~18 加 C7 / C7D / memory-gov / C3+ 4 个新横切关卡)
+- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~19 加 C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap 6 个新横切关注点)
 - 多项目 / 多 session 管理(SQLite 持久化)
 - 工具集(2026-08-25 实测 27 个注册名 = 25 builtin(含 F4 `web_search`)+ 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤):
   - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
@@ -67,7 +67,7 @@
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **27 类 AuditKind**(2026-08-20 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **28 类 AuditKind**(2026-08-28 实测,`ScheduledTaskFired` 为第 28 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
 - **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发(2026-08-19 起触发口径统一切换为 system+tools+messages 三部件之和,见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md))→ LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO=0.95`,unified-context-budget 2026-08-19);撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)(详见 [ARCHITECTURE §2.5.5/§2.5.14](./ARCHITECTURE.md))
 - C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)
 - **MAX_TURNS 软卡**(2026-08-19 落地,**替代硬终断**):单聊主 loop 撞线(缺省 200)改 QuestionStore 询问——继续(+200)/ 压缩后续跑 / 停止,10 分钟超时兜底;worker 与群聊 speaker 段保持硬卡直接 break(详见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md))
@@ -90,6 +90,12 @@
 - **C7D tools stub 注册**(2026-08-14):`StubRegistry`(session 粘性 loaded-set)+ `load_tool_schemas` 元工具按需取回 + `tools_stub_enabled` gate(开关 && 非 worker && 非群聊时生效);C7 + C7D 联合实测 -62%
 - **B1 image multimodal**(2026-08-16/17):`ContentBlock::Image` / `ImageRef` 双形态 + `models.supports_images` 配置(`INTEGER NOT NULL DEFAULT 0`,`db/migrations/schema.rs:1012`)+ `messages.metadata.attachments[]` 引用 attachments 表 + **首个二进制 GET 路由** `GET /api/v1/attachments/<id>`(daemon `daemon/routes/attachments.rs`,手机 PWA 看图路径)+ `turn_trace.images_token INTEGER` 度量(B1 PR4);不支持 vision 的模型走 ImageRef 占位降级
 - **D2 跨 session 全文搜索**(2026-08-17):`messages_fts` FTS5 虚拟表(`db/migrations/schema.rs:1051`,external-content + trigram + `UPDATE OF text` 防写放大 + `messages_fts_docsize` 影子表守卫回填)+ `db/search.rs` 双路分派(FTS 命中走 rowid → `messages` 主表;0 命中回退 LIKE 兜底)+ `search_messages` POST IPC + 前端 `SearchModal` 两态(空态/命中态按 session 分组)+ Cmd/Ctrl+K 接管
+- **F1 消息队列·用户连发档**(2026-08-25):流式期间编辑器解锁,发送统一入队(后端 per-session 内存队列 `agent/message_queue.rs`,FIFO/uuid 寻址/上限 20),turn 边界驱动器 drain 全队批量注入;`ChatEvent::TurnContinuation` 续轮渲染边界;单条撤销/退回/水合(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md))
+- **F4 `web_search` 工具**(2026-08-25):与 `web_fetch` 两段式分工(Tavily keyed / DDG 兜底),固定端点无 SSRF 面,Tier 5 silent Allow;Settings 第 7 tab 配 key(AEAD 加密)
+- **F5 PDF/docx/xlsx 原生文本提取**(2026-08-26):`agent/doc_extract.rs` 纯函数提取(pdf-extract / quick-xml / calamine,零 Node 运行时零 pdfium),@文件在 Degraded 兜底前分流,成功走 `<doc>` span 注入通道 + `at_files_token` 度量;占位文案升级为指令式自助兜底(长尾格式 agent 自行转换);pptx 用户裁定不做
+- **F6 异步 agent 任务 + F3 全局并发闸**(2026-08-27):`SessionSummary.busy` 运行时 enrich(跨端侧栏红点)+ 轮次终结跨 session toast + `max_concurrent_loops` 全局信号量(缺省 4)+ Tauri 壳关闭确认;零新表零 migration(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md))
+- **F2·F2b 定时任务**(2026-08-28):daemon 常驻调度器(`scheduler/` 30s tick,单一扫描算法 + `due` 落账防相位漂移 + catch-up)+ origin 载体链走 F1 队列入口;preset 6 档 + `max_runs`/`ends_at` 结束条件 + `completed` 审计;Settings 第 8 tab 管理面,PWA 可用(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md) + [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md))
+- **stream 事件补 session_id**(2026-08-27):`chat-event` payload 回填 `session_id`,支持跨客户端(remote PWA)按 session 认领
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
@@ -112,7 +118,7 @@
 
 **范围守护**(避免后期蔓延):
 - ❌ **不做 Yolo 模式默认开** — Yolo(无任何确认)必须显式开启,默认拒绝(详见 [权限层 spec](../.trellis/spec/backend/permission-layer.md))
-- ❌ **不做云端触发器** — 定时/事件触发源必须在本地(系统时间、fs 事件、本地 webhook);Cloudflare Cron Trigger 之类不接(用户经 PWA **主动发起**的远程会话是例外,见下条)
+- ❌ **不做云端触发器** — 定时/事件触发源必须在本地(系统时间、fs 事件、本地 webhook);Cloudflare Cron Trigger 之类不接(用户经 PWA **主动发起**的远程会话是例外,见下条)。**本地定时已实现(F2,2026-08-28)**:daemon 常驻调度器按本机时钟触发,云端不参与(用户经 PWA 主动发起的是例外,见下条)
 - ❌ **不做 in-app 自动升级** — 新版本走包管理器或手动下二进制,降低供应链攻击面和复杂度
 - ❌ **不做云端自动推送任务回写本机** — agent 不接受"云端自动/定时/事件推下来"的任务,主动权必须在本地用户;**排除的是自动推送**,用户经 PWA 主动发起的远程会话是已实施例外(remote-control epic,2026-08)
 

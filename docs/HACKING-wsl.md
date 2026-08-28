@@ -616,7 +616,7 @@ ss -tlnp | grep 7456
 
 ```bash
 ./scripts/daemon.sh start   [--port N]   # 编译 release + 前台启动(日志直接输出)
-./scripts/daemon.sh bg      [--port N]   # ⚠️ 暂不可用,见下方「bg 模式失效」说明
+./scripts/daemon.sh bg      [--port N]   # 后台启动(日志写 /tmp/everlasting-daemon.log)
 ./scripts/daemon.sh stop                 # 停 daemon(读 PID 文件,SIGTERM→15s→SIGKILL 兜底)
 ./scripts/daemon.sh restart [--port N]   # stop + start(改完前端重新 serve dist)
 ./scripts/daemon.sh rebuild              # 只重新编译 release 二进制(不重启)
@@ -624,13 +624,13 @@ ss -tlnp | grep 7456
 ./scripts/daemon.sh logs                 # 跟踪日志(bg 模式的日志文件)
 ```
 
-> ⚠️ **bg 模式失效(2026-08-11 核查)**:自 `928bdc3`(2026-07-27)daemon bin 加
-> `prctl(PR_SET_PDEATHSIG)` 孤儿守卫后,`daemon.sh bg` 即坏 —— 脚本的 bash
-> 进程退出(脚本跑完)时,PDEATHSIG 给 daemon 发 SIGTERM,后台 daemon 1-2s 内
-> 被杀。要后台跑,先 `start --no-build` 前台起,再 `Ctrl+Z` + `bg`(父 shell 存活),
-> 或用 `nohup` 时给 daemon 设孤儿守卫 opt-out(需 daemon bin 支持,见
-> [daemon-server.md](../.trellis/spec/backend/daemon-server.md) 的孤儿守卫条款)。
-> 修复(daemon bin 加 opt-out env)单开 task 中。
+> ✅ **bg 模式已恢复(2026-08-24 gate 修复)**:daemon bin 的孤儿守卫
+> `prctl(PR_SET_PDEATHSIG)`(2026-07-27 起,`928bdc3`)曾让 `daemon.sh bg` 必死 ——
+> 脚本退出即 SIGTERM 杀 daemon。08-24 起守卫 gate 到 **sidecar 模式**
+> (`EVERLASTING_SIDECAR=1`,GUI 的 sidecar.rs spawn 才注入),standalone
+> (`daemon.sh bg` / `cargo run` / CI)不再设该 env,后台 daemon 被 init 收养正常存活;
+> 防护 1(`getppid()==1` 拒启动)一并 gate(systemd/daemonize 场景 ppid 天然是 1)。
+> 见 `bin/everlasting-daemon.rs` 的 gate 注释。
 
 脚本细节:用 **PID 文件**(`.everlasting-daemon.pid`)管理进程,避免 `pkill -f everlasting-daemon` 自匹配(脚本命令行含 daemon 名会被自己误杀);自动注入 `PKG_CONFIG_PATH`(WSL 编译 Rust 前置,见坑 1);`--no-build` 跳过编译用现有二进制。设计文档与本节对应;脚本头注释是权威。
 

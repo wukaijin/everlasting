@@ -1,7 +1,7 @@
 # CONTEXT.md
 
 > Everlasting 项目术语表(glossary)。
-> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志(按月分卷,无 `decisions.md`),本文件不重复。
+> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md)),本文件不重复。
 > 词条内的实现状态为**历史快照**(落地时记录),新进展/新特性只更新 [ROADMAP.md](./ROADMAP.md) 与决策日志,不在此追加;术语新增时才加词条。
 
 ---
@@ -82,7 +82,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 `run_background_shell` 启动后台 shell(tokio Child,**不带 PTY**,L1b follow-up 接 `portable-pty`),`shell_status` 拉 exit_code,`shell_kill` 终止。实现细节(Registry trait / 三触发 `select!` / Q1-Q7 决策 / 生命周期钩子)见 [ROADMAP §1.2 L1 行](./ROADMAP.md#12-路线图外完成) + [决策日志 2026-06-19](./IMPLEMENTATION/decisions-2026-06.md)。
 
 ### MAX_TURNS
-当前常量 `200`(`app/src-tauri/src/agent/mod.rs:76`)。Agent Loop 单 request 内最大 turn 数。实现状态见 [ROADMAP §1.2 softcap 行](./ROADMAP.md#12-路线图外完成) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md);变更轨迹 `20 → 50 → 200`。
+当前常量 `200`(`app/src-tauri/src/agent/mod.rs:99`)。Agent Loop 单 request 内最大 turn 数。实现状态见 [ROADMAP §1.2 softcap 行](./ROADMAP.md#12-路线图外完成) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md);变更轨迹 `20 → 50 → 200`。
 
 ### Context Compression Thresholds (C3+ 替代 C3,2026-08-18)
 原 C3 阈值(`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,2026-06-12 落地)已被 **C3+ LLM 摘要式压缩(2026-08-18)** 替换。当前实现:0.85 触发 → LLM 9 段模板摘要 + 保留区存活 + `cutoff_seq` 水位折叠,摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`;连续 3 次失败熔断回退 C3 机械丢组;实现细节见 [ROADMAP §1.2 C3+ 行](./ROADMAP.md#12-路线图外完成) + [ARCHITECTURE §2.5.5/§2.5.13](./ARCHITECTURE.md)。
@@ -96,7 +96,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 撞线兜底见上节 MAX_TURNS(2026-08-19 起软卡询问,非硬停)。实现见 `app/src-tauri/src/agent/loop_detection.rs`;C2+ 主动干预(每 run `loop_hit_count` N=3 + 三分支询问)见 [ROADMAP §1.2 C2+ 行](./ROADMAP.md#12-路线图外完成)。
 
 ### AuditKind
-`session_audit_events.kind` 字符串枚举,**2026-08-20 实测 27 类**,按域分组(完整 27 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
+`session_audit_events.kind` 字符串枚举,**2026-08-28 实测 28 类**,按域分组(完整 28 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
 
 - **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
 - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
@@ -107,11 +107,12 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
 - **Budget 域(1)**:ContextBudgetTrim(08-19 关卡⑤硬卡裁剪,unified-context-budget)
 - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
+- **Scheduler 域(1)**:ScheduledTaskFired(F2 08-28,动作 fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error)
 
 每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog);E2 07-14 起增 `turn_seq` 列(审计按 turn 落表)。
 
 ### L1 / L2 / L3 命名约定
-路线图子档命名,2026-08-20 同步(新特性加入新字母)。完整逐项状态见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) 对应行 + [CONTEXT 词条](./CONTEXT.md) 对应术语:
+路线图子档命名,2026-08-28 同步(新特性加入新字母)。完整逐项状态见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) 对应行 + [CONTEXT 词条](./CONTEXT.md) 对应术语:
 
 - **L1**:后台 shell + 完成通知(L1a 不带 PTY / L1b 后续接 portable-pty)
 - **L2**:单 turn 多 tool 并发(只读 batch,`is_parallel_eligible` + `FuturesUnordered`)
@@ -135,6 +136,13 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 - **compact 命令** (2026-08-19):手动 `/compact` — 空闲期 LLM 摘要压缩入口
 - **handoff** (2026-08-19):跨 session 接力 — HUD 按 session 隔离 + 接力摘要进下一 session
 - **worker per-turn trace** (2026-08-20):`turn_trace` 并入 run 维度(`UNIQUE(session_id, run_id, seq)`,`''` 哨兵主行)
+- **F1** (2026-08-25):消息队列·用户连发档 — `agent/message_queue.rs` + `ChatEvent::TurnContinuation`(见下节)
+- **F4** (2026-08-25):`web_search` 工具 — Tavily/DDG 双后端,Settings 第 7 tab(`READONLY_TOOL_ALLOWLIST` 第 7 员)
+- **F5** (2026-08-26):PDF/docx/xlsx 原生文本提取 — `agent/doc_extract.rs` + `InjectionAction::Extracted`(@文件注入第一档;pptx 不做)
+- **F6** (2026-08-27):异步 agent 任务可观测性 — `SessionSummary.busy` + 轮次终结跨 session toast
+- **F3** (2026-08-27):全局并发闸 — `max_concurrent_loops` 信号量(缺省 4)
+- **F2/F2b** (2026-08-28):定时任务 — `scheduler/` 30s tick + `scheduled_tasks` 表 + 6 档 preset + 结束条件(见下节)
+- **stream session_id** (2026-08-27):`chat-event` payload 回填 `session_id`(跨客户端认领)
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
@@ -149,10 +157,10 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
   - **httpTransport**(默认):fetch POST 到 daemon `/api/v1/*` + EventSource 订阅 `/api/v1/stream` SSE。Tauri webview 和纯浏览器都用它。
   - **tauriTransport**(逃生):`@tauri-apps/api` 的 `invoke`/`listen` 透传,仅 Full 模式。`?transport=tauri` URL query 触发。
   - `resolveTransport()`(`index.ts`)按 URL query 选;`health.ts` 轮询 daemon health 必要时降级。
-- **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。Full 模式下对应 Tauri `app.emit`。
+- **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。**2026-08-27 起 `chat-event` payload 回填 `session_id`**(`daemon/sse.rs` 注释契约),非发起端(remote PWA)可跨客户端按 session 认领。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— **2026-08-18 实测 95** 个原 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— **2026-08-28 实测 118** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
 - **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速;WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
 - **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
 - **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。
@@ -160,10 +168,26 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **pwa-remote 模式** — `httpTransport` 内部第三态:前端持有 `device_token` 时请求加 `/api/v1/proxy` 前缀 + Bearer,SSE 带 `access_token`;vue-router 守卫仅 remote-served 语境 gate 配对页。PWA 壳:vite-plugin-pwa + `public/icons/`。
 - **Settings RemoteTab / remoteConfig store** — 前端远程设置入口(`app/src/components/settings/RemoteTab.vue` + `stores/remoteConfig.ts`),GUI 侧配置 remote 隧道相关状态。
 
+### Scheduled Task / ScheduleSpec(F2/F2b 定时任务,2026-08-28)
+daemon 常驻调度器触发的本地定时任务。相关术语:
+
+- **`scheduled_tasks` 表** — 一行一个任务:`project_id` + `target_session_id`(双 FK CASCADE)/ `name` / `prompt`(触发时注入的 user message 内容)/ `schedule`(JSON:preset 类型 + 参数)/ `enabled` / `run_count` / `max_runs` / `ends_at`(F2b 结束条件两列)/ `last_fired_at` / `next_fire_at`。
+- **ScheduleSpec** — `schedule` JSON 的 schema,6 档 preset:固定时间类 `daily`(每天 HH:MM)/ `hourly`(每小时第 N 分)/ `weekly`(每周 W HH:MM)/ `weekdays`(每工作日)/ `monthly`(每月 D 号,短月无该日**跳过该月**)+ 固定频率类 `every_min`(每 N 分钟,interval 单位换算**纯 UI 做**,后端零感知)。
+- **origin 载体链** — fire 时构造带 origin 的 user message:`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控`,落 `messages.metadata.scheduled`(additive)。`created_by = 'scheduler'`(F2)区别于 `'user'`。
+- **`due` 落账** — fire 时记录**理论到期点**(非实际触发时刻),interval 类任务据此保证无相位漂移。
+- **ScheduledTaskFired** — 审计 kind,六动作:`fired` / `catchup`(停机补跑)/ `skipped_dedup`(同 session 同 tick 已 fire)/ `skipped_queue_disabled` / `lost` / `error`。
+- **kill switch** — `scheduled_tasks_enabled`(app_config,fail-open);per-task `enabled` 是停用。`max_runs` / `ends_at` 命中 → 自动停用保留 + `completed` 审计(恰好一次),重新启用计数清零。
+
+### 全局并发闸(F3,2026-08-27)
+`max_concurrent_loops`(缺省 4)全局信号量:daemon 侧 spawn agent loop 前 acquire,满则**排队不拒绝**;等闸取消完整回滚 claim 注册。F6 的编排面三件套(`SessionSummary.busy` 运行时 enrich / 轮次终结跨 session toast / Tauri 壳关闭确认)见 [ARCHITECTURE §1.6](./ARCHITECTURE.md)。spec:`agent-loop-architecture/pattern-global-loop-semaphore`。
+
+### TurnContinuation(F1,2026-08-25)
+`ChatEvent` 变体,队列驱动器在续轮(同 rid 内层 run 前)emit,作前端**续轮渲染边界**——`start` 是 run 内每次 LLM 调用的边界,不能复用;群聊 `Speaker` 同位置同角色。前端据此在消息流里追加"续轮"分隔,而非新起一轮。
+
 ---
 
 ## 相关决策
 
-- 设计决策走 [`docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志](./IMPLEMENTATION/)(按月分卷,无 `decisions.md`;本月新建条目落 `decisions-YYYY-MM.md` + 更新 `[ARCHITECTURE.md](./ARCHITECTURE.md)` 对应章节)
+- 设计决策走 [`docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md);本月新建条目落 `decisions-YYYY-MM.md` + 更新 `[ARCHITECTURE.md](./ARCHITECTURE.md)` 对应章节)
 - A4 Token 相关术语、Checklist(agent 自跟踪清单)均已落地(详见上文 Checklist 条目,B12 2026-06-19),作为术语定义保留
 - 跨层契约走 `.trellis/spec/backend/llm-contract.md` "Scenario: Token Usage Tracking" 段
