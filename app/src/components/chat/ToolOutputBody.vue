@@ -20,26 +20,22 @@
 //   - long output truncated via `truncateOutput(max=500)`
 //   - human-readable size hint in summary
 //     ("<n> chars" / "X.XK chars" / "X.XM chars")
-//   - F5 duration chip appended to summary when present
-//     ("0.4s" / "1m 23s" via `abbreviateDuration`)
+//   - F5 duration chip REMOVED (2026-08-29 ui-visual-polish): the
+//     header (ToolCallHeader) already renders the same
+//     `result.durationMs` next to ✓ done — the output-row repeat
+//     read as "output · 225 chars · 0.1s · 0.1s" noise. The
+//     `durationMs` prop is gone; pre-F5 callers passing it can
+//     drop the binding.
 //   - isError adds red-tinted pre border
 //
-// Pre-F5 rows / pre-F5 cards: `durationMs` is undefined, summary
-// simply omits the duration chip — no display change vs the old
-// inline block.
+// Pre-F5 rows / pre-F5 cards: summary just shows size, unchanged.
 
 import { computed } from "vue";
 import { extractToolResultDisplay, truncateOutput } from "../../utils/messageFormat";
-import { abbreviateDuration } from "../../utils/duration";
 
 const props = defineProps<{
   content: string;
   isError: boolean;
-  // F5 (LLM Latency Tracking): per-tool duration in ms. Pre-F5 rows
-  // / rows where the in-memory measurement race lost will not
-  // carry a value. When undefined, the summary simply omits the
-  // duration chip.
-  durationMs?: number;
 }>();
 
 /** Display-only view of the tool result content. Strips the cwd
@@ -65,20 +61,12 @@ const sizeLabel = computed<string>(() => {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K chars`;
   return `${(n / 1024 / 1024).toFixed(1)}M chars`;
 });
-
-/** F5 duration label appended to the summary when set.
- *  Returns "" when undefined (the summary then just shows
- *  `output · <sizeLabel>` without the trailing duration). */
-const durationLabel = computed<string>(() => {
-  if (typeof props.durationMs !== "number") return "";
-  return abbreviateDuration(props.durationMs);
-});
 </script>
 
 <template>
   <details class="tool-output-body" :class="{ 'tool-output-body--error': isError }">
     <summary>
-      output · {{ sizeLabel }}<span v-if="durationLabel"> · {{ durationLabel }}</span>
+      output · {{ sizeLabel }}
     </summary>
     <pre
       class="tool-output-body__pre"

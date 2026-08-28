@@ -166,7 +166,6 @@ const statusIconName = computed<string>(() => {
       v-if="result"
       :content="result.content"
       :is-error="result.isError"
-      :duration-ms="result.durationMs"
     />
     <ToolResultImages
       v-if="result?.images?.length && sessionId"

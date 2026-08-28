@@ -711,7 +711,6 @@ watch(
       v-if="!isDispatchSubagent && result"
       :content="result.content"
       :is-error="result.isError"
-      :duration-ms="result.durationMs"
     />
     <ToolResultImages
       v-if="!isDispatchSubagent && result?.images?.length && sessionId"

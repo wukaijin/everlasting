@@ -158,9 +158,9 @@ describe("DrawerToolCallCard — duration chip", () => {
   it("renders minute-scale duration in the 'Mm Ss' format", () => {
     const w = mountCard({
       call: makeCall(),
-      result: makeResult({ durationMs: 83500 }), // 1m 23.5s
+      result: makeResult({ durationMs: 83500 }), // 1m 23s (分档秒取整,08-29 ladder)
     });
-    expect(w.find(".tool-call-header__duration").text()).toBe("1m 23.5s");
+    expect(w.find(".tool-call-header__duration").text()).toBe("1m 23s");
   });
 
   it("omits the duration span when result is present but durationMs is undefined", () => {

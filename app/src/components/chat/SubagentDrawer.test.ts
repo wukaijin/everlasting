@@ -518,8 +518,9 @@ describe("SubagentDrawer", () => {
     expect(toolsSection?.querySelector(".drawer-section__live-chip")).toBeNull();
     const finalChip = toolsSection?.querySelector(".drawer-section__final-chip");
     expect(finalChip).not.toBeNull();
-    // startedAt 10:00:00 + finishedAt 10:00:30 = 30s → "✓ 30.0s".
-    expect(finalChip?.textContent ?? "").toContain("30.0s");
+    // startedAt 10:00:00 + finishedAt 10:00:30 = 30s → "✓ 30s"
+    // (2026-08-29 ladder: whole seconds drop the decimal).
+    expect(finalChip?.textContent ?? "").toContain("30s");
     w.unmount();
   });
 
@@ -550,7 +551,7 @@ describe("SubagentDrawer", () => {
     await flushPromises();
 
     const statusEl = document.body.querySelector(".subagent-drawer__status");
-    expect(statusEl?.textContent?.trim()).toBe("完成 30.0s");
+    expect(statusEl?.textContent?.trim()).toBe("完成 30s");
     w.unmount();
     vi.useRealTimers();
   });
@@ -568,7 +569,7 @@ describe("SubagentDrawer", () => {
     await flushPromises();
 
     const statusEl = document.body.querySelector(".subagent-drawer__status");
-    expect(statusEl?.textContent?.trim()).toBe("failed at 11.7s");
+    expect(statusEl?.textContent?.trim()).toBe("failed at 11s");
     w.unmount();
     vi.useRealTimers();
   });
@@ -673,7 +674,7 @@ describe("SubagentDrawer", () => {
     await flushPromises();
 
     const statusEl = document.body.querySelector(".subagent-drawer__status");
-    expect(statusEl?.textContent?.trim()).toBe("未完成 at 150.0s");
+    expect(statusEl?.textContent?.trim()).toBe("未完成 at 2m 30s");
     w.unmount();
     vi.useRealTimers();
   });
@@ -694,7 +695,7 @@ describe("SubagentDrawer", () => {
     await flushPromises();
 
     const statusEl = document.body.querySelector(".subagent-drawer__status");
-    expect(statusEl?.textContent?.trim()).toBe("完成 30.0s");
+    expect(statusEl?.textContent?.trim()).toBe("完成 30s");
     w.unmount();
     vi.useRealTimers();
   });
@@ -740,7 +741,7 @@ describe("SubagentDrawer", () => {
 
     const banner = document.body.querySelector(".subagent-drawer__banner");
     expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
-      .toBe("Worker exited unexpectedly at 11.7s");
+      .toBe("Worker exited unexpectedly at 11s");
     w.unmount();
     vi.useRealTimers();
   });

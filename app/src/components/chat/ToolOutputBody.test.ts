@@ -9,8 +9,10 @@
 //   3. Long content is truncated with the `truncateOutput`
 //      suffix.
 //   4. `isError` adds the error visual class on the <pre>.
-//   5. `durationMs` adds the F5 duration chip after the size
-//      in the summary.
+//   5. (2026-08-29 ui-visual-polish) the F5 duration chip was
+//      REMOVED from the summary — ToolCallHeader already renders
+//      the same `result.durationMs` next to ✓ done, the repeat
+//      was noise. Guard tests assert its absence.
 //   6. (Guard test) Empty / undefined content does NOT crash —
 //      the body renders an empty <pre> (parent decides whether
 //      to mount via v-if).
@@ -20,11 +22,7 @@ import { mount } from "@vue/test-utils";
 import ToolOutputBody from "./ToolOutputBody.vue";
 
 describe("ToolOutputBody", () => {
-  function mountBody(props: {
-    content: string;
-    isError: boolean;
-    durationMs?: number;
-  }) {
+  function mountBody(props: { content: string; isError: boolean }) {
     return mount(ToolOutputBody, { props });
   }
 
@@ -88,30 +86,18 @@ describe("ToolOutputBody", () => {
     );
   });
 
-  it("appends the F5 duration chip to the summary when durationMs is set", () => {
-    const w = mountBody({
-      content: "ok",
-      isError: false,
-      durationMs: 1234,
+  it("never renders a duration chip in the summary (2026-08-29 dedup)", () => {
+    // The header owns the duration display now; the summary is
+    // `output · <size>` only — no trailing duration even if a
+    // stale caller still passes a durationMs prop (extra props
+    // are ignored as attrs).
+    const w = mount(ToolOutputBody, {
+      props: { content: "ok", isError: false },
+      attrs: { "data-stale-duration": "1234" },
     });
     const summaryText = w.find(".tool-output-body summary").text();
-    // 1234ms → "1.2s" via abbreviateDuration.
     expect(summaryText).toContain("output");
-    expect(summaryText).toContain("1.2s");
-    // The size label is also present.
     expect(summaryText).toMatch(/\d+ chars/);
-  });
-
-  it("omits the duration chip when durationMs is undefined (pre-F5 row)", () => {
-    const w = mountBody({
-      content: "ok",
-      isError: false,
-      // durationMs intentionally omitted.
-    });
-    const summaryText = w.find(".tool-output-body summary").text();
-    // The summary must NOT contain a duration separator + duration.
-    // (The summary's format is `output · <size>` when no duration,
-    //  `output · <size> · <duration>` when present.)
     expect(summaryText).not.toMatch(/· [0-9]+(\.[0-9])?s/);
     expect(summaryText).not.toMatch(/· [0-9]+m /);
   });

@@ -131,10 +131,12 @@ const countUnit = computed<string>(() => {
  *  elapsed seconds. e.g. "3 · 4.2s" while the worker is running.
  *  Empty-segment guard: when `entryCount === 0` (worker just
  *  started, no entries yet), show only the elapsed time so the
- *  chip doesn't render a misleading "0 ·". */
+ *  chip doesn't render a misleading "0 ·".
+ *  2026-08-29 ui-visual-polish: was raw toFixed(1) (a 4h run
+ *  rendered "14400.0s"); now the shared s/m/h ladder. */
 const liveChipText = computed<string>(() => {
-  const sec = (props.elapsedMs / 1000).toFixed(1);
-  return props.entryCount > 0 ? `${props.entryCount} · ${sec}s` : `${sec}s`;
+  const elapsed = abbreviateDuration(props.elapsedMs);
+  return props.entryCount > 0 ? `${props.entryCount} · ${elapsed}` : elapsed;
 });
 
 /** Formatted terminal chip text. e.g. "✓ Completed · 4.2s" when

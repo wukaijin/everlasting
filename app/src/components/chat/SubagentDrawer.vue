@@ -45,6 +45,7 @@ import {
 } from "../../utils/transcriptPairing";
 import { truncate } from "../../utils/useTruncate";
 import { renderMarkdown } from "../../utils/markdown";
+import { abbreviateDuration } from "../../utils/duration";
 import DrawerSection from "./DrawerSection.vue";
 import DrawerPromptCard from "./DrawerPromptCard.vue";
 import WorkerTurnTraceList from "./WorkerTurnTraceList.vue";
@@ -383,13 +384,15 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
     return { label: meta.label, color: meta.color, suffix: "" };
   }
   if (status.value === "running") {
-    return { label: meta.label, color: meta.color, suffix: ` ${(elapsedMs.value / 1000).toFixed(1)}s` };
+    // 2026-08-29 ui-visual-polish: was raw toFixed(1) — a 4h run
+    // rendered "14400.0s". Shared s/m/h ladder now.
+    return { label: meta.label, color: meta.color, suffix: ` ${abbreviateDuration(elapsedMs.value)}` };
   }
   if (status.value === "completed" && terminalDurMs.value !== null) {
-    return { label: meta.label, color: meta.color, suffix: ` ${(terminalDurMs.value / 1000).toFixed(1)}s` };
+    return { label: meta.label, color: meta.color, suffix: ` ${abbreviateDuration(terminalDurMs.value)}` };
   }
   if (status.value === "error") {
-    const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
+    const suffix = terminalDurMs.value !== null ? ` at ${abbreviateDuration(terminalDurMs.value)}` : "";
     return { label: "failed", color: meta.color, suffix };
   }
   if (status.value === "cancelled") {
@@ -398,7 +401,7 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
     if (run.value.turnCount !== null && run.value.turnCount !== undefined) {
       return { label: meta.label, color: meta.color, suffix: ` at turn ${run.value.turnCount}` };
     }
-    const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
+    const suffix = terminalDurMs.value !== null ? ` at ${abbreviateDuration(terminalDurMs.value)}` : "";
     return { label: meta.label, color: meta.color, suffix };
   }
   if (status.value === "incomplete") {
@@ -411,7 +414,7 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
     if (run.value.turnCount !== null && run.value.turnCount !== undefined) {
       return { label: meta.label, color: meta.color, suffix: ` at turn ${run.value.turnCount}` };
     }
-    const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
+    const suffix = terminalDurMs.value !== null ? ` at ${abbreviateDuration(terminalDurMs.value)}` : "";
     return { label: meta.label, color: meta.color, suffix };
   }
   return { label: meta.label, color: meta.color, suffix: "" };
@@ -504,7 +507,7 @@ const errorMessage = computed<string | null>(() => {
 });
 
 /** PR6 (2026-06-21) R23 (downgraded): cancelled terminal state — the
- *  Reply segment replaces its body with a `⊘ Cancelled · at X.Xs`
+ *  Reply segment replaces its body with a `⊘ Cancelled · at Xs`
  *  chip. PRD R23 originally specified "at turn N" but the
  *  `subagent_runs` schema has no turn column pre-PR2; the downgrade
  *  uses the wall-clock terminal duration (`terminalDurMs`) instead.
@@ -514,7 +517,7 @@ const errorMessage = computed<string | null>(() => {
 const cancelledSuffix = computed<string | null>(() => {
   if (status.value !== "cancelled") return null;
   if (terminalDurMs.value === null) return null;
-  return `at ${(terminalDurMs.value / 1000).toFixed(1)}s`;
+  return `at ${abbreviateDuration(terminalDurMs.value)}`;
 });
 
 watch(

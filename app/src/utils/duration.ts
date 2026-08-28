@@ -4,24 +4,29 @@
 //
 // F5 (LLM Latency Tracking): the chat panel renders two
 // per-message latencies via this helper:
-//   1. Assistant message bottom-right chip (totalMs):
-//      e.g. "0.4s", "1.2s", "32.4s", "1m 23s", "12m 4s"
-//   2. ToolCallCard status row (durationMs):
-//      same scale.
+//   1. Assistant message bottom-right chip (totalMs)
+//   2. ToolCallCard status row (durationMs)
+// 2026-08-29 ui-visual-polish: upgraded to the s/m/h ladder the
+// subagent drawer also needs — SubagentDrawer statusDisplay and
+// DrawerSection liveChip previously rolled their own toFixed(1)
+// and rendered "14400.0s" for a 4-hour run; now everything funnels
+// through here (single source of truth).
 //
-// Format rules (locked in the PRD §"Definition of Done" + spec
-// "Wrong vs Correct" in `.trellis/spec/backend/llm-contract.md`
-// "Scenario: Latency Tracking" §7):
-//   - < 1000 ms   → "0.0s" / "0.4s" / "999.0s" (one decimal, "s" suffix)
-//   - 1000-59999  → "1.0s" / "32.4s" / "59.9s"  (one decimal, "s" suffix)
-//   - 60_000+     → "1m 23s" / "12m 4s" / "59m 32s" (minute-rounded;
-//     seconds keep one decimal only if they need to disambiguate;
-//     "1m 0s" instead of "1m" to match the "m s" grammar).
+// Format rules (2026-08-29 revision, replaces the pre-08-29
+// "always one decimal below a minute" lock):
+//   - < 10_000 ms        → "0.4s" / "9.9s"   (one decimal — fast-tool
+//                          precision is the whole point at this scale)
+//   - 10_000–59_999      → "32s" / "54s"     (whole seconds; "54.0s"
+//                          trailing ".0" is decimal noise)
+//   - 60_000–3_599_999   → "1m 23s"; whole minute → "5m" (compact
+//                          grammar, not "5m 0s")
+//   - ≥ 3_600_000        → "1h 2m"; whole hour → "2h" (seconds are
+//                          noise at hour scale)
 //
 // Negative or non-finite inputs are clamped to 0 (defensive
 // against user clock changes that make `Date.now() - start`
 // negative, and against NaN propagation from a buggy IPC
-// payload). The clamp is silent (returns "0.0s") — the caller
+// payload). The clamp is silent (returns "0s") — the caller
 // doesn't need to special-case the result.
 
 /** Abbreviate a millisecond duration to a human-readable label.
@@ -29,22 +34,26 @@
 export function abbreviateDuration(ms: number): string {
   // Defensive: NaN, negative, Infinity all collapse to 0.
   if (!Number.isFinite(ms) || ms < 0) {
-    return "0.0s";
+    return "0s";
   }
-  // Sub-minute range: "Ns" with one decimal.
-  if (ms < 60_000) {
+  // Fast-tool range: "Ns" with one decimal — precision matters
+  // when comparing 0.4s vs 2.1s tool calls.
+  if (ms < 10_000) {
     return `${(ms / 1000).toFixed(1)}s`;
   }
-  // Minute range: "Mm Ss" — total seconds still one decimal
-  // for sub-minute precision, but a whole-minute value renders
-  // as "Xm 0s" (not "Xm") to keep the suffix consistent.
-  const totalSeconds = ms / 1000;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds - minutes * 60;
-  // Format seconds with one decimal when fractional, integer
-  // when whole. The leading-zero is implied ("1m 0s" not
-  // "1m 0.0s").
-  const secondsLabel =
-    seconds % 1 === 0 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
-  return `${minutes}m ${secondsLabel}`;
+  const totalSeconds = Math.floor(ms / 1000);
+  // Sub-minute: whole seconds ("32s" / "54s" — no trailing ".0").
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutesTotal = Math.floor(totalSeconds / 60);
+  // Hour range: "1h 2m" — seconds dropped as noise at this scale.
+  if (minutesTotal >= 60) {
+    const hours = Math.floor(minutesTotal / 60);
+    const mins = minutesTotal % 60;
+    return mins === 0 ? `${hours}h` : `${hours}h ${mins}m`;
+  }
+  // Minute range: "1m 23s"; whole minute compacts to "5m".
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutesTotal}m` : `${minutesTotal}m ${seconds}s`;
 }

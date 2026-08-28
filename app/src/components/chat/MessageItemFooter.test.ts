@@ -127,14 +127,16 @@ describe("MessageItemFooter — latency chip visibility", () => {
 });
 
 describe("MessageItemFooter — latency chip label", () => {
+  // 2026-08-29 ui-visual-polish: ladder contract — decimal < 10s,
+  // whole seconds 10-59s, "Xm Ys" with whole-minute compaction.
   it("abbreviates 1000ms as '1.0s'", () => {
     const w = mountFooter({ latency: { totalMs: 1000 } });
     expect(w.get("[data-testid='msg-latency-chip']").text()).toBe("1.0s");
   });
 
-  it("abbreviates 60000ms as '1m 0s'", () => {
+  it("abbreviates 60000ms as '1m'", () => {
     const w = mountFooter({ latency: { totalMs: 60000 } });
-    expect(w.get("[data-testid='msg-latency-chip']").text()).toBe("1m 0s");
+    expect(w.get("[data-testid='msg-latency-chip']").text()).toBe("1m");
   });
 
   it("abbreviates 90000ms as '1m 30s'", () => {

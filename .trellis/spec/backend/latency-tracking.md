@@ -478,12 +478,21 @@ strip doesn't affect the chat-event channel.
 | `rehydrateMessages — F5 per-tool duration rehydration > leaves durationMs undefined when the field is missing (pre-F5 rows)` | Pre-F5 blocks render no time |
 | `rehydrateMessages — F5 per-tool duration rehydration > rounds fractional durationMs to an integer` | Defensive round |
 | `rehydrateMessages — F5 per-tool duration rehydration > clamps negative durationMs to 0 (defensive against clock skew)` | Pathological user clock change doesn't break the UI |
-| `abbreviateDuration — formats sub-second durations with one decimal` | `0.4s`, `1.0s`, `999ms → 1.0s` |
-| `abbreviateDuration — formats sub-minute durations with one decimal` | `1.0s`, `3.2s`, `59.9s` |
-| `abbreviateDuration — switches to 'Xm Ys' format past 60 seconds` | `1m 0s`, `1m 23s`, `12m 4s` |
-| `abbreviateDuration — formats the seconds portion with one decimal only when fractional` | `1m 30s` not `1m 30.0s`; `1m 30.5s` for fractional |
-| `abbreviateDuration — clamps negative inputs to 0.0s` | Defensive against clock skew |
-| `abbreviateDuration — clamps NaN / Infinity to 0.0s` | Defensive against buggy upstreams |
+| `abbreviateDuration — formats sub-10s durations with one decimal` | `0.4s`, `1.5s`, `9.9s` |
+| `abbreviateDuration — drops the decimal at 10s and above` | `10s`, `32s`, `54s`(2026-08-29 ladder 修订:原"sub-minute 一律一位小数"渲出 `54.0s` 尾巴) |
+| `abbreviateDuration — switches to 'Xm Ys' format past 60 seconds` | `1m 23s`, `12m 4s` |
+| `abbreviateDuration — compacts whole minutes to '5m' (not '5m 0s')` | `1m`, `5m`, `59m 59s` |
+| `abbreviateDuration — switches to 'Xh Ym' format past 60 minutes` | `1h`, `1h 1m`, `2h 1m`(秒在小时档视为噪声) |
+| `abbreviateDuration — clamps negative inputs to 0s` | Defensive against clock skew |
+| `abbreviateDuration — clamps NaN / Infinity to 0s` | Defensive against buggy upstreams |
+
+> **2026-08-29 ui-visual-polish 修订**:格式从"sub-minute 一律一位小数"
+> 改为阶梯 `<10s 一位小数 → 整秒 → 分 → 时`。起因:子代理 drawer 长跑
+> (statusDisplay / DrawerSection liveChip 原各自裸 `toFixed(1)`)渲出
+> `14400.0s`;现在四处耗时显示(主聊天 footer chip、ToolCallCard header、
+> drawer status pill、drawer section live chip)统一走
+> `utils/duration.ts#abbreviateDuration` 单一出处。同批:ToolOutputBody
+> summary 行的重复耗时 chip 删除(header 已渲同一 `result.durationMs`)。
 
 #### Existing 2013 / A4 invariants (must continue to pass)
 
