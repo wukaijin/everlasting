@@ -1,9 +1,9 @@
 # 远程访问 / 多通道改造 — 实施路线图
 
-> **状态**:实施路线图(2026-07-20)。本文档是 [REMOTE-ACCESS-RESEARCH.md](./_archive/2026-07-20-remote-access-research.md) 调研评估的**可执行版本**,把 Phase 1/2/3 拆成可独立验证、独立交付的子阶段。
+> **状态**:实施路线图(2026-07-20)。本文档是 [REMOTE-ACCESS-RESEARCH.md](./_history/2026-07-20-remote-access-research.md) 调研评估的**可执行版本**,把 Phase 1/2/3 拆成可独立验证、独立交付的子阶段。
 > **进度(2026-08-13 同步)**:Phase 1/2 已于 2026-07 实施;Phase 3 已由 **remote-control epic(S1~S6b)** 于 2026-08-11~13 落地(merge `94828cb` 合入 main)。本文档转为"历史规划 + 已实施对照"。
 > **定位**:RESEARCH.md 是"为什么这么做",本文是"具体怎么做、怎么验证"。每个子阶段都满足三个条件:① 能独立提交 ② 有明确的验证标准 ③ Tauri 版始终可用(不破坏现状)。
-> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10/B11](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_reviews/)(2026-07-20 两份 review 已吸纳修正) / Phase 3 权威对照见 epic PRD `.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md`
+> **关联**:[ARCHITECTURE §4/§5](./ARCHITECTURE.md#4-决策agent-daemon-化) / [ROADMAP B10/B11](./ROADMAP.md) / [REVIEW-remote-access-research-*](./_history/reviews/)(2026-07-20 两份 review 已吸纳修正) / Phase 3 权威对照见 epic PRD `.trellis/tasks/archive/2026-08/08-11-remote-control-epic/prd.md`
 
 ---
 

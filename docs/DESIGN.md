@@ -100,7 +100,7 @@
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
 - 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成,见 [decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md))/ ~~`B11` 远程遥控通道~~ **✅ 2026-08-11~13 已实施**(remote-control epic S1~S6b,合并 `94828cb`):中继方案变更为国内 2C2G 服务器 + 自研 Rust remote daemon,PC daemon 权威 + 云端仅中继;详见 [ROADMAP §1.2](./ROADMAP.md))
-- 安全:`A2+ P3` shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail,前置 WSL userns spike;详见 [A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) §4)
+- 安全:`A2+ P3` shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail,前置 WSL userns spike;详见 [A2-SHELL-CLASSIFICATION.md](./_history/2026-08-28-a2-shell-classification.md) §4)
 
 > **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项 + A2+ P3 归 ROADMAP §2 第四档。
 > **2026-08-13 同步**:`B11` 远程遥控通道已由 remote-control epic(S1~S6b)实施,从"未做"移除。

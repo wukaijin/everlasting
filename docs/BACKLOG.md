@@ -1,7 +1,7 @@
 # BACKLOG — 候选功能与技术选型
 
 > 7 个新功能方向(图片 / @ / command、Skill、Memory、角色/模式/编排、生成式 UI、飞书 IM、云端同步)的完整技术评估。
-> **注**:飞书(§6 IM 通道)/ 云端同步(§7 云端状态同步)两节已于 2026-06-25 随附录 A 归档,见 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md);本文档正文不再包含这两节,下文相关引用均指向归档。
+> **注**:飞书(§6 IM 通道)/ 云端同步(§7 云端状态同步)两节已于 2026-06-25 随附录 A 归档,见 [`docs/_history/backlog-appendix-A.md`](./_history/backlog-appendix-A.md);本文档正文不再包含这两节,下文相关引用均指向归档。
 > **优先级 / 排期归 [ROADMAP.md](./ROADMAP.md),本文档只做技术评估**。
 >
 > 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md)。
@@ -26,7 +26,7 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-> **注**:图中 §6 飞书 / §7 云端同步两节已于 2026-06-25 随附录 A 归档(见 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md) §6/§7),本文档正文不再展开。
+> **注**:图中 §6 飞书 / §7 云端同步两节已于 2026-06-25 随附录 A 归档(见 [`docs/_history/backlog-appendix-A.md`](./_history/backlog-appendix-A.md) §6/§7),本文档正文不再展开。
 
 **建议实施顺序(从下到上)**:下层先做、上层后做,后者依赖前者的稳定。**跨层都需要关注:token 预算、安全边界、状态管理**(见 §8)。
 
@@ -104,7 +104,7 @@
 **定位**(重要):
 - **不是**多端协作(明确不做)
 - **是**个人多设备使用(家里电脑、公司电脑、手机)
-- 跟 §6 飞书的关系:飞书 = 消息通道;跟 §7 云端的关系:云端 = 状态镜像(§6/§7 章节已归档到 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md) §6/§7,此处仅沿用其概念)
+- 跟 §6 飞书的关系:飞书 = 消息通道;跟 §7 云端的关系:云端 = 状态镜像(§6/§7 章节已归档到 [`docs/_history/backlog-appendix-A.md`](./_history/backlog-appendix-A.md) §6/§7,此处仅沿用其概念)
 - 本节 = "在另一台机器接着干"
 
 **形态**:
@@ -148,7 +148,7 @@
 
 ## 5. 步骤 3b-1 实施后续(implementation follow-up)
 
-> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](./_archive/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机 + 实际落地状态。
+> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_history/2026-06-3b-1/FOLLOW-UP.md](./_history/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机 + 实际落地状态。
 
 ### ~~5.1 cwd 简化为 `~/`(✅ 已落地 2026-06-06)~~
 
@@ -181,12 +181,12 @@
 - **FU-7**:PROPOSAL §9 给外部 LLM 的提问重写,改成"只读 PROPOSAL 就能答"形式。~30 行(下次发评审前一次性做)。
 - **FU-8**:`check.jsonl` 加 "Tauri command arg camelCase" + "TS interface 字段命名"作为 PR 验收硬约束。~10 行。
 
-> 💡 本节"实现"层面的 follow-up 跟 §1-§9"候选功能"性质不同 —— 那些是新功能,本节是已实施步骤的技术债。完整 follow-up 列表(含经验沉淀类的 4-6 条)见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](./_archive/2026-06-3b-1/FOLLOW-UP.md)。
+> 💡 本节"实现"层面的 follow-up 跟 §1-§9"候选功能"性质不同 —— 那些是新功能,本节是已实施步骤的技术债。完整 follow-up 列表(含经验沉淀类的 4-6 条)见 [docs/_history/2026-06-3b-1/FOLLOW-UP.md](./_history/2026-06-3b-1/FOLLOW-UP.md)。
 
 ---
 
 ## 附录 A: 远期候选
 
-> 📦 **已归档**:本节内容(357 行,7 项远期候选技术评估)于 2026-06-25 归档到 [`docs/_archive/backlog-appendix-A.md`](./_archive/backlog-appendix-A.md)。**只读不改**。如远期候选进展,新评估直接在 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 中更新。
+> 📦 **已归档**:本节内容(357 行,7 项远期候选技术评估)于 2026-06-25 归档到 [`docs/_history/backlog-appendix-A.md`](./_history/backlog-appendix-A.md)。**只读不改**。如远期候选进展,新评估直接在 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 中更新。
 >
 > 📌 **新候选(2026-08-24,08-24-btn-family-convergence 完工遗留)**:生成式 UI `ui-prim__btn` 家族(ButtonPrimitive/DiffPrimitive/CodeBlockPrimitive,LLM 渲染 per-action 变色语义)是否消费 `.btn` CSS 家族基类排版(仅吃 padding/字号/过渡,不吃变体色)。当时判定特例保留;若未来 ui-prim 按钮观感与主应用漂移成为问题,再评估。

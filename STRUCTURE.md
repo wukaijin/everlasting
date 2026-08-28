@@ -1,7 +1,7 @@
 # STRUCTURE — 项目代码结构全景图
 
 > **基线**:2026-08-28(在 2026-08-13 `94828cb` 基础上 + 08-14~28 工具治理 / 压缩升级 / 搜索 / 图片 / 文档提取 / 消息队列 / 定时任务批)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转 + 08-14~28(C7/C7D/memory-gov/B1/D2/C3+/budget/softcap/worker-trace/F1/F4/F5/F6/F3/F2·F2b)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_history/reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转 + 08-14~28(C7/C7D/memory-gov/B1/D2/C3+/budget/softcap/worker-trace/F1/F4/F5/F6/F3/F2·F2b)
 > **状态**: 由 CLAUDE.md §Architecture 段引用
 >
 > **2026-08-28 同步**:08-14~28 功能批。§3 后端树补 `scheduler/`(F2 定时调度器)+ `agent/message_queue.rs`(F1)+ `agent/doc_extract.rs`(F5)+ `tools/{search_history.rs,web_search/,stub.rs}`(D2②/F4/C7D);§5 IPC 表 97→118;§6 schema 表 12→14(补 `scheduled_tasks`);AuditKind 17→28。

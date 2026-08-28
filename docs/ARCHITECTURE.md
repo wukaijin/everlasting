@@ -31,9 +31,8 @@
 ║                           ▼                                            ║
 ║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
 ║  │  axum router (daemon/server.rs::build_router)            │          ║
-║  │   · 95 个 #[tauri::command] 镜像为 REST 路由(2026-08-18  │          ║
-║  │     实测;commands/ 21 文件,不含 tests_resolve_mode_change │          ║
-║  │     测试 0 计数 + tests_get_pending_interaction 测试 1)  │          ║
+║  │   · 118 个 #[tauri::command] 镜像为 REST 路由(2026-08-28 │          ║
+║  │     实测)                                              │          ║
 ║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
 ║  │   · /api/v1/attachments/<id> GET 二进制(B1 08-16,首个    │          ║
 ║  │     非 JSON REST 路由,手机 PWA 看图路径)                │          ║
@@ -102,7 +101,7 @@
 ```
 **进程边界说明**:
 - **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
-- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 95 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-08-18 实测;commands/ 21 文件),前端同一份 handler 代码服务 IPC 与 HTTP。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 118 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-08-28 实测),前端同一份 handler 代码服务 IPC 与 HTTP。
 - **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
 - **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
 - **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client(GUI + 浏览器 + 经 remote daemon 的远程 PWA client)共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
@@ -221,52 +220,23 @@
 
 ### 1.6 近期落地特性(2026-08-14~28)
 
-> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量)+ 08-25~28 批(F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 / F3 并发闸 / F2·F2b 定时任务)。横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)见 §2.5.10~15;本节按"用户可感知度"挑最显著的:**F1 消息队列 / B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool / F2 定时任务 / F6+F3 异步编排**。08-19~20 批次中最重的 **unified-context-budget(统一 token 预算 + 关卡⑤硬卡)** 见 §2.5.14。
+> 2026-08-14~28 批量落地:C7 tools token 治理 / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 搜索 / C3+ 摘要式压缩 / unified-context-budget 统一预算 / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量 / F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 + F3 并发闸 / F2·F2b 定时任务 / stream session_id。
+>
+> **完整逐项记录(一句 + 链接)见 [ROADMAP.md §1.2](./ROADMAP.md#12-路线图外完成)**——本节不再重复;横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)的关卡级设计见 §2.5.10~15。F2 定时任务调度内核与 F6/F3 异步编排的关键架构点见下两小节(其余同见 ROADMAP)。
 
-**F1 消息队列·用户连发档(2026-08-25 落地)**
-- 输入侧 gate:流式期间编辑器解锁(群聊保持锁定),所有发送统一入队经路由临界区分流(忙/闲同路径,详见 §1.2 [3]);后端 per-session 内存队列 `agent/message_queue.rs`(FIFO / uuid 寻址 / 上限 20)
-- 续轮协议:队列驱动器在 turn 边界 drain 全队批量注入下一轮(每条独立 user APPEND,cache 断点不变量保持);新 `ChatEvent::TurnContinuation` 作前端续轮渲染边界;DriverSink 单 rid 跨内层轮保活(群聊 stop_reason 白名单的经典聊天泛化)
-- 单条操作:排队消息可撤销(×)/ 退回输入框(recall 返回原文回填 composer),按 uuid 寻址;视图水合 `list_queued_messages`(刷新 / LRU 驱逐 / PWA 第二端可见)
-- 取消矩阵:Stop / edit / resend / retry 清队返回 `clearedQueued` 计数驱动 toast;provider 错误 / 续轮触顶(50)队列**保留**,下次发送 FIFO 一起注入
-- 前置为 F2 定时任务 / F6 异步任务预留统一入口(F2 cron 消费者 2026-08-28 已接入:调度器经 `ChatEntry.origin` 走同一「闲也入队」路由;LLM detached dispatch 仍未实现);优先级分档(B 档)留后续
-- 完整设计:见 [ROADMAP.md §1.2 F1-A](./ROADMAP.md) 行;spec 见 [pattern-message-queue-driver](../.trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md)
+**F2·F2b 定时任务调度内核(2026-08-28,架构级关键设计)**
 
-**B1 image multimodal(2026-08-16/17 落地)**
-- 模型能力:`models.supports_images` 新列(`INTEGER NOT NULL DEFAULT 0`,B1 backfill `add_models_column_if_missing`,见 `db/migrations/schema.rs:1012`),UI Settings 配置 capability 标志
-- wire 层:`ContentBlock` 双形态 — `ImageRef`(JSON 引用,仅 ID + metadata,占 token 少)/ `Image`(serde 即 Anthropic 原生 image block,占 token 多);Anthropic provider 优先发 `Image`,不支持 vision 的模型走 `ImageRef` 占位降级(`Caps=false` 仍接受 attachment 但不下发 LLM,降级展示)
-- 存储:`messages.metadata.attachments[]` JSON 数组引用 attachments 表;文件落 `app_data_dir/attachments/<id>.<ext>`
-- 路由:首个二进制 GET 路由 `GET /api/v1/attachments/<id>`(`daemon/routes/attachments.rs`,见 §1.5,手机 PWA 看图路径)
-- 度量:`turn_trace.images_token INTEGER` 列(B1 PR4,backfill 同 C7 / memory-gov,见 `db/migrations/schema.rs:1006`)
-- 安全:DOMPurify 收紧外链 img(防 prompt injection via 加载追踪)
-- 完整设计:见 [ROADMAP.md §1.2 B1](./ROADMAP.md) 行(2026-08-16/17 落地)
+- `scheduler/` 模块,daemon 常驻 30s tick + CancellationToken 停机(GUI Full 零 timer 硬约束,调度仅 daemon 进程);单一扫描算法——每 tick 重算「自 `max(created_at, last_fired_at)` 以来最近到期点」,catch-up 与常规触发同一判定,落账记理论到期点 `due` 防相位漂移;同 session 每 tick 至多一 fire
+- origin 载体链:fire = 构造带 origin 的 user message 走 `chat_inner` 同源路径,`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控` 落 `messages.metadata.scheduled`(additive)——F1 队列「闲也入队」路由统一
+- F2b:6 档 preset + `max_runs`/`ends_at` 结束条件 + `completed` 审计;`ScheduledTaskFired` 六动作;`scheduled_tasks_enabled` kill switch fail-open
+- 完整设计:见 [ROADMAP.md §1.2 F2/F2b](./ROADMAP.md) 行 + spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)
 
-**D2 跨 session 全文搜索(2026-08-17 落地)**
-- DB:`messages_fts` FTS5 虚拟表(external-content + trigram + `UPDATE OF text` 防写放大 + `messages_fts_docsize` 影子表守卫回填,见 `db/migrations/schema.rs:1051`)
-- 后端:`db/search.rs` 双路分派 — FTS 命中走 rowid → `messages` 主表;FTS 0 命中回退 LIKE 兜底,title 附带
-- IPC:`search_messages` 新命令(`commands/search_messages.rs`),**POST** 接收 query + session 过滤
-- 前端:`SearchModal` 两态(空态提示 / 命中态列表,按 session 分组)+ Cmd/Ctrl+K 接管(`app/src/components/SearchModal.vue`)
-- 完整设计:见 [ROADMAP.md §1.2 D2①](./ROADMAP.md) 行(2026-08-17 落地)
+**F6 异步任务可观测性 + F3 全局并发闸(2026-08-27)**
 
-**D2② agent search_history tool(2026-08-17 落地)**
-- `tools/search_history.rs` 薄封装 `db::search::search_messages`,LLM 显式调
-- `READONLY_TOOL_ALLOWLIST` 第 6 员(当时其他 5:`read_file` / `grep` / `glob` / `list_dir` / `web_fetch`;2026-08-25 F4 起 `web_search` 为第 7 员)
-- UI 卡片:`SearchHistoryCard` 4 态机(loading / empty / results / error),前端组件注册表新员
-- 完整设计:见 [ROADMAP.md §1.2 D2②](./ROADMAP.md) 行(2026-08-17 落地)
-
-**F2·F2b 定时任务(2026-08-28 落地,本地 cron 式)**
-- **调度内核**:`scheduler/` 模块,daemon 常驻 30s tick + CancellationToken 停机(GUI Full 零 timer 硬约束保持,调度仅 daemon 进程);**单一扫描算法**——每 tick 重算「自 `max(created_at, last_fired_at)` 以来最近到期点」,catch-up(停机补跑一次)与常规触发同一判定,落账记理论到期点 `due` 保证 interval 无相位漂移;同 session 每 tick 至多一 fire
-- **origin 载体链**:fire = 构造带 origin 的 user message 走 `chat_inner` 同源路径,`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控` 落 `messages.metadata.scheduled`(additive)——F1 队列「闲也入队」路由统一,消费者模式见 [pattern-message-queue-driver](../.trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md)
-- **F2b 调度模型扩展**:preset 6 档(固定时间类 daily/hourly/weekdays/monthly + 固定频率类 interval 单位换算成 every_min,纯 UI);结束条件 `max_runs` / `ends_at`(命中自动停用保留 + `completed` 审计,reason=max_runs/end_date);`run_count` 只计真正送入 chat_inner 的 fire(dedup 跳过不计数);ends_at 含当日(`due > ends_at` 判定,保 catch-up)
-- **管理面**:Settings 第 8 tab(建/编辑/启停/删),PWA 可用;前端「定时」chip(消息气泡 + 排队占位 + header 徽章)零 rehydrate 改动
-- **审计 / 开关**:`ScheduledTaskFired` 六动作(fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error)+ `scheduled_tasks_enabled` kill switch fail-open;`scheduled_tasks` 表双 FK 级联(见 [DEBUG_DB.md §2](./DEBUG_DB.md))
-- 完整设计:见 [ROADMAP.md §1.2 F2/F2b](./ROADMAP.md) 行(2026-08-28 落地);spec 见 [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)
-
-**F6 异步任务可观测性 + F3 全局并发闸(2026-08-27 落地)**
-- `SessionSummary.busy` 运行时 enrich(daemon 层单点 `list_sessions_inner`,双 transport 一致)→ 冷启动/跨端侧栏红点
-- 轮次终结跨 session toast(当前-session 抑制 + cancelled 抑制 + `turn_complete_notify_enabled` 开关)
-- **F3 最小档全局信号量 `max_concurrent_loops`**(缺省 4):spawn 闭包头 acquire 排队不拒绝,等闸取消完整回滚 claim 注册;Tauri 壳关闭确认(仅 `isTauriWebview`,Web/PWA 关闭不影响任务)
-- 零新表零 migration(跨重启终态复用 messages.status 恢复链);F1-C 移出归 F2(cron 消费者 08-28 已接入,LLM detached dispatch 仍开放)
-- 完整设计:见 [ROADMAP.md §1.2 F6](./ROADMAP.md) 行(2026-08-27 落地);spec 见 [pattern-global-loop-semaphore](../.trellis/spec/backend/agent-loop-architecture/pattern-global-loop-semaphore.md)
+- `SessionSummary.busy` 运行时 enrich(daemon 层单点 `list_sessions_inner`,双 transport 一致)+ 轮次终结跨 session toast + Tauri 壳关闭确认(仅 `isTauriWebview`)
+- F3 最小档全局信号量 `max_concurrent_loops`(缺省 4):spawn 闭包头 acquire 排队不拒绝,等闸取消完整回滚 claim 注册
+- 零新表零 migration(跨重启终态复用 messages.status 恢复链);F1-C 移出归 F2
+- 完整设计:见 [ROADMAP.md §1.2 F6](./ROADMAP.md) 行 + spec [pattern-global-loop-semaphore](../.trellis/spec/backend/agent-loop-architecture/pattern-global-loop-semaphore.md)
 
 ---
 
@@ -462,7 +432,7 @@ for event in stream {
 
 - **关卡点**:event 顺序保证、断点续传、token 累计
 - 没有真正的"决策关卡",但事件流可靠解析是地基
-- **交错思考(2026-07-23/24 落地)**:contentBlocks 按**真实流序**交错落库与渲染(thinking / text / tool_use 时间轴,run 分组),而非 Anthropic 的"text 全先于 tool_use"分组顺序 —— 后端保留 BlockState 时间戳序,前端 run 分组 + contentBlocks 时间轴渲染,修复 Anthropic thinking 块在中途消失 + 真工具穿插。设计见 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)。
+- **交错思考(2026-07-23/24 落地)**:contentBlocks 按**真实流序**交错落库与渲染(thinking / text / tool_use 时间轴,run 分组),而非 Anthropic 的"text 全先于 tool_use"分组顺序 —— 后端保留 BlockState 时间戳序,前端 run 分组 + contentBlocks 时间轴渲染,修复 Anthropic thinking 块在中途消失 + 真工具穿插。设计见 [docs/INTERLEAVED-THINKING-DESIGN.md](./_history/2026-08-28-interleaved-thinking-design.md)。
 
 #### ⑧ 决策分叉(LLM 给的指令 + Mode 维度)
 
@@ -594,7 +564,7 @@ DB schema 已在 06-12 落地(CHECK 约束支持 3 种),re-grill
 
 **详见** [permission-layer.md §4.1 "Re-grill update 2026-06-13: 5-tier 重排 + path-based 决策"](./../.trellis/spec/backend/permission-layer.md) +
 [project-cwd-boundary.md §6 "is_within_root"](./../.trellis/spec/backend/project-cwd-boundary.md) +
-[docs/_reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md](./_reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md) +
+[docs/_history/reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md](./_history/reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md) +
 [IMPLEMENTATION/decisions-2026-06.md "2026-06-13 Re-grill ADR"](./IMPLEMENTATION/decisions-2026-06.md)。
 
 #### ⑩ Tool 执行
@@ -695,7 +665,7 @@ match tool_call.name {
 - **关键设计**:`ui_render` 不在 chat 流里走,单独的 UiCard 事件,前端用 component registry 渲染
 - **为什么混合模式**:高频 token 需要单 listener 低开销;低频 tool/permission 需要精确 filter。两种模式各取所长
 - **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成);B9+ 后补通用 button + diff 应用(UiDiffApplied 审计)
-- **交错思考渲染(2026-07-23/24)**:前端按 run 分组 + contentBlocks 时间轴交错渲染(thinking/text/tool_use 按到达序),与 ⑦ 后端落库的真实流序对齐,见 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)。
+- **交错思考渲染(2026-07-23/24)**:前端按 run 分组 + contentBlocks 时间轴交错渲染(thinking/text/tool_use 按到达序),与 ⑦ 后端落库的真实流序对齐,见 [docs/INTERLEAVED-THINKING-DESIGN.md](./_history/2026-08-28-interleaved-thinking-design.md)。
 
 #### ⑮ daemon 输出(HttpSseSink / Tauri event → client)
 
@@ -751,7 +721,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **关键设计**:取消不立即终止 LLM 请求,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
 - **`shell` 进程组杀整组**:`shell` tool 子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程。Windows 留 P2
 - **缺失后果**:用户按 stop 没反应 → 跑光了 token 还在跑 → 信任崩塌
-- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION/decisions-2026-06.md)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
+- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_history/reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION/decisions-2026-06.md)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
 
 #### 2.5.2 ⑩ Tool 超时回填
 
@@ -838,14 +808,13 @@ agent loop 结束(text-only response or max_turns reached):
   - `web_fetch` 虽只读但 Tier 4 默认 `emit ask`,MVP 排除(走串行,保留逐个 ask UX)
   - 共享状态安全:并发集合无 shell(改 cwd)/edit_file(写 read_guard)→ 无写冲突;`PermissionStore`/`SkillCache`/`ReadGuard` 都是 `Arc<Mutex/RwLock>`,多 task 并发 read 安全
   - cancel:并发不 `break`,等所有 task 完成或被 cancel;`execute_tool` 内 `tokio::select!` 各 task 独立响应 cancel
-- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION/decisions-2026-06.md) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./spikes/2026-06-19-async-parallel-tool-research.md)
+- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION/decisions-2026-06.md) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./_history/spikes/2026-06-19-async-parallel-tool-research.md)
 
 #### 2.5.10 ⑨ C7 tools token 治理(2026-08-14 落地)
 
 - **问题**:关卡 ⑤ context 构造时,LLM tool 列表占 prompt 大量 token(实测 25 builtin × 平均 ~1.2KB schema ≈ 30k token),`context_window * 0.85` 触发前已吃紧
 - **方案**:静态裁剪 `STUB_CANDIDATES` 列表(`filter_tools_for_session_type` 在 drive.rs 第 3 环,按 session_type 砍掉不适用的 builtin,例如 group_chat 砍掉 `dispatch_subagent`、worker subagent 砍掉 `merge_worker` / `discard_worker` / workflow-only 工具)
 - **度量**:`turn_trace.tools_token INTEGER` 列(C7 08-14,add_turn_trace_column_if_missing backfill,见 `db/migrations/schema.rs:994-999`)
-- **实测**:session 起步 tools_token -38.5%(裸 session → session_type 命中裁剪)
 - **完整设计**:见 [ROADMAP.md §1.2 C7](./ROADMAP.md) 行(2026-08-14 落地)
 
 #### 2.5.11 ⑨ C7D tools stub 注册 + 元工具按需取回(2026-08-14 落地)
@@ -854,7 +823,6 @@ agent loop 结束(text-only response or max_turns reached):
 - **方案**:`tools/stub.rs` + `StubRegistry`(session 粘性 loaded-set,记录当前 session 已经取回 schema 的工具名)+ **`load_tool_schemas` 元工具**(LLM 想调罕见工具时显式 `load_tool_schemas({"merge_worker"})` 拿回完整 schema)
 - **gate**:`tools_stub_enabled` drive.rs 第 4 环(开关 && 非 worker && 非群聊时生效,worker / 群聊直接给全 schema 不走 stub)
 - **度量**:`turn_trace.tools_token` 配合 stub 触发次数统计(预计 tools_token 进一步 -12%)
-- **实测**:C7 + C7D 联合,session 起步 tools_token 26%(从原 38.5% 进一步降)
 - **完整设计**:见 [ROADMAP.md §1.2 C7D](./ROADMAP.md) 行(2026-08-14 落地)
 
 #### 2.5.12 ⑤ memory-gov 指令块窗口治理(2026-08-15 落地)
@@ -864,7 +832,6 @@ agent loop 结束(text-only response or max_turns reached):
 - **方案 WP2 切节注入**:`memory/digest.rs` fence-aware 切节目录(纯机械,标题 + 首句,无 LLM 调用);`AGENTS.md` primary 永不 digest(`mtime` 锁死),`CLAUDE.md` 且 tokens>600 才 digest
 - **方案 WP3 元工具**:`load_memory_sections` 元工具(append,精确寻址 banner label 切片,LLM 看到目录找不到的内容时显式拉全文)
 - **gate**:`MemoryDigestRegistry` OnceLock 单例 + `memory_digest_enabled` 缺省 on(fail-open,worker / 群聊豁免)
-- **实测**:context_window 72% → 28%(-79.5%)
 - **完整设计**:见 [ROADMAP.md §1.2 memory-gov](./ROADMAP.md) 行(2026-08-15 落地)
 
 #### 2.5.13 ⑤ C3+ LLM 摘要式压缩(2026-08-18 落地)
@@ -932,7 +899,7 @@ agent loop 结束(text-only response or max_turns reached):
 - 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
 - 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
 - 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
-- 95 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-08-18 实测 95** 个,commands/ 21 文件)
+- 118 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-08-28 实测 118** 个)
 - 新增 `crates/everlasting-remote/`(axum 云服务端:shared_secret auth + device_token、配对码 60s 一次性 + per-IP 限速(`ratelimit.rs`)、WSS 隧道服务端、反向代理、SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表)+ `crates/everlasting-remote-protocol/`(2026-08-11 workspace 翻转:根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,Cargo.lock / target 在根)
 - PC daemon 新增 `src-tauri/src/daemon/tunnel/`(client / config / dispatcher / manager / node_id / sse_bridge;WSS 长连接 + loopback 转发,取消只停转发)
 - 前端新增 `app/src/transport/auth.ts`(device_token / `isRemoteContext()`)+ `app/src/router/index.ts` vue-router `isRemoteContext()` 守卫 + `PairingView` / `NodeListView` / `ChatView` / `RemoteTab.vue` + PWA 壳(vite-plugin-pwa + `public/icons/`);配对流程:PC Remote tab 生成 6 位配对码 → 手机 PWA redeem 换 64-hex device_token → nodes 列表

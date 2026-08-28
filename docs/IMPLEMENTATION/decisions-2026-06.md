@@ -387,7 +387,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 
 ### 2026-06-18 — B4 Skill 系统(use_skill 虚拟 tool + 三层渐进披露)
 
-**Context**:第三档 B4 要把"做事方法"打包成可复用单元。前置调研([docs/research/skill-system-survey.md](../research/skill-system-survey.md),一手抓取 Claude Code / Hermes / opencode / agentskills.io)确认业界已收敛到"虚拟 tool + 渐进式披露"模式。本仓库 B3 /command 已落地 ResourceLoader,B5 memory 已有 synthetic message 注入机制。brainstorm 收敛 4 决策后 2 PR 落地。
+**Context**:第三档 B4 要把"做事方法"打包成可复用单元。前置调研([docs/research/skill-system-survey.md](../_history/research/skill-system-survey.md),一手抓取 Claude Code / Hermes / opencode / agentskills.io)确认业界已收敛到"虚拟 tool + 渐进式披露"模式。本仓库 B3 /command 已落地 ResourceLoader,B5 memory 已有 synthetic message 注入机制。brainstorm 收敛 4 决策后 2 PR 落地。
 
 **Decision**:
 1. `use_skill` 虚拟 tool(非 system prompt 全量注入),三层渐进披露:L0 清单(name+description)独立 synthetic message 常驻 → L1 模型调 `use_skill` 返回正文 → L2 reference 文件用 `read_file` 拉
@@ -663,12 +663,12 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 
 ### 2026-06-04 — 路线图重构(步骤 1 完成后审视)
 
-> 📦 **已归档到 [`docs/_archive/2026-06-04-roadmap-restructure.md`](../_archive/2026-06-04-roadmap-restructure.md)**。本节历史路线图重构决策(8 步合并 7 步 / 步骤 3 拆 3a+3b / 事件协议混合模式 / SQLite 排期 / 步骤 2 继续手写 reqwest)由 ROADMAP.md V2 重排 ADR 取代,只读不改。
+> 📦 **已归档到 [`docs/_archive/2026-06-04-roadmap-restructure.md`](../_history/2026-06-04-roadmap-restructure.md)**。本节历史路线图重构决策(8 步合并 7 步 / 步骤 3 拆 3a+3b / 事件协议混合模式 / SQLite 排期 / 步骤 2 继续手写 reqwest)由 ROADMAP.md V2 重排 ADR 取代,只读不改。
 
 ### 2026-06-05 — 步骤 3b-1 follow-up 沉淀 (FU-1/2/3 项目决策)
 
-完整 FU 项(FU-1 cwd `~/` / FU-2 TS interface camelCase / FU-3 pick_project_dir reka-ui 改写)与决策理由沉淀在 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md);本 ADR 仅留状态索引,FU 内容不重复。
-- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+完整 FU 项(FU-1 cwd `~/` / FU-2 TS interface camelCase / FU-3 pick_project_dir reka-ui 改写)与决策理由沉淀在 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_history/2026-06-3b-1/FOLLOW-UP.md);本 ADR 仅留状态索引,FU 内容不重复。
+- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_history/2026-06-3b-1/FOLLOW-UP.md)。
 
 ### 2026-06-24 — RULE-D-001 provider api_key 加密存储(P1 安全债收口)
 
@@ -836,7 +836,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **实现偏离 — P5 `is_full_match`**:design 字面"完全命中 = tool_name + command_pattern + path_globs 三者皆中"对内置工具不可行(Shell 不产 path 探针、Path 工具不产 command_pattern 探针,故"两字段都 Some 且匹配"永不满足)。实际语义:行上每个 `Some(_)` 字段都与探针匹配 + 至少一个 `Some`;宽泛 pitfall(皆 None)→ 永不 SoftBlock,降级 Footnote(比字面更保守,保留"verified 高门槛"意图)。测试锁定。
 - **关键教训 — sub-agent completed 通知 ≠ 真完成**:P5 `trellis-implement` 首次 completed 通知(result 截断在"添加集成测试")是中途 snapshot,实际继续跑 68min 才真完成(同 task-id 两次 completed 通知);误判后自己补 Step5/6 + 又 dispatch check → 三写者并发改同一批文件,靠 Edit 读后写 + 区域不重叠才侥幸协调。**收到截断/不自洽 result 时用 `git diff --stat` 客观核查工作树,确认 sub-agent 真停之前别并发改文件 / 再 dispatch 同批文件的 agent**。
 - **测试**:P1-P5 累计 **1071 passed**(P5 +30:软拦截分档 / 晋升阈值 / char-trigram Jaccard dedup / 2 端到端 soft-block 集成)。spec 落 `.trellis/spec/backend/memory.md` Scenario 2(P5 contract 段 + §4/§6 矩阵 + 修正 4 处 P5 相关过时)。
-- **v1 边界(留 v2)**:向量检索 / LLM-judge 写入过滤 / global 记忆层 / 跨 session "翻车"持久追踪(P4 `FailureTracker` 是 session 内状态机)/ recall_memory 主动深挖 tool。完整设计见 [spike-007](../spikes/007-agent-autonomous-memory-plan.md)。
+- **v1 边界(留 v2)**:向量检索 / LLM-judge 写入过滤 / global 记忆层 / 跨 session "翻车"持久追踪(P4 `FailureTracker` 是 session 内状态机)/ recall_memory 主动深挖 tool。完整设计见 [spike-007](../_history/spikes/007-agent-autonomous-memory-plan.md)。
 
 ---
 

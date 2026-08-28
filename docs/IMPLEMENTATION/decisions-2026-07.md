@@ -29,7 +29,7 @@
 
 - **Context**:Anthropic Messages API 的 SSE 流里 thinking / text / tool_use block 按**真实到达序**交错出现,但旧实现落库时按"先 text 后 tool_use"分组,导致 thinking 块在中途消失 + 工具无法在思考之间穿插执行。
 - **决策 — 后端保留真实流序 + 前端 run 分组时间轴**:`chat_loop.rs` 落库时保留 BlockState 时间戳序(thinking/text/tool_use 按 SSE 到达序),前端按 run 分组 + contentBlocks 时间轴交错渲染。修复 Anthropic thinking 消失 + 实现真·工具穿插(工具在思考之间执行)。
-- **影响**:设计文档沉淀为 [docs/INTERLEAVED-THINKING-DESIGN.md](../INTERLEAVED-THINKING-DESIGN.md)(含评审 triage 修订)。3 commit:后端落库(`ba1eeca`)+ 前端 run 分组(`5b1fc81`)+ 实时流序交错渲染(`78d7ec7`)+ 修复 thinking 消失(`8daaf23`)。
+- **影响**:设计文档沉淀为 [docs/INTERLEAVED-THINKING-DESIGN.md](../_history/2026-08-28-interleaved-thinking-design.md)(含评审 triage 修订)。3 commit:后端落库(`ba1eeca`)+ 前端 run 分组(`5b1fc81`)+ 实时流序交错渲染(`78d7ec7`)+ 修复 thinking 消失(`8daaf23`)。
 
 
 ### 2026-07-20 — Agent daemon 化 + HTTP/SSE transport(项目迄今最大架构变更)

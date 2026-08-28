@@ -47,8 +47,8 @@ python3 .trellis/tasks/08-10-docs-staleness-audit/scripts/check-links.py
 ### 6. 索引与归档
 
 - [ ] 新增/归档文档后同步 `docs/README.md` 索引表（顶层活文档 vs `ls docs/*.md` 一一对应）
-- [ ] 一次性/已消费文档归档到 `docs/_archive/<YYYY-MM-DD>-<原名小写>.md`（沿用日期前缀惯例），不删除
-- [ ] 历史目录（_archive/_deprecated/_reviews/research/spikes）是记录性质，不做"新鲜度"审查
+- [ ] 一次性/已消费文档归档到 `docs/_history/<YYYY-MM-DD>-<原名小写>.md`（沿用日期前缀惯例），不删除
+- [ ] 历史目录 `docs/_history/`（含 spikes/ research/ deprecated/ reviews/ 子目录 + 日期前缀归档件）是记录性质，不做"新鲜度"审查；活文档一律不指向 `_history/` 之外的旧归档路径
 
 ## Related
 

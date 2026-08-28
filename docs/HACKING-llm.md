@@ -192,7 +192,7 @@ message_stop
 
 ## 关联文档
 
-- [spike-002](./spikes/002-reqwest-anthropic-sse.md) — 这些差异的来源 spike
+- [spike-002](./_history/spikes/002-reqwest-anthropic-sse.md) — 这些差异的来源 spike
 - [HACKING-wsl.md](./HACKING-wsl.md) — WSL 环境坑(配对文档)
 - [TECH §2 rig-core](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) — 为什么 spike-002 决定手写 reqwest 不上 rig-core
 - [IMPLEMENTATION §1 自研决策](./IMPLEMENTATION.md#1-决策自己写-agent-core不用-sdk-包装) — LLM 客户端实施位置
@@ -316,7 +316,7 @@ let model = model.unwrap_or_default();
 
 **验证**:`pnpm tauri dev` 时 F12 console 看到 `missing required key` 立刻检查是否传了 `null` 给 `Option` 字段。
 
-**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-5](./_archive/2026-06-3b-1/FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/_history/2026-06-3b-1/FOLLOW-UP.md FU-5](./_history/2026-06-3b-1/FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
 
 ---
 
@@ -344,7 +344,7 @@ let model = model.unwrap_or_default();
 
 **验证**:写 PR 时,在 `check.jsonl` 加"toPayloadContent / 对等函数按 role 分发 tool_result"作为硬约束。
 
-**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-6](./_archive/2026-06-3b-1/FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/_history/2026-06-3b-1/FOLLOW-UP.md FU-6](./_history/2026-06-3b-1/FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
 
 ---
 
@@ -484,7 +484,7 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 
 ## 差异 6:A5+ 网络健壮性 retry 策略(2026-07-05,07-04-a5plus-llm-network-resilience)
 
-**背景**:A5(07-02)错误契约落地 5 类 `LlmError` 分类,但 provider 层无重试 — 单次 503 / 429 / 网络抖动就让整轮 turn 失败,长会话(多 Provider 中转 + 国内网络)脆。DESIGN §5.1 风险表原列"LLM 流式 token 断连 → 实现重连,断点续传用 message ID"作退路,但调研(`docs/research/llm-network-resilience-survey.md` §5.4)证实 SSE 协议无 resumption,message ID 续传不可行,只能整请求重发。
+**背景**:A5(07-02)错误契约落地 5 类 `LlmError` 分类,但 provider 层无重试 — 单次 503 / 429 / 网络抖动就让整轮 turn 失败,长会话(多 Provider 中转 + 国内网络)脆。DESIGN §5.1 风险表原列"LLM 流式 token 断连 → 实现重连,断点续传用 message ID"作退路,但调研(`docs/_history/research/llm-network-resilience-survey.md` §5.4)证实 SSE 协议无 resumption,message ID 续传不可行,只能整请求重发。
 
 **关键决策**(7 条,按"为什么"):
 
@@ -502,4 +502,4 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 - token 统计不重复(R9):retry_open 首字节前失败不消费 stream → 不 emit `Done` → `update_last_turn_usage` 只记最终成功 turn 一次(集成测试直查 SQL `sessions.last_input_tokens == <success_usage>` 验证)
 - Retry 不入审计(transient UX,不入 AuditKind;prd grill §4 锁定,避免 17 类 AuditKind 膨胀)
 
-**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/` + ADR `IMPLEMENTATION/decisions.md 2026-07-05`。
+**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/_history/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/` + ADR `IMPLEMENTATION/decisions.md 2026-07-05`。

@@ -14,25 +14,19 @@
 | [DESIGN.md](./DESIGN.md) | 需求设计 | 已决定的项目能力边界 + 硬约束 | 第一次接触项目,看"我到底在做什么 / 不做什么" |
 | [ROADMAP.md](./ROADMAP.md) | 技术路线图(单一 source of truth) | V2 4 档分类 + 已实施粗粒度归类 + 维护承诺 | 看当前在哪一步、下一步选项、什么不做 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构设计 | 系统怎么搭、请求怎么流 | 写代码前,看"模块怎么分、调用怎么走" |
-| [A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) | shell 命令精细判定方案 | P1+P2 已实施(2026-07-04),P3 沙盒远期 | 了解 shell 权限判定设计 / 回顾时 |
 | [TECH.md](./TECH.md) | 技术栈 | 用什么库、为什么 | 选库/做依赖决策时 |
 | [CONTEXT.md](./CONTEXT.md) | 术语表 | 项目 glossary(Token 用量 / Checklist / Subagent / AuditKind / daemon 化进程模型 等) | 写/改跨模块共享概念前对齐术语时 |
-| [INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md) | 交错思考渲染方案 | 已实施(2026-07-23/24),保留为方案回顾 | 了解交错渲染设计时 |
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + 决策日志(ADR 性质,只追加,按月分卷,见 [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)) | 想看"为什么这么做"的历史 ADR |
-| [WORKFLOW-INTEGRATION.md](./WORKFLOW-INTEGRATION.md) | workflow 集成需求设计(hub) | workflow engine/plugin 拆分设计,13 个 part 见 [WORKFLOW-INTEGRATION/](./WORKFLOW-INTEGRATION/) | 了解 workflow 引擎 / dev·review plugin 设计时 |
 | [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) | daemon 化编排 | remote-access epic(transport 抽象 / axum daemon / sidecar / httpTransport / ServeDir)的 Phase 编排 + 状态 | 看 daemon 化怎么分阶段落地 / 当前到哪个 Phase |
 | [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) | remote 云服务器部署手册 | everlasting-remote 服务端部署(国内 2C2G 服务器 + nginx + remote.sh / deploy-remote.sh) | 部署 remote daemon / 排查部署问题时 |
 | [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) | 远程访问 E2E 部署与验收手册 | S1+S2+S4+S5 全链路(E2E 隧道管线 / 配对 / PWA)逐场景验收步骤 | 端到端验证远程访问 / 回滚排查时 |
-| [REMOTE-ACCESS-RESEARCH.md](./_archive/2026-07-20-remote-access-research.md) | daemon 化调研(已消费) | 调研结论已由 Phase 1/2 落地消化,归档保留 | 历史参考(评估 daemon 化选型回顾) |
-| [MANUAL-TEST-P2.md](./_archive/2026-07-23-manual-test-p2.md) | daemon 手动测试(已消费) | daemon 化 Phase 2 手动测试指南,归档保留 | 历史参考(手动验证 daemon 行为回顾) |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
 | [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 11 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
 | [HACKING-markdown.md](./HACKING-markdown.md) | 前端 markdown 渲染陷阱 | marked v18 + DOMPurify 的 XSS / 协议白名单 / 测试 fixture | 改前端 markdown 渲染 / 加 vitest fixture 时 |
 | [DEBUG_DB.md](./DEBUG_DB.md) | SQLite 直连调试指引 | DB 路径 / schema / sqlite3 速查 | 直连查 DB / 排查数据问题时 |
-| [spikes/](./spikes/) | 技术验证记录 | 5 分钟上手每个 spike 的目标 / 标准 / 结果 | 评估"某项技术能不能用"时 |
-| [`_archive/`](./_archive/) | 一次性任务归档（PROPOSAL / 评审 / 收尾） | 历史任务产物，已沉淀到主目录文档 | 查阅历史决策时 |
-| [`_reviews/`](./_reviews/) | 项目级设计评审快照 | 外部 LLM 评审（只读不改） | 了解项目被评审过什么 |
+| [spikes/](./_history/spikes/) | 技术验证记录 | 5 分钟上手每个 spike 的目标 / 标准 / 结果 | 评估"某项技术能不能用"时 |
+| [`_history/`](./_history/) | 统一历史归档 | 已消费文档 / 设计回顾 / 调研 / 评审 / 验证(含归档后的 [A2-SHELL](./_history/2026-08-28-a2-shell-classification.md) / [INTERLEAVED-THINKING](./_history/2026-08-28-interleaved-thinking-design.md) / [WORKFLOW-INTEGRATION](./_history/2026-08-28-workflow-integration.md) 设计回顾 + 13 part 子目录) | 查阅历史决策 / 设计回顾时 |
 
 ## 推荐阅读顺序
 
