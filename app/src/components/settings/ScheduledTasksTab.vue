@@ -19,10 +19,31 @@
 // session 列表数据:`list_sessions` 按 project 现取 + 组件内缓存
 // (chat store 只持当前 project 的 sessions,管理面要跨 project)。
 // 移动端沿 S6b:输入控件全宽 box-sizing、卡片纵向堆叠、触控目标由
-// style.css 全局 44px 规则覆盖(`.settings-modal button`)。
+// style.css 全局 44px 规则覆盖(`.settings-modal button`;reka
+// SelectTrigger 渲染为 button,同 ModelForm/ProvidersTab 一并受益)。
+//
+// 下拉控件走 reka-ui SelectRoot(ProvidersTab/ModelForm/SubagentsTab
+// 同款,2026-08-28 统一):原生 <select> 的 options 弹层是 OS 原生样式
+// (浅色、无暗色主题),与其它 tab 的 reka 弹层不一致。空串值被 reka
+// 2.9.9 禁止,「未选」态用 undefined model + SelectValue placeholder
+// 表达(SubagentsTab sentinel 注释同源);project 切换时联动清空
+// targetSessionId(原 @change 语义挪进 handler)。
 
 import { computed, onMounted, reactive, ref } from "vue";
-import { Label, CheckboxRoot, CheckboxIndicator } from "reka-ui";
+import {
+  Label,
+  CheckboxRoot,
+  CheckboxIndicator,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+} from "reka-ui";
 import ConfirmDialog from "../common/ConfirmDialog.vue";
 import Icon from "../Icon.vue";
 import { useScheduledTasksStore } from "../../stores/scheduledTasks";
@@ -121,6 +142,27 @@ async function confirmDelete(): Promise<void> {
 // --- 表单区(新建 / 编辑共用) --------------------------------------------
 
 type FormKind = "daily" | "interval" | "weekly";
+
+/** reka `update:model-value` 载荷归一化(SubagentsTab onModelChange
+ *  同款:单选场景收掉防御性的数组分支)。 */
+function normalizeSelectValue(v: unknown): string {
+  if (Array.isArray(v)) return typeof v[0] === "string" ? v[0] : "";
+  return typeof v === "string" ? v : "";
+}
+
+function onPickProject(v: unknown): void {
+  form.projectId = normalizeSelectValue(v);
+  form.targetSessionId = "";
+}
+
+function onPickSession(v: unknown): void {
+  form.targetSessionId = normalizeSelectValue(v);
+}
+
+function onPickKind(v: unknown): void {
+  const k = normalizeSelectValue(v);
+  if (k === "daily" || k === "interval" || k === "weekly") form.kind = k;
+}
 
 const formOpen = ref(false);
 const editingId = ref<string | null>(null);
@@ -302,21 +344,8 @@ onMounted(async () => {
       </span>
     </p>
 
-    <!-- 新建入口 -->
-    <div v-if="!formOpen" class="sched-tab__toolbar">
-      <button
-        type="button"
-        class="btn btn--primary sched-tab__create-btn"
-        data-testid="sched-create-btn"
-        @click="openCreate"
-      >
-        <Icon name="plus" :size="12" />
-        新建任务
-      </button>
-    </div>
-
-    <!-- 新建 / 编辑表单 -->
-    <section v-else class="sched-tab__form" data-testid="sched-form">
+    <!-- 新建/编辑表单(打开时列表头的新建按钮隐藏,表单自带标题) -->
+    <section v-if="formOpen" class="sched-tab__form" data-testid="sched-form">
       <h3 class="sched-tab__section-title">
         {{ editingId ? "编辑任务" : "新建任务" }}
       </h3>
@@ -333,12 +362,39 @@ onMounted(async () => {
 
       <Label class="sched-tab__field">
         <span class="sched-tab__label">Project</span>
-        <select v-model="form.projectId" class="sched-tab__input" @change="form.targetSessionId = ''">
-          <option value="" disabled>选择 project</option>
-          <option v-for="p in projects.projects" :key="p.id" :value="p.id">
-            {{ p.name }}
-          </option>
-        </select>
+        <SelectRoot
+          :model-value="form.projectId || undefined"
+          @update:model-value="onPickProject"
+        >
+          <SelectTrigger
+            class="sched-tab__trigger"
+            data-testid="sched-project-select"
+            aria-label="Project"
+          >
+            <SelectValue placeholder="选择 project" />
+            <SelectIcon class="sched-tab__trigger-icon">
+              <Icon name="chevron-down" :size="12" />
+            </SelectIcon>
+          </SelectTrigger>
+          <SelectPortal>
+            <SelectContent
+              class="sched-tab__dropdown"
+              position="popper"
+              :side-offset="4"
+            >
+              <SelectViewport class="sched-tab__dropdown-viewport">
+                <SelectItem
+                  v-for="p in projects.projects"
+                  :key="p.id"
+                  :value="p.id"
+                  class="sched-tab__option"
+                >
+                  <SelectItemText>{{ p.name }}</SelectItemText>
+                </SelectItem>
+              </SelectViewport>
+            </SelectContent>
+          </SelectPortal>
+        </SelectRoot>
       </Label>
 
       <div class="sched-tab__field">
@@ -357,30 +413,79 @@ onMounted(async () => {
           </CheckboxRoot>
           新建专用 session(名称同任务名)
         </label>
-        <select
+        <SelectRoot
           v-if="!form.newDedicated"
-          v-model="form.targetSessionId"
-          class="sched-tab__input"
-          data-testid="sched-session-select"
+          :model-value="form.targetSessionId || undefined"
           :disabled="!form.projectId"
+          @update:model-value="onPickSession"
         >
-          <option value="" disabled>
-            {{ form.projectId ? "选择 session(仅普通会话)" : "先选择 project" }}
-          </option>
-          <option v-for="s in sessionOptions" :key="s.id" :value="s.id">
-            {{ s.title }}
-          </option>
-        </select>
+          <SelectTrigger
+            class="sched-tab__trigger"
+            data-testid="sched-session-select"
+            aria-label="目标 session"
+          >
+            <SelectValue
+              :placeholder="form.projectId ? '选择 session(仅普通会话)' : '先选择 project'"
+            />
+            <SelectIcon class="sched-tab__trigger-icon">
+              <Icon name="chevron-down" :size="12" />
+            </SelectIcon>
+          </SelectTrigger>
+          <SelectPortal>
+            <SelectContent
+              class="sched-tab__dropdown"
+              position="popper"
+              :side-offset="4"
+            >
+              <SelectViewport class="sched-tab__dropdown-viewport">
+                <SelectItem
+                  v-for="s in sessionOptions"
+                  :key="s.id"
+                  :value="s.id"
+                  class="sched-tab__option"
+                >
+                  <SelectItemText>{{ s.title }}</SelectItemText>
+                </SelectItem>
+              </SelectViewport>
+            </SelectContent>
+          </SelectPortal>
+        </SelectRoot>
       </div>
 
       <div class="sched-tab__field">
         <span class="sched-tab__label">触发计划</span>
         <div class="sched-tab__schedule-row">
-          <select v-model="form.kind" class="sched-tab__input sched-tab__kind" data-testid="sched-kind">
-            <option value="daily">每天</option>
-            <option value="interval">间隔</option>
-            <option value="weekly">每周</option>
-          </select>
+          <SelectRoot :model-value="form.kind" @update:model-value="onPickKind">
+            <SelectTrigger
+              class="sched-tab__trigger sched-tab__kind"
+              data-testid="sched-kind"
+              aria-label="触发档位"
+            >
+              <SelectValue />
+              <SelectIcon class="sched-tab__trigger-icon">
+                <Icon name="chevron-down" :size="12" />
+              </SelectIcon>
+            </SelectTrigger>
+            <SelectPortal>
+              <SelectContent
+                class="sched-tab__dropdown"
+                position="popper"
+                :side-offset="4"
+              >
+                <SelectViewport class="sched-tab__dropdown-viewport">
+                  <SelectItem value="daily" class="sched-tab__option">
+                    <SelectItemText>每天</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="interval" class="sched-tab__option">
+                    <SelectItemText>间隔</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="weekly" class="sched-tab__option">
+                    <SelectItemText>每周</SelectItemText>
+                  </SelectItem>
+                </SelectViewport>
+              </SelectContent>
+            </SelectPortal>
+          </SelectRoot>
           <template v-if="form.kind === 'daily'">
             <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
           </template>
@@ -396,11 +501,35 @@ onMounted(async () => {
             <span class="sched-tab__unit">分钟</span>
           </template>
           <template v-else>
-            <select v-model="form.weekday" class="sched-tab__input sched-tab__weekday">
-              <option v-for="w in WEEKDAY_OPTIONS" :key="w.value" :value="w.value">
-                {{ w.label }}
-              </option>
-            </select>
+            <SelectRoot v-model="form.weekday">
+              <SelectTrigger
+                class="sched-tab__trigger sched-tab__weekday"
+                aria-label="星期"
+              >
+                <SelectValue />
+                <SelectIcon class="sched-tab__trigger-icon">
+                  <Icon name="chevron-down" :size="12" />
+                </SelectIcon>
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectContent
+                  class="sched-tab__dropdown"
+                  position="popper"
+                  :side-offset="4"
+                >
+                  <SelectViewport class="sched-tab__dropdown-viewport">
+                    <SelectItem
+                      v-for="w in WEEKDAY_OPTIONS"
+                      :key="w.value"
+                      :value="w.value"
+                      class="sched-tab__option"
+                    >
+                      <SelectItemText>{{ w.label }}</SelectItemText>
+                    </SelectItem>
+                  </SelectViewport>
+                </SelectContent>
+              </SelectPortal>
+            </SelectRoot>
             <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
           </template>
         </div>
@@ -437,7 +566,19 @@ onMounted(async () => {
 
     <!-- 任务卡片列表 -->
     <section class="sched-tab__list">
-      <h3 class="sched-tab__section-title">任务列表</h3>
+      <div class="sched-tab__list-head">
+        <h3 class="sched-tab__section-title">任务列表</h3>
+        <button
+          v-if="!formOpen"
+          type="button"
+          class="btn btn--primary"
+          data-testid="sched-create-btn"
+          @click="openCreate"
+        >
+          <Icon name="plus" :size="12" />
+          新建任务
+        </button>
+      </div>
       <p v-if="store.error" class="sched-tab__error" role="alert">{{ store.error }}</p>
       <p v-if="store.tasks.length === 0 && !store.error" class="sched-tab__empty">
         还没有定时任务。
@@ -555,9 +696,12 @@ onMounted(async () => {
   color: var(--color-text-primary);
 }
 
-.sched-tab__toolbar {
+/* 列表头:标题 + 新建按钮同行(按钮右对齐),不再让按钮独占一行。 */
+.sched-tab__list-head {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 /* --- 表单(镜像 SearchTab form 容器)--- */
@@ -601,6 +745,85 @@ onMounted(async () => {
   border-color: var(--color-accent);
 }
 
+/* --- reka Select(ProvidersTab/ModelForm 同款;trigger 字号与本表单
+   input 一致(text-sm),弹层 option 与全局各下拉一致(text-base))--- */
+
+.sched-tab__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: border-color var(--duration-base) var(--ease-out);
+}
+
+.sched-tab__trigger:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.sched-tab__trigger[data-state="open"] {
+  border-color: var(--color-accent);
+}
+
+.sched-tab__trigger[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sched-tab__trigger-icon {
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Portal children —— SelectPortal teleport 到 body,规范要求 :deep()
+   (reka-ui-usage.md gotcha;宽度对齐 trigger 用 --reka-select-trigger-width)。 */
+:deep(.sched-tab__dropdown) {
+  position: fixed;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  min-width: var(--reka-select-trigger-width, 240px);
+  width: var(--reka-select-trigger-width);
+  z-index: var(--z-over-modal) !important;
+  overflow: hidden;
+}
+
+:deep(.sched-tab__dropdown-viewport) {
+  padding: 4px;
+}
+
+:deep(.sched-tab__option) {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+:deep(.sched-tab__option[data-highlighted]) {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+:deep(.sched-tab__option[data-state="checked"]) {
+  color: var(--color-accent-text);
+}
+
 .sched-tab__dedicated {
   display: inline-flex;
   align-items: center;
@@ -637,7 +860,8 @@ onMounted(async () => {
   line-height: 0;
 }
 
-/* 档位行:档位下拉 + 按 kind 的参数控件。桌面一行;窄屏换行。 */
+/* 档位行:档位下拉 + 按 kind 的参数控件。桌面一行,控件适度伸展
+   (flex-grow + max-width 上限)避免只在行首挤一小撮;窄屏换行铺满。 */
 .sched-tab__schedule-row {
   display: flex;
   align-items: center;
@@ -647,23 +871,23 @@ onMounted(async () => {
 }
 
 .sched-tab__kind {
-  width: 96px;
-  flex-shrink: 0;
+  flex: 1 1 96px;
+  max-width: 140px;
 }
 
 .sched-tab__time {
-  width: 116px;
-  flex-shrink: 0;
+  flex: 1 1 116px;
+  max-width: 180px;
 }
 
 .sched-tab__minutes {
-  width: 90px;
-  flex-shrink: 0;
+  flex: 1 1 90px;
+  max-width: 140px;
 }
 
 .sched-tab__weekday {
-  width: 92px;
-  flex-shrink: 0;
+  flex: 1 1 92px;
+  max-width: 150px;
 }
 
 .sched-tab__unit {
@@ -873,6 +1097,19 @@ onMounted(async () => {
 @media (max-width: 767px) {
   .sched-tab__card {
     flex-direction: column;
+  }
+
+  /* 复选框与 switch 同理(DEC-6 chip 例外):CheckboxRoot 渲染为
+     <button>,全局 44px min 规则会把 16px 视觉盒撑成大方块;触控
+     目标改由外层整行 <label> 承担 —— checkbox 压回视觉尺寸,
+     label 行保 44px 高。 */
+  .sched-tab__checkbox {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .sched-tab__dedicated {
+    min-height: 44px;
   }
 
   .sched-tab__card-actions {

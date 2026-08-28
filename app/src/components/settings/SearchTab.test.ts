@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
+import { SelectRoot } from "reka-ui";
 
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({
@@ -65,8 +66,8 @@ describe("SearchTab", () => {
     stubGet({ provider: "ddg" });
     const w = await mountTab();
     expect(invokeMock).toHaveBeenCalledWith("get_web_search_config");
-    const select = w.find("select");
-    expect((select.element as HTMLSelectElement).value).toBe("ddg");
+    // reka Select:回填值经 SelectValue 渲染在 trigger 文本里。
+    expect(w.find(".search-tab__trigger").text()).toContain("ddg");
   });
 
   it("已存 key 时 placeholder 显示 masked,不显示明文", async () => {
@@ -80,7 +81,15 @@ describe("SearchTab", () => {
   it("key 留空保存 → args 不含 tavilyApiKey(不动语义)", async () => {
     stubGet({ provider: "auto", tavilyKeySet: true, tavilyKeyMasked: "tvly-****9999" });
     const w = await mountTab();
-    await w.find("select").setValue("tavily");
+    // reka Select:经 SelectRoot 的 update:modelValue 事件驱动(等价
+    // 原 native select.setValue —— 测的都是 v-model 接线,非弹层交互)。
+    // 经 DOMWrapper.findAllComponents 取 SelectRoot(与 ScheduledTasksTab
+    // 测试同款;直接在 VueWrapper 上 findAllComponents 会被 TS 解析成
+    // DOMWrapper 重载,取不到 .vm)。
+    w.get(".search-tab")
+      .findAllComponents(SelectRoot)[0]
+      .vm.$emit("update:modelValue", "tavily");
+    await flushPromises();
     // key 输入留空
     await w.find("button.btn--primary").trigger("click");
     await flushPromises();

@@ -4,13 +4,28 @@
 //
 // 一个表单节:provider 下拉(auto/tavily/ddg)+ Tavily key 密码框
 // (masked placeholder,留空 = 不改)+ 「清除已存 key」动作。样式镜像
-// RemoteTab(reka Label + 原生 input + .btn 家族 + error banner + toast)。
+// RemoteTab(reka Label + 原生 input + .btn 家族 + error banner + toast);
+// provider 下拉走 reka-ui SelectRoot(2026-08-28 统一,ProvidersTab/
+// ModelForm/SubagentsTab 同款 —— 原生 <select> 的 OS 弹层与其它 tab
+// 的暗色 reka 弹层不一致)。
 //
 // key 三态映射见 stores/webSearch.ts 头注释:留空保存不动 key;清除
 // 动作传空串删行(切回 auto 后不会静默复活 Tavily)。
 
 import { onMounted, ref } from "vue";
-import { Label } from "reka-ui";
+import {
+  Label,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+} from "reka-ui";
+import Icon from "../Icon.vue";
 import { useWebSearchStore } from "../../stores/webSearch";
 import { useProjectsStore } from "../../stores/projects";
 import { extractErrorMessage } from "../../utils/useErrorBus";
@@ -86,11 +101,33 @@ onMounted(async () => {
       <div class="search-tab__form">
         <Label class="search-tab__field">
           <span class="search-tab__label">Provider</span>
-          <select v-model="form.provider" class="search-tab__input">
-            <option value="auto">auto(有 Tavily key 用 Tavily,否则 DDG)</option>
-            <option value="tavily">tavily</option>
-            <option value="ddg">ddg(DuckDuckGo,零配置)</option>
-          </select>
+          <SelectRoot v-model="form.provider">
+            <SelectTrigger class="search-tab__trigger" aria-label="Provider">
+              <SelectValue />
+              <SelectIcon class="search-tab__trigger-icon">
+                <Icon name="chevron-down" :size="12" />
+              </SelectIcon>
+            </SelectTrigger>
+            <SelectPortal>
+              <SelectContent
+                class="search-tab__dropdown"
+                position="popper"
+                :side-offset="4"
+              >
+                <SelectViewport class="search-tab__dropdown-viewport">
+                  <SelectItem value="auto" class="search-tab__option">
+                    <SelectItemText>auto(有 Tavily key 用 Tavily,否则 DDG)</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="tavily" class="search-tab__option">
+                    <SelectItemText>tavily</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="ddg" class="search-tab__option">
+                    <SelectItemText>ddg(DuckDuckGo,零配置)</SelectItemText>
+                  </SelectItem>
+                </SelectViewport>
+              </SelectContent>
+            </SelectPortal>
+          </SelectRoot>
         </Label>
 
         <Label class="search-tab__field">
@@ -210,6 +247,79 @@ onMounted(async () => {
 .search-tab__input:focus {
   outline: none;
   border-color: var(--color-accent);
+}
+
+/* --- reka Select(ScheduledTasksTab 同款;trigger 字号与本表单
+   input 一致(text-sm),弹层 option 与全局各下拉一致(text-base))--- */
+
+.search-tab__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: border-color var(--duration-base) var(--ease-out);
+}
+
+.search-tab__trigger:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.search-tab__trigger[data-state="open"] {
+  border-color: var(--color-accent);
+}
+
+.search-tab__trigger-icon {
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Portal children —— SelectPortal teleport 到 body,规范要求 :deep()。 */
+:deep(.search-tab__dropdown) {
+  position: fixed;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  min-width: var(--reka-select-trigger-width, 240px);
+  width: var(--reka-select-trigger-width);
+  z-index: var(--z-over-modal) !important;
+  overflow: hidden;
+}
+
+:deep(.search-tab__dropdown-viewport) {
+  padding: 4px;
+}
+
+:deep(.search-tab__option) {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+:deep(.search-tab__option[data-highlighted]) {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+:deep(.search-tab__option[data-state="checked"]) {
+  color: var(--color-accent-text);
 }
 
 .search-tab__form-actions {

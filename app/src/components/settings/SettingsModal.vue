@@ -174,10 +174,15 @@ const open = defineModel<boolean>("open", { required: true });
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-elevated);
   flex-shrink: 0;
+  /* 8 个 tab(含中文「定时任务」)在 640px 弹窗内贴满:nowrap + 不收缩,
+     放不下时横向滚动兜底(与移动端同一机制,桌面无 mask)。
+     若不 nowrap,中文按字换行会把整条 strip 撑高两行(2026-08-28 实证)。 */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .settings-modal__tab {
-  padding: 8px 16px;
+  padding: 8px 12px;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--color-text-muted);
@@ -185,6 +190,8 @@ const open = defineModel<boolean>("open", { required: true });
   border: 0;
   border-bottom: 2px solid transparent;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: color var(--duration-base) var(--ease-out), border-color var(--duration-base) var(--ease-out);
 }
 

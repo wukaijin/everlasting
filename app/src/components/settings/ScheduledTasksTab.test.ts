@@ -13,9 +13,10 @@
 // transport / projects store mock(SearchTab.test.ts 同款);config
 // store 用真 pinia(默认 scheduledTasksEnabled=true 不渲染 killwarn)。
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
+import { SelectRoot } from "reka-ui";
 
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({
@@ -85,6 +86,29 @@ async function mountTab() {
 function openForm(w: ReturnType<typeof mount>) {
   return w.get('[data-testid="sched-form"]');
 }
+
+/** 经 SelectRoot 的 update:modelValue 事件选值(等价原 native
+ * select.setValue —— 测 v-model 接线,不测弹层交互)。SelectRoot 是
+ * renderless provider,按 DOM 序索引:0=project,1=session,2=kind,
+ * 3=weekday(仅 weekly 渲染)。 */
+async function pickSelect(
+  form: ReturnType<typeof openForm>,
+  index: number,
+  value: string,
+) {
+  form.findAllComponents(SelectRoot)[index].vm.$emit("update:modelValue", value);
+  await flushPromises();
+}
+
+beforeAll(() => {
+  // jsdom 未实现 Pointer Capture API,reka SelectTrigger 的 pointerdown
+  // handler 调 hasPointerCapture 会抛错;且 jsdom 合成的 pointerdown 事件
+  // 没有 button 属性(=== 0 判定不过,打不开)。这里 stub 掉 capture API,
+  // 打开路径改走 keydown(OPEN_KEYS 含 Enter,jsdom 键盘事件完整)。
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+});
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -165,16 +189,14 @@ describe("ScheduledTasksTab 表单", () => {
     const form = openForm(w);
 
     // 默认 daily:存在 time 输入;切到 interval:出现 number 输入。
-    // DOM 序:任务名称 input → project select → session select →
-    // kind select → 参数控件 → prompt textarea。
-    await form.find('[data-testid="sched-kind"]').setValue("interval");
+    // SelectRoot DOM 序:0=project → 1=session → 2=kind → 参数控件 →
+    // prompt textarea(weekday=3 仅 weekly 渲染)。
+    await pickSelect(form, 2, "interval");
     await form.find('[data-testid="sched-every-min"]').setValue("45");
 
     await form.find("input[type='text']").setValue("巡检");
-    await form.find("select").setValue("p1"); // DOM 序第一个 select = project
-    await form
-      .find('[data-testid="sched-session-select"]')
-      .setValue("s1");
+    await pickSelect(form, 0, "p1");
+    await pickSelect(form, 1, "s1");
     await form.find("textarea").setValue("跑一遍测试");
 
     invokeMock.mockClear();
@@ -216,7 +238,7 @@ describe("ScheduledTasksTab 表单", () => {
     await w.get('[data-testid="sched-create-btn"]').trigger("click");
     const form = openForm(w);
     await form.find("input[type='text']").setValue("第二单");
-    await form.find('[data-testid="sched-session-select"]').setValue("s1");
+    await pickSelect(form, 1, "s1");
     await form.find("textarea").setValue("p");
     await flushPromises();
     const warn = w.find('[data-testid="sched-soft-warning"]');
@@ -243,13 +265,17 @@ describe("ScheduledTasksTab 表单", () => {
     await w.get('[data-testid="sched-create-btn"]').trigger("click");
     await flushPromises();
     const form = openForm(w);
-    const options = form
-      .find('[data-testid="sched-session-select"]')
-      .findAll("option")
-      .map((o) => o.element as HTMLOptionElement)
-      .map((o) => o.value)
-      .filter((v) => v !== "");
-    expect(options).toEqual(["s1"]);
+    // 真实 UI 路径:键盘打开 session 下拉(Enter ∈ reka OPEN_KEYS),
+    // SelectContent teleport 到 document.body,断言弹层 option 只有
+    // classic session(群聊被过滤)。
+    await form.find('[data-testid="sched-session-select"]').trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const items = Array.from(document.querySelectorAll('[role="option"]')).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(items).toEqual(["旧会话"]);
+    // 卸载清掉 teleport 到 body 的弹层,避免污染后续用例的 DOM 查询。
+    w.unmount();
   });
 
   it("编辑回填:openEdit 预填表单并以 update 提交", async () => {
