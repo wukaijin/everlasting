@@ -1,8 +1,10 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-08-13 commit `94828cb`(在 2026-08-05 `6449f16` 基础上 + 08-11 workspace 翻转 + 08-11~13 remote-control-epic-s1 远程控制 epic S1~S6b)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转
+> **基线**:2026-08-28(在 2026-08-13 `94828cb` 基础上 + 08-14~28 工具治理 / 压缩升级 / 搜索 / 图片 / 文档提取 / 消息队列 / 定时任务批)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转 + 08-14~28(C7/C7D/memory-gov/B1/D2/C3+/budget/softcap/worker-trace/F1/F4/F5/F6/F3/F2·F2b)
 > **状态**: 由 CLAUDE.md §Architecture 段引用
+>
+> **2026-08-28 同步**:08-14~28 功能批。§3 后端树补 `scheduler/`(F2 定时调度器)+ `agent/message_queue.rs`(F1)+ `agent/doc_extract.rs`(F5)+ `tools/{search_history.rs,web_search/,stub.rs}`(D2②/F4/C7D);§5 IPC 表 97→118;§6 schema 表 12→14(补 `scheduled_tasks`);AuditKind 17→28。
 >
 > **2026-08-13 同步**:remote-control-epic-s1 合入(merge `94828cb`)+ workspace 翻转(08-11)。§1 顶层结构改 3-crate workspace(根 `Cargo.toml` / `Cargo.lock` / `crates/`);§2 前端补 router/views/stores/transport/auth + PWA;§3 后端补 `daemon/tunnel/` + `commands/pairing.rs` + config.rs tunnel 命令;§5 IPC 表 91→97;§10.2/§12 补根 workspace 构建与 Cargo.lock 位置。
 >
@@ -189,6 +191,8 @@ app/src-tauri/src/
 │ ├── chat.rs # Agent Loop entry(IPC 入口)
 │ ├── trace.rs # ★ NEW (07-14 E2) — trace pipeline(3 record_* 双写 emit+upsert)
 │ ├── chat_loop.rs # (06-23 抽 run_subagent 后)2586→~2064 行,主循环 + 主循环辅助
+│ ├── message_queue.rs # ★ NEW (08-25 F1) — per-session 内存消息队列(FIFO/uuid 寻址/上限 20)+ run_queue_driver 驱动器(turn 边界 drain 批量注入)
+│ ├── doc_extract.rs # ★ NEW (08-26 F5) — @文件 PDF/docx/xlsx 原生文本提取纯函数(pdf-extract / quick-xml / calamine,bytes 进文本出)
 │ ├── group_chat.rs / group_chat_loop.rs # ★ NEW (07-29) — 群聊 turn-taking 编排引擎(moderator 轮次控制 + 参与者身份护栏 + 终止/发言人事件 + 逐轮流式;session_type=group_chat 时走此循环)
 │ ├── subagent/ # ★ NEW (06-23 拆 4 文件,06-23/24 续拆 dispatch)
 │ │ ├── mod.rs # 类型 + helpers(lookup / assemble / filter / build_messages)
@@ -238,13 +242,15 @@ app/src-tauri/src/
 │ ├── review.rs # ★ (07-26 C2) — get_review_state + get_current_task_slug(review-state.json 三态载荷)
 │ ├── pairing.rs # ★ NEW (08-11 remote) — generate_pairing_code(配对码,远端 PWA 兑换 device_token)
 │ └── ui.rs # ★ (07-13 B9+) — apply_ui_diff(生成式 UI diff 应用)
-├── tools/ # 内置工具 (24 个 builtin;07-08~10 加 workflow + B6+ 等;07-29 加群聊 nominate_speaker/end_discussion)
+├── tools/ # 内置工具 (25 个 builtin;07-08~10 加 workflow + B6+ 等;07-29 加群聊 nominate_speaker/end_discussion;08-17 加 search_history;08-25 加 web_search)
 │ ├── mod.rs (builtin_tools + execute_tool 分发 + filter_tools_for_mode/subagent/workflow)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
 │ ├── shell.rs (5min超时 +30K spill)
 │ ├── shell_kill.rs / shell_status.rs / run_background_shell.rs # L1a 后台 shell(06-19)
 │ ├── grep.rs / glob.rs / list_dir.rs # L2 并发只读集
 │ ├── web_fetch.rs # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
+│ ├── web_search/ # ★ (08-25 F4) 搜索工具(Tavily/DDG 双后端 + 30s 预算重试环;mod.rs)
+│ ├── search_history.rs # ★ (08-17 D2②) 跨 session 全文搜索 tool(薄封装 db::search)
 │ ├── use_skill.rs # B4 Skill 调用(workflow-aware 三层渐进披露)
 │ ├── use_ui.rs # ★ (07-02 B9) 生成式 UI(non-blocking execute + UiCard registry)
 │ ├── update_checklist.rs # B12 agent 自跟踪 checklist(workflow 分支同步 task.json.items)
@@ -255,6 +261,7 @@ app/src-tauri/src/
 │ ├── request_mode_change.rs # ★ (07-07 B6+ A) LLM 申请切 mode(用户 inline card 授权)
 │ ├── create_task.rs / request_task_state_transition.rs # ★ (07-08/10) workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
 │ ├── nominate_speaker.rs / end_discussion.rs # ★ (07-29 群聊) — moderator 发言控制 SIGNAL 工具(chat_loop 拦截记录提名/终止信号)
+│ ├── stub.rs # ★ (08-14 C7D) STUB_CANDIDATES + load_tool_schemas 元工具(stub 原地替换大 schema 工具)
 │ └── read_guard.rs (session隔离读权限,edit_file前置)
 ├── skill/ # B4 Skill 系统
 │ ├── mod.rs / loader.rs (SkillCache + 17 单测)
@@ -266,7 +273,7 @@ app/src-tauri/src/
 ├── daemon/ # ★ NEW (07-20~23 remote-access) — axum HTTP daemon(everlasting-daemon bin 的核心)
 │ ├── mod.rs (re-exports + daemon_version)
 │ ├── server.rs (build_router + serve_daemon:TcpListener 0.0.0.0:7456 + ServeDir 同源 SPA fallback + graceful shutdown)
-│ ├── sse.rs (HttpSseSink — agent loop 的 SSE 事件流广播)
+│ ├── sse.rs (HttpSseSink — agent loop 的 SSE 事件流广播;08-27 起 chat-event payload 回填 session_id)
 │ ├── error.rs (DaemonError → axum IntoResponse)
 │ ├── tunnel/ # ★ NEW (08-11 remote) — PC 侧 WSS tunnel client(连 crates/everlasting-remote,loopback 转发到本机 daemon)
 │ │ ├── mod.rs / client.rs (WSS 长连接:shared_secret + node_id + 心跳)
@@ -274,11 +281,15 @@ app/src-tauri/src/
 │ │ ├── manager.rs / dispatcher.rs (TunnelManager + 请求分发 loopback 转发)
 │ │ ├── node_id.rs / sse_bridge.rs (节点 id + SSE 桥接,取消只停转发)
 │ │ └── tests.rs / e2e_tests.rs (单元 + 端到端隧道测试)
-│ └── routes/ # 97 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│ └── routes/ # 118 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
 │ ├── mod.rs / health.rs / stream.rs(SSE)
 │ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
 │ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs / review.rs
-│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs
+│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs / scheduled_tasks.rs
+├── scheduler/ # ★ NEW (08-28 F2/F2b) — daemon 常驻定时调度器(30s tick + CancellationToken 停机;单一扫描算法 + due 落账 + catch-up;同 session 每 tick 至多一 fire;F2b 四道 gate + completed 审计)
+│ ├── mod.rs (spawn_task_scheduler + tick 主循环 + kill switch)
+│ ├── compute.rs (most_recent_due / next_fire_display 等纯函数)
+│ └── (fire 走 chat_inner + origin 载体链落 messages.metadata.scheduled)
 ├── bin/ # ★ NEW (07-20) — cargo bin targets
 │ └── everlasting-daemon.rs (daemon 进程入口:resolve_data_dir + clap --port/--data-dir + serve_daemon)
 ├── git/
@@ -329,7 +340,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ▼
 ┌─────────────────────────── 后端 ────────────────────────────┐
 │ everlasting-daemon(axum,独立进程) / 或 Full 模式 GUI 进程 │
-│ daemon/server.rs::build_router (97 个 command 镜像 REST 路由)│
+│ daemon/server.rs::build_router (118 个 command 镜像 REST 路由)│
 │ ├─ commands/* + daemon/routes/* (同一 handler 双暴露 IPC+HTTP)│
 │ ├─ agent/* → llm::provider::* → wire.rs + client.rs │
 │ ├─ tools/* (24 个 builtin + read_guard) │
@@ -356,9 +367,9 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ## 5. Tauri IPC 表面
 
-**总命令数**:97 个(2026-08-13 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 6 个,含 1 个测试命令 tests_resolve_mode_change.rs)。
+**总命令数**:118 个(2026-08-28 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 6 个 → 08-14~28 再增 ~21 个(F1 队列 / F4 web_search / F5 提取 / F6 busy / F2 定时任务 的 command))。
 
-> **daemon 化后双暴露(07-20 Q0 决策)**:这 97 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
+> **daemon 化后双暴露(07-20 Q0 决策)**:这 118 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
@@ -394,7 +405,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 **位置**: `app/src-tauri/src/db/mod.rs::run_migrations`
 
-**12 张表**(2026-08 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace`;08-11 remote 配置走 `app_config` KV,零 migration):
+**14 张表**(2026-08-28 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace` + 08-28 F2 加 `scheduled_tasks`;08-11 remote 配置走 `app_config` KV,零 migration):
 
 | 表 | 主键 |关键字段 |
 |----|------|---------|
@@ -404,7 +415,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 | `providers` | `id` | `name` / `protocol` / `base_url` / `api_key` / `enabled` |
 | `models` | `id` | `provider_id` (FK) / `name` / `model_id` / `max_tokens` / `enabled` |
 | `app_config` | `key` | `value` (JSON) |
-| `session_audit_events` | `id` | `session_id` (FK, ON DELETE CASCADE) / `kind` (AuditKind 17 variant wire string) / `tool_use_id?` / `path?` / `match_kind?` / `match_value?` / `mode?` / `risk?` / `ts` (RFC3339) |
+| `session_audit_events` | `id` | `session_id` (FK, ON DELETE CASCADE) / `kind` (AuditKind 28 variant wire string) / `tool_use_id?` / `path?` / `match_kind?` / `match_value?` / `mode?` / `risk?` / `ts` (RFC3339) |
 | `session_tool_permissions` | `id` | `session_id` (FK) / `tool_name` / `match_kind` (`tool` / `prefix` / `path`) / `match_value` / `granted_at` |
 | `subagent_runs` | `id` (UUID) | `parent_session_id` (FK, ON DELETE CASCADE) / `parent_request_id` (TEXT, soft FK) / `subagent_name` / `status` (CHECK 5 值) / `started_at` / `finished_at?` / `token_usage_json?` / `summary?` / `transcript_json?` / `transcript_truncated` / `turn_count?`(RULE-FrontSubagent-004 加) / `created_at` |
 | `autonomous_memories` | `id` | `memory_id` (UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` / `tool_name` / `command_pattern` / `path_globs` / `source_session_id` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(★ V2 2 期,06-29) |
@@ -687,7 +698,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ │ Vue3 Frontend │ http(默认) │ everlasting-daemon │ │
 │ │ (app/src/) │ /tauri(逃生)│ (axum,app/src-tauri/ │ │
 │ │ · Pinia(18 stores) │◄─────────►│ src/daemon/ + bin/) │ │
-│ │ · transport/ 抽象 │ │ ·97 commands→REST 路由 │ │
+│ │ · transport/ 抽象 │ │ ·118 commands→REST 路由 │ │
 │ │ · stream1 source │ │ · Provider trait │ │
 │ │ · reka-ui2.9.9 │ │ (Anthropic/OpenAI) │ │
 │ │ · marked+DOMPurify │ │ · Tool registry (24) │ │

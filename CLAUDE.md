@@ -80,7 +80,7 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 - **自研 agent core**：不使用 Anthropic Agent SDK / Codex SDK，自己实现 Agent Loop、消息管理、tool 注册、权限检查（见 `docs/IMPLEMENTATION.md §1`）
 - **步骤 1 用手写 SSE 解析**：不用 eventsource-stream crate，`llm/sse.rs` 是自研状态机（已通过 spike-002 验证）
 - **自研 Provider trait（多 Provider 抽象）**：`llm/provider/` 定义 `Provider` trait，`AnthropicProvider` / `OpenAIProvider` 两个实现 + `wire.rs` WireMessage 跨协议中间层（2026-06-08/09 落地，取代早期 rig-core 计划）
-- **16 阶段请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`
+- **18+ 关卡请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`（原 16 关 + C7/C7D/memory-gov/C3+/budget 硬卡/softcap 6 个新横切关注点）
 - **Memory/指令文件系统**：4 个指令文件（User/Project × CLAUDE.md/AGENTS.md）固定路径加载 + mtime fence 新鲜度校验（RULE-C-001,notify 已移除）+ `build_instructions_blocks()` 构造带 `cache_control: ephemeral` 的 synthetic user message，实现 prompt caching（2026-06-11 B5 重构落地）
 - **daemon 化（已落地，remote-access Phase 2）**：agent core 从 Tauri GUI 进程拆出为独立 `everlasting-daemon` 进程（axum HTTP server），GUI 作为瘦客户端 spawn daemon 为 sidecar，经**同源 HTTP + SSE** 通信（`httpTransport` 默认）；daemon 用 `tower-http::ServeDir` 同源服务前端 SPA，支持纯浏览器访问（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障逃生舱（回退一体化 Tauri IPC）。决策动机见 [docs/IMPLEMENTATION/ 决策日志](./docs/IMPLEMENTATION/)，编排放 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md)
 - **远程控制（已落地，remote-control epic S1~S6b）**：Cargo workspace 翻转（根 `Cargo.toml`，default-members 只含 remote 两 crate）；新增 `everlasting-remote` 云服务端（axum 0.7 ws + 自研 WSS 隧道协议 + 配对码 60s 一次性 + per-IP 限速 + 反向代理，**仅中继不存 agent 数据**，PC daemon 权威不变）；PC daemon 增加 tunnel client（WSS 长连接 + loopback 转发，**agent core 零改动**）；前端 vue-router + PWA 壳 + 配对/节点视图 + pwa-remote transport 模式；移动端适配（S5/S6a/S6b 含真机迭代）。HTTPS 用户自理（nginx），不做主动推送/多用户/跨节点同步。部署见 [docs/REMOTE-DEPLOY.md](./docs/REMOTE-DEPLOY.md)，E2E 验收见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md)
@@ -117,7 +117,7 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 所有设计文档在 `docs/` 目录，全中文。入口与分工：
 - **状态 / 排期查 [docs/ROADMAP.md](./docs/ROADMAP.md)**（技术路线图，单一 source of truth：V2 4 档分类 + 已实施粗粒度归类）
 - **决策历史查 [docs/IMPLEMENTATION/](./docs/IMPLEMENTATION/)**（`decisions.md` 索引 + `decisions-2026-{06,07,08}.md` 按月分卷，只追加）
-- `ARCHITECTURE.md` — 系统架构、16 阶段请求生命周期、核心决策
+- `ARCHITECTURE.md` — 系统架构、18+ 关卡请求生命周期、核心决策
 - `DESIGN.md` — 项目能力边界 + 硬约束(明确不做)
 - `TECH.md` — 技术选型决策（锁定/候选/不用）
 - `IMPLEMENTATION.md` — 决策档案(§1 自研 agent core 决策 + §4 ADR 决策日志)
