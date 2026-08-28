@@ -319,13 +319,14 @@ function onSearchClear() {
   justify-content: flex-start;
 }
 
-/* 08-24 btn-family:设置入口由 ghost·sm 家族承载;本地保留 mono 字体。
-   2026-08-29 ui-visual-polish r1:用户反馈"设置和 icon 感觉小了" ——
-   在 btn--sm 基础上加大一档:icon 18→20、字号 xs→sm、padding 4/6→6/10,
-   footer 常驻入口要有可点的体量。 */
+/* 08-24 btn-family:设置入口由 ghost·sm 家族承载。
+   2026-08-29 ui-visual-polish r1:在 btn--sm 基础上加大一档(icon
+   18→20、字号 xs→sm、padding 4/6→6/10)——footer 常驻入口要有可点的
+   体量。r3 补记:原"保留 mono 字体"撤销 —— --font-mono 栈(JetBrains
+   Mono 及其回退)无 CJK 字形,"设置"靠浏览器兜底渲染,与全局 sans
+   明显不一致;button 本有 font: inherit(style.css),删掉即回正轨。 */
 .sidebar__settings {
   gap: var(--space-2);
-  font-family: var(--font-mono);
   padding: 6px 10px;
   font-size: var(--text-sm);
 }
