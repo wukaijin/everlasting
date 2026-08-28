@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-label="Everlasting 远程访问架构:手机浏览器 PWA 经 HTTPS 连接云端中继 everlasting-remote(只转发,不存你的数据),再经 WSS 加密隧道连接你家 PC daemon(agent core,数据 100% 留在本机)">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-label="Everlasting 远程访问架构:手机浏览器 PWA(无需安装 App)经 HTTPS 连接云端中继 everlasting-remote(只转发,不存你的数据),再经 WSS 加密隧道连接你家 PC daemon(agent core,数据 100% 留在本机)">
   <title>Everlasting 远程访问架构</title>
-  <desc>手机浏览器(PWA) --HTTPS-- 云端中继 everlasting-remote(只转发,不存你的数据) --WSS 加密隧道-- 你家 PC daemon(agent core,数据 100% 留在本机)</desc>
+  <desc>手机浏览器(PWA,无需安装 App) --HTTPS-- 云端中继 everlasting-remote(只转发,不存你的数据) --WSS 加密隧道-- 你家 PC daemon(agent core,数据 100% 留在本机)</desc>
 
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
@@ -43,21 +43,29 @@
       <stop offset="1" stop-color="#fde68a"/>
     </linearGradient>
     <linearGradient id="bandGrad" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.07"/>
-      <stop offset="0.5" stop-color="#fbbf24" stop-opacity="0.05"/>
-      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.07"/>
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.09"/>
+      <stop offset="0.5" stop-color="#fbbf24" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.09"/>
     </linearGradient>
+    <linearGradient id="fadeV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="bandMask" maskUnits="userSpaceOnUse" x="0" y="176" width="1200" height="128">
+      <rect x="0" y="176" width="1200" height="128" fill="url(#fadeV)"/>
+    </mask>
     <filter id="blurL" x="-80%" y="-80%" width="260%" height="260%">
       <feGaussianBlur stdDeviation="7"/>
     </filter>
     <filter id="blurS" x="-80%" y="-80%" width="260%" height="260%">
       <feGaussianBlur stdDeviation="3.2"/>
     </filter>
-    <marker id="ahAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 1 L9 5 L0 9 z" fill="#fbbf24"/>
+    <marker id="ahAmber" viewBox="0 0 12 10" refX="10.5" refY="5" markerWidth="12" markerHeight="10" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0.8 1.4 L 11 5 L 0.8 8.6 L 3.4 5 Z" fill="#fbbf24"/>
     </marker>
-    <marker id="ahCyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 1 L9 5 L0 9 z" fill="#22d3ee"/>
+    <marker id="ahCyan" viewBox="0 0 15 12" refX="13" refY="6" markerWidth="15" markerHeight="12" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0.8 1.6 L 14 6 L 0.8 10.4 L 4 6 Z" fill="#22d3ee"/>
     </marker>
   </defs>
 
@@ -73,18 +81,18 @@
     .foot{font-family:'PingFang SC','Noto Sans SC','Microsoft YaHei',sans-serif;font-size:11px;letter-spacing:1px;fill:#5b6b84}
   </style>
 
-  <!-- ===================== 背景:深空 + 星尘 + 能量带 ===================== -->
+  <!-- ===================== 背景:深空 + 星尘 + 能量带(垂直渐隐) ===================== -->
   <rect width="1200" height="480" fill="url(#bgGrad)"/>
   <circle cx="600" cy="245" r="430" fill="url(#nebulaCyan)"/>
   <circle cx="1010" cy="310" r="300" fill="url(#nebulaAmber)"/>
   <circle cx="190" cy="180" r="240" fill="url(#nebulaAmber)"/>
-  <rect x="0" y="206" width="1200" height="68" fill="url(#bandGrad)"/>
+  <rect x="0" y="176" width="1200" height="128" fill="url(#bandGrad)" mask="url(#bandMask)"/>
 
   <g>
     <circle cx="60"  cy="120" r="1.6" fill="#f8fafc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="3.2s" begin="-0.3s" repeatCount="indefinite"/></circle>
     <circle cx="110" cy="300" r="1.2" fill="#a5f3fc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="4.1s" begin="-1.2s" repeatCount="indefinite"/></circle>
     <circle cx="170" cy="90"  r="1.4" fill="#fde68a" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="2.8s" begin="-0.8s" repeatCount="indefinite"/></circle>
-    <circle cx="235" cy="390" r="1.8" fill="#f8fafc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="3.6s" begin="-2.0s" repeatCount="indefinite"/></circle>
+    <circle cx="330" cy="412" r="1.8" fill="#f8fafc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="3.6s" begin="-2.0s" repeatCount="indefinite"/></circle>
     <circle cx="305" cy="70"  r="1.2" fill="#a5f3fc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="4.6s" begin="-0.5s" repeatCount="indefinite"/></circle>
     <circle cx="335" cy="180" r="1.5" fill="#f8fafc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="3.0s" begin="-1.6s" repeatCount="indefinite"/></circle>
     <circle cx="405" cy="345" r="1.3" fill="#fde68a" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="3.9s" begin="-2.6s" repeatCount="indefinite"/></circle>
@@ -104,64 +112,69 @@
     <circle cx="85"  cy="225" r="1.1" fill="#f8fafc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="4.5s" begin="-3.0s" repeatCount="indefinite"/></circle>
     <circle cx="375" cy="85"  r="1.2" fill="#a5f3fc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="3.4s" begin="-1.8s" repeatCount="indefinite"/></circle>
     <circle cx="855" cy="300" r="1.3" fill="#f8fafc" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="4.7s" begin="-0.9s" repeatCount="indefinite"/></circle>
-    <circle cx="1025" cy="360" r="1.1" fill="#fde68a" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="2.5s" begin="-1.5s" repeatCount="indefinite"/></circle>
+    <circle cx="1128" cy="302" r="1.1" fill="#fde68a" opacity="0.4"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="2.5s" begin="-1.5s" repeatCount="indefinite"/></circle>
   </g>
 
-  <!-- ===================== 页眉 ===================== -->
-  <text x="40" y="46" class="hdr"><tspan fill="#22d3ee">Everlasting</tspan><tspan fill="#f8fafc"> · 远程访问架构</tspan></text>
-  <text x="40" y="74" class="hdr-sub">概念架构图 · 手机 PWA ↔ 本机 daemon 的加密链路</text>
+  <!-- ===================== 页眉(含品牌互锁双环 mark) ===================== -->
+  <g transform="translate(74 51) scale(0.158) translate(-256 -256)" fill="none" stroke-width="30" stroke-linecap="round">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+    <circle cx="256" cy="256" r="13" fill="#f8fafc" stroke="none"/>
+  </g>
+  <text x="125" y="46" class="hdr"><tspan fill="#22d3ee">Everlasting</tspan><tspan fill="#f8fafc"> · 远程访问架构</tspan></text>
+  <text x="125" y="74" class="hdr-sub">概念架构图 · 手机 PWA ↔ 本机 daemon 的加密链路</text>
 
-  <!-- ===================== 连线 A:HTTPS(琥珀,细光) ===================== -->
+  <!-- ===================== 连线 A:HTTPS(琥珀,粒子沿线飞行) ===================== -->
   <g>
-    <path d="M 280 240 L 520 240" fill="none" stroke="#fbbf24" stroke-opacity="0.35" stroke-width="9" stroke-linecap="round" filter="url(#blurL)"/>
-    <path d="M 280 240 L 520 240" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" marker-end="url(#ahAmber)"/>
-    <path d="M 280 240 L 520 240" fill="none" stroke="#fde68a" stroke-width="3" stroke-linecap="round" stroke-dasharray="10 16">
-      <animate attributeName="stroke-dashoffset" from="0" to="-26" dur="1.4s" repeatCount="indefinite"/>
+    <path d="M 282 240 L 512 240" fill="none" stroke="#fbbf24" stroke-opacity="0.35" stroke-width="9" stroke-linecap="round" filter="url(#blurL)"/>
+    <path d="M 282 240 L 512 240" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" marker-end="url(#ahAmber)"/>
+    <path d="M 282 240 L 512 240" fill="none" stroke="#fde68a" stroke-width="3.2" stroke-linecap="round" stroke-dasharray="0.1 13">
+      <animate attributeName="stroke-dashoffset" from="0" to="-13.1" dur="0.9s" repeatCount="indefinite"/>
     </path>
-    <circle cx="280" cy="240" r="4.5" fill="#fde68a" filter="url(#blurS)">
-      <animateMotion path="M 280 240 L 520 240" dur="2.6s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="4.5" fill="#fde68a" filter="url(#blurS)">
+      <animateMotion path="M 282 240 L 512 240" begin="-1.2s" dur="2.8s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="280" cy="240" r="2.2" fill="#fff7ed">
-      <animateMotion path="M 280 240 L 520 240" begin="0.2s" dur="2.6s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="2.2" fill="#fff7ed">
+      <animateMotion path="M 282 240 L 512 240" begin="-2.6s" dur="2.8s" repeatCount="indefinite"/>
     </circle>
-    <text x="400" y="212" class="conn" fill="#fbbf24" text-anchor="middle">HTTPS</text>
+    <text x="397" y="212" class="conn" fill="#fbbf24" text-anchor="middle">HTTPS</text>
   </g>
 
-  <!-- ===================== 连线 B:WSS 加密隧道(青,波浪+锁+粒子) ===================== -->
+  <!-- ===================== 连线 B:WSS 加密隧道(青,S 波 + 锁 + 粒子) ===================== -->
   <g>
-    <path d="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" fill="none" stroke="#22d3ee" stroke-opacity="0.4" stroke-width="12" stroke-linecap="round" filter="url(#blurL)"/>
-    <path d="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" fill="none" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" marker-end="url(#ahCyan)"/>
-    <path d="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" fill="none" stroke="#a5f3fc" stroke-width="5" stroke-linecap="round" stroke-dasharray="14 30">
-      <animate attributeName="stroke-dashoffset" from="0" to="-44" dur="2.2s" repeatCount="indefinite"/>
+    <path d="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" fill="none" stroke="#22d3ee" stroke-opacity="0.4" stroke-width="12" stroke-linecap="round" filter="url(#blurL)"/>
+    <path d="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" fill="none" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" marker-end="url(#ahCyan)"/>
+    <path d="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" fill="none" stroke="#a5f3fc" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="0.1 15">
+      <animate attributeName="stroke-dashoffset" from="0" to="-15.1" dur="1.1s" repeatCount="indefinite"/>
     </path>
-    <circle cx="680" cy="240" r="5" fill="#67e8f9" filter="url(#blurS)">
-      <animateMotion path="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" dur="3s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="5" fill="#67e8f9" filter="url(#blurS)">
+      <animateMotion path="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" begin="-0.6s" dur="3.4s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="680" cy="240" r="5" fill="#67e8f9" filter="url(#blurS)">
-      <animateMotion path="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" begin="1s" dur="3s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="5" fill="#67e8f9" filter="url(#blurS)">
+      <animateMotion path="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" begin="-1.7s" dur="3.4s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="680" cy="240" r="5" fill="#67e8f9" filter="url(#blurS)">
-      <animateMotion path="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" begin="2s" dur="3s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="5" fill="#67e8f9" filter="url(#blurS)">
+      <animateMotion path="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" begin="-2.8s" dur="3.4s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="680" cy="240" r="2.4" fill="#cffafe">
-      <animateMotion path="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" begin="0.4s" dur="3s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="2.4" fill="#cffafe">
+      <animateMotion path="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" begin="-1.15s" dur="3.4s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="680" cy="240" r="2.4" fill="#cffafe">
-      <animateMotion path="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" begin="1.4s" dur="3s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="2.4" fill="#cffafe">
+      <animateMotion path="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" begin="-2.25s" dur="3.4s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="680" cy="240" r="2.4" fill="#cffafe">
-      <animateMotion path="M 680 240 Q 722 218 765 240 T 850 240 T 940 240" begin="2.4s" dur="3s" repeatCount="indefinite"/>
+    <circle cx="0" cy="0" r="2.4" fill="#cffafe">
+      <animateMotion path="M 688 240 C 716 214 758 214 786 240 C 814 266 862 240 884 240 L 922 240" begin="-3.35s" dur="3.4s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="810" cy="196" r="15" fill="url(#glowCyan)">
+    <circle cx="805" cy="200" r="15" fill="url(#glowCyan)">
       <animate attributeName="opacity" values="0.5;1;0.5" dur="2.8s" repeatCount="indefinite"/>
     </circle>
     <g>
       <animateTransform attributeName="transform" type="translate" values="0 0;0 -4;0 0" dur="2.8s" repeatCount="indefinite"/>
-      <rect x="804" y="200" width="12" height="11" rx="2.5" fill="#22d3ee"/>
-      <path d="M 806.5 200 v -3.5 a 3.5 3.5 0 0 1 7 0 v 3.5" fill="none" stroke="#a5f3fc" stroke-width="2" stroke-linecap="round"/>
-      <circle cx="810" cy="206.5" r="1.5" fill="#0b1220"/>
+      <rect x="799" y="192" width="12" height="11" rx="2.5" fill="#22d3ee"/>
+      <path d="M 801.5 192 v -3.5 a 3.5 3.5 0 0 1 7 0 v 3.5" fill="none" stroke="#a5f3fc" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="805" cy="198.5" r="1.5" fill="#0b1220"/>
     </g>
-    <text x="810" y="168" class="conn-wss" fill="#22d3ee" text-anchor="middle">WSS 加密隧道</text>
+    <text x="805" y="168" class="conn-wss" fill="#22d3ee" text-anchor="middle">WSS 加密隧道</text>
   </g>
 
   <!-- ===================== 节点 A:手机浏览器(PWA) ===================== -->
@@ -183,15 +196,17 @@
     </circle>
     <circle cx="190" cy="240" r="52" fill="url(#nodeFill)" stroke="#2b3f5c" stroke-width="1.2"/>
     <g fill="none" stroke="#67e8f9" stroke-width="2.4" stroke-linecap="round">
-      <rect x="175" y="221" width="30" height="50" rx="6"/>
-      <path d="M 181 227 h 8"/>
+      <rect x="174" y="214" width="32" height="52" rx="6.5"/>
+      <path d="M 180 220 h 9"/>
     </g>
-    <rect x="180" y="234" width="20" height="19" rx="3" fill="#22d3ee" opacity="0.28">
+    <rect x="179" y="227" width="22" height="20" rx="3" fill="#22d3ee" opacity="0.28">
       <animate attributeName="opacity" values="0.2;0.45;0.2" dur="2.2s" begin="-0.8s" repeatCount="indefinite"/>
     </rect>
-    <circle cx="190" cy="266" r="2" fill="#67e8f9"/>
+    <circle cx="190" cy="261" r="2" fill="#67e8f9"/>
     <text x="190" y="340" class="title" text-anchor="middle">手机浏览器</text>
     <text x="190" y="362" class="sub" text-anchor="middle">PWA · 随时随地</text>
+    <rect x="115" y="374" width="150" height="30" rx="15" fill="#22d3ee" fill-opacity="0.10" stroke="#22d3ee" stroke-opacity="0.5" stroke-width="1.2"/>
+    <text x="190" y="393" class="tag" fill="#67e8f9" text-anchor="middle">无需安装 App</text>
   </g>
 
   <!-- ===================== 节点 B:云端中继 everlasting-remote ===================== -->
@@ -216,14 +231,14 @@
       <animateTransform attributeName="transform" type="rotate" from="360 600 240" to="0 600 240" dur="24s" repeatCount="indefinite"/>
     </circle>
     <circle cx="600" cy="240" r="54" fill="url(#nodeFill)" stroke="#2b3f5c" stroke-width="1.2"/>
-    <g transform="translate(600,240) scale(0.92) translate(-593,-214)" fill="#fbbf24" fill-opacity="0.12" stroke="#fbbf24" stroke-width="2.6" stroke-linejoin="round">
+    <g transform="translate(600,240) scale(0.5) translate(-593,-214.5)" fill="#fbbf24" fill-opacity="0.12" stroke="#fbbf24" stroke-width="4.8" stroke-linejoin="round">
       <path d="M 568 250 C 551 250 538 238 538 223 C 538 211 547 201 560 199 C 563 187 575 179 589 179 C 605 179 619 190 623 204 C 638 206 648 218 648 232 C 648 242 639 250 627 250 Z"/>
     </g>
-    <circle cx="600" cy="266" r="2.5" fill="#fde68a">
+    <circle cx="600" cy="262" r="2.5" fill="#fde68a">
       <animate attributeName="opacity" values="0.3;1;0.3" dur="1.6s" begin="-0.5s" repeatCount="indefinite"/>
     </circle>
-    <text x="600" y="342" class="title" text-anchor="middle">云端中继</text>
-    <text x="600" y="363" class="mono" text-anchor="middle">everlasting-remote</text>
+    <text x="600" y="340" class="title" text-anchor="middle">云端中继</text>
+    <text x="600" y="362" class="mono" text-anchor="middle">everlasting-remote</text>
     <rect x="503" y="374" width="194" height="30" rx="15" fill="#fbbf24" fill-opacity="0.10" stroke="#fbbf24" stroke-opacity="0.5" stroke-width="1.2"/>
     <text x="600" y="393" class="tag" fill="#fcd34d" text-anchor="middle">只转发，不存你的数据</text>
   </g>
@@ -246,12 +261,12 @@
       <animateTransform attributeName="transform" type="rotate" from="360 1010 240" to="0 1010 240" dur="22s" repeatCount="indefinite"/>
     </circle>
     <circle cx="1010" cy="240" r="52" fill="url(#nodeFill)" stroke="#2b3f5c" stroke-width="1.2"/>
-    <rect x="990" y="218" width="40" height="28" rx="4" fill="none" stroke="#67e8f9" stroke-width="2.4"/>
-    <rect x="995" y="223" width="30" height="18" rx="2" fill="#22d3ee" opacity="0.25">
+    <rect x="986" y="220" width="48" height="32" rx="4.5" fill="none" stroke="#67e8f9" stroke-width="2.4"/>
+    <rect x="991" y="225" width="38" height="22" rx="2.5" fill="#22d3ee" opacity="0.25">
       <animate attributeName="opacity" values="0.15;0.4;0.15" dur="2.6s" begin="-1.4s" repeatCount="indefinite"/>
     </rect>
-    <path d="M 1010 246 v 9 M 1000 255 h 20" fill="none" stroke="#67e8f9" stroke-width="2.4" stroke-linecap="round"/>
-    <circle cx="1010" cy="254" r="2.2" fill="#fbbf24"/>
+    <path d="M 1010 252 v 9 M 999 261 h 22" fill="none" stroke="#67e8f9" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="1010" cy="257.5" r="2.2" fill="#fbbf24"/>
     <text x="1010" y="340" class="title" text-anchor="middle">你家 PC daemon</text>
     <text x="1010" y="362" class="sub" text-anchor="middle">agent core · 本地运行</text>
     <rect x="916" y="374" width="188" height="30" rx="15" fill="#22d3ee" fill-opacity="0.10" stroke="#22d3ee" stroke-opacity="0.5" stroke-width="1.2"/>
