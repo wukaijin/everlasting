@@ -79,10 +79,12 @@
 </head>
 <body>
 <header>
-  <h1>Everlasting <span class="c">·</span> 循环光效动效方案 <span class="a">× 9</span></h1>
-  <p>基于 brand/logo-mark.svg 原几何(双 320° 互锁弧 R=118 + 中心 spark)设计的循环动效,两批共九款。
-     第一批偏"光效循环",第二批按"科技感强化"方向重做(刻度 / 电路 / 信号 / 演化)。
+  <h1>Everlasting <span class="c">·</span> 循环光效动效方案 <span class="a">× 13</span></h1>
+  <p>基于 brand/logo-mark.svg 原几何(双 320° 互锁弧 R=118 + 中心 spark)设计的循环动效,三批共十三款。
+     第一批偏"光效循环",第二批按"科技感强化"方向重做(刻度 / 电路 / 信号 / 演化),
+     第三批补足叙事与氛围语义(接力 / 极光 / 组装 / 开合)。
      全部为纯 SMIL 动画的自包含 SVG:无 JS / 无外部 CSS,可直接 &lt;img&gt; 引用、内联进页面或当启动帧素材。
+     2026-08-28 起全量同步 v2 品牌光照(顶部受光渐变 + spark 辉光)。
      在浏览器打开本页即可同时预览全部方案。</p>
 </header>
 
@@ -167,8 +169,72 @@
   </div>
 </div>
 
+<h2 style="max-width:1180px;margin:0 auto 18px;font-size:19px;color:var(--text);font-weight:600">第三批 · 叙事与氛围补足</h2>
+<div class="grid" style="margin-bottom:56px">
+  <div class="card">
+    <img src="logo-relay.svg" alt="能量接力">
+    <h2>⑩ 能量接力 <small>Token Relay · 8s</small></h2>
+    <p>充能 + 交接:青环从端点匀速充能一圈(亮头与充能前沿经 keyPoints 精确重合)→
+       能量汇入中心 spark 暴胀交接 → 琥珀环再充能一圈 → 双色涟漪释放归暗。
+       读(青)→ 行(琥珀)→ 交接 → 释放,对应工具色语义循环;适合任务流转 / 阶段推进状态。</p>
+    <div class="meta"><span>回合 8s</span><span>充能 2.7s×2</span><span>spark 交接</span></div>
+  </div>
+
+  <div class="card">
+    <img src="logo-aurora.svg" alt="极光环流">
+    <h2>⑪ 极光环流 <small>Aurora Drift · 12s</small></h2>
+    <p>最纯粹的氛围款:没有粒子与叙事,双环渐变各自绕环心匀速旋转——
+      像磨砂玻璃管外有一圈光源缓缓环绕,v2 的"顶部受光"延伸成"光绕管走";
+      另有一道 8px 微光带反向滑行形成视差。适合空状态 / 官网 / 常驻背景。
+      不支持 gradientTransform 动画的环境自动退化为 v2 静态观感。</p>
+    <div class="meta"><span>环流 12s</span><span>反相半圈</span><span>视差微光</span></div>
+  </div>
+
+  <div class="card">
+    <img src="logo-assemble.svg" alt="分段组装">
+    <h2>⑫ 分段组装 <small>Assemble · 6s</small></h2>
+    <p>六段弧片段(每环三段、错相)自四散位置缓出归位 → 一道白光沿双环扫过"焊接"接缝,
+       spark 弹出落定 → 静置 → 片段沿原路退回拆解回收。全程 10% 蓝图底稿指示目标位置。
+       与演化 Loading(粒子结晶)相对,这是刚性分段装配:会话由多段协作拼接而成。</p>
+    <div class="meta"><span>回合 6s</span><span>6 片段错相</span><span>焊光扫缝</span></div>
+  </div>
+
+  <div class="card">
+    <img src="logo-breathe.svg" alt="开合呼吸">
+    <h2>⑬ 开合呼吸 <small>Breathe · 10s</small></h2>
+    <p>极简几何 morph:双环开口半角 β 在 20° 与 8° 之间往复——不断闭合、永不闭合,
+       Everlasting 的字面隐喻。圆心与半径恒定,交叉点是两圆交点故纹丝不动(v2 投影全程正确),
+       β 变化只移动端帽缺口;闭合力峰值时交叉点亮起十字星、spark 同步涨大。</p>
+    <div class="meta"><span>一息 10s</span><span>d-morph</span><span>交叉定值</span></div>
+  </div>
+</div>
+
+<h2 style="max-width:1180px;margin:0 auto 18px;font-size:19px;color:var(--text);font-weight:600">浅底变体(600 级配色,浅色表面用)</h2>
+<div class="grid" style="margin-bottom:56px">
+  <div class="card">
+    <div style="border-radius:12px;overflow:hidden;background:#f1f5f9"><img src="logo-flow-light.svg" alt="能量流光 浅底"></div>
+    <h2>① 浅 · 能量流光 <small>Comet Flow · Light</small></h2>
+    <p>logo-flow.svg 的浅底版:600 级渐变(与 logo-mark-light.svg 同步)、浅色 tile、
+       spark/彗头换深色可读配色。浅色主题 UI / 文档场景的加载指示。</p>
+    <div class="meta"><span>周期 5s</span><span>600 级</span><span>浅色 tile</span></div>
+  </div>
+  <div class="card">
+    <div style="border-radius:12px;overflow:hidden;background:#f1f5f9"><img src="logo-evolve-light.svg" alt="演化 Loading 浅底"></div>
+    <h2>★ 浅 · 演化 Loading <small>Evolve · Light</small></h2>
+    <p>logo-evolve.svg 的浅底版:8s 生命周期编排不变,涟漪/坍缩环/彗头/种子全部换浅底可读配色。</p>
+    <div class="meta"><span>回合 8s</span><span>6 个相位</span><span>浅色 tile</span></div>
+  </div>
+  <div class="card">
+    <div style="border-radius:12px;overflow:hidden;background:#f1f5f9"><img src="logo-aurora-light.svg" alt="极光环流 浅底"></div>
+    <h2>⑪ 浅 · 极光环流 <small>Aurora Drift · Light</small></h2>
+    <p>logo-aurora.svg 的浅底版:600 级渐变绕环流不变,微光带与 spark 换浅底可读配色。</p>
+    <div class="meta"><span>环流 12s</span><span>600 级</span><span>浅色 tile</span></div>
+  </div>
+</div>
+
 <footer>
-  说明:九个文件均在深色 app 底色 (#0a0e14, 径向微光泽) 上呈现,配色沿用品牌 token(青 #22d3ee / 琥珀 #fbbf24 / spark #f8fafc)。<br>
+  说明:十三个深底文件均在深色 app 底色 (#0a0e14, 径向微光泽) 上呈现,配色沿用品牌 token(青 #22d3ee / 琥珀 #fbbf24 / spark #f8fafc);
+  2026-08-28 v2 同步:主环/拖尾改用顶部受光渐变(userSpaceOnUse y122→392),spark 加青调辉光,与 brand/logo-mark.svg v2 一致。<br>
   彗星与彗头的同步原理:overlay 路径设 pathLength=100,dashoffset 由 L 线性降至 L−100,彗头恰好位于弧长百分比 100f 处,
   与 animateMotion(匀速)的亮头圆重合;交叉点位于弧长 7.25% / 92.75%(logo-twin 的编排基准)。<br>
   工程落地提示:若接入 app,建议改用 CSS/WAAPI 实现同款参数,以便响应 prefers-reduced-motion;SMIL 版可作为设计基准与静态素材源。

@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案十:能量接力">
+  <title>Everlasting — 能量接力(Token Relay)</title>
+  <desc>充能 + 交接的叙事循环,8s 一回合,全部动画共用 8s 时钟(纯 keyTimes 编排,无缝循环):
+    [0–6%] 双环暗底,青环端点停着一枚待发的 token 亮头;
+    [6%–40%] 青环从端点匀速充能一圈,dasharray 线性生长,亮头以 animateMotion keyPoints
+      线性映射同一时间窗,与充能前沿精确重合;
+    [40%–45%] 交接:能量汇入中心 spark —— spark 暴胀 + 一圈青白涟漪,亮头消隐;
+    [45%–80%] 琥珀环同样充能一圈;
+    [80%–88%] 释放:双环点亮后整体淡出,spark 二次暴胀 + 青/琥珀双色涟漪;
+    [88%–100%] 静默底稿,等待下一轮。
+    读(青)→ 行(琥珀)→ 交接 → 释放,对应工具色的语义循环。
+    充能路径用 butt 端帽(前沿平齐,亮头圆即"帽"),避免 round 端帽在 0 长度 dash 时驻留亮点。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致) -->
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#67e8f9"/><stop offset="0.55" stop-color="#22d3ee"/><stop offset="1" stop-color="#06b6d4"/>
+  </linearGradient>
+  <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#fcd34d"/><stop offset="0.55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/>
+  </linearGradient>
+  <radialGradient id="gl">
+    <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/><stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="5"/>
+  </filter>
+  <mask id="onCyan" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"/>
+  </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 运动参考路径(不可见) -->
+  <path id="rc" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="none"/>
+  <path id="ra" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" fill="none" stroke="none"/>
+  <!-- 底稿(暗态,含 v2 交叉投影) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.26">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="url(#gc)"/>
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="url(#ga)"/>
+  </g>
+  <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" fill="none" stroke="#040b14" stroke-width="52" stroke-linecap="round" opacity="0.1" filter="url(#soft)" mask="url(#onCyan)"/>
+
+  <!-- 充能层:青(6%–40%)→ 琥珀(45%–80%),释放时整体淡出 -->
+  <g>
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.80;0.88;1" dur="8s" repeatCount="indefinite"/>
+    <g fill="none" stroke-width="30" stroke-linecap="butt">
+      <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+            stroke="url(#gc)" stroke-dasharray="0 100">
+        <animate attributeName="stroke-dasharray" values="0 100;0 100;100 100;100 100"
+                 keyTimes="0;0.0625;0.4;1" dur="8s" repeatCount="indefinite"/>
+      </path>
+      <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+            stroke="url(#ga)" stroke-dasharray="0 100">
+        <animate attributeName="stroke-dasharray" values="0 100;0 100;100 100;100 100"
+                 keyTimes="0;0.45;0.8;1" dur="8s" repeatCount="indefinite"/>
+      </path>
+    </g>
+    <g filter="url(#glowDot)">
+      <circle r="9.5" fill="#eaffff">
+        <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.40;0.425;1" dur="8s" repeatCount="indefinite"/>
+        <animateMotion dur="8s" repeatCount="indefinite" calcMode="linear"
+                       keyPoints="0;0;1;1" keyTimes="0;0.0625;0.4;1"><mpath href="#rc"/></animateMotion>
+      </circle>
+      <circle r="9.5" fill="#fff6dd">
+        <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.80;0.825;1" dur="8s" repeatCount="indefinite"/>
+        <animateMotion dur="8s" repeatCount="indefinite" calcMode="linear"
+                       keyPoints="0;0;1;1" keyTimes="0;0.45;0.8;1"><mpath href="#ra"/></animateMotion>
+      </circle>
+    </g>
+  </g>
+
+  <!-- 涟漪:交接(40%)青白一圈;释放(80%)双色两圈 -->
+  <circle cx="256" cy="256" r="12" fill="none" stroke="#dff6ff" stroke-width="4" opacity="0">
+    <animate attributeName="r" values="12;12;84;84" keyTimes="0;0.40;0.55;1" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0;0.85;0;0" keyTimes="0;0.40;0.415;0.55;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="256" cy="256" r="12" fill="none" stroke="#22d3ee" stroke-width="4" opacity="0">
+    <animate attributeName="r" values="12;12;96;96" keyTimes="0;0.80;0.95;1" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0;0.7;0;0" keyTimes="0;0.80;0.815;0.95;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="256" cy="256" r="12" fill="none" stroke="#fbbf24" stroke-width="4" opacity="0">
+    <animate attributeName="r" values="12;12;96;96" keyTimes="0;0.80;0.95;1" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0;0.7;0;0" keyTimes="0;0.80;0.815;0.95;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- spark:交接/释放两次暴胀 -->
+  <circle cx="256" cy="256" r="40" fill="url(#gl)">
+    <animate attributeName="opacity" values="0.55;0.55;1;0.55;0.55;1;0.55;0.55"
+             keyTimes="0;0.40;0.43;0.46;0.80;0.83;0.88;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;13;18.5;13;13;19;13;13"
+             keyTimes="0;0.40;0.43;0.46;0.80;0.83;0.88;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+</svg>

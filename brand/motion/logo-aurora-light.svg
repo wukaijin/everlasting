@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案十一:极光环流(浅底)">
+  <title>Everlasting — 极光环流(Aurora Drift) · 浅底</title>
+  <desc>最"常驻"的纯氛围款:没有粒子、没有叙事,光本身就是运动。
+    双环渐变各自绕自己的环心匀速旋转(dur 12s,linear)—— 像磨砂玻璃管外有一圈光源缓缓环绕,
+    顶部受光的 v2 静态语言被延伸成"光绕着管子走"。琥珀环的光源反相位(相差半圈)保持画面平衡;
+    另有一道 8px 细微光带沿环反向滑过(dur 12s),与主光形成视差层次。
+    spark 以 4s 呼吸,halo 同步。无 SMIL 兼容性风险:animateTransform 作用于 gradientTransform
+    (stop 元素标准用法),不支持的环境自动退化为 v2 静态观感。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#fbfdff"/>
+      <stop offset="0.55" stop-color="#f1f5f9"/>
+      <stop offset="1" stop-color="#e4ebf4"/>
+    </radialGradient>
+    <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致);
+       本文件差异:gc/ga 各自绕环心旋转(12s),形成极光式环流 -->
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#06b6d4"/><stop offset="0.55" stop-color="#0891b2"/><stop offset="1" stop-color="#0e7490"/>
+    <animateTransform attributeName="gradientTransform" attributeType="XML" type="rotate"
+                      from="0 170 256" to="360 170 256" dur="12s" repeatCount="indefinite"/>
+  </linearGradient>
+  <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#f59e0b"/><stop offset="0.55" stop-color="#d97706"/><stop offset="1" stop-color="#b45309"/>
+    <animateTransform attributeName="gradientTransform" attributeType="XML" type="rotate"
+                      from="180 342 256" to="540 342 256" dur="12s" repeatCount="indefinite"/>
+  </linearGradient>
+  <radialGradient id="gl">
+    <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.35"/><stop offset="0.45" stop-color="#0ea5e9" stop-opacity="0.12"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="5"/>
+  </filter>
+  <mask id="onCyan" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"/>
+  </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#c9d4e4" stroke-width="3" opacity="0.45"/>
+
+  <!-- 双环(v2 光照,光绕管转) -->
+  <g fill="none" stroke-width="30" stroke-linecap="round">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="url(#gc)"/>
+  </g>
+  <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" fill="none" stroke="#0c1a2a" stroke-width="52" stroke-linecap="round" opacity="0.45" filter="url(#soft)" mask="url(#onCyan)"/>
+  <g fill="none" stroke-width="30" stroke-linecap="round">
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="url(#ga)"/>
+  </g>
+
+  <!-- 逆行微光带(8px,反向滑行,视差层) -->
+  <g fill="none" stroke-width="8" stroke-linecap="round" opacity="0.12" filter="url(#glowTrack)">
+    <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+          stroke="#0e7490" stroke-dasharray="24 76" stroke-dashoffset="24">
+      <animate attributeName="stroke-dashoffset" values="24;-76" dur="12s" repeatCount="indefinite"/>
+    </path>
+    <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
+          stroke="#b45309" stroke-dasharray="24 76" stroke-dashoffset="24">
+      <animate attributeName="stroke-dashoffset" values="24;-76" dur="12s" begin="-6s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <!-- spark 慢呼吸(4s) -->
+  <circle cx="256" cy="256" r="40" fill="url(#gl)">
+    <animate attributeName="opacity" values="0.6;1;0.6" dur="4s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="256" cy="256" r="13" fill="#1e293b" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;15.5;13" dur="4s" repeatCount="indefinite"
+             calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    <animate attributeName="opacity" values="0.85;1;0.85" dur="4s" repeatCount="indefinite"/>
+  </circle>
+</svg>

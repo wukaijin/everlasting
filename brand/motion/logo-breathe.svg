@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案十三:开合呼吸">
+  <title>Everlasting — 开合呼吸(Breathe)</title>
+  <desc>几何微 Morph 的极简氛围款,10s 一息,循环无缝:
+    双环开口半角 β 在 20°(敞开)与 8°(将合未合)之间往复——
+    "不断闭合、永不闭合",正是 Everlasting 的字面隐喻。
+    几何要点:双环圆心与半径恒定,两圆的交叉点 (256,175.2)/(256,336.8) 是定值,
+    β 变化只移动端帽缺口,交叉与互锁关系纹丝不动(v2 交叉投影因此全程正确);
+    β=8° 时端帽心距 32.9 ≈ 描边宽,帽沿将触未触,不变量(帽周负空间)仍成立。
+    闭合力最大时(50% 相位)两枚交叉点亮起十字星辉光,spark 同步涨大,halo 同步增强。
+    d-morph 说明:两条 path 的 M/A 命令结构一致,仅端点数值插值(β 线性化),
+    Chrome/Firefox/Safari 均支持;不支持的环境退化为静态敞开态。</desc>
+  <defs>
+    <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#1c2a42"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </radialGradient>
+    <filter id="glowDot" x="-350%" y="-350%" width="800%" height="800%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致) -->
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#67e8f9"/><stop offset="0.55" stop-color="#22d3ee"/><stop offset="1" stop-color="#06b6d4"/>
+  </linearGradient>
+  <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#fcd34d"/><stop offset="0.55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/>
+  </linearGradient>
+  <radialGradient id="gl">
+    <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/><stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="5"/>
+  </filter>
+  <mask id="onCyan" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"/>
+  </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="72" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+
+  <!-- 青环:β 20°(敞开)↔ 8°(将合)。
+       敞开端点 (280.88,215.64)/(280.88,296.36);β=8° 端点 (286.85,239.58)/(286.85,272.42) -->
+  <path fill="none" stroke="url(#gc)" stroke-width="30" stroke-linecap="round"
+        d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36">
+    <animate attributeName="d" dur="10s" repeatCount="indefinite" calcMode="spline"
+             keySplines="0.42 0 0.58 1;0.42 0 0.58 1"
+             values="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36;
+                     M 286.85 239.58 A 118 118 0 1 0 286.85 272.42;
+                     M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
+             keyTimes="0;0.5;1"/>
+  </path>
+
+  <!-- 交叉投影(v2):交叉点是两圆交点,β 变化不动交叉,阴影全程正确 -->
+  <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" fill="none" stroke="#040b14" stroke-width="52" stroke-linecap="round" opacity="0.45" filter="url(#soft)" mask="url(#onCyan)"/>
+
+  <!-- 琥珀环:镜像 β。β=8° 端点 (225.15,239.58)/(225.15,272.42) -->
+  <path fill="none" stroke="url(#ga)" stroke-width="30" stroke-linecap="round"
+        d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36">
+    <animate attributeName="d" dur="10s" repeatCount="indefinite" calcMode="spline"
+             keySplines="0.42 0 0.58 1;0.42 0 0.58 1"
+             values="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36;
+                     M 225.15 239.58 A 118 118 0 1 1 225.15 272.42;
+                     M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
+             keyTimes="0;0.5;1"/>
+  </path>
+
+  <!-- 交叉点十字星辉光:闭合力峰值(50% 相位)点亮,上青白下暖白 -->
+  <g transform="translate(256 175.2)">
+    <g opacity="0">
+      <animate attributeName="opacity" values="0;0;0.95;0;0" keyTimes="0;0.44;0.5;0.58;1" dur="10s" repeatCount="indefinite"/>
+      <animateTransform attributeName="transform" type="scale" values="0.4;0.4;1;0.5;0.5" keyTimes="0;0.44;0.5;0.58;1" dur="10s" repeatCount="indefinite"/>
+      <g stroke="#eaffff" stroke-width="3" stroke-linecap="round">
+        <line x1="-9" y1="0" x2="9" y2="0"/>
+        <line x1="0" y1="-9" x2="0" y2="9"/>
+      </g>
+    </g>
+  </g>
+  <g transform="translate(256 336.8)">
+    <g opacity="0">
+      <animate attributeName="opacity" values="0;0;0.95;0;0" keyTimes="0;0.44;0.5;0.58;1" dur="10s" repeatCount="indefinite"/>
+      <animateTransform attributeName="transform" type="scale" values="0.4;0.4;1;0.5;0.5" keyTimes="0;0.44;0.5;0.58;1" dur="10s" repeatCount="indefinite"/>
+      <g stroke="#fff2cf" stroke-width="3" stroke-linecap="round">
+        <line x1="-9" y1="0" x2="9" y2="0"/>
+        <line x1="0" y1="-9" x2="0" y2="9"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- spark + halo:随闭合力涨落 -->
+  <circle cx="256" cy="256" r="40" fill="url(#gl)">
+    <animate attributeName="opacity" values="0.55;1;0.55" keyTimes="0;0.5;1" dur="10s" repeatCount="indefinite"
+             calcMode="spline" keySplines="0.42 0 0.58 1;0.42 0 0.58 1"/>
+  </circle>
+  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+    <animate attributeName="r" values="13;16.5;13" keyTimes="0;0.5;1" dur="10s" repeatCount="indefinite"
+             calcMode="spline" keySplines="0.42 0 0.58 1;0.42 0 0.58 1"/>
+  </circle>
+</svg>
