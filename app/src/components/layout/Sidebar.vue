@@ -321,17 +321,22 @@ function onSearchClear() {
 
 /* 08-24 btn-family:设置入口由 ghost·sm 家族承载。
    2026-08-29 ui-visual-polish r1:在 btn--sm 基础上加大一档(icon
-   18→20、字号 xs→sm、padding 4/6→6/10)——footer 常驻入口要有可点的
-   体量。r3 补记:原"保留 mono 字体"撤销 —— --font-mono 栈(JetBrains
-   Mono 及其回退)无 CJK 字形,"设置"靠浏览器兜底渲染,与全局 sans
-   明显不一致;button 本有 font: inherit(style.css),删掉即回正轨。 */
+   18→20、padding 4/6→6/10)——footer 常驻入口要有可点的体量。r3 补记:
+   原"保留 mono 字体"撤销 —— --font-mono 栈(JetBrains Mono 及其回退)
+   无 CJK 字形,"设置"靠浏览器兜底渲染,与全局 sans 明显不一致;button
+   本有 font: inherit(style.css),删掉即回正轨。
+   r4(用户反馈):字号提至 --text-md 14px;标签 line-height 压到 1 ——
+   继承的 1.55 行高让字面在半行距里光学偏移(flex 居中的是行框不是
+   字形,盒测量 cy 一致但观感偏),贴住 em box 后图标与字面才真正
+   对中。 */
 .sidebar__settings {
   gap: var(--space-2);
   padding: 6px 10px;
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
 }
 
 .sidebar__settings-label {
   font-weight: var(--weight-medium);
+  line-height: 1;
 }
 </style>
