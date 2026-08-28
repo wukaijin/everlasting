@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "origin 载体链跨层契约;§3 链路第 3 环与「多 drain 只有尾条生效」条款需按根治后口径改写(WP2)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md", "reason": "队列驱动器 pattern + D-D 持久化契约;「尾条未落库」注记需更新(WP2)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/signature-run-chat-loop.md", "reason": "run_chat_loop 三套件签名契约;ChatLoopRequest 字段表 origin → drained(WP2)"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-QUEUE-001 债条原文;闭合后按 DEBT 规则删除条目(WP2)"}

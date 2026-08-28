@@ -1,0 +1,7 @@
+{"file": "app/src-tauri/src/agent/chat_loop/init.rs", "reason": "persist 点(尾条 user)与 seq 推导;非尾条 persist 循环插入地"}
+{"file": "app/src-tauri/src/agent/chat_loop/suite.rs", "reason": "ChatLoopRequest 定义:origin 字段替换为 drained"}
+{"file": "app/src-tauri/src/agent/chat.rs", "reason": "run_queue_driver 驱动器:drained 组装与请求构造"}
+{"file": "app/src-tauri/src/agent/tests_message_queue.rs", "reason": "钉行为测试改写 + multi-drain 新增用例"}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "origin 载体链契约(WP2 收口对象)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md", "reason": "D-D 持久化契约(WP2 收口对象)"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-QUEUE-001 债条(闭合后删除)"}
