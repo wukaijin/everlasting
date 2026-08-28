@@ -1254,5 +1254,50 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     add_provider_column_if_missing(pool, "key_migrated_at", "TEXT").await?;
     migrate_provider_api_keys_to_encrypted(pool).await?;
 
+    // --- F2 定时任务 (`08-28-f2-scheduled-tasks` design §2) ---
+    //
+    // preset 调度任务的持久化(本地 cron 式,prd D1/D2):一个任务 =
+    // 「向单一 target session 注入一轮带来源标记的 agent 运行」。
+    // - `schedule`: JSON(internally-tagged `ScheduleSpec`,见
+    //   `scheduler/compute.rs`)。
+    // - `last_fired_at`: NULL = 从未触发;触发判定基准(调度器内每
+    //   tick 重算,catch-up 判定语义 =「到期点是否已消费」)。
+    // - `next_fire_at`: **纯 UI 展示**,NOT NULL 只是列约束 —— 触发
+    //   判定不信任存库值(design §2),停用任务存 schedule 下一到期点
+    //   灰显。
+    // - 双 FK `ON DELETE CASCADE`:删 target session / project 级联删
+    //   任务(AC6;依赖 init_pool 的 FK pragma,有
+    //   migrations_tests::init_pool_sets_foreign_keys_on 锁定)。
+    // - 索引服调度循环的 enabled 扫描 + Settings 面板按期展示排序。
+    // 幂等重放:新库直接建,存量库 IF NOT EXISTS no-op;回滚 = revert
+    // 后表残留无副作用(无人读,design §10)。
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS scheduled_tasks (
+   id TEXT PRIMARY KEY,
+   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+   target_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+   name TEXT NOT NULL,
+   prompt TEXT NOT NULL,
+   schedule TEXT NOT NULL,
+   enabled INTEGER NOT NULL DEFAULT 1,
+   created_by TEXT NOT NULL DEFAULT 'user',
+   created_at INTEGER NOT NULL,
+   last_fired_at INTEGER,
+   next_fire_at INTEGER NOT NULL
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
+ ON scheduled_tasks(enabled, next_fire_at)
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

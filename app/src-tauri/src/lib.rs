@@ -61,6 +61,11 @@ mod llm;
 mod memory;
 mod projects;
 mod resource_loader;
+// F2 定时任务 (2026-08-28, task `08-28-f2-scheduled-tasks`): 调度内核
+// (preset 档位纯函数 + 30s tick 单一扫描算法 + TaskOrigin 来源标记)。
+// crate 私有:唯一消费者是 daemon/server.rs 的 spawn_task_scheduler
+// wrapper、agent 的 origin 载体链与本模块测试。
+mod scheduler;
 // P2.4 D2/D5 (2026-07-22, task `07-20-remote-access-daemon-split`):
 // GUI-side daemon sidecar lifecycle. The Thin-client mode spawns the
 // `everlasting-daemon` binary via `tauri-plugin-shell` and kills it on
@@ -240,8 +245,16 @@ pub fn run() {
             commands::config::get_web_search_config,
             commands::config::set_web_search_config,
             // F6 异步 agent 任务(2026-08-27):前端可读 app_config
-            // 开关面(当前仅 turn_complete_notify_enabled)。
+            // 开关面(turn_complete_notify_enabled + F2 的
+            // scheduled_tasks_enabled,additive)。
             commands::config::get_app_config,
+            // F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):
+            // 管理面 CRUD 四件;调度循环只在 daemon bin 装配(GUI 零
+            // timer),这些命令只读写 scheduled_tasks 表 + 校验。
+            commands::scheduled_tasks::list_scheduled_tasks,
+            commands::scheduled_tasks::create_scheduled_task,
+            commands::scheduled_tasks::update_scheduled_task,
+            commands::scheduled_tasks::delete_scheduled_task,
             // S2 配对码生成(经 tunnel WSS 调 remote 内部 RPC)
             commands::pairing::generate_pairing_code,
             // Providers / models / default model

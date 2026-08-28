@@ -72,6 +72,7 @@ pub mod projects;
 pub mod projects_tests;
 pub mod providers;
 pub mod providers_tests;
+pub mod scheduled_tasks;
 pub mod search;
 pub mod search_tests;
 pub mod sessions;

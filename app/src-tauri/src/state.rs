@@ -253,6 +253,14 @@ pub struct AppState {
     /// (`set_remote_config` / `get_tunnel_status` / `generate_pairing_code`)
     /// 经它统一管 config 变更 / shutdown / 状态 / RPC 通道。
     pub tunnel_manager: Arc<crate::daemon::tunnel::TunnelManager>,
+    /// F2 定时任务(2026-08-28, `08-28-f2-scheduled-tasks` design §5):
+    /// 调度循环的停机令牌。`spawn_task_scheduler`(`daemon/server.rs`,
+    /// 唯一装配点 = daemon bin)的 tick 循环 `select!` 监听它;
+    /// `shutdown_signal` 在 tunnel stop 之后 cancel。`load_inner` 只做
+    /// `CancellationToken::new()` 纯分配,**绝不 spawn**(RULE-DAEMON-001
+    /// 「AppState::load 绝不 spawn」;GUI Full 模式零 timer 约束保持 ——
+    /// 没有 bin 装配就没有循环)。
+    pub scheduler_cancel: CancellationToken,
 }
 
 impl AppState {
@@ -519,6 +527,9 @@ impl AppState {
             // S2: tunnel 管理器空壳。daemon bin main 调 start() 才 spawn
             // tunnel task(Tauri 路径永不 start —— P1-1)。
             tunnel_manager: crate::daemon::tunnel::TunnelManager::new(),
+            // F2 定时任务:调度循环停机令牌。纯分配无 spawn(RULE-DAEMON-001);
+            // 循环本体由 daemon bin 经 spawn_task_scheduler 装配。
+            scheduler_cancel: CancellationToken::new(),
         }
     }
 

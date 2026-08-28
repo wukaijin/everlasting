@@ -164,6 +164,14 @@ async fn main() -> ExitCode {
     // long-lived daemon). Daemon-only; GUI stays timer-free.
     server::spawn_shell_sweeper(&state);
 
+    // F2 定时任务调度循环(2026-08-28, task
+    // `08-28-f2-scheduled-tasks`): 30s tick 单一扫描算法,到点任务经
+    // chat_inner 注入目标 session。**只有这里装配** —— GUI Full 模式
+    // 零 timer 硬约束保持(可建任务但不会触发,Settings 面板注明);
+    // 停机链在 shutdown_signal 的 tunnel stop 之后 cancel
+    // `state.scheduler_cancel`。首 tick 立即 = 启动补偿评估(D4)。
+    server::spawn_task_scheduler(&state);
+
     // S2 tunnel client (2026-08-11, task `08-11-tunnel-client`,design §2.4
     // / §4.2 P1-1 修订):**只有这里** spawn tunnel —— lib.rs 零改动,
     // Tauri GUI(Thin/Full)持有空壳 manager 但从不 start()。双进程同

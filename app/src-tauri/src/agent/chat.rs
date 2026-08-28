@@ -113,6 +113,7 @@ pub async fn chat(
             worker_event_sink,
             resend_seq: resendSeq,
             forced_dispatch: forcedDispatch,
+            origin: None,
         },
     )
     .await
@@ -186,6 +187,12 @@ pub(crate) struct ChatEntry {
     pub(crate) resend_seq: Option<i64>,
     // explicit-agent-dispatch (2026-06-30): `@@<agent> <task>` prefix.
     pub(crate) forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
+    // F2 定时任务(2026-08-28, `08-28-f2-scheduled-tasks` design §4.1):
+    // 消息来源标记。仅调度器 fire 路径传 `Some`;其余全部构造点
+    // (routes/agent.rs + 本文件的 Tauri command)传 `None` —— 既有路径
+    // 行为逐字节不变。载荷经路由临界区拷入 `QueuedMessage.origin`(忙时
+    // 条目由另一个请求的驱动器在 round>0 消费,载体必须在队列项上)。
+    pub(crate) origin: Option<crate::scheduler::TaskOrigin>,
 }
 
 pub(crate) async fn chat_inner(
@@ -201,6 +208,7 @@ pub(crate) async fn chat_inner(
         worker_event_sink,
         resend_seq,
         forced_dispatch,
+        origin,
     } = entry;
     let tool_defs = state.tools.clone();
     // B1 (2026-08-16): image-attachment caps, enforced at the shared
@@ -355,15 +363,19 @@ pub(crate) async fn chat_inner(
             active.contains_key(&session_id)
         };
         let q = qmap.entry(session_id.clone()).or_default();
-        let pushed = match crate::agent::message_queue::push(q, tail, now_ms) {
-            Ok(id) => id,
-            Err(e) => {
-                // AC6:队列满(20)。用户可感知错误,不入队不认领。
-                tracing::warn!(session_id = %session_id, error = %e, "chat: enqueue rejected");
-                drop(qmap);
-                return Err(anyhow::anyhow!(e.to_string()).into());
-            }
-        };
+        // F2 origin 载体拷入(design §4.1):ChatEntry.origin →
+        // QueuedMessage.origin。纯赋值 —— 在既有临界区内完成,无新锁、
+        // 无 await;origin 为 None(全部既有路径)时行为逐字节不变。
+        let pushed =
+            match crate::agent::message_queue::push_with_origin(q, tail, now_ms, origin.clone()) {
+                Ok(id) => id,
+                Err(e) => {
+                    // AC6:队列满(20)。用户可感知错误,不入队不认领。
+                    tracing::warn!(session_id = %session_id, error = %e, "chat: enqueue rejected");
+                    drop(qmap);
+                    return Err(anyhow::anyhow!(e.to_string()).into());
+                }
+            };
         pushed_id = Some(pushed);
         queued_position = Some(q.len());
         if !busy {
@@ -732,6 +744,9 @@ pub(crate) async fn chat_inner(
                     workflow_ctx,
                     group_chat_state: None,
                     current_speaker: None,
+                    // 经典单聊无来源标记(origin 载体只在队列项上,
+                    // 驱动器路径传)。
+                    origin: None,
                 },
                 deps,
                 role,
@@ -1099,6 +1114,11 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
             app_data_dir: deps.app_data_dir.clone(),
             forced_dispatch: round_forced,
         };
+        // F2 origin(design §4.1):取 `drained.last()`(= 本轮被持久化的
+        // 尾条)的来源标记,经 ChatLoopRequest 传入 init.rs 的 persist
+        // 门控点。多 drain 时取尾条与「persist 只写尾条」对齐(RULE-QUEUE-
+        // 001 缺口面,origin 跟随权威行)。
+        let round_origin = drained.last().and_then(|qm| qm.origin.clone());
         run_chat_loop(
             ChatLoopRequest {
                 tool_defs: deps.tool_defs.clone(),
@@ -1114,6 +1134,7 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
                 workflow_ctx: deps.workflow_ctx.clone(),
                 group_chat_state: None,
                 current_speaker: None,
+                origin: round_origin,
             },
             deps_suite,
             role,
@@ -1122,7 +1143,13 @@ pub(crate) async fn run_queue_driver(deps: QueueDriverDeps) {
 
         // --- 轮间边界判定(design §4 取消矩阵)---
         if deps.token.is_cancelled() {
-            // Stop / defense-in-depth 替换:清空队列(PRD R7)。
+            // Stop / defense-in-depth 替换:清空队列(PRD R7)。清队前对
+            // 带 origin 的滞留条目补 `lost` 审计(F2 design §4.3-5,
+            // best-effort)。
+            let snapshot =
+                crate::agent::message_queue::list_session(&deps.queues, &deps.session_id).await;
+            crate::scheduler::audit_lost_queued_entries(&deps.db, &deps.session_id, &snapshot)
+                .await;
             crate::agent::message_queue::clear_session(&deps.queues, &deps.session_id).await;
             break;
         }

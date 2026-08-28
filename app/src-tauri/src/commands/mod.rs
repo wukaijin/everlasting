@@ -48,6 +48,10 @@ pub mod usage;
 // is frontend-driven via streamController's tool:call route
 // (no backend event). See commands/review.rs.
 pub mod review;
+// F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):管理面
+// CRUD 四件(list/create/update/delete),`_inner` 单源供 Tauri +
+// daemon route 双注册(design §6);调度语义本身在 `scheduler` 模块。
+pub mod scheduled_tasks;
 // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
 // task IPC surface. Phase 0 ships `create_task` only;
 // Phase 2 Step 2.6 adds `update_task` (B12 checklist

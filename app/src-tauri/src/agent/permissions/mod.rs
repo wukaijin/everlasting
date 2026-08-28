@@ -120,7 +120,8 @@ pub mod tests_types;
 #[allow(unused_imports)]
 pub use audit::{
     record_context_budget_trim_audit, record_loop_intervention_audit, record_message_resend_audit,
-    record_tool_executed_audit, record_ui_diff_applied_audit, AuditKind,
+    record_scheduled_task_audit, record_tool_executed_audit, record_ui_diff_applied_audit,
+    AuditKind,
 };
 pub use check::check;
 // 07-06 (am-observability-panel A9): `recall_pitfall` is now a

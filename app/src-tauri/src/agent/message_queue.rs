@@ -67,6 +67,15 @@ pub struct QueuedMessage {
     /// NOT participate in ordering. Do not branch on it without
     /// opening the priority tier (ROADMAP B 档).
     pub priority: u8,
+    /// F2 定时任务(2026-08-28, `08-28-f2-scheduled-tasks` design §4.1):
+    /// 消息来源标记。Additive — 仅调度器 fire 路径经
+    /// [`push_with_origin`] 塞 `Some`,其余路径恒 `None`(序列化进
+    /// `list_queued_messages` 排队占位 IPC,前端显示「定时」徽标;
+    /// **不进** chat 事件主链)。载荷必须在队列项上:忙时 fire 的条目
+    /// 由*另一个*请求的驱动器在 round>0 消费,请求级上下文(resend_seq /
+    /// forced_dispatch 同款)在 round>0 一律丢弃。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::scheduler::TaskOrigin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,10 +101,15 @@ impl std::fmt::Display for QueueError {
 /// lock across the busy-check + slot-claim sequence (module docs) and
 /// calls this while still holding the guard. Returns the entry uuid;
 /// position = queue length AFTER push (1-based tail).
-pub fn push(
+///
+/// F2 (2026-08-28): the origin param is mandatory at the single
+/// production call site (chat_inner routing critical section passes the
+/// entry's `ChatEntry.origin`, `None` for every user send).
+pub fn push_with_origin(
     q: &mut VecDeque<QueuedMessage>,
     message: ChatMessage,
     now_ms: i64,
+    origin: Option<crate::scheduler::TaskOrigin>,
 ) -> Result<String, QueueError> {
     if q.len() >= SESSION_QUEUE_MAX {
         return Err(QueueError::Full);
@@ -107,6 +121,7 @@ pub fn push(
         enqueued_at: now_ms,
         // R6 placeholder — see struct doc; MVP scheduling ignores it.
         priority: 0,
+        origin,
     });
     Ok(id)
 }
@@ -189,10 +204,14 @@ mod tests {
     async fn push_rejects_beyond_capacity() {
         let mut q = VecDeque::new();
         for i in 0..SESSION_QUEUE_MAX {
-            push(&mut q, user_msg(&format!("m{i}")), 0).expect("under capacity must succeed");
+            push_with_origin(&mut q, user_msg(&format!("m{i}")), 0, None)
+                .expect("under capacity must succeed");
         }
         assert_eq!(q.len(), SESSION_QUEUE_MAX);
-        assert_eq!(push(&mut q, user_msg("overflow"), 0), Err(QueueError::Full));
+        assert_eq!(
+            push_with_origin(&mut q, user_msg("overflow"), 0, None),
+            Err(QueueError::Full)
+        );
         // Rejected entry must NOT have been appended.
         assert_eq!(q.len(), SESSION_QUEUE_MAX);
     }
@@ -203,9 +222,9 @@ mod tests {
         {
             let mut map = queues.lock().await;
             let q = map.entry("s1".into()).or_default();
-            push(q, user_msg("a"), 1).unwrap();
-            push(q, user_msg("b"), 2).unwrap();
-            push(q, user_msg("c"), 3).unwrap();
+            push_with_origin(q, user_msg("a"), 1, None).unwrap();
+            push_with_origin(q, user_msg("b"), 2, None).unwrap();
+            push_with_origin(q, user_msg("c"), 3, None).unwrap();
         }
         let drained = drain_all(&queues, "s1").await;
         let texts: Vec<_> = drained
@@ -227,8 +246,8 @@ mod tests {
         {
             let mut map = queues.lock().await;
             let q = map.entry("s1".into()).or_default();
-            push(q, user_msg("a"), 1).unwrap();
-            push(q, user_msg("b"), 2).unwrap();
+            push_with_origin(q, user_msg("a"), 1, None).unwrap();
+            push_with_origin(q, user_msg("b"), 2, None).unwrap();
         }
         assert_eq!(clear_session(&queues, "s1").await, 2);
         assert_eq!(clear_session(&queues, "s1").await, 0);
@@ -242,7 +261,7 @@ mod tests {
             let mut map = queues.lock().await;
             let q = map.entry("s1".into()).or_default();
             (0..3)
-                .map(|i| push(q, user_msg(&format!("m{i}")), i).unwrap())
+                .map(|i| push_with_origin(q, user_msg(&format!("m{i}")), i, None).unwrap())
                 .collect()
         };
         // Remove the MIDDLE entry by uuid.

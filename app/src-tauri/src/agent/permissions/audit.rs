@@ -189,6 +189,19 @@ pub enum AuditKind {
     /// `session_id` 共享,C4 audit log UI 据此 disambiguate
     /// "用户主动写" vs "LLM 工具调用"。
     UiDiffApplied,
+    // === Scheduler 域 (F2 定时任务, 2026-08-28, `08-28-f2-scheduled-tasks`) ===
+    /// 定时任务调度事件。daemon 调度循环的每个判定分支都落本行
+    /// (挂**目标 session**),payload 统一携带 `task_id` / `task_name` /
+    /// `action`,action 枚举(prd R3):
+    /// - `fired` — 到点触发(宽限 60s = 2×tick 内)
+    /// - `catchup` — 停机跨过到期点后的补偿触发(due 距 now > 60s)
+    /// - `skipped_dedup` — 上次注入条目仍滞留队列,本轮跳过去重
+    /// - `skipped_queue_disabled` — `message_queue_enabled=false`,fire
+    ///   会走 legacy 取消语义,跳过
+    /// - `lost` — 账已落但注入条目被 Stop 语义清队丢弃(best-effort
+    ///   兜底;仅覆盖驱动器 cancel break + Stop 命令两处清队点)
+    /// - `error` — fire 失败(`reason` 附错误类别,如 `queue_full`)
+    ScheduledTaskFired,
 }
 
 impl AuditKind {
@@ -232,6 +245,11 @@ impl AuditKind {
             // instead of `tool_name`/`tool_input`/`duration_ms`/
             // `exit_code`).
             Self::UiDiffApplied => "ui_diff_applied",
+            // F2 定时任务 (2026-08-28): scheduler lifecycle events.
+            // Wire shape: snake_case lowercase; payload carries
+            // `task_id`/`task_name`/`action` (+ optional `reason`),
+            // see the variant doc + `record_scheduled_task_audit`.
+            Self::ScheduledTaskFired => "scheduled_task_fired",
         }
     }
 }
@@ -581,6 +599,51 @@ pub async fn record_ui_diff_applied_audit(
         AuditKind::UiDiffApplied.as_str(),
         Some(&payload_str),
         turn_seq,
+    )
+    .await
+}
+
+/// F2 定时任务 (2026-08-28): record a `scheduled_task_fired` audit row
+/// for the daemon scheduler's decision branches. Mirrors the other
+/// best-effort helpers (warn + swallow on DB error).
+///
+/// Fired from `scheduler/mod.rs` (tick branches: `fired` / `catchup` /
+/// `skipped_dedup` / `skipped_queue_disabled` / `error`) and from the
+/// two Stop-语义 queue-clear sites (`agent/chat.rs` driver cancel break +
+/// `commands/cancel.rs`) with `action = "lost"`. The row hangs off the
+/// **target session** (best-effort, non-transactional — same convention
+/// as `record_message_resend_audit`).
+///
+/// `turn_seq` is `None`: scheduler fires happen outside any turn loop
+/// (the injected turn's own seq is owned by the agent loop, not the
+/// scheduler) — the audit schema allows NULL `turn_seq`.
+///
+/// `reason` is `Some` only for the `error` action (e.g. `queue_full`).
+pub async fn record_scheduled_task_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    task_id: &str,
+    task_name: &str,
+    action: &str,
+    reason: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let mut payload = serde_json::json!({
+        "task_id": task_id,
+        "task_name": task_name,
+        "action": action,
+    });
+    if let Some(r) = reason {
+        payload["reason"] = serde_json::json!(r);
+    }
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::ScheduledTaskFired.as_str(),
+        Some(&payload_str),
+        // 调度器 fire 在任何 turn loop 之外,无 turn_seq 可挂(签名
+        // 的零值 = None,不留 TODO,design §4)。
+        None,
     )
     .await
 }

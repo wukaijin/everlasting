@@ -66,7 +66,17 @@ pub async fn cancel_chat_inner(
         })
     };
     let cleared_queued = match &session_id {
-        Some(sid) => crate::agent::message_queue::clear_session(&state.message_queues, sid).await,
+        Some(sid) => {
+            // F2 定时任务(design §4.3-5):清队**前**快照,对带 origin
+            // 的条目补 `lost` 审计(best-effort)。快照与清队之间驱动器
+            // 可能并发 drain —— 可接受(调度器侧该轮已落账,审计兜底
+            // 可观测)。sessions.rs 的破坏性清理不在此列(会话销毁,
+            // 不审计)。
+            let snapshot =
+                crate::agent::message_queue::list_session(&state.message_queues, sid).await;
+            crate::scheduler::audit_lost_queued_entries(&state.db, sid, &snapshot).await;
+            crate::agent::message_queue::clear_session(&state.message_queues, sid).await
+        }
         None => 0,
     };
     Ok(CancelOutcome {

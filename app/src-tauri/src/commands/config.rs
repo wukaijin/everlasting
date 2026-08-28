@@ -493,6 +493,12 @@ pub struct AppConfigPayload {
     /// `turn_complete_notify_enabled`,fail-open 缺省开——读法对齐
     /// `tools_stub_enabled`(`chat_loop.rs` 同款:仅字面 `"false"` 关)。
     pub turn_complete_notify_enabled: bool,
+    /// F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`)全局
+    /// kill switch 的读出口。app_config 键 `scheduled_tasks_enabled`,
+    /// fail-open 缺省开(仅字面 `"false"` 关,读法同调度循环
+    /// `scheduler/mod.rs` 的每 tick 读取)。additive 字段:供前端
+    /// 「定时任务」面板展示当前开关状态(design §5)。
+    pub scheduled_tasks_enabled: bool,
 }
 
 pub async fn get_app_config_inner(
@@ -504,8 +510,15 @@ pub async fn get_app_config_inner(
         Ok(Some(v)) => v != "false",
         _ => true,
     };
+    // F2 kill switch:与调度循环同读法(fail-open)。
+    let scheduled_on =
+        match crate::db::config::get_config_value(&state.db, "scheduled_tasks_enabled").await {
+            Ok(Some(v)) => v != "false",
+            _ => true,
+        };
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
+        scheduled_tasks_enabled: scheduled_on,
     })
 }
 

@@ -67,6 +67,8 @@ pub async fn chat(
             worker_event_sink,
             resend_seq: req.resend_seq,
             forced_dispatch: req.forced_dispatch,
+            // F2 origin:HTTP chat 入口无来源标记(仅调度器 fire 路径传)。
+            origin: None,
         },
     )
     .await?;

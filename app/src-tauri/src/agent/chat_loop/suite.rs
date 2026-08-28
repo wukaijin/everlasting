@@ -217,6 +217,12 @@ pub(crate) struct ChatLoopRequest {
     // persist site so messages store the originating speaker. Read-only —
     // never affects tool routing or wire shape.
     pub(crate) current_speaker: Option<String>,
+    // F2 定时任务(2026-08-28, `08-28-f2-scheduled-tasks` design §4.1):
+    // 消息来源标记。驱动器每轮取 `drained.last()` 的 origin 经此传入;
+    // init.rs 的 persist 门控据 `is_some()` 放宽并把来源写进 metadata
+    // 信封 `scheduled` 键。其余全部调用点(classic / 群聊 / worker)恒
+    // `None` —— 既有路径行为逐字节不变。
+    pub(crate) origin: Option<crate::scheduler::TaskOrigin>,
 }
 
 /// 调用方角色旗标（design 表第三行；暂名 CallerRole）。由调用方身份决定

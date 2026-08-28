@@ -149,6 +149,10 @@ pub(crate) async fn prepare_loop_state(
     let skip_persist = role.skip_persist;
     let resend_seq = request.resend_seq;
     let group_chat_state = &request.group_chat_state;
+    // F2 定时任务(design §4.1):来源标记。驱动器取 drained 尾条经
+    // ChatLoopRequest 传入;用于放宽 metadata persist 门控 + 信封
+    // `scheduled` 键。其余路径恒 None(行为逐字节不变)。
+    let task_origin = request.origin.clone();
 
     // Start seq from the highest existing seq in this session + 1.
     let loaded_session = match crate::db::load_session(&db, &session_id).await {
@@ -969,7 +973,14 @@ pub(crate) async fn prepare_loop_state(
         refs
     };
     let has_attachments = !last_user_attachments.is_empty();
-    if (!injections.is_empty() || has_attachments) && last_user_snapshot.is_some() {
+    // F2 定时任务(design §4.1):persist 门控放宽 —— 纯定时注入轮
+    // (无 @文件注入、无附件)也要把来源标记写进 `messages.metadata`,
+    // 否则 reload 后该 user 行不带「定时」标识。FileInjections 事件
+    // 的触发条件**不**放宽(保持既有行为逐字节不变;定时注入轮无
+    // injections 可发,发空载荷只会白耗一条 IPC)。
+    let should_persist_meta = (!injections.is_empty() || has_attachments || task_origin.is_some())
+        && last_user_snapshot.is_some();
+    if should_persist_meta {
         // Update the user row with the injection manifest as
         // metadata. The `update_message_metadata` IPC at the
         // SQL layer (added in this PR — see `db::sessions.rs`)
@@ -993,7 +1004,12 @@ pub(crate) async fn prepare_loop_state(
         // B1 (2026-08-16): `attachments` joins the envelope (same
         // single-write-path contract); emitted only when non-empty
         // so legacy rows / text turns stay byte-identical.
-        let meta = if has_attachments {
+        //
+        // F2 (2026-08-28): `scheduled` joins the envelope — the
+        // source marker (`TaskOrigin::Scheduled` serde shape,
+        // internally tagged). Additive: absent for every non-scheduler
+        // path; `update_message_metadata` 整体覆盖写语义不变。
+        let mut meta = if has_attachments {
             serde_json::json!({
                 "injections": &injections,
                 "attachments": &last_user_attachments,
@@ -1001,6 +1017,9 @@ pub(crate) async fn prepare_loop_state(
         } else {
             serde_json::json!({ "injections": &injections })
         };
+        if let Some(origin) = &task_origin {
+            meta["scheduled"] = serde_json::json!(origin);
+        }
         // B6 PR1b: skip the metadata UPDATE in worker mode (the
         // user row is the parent's, not the worker's).
         if !skip_persist {
@@ -1020,16 +1039,24 @@ pub(crate) async fn prepare_loop_state(
         // controller's `handleChatEvent("file_injections")`
         // case patches the user message's `injections` array
         // by `request_id` + `message_seq`.
-        emit_chat_event_via_sink(
-            &sink,
-            &session_id,
-            &rid,
-            &ChatEvent::FileInjections {
-                request_id: rid.clone(),
-                message_seq: last_user_seq,
-                injections: injections.clone(),
-            },
-        );
+        //
+        // Gate kept at the pre-F2 condition: the persist-gate widening
+        // above is for the metadata write only; a pure scheduler turn
+        // (origin Some, no injections/attachments) must not emit an
+        // empty FileInjections payload (既有路径逐字节不变 + 新路径
+        // 不发空载荷 IPC)。
+        if (!injections.is_empty() || has_attachments) && last_user_snapshot.is_some() {
+            emit_chat_event_via_sink(
+                &sink,
+                &session_id,
+                &rid,
+                &ChatEvent::FileInjections {
+                    request_id: rid.clone(),
+                    message_seq: last_user_seq,
+                    injections: injections.clone(),
+                },
+            );
+        }
     }
     // Silence the unused warning on `last_user_after_inject` —
     // we keep the in-place expansion in `messages` but the

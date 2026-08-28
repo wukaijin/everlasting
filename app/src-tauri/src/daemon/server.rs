@@ -152,6 +152,51 @@ pub fn spawn_shell_sweeper(state: &AppState) {
     });
 }
 
+/// F2 定时任务调度循环(2026-08-28, task `08-28-f2-scheduled-tasks`,
+/// design §5):每 [`crate::scheduler::SCHEDULER_TICK_SECS`](30s)跑一次
+/// 单一扫描算法(`scheduler::scheduler_tick`),到点任务经 `chat_inner`
+/// 注入一轮带 origin 标记的 agent 运行。**唯一**装配点是 daemon bin
+/// (GUI Full 模式零 timer 硬约束不变 ——「no timer tasks in the GUI
+/// main process」)。
+///
+/// Detached spawn(不 join,不阻塞 serve),仿 `spawn_backup_task` /
+/// `spawn_shell_sweeper` 形;停机沿 tunnel 心跳的
+/// `CancellationToken + select!` 样板:tick 循环监听
+/// `state.scheduler_cancel`(字段挂 `AppState`,`load_inner` 只构造
+/// token 绝不 spawn —— RULE-DAEMON-001),`shutdown_signal` 在 tunnel
+/// stop 之后 cancel。cancel 后循环当 tick 退出;正在 fire 的单个注入由
+/// 既有 `cancel_and_drain_all_agent_loops` 兜底。
+///
+/// interval 的首 tick 立即完成 = 启动即做一次补偿评估(停机跨过 fire
+/// 点的 D4 catch-up 语义)。`pending_by_task`(任务 → 队列条目 uuid
+/// 去重表)由本循环体跨 tick 持有 —— 纯内存,daemon 重启即空,与
+/// 消息队列的风险姿态一致。
+pub fn spawn_task_scheduler(state: &Arc<AppState>) {
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        tracing::info!(
+            tick_secs = crate::scheduler::SCHEDULER_TICK_SECS,
+            "task scheduler started"
+        );
+        let mut pending_by_task: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut interval =
+            tokio::time::interval(Duration::from_secs(crate::scheduler::SCHEDULER_TICK_SECS));
+        loop {
+            tokio::select! {
+                biased;
+                _ = state.scheduler_cancel.cancelled() => {
+                    tracing::info!("task scheduler stopped (shutdown)");
+                    break;
+                }
+                _ = interval.tick() => {
+                    crate::scheduler::scheduler_tick(&state, &mut pending_by_task).await;
+                }
+            }
+        }
+    });
+}
+
 /// Build the un-mounted daemon router. Exposed so integration tests
 /// (`daemon::routes::tests_*`) can construct a router against a
 /// test-only `AppState` without going through the TCP serve loop.
@@ -425,6 +470,12 @@ async fn shutdown_signal(state: Arc<AppState>) {
     // daemon,这里只是给它一个明确的 shutdown 信号(design §7 对齐:
     // 与现有 serve 行为正交,只加通知,不改 drain 语义)。
     state.tunnel_manager.stop();
+
+    // 步骤 1.6(F2 定时任务, 2026-08-28, design §5):停调度循环。
+    // cancel 后 tick 循环当拍退出,不再发起新的 fire;正在 fire 的单个
+    // 注入由下方 `cancel_and_drain_all_agent_loops` 兜底(该注入已注册
+    // 进 cancellations/inflight_exits)。
+    state.scheduler_cancel.cancel();
 
     // 步骤 2:cancel + drain 所有活跃 agent loop。必须排在 sse.shutdown
     // 之后(先断流、再停处理,语义更干净;且 SSE 关后前端不再收到新事件,

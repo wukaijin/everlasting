@@ -61,6 +61,9 @@ pub mod question;
 // C2 (review visualization view, 2026-07-26): review-state.json
 // read IPC routes (mirror commands::review).
 pub mod review;
+// F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):管理面
+// CRUD 四条 route(mirror commands::scheduled_tasks,Q0 单源)。
+pub mod scheduled_tasks;
 pub mod sessions;
 pub mod stream;
 pub mod subagent_runs;
@@ -107,6 +110,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/providers", providers::router(state.clone()))
         .nest("/api/v1/question", question::router(state.clone()))
         .nest("/api/v1/review", review::router())
+        .nest(
+            "/api/v1/scheduled_tasks",
+            scheduled_tasks::router(state.clone()),
+        )
         .nest("/api/v1/sessions", sessions::router(state.clone()))
         .nest(
             "/api/v1/subagent_runs",
