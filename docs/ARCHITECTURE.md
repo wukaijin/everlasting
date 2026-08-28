@@ -7,7 +7,7 @@
 
 ## 1. 系统架构
 
-> ✅ **当前状态(2026-08-20)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,无 `decisions.md`)。
+> ✅ **当前状态(2026-08-20)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,入口索引在 `decisions.md`)。
 >
 > 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
@@ -111,7 +111,7 @@
 
 ### 1.2 关键数据流:用户发一条消息(daemon 化后,默认 httpTransport)
 
-> 📌 **当前默认路径(Thin 模式)**:Frontend → `transport.invoke('chat', ...)`(`httpTransport`:fetch POST 到 daemon `/api/v1/chat`)→ daemon 进程的 axum 路由调同一份 `chat` handler → `chat_stream_with_tools()`(reqwest + 手写 SSE)→ `HttpSseSink`(`daemon/sse.rs`)经 `/api/v1/stream` 同源 SSE 广播 `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(`streamController.ts`,按 `request_id` 路由)→ Pinia store 增量更新。
+> 📌 **当前默认路径(Thin 模式)**:Frontend → `transport.invoke('chat', ...)`(`httpTransport`:fetch POST 到 daemon `/api/v1/chat`)→ daemon 进程的 axum 路由调同一份 `chat` handler → `chat_stream_with_tools()`(reqwest + 手写 SSE)→ `HttpSseSink`(`daemon/sse.rs`)经 `/api/v1/stream` 同源 SSE 广播 `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(`streamController.ts`,按 `request_id` 路由到对应 session 的 streamController,`chat-event` payload 自 2026-08-27 起回填 **`session_id`**,支持跨客户端(remote PWA)按 session 认领)→ Pinia store 增量更新。
 > 逃生路径(Full 模式 `?transport=tauri`):`tauriTransport` 走 Tauri IPC,handler 在 GUI 进程内,事件经 Tauri event emit。两条路径共享同一 `#[tauri::command]`/REST 双暴露 handler。
 >
 > 📌 **远程 PWA 语境(2026-08 remote epic)**:`httpTransport` 内部有第三态 **pwa-remote** —— 前端持有 `device_token` 时(`transport/auth.ts` 的 `isRemoteContext()`),请求自动加 `/api/v1/proxy` 前缀 + `Authorization: Bearer <device_token>`(`http.ts`),SSE 经 `/api/v1/stream?access_token=...`;请求先到云上 `everlasting-remote`,由它经 WSS 隧道反代到 PC daemon,远程 PWA 与本地 GUI / 浏览器共用同一 agent core(拓扑见 §1.1 形态 C)。
@@ -141,7 +141,7 @@
       → 触发 agent core
     agent core:
       构造 messages: [system_prompt + role + memory, ...history, new_user_msg]
-      // Skill 按 use_skill 触发时按需加载(详见 [ARCHITECTURE §2.2 第 ⑤a 关](#5a-资源加载-skill--memory--role))
+      // Skill 按 use_skill 触发时按需加载(详见 [ARCHITECTURE §2.5.12](#2512-⑤-memory-gov-指令块窗口治理2026-08-15-落地))
       while !done {
         stream = llm.stream(messages, tools)
         for chunk in stream {
@@ -219,9 +219,9 @@
 
 **决策偏差记录**:Phase 3(dogfooding)在 dogfooding 前置条件未满足时由 epic 直接启动完成 —— 见决策日志对应条目。
 
-### 1.6 近期落地特性(2026-08-14~25)
+### 1.6 近期落地特性(2026-08-14~28)
 
-> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量)+ F1 消息队列(2026-08-25)。横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)见 §2.5.10~15;本节按"用户可感知度"挑 4 个最显著的:**F1 消息队列 / B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool**。08-19~20 批次中最重的 **unified-context-budget(统一 token 预算 + 关卡⑤硬卡)** 见 §2.5.14。
+> 2 周密集落地 6 个跨层特性(C7 tools token / C7D stub / memory-gov / B1 image / D2 search / C3+ 压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量)+ 08-25~28 批(F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 / F3 并发闸 / F2·F2b 定时任务)。横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)见 §2.5.10~15;本节按"用户可感知度"挑最显著的:**F1 消息队列 / B1 image multimodal / D2 跨 session 搜索 / D2② agent search_history tool / F2 定时任务 / F6+F3 异步编排**。08-19~20 批次中最重的 **unified-context-budget(统一 token 预算 + 关卡⑤硬卡)** 见 §2.5.14。
 
 **F1 消息队列·用户连发档(2026-08-25 落地)**
 - 输入侧 gate:流式期间编辑器解锁(群聊保持锁定),所有发送统一入队经路由临界区分流(忙/闲同路径,详见 §1.2 [3]);后端 per-session 内存队列 `agent/message_queue.rs`(FIFO / uuid 寻址 / 上限 20)
@@ -252,6 +252,21 @@
 - `READONLY_TOOL_ALLOWLIST` 第 6 员(当时其他 5:`read_file` / `grep` / `glob` / `list_dir` / `web_fetch`;2026-08-25 F4 起 `web_search` 为第 7 员)
 - UI 卡片:`SearchHistoryCard` 4 态机(loading / empty / results / error),前端组件注册表新员
 - 完整设计:见 [ROADMAP.md §1.2 D2②](./ROADMAP.md) 行(2026-08-17 落地)
+
+**F2·F2b 定时任务(2026-08-28 落地,本地 cron 式)**
+- **调度内核**:`scheduler/` 模块,daemon 常驻 30s tick + CancellationToken 停机(GUI Full 零 timer 硬约束保持,调度仅 daemon 进程);**单一扫描算法**——每 tick 重算「自 `max(created_at, last_fired_at)` 以来最近到期点」,catch-up(停机补跑一次)与常规触发同一判定,落账记理论到期点 `due` 保证 interval 无相位漂移;同 session 每 tick 至多一 fire
+- **origin 载体链**:fire = 构造带 origin 的 user message 走 `chat_inner` 同源路径,`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控` 落 `messages.metadata.scheduled`(additive)——F1 队列「闲也入队」路由统一,消费者模式见 [pattern-message-queue-driver](../.trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md)
+- **F2b 调度模型扩展**:preset 6 档(固定时间类 daily/hourly/weekdays/monthly + 固定频率类 interval 单位换算成 every_min,纯 UI);结束条件 `max_runs` / `ends_at`(命中自动停用保留 + `completed` 审计,reason=max_runs/end_date);`run_count` 只计真正送入 chat_inner 的 fire(dedup 跳过不计数);ends_at 含当日(`due > ends_at` 判定,保 catch-up)
+- **管理面**:Settings 第 8 tab(建/编辑/启停/删),PWA 可用;前端「定时」chip(消息气泡 + 排队占位 + header 徽章)零 rehydrate 改动
+- **审计 / 开关**:`ScheduledTaskFired` 六动作(fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error)+ `scheduled_tasks_enabled` kill switch fail-open;`scheduled_tasks` 表双 FK 级联(见 [DEBUG_DB.md §2](./DEBUG_DB.md))
+- 完整设计:见 [ROADMAP.md §1.2 F2/F2b](./ROADMAP.md) 行(2026-08-28 落地);spec 见 [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)
+
+**F6 异步任务可观测性 + F3 全局并发闸(2026-08-27 落地)**
+- `SessionSummary.busy` 运行时 enrich(daemon 层单点 `list_sessions_inner`,双 transport 一致)→ 冷启动/跨端侧栏红点
+- 轮次终结跨 session toast(当前-session 抑制 + cancelled 抑制 + `turn_complete_notify_enabled` 开关)
+- **F3 最小档全局信号量 `max_concurrent_loops`**(缺省 4):spawn 闭包头 acquire 排队不拒绝,等闸取消完整回滚 claim 注册;Tauri 壳关闭确认(仅 `isTauriWebview`,Web/PWA 关闭不影响任务)
+- 零新表零 migration(跨重启终态复用 messages.status 恢复链);F1-C 移出归 F2(cron 消费者 08-28 已接入,LLM detached dispatch 仍开放)
+- 完整设计:见 [ROADMAP.md §1.2 F6](./ROADMAP.md) 行(2026-08-27 落地);spec 见 [pattern-global-loop-semaphore](../.trellis/spec/backend/agent-loop-architecture/pattern-global-loop-semaphore.md)
 
 ---
 
@@ -662,9 +677,10 @@ match tool_call.name {
 #### ⑭ 流式 token 输出(混合事件模式)
 
 **事件协议设计**:
-- **高频事件**(`chat-event`，payload 判别):`delta`(token)、`start`、`done`、`error`
+- **高频事件**(`chat-event`，payload 判别):`delta`(token)、`start`、`done`、`error`,以及后续加入的 `turn_continuation`(F1 08-25,续轮渲染边界)/ `turn_complete` / `turn_usage` / `budget_trim` / `recall` / `context_compacted` / `loop_hint` / `workflow_breadcrumb` / `retrying` / `file_injections` / `speaker`(群聊)等 —— 完整 kind 枚举见 `app/src-tauri/src/llm/types/event.rs`(~19 个变体)
   - 流式 token 频率高,走单 listener + payload.type 分发,减少 listener 注册开销
-- **低频事件**(独立事件名):`tool:call`、`tool:result`、`permission:ask`、`ui:render`
+  - **`session_id` 回填(2026-08-27)**:`chat-event` payload 自 `68f7cadc` 起带 `session_id`,非发起端(remote PWA)可跨客户端按 session 认领;向后兼容,老客户端忽略新字段
+- **低频事件**(独立事件名):`tool:call`、`tool:result`、`permission:ask`、`ui:render`、`tool:question`(Phase C3)、`mode:change:request`(07-07)、`task:state:transition:request`(07-09)、**`stream-resync`**(08-24,SSE 崩溃恢复哨兵——重连后前端据此重发 resync 请求,服务端重放缺失段)
   - 需要精确 filter 的场景用独立事件名,前端好做 `listen("tool:call")` 过滤
 
 ```
@@ -678,7 +694,7 @@ match tool_call.name {
 
 - **关键设计**:`ui_render` 不在 chat 流里走,单独的 UiCard 事件,前端用 component registry 渲染
 - **为什么混合模式**:高频 token 需要单 listener 低开销;低频 tool/permission 需要精确 filter。两种模式各取所长
-- **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成)
+- **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [ROADMAP §1.2 B9](./ROADMAP.md#12-路线图外完成);B9+ 后补通用 button + diff 应用(UiDiffApplied 审计)
 - **交错思考渲染(2026-07-23/24)**:前端按 run 分组 + contentBlocks 时间轴交错渲染(thinking/text/tool_use 按到达序),与 ⑦ 后端落库的真实流序对齐,见 [docs/INTERLEAVED-THINKING-DESIGN.md](./INTERLEAVED-THINKING-DESIGN.md)。
 
 #### ⑮ daemon 输出(HttpSseSink / Tauri event → client)
@@ -722,7 +738,7 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
-> **18+ 关卡**(原 16 关卡 + C7 stub / memory digest / C3+ compaction 3 个新横切关注点,详见 §2.5.10~13)在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION/decisions-2026-06.md / -07.md / -08.md](./IMPLEMENTATION/) 对应日期条目(按月分卷,无 `decisions.md`)。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
+> **18+ 关卡**(原 16 关卡 + C7 tools token / C7D stub / memory digest / C3+ compaction / unified-context-budget 硬卡 / MAX_TURNS 软卡 6 个新横切关注点,详见 §2.5.10~15)在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION/decisions-2026-06.md / -07.md / -08.md](./IMPLEMENTATION/) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
 
 ### 2.5 横切关注点:16 关之外但必做的事
 
@@ -799,7 +815,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
 - **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
 - **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
-- **27 类 AuditKind(2026-08-20 实测,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
+- **28 类 AuditKind(2026-08-28 实测,`ScheduledTaskFired` 为第 28 个,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
   - **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
   - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
   - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
@@ -809,6 +825,7 @@ agent loop 结束(text-only response or max_turns reached):
   - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
   - **Budget 域(1)**:ContextBudgetTrim(08-19 关卡⑤硬卡裁剪,unified-context-budget)
   - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
+  - **Scheduler 域(1)**:ScheduledTaskFired(F2 08-28,动作 fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error)
   - 实现位置:`app/src-tauri/src/agent/permissions/audit.rs`;落表点见各 variant 注释 + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) 各月 ADR
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
