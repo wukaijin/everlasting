@@ -310,7 +310,9 @@ function onRetryClick(): void {
   display: inline-flex;
   align-items: center;
   align-self: flex-end;
-  margin-top: 4px;
+  /* 2026-08-29 ui-visual-polish r2:4px→2px,贴住气泡右下角,
+     消除"悬空小字"观感(位置结构是 ADR-2 决定,不动)。 */
+  margin-top: 2px;
   padding: 0 6px;
   font-size: var(--text-xs);
   font-family: var(--font-mono);

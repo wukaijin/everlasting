@@ -1163,7 +1163,11 @@ const messageImages = computed<
 .msg {
   display: flex;
   flex-direction: column;
-  max-width: 75%;
+  /* 2026-08-29 ui-visual-polish r2:75% 在宽屏(≥1227px 列宽)下放不出
+     可读行长,同为盒型卡片的摘要卡与回复气泡右缘能差出 350px+。统一
+     收进 min(75%, 920px) 列宽:窄屏行为不变(75% 先生效),宽屏两种
+     卡片右缘一致,行长 ≤ ~110ch。 */
+  max-width: min(75%, 920px);
   /* C3 摘要行:整行(含 user 气泡变体)都换系统样式行,不受
      max-width 约束 —— 居中、窄、低调。 */
   .msg-compact-summary {
@@ -1592,14 +1596,19 @@ const messageImages = computed<
   line-height: 1.3;
 }
 
+/* 2026-08-29 ui-visual-polish r2:标题层级压平。气泡字号 14px 基准下
+   旧 h1=1.4em(19.6px)比会话页头标题(--text-lg 16px)还大,消息内
+   标题倒挂页面层级;现在 h1≈17.5 / h2≈16 / h3≈14.7 / h4=14,全部
+   不超过页头一档以上。margin 节奏(16/4)不动 —— 那是四处镜像的
+   契约块,见 .trellis/spec/frontend/chat/message-list-and-markdown.md §2。 */
 .msg__markdown :deep(h1) {
-  font-size: 1.4em;
-}
-.msg__markdown :deep(h2) {
   font-size: 1.25em;
 }
+.msg__markdown :deep(h2) {
+  font-size: 1.15em;
+}
 .msg__markdown :deep(h3) {
-  font-size: 1.1em;
+  font-size: 1.05em;
 }
 .msg__markdown :deep(h4) {
   font-size: 1em;
