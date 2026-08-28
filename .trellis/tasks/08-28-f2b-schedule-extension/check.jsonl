@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门:clippy -D warnings / fmt / test_pool 禁手写"}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "核验既有定案未被破坏(落账记 due/单一扫描/审计动作)+ 新语义(结束条件)已收录"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验加列迁移幂等"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "核验新下拉遵守 reka 硬约束"}

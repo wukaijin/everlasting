@@ -1,6 +1,7 @@
 # Scheduled Tasks(F2 定时任务)— 执行契约
 
-> 任务源:`.trellis/tasks/08-28-f2-scheduled-tasks/`(2026-08-28,经两道外部评审)。
+> 任务源:`.trellis/tasks/08-28-f2-scheduled-tasks/`(2026-08-28,经两道外部评审);
+> F2b 调度模型扩展(三新档位 + 结束条件)任务源 `08-28-f2b-schedule-extension/`。
 > 本文件是 F2 的 code-spec:调度判定语义、origin 载体链、wire 契约、错误矩阵。
 > 实现在 `app/src-tauri/src/scheduler/` + `db/scheduled_tasks.rs` + `commands/scheduled_tasks.rs`。
 
@@ -27,6 +28,10 @@ pub enum ScheduleSpec {
     Daily { at: String },          // "HH:MM"
     Interval { every_min: u32 },
     Weekly { weekday: Weekday, at: String },
+    // F2b 三新档(08-28-f2b-schedule-extension prd D7):
+    Hourly { minute: u32 },        // 每小时第 minute 分钟(0-59)
+    Weekdays { at: String },       // 每工作日(周一至五,无节假日日历)
+    Monthly { day: u32, at: String }, // 每月 day 号;短月无该日 → 跳过该月
 }
 
 // origin 载体链(四点一线,全部 Option/additive)
@@ -46,7 +51,10 @@ CREATE TABLE scheduled_tasks (
   created_by TEXT NOT NULL DEFAULT 'user',
   created_at INTEGER NOT NULL,
   last_fired_at INTEGER,                           -- NULL = 从未触发
-  next_fire_at INTEGER NOT NULL                    -- 纯 UI 展示,不参与触发判定
+  next_fire_at INTEGER NOT NULL,                   -- 纯 UI 展示,不参与触发判定
+  run_count INTEGER NOT NULL DEFAULT 0,            -- F2b 已 fire 次数(dedup 跳过不计)
+  max_runs INTEGER,                                -- F2b 次数上限;NULL = 不限
+  ends_at INTEGER                                  -- F2b 结束日期 epoch ms;NULL = 不限(含当日)
 );
 
 // wire:POST /api/v1/scheduled_tasks/{list|create|update|delete}_scheduled_tasks
@@ -62,9 +70,33 @@ CREATE TABLE scheduled_tasks (
 - **disable→enable 不补跑**:`update_scheduled_task` false→true 时 `last_fired_at = now`。语义分界:daemon 停机是**非自愿**(补跑一次);显式禁用是**用户主动**(不补)。
 - **metadata.scheduled 信封**(前端「定时」标识的依据):persist 时并入 messages.metadata,三键 `{task_id, task_name, fired_at}`;与既有 `injections`/`attachments` 并列,**不放宽 FileInjections 事件门控**(纯定时轮不发空载荷事件)。
 - **fire 正文**:prompt + 注脚 `（本条由定时任务「{name}」于 {YYYY-MM-DD HH:MM} 自动触发）`(全角,模型日期上下文)。
-- **审计**:`AuditKind::ScheduledTaskFired`(`"scheduled_task_fired"`),payload `{task_id, task_name, action[, reason]}`,action ∈ `fired | catchup | skipped_dedup | skipped_queue_disabled | lost | error`;turn_seq 传 None;`lost` 仅覆盖两处 Stop 语义清队点(驱动器 cancel break + Stop 命令),破坏性清理(delete_session 等)不审计。
+- **审计**:`AuditKind::ScheduledTaskFired`(`"scheduled_task_fired"`),payload `{task_id, task_name, action[, reason]}`,action ∈ `fired | catchup | skipped_dedup | skipped_queue_disabled | lost | error | completed`(F2b);turn_seq 传 None;`lost` 仅覆盖两处 Stop 语义清队点(驱动器 cancel break + Stop 命令),破坏性清理(delete_session 等)不审计。
 - **queue-disabled gate**:`message_queue_enabled=false` 时 fire 跳过并审计(legacy 分支对忙 session 是 cancel+replace 语义,会砍在跑轮)。
 - kill switch `app_config` `scheduled_tasks_enabled`:fail-open(仅字面 `"false"` 关)。
+
+### F2b 扩展契约(08-28-f2b-schedule-extension)
+
+**档位回看/前看窗口**(`most_recent_due` 回看 / `next_fire_display` 前看,全部经 `local_at` 的 DST 防御 —— 春令时不存在的时刻 → `None` 跳过,秋令时重复取较早):
+
+| 档位 | 窗口 | 说明 |
+|---|---|---|
+| daily | 0..=1 天 | |
+| weekly | 0..=7 天 | 跳过非目标 weekday |
+| hourly | 0..=2 个墙上钟点 | 第 2 个是 DST 跳过余量 |
+| weekdays | 0..=3 天 | 跳过 Sat/Sun(周一最远命中周五) |
+| monthly | 0..=2 个月 | `from_ymd_opt` 无效(短月无 29/30/31)→ **跳过该月**(prd D7,cron 语义;day=31 在 3 月初要回看到 1 月) |
+
+- **interval 单位是纯 UI 换算**:「每 N 小时/天/周」在前端换算成 `every_min`(时 60 / 天 1440 / 周 10080,整除无精度损失),后端与存库只有分钟粒度,网格判定零改动。
+
+**结束条件(`max_runs` / `ends_at` 两列对所有档位通用,UI 按类型限定展示 —— 固定时间只出次数、固定频率只出日期,prd D10)**:
+
+- **run_count 只计真正送入 chat_inner 的 fire**(Queued/Started/Error 三种落账结局 +1);**dedup 跳过不计**(prompt 未送达,仅消费 due 点)。
+- **tick 四道 gate**(顺序即代码序):① `run_count >= max_runs`(若设)→ 完成;② `ends_at` 已过且窗口内无未消费 due → 完成;③ 算出 due 后 `due > ends_at`(若设)→ 不 fire 且完成 —— 反之 `due <= ends_at` 照常 fire(**含 catchup,结束日当天仍触发**,prd D9,ends_at = 指定日 23:59:59.999 本地);④ fire 落账后 `run_count+1 >= max_runs` 或 `next_fire_display(due) > ends_at` → 即时完成。
+- **完成 = `mark_task_completed`(仅置 enabled=0)+ `completed` 审计**(reason = `max_runs` / `end_date`);enabled=0 即出扫描集,completed 审计天然只发一次。任务保留在列表(UI「已完成 N/M」「已结束」),不自动删除(prd D8)。
+- **重新启用(enabled false→true)重置 `run_count = 0` + `last_fired_at = now`**(与 F2「重启用不补跑」同一语义:用户主动重启 = 重新计次)。
+- **wire 的 update 双层 Option**:daemon DTO 用 serde double-option 反序列化(`#[serde(default)]` + `map(Some)` helper)—— 字段缺省 = 不动,显式 `null` = 清空为不限,数值 = 写入。前端 update 恒显式带 `maxRuns`/`endsAt`(null 清空),避免切换结束方式后旧值残留。
+- **ends_at 判定用 due 不是 now**:停机跨 ends_at 重启后,窗口内未消费且 `<= ends_at` 的 due 仍补跑一次(Bad 案例:「用 now > ends_at 直接判死」会让 catch-up 语义失效)。
+- 校验矩阵新增:`max_runs < 1` / `ends_at <= now`(create 与 update 显式写入)→ 400 中文错误。
 
 ### 4. Validation & Error Matrix
 
@@ -82,7 +114,7 @@ CREATE TABLE scheduled_tasks (
 
 - **Good**:daily@09:00 任务,daemon 08:00–09:30 停机 → 重启首 tick `most_recent_due` 命中 09:00 → fire 一次,`action=catchup`,下一到期点明天 09:00。
 - **Base**:interval 30min 正常运行 → 相邻 due 间隔恒等 30min(tick 30s 量化误差不进入下一周期);同 session 双任务同 tick → 第二个顺延下 tick 独立一轮,两条 prompt 各自落库。
-- **Bad**(禁止出现):catch-up 独立 pass 与常规扫描同 tick 各 fire 一次;落账记 now;dedup 前移用 now;enable 后补跑停用期;`QueuedMessage` 加非 Option 破坏性字段。
+- **Bad**(禁止出现):catch-up 独立 pass 与常规扫描同 tick 各 fire 一次;落账记 now;dedup 前移用 now;enable 后补跑停用期;`QueuedMessage` 加非 Option 破坏性字段;**F2b:dedup 跳过也计 run_count(prompt 未送达);ends_at 用 `now > ends_at` 判死而非 `due > ends_at`(会让跨 ends_at 停机的 catch-up 补跑失效);完成审计走独立定时扫描而非 tick gate(会与 enabled=0 竞态重复发)**。
 
 ### 6. Tests Required
 
@@ -91,6 +123,7 @@ CREATE TABLE scheduled_tasks (
 - tick 集成(`scheduler/tests_tick.rs`):fired/catchup 动作 + 落账 ≈ due(容差断言,记 now 会偏差一个 tick)、deferral(顺延者 last_fired_at 不动)、去重/消费后放行、kill switch、queue-disabled、error reason、Started 不记 uuid。
 - origin 全链(`tests_message_queue.rs` / `tests_lost.rs`):`scheduled_origin_persists_scheduled_metadata`(MockProvider 端到端断言三键 + 无 FileInjections + 对照组 metadata None)、lost 正负向、**多 drain 钉现状**(RULE-QUEUE-001 根治前防漂移)。
 - parity:`daemon/routes/scheduled_tasks.rs` Router oneshot——CRUD roundtrip(含缺省新建专用 session 分支)+ 校验矩阵全臂。
+- **F2b**:compute 三新档的窗口边界 + 两函数互相一致 + monthly 短月跳过(day=31 回看两月);db 的 mark_fired 计数语义(count_fire bool)/ mark_task_completed 只翻 enabled / update 双层 Option(缺省≠null)/ 重启用清零;tick 的四道 gate(max_runs 达限完成恰好审计一次、due>ends_at 不 fire、ends_at 含当日 fire 后完成、dedup 不计数);route 的 end-condition roundtrip(monthly 档过 wire、显式 null 清空、max_runs=0 与过去 ends_at 400);前端 format/store/tab(单位换算、结束条件 args 形状、完成态徽章)。
 
 ### 7. Wrong vs Correct
 

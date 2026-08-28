@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "F2 执行契约:判定语义/落账记 due/审计动作枚举——本任务在其上 additive 扩展,不得破坏既有定案"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "scheduled_tasks 加列迁移守则(幂等重放/IF NOT EXISTS/columns.rs probe 先例)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "commands/scheduled_tasks.rs 新参数校验的 AppCommandError 模式"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "AuditKind 动作扩展惯例(completed 新动作)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "clippy 零告警 / test_pool 等强制约定"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend spec 索引入口"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "档位/单位下拉的 reka Select 硬约束(空串禁止/undefined 未选/Portal :deep)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 类型扩展与 wire 形状约定"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "无新 command,CMD_TO_DOMAIN 不动的核验依据"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "表单新增字段需过 320-430px 断点"}
