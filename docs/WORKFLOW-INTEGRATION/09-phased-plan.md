@@ -1,8 +1,10 @@
 ## 9. 分阶段实施计划
 
 > 排期归 [ROADMAP.md](../ROADMAP.md)。本节是**功能落地依赖拓扑**,每阶段独立可验证。
+>
+> **状态(2026-08-28 同步)**:Phase 0-2 已全部落地(workflow_enabled / builtin dev+review plugin / load_workflow / delegation 模板 / checklist 同步,见 [ROADMAP §1.2 B8 行](../ROADMAP.md#12-路线图外完成));Phase 3 半完成(Rust 固定 hook 已落地,spec 蒸馏为 hook-stub + wf-update-spec skill 兜底);Phase 4+ 仍为愿景。
 
-### Phase 0:engine 骨架(state 注入 + workflow 开关)
+### Phase 0:engine 骨架(state 注入 + workflow 开关)✅ 已落地(07-08~10)
 
 **目标**:workflow 开关 + state machine + breadcrumb 注入跑通,验证"agent 读 breadcrumb 改变行为"。
 
@@ -16,7 +18,7 @@
 
 **完成标准**:开 workflow → agent 自动起 task 写 task.json → 推进 state(用户确认)→ breadcrumb 随 state 变化可见。
 
-### Phase 1:skill 规范包 + plugin skill loader
+### Phase 1:skill 规范包 + plugin skill loader ✅ 已落地
 
 **目标**:"规范"落地,agent 知道"标准做法";plugin skill 加载路径就位(避免 Phase 2 迁移债,M4 决定4选 b)。
 
@@ -26,7 +28,7 @@
 
 **完成标准**:进 workflow 时 agent use_skill wf-overview 建立全局意识;planning state agent use_skill wf-brainstorm;各 skill body 被读到。
 
-### Phase 2:plugin 外置 + sub-agent 角色 + 上下文注入
+### Phase 2:plugin 外置 + sub-agent 角色 + 上下文注入 ✅ 已落地
 
 **目标**:engine/content 真分离;调研/实施/验收真分工;worker 看得到 artifact。
 
@@ -39,7 +41,7 @@
 
 **完成标准**:改 workflow.json 能改流程;planning 只派 researcher;worker 收到的 delegation 带 task meta + 角色模板框架;checklist items 跨 session 持久(task.json)。
 
-### Phase 3:hook + 沉淀闭环
+### Phase 3:hook + 沉淀闭环 🟡 半完成(08-28)
 
 **目标**:task done 自动沉淀 spec;长跑积累项目规范。
 

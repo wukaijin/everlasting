@@ -38,7 +38,7 @@
 
 **按场景速查**:
 - **第一次接触**:CLAUDE.md → DESIGN.md → ROADMAP.md → ARCHITECTURE.md(看"做什么 / 不做 / 当前在哪步 / 怎么搭")
-- **写代码时反复查**:ARCHITECTURE.md §2 16 关卡 / TECH.md 选库 / IMPLEMENTATION/decisions.md ADR
+- **写代码时反复查**:ARCHITECTURE.md §2 18+ 关卡 / TECH.md 选库 / IMPLEMENTATION/decisions.md ADR
 - **评估新功能**:BACKLOG.md §0 五层架构 → 对应章节
 - **撞环境/API 怪事**:HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md / `.trellis/spec/frontend/state-management.md`
 
