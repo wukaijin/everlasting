@@ -37,7 +37,7 @@ import { useProjectsStore } from "../stores/projects";
 import { useStreamControllerStore } from "../stores/streamController";
 import { usePermissionsStore } from "../stores/permissions";
 import { useQuestionCardsStore } from "../stores/questionCards";
-import { COLOR_PALETTE, colorTagHex, hexToRgba } from "../utils/colorTag";
+import { COLOR_PALETTE, colorTagForName, colorTagHex, hexToRgba } from "../utils/colorTag";
 import {
   BUCKET_LABELS,
   BUCKET_ORDER,
@@ -385,6 +385,16 @@ function projectNameFor(s: SessionSummary): string {
   return p?.name ?? "无标题";
 }
 
+/* 2026-08-29 ui-visual-polish r3:会话点从全员同色绿(--color-tool-write,
+   纯装饰,F6 后 busy 信号已移至流光边框)改为按项目着色 —— 同项目一色,
+   扫一眼可分辨会话归属;用户显式 color_tag 优先于项目推导色。active 项
+   返回 undefined,保留 accent 选中语义(CSS 类默认底)。 */
+function sessionDotStyle(s: SessionSummary): { background: string } | undefined {
+  if (s.id === store.currentSessionId) return undefined;
+  const hex = colorTagHex(s.color_tag ?? colorTagForName(projectNameFor(s)));
+  return hex ? { background: hex } : undefined;
+}
+
 function onClick(id: string) {
   if (editingId.value === id) return;
   void store.switchSession(id);
@@ -513,7 +523,11 @@ watch(() => props.searchActive, (active) => {
           </span>
         </div>
       </div>
-      <span class="session-item__dot" aria-hidden="true" />
+      <span
+        class="session-item__dot"
+        aria-hidden="true"
+        :style="sessionDotStyle(s)"
+      />
       <button
         class="session-item__delete btn btn--ghost btn--icon"
         title="删除"
@@ -600,7 +614,11 @@ watch(() => props.searchActive, (active) => {
                 </span>
               </div>
             </div>
-            <span class="session-item__dot" aria-hidden="true" />
+            <span
+              class="session-item__dot"
+              aria-hidden="true"
+              :style="sessionDotStyle(s)"
+            />
             <button
               class="session-item__delete btn btn--ghost btn--icon"
               title="删除"

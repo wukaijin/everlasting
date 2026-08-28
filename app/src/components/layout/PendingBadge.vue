@@ -79,6 +79,9 @@ function onClick(): void {
    药丸 + text-2xs + tabular-nums + 脉冲圆点),主体是 badge 样式而
    非按钮样式 —— 最小家族档 btn--sm(4px 8px + text-xs)也会撑大它,
    且 accent 18% 徽章底与家族变体语义不合,整块保留本地。 */
+/* 2026-08-29 ui-visual-polish r3:底色 18%→10%、hover 30%→22% ——
+   全局常驻徽标原先是首屏饱和度最高的元素,比用户气泡还抢;降一档后
+   仍靠脉冲圆点 + accent-text 保住"有待处理"的 Alerts 语义。 */
 .pending-badge {
   align-self: center;
   display: inline-flex;
@@ -88,7 +91,7 @@ function onClick(): void {
   padding: 2px 9px;
   border: none;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
   color: var(--color-accent-text);
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
@@ -99,7 +102,7 @@ function onClick(): void {
 }
 
 .pending-badge:hover {
-  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 .pending-badge__dot {

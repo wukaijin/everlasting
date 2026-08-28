@@ -30,3 +30,17 @@ export function hexToRgba(hex: string, alpha: number): string {
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
+
+/**
+ * Deterministic palette index for a free-form name (project name,
+ * group-chat speaker…). djb2 → 0-7: same name = same color across
+ * reloads, no DB lookup. 2026-08-29 ui-visual-polish r3 收拢:此实现
+ * 从 messageTimeline.ts 的 speakerAccentOf 内联块上移,供多处共用。
+ */
+export function colorTagForName(name: string): ColorTagIndex {
+  let h = 5381;
+  for (let i = 0; i < name.length; i++) {
+    h = ((h << 5) + h + name.charCodeAt(i)) >>> 0;
+  }
+  return (h % COLOR_PALETTE.length) as ColorTagIndex;
+}

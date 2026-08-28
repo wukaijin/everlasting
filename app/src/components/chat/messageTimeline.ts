@@ -3,7 +3,7 @@
 
 import type { ChatMessage, ThinkingBlockInfo } from "../../stores/chat.types";
 import { renderMarkdown } from "../../utils/markdown";
-import { COLOR_PALETTE } from "../../utils/colorTag";
+import { colorTagForName } from "../../utils/colorTag";
 
 // ---------------------------------------------------------------------------
 // 交错思考(interleaved thinking): 按 LLM 真实流式到达顺序排列
@@ -103,13 +103,8 @@ export function speakerAccentOf(message: ChatMessage): string {
   const s = message.speaker;
   if (!s) return ""; // v-if guard — not rendered
   if (s === "moderator") return "neutral";
-  // djb2 hash → 0..7 palette index
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  }
-  const idx = h % COLOR_PALETTE.length;
-  return `palette-${idx}`;
+  // djb2 hash → 0..7 palette index(实现在 utils/colorTag 共享)
+  return `palette-${colorTagForName(s)}`;
 }
 
 export function showSpeakerChipFor(message: ChatMessage): boolean {
