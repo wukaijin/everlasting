@@ -61,6 +61,26 @@ Cmd+K 一键检索全部历史会话，agent 也能自己搜。
 </tr>
 </table>
 
+## 手机远程（Remote）
+
+agent 跑在你家电脑上，出门用手机浏览器就能继续操作——手机不用装 App，打开网页即用：
+
+```
+手机浏览器 (PWA)
+      │  HTTPS
+      ▼
+云端中继 everlasting-remote   ← 只转发,不存你的数据
+      │  WSS 加密隧道
+      ▼
+你家的 PC daemon (agent core) ← 数据 100% 留在本机
+```
+
+- **手机端**：PWA 壳（配对码绑定 / 节点列表 / 远程聊天），无需安装
+- **安全**：配对码 60 秒一次性 + 设备令牌 + HTTPS；中继只转发，不持文件、不存 agent 数据
+- **本地零依赖**：中继或网络断了，桌面 / 浏览器照常用，不互相影响
+
+> 部署云中继 / 配手机 / 端到端验收见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md) + [docs/REMOTE-DEPLOY.md](./docs/REMOTE-DEPLOY.md)。
+
 ## 快速开始
 
 **前提**：
