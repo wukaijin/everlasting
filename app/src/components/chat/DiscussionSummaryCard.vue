@@ -143,20 +143,20 @@ const pending = computed<boolean>(() => !props.result);
   font-weight: var(--weight-semibold);
 }
 
+/* 镜像 MessageItem .msg__markdown 的 chip/pre 节奏(2026-08-29
+   ui-visual-polish r1:去描边只留底色,padding +1px 补高度)。 */
 .discussion-summary__body :deep(code) {
   font-family: var(--font-mono);
   font-size: 0.9em;
-  padding: 1px 5px;
+  padding: 2px 5px;
   border-radius: 3px;
   background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
-  border: 1px solid var(--color-bg-border-strong);
 }
 
 .discussion-summary__body :deep(pre) {
   margin: var(--space-2) 0;
   padding: 10px 12px;
   background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-  border: 1px solid var(--color-bg-border-strong);
   border-radius: var(--radius-md);
   overflow-x: auto;
   line-height: 1.45;

@@ -186,7 +186,7 @@ function onSearchClear() {
         aria-label="设置"
         @click="onSettingsClick"
       >
-        <Icon name="cog-6-tooth" :size="18" />
+        <Icon name="cog-6-tooth" :size="20" />
         <span class="sidebar__settings-label">设置</span>
       </button>
     </div>
@@ -319,12 +319,15 @@ function onSearchClear() {
   justify-content: flex-start;
 }
 
-/* 08-24 btn-family:设置入口由 ghost·sm 家族承载;本地保留 mono 字体
-   与紧凑横向 padding(原裸 border-radius: 3px 删,落家族 radius-sm)。 */
+/* 08-24 btn-family:设置入口由 ghost·sm 家族承载;本地保留 mono 字体。
+   2026-08-29 ui-visual-polish r1:用户反馈"设置和 icon 感觉小了" ——
+   在 btn--sm 基础上加大一档:icon 18→20、字号 xs→sm、padding 4/6→6/10,
+   footer 常驻入口要有可点的体量。 */
 .sidebar__settings {
-  gap: 6px;
+  gap: var(--space-2);
   font-family: var(--font-mono);
-  padding: 4px 6px;
+  padding: 6px 10px;
+  font-size: var(--text-sm);
 }
 
 .sidebar__settings-label {

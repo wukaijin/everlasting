@@ -1639,17 +1639,18 @@ const messageImages = computed<
   font-style: italic;
 }
 
+/* 2026-08-29 ui-visual-polish r1:行内 chip 去 1px 描边只留底色 ——
+   描边 chip 是深色浮面线噪声的主要来源之一;padding +1px 补回高度。 */
 .msg__markdown :deep(code) {
   font-family: var(--font-mono);
   font-size: 0.9em;
-  padding: 1px 5px;
+  padding: 2px 5px;
   border-radius: 3px;
   background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
-  border: 1px solid var(--color-bg-border-strong);
 }
 
 /* 08-26-f5-verify-followups P2: user 气泡内 @token 引用标识。基座复用
-   上面 code 的 chip 形状(mono / padding / radius / 边框),只把配色切
+   上面 code 的 chip 形状(mono / padding / radius),只把配色切
    到 read 家族 —— 与输入框 cm-token-file chip、TriggerMenu 文件项的
    source chip 同一套 color-mix 配比,"用户引用了一个文件"在发送后仍
    可辨。break-all:窄屏长路径可断行,不撑破气泡。 */
@@ -1657,15 +1658,16 @@ const messageImages = computed<
   color: var(--color-tool-read);
   font-weight: var(--weight-semibold);
   background: color-mix(in srgb, var(--color-tool-read) 12%, transparent);
-  border-color: color-mix(in srgb, var(--color-tool-read) 40%, transparent);
   word-break: break-all;
 }
 
+/* 2026-08-29 ui-visual-polish r1:pre 去描边,靠 6% 白 mix 底与
+   elevated 气泡的明度差分层 —— 卡片内"边框套边框"的双线感消掉,
+   嵌套结构不再需要两道线。 */
 .msg__markdown :deep(pre) {
   margin: var(--space-2) 0;
   padding: 10px 12px;
   background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-  border: 1px solid var(--color-bg-border-strong);
   border-radius: var(--radius-md);
   overflow-x: auto;
   line-height: 1.45;
@@ -1705,19 +1707,29 @@ const messageImages = computed<
   font-size: 0.95em;
 }
 
+/* 2026-08-29 ui-visual-polish r1:表格去全网格 → 只留水平分隔线。
+   竖线在深色浮面上是线噪声主源;表头下沿 border-strong 定列界,
+   行间 50% border-strong(纯 --color-bg-border 在 elevated 气泡上只差
+   4 个亮度单位,不可见 —— 旧全网格版因此被迫用 border-strong)。
+   padding 4/8 → 5/10 补回网格线消失后的呼吸感。 */
 .msg__markdown :deep(th),
 .msg__markdown :deep(td) {
-  /* Stronger border color than --color-bg-border because table cells
-     sit on --color-bg-elevated (the bubble) and the regular border
-     reads as invisible (only 4 luminance units of separation). */
-  border: 1px solid var(--color-bg-border-strong);
-  padding: 4px 8px;
+  padding: 5px 10px;
   text-align: left;
 }
 
 .msg__markdown :deep(th) {
-  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-bg-border-strong);
   font-weight: var(--weight-semibold);
+}
+
+.msg__markdown :deep(td) {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--color-bg-border-strong) 50%, transparent);
+}
+
+.msg__markdown :deep(tr:last-child td) {
+  border-bottom: 0;
 }
 
 /* S6a 消息气泡移动端微调(08-13-mobile-chat-view)。prd A5/C3:窄屏下大段
