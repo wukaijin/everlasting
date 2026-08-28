@@ -83,6 +83,56 @@
 - **偏差记录**:① `preserved_region_and_question_survive_across_requests` 断言一度过严(要求缺席非空文本行最大 seq == cutoff,但被压区末组可能是空 text 的工具配对)——修为"边界行在 DB + 缺席最大非空 seq ≤ cutoff";② live 烟测未跑(catalog 无超线长 session 现场,需真机重编 daemon 后构造),AC1/AC2 的 live 半边留待;③ 全量测试 1 个预存 flaky(`dispatch_main guard` 满并发超时,单发 0.56s 过,基线同挂)。
 - 任务:`08-18-llm-context-compaction`(已归档)。spec:agent-loop-architecture "pattern-llm-compaction" + database-guidelines "compaction_summary" + token-usage-tracking "摘要旁路 usage"。后续任务:MAX_TURNS 软卡化 / 手动 `/compact` / handoff 接力(已立项)。
 
+### 2026-08-14 — C7 tools[] 上下文 token 治理 + C7D tools Stub 注册(渐进式披露)
+
+- **Context**:`tools[]` 数组是与 messages 并列的上下文治理对象(省窗口预算,provider 无关;cache 断点只省钱不省窗口)。live 实测 tools_token=6773 / context_input=17602 = **38.5%**,远超 15% 触发线。
+- **决策 — R1 度量先行,先量后裁**:`turn_tool_defs` freeze 后对 post-filter ToolDef JSON 跑 cl100k,落 `turn_trace.tools_token` 新列(幂等 migration helper + `upsert_turn_trace_token` 扩参);占比口径 = tools_token / context_input,**不 double-count**(context_input 已含 tools)。
+- **决策 — R2(Anthropic cache 断点)不做**:relay 实测 `cache_creation=0` 零收益,等原生 Claude provider;D(Stub 注册)触发线 = tools 占窗口 >15%。
+- **决策 — R3 静态裁剪**:`filter_tools_for_session_type` 经典聊天砍群聊专属 `nominate_speaker`/`end_discussion`(~465 tok/轮);drive.rs 过滤链第三环 mode→workflow→session_type。
+- **决策 — C7D 原地 stub 替换 + 元工具按需取回**:`STUB_CANDIDATES` 大 schema 工具首轮原地替换为 stub(真名 + 一句话摘要 + 宽松外壳),另注册常驻 `load_tool_schemas` 元工具取回完整契约;session 粘性 `StubRegistry`(loaded-set,`delete_session` 清空);gate = `tools_stub_enabled` && 非 worker && 非群聊(群聊白名单语义 / worker 自主可靠性豁免)。live 两轮复验:tools_token 6773→**3677**(-45.7%),AC1 阈值 3000→3700 校准。
+- 任务:`08-14-c7-tools-token-governance` / `08-14-c7d-tools-stub-registration`(均 archive)。spec:`token-usage-tracking §C7` + `tool-contract`。
+
+### 2026-08-15 — memory-gov memory 指令块窗口治理(WP1 度量 + WP2 分级注入 digest)
+
+- **Context**:C7D 后 memory 指令块(CLAUDE.md/AGENTS.md 4 层,~7-8k ≈ 42%)反超为上下文最大头。
+- **决策 — WP1 度量与 tools_token 同契约**:`turn_trace.memory_token` 列(幂等 backfill,同 Done 写点/同 upsert);init.rs 对实际注入 blocks cl100k 估算经 `LoopInit`→`drive_turn` 落库。
+- **决策 — WP2 分级注入(同构 C7D 渐进披露)**:`memory/digest.rs` fence-aware 切节 + 目录(标题+首句,纯机械);tier = AGENTS.md(primary)永不 digest / CLAUDE.md(reference)且 tokens>600 才 digest;`load_memory_sections` 元工具按需取回(banner label 命名空间寻址);粘性 `MemoryDigestRegistry`(OnceLock 单例,`delete_session_inner` 清理);gate `memory_digest_enabled`(缺省 on,fail-open)&& !worker && !群聊。
+- **live 实测(08-15)**:memory 10124→**2080**(-79.5%,占首轮 72%→28%),首轮 context 14079→7421(**-47%**);双轮 cache 率 99.8% vs off 99.7% 不劣化。
+- 任务:`08-15-memory-block-governance`。spec:`memory/decisions` + `token-usage-tracking`。
+
+### 2026-08-17 — D2② Agent 驱动 `search_history` tool
+
+- **Context**:D2① 用户驱动搜索落地后,agent 侧检索同库但复用 DB 层即可,不经 IPC。
+- **决策 — 薄封装复用 `db::search::search_messages` SQL 层**:`tools/search_history.rs` 零 SQL/IPC/前端改动;`{query, scope: all|current_project, limit≤50}` → 紧凑一行一 hit 文本。权限链零改动(`ToolKind::Other` Tier 5 silent Allow);`READONLY_TOOL_ALLOWLIST` 第 6 员。
+- **决策 — 新工具先评估扩 STUB_CANDIDATES 守则**:search_history 非 C7D stub 候选但注册 +178 tok → C7D AC1 预算线二次校准 3700→3900。
+- 任务:`08-17-cross-session-search`(与 D2① 同任务)。spec:`tool-contract/15-search-history`。前端专属卡片 `08-17-search-history-card`。
+
+### 2026-08-19 — unified-context-budget 统一 token 预算 + MAX_TURNS 软卡 + 手动 /compact + handoff
+
+- **Context**:C7/memory-gov/B1 切片齐备,但缺统一预算收口;去硬卡前提是上下文可语义无损续(C3+ 已具备)。
+- **决策 — WP1 度量补齐三切片**:`turn_trace` 新列 `at_files_token`(@文件注入体,span 寻址单一定义)/ `system_token`(system prompt 体 + skill-listing 合成消息)/ `context_window`(请求时窗口快照,前端预算行分母)。
+- **决策 — 压缩口径统一切换为"发送部件加法"**:触发线 / 摘要 postcheck / 机械 compact 三处全用 `estimate_request_tokens`(system + tools_json + messages),修复旧口径只数 messages 漏计 tools/system 的洞;归因切片与总量**永不互相加计**。
+- **决策 — WP2 硬卡引擎**:`BUDGET_LINE_RATIO=0.95`×window 触发静默裁剪,裁尽仍超才 fail-fast;触发落 `AuditKind::ContextBudgetTrim`。
+- **决策 — MAX_TURNS 软卡**:撞线不再无条件硬停,改 QuestionStore 询问(继续 +200 / 压缩后续跑(`force_compaction=true`,trigger_label="softcap")/ 停止,10 分钟超时兜底);break 门 = `effective_is_worker || group_chat_state.is_some()`(worker 有 C1 resume、群聊 speaker 段保持硬卡,漏群聊门会让 tool_use 结尾的 speaker 轮挂满超时)。新增 `AuditKind::TurnLimitSoftcap`;前端复用 `AskUserQuestionCard` 浮动卡(`tool_use_id` 前缀 `turn_limit_softcap_{turn}`,**绝不能 tag 成 `Question`**)。
+- **决策 — 手动 /compact**:空闲期(loop 非活跃)主动触发 LLM 摘要压缩,替代"只能等触发线自动压";`CompactResult.method`(Summary/Mechanical/None)观测;`summary_usage` 不混入 `update_last_turn_usage`。
+- **决策 — handoff 跨 session 接力**:C3+ 的 handoff 前缀落地为产品功能,接力摘要带进下一 session + 修复 HUD 按 session 隔离(接力状态不再串 session)。
+- 任务:`08-19-unified-context-budget` / `08-18-max-turns-softcap` / `08-18-manual-compact-command` / `08-18-handoff-mechanism`(均 archive)。spec:`pattern-budget-gate` / `pattern-turn-limit-softcap` / `token-usage-tracking`。
+
+### 2026-08-20 — worker per-turn 度量(turn_trace 并入 run 维度)
+
+- **Context**:E2 turn-level trace 只记主 loop,worker per-run 的逐轮 token 不可见。
+- **决策 — 表重建迁移 `UNIQUE(session_id, seq)` → `UNIQUE(session_id, run_id, seq)`**:`''` 哨兵 = 主 loop 行,worker 行 = `subagent_runs.id`;**不用 NULL** 因 SQLite UNIQUE 视 NULL 互异,会插出第二行破坏 upsert;partial index `idx_turn_trace_run`(`WHERE run_id != ''`);老库走 `schema_helpers::rebuild_turn_trace_with_run_id`(表约束加宽迁移守则)。
+- **决策 — 写点归位**:Done 臂 run 行落值 + compaction / loop_hint 旁路写点带 run_id;前端 SubagentDrawer「Token 明细」per-run 折叠区 + `runTracesByRunId` 粘性缓存。
+- 任务:`08-20-worker-turn-trace-persist`。spec:worker per-turn 行语义 + subagent_runs×turn_trace 关联。
+
+### 2026-08-21 — B1 收尾:图片自动压缩 + 拖拽 + read_file 工具读图
+
+- **Context**:B1(08-16/17)正向视觉路径与工具读图留作 follow-up。
+- **决策 — 前端 canvas 压缩(fail-open)**:长边>1568 降采样;无透明且>1MB 重编码 JPEG q0.85;压后判 5MB。
+- **决策 — `read_file` 读图**:白名单 + 魔数 + 5MiB 闸 → attachments 副本 + `ToolResult.images` 引用;`ToolResultData` **双形态 serde**(DB=refs / wire=Anthropic tool_result content block array;无图路径逐字节不变 fixture 锁)。
+- **live 实证**:MiniMax-M3 read_file UI 截图准确描述内容(**正向视觉路径首次 live 实证**),images_token=1728 精确入账。
+- 任务:`08-21-b1-image-followups`。spec:`llm-contract §Tool-Result Image Blocks` + `tool-contract/16` + `token-usage-tracking 工具图计费`。
+
 ### 2026-08-25 — F1 消息队列·用户连发档(输入侧排队 + 续轮批量注入)
 
 - **Context**:turn 串行且流式期间编辑器整体只读,连打字都不行。补输入侧队列最小闭环:turn 进行中可打字/发送/撤销/修改,轮结束批量注入下一轮;为 F2 定时 / F6 异步预留统一入口(生产者不实现)。双外部评审(review-glm / review-d4f)+ 三轮修复收口,live 冒烟与 curl REST 排队分支真机实测通过。
@@ -93,6 +143,15 @@
 - **决策 — 闲路径口径修正**(评审 Round 2):原"闲且队空逐字节对齐现状"作废——统一路径下闲时发送同样入队由驱动器消费,LLM 请求历史从客户端 `messages` 改为 DB reload(群聊 D-B 同构)。语义等价非逐字节;若未来出现"仅存于客户端 history、未落库"的请求内容会被 reload 丢弃(当前无此形态,记录在案)。
 - **偏差记录**:① P0 DriverSink 丢事件——`emit_chat_event` 未按 `forward` 返回值转发且 Error 分支自转发(双发),续轮 Delta 整链不可见,单测 2 例 + 集成 Delta 断言锁死;② F1 三命令漏 `CMD_TO_DOMAIN` 映射,开 session 即 unknown cmd(transport 层路由同步守卫断根);③ ChatInput 两道旧守卫(`sendDisabled`/readOnly 判定)吞掉流式发送,AC1 物理不可达——评审 d4f 称"AC1 未要求流式中可发送"系误读,实现者驳回正确;④ 跨设备可见性走 `list_queued_messages` 水合而非事件广播(省 wire 变体,代价非实时,MVP 接受)。
 - 任务:`08-25-f1-message-queue`(已归档)。spec:agent-loop-architecture "pattern-message-queue-driver"(注入契约 + TurnContinuation 事件语义 + 锁纪律)。B 档(优先级分档/抢占)与 C 档(daemon 统一入口服务化,F2/F6 生产者)留后续。
+
+### 2026-08-25 — F4 `web_search` 工具(搜索 → 取前 N 条结果)
+
+- **Context**:与 `web_fetch`(全文抓取)两段式分工,同 Claude Code WebSearch/WebFetch split;搜索场景不必抓全文。
+- **决策 — enum dispatch 双后端(Tavily keyed / DDG 兜底)+ 30s 整体预算重试环**:固定端点无用户可控 URL → **无 SSRF 面**,`ToolKind::Other` Tier 5 silent Allow(同 `search_history`)。
+- **决策 — key 三态 AEAD 配置**:`app_config` 存 web_search key(aad=web_search),Settings 第 7 tab masked 回显;Tauri command / daemon route / CMD_TO_DOMAIN 多处 IPC。
+- **决策 — 开闸多面 + 运行时断言**:`READONLY_TOOL_ALLOWLIST` 第 7 员 / builtin + dev plugin researcher / 群聊调研白名单 / 用户+项目 frontmatter 层,配运行时断言防 builtin-only 假绿;C7D `STUB_CANDIDATES` 第 11 员(token 线零平移)。
+- live 冒烟经 debug daemon 实跑 DDG 搜索全链路通(attribution / 审计两行)。
+- 任务:`08-25-web-search-tool`(已归档)。spec:`tool-contract/16-web-search`。
 
 ### 2026-08-26 — F5 PDF/docx 原生文本提取(@文件注入第一档)
 
@@ -111,3 +170,36 @@
 - **决策 — 单元格渲染契约(D5)**:字符串原样 / 数字最短表示 / bool true·false / 错误值保留 `#REF!` 形态 / 公式取缓存值 / 序列日期 chrono 转 ISO(`%Y-%m-%d`,非零点补时间)。xlsx 路径**不做 normalize_whitespace**(压空行/trim 破坏 CSV 行语义);全 sheet 无数据 → Err 走 Degraded 兜底。marker `sheets="N"`(units=sheet 数);`.xlsm` 复用 xlsx 通道,`.xls`(OLE2)/`.ods` 保持占位降级。
 - 坑:测试断言 needle 手写 RFC4180 转义多打一个引号——实现输出正确、断言写错(转义后的期望串应逐字符对照生成,别手抄)。
 - 任务:`08-26-f5-xlsx-extraction`。spec:pattern-doc-extraction(硬约束 +7 号 xlsx 节)。
+
+### 2026-08-27 — F6 异步 agent 任务可观测性 + F3 全局并发闸
+
+- **Context**:detach 运行时语义早已免费成立(loop 是 fire-and-forget spawn,客户端断开非 cancel 源)——本任务交付**编排面**三件套,session 即载体、隐式普遍化(无「后台发」概念)。
+- **决策 — `SessionSummary.busy` 运行时 enrich**:daemon 层单点 `list_sessions_inner`,双 transport 一致;冷启动/跨端侧栏红点。
+- **决策 — 轮次终结跨 session toast**:当前-session 抑制 + cancelled 抑制 + `turn_complete_notify_enabled` 开关。
+- **决策 — F3 最小档全局信号量 `max_concurrent_loops`**(缺省 4):spawn 闭包头 acquire 排队不拒绝,等闸取消完整回滚 claim 注册。
+- **决策 — Tauri 壳关闭确认**:仅 `isTauriWebview` 生效,Web/PWA 关闭不影响任务。
+- **决策 — 零新表零 migration**:跨重启终态复用 messages.status 恢复链。F1-C 移出归 F2(两个消费者:cron + LLM detached dispatch)。
+- 任务:`08-27-f6-async-agent-task`。spec:`agent-loop-architecture/pattern-global-loop-semaphore`。
+
+### 2026-08-27 — stream chat 事件 payload 补 `session_id`(跨客户端实时认领)
+
+- **Context**:remote PWA / 多客户端并发连接时,`chat-event` 只有 `request_id` 没有 session 维度,非发起端无法按 session 认领事件。
+- **决策 — 事件 payload 回填 `session_id`(additive)**:`daemon/sse.rs` 事件注释契约化,支持跨客户端按 session 认领;向后兼容,老客户端忽略新字段。
+- 任务:`08-27-stream-session-id`(已归档)。
+
+### 2026-08-27 — workflow-plugin builtin 提示词脱栈通用化
+
+- **Context**:内置 dev/review 插件提示词含 `cargo`/`pnpm` 硬编码与 `.trellis` 残留,换栈/换目录即误导 agent。
+- **决策 — 提示词内容三约定**:栈中立 / 无 dogfood 泄漏 / 不承诺 ask(权限动作交给 permission 层)。零 `.trellis` 残留;等价性测试机制 + 镜像范围口径收编 spec。
+- **决策 — model 漏传教训去标识化收编**:错误示例不复述个人栈细节。
+- 任务:`08-27-builtin-agent-prompt-generalize`。spec:`workflow-plugin-builtin`(提示词三约定 + 等价性测试机制)。
+
+### 2026-08-28 — F2 定时任务(本地 cron 式)+ F2b 调度模型扩展
+
+- **Context**:ROADMAP F1-C(cron 消费者)落地;F2 把「detached LLM dispatch」与「定时触发」两个消费者统一到一条调度通道。GUI Full 零 timer 硬约束保持,调度仅 daemon 进程。
+- **决策 — daemon 常驻调度器 30s tick + 单一扫描算法**:每 tick 重算「自 `max(created_at, last_fired_at)` 以来最近到期点」,catch-up(停机补跑一次)与常规触发同一判定;落账记理论到期点 `due` 保证 interval 无相位漂移;同 session 每 tick 至多一 fire。
+- **决策 — origin 载体链**:fire = 构造带 origin 的 user message 走 chat_inner 同源路径,`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控` 落 `messages.metadata.scheduled`(additive)——F1 队列入口统一。
+- **决策 — 审计 + kill switch**:`ScheduledTaskFired` 六动作(fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error);`scheduled_tasks_enabled` kill switch fail-open。管理面 Settings 第 8 tab,PWA 可用;前端「定时」chip 零 rehydrate 改动。
+- **决策 — F2b 调度模型 additive 扩展**:preset 6 档(固定时间类新增 hourly/weekdays/monthly;interval 加单位换算,**纯 UI 换算**成 every_min,后端零感知零迁移);结束条件 `max_runs`/`ends_at` 通用(completed 审计 reason=max_runs/end_date,恰好一次);`run_count` 只计真正送入 chat_inner 的 fire(dedup 跳过不计数);ends_at **含当日**(判定用 `due > ends_at` 而非 now,保 catch-up 补跑);重新启用计数清零;wire update 双层 Option(显式 null = 清空为不限)。
+- 用户三裁定:短月跳过(monthly 无该日跳过该月,cron 语义)/ 自动停用保留 / 当天仍触发。
+- 任务:`08-28-f2-scheduled-tasks` / `08-28-f2b-schedule-extension`。spec:`backend/scheduled-tasks.md`(§F2 + §F2b)。F1-C cron 消费者交付,**LLM detached dispatch(`schedule_task` tool)仍开放**。
