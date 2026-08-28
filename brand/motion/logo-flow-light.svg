@@ -1,14 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案一:能量流光">
-  <title>Everlasting — 能量流光(Comet Flow)</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting 动效方案一:能量流光(浅底)">
+  <title>Everlasting — 能量流光(Comet Flow) · 浅底</title>
   <desc>两枚发光彗星分别沿青/琥珀环逆时针循环流动,白色亮头领先,光晕拖尾随后;
     spark 以 2.5s 呼吸。纯 SMIL,无 JS/CSS,可直接 &lt;img&gt; 引用或内联。
     同步原理:overlay path 设 pathLength=100,dashoffset 从 L 到 L-100 线性递减,
     彗头(拖尾前缘)恰好落在弧长百分比 100f 处,与 animateMotion(paced 匀速)的亮头圆重合。</desc>
   <defs>
     <radialGradient id="tile" cx="0.5" cy="0.38" r="0.75">
-      <stop offset="0" stop-color="#1c2a42"/>
-      <stop offset="0.55" stop-color="#101827"/>
-      <stop offset="1" stop-color="#0a0e14"/>
+      <stop offset="0" stop-color="#fbfdff"/>
+      <stop offset="0.55" stop-color="#f1f5f9"/>
+      <stop offset="1" stop-color="#e4ebf4"/>
     </radialGradient>
     <filter id="glowTrack" x="-60%" y="-60%" width="220%" height="220%">
       <feGaussianBlur stdDeviation="6" result="b"/>
@@ -18,20 +18,20 @@
       <feGaussianBlur stdDeviation="7" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
-    <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致) -->
+    <!-- 2026-08-28 v2 浅底版:600 级渐变 + 浅色 tile,语义与深底版完全一致(与 brand/logo-mark-light.svg 同步) -->
   <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
-    <stop offset="0" stop-color="#67e8f9"/><stop offset="0.55" stop-color="#22d3ee"/><stop offset="1" stop-color="#06b6d4"/>
+    <stop offset="0" stop-color="#06b6d4"/><stop offset="0.55" stop-color="#0891b2"/><stop offset="1" stop-color="#0e7490"/>
   </linearGradient>
   <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
-    <stop offset="0" stop-color="#fcd34d"/><stop offset="0.55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/>
+    <stop offset="0" stop-color="#f59e0b"/><stop offset="0.55" stop-color="#d97706"/><stop offset="1" stop-color="#b45309"/>
   </linearGradient>
   <radialGradient id="gl">
-    <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/><stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+    <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.35"/><stop offset="0.45" stop-color="#0ea5e9" stop-opacity="0.12"/><stop offset="1" stop-color="#0ea5e9" stop-opacity="0"/>
   </radialGradient>
   </defs>
 
   <rect width="512" height="512" rx="72" fill="url(#tile)"/>
-  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#2a3850" stroke-width="3" opacity="0.45"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="71" fill="none" stroke="#c9d4e4" stroke-width="3" opacity="0.45"/>
 
   <!-- 底层轨道(暗态) -->
   <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.28">
@@ -55,10 +55,10 @@
 
   <!-- 彗头亮点 -->
   <g filter="url(#glowDot)">
-    <circle r="9.5" fill="#eaffff">
+    <circle r="9.5" fill="#0e7490">
       <animateMotion dur="5s" repeatCount="indefinite"><mpath href="#loopC"/></animateMotion>
     </circle>
-    <circle r="9.5" fill="#fff6dd">
+    <circle r="9.5" fill="#b45309">
       <animateMotion dur="5s" begin="-2.5s" repeatCount="indefinite"><mpath href="#motA"/></animateMotion>
     </circle>
   </g>
@@ -67,7 +67,7 @@
     <animate attributeName="r" values="40;46;40" dur="2.5s" repeatCount="indefinite"
              calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
   </circle>
-  <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
+  <circle cx="256" cy="256" r="13" fill="#1e293b" filter="url(#glowDot)">
     <animate attributeName="r" values="13;15;13" dur="2.5s" repeatCount="indefinite"
              calcMode="spline" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
     <animate attributeName="opacity" values="0.85;1;0.85" dur="2.5s" repeatCount="indefinite"/>

@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting app icon (maskable)">
   <!-- Maskable variant — full-bleed square (launcher applies its own mask),
-       mark at 50% so it stays inside the 20% corner safe zone.
+       mark at 60% (2026-08-28 与 brand/logo-app-icon-maskable.svg v2 对齐;外接盒半对角
+       153.7 < 安全区半径 204.8,圆/方/圆角矩形 mask 均有余量)。
        浅色底(与 PWA 图标一致,浅色 Launcher 上可见)。 -->
   <rect width="512" height="512" fill="#f8fafc"/>
-  <g transform="translate(128 128) scale(0.5)">
+  <g transform="translate(102.4 102.4) scale(0.6)">
     <g fill="none" stroke-width="30" stroke-linecap="round">
       <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#0891b2"/>
       <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#d97706"/>

@@ -13,6 +13,16 @@
       <feGaussianBlur stdDeviation="5" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致) -->
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#67e8f9"/><stop offset="0.55" stop-color="#22d3ee"/><stop offset="1" stop-color="#06b6d4"/>
+  </linearGradient>
+  <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#fcd34d"/><stop offset="0.55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/>
+  </linearGradient>
+  <radialGradient id="gl">
+    <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/><stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+  </radialGradient>
   </defs>
 
   <rect width="512" height="512" rx="72" fill="url(#tile)"/>
@@ -59,9 +69,9 @@
   <!-- 分段刻度环底座(butt 端帽 = 棱角) -->
   <g fill="none" stroke-width="30" stroke-linecap="butt" opacity="0.38">
     <path id="loopC" pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
-          stroke="#22d3ee" stroke-dasharray="6 4"/>
+          stroke="url(#gc)" stroke-dasharray="6 4"/>
     <path id="loopA" pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
-          stroke="#fbbf24" stroke-dasharray="6 4"/>
+          stroke="url(#ga)" stroke-dasharray="6 4"/>
   </g>
   <path id="motA" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64" fill="none" stroke="none"/>
 
@@ -69,11 +79,11 @@
   <g fill="none" stroke-width="30">
     <g stroke-linecap="butt" opacity="0.3">
       <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
-            stroke="#22d3ee" stroke-dasharray="24 76" stroke-dashoffset="24">
+            stroke="url(#gc)" stroke-dasharray="24 76" stroke-dashoffset="24">
         <animate attributeName="stroke-dashoffset" values="24;-76" dur="3s" repeatCount="indefinite"/>
       </path>
       <path pathLength="100" d="M 231.12 296.36 A 118 118 0 1 0 231.12 215.64"
-            stroke="#fbbf24" stroke-dasharray="24 76" stroke-dashoffset="24">
+            stroke="url(#ga)" stroke-dasharray="24 76" stroke-dashoffset="24">
         <animate attributeName="stroke-dashoffset" values="24;-76" dur="3s" begin="-1.5s" repeatCount="indefinite"/>
       </path>
     </g>
@@ -96,6 +106,8 @@
     <line x1="256" y1="234" x2="256" y2="240"/>
     <line x1="256" y1="272" x2="256" y2="278"/>
   </g>
+  <circle cx="256" cy="256" r="40" fill="url(#gl)">
+  </circle>
   <circle cx="256" cy="256" r="11" fill="#f8fafc" filter="url(#glowDot)"/>
 
   <!-- 底部状态灯:依次点亮,满格重置(离散跳变) -->

@@ -25,6 +25,16 @@
       <feGaussianBlur stdDeviation="7" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致) -->
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#67e8f9"/><stop offset="0.55" stop-color="#22d3ee"/><stop offset="1" stop-color="#06b6d4"/>
+  </linearGradient>
+  <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#fcd34d"/><stop offset="0.55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/>
+  </linearGradient>
+  <radialGradient id="gl">
+    <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/><stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+  </radialGradient>
   </defs>
 
   <rect width="512" height="512" rx="72" fill="url(#tile)"/>
@@ -32,8 +42,8 @@
 
   <!-- 底层轨道(暗态) -->
   <g fill="none" stroke-width="30" stroke-linecap="round" opacity="0.26">
-    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
-    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="url(#gc)"/>
+    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="url(#ga)"/>
   </g>
 
   <!-- 交叉点端口微光(上=出发点,下=交汇点) -->
@@ -46,11 +56,11 @@
   <!-- 双彗星:青走自然方向(逆时针),琥珀走自然方向(顺时针),从上交叉点同时出发 -->
   <g fill="none" stroke-width="30" stroke-linecap="round" filter="url(#glowTrack)">
     <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
-          stroke="#22d3ee" stroke-dasharray="18 82" stroke-dashoffset="10.75">
+          stroke="url(#gc)" stroke-dasharray="18 82" stroke-dashoffset="10.75">
       <animate attributeName="stroke-dashoffset" values="18;-82" dur="6s" begin="-0.435s" repeatCount="indefinite"/>
     </path>
     <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
-          stroke="#fbbf24" stroke-dasharray="18 82" stroke-dashoffset="10.75">
+          stroke="url(#ga)" stroke-dasharray="18 82" stroke-dashoffset="10.75">
       <animate attributeName="stroke-dashoffset" values="18;-82" dur="6s" begin="-0.435s" repeatCount="indefinite"/>
     </path>
   </g>
@@ -77,6 +87,10 @@
   </circle>
 
   <!-- spark:交汇瞬间同步暴胀 -->
+  <circle cx="256" cy="256" r="40" fill="url(#gl)">
+    <animate attributeName="r" values="40;40;56;40" keyTimes="0;0.855;0.87;1"
+             dur="6s" repeatCount="indefinite"/>
+  </circle>
   <circle cx="256" cy="256" r="13" fill="#f8fafc" filter="url(#glowDot)">
     <animate attributeName="r" values="13;13;18.5;13" keyTimes="0;0.855;0.87;1"
              dur="6s" repeatCount="indefinite"/>

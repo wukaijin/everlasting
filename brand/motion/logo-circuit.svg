@@ -17,6 +17,16 @@
       <feGaussianBlur stdDeviation="5" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <!-- 2026-08-28 v2 品牌同步:主环/拖尾用顶部受光渐变,spark 加辉光(与 brand/logo-mark.svg v2 一致) -->
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#67e8f9"/><stop offset="0.55" stop-color="#22d3ee"/><stop offset="1" stop-color="#06b6d4"/>
+  </linearGradient>
+  <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+    <stop offset="0" stop-color="#fcd34d"/><stop offset="0.55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/>
+  </linearGradient>
+  <radialGradient id="gl">
+    <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/><stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/><stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+  </radialGradient>
   </defs>
 
   <rect width="512" height="512" rx="72" fill="url(#tile)"/>
@@ -33,8 +43,8 @@
 
   <!-- 主走线 + 焊盘 -->
   <g fill="none" stroke-width="9" opacity="0.95">
-    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
-    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+    <path id="loopC" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="url(#gc)"/>
+    <path id="loopA" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="url(#ga)"/>
   </g>
   <g fill="#0a0e14" stroke-width="2.5">
     <circle cx="280.88" cy="215.64" r="6.5" stroke="#22d3ee"/>
@@ -66,11 +76,11 @@
   <!-- 电流脉冲:拖尾 + 亮头(双环反向环流,相位差半程) -->
   <g fill="none" stroke-width="12" opacity="0.5">
     <path pathLength="100" d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36"
-          stroke="#22d3ee" stroke-dasharray="12 88" stroke-dashoffset="12">
+          stroke="url(#gc)" stroke-dasharray="12 88" stroke-dashoffset="12">
       <animate attributeName="stroke-dashoffset" values="12;-88" dur="2.8s" repeatCount="indefinite"/>
     </path>
     <path pathLength="100" d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36"
-          stroke="#fbbf24" stroke-dasharray="12 88" stroke-dashoffset="12">
+          stroke="url(#ga)" stroke-dasharray="12 88" stroke-dashoffset="12">
       <animate attributeName="stroke-dashoffset" values="12;-88" dur="2.8s" begin="-1.4s" repeatCount="indefinite"/>
     </path>
   </g>
@@ -84,6 +94,8 @@
   </g>
 
   <!-- spark:常亮电源 -->
+  <circle cx="256" cy="256" r="34" fill="url(#gl)">
+  </circle>
   <circle cx="256" cy="256" r="12" fill="#f8fafc" filter="url(#glowDot)">
     <animate attributeName="opacity" values="0.9;1;0.9" dur="1.6s" repeatCount="indefinite"/>
   </circle>

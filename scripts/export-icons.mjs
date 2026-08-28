@@ -3,18 +3,28 @@
 // 依赖:playwright-core + ~/.cache/ms-playwright 下任一 Chromium。
 // 产出(浅色底变体,解决桌面快捷方式图标空白/不可见的问题):
 //   app-icon-192-light.png / app-icon-512-light.png (浅底 #f8fafc + mark 66%)
-//   app-icon-512-maskable-light.png                (浅底 + mark 50%,20% 安全区)
+//   app-icon-512-maskable-light.png                (浅底 + mark 60%,80% 圆安全区)
 //   favicon-32-light.png                           (透明底 + 深色弧线,64px)
+// 注:浅色弧线来自 brand/logo-mark-light.svg 的 <g>(2026-08-28 v2:含渐变/交叉投影
+//   defs,必须留在首个 <g> 内部才能被本脚本 markInner() 完整提取)。
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 const require = createRequire(import.meta.url);
-const { chromium } = require("playwright-core");
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BRAND = path.join(REPO, "brand");
 const OUT_DIR = process.argv[2] || path.join(BRAND, "png");
+
+// playwright-core 不在根依赖里,实际装在 out/logo-work(仓库唯一安装点);逐级回退。
+function loadChromium() {
+  for (const base of ["playwright-core", path.join(REPO, "out/logo-work/node_modules/playwright-core")]) {
+    try { return require(base).chromium; } catch { /* try next */ }
+  }
+  throw new Error("playwright-core not found (expected in out/logo-work/node_modules)");
+}
+const chromium = loadChromium();
 
 const CHROME_EXE =
   process.env.CHROME_EXE ||
@@ -66,7 +76,8 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const jobs = [
   ["app-icon-192-light.png", 192, appIconSVG(0.66, 192)],
   ["app-icon-512-light.png", 512, appIconSVG(0.66, 512)],
-  ["app-icon-512-maskable-light.png", 512, appIconSVG(0.5, 512)],
+  // 2026-08-28: maskable mark 0.5→0.6,与 brand/logo-app-icon-maskable.svg v2 对齐(半对角 153.7 < 安全区 204.8)
+  ["app-icon-512-maskable-light.png", 512, appIconSVG(0.6, 512)],
   ["favicon-32-light.png", 64, faviconSVG(64)],
 ];
 for (const [name, size, svg] of jobs) {

@@ -1,12 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Everlasting logo">
   <!-- Everlasting mark — interlocked loops + center spark.
-       Geometry: two arcs R=118, centers (170,256)/(342,256), gap half-angle 20°,
-       stroke 30 round caps; arcs cross at (256,175.2)/(256,336.8) and each
+       Geometry (unchanged from 2026-08-15 v1): two arcs R=118, centers (170,256)/(342,256),
+       gap half-angle 20°, stroke 30 round caps; arcs cross at (256,175.2)/(256,336.8) and each
        terminates inside the other loop's hole (cap-center distance 73.2 < inner 103).
-       Palette (dark surfaces): cyan #22d3ee / amber #fbbf24 / spark #f8fafc. -->
-  <g fill="none" stroke-width="30" stroke-linecap="round">
-    <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="#22d3ee"/>
-    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="#fbbf24"/>
+       2026-08-28 v2 质感升级(几何不动):
+       - 顶部受光:笔画竖向渐变 cyan-300→400→500 / amber-300→400→500(userSpaceOnUse y122→392)
+       - 交叉投影:琥珀路径加宽模糊深色描边,mask 限定只落在青色笔画带 → 穿插深度,深浅底都干净
+       - spark 辉光:青调径向 halo(r40)+ 白色实心点 r13
+       Palette (dark surfaces): cyan #22d3ee / amber #fbbf24 / spark #f8fafc。
+       注意:若内联进 HTML 且同页多实例,请给 gc/ga/gl/soft/onCyan 加实例前缀防 id 冲突。 -->
+  <g>
+    <defs>
+      <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+        <stop offset="0" stop-color="#67e8f9"/>
+        <stop offset="0.55" stop-color="#22d3ee"/>
+        <stop offset="1" stop-color="#06b6d4"/>
+      </linearGradient>
+      <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="0" y1="122" x2="0" y2="392">
+        <stop offset="0" stop-color="#fcd34d"/>
+        <stop offset="0.55" stop-color="#fbbf24"/>
+        <stop offset="1" stop-color="#f59e0b"/>
+      </linearGradient>
+      <radialGradient id="gl">
+        <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.8"/>
+        <stop offset="0.45" stop-color="#a5f3fc" stop-opacity="0.3"/>
+        <stop offset="1" stop-color="#a5f3fc" stop-opacity="0"/>
+      </radialGradient>
+      <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="5"/>
+      </filter>
+      <mask id="onCyan" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+        <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"/>
+      </mask>
+    </defs>
+    <g fill="none" stroke-width="30" stroke-linecap="round">
+      <path d="M 280.88 215.64 A 118 118 0 1 0 280.88 296.36" stroke="url(#gc)"/>
+    </g>
+    <!-- 交叉投影:琥珀压在青上的穿插深度,只允许出现在青色笔画带内 -->
+    <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" fill="none" stroke="#040b14" stroke-width="52" stroke-linecap="round" opacity="0.45" filter="url(#soft)" mask="url(#onCyan)"/>
+    <g fill="none" stroke-width="30" stroke-linecap="round">
+      <path d="M 231.12 215.64 A 118 118 0 1 1 231.12 296.36" stroke="url(#ga)"/>
+    </g>
+    <circle cx="256" cy="256" r="40" fill="url(#gl)"/>
+    <circle cx="256" cy="256" r="13" fill="#f8fafc"/>
   </g>
-  <circle cx="256" cy="256" r="13" fill="#f8fafc"/>
 </svg>
