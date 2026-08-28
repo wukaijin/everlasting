@@ -7,14 +7,20 @@
 //!
 //! ```text
 //! kill switch(scheduled_tasks_enabled,fail-open)
-//! → 逐 enabled 任务:most_recent_due(schedule, now, max(created_at, last_fired_at ?? 0))
-//!    None → 空转(catch-up 与常规触发同一算法,无独立 pass)
-//!    Some(due):
+//! → 逐 enabled 任务:
+//!    · F2b gate1:run_count ≥ max_runs(若设)→ 完成落账 + 审计,continue
+//!    · most_recent_due(schedule, now, max(created_at, last_fired_at ?? 0))
+//!      None → 空转(catch-up 与常规触发同一算法,无独立 pass)
+//!             · F2b gate2:ends_at 已过(无未消费 due)→ 完成,continue
+//!      Some(due):
+//!      · F2b gate3:due > ends_at(若设)→ 不 fire,完成,continue
 //!      · 同 target session 本 tick 已 fire → continue(顺延,不前移基准)
 //!      · message_queue_enabled=false → 审计 skipped_queue_disabled
 //!      · 上次注入条目仍滞留队列 → 审计 skipped_dedup + 落账 last_fired_at=due
+//!        (F2b:dedup 跳过不计数 run_count —— prompt 未送达)
 //!      · fire(prompt + 注脚 + origin → chat_inner)→ 审计 fired/catchup
-//!        (Err ⇒ error + reason);落账 last_fired_at=due + 展示值写回
+//!        (Err ⇒ error + reason);落账 last_fired_at=due + run_count+1
+//!      · F2b gate4:run_count+1 ≥ max_runs 或 next_fire > ends_at → 完成
 //! ```
 //!
 //! # origin 载体链(design §4.1,P0 定案)
@@ -79,8 +85,9 @@ pub fn now_epoch_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// 审计动作枚举的字符串形态(prd R3):
-/// `fired | catchup | skipped_dedup | skipped_queue_disabled | lost | error`。
+/// 审计动作枚举的字符串形态(prd R3 + F2b):
+/// `fired | catchup | skipped_dedup | skipped_queue_disabled | lost | error
+/// | completed`。
 pub mod actions {
     pub const FIRED: &str = "fired";
     pub const CATCHUP: &str = "catchup";
@@ -88,6 +95,16 @@ pub mod actions {
     pub const SKIPPED_QUEUE_DISABLED: &str = "skipped_queue_disabled";
     pub const LOST: &str = "lost";
     pub const ERROR: &str = "error";
+    /// F2b:任务完成(达次数上限 / 越过结束日期)自动停用。
+    pub const COMPLETED: &str = "completed";
+}
+
+/// F2b completed 动作的 reason 字段:哪种结束条件触发完成。
+pub mod completion_reasons {
+    /// 次数上限(run_count 达 max_runs)。
+    pub const MAX_RUNS: &str = "max_runs";
+    /// 结束日期(到期点越过 ends_at)。
+    pub const END_DATE: &str = "end_date";
 }
 
 // ---------------------------------------------------------------------------
@@ -249,10 +266,27 @@ pub(crate) async fn scheduler_tick_with_fire(
                 continue;
             }
         };
+        // F2b gate 1:次数上限已达 → 完成出扫描集(正常路径第 N 次 fire
+        // 后已由 gate 4 即时完成;这里兜底存量数据 / 完成写失败的场景)。
+        if task.max_runs.is_some_and(|m| task.run_count >= m) {
+            complete_task(&state.db, &task, completion_reasons::MAX_RUNS).await;
+            continue;
+        }
         let not_before = task.created_at.max(task.last_fired_at.unwrap_or(0));
         let Some(due) = compute::most_recent_due(&spec, now_ms, not_before) else {
+            // F2b gate 2:ends_at 已过且无未消费 due —— 未来到期点全部
+            // 越过 ends_at,任务已死,完成出扫描集(不常驻空转)。
+            if task.ends_at.is_some_and(|t| now_ms > t) {
+                complete_task(&state.db, &task, completion_reasons::END_DATE).await;
+            }
             continue;
         };
+        // F2b gate 3:最近未消费到期点已越过结束日期 → 不 fire,完成。
+        // 反之 due ≤ ends_at 照常 fire(含 catchup,D9:结束日当天仍触发)。
+        if task.ends_at.is_some_and(|t| due > t) {
+            complete_task(&state.db, &task, completion_reasons::END_DATE).await;
+            continue;
+        }
         hit_any = true;
         // 同 target session 每 tick 至多 fire 一个任务,余者顺延下 tick
         // (消掉「多任务同 tick 同 session」对 RULE-QUEUE-001 的确定性
@@ -287,7 +321,8 @@ pub(crate) async fn scheduler_tick_with_fire(
                     "scheduler: previous injection still queued, skipping (dedup)"
                 );
                 audit_task(&state.db, &task, actions::SKIPPED_DEDUP, None).await;
-                account(&state.db, &task, &spec, due).await;
+                // F2b:dedup 跳过不计数(prompt 未送达),仅消费 due 点。
+                account(&state.db, &task, &spec, due, false).await;
                 continue;
             }
         }
@@ -328,7 +363,24 @@ pub(crate) async fn scheduler_tick_with_fire(
                 audit_task(&state.db, &task, actions::ERROR, Some(&reason)).await;
             }
         }
-        account(&state.db, &task, &spec, due).await;
+        // F2b:fire 落账计数(Queued/Started/Error 三种结局都算一次
+        // 「已触发」——error 也消费了 due 且有审计可查)。
+        account(&state.db, &task, &spec, due, true).await;
+        // F2b gate 4:本次 fire 后已达上限 / 下一到期点越过结束日期 →
+        // 即时完成(不等下 tick 扫死任务;enabled=0 使 completed 审计
+        // 天然只发一次)。
+        let new_run_count = task.run_count + 1;
+        let next = compute::next_fire_display(&spec, due);
+        let reached_max = task.max_runs.is_some_and(|m| new_run_count >= m);
+        let past_end = task.ends_at.is_some_and(|t| next > t);
+        if reached_max || past_end {
+            let reason = if reached_max {
+                completion_reasons::MAX_RUNS
+            } else {
+                completion_reasons::END_DATE
+            };
+            complete_task(&state.db, &task, reason).await;
+        }
         fired_sessions.insert(task.target_session_id.clone());
     }
     if hit_any {
@@ -337,12 +389,37 @@ pub(crate) async fn scheduler_tick_with_fire(
 }
 
 /// fire 落账:`last_fired_at = due`(理论到期点,防相位漂移,design §3)
-/// + 展示用 `next_fire_at` 按 due 重算写回。best-effort(失败 warn)。
-async fn account(db: &SqlitePool, task: &ScheduledTaskRow, spec: &ScheduleSpec, due: i64) {
+/// + 展示用 `next_fire_at` 按 due 重算写回;`count_fire` 控制 `run_count+1`
+/// 与否(F2b:dedup 跳过不计数)。best-effort(失败 warn)。
+async fn account(
+    db: &SqlitePool,
+    task: &ScheduledTaskRow,
+    spec: &ScheduleSpec,
+    due: i64,
+    count_fire: bool,
+) {
     let next = compute::next_fire_display(spec, due);
-    if let Err(e) = crate::db::scheduled_tasks::mark_task_fired(db, &task.id, due, next).await {
+    if let Err(e) =
+        crate::db::scheduled_tasks::mark_task_fired(db, &task.id, due, next, count_fire).await
+    {
         tracing::warn!(task_id = %task.id, error = %e, "scheduler: accounting write failed");
     }
+}
+
+/// F2b 任务完成落账:`enabled = 0`(退出调度扫描,审计天然只发一次)
+/// + `completed` 审计(附 reason:max_runs / end_date)。best-effort,
+/// 与 fire 审计同语义(失败不阻断 tick)。
+async fn complete_task(db: &SqlitePool, task: &ScheduledTaskRow, reason: &str) {
+    if let Err(e) = crate::db::scheduled_tasks::mark_task_completed(db, &task.id).await {
+        tracing::warn!(task_id = %task.id, error = %e, "scheduler: completion write failed");
+    }
+    tracing::info!(
+        task_id = %task.id,
+        task_name = %task.name,
+        reason,
+        "scheduler: task completed (auto-disabled)"
+    );
+    audit_task(db, task, actions::COMPLETED, Some(reason)).await;
 }
 
 /// fire 审计(best-effort,挂目标 session,沿 resend 审计惯例不进事务;

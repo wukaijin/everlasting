@@ -33,7 +33,8 @@ pub async fn list_scheduled_tasks(
 
 /// 请求体 snake_case、扁平标量(同 Tauri command 形参;transport 的
 /// 顶层 camel→snake 转换后两形态等价)。`target_session_id` 缺省 /
-/// 空串 = 新建专用 session(`_inner` 内定案)。
+/// 空串 = 新建专用 session(`_inner` 内定案)。`max_runs` / `ends_at`
+/// 是 F2b 结束条件(None = 不限)。
 #[derive(Debug, Deserialize)]
 pub struct CreateScheduledTaskRequest {
     pub project_id: String,
@@ -42,6 +43,8 @@ pub struct CreateScheduledTaskRequest {
     pub prompt: String,
     pub schedule: String,
     pub enabled: Option<bool>,
+    pub max_runs: Option<i64>,
+    pub ends_at: Option<i64>,
 }
 
 pub async fn create_scheduled_task(
@@ -56,6 +59,8 @@ pub async fn create_scheduled_task(
         req.prompt,
         req.schedule,
         req.enabled,
+        req.max_runs,
+        req.ends_at,
     )
     .await?;
     Ok(Json(result))
@@ -69,6 +74,23 @@ pub struct UpdateScheduledTaskRequest {
     pub schedule: Option<String>,
     pub target_session_id: Option<String>,
     pub enabled: Option<bool>,
+    /// 双层 Option:缺省 = 不动;显式 `null` = 清空为不限;数值 = 写入。
+    #[serde(default, deserialize_with = "deserialize_double_option_i64")]
+    pub max_runs: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option_i64")]
+    pub ends_at: Option<Option<i64>>,
+}
+
+/// serde 双层 Option 反序列化(serde 惯例 "double option" 模式):
+/// 字段缺省 → `None`(不动,由 `#[serde(default)]` 提供);显式 `null` →
+/// `Some(None)`(清空为不限);数值 → `Some(Some(v))`。serde 对
+/// `Option<Option<T>>` 的默认行为无法区分缺省与 `null`,必须包一层
+/// `map(Some)` 才能让「显式 null 清空」过 wire。
+fn deserialize_double_option_i64<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<i64>::deserialize(deserializer)?))
 }
 
 pub async fn update_scheduled_task(
@@ -83,6 +105,8 @@ pub async fn update_scheduled_task(
         req.schedule,
         req.target_session_id,
         req.enabled,
+        req.max_runs,
+        req.ends_at,
     )
     .await?;
     Ok(Json(result))
@@ -364,5 +388,82 @@ mod tests {
             row.target_session_id, _session_id,
             "rejected update must not mutate the stored target"
         );
+    }
+
+    /// F2b 结束条件 wire 形状:create 携带 max_runs / ends_at(顺带钉
+    /// monthly 新档位过 wire);update 数值写入、显式 `null` 清空
+    /// (double option:缺省 = 不动,`null` = 清空);max_runs=0 与过去
+    /// ends_at 都 400。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn scheduled_tasks_routes_end_conditions_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let (project_id, _session_id) = seed_project_session(&state.db).await;
+
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"限次","prompt":"p","schedule":"{{\"kind\":\"monthly\",\"day\":15,\"at\":\"09:00\"}}","max_runs":5,"ends_at":4102444800000}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "create with end conditions: {body}");
+        let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let task_id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            created["schedule"]["kind"], "monthly",
+            "new preset rides the wire"
+        );
+        assert_eq!(created["max_runs"], 5);
+        assert_eq!(created["ends_at"], 4_102_444_800_000i64);
+        assert_eq!(created["run_count"], 0, "starts at zero");
+
+        // update:数值写入。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(r#"{{"id":"{task_id}","max_runs":10}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "update max_runs: {body}");
+        let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(updated["max_runs"], 10);
+
+        // update:显式 null 清空 ends_at;同请求缺省的 max_runs 不动。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(r#"{{"id":"{task_id}","ends_at":null}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "explicit null clears: {body}");
+        let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(updated["ends_at"].is_null(), "ends_at cleared to unlimited");
+        assert_eq!(updated["max_runs"], 10, "absent sibling field untouched");
+
+        // 校验臂:max_runs=0 → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"x","prompt":"p","schedule":"{{\"kind\":\"daily\",\"at\":\"09:00\"}}","max_runs":0}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "max_runs=0: {body}");
+        assert!(body.contains("次数上限"), "max_runs gate message: {body}");
+
+        // 校验臂:过去 ends_at → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"x","prompt":"p","schedule":"{{\"kind\":\"daily\",\"at\":\"09:00\"}}","ends_at":1000}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "past ends_at: {body}");
+        assert!(body.contains("结束日期"), "ends_at gate message: {body}");
     }
 }

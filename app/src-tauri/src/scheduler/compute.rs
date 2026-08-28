@@ -1,9 +1,11 @@
-//! F2 定时任务的调度计算纯函数(`08-28-f2-scheduled-tasks` design §3)。
+//! F2 定时任务的调度计算纯函数(`08-28-f2-scheduled-tasks` design §3,
+//! F2b 扩展三档位:`08-28-f2b-schedule-extension` prd D7)。
 //!
 //! schedule 是 preset 档位(prd D2):`daily HH:MM` / `interval 每 N 分钟` /
-//! `weekly 周X HH:MM`,以 internally-tagged JSON 存 `scheduled_tasks.schedule`
-//! 列。本模块只做「给定 schedule 与时间窗,算出到期点」的纯计算 —— 无 DB、
-//! 无 IO、无锁,全部本地时区(chrono `Local`)。
+//! `weekly 周X HH:MM` / `hourly 每小时第 N 分` / `weekdays 工作日 HH:MM` /
+//! `monthly 每月 D 号 HH:MM`,以 internally-tagged JSON 存
+//! `scheduled_tasks.schedule` 列。本模块只做「给定 schedule 与时间窗,算出
+//! 到期点」的纯计算 —— 无 DB、无 IO、无锁,全部本地时区(chrono `Local`)。
 //!
 //! 两个核心纯函数(design §3):
 //! - [`most_recent_due`]:从 now 向后步进找**最近**到期点
@@ -21,7 +23,7 @@
 //! 4. **interval 无累积漂移**:连续模拟 fire(含 tick 量化抖动)且落账恒记
 //!    理论到期点 `last_fired_at = due` 时,相邻 due 间隔恒等步长。
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Weekday};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// schedule preset 档位(prd D2,design §3)。internally tagged JSON:
@@ -30,6 +32,9 @@ use serde::{Deserialize, Serialize};
 /// { "kind": "daily",    "at": "09:00" }
 /// { "kind": "interval", "every_min": 30 }
 /// { "kind": "weekly",   "weekday": "mon", "at": "09:00" }
+/// { "kind": "hourly",   "minute": 30 }
+/// { "kind": "weekdays", "at": "09:00" }
+/// { "kind": "monthly",  "day": 15, "at": "09:00" }
 /// ```
 ///
 /// 后续档位 additive 扩展(未知 `kind` 反序列化失败 → 入库/更新时被
@@ -41,9 +46,17 @@ pub enum ScheduleSpec {
     Daily { at: String },
     /// 每 `every_min` 分钟一次;网格锚定 `not_before`(=
     /// `max(created_at, last_fired_at)`),落账恒记理论到期点,网格不漂移。
+    /// 「每 N 小时/天/周」是前端单位换算(F2b),存库仍是分钟数。
     Interval { every_min: u32 },
     /// 每周 `weekday` 的 `at`(本地时间)。
     Weekly { weekday: Weekday, at: String },
+    /// 每小时第 `minute` 分钟(本地时间)。
+    Hourly { minute: u32 },
+    /// 每工作日(周一至五,无节假日日历)的 `at`(本地时间)。
+    Weekdays { at: String },
+    /// 每月 `day` 号的 `at`(本地时间)。短月无该日(如 2 月无 31 号)→
+    /// **跳过该月**(F2b prd D7,cron 语义,与 DST 跳过防御一致)。
+    Monthly { day: u32, at: String },
 }
 
 /// 解析并校验 schedule JSON(`scheduled_tasks.schedule` 列的唯一合法入口)。
@@ -61,7 +74,22 @@ pub fn parse_schedule(json: &str) -> Result<ScheduleSpec, String> {
 /// 已消费,等价于任务死掉)。
 pub fn validate_schedule(spec: &ScheduleSpec) -> Result<(), String> {
     match spec {
-        ScheduleSpec::Daily { at } | ScheduleSpec::Weekly { at, .. } => parse_hh_mm(at).map(|_| ()),
+        ScheduleSpec::Daily { at }
+        | ScheduleSpec::Weekly { at, .. }
+        | ScheduleSpec::Weekdays { at } => parse_hh_mm(at).map(|_| ()),
+        ScheduleSpec::Monthly { day, at } => {
+            if !(1..=31).contains(day) {
+                return Err(format!("day 必须在 1-31 之间,得到 {day}"));
+            }
+            parse_hh_mm(at).map(|_| ())
+        }
+        ScheduleSpec::Hourly { minute } => {
+            if *minute >= 60 {
+                Err(format!("minute 必须在 0-59 之间,得到 {minute}"))
+            } else {
+                Ok(())
+            }
+        }
         ScheduleSpec::Interval { every_min } => {
             if *every_min == 0 {
                 Err("every_min 必须为正整数".to_string())
@@ -132,6 +160,14 @@ fn local_at(date: NaiveDate, hour: u32, minute: u32) -> Option<DateTime<Local>> 
     }
 }
 
+/// `base` 所在月偏移 `delta` 个月后的 `(year, month)`(负数 = 往前)。
+/// 只做月粒度换算,不判断「日」在该月是否合法(由调用方
+/// `NaiveDate::from_ymd_opt` 判定,无效即跳过该月)。
+fn month_shift(base: NaiveDate, delta: i32) -> (i32, u32) {
+    let total = base.year() * 12 + base.month() as i32 - 1 + delta;
+    (total.div_euclid(12), total.rem_euclid(12) as u32 + 1)
+}
+
 /// 从 now 向后步进找最近的**未消费**到期点 `d`
 /// (`not_before < d <= now`),无则 `None`。
 ///
@@ -188,6 +224,57 @@ pub fn most_recent_due(schedule: &ScheduleSpec, now_ms: i64, not_before: i64) ->
             }
             None
         }
+        ScheduleSpec::Hourly { minute } => {
+            // 回看 0..=2 个「墙上钟点」:本小时未到点时上一个小时必命中;
+            // 第 2 个是为 DST 春令时跳过时刻留的余量(候选经 local_at
+            // 判 None 即跳过该钟点)。
+            for hours_back in 0..=2 {
+                let dt = now - Duration::hours(hours_back);
+                if let Some(cand) = local_at(dt.date_naive(), dt.hour(), *minute) {
+                    let cand_ms = cand.timestamp_millis();
+                    if cand_ms > not_before && cand_ms <= now_ms {
+                        return Some(cand_ms);
+                    }
+                }
+            }
+            None
+        }
+        ScheduleSpec::Weekdays { at } => {
+            let (hour, minute) = parse_hh_mm(at).ok()?;
+            // 回看 0..=3 天:周一最远的候选是周五(周六/周日跳过)。
+            for days_back in 0..=3 {
+                let date = (now - Duration::days(days_back)).date_naive();
+                if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+                    continue;
+                }
+                if let Some(cand) = local_at(date, hour, minute) {
+                    let cand_ms = cand.timestamp_millis();
+                    if cand_ms > not_before && cand_ms <= now_ms {
+                        return Some(cand_ms);
+                    }
+                }
+            }
+            None
+        }
+        ScheduleSpec::Monthly { day, at } => {
+            let (hour, minute) = parse_hh_mm(at).ok()?;
+            let now_date = now.date_naive();
+            // 回看 0..=2 个月:day=31 时最远候选在前前月(2 月无 31 号
+            // → from_ymd_opt None → 跳过该月,D7)。
+            for months_back in 0i32..=2 {
+                let (y, m) = month_shift(now_date, -months_back);
+                let Some(date) = NaiveDate::from_ymd_opt(y, m, *day) else {
+                    continue;
+                };
+                if let Some(cand) = local_at(date, hour, minute) {
+                    let cand_ms = cand.timestamp_millis();
+                    if cand_ms > not_before && cand_ms <= now_ms {
+                        return Some(cand_ms);
+                    }
+                }
+            }
+            None
+        }
     }
 }
 
@@ -231,6 +318,58 @@ pub fn next_fire_display(schedule: &ScheduleSpec, from_ms: i64) -> i64 {
             }
             from_ms + 7 * 86_400_000
         }
+        ScheduleSpec::Hourly { minute } => {
+            // 前看 0..=2 个「墙上钟点」(第 2 个是 DST 跳过余量);
+            // 解析失败时退化为 +1h(与 daily/weekly 的 fallback 惯例一致)。
+            for hours_ahead in 0..=2 {
+                let dt = from + Duration::hours(hours_ahead);
+                if let Some(cand) = local_at(dt.date_naive(), dt.hour(), *minute) {
+                    let cand_ms = cand.timestamp_millis();
+                    if cand_ms > from_ms {
+                        return cand_ms;
+                    }
+                }
+            }
+            from_ms + 3_600_000
+        }
+        ScheduleSpec::Weekdays { at } => {
+            if let Ok((hour, minute)) = parse_hh_mm(at) {
+                // 前看 0..=3 天:周五最远的候选是下周一(周末跳过)。
+                for days_ahead in 0..=3 {
+                    let date = (from + Duration::days(days_ahead)).date_naive();
+                    if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+                        continue;
+                    }
+                    if let Some(cand) = local_at(date, hour, minute) {
+                        let cand_ms = cand.timestamp_millis();
+                        if cand_ms > from_ms {
+                            return cand_ms;
+                        }
+                    }
+                }
+            }
+            from_ms + 3 * 86_400_000
+        }
+        ScheduleSpec::Monthly { day, at } => {
+            if let Ok((hour, minute)) = parse_hh_mm(at) {
+                let from_date = from.date_naive();
+                // 前看 0..=2 个月:day=31 时 1 月末触发后跳过 2 月、
+                // 落到 3 月(D7)。
+                for months_ahead in 0..=2 {
+                    let (y, m) = month_shift(from_date, months_ahead);
+                    let Some(date) = NaiveDate::from_ymd_opt(y, m, *day) else {
+                        continue;
+                    };
+                    if let Some(cand) = local_at(date, hour, minute) {
+                        let cand_ms = cand.timestamp_millis();
+                        if cand_ms > from_ms {
+                            return cand_ms;
+                        }
+                    }
+                }
+            }
+            from_ms + 31 * 86_400_000
+        }
     }
 }
 
@@ -272,13 +411,49 @@ mod tests {
         }
     }
 
+    fn hourly(minute: u32) -> ScheduleSpec {
+        ScheduleSpec::Hourly { minute }
+    }
+
+    fn weekdays(at: &str) -> ScheduleSpec {
+        ScheduleSpec::Weekdays { at: at.to_string() }
+    }
+
+    fn monthly(day: u32, at: &str) -> ScheduleSpec {
+        ScheduleSpec::Monthly {
+            day,
+            at: at.to_string(),
+        }
+    }
+
+    /// 确定性锚点:本地 `y-m-d h:min` 的 epoch ms。固定历史日期 + 工作日
+    /// 时刻 —— 各时区 DST 切换都在周日,工作日的墙上时刻必然存在。
+    fn local_ms(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
+        let naive = NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap();
+        Local
+            .from_local_datetime(&naive)
+            .earliest()
+            .expect("fixed local datetime valid")
+            .timestamp_millis()
+    }
+
     // --- 不变量 1:most_recent_due ∈ (not_before, now] ---
 
     #[test]
     fn most_recent_due_result_strictly_within_window() {
         let now = base_now_ms();
         for nb in [now - 90_000, now - 3_600_000, now - 3 * 86_400_000] {
-            for spec in [daily("09:00"), interval(30), weekly(Weekday::Mon, "08:30")] {
+            for spec in [
+                daily("09:00"),
+                interval(30),
+                weekly(Weekday::Mon, "08:30"),
+                hourly(0),
+                weekdays("09:00"),
+                monthly(1, "09:00"),
+            ] {
                 if let Some(d) = most_recent_due(&spec, now, nb) {
                     assert!(d > nb, "due {d} must be > not_before {nb}");
                     assert!(d <= now, "due {d} must be <= now {now}");
@@ -292,7 +467,17 @@ mod tests {
     #[test]
     fn next_fire_display_strictly_after_from() {
         let now = base_now_ms();
-        for spec in [daily("00:00"), daily("23:59"), interval(1), interval(1440)] {
+        for spec in [
+            daily("00:00"),
+            daily("23:59"),
+            interval(1),
+            interval(1440),
+            hourly(0),
+            hourly(59),
+            weekdays("09:00"),
+            monthly(1, "09:00"),
+            monthly(31, "09:00"),
+        ] {
             assert!(next_fire_display(&spec, now) > now);
         }
     }
@@ -308,6 +493,10 @@ mod tests {
             interval(1),
             weekly(Weekday::Mon, "08:30"),
             weekly(Weekday::Sun, "22:00"),
+            hourly(30),
+            weekdays("09:00"),
+            monthly(1, "09:00"),
+            monthly(31, "09:00"),
         ] {
             let next = next_fire_display(&spec, now);
             assert!(
@@ -463,6 +652,110 @@ mod tests {
         }
     }
 
+    // --- F2b:hourly 边界(确定性锚点,2026-03-10 是周二)---
+
+    #[test]
+    fn hourly_due_this_hour_when_minute_passed() {
+        let now = local_ms(2026, 3, 10, 10, 30);
+        let nb = local_ms(2026, 3, 10, 8, 0);
+        let d = most_recent_due(&hourly(15), now, nb).expect("this hour :15 due");
+        assert_eq!(d, local_ms(2026, 3, 10, 10, 15));
+    }
+
+    #[test]
+    fn hourly_due_previous_hour_when_minute_not_reached() {
+        let now = local_ms(2026, 3, 10, 10, 5);
+        let nb = local_ms(2026, 3, 10, 8, 0);
+        let d = most_recent_due(&hourly(45), now, nb).expect("previous hour :45 due");
+        assert_eq!(d, local_ms(2026, 3, 10, 9, 45));
+    }
+
+    #[test]
+    fn hourly_none_when_slot_consumed() {
+        let now = local_ms(2026, 3, 10, 10, 30);
+        // not_before 在 09:59 → 10:30 是最近未消费点;消费后同一时刻重评 None。
+        let due = most_recent_due(&hourly(30), now, local_ms(2026, 3, 10, 9, 59))
+            .expect("10:30 slot due");
+        assert_eq!(due, now);
+        assert_eq!(most_recent_due(&hourly(30), now, due), None);
+    }
+
+    #[test]
+    fn hourly_next_fire_skips_to_next_hour_when_minute_passed() {
+        let from = local_ms(2026, 3, 10, 10, 30);
+        assert_eq!(
+            next_fire_display(&hourly(15), from),
+            local_ms(2026, 3, 10, 11, 15)
+        );
+        assert_eq!(
+            next_fire_display(&hourly(45), from),
+            local_ms(2026, 3, 10, 10, 45)
+        );
+    }
+
+    // --- F2b:weekdays 边界(2026-03-10 周二 / 03-13 周五 / 03-16 周一)---
+
+    #[test]
+    fn weekdays_due_today_on_weekday() {
+        let now = local_ms(2026, 3, 10, 12, 0);
+        let nb = local_ms(2026, 3, 10, 0, 0);
+        let d = most_recent_due(&weekdays("09:00"), now, nb).expect("today's slot due");
+        assert_eq!(d, local_ms(2026, 3, 10, 9, 0));
+    }
+
+    #[test]
+    fn weekdays_monday_falls_back_to_friday() {
+        // 周一 07:00:今天 09:00 未到,周六/周日无候选 → 周五 09:00。
+        let now = local_ms(2026, 3, 16, 7, 0);
+        let nb = local_ms(2026, 3, 10, 0, 0);
+        let d = most_recent_due(&weekdays("09:00"), now, nb).expect("friday's slot due");
+        assert_eq!(d, local_ms(2026, 3, 13, 9, 0));
+        // 周五消费后,周一 09:00 前窗口内无新候选。
+        assert_eq!(most_recent_due(&weekdays("09:00"), now, d), None);
+    }
+
+    #[test]
+    fn weekdays_next_fire_friday_to_monday() {
+        let from = local_ms(2026, 3, 13, 10, 0); // 周五 10:00
+        assert_eq!(
+            next_fire_display(&weekdays("09:00"), from),
+            local_ms(2026, 3, 16, 9, 0)
+        );
+    }
+
+    // --- F2b:monthly 边界(D7:短月跳过)---
+
+    #[test]
+    fn monthly_due_this_month_when_slot_passed() {
+        let now = local_ms(2026, 3, 20, 12, 0);
+        let nb = local_ms(2026, 2, 1, 0, 0);
+        let d = most_recent_due(&monthly(15, "09:00"), now, nb).expect("this month 15th due");
+        assert_eq!(d, local_ms(2026, 3, 15, 9, 0));
+    }
+
+    #[test]
+    fn monthly_falls_back_to_previous_month() {
+        // 3 月 10 日,15 号未到 → 2 月 15 日。
+        let now = local_ms(2026, 3, 10, 12, 0);
+        let nb = local_ms(2026, 1, 1, 0, 0);
+        let d = most_recent_due(&monthly(15, "09:00"), now, nb).expect("feb 15th due");
+        assert_eq!(d, local_ms(2026, 2, 15, 9, 0));
+    }
+
+    #[test]
+    fn monthly_day31_skips_short_months() {
+        // 3 月 1 日:3/31 未来、2/31 不存在(跳过)、1/31 是最近未消费点。
+        let now = local_ms(2026, 3, 1, 12, 0);
+        let nb = local_ms(2026, 1, 1, 0, 0);
+        let d = most_recent_due(&monthly(31, "09:00"), now, nb).expect("jan 31st due");
+        assert_eq!(d, local_ms(2026, 1, 31, 9, 0));
+        // 1/31 触发后:2 月跳过,下一展示点落在 3/31。
+        assert_eq!(
+            next_fire_display(&monthly(31, "09:00"), d),
+            local_ms(2026, 3, 31, 9, 0)
+        );
+    }
+
     // --- parse / validate ---
 
     #[test]
@@ -487,6 +780,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_schedule_accepts_f2b_presets() {
+        assert_eq!(
+            parse_schedule(r#"{"kind":"hourly","minute":30}"#).unwrap(),
+            hourly(30)
+        );
+        assert_eq!(
+            parse_schedule(r#"{"kind":"weekdays","at":"09:00"}"#).unwrap(),
+            weekdays("09:00")
+        );
+        assert_eq!(
+            parse_schedule(r#"{"kind":"monthly","day":15,"at":"09:00"}"#).unwrap(),
+            monthly(15, "09:00")
+        );
+    }
+
+    #[test]
     fn parse_schedule_rejects_malformed_input() {
         assert!(parse_schedule("not json").is_err());
         assert!(parse_schedule(r#"{"kind":"cron","expr":"* * * * *"}"#).is_err());
@@ -495,5 +804,10 @@ mod tests {
         assert!(parse_schedule(r#"{"kind":"daily","at":"nine"}"#).is_err());
         assert!(parse_schedule(r#"{"kind":"interval","every_min":0}"#).is_err());
         assert!(parse_schedule(r#"{"kind":"weekly","weekday":"funday","at":"09:00"}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"hourly","minute":60}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"monthly","day":0,"at":"09:00"}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"monthly","day":32,"at":"09:00"}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"monthly","day":15,"at":"25:00"}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"weekdays","at":"09:60"}"#).is_err());
     }
 }

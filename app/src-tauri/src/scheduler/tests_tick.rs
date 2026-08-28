@@ -90,6 +90,8 @@ async fn seed_task(
             schedule_json: serde_json::to_string(&spec).unwrap(),
             enabled: true,
             next_fire_at: scheduler::now_epoch_ms() + step_ms,
+            max_runs: None,
+            ends_at: None,
         },
     )
     .await
@@ -104,11 +106,30 @@ async fn seed_task(
         .await
         .expect("backdate created_at");
     if let Some(fired) = last_fired_at {
-        mark_task_fired(&fx.state.db, &task.id, fired, fired + step_ms)
+        // 预设 = 模拟一次真实历史 fire(计一次 run_count,同生产语义)。
+        mark_task_fired(&fx.state.db, &task.id, fired, fired + step_ms, true)
             .await
             .expect("preset last_fired_at");
     }
     task
+}
+
+/// F2b:seed 后直写结束条件三列(同 created_at 回拨模式)。
+async fn set_end_conditions(
+    fx: &TickFixture,
+    task_id: &str,
+    max_runs: Option<i64>,
+    ends_at: Option<i64>,
+    run_count: i64,
+) {
+    sqlx::query("UPDATE scheduled_tasks SET max_runs = ?, ends_at = ?, run_count = ? WHERE id = ?")
+        .bind(max_runs)
+        .bind(ends_at)
+        .bind(run_count)
+        .bind(task_id)
+        .execute(&fx.state.db)
+        .await
+        .expect("set end conditions");
 }
 
 /// 记录替身:每次 fire 记下 FireContext 并返回 `Queued{uuid}`
@@ -370,6 +391,8 @@ async fn dedup_skips_when_previous_entry_still_queued() {
         audit_actions(&fx).await,
         vec![(actions::SKIPPED_DEDUP.to_string(), None)]
     );
+    // F2b:dedup 跳过不计数(prompt 未送达,仅消费 due 点)。
+    assert_eq!(task_row(&fx, &task.id).await.run_count, 1, "preset only");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -482,6 +505,147 @@ async fn started_acceptance_does_not_record_pending_uuid() {
         !pending.contains_key(&task.id),
         "Started carries no queue uuid → no dedup key"
     );
+    assert_eq!(
+        audit_actions(&fx).await,
+        vec![(actions::FIRED.to_string(), None)]
+    );
+}
+
+// --- F2b:结束条件(次数上限 / 结束日期)---
+
+/// gate 4 + gate 1:max_runs=1 的任务第 1 次 fire 后立即完成(enabled=0、
+/// completed 审计恰好一次),下 tick 不再扫描。
+#[tokio::test(flavor = "multi_thread")]
+async fn max_runs_task_completes_after_nth_fire() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let task = seed_task(&fx, 1, Some(now - 90_000), "t1").await;
+    // 预设的 last_fired_at 已带 run_count=1;上限改 2 → 本次 fire 后
+    // new_run_count=2 达限 → 完成。
+    set_end_conditions(&fx, &task.id, Some(2), None, 1).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let fire = recording_fire(records.clone());
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &fire).await;
+
+    assert_eq!(records.lock().unwrap().len(), 1, "fires the nth run");
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 2, "run_count incremented to the limit");
+    assert!(!row.enabled, "completed task auto-disabled");
+    assert_eq!(
+        audit_actions(&fx).await,
+        vec![
+            (actions::FIRED.to_string(), None),
+            (actions::COMPLETED.to_string(), Some("max_runs".to_string())),
+        ],
+        "fired then completed(max_runs), exactly once each"
+    );
+
+    // 完成后任务退出 enabled 扫描集:重跑 tick 无 fire、无重复审计。
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &fire).await;
+    assert_eq!(records.lock().unwrap().len(), 1, "no fire after completion");
+    assert_eq!(audit_actions(&fx).await.len(), 2, "completed audits once");
+}
+
+/// gate 1(兜底):run_count 已达上限的任务直接完成,不 fire。
+#[tokio::test(flavor = "multi_thread")]
+async fn max_runs_at_limit_task_does_not_fire() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let task = seed_task(&fx, 1, Some(now - 90_000), "t1").await;
+    set_end_conditions(&fx, &task.id, Some(1), None, 1).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert!(records.lock().unwrap().is_empty(), "no fire at limit");
+    let row = task_row(&fx, &task.id).await;
+    assert!(!row.enabled);
+    assert_eq!(
+        audit_actions(&fx).await,
+        vec![(actions::COMPLETED.to_string(), Some("max_runs".to_string()))]
+    );
+}
+
+/// gate 3:due 已越过 ends_at → 不 fire,直接完成(end_date)。
+#[tokio::test(flavor = "multi_thread")]
+async fn ends_at_past_due_does_not_fire_and_completes() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let task = seed_task(&fx, 1, Some(now - 90_000), "t1").await;
+    // due = now-30s;ends_at = now-45s → due > ends_at。
+    set_end_conditions(&fx, &task.id, None, Some(now - 45_000), 1).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert!(
+        records.lock().unwrap().is_empty(),
+        "past-end due must not fire"
+    );
+    let row = task_row(&fx, &task.id).await;
+    assert!(!row.enabled);
+    assert_eq!(row.run_count, 1, "run_count untouched (no fire)");
+    assert_eq!(
+        audit_actions(&fx).await,
+        vec![(actions::COMPLETED.to_string(), Some("end_date".to_string()))]
+    );
+}
+
+/// D9(含当日):due ≤ ends_at 照常 fire;若下一到期点越过 ends_at,
+/// fire 后立即完成(end_date)。
+#[tokio::test(flavor = "multi_thread")]
+async fn ends_at_inclusive_fires_then_completes() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let task = seed_task(&fx, 1, Some(now - 90_000), "t1").await;
+    // due = now-30s ≤ ends_at(now-10s)→ fire;next = now+30s > ends_at
+    // → gate 4 完成。
+    set_end_conditions(&fx, &task.id, None, Some(now - 10_000), 1).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert_eq!(
+        records.lock().unwrap().len(),
+        1,
+        "fires within the end date"
+    );
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 2);
+    assert!(!row.enabled, "no next due within ends_at → completed");
+    assert_eq!(
+        audit_actions(&fx).await,
+        vec![
+            (actions::FIRED.to_string(), None),
+            (actions::COMPLETED.to_string(), Some("end_date".to_string())),
+        ]
+    );
+}
+
+/// ends_at 尚远:fire 正常,任务保持 enabled(完成逻辑不误伤)。
+#[tokio::test(flavor = "multi_thread")]
+async fn ends_at_far_future_keeps_task_enabled() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let task = seed_task(&fx, 1, Some(now - 90_000), "t1").await;
+    set_end_conditions(&fx, &task.id, None, Some(now + 3_600_000), 1).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert_eq!(records.lock().unwrap().len(), 1);
+    let row = task_row(&fx, &task.id).await;
+    assert!(row.enabled, "ends_at not reached → stays enabled");
     assert_eq!(
         audit_actions(&fx).await,
         vec![(actions::FIRED.to_string(), None)]

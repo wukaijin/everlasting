@@ -35,6 +35,12 @@ pub struct ScheduledTaskRow {
     pub last_fired_at: Option<i64>,
     /// 纯 UI 展示;不参与触发判定。
     pub next_fire_at: i64,
+    /// 已 fire 次数(F2b;只计真正送入 chat_inner 的落账,dedup 跳过不计)。
+    pub run_count: i64,
+    /// 次数上限;NULL = 不限(F2b prd D10,对所有档位通用)。
+    pub max_runs: Option<i64>,
+    /// 结束日期(epoch ms,该时刻前含当日的到期点照常触发);NULL = 不限。
+    pub ends_at: Option<i64>,
 }
 
 /// [`insert_scheduled_task`] 的载荷。`next_fire_at` 由调用方按
@@ -49,10 +55,14 @@ pub struct NewScheduledTask {
     pub schedule_json: String,
     pub enabled: bool,
     pub next_fire_at: i64,
+    pub max_runs: Option<i64>,
+    pub ends_at: Option<i64>,
 }
 
 /// [`update_scheduled_task`] 的载荷。`None` 字段不动存量;`enabled` 的
-/// false→true 跳变触发 `last_fired_at = now`(重启用不补跑)。
+/// false→true 跳变触发 `last_fired_at = now` + `run_count = 0`(重启用
+/// 不补跑、计数重置,design §3 + F2b D8)。`max_runs` / `ends_at` 是双层
+/// Option:外层 `None` = 不动,内层 `None` = 显式清空为不限。
 #[derive(Debug, Clone, Default)]
 pub struct UpdateScheduledTask {
     pub name: Option<String>,
@@ -60,6 +70,8 @@ pub struct UpdateScheduledTask {
     pub schedule_json: Option<String>,
     pub target_session_id: Option<String>,
     pub enabled: Option<bool>,
+    pub max_runs: Option<Option<i64>>,
+    pub ends_at: Option<Option<i64>>,
 }
 
 /// epoch ms。与 `agent/chat.rs` 路由临界区的 `now_ms` 同口径。
@@ -84,11 +96,14 @@ fn row_from(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduledTaskRow, sqlx::Err
         created_at: row.try_get("created_at")?,
         last_fired_at: row.try_get("last_fired_at")?,
         next_fire_at: row.try_get("next_fire_at")?,
+        run_count: row.try_get("run_count")?,
+        max_runs: row.try_get("max_runs")?,
+        ends_at: row.try_get("ends_at")?,
     })
 }
 
 const SELECT_COLS: &str = "id, project_id, target_session_id, name, prompt, schedule, \
-     enabled, created_by, created_at, last_fired_at, next_fire_at";
+     enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at";
 
 /// 新建任务。id 服务端生成(uuid);`created_by` 恒 `'user'`(MVP;
 /// F2+ agent 复用同表时改由参数区分,prd D5)。
@@ -101,8 +116,8 @@ pub async fn insert_scheduled_task(
     sqlx::query(
         r#"
  INSERT INTO scheduled_tasks
- (id, project_id, target_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at)
- VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, NULL, ?)
+ (id, project_id, target_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at)
+ VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, NULL, ?, 0, ?, ?)
  "#,
     )
     .bind(&id)
@@ -114,6 +129,8 @@ pub async fn insert_scheduled_task(
     .bind(new.enabled as i64)
     .bind(created_at)
     .bind(new.next_fire_at)
+    .bind(new.max_runs)
+    .bind(new.ends_at)
     .execute(pool)
     .await?;
     Ok(get_scheduled_task(pool, &id)
@@ -198,11 +215,22 @@ pub async fn update_scheduled_task(
         .unwrap_or(existing.target_session_id.clone());
     let enabled = upd.enabled.unwrap_or(existing.enabled);
 
-    // false→true:用户主动重启用 → 从现在起算,不补跑存量(design §3)。
-    let last_fired_at = if !existing.enabled && enabled {
+    // false→true:用户主动重启用 → 从现在起算,不补跑存量(design §3);
+    // 结束条件计数同步清零(F2b D8:重新启用 = 重新计次)。
+    let re_enabled = !existing.enabled && enabled;
+    let last_fired_at = if re_enabled {
         Some(now_epoch_ms())
     } else {
         existing.last_fired_at
+    };
+    let run_count = if re_enabled { 0 } else { existing.run_count };
+    let max_runs = match upd.max_runs {
+        None => existing.max_runs,
+        Some(v) => v,
+    };
+    let ends_at = match upd.ends_at {
+        None => existing.ends_at,
+        Some(v) => v,
     };
 
     // 展示值重算时机:schedule 或 enabled 跳变时按当前时刻重推
@@ -219,7 +247,7 @@ pub async fn update_scheduled_task(
     sqlx::query(
         r#"
  UPDATE scheduled_tasks
- SET name = ?, prompt = ?, schedule = ?, target_session_id = ?, enabled = ?, last_fired_at = ?, next_fire_at = ?
+ SET name = ?, prompt = ?, schedule = ?, target_session_id = ?, enabled = ?, last_fired_at = ?, next_fire_at = ?, run_count = ?, max_runs = ?, ends_at = ?
  WHERE id = ?
  "#,
     )
@@ -230,6 +258,9 @@ pub async fn update_scheduled_task(
     .bind(enabled as i64)
     .bind(last_fired_at)
     .bind(next_fire_at)
+    .bind(run_count)
+    .bind(max_runs)
+    .bind(ends_at)
     .bind(id)
     .execute(pool)
     .await?;
@@ -239,6 +270,9 @@ pub async fn update_scheduled_task(
 /// 调度器落账(design §4:fire / dedup 跳过后调用)。`last_fired_at`
 /// 恒记**理论到期点 due**(防 interval 相位漂移,design §3);
 /// `next_fire_at` 写 `next_fire_display(schedule, due)` 展示值。
+/// `count_fire` 控制 `run_count + 1` 与否(F2b):真正送入 chat_inner
+/// 的落账(Queued/Started/Error)计一次;dedup 跳过(prompt 未送达)
+/// 仅消费 due 点不计数。
 /// 触碰 `last_fired_at` 时**不**套 false→true 语义 —— 本函数只被调度器
 /// 在任务保持 enabled 的前提下调用。返回 affected 行数(0 = 任务已被删)。
 pub async fn mark_task_fired(
@@ -246,14 +280,31 @@ pub async fn mark_task_fired(
     id: &str,
     last_fired_at: i64,
     next_fire_at: i64,
+    count_fire: bool,
 ) -> Result<u64, sqlx::Error> {
-    let result =
-        sqlx::query("UPDATE scheduled_tasks SET last_fired_at = ?, next_fire_at = ? WHERE id = ?")
-            .bind(last_fired_at)
-            .bind(next_fire_at)
-            .bind(id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE scheduled_tasks SET last_fired_at = ?, next_fire_at = ?, run_count = run_count + ? WHERE id = ?",
+    )
+    .bind(last_fired_at)
+    .bind(next_fire_at)
+    .bind(count_fire as i64)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 任务完成落账(F2b D8:达 `max_runs` 或到期点越过 `ends_at`)。
+/// 仅置 `enabled = 0` 让任务退出调度扫描;`last_fired_at` /
+/// `next_fire_at` / `run_count` / 结束条件三列保持落账原值(UI 依其
+/// 渲染「已完成 N/M」/「已结束」)。对已 disabled 行重写是列级 no-op
+/// (SQLite `rows_affected` 仍计 1,它数的是 WHERE 命中数);返回
+/// affected 行数(0 = 行已被删)。
+pub async fn mark_task_completed(pool: &SqlitePool, id: &str) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("UPDATE scheduled_tasks SET enabled = 0 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected())
 }
 
@@ -350,6 +401,8 @@ mod tests {
                 schedule_json: spec_json(r#"{"kind":"daily","at":"09:00"}"#),
                 enabled: true,
                 next_fire_at: 1_000,
+                max_runs: None,
+                ends_at: None,
             },
         )
         .await
@@ -414,6 +467,8 @@ mod tests {
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
                 enabled: true,
                 next_fire_at: 2_000,
+                max_runs: None,
+                ends_at: None,
             },
         )
         .await
@@ -428,11 +483,13 @@ mod tests {
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":60}"#),
                 enabled: false,
                 next_fire_at: 3_000,
+                max_runs: None,
+                ends_at: None,
             },
         )
         .await
         .expect("insert third");
-        mark_task_fired(&pool, &fired.id, 500, 3_500_000)
+        mark_task_fired(&pool, &fired.id, 500, 3_500_000, true)
             .await
             .expect("mark fired");
 
@@ -450,7 +507,7 @@ mod tests {
         let pool = test_pool().await;
         let (project_id, session_id) = seed_project_session(&pool).await;
         let row = insert_sample(&pool, &project_id, &session_id).await;
-        mark_task_fired(&pool, &row.id, 123, 4_555)
+        mark_task_fired(&pool, &row.id, 123, 4_555, true)
             .await
             .expect("mark fired");
 
@@ -610,6 +667,181 @@ mod tests {
         assert!(
             err.contains("群聊"),
             "message should name group chat: {err}"
+        );
+    }
+
+    // --- F2b:结束条件列 ---
+
+    /// 计数语义:count_fire 才 +1(dedup 跳过路径不计数);完成落账只翻
+    /// enabled,其余列保持;幂等(已 disabled 再写 no-op)。
+    #[tokio::test]
+    async fn mark_fired_counts_and_completion_flips_enabled_only() {
+        let pool = test_pool().await;
+        let (project_id, session_id) = seed_project_session(&pool).await;
+        let row = insert_sample(&pool, &project_id, &session_id).await;
+
+        mark_task_fired(&pool, &row.id, 100, 200, true)
+            .await
+            .expect("fire");
+        assert_eq!(
+            get_scheduled_task(&pool, &row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .run_count,
+            1,
+            "count_fire=true increments"
+        );
+        mark_task_fired(&pool, &row.id, 300, 400, false)
+            .await
+            .expect("dedup-style account");
+        assert_eq!(
+            get_scheduled_task(&pool, &row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .run_count,
+            1,
+            "count_fire=false (dedup skip) must not increment"
+        );
+
+        let affected = mark_task_completed(&pool, &row.id).await.expect("complete");
+        assert_eq!(affected, 1);
+        let done = get_scheduled_task(&pool, &row.id).await.unwrap().unwrap();
+        assert!(!done.enabled, "completed = disabled");
+        assert_eq!(done.run_count, 1, "count preserved");
+        assert_eq!(done.last_fired_at, Some(300), "basis preserved");
+        assert_eq!(done.next_fire_at, 400, "display value preserved");
+
+        // 重写是列级 no-op(SQLite rows_affected 数 WHERE 命中,仍为 1),
+        // 列值不动。
+        let affected = mark_task_completed(&pool, &row.id).await.expect("again");
+        assert_eq!(affected, 1, "matched row still counts as changed");
+        assert_eq!(
+            get_scheduled_task(&pool, &row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .run_count,
+            1
+        );
+    }
+
+    /// update 的双层 Option:外层 None 不动、Some(Some) 写入、Some(None)
+    /// 清空;重新启用(false→true)时 run_count 清零。
+    #[tokio::test]
+    async fn update_end_conditions_set_clear_and_reenable_resets_count() {
+        let pool = test_pool().await;
+        let (project_id, session_id) = seed_project_session(&pool).await;
+        let row = insert_scheduled_task(
+            &pool,
+            NewScheduledTask {
+                project_id: project_id.clone(),
+                target_session_id: session_id.clone(),
+                name: "限时".into(),
+                prompt: "p".into(),
+                schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
+                enabled: true,
+                next_fire_at: 1_000,
+                max_runs: Some(3),
+                ends_at: Some(9_999_999),
+            },
+        )
+        .await
+        .expect("insert with end conditions");
+        assert_eq!(row.max_runs, Some(3));
+        assert_eq!(row.ends_at, Some(9_999_999));
+        assert_eq!(row.run_count, 0, "starts at zero");
+
+        // 外层 None(name-only patch):结束条件不动。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                name: Some("改名".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.max_runs, Some(3), "untouched");
+        assert_eq!(upd.ends_at, Some(9_999_999), "untouched");
+
+        // Some(Some(5)):写入。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                max_runs: Some(Some(5)),
+                ends_at: Some(Some(12_345)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.max_runs, Some(5));
+        assert_eq!(upd.ends_at, Some(12_345));
+
+        // Some(None):清空为不限。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                max_runs: Some(None),
+                ends_at: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.max_runs, None, "explicit null clears");
+        assert_eq!(upd.ends_at, None, "explicit null clears");
+
+        // 计数两次 → 停用 → 重启用:run_count 清零(F2b D8)。
+        mark_task_fired(&pool, &row.id, 100, 200, true)
+            .await
+            .expect("fire 1");
+        mark_task_fired(&pool, &row.id, 400, 500, true)
+            .await
+            .expect("fire 2");
+        assert_eq!(
+            get_scheduled_task(&pool, &row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .run_count,
+            2
+        );
+        update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(upd.enabled);
+        assert_eq!(upd.run_count, 0, "re-enable resets the run count");
+        assert!(
+            upd.last_fired_at.is_some(),
+            "re-enable also resets the basis (existing semantics)"
         );
     }
 }

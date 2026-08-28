@@ -42,6 +42,12 @@ pub struct ScheduledTaskPayload {
     pub last_fired_at: Option<i64>,
     /// epoch ms;仅 UI 展示。
     pub next_fire_at: i64,
+    /// 已 fire 次数(F2b;dedup 跳过不计数)。
+    pub run_count: i64,
+    /// 次数上限;`None` = 不限(F2b)。
+    pub max_runs: Option<i64>,
+    /// 结束日期 epoch ms;`None` = 不限(F2b)。
+    pub ends_at: Option<i64>,
 }
 
 impl From<&st::ScheduledTaskRow> for ScheduledTaskPayload {
@@ -58,12 +64,34 @@ impl From<&st::ScheduledTaskRow> for ScheduledTaskPayload {
             created_at: row.created_at,
             last_fired_at: row.last_fired_at,
             next_fire_at: row.next_fire_at,
+            run_count: row.run_count,
+            max_runs: row.max_runs,
+            ends_at: row.ends_at,
         }
     }
 }
 
 fn invalid(msg: impl Into<String>) -> AppCommandError {
     AppCommandError::new(ErrorCategory::InvalidRequest, msg)
+}
+
+/// F2b 结束条件校验:`max_runs ≥ 1`;`ends_at` 必须晚于当前时刻
+/// (过去日期的任务一出生即完成,无意义,直接拒绝)。
+fn validate_end_conditions(
+    max_runs: Option<i64>,
+    ends_at: Option<i64>,
+) -> Result<(), AppCommandError> {
+    if let Some(m) = max_runs {
+        if m < 1 {
+            return Err(invalid(format!("次数上限必须不小于 1,得到 {m}")));
+        }
+    }
+    if let Some(t) = ends_at {
+        if t <= crate::scheduler::now_epoch_ms() {
+            return Err(invalid("结束日期必须晚于当前时间"));
+        }
+    }
+    Ok(())
 }
 
 /// `list_scheduled_tasks(projectId?)` — 全量 / 按 project(创建序)。
@@ -87,7 +115,10 @@ pub async fn list_scheduled_tasks(
 
 /// `create_scheduled_task` — `target_session_id` 为 `None` / 空串时新建
 /// 专用 session(标题同任务名,cwd 取 project 根);为 `Some` 时校验存在
-/// 且 classic 且 project 归属一致。返回新行(id 服务端生成)。
+/// 且 classic 且 project 归属一致。`max_runs` / `ends_at` 是 F2b 结束条件
+/// (None = 不限)。返回新行(id 服务端生成)。
+/// 参数保持扁平标量(IPC 形状铁律,providers.rs 同款 allow)。
+#[allow(clippy::too_many_arguments)]
 pub async fn create_scheduled_task_inner(
     state: &Arc<AppState>,
     project_id: String,
@@ -96,6 +127,8 @@ pub async fn create_scheduled_task_inner(
     prompt: String,
     schedule: String,
     enabled: Option<bool>,
+    max_runs: Option<i64>,
+    ends_at: Option<i64>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -104,6 +137,7 @@ pub async fn create_scheduled_task_inner(
     if prompt.trim().is_empty() {
         return Err(invalid("任务提示词(prompt)不能为空"));
     }
+    validate_end_conditions(max_runs, ends_at)?;
     // schedule 先过解析器(中文错误信息直出前端)。
     let spec = crate::scheduler::compute::parse_schedule(&schedule).map_err(invalid)?;
     // schedule 落库统一为「解析后再序列化」的规范形(拒绝多余字段 /
@@ -178,6 +212,8 @@ pub async fn create_scheduled_task_inner(
             schedule_json,
             enabled,
             next_fire_at,
+            max_runs,
+            ends_at,
         },
     )
     .await
@@ -186,6 +222,7 @@ pub async fn create_scheduled_task_inner(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_scheduled_task(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -194,6 +231,8 @@ pub async fn create_scheduled_task(
     prompt: String,
     schedule: String,
     enabled: Option<bool>,
+    max_runs: Option<i64>,
+    ends_at: Option<i64>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     create_scheduled_task_inner(
         state.inner(),
@@ -203,16 +242,21 @@ pub async fn create_scheduled_task(
         prompt,
         schedule,
         enabled,
+        max_runs,
+        ends_at,
     )
     .await
 }
 
 /// `update_scheduled_task` — 部分更新(`None` 字段不动存量)。schedule /
 /// target_session 变更时同样过校验;enabled false→true 由 WP1 db 层置
-/// `last_fired_at = now`(重启用不补跑,design §3)。`next_fire_at` 不由
-/// 本命令维护(展示值由 db 层在 schedule/enabled 跳变时重推,权威触发
-/// 判定每 tick 重算)。目标不存在返回 `InvalidRequest`(编辑竞态:
-/// 行已被他端删除时前端 toast,不静默)。
+/// `last_fired_at = now` + `run_count = 0`(重启用不补跑、计数重置,
+/// design §3 + F2b D8)。`max_runs` / `ends_at` 是 F2b 双层 Option:
+/// 外层 `None` = 不动,内层 `None`(wire 显式 `null`)= 清空为不限。
+/// `next_fire_at` 不由本命令维护(展示值由 db 层在 schedule/enabled 跳变时
+/// 重推,权威触发判定每 tick 重算)。目标不存在返回 `InvalidRequest`
+/// (编辑竞态:行已被他端删除时前端 toast,不静默)。
+#[allow(clippy::too_many_arguments)]
 pub async fn update_scheduled_task_inner(
     state: &Arc<AppState>,
     id: String,
@@ -221,11 +265,22 @@ pub async fn update_scheduled_task_inner(
     schedule: Option<String>,
     target_session_id: Option<String>,
     enabled: Option<bool>,
+    max_runs: Option<Option<i64>>,
+    ends_at: Option<Option<i64>>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     let existing = st::get_scheduled_task(&state.db, &id)
         .await
         .map_err(|e| anyhow::anyhow!("update_scheduled_task: load failed: {}", e))?
         .ok_or_else(|| invalid(format!("定时任务 {id} 不存在")))?;
+
+    // F2b 结束条件:只校验显式写入的值(清空动作不校验);
+    // 过去的 ends_at 会立刻完成,视为误操作直接拒绝。
+    if let Some(v) = max_runs {
+        validate_end_conditions(v, None)?;
+    }
+    if let Some(v) = ends_at {
+        validate_end_conditions(None, v)?;
+    }
 
     // schedule 合法性(提供才校验;非法拒绝**不写库**)。
     let schedule_json = match schedule.as_deref() {
@@ -273,6 +328,8 @@ pub async fn update_scheduled_task_inner(
             schedule_json,
             target_session_id: validated_target,
             enabled,
+            max_runs,
+            ends_at,
         },
     )
     .await
@@ -282,6 +339,7 @@ pub async fn update_scheduled_task_inner(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_scheduled_task(
     state: State<'_, Arc<AppState>>,
     id: String,
@@ -290,6 +348,8 @@ pub async fn update_scheduled_task(
     schedule: Option<String>,
     target_session_id: Option<String>,
     enabled: Option<bool>,
+    max_runs: Option<Option<i64>>,
+    ends_at: Option<Option<i64>>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     update_scheduled_task_inner(
         state.inner(),
@@ -299,6 +359,8 @@ pub async fn update_scheduled_task(
         schedule,
         target_session_id,
         enabled,
+        max_runs,
+        ends_at,
     )
     .await
 }

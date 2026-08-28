@@ -204,3 +204,25 @@ pub(crate) async fn add_turn_trace_column_if_missing(
     }
     Ok(())
 }
+
+/// Add a column to `scheduled_tasks` if it doesn't already exist.
+/// Mirrors [`add_session_column_if_missing`]. Added for F2b
+/// (schedule end conditions, 2026-08-28) — `run_count` / `max_runs` /
+/// `ends_at`:次数上限与结束日期的判定与展示列。
+pub(crate) async fn add_scheduled_tasks_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('scheduled_tasks') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!("ALTER TABLE scheduled_tasks ADD COLUMN {} {}", column, decl);
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}
