@@ -49,6 +49,7 @@ import type {
   ContentBlockView,
   ErrorCategory,
   InjectionEntry,
+  QueuedTaskOrigin,
 } from "./chat.types";
 import { useChecklistStore } from "./checklist";
 import { useMemoryStore } from "./memory";
@@ -1233,10 +1234,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
   /** R4:水合(SoT `list_queued_messages`)后把队列项物化为占位气泡,
    *  恢复页面刷新 / LRU 驱逐 / PWA 第二端后的可见性。按 queued.id
    *  去重(发送路径刚 push 的占位不重复物化);消息数组未加载(不在
-   *  map)时跳过,待下次切 session 的水合兜底。 */
+   *  map)时跳过,待下次切 session 的水合兜底。
+   *  F2 (2026-08-28):`origin` 随水合进占位气泡的 `queued` 字段 ——
+   *  调度器 fire 的条目在排队期间也显「定时」徽标(MessageItem)。 */
   function materializeQueuedPlaceholders(
     sessionId: string,
-    entries: ReadonlyArray<{ id: string; text: string }>,
+    entries: ReadonlyArray<{ id: string; text: string; origin?: QueuedTaskOrigin }>,
   ): void {
     const msgs = messagesBySession.get(sessionId);
     if (!msgs || entries.length === 0) return;
@@ -1249,7 +1252,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         id: genId(),
         role: "user",
         content: e.text,
-        queued: { id: e.id, position: 0 },
+        queued: { id: e.id, position: 0, origin: e.origin },
       });
     }
     renumberQueued(sessionId);

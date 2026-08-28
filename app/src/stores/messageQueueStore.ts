@@ -15,12 +15,17 @@ import { ref } from "vue";
 import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 import { useProjectsStore } from "./projects";
+import type { QueuedTaskOrigin } from "./chat.types";
 
 export interface QueuedEntry {
   /** 后端 uuid(R8 remove/recall 按 id 寻址,不用会漂移的位置)。 */
   id: string;
   text: string;
   position: number;
+  /** F2 定时任务(2026-08-28):来源标记(`QueuedMessage.origin`)。
+   *  调度器 fire 的条目携带 → 排队占位气泡显「定时」徽标;用户手发
+   *  条目恒 undefined(serde skip_serializing_if None 不上 wire)。 */
+  origin?: QueuedTaskOrigin;
 }
 
 export const useMessageQueueStore = defineStore("messageQueue", () => {
@@ -40,12 +45,18 @@ export const useMessageQueueStore = defineStore("messageQueue", () => {
     let entries: QueuedEntry[] = [];
     try {
       const rows = await transport.invoke<
-        Array<{ id: string; message: { content: unknown }; position?: number }>
+        Array<{
+          id: string;
+          message: { content: unknown };
+          position?: number;
+          origin?: QueuedTaskOrigin;
+        }>
       >("list_queued_messages", { sessionId });
       entries = rows.map((r, i) => ({
         id: r.id,
         text: flattenText(r.message?.content),
         position: r.position ?? i + 1,
+        origin: r.origin,
       }));
       queuedBySession.value.set(sessionId, entries);
     } catch (e) {

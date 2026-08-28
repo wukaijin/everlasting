@@ -117,6 +117,11 @@ export const useConfigStore = defineStore("config", () => {
   // 通知是观测层增强,配置读失败不应静默吞掉它。
   const turnCompleteNotify = ref(true);
 
+  // F2 定时任务(2026-08-28):全局调度 kill switch 的展示值(读法与
+  // 后端调度循环一致,fail-open 缺省开)。仅「定时任务」面板的状态行
+  // 消费;关掉时不做硬拦截(与后端语义一致:可建任务,只是不触发)。
+  const scheduledTasksEnabled = ref(true);
+
   async function load() {
     // Load providers + models from the catalog (replaces the old
     // `get_llm_config` env path). Store references are obtained at
@@ -147,8 +152,11 @@ export const useConfigStore = defineStore("config", () => {
     try {
       const appConfig = await transport.invoke<{
         turnCompleteNotifyEnabled: boolean;
+        scheduledTasksEnabled?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
+      // F2:additive 字段(旧 daemon 缺省 true)。
+      scheduledTasksEnabled.value = appConfig.scheduledTasksEnabled !== false;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
     }
@@ -161,6 +169,7 @@ export const useConfigStore = defineStore("config", () => {
     loaded,
     homeDir,
     turnCompleteNotify,
+    scheduledTasksEnabled,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,

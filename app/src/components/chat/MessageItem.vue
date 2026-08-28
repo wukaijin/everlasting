@@ -483,6 +483,30 @@ async function jumpToHandoffParent(): Promise<void> {
   }
 }
 
+// --- F2 定时任务 (2026-08-28): user 行「定时」来源标识 ------------------
+// 调度器注入的 user 消息落库时 metadata 信封带 `scheduled` 键
+// ({task_id, task_name, fired_at},Rust TaskOrigin serde 形)。零
+// rehydrate 改动 —— MessageRow.metadata 已整体透传,这里按 edited_at
+// 同款防御式读取。渲染为气泡下的一枚低调「定时」chip(task_name 作
+// title);实时占位不携带,reload 后才出现(R6 已定预期,不算缺陷)。
+const scheduledMeta = computed<{ task_id?: unknown; task_name?: unknown } | null>(
+  () => {
+    if (props.message.role !== "user") return null;
+    const meta = props.message.metadata;
+    if (!meta || typeof meta !== "object") return null;
+    const s = (meta as Record<string, unknown>).scheduled;
+    if (!s || typeof s !== "object") return null;
+    return s as { task_id?: unknown; task_name?: unknown };
+  },
+);
+
+const scheduledTitle = computed<string>(() => {
+  const name = scheduledMeta.value?.task_name;
+  return typeof name === "string" && name.length > 0
+    ? `由定时任务「${name}」自动触发`
+    : "由定时任务自动触发";
+});
+
 // --- B1 (2026-08-16) R2a: user-turn attachment thumbnails ---------------
 // Map `message.metadata.attachments` into the `MessageImages` entry
 // shape. Two producers write the manifest (see `AttachmentView` in
@@ -1044,13 +1068,40 @@ const messageImages = computed<
       `FileInjectionsHint.vue` for the per-row shape.
     -->
     <!--
+      F2 定时任务 (2026-08-28): 「定时」来源标识(气泡下、排队行之前)。
+      仅 metadata.scheduled 的 user 行渲染 —— 调度器注入轮 reload 后
+      权威出现(R6 预期)。
+    -->
+    <div
+      v-if="scheduledMeta"
+      class="f2-scheduled-row"
+      data-testid="msg-scheduled-badge"
+      :title="scheduledTitle"
+    >
+      <span class="f2-scheduled-chip">
+        <Icon name="clock" :size="11" />
+        定时
+      </span>
+    </div>
+
+    <!--
       F1 消息队列 (2026-08-25): 排队中徽标 + 单条撤销 / 退回输入框
       (R8)。仅内存占位有 `queued`;注入轮物化后本行随字段清除消失。
+      F2 (2026-08-28): 占位条目带 origin(scheduler fire)时追加
+      「定时」徽标 —— 排队期间也可见来源。
     -->
     <div
       v-if="message.role === 'user' && message.queued"
       class="f1-queued-row"
     >
+      <span
+        v-if="message.queued.origin"
+        class="f2-scheduled-chip f2-scheduled-chip--queued"
+        title="由定时任务自动触发"
+      >
+        <Icon name="clock" :size="11" />
+        定时
+      </span>
       <span class="f1-queued-chip">⏳ 排队中 · 第 {{ message.queued.position }} 位</span>
       <button
         class="f1-queued-btn"
@@ -1718,6 +1769,31 @@ const messageImages = computed<
   border-radius: 999px;
   padding: 1px 8px;
 }
+
+/* F2 定时任务 (2026-08-28): 「定时」来源 chip —— 与排队行同款低调
+   形状,clock 图标 + mono 小字;队列占位与落库行共用一枚样式。 */
+.f2-scheduled-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.f2-scheduled-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  opacity: 0.78;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
+  padding: 1px 8px;
+  cursor: default;
+}
+.f2-scheduled-chip--queued {
+  cursor: default;
+}
+
 .f1-queued-btn {
   border: none;
   background: transparent;

@@ -130,6 +130,16 @@ const meta = computed<{ iconName: string; colorVar: string }>(() => {
         iconName: "shrink",
         colorVar: "var(--color-accent)",
       };
+    // F2 定时任务 (2026-08-28, task `08-28-f2-scheduled-tasks`):
+    // scheduler fire lifecycle. Renders a clock icon in the accent
+    // color — 与 session header 的「定时」徽章同图标同色系
+    // (调度触发是系统治理动作,非错误;error 动作不翻红,详情在
+    // summary 行的 action/reason)。
+    case "scheduled-task":
+      return {
+        iconName: "clock",
+        colorVar: "var(--color-accent)",
+      };
     default:
       return { iconName: "info", colorVar: "var(--color-text-muted)" };
   }
@@ -293,6 +303,35 @@ const uiDiffAppliedSummary = computed<string>(() => {
   return `应用 diff · ${total} 个文件 (+${totalAdded} / -${totalRemoved}) · ${shown}${more}`;
 });
 
+/** F2 定时任务 (2026-08-28): scheduler fire lifecycle summary. Format:
+ *  `「任务名」 · 触发/补跑/去重跳过/队列关闭跳过/丢失/失败[ · reason]`.
+ *  Renders empty for non-scheduled_task_fired kinds. */
+const scheduledTaskSummary = computed<string>(() => {
+  if (parsed.value.kind !== "scheduled_task_fired") return "";
+  const p = parsed.value.payload;
+  const name = p.task_name ?? p.task_id ?? "?";
+  const actionLabel = (() => {
+    switch (p.action) {
+      case "fired":
+        return "触发";
+      case "catchup":
+        return "补跑";
+      case "skipped_dedup":
+        return "去重跳过";
+      case "skipped_queue_disabled":
+        return "队列关闭跳过";
+      case "lost":
+        return "丢失";
+      case "error":
+        return "失败";
+      default:
+        return p.action ?? "?";
+    }
+  })();
+  const reason = p.reason ? ` · ${p.reason}` : "";
+  return `「${name}」 · ${actionLabel}${reason}`;
+});
+
 /** Whether the payload was malformed / unknown — render a raw
  *  blob fallback row. */
 const isRawPayload = computed<boolean>(() => parsed.value.kind === "raw");
@@ -384,6 +423,10 @@ const isCritical = computed<boolean>(() => {
 
       <div v-if="uiDiffAppliedSummary" class="audit-item__ui-diff">
         {{ uiDiffAppliedSummary }}
+      </div>
+
+      <div v-if="scheduledTaskSummary" class="audit-item__scheduled">
+        {{ scheduledTaskSummary }}
       </div>
 
       <div v-if="isRawPayload && rawPayloadText" class="audit-item__raw">
@@ -539,6 +582,16 @@ const isCritical = computed<boolean>(() => {
   color: var(--color-tool-write);
   line-height: 1.4;
   word-break: break-all;
+}
+
+/* F2 定时任务 (2026-08-28): scheduler fire lifecycle line.
+   Accent-tinted mono — 与 leading clock icon 同色系(治理动作)。 */
+.audit-item__scheduled {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .audit-item__raw {

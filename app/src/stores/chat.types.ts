@@ -290,6 +290,18 @@ export interface AttachmentView {
   tokens_est?: number;
 }
 
+/** F2 定时任务 (2026-08-28):排队条目的来源标记(镜像 Rust
+ *  `scheduler::TaskOrigin`,internally tagged;随 `list_queued_messages`
+ *  的 `QueuedMessage.origin` 上 wire —— 排队占位显示「定时」徽标)。
+ *  仅调度器 fire 路径携带;用户手发消息恒无此字段。 */
+export interface QueuedTaskOrigin {
+  kind: "scheduled";
+  task_id: string;
+  task_name: string;
+  /** epoch ms,实际触发时刻。 */
+  fired_at: number;
+}
+
 /** Chat message with optional tool call/result/thinking metadata. */
 export interface ChatMessage {
   id: string;
@@ -308,7 +320,7 @@ export interface ChatMessage {
    * 撤销/退回的稳定寻址键(位置随增删漂移,不可用于寻址);
    * `position` 仅展示,由 `renumberQueued` 重排。
    */
-  queued?: { id: string; position: number };
+  queued?: { id: string; position: number; origin?: QueuedTaskOrigin | null };
   /** 交错思考: 按真实流序排列的内容块,reload 后由
    *  `rehydrateMessages` 从 DB `content` 数组透传(见
    *  `ContentBlockView` 头注释)。`MessageRunGroup` 优先用它做流式

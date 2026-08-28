@@ -45,6 +45,7 @@ import type { SessionSummary, StagedImage } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
+import { useScheduledTasksStore } from "../../stores/scheduledTasks";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { useQuestionCardsStore } from "../../stores/questionCards";
 import { useMemoryStore } from "../../stores/memory";
@@ -217,6 +218,19 @@ const isGroupChat = computed(
 const groupChatParticipants = computed(
   () => chatStore.currentSessionParticipants,
 );
+
+// F2 定时任务 (2026-08-28): session header 活跃任务徽章。数据源是
+// scheduledTasks store 的启动缓存(AppShell 挂载时拉一次 list;
+// 管理面每次变更后重拉),这里纯读不发起 IPC —— 有 enabled 任务 →
+// 时钟小 chip,title 列任务名。
+const scheduledTasksStore = useScheduledTasksStore();
+const activeScheduledTasks = computed(
+  () => scheduledTasksStore.enabledTasksForSession(chatStore.currentSessionId),
+);
+const activeScheduledBadgeTitle = computed<string>(() => {
+  const names = activeScheduledTasks.value.map((t) => `「${t.name}」`).join("、");
+  return `定时任务：${names}`;
+});
 
 const groupChatEditOpen = ref<boolean>(false);
 function openGroupChatEdit() {
@@ -712,6 +726,20 @@ onUnmounted(() => reviewStateStore.stop());
           <Icon name="users" :size="12" />
           群聊 ({{ groupChatParticipants?.length ?? 0 }} 参与者)
         </button>
+        <!--
+          F2 定时任务 (2026-08-28): session header 活跃任务徽章 ——
+          时钟小 chip,title 列任务名。数据来自 scheduledTasks store
+          的启动缓存(AppShell 拉一次 + 管理面变更后重拉),纯读。
+        -->
+        <span
+          v-if="activeScheduledTasks.length > 0"
+          class="chat-panel__chip chat-panel__chip--scheduled mobile-hide-scheduled"
+          :title="activeScheduledBadgeTitle"
+          data-testid="chat-panel-scheduled-badge"
+        >
+          <Icon name="clock" :size="12" />
+          定时 ({{ activeScheduledTasks.length }})
+        </span>
         <span
           v-if="showGitChip"
           class="chat-panel__chip chat-panel__chip--git mobile-hide-git"
@@ -1314,6 +1342,14 @@ onUnmounted(() => reviewStateStore.stop());
   flex-shrink: 0;
 }
 
+/* F2 定时任务 (2026-08-28): header 活跃任务徽章。accent 淡染与 git
+   chip 同族(状态指示),短文案 + flex-shrink:0 不被标题挤压。 */
+.chat-panel__chip--scheduled {
+  color: var(--color-accent-text);
+  border-color: var(--color-accent-muted);
+  flex-shrink: 0;
+}
+
 .chat-panel__chip--cwd {
   margin-left: auto;
   max-width: 50%;
@@ -1636,6 +1672,8 @@ onUnmounted(() => reviewStateStore.stop());
   .mobile-hide-cwd,
   .mobile-hide-git,
   .mobile-hide-group-chat,
+  /* F2 定时徽章:信息性 chip(无交互),移动端随次要 chips 收纳。 */
+  .mobile-hide-scheduled,
   :deep(.mobile-hide-worktree) {
     display: none;
   }

@@ -196,6 +196,23 @@ export interface UiDiffAppliedAuditPayload {
   total_files?: number;
 }
 
+/** F2 定时任务 (2026-08-28, task `08-28-f2-scheduled-tasks`):
+ *  payload for the scheduler's `scheduled_task_fired` audit rows.
+ *  Mirrors the Rust-side `record_scheduled_task_audit` helper's
+ *  `{ task_id, task_name, action[, reason] }` shape. `action`
+ *  discriminates the fire lifecycle per prd R3: `fired` (正常触发),
+ *  `catchup` (停机错过补跑一次), `skipped_dedup` (上次注入仍滞留队列,
+ *  跳过防堆积), `skipped_queue_disabled` (message_queue 关闭,legacy
+ *  分支会砍在跑轮), `lost` (Stop 清队丢带 origin 条目,best-effort
+ *  兜底), `error` (fire 失败,附 `reason`,如 queue_full)。 */
+export interface ScheduledTaskAuditPayload {
+  task_id?: string;
+  task_name?: string;
+  action?: string;
+  /** `error` 动作附带的失败原因(如 queue_full);其余动作缺省。 */
+  reason?: string;
+}
+
 /** Union of all parsed payload shapes + a `raw` fallback for
  *  malformed / unknown kinds. The renderer switches on the
  *  parsed shape's kind via the `kind` field on the row, not on
@@ -209,6 +226,7 @@ export type ParsedPayload =
   | { kind: "turn_limit_softcap"; payload: TurnLimitSoftcapAuditPayload }
   | { kind: "ui_diff_applied"; payload: UiDiffAppliedAuditPayload }
   | { kind: "context_budget_trim"; payload: ContextBudgetTrimAuditPayload }
+  | { kind: "scheduled_task_fired"; payload: ScheduledTaskAuditPayload }
   | { kind: "raw"; raw: unknown }
   | { kind: "empty" };
 
@@ -249,6 +267,10 @@ const UI_DIFF_APPLIED_KIND = "ui_diff_applied";
 // audit kind. Wire string is locked by
 // `AuditKind::ContextBudgetTrim.as_str()` in `agent/permissions/audit.rs`.
 const CONTEXT_BUDGET_TRIM_KIND = "context_budget_trim";
+// F2 定时任务 (2026-08-28): scheduler fire lifecycle audit kind.
+// Wire string is locked by `AuditKind::ScheduledTaskFired.as_str()`
+// in `agent/permissions/audit.rs`.
+const SCHEDULED_TASK_FIRED_KIND = "scheduled_task_fired";
 
 /** Parse the raw `payloadJson` for a row into a typed shape.
  *  Never throws — malformed / null / unknown shapes degrade
@@ -303,6 +325,15 @@ export function parseAuditPayload(
     return {
       kind: "context_budget_trim",
       payload: parsed as ContextBudgetTrimAuditPayload,
+    };
+  }
+  // F2 定时任务 (2026-08-28): scheduler fire lifecycle. The payload
+  // is `{task_id, task_name, action[, reason]}` — see
+  // `record_scheduled_task_audit` on the Rust side.
+  if (kind === SCHEDULED_TASK_FIRED_KIND) {
+    return {
+      kind: "scheduled_task_fired",
+      payload: parsed as ScheduledTaskAuditPayload,
     };
   }
   if (MODE_KINDS.has(kind)) {
@@ -392,6 +423,13 @@ export const AUDIT_KIND_OPTIONS: ReadonlyArray<{ value: string | null; label: st
   // pre/post unified totals. Wire string is locked by
   // `AuditKind::ContextBudgetTrim.as_str()` in the Rust side.
   { value: "context_budget_trim", label: "预算裁剪" },
+  // F2 定时任务 (2026-08-28, task `08-28-f2-scheduled-tasks`): the
+  // daemon scheduler's fire lifecycle per prd R3 — fired / catchup /
+  // skipped_dedup / skipped_queue_disabled / lost / error, all under
+  // one kind; the action rides the payload (see AuditLogItem's
+  // summary line). Wire string is locked by
+  // `AuditKind::ScheduledTaskFired.as_str()`.
+  { value: "scheduled_task_fired", label: "定时任务" },
 ];
 
 /** Visual family for the list row's leading icon. The renderer
@@ -412,6 +450,7 @@ export type AuditIconFamily =
   | "turn-limit-softcap"
   | "ui-diff-applied"
   | "context-budget-trim"
+  | "scheduled-task"
   | "unknown";
 
 /** Map a wire `kind` to the icon family the modal renders.
@@ -475,6 +514,11 @@ export function iconFamilyForKind(kind: string): AuditIconFamily {
     // bucket — 治理动作,非错误。
     case "context_budget_trim":
       return "context-budget-trim";
+    // F2 定时任务 (2026-08-28): scheduler fire lifecycle. Distinct
+    // family so the icon reads "定时触发" (clock, accent) instead of
+    // falling into the generic gray bucket — 与 header 定时徽章同图标.
+    case "scheduled_task_fired":
+      return "scheduled-task";
     default:
       return "unknown";
   }

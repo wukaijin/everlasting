@@ -21,9 +21,10 @@
 // for any session regardless of the current chat
 // surface.
 
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useProjectsStore } from "../../stores/projects";
 import { useChatStore } from "../../stores/chat";
+import { useScheduledTasksStore } from "../../stores/scheduledTasks";
 import { registerKeybinding } from "../../utils/useKeyboard";
 import { useSearchModal } from "../../composables/useSearchModal";
 import AppHeader from "./AppHeader.vue";
@@ -72,6 +73,15 @@ registerKeybinding({
 // 遮罩(@click close)。桌面下 open 状态被 CSS 忽略(Sidebar 常驻,fixed 定位
 // 只在 @media max-width:767px 生效)。
 const { mobileNavOpen, close: closeMobileNav } = useMobileNav();
+
+// F2 定时任务 (2026-08-28): 启动拉一次全量任务列表(设计 §7 ——
+// session header「活跃任务」徽章的数据源)。fire-and-forget:失败仅
+// 落 store.error(徽章降态不渲染),不阻塞首屏。管理面(Settings
+// tab)挂载/变更时会再拉,保持徽章新鲜。
+const scheduledTasksStore = useScheduledTasksStore();
+onMounted(() => {
+  void scheduledTasksStore.load();
+});
 
 /** Toast click handler. For cross-session pending-interaction
  *  toasts (`sessionId` set): if the target session belongs to the

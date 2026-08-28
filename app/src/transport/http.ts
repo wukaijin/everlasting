@@ -170,6 +170,14 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // review (C2)
   get_review_state: "review",
   get_current_task_slug: "review",
+  // F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):Settings
+  // 「定时任务」tab 的 CRUD 四条。缺映射时浏览器/sidecar/remote 模式
+  // 打开 Settings tab 即报 `unknown cmd`(Tauri IPC 模式侥幸走 IPC,
+  // 同 save_attachment / F1 三条的老坑;http.routes-sync.test.ts 守卫)。
+  create_scheduled_task: "scheduled_tasks",
+  delete_scheduled_task: "scheduled_tasks",
+  list_scheduled_tasks: "scheduled_tasks",
+  update_scheduled_task: "scheduled_tasks",
   set_session_color: "sessions",
   set_session_plugin_name: "sessions",
   set_session_workflow_enabled: "sessions",
