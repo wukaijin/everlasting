@@ -478,6 +478,18 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** BUGLIST CH5-2 (2026-08-29): /clear wipes the session's message
+   *  rows, so both cumulative-usage maps must drop the session too —
+   *  a reload would reseed them from the (now empty) DB, and keeping
+   *  the stale in-memory totals made the footer + latency popover
+   *  contradict their own empty state ("累计 4.5s" alongside "本次
+   *  session 还没有 LLM 耗时数据" on screen at once). Called from
+   *  `clearSessionMessages` (session-actions ctx). */
+  function resetUsageStats(sessionId: string): void {
+    tokenUsageBySession.delete(sessionId);
+    sessionTotalLatencyMs.delete(sessionId);
+  }
+
   /** F5 follow-up: per-turn latency list for the active
    *  session, in chronological order (oldest first). The
    *  ChatInput popover renders this as a row-by-row breakdown
@@ -635,6 +647,7 @@ export const useChatStore = defineStore("chat", () => {
     projectsStore,
     configStore,
     cancel,
+    resetUsageStats,
   });
   const {
     loadSessions,

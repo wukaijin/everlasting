@@ -24,6 +24,9 @@ export interface SessionActionsContext {
   projectsStore: ReturnType<typeof useProjectsStore>;
   configStore: ReturnType<typeof useConfigStore>;
   cancel: () => Promise<void>;
+  /** BUGLIST CH5-2: drop the session's cumulative token/latency maps
+   *  (chat store state) — /clear must match what a reload would show. */
+  resetUsageStats: (sessionId: string) => void;
 }
 
 export function createSessionActions(ctx: SessionActionsContext) {
@@ -38,6 +41,7 @@ export function createSessionActions(ctx: SessionActionsContext) {
     projectsStore,
     configStore,
     cancel,
+    resetUsageStats,
   } = ctx;
 
   async function loadSessions(projectId: string | null): Promise<void> {
@@ -269,6 +273,10 @@ export function createSessionActions(ctx: SessionActionsContext) {
     await transport.invoke("clear_session_messages", { sessionId });
     controller.evict(sessionId);
     diffCache.value.delete(sessionId);
+    // BUGLIST CH5-2: the DB rows are gone — drop the session's
+    // cumulative token/latency totals too, so the footer + latency
+    // popover match what a page reload would show (empty).
+    resetUsageStats(sessionId);
     // B12 Checklist: the cleared session has no history → no
     // committed checklist. Drop the live state so the card
     // hides until the next update_checklist fires.
