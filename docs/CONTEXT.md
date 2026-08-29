@@ -184,6 +184,9 @@ daemon 常驻调度器触发的本地定时任务。相关术语:
 ### TurnContinuation(F1,2026-08-25)
 `ChatEvent` 变体,队列驱动器在续轮(同 rid 内层 run 前)emit,作前端**续轮渲染边界**——`start` 是 run 内每次 LLM 调用的边界,不能复用;群聊 `Speaker` 同位置同角色。前端据此在消息流里追加"续轮"分隔,而非新起一轮。
 
+### Session Preview(会话摘要行)与群聊空 text(2026-08-29)
+`SessionSummary.preview` = 该 session **最后一条 `role='user'` 消息的 `text`**(DB `COALESCE` 子查询,无 user 消息为空串);侧边栏摘要行与删除确认(`needsDeleteConfirmation`)都吃这个字段。**群聊例外**:group_chat 的用户输入不落在 `messages.text`(落讨论配置),其 user 轮次 `text` **恒为空串**——所以群聊 preview 永远为空,任何「preview 判空 = 无内容」的推断对群聊都不成立(BUGLIST CH2-1 实证:38 条消息的群聊曾免确认直删)。涉及群聊有无内容的判断,用 `session_type === 'group_chat'` 单独分支,不要复用 preview 语义。
+
 ---
 
 ## 相关决策
