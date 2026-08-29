@@ -77,8 +77,14 @@ const qc = useQuestionCardsStore();
 const props = withDefaults(
   defineProps<{
     searchActive?: boolean;
+    /** Density variant. Owned by Sidebar (header toggle button),
+     *  which also persists it to localStorage — passed down as a
+     *  plain prop so the list re-renders on toggle. (历史坑:本组件
+     *  曾自持 ref、只在 setup 时读一次 localStorage,而 localStorage
+     *  写入不响应,导致点头部按钮列表毫无反应、刷新后才生效。) */
+    density?: "comfortable" | "compact";
   }>(),
-  { searchActive: false },
+  { searchActive: false, density: "comfortable" },
 );
 
 const emit = defineEmits<{
@@ -87,24 +93,6 @@ const emit = defineEmits<{
 }>();
 
 const searchQuery = ref<string>("");
-
-/** Density variant. localStorage-persisted so the user's choice
- *  survives a reload. Default "comfortable" matches the pre-PR
- *  layout (no regression for existing users). */
-type Density = "comfortable" | "compact";
-const DENSITY_LS_KEY = "everlasting:sessionDensity";
-const density = ref<Density>(
-  (localStorage.getItem(DENSITY_LS_KEY) as Density) || "comfortable",
-);
-watch(density, (v) => {
-  try {
-    localStorage.setItem(DENSITY_LS_KEY, v);
-  } catch {
-    // localStorage may be unavailable (private mode, quota
-    // exceeded). Silently swallow — the in-memory value still
-    // works for this session.
-  }
-});
 
 /** Per-group collapsed state. Default: 今天 expanded, others
  *  collapsed. Persisted in localStorage so the user's manual

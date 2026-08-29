@@ -68,10 +68,10 @@ function onSettingsClick() {
   settingsOpen.value = !settingsOpen.value;
 }
 
-// 2026-06-27 sidebar 搜索入口 + 密度切换: state lifted to
+// 2026-06-27 sidebar 搜索入口 + 密度切换: search state lifted to
 // Sidebar so both buttons can share their icons + the SessionList
-// receives `searchActive` as a prop. localStorage persistence
-// lives in SessionList (it owns the per-density CSS modifier).
+// receives `searchActive` as a prop. (density 同为 prop 下发,但
+// 状态与 localStorage 持久化都在本组件,见上方 toggleDensity。)
 //
 // `searchActive` is a one-way flip from the Sidebar; SessionList
 // emits `search-clear` to flip it back to false when the user
@@ -83,12 +83,15 @@ function toggleSearch() {
   searchActive.value = !searchActive.value;
 }
 
-/** Density toggle (comfortable / compact). Lifted to Sidebar so
- *  the icon can reflect the current density, but the persisted
- *  state is read/written by SessionList (single source of truth
- *  — both header button and list read the same localStorage key).
- *  We track the value here only to flip the icon; the actual
- *  CSS modifier on the list comes from SessionList's own state. */
+/** Density toggle (comfortable / compact). This component owns the
+ *  state AND its localStorage persistence (single source of truth):
+ *  the header button flips it, and SessionList receives it as a
+ *  plain prop so the list re-renders immediately. (历史坑:density
+ *  曾在 SessionList 内部自持 ref、只在 setup 读一次 localStorage,
+ *  与本组件写入不联通,按钮点了要刷新页面才生效 — 2026-08-30 改为
+ *  prop 下发。)
+ *  We track the value here to flip the icon/title; the actual
+ *  CSS modifier on the list comes from the prop. */
 type Density = "comfortable" | "compact";
 const density = ref<Density>(
   (localStorage.getItem("everlasting:sessionDensity") as Density) ||
@@ -176,6 +179,7 @@ function onSearchClear() {
     </div>
     <SessionList
       :search-active="searchActive"
+      :density="density"
       @search-clear="onSearchClear"
     />
     <div class="sidebar__footer">
