@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 121
+- **Total Sessions**: 122
 - **Last Active**: 2026-08-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1110 | Active |
+| `journal-4.md` | ~1135 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 122 | 2026-08-29 | 功能池批次截图走查(CH4-3/CH7-4/CH3-2 live 验证 + 状态还原) | `f424d14`, `6dfcd5a`, `f69c191`, `b56ad41`, `0aca0d2` | `main` |
 | 121 | 2026-08-29 | BUGLIST 功能池交互打磨批次(CH8-2/CH4-3/CH3-2/CH7-4) | `f424d14`, `6dfcd5a`, `f69c191`, `b56ad41`, `0aca0d2` | `main` |
 | 120 | 2026-08-29 | 定时任务表单换 reka-ui 日期/时间控件 | `97e79f0`, `a56bede` | `main` |
 | 118 | 2026-08-29 | schedule_task 家族:LLM detached dispatch 收口 F2 + 外部评审甄别 + HTTP daemon E2E | `6e3d2c2` | `main` |

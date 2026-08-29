@@ -1108,3 +1108,28 @@ ScheduledTasksTab 原生 date/time/datetime-local 全部替换为 reka 2.9.9 原
 ### Status
 
 [OK] **Completed**
+
+
+## Session 122: 功能池批次截图走查(CH4-3/CH7-4/CH3-2 live 验证 + 状态还原)
+
+**Date**: 2026-08-29
+**Task**: 功能池批次截图走查(CH4-3/CH7-4/CH3-2 live 验证 + 状态还原)
+**Branch**: `main`
+
+### Summary
+
+headless Chromium(ui-review.sh 同款 playwright-core 管线)对运行中 daemon 做真实交互走查:CH4-3 assistant 菜单 data-disabled 2 项/user 菜单 0 项,灰态与启用项对比截图确认;CH7-4 经 daemon API 先授临时放行(shell prefix git status)再走完整三步——确认弹窗展示行摘要未发 IPC、取消零副作用行保留、确认后行消失 DB 计数归零;CH3-2 四隐藏项目点 f5-smoke 重新打开→菜单即收起 badge 4→3。f5-smoke 已重新 hide、临时放行已删,DB 与验证前一致。CH8-2 无法黑盒触发(需 LLM 真实发起阻塞 ask_user_question),由 8 个单测覆盖(MessageList 回底跃迁 4 + send toast 4 含上传失败负路径)。产物 out/ui-review/manual-ch-batch/(gitignored)。环境坑:browser-use 运行时本环境无可用后端(agent.browsers.list() 空),改走项目 playwright-core 管线;env 变量名 BASE 会被宿主吞掉,换 APP_BASE_URL 后正常。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f424d14` | (see git log) |
+| `6dfcd5a` | (see git log) |
+| `f69c191` | (see git log) |
+| `b56ad41` | (see git log) |
+| `0aca0d2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
