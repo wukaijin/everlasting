@@ -1018,3 +1018,24 @@ F1 队列多 drain 丢消息病灶根治:ChatLoopRequest.origin(尾条单传)替
 ### Status
 
 [OK] **Completed**
+
+
+## Session 118: schedule_task 家族:LLM detached dispatch 收口 F2 + 外部评审甄别 + HTTP daemon E2E
+
+**Date**: 2026-08-29
+**Task**: schedule_task 家族:LLM detached dispatch 收口 F2 + 外部评审甄别 + HTTP daemon E2E
+**Branch**: `main`
+
+### Summary
+
+ROADMAP F1/F2 点名的 follow-up 落地:LLM 调度三件套(schedule_task/status/cancel,plain dispatch + Tier 5 silent Allow,作者面分离 created_by='agent')。规划经 trellis-brainstorm 三问定案(工具面三件/权限全静默/per-project 上限 20)+ 外部模型评审甄别:7 项中 6 采纳(含 P1 群聊过滤方向写反——filter_tools_for_session_type 是从普通 chat 剥群聊专属工具的名单,加错方向会毁掉特性;群聊隔离改走 group_chat_tool_defs 白名单天然排除零改动)、1 论据证伪(P3-4 称 search_history 输出含 session id,实际只内部打标不出现在输出)。关键实施范式:ToolContext 无 AppState → 抽 pool 级核心(create_scheduled_task_in_pool / create_session_in_pool)+ 薄包装;tool 侧双 gate(kill switch 同键常量、上限 20 TOCTOU 有意接受)不进核心保用户路径零变化;C7D 扩员 11→14 + 预算线 3960→4100(实测 4031)。验证:后端 2097 / 前端 1339 / vue-tsc / clippy / fmt 全绿;新增工具内联 13 例 + 集成 6 例(execute_tool 真分发臂 + worker/群聊双态过滤 + 尾部追加序)+ Tier 5 钉住测试;live E2E(e2e.sh 留档)经 HTTP daemon 真实 LLM 两轮:create 回复原样复述服务端 task_id(tool_result 消费实证)+ status→cancel 闭环。spec 收口 tool-contract/17 + scheduled-tasks agent 作者面 scenario,ROADMAP F1/F2 行更新。遗留:daemon::tunnel remote_cancel_stops_stream_forwarding 为既有 load 型 flake(SSE ping 竞态,隔离 3 连绿,本任务未触碰 tunnel,建议另立小债)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6e3d2c2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
