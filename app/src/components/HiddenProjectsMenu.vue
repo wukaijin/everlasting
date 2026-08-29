@@ -33,7 +33,7 @@
 // Out of scope:hidden projects 的批量操作、archive 主题、永久删除(项目
 // 删除是 V2 路线图项，PROPOSAL 明确 out of scope)。
 
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
@@ -44,6 +44,10 @@ import { useProjectsStore } from "../stores/projects";
 import Icon from "./Icon.vue";
 
 const projectsStore = useProjectsStore();
+
+// BUGLIST CH3-2:受控 open —— 「重新打开」成功后主动收起(多隐藏项目
+// 时列表会留下已恢复的陈旧行);剩 0 个时 v-if 卸载本就消失。
+const menuOpen = ref(false);
 
 onMounted(async () => {
   // Best-effort: populate the badge count on app start so the user
@@ -57,12 +61,14 @@ onMounted(async () => {
 });
 
 async function onUnhide(id: string): Promise<void> {
-  await projectsStore.unhideProject(id);
+  // CH3-2:仅成功时收起 —— 失败(store 已 toast)保持展开让用户重试。
+  const ok = await projectsStore.unhideProject(id);
+  if (ok) menuOpen.value = false;
 }
 </script>
 
 <template>
-  <DropdownMenuRoot v-if="projectsStore.hiddenProjects.length > 0">
+  <DropdownMenuRoot v-if="projectsStore.hiddenProjects.length > 0" v-model:open="menuOpen">
     <DropdownMenuTrigger as-child>
       <button
         type="button"
