@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端 spec 入口(设计 token / reka 约定索引)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka 2.9.9 原语清单、portal :deep() gotcha、wrapper data-* 转发约定"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "颜色/字号/圆角/动效 token,禁硬编码"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest+jsdom 坑:transport mock、teleport 查询、pointer API stub"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "移动端 320px 无溢出验收"}
