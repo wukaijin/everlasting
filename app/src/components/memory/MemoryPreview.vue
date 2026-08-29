@@ -477,11 +477,12 @@ function formatTimestamp(rfc3339: string): string {
     </section>
 
     <footer class="memory-preview__footer">
+      <!-- BUGLIST CH9-1: removed the "详见 docs/IMPLEMENTATION.md §4
+           (B5 决策)" pointer — repo-internal doc references mean
+           nothing to end users. -->
       <p>
         指令文件每 <strong>1 秒</strong> 自动监听变更;
         新建文件需重启 session 生效。
-        详细规范见
-        <code>docs/IMPLEMENTATION.md</code> §4(B5 决策)。
       </p>
     </footer>
 
