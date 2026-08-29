@@ -99,6 +99,7 @@ import { useModelsStore } from "../../stores/models";
 import { useProjectsStore } from "../../stores/projects";
 import { tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
 import { matchBuiltinCommandInput } from "../../utils/slashCommand";
+import { loadDraft, saveDraft } from "../../utils/draftStorage";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 import { registerShiftTabCycle } from "../../utils/useKeyboard";
 import { useMobileKeyboard } from "../../composables/useMobileKeyboard";
@@ -427,6 +428,34 @@ watch(
   () => {
     const text = useMessageQueueStore().takeRecallDraft(chatStore.currentSessionId);
     if (text != null) cm.input.value = text;
+  },
+  { immediate: true },
+);
+
+// === CH5-4 (2026-08-29): 草稿持久化 ==============================
+//
+// 输入框未发送文本原先只活在 CM doc(内存)——刷新/切会话即丢。
+// 两个 watcher 配对:
+//   ① 保存:input 镜像每次变化即写 localStorage(按当前上下文:
+//      有 session → sess:<id>;未保存的新对话 → new:<projectId>)。
+//      发送路径 dispatch 清空 doc → 镜像同步为 "" → saveDraft("").
+//      移除键,草稿不会在发送后复活。
+//   ② 还原:上下文切换(session/project 变化)与首次挂载时把持久化
+//      草稿灌回编辑器,走 replaceDoc(CM doc 与镜像一起更新)。
+//      挂载时 view 尚未创建,replaceDoc 只写镜像 → CM 以该 doc 初始化,
+//      刷新后草稿自然出现在输入框。
+// 只持久化文本;staged 图片不落盘(objectURL 本就过不了刷新)。
+watch(
+  () => cm.input.value,
+  (text) => {
+    saveDraft(chatStore.currentSessionId, projectsStore.currentProjectId, text);
+  },
+);
+
+watch(
+  () => [chatStore.currentSessionId, projectsStore.currentProjectId] as const,
+  ([sid, pid]) => {
+    cm.replaceDoc(loadDraft(sid, pid));
   },
   { immediate: true },
 );

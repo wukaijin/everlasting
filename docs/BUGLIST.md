@@ -135,7 +135,7 @@
 | 编号 | 建议 | 备注 |
 |---|---|---|
 | CH4-5 | ~~普通围栏代码块加块级复制按钮/语言标签~~ ✅ 已实现(5bd8f20,2026-08-29) | 结构化卡片路径已有现成实现(`CodeBlockPrimitive.vue:32-56`);markdown 管线已接:`.md-code` chrome + `useCodeBlockCopy` 事件委托,五处消费方同步 |
-| CH5-4 | 输入框草稿持久化(localStorage,按 session) | 现无任何草稿持久化,属新能力 |
+| CH5-4 | ~~输入框草稿持久化~~ ✅ 已实现(draftStorage + ChatInput 双 watcher,2026-08-29) | 按 session(`sess:<id>`)与未保存新对话(`new:<projectId>`)分键存 localStorage;只持久化文本,staged 图片不落盘(objectURL 过不了刷新) |
 | CH11-1 | 定时任务原生「一次性」档位 | 前后端六档对齐、都无 one-shot;现可用「结束条件=次数 1」近似(`compute.rs:44-60`) |
 | CH12-2 | 搜索历史关键词卡片 | 未实现;`SearchHistoryCard.vue` 是 agent 的 search_history 工具卡,易混淆,别复用其名 |
 | CH3-2 | 隐藏项目「重新打开」后下拉自动收起 | 小交互打磨 |
