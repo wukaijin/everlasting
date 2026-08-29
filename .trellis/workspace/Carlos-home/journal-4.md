@@ -1133,3 +1133,24 @@ headless Chromium(ui-review.sh 同款 playwright-core 管线)对运行中 daemon
 ### Status
 
 [OK] **Completed**
+
+
+## Session 123: P3 技术债打包清理:7 项闭合,台账 9→3(08-30-p3-debt-batch-cleanup)
+
+**Date**: 2026-08-30
+**Task**: P3 技术债打包清理:7 项闭合,台账 9→3(08-30-p3-debt-batch-cleanup)
+**Branch**: `main`
+
+### Summary
+
+DEBT.md P3 批量收敛:闭合 7 条(ALLOW/SHIM/HEALTH/DOC×2/FE-002/BUILD),TEST-001 改写为仅剩浏览器 runner 选型,新登记 TEST-003(干净 HEAD 上 e2e 既有 2 红,stash 对照验证非本批引入)。考证发现 4 条登记已自愈/过时:BUILD-001 manualChunks 已实现(build 实测零告警);DOC-002 三处漂移两处自愈只剩 subagent max_turns 注释;DOC-001 CLAUDE.md 状态段已被叙事治理删除;TEST-001 mode-change 链路已有 tests_resolve_mode_change 6+ 用例。实事:drive.rs 72 处任务名注释收敛(脚本断言式替换);health session_count -1 哨兵删除(零消费方,wire 删字段,前后端+e2e 同步);get_pending_question + test_provider 两个 deprecated IPC 六处全链删除,messageTimeline 双渲染路径定性为旧 DB 行兼容(streamController 实时态已填 contentBlocks,过时注释修正);三把 dead_code 伞摘除 — fallout 仅 search_memories_fts(cargo check --lib 视角孤儿,cargo test 才见 memories_tests/ 18 处调用,定性测试锁定件恢复+逐项 allow)与 ActiveVerifiedOnly(P5 决策保留的策略旋钮,逐项 allow);Yolo confirm/cancel resolve 失败接 warn toast + 2 vitest。坑:cargo check 增量缓存出过 0 告警假阴性(re-export 已删函数仍过检),touch 后才现形;grep 目录漏检 memories_tests/(只搜了 .rs 文件名)。回归:lib 2104 全绿、e2e 8 过 2 红(均 HEAD 既有)、clippy 0、fmt 干净、前端 1413 全绿、build 零 chunk 告警。spec daemon-server.md 收编『下线 IPC 命令六处清单』与『health stateless 契约』。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `pending` | (see git log) |
+
+### Status
+
+[OK] **Completed**
