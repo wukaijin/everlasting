@@ -15,7 +15,10 @@
 
 import { computed } from "vue";
 import Icon from "../Icon.vue";
-import type { PermissionGrantRow } from "../../stores/permissionGrants";
+import {
+  matchKindLabel,
+  type PermissionGrantRow,
+} from "../../stores/permissionGrants";
 
 const props = defineProps<{ row: PermissionGrantRow }>();
 const emit = defineEmits<{ (e: "revoke", row: PermissionGrantRow): void }>();
@@ -24,16 +27,17 @@ const emit = defineEmits<{ (e: "revoke", row: PermissionGrantRow): void }>();
  *  broadest grant), `path` = emerald (filesystem scope), `prefix` =
  *  violet (shell scope). Colors reuse the existing `--color-tool-*`
  *  family per design-tokens.md "Don't add a new `--color-*` token
- *  for a one-off use". */
+ *  for a one-off use". Label text comes from the shared
+ *  `matchKindLabel` (same source as the modal's revoke-confirm copy). */
 const kindMeta = computed<{ label: string; colorVar: string }>(() => {
   switch (props.row.matchKind) {
     case "path":
-      return { label: "路径", colorVar: "var(--color-tool-write)" };
+      return { label: matchKindLabel("path"), colorVar: "var(--color-tool-write)" };
     case "prefix":
-      return { label: "前缀", colorVar: "var(--color-tool-thinking)" };
+      return { label: matchKindLabel("prefix"), colorVar: "var(--color-tool-thinking)" };
     case "tool":
     default:
-      return { label: "整工具", colorVar: "var(--color-text-muted)" };
+      return { label: matchKindLabel("tool"), colorVar: "var(--color-text-muted)" };
   }
 });
 

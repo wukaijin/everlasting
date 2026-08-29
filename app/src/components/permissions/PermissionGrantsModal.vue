@@ -16,8 +16,17 @@
 // DB; the check path re-reads the DB on the next tool_use, so the
 // revoke takes effect with no cache signal. The UI removes the row
 // locally on success.
+//
+// BUGLIST CH7-4 (2026-08-29): D1's one-click immediacy is kept, but the
+// click now routes through a ConfirmDialog first — grants are security
+// posture and an accidental revoke re-prompts on the next tool_use,
+// so the mistake cost is asymmetric. The dialog is rendered INSIDE
+// DialogContent (RuntimeMemoryModal/MemoryPreview precedent): it's a
+// DOM descendant of the z-modal stacking context, so its own
+// --z-confirm backdrop still paints above the modal without any
+// z-index override.
 
-import { computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -28,8 +37,13 @@ import {
 } from "reka-ui";
 
 import Icon from "../Icon.vue";
+import ConfirmDialog from "../common/ConfirmDialog.vue";
 import PermissionGrantItem from "./PermissionGrantItem.vue";
-import { usePermissionGrantsStore, type PermissionGrantRow } from "../../stores/permissionGrants";
+import {
+  matchKindLabel,
+  usePermissionGrantsStore,
+  type PermissionGrantRow,
+} from "../../stores/permissionGrants";
 import { useChatStore } from "../../stores/chat";
 
 const open = defineModel<boolean>("open", { required: true });
@@ -67,8 +81,21 @@ async function onRefresh(): Promise<void> {
   await store.refresh();
 }
 
+/** CH7-4: the row awaiting revoke confirmation. `null` = dialog
+ *  closed; `onRevoke` (the item's 撤销 click) only STAGES the row
+ *  here — the actual `store.revoke` fires from the dialog's
+ *  confirm handler. Cancel / Esc / backdrop all just null it out
+ *  with zero side effects. */
+const revokeTarget = ref<PermissionGrantRow | null>(null);
+
 function onRevoke(row: PermissionGrantRow): void {
-  void store.revoke(row);
+  revokeTarget.value = row;
+}
+
+async function onRevokeConfirm(): Promise<void> {
+  const row = revokeTarget.value;
+  revokeTarget.value = null;
+  if (row) await store.revoke(row);
 }
 </script>
 
@@ -130,6 +157,28 @@ function onRevoke(row: PermissionGrantRow): void {
             />
           </ul>
         </div>
+
+        <!-- CH7-4 revoke confirmation. Rendered inside DialogContent
+             (stacking-context precedent, see file header). The body
+             mirrors the row's own presentation (kind label via the
+             shared matchKindLabel + tool name + match value). -->
+        <ConfirmDialog
+          :open="revokeTarget !== null"
+          title="撤销此放行?"
+          variant="danger"
+          confirm-text="撤销"
+          data-testid="grant-revoke-confirm"
+          @cancel="revokeTarget = null"
+          @confirm="onRevokeConfirm"
+        >
+          <template v-if="revokeTarget">
+            确认撤销「{{ matchKindLabel(revokeTarget.matchKind) }} ·
+            {{ revokeTarget.toolName }}{{
+              revokeTarget.matchValue ? ` ${revokeTarget.matchValue}` : ""
+            }}」?
+            撤销后下一个工具调用将重新询问。
+          </template>
+        </ConfirmDialog>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>

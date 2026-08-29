@@ -45,6 +45,20 @@ export interface PermissionGrantRow {
   grantedAt: string;
 }
 
+/** matchKind → 中文标签。PermissionGrantItem 的 kind chip 与
+ *  PermissionGrantsModal 的撤销确认文案共用,避免两处漂移。 */
+export function matchKindLabel(kind: PermissionGrantRow["matchKind"]): string {
+  switch (kind) {
+    case "path":
+      return "路径";
+    case "prefix":
+      return "前缀";
+    case "tool":
+    default:
+      return "整工具";
+  }
+}
+
 export const usePermissionGrantsStore = defineStore("permissionGrants", () => {
   const grants = ref<PermissionGrantRow[]>([]);
   const loading = ref<boolean>(false);
