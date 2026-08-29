@@ -137,11 +137,11 @@
 | CH4-5 | ~~普通围栏代码块加块级复制按钮/语言标签~~ ✅ 已实现(5bd8f20,2026-08-29) | 结构化卡片路径已有现成实现(`CodeBlockPrimitive.vue:32-56`);markdown 管线已接:`.md-code` chrome + `useCodeBlockCopy` 事件委托,五处消费方同步 |
 | CH5-4 | ~~输入框草稿持久化~~ ✅ 已实现(draftStorage + ChatInput 双 watcher,2026-08-29) | 按 session(`sess:<id>`)与未保存新对话(`new:<projectId>`)分键存 localStorage;只持久化文本,staged 图片不落盘(objectURL 过不了刷新) |
 | CH11-1 | ~~定时任务原生「一次性」档位~~ ✅ 已实现(2026-08-29) | `ScheduleSpec::Once{at_ms}` 第七档(wire `{"kind":"once","at_ms":<epoch ms>}`):唯一到期点消费后 tick gate4 即时完成(reason=`once`);create/update 校验 at_ms 必须未来;表单 datetime-local,单次档隐藏结束条件块,完成卡「下次」列渲染 — |
+| CH8-2 | ~~提问卡滚动可见性 + 聊天回答与卡片提交并存提示~~ ✅ 已实现(f424d14,2026-08-29) | MessageList watch 当前 session pending interaction,null→some 强制回底(some→some 不重复,重载路径本就回底);send 排队路径遇 pending warn toast「已排队;Agent 等卡片提交」,upload 失败提前 return 不误报 |
+| CH4-3 | ~~助手消息菜单禁用项的灰态视觉加强~~ ✅ 已实现(b56ad41,2026-08-29) | `[data-disabled]` 项 opacity 0.55 叠加 muted 色,禁用项不参与 highlight 背景(规则置于其后显式关闭) |
+| CH3-2 | ~~隐藏项目「重新打开」后下拉自动收起~~ ✅ 已实现(f69c191,2026-08-29) | DropdownMenuRoot 受控 `v-model:open`;unhide 成功才收起(失败保持展开可重试);最后一个恢复时 v-if 卸载本就消失 |
+| CH7-4 | ~~放行管理「撤销」加确认~~ ✅ 已实现(6dfcd5a,2026-08-29) | ConfirmDialog(danger)放 DialogContent 内(stack context 先例,免 z-index 特技);确认走既有 store.revoke,取消零副作用;matchKind 中文标签抽取 `matchKindLabel` 与行内 badge 共享 |
 | CH12-2 | 搜索历史关键词卡片 | 未实现;`SearchHistoryCard.vue` 是 agent 的 search_history 工具卡,易混淆,别复用其名 |
-| CH3-2 | 隐藏项目「重新打开」后下拉自动收起 | 小交互打磨 |
-| CH7-4 | 放行管理「撤销」加确认 | 影响低 |
-| CH8-2 | 提问卡滚动可见性 + 聊天回答与卡片提交并存提示 | 交互打磨 |
-| CH4-3 | 助手消息菜单禁用项的灰态视觉加强 | 逻辑正确,纯视觉 |
 
 ---
 

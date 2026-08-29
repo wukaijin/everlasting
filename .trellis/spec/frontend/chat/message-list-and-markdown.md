@@ -75,3 +75,19 @@ line-height: var(--leading-relaxed);           /* 1.6,长文容器统一 */
 - **盘古之白**:`text-autospace: ideograph-alpha` 已加在 markdown 容器
   (2026-08-14)。Chromium ≥140 原生支持,WebKit/Firefox 忽略声明 =
   零风险渐进增强。`text-spacing-trim` 会改变标点宽度,不启用。
+
+---
+
+## 4. pending interaction 强制回底契约(BUGLIST CH8-2a,2026-08-29)
+
+MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null → some
+跃迁**时强制回底(`isAtBottom = true` + 瞬时 scrollToBottom):
+
+- 触发面覆盖全部 pending 种类(question / loop_intervention / turn_limit_softcap /
+  mode_change / task_state_transition)—— 都是"agent 停下来等人"的阻塞态,值得
+  打断用户滚动位置;
+- some → some 不触发(切到本就有 pending 的 session 时,重载路径
+  `scrollAfterReload` 本就回底,重复只添抖动);
+- 配套:chatSendActions `send()` 在排队路径(queueingClassic)且当前 session 有
+  pending 时 warn toast 澄清"消息已排队但 Agent 在等卡片提交"(CH8-2b)——
+  mock `get_pending_interaction` 的测试坑见 `../test-environment.md` §8。
