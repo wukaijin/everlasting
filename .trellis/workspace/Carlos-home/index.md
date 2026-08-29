@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 123
+- **Total Sessions**: 124
 - **Last Active**: 2026-08-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1156 | Active |
+| `journal-4.md` | ~1177 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 124 | 2026-08-30 | e2e 既有 2 红修复 + 纳入 CI 基线(RULE-TEST-003 闭合) | `b5a41e5` | `main` |
 | 123 | 2026-08-30 | P3 技术债打包清理:7 项闭合,台账 9→3(08-30-p3-debt-batch-cleanup) | pending | `main` |
 | 122 | 2026-08-29 | 功能池批次截图走查(CH4-3/CH7-4/CH3-2 live 验证 + 状态还原) | `f424d14`, `6dfcd5a`, `f69c191`, `b56ad41`, `0aca0d2` | `main` |
 | 121 | 2026-08-29 | BUGLIST 功能池交互打磨批次(CH8-2/CH4-3/CH3-2/CH7-4) | `f424d14`, `6dfcd5a`, `f69c191`, `b56ad41`, `0aca0d2` | `main` |

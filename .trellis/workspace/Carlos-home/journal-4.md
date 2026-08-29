@@ -1154,3 +1154,24 @@ DEBT.md P3 批量收敛:闭合 7 条(ALLOW/SHIM/HEALTH/DOC×2/FE-002/BUILD),TEST
 ### Status
 
 [OK] **Completed**
+
+
+## Session 124: e2e 既有 2 红修复 + 纳入 CI 基线(RULE-TEST-003 闭合)
+
+**Date**: 2026-08-30
+**Task**: e2e 既有 2 红修复 + 纳入 CI 基线(RULE-TEST-003 闭合)
+**Branch**: `main`
+
+### Summary
+
+闭合 DEBT.md §RULE-TEST-003:两红均定性测试侧、生产零 diff。①e1a add_model 422 = fixture 缺 B1(2b647c0)后必填的 supports_images(serde Json rejection),补字段即绿;②e1b replay 非空 = WP4 改 compute_replay 语义(空 buffer+Some(last) 改发 resync 哨兵)时 e2e 的 4 个纯 SseRegistry 单元副本漂移 —— 整模块移除而非修单条(权威 home 是 sse.rs 内联 15 例,镜像必再漂),孤儿 import + 头注释同步。ci.yml Rust job 补 cargo test --test e2e(此前从未进 CI,长红近两周无人知)。验证:--test e2e 6/6 绿、--lib 2104 绿、clippy --test e2e 零告警、fmt 干净。观察:--lib 首轮曾有 2 例 flaky(2102/2104),连续 4 轮全绿未复现、身份未定,未立债条,复发时先抓失败名。spec daemon-server.md 收编 SSE 契约测试唯一 home + e2e 路由级定位 + 422 第一嫌疑排查法。台账 P3 3→2(PERM-001 审计分页 / TEST-001 浏览器 runner 选型)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b5a41e5` | (see git log) |
+
+### Status
+
+[OK] **Completed**
