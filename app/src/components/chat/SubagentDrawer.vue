@@ -45,6 +45,7 @@ import {
 } from "../../utils/transcriptPairing";
 import { truncate } from "../../utils/useTruncate";
 import { renderMarkdown } from "../../utils/markdown";
+import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 import { abbreviateDuration } from "../../utils/duration";
 import DrawerSection from "./DrawerSection.vue";
 import DrawerPromptCard from "./DrawerPromptCard.vue";
@@ -63,6 +64,8 @@ import WorkerMergeControls from "./WorkerMergeControls.vue";
 const store = useSubagentRunsStore();
 const chatStore = useChatStore();
 const permissionsStore = usePermissionsStore();
+// CH4-5: delegated copy handler for fenced-code chrome in v-html bodies.
+const { onMarkdownClick } = useCodeBlockCopy();
 
 /** FT-F-001 stage 2 (2026-06-20): repo root for the historical-mode
  *  PermissionAskBody path badge. Q2 decision — we assume the worker
@@ -812,7 +815,7 @@ function isPermissionAskLive(rid: string): boolean {
                     <span>⊘ Cancelled · {{ cancelledSuffix }}</span>
                   </div>
                   <div v-if="replyText.length > 0" class="subagent-drawer__reply-body">
-                    <div class="subagent-drawer__reply-markdown" v-html="replyPreviewHtml" />
+                    <div class="subagent-drawer__reply-markdown" @click="onMarkdownClick" v-html="replyPreviewHtml" />
                     <button
                       v-if="replyIsTruncated"
                       type="button"
@@ -1092,6 +1095,52 @@ function isPermissionAskLive(rid: string): boolean {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   line-height: 1.45;
+}
+
+/* CH4-5:围栏代码块 chrome,五处镜像同步(grep md-code 找全)。 */
+.subagent-drawer__reply-markdown :deep(.md-code) {
+  margin: 8px 0;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.subagent-drawer__reply-markdown :deep(.md-code__head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-bg-border);
+  font-size: 11px;
+}
+
+.subagent-drawer__reply-markdown :deep(.md-code__lang) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+}
+
+.subagent-drawer__reply-markdown :deep(.md-code__copy) {
+  padding: 1px 8px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.subagent-drawer__reply-markdown :deep(.md-code__copy:hover) {
+  color: var(--color-text-primary);
+}
+
+.subagent-drawer__reply-markdown :deep(.md-code pre) {
+  margin: 0;
+  border: none;
+  border-radius: 0;
 }
 
 .subagent-drawer__reply-markdown :deep(pre code) {

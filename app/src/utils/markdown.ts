@@ -22,7 +22,7 @@
 //   torrent of SSE deltas into one render. On `streaming=false` the
 //   caller invokes `flush()` to render the final frame immediately.
 
-import { marked } from "marked";
+import { marked, type Tokens } from "marked";
 import { markedHighlight } from "marked-highlight";
 import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { ref, type Ref } from "vue";
@@ -58,6 +58,46 @@ marked.use(
     },
   }),
 );
+
+// CH4-5 (2026-08-29): fenced code block chrome. marked-highlight leaves
+// the highlighted HTML in `token.text` with `escaped: true`; the default
+// `code` renderer would emit a bare `<pre><code>`. We wrap it in a
+// `.md-code` card carrying a language label + a copy button. The copy
+// button is raw HTML (no Vue listeners survive v-html) — the click is
+// handled by delegation in `composables/useCodeBlockCopy.ts` via the
+// `data-code-block` / `data-code-copy` hooks. Per-container chrome CSS
+// is mirrored next to each container's `:deep(pre)` block (see
+// .trellis/spec/frontend/chat/message-list-and-markdown.md §2).
+marked.use({
+  renderer: {
+    code({ text, lang, escaped }: Tokens.Code): string {
+      const langString = (lang ?? "").match(/^\S*/)?.[0] ?? "";
+      const label = langString || "code";
+      const codeHtml = escaped ? text : escapeHtml(text);
+      const langClass = langString ? ` language-${escapeHtml(langString)}` : "";
+      return (
+        `<div class="md-code" data-code-block>` +
+        `<div class="md-code__head">` +
+        `<span class="md-code__lang">${escapeHtml(label)}</span>` +
+        `<button type="button" class="md-code__copy" data-code-copy>复制</button>` +
+        `</div>` +
+        `<pre><code class="hljs${langClass}">${codeHtml}</code></pre>` +
+        `</div>`
+      );
+    },
+  },
+});
+
+/** Minimal HTML escaper for the renderer's own interpolations (lang
+ *  label; un-highlighted fallback code). Marked's internal `escape` is
+ *  not part of the public API. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 // --- DOMPurify configuration -------------------------------------------
 // The defaults already strip <script>, on* handlers, and javascript:

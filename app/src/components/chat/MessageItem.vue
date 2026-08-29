@@ -46,6 +46,7 @@ import { taskStateTransitionCardPropsFor as taskStateTransitionCardPropsResolved
 import { buildTimeline, shouldUseTimeline, speakerAccentOf, speakerLabelOf, showSpeakerChipFor } from "./messageTimeline";
 import { FILE_RE, FILE_TOKEN_BODY } from "./chatInputTokens";
 import { useMessageEditing } from "./useMessageEditing";
+import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 import { getToolResult } from "../../utils/messageFormat";
 import { createDebouncedRenderer, renderMarkdown } from "../../utils/markdown";
 import ThinkingBlock from "./ThinkingBlock.vue";
@@ -199,6 +200,10 @@ const {
   () => props.message,
   () => isStreaming.value,
 );
+
+// CH4-5: delegated copy handler for the fenced-code chrome emitted by
+// the markdown pipeline (v-html nodes can't carry Vue listeners).
+const { onMarkdownClick } = useCodeBlockCopy();
 
 // --- Markdown pipeline ----------------------------------------------------
 // `createDebouncedRenderer` collapses the SSE delta stream into
@@ -581,6 +586,7 @@ const messageImages = computed<
         <div
           v-if="summaryExpanded"
           class="msg-compact-summary__body msg__markdown"
+          @click="onMarkdownClick"
           v-html="summaryHtml"
         ></div>
       </div>
@@ -610,6 +616,7 @@ const messageImages = computed<
         <div
           v-if="summaryExpanded"
           class="msg-compact-summary__body msg__markdown"
+          @click="onMarkdownClick"
           v-html="summaryHtml"
         ></div>
       </div>
@@ -741,6 +748,7 @@ const messageImages = computed<
         <div v-else class="msg__bubble msg__bubble--timeline">
           <span
             class="msg__markdown"
+            @click="onMarkdownClick"
             v-html="item.html"
           />
         </div>
@@ -1695,6 +1703,55 @@ const messageImages = computed<
   border-radius: var(--radius-md);
   overflow-x: auto;
   line-height: 1.45;
+}
+
+/* CH4-5 (2026-08-29): markdown 围栏代码块 chrome —— renderer 把 <pre>
+   包进 .md-code wrapper(语言标签 + 复制按钮,复制走 useCodeBlockCopy
+   事件委托)。wrapper 接管边框/圆角,pre 只保留底色与内边距。与
+   :deep(pre) 节奏块同属镜像契约,五处同步(grep md-code 找全)。 */
+.msg__markdown :deep(.md-code) {
+  margin: var(--space-2) 0;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.msg__markdown :deep(.md-code__head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-bg-border);
+  font-size: 11px;
+}
+
+.msg__markdown :deep(.md-code__lang) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+}
+
+.msg__markdown :deep(.md-code__copy) {
+  padding: 1px 8px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.msg__markdown :deep(.md-code__copy:hover) {
+  color: var(--color-text-primary);
+}
+
+.msg__markdown :deep(.md-code pre) {
+  margin: 0;
+  border: none;
+  border-radius: 0;
 }
 
 .msg__markdown :deep(pre code) {

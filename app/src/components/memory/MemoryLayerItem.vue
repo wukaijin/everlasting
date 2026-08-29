@@ -22,12 +22,16 @@ import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, ref, watch } from "vue";
 
 import { renderMarkdown } from "../../utils/markdown";
+import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 import { useMemoryStore, type MemoryLayerInfo } from "../../stores/memory";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
   layer: MemoryLayerInfo;
 }>();
+
+// CH4-5: delegated copy handler for fenced-code chrome in the v-html body.
+const { onMarkdownClick } = useCodeBlockCopy();
 
 const emit = defineEmits<{
   /** User clicked "在外部编辑器打开". */
@@ -164,7 +168,7 @@ function onOpenEditor() {
         加载失败:{{ bodyError }}
       </div>
       <div v-else>
-        <div class="memory-layer__markdown" v-html="bodyHtml ?? ''" />
+        <div class="memory-layer__markdown" @click="onMarkdownClick" v-html="bodyHtml ?? ''" />
         <div v-if="bodyTruncated" class="memory-layer__truncated">
           (内容已截断;在外部编辑器中查看完整文件)
         </div>
@@ -310,6 +314,52 @@ function onOpenEditor() {
   overflow-x: auto;
   font-size: var(--text-xs);
   font-family: var(--font-mono);
+}
+
+/* CH4-5:围栏代码块 chrome,五处镜像同步(grep md-code 找全)。 */
+.memory-layer__markdown :deep(.md-code) {
+  margin: 8px 0;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.memory-layer__markdown :deep(.md-code__head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-bg-border);
+  font-size: 11px;
+}
+
+.memory-layer__markdown :deep(.md-code__lang) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+}
+
+.memory-layer__markdown :deep(.md-code__copy) {
+  padding: 1px 8px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-layer__markdown :deep(.md-code__copy:hover) {
+  color: var(--color-text-primary);
+}
+
+.memory-layer__markdown :deep(.md-code pre) {
+  margin: 0;
+  border: none;
+  border-radius: 0;
 }
 
 .memory-layer__markdown :deep(code) {

@@ -49,7 +49,11 @@ import {
 
 import { computed } from "vue";
 import { renderMarkdown } from "../../utils/markdown";
+import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 import Icon from "../Icon.vue";
+
+// CH4-5: delegated copy handler for fenced-code chrome in the v-html body.
+const { onMarkdownClick } = useCodeBlockCopy();
 
 /**
  * Where the markdown content came from. Drives the small chip in
@@ -172,6 +176,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
         <div class="markdown-detail-modal__body">
           <div
             class="markdown-detail-modal__markdown"
+            @click="onMarkdownClick"
             v-html="bodyHtml"
           />
         </div>
@@ -402,6 +407,52 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   line-height: 1.45;
+}
+
+/* CH4-5:围栏代码块 chrome,五处镜像同步(grep md-code 找全)。 */
+.markdown-detail-modal__markdown :deep(.md-code) {
+  margin: 8px 0;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.markdown-detail-modal__markdown :deep(.md-code__head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-bg-border);
+  font-size: 11px;
+}
+
+.markdown-detail-modal__markdown :deep(.md-code__lang) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+}
+
+.markdown-detail-modal__markdown :deep(.md-code__copy) {
+  padding: 1px 8px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.markdown-detail-modal__markdown :deep(.md-code__copy:hover) {
+  color: var(--color-text-primary);
+}
+
+.markdown-detail-modal__markdown :deep(.md-code pre) {
+  margin: 0;
+  border: none;
+  border-radius: 0;
 }
 
 .markdown-detail-modal__markdown :deep(pre code) {

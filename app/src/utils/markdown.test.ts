@@ -158,4 +158,49 @@ describe("renderMarkdown", () => {
       expect(html).toContain("<img");
     });
   });
+
+  // BUGLIST CH4-5 (2026-08-29): fenced code blocks are wrapped in a
+  // `.md-code` chrome (language label + copy button). The button is
+  // raw HTML — Vue listeners don't survive v-html — so it carries
+  // `data-code-copy` / `data-code-block` hooks consumed by the
+  // delegated handler in `composables/useCodeBlockCopy.ts`.
+  describe("fenced code block chrome (CH4-5)", () => {
+    it("wraps a fenced block in the md-code card with lang label + copy button", () => {
+      const html = renderMarkdown("```py\nprint(1)\n```");
+      expect(html).toContain('class="md-code" data-code-block');
+      expect(html).toContain('class="md-code__lang">py<');
+      expect(html).toContain('data-code-copy');
+      expect(html).toContain(">复制</button>");
+      // The highlighted code still rides inside the wrapper.
+      expect(html).toContain("hljs");
+      expect(html).toContain("language-py");
+      expect(html).toContain("print");
+    });
+
+    it("labels a fence without a language as 'code' and skips the language class", () => {
+      const html = renderMarkdown("```\nplain\n```");
+      expect(html).toContain('class="md-code__lang">code<');
+      expect(html).not.toContain("language-");
+    });
+
+    it("keeps only the first word of the info string as the label", () => {
+      const html = renderMarkdown('```ts title="x"\nlet a = 1;\n```');
+      expect(html).toContain('class="md-code__lang">ts<');
+      expect(html).toContain("language-ts");
+      expect(html).not.toContain('md-code__lang">ts title');
+    });
+
+    it("inline code stays bare (no chrome)", () => {
+      const html = renderMarkdown("`x`");
+      expect(html).not.toContain("data-code-block");
+      expect(html).not.toContain("data-code-copy");
+    });
+
+    it("chrome survives DOMPurify with no event-handler attributes", () => {
+      const html = renderMarkdown("```js\nalert(1)\n```");
+      expect(html).toContain("<button");
+      expect(html).not.toContain("onclick");
+      expect(html).not.toContain("<script");
+    });
+  });
 });

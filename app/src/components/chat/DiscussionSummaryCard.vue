@@ -14,12 +14,16 @@
 import { computed } from "vue";
 import { extractToolResultDisplay } from "../../utils/messageFormat";
 import { renderMarkdown } from "../../utils/markdown";
+import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat.types";
 
 const props = defineProps<{
   call: ToolCallInfo;
   result?: ToolResultInfo;
 }>();
+
+// CH4-5: delegated copy handler for fenced-code chrome in the v-html body.
+const { onMarkdownClick } = useCodeBlockCopy();
 
 /** 解 `{result, cwd}` 信封后的总结全文;result 未到达时为空。 */
 const summary = computed<string>(() => {
@@ -43,7 +47,7 @@ const pending = computed<boolean>(() => !props.result);
       </span>
     </div>
     <div v-if="!pending" class="discussion-summary__body">
-      <span class="msg__markdown" v-html="html" />
+      <span class="msg__markdown" @click="onMarkdownClick" v-html="html" />
     </div>
   </div>
 </template>
@@ -169,6 +173,52 @@ const pending = computed<boolean>(() => !props.result);
   border-radius: var(--radius-md);
   overflow-x: auto;
   line-height: 1.45;
+}
+
+/* CH4-5:围栏代码块 chrome,五处镜像同步(grep md-code 找全)。 */
+.discussion-summary__body :deep(.md-code) {
+  margin: var(--space-2) 0;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.discussion-summary__body :deep(.md-code__head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-bg-border);
+  font-size: 11px;
+}
+
+.discussion-summary__body :deep(.md-code__lang) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+}
+
+.discussion-summary__body :deep(.md-code__copy) {
+  padding: 1px 8px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.discussion-summary__body :deep(.md-code__copy:hover) {
+  color: var(--color-text-primary);
+}
+
+.discussion-summary__body :deep(.md-code pre) {
+  margin: 0;
+  border: none;
+  border-radius: 0;
 }
 
 .discussion-summary__body :deep(pre code) {
