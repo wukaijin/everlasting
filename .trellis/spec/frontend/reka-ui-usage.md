@@ -862,3 +862,48 @@ break future theme swaps.
 - `.trellis/spec/frontend/state-management.md` §
   "D3 PR2 (2026-06-17): inline message edit" — the
   store API + flow.
+
+---
+
+## Date/Time primitives (2026-08-29, task `08-29-sched-datetime-pickers`)
+
+ScheduledTasksTab 的日期/时间输入换用 reka-ui 2.9.9 的 `DatePicker*` /
+`TimeField*`(包装组件 `app/src/components/common/AppDatePicker.vue` /
+`AppTimeField.vue`,字符串 v-model 契约)。四个版本钉死约束,升 reka 时复查:
+
+### 1. `DatePickerPortal` 在 2.9.9 包根不存在
+
+`dist/DatePicker/` 里有 `DatePickerPortal.js` 文件,但包根 **不导出** 它
+(`import { DatePickerPortal } from "reka-ui"` 得到 `undefined`),渲染成
+`Invalid vnode type` 且无报错弹层直接不出现。教训:**确认原语存在要看
+包根导出,不能只看 dist 文件名**(`node -e "import('reka-ui').then(m =>
+console.log(typeof m.DatePickerPortal))"`)。DatePickerContent 自带
+portal,直接 `DatePickerRoot > DatePickerTrigger / DatePickerContent`。
+
+### 2. DatePicker 弹层样式:scoped / `:deep()` 都够不到,用非 scoped 块
+
+`DatePickerContent` 经 DatePickerPortal(Teleport)+ popper 渲染链后,
+元素**不带任何 data-v scope attr**(与 SelectContent 不同——后者的
+包裹层根会拿父组件 scope attr,所以 Select 的 `:deep()` 生效)。实证:
+`:deep(.adp__pop)` 与 plain scoped 的 computed background 都是
+transparent。修法:弹层样式放组件的**第二个非 `<style scoped>` 块**,
+类名 `adp__` 前缀命名空间化防泄漏。
+
+### 3. 弹层 z-index 要提 reka 的 fixed popper 包裹层
+
+popper 包裹层 `position: fixed; z-index: auto`,settings modal 内容是
+z 2001 → 弹层被整个盖住(截图实证:trigger 有 data-state=open 高亮但
+看不见面板)。内容元素是 static,z-index 写它身上无效。修法:
+
+```css
+body > div:has(> .adp__pop) { z-index: var(--z-over-modal); }
+```
+
+### 4. TimeField 的 `hourCycle` 是数字 `12 | 24`
+
+类型声明写成 `HourCycle`(`@internationalized/date` 的字符串 union
+"h23" 等)但 reka 实现 `normalizeHourCycle` 只认数字,传字符串被静默
+忽略落回 locale 默认。另外 `locale="zh-CN"` 的 24h 格式还会多出一个
+**空白 literal 分段**(dayPeriod 槽位残留),需按 `value.trim() === ""`
+过滤(AppTimeField 的 `visibleSegments`)。分段键入在 vitest+jsdom 可
+直接 `trigger("keydown", { key: "9" })` 驱动。
