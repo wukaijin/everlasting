@@ -361,6 +361,15 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   padding-left: 20px;
 }
 
+/* CH4-2:preflight 吃掉 list marker,镜像块五处同步补回。 */
+.markdown-detail-modal__markdown :deep(ul) {
+  list-style: disc;
+}
+
+.markdown-detail-modal__markdown :deep(ol) {
+  list-style: decimal;
+}
+
 .markdown-detail-modal__markdown :deep(ul:last-child),
 .markdown-detail-modal__markdown :deep(ol:last-child) {
   margin-bottom: 0;

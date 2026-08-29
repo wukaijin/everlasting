@@ -1627,6 +1627,21 @@ const messageImages = computed<
   padding-left: var(--space-6);
 }
 
+/* BUGLIST CH4-2 (2026-08-29):Tailwind v4 preflight 全局重置
+   `ul, ol { list-style: none }`,而本节奏镜像块只补回了
+   margin/padding —— 列表 marker 因此消失(截图实证)。这里显式
+   补回浏览器默认 marker;契约块见
+   .trellis/spec/frontend/chat/message-list-and-markdown.md §2,
+   五处镜像同步(MessageItem / DiscussionSummaryCard /
+   MarkdownDetailModal / SubagentDrawer / MemoryLayerItem)。 */
+.msg__markdown :deep(ul) {
+  list-style: disc;
+}
+
+.msg__markdown :deep(ol) {
+  list-style: decimal;
+}
+
 .msg__markdown :deep(ul:last-child),
 .msg__markdown :deep(ol:last-child) {
   margin-bottom: 0;

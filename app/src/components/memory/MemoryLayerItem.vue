@@ -341,6 +341,15 @@ function onOpenEditor() {
   margin: 0 0 8px 0;
 }
 
+/* CH4-2:preflight 吃掉 list marker,镜像块五处同步补回。 */
+.memory-layer__markdown :deep(ul) {
+  list-style: disc;
+}
+
+.memory-layer__markdown :deep(ol) {
+  list-style: decimal;
+}
+
 .memory-layer__markdown :deep(a) {
   color: var(--color-accent-text);
   text-decoration: underline;

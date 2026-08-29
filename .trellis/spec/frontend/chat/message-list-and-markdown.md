@@ -48,15 +48,21 @@
 
 ```css
 /* 镜像块(MessageItem.vue / DiscussionSummaryCard.vue /
-   MarkdownDetailModal.vue / SubagentDrawer reply 区,四处同步) */
+   MarkdownDetailModal.vue / SubagentDrawer reply 区 /
+   MemoryLayerItem,五处同步) */
 :deep(p)      { margin: var(--space-3) 0; }   /* 12px */
 :deep(li)     { margin: var(--space-1) 0; }   /* 4px */
 :deep(ul, ol) { margin: var(--space-1) 0 var(--space-3); }  /* 4/12 */
 :deep(h1..h4) { margin: var(--space-4) 0 var(--space-1); }  /* 16/4 */
 line-height: var(--leading-relaxed);           /* 1.6,长文容器统一 */
+/* list marker 必须显式补回(BUGLIST CH4-2,2026-08-29):Tailwind
+   v4 preflight 全局 `ul, ol { list-style: none }`,只镜像 margin/
+   padding 的话列表符号直接消失(截图实证)。 */
+:deep(ul)     { list-style: disc; }
+:deep(ol)     { list-style: decimal; }
 ```
 
-改节奏时四处一起改(grep `.msg__markdown` 找全消费方)。
+改节奏时五处一起改(grep `.msg__markdown` 找全消费方)。
 
 ---
 

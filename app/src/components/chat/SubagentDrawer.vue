@@ -1052,6 +1052,15 @@ function isPermissionAskLive(rid: string): boolean {
   padding-left: var(--space-6);
 }
 
+/* CH4-2:preflight 吃掉 list marker,镜像块五处同步补回。 */
+.subagent-drawer__reply-markdown :deep(ul) {
+  list-style: disc;
+}
+
+.subagent-drawer__reply-markdown :deep(ol) {
+  list-style: decimal;
+}
+
 .subagent-drawer__reply-markdown :deep(ul:last-child),
 .subagent-drawer__reply-markdown :deep(ol:last-child) {
   margin-bottom: 0;

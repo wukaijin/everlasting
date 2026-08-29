@@ -126,6 +126,15 @@ const pending = computed<boolean>(() => !props.result);
   padding-left: var(--space-6);
 }
 
+/* CH4-2:preflight 吃掉 list marker,镜像块五处同步补回。 */
+.discussion-summary__body :deep(ul) {
+  list-style: disc;
+}
+
+.discussion-summary__body :deep(ol) {
+  list-style: decimal;
+}
+
 .discussion-summary__body :deep(ul:last-child),
 .discussion-summary__body :deep(ol:last-child) {
   margin-bottom: 0;
