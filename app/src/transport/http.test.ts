@@ -197,6 +197,22 @@ describe("httpTransport.invoke", () => {
     });
   });
 
+  // BUGLIST CH3-3/CH7-3 (2026-08-29): `e.message` lands verbatim in
+  // user-facing toasts (useErrorBus / store catches) — it must carry
+  // the backend message only, no "[httpTransport] <status>: " prefix.
+  it("rejects with a clean message (no transport-layer prefix in e.message)", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({ message: "path 'x' does not exist" }),
+      text: async () => '{"message":"path \'x\' does not exist"}',
+    } as Response);
+    const t = await loadTransport();
+    await expect(t.invoke("create_project", { path: "x" })).rejects.toThrow(
+      /^path 'x' does not exist$/,
+    );
+  });
+
   it("returns null on empty body (chat / cancel_chat return Json(()))", async () => {
     const t = await loadTransport();
     const r = await t.invoke("cancel_chat", { sessionId: "s1" });

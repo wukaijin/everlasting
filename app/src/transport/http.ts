@@ -232,7 +232,12 @@ export class TransportError extends Error {
       typeof body === "string"
         ? body
         : body?.message ?? `HTTP ${status}`;
-    super(`[httpTransport] ${status}: ${msg}`);
+    // BUGLIST CH3-3/CH7-3 (2026-08-29): the old "[httpTransport]
+    // <status>: " prefix leaked straight into user-facing toasts —
+    // every display path (useErrorBus, store catches) reads
+    // `e.message` verbatim. Identification stays available for
+    // debugging via `name` + `status`.
+    super(msg);
     this.name = "TransportError";
   }
 }
