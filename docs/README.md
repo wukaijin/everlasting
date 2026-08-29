@@ -21,6 +21,7 @@
 | [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) | remote 云服务器部署手册 | everlasting-remote 服务端部署(国内 2C2G 服务器 + nginx + remote.sh / deploy-remote.sh) | 部署 remote daemon / 排查部署问题时 |
 | [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) | 远程访问 E2E 部署与验收手册 | S1+S2+S4+S5 全链路(E2E 隧道管线 / 配对 / PWA)逐场景验收步骤 | 端到端验证远程访问 / 回滚排查时 |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
+| [BUGLIST.md](./BUGLIST.md) | 缺陷跟踪 | 2026-08-29 WebUI 全量测试的甄别结论 + 待修复清单(状态跟踪,修一个勾一个) | 领缺陷修复 / 看某测试问题是否设计如此时 |
 | [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 11 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
 | [HACKING-markdown.md](./HACKING-markdown.md) | 前端 markdown 渲染陷阱 | marked v18 + DOMPurify 的 XSS / 协议白名单 / 测试 fixture | 改前端 markdown 渲染 / 加 vitest fixture 时 |
