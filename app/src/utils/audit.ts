@@ -539,18 +539,13 @@ export function labelForKind(kind: string): string {
 // Centralized so a refactor to i18n later has one chokepoint.
 // ---------------------------------------------------------------------------
 
-/** Format the SQLite `ts` ("YYYY-MM-DD HH:MM:SS") as `HH:MM:SS`.
- *  Defensive: on a malformed `ts` (e.g. NULL-ish empty string),
- *  returns the input verbatim. */
-export function formatTimeOfDay(ts: string): string {
-  // SQLite `datetime('now')` is "YYYY-MM-DD HH:MM:SS" (24h, UTC).
-  // We only display the time portion — the date is implicit (it's
-  // always "today" or "this session").
-  const idx = ts.indexOf(" ");
-  if (idx < 0) return ts;
-  const time = ts.slice(idx + 1);
-  return time.length === 8 ? time : ts;
-}
+// BUGLIST CH13-1 (2026-08-29): `formatTimeOfDay` moved to ./time.ts —
+// it now converts the UTC wall-clock to LOCAL time via Date (the
+// sliced-UTC version displayed 06:54 for a 15:54 local event) and
+// belongs beside `formatTime`, which already documents the same
+// UTC→local gotcha. Re-exported here so existing import sites keep
+// working.
+export { formatTimeOfDay } from "./time";
 
 /** Format `duration_ms` as a short human string.
  *  - < 1000ms   → "123ms"

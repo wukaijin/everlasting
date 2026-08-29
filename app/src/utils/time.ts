@@ -32,3 +32,21 @@ export function formatTime(iso: string | null | undefined): string {
   const s = d.getSeconds().toString().padStart(2, "0");
   return `${h}:${m}:${s}`;
 }
+
+/** Format a SQLite `datetime('now')` value ("YYYY-MM-DD HH:MM:SS",
+ *  UTC, no offset marker) as a local `HH:MM:SS` string.
+ *
+ *  BUGLIST CH13-1 (2026-08-29): moved here from ./audit.ts and fixed
+ *  to actually convert — the old version sliced the raw string and
+ *  displayed the UTC wall clock (06:54 for a 15:54 local event,
+ *  ~8h drift from everything else in the UI). Same gotcha as
+ *  `formatTime` above: hand `Date` an explicit `Z`, then read local
+ *  getters. Malformed input (no space / time portion ≠ HH:MM:SS)
+ *  returns the input verbatim, matching the old defensive contract. */
+export function formatTimeOfDay(ts: string): string {
+  const idx = ts.indexOf(" ");
+  if (idx < 0) return ts;
+  const time = ts.slice(idx + 1);
+  if (time.length !== 8) return ts;
+  return formatTime(`${ts.slice(0, idx)}T${time}Z`);
+}

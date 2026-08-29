@@ -15,7 +15,7 @@
 // UTC→local intent is documented in the helper itself.)
 
 import { describe, it, expect } from "vitest";
-import { formatTime } from "./time";
+import { formatTime, formatTimeOfDay } from "./time";
 
 function pad(n: number): string {
   return n.toString().padStart(2, "0");
@@ -59,5 +59,30 @@ describe("formatTime", () => {
   it("returns the placeholder for unparseable input", () => {
     expect(formatTime("not-a-date")).toBe("--:--:--");
     expect(formatTime("garbage")).toBe("--:--:--");
+  });
+});
+
+// BUGLIST CH13-1 (2026-08-29): SQLite `datetime('now')` values were
+// sliced raw, showing the UTC wall clock in the audit/trace UI while
+// everything else rendered local time. The helper must funnel the
+// value through the same UTC→local Date conversion as `formatTime`.
+describe("formatTimeOfDay (SQLite datetime, UTC → local)", () => {
+  it("converts a SQLite UTC datetime to the local HH:MM:SS breakdown", () => {
+    const ts = "2026-08-29 06:54:55";
+    const d = new Date("2026-08-29T06:54:55Z");
+    const expected = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    expect(formatTimeOfDay(ts)).toBe(expected);
+  });
+
+  it("preserves seconds verbatim (not TZ-shifted out of the minute)", () => {
+    // Whole-hour offsets never move the seconds digit, so this pins
+    // the padStart + passthrough behavior deterministically.
+    expect(formatTimeOfDay("2026-08-29 06:54:05")).toMatch(/:05$/);
+  });
+
+  it("returns malformed input verbatim (defensive contract)", () => {
+    expect(formatTimeOfDay("2026-08-29")).toBe("2026-08-29");
+    expect(formatTimeOfDay("2026-08-29 06:54")).toBe("2026-08-29 06:54");
+    expect(formatTimeOfDay("")).toBe("");
   });
 });
