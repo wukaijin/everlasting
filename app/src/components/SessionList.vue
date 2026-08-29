@@ -43,6 +43,7 @@ import {
   BUCKET_ORDER,
   filterByQuery,
   groupSessions,
+  needsDeleteConfirmation,
   type BucketKey,
 } from "../utils/sessionGrouping";
 import {
@@ -299,13 +300,16 @@ function contextDelete() {
 
 function requestDelete(id: string) {
   const s = store.sessions.find((x) => x.id === id);
-  // Empty session (no preview) → delete directly
-  if (!s || !s.preview) {
-    void store.deleteSession(id);
+  // Regular session: empty preview = no user messages → delete
+  // directly. Group chats never carry a preview (their user turns
+  // persist with empty text), so they confirm unconditionally —
+  // BUGLIST CH2-1.
+  if (needsDeleteConfirmation(s)) {
+    pendingDeleteId.value = id;
+    confirmOpen.value = true;
     return;
   }
-  pendingDeleteId.value = id;
-  confirmOpen.value = true;
+  void store.deleteSession(id);
 }
 
 function onConfirmDelete() {

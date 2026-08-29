@@ -14,6 +14,7 @@ import {
   bucketKey,
   groupSessions,
   filterByQuery,
+  needsDeleteConfirmation,
   BUCKET_ORDER,
   BUCKET_LABELS,
 } from "./sessionGrouping";
@@ -236,6 +237,26 @@ describe("sessionGrouping", () => {
       const before = sessions.slice();
       filterByQuery(sessions, "PR");
       expect(sessions).toEqual(before);
+    });
+  });
+
+  // BUGLIST CH2-1 (2026-08-29): group chats never carry a preview
+  // (their user turns persist with empty text), so the old
+  // `!s.preview → delete directly` branch wiped a 38-message group
+  // chat with no confirmation. Lock the decision table.
+  describe("needsDeleteConfirmation (CH2-1)", () => {
+    it("普通会话:有 preview → 确认;无 preview → 直接删", () => {
+      expect(needsDeleteConfirmation({ preview: "最后一条", session_type: "chat" })).toBe(true);
+      expect(needsDeleteConfirmation({ preview: "", session_type: "chat" })).toBe(false);
+    });
+
+    it("群聊:一律确认(preview 恒空不能作为有无内容的信号)", () => {
+      expect(needsDeleteConfirmation({ preview: "", session_type: "group_chat" })).toBe(true);
+      expect(needsDeleteConfirmation({ preview: "x", session_type: "group_chat" })).toBe(true);
+    });
+
+    it("未知 id(undefined)→ 不确认(保持旧静默删除)", () => {
+      expect(needsDeleteConfirmation(undefined)).toBe(false);
     });
   });
 });

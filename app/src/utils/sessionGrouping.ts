@@ -139,3 +139,26 @@ export function filterByQuery(
   if (trimmed.length === 0) return sessions.slice();
   return sessions.filter((s) => s.title.toLowerCase().includes(trimmed));
 }
+
+/** Delete-confirm decision for a sidebar session row (BUGLIST CH2-1).
+ *
+ *  `preview` is the session's last `role='user'` message text (DB
+ *  COALESCE subquery). Regular sessions: empty preview ⇔ no user
+ *  messages ⇔ nothing to lose → delete directly (by design); any
+ *  preview → confirm. Group chats: their user turns persist with
+ *  EMPTY text (the prompt rides in the discussion config, not the
+ *  message body — DB-verified), so preview is always '' there and
+ *  preview alone can't signal "has content"; a 38-message group
+ *  chat used to delete with no confirmation. Group chats therefore
+ *  always confirm.
+ *
+ *  Unknown id (`undefined`) → false, preserving the old silent
+ *  no-op delete for stale rows. */
+export function needsDeleteConfirmation(
+  summary:
+    | Pick<SessionSummary, "preview" | "session_type">
+    | undefined,
+): boolean {
+  if (!summary) return false;
+  return summary.session_type === "group_chat" || !!summary.preview;
+}
