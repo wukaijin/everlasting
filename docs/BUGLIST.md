@@ -28,8 +28,8 @@
 
 | 编号 | 级别 | 问题 | 根因位置 | 状态 | 修复提交 |
 |---|---|---|---|---|---|
-| CH4-1 | **P1** | 编辑已发消息报「消息缺少 seq 无法编辑」 | `useMessageEditing.ts:164,233` | ⬜ | |
-| CH3-1 | **P1** | 关项目 Tab 后隐藏列表不更新,重新添加被拒 | `stores/projects.ts:312-327` | ⬜ | |
+| CH4-1 | **P1** | 编辑已发消息报「消息缺少 seq 无法编辑」 | `useMessageEditing.ts:164,233` | ✅ 已修复 | 61c0dc8 |
+| CH3-1 | **P1** | 关项目 Tab 后隐藏列表不更新,重新添加被拒 | `stores/projects.ts:312-327` | ✅ 已修复 | 0536914 |
 | CH4-2 | P2 | 消息 Markdown 有序/无序列表无标记 | Tailwind preflight + `MessageItem.vue:1624` | ⬜ | |
 | CH2-1 | P2 | 含消息的群聊会话删除永不弹确认 | `SessionList.vue:302-305` + 群聊 preview 恒空 | ⬜ | |
 | CH5-2 | P3 | /clear 后「累计耗时」与空态提示同屏自相矛盾 | `stores/chat.ts:450-463` | ⬜ | |
