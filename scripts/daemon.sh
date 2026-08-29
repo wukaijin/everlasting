@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 # scripts/daemon.sh — everlasting-daemon 浏览器模式管理脚本
 #
-# 覆盖"WSL 跑 release daemon + Windows 宿主浏览器访问"的全流程。
+# 覆盖"WSL 跑 daemon + Windows 宿主浏览器访问"的全流程。
 # 这是 Phase 2 的核心使用场景(daemon 自己 serve 前端 + API,同源无 CORS)。
 #
 # 用 PID 文件管理进程,避免 pkill -f 自匹配(脚本命令行含 daemon 名会被误杀)。
 #
 # 用法:
-#   ./scripts/daemon.sh start   [--port N]   编译 release 二进制 + 启动(前台日志)
+#   ./scripts/daemon.sh start   [--port N]   编译 daemon 档二进制 + 启动(前台日志)
 #   ./scripts/daemon.sh bg      [--port N]   同 start,但后台运行 + 日志写文件
 #                                           ($XDG_STATE_HOME 下 daemon.log,追加写 + 启动时轮转)
 #   ./scripts/daemon.sh stop                 停止运行中的 daemon
 #   ./scripts/daemon.sh restart [--port N]   stop + start(改前端后重新 serve dist)
-#   ./scripts/daemon.sh rebuild              只重新编译 release 二进制(不重启)
+#   ./scripts/daemon.sh rebuild [--release]  只重新编译二进制(不重启)
 #   ./scripts/daemon.sh status               显示进程状态 + health 检查
 #   ./scripts/daemon.sh logs                 跟踪日志(bg 模式的日志文件)
 #
 # 选项:
 #   --port N    监听端口(默认 7456)
-#   --no-build  start/bg/restart 时跳过 release 编译(用现有二进制)
+#   --no-build  start/bg/restart 时跳过编译(用现有二进制)
+#   --release   用发布档(fat LTO + CGU=1,target/release/)代替默认的
+#               daemon 迭代档(无 LTO + 增量,target/daemon/,根 Cargo.toml
+#               [profile.daemon],2026-08-29):发布档单次改动重编 ~6-7min
+#               (fat LTO 与增量互斥,leaf 全量重编 + 全程序 LTO/链接),
+#               只在需要发布体积 / 极致性能时用;daemon 档改后端代码
+#               ~1-2min 出二进制,运行性能与发布档基本一致(I/O 密集)。
 #   -h, help    显示帮助
 #
 # 设计参考:docs/HACKING-wsl.md §远程访问 daemon 部署。
@@ -32,7 +38,14 @@ SRC_TAURI="$REPO_ROOT/app/src-tauri"
 # `app/src-tauri/target/`)。daemon.sh 必须指向根 target,否则干净
 # checkout 上 rebuild 出的新二进制在根 target、脚本却拉旧路径的陈旧
 # 产物(S2 给 daemon 加 tunnel client 后这会让脚本一直跑旧 daemon)。
-DAEMON_BIN="$REPO_ROOT/target/release/everlasting-daemon"
+# 2026-08-29:默认档从 release 换成 daemon 迭代档(增量编译,见头部
+# --release 说明);--release 时经 use_release_profile 切回发布档。
+BUILD_PROFILE=daemon
+DAEMON_BIN="$REPO_ROOT/target/$BUILD_PROFILE/everlasting-daemon"
+use_release_profile() {
+    BUILD_PROFILE=release
+    DAEMON_BIN="$REPO_ROOT/target/release/everlasting-daemon"
+}
 PID_FILE="$REPO_ROOT/.everlasting-daemon.pid"
 # 2026-08-24 RULE-DAEMON-001 收口:日志从 /tmp(重启即覆盖 + 无限增长)
 # 迁到 XDG state 目录,追加写 + 启动时大小轮转(见 rotate_log)。
@@ -88,10 +101,19 @@ running_pid() {
 
 # ── 子命令实现 ────────────────────────────────────────────────────
 do_build() {
-    log "编译 daemon release 二进制(首次 ~3-5 min,vendored libgit2)"
+    # rebuild 直调时可带 --release;start/bg/restart 在各自参数解析里
+    # 已切换过,再传会重复但幂等(无参调用时循环体不执行)。
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --release) use_release_profile; shift;;
+            *) die "rebuild: 未知参数 '$1'(可用:--release)";;
+        esac
+    done
+    log "编译 daemon 二进制($BUILD_PROFILE 档;该档首次全量编依赖,之后增量)"
     (
         cd "$SRC_TAURI"
-        cargo build --release --bin everlasting-daemon
+        # --profile 对内置 profile 名同样合法(--profile release == --release)。
+        cargo build --profile "$BUILD_PROFILE" --bin everlasting-daemon
     )
     log "编译完成 → $DAEMON_BIN"
 }
@@ -103,7 +125,8 @@ do_start() {
             --port)     port="$2"; shift 2;;
             --bg)       background=true; shift;;
             --no-build) do_build_flag=false; shift;;
-            *) die "start: 未知参数 '$1'(可用:--port N --bg --no-build)";;
+            --release)  use_release_profile; shift;;
+            *) die "start: 未知参数 '$1'(可用:--port N --bg --no-build --release)";;
         esac
     done
 
@@ -220,7 +243,7 @@ main() {
         bg)       do_start "$@" --bg;;
         stop)     do_stop "$@";;
         restart)  do_restart "$@";;
-        rebuild)  do_build;;
+        rebuild)  do_build "$@";;
         status)   do_status "$@";;
         logs)     do_logs "$@";;
         help|-h|--help) show_help;;

@@ -615,11 +615,11 @@ ss -tlnp | grep 7456
 日常用项目自带的 `scripts/daemon.sh` 管理浏览器模式 daemon,它包好了「编译 + 启动 + PID 文件 + 日志 + health 检查」,不用手敲 `cargo build` 和 `--port`:
 
 ```bash
-./scripts/daemon.sh start   [--port N]   # 编译 release + 前台启动(日志直接输出)
-./scripts/daemon.sh bg      [--port N]   # 后台启动(日志写 /tmp/everlasting-daemon.log)
+./scripts/daemon.sh start   [--port N]   # 编译 daemon 档 + 前台启动(日志直接输出)
+./scripts/daemon.sh bg      [--port N]   # 后台启动(日志写 $XDG_STATE_HOME 下 daemon.log)
 ./scripts/daemon.sh stop                 # 停 daemon(读 PID 文件,SIGTERM→15s→SIGKILL 兜底)
 ./scripts/daemon.sh restart [--port N]   # stop + start(改完前端重新 serve dist)
-./scripts/daemon.sh rebuild              # 只重新编译 release 二进制(不重启)
+./scripts/daemon.sh rebuild [--release]  # 只重新编译二进制(不重启)
 ./scripts/daemon.sh status               # 显示 PID + health 检查
 ./scripts/daemon.sh logs                 # 跟踪日志(bg 模式的日志文件)
 ```
@@ -633,6 +633,8 @@ ss -tlnp | grep 7456
 > 见 `bin/everlasting-daemon.rs` 的 gate 注释。
 
 脚本细节:用 **PID 文件**(`.everlasting-daemon.pid`)管理进程,避免 `pkill -f everlasting-daemon` 自匹配(脚本命令行含 daemon 名会被自己误杀);自动注入 `PKG_CONFIG_PATH`(WSL 编译 Rust 前置,见坑 1);`--no-build` 跳过编译用现有二进制。设计文档与本节对应;脚本头注释是权威。
+
+> **编译档位(2026-08-29 提速)**:daemon.sh 默认编译 **daemon 档**(根 Cargo.toml `[profile.daemon]`:继承 release 的 `opt-level="s"`/strip,关 LTO + `codegen-units=16` + 开增量;产物在 `target/daemon/`)。此前迭代走 release(fat LTO + CGU=1),`--timings` 实测**改一行后端代码 ≈ 6-7min**(leaf 156K 行全量重编 247s——fat LTO 与增量互斥;LTO/链接 124s),daemon 档降到 **~1-2min**,运行性能基本一致(daemon 是 I/O 密集)。需要发布体积 / 打 sidecar 时加 `--release`(走 `target/release/`)。该档首次构建会全量编一遍依赖(一次性 ~10-20min)。
 
 > ⚠️ **多实例反模式(Q1)**:**不要同时跑两个 daemon**(比如一个 `scripts/daemon.sh start` + 一个裸 `everlasting-daemon --port 7457`)。两个 daemon 各自打开(或试图打开)同一个 SQLite,会出现:① 写竞争 / `SQLITE_BUSY`;② 各自 `reap_orphaned_runs` 互踩;③ 如果落到不同 `data_dir`(见 [DEBUG_DB §1.0 孤儿 DB 坑](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步)),数据分裂成两份历史。要换端口做 A/B,先 `stop` 旧的。`scripts/daemon.sh` 用单 PID 文件做了防多实例,裸跑没有这层保护。
 
@@ -665,6 +667,9 @@ cd app && pnpm build
 #    daemon 必须 `-p everlasting`(或在 app/src-tauri/ 内跑裸 `--bin`)。
 PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
   cargo build --release -p everlasting --bin everlasting-daemon
+#    (迭代场景别用 release——fat LTO + CGU=1 改一行要 ~6-7min;日常改后端
+#     走 `--profile daemon`(daemon.sh 默认即此档,见上方「编译档位」),
+#     产物在 target/daemon/,~1-2min 出二进制)
 
 # 3. 启 daemon(监听 0.0.0.0:7456,Windows 宿主经 WSL 2 localhost forwarding 可达;
 #    从仓库根跑,`resolve_dist_dir` 会沿 `app/src-tauri` 标记找到 app/dist 伺服前端)
@@ -821,6 +826,10 @@ BIN=target/debug/deps/everlasting_lib-<hash>
 ### 内存压力对并行度的限制
 
 本机 swap 已满(11G RAM / 3G swap 全占),`cargo test --lib` 6 线程只拿到 ~2.7× 加速(72s→26s),远不到理论 6×。表现是编译/链接阶段大量换页。**临时缓解**:跑测前关掉 daemon / 浏览器 / 其他大内存进程;或显式压线程数 `cargo test --lib -- --test-threads=4`(避免 OOM 时被 kernel 杀 test 进程)。
+
+### 链接器已切 mold(2026-08-29)
+
+本机 `~/.cargo/config.toml`(**用户级配置,不进仓库**)给 `x86_64-unknown-linux-gnu` 配了 `rustflags = ["-C", "link-arg=-B~/.cache/rust-mold-ld"]`,目录里的 `ld` 是指向 mold 2.42(brew 安装,`/home/linuxbrew/.linuxbrew/opt/mold`)的符号链接——Ubuntu 22.04 的 gcc 11 不支持 `-fuse-ld=mold`,走 `-B` 前缀让 cc 驱动优先取该 `ld`。所有 profile(test binary / daemon / GUI / release)的链接都提速,LTO 链接的换页压力也小。注意:改 rustflags 会让 cargo 按 fingerprint 把既有缓存全量重编一次(所有 profile,一次性成本);mold 坏了就删掉该配置行,回到系统 GNU ld。
 
 ---
 

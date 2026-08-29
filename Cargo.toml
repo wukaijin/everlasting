@@ -20,6 +20,9 @@ resolver = "2"
 # directory makes that package the current one, so `--bin` resolves
 # without `-p`. Note: `--bin` WITHOUT `-p` at the repo root only looks
 # in the default members, so it cannot see the daemon.
+# 日常迭代 daemon 用 `--profile daemon`(见下方 [profile.daemon],
+# 2026-08-29:无 LTO + 增量,改后端代码 ~1-2min 出二进制);
+# `--release`(fat LTO + CGU=1)留给发布 / sidecar。
 default-members = [
     "crates/everlasting-remote",
     "crates/everlasting-remote-protocol",
@@ -47,4 +50,18 @@ opt-level = "s"
 # doc_extract.rs 的 catch_unwind 兜底是死代码 —— 与「turn 不死」硬约束
 # 结构性冲突。不得回设 abort,除非先把文档提取挪进独立子进程。
 strip = true
+
+# 2026-08-29(daemon 增量编译提速):daemon.sh 日常迭代专档。此前迭代也走
+# release(fat LTO + CGU=1),--timings 实测改动一行 ≈ 6-7min:leaf crate
+# 全量重编 247s(fat LTO 与增量编译互斥)+ LTO/链接 124s,依赖全缓存 ——
+# 时间全花在自家 crate + 链接上。本档继承 release 的 opt-level="s"/strip
+# (运行性能与发布档基本一致;daemon 是 I/O 密集,LLM/网络/SQLite 等待
+# 占主导,不感知 LTO),只放开迭代致命的三项:LTO、codegen-units、增量。
+# 首次构建会为该档全量编一遍依赖(一次性 ~10-20min);产物在
+# target/daemon/。发布 / sidecar 打包仍走 --release。
+[profile.daemon]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
 
