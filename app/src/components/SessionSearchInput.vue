@@ -3,6 +3,10 @@
 // presentation: parent owns `modelValue` via v-model; emits
 // `clear` when the user clicks the ✕ button or presses Esc.
 //
+// 2026-08-30: ✕ 常驻(此前只在 query 非空时渲染),空查询时也能
+// 点它关闭搜索行 —— 旧版空态没有任何可见关闭入口,只能靠 Esc。
+// 点击语义与 Esc 对齐:有文字=清空+关闭,空=关闭。
+//
 // 2026-06-27 sidebar 搜索入口 (PR-of-PRs, 3 features): the
 // sidebar previously had no way to filter the session list. At
 // 10+ sessions the list becomes a wall of text; a simple
@@ -114,11 +118,10 @@ function onKeydown(e: KeyboardEvent) {
       @keydown="onKeydown"
     />
     <button
-      v-if="modelValue.length > 0"
       class="session-search__clear btn btn--icon btn--ghost"
       type="button"
-      title="清空 (Esc)"
-      aria-label="清空搜索"
+      :title="modelValue.length > 0 ? '清空并关闭 (Esc)' : '关闭搜索 (Esc)'"
+      :aria-label="modelValue.length > 0 ? '清空并关闭搜索' : '关闭搜索'"
       @click="onClear"
     >
       <Icon name="x" :size="12" />
@@ -128,8 +131,8 @@ function onKeydown(e: KeyboardEvent) {
 
 <style scoped>
 /* 2026-06-27 sidebar 搜索入口: thin input row with a leading
-   magnifier icon and a trailing clear button (only when the
-   query is non-empty). Visual sits in the same elevation tier
+   magnifier icon and a trailing close button (常驻,2026-08-30 起
+   空查询也渲染 — 见文件头注)。Visual sits in the same elevation tier
    as the session items below it (--color-bg-elevated) so the
    input feels "anchored" without competing with the list. */
 .session-search {
@@ -176,7 +179,7 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--color-text-muted);
 }
 
-/* 清空钮由全局 .btn 家族承载(ghost icon);此处仅几何。 */
+/* 关闭钮由全局 .btn 家族承载(ghost icon);此处仅几何。 */
 .session-search__clear {
   flex-shrink: 0;
   width: 18px;

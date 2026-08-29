@@ -4,7 +4,8 @@
 //   - renders input with placeholder
 //   - autofocuses on mount (focus called on the underlying <input>)
 //   - emits update:modelValue on input
-//   - clear button (✕) only visible when query is non-empty
+//   - clear button (✕) is ALWAYS visible (2026-08-30: 空查询也渲染,
+//     此前空态没有任何可见关闭入口、只能 Esc 关行)
 //   - clicking ✕ emits both update:modelValue="" AND clear
 //   - Escape with non-empty query clears query (but does NOT emit
 //     clear — the parent keeps the row open so the user can type
@@ -39,14 +40,20 @@ describe("SessionSearchInput", () => {
     expect(w.emitted("update:modelValue")?.[0]).toEqual(["abc"]);
   });
 
-  it("does NOT render the clear (✕) button when query is empty", () => {
+  it("renders the close (✕) button even when query is empty (no-Esc close path)", () => {
     const w = mount(SessionSearchInput, { props: { modelValue: "" } });
-    expect(w.find(".session-search__clear").exists()).toBe(false);
+    expect(w.find(".session-search__clear").exists()).toBe(true);
   });
 
-  it("renders the clear (✕) button when query is non-empty", () => {
+  it("renders the close (✕) button when query is non-empty", () => {
     const w = mount(SessionSearchInput, { props: { modelValue: "PR" } });
     expect(w.find(".session-search__clear").exists()).toBe(true);
+  });
+
+  it("clicking ✕ with EMPTY query emits clear (parent closes the row)", async () => {
+    const w = mount(SessionSearchInput, { props: { modelValue: "" } });
+    await w.find(".session-search__clear").trigger("click");
+    expect(w.emitted("clear")?.length).toBe(1);
   });
 
   it("clicking clear emits update:modelValue='' AND clear", async () => {
