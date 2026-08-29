@@ -396,6 +396,15 @@ async function onCopy() {
 :deep(.msg-actions__item)[data-disabled] {
   color: var(--color-text-muted);
   cursor: not-allowed;
+  /* BUGLIST CH4-3:仅 muted 色与启用项(--color-text-primary)拉不开
+     差距,黑盒测试判「看不出不可点」;整体再降不透明度,灰态一眼可辨。 */
+  opacity: 0.55;
+}
+
+/* 禁用项不参与 highlight 背景(上面的 [data-highlighted] 规则
+   会盖上来,需在其后显式关掉),hover 划过时灰态保持稳定。 */
+:deep(.msg-actions__item)[data-disabled][data-highlighted] {
+  background: transparent;
 }
 
 :deep(.msg-actions__item-icon) {
