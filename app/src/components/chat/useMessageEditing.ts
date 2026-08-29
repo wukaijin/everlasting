@@ -161,7 +161,11 @@ watch(
  *  edit mode; on failure, surfaces an inline error + a
  *  toast and keeps edit mode active for retry. */
 async function handleSave(trimmed: string) {
-  if (!message().seq) {
+  // seq 0 is valid — it's the session's first message (backend
+  // starts the counter at 0, `init.rs` `unwrap_or(0)`). Only a
+  // truly missing seq (queued placeholder row) blocks the edit;
+  // a falsy check here made every first message uneditable.
+  if (message().seq == null) {
     editError.value = "消息缺少 seq,无法编辑";
     return;
   }
@@ -230,7 +234,8 @@ async function handleResend() {
     projectsStore.showToast("重发失败: 无当前 session", "error");
     return;
   }
-  if (!message().seq) {
+  // Same falsy-zero trap as handleSave: seq 0 (first message) is valid.
+  if (message().seq == null) {
     projectsStore.showToast("重发失败: 消息缺少 seq", "error");
     return;
   }
