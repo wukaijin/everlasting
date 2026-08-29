@@ -133,6 +133,45 @@ async fn set_end_conditions(
         .expect("set end conditions");
 }
 
+/// 建单次档(CH11-1)任务:at_ms 相对 now 的偏移由调用方定;
+/// created_at 恒回拨 6h,使「已过去的 at_ms」能落进判定窗口。
+async fn seed_once_task(
+    fx: &TickFixture,
+    at_offset_ms: i64,
+    name: &str,
+) -> crate::db::scheduled_tasks::ScheduledTaskRow {
+    let now = scheduler::now_epoch_ms();
+    let spec = scheduler::parse_schedule(&format!(
+        r#"{{"kind":"once","at_ms":{}}}"#,
+        now + at_offset_ms
+    ))
+    .expect("valid once schedule");
+    let task = insert_scheduled_task(
+        &fx.state.db,
+        NewScheduledTask {
+            project_id: fx.project_id.clone(),
+            target_session_id: fx.session_id.clone(),
+            name: name.to_string(),
+            prompt: "跑一次就收工".into(),
+            schedule_json: serde_json::to_string(&spec).unwrap(),
+            enabled: true,
+            created_by: "user".into(),
+            next_fire_at: now + at_offset_ms.max(0),
+            max_runs: None,
+            ends_at: None,
+        },
+    )
+    .await
+    .expect("insert once task");
+    sqlx::query("UPDATE scheduled_tasks SET created_at = ? WHERE id = ?")
+        .bind(now - 6 * 3_600_000)
+        .bind(&task.id)
+        .execute(&fx.state.db)
+        .await
+        .expect("backdate created_at");
+    task
+}
+
 /// 记录替身:每次 fire 记下 FireContext 并返回 `Queued{uuid}`
 /// (uuid 仅 Queued 返回路径可得,design §4.2)。
 fn recording_fire(records: Arc<StdMutex<Vec<FireContext>>>) -> TickFire {
@@ -650,5 +689,87 @@ async fn ends_at_far_future_keeps_task_enabled() {
     assert_eq!(
         audit_actions(&fx).await,
         vec![(actions::FIRED.to_string(), None)]
+    );
+}
+
+// --- 单次档(CH11-1)---
+
+/// 到点 → fire 恰一次 → gate 4 即时完成(reason=once);重跑 tick 无 fire。
+#[tokio::test(flavor = "multi_thread")]
+async fn once_task_fires_once_then_completes() {
+    let fx = make_fixture().await;
+    // at_ms = now-30s(刚过点,进宽限内 → fired 动作)。
+    let task = seed_once_task(&fx, -30_000, "t1").await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert_eq!(records.lock().unwrap().len(), 1, "fires the single run");
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 1);
+    // 落账记理论到期点(seed 的 at_ms 本身)。
+    let at_ms = match scheduler::parse_schedule(&task.schedule_json).unwrap() {
+        scheduler::ScheduleSpec::Once { at_ms } => at_ms,
+        _ => panic!("seeded once schedule"),
+    };
+    assert_eq!(row.last_fired_at, Some(at_ms), "accounted at the due point");
+    assert!(!row.enabled, "single due point consumed → completed");
+
+    // 重跑:enabled=0 出扫描集,无 fire、无重复审计。
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+    assert_eq!(records.lock().unwrap().len(), 1, "no second fire");
+}
+
+/// 未到点:不 fire,保持 enabled(等点)。
+#[tokio::test(flavor = "multi_thread")]
+async fn once_task_future_point_waits() {
+    let fx = make_fixture().await;
+    let task = seed_once_task(&fx, 3_600_000, "t1").await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert!(records.lock().unwrap().is_empty(), "not due yet");
+    let row = task_row(&fx, &task.id).await;
+    assert!(row.enabled, "future once point stays enabled");
+    assert_eq!(row.run_count, 0);
+    assert!(audit_actions(&fx).await.is_empty());
+}
+
+/// None 分支兜底:at_ms 已被消费(last_fired_at = at_ms)但完成写
+/// 未落(等价「重启用已过期的一次性任务」)→ 完成(reason=once),不 fire。
+#[tokio::test(flavor = "multi_thread")]
+async fn once_task_consumed_point_completes_without_firing() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let task = seed_once_task(&fx, -3_600_000, "t1").await;
+    // 模拟历史 fire 已消费 due 点但 enabled 仍为 1(完成写丢失/被重启用)。
+    mark_task_fired(
+        &fx.state.db,
+        &task.id,
+        now - 3_600_000,
+        now + 86_400_000,
+        true,
+    )
+    .await
+    .expect("preset consumed point");
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert!(records.lock().unwrap().is_empty(), "no due left to fire");
+    let row = task_row(&fx, &task.id).await;
+    assert!(!row.enabled, "expired once task completes");
+    assert_eq!(row.run_count, 1, "count untouched");
+    assert_eq!(
+        audit_actions(&fx).await,
+        vec![(actions::COMPLETED.to_string(), Some("once".to_string()))]
     );
 }

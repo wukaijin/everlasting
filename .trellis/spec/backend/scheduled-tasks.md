@@ -32,6 +32,8 @@ pub enum ScheduleSpec {
     Hourly { minute: u32 },        // 每小时第 minute 分钟(0-59)
     Weekdays { at: String },       // 每工作日(周一至五,无节假日日历)
     Monthly { day: u32, at: String }, // 每月 day 号;短月无该日 → 跳过该月
+    // 单次档(BUGLIST CH11-1):at_ms epoch ms 触发恰好一次。
+    Once { at_ms: i64 },
 }
 
 // origin 载体链(四点一线,全部 Option/additive)
@@ -98,6 +100,19 @@ CREATE TABLE scheduled_tasks (
 - **ends_at 判定用 due 不是 now**:停机跨 ends_at 重启后,窗口内未消费且 `<= ends_at` 的 due 仍补跑一次(Bad 案例:「用 now > ends_at 直接判死」会让 catch-up 语义失效)。
 - 校验矩阵新增:`max_runs < 1` / `ends_at <= now`(create 与 update 显式写入)→ 400 中文错误。
 
+**单次档 Once(CH11-1,2026-08-29)**:
+
+- `most_recent_due(Once{at_ms})` = `(not_before < at_ms <= now) ? Some(at_ms) : None` —— 唯一到期点,「补一次不追多次」由点唯一性天然保证;fire 后 `last_fired_at = at_ms` 使 `not_before = at_ms` → 恒 None。
+- **完成语义两臂**:① gate4 增补 —— once 任务 fire 落账后即时完成(reason=`once`,优先级低于 max_runs/end_date);② None 分支兜底 —— `now > at_ms` 且窗口内无未消费点(消费写丢失 / 停用跨过时刻后重启用)→ 完成。completion reason 常量 `completion_reasons::ONCE = "once"`。
+- `next_fire_display(Once, from)`:未消费 → `at_ms`;已消费 → `from + 86_400_000` fallback(保持 `> from` 不变量,沿 daily 解析失败同款惯例)。该 fallback 只落进展示列 —— **前端对已消费的 once 任务「下次」列恒渲染「—」**(`displayNextFireAt`),不看存库值。
+- create/update 显式写 schedule 时校验 `at_ms > now`(过去时刻一出生即完成,与「过去 ends_at 拒绝」同一定案);前端表单同步前置校验。停机跨 at_ms → 重启首 tick catch-up 补跑一次(不因 once 特殊化)。
+- 前端:单次档隐藏结束条件块(提交恒清空 maxRuns/endsAt);完成态 `completedByOnce`(已消费 run_count≥1 → 「已完成」,过期未触发 → 「已结束」)。
+
+**专用 session 指定模型(create 的 `model_id` 参数,2026-08-29)**:
+
+- 仅 `target_session_id` 缺省(新建专用 session)分支生效:校验 `models` 表存在(先于建 session,失败不留孤儿行)→ `create_session_in_pool`(绑全局默认)后 `update_session_model_id` 覆盖为指定值。每轮 chat 经 `resolve_model_id_for_session` 优先取该列 —— 定时注入轮次固定模型,不随全局默认漂移。
+- wire:HTTP DTO / Tauri command 均为扁平 `model_id: Option<String>`(缺省/空 = 全局默认);LLM `schedule_task` tool 恒传 `None`(模型指定是用户 UI 面能力)。
+
 ### 4. Validation & Error Matrix
 
 | 条件 | 行为 |
@@ -124,6 +139,7 @@ CREATE TABLE scheduled_tasks (
 - origin 全链(`tests_message_queue.rs` / `tests_lost.rs`):`scheduled_origin_persists_scheduled_metadata`(MockProvider 端到端断言三键 + 无 FileInjections + 对照组 metadata None)、lost 正负向、**多 drain 全落库**(RULE-QUEUE-001 已根治,2026-08-29:`multi_drain_persists_all_drained_user_rows_rule_queue_001` + 全 manual 对照 `multi_drain_all_manual_persists_every_row_without_metadata`)。
 - parity:`daemon/routes/scheduled_tasks.rs` Router oneshot——CRUD roundtrip(含缺省新建专用 session 分支)+ 校验矩阵全臂。
 - **F2b**:compute 三新档的窗口边界 + 两函数互相一致 + monthly 短月跳过(day=31 回看两月);db 的 mark_fired 计数语义(count_fire bool)/ mark_task_completed 只翻 enabled / update 双层 Option(缺省≠null)/ 重启用清零;tick 的四道 gate(max_runs 达限完成恰好审计一次、due>ends_at 不 fire、ends_at 含当日 fire 后完成、dedup 不计数);route 的 end-condition roundtrip(monthly 档过 wire、显式 null 清空、max_runs=0 与过去 ends_at 400);前端 format/store/tab(单位换算、结束条件 args 形状、完成态徽章)。
+- **CH11-1 + model_id**:compute 的 once 窗口三态(未到点/到点/消费后)与 fallback 不变量;tick 的 once fire 后完成(reason=once)+ 未到点等待 + None 分支兜底完成;route 的 once 档过 wire + model_id 覆盖专用 session 列 + 过去 at_ms / 伪造 model_id 400(不留孤儿 session);前端 format(describeSchedule once、completedByOnce、displayNextFireAt)+ tab 表单(datetime-local 校验、模型下拉 args、编辑回填)。
 
 ### 7. Wrong vs Correct
 

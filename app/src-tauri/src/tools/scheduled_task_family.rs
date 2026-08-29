@@ -241,6 +241,9 @@ pub async fn execute(
         "agent".to_string(),
         parsed.max_runs,
         ends_at,
+        // 模型指定是用户 UI 面的能力:agent 建的专用 session 恒绑
+        // 全局默认(与 tool 不暴露 model 参数一致)。
+        None,
     )
     .await
     {

@@ -24,8 +24,8 @@ import { transport } from "../transport";
 
 /** schedule preset 档位(prd D2;镜像 Rust `ScheduleSpec`,internally
  *  tagged `kind`,weekday 为 chrono 三字母小写 "mon".."sun")。F2b 扩展
- *  hourly / weekdays / monthly 三档;后续新档位 additive:这里加 union
- *  分支 + UI 渲染分支,未知 kind 显示「未知档位」。 */
+ *  hourly / weekdays / monthly 三档;CH11-1 补 once 单次档;后续新档位
+ *  additive:这里加 union 分支 + UI 渲染分支,未知 kind 显示「未知档位」。 */
 export type ScheduleSpec =
   | { kind: "daily"; at: string }
   | { kind: "interval"; every_min: number }
@@ -35,7 +35,9 @@ export type ScheduleSpec =
   /** 每工作日(周一至五)的 at(F2b)。 */
   | { kind: "weekdays"; at: string }
   /** 每月 day 号的 at(F2b;短月无该日跳过该月)。 */
-  | { kind: "monthly"; day: number; at: string };
+  | { kind: "monthly"; day: number; at: string }
+  /** 单次:at_ms(epoch ms 本地时刻)触发恰好一次(CH11-1)。 */
+  | { kind: "once"; at_ms: number };
 
 /** `ScheduledTaskPayload` wire 形状(snake_case 直拷)。 */
 export interface ScheduledTask {
@@ -77,6 +79,9 @@ export interface CreateScheduledTaskInput {
   maxRuns?: number;
   /** 结束日期 epoch ms(F2b;undefined = 不限)。 */
   endsAt?: number;
+  /** 新建专用 session 绑定的模型 id(undefined = 沿用全局默认;仅
+   *  targetSessionId 缺省的「新建专用 session」分支生效)。 */
+  modelId?: string;
 }
 
 /** `update_scheduled_task` 的部分更新 patch(`undefined` 字段后端不动)。
@@ -124,6 +129,7 @@ export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.maxRuns !== undefined ? { maxRuns: input.maxRuns } : {}),
       ...(input.endsAt !== undefined ? { endsAt: input.endsAt } : {}),
+      ...(input.modelId ? { modelId: input.modelId } : {}),
     });
     await load();
     return row;

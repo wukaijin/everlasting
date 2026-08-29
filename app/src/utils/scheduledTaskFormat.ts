@@ -61,7 +61,7 @@ export function splitEveryMin(
  *  `daily 09:00` → 「每天 09:00」;`interval 30` → 「每 30 分钟」;
  *  `weekly mon 09:00` → 「每周一 09:00」;F2b:`hourly 30` →
  *  「每小时 30 分」、`weekdays` → 「每工作日 09:00」、`monthly 15`
- *  → 「每月 15 号 09:00」。 */
+ *  → 「每月 15 号 09:00」;CH11-1:`once` → 「单次 2026-08-30 09:00」。 */
 export function describeSchedule(spec: ScheduleSpec | null): string {
   if (!spec || typeof spec !== "object") return "未知档位";
   switch (spec.kind) {
@@ -79,9 +79,21 @@ export function describeSchedule(spec: ScheduleSpec | null): string {
       return `每工作日 ${spec.at}`;
     case "monthly":
       return `每月 ${spec.day} 号 ${spec.at}`;
+    case "once":
+      return `单次 ${formatLocalYMDHm(spec.at_ms)}`;
     default:
       return "未知档位";
   }
+}
+
+/** epoch ms → 本地 `YYYY-MM-DD HH:mm`(once 档展示:单次时刻可能跨年,
+ *  需要年份粒度;区别于 formatFireTime 的 MM-DD HH:mm)。非法 → 原样
+ *  数字串(防御,正常 wire 恒合法)。 */
+export function formatLocalYMDHm(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return String(ms);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** 已触发次数片段(F2b 列表卡):`max_runs` 设置 → 「N/M 次」,否则
@@ -127,6 +139,31 @@ export function completedByEndDate(task: {
   return (
     !task.enabled && typeof task.ends_at === "number" && Date.now() > task.ends_at
   );
+}
+
+/** 单次档完成态(CH11-1):自动停用且唯一到期点已消费(run_count ≥ 1)
+ *  或已过期(从未 fire,如停用跨过时刻后重启用)。「已消费」优先由
+ *  run_count 判定 —— at_ms 已过但 run_count=0 的存量态也可能刚 fire
+ *  完(落账先于完成),由调用方决定文案粒度。 */
+export function completedByOnce(task: {
+  enabled: boolean;
+  run_count: number;
+  schedule: ScheduleSpec | null;
+}): boolean {
+  if (task.enabled || task.schedule?.kind !== "once") return false;
+  return task.run_count >= 1 || Date.now() > task.schedule.at_ms;
+}
+
+/** 列表卡「下次」列的展示值(CH11-1):once 档唯一到期点消费后无
+ * 「下次」——后端 next_fire_at 在该态存的是 fallback 值(纯展示列
+ * 防回归的 +1 天),前端渲染「—」。其余档位原样透传。 */
+export function displayNextFireAt(task: {
+  run_count: number;
+  schedule: ScheduleSpec | null;
+  next_fire_at: number;
+}): number | null {
+  if (task.schedule?.kind === "once" && task.run_count >= 1) return null;
+  return task.next_fire_at;
 }
 
 /** epoch ms → 本地 `MM-DD HH:mm`(列表的上次/下次触发列;触发点几乎

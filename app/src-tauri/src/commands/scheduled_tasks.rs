@@ -119,9 +119,10 @@ pub async fn list_scheduled_tasks(
 /// `create_scheduled_task` — `target_session_id` 为 `None` / 空串时新建
 /// 专用 session(标题同任务名,cwd 取 project 根);为 `Some` 时校验存在
 /// 且 classic 且 project 归属一致。`max_runs` / `ends_at` 是 F2b 结束条件
-/// (None = 不限)。`created_by` 标作者:`'user'`(UI/IPC 路径,两个
-/// transport 包装恒传)或 `'agent'`(LLM `schedule_task` tool)。返回新行
-/// (id 服务端生成)。
+/// (None = 不限)。`model_id` 仅「新建专用 session」分支生效:校验存在
+/// 后写入新 session 的 per-session 覆盖列(缺省 = 沿用全局默认)。
+/// `created_by` 标作者:`'user'`(UI/IPC 路径,两个 transport 包装恒传)
+/// 或 `'agent'`(LLM `schedule_task` tool)。返回新行(id 服务端生成)。
 /// 参数保持扁平标量(IPC 形状铁律,providers.rs 同款 allow)。
 #[allow(clippy::too_many_arguments)]
 pub async fn create_scheduled_task_inner(
@@ -135,6 +136,7 @@ pub async fn create_scheduled_task_inner(
     created_by: String,
     max_runs: Option<i64>,
     ends_at: Option<i64>,
+    model_id: Option<String>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     create_scheduled_task_in_pool(
         &state.db,
@@ -147,6 +149,7 @@ pub async fn create_scheduled_task_inner(
         created_by,
         max_runs,
         ends_at,
+        model_id,
     )
     .await
 }
@@ -167,6 +170,7 @@ pub async fn create_scheduled_task_in_pool(
     created_by: String,
     max_runs: Option<i64>,
     ends_at: Option<i64>,
+    model_id: Option<String>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -178,10 +182,32 @@ pub async fn create_scheduled_task_in_pool(
     validate_end_conditions(max_runs, ends_at)?;
     // schedule 先过解析器(中文错误信息直出前端)。
     let spec = crate::scheduler::compute::parse_schedule(&schedule).map_err(invalid)?;
+    // 单次档的时刻必须在未来(过去时刻一出生即完成,无意义,与 F2b
+    // 「过去 ends_at 直接拒绝」同一定案)。
+    if let crate::scheduler::ScheduleSpec::Once { at_ms } = &spec {
+        if *at_ms <= crate::scheduler::now_epoch_ms() {
+            return Err(invalid("单次任务的触发时间必须晚于当前时间"));
+        }
+    }
     // schedule 落库统一为「解析后再序列化」的规范形(拒绝多余字段 /
     // 字段别名漂移;与调度器读取侧零分歧)。
     let schedule_json =
         serde_json::to_string(&spec).map_err(|e| invalid(format!("schedule 序列化失败: {e}")))?;
+    // 指定模型:必须在 catalog 中存在(校验先于建 session,失败不留
+    // 孤儿行);仅新建专用 session 分支使用。
+    let model_id = match model_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(mid) => {
+            let exists = crate::db::get_model(db, mid)
+                .await
+                .map_err(|e| anyhow::anyhow!("create_scheduled_task: load model failed: {}", e))?
+                .is_some();
+            if !exists {
+                return Err(invalid(format!("模型 {mid} 不存在,请刷新后重选")));
+            }
+            Some(mid.to_string())
+        }
+        None => None,
+    };
 
     let project = crate::db::get_project(db, &project_id)
         .await
@@ -233,6 +259,19 @@ pub async fn create_scheduled_task_in_pool(
                         e
                     )
                 })?;
+            // 指定模型 → 写 per-session 覆盖列(缺省:create_session_in_pool
+            // 已绑全局默认,不动)。每轮 chat 经 resolve_model_id_for_session
+            // 优先取该列 —— 定时注入的轮次由此固定模型,不随全局默认漂移。
+            if let Some(mid) = &model_id {
+                crate::db::update_session_model_id(db, &session.id, mid)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "create_scheduled_task: bind dedicated session model failed: {}",
+                            e
+                        )
+                    })?;
+            }
             session.id
         }
     };
@@ -272,6 +311,7 @@ pub async fn create_scheduled_task(
     enabled: Option<bool>,
     max_runs: Option<i64>,
     ends_at: Option<i64>,
+    model_id: Option<String>,
 ) -> Result<ScheduledTaskPayload, AppCommandError> {
     create_scheduled_task_inner(
         state.inner(),
@@ -284,6 +324,7 @@ pub async fn create_scheduled_task(
         "user".to_string(),
         max_runs,
         ends_at,
+        model_id,
     )
     .await
 }
@@ -322,10 +363,16 @@ pub async fn update_scheduled_task_inner(
         validate_end_conditions(None, v)?;
     }
 
-    // schedule 合法性(提供才校验;非法拒绝**不写库**)。
+    // schedule 合法性(提供才校验;非法拒绝**不写库**)。单次档时刻
+    // 必须在未来(编辑一次性任务 = 重定时刻,过期即拒,与 create 同款)。
     let schedule_json = match schedule.as_deref() {
         Some(json) => {
             let spec = crate::scheduler::compute::parse_schedule(json).map_err(invalid)?;
+            if let crate::scheduler::ScheduleSpec::Once { at_ms } = &spec {
+                if *at_ms <= crate::scheduler::now_epoch_ms() {
+                    return Err(invalid("单次任务的触发时间必须晚于当前时间"));
+                }
+            }
             Some(
                 serde_json::to_string(&spec)
                     .map_err(|e| invalid(format!("schedule 序列化失败: {e}")))?,

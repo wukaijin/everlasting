@@ -77,6 +77,9 @@ function stubBackend(tasks: ScheduledTask[]) {
         { id: "s-group", title: "群聊", session_type: "group_chat" },
       ];
     }
+    // 模型下拉数据源(组件挂载即拉;空列表 = 下拉无可选项)。
+    if (cmd === "list_models") return [];
+    if (cmd === "get_default_model") return null;
     return null;
   });
 }
@@ -473,5 +476,169 @@ describe("ScheduledTasksTab F2b 调度扩展", () => {
     const card2 = w.get('[data-testid="sched-card-task-2"]');
     expect(card2.text()).toContain("已结束");
     expect(card2.text()).toContain("已触发 5 次");
+  });
+});
+
+describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
+  async function openFilledForm() {
+    stubBackend([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("单次任务");
+    await pickSelect(form, 0, "p1");
+    await pickSelect(form, 1, "s1");
+    await form.find("textarea").setValue("p");
+    return { w, form };
+  }
+
+  function stubCreate() {
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task") return row({ id: "new-x" });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+  }
+
+  /** 明天本地 20:30 的 datetime-local 值 + 对应 epoch ms。 */
+  function tomorrowEvening(): { value: string; ms: number } {
+    const d = new Date(Date.now() + 86_400_000);
+    d.setDate(d.getDate() + 1);
+    d.setHours(20, 30, 0, 0);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    return {
+      value: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T20:30`,
+      ms: d.getTime(),
+    };
+  }
+
+  it("单次档:datetime-local 输入,提交 {kind:once,at_ms} 且不带结束条件", async () => {
+    const { w, form } = await openFilledForm();
+    await pickSelect(form, 2, "once");
+    // 单次档不渲染结束条件块(无意义:唯一触发点即终点)。
+    expect(form.find('input[name="sched-end"]').exists()).toBe(false);
+    const t = tomorrowEvening();
+    await form.find('[data-testid="sched-once-at"]').setValue(t.value);
+    stubCreate();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].schedule).toBe(JSON.stringify({ kind: "once", at_ms: t.ms }));
+    expect(call?.[1].maxRuns).toBeUndefined();
+    expect(call?.[1].endsAt).toBeUndefined();
+  });
+
+  it("单次档校验:未选时间 / 过去时间 → 内联错误,不发起 create", async () => {
+    const { w, form } = await openFilledForm();
+    await pickSelect(form, 2, "once");
+    invokeMock.mockClear();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    expect(w.find(".sched-tab__error").text()).toContain("请选择单次触发的时间");
+    expect(invokeMock).not.toHaveBeenCalledWith("create_scheduled_task", expect.anything());
+
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const past = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}T09:00`;
+    await form.find('[data-testid="sched-once-at"]').setValue(past);
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    expect(w.find(".sched-tab__error").text()).toContain("晚于当前时间");
+    expect(invokeMock).not.toHaveBeenCalledWith("create_scheduled_task", expect.anything());
+  });
+
+  it("勾选新建专用 session:模型下拉出现,选中的 modelId 进 create args", async () => {
+    stubBackend([]);
+    // 模型目录:onPickModel 只接受 catalog 中的 id,须返回真实条目。
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_scheduled_tasks") return [];
+      if (cmd === "list_sessions") {
+        return [
+          { id: "s1", title: "旧会话", session_type: "chat" },
+        ];
+      }
+      if (cmd === "list_models")
+        return [
+          {
+            id: "model-7",
+            providerId: "prov-1",
+            providerDisplayName: "Acme",
+            displayName: "GPT-X",
+            modelName: "gpt-x",
+          },
+        ];
+      if (cmd === "get_default_model") return null;
+      return null;
+    });
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("专用");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    // 默认态:模型下拉不渲染(仅专用 session 分支)。
+    expect(form.find('[data-testid="sched-model-select"]').exists()).toBe(false);
+    await form.get('[data-testid="sched-new-dedicated"]').trigger("click");
+    await flushPromises();
+    expect(form.find('[data-testid="sched-model-select"]').exists()).toBe(true);
+    // 专用模式 SelectRoot 序:0=project,1=model(session 下拉已隐藏)。
+    await pickSelect(form, 1, "model-7");
+    stubCreate();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].modelId).toBe("model-7");
+    expect(call?.[1].targetSessionId).toBeUndefined();
+  });
+
+  it("卡片:once 任务已触发 → 状态「已完成」且「下次」列为 —;过期未触发 → 「已结束」", async () => {
+    stubBackend([
+      row({
+        schedule: { kind: "once", at_ms: Date.now() - 60_000 },
+        enabled: false,
+        run_count: 1,
+        next_fire_at: Date.now() + 86_400_000, // 后端 fallback 展示值,前端应忽略
+      }),
+      row({
+        id: "task-2",
+        schedule: { kind: "once", at_ms: Date.now() - 60_000 },
+        enabled: false,
+        run_count: 0,
+      }),
+    ]);
+    const w = await mountTab();
+    const card1 = w.get('[data-testid="sched-card-task-1"]');
+    expect(card1.text()).toContain("已完成");
+    expect(card1.text()).toContain("下次:—");
+    const card2 = w.get('[data-testid="sched-card-task-2"]');
+    expect(card2.text()).toContain("已结束");
+  });
+
+  it("编辑回填:once 任务预填 datetime-local,更新提交同 at_ms", async () => {
+    const at = new Date(Date.now() + 2 * 86_400_000);
+    at.setHours(7, 15, 0, 0);
+    stubBackend([row({ schedule: { kind: "once", at_ms: at.getTime() } })]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-task-1"]').trigger("click");
+    await flushPromises();
+    const form = openForm(w);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const expectedValue = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
+    const input = form.find('[data-testid="sched-once-at"]');
+    expect((input.element as HTMLInputElement).value).toBe(expectedValue);
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return row({ schedule: { kind: "once", at_ms: at.getTime() } });
+      if (cmd === "list_scheduled_tasks") return [row({ schedule: { kind: "once", at_ms: at.getTime() } })];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].schedule).toBe(JSON.stringify({ kind: "once", at_ms: at.getTime() }));
+    // 单次档更新显式清空结束条件(不残留旧值)。
+    expect(call?.[1].maxRuns).toBeNull();
+    expect(call?.[1].endsAt).toBeNull();
   });
 });

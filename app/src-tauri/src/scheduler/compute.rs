@@ -1,11 +1,13 @@
 //! F2 定时任务的调度计算纯函数(`08-28-f2-scheduled-tasks` design §3,
-//! F2b 扩展三档位:`08-28-f2b-schedule-extension` prd D7)。
+//! F2b 扩展三档位:`08-28-f2b-schedule-extension` prd D7;单次档 =
+//! BUGLIST CH11-1 兑现)。
 //!
 //! schedule 是 preset 档位(prd D2):`daily HH:MM` / `interval 每 N 分钟` /
 //! `weekly 周X HH:MM` / `hourly 每小时第 N 分` / `weekdays 工作日 HH:MM` /
-//! `monthly 每月 D 号 HH:MM`,以 internally-tagged JSON 存
-//! `scheduled_tasks.schedule` 列。本模块只做「给定 schedule 与时间窗,算出
-//! 到期点」的纯计算 —— 无 DB、无 IO、无锁,全部本地时区(chrono `Local`)。
+//! `monthly 每月 D 号 HH:MM` / `once 指定时刻一次`,以 internally-tagged
+//! JSON 存 `scheduled_tasks.schedule` 列。本模块只做「给定 schedule 与
+//! 时间窗,算出到期点」的纯计算 —— 无 DB、无 IO、无锁,全部本地时区
+//! (chrono `Local`)。
 //!
 //! 两个核心纯函数(design §3):
 //! - [`most_recent_due`]:从 now 向后步进找**最近**到期点
@@ -35,6 +37,7 @@ use serde::{Deserialize, Serialize};
 /// { "kind": "hourly",   "minute": 30 }
 /// { "kind": "weekdays", "at": "09:00" }
 /// { "kind": "monthly",  "day": 15, "at": "09:00" }
+/// { "kind": "once",     "at_ms": 1753923600000 }
 /// ```
 ///
 /// 后续档位 additive 扩展(未知 `kind` 反序列化失败 → 入库/更新时被
@@ -57,6 +60,11 @@ pub enum ScheduleSpec {
     /// 每月 `day` 号的 `at`(本地时间)。短月无该日(如 2 月无 31 号)→
     /// **跳过该月**(F2b prd D7,cron 语义,与 DST 跳过防御一致)。
     Monthly { day: u32, at: String },
+    /// 单次:在 `at_ms`(epoch ms,本地语义由前端 datetime-local 换算)
+    /// 触发**恰好一次**,fire 后由调度器即时完成落账(BUGLIST CH11-1;
+    /// 「结束条件=次数 1」的近似替代就此转正)。`at_ms` 在 create/update
+    /// 时校验必须晚于当前时刻(纯函数层只做 `> 0` 结构校验)。
+    Once { at_ms: i64 },
 }
 
 /// 解析并校验 schedule JSON(`scheduled_tasks.schedule` 列的唯一合法入口)。
@@ -93,6 +101,13 @@ pub fn validate_schedule(spec: &ScheduleSpec) -> Result<(), String> {
         ScheduleSpec::Interval { every_min } => {
             if *every_min == 0 {
                 Err("every_min 必须为正整数".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        ScheduleSpec::Once { at_ms } => {
+            if *at_ms <= 0 {
+                Err("at_ms 必须为正的 epoch 毫秒时间戳".to_string())
             } else {
                 Ok(())
             }
@@ -193,6 +208,10 @@ pub fn most_recent_due(schedule: &ScheduleSpec, now_ms: i64, not_before: i64) ->
             }
             Some(not_before + j * step)
         }
+        // 单次:唯一到期点就是 at_ms 本身;窗口约束(not_before <
+        // at_ms <= now)消费过或未到点 → None。fire 后 last_fired_at =
+        // at_ms 使 not_before = at_ms → 恒 None,完成语义由调度器接管。
+        ScheduleSpec::Once { at_ms } => (not_before < *at_ms && *at_ms <= now_ms).then_some(*at_ms),
         ScheduleSpec::Daily { at } => {
             let (hour, minute) = parse_hh_mm(at).ok()?;
             for days_back in 0..=1 {
@@ -287,6 +306,17 @@ pub fn next_fire_display(schedule: &ScheduleSpec, from_ms: i64) -> i64 {
     let from = ms_to_local(from_ms);
     match schedule {
         ScheduleSpec::Interval { every_min } => from_ms + (*every_min).max(1) as i64 * 60_000,
+        // 单次:未消费(未到点)→ at_ms 本身;已消费/已过后无下一到期点,
+        // 走与 daily 解析失败同款的 +1 天 fallback 保持 `> from` 不变量 ——
+        // 该值只可能出现在「fire 落账 / 已过期任务」的展示列上,而这两态
+        // 前端对 once 恒渲染「—」(见 scheduledTaskFormat.displayNextFireAt)。
+        ScheduleSpec::Once { at_ms } => {
+            if *at_ms > from_ms {
+                *at_ms
+            } else {
+                from_ms + 86_400_000
+            }
+        }
         ScheduleSpec::Daily { at } => {
             if let Ok((hour, minute)) = parse_hh_mm(at) {
                 for days_ahead in 0..=1 {
@@ -426,6 +456,10 @@ mod tests {
         }
     }
 
+    fn once(at_ms: i64) -> ScheduleSpec {
+        ScheduleSpec::Once { at_ms }
+    }
+
     /// 确定性锚点:本地 `y-m-d h:min` 的 epoch ms。固定历史日期 + 工作日
     /// 时刻 —— 各时区 DST 切换都在周日,工作日的墙上时刻必然存在。
     fn local_ms(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
@@ -453,6 +487,7 @@ mod tests {
                 hourly(0),
                 weekdays("09:00"),
                 monthly(1, "09:00"),
+                once(now + 86_400_000),
             ] {
                 if let Some(d) = most_recent_due(&spec, now, nb) {
                     assert!(d > nb, "due {d} must be > not_before {nb}");
@@ -477,6 +512,9 @@ mod tests {
             weekdays("09:00"),
             monthly(1, "09:00"),
             monthly(31, "09:00"),
+            once(now + 3_600_000),
+            // 已消费过的单次点:仍须返回 > from(fallback 路径)。
+            once(now - 3_600_000),
         ] {
             assert!(next_fire_display(&spec, now) > now);
         }
@@ -497,6 +535,7 @@ mod tests {
             weekdays("09:00"),
             monthly(1, "09:00"),
             monthly(31, "09:00"),
+            once(now + 86_400_000),
         ] {
             let next = next_fire_display(&spec, now);
             assert!(
@@ -756,6 +795,33 @@ mod tests {
         );
     }
 
+    // --- once(单次,CH11-1)---
+
+    #[test]
+    fn once_due_exactly_when_window_contains_the_point() {
+        let at = base_now_ms() + 3_600_000;
+        // 未到点 → None。
+        assert_eq!(most_recent_due(&once(at), at - 1, at - 3_600_000), None);
+        // 到点瞬间(at <= now)→ Some(at),与 not_before 无关地精确命中。
+        assert_eq!(most_recent_due(&once(at), at, at - 3_600_000), Some(at));
+        // 错过(catch-up 窗口内)→ 仍是 Some(at)(「补一次」由唯一
+        // 到期点语义天然保证)。
+        assert_eq!(
+            most_recent_due(&once(at), at + 86_400_000, at - 3_600_000),
+            Some(at)
+        );
+        // 消费过(not_before = at)→ None,且之后恒 None。
+        assert_eq!(most_recent_due(&once(at), at + 86_400_000, at), None);
+    }
+
+    #[test]
+    fn once_next_fire_display_is_the_point_until_consumed() {
+        let at = base_now_ms() + 3_600_000;
+        assert_eq!(next_fire_display(&once(at), base_now_ms()), at);
+        // 消费后无下一到期点 → fallback(保持 > from 不变量;仅展示列)。
+        assert!(next_fire_display(&once(at), at) > at);
+    }
+
     // --- parse / validate ---
 
     #[test]
@@ -809,5 +875,16 @@ mod tests {
         assert!(parse_schedule(r#"{"kind":"monthly","day":32,"at":"09:00"}"#).is_err());
         assert!(parse_schedule(r#"{"kind":"monthly","day":15,"at":"25:00"}"#).is_err());
         assert!(parse_schedule(r#"{"kind":"weekdays","at":"09:60"}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"once","at_ms":0}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"once","at_ms":-1}"#).is_err());
+        assert!(parse_schedule(r#"{"kind":"once"}"#).is_err());
+    }
+
+    #[test]
+    fn parse_schedule_accepts_once_preset() {
+        assert_eq!(
+            parse_schedule(r#"{"kind":"once","at_ms":1753923600000}"#).unwrap(),
+            once(1_753_923_600_000)
+        );
     }
 }

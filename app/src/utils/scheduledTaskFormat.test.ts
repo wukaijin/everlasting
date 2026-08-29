@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   describeSchedule,
   formatFireTime,
+  formatLocalYMDHm,
   summarizePrompt,
   weekdayLabel,
   WEEKDAY_OPTIONS,
@@ -15,6 +16,8 @@ import {
   describeEndDate,
   completedByRunLimit,
   completedByEndDate,
+  completedByOnce,
+  displayNextFireAt,
 } from "./scheduledTaskFormat";
 
 describe("describeSchedule", () => {
@@ -36,6 +39,13 @@ describe("describeSchedule", () => {
     );
     expect(describeSchedule({ kind: "monthly", day: 15, at: "09:00" })).toBe(
       "每月 15 号 09:00",
+    );
+  });
+
+  it("once 档人话:单次 + 本地 YYYY-MM-DD HH:mm(CH11-1)", () => {
+    const d = new Date(2026, 7, 30, 9, 5, 0);
+    expect(describeSchedule({ kind: "once", at_ms: d.getTime() })).toBe(
+      "单次 2026-08-30 09:05",
     );
   });
 
@@ -136,6 +146,54 @@ describe("F2b 结束条件格式化", () => {
       completedByEndDate({ enabled: true, ends_at: Date.now() - 1 }),
     ).toBe(false);
   });
+
+  it("completedByOnce:停用的 once 档,已消费或已过期才算完成(CH11-1)", () => {
+    const past = { kind: "once", at_ms: Date.now() - 60_000 } as const;
+    const future = { kind: "once", at_ms: Date.now() + 60_000 } as const;
+    // 已 fire 过(run_count ≥ 1)→ 完成,与 at_ms 新旧无关。
+    expect(
+      completedByOnce({ enabled: false, run_count: 1, schedule: past }),
+    ).toBe(true);
+    // 过期未 fire(如停用跨过时刻后重启用)→ 完成。
+    expect(
+      completedByOnce({ enabled: false, run_count: 0, schedule: past }),
+    ).toBe(true);
+    // 未到点 / 仍启用 / 非 once 档 → 不是完成态。
+    expect(
+      completedByOnce({ enabled: false, run_count: 0, schedule: future }),
+    ).toBe(false);
+    expect(
+      completedByOnce({ enabled: true, run_count: 0, schedule: past }),
+    ).toBe(false);
+    expect(
+      completedByOnce({
+        enabled: false,
+        run_count: 3,
+        schedule: { kind: "daily", at: "09:00" },
+      }),
+    ).toBe(false);
+    expect(completedByOnce({ enabled: false, run_count: 1, schedule: null })).toBe(
+      false,
+    );
+  });
+
+  it("displayNextFireAt:once 档消费后无下次(渲染 —),其余透传(CH11-1)", () => {
+    const once = { kind: "once", at_ms: 123 } as const;
+    expect(
+      displayNextFireAt({ run_count: 1, schedule: once, next_fire_at: 999 }),
+    ).toBeNull();
+    // 未消费的 once(等点)仍展示存库展示值。
+    expect(
+      displayNextFireAt({ run_count: 0, schedule: once, next_fire_at: 999 }),
+    ).toBe(999);
+    expect(
+      displayNextFireAt({
+        run_count: 5,
+        schedule: { kind: "daily", at: "09:00" },
+        next_fire_at: 777,
+      }),
+    ).toBe(777);
+  });
 });
 
 describe("formatFireTime", () => {
@@ -143,6 +201,12 @@ describe("formatFireTime", () => {
     // 2026-08-28 08:30 本地时间的 epoch ms(用 Date 反查,不依赖时区)。
     const d = new Date(2026, 7, 28, 8, 30, 0);
     expect(formatFireTime(d.getTime())).toBe("08-28 08:30");
+  });
+
+  it("formatLocalYMDHm:本地 YYYY-MM-DD HH:mm;非法 → 原样数字串", () => {
+    const d = new Date(2026, 11, 31, 23, 59, 0);
+    expect(formatLocalYMDHm(d.getTime())).toBe("2026-12-31 23:59");
+    expect(formatLocalYMDHm(NaN)).toBe("NaN");
   });
 
   it("缺失 / 非法输入 → “—”", () => {

@@ -110,6 +110,8 @@ pub mod completion_reasons {
     pub const MAX_RUNS: &str = "max_runs";
     /// 结束日期(到期点越过 ends_at)。
     pub const END_DATE: &str = "end_date";
+    /// 单次档(CH11-1):唯一到期点已消费 / 已过,任务无后续触发。
+    pub const ONCE: &str = "once";
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +286,13 @@ pub(crate) async fn scheduler_tick_with_fire(
             if task.ends_at.is_some_and(|t| now_ms > t) {
                 complete_task(&state.db, &task, completion_reasons::END_DATE).await;
             }
+            // 单次档兜底:at_ms 已过且窗口内无未消费点(已 fire 过 /
+            // 停用跨过时刻后重启用 / fire 落账失败)→ 完成,不空转。
+            if let ScheduleSpec::Once { at_ms } = &spec {
+                if now_ms > *at_ms {
+                    complete_task(&state.db, &task, completion_reasons::ONCE).await;
+                }
+            }
             continue;
         };
         // F2b gate 3:最近未消费到期点已越过结束日期 → 不 fire,完成。
@@ -371,18 +380,21 @@ pub(crate) async fn scheduler_tick_with_fire(
         // F2b:fire 落账计数(Queued/Started/Error 三种结局都算一次
         // 「已触发」——error 也消费了 due 且有审计可查)。
         account(&state.db, &task, &spec, due, true).await;
-        // F2b gate 4:本次 fire 后已达上限 / 下一到期点越过结束日期 →
-        // 即时完成(不等下 tick 扫死任务;enabled=0 使 completed 审计
-        // 天然只发一次)。
+        // F2b gate 4:本次 fire 后已达上限 / 下一到期点越过结束日期 /
+        // 单次档(唯一到期点已消费)→ 即时完成(不等下 tick 扫死任务;
+        // enabled=0 使 completed 审计天然只发一次)。
         let new_run_count = task.run_count + 1;
         let next = compute::next_fire_display(&spec, due);
         let reached_max = task.max_runs.is_some_and(|m| new_run_count >= m);
         let past_end = task.ends_at.is_some_and(|t| next > t);
-        if reached_max || past_end {
+        let once_done = matches!(spec, ScheduleSpec::Once { .. });
+        if reached_max || past_end || once_done {
             let reason = if reached_max {
                 completion_reasons::MAX_RUNS
-            } else {
+            } else if past_end {
                 completion_reasons::END_DATE
+            } else {
+                completion_reasons::ONCE
             };
             complete_task(&state.db, &task, reason).await;
         }

@@ -144,6 +144,44 @@ describe("scheduledTasks store", () => {
     });
   });
 
+  it("modelId 有值时进 args,缺省不进(新建专用 session 绑模型)", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task") return row();
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    const store = useScheduledTasksStore();
+    await store.create({
+      projectId: "p1",
+      name: "单次跑",
+      prompt: "p",
+      schedule: '{"kind":"once","at_ms":4102444800000}',
+      modelId: "model-9",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_scheduled_task", {
+      projectId: "p1",
+      name: "单次跑",
+      prompt: "p",
+      schedule: '{"kind":"once","at_ms":4102444800000}',
+      modelId: "model-9",
+    });
+    // 空串 modelId(表单「默认」态)不进 args。
+    invokeMock.mockClear();
+    await store.create({
+      projectId: "p1",
+      name: "n2",
+      prompt: "p",
+      schedule: "{}",
+      modelId: "",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_scheduled_task", {
+      projectId: "p1",
+      name: "n2",
+      prompt: "p",
+      schedule: "{}",
+    });
+  });
+
   it("F2b:update 的 maxRuns/endsAt 显式 null 透传(wire null = 清空为不限)", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "update_scheduled_task")

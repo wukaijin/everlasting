@@ -34,7 +34,8 @@ pub async fn list_scheduled_tasks(
 /// 请求体 snake_case、扁平标量(同 Tauri command 形参;transport 的
 /// 顶层 camel→snake 转换后两形态等价)。`target_session_id` 缺省 /
 /// 空串 = 新建专用 session(`_inner` 内定案)。`max_runs` / `ends_at`
-/// 是 F2b 结束条件(None = 不限)。
+/// 是 F2b 结束条件(None = 不限)。`model_id` 仅「新建专用 session」
+/// 分支生效(None = 沿用全局默认模型)。
 #[derive(Debug, Deserialize)]
 pub struct CreateScheduledTaskRequest {
     pub project_id: String,
@@ -45,6 +46,7 @@ pub struct CreateScheduledTaskRequest {
     pub enabled: Option<bool>,
     pub max_runs: Option<i64>,
     pub ends_at: Option<i64>,
+    pub model_id: Option<String>,
 }
 
 pub async fn create_scheduled_task(
@@ -64,6 +66,7 @@ pub async fn create_scheduled_task(
         "user".to_string(),
         req.max_runs,
         req.ends_at,
+        req.model_id,
     )
     .await?;
     Ok(Json(result))
@@ -468,5 +471,113 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "past ends_at: {body}");
         assert!(body.contains("结束日期"), "ends_at gate message: {body}");
+    }
+
+    /// 单次档(CH11-1)+ 专用 session 指定模型的 wire 形状:create 携带
+    /// 未来 `at_ms` 的 once 档 + `model_id` → 200 且新建 session 的
+    /// `model_id` 列被指定值覆盖;过去 at_ms(create 与 update 两臂)与
+    /// 不存在的 model_id → 400,且校验失败不留孤儿 session。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn scheduled_tasks_routes_once_preset_and_model_binding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let (project_id, _session_id) = seed_project_session(&state.db).await;
+        // 迁移 seed 了默认 provider + models,取一个真实 model id。
+        let model = db::list_models(&state.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("seeded model");
+
+        let future_at = 4_102_444_800_000i64; // 2100-01-01,必在未来
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"一次性","prompt":"p","schedule":"{{\"kind\":\"once\",\"at_ms\":{future_at}}}","model_id":"{}"}}"#,
+                model.model.id
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "once create with model: {body}");
+        let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            created["schedule"]["kind"], "once",
+            "once preset rides the wire"
+        );
+        assert_eq!(created["schedule"]["at_ms"], future_at);
+        // 专用 session 的 per-session 模型覆盖列 = 指定值。
+        let target = created["target_session_id"].as_str().unwrap();
+        let dedicated = db::sessions::load_session(&state.db, target)
+            .await
+            .unwrap()
+            .expect("dedicated session row");
+        assert_eq!(
+            dedicated.session.model_id.as_deref(),
+            Some(model.model.id.as_str())
+        );
+
+        // create:过去 at_ms → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"x","prompt":"p","schedule":"{{\"kind\":\"once\",\"at_ms\":1000}}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "past once at_ms: {body}");
+        assert!(body.contains("晚于当前时间"), "once gate message: {body}");
+
+        // update:换成过去的 once 档 → 400,存量 schedule 不被改写。
+        let task_id = created["id"].as_str().unwrap().to_string();
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(r#"{{"id":"{task_id}","schedule":"{{\"kind\":\"once\",\"at_ms\":1000}}"}}"#),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "past once at_ms update: {body}"
+        );
+        assert!(
+            body.contains("晚于当前时间"),
+            "once update gate message: {body}"
+        );
+        let row = db::scheduled_tasks::get_scheduled_task(&state.db, &task_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            row.schedule_json.contains(&future_at.to_string()),
+            "rejected update must not mutate the stored schedule"
+        );
+
+        // 不存在的 model_id → 400,且不建孤儿 session(校验先于建 session)。
+        let sessions_before = db::sessions::list_sessions(&state.db, &project_id)
+            .await
+            .unwrap()
+            .len();
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"y","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","model_id":"no-such-model"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "bogus model_id: {body}");
+        assert!(body.contains("不存在"), "model gate message: {body}");
+        let sessions_after = db::sessions::list_sessions(&state.db, &project_id)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(
+            sessions_before, sessions_after,
+            "rejected model must not leave an orphan dedicated session"
+        );
     }
 }
