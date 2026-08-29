@@ -316,13 +316,18 @@ export const useProjectsStore = defineStore("projects", () => {
       showToast(`关闭项目失败: ${extractErrorMessage(e)}`, "error");
       return;
     }
+    await loadProjects();
+    // BUGLIST CH3-1 (2026-08-29 GUI full-test): refresh the hidden
+    // list too, mirroring `unhideProject`. Without this, the just-
+    // hidden project stayed invisible in「已隐藏项目」until the next
+    // page reload, and re-adding its path fell through to
+    // `create_project` (stale-list miss) → misleading UNIQUE
+    // "already exists" toast — no UI way back before a reload.
+    await loadHiddenProjects();
     // The current project may have just been hidden — fall back to
     // the first remaining visible project, or null if none.
     if (currentProjectId.value === id) {
-      await loadProjects();
       currentProjectId.value = projects.value[0]?.id ?? null;
-    } else {
-      await loadProjects();
     }
   }
 

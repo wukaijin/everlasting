@@ -363,3 +363,77 @@ describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
     expect(store.manualPathOpen).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUGLIST CH3-1 (2026-08-29 GUI full-test): `hideProject` used to refresh
+// only `list_projects`, leaving `hiddenProjects` stale until the next page
+// reload. With another hidden project already present at startup, the
+// stale list never contained the just-hidden row, so「已隐藏项目」didn't
+// show it and re-adding its path fell through to `create_project` →
+// UNIQUE "already exists" toast. Lock: hide refreshes the hidden list
+// immediately, and the re-add path recovers via unhide (no create).
+// ---------------------------------------------------------------------------
+describe("useProjectsStore — hideProject refreshes hidden list (CH3-1)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockReset();
+  });
+
+  it("hide 后 store.hiddenProjects 立即含该项目(重调 list_hidden_projects)", async () => {
+    const store = useProjectsStore();
+    // Stale-list scenario: ANOTHER hidden project already exists at
+    // startup, so the lazy `length === 0` reload in registerPickedPath
+    // would never have fired — only hideProject's own refresh helps.
+    let visibleNow = [VISIBLE_PROJECT];
+    let hiddenNow = [HIDDEN_PROJECT];
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_projects") return visibleNow;
+      if (cmd === "list_hidden_projects") return hiddenNow;
+      if (cmd === "hide_project") {
+        visibleNow = [];
+        hiddenNow = [HIDDEN_PROJECT, { ...VISIBLE_PROJECT, hidden: true }];
+        return null;
+      }
+      return null;
+    });
+    await store.loadProjects();
+    await store.loadHiddenProjects();
+    expect(store.hiddenProjects.map((p) => p.id)).toEqual([HIDDEN_PROJECT.id]);
+
+    await store.hideProject(VISIBLE_PROJECT.id);
+
+    expect(store.hiddenProjects.map((p) => p.id)).toContain(VISIBLE_PROJECT.id);
+  });
+
+  it("hide 后立即重加同路径:走 unhide 恢复,不触发 create_project", async () => {
+    const store = useProjectsStore();
+    let visibleNow = [VISIBLE_PROJECT];
+    let hiddenNow = [HIDDEN_PROJECT];
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_projects") return visibleNow;
+      if (cmd === "list_hidden_projects") return hiddenNow;
+      if (cmd === "hide_project") {
+        visibleNow = [];
+        hiddenNow = [HIDDEN_PROJECT, { ...VISIBLE_PROJECT, hidden: true }];
+        return null;
+      }
+      if (cmd === "unhide_project") {
+        hiddenNow = [HIDDEN_PROJECT];
+        visibleNow = [VISIBLE_PROJECT];
+        return null;
+      }
+      return null;
+    });
+    await store.loadProjects();
+    await store.loadHiddenProjects();
+
+    await store.hideProject(VISIBLE_PROJECT.id);
+    const result = await store.addProjectByPath(VISIBLE_PROJECT.path);
+
+    expect(result?.id).toBe(VISIBLE_PROJECT.id);
+    expect(store.currentProjectId).toBe(VISIBLE_PROJECT.id);
+    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
+    expect(calledCmds).toContain("unhide_project");
+    expect(calledCmds).not.toContain("create_project");
+  });
+});
