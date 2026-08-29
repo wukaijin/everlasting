@@ -57,6 +57,9 @@ import {
   MagnifyingGlassIcon,
   UserGroupIcon,
   Bars3Icon,
+  // 08-29 定时任务日期控件(AppDatePicker 日历触发 + 上月翻页)。
+  CalendarIcon,
+  ChevronLeftIcon,
 } from "@heroicons/vue/24/outline";
 import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink, CornerUpRight } from "@lucide/vue";
 
@@ -112,6 +115,9 @@ const map = {
   "circle-stack": CircleStackIcon,
   "bolt": BoltIcon,
   "clock": ClockIcon,
+  // 08-29 定时任务日期控件(AppDatePicker)。
+  "calendar": CalendarIcon,
+  "chevron-left": ChevronLeftIcon,
   // 2026-06-27 sidebar 搜索入口: MagnifyingGlassIcon 触发搜索 input 行
   "magnifying-glass": MagnifyingGlassIcon,
   // 08-04 group-chat UI: 群聊入口按钮 (Sidebar "新建群聊") + 群聊

@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { defineComponent, h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { SelectRoot } from "reka-ui";
 
@@ -84,8 +85,39 @@ function stubBackend(tasks: ScheduledTask[]) {
   });
 }
 
+/** AppDatePicker / AppTimeField 的测试替身:渲染成普通 text input,
+ *  走同一字符串 v-model 契约($attrs 里的 data-testid / class 落到
+ *  input)。表单接线 / 校验 / 提交 payload 的断言不依赖 reka 弹层;
+ *  两个包装组件自身的转换逻辑有专门单测(AppDatePicker.test.ts /
+ *  AppTimeField.test.ts)。 */
+function stringFieldStub() {
+  return defineComponent({
+    inheritAttrs: false,
+    props: { modelValue: { type: String, default: "" } },
+    emits: ["update:modelValue"],
+    setup(props, { emit, attrs }) {
+      return () =>
+        h("input", {
+          ...attrs,
+          type: "text",
+          value: props.modelValue ?? "",
+          onInput: (e: Event) =>
+            emit("update:modelValue", (e.target as HTMLInputElement).value),
+        });
+    },
+  });
+}
+
 async function mountTab() {
-  const w = mount(ScheduledTasksTab, { global: { plugins: [createPinia()] } });
+  const w = mount(ScheduledTasksTab, {
+    global: {
+      plugins: [createPinia()],
+      stubs: {
+        AppDatePicker: stringFieldStub(),
+        AppTimeField: stringFieldStub(),
+      },
+    },
+  });
   await flushPromises();
   return w;
 }
@@ -362,7 +394,7 @@ describe("ScheduledTasksTab F2b 调度扩展", () => {
     const { w, form } = await openFilledForm();
     await pickSelect(form, 2, "monthly");
     await form.find('[data-testid="sched-monthly-day"]').setValue("15");
-    await form.find("input[type='time']").setValue("08:30");
+    await form.find('[data-testid="sched-at-time"]').setValue("08:30");
     stubCreate();
     await w.get('[data-testid="sched-submit"]').trigger("click");
     await flushPromises();
@@ -501,25 +533,27 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     });
   }
 
-  /** 明天本地 20:30 的 datetime-local 值 + 对应 epoch ms。 */
-  function tomorrowEvening(): { value: string; ms: number } {
+  /** 明天本地 20:30 的日期/时刻字符串 + 对应 epoch ms。 */
+  function tomorrowEvening(): { date: string; time: string; ms: number } {
     const d = new Date(Date.now() + 86_400_000);
     d.setDate(d.getDate() + 1);
     d.setHours(20, 30, 0, 0);
     const pad = (n: number) => n.toString().padStart(2, "0");
     return {
-      value: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T20:30`,
+      date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      time: "20:30",
       ms: d.getTime(),
     };
   }
 
-  it("单次档:datetime-local 输入,提交 {kind:once,at_ms} 且不带结束条件", async () => {
+  it("单次档:日期 + 时刻控件,提交 {kind:once,at_ms} 且不带结束条件", async () => {
     const { w, form } = await openFilledForm();
     await pickSelect(form, 2, "once");
     // 单次档不渲染结束条件块(无意义:唯一触发点即终点)。
     expect(form.find('input[name="sched-end"]').exists()).toBe(false);
     const t = tomorrowEvening();
-    await form.find('[data-testid="sched-once-at"]').setValue(t.value);
+    await form.find('[data-testid="sched-once-date"]').setValue(t.date);
+    await form.find('[data-testid="sched-once-time"]').setValue(t.time);
     stubCreate();
     await w.get('[data-testid="sched-submit"]').trigger("click");
     await flushPromises();
@@ -540,8 +574,9 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
 
     const yesterday = new Date(Date.now() - 86_400_000);
     const pad = (n: number) => n.toString().padStart(2, "0");
-    const past = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}T09:00`;
-    await form.find('[data-testid="sched-once-at"]').setValue(past);
+    const pastDate = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+    await form.find('[data-testid="sched-once-date"]').setValue(pastDate);
+    await form.find('[data-testid="sched-once-time"]').setValue("09:00");
     await w.get('[data-testid="sched-submit"]').trigger("click");
     await flushPromises();
     expect(w.find(".sched-tab__error").text()).toContain("晚于当前时间");
@@ -615,7 +650,7 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     expect(card2.text()).toContain("已结束");
   });
 
-  it("编辑回填:once 任务预填 datetime-local,更新提交同 at_ms", async () => {
+  it("编辑回填:once 任务预填日期/时刻,更新提交同 at_ms", async () => {
     const at = new Date(Date.now() + 2 * 86_400_000);
     at.setHours(7, 15, 0, 0);
     stubBackend([row({ schedule: { kind: "once", at_ms: at.getTime() } })]);
@@ -624,9 +659,13 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     await flushPromises();
     const form = openForm(w);
     const pad = (n: number) => n.toString().padStart(2, "0");
-    const expectedValue = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
-    const input = form.find('[data-testid="sched-once-at"]');
-    expect((input.element as HTMLInputElement).value).toBe(expectedValue);
+    const expectedDate = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+    expect(
+      (form.find('[data-testid="sched-once-date"]').element as HTMLInputElement).value,
+    ).toBe(expectedDate);
+    expect(
+      (form.find('[data-testid="sched-once-time"]').element as HTMLInputElement).value,
+    ).toBe("07:15");
     invokeMock.mockClear();
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "update_scheduled_task") return row({ schedule: { kind: "once", at_ms: at.getTime() } });

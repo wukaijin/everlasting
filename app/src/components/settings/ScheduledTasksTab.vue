@@ -52,6 +52,8 @@ import {
   SelectItemText,
 } from "reka-ui";
 import ConfirmDialog from "../common/ConfirmDialog.vue";
+import AppDatePicker from "../common/AppDatePicker.vue";
+import AppTimeField from "../common/AppTimeField.vue";
 import Icon from "../Icon.vue";
 import { useScheduledTasksStore } from "../../stores/scheduledTasks";
 import type { ScheduledTask, ScheduleSpec } from "../../stores/scheduledTasks";
@@ -243,20 +245,23 @@ function onPickModel(v: unknown): void {
   if (m === "" || flatModelOptions.value.some((o) => o.id === m)) form.modelId = m;
 }
 
-/** 本地 `yyyy-MM-ddTHH:mm`(input[type=datetime-local] 值)→ epoch ms。
- *  datetime-local 无时区后缀,`new Date(v)` 按本地时区解释。非法 → null。 */
-function localDatetimeToMs(v: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) return null;
-  const t = new Date(v).getTime();
-  return Number.isFinite(t) ? t : null;
-}
-
-/** epoch ms → 本地 `yyyy-MM-ddTHH:mm`(编辑回填 datetime-local)。 */
-function msToLocalDatetimeStr(ms: number): string {
+/** 本地 `yyyy-MM-dd` 字符串(`AppDatePicker` 值)。 */
+function msToDateStr(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+/** 本地 `HH:mm`(24h,`AppTimeField` 值)。 */
+function msToTimeStr(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 日历可选的最早日期(今天,`yyyy-MM-dd`):once 不能约过去,结束
+ *  日期不能早于今天(表单校验语义不变,日历只是前置拦截)。 */
+const minDateStr = computed(() => msToDateStr(Date.now()));
 
 const formOpen = ref(false);
 const editingId = ref<string | null>(null);
@@ -270,8 +275,10 @@ const form = reactive({
   targetSessionId: "",
   kind: "daily" as FormKind,
   at: "09:00",
-  /** once:datetime-local 值(提交转本地 epoch ms)。 */
-  onceAt: "",
+  /** once:日期 + 时刻(AppDatePicker / AppTimeField 字符串值),
+   *  提交时合成 onceAtMs()。 */
+  onceDate: "",
+  onceTime: "",
   /** hourly:每小时第几分钟(0-59)。 */
   hourlyMinute: 30,
   /** monthly:每月几号(1-31)。 */
@@ -325,11 +332,15 @@ function endOfDayMs(dateStr: string): number | null {
   return dt.getTime();
 }
 
-/** epoch ms → 本地 `yyyy-MM-dd`(编辑回填 `input[type=date]`)。 */
-function msToDateStr(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** onceDate + onceTime(表单字符串)→ 本地 epoch ms;任一为空/非法
+ *  → null(提交校验兜底,AppDatePicker/AppTimeField 正常只出合法值)。 */
+function onceAtMs(): number | null {
+  const dp = form.onceDate.split("-").map(Number);
+  const tp = /^(\d{1,2}):(\d{2})$/.exec(form.onceTime);
+  if (dp.length !== 3 || dp.some((n) => !Number.isFinite(n)) || !tp) return null;
+  const [y, mo, d] = dp as [number, number, number];
+  const dt = new Date(y, mo - 1, d, Number(tp[1]), Number(tp[2]));
+  return Number.isNaN(dt.getTime()) ? null : dt.getTime();
 }
 
 function resetForm(): void {
@@ -339,7 +350,8 @@ function resetForm(): void {
   form.targetSessionId = "";
   form.kind = "daily";
   form.at = "09:00";
-  form.onceAt = "";
+  form.onceDate = "";
+  form.onceTime = "";
   form.hourlyMinute = 30;
   form.monthlyDay = 1;
   form.weekday = "mon";
@@ -368,7 +380,8 @@ function openEdit(task: ScheduledTask): void {
   const spec = task.schedule;
   if (spec?.kind === "once") {
     form.kind = "once";
-    form.onceAt = msToLocalDatetimeStr(spec.at_ms);
+    form.onceDate = msToDateStr(spec.at_ms);
+    form.onceTime = msToTimeStr(spec.at_ms);
   } else if (spec?.kind === "hourly") {
     form.kind = "hourly";
     form.hourlyMinute = spec.minute;
@@ -430,7 +443,7 @@ function cancelForm(): void {
 function buildScheduleSpec(): ScheduleSpec | null {
   switch (form.kind) {
     case "once": {
-      const t = localDatetimeToMs(form.onceAt);
+      const t = onceAtMs();
       return t === null ? null : { kind: "once", at_ms: t };
     }
     case "hourly": {
@@ -480,7 +493,7 @@ async function submitForm(): Promise<void> {
   }
   // 档位字段(按档位细分错误信息)。
   if (form.kind === "once") {
-    const t = localDatetimeToMs(form.onceAt);
+    const t = onceAtMs();
     if (t === null) {
       formError.value = "请选择单次触发的时间";
       return;
@@ -809,11 +822,19 @@ onMounted(async () => {
             </SelectPortal>
           </SelectRoot>
           <template v-if="form.kind === 'once'">
-            <input
-              v-model="form.onceAt"
-              type="datetime-local"
-              class="sched-tab__input sched-tab__datetime"
-              data-testid="sched-once-at"
+            <AppDatePicker
+              v-model="form.onceDate"
+              class="sched-tab__date"
+              placeholder="选择日期"
+              :min-value="minDateStr"
+              data-testid="sched-once-date"
+              aria-label="单次触发日期"
+            />
+            <AppTimeField
+              v-model="form.onceTime"
+              class="sched-tab__time-field"
+              data-testid="sched-once-time"
+              aria-label="单次触发时刻"
             />
             <span class="sched-tab__unit">(到点触发一次)</span>
           </template>
@@ -830,11 +851,21 @@ onMounted(async () => {
             <span class="sched-tab__unit">分钟(每小时第几分钟)</span>
           </template>
           <template v-else-if="form.kind === 'daily'">
-            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+            <AppTimeField
+              v-model="form.at"
+              class="sched-tab__time"
+              data-testid="sched-at-time"
+              aria-label="触发时刻"
+            />
           </template>
           <template v-else-if="form.kind === 'weekdays'">
             <span class="sched-tab__unit">周一至五</span>
-            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+            <AppTimeField
+              v-model="form.at"
+              class="sched-tab__time"
+              data-testid="sched-at-time"
+              aria-label="触发时刻"
+            />
           </template>
           <template v-else-if="form.kind === 'weekly'">
             <SelectRoot v-model="form.weekday">
@@ -866,7 +897,12 @@ onMounted(async () => {
                 </SelectContent>
               </SelectPortal>
             </SelectRoot>
-            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+            <AppTimeField
+              v-model="form.at"
+              class="sched-tab__time"
+              data-testid="sched-at-time"
+              aria-label="触发时刻"
+            />
           </template>
           <template v-else-if="form.kind === 'monthly'">
             <span class="sched-tab__unit">每月</span>
@@ -880,7 +916,12 @@ onMounted(async () => {
               data-testid="sched-monthly-day"
             />
             <span class="sched-tab__unit">号</span>
-            <input v-model="form.at" type="time" class="sched-tab__input sched-tab__time" />
+            <AppTimeField
+              v-model="form.at"
+              class="sched-tab__time"
+              data-testid="sched-at-time"
+              aria-label="触发时刻"
+            />
           </template>
           <template v-else>
             <input
@@ -955,12 +996,14 @@ onMounted(async () => {
           <label v-else class="sched-tab__end-option">
             <input v-model="form.endMode" type="radio" value="date" name="sched-end" />
             结束日期
-            <input
+            <AppDatePicker
               v-model="form.endDate"
-              type="date"
-              class="sched-tab__input sched-tab__date"
-              data-testid="sched-end-date"
+              class="sched-tab__date"
+              placeholder="选择日期"
+              :min-value="minDateStr"
               :disabled="form.endMode !== 'date'"
+              data-testid="sched-end-date"
+              aria-label="结束日期"
             />
           </label>
         </div>
@@ -1320,15 +1363,18 @@ onMounted(async () => {
   max-width: 140px;
 }
 
-.sched-tab__time {
+/* AppTimeField / AppDatePicker 的根分别是 reka TimeFieldRoot /
+   renderless DatePickerRoot,布局类落在 reka 内部元素上,scoped
+   选择器够不到,统一 :deep()(祖先 schedule-row 带 data-v)。 */
+.sched-tab__schedule-row :deep(.sched-tab__time) {
   flex: 1 1 116px;
   max-width: 180px;
 }
 
-/* 单次档的 datetime-local(日期+时刻,比 time 输入宽)。 */
-.sched-tab__datetime {
-  flex: 1 1 180px;
-  max-width: 230px;
+/* 单次档的 AppTimeField(时刻,与日期选择并排)。 */
+.sched-tab__schedule-row :deep(.sched-tab__time-field) {
+  flex: 1 1 96px;
+  max-width: 130px;
 }
 
 .sched-tab__minutes {
@@ -1360,6 +1406,7 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap; /* 「结束日期」等文案不内折,整条 label 换行(flex-wrap)。 */
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -1381,7 +1428,8 @@ onMounted(async () => {
   flex: 0 0 72px;
 }
 
-.sched-tab__date {
+.sched-tab__schedule-row :deep(.sched-tab__date),
+.sched-tab__end-row :deep(.sched-tab__date) {
   flex: 1 1 140px;
   max-width: 200px;
 }
@@ -1486,7 +1534,7 @@ onMounted(async () => {
 
 .sched-tab__card-state {
   flex-shrink: 0;
-  font-size: var(--text-2-xs);
+  font-size: var(--text-2xs);
   color: var(--color-tool-write);
 }
 
@@ -1494,10 +1542,10 @@ onMounted(async () => {
    同排、更低调(描边式,user 任务不渲染 = 缺省态零噪音)。 */
 .sched-tab__card-origin {
   flex-shrink: 0;
-  font-size: var(--text-2-xs);
+  font-size: var(--text-2xs);
   line-height: 1;
   padding: 2px 5px;
-  border: 1px solid var(--color-border-primary);
+  border: 1px solid var(--color-bg-border-strong);
   border-radius: 999px;
   color: var(--color-text-secondary);
 }
@@ -1627,10 +1675,17 @@ onMounted(async () => {
   }
 
   .sched-tab__kind,
-  .sched-tab__time,
-  .sched-tab__datetime,
   .sched-tab__minutes,
   .sched-tab__weekday {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  .sched-tab__schedule-row :deep(.sched-tab__time),
+  .sched-tab__schedule-row :deep(.sched-tab__time-field),
+  .sched-tab__schedule-row :deep(.sched-tab__date),
+  .sched-tab__end-row :deep(.sched-tab__date) {
     flex: 1 1 auto;
     width: auto;
     min-width: 0;
