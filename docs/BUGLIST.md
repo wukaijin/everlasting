@@ -30,14 +30,14 @@
 |---|---|---|---|---|---|
 | CH4-1 | **P1** | 编辑已发消息报「消息缺少 seq 无法编辑」 | `useMessageEditing.ts:164,233` | ✅ 已修复 | 61c0dc8 |
 | CH3-1 | **P1** | 关项目 Tab 后隐藏列表不更新,重新添加被拒 | `stores/projects.ts:312-327` | ✅ 已修复 | 0536914 |
-| CH4-2 | P2 | 消息 Markdown 有序/无序列表无标记 | Tailwind preflight + `MessageItem.vue:1624` | ⬜ | |
-| CH2-1 | P2 | 含消息的群聊会话删除永不弹确认 | `SessionList.vue:302-305` + 群聊 preview 恒空 | ⬜ | |
-| CH5-2 | P3 | /clear 后「累计耗时」与空态提示同屏自相矛盾 | `stores/chat.ts:450-463` | ⬜ | |
-| CH13-1 | P3 | 审计/Trace 事件时间显示 UTC,与界面本地时间不一致 | `utils/audit.ts:545-552` | ⬜ | |
-| CH12-1a | P3 | 搜索消息命中分组的会话头视觉像可点,实际无 handler | `SearchModal.vue:370-374` | ⬜ | |
-| CH12-1b | P3 | 搜索预览「在主窗口打开」不定位到命中消息(不消费 seq) | `SearchModal.vue:245-248` | ⬜ | |
-| CH3-3/7-3 | P3 | 错误 toast 暴露内部传输层名 `[httpTransport]` | `transport/http.ts:226-238` | ⬜ | |
-| CH9-1 | P3 | 记忆弹窗暴露内部文档路径 `docs/IMPLEMENTATION.md` | `MemoryPreview.vue:479-485` | ⬜ | |
+| CH4-2 | P2 | 消息 Markdown 有序/无序列表无标记 | Tailwind preflight + `MessageItem.vue:1624` | ✅ 已修复 | f030e4d |
+| CH2-1 | P2 | 含消息的群聊会话删除永不弹确认 | `SessionList.vue:302-305` + 群聊 preview 恒空 | ✅ 已修复 | 8388dc7 |
+| CH5-2 | P3 | /clear 后「累计耗时」与空态提示同屏自相矛盾 | `stores/chat.ts:450-463` | ✅ 已修复 | a551314 |
+| CH13-1 | P3 | 审计/Trace 事件时间显示 UTC,与界面本地时间不一致 | `utils/audit.ts:545-552` | ✅ 已修复 | 1ada545 |
+| CH12-1a | P3 | 搜索消息命中分组的会话头视觉像可点,实际无 handler | `SearchModal.vue:370-374` | ✅ 已修复 | 44cf49b |
+| CH12-1b | P3 | 搜索预览「在主窗口打开」不定位到命中消息(不消费 seq) | `SearchModal.vue:245-248` | ✅ 已修复 | 44cf49b |
+| CH3-3/7-3 | P3 | 错误 toast 暴露内部传输层名 `[httpTransport]` | `transport/http.ts:226-238` | ✅ 已修复 | 15dfdcf |
+| CH9-1 | P3 | 记忆弹窗暴露内部文档路径 `docs/IMPLEMENTATION.md` | `MemoryPreview.vue:479-485` | ✅ 已修复 | a707218 |
 
 ### CH4-1 编辑消息「缺少 seq」(P1)
 
