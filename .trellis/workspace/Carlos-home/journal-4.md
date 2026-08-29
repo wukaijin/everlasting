@@ -1083,3 +1083,28 @@ ScheduledTasksTab 原生 date/time/datetime-local 全部替换为 reka 2.9.9 原
 ### Status
 
 [OK] **Completed**
+
+
+## Session 121: BUGLIST 功能池交互打磨批次(CH8-2/CH4-3/CH3-2/CH7-4)
+
+**Date**: 2026-08-29
+**Task**: BUGLIST 功能池交互打磨批次(CH8-2/CH4-3/CH3-2/CH7-4)
+**Branch**: `main`
+
+### Summary
+
+收尾 WebUI 黑盒测试功能池 4 条交互打磨:CH8-2 MessageList watch 当前 session pending interaction 仅 null→some 跃迁强制回底(全 pending 种类覆盖)+ send 排队路径遇 pending warn toast 澄清「已排队但 Agent 等卡片提交」(upload 失败提前 return 不误报);CH7-4 放行撤销接 ConfirmDialog(RuntimeMemoryModal stacking context 先例放 DialogContent 内免 z-index 特技,确认走既有 store.revoke,matchKind 中文标签抽取 matchKindLabel 与行内 badge 共享);CH3-2 隐藏项目下拉受控 v-model:open 仅 unhide 成功后收起(失败保持展开可重试);CH4-3 菜单禁用项 opacity 0.55 + 与 highlight 背景解耦。前端 107 文件 1411 用例(+17)全绿 + vue-tsc 干净,后端零 diff。spec 收编 test-environment 四坑(VTU 默认 stub transition-group 断 ul.messages 抓取 / onMounted store 重载覆盖直接种子须 mock 应答 load IPC / stickToBottomUntilStable rAF 静默窗与测试滚动竞态须等 300ms / ensureLoaded 权威拉取中途清种子须 mock get_pending_interaction 且 override 晚于 setup 防 onProjectChange 尾巴竞态)+ message-list §4 pending 回底契约。测试期间定位 3 个新测试基建坑均为本任务首踩。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f424d14` | (see git log) |
+| `6dfcd5a` | (see git log) |
+| `f69c191` | (see git log) |
+| `b56ad41` | (see git log) |
+| `0aca0d2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
