@@ -18,6 +18,7 @@ import { compressImage } from "../utils/imageCompress";
 import { extractErrorMessage } from "../utils/useErrorBus";
 import { useChecklistStore } from "./checklist";
 import { useModelsStore } from "./models";
+import { useQuestionCardsStore } from "./questionCards";
 import type { useStreamControllerStore } from "./streamController";
 import type { useProjectsStore } from "./projects";
 import { genId, parseForcedDispatchPrefix, type AttachmentWireRef, type ChatMessagePayload } from "./chat";
@@ -448,6 +449,19 @@ export function createSendActions(ctx: SendActionsContext) {
           ...(attachments.length > 0 ? { attachments } : {}),
         };
       });
+
+    // CH8-2b (2026-08-29): 排队发送 × 阻塞中的提问卡。经典 session 流式
+    // 发送经后端「闲也入队」路由入队,但 loop 此刻仍阻塞在 QuestionStore
+    // oneshot 等卡片提交 —— 输入框这条路解不开阻塞,用户容易误以为打字
+    // 即回答。放在最后一个早期 return(upload 失败)之后,保证 toast 的
+    // 「已排队」话音落时发送必然继续;pending 只在 loop 阻塞期存在,
+    // 无需区分种类。
+    if (queueingClassic && useQuestionCardsStore().getPending(sessionId)) {
+      projectsStore.showToast(
+        "消息已排队；当前有未回答的提问卡，Agent 正在等待卡片提交",
+        "warn",
+      );
+    }
 
     // `startRequest` registers the active request, pins the session
     // in the LRU, and invokes the backend `chat` IPC. The

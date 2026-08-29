@@ -17,6 +17,7 @@
 
 import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
+import { useQuestionCardsStore } from "../../stores/questionCards";
 import type { ChatMessage } from "../../stores/chat.types";
 import { buildRunGroups } from "../../utils/messageFormat";
 import MessageItem from "./MessageItem.vue";
@@ -213,6 +214,24 @@ watch(
     stickToBottomUntilStable();
   },
 );
+
+// BUGLIST CH8-2a (2026-08-29): 阻塞式 pending interaction(ask_user_question
+// 家族 + loop intervention + softcap + mode/task 卡)在当前 session **从无到
+// 有**时强制回底。常规跟底只服务 near-bottom / force-follow:用户上滚读历史
+// 时卡片落在视口外,而 loop 正阻塞在 QuestionStore oneshot 上等回答 —— 这是
+// 全 UI 里唯一"agent 停下来等人"的状态,值得打断用户的滚动位置。some→some
+// (切换到本就有 pending 的 session)不触发:重载路径 scrollAfterReload 本就
+// 回底,重复只添抖动。
+const questionCardsStore = useQuestionCardsStore();
+const currentPendingInteraction = computed(() => {
+  const sid = store.currentSessionId;
+  return (sid && questionCardsStore.getPending(sid)) || null;
+});
+watch(currentPendingInteraction, (now, before) => {
+  if (!now || before) return;
+  isAtBottom.value = true;
+  void scrollToBottom(false);
+});
 
 // F4: after reloadAfterFinalize replaces the streaming buffer with
 // DB messages, re-scroll to bottom to avoid position jitter. See
