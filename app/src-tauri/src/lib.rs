@@ -272,7 +272,6 @@ pub fn run() {
             commands::providers::get_default_model,
             commands::providers::set_default_model,
             commands::providers::update_session_model_id,
-            commands::providers::test_provider,
             commands::providers::test_model,
             // Sessions
             commands::attachments::save_attachment,
@@ -439,18 +438,10 @@ pub fn run() {
             // question IPCs (frontend `<AskUserQuestionCard>`
             // resolve + pending-state source-of-truth lookup).
             commands::question::resolve_tool_question,
-            // Legacy IPC, kept for backward compat (frontends
-            // pre-dating `get_pending_interaction`); new code
-            // should use the unified command. `#[allow(deprecated)]`
-            // suppresses the registration-site warning.
-            #[allow(deprecated)]
-            commands::question::get_pending_question,
             // 2026-07-07 (`request_mode_change` task): unified
             // mode-change IPCs (frontend `<RequestModeChangeCard>`
             // resolve + pending-interaction source-of-truth
-            // lookup). `get_pending_interaction` supersedes
-            // `get_pending_question` for new code; the legacy
-            // command is kept for backward compat.
+            // lookup).
             commands::question::resolve_mode_change,
             commands::question::get_pending_interaction,
             // 2026-07-08 (`07-08-workflow-integration` Phase 3

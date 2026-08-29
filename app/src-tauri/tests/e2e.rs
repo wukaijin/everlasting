@@ -586,9 +586,12 @@ mod e1d_health {
             body.get("uptimeSeconds").and_then(|v| v.as_u64()).is_some(),
             "uptimeSeconds is a non-negative integer"
         );
+        // sessionCount was removed with the P2.2 -1 sentinel
+        // (2026-08-30, RULE-HEALTH-001): the stateless handler
+        // reports no session count at all.
         assert!(
-            body.get("sessionCount").is_some(),
-            "sessionCount field present"
+            body.get("sessionCount").is_none(),
+            "sessionCount must be absent from the wire shape"
         );
     }
 
@@ -691,7 +694,6 @@ mod e1e_router_smoke {
             "/api/v1/question/resolve_tool_question",
             "/api/v1/question/resolve_mode_change",
             "/api/v1/question/get_pending_interaction",
-            "/api/v1/question/get_pending_question",
             "/api/v1/question/resolve_task_state_transition",
             // sessions
             "/api/v1/sessions/list_sessions",

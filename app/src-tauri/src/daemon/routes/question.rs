@@ -13,10 +13,9 @@ use serde::Deserialize;
 
 use crate::agent::question_store::PendingInteractionEntry;
 use crate::agent::question_store::QuestionAnswer;
-use crate::agent::question_store::ToolQuestionPayload;
 use crate::commands::question::{
-    get_pending_interaction_inner, get_pending_question_inner, resolve_mode_change_inner,
-    resolve_task_state_transition_inner, resolve_tool_question_inner,
+    get_pending_interaction_inner, resolve_mode_change_inner, resolve_task_state_transition_inner,
+    resolve_tool_question_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;
@@ -82,19 +81,6 @@ pub async fn get_pending_interaction(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GetPendingQuestionRequest {
-    pub session_id: String,
-}
-
-pub async fn get_pending_question(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<GetPendingQuestionRequest>,
-) -> Result<Json<Option<ToolQuestionPayload>>, AppCommandError> {
-    let result = get_pending_question_inner(&state, req.session_id).await?;
-    Ok(Json(result))
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ResolveTaskStateTransitionRequest {
     pub session_id: String,
     pub tool_use_id: String,
@@ -124,7 +110,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/resolve_tool_question", post(resolve_tool_question))
         .route("/resolve_mode_change", post(resolve_mode_change))
         .route("/get_pending_interaction", post(get_pending_interaction))
-        .route("/get_pending_question", post(get_pending_question))
         .route(
             "/resolve_task_state_transition",
             post(resolve_task_state_transition),

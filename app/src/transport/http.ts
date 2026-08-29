@@ -144,7 +144,6 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   update_session_model_id: "providers",
   // question
   get_pending_interaction: "question",
-  get_pending_question: "question",
   resolve_mode_change: "question",
   resolve_task_state_transition: "question",
   resolve_tool_question: "question",

@@ -1,4 +1,4 @@
-//! run_chat_loop 单轮驱动段(拆分自 chat_loop.rs,08-08-a-class-chat-loop-split)。
+//! run_chat_loop 单轮驱动段(拆分自 chat_loop.rs)。
 //!
 //! `DriveTurnOutcome` struct + `drive_turn` 函数:hub turn 循环体内、一轮的
 //! C3 compaction → provider.send → 事件流处理 → persist_turn。早返路径
@@ -46,8 +46,8 @@ use super::{
 /// cancel_parent sets `cancelled`). The caller persists + feeds the blocks
 /// back into the next turn.
 ///
-/// Split off `run_chat_loop` (08-08-a-class-chat-loop-split). No behavior
-/// change — pure lift; the block contained no `return` statements.
+/// Split off `run_chat_loop`. No behavior change — pure lift; the
+/// block contained no `return` statements.
 /// Per-turn LLM drive: head_sha/system_prompt refresh → C3 compaction →
 /// checklist/background injection → LLM retry/stream → event loop → post-stream
 /// flush + assistant persist → no-tools terminal check → loop detection (C2/C2+
@@ -57,8 +57,7 @@ use super::{
 /// On the normal path returns [`DriveTurnOutcome`] carrying this turn's
 /// `tool_calls` + `loop_hint` + the mutated cross-turn state.
 ///
-/// Split off `run_chat_loop` (08-08-a-class-chat-loop-split). No behavior
-/// change — pure lift.
+/// Split off `run_chat_loop`. No behavior change — pure lift.
 pub(crate) struct DriveTurnOutcome {
     pub(crate) tool_calls: Vec<(String, String, serde_json::Value)>,
     pub(crate) loop_hint: Option<String>,
@@ -72,7 +71,7 @@ pub(crate) struct DriveTurnOutcome {
     pub(crate) last_usage_terminal: Option<crate::llm::types::TokenUsage>,
     pub(crate) workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
     pub(crate) cancelled: bool,
-    /// C3 摘要压缩 PR2(08-18-llm-context-compaction,design §4.2):
+    /// C3 摘要压缩:
     /// 当前水位摘要锚点。进参是上一 turn 的 anchor(init 种子或上次
     /// 压缩产物),出参在本 turn 成功压缩后更新为新摘要 —— 同
     /// `loop_hit_count` 的循环内穿参模式,覆盖**同一 loop run 内的
@@ -81,7 +80,7 @@ pub(crate) struct DriveTurnOutcome {
 }
 
 // ---------------------------------------------------------------------------
-// RULE-PERSIST-001 (08-24-p1-turn-crash-recovery) WP2: turn 流式检查点
+// turn 流式检查点:
 //
 // daemon kill -9 / OOM / 断电时流式内容全在内存累加器里,不落库即丢。
 // 检查点把累积状态按时间门 upsert 进 messages 的 in_progress 行
@@ -164,7 +163,7 @@ fn snapshot_checkpoint_blocks(
     snap
 }
 
-/// RULE-ARGS-001 收编（原 49 参 → 六元）：三套件引用 +
+/// 参数收编（原 49 参 → 六元）：三套件引用 +
 /// [`TurnFrame`]（每轮常量派生帧，含轮计数）+ [`TurnCarry`]（by-value
 /// 十人可变名单，design D2）+ [`TurnHot`]（cwd 状态对的只读视图——
 /// 本函数不产 cwd 突变；shell cd 经 dispatch 的 DispatchOutcome 回写）。
@@ -178,7 +177,7 @@ pub(crate) async fn drive_turn(
     carry: TurnCarry,
     hot: &TurnHot,
 ) -> Result<DriveTurnOutcome, ()> {
-    // RULE-ARGS-001（design D2）：跨 turn 可变状态的十人名单解包 ——
+    // 跨 turn 可变状态的十人名单解包 ——
     // 等价旧签名首十个位参的 `let mut x = x;` 重绑定块。
     let TurnCarry {
         mut messages,
@@ -193,7 +192,7 @@ pub(crate) async fn drive_turn(
         mut summary_anchor,
     } = carry;
     // -----------------------------------------------------------------
-    // RULE-ARGS-001 重绑定表（旧位参名 → 新来源），形态逐一对应：
+    // 重绑定表（旧位参名 → 新来源），形态逐一对应：
     //   旧按引用形参      → 引用别名（零克隆）
     //   旧按值形参        → owned 镜像（一次 clone ≡ 旧调用点实参克隆）
     //   LoopInit 常量     → frame.* 只读/Copy 出
@@ -241,12 +240,11 @@ pub(crate) async fn drive_turn(
     let token = deps.token.clone();
 
     permission_ctx.turn_seq = Some(seq);
-    // 08-20-worker-turn-trace-persist: run 维度写键。'' = 主行(worker
+    // run 维度写键。'' = 主行(worker
     // 未跑或 insert_run 失败降级);非空 = worker 行的 turn_trace 键
     // 第三元。下方三个写点(Done 臂 upsert / record_compaction /
     // record_loop_hint)都用它路由。
     let run_key: &str = worker_run_id.unwrap_or("");
-    // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
     // refresh `head_sha` + rebuild `system_prompt` at the start of
     // EVERY turn. The LLM only consumes `system_prompt` once per
     // turn (at `provider.send`), so refreshing at turn entry is
@@ -289,10 +287,10 @@ pub(crate) async fn drive_turn(
     // `session_type` is read from the loaded session row at zero cost
     // (no DB round-trip — design §R3 / 评审 P2-1).
     //
-    // unified-context-budget WP1 (2026-08-19, D7 时序重排): 本块
+    // 本块
     // (过滤链 + stubify + dispatch/元工具 append + tools_token 估算)
     // 原位于 turn 组装与图片 resolve 之后,现整体挪到 C3 压缩块
-    // **之前** —— 压缩触发线的统一口径(prd R3)需要当轮 tools_json
+    // **之前** —— 压缩触发线的统一口径需要当轮 tools_json
     // 估算。依赖核查:本块只依赖 permissions + head_sha(上方已刷新)
     // + StubRegistry/SubagentCache,与压缩块零依赖;挪动为纯顺序
     // 变化,tools_token 计数语义不变(仍在"最终发送集合"上序列化
@@ -305,7 +303,7 @@ pub(crate) async fn drive_turn(
         ),
         is_group_chat,
     );
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 第 4 环
+    // 第 4 环
     // stubify。开关开 && 非 worker && 非群聊时,候选集内未 loaded
     // 的工具原地替换为 stub(真名 + 一句话摘要 + 宽松外壳 schema,
     // 保序 — tools[] 顺序稳定是前缀缓存前提,C7 R3.2)。
@@ -322,7 +320,7 @@ pub(crate) async fn drive_turn(
         let loaded = stub_loaded.get(&session_id).await;
         turn_tool_defs = crate::tools::stub::stubify(turn_tool_defs, &loaded);
     }
-    // L3d (2026-06-25): append the dynamic `dispatch_subagent`
+    // append the dynamic `dispatch_subagent`
     // ToolDef so the enum reflects builtin + user + project
     // subagents merged by `SubagentCache` (mtime-fenced scan).
     // The static `dispatch_subagent` definition is no longer in
@@ -364,7 +362,7 @@ pub(crate) async fn drive_turn(
         .await;
         turn_tool_defs.push(dispatch_def);
     }
-    // D (2026-08-14, `08-14-c7d-tools-stub-registration`): 同侧
+    // 同侧
     // append `load_tool_schemas` 元工具 def(dispatch append 之后,
     // 与现有 append 同侧 — 避免无谓的顺序扰动,评审 P2-3)。**不进**
     // `builtin_tools()`(那会渗入 worker 种子集 `prepare_worker` 与
@@ -373,7 +371,7 @@ pub(crate) async fn drive_turn(
     if stub_on && !effective_is_worker && !is_group_chat {
         turn_tool_defs.push(crate::tools::stub::load_tool_schemas_def());
     }
-    // memory-block-governance WP2 (2026-08-15): 同侧 append
+    // 同侧 append
     // `load_memory_sections` 元工具 def。gate 与注入同源(LoopInit 的
     // digest_on = 开关 && !worker && !群聊,init.rs 已含 worker/群聊
     // 豁免);tools_token 估算在下方序列化点之后,自动计入此 def 的
@@ -382,7 +380,7 @@ pub(crate) async fn drive_turn(
         turn_tool_defs.push(crate::memory::digest::load_memory_sections_def());
     }
     let turn_tool_defs = turn_tool_defs;
-    // C7 (2026-08-14, R1): estimate the per-turn `tools[]` token cost
+    // estimate the per-turn `tools[]` token cost
     // for the trace viewer. Serialized AFTER the full filter chain
     // (mode/workflow/session_type below) + the dispatch_subagent
     // append, so the estimate reflects the exact ToolDef set sent on
@@ -393,14 +391,14 @@ pub(crate) async fn drive_turn(
     // empty string → 0 tokens, never blocks the turn. The value is
     // NOT folded into the cache-rate (`context_input_tokens` already
     // contains tools); it's a separately-measured slice persisted to
-    // `turn_trace.tools_token` for the trace viewer (see design §R1).
+    // `turn_trace.tools_token` for the trace viewer.
     // Computed before `turn_tool_defs` is moved into `retry_open`
     // below; `tools_token` is `Copy` (`u32`) so it stays in scope at
     // the `Done`-event upsert write point.
     let tools_json = serde_json::to_string(&turn_tool_defs).unwrap_or_default();
     let tools_token = crate::memory::tokens::count_tokens(&tools_json).await;
 
-    // unified-context-budget WP1 (2026-08-19, prd R3 / D8): 统一口径
+    // 统一口径
     // 的 overhead —— 与 messages 并列发送、消息裁剪动不了的两个部件
     // (system prompt + tools[])。供下方 C3 块三处"当前占用"切换到
     // `estimate_request_tokens` 全量口径。注意:这里的 system 估算
@@ -414,8 +412,7 @@ pub(crate) async fn drive_turn(
     // the test's tiny context_window, dropped_count == 0 and
     // the messages vec is unchanged).
     //
-    // 08-18-llm-context-compaction PR2:超线时**先尝试 LLM 摘要压缩**
-    // (design §4),失败/熔断/gate 关闭才落到原 `compact_messages`
+    // 超线时**先尝试 LLM 摘要压缩**;失败/熔断/gate 关闭才落到原 `compact_messages`
     // 机械丢组(fallback tier,行为原样不动)。
     //
     // gate:`compaction_on`(LoopInit 穿入 = `llm_compaction_enabled
@@ -425,7 +422,7 @@ pub(crate) async fn drive_turn(
     // (`summary_anchor` 存在)照样可再压 —— 增量合并,prior 来自
     // 循环内 anchor(评审 P1-1)。
     //
-    // RULE-A-002 (2026-06-14): `StillOver` means every safe
+    // `StillOver` means every safe
     // droppable candidate was exhausted but the budget is still
     // over target — sending the list would 400 on `prompt is
     // too long`. The agent loop emits an `Error` event +
@@ -439,7 +436,7 @@ pub(crate) async fn drive_turn(
         // 摘要路径的全历史估算成本 —— `tokens_pre` 是摘要触发检查的
         // 额外一次 cl100k 编码,机械路径 `compact_messages` 自己还会
         // 再估一次,gate 关闭时跳过本次 = 每 turn 成本与 PR2 之前持平。
-        // unified-context-budget WP1 (prd R3): 口径切换 —— messages-only
+        // 口径切换 —— messages-only
         // → `estimate_request_tokens` 统一总量(补上 tools+system 挤窗
         // 时漏计的洞;`request_overhead` 已在 C3 块之前算好)。
         let summary_gate = compaction_on && !skip_persist && !breaker.is_tripped(&session_id).await;
@@ -531,7 +528,7 @@ pub(crate) async fn drive_turn(
                         // 摘要后复查(design §4.4):仍超 0.95×window
                         // (巨尾消息)→ 机械丢组兜底;否则不追加 —— 摘要
                         // 路径目标是语义保留,不是压到 target。
-                        // WP1 口径:`tokens_after` 是折叠后 messages 部件
+                        // 统一口径:`tokens_after` 是折叠后 messages 部件
                         // (messages-only),补 `request_overhead` 才是统一
                         // 总量(prd R3/D8)。
                         if (tokens_after as u64 + request_overhead as u64)
@@ -612,7 +609,7 @@ pub(crate) async fn drive_turn(
         }
 
         // ---- 机械路径(未触发摘要 / 摘要失败 / gate 关闭)----
-        // WP1 口径:统一总量(messages + request_overhead)进触发线,
+        // 统一口径:统一总量(messages + request_overhead)进触发线,
         // 无 gate —— 群聊/worker 同受益(prd R3/D5)。
         let compacted = if let Some(r) = summary_result {
             r
@@ -632,12 +629,12 @@ pub(crate) async fn drive_turn(
                 "agent loop: context compressed (C3)"
             );
         }
-        // E2 trace (2026-07-14): record C3 compaction observation
+        // record C3 compaction observation
         // (both normal compaction + StillOver error). Always-on
         // emit + persist; best-effort on the DB write. PR2:seq 用
         // 推进后的游标 —— 摘要行已落库,本 turn 的 persist 行(及其
         // turn_trace 行)排在摘要行之后,对齐才成立。
-        // 08-20-worker-turn-trace-persist: run_key 路由 —— worker 路径
+        // run_key 路由 —— worker 路径
         // (机械压缩无 gate,群聊/worker 同受益)写 run 行,不再以
         // (父 sid, worker seq) 污染主行。
         if compacted.dropped_count > 0
@@ -702,7 +699,7 @@ pub(crate) async fn drive_turn(
     let mut turn_thinking_done: Option<Instant> = None;
     let mut turn_done_at: Option<Instant> = None;
 
-    // B12 (2026-06-19): ephemeral checklist injection. Each turn,
+    // ephemeral checklist injection. Each turn,
     // AFTER C3 compaction and BEFORE `provider.send`, if the
     // checklist Vec is non-empty, build a synthetic user block
     // carrying the full current list + an explicit "in progress"
@@ -755,7 +752,7 @@ pub(crate) async fn drive_turn(
     // single extra `.clone()` per turn (cheap relative to LLM
     // network latency).
 
-    // L1a (2026-06-19): drain completion notifications from the
+    // drain completion notifications from the
     // background-shell registry. Each notification is appended
     // as a `user`-role message at the END of the request clone
     // (mirroring the checklist injection rule: APPEND, not
@@ -831,7 +828,7 @@ pub(crate) async fn drive_turn(
             };
             req.push(msg);
         }
-        // P2 (2026-06-29): autonomous-memory session-start
+        // autonomous-memory session-start
         // recall. Per-turn (PRD decision 6): query = the most
         // recent user message text. The recall text is
         // appended to the instruction message's block list
@@ -889,8 +886,7 @@ pub(crate) async fn drive_turn(
                 }
             }
 
-            // W1 (Workflow integration, Phase 0 Step 0.5
-            // — 2026-07-08): per-turn breadcrumb injection.
+            // per-turn breadcrumb injection.
             // Sibling to the recall-injection block above
             // (not nested inside `if
             // !query.trim().is_empty()`) because the
@@ -941,7 +937,7 @@ pub(crate) async fn drive_turn(
             if let Some(ref ctx) = workflow_ctx {
                 let appended =
                     crate::agent::workflow::inject::append_workflow_breadcrumb(&mut req, ctx);
-                // E2 trace (2026-07-14): record breadcrumb snapshot.
+                // record breadcrumb snapshot.
                 // Lives in chat_loop (not inject.rs) so it has access
                 // to seq + db + sink. Only fires when the breadcrumb
                 // was actually appended (S-B guard passed).
@@ -969,7 +965,7 @@ pub(crate) async fn drive_turn(
         req
     };
 
-    // B1 (2026-08-16): pre-send image resolve + token estimate on the
+    // pre-send image resolve + token estimate on the
     // per-turn request clone. `attach_images` (init.rs) turned the
     // user messages' attachment refs into lightweight `ImageRef`
     // blocks in the master `messages` Vec; here — after checklist /
@@ -989,17 +985,16 @@ pub(crate) async fn drive_turn(
     let images_token = crate::attachments::estimate_images_token(&turn_messages);
 
     // (Turn-tool filter chain + stubify + dispatch/元工具 append +
-    // tools_token 估算:unified-context-budget WP1 D7 时序重排后位于
+    // tools_token 估算:时序重排后位于
     // 函数顶部 C3 压缩块之前 —— 统一口径的触发线需要当轮 tools 估算。
     // 见上方 "Turn-tool filter chain" 块注释。)
 
-    // unified-context-budget WP2 (2026-08-19, prd R6-R9): 关卡⑤硬卡
-    // —— send 前最后一道检查。位置在图片 resolve 之后(臂 2 要看到
-    // 已 resolve 的 Image 块)、APPEND 组装之后(压缩块与 send 之间的
-    // 增长 —— checklist/后台 shell 通知/recall —— 正是本闸要兜的
-    // 窗口)。gate 与 digest/compaction 同款豁免(worker/群聊机械压缩
-    // 仍兜底,prd D5)。裁剪只改 `turn_messages` 请求副本(D6 非破坏
-    // 性);trace 切片列改记实发值(预裁 − freed,D9)。
+    // 关卡⑤硬卡 —— send 前最后一道检查。位置在图片 resolve 之后
+    // (臂 2 要看到已 resolve 的 Image 块)、APPEND 组装之后(压缩块与
+    // send 之间的增长 —— checklist/后台 shell 通知/recall —— 正是
+    // 本闸要兜的窗口)。gate 与 digest/compaction 同款豁免(worker/群聊
+    // 机械压缩仍兜底)。裁剪只改 `turn_messages` 请求副本(非破坏性);
+    // trace 切片列改记实发值(预裁 − freed)。
     let mut turn_messages = turn_messages;
     let mut images_token = images_token;
     let mut at_files_token = at_files_token;
@@ -1128,7 +1123,7 @@ pub(crate) async fn drive_turn(
     let mut last_usage: Option<crate::llm::types::TokenUsage> = None;
     let mut had_error = false;
     let mut cancelled = false;
-    // A5+ (2026-07-04): first-byte-safe retry around `provider.send`.
+    // first-byte-safe retry around `provider.send`.
     // See llm/retry.rs + docs/research/llm-network-resilience-survey.md.
     // On retryable first-byte failure (Network/Server/RateLimit) the
     // request is re-issued with Full Jitter backoff, bounded by budget;
@@ -1152,7 +1147,7 @@ pub(crate) async fn drive_turn(
         &mut rng,
     )
     .await;
-    // P2 RULE-A-009: `turn_send_at` marks when the LLM stream became
+    // `turn_send_at` marks when the LLM stream became
     // ready (post-retry). The other 4 `turn_*_at` vars stay declared at
     // the top of the loop body (conditionally assigned; `None` default
     // is load-bearing for `is_none()` checks).
@@ -1177,7 +1172,7 @@ pub(crate) async fn drive_turn(
         }
     };
 
-    // RULE-PERSIST-001 (08-24-p1-turn-crash-recovery) WP2 写点①:
+    // 检查点写点①:
     // stream ready 后立即写空占位行(status='in_progress')。此后
     // 崩溃在**任何**流式阶段(哪怕 0 内容)都会留下可恢复锚点;
     // 空占位由启动恢复 pass 删除,不残留空行。upsert 语义:同
@@ -1218,7 +1213,7 @@ pub(crate) async fn drive_turn(
                 let Some(event_result) = event_result else { break; };
                 let event = match event_result {
                     Ok(e) => e,
-                    // RULE-A-011 (2026-06-19): previously this arm
+                    // previously this arm
                     // silently wrapped `LlmError` into a
                     // `ChatEvent::Error` with NO tracing. The
                     // 2026-06-18 incident (`mz8s3hqwx6rmqjswgte`,
@@ -1255,7 +1250,7 @@ pub(crate) async fn drive_turn(
                         emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::Delta { text } => {
-                        // RULE-PERSIST-001 写点②: 时间门检查点(见
+                        // 检查点写点②: 时间门检查点(见
                         // ThinkingDelta 臂同款注释)。挂在 Delta /
                         // ThinkingDelta 两臂 —— 流式高频事件,其余臂
                         // (Done/ToolCall/...)低频或本身就有落库动作。
@@ -1307,7 +1302,7 @@ pub(crate) async fn drive_turn(
                         emit_chat_event_via_sink(&sink, &session_id, &rid, &event);
                     }
                     ChatEvent::ThinkingDelta { text } => {
-                        // RULE-PERSIST-001 写点②: 时间门检查点(1s
+                        // 检查点写点②: 时间门检查点(1s
                         // 门,CHECKPOINT_INTERVAL)。快照只读克隆累加器
                         // (snapshot_checkpoint_blocks),不 flush ——
                         // pending 状态机留给流式循环自己推进。写失败
@@ -1388,7 +1383,7 @@ pub(crate) async fn drive_turn(
                     ChatEvent::Done { stop_reason: sr, usage } => {
                         stop_reason = sr.clone();
                         last_usage = *usage;
-                        // 2026-06-21 (R3): mirror the per-turn
+                        // mirror the per-turn
                         // `last_usage` to the function-scope
                         // `last_usage_terminal` so the
                         // synthetic `max_turns` terminal site
@@ -1408,8 +1403,7 @@ pub(crate) async fn drive_turn(
                             turn_thinking_done = Some(Instant::now());
                         }
                         if let Some(t) = usage {
-                            // 2026-06-26 (token-usage snapshot fix +
-                            // RULE-A-015 reversal): the per-turn
+                            // the per-turn
                             // `update_last_turn_usage` is now BACK
                             // inside the `!skip_persist` gate.
                             //
@@ -1446,9 +1440,8 @@ pub(crate) async fn drive_turn(
                                     tracing::warn!(error = %e, "chat: failed to update last-turn token usage (non-fatal)");
                                 }
                             }
-                            // E2 trace (2026-07-14): persist per-turn
-                            // token usage to turn_trace. 08-20-worker
-                            // -turn-trace-persist 开闸:worker
+                            // persist per-turn token usage to
+                            // turn_trace. worker
                             // (skip_persist=true)也写,但路由到 (父 sid,
                             // run UUID, seq) run 行 —— run_key 空
                             // (insert_run 失败降级)时自然不写。
@@ -1457,14 +1450,13 @@ pub(crate) async fn drive_turn(
                             // reversal 不碰 —— worker 不覆盖父
                             // sessions.last_*。
                             //
-                            // WP1 (2026-08-15): memory_token rides the
+                            // memory_token rides the
                             // same write point — per-request constant,
                             // identical across the request's turn rows.
-                            // B1 (2026-08-16): images_token likewise
+                            // images_token likewise
                             // (worker turns never carry attachments → 0,
                             // 但 worker 行契约是 NULL 而非 0 —— 见
                             // 下方 images_tok 门)。
-                            // unified-context-budget WP1 (2026-08-19):
                             // at_files / system 切片同点落列;
                             // `context_window` 是请求时窗口快照
                             // (前端预算行分母,非切片)。at_files 语义
@@ -1489,7 +1481,7 @@ pub(crate) async fn drive_turn(
                                 if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, run_key, seq, t, Some(tools_token), memory_tok, images_tok, at_files_tok, Some(system_token), Some(context_window), provider_id.as_deref()).await {
                                     tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
                                 }
-                                // 08-20-turn-usage-event-quota-view WP1:同点同值
+                                // 同点同值
                                 // emit 一份 read-only 事件,TracePanel TurnCard 的
                                 // token cells 即时可见(loadHistory 只在下一条用户
                                 // 消息 / 切 session 时触发)。emit 不进上方 DB 错误
@@ -1522,12 +1514,12 @@ pub(crate) async fn drive_turn(
                     ChatEvent::TurnComplete { .. } => {
                         tracing::warn!(request_id = %rid, "chat: unexpected TurnComplete in LLM stream");
                     }
-                    // 08-20-turn-usage-event-quota-view WP1: TurnUsage 是
+                    // TurnUsage 是
                     // loop 层事件(本文件 Done 臂 emit),不从 provider
                     // stream 到达 —— 与 TurnComplete / FileInjections 同款
                     // 防御臂,wire 泄漏时静默丢弃。
                     ChatEvent::TurnUsage { .. } => {}
-                    // B2 PR3: `FileInjections` is emitted ONCE per
+                    // `FileInjections` is emitted ONCE per
                     // user turn from the agent loop's pre-turn
                     // hook (right after `inject_at_tokens` runs) —
                     // NOT from the LLM stream. A `FileInjections`
@@ -1542,7 +1534,7 @@ pub(crate) async fn drive_turn(
                             "chat: unexpected FileInjections in LLM stream (ignoring — already emitted pre-turn)"
                         );
                     }
-                    // A5+ (2026-07-04): `Retrying` is emitted
+                    // `Retrying` is emitted
                     // directly by `LlmRetrySink` (NOT via this
                     // per-event stream loop), so reaching this
                     // arm means a provider somehow re-emitted a
@@ -1589,7 +1581,7 @@ pub(crate) async fn drive_turn(
                             "chat: unexpected TurnContinuation in LLM stream (ignoring — emitted by the F1 queue driver)"
                         );
                     }
-                    // E2 trace (2026-07-14): the 3 trace events are
+                    // the 3 trace events are
                     // emitted by `agent::trace::record_*` (NOT by the
                     // LLM stream), so reaching this arm means a
                     // provider somehow re-emitted a trace event we
@@ -1603,7 +1595,6 @@ pub(crate) async fn drive_turn(
                             "chat: unexpected trace event in LLM stream (ignoring)"
                         );
                     }
-                    // unified-context-budget WP2 (2026-08-19):
                     // `BudgetTrim` is emitted by the 关卡⑤ gate above
                     // (NOT by the LLM stream) — a provider re-emitting
                     // it would mean the wire shape leaked. Drop it
@@ -1622,7 +1613,7 @@ pub(crate) async fn drive_turn(
         }
     }
 
-    // RULE-A-007 (2026-06-17): the error path no longer bails
+    // the error path no longer bails
     // out with raw `return`. Instead — symmetric with the
     // cancel path below — the agent loop flushes any pending
     // thinking, appends an `ERROR_MARKER` to the text, and
@@ -1658,7 +1649,7 @@ pub(crate) async fn drive_turn(
     flush_ordered_thinking(&mut finalized_thinking, &mut ordered_blocks);
     flush_pending_text(&mut pending_text, &mut ordered_blocks);
 
-    // RULE-A-007 (2026-06-17) + 交错思考调整: cancel/error marker
+    // (交错思考调整后)cancel/error marker
     // 追加为一个**独立 Text 块**到 ordered_blocks 末尾(而非旧
     // 逻辑里追加到 `full_text` 字符串内)。语义保持等价:
     //   - 空 turn(无文本) → 只有 marker 一个 Text 块
@@ -1696,7 +1687,7 @@ pub(crate) async fn drive_turn(
     // —— 所有块在循环内已按真实到达顺序填入。
     let assistant_blocks = ordered_blocks;
 
-    // RULE-PERSIST-001 写点③(空 turn 分支):本 turn 未产生任何
+    // 检查点写点③(空 turn 分支):本 turn 未产生任何
     // 内容(无文本/思考/工具/marker)→ 收尾不落库,检查点占位行
     // 必须删掉,不留空行(R1.3)。delete 带 status='in_progress'
     // 守卫:只吃自己的占位,误用时对终态行是 no-op。
@@ -1735,14 +1726,14 @@ pub(crate) async fn drive_turn(
             turn_thinking_done,
             turn_done_at,
         );
-        // RULE-A-003 (2026-06-15): assistant turn persist
+        // assistant turn persist
         // failure → emit Error + abort. Previously this was a
         // silent log, but the `messages.push` + `seq += 1`
         // below it still ran, drifting the in-memory seq out
         // of sync with the DB. TurnComplete stays on the
         // success path only (unchanged).
         //
-        // RULE-A-007 (2026-06-17): on the **error path**,
+        // on the **error path**,
         // persist failure is log-only (NOT
         // `emit_persist_failure`). The loop already emitted a
         // terminal `ChatEvent::Error` from the per-event arm
@@ -1752,7 +1743,7 @@ pub(crate) async fn drive_turn(
         // persist (log-only, see below at the `if cancelled`
         // block).
         if !skip_persist {
-            // RULE-PERSIST-001 写点③(终态覆盖):这里从 persist_turn
+            // 检查点写点③(终态覆盖):这里从 persist_turn
             // (裸 INSERT)换成 finalize_turn_persist(ON CONFLICT DO
             // UPDATE)—— 本 turn 的 seq 上已有检查点占位/周期行
             // (写点①②),终态落库覆盖它并把 status 清回 NULL。
@@ -1819,7 +1810,7 @@ pub(crate) async fn drive_turn(
             // worker mode (the worker's intermediate turn is
             // captured by the SubagentBufferSink transcript).
             if !skip_persist {
-                // RULE-A-003 (2026-06-15): cancel path —
+                // cancel path —
                 // log-only, NOT emit_persist_failure. The loop
                 // is about to emit its terminal cancelled `Done`;
                 // an Error here would be a second terminal event
@@ -1861,7 +1852,7 @@ pub(crate) async fn drive_turn(
         return Err(());
     }
 
-    // RULE-A-007 (2026-06-17): the error path persisted its
+    // the error path persisted its
     // partial assistant turn above (with ERROR_MARKER + a
     // TurnComplete event). The loop has already emitted its
     // terminal `ChatEvent::Error` from the per-event arm;
@@ -1915,7 +1906,7 @@ pub(crate) async fn drive_turn(
         return Err(());
     }
 
-    // 08-07-group-chat-role-history-isolation follow-up fix: the
+    // follow-up fix (group-chat role history isolation): the
     // pre-fix predicate required `stop_reason == Some("tool_use")`
     // in addition to a non-empty `tool_calls`. That is too strict:
     // an OpenAI-compatible provider (Console Go) can end a stream
@@ -1993,7 +1984,7 @@ pub(crate) async fn drive_turn(
         loop_window.pop_front();
     }
     let loop_verdict = loop_detection::detect(&loop_window.iter().cloned().collect::<Vec<_>>());
-    // 2026-08-18 (5df29977 问题5) design note: do NOT collapse the
+    // design note (5df29977 问题5): do NOT collapse the
     // window on a hard verdict. Evicting the flagged signature
     // resets the very runway the C2+ 3-strike escalation needs —
     // a pure identical-call death loop would hard-fire (hit 1),
@@ -2004,7 +1995,7 @@ pub(crate) async fn drive_turn(
     // gate: stale residue pairs no longer count unless one touches
     // the last two window slots), which keeps hard strikes
     // window-driven and untouched.
-    // C2+ (2026-07-05): maintain the consecutive-hit counter and
+    // maintain the consecutive-hit counter and
     // trigger active intervention at >= 3. The counter is
     // per-`run_chat_loop`-local (declared next to `loop_window`
     // outside the turn loop) so it accumulates across turns; on
@@ -2034,11 +2025,11 @@ pub(crate) async fn drive_turn(
         loop_hit_count = 0;
     }
 
-    // E2 trace (2026-07-14): record C2 soft hint (1-2 consecutive
+    // record C2 soft hint (1-2 consecutive
     // hits, before the ≥3 active-intervention threshold). The ≥3
     // path already writes `loop_intervention` audit rows; this
     // trace covers the pre-intervention turns only.
-    // 08-20-worker-turn-trace-persist: run_key 路由(worker 1-2 次
+    // run_key 路由(worker 1-2 次
     // 命中走本写点;≥3 直接 break 不落)—— 归位同 compaction。
     if verdict_kind_str.is_some() && loop_hit_count < 3 {
         if let Some(vk) = verdict_kind_str {
@@ -2251,7 +2242,7 @@ pub(crate) async fn drive_turn(
                                     // same call will not make
                                     // progress.
                                     loop_hit_count = 0;
-                                    // 2026-08-18 (5df29977 问题5):
+                                    // (5df29977 问题5):
                                     // clear the detection window
                                     // too — the residue that
                                     // accumulated the 3 strikes
@@ -2444,7 +2435,7 @@ pub(crate) async fn drive_turn(
 }
 
 // ---------------------------------------------------------------------------
-// C3 摘要压缩 PR2(08-18-llm-context-compaction)—— 摘要旁路 completion
+// C3 摘要压缩 —— 摘要旁路 completion
 // ---------------------------------------------------------------------------
 
 /// [`attempt_summary_compaction`] 的结果。
@@ -2489,7 +2480,7 @@ enum SummaryOutcome {
 /// "Output ONLY the summary" 指令约束 + 采集时忽略 ThinkingDelta
 /// (thinking 内容对摘要正文无贡献);输出超长由
 /// `clamp_summary_output` 按 4k token 截断兜底。
-/// RULE-ARGS-001 收编（原 13 参 → 四元）：三套件中的两个
+/// 参数收编（原 13 参 → 四元）：三套件中的两个
 /// （request/deps）+ [`TurnFrame`]（synthetic_prefix_len 派生常量）
 /// + [`SummaryCompactionJob`]。体内头部重绑定保持正文逐字节不变；
 /// 熔断 registry 依旧走进程级单例，不经参数。
@@ -2520,7 +2511,7 @@ async fn attempt_summary_compaction(
         COMPACTION_SUMMARY_KIND,
     };
 
-    // PR2.5(修订 2026-08-18):cutoff_seq 精确计算(design §4.3)。**在
+    // cutoff_seq 精确计算。**在
     // LLM 调用之前**算 —— 对齐失效(wire 与 DB 行序失配 / 待压区退化
     // 到只剩 prior 摘要)直接走失败路径,不为注定落不了库的摘要付一次
     // 旁路 completion。精确值的对齐论证见 `compressible_cutoff_seq`
@@ -2563,7 +2554,7 @@ async fn attempt_summary_compaction(
     let prompt = build_compaction_prompt(compressible, prior.as_ref(), context_window, None).await;
 
     // 旁路 completion(auto 路径无 focus):共享 helper(手动 /compact
-    // 入口同源,08-18-manual-compact-command 抽取),retry_open 包裹、
+    // 入口同源抽取),retry_open 包裹、
     // 无 tools;剥壳只收 assistant text + Done usage,Ok(ChatEvent::Error)
     // 与 Err 都算失败(RULE-A-011 同源 —— 漏接 Ok(Error) 会把半截
     // 文本当完整摘要落库)。输出 4k 截断由 clamp 承担。
@@ -2588,7 +2579,7 @@ async fn attempt_summary_compaction(
     folded.extend_from_slice(&messages[cut..]);
     let tokens_after = crate::agent::context::estimate_messages_tokens(&folded).await;
 
-    // design §2.1 metadata(修订 2026-08-18:cutoff_seq = 待压区末行
+    // metadata(cutoff_seq = 待压区末行
     // 真实 seq,精确值,不再是"摘要行 seq-1"上界 —— 那是当前输入行
     // 的 seq,会让下一请求的水位折叠吞掉保留区与本请求提问,PR2 check
     // P1 正是此错)。preserve_from_seq = cutoff + 1(DB 行连续区,可
@@ -2649,8 +2640,8 @@ async fn attempt_summary_compaction(
 }
 
 // ---------------------------------------------------------------------------
-// RULE-PERSIST-001 WP2 单元测试:时间门 + 快照构造(纯逻辑,无 DB /
-// 无 1s 真等待 —— design §7 把间隔逻辑收敛在此处测)。
+// 单元测试:时间门 + 快照构造(纯逻辑,无 DB /
+// 无 1s 真等待 —— 间隔逻辑收敛在此处测)。
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod checkpoint_tests {

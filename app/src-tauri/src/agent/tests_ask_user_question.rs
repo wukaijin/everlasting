@@ -15,7 +15,7 @@
 //! | `agent_loop_ask_user_question_session_cancel` | AC5' / R19 | `token.cancel()` mid-wait → tool_result = `{"cancelled_by_session": true}` + store cleaned (subsequent `get_payload` → `None`) |
 //! | `agent_loop_ask_user_question_already_pending` | AC9 / R12 | Same-session second `ask_user_question` call → structured "已有 pending" error + first pending stays usable |
 //! | `agent_loop_ask_user_question_serial_batch` | AC1' / R21 | Mixed batch → `is_parallel_eligible == false` (ask_user_question not in NAME_ELIGIBLE) → serial execution order |
-//! | `get_pending_question_command_*` (3 tests) | AC5' | `get_pending_question` Tauri command → `Some`/`None` round-trip |
+//! | `question_store_get_payload_register_resolve_round_trip` | AC5' | `QuestionStore::get_payload` → `Some`/`None` round-trip |
 //!
 //! ## Test pattern
 //!
@@ -455,9 +455,8 @@ async fn agent_loop_ask_user_question_user_skip() {
 //
 // After the cancel, `QuestionStore::get_payload(session_id)`
 // must return `None` (the entry was cleared by the cancel arm).
-// This also exercises the post-cancel `get_pending_question`
-// command path — `get_pending_question` would now return
-// `None` for this session.
+// This also exercises the post-cancel `get_payload` path —
+// it now returns `None` for this session.
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn agent_loop_ask_user_question_session_cancel() {
@@ -913,19 +912,16 @@ async fn agent_loop_ask_user_question_serial_batch() {
 }
 
 // ---------------------------------------------------------------------------
-// F2 Test — `get_pending_question` command behavior (PRD AC5')
-//
-// The Tauri command in `commands/question.rs` is a thin
-// wrapper over `QuestionStore::get_payload`. We exercise the
-// behavior directly via `QuestionStore` (the command is
-// mechanically `state.question_store.get_payload(...).await`,
-// so testing the store method covers the IPC contract):
+// F2 Test — `QuestionStore::get_payload` behavior (PRD AC5').
+// The `get_pending_interaction` IPC command is a thin wrapper
+// over `QuestionStore::get_payload`; testing the store method
+// covers the IPC contract:
 //   1. After `register` → `Some(payload)`
 //   2. After `resolve` → `None`
 //   3. Unknown session → `None`
 // ---------------------------------------------------------------------------
 #[tokio::test]
-async fn get_pending_question_command_register_resolve_round_trip() {
+async fn question_store_get_payload_register_resolve_round_trip() {
     use crate::agent::question_store::QuestionStore;
 
     let store = QuestionStore::new();

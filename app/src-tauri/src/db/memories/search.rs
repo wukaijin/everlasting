@@ -2,7 +2,8 @@ use sqlx::SqlitePool;
 
 use super::types::{MemoryInsertError, MemoryRow, MemoryScope};
 
-// escape_fts5 (phrase-match helper) — used by search_memories_fts.
+// escape_fts5 (phrase-match helper) — used by `db::search` (messages
+// FTS); the memories recall path OR-expands per-token instead.
 /// Escape a user-supplied query string for safe FTS5 MATCH.
 ///
 /// Wraps the query in double quotes (FTS5 phrase-match syntax) and
@@ -19,38 +20,6 @@ use super::types::{MemoryInsertError, MemoryRow, MemoryScope};
 /// note.
 pub(crate) fn escape_fts5(q: &str) -> String {
     format!("\"{}\"", q.replace('"', "\"\""))
-}
-
-// ---------------------------------------------------------------------------
-// search_memories_fts — FTS5 bm25 search with scope semantics
-// ---------------------------------------------------------------------------
-
-/// Status-filter policy for [`search_memories_fts`].
-///
-/// - `ActiveVerifiedOnly` — original P1 semantics (P3 pre-tool
-///   pitfall recall, P5 status-machine path). `candidate` rows are
-///   NOT surfaced — they haven't earned recall surface yet.
-/// - `IncludeCandidate` — P2 session-start recall semantics (PRD
-///   ADR-lite decision: candidate rows ARE surfaced because P2
-///   has no promotion mechanism; remember writes fixed-candidate,
-///   so excluding candidate would make P2 written memories never
-///   recallable, breaking the core AC). P5 will tighten the
-///   session-start path back to `ActiveVerifiedOnly` once the
-///   state machine lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecallStatusFilter {
-    ActiveVerifiedOnly,
-    IncludeCandidate,
-}
-
-impl RecallStatusFilter {
-    /// The SQL fragment used in the `AND m.status IN (...)` clause.
-    fn status_in_clause(&self) -> &'static str {
-        match self {
-            Self::ActiveVerifiedOnly => "'active','verified'",
-            Self::IncludeCandidate => "'candidate','active','verified'",
-        }
-    }
 }
 
 /// Search memories via FTS5 `MATCH` + `bm25` ranking. The query is
@@ -77,6 +46,11 @@ impl RecallStatusFilter {
 ///
 /// `limit` caps the result count (P2's session-start recall uses
 /// a small top-k; the caller decides).
+#[allow(dead_code)] // test-locked: production recall goes through
+                    // `search_memories_fts_recall`; this phrase variant survives as the
+                    // H2-scope-semantics + phrase-escape test vehicle (memories_tests/
+                    // list_delete_search.rs). Remove together with those tests if the
+                    // phrase search is ever retired for real.
 pub async fn search_memories_fts(
     pool: &SqlitePool,
     project_id: Option<&str>,
@@ -183,6 +157,42 @@ pub async fn search_memories_fts(
     Ok(rows)
 }
 
+// ---------------------------------------------------------------------------
+// FTS5 bm25 search: the P1 phrase-match variant (test-locked, see its
+// per-item allow) + the P2 loose-recall variant that production uses
+// ---------------------------------------------------------------------------
+
+/// Status-filter policy for the FTS recall search.
+///
+/// - `ActiveVerifiedOnly` — original P1 semantics (P3 pre-tool
+///   pitfall recall, P5 status-machine path). `candidate` rows are
+///   NOT surfaced — they haven't earned recall surface yet.
+/// - `IncludeCandidate` — P2 session-start recall semantics. P5's
+///   state machine landed and DELIBERATELY kept this (see
+///   `memory_recall.rs`: candidate is promoted BY being recalled —
+///   hit_count accrues on recall — so excluding it would sever the
+///   candidate→active graduation path; noise is controlled by the
+///   promotion threshold + hygiene job, not the recall filter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecallStatusFilter {
+    /// Policy knob, currently unconstructed in production (the
+    /// recall path deliberately always passes `IncludeCandidate`).
+    /// Retained as the documented dial for a future tightening.
+    #[allow(dead_code)]
+    ActiveVerifiedOnly,
+    IncludeCandidate,
+}
+
+impl RecallStatusFilter {
+    /// The SQL fragment used in the `AND m.status IN (...)` clause.
+    fn status_in_clause(&self) -> &'static str {
+        match self {
+            Self::ActiveVerifiedOnly => "'active','verified'",
+            Self::IncludeCandidate => "'candidate','active','verified'",
+        }
+    }
+}
+
 /// Build an OR-joined FTS5 query from a natural-language phrase
 /// (the user's latest message). Splits on whitespace, drops
 /// stopwords + tokens shorter than 3 chars (trigram tokenizer
@@ -237,8 +247,7 @@ pub(crate) fn build_recall_fts_query(text: &str) -> String {
     phrases.join(" OR ")
 }
 
-/// Loose-recall variant of [`search_memories_fts`] for P2's
-/// session-start recall. Same scope/project_id interaction (H2)
+/// Loose-recall FTS search for P2's session-start recall. Same scope/project_id interaction (H2)
 /// and same `status_filter` semantics, but the query is OR-joined
 /// per-token via [`build_recall_fts_query`] (natural-language
 /// friendly) instead of phrase-matched (which is too strict for a

@@ -70,33 +70,13 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [9 items]
+## P3 — 轻微(文档/一致性) [3 items]
+
+> RULE-ALLOW-001 / RULE-SHIM-001 / RULE-HEALTH-001 / RULE-DOC-001 / RULE-DOC-002 / RULE-FE-002 / RULE-BUILD-001 于 2026-08-30 由 `.trellis/tasks/08-30-p3-debt-batch-cleanup` 闭合:三把模块级 dead_code 伞摘除(fallout 仅 1 项 —— `search_memories_fts` 定性为测试锁定件恢复 + 逐项 allow,`RecallStatusFilter::ActiveVerifiedOnly` 逐项 allow 注明策略旋钮;workflow/task.rs 与 memories 两伞零残留);`get_pending_question` + `test_provider` 两个 deprecated IPC 全链删除(Tauri 注册/daemon 路由/http 映射/常量/all_command_names/e2e 路由清单,messageTimeline 双渲染路径定性为旧 DB 行数据兼容并修正过时注释);health `session_count` -1 哨兵删除(零消费方,wire 删字段);drive.rs 72 处任务名注释收敛 + subagent mod.rs max_turns 20→200 修正;Yolo confirm/cancel 的 resolve 失败接 warn toast(+2 vitest);vite manualChunks 核实已实现(build 零告警)。详见 git log。
 
 > RULE-SMOKE-001 / RULE-PERM-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-smoke-perm-cleanup` 闭合:turn-smoke.sh 的 send_and_wait 改等 SSE 请求终态(`chat-event` `kind=done`,每请求恰一次;常驻订阅 + trap 清理,--assert-turn-usage 复用同一日志),多轮工具 turn 不再被 delete_session 腰斩(live 双场景验证);grant 入口 `grant_tool_permission_inner` 按 `classify_tool` 校验 kind↔类别矩阵(Shell 只许 prefix 等,InvalidRequest 拒绝死数据组合);同任务顺带修复同族坑 —— AllowAlways 在 run_background_shell 上写的 prefix 行因 `check_prefix_grant` 硬编码 `tool_name='shell'` 永不命中,读侧放宽 `IN ('shell','run_background_shell')`。校验矩阵 + 终态 Done 不变量收编 spec `permission-layer.md` §4.3 与 `agent-loop-architecture/pattern-terminal-done-event.md`。详见 git log。
 
 > RULE-TEST-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-test-002-role-gate-it` 闭合:新增集成用例 `role_gate_denies_then_allows_after_mid_loop_task_json_status_change`(`tests_agent_loop/role_gate_refresh.rs`)——round-1 denial(planning 拒 checker)→ mock LLM 同轮 write_file 翻盘 task.json status(in_progress,事故真实形态)→ round-2 经 drive_turn 轮顶刷新后同一 dispatch 放行(worker marker + call_count==4);变异验证覆盖两类回归(门误接入口快照 / R4 轮顶刷新移除),均精确转红后复原。已知边界:若 `resolve_current_task` 中途恒返 None 门会静默开放,该第三类未覆盖(spec tests-required 条目已注明)。全量 2008 后端测试 + fmt/clippy 绿,生产代码零 diff。详见 git log。
-
-### RULE-ALLOW-001
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `app/src-tauri/src/db/memories.rs:14-42`(模块级 `#![allow(dead_code)]`,注释自承诺"P2 落地后替换为逐项 allow")、`agent/workflow/{def,state,task}.rs`(三个模块级大伞待审计)、subagent transcript/sink/event_sink 观测预留面
-- **Description**: 模块级 dead_code 大伞掩盖 typo/refactor 孤儿函数,memory P2–P5 已全部上线但收窄承诺未兑现;对照组 auto_reflect.rs 同类 allow 已按承诺拆除
-- **Fix**: memories 模块逐项收窄(约半天)+ workflow/subagent 预留面逐个审计后拆除或登记真实用途
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
-
-### RULE-SHIM-001
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `commands/question.rs:529`(`get_pending_question` 标 deprecated,lib.rs:423 注册 + `#[allow(deprecated)]`)、`commands/providers.rs:367`(`test_provider` 标 DEPRECATED,前端已走 `test_model`)、`components/chat/messageTimeline.ts:18`(contentBlocks ↔ 旧三桶数组双渲染路径)
-- **Description**: 弃用兼容面长期并存且无下线时间表,靠压制属性维持编译静默;风险是新旧路径行为漂移无人察觉
-- **Fix**: 确认实际调用方归零后从注册表删除,或写明下线节点(合计约半天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
 
 ### RULE-PERM-001
 
@@ -109,72 +89,27 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
 
-### RULE-HEALTH-001
+### RULE-TEST-001(2026-08-30 改写:mode-change 链路已覆盖,原描述过时)
 
 - **Level**: P3
 - **Subsystem**: Cross
-- **File**: `app/src-tauri/src/daemon/routes/health.rs:102`(TODO(P2.5))
-- **Description**: health 接口以 `-1` 哨兵上报 session_count;带 AppState 的完整变体与 `/api/v1/health/detailed` 显式推迟 P2.5 至今未动(Q1 需要 stateless router 先应答端口探测)
-- **Fix**: 接线 AppState 或删哨兵语义,动手前先确认 sidecar 握手是否有消费方(半天)
+- **File**: `components/common/MarkdownDetailModal.test.ts:383-390`(jsdom 无法模拟 pointerdown-outside,仅占位守护)
+- **Description**: 08-30 考证:`resolve_mode_change` 的 DB 链路已有 `commands/tests_resolve_mode_change.rs` 6+ 用例覆盖(pure-core 抽取),过时 TODO 注释已修;真实剩余缺口 = 项目无真浏览器 runner,跨组件指针交互类回归无可靠守护手段(ui-review.sh 是视觉评审,非交互回归)
+- **Fix**: playwright(或 webdriverio)选型评估,单独评估任务
 - **Owner**: carlos
 - **Related Task**: null
 - **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
 
-### RULE-DOC-002
+### RULE-TEST-003
 
 - **Level**: P3
 - **Subsystem**: Cross
-- **File**: `agent/subagent/mod.rs:28`(注释 `max_turns: Some(20)` vs 实际 `SUBAGENT_MAX_TURNS`=200,journal-3:18 known drift)、`.trellis/spec/frontend/state-management.md:517`(仍在描述已迁入 MessageItemEdit.vue 的 MessageItem 内联编辑)、`app/src-tauri/TECH.md` §1.4(serde_yaml 段与 frontmatter 手写解析现状不符)
-- **Description**: 实现↔文档三处漂移,均已发现并躺 journal 但未销账;journal 不是 open 债台账故收编于此
-- **Fix**: 三处各一小段修正(合计约半天)
+- **File**: `app/src-tauri/tests/e2e.rs`(`e1a_chat::chat_happy_path_httpmock` :213、`e1b_sse_protocol::large_payload_skips_buffer_but_reaches_live` :486)
+- **Description**: 2026-08-30 发现:干净 HEAD 上 `--test e2e` 即有 2 个既有失败(e1a add_model 422≠200;e1b SSE replay 非空)。非本批改动引入(stash 对照验证),e2e 层处于无人跑的红态
+- **Fix**: 排查两失败根因(疑似 e1a 的 add_model 校验收紧后 fixture 过期、e1b 缓冲语义变化),并把 `--test e2e` 纳入回归基线
 - **Owner**: carlos
 - **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(journal 未销账项收编)
-
-### RULE-FE-002
-
-- **Level**: P3
-- **Subsystem**: Frontend
-- **File**: `app/src/stores/chatModeActions.ts:225-232`
-- **Description**: Yolo 确认后 `resolve_mode_change` 失败只写 console.error,不进 toast/pending 卡片,用户无从得知模式切换失败(follow-up 注释指明可复用现有 pending-card re-mount 路径)
-- **Fix**: 失败分支接入现有提示通道(约半天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
-
-### RULE-BUILD-001
-
-- **Level**: P3
-- **Subsystem**: Frontend
-- **File**: `app/vite.config.ts`(产物超限 chunk 警告)
-- **Description**: 前端构建存在超限 chunk,vite 每次构建输出告警;manualChunks 拆分方案已在 journal 定向但被标"单独任务"搁置(journal-3:283)
-- **Fix**: manualChunks 按 vendor/UI 分包 + 构建体积复核(约半天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(journal 未销账项收编)
-
-### RULE-TEST-001
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `agent/tests_request_mode_change.rs:32`(`resolve_mode_change` IPC 的 DB 更新链路零覆盖,"TODO: future task")、`components/common/MarkdownDetailModal.test.ts:383-390`(jsdom 无法模拟 pointerdown-outside,仅占位守护)
-- **Description**: 两处测试基建缺口:mode change 持久化链路零集成覆盖(目前靠共享纯函数既有测试垫底);项目无真浏览器 runner,跨组件指针交互类回归无可靠守护手段
-- **Fix**: 该链路补 1 条集成用例 + playwright 选型评估
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
-
-### RULE-DOC-001
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `app/src-tauri/src/agent/chat_loop/drive.rs:107`(参数注释块 `08-20-turn-usage-event-quota-view WP2` 等)、`docs/CONTEXT.md`(与 CLAUDE.md "当前状态" 段重复)
-- **Description**: 参数注释块把 git log 已记录的 feature 名 + 日期 + commit hash 重复进代码注释,形成双 source of truth(注释会被 feature 重命名牵动,gir log 是只读稳定副本);CLAUDE.md "当前状态"段与 ROADMAP 重复且每轮注入付 token 税
-- **Fix**: 参数注释收敛为一句用途说明,历史走 git log;CLAUDE.md 状态段改派生生成(git log / 代码现状 / 既有 memory 管道)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-24 群聊 session `702e6ec8…`(讨论本项目不足,代码事实验证)
-
+- **Discovered In**: 2026-08-30 p3-debt-batch-cleanup 回归(stash 对照)
 
 ---
 
@@ -184,9 +119,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 1 | RULE-QUEUE-001(F1-A 多 drain 非尾条不落库,F2 planning review 2026-08-28 登记) |
-| P3 | 10 | 文档 + 一致性 + 待兑现承诺,可延后 |
-| **Total** | **11** | 当前 open items |
+| P2 | 0 | 全部 closed(RULE-QUEUE-001 2026-08-29 闭合,见上方 P2 段) |
+| P3 | 3 | RULE-PERM-001(审计分页)/ RULE-TEST-001(浏览器 runner 选型)/ RULE-TEST-003(既有 e2e 红) |
+| **Total** | **3** | 当前 open items |
 
 ---
 

@@ -32,7 +32,7 @@
 //!
 //! - 79 HTTP routes via `_inner` delegation (Q0 decision).
 //! - `GET /api/v1/health` returns `{daemonId, daemonVersion,
-//!   apiVersions, uptimeSeconds, sessionCount}`.
+//!   apiVersions, uptimeSeconds}`.
 //! - Graceful shutdown on SIGINT / SIGTERM.
 //!
 //! Out of scope for P2.2:

@@ -26,26 +26,20 @@
 //!   interaction pending. The store is the source of truth;
 //!   the frontend `pendingBySession` cache is overruled by this
 //!   result (`get_pending_interaction` > cache > empty).
-//! - [`get_pending_question`] — legacy thin shim that returns
-//!   only the `ToolQuestionPayload` for backward compat with
-//!   callers that pre-date the unified IPC. New code should use
-//!   `get_pending_interaction` + the tagged `PendingInteraction`
-//!   enum.
 
 use std::sync::Arc;
 
 use tauri::State;
 
 use crate::agent::permissions::AuditKind;
-use crate::agent::question_store::{
-    InteractionResponse, PendingInteractionEntry, QuestionAnswer, ToolQuestionPayload,
-};
+use crate::agent::question_store::{InteractionResponse, PendingInteractionEntry, QuestionAnswer};
 // Test-only imports — gated by `#[cfg(test)]` so non-test builds
 // (e.g. `cargo check`) don't flag them as unused. `use super::*;`
 // inside `mod tests` then re-imports them via the parent scope.
 #[cfg(test)]
 use crate::agent::question_store::{
     InteractionKind, ModeChangePayload, PendingInteraction, TaskStateTransitionPayload,
+    ToolQuestionPayload,
 };
 use crate::agent::workflow::state::{
     set_task_state as workflow_set_task_state, StateTransitionError,
@@ -508,30 +502,6 @@ pub async fn get_pending_interaction(
     session_id: String,
 ) -> Result<Option<PendingInteractionEntry>, AppCommandError> {
     get_pending_interaction_inner(&state, session_id).await
-}
-
-/// Legacy IPC shim (back-compat). Returns just the
-/// `ToolQuestionPayload` for the session if a question is
-/// still pending AND the pending interaction is a question
-/// (returns `None` for a pending mode change — callers that
-/// care about mode change should migrate to
-/// `get_pending_interaction`). New code should use
-/// `get_pending_interaction`; this shim is kept so pre-unified
-/// callers don't break.
-pub async fn get_pending_question_inner(
-    state: &Arc<AppState>,
-    session_id: String,
-) -> Result<Option<ToolQuestionPayload>, AppCommandError> {
-    Ok(state.question_store.get_question_payload(&session_id).await)
-}
-
-#[tauri::command]
-#[deprecated(note = "use get_pending_interaction instead")]
-pub async fn get_pending_question(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Option<ToolQuestionPayload>, AppCommandError> {
-    get_pending_question_inner(&state, session_id).await
 }
 
 /// Reload a session row by id; the thin wrapper around

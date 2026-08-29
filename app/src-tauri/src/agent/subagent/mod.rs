@@ -25,7 +25,8 @@
 //!    worker Drop doesn't evict the parent's
 //!    `session_active_request[session_id]`), a worker
 //!    `PermissionContext { is_worker: true }`, and
-//!    `max_turns: Some(20)`.
+//!    `max_turns: Some(SUBAGENT_MAX_TURNS)` (= 200, see
+//!    [`dispatch::SUBAGENT_MAX_TURNS`]).
 //! 5. The worker's `ChatEventSink` is a [`SubagentBufferSink`] —
 //!    it records the worker's chat-events / tool calls / tool
 //!    results **into an in-memory transcript** but does NOT

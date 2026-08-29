@@ -29,12 +29,12 @@
 //! NOTE: We do NOT test the actual DB mode UPDATE here — that
 //! happens in `commands::question::resolve_mode_change` (the
 //! IPC handler), which is tested separately in `commands/`
-//! tests (TODO: future task — the `resolve_mode_change` IPC
-//! path is covered by the user-driven `set_session_mode`
-//! precedent and the shared `set_session_mode_internal` pure
-//! function; integration coverage of the full IPC chain
-//! requires a `tauri::test::mock_app` harness which this
-//! project doesn't use).
+//! tests: `resolve_mode_change_internal` (the pure core the
+//! handler delegates to) is covered by
+//! `commands/tests_resolve_mode_change.rs` (allow/deny paths,
+//! root guard, unknown session, pending unregister — real DB
+//! pool, no `tauri::test::mock_app` needed thanks to the
+//! pure-core extraction).
 
 #![cfg(test)]
 

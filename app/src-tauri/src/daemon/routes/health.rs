@@ -12,19 +12,15 @@
 //!   version mismatch = warn only).
 //! - Ad-hoc operator `curl` checks.
 //!
-//! Wire shape (PRD R1 + design.md §3.4). P2.2 ships the
-//! bare-bones variant — `session_count` is a `-1` sentinel (no
-//! `AppState` wired into this handler); P2.5 replaces it with a
-//! real DB-backed count by upgrading the handler to take
-//! `Extension<Arc<AppState>>`:
+//! Wire shape (PRD R1 + design.md §3.4) — deliberately stateless
+//! (no `AppState`; see `health()` doc for the Q1 rationale):
 //! ```json
 //! 200 OK
 //! {
 //!   "daemon_id": "uuid-v4",
 //!   "daemon_version": "0.1.0",
 //!   "api_versions": ["v1"],
-//!   "uptime_seconds": 3600,
-//!   "session_count": -1
+//!   "uptime_seconds": 3600
 //! }
 //! ```
 //!
@@ -74,51 +70,32 @@ pub struct HealthResponse {
     /// (process start would be more accurate but `Instant::now()`
     /// captured lazily keeps the `static` initialization simple).
     pub uptime_seconds: u64,
-    /// Count of sessions currently in the SQLite store.
-    ///
-    /// **P2.2 sentinel**: the bare-bones handler reports `-1` (no
-    /// `AppState` wired — see `health()` doc). P2.5 swaps this for
-    /// a real `COUNT(*)` against `db::sessions` once the handler is
-    /// upgraded to take `Extension<Arc<AppState>>`. Frontends should
-    /// treat `-1` as "not reported" rather than "zero sessions".
-    pub session_count: i64,
 }
 
 /// `GET /api/v1/health` handler.
 ///
-/// **P2.2 bare-bones variant**: takes **no parameters**. This is
-/// intentional — the Q1 port-conflict probe hits this endpoint
-/// *before the new daemon process has loaded its own `AppState`*
-/// (the probe is asking the *other* daemon squatting on the
-/// port), and wiring `State<Arc<AppState>>` into this route
-/// would require the daemon's state-bearing router. Instead,
-/// `daemon::server::build_router` mounts `/api/v1/health` on
-/// the state-less top-level router; the Q1 probe's port-conflict
+/// Takes **no parameters**, intentionally stateless — the Q1
+/// port-conflict probe hits this endpoint *before the new daemon
+/// process has loaded its own `AppState`* (the probe is asking
+/// the *other* daemon squatting on the port), and wiring
+/// `State<Arc<AppState>>` into this route would require the
+/// daemon's state-bearing router. Instead,
+/// `daemon::server::build_router` mounts `/api/v1/health` on the
+/// state-less top-level router; the Q1 probe's port-conflict
 /// `reqwest::get` works against any axum instance that answers.
-///
-/// `session_count` is therefore reported as `-1` (sentinel for
-/// "not reported in this lightweight handler"). The richer
-/// variant — `Extension<Arc<AppState>>` + real DB count — is
-/// deferred to **P2.5** (TODO(P2.5): wire state-bearing health
-/// variant + a separate `/api/v1/health/detailed` endpoint if
-/// the GUI needs the count pre-sidecar-handshake).
+/// If a state-bearing variant is ever needed (e.g. a live session
+/// count), add a separate `/api/v1/health/detailed` route rather
+/// than changing this one.
 pub async fn health() -> impl IntoResponse {
     let start = *START_TIME.get_or_init(Instant::now);
     let daemon_id = DAEMON_ID.get_or_init(|| Uuid::new_v4().to_string()).clone();
     let uptime_seconds = start.elapsed().as_secs();
 
-    // session_count would require AppState; for P2.2 we surface
-    // -1 as a "not reported in this lightweight handler" marker.
-    // The richer variant (with session_count) lands when the
-    // health endpoint moves to take `State<Arc<AppState>>` in a
-    // follow-up — P2.2 ships the bare-bones probe so the Q1
-    // port-conflict path works without a state-bearing request.
     Json(HealthResponse {
         daemon_id,
         daemon_version: DAEMON_VERSION.to_string(),
         api_versions: SUPPORTED_API_VERSIONS.to_vec(),
         uptime_seconds,
-        session_count: -1,
     })
 }
 
@@ -167,12 +144,12 @@ mod tests {
             json.get("uptimeSeconds").and_then(|v| v.as_u64()).is_some(),
             "uptimeSeconds is a non-negative integer"
         );
-        // session_count is -1 in the bare handler (P2.2 Q1 probe
-        // path; richer variant with real count lands in a follow-up).
-        assert_eq!(
-            json.get("sessionCount").and_then(|v| v.as_i64()),
-            Some(-1),
-            "session_count sentinel = -1 in the lightweight handler"
+        // The stateless handler reports no session count at all —
+        // `sessionCount` must be absent (removed with the -1
+        // sentinel; no consumer ever read it).
+        assert!(
+            json.get("sessionCount").is_none(),
+            "sessionCount is absent from the wire shape"
         );
     }
 

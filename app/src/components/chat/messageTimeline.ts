@@ -12,10 +12,12 @@ import { colorTagForName } from "../../utils/colorTag";
 //
 // 数据源优先级:
 //   1. `message.contentBlocks`(reload 后由 rehydrate 从 DB content 数组按
-//      原序透传;实时态由 streamController 就地 mutate —— 见 chat_loop.rs
-//      ordered_blocks)。
-//   2. 回退到分桶数组(thinkingBlocks + toolCalls + content)的固定顺序 ——
-//      兼容旧消息(无 contentBlocks)。
+//      原序透传;实时流式态也由 streamController 从首个 thinking token 起
+//      就地构建 —— 见 streamController "实时态 contentBlocks 维护" 块)。
+//   2. 回退到分桶数组(thinkingBlocks + content)的固定顺序 —— 只服务
+//      历史遗留消息(interleaved-thinking 上线前落库的行没有 contentBlocks,
+//      rehydrate 后该字段为空)。下线条件:对旧库行做一次 content 数组
+//      backfill;在此之前该回退路径必须保留。
 //
 // tool_use 在 timeline 内渲染 ToolCallCard(配对 getToolResult + 4 个 resolver
 // 卡片),实现"工具穿插在思考/文本之间"。每个 thinking 块独立成渲染点,
@@ -66,8 +68,9 @@ export function buildTimeline(
 }
 
 /** 是否走 contentBlocks 时间轴(true → 文本由时间轴渲染,
- *  msg__bubble 只留 cursor/edited)。仅在 reload 后且有 contentBlocks
- *  时为真;实时流式态/旧消息为 false(走回退 + msg__bubble)。 */
+ *  msg__bubble 只留 cursor/edited)。有 contentBlocks 即为真 —— 实时
+ *  流式态 streamController 就地构建该数组,首个 thinking token 起非空;
+ *  仅历史遗留消息(无 contentBlocks)为 false(走回退 + msg__bubble)。 */
 export function shouldUseTimeline(message: ChatMessage): boolean {
   return (
     !!message.contentBlocks &&

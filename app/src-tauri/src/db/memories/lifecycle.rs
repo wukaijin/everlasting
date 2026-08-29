@@ -37,7 +37,7 @@ pub const ACTIVE_TO_VERIFIED_AT: i64 = 5;
 pub const ACTIVE_TO_VERIFIED_AGE_DAYS: i64 = 3;
 
 /// Increment `hit_count` and stamp `last_used_at` for a memory.
-/// Called by the recall paths (`search_memories_fts` / P3's
+/// Called by the recall paths (`search_memories_fts_recall` / P3's
 /// `find_pitfalls_by_trigger` consumer) when a memory is surfaced
 /// — P5's status machine reads `hit_count` to decide promotion
 /// (candidate → active → verified).

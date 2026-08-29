@@ -245,4 +245,67 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
     expect(toast?.kind).toBe("error");
     expect(toast?.message).toContain("Cannot enable Yolo as root");
   });
+
+  // RULE-FE-002 (2026-08-30): when the Yolo IPC succeeds but the
+  // follow-up resolveModeChange fails (agent-initiated path via
+  // `<RequestModeChangeCard>`), the user must still learn the
+  // agent-side oneshot is stranded — a warn toast, not silence.
+  // The mode DID switch, so this is a warning, not an error.
+  it("confirmYolo surfaces a warn toast when resolveModeChange fails after IPC success", async () => {
+    const sid = seedSession({ id: "s1", mode: "edit" });
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "set_session_mode") return Promise.resolve({});
+      if (cmd === "resolve_mode_change")
+        return Promise.reject(new Error("db locked"));
+      return Promise.resolve({});
+    });
+
+    const store = useChatStore();
+    await store.requestSetMode(sid, "yolo");
+    const result = await store.confirmYolo({
+      sessionId: sid,
+      toolUseId: "tu1",
+      targetMode: "yolo",
+    });
+
+    // The Yolo switch itself succeeded.
+    expect(result).toBe(true);
+    expect(store.sessions[0].mode).toBe("yolo");
+    expect(invokeMock).toHaveBeenCalledWith("resolve_mode_change", {
+      sessionId: sid,
+      toolUseId: "tu1",
+      targetMode: "yolo",
+      allow: true,
+    });
+    const { useProjectsStore } = await import("./projects");
+    const toast = useProjectsStore().toast;
+    expect(toast?.kind).toBe("warn");
+    expect(toast?.message).toContain("db locked");
+  });
+
+  // RULE-FE-002, cancel twin: the modal already closed and no mode
+  // change happened — the stranded resolve still deserves a warn.
+  it("cancelYolo surfaces a warn toast when resolveModeChange fails", async () => {
+    const sid = seedSession({ id: "s1", mode: "edit" });
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "resolve_mode_change")
+        return Promise.reject(new Error("db locked"));
+      return Promise.resolve({});
+    });
+
+    const store = useChatStore();
+    await store.requestSetMode(sid, "yolo");
+    await store.cancelYolo({
+      sessionId: sid,
+      toolUseId: "tu1",
+      targetMode: "yolo",
+    });
+
+    expect(store.pendingYoloConfirm).toBe(false);
+    expect(store.sessions[0].mode).toBe("edit");
+    const { useProjectsStore } = await import("./projects");
+    const toast = useProjectsStore().toast;
+    expect(toast?.kind).toBe("warn");
+    expect(toast?.message).toContain("db locked");
+  });
 });

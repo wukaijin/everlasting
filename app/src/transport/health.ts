@@ -37,7 +37,6 @@ export interface DaemonHealth {
   daemonVersion: string;
   apiVersions: string[];
   uptimeSeconds?: number;
-  sessionCount?: number;
 }
 
 /** Outcome of a single health probe — either the daemon responded

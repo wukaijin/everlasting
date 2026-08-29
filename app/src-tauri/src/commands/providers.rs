@@ -1,5 +1,5 @@
 //! Provider / Model / default-model Tauri commands (PR1 of
-//! multi-model), plus `test_provider` (deprecated) and
+//! multi-model), plus `test_model` (PR5 follow-up).
 //! `test_model` (PR5 follow-up).
 //!
 //! Wire shape (camelCase on the JS side per Tauri's default):
@@ -323,7 +323,7 @@ pub async fn set_default_model(
 }
 
 // ---------------------------------------------------------------------------
-// PR4 of multi-model task: per-session model override + test_provider
+// PR4 of multi-model task: per-session model override
 // ---------------------------------------------------------------------------
 
 /// Update the per-session model override. The frontend's StatusBar
@@ -350,117 +350,12 @@ pub async fn update_session_model_id(
     update_session_model_id_inner(&state, session_id, model_id).await
 }
 
-/// Test a provider's connectivity by sending a lightweight request
-/// with the given `base_url`, `api_key`, and `protocol`. Returns
-/// a JSON object with `success`, `latencyMs`, and optional `error`.
-///
-/// - Anthropic: `POST {base_url}/v1/messages` with `max_tokens=1`
-///   and a minimal user message. A 200 means success; 401/403 means
-///   auth failure.
-/// - OpenAI: `GET {base_url}/models` with `Authorization: Bearer`.
-///   A 200 means success; 401 means auth failure.
-///
-/// The function does NOT access `AppState` — it only makes an HTTP
-/// request to validate the credentials, keeping the test isolated
-/// from the app's DB and LLM dispatch.
-///
-/// DEPRECATED (PR5 follow-up): the frontend no longer calls this
-/// IPC. The user-perceived Test flow is now `test_model`, which
-/// validates end-to-end that a specific catalog `model.model_name`
-/// can be reached (this function used a hardcoded
-/// `claude-sonnet-4-5` body and was therefore unable to surface
-/// model-name 404s on a GLM-style proxy). Kept in the registry
-/// for future catalog-resolution use cases that need a
-/// protocol-only reachability probe.
-#[tauri::command]
-#[allow(dead_code)]
-pub async fn test_provider(
-    base_url: String,
-    api_key: String,
-    protocol: String,
-) -> Result<serde_json::Value, AppCommandError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {}", e))?;
-    let start = std::time::Instant::now();
-
-    let (success, error) = match protocol.as_str() {
-        "anthropic" => {
-            let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
-            let body = serde_json::json!({
-                "model": "claude-sonnet-4-5",
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]
-            });
-            let resp = client
-                .post(&url)
-                .header("x-api-key", &api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("request failed: {}", e))?;
-
-            let status = resp.status();
-            if status.is_success() {
-                (true, None)
-            } else {
-                let body_text = resp.text().await.unwrap_or_default();
-                (
-                    false,
-                    Some(format!(
-                        "HTTP {}: {}",
-                        status,
-                        body_text.chars().take(200).collect::<String>()
-                    )),
-                )
-            }
-        }
-        "openai" => {
-            let url = format!("{}/models", base_url.trim_end_matches('/'));
-            let resp = client
-                .get(&url)
-                .header("authorization", format!("Bearer {}", api_key))
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("request failed: {}", e))?;
-
-            let status = resp.status();
-            if status.is_success() {
-                (true, None)
-            } else {
-                let body_text = resp.text().await.unwrap_or_default();
-                (
-                    false,
-                    Some(format!(
-                        "HTTP {}: {}",
-                        status,
-                        body_text.chars().take(200).collect::<String>()
-                    )),
-                )
-            }
-        }
-        _ => (false, Some(format!("unsupported protocol: {}", protocol))),
-    };
-
-    let latency_ms = start.elapsed().as_millis() as u64;
-    Ok(serde_json::json!({
-        "success": success,
-        "latencyMs": latency_ms,
-        "error": error,
-    }))
-}
-
 /// Test a specific model (looked up in the catalog) by sending a
 /// lightweight request to its provider using the real `model_name`
 /// the user configured.
 ///
-/// Replaces the user-perceived "Test" flow from `test_provider` —
-/// the per-model test is what the user actually cares about (can
-/// this model name be reached end-to-end?). `test_provider`
-/// remains in the registry for catalog-resolution future use.
+/// The per-model test is what the user actually cares about (can
+/// this model name be reached end-to-end?).
 pub async fn test_model_inner(
     state: &Arc<AppState>,
     model_id: String,

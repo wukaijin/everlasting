@@ -10,9 +10,8 @@
 // protocol-reachability probe (the old `test_provider` IPC) was
 // only a subset of that and surfaced confusing results when a
 // provider routed to a GLM-style proxy with multiple model names
-// where some were 404. `test_provider` is still in the Rust
-// registry (`#[allow(dead_code)]`) for future catalog-resolution
-// use, but the frontend never calls it.
+// where some were 404. (The old `test_provider` IPC has since
+// been removed from the Rust registry — zero frontend callers.)
 //
 // R1 polish: form controls now use reka-ui `SelectRoot` /
 // `SelectTrigger` / `SelectItem` for the protocol dropdown, and

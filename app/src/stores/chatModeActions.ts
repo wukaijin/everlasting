@@ -223,11 +223,18 @@ export function createModeActions(ctx: ModeActionsContext) {
           "Failed to resolve mode_change after Yolo IPC success:",
           e,
         );
-        // Don't surface as toast — the Yolo IPC succeeded; the
-        // resolve failure means the LLM will see the pending
-        // interaction (eventually timed out or rejected). Log
-        // for now; a follow-up can surface via the existing
-        // pending-card re-mount path.
+        // The mode DID switch (chip/DB already updated) — the
+        // resolve failure only strands the agent loop's oneshot
+        // (the pending card lingers until timeout). Warn, not
+        // error: the user's action itself succeeded. Same
+        // lazy-import cycle-breaker pattern as the first catch.
+        const { extractErrorMessage } = await import("../utils/useErrorBus");
+        const { useProjectsStore } = await import("./projects");
+        useProjectsStore().showToast(
+          `Yolo 已切换，但通知 Agent 失败：${extractErrorMessage(e)}`,
+          "warn",
+          5000,
+        );
       }
     }
     return true;
@@ -267,6 +274,18 @@ export function createModeActions(ctx: ModeActionsContext) {
       console.error(
         "Failed to resolve mode_change after Yolo cancel:",
         e,
+      );
+      // The modal is already closed and no mode change happened —
+      // the resolve failure only strands the agent loop's oneshot
+      // until timeout. Warn so the user knows the agent may sit
+      // on a pending card. Lazy imports match confirmYolo's
+      // catches (store-import cycle breaker).
+      const { extractErrorMessage } = await import("../utils/useErrorBus");
+      const { useProjectsStore } = await import("./projects");
+      useProjectsStore().showToast(
+        `已取消，但通知 Agent 失败：${extractErrorMessage(e)}`,
+        "warn",
+        5000,
       );
     }
   }

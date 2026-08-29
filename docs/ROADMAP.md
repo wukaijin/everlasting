@@ -135,7 +135,6 @@
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |
 | ~~E1~~ | ~~CI 测试自动化管线(GitHub Actions)~~ | ✅ 07-05 落地(双 job 并行 + CI 首跑暴露的 drain race / mtime fence 2 个 flaky 修复),见 §1.2 |
 | ~~A5+~~ | ~~LLM 网络健壮性(重试 / 指数退避 / SSE 断点续传)~~ | ✅ 07-05 落地(retry_open + Full Jitter + 首字节前重试;SSE 无 resumption 故不走 message ID 续传),见 §1.2 |
-| **A4+** | 成本聚合视图(token → $) | A4 per-session token 累计已有;补跨 session / provider / day 汇总换算,纯前端聚合查询不动 agent core |
 | ~~V2-2+~~ | ~~自主记忆可观测性 + 管理面板~~ | ✅ 07-06 落地(`update_memory` + `validate_memory_text` helper 提取 + `ChatEvent::Recall` 只读 event + worker sink 隔离 AC7 + `RuntimeMemoryModal` 状态机/编辑/删除 + ChatPanel 实时召回 chip;2 commits Phase A 后端 / Phase B 前端),见 §1.2 |
 | ~~E2~~ | ~~turn-level harness trace viewer~~ | ✅ 07-14 落地(后端 trace 管道 + 前端独立面板 live+回看,4 维缺口全补),见 §1.2 |
 | ~~C2+~~ | ~~循环检测升级为主动干预~~ | ✅ 07-06 落地(per-run-local `loop_hit_count` N=3 + QuestionStore 复用 + 三分支 + worker `effective_is_worker` 直接 break + `AuditKind::LoopIntervention` 无 migration),见 §1.2 |
@@ -150,11 +149,12 @@
 
 > **已实施的 22 项**(B6 / B6+ / B8 / B12 / B4 / C2 / C2+ / A7 / L2 / L1 / L3a / L3b PR1 / L3b PR2 / L3b PR3 / L3c / L3d / A2+ / A5+ / E1 / V2-2+ / E2 / C7)已从第三档或第四档移到 §1.2 已实施列表。
 
-### 🔴 第四档 — 最远远期(app 主体完善之后)(4 项,B8 已于 2026-07-10、B11 已于 2026-08-13 迁至 §1.2)
+### 🔴 第四档 — 最远远期(app 主体完善之后)(开放 3 项:B10 / A2+ P3 / A4+;B8、B11、F2、F6 已完成迁 §1.2)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
+| A4+ | 成本聚合视图(token → $) | **可做可不做**(2026-08-30 用户裁定,由第三档移入)。A4 per-session token 累计已有;若做:补跨 session / provider / day 汇总换算 + 每模型 $/M 价格表(provider 层现无 pricing 字段,原"纯前端聚合"估计偏乐观) |
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |
 | A2+ P3 | shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail) | A2+ P1+P2 **判定层** 07-04 落地(见 §1.2);P3 是判定层之下的独立**限损层** — 判定错了也限损(盲区 `VAR=val cmd` / `$var` 展开 / 拆分器引号极端误判靠它兜底)。前置 WSL userns spike。拆自 parent `07-04-a2-shell-classification`(已 archive,P1+P2 收口)。源方案 [docs/_history/2026-08-28-a2-shell-classification.md](./_history/2026-08-28-a2-shell-classification.md) §4 远期候选 |
 | ~~F2~~  | ~~定时任务(本地 cron 式)~~ | ✅ **2026-08-28 落地**(daemon 常驻调度器 + preset 档位 + origin 标记链 + Settings 管理面;触发源 MVP 只做系统时间;catch-up 补跑一次;经两道外部评审,见 §1.2)。**F2b 调度模型扩展同日落地**(6 档 + 次数/日期结束条件,见 §1.2 F2b 行)。**LLM `schedule_task` 家族(detached dispatch)2026-08-29 落地**(create/status/cancel、`created_by='agent'` 作者面分离、tool 侧 kill-switch/上限双 gate,见 §1.2 与 spec tool-contract 17)。余下:fs 事件 / 本地 webhook 触发源 |

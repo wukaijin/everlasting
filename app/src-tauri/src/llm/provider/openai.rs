@@ -108,7 +108,7 @@ impl OpenAIConfig {
     /// version prefix** (e.g. `https://api.openai.com/v1`,
     /// `https://hub.example.com/v1`); this function only appends
     /// `/chat/completions` (no leading `/v1/`). This matches the
-    /// convention used by `test_model` / `test_provider` in
+    /// convention used by `test_model` in
     /// `lib.rs` and the OpenAI seed row (`https://api.openai.com/v1`).
     ///
     /// **BUG FIX (06-09-fix-session):** prior to this fix the

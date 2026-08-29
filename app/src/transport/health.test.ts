@@ -34,7 +34,6 @@ function makeHealth(overrides: Partial<DaemonHealth> = {}): DaemonHealth {
     daemonVersion: "0.1.0",
     apiVersions: ["v1"],
     uptimeSeconds: 100,
-    sessionCount: 3,
     ...overrides,
   };
 }

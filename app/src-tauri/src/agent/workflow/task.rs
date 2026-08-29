@@ -62,22 +62,6 @@
 //! existing `agent/workflow/mod.rs` `pub use task::{...}` and all
 //! `crate::agent::workflow::task::*` callers keep resolving unchanged.
 
-// Step 0.4 ships the file-state surface (`TaskJson` + read /
-// write + `create_task_init`) BEFORE the first consumer
-// lands in Step 0.5 (chat_loop's per-turn breadcrumb
-// injection reads via `read_task`). The IPC wrapper
-// (`commands::task`) is also new this step but, like
-// `def.rs`, briefly dead-code until Phase 1's
-// wf-brainstorm skill triggers `create_task`.
-//
-// Suppress `dead_code` for this file. Remove in Step 0.5's
-// commit when chat_loop adds its first read_site, and in
-// the `commands::task` IPC's first commit that uses this
-// body.
-//
-// Tests below use every public item, so they're unaffected.
-#![allow(dead_code)]
-
 mod archive;
 mod io;
 mod paths;

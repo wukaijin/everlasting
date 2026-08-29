@@ -15,31 +15,11 @@
 //!
 //! # Dead-code policy
 //!
-//! `#![allow(dead_code)]` is set at the module level. This is a
-//! **storage底座 (foundation) task** — P1 lands the table + CRUD +
-//! write safety net + unit tests, but **no production caller wires
-//! any function yet**. P2 (remember tool + recall injection) is the
-//! first production consumer; P3 / P4 / P5 follow. Every `pub` item
-//! in this module (3 enums + 2 structs + 7 CRUD fns + 2 error enums
-//! + the safety-net helpers) is forward-compat storage with zero
-//! current callers — ~25 dead-code warnings would fire otherwise.
-//!
-//! **Deviation from the `subagent_runs.rs` precedent** (which uses
-//! per-item `#[allow(dead_code)]`): that module's PR2 landed the
-//! table + CRUD **alongside** production callers in B6 PR1's
-//! `dispatch.rs`, so only ~8 items (UI-read shapes, a `get_run`
-//! helper, an unused flag) lacked callers and got per-item allows.
-//! `memories.rs` is a pure-foundation task — **every** public
-//! symbol is unused until P2, so per-item allows would be noisy
-//! (~25 annotations) without adding precision over the module form.
-//! The trade-off accepted here: the module-level allow could mask a
-//! future drift (typo'd helper, refactor-orphaned fn), but P2 is
-//! the immediate next task and will surface any orphan when it
-//! becomes the first caller. When P2 lands, **replace this
-//! module-level allow with per-item allows** on whatever P2 still
-//! doesn't consume (mirroring `subagent_runs.rs`).
-
-#![allow(dead_code)]
+//! The P1-era module-level `#![allow(dead_code)]` umbrella was
+//! removed once P2–P5 landed production consumers (2026-08-30,
+//! RULE-ALLOW-001). Items with no live caller get a per-item
+//! `#[allow(dead_code)]` with a stated reason (mirroring the
+//! `subagent_runs.rs` precedent); true orphans are deleted.
 
 mod crud;
 mod lifecycle;

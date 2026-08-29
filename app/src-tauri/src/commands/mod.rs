@@ -8,7 +8,7 @@
 //! Submodules:
 //! - [`config`] — `get_llm_config`, `get_home_dir`
 //! - [`providers`] — Provider / Model CRUD + `test_model` (and the
-//!   deprecated `test_provider`)
+//!   `test_model`)
 //! - [`sessions`] — Session CRUD + `diff_worktree`
 //! - [`worktree`] — `attach_worktree` / `detach_worktree` /
 //!   `delete_worktree` + the destructive `cancel_inflight_for_session`
@@ -94,7 +94,6 @@ pub fn all_command_names() -> Vec<&'static str> {
         "get_default_model",
         "set_default_model",
         "update_session_model_id",
-        "test_provider",
         "test_model",
         "list_sessions",
         // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
@@ -179,7 +178,6 @@ pub fn all_command_names() -> Vec<&'static str> {
         // question IPCs (frontend `/<AskUserQuestionCard>`
         // submit/跳过 + session-switch source-of-truth lookup).
         "resolve_tool_question",
-        "get_pending_question",
         // 2026-07-07 (`request_mode_change` task): tool
         // mode-change IPCs (frontend `<RequestModeChangeCard>`
         // allow/拒绝 + session-switch source-of-truth lookup

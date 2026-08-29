@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "health 端点契约 + daemon 路由注册(HEALTH-001/SHIM-001 删路由)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store action 模式与测试约定(FE-002 toast)"}

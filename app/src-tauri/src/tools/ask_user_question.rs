@@ -372,7 +372,7 @@ pub async fn execute_blocking(
             return (msg, true, crate::tools::ToolContextUpdate::default(), None);
         }
     };
-    // Emit AFTER register — the frontend's `get_pending_question`
+    // Emit AFTER register — the frontend's `get_pending_interaction`
     // fallback (used on session reload) needs the entry to
     // exist when the event arrives. Symmetric with the
     // permission:ask flow which emits AFTER register_ask.

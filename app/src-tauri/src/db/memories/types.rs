@@ -4,8 +4,6 @@
 //! shapes + error enums + length constants live here so the crud /
 //! validation / search / lifecycle submodules share one source.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 

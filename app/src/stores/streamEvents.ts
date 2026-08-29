@@ -1072,9 +1072,7 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
 
   /** Phase C3 (2026-06-30, `ask_user_question` task): pull the
    *  authoritative pending-interaction state from the backend's
-   *  QuestionStore via the `get_pending_interaction` IPC
-   *  (Phase B4, 2026-07-07 — supersedes the deprecated
-   *  `get_pending_question`).
+   *  QuestionStore via the `get_pending_interaction` IPC.
    *
    *  Source-of-truth correction (design §5.4): the live
    *  `tool:question` / `mode:change:request` listeners are the

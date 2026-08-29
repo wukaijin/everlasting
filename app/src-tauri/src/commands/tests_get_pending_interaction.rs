@@ -3,7 +3,7 @@
 //!
 //! These tests verify the `get_pending_interaction` Tauri command
 //! (the unified `Option<PendingInteractionEntry>` IPC that replaces
-//! the legacy `get_pending_question` shim). The IPC handler is a
+//! legacy shims, since removed). The IPC handler is a
 //! thin wrapper around `QuestionStore::get_payload`, so we exercise
 //! that method directly — `tauri::test::mock_app` is not used in
 //! this codebase (per the established `permission_response`

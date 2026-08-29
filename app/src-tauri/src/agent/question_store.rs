@@ -31,7 +31,7 @@
 //! No new IPC channel here — that lives in `state.rs::ChatEventSink
 //! ::emit_tool_question` (the `tool:question` Tauri event) and in
 //! `commands/question.rs` (the `resolve_tool_question` +
-//! `get_pending_question` commands). This module owns the
+//! `get_pending_interaction` commands). This module owns the
 //! in-process oneshot map only.
 //!
 //! ## Pending state survives session switches
@@ -39,7 +39,7 @@
 //! `QuestionStore` deliberately does NOT cancel on session
 //! switch (design §8): the agent loop's `tokio::select!` keeps
 //! waiting on the oneshot until resolve / app crash. The
-//! frontend session-switch path uses `get_pending_question` to
+//! frontend session-switch path uses `get_pending_interaction` to
 //! recover the live payload (so a switched-back session can
 //! render the still-pending card). The user-facing `取消` button
 //! resolves with `InteractionResponse::Cancelled`; the session
@@ -576,24 +576,6 @@ impl QuestionStore {
             kind: p.kind,
             payload: p.payload.clone(),
         })
-    }
-
-    /// Back-compat shim: returns the `ToolQuestionPayload` for
-    /// a pending question OR `None` for anything else
-    /// (including pending mode changes). Used by the legacy
-    /// `get_pending_question` IPC command (kept for backward
-    /// compatibility; new code should use
-    /// `get_pending_interaction` + the
-    /// `PendingInteractionEntry` shape).
-    pub async fn get_question_payload(&self, session_id: &str) -> Option<ToolQuestionPayload> {
-        let map = self.inner.lock().await;
-        match map.get(session_id) {
-            Some(p) => match &p.payload {
-                PendingInteraction::Question(qp) => Some(qp.clone()),
-                _ => None,
-            },
-            None => None,
-        }
     }
 
     /// List all pending question sessions (test-only

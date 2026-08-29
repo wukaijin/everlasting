@@ -2,9 +2,9 @@
 // blocking reverse-question tool (Phase C4 of
 // `06-30-ask-user-question-tool`, 2026-06-30).
 //
-// Thin layer over the transport's `invoke` for the two
-// frontend-initiated IPC commands (`resolve_tool_question`,
-// `get_pending_question`). The third wire — `tool:question` — is
+// Thin layer over the transport's `invoke` for the
+// frontend-initiated IPC command (`resolve_tool_question`).
+// The third wire — `tool:question` — is
 // server-pushed via `listen<>` in streamController, not a Tauri
 // command, so it doesn't live here.
 //

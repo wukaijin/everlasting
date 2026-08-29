@@ -87,17 +87,6 @@ export const TOOL_QUESTION_EVENT = "tool:question";
  *  `QuestionStore.resolve(session_id, response)`. */
 export const RESOLVE_TOOL_QUESTION_CMD = "resolve_tool_question";
 
-/** Tauri command name (frontend → backend). Routes to
- *  `commands::question::get_pending_question`, which calls
- *  `QuestionStore.get(session_id)`. Returns `Option<ToolQuestionPayload>`
- *  (snake_case payload), `null` when no pending question exists
- *  for the session. The streamController calls this on
- *  `ensureLoaded` to fetch the authoritative backend state (the
- *  QuestionStore lives in `AppState`, NOT in the LRU-bounded
- *  `messagesBySession`, so it survives session-switch reloads
- *  intact — see design §5.4 source-of-truth rationale). */
-export const GET_PENDING_QUESTION_CMD = "get_pending_question";
-
 // -----------------------------------------------------------------------
 // Wire types (mirrors Rust `ToolQuestionPayload` + children, snake_case)
 // -----------------------------------------------------------------------
