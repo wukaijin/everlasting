@@ -125,7 +125,7 @@
 
 > 自动化手段测不可靠,需真人键盘/视觉复核后再定级。
 
-- **CH5-1 Shift+Enter 换行**:输入框是 CodeMirror 6 contenteditable(`ChatInput.vue:27-32`),keymap 只绑 Enter(`chatInputCodeMirror.ts:771-821`),换行靠浏览器默认行为。非受信合成键盘事件不触发默认插入,自动化测不出是预期的。→ 人工 Shift+Enter 验证;若真不换行,再在 keymap 显式加 `Shift-Enter → insertNewlineAndIndent`。
+- **CH5-1 Shift+Enter 换行**:~~待复核~~ **✅ 已人工复核(2026-08-29,真实键盘):换行正常,关闭。** 原报告为自动化误报——输入框是 CodeMirror 6 contenteditable(`ChatInput.vue:27-32`),keymap 只绑 Enter(`chatInputCodeMirror.ts:771-821`),换行靠浏览器默认行为;非受信合成键盘事件不触发默认插入,自动化测不出是预期的。无需在 keymap 加 Shift-Enter 绑定。
 - **CH14-1 Tab 焦点环弱**:`:focus-visible` 基线存在(`style.css:319-353`,accent 20% alpha 3px ring),「没有焦点样式」不成立;深色下偏弱是观感问题。→ 人工 Tab 走查一圈,若确实难辨认,调高 alpha 或加深色加强变体。
 
 ---
