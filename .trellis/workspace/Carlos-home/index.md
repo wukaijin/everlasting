@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 119
+- **Total Sessions**: 120
 - **Last Active**: 2026-08-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1041 | Active |
+| `journal-4.md` | ~1085 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 120 | 2026-08-29 | 定时任务表单换 reka-ui 日期/时间控件 | `97e79f0`, `a56bede` | `main` |
 | 118 | 2026-08-29 | schedule_task 家族:LLM detached dispatch 收口 F2 + 外部评审甄别 + HTTP daemon E2E | `6e3d2c2` | `main` |
 | 117 | 2026-08-29 | RULE-QUEUE-001 多 drain 丢消息根治(非尾 drained 条目补持久化) | `ff54c1f` | `main` |
 | 116 | 2026-08-27 | RULE-ARGS-001 参数对象化落地 + 全库技术债盘点收编 | `21776cb`, `abd9662`, `a6a71f7`, `8d1b529` | `main` |

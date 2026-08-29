@@ -1061,3 +1061,25 @@ ROADMAP F1/F2 点名的 follow-up 落地:LLM 调度三件套(schedule_task/statu
 ### Status
 
 [OK] **Completed**
+
+
+## Session 120: 定时任务表单换 reka-ui 日期/时间控件
+
+**Date**: 2026-08-29
+**Task**: 定时任务表单换 reka-ui 日期/时间控件
+**Branch**: `main`
+
+### Summary
+
+ScheduledTasksTab 原生 date/time/datetime-local 全部替换为 reka 2.9.9 原语:新增 AppDatePicker(日历弹层)与 AppTimeField(分段 hh:mm)两个字符串 v-model 包装组件,单次档拆日期+时刻,结束日期走日历(今天前禁选),数字输入留待后续。测试 1394 全绿(tab 层 stub 注入 + 包装组件单测),headless Chromium 截 9 图验证含移动端 0 溢出。沉淀 reka 2.9.9 四坑入 spec:DatePickerPortal 包根未导出、DatePickerContent portal 链拿不到 scope attr(弹层样式需非 scoped 块)、popper 包裹层 z-index 需 :has() 反选提层、hourCycle 只认数字 12|24;顺手修 --text-2-xs/--color-border-primary 两个失效 token。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `97e79f0` | (see git log) |
+| `a56bede` | (see git log) |
+
+### Status
+
+[OK] **Completed**
