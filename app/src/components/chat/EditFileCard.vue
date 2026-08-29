@@ -189,13 +189,18 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
         <button
           v-if="hasInputStrings && diffRows"
           type="button"
-          class="edit-card__toggle btn btn--tint btn--sm"
+          class="edit-card__toggle btn btn--ghost btn--icon"
           :aria-expanded="diffExpanded"
+          :aria-label="diffExpanded ? '收起 diff' : '展开 diff'"
           :title="diffExpanded ? '收起 diff' : '展开 diff'"
           @click.stop="diffExpanded = !diffExpanded"
         >
-          <Icon :name="diffExpanded ? 'chevron-down' : 'chevron-right'" :size="12" />
-          {{ diffExpanded ? "收起" : "展开" }}
+          <span
+            class="edit-card__toggle-chevron"
+            :class="{ 'edit-card__toggle-chevron--open': diffExpanded }"
+          >
+            <Icon name="chevron-right" :size="12" />
+          </span>
         </button>
       </template>
     </ToolCallHeader>
@@ -298,9 +303,19 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
   color: var(--color-text-muted);
 }
 
-/* 展开按钮由全局 .btn 家族承载(tint·sm);仅保留 margin 几何。 */
+/* 展开/收起开关:icon-only ghost(透明底,hover 才有 wash)。chevron 固定
+ * 用右向图标,展开时旋转 90°(→朝下),transform 过渡即切换动画。 */
 .edit-card__toggle {
   margin-left: 8px;
+}
+
+.edit-card__toggle-chevron {
+  display: inline-flex;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.edit-card__toggle-chevron--open {
+  transform: rotate(90deg);
 }
 
 .edit-card__approval {
