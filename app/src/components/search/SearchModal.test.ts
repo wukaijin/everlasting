@@ -23,6 +23,7 @@ vi.mock("../../transport", () => ({
 
 import { transport } from "../../transport";
 import SearchModal from "./SearchModal.vue";
+import { useChatStore } from "../../stores/chat";
 
 const invokeMock = vi.mocked(transport.invoke);
 import { useSearchModal } from "../../composables/useSearchModal";
@@ -249,6 +250,102 @@ describe("SearchModal", () => {
     // data-seq anchor present on the rendered message.
     expect(document.body.querySelector('[data-seq="3"]')).not.toBeNull();
     vi.useRealTimers();
+    wrapper.unmount();
+  });
+
+  // BUGLIST CH12-1a (2026-08-29): the session head inside a content-hit
+  // group used to be a dead div that looked clickable (the GUI test
+  // clicked it and reported "search does nothing"). It's a real button
+  // now — same action as a title hit: open the session in the main window.
+  it("clicking a session head opens that session in the main window (CH12-1a)", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockResolvedValue([contentHit()]);
+    const wrapper = await mountOpen();
+    const input = document.body.querySelector<HTMLInputElement>(".search-modal__input");
+    input!.value = "权限";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(260);
+    await flushPromises();
+
+    const chatStore = useChatStore();
+    const openSpy = vi
+      .spyOn(chatStore, "openSessionInProject")
+      .mockResolvedValue(undefined);
+    const head = document.body.querySelector<HTMLButtonElement>(
+      ".search-modal__session-head",
+    );
+    expect(head).not.toBeNull();
+    expect(head!.tagName).toBe("BUTTON");
+    head!.click();
+    await flushPromises();
+
+    expect(openSpy).toHaveBeenCalledWith("pa", "s1");
+    // No seq on a head click → no locate pass (no rAF wait needed).
+    vi.useRealTimers();
+    wrapper.unmount();
+  });
+
+  // BUGLIST CH12-1b: the preview's "在主窗口打开" used to drop the
+  // seq — the main window opened the session but never positioned on
+  // the hit message. It must hand the seq to the main-window list.
+  //
+  // Real timers: `locateMessage` waits nextTick + one real rAF before
+  // querying, so fake timers would freeze the wait and leak the
+  // pending continuation past unmount. The prefill open (no debounce)
+  // makes the search synchronous without fake timers.
+  it("preview '在主窗口打开' passes the seq through and scrolls to the hit message (CH12-1b)", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "search_messages") return [contentHit()];
+      if (cmd === "load_session") {
+        return {
+          session: { id: "s1" },
+          messages: [
+            {
+              id: 1,
+              session_id: "s1",
+              role: "user",
+              content: [{ type: "text", text: "hello 权限" }],
+              text: "hello 权限",
+              has_tool_calls: false,
+              has_tool_results: false,
+              created_at: "2026-08-17T00:00:00Z",
+              seq: 3,
+            },
+          ],
+        };
+      }
+      return null;
+    });
+    const wrapper = await reopenWith({ query: "权限" });
+
+    // Open the preview, then stub a main-window message list with the
+    // data-seq hook MessageList stamps on MessageItem roots.
+    document.body.querySelector<HTMLButtonElement>(".search-modal__row--snippet")!.click();
+    await flushPromises();
+    const list = document.createElement("div");
+    list.className = "messages";
+    const msgEl = document.createElement("div");
+    msgEl.setAttribute("data-seq", "3");
+    list.appendChild(msgEl);
+    document.body.appendChild(list);
+    const scrollSpy = vi.fn();
+    msgEl.scrollIntoView = scrollSpy;
+
+    const chatStore = useChatStore();
+    const openSpy = vi
+      .spyOn(chatStore, "openSessionInProject")
+      .mockResolvedValue(undefined);
+
+    document.body.querySelector<HTMLButtonElement>(".search-modal__open-btn")!.click();
+    await flushPromises();
+    // locateMessage waits nextTick + nextPaint (rAF races a 60ms
+    // setTimeout fallback — jsdom's rAF clock is dead after this
+    // file's earlier fake-timer cycles, so the fallback carries it).
+    await new Promise((r) => setTimeout(r, 120));
+    await flushPromises();
+
+    expect(openSpy).toHaveBeenCalledWith("pa", "s1");
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
     wrapper.unmount();
   });
 

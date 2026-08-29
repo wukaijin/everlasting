@@ -245,6 +245,48 @@ function openPreview(hit: MessageSearchHit): void {
 async function openInMainWindow(target: PreviewTarget): Promise<void> {
   close();
   await chatStore.openSessionInProject(target.projectId, target.sessionId);
+  // BUGLIST CH12-1b (2026-08-29): a target carrying a message seq
+  // (preview "在主窗口打开") must land ON that message, not at the
+  // top of the session — the in-modal preview already positions, the
+  // main-window hand-off used to drop the seq.
+  if (target.seq != null) await locateMessage(target.seq);
+}
+
+/** Wait for the next paint: rAF when it fires, a short macrotask
+ *  fallback when it can't (background tabs stall rAF; so do some
+ *  jsdom-after-fake-timers test environments). */
+function nextPaint(): Promise<void> {
+  return Promise.race([
+    new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    new Promise<void>((resolve) => setTimeout(resolve, 60)),
+  ]);
+}
+
+/** Scroll the main window's message list to the hit message and
+ *  flash it. MessageList stamps `data-seq` on each MessageItem root
+ *  (the same hook SearchPreviewBody uses for in-modal positioning);
+ *  the modal renders through a portal, so a document query is the
+ *  simplest cross-tree lookup. */
+async function locateMessage(seq: number): Promise<void> {
+  await nextTick();
+  await nextPaint();
+  const el = document.querySelector<HTMLElement>(
+    `.messages [data-seq="${seq}"]`,
+  );
+  if (!el) return;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  // Soft accent flash to anchor the eye (Web Animations API — no CSS
+  // to scope; falls back to a plain jump where unsupported).
+  el.animate?.(
+    [
+      {
+        backgroundColor:
+          "color-mix(in srgb, var(--color-accent) 22%, transparent)",
+      },
+      { backgroundColor: "transparent" },
+    ],
+    { duration: 1400, easing: "ease-out" },
+  );
 }
 
 /** Highlight the query inside a snippet. Returns [before, match,
@@ -368,12 +410,20 @@ function timeLabel(iso: string): string {
                 <h3 class="search-modal__section-title">{{ pg.projectLabel }}</h3>
                 <div class="search-modal__section-rows">
                   <div v-for="s in pg.sessions" :key="s.hit.session_id" class="search-modal__session">
-                    <div class="search-modal__session-head">
+                    <!-- CH12-1a: real button (was a dead div that looked
+                         clickable) — opens the session in the main window,
+                         same action as a title hit. -->
+                    <button
+                      type="button"
+                      class="search-modal__session-head no-focus-ring"
+                      title="在主窗口打开该会话"
+                      @click="openInMainWindow({ sessionId: s.hit.session_id, sessionTitle: s.hit.session_title, projectId: s.hit.project_id, seq: null })"
+                    >
                       <span class="search-modal__row-title">{{ s.hit.session_title }}</span>
                       <span class="search-modal__row-meta">
                         {{ timeLabel(s.hit.updated_at) }}<template v-if="s.extra > 0"> · 还有 {{ s.extra }} 条</template>
                       </span>
-                    </div>
+                    </button>
                     <button type="button" class="search-modal__row search-modal__row--snippet" @click="openPreview(s.hit)">
                       <span class="search-modal__snippet">
                         <template v-if="s.hit.snippet">
@@ -634,13 +684,30 @@ function timeLabel(iso: string): string {
 }
 
 /* Title row in each session: small but unambiguously primary so the
-   snippet below reads as "supporting text". */
+   snippet below reads as "supporting text".
+   CH12-1a: it's a real <button> now — reset the UA chrome to keep
+   the old look and add the row hover/focus affordance. */
 .search-modal__session-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2) 0;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.search-modal__session-head:hover,
+.search-modal__session-head:focus-visible {
+  background: var(--color-bg-elevated);
+  outline: none;
 }
 
 .search-modal__row {

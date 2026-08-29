@@ -258,7 +258,13 @@ onUnmounted(() => {
           v-for="m in g.items"
           :key="m.id"
           :message="m"
+          :data-seq="m.seq ?? undefined"
         />
+        <!-- data-seq (BUGLIST CH12-1b): fallthrough attr lands on the
+             MessageItem root — the search modal's "在主窗口打开" uses
+             it to scroll+flash the hit message (same hook as
+             SearchPreviewBody). Queued placeholders have no seq and
+             render without the attribute. -->
       </li>
     </TransitionGroup>
     <button
