@@ -1039,3 +1039,25 @@ ROADMAP F1/F2 点名的 follow-up 落地:LLM 调度三件套(schedule_task/statu
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 119: WebUI 全量测试甄别 + 10 缺陷修复收口 + CH4-5 代码块 chrome
+
+**Date**: 2026-08-29
+**Task**: GUI 黑盒全量测试(外部 LLM 执行)结果甄别、BUGLIST 建档跟踪修复、复核收口、功能池首项落地
+**Branch**: `main`
+
+### Summary
+
+外部 LLM 以浏览器黑盒方式对 localhost:7456 做了 15 章节全量测试(33 项记录),逐项对照源码甄别:真缺陷 10 / 设计如此 14 / 测试方法局限 2 / 功能建议 8,建档 `docs/BUGLIST.md` 跟踪。10 项缺陷全部修复(2×P1:useMessageEditing falsy-seq 使每个会话首条消息不可编辑、hideProject 漏刷隐藏列表造成项目入口丢失窗口期;CH4-2 根因 = Tailwind v4 preflight 全局 list-style:none 而 markdown 镜像块只补间距;CH2-1 群聊 user 轮次落库 text 恒空致 preview 判空失效,38 条消息免确认直删——已录入 CONTEXT.md 术语)。人工复核 3 项收口:Shift+Enter 正常(CodeMirror 合成键盘事件误报)、焦点环达标、列表 marker 视觉确认。知识回写:新建 `.trellis/spec/frontend/test-environment.md`(fake-timers 循环永久杀死 jsdom rAF→竞速兜底模式、scrollIntoView/animate 缺失、v-html 事件委托、transport mock 规范形)。功能池首项 CH4-5 落地:marked 自定义 code renderer 把高亮 <pre> 包进 .md-code 卡片(语言标签+复制按钮),复制走 useCodeBlockCopy 容器级事件委托(v-html 带不了 Vue listener),chrome CSS 按五处镜像契约同步。测试期间定位并绕过测试基建坑:SearchModal 测试文件内 fake-timers 循环后 rAF 全灭,locateMessage 等待改 rAF 竞速 60ms setTimeout。验证:前端 101 文件 1366 用例 + vue-tsc 全绿(净增 27 用例);16 commits 已推 origin。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2d9d8cd` ~ `5bd8f20` | (see git log,16 commits:docs 4 + fix 10 + feat 1 + journal) |
+
+### Status
+
+[OK] **Completed**
