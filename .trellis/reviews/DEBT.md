@@ -70,7 +70,9 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [3 items]
+## P3 — 轻微(文档/一致性) [2 items]
+
+> RULE-TEST-003 于 2026-08-30 由 `.trellis/tasks/08-30-e2e-red-fix` 闭合:两红均定性测试侧、生产零 diff —— ① e1a fixture 补 B1 后必填的 `supports_images`(422 = serde Json rejection);② e1b 整模块移除(4 个纯 SseRegistry 单元副本,WP4 改 compute_replay 语义时镜像漂移,权威副本在 sse.rs 内联 15 例)。`cargo test --test e2e` 同步进 CI Rust job,基线不再无人跑。spec daemon-server.md 收编「SSE 契约测试唯一 home + e2e 路由级定位 + 422 排查第一嫌疑」。详见 git log。
 
 > RULE-ALLOW-001 / RULE-SHIM-001 / RULE-HEALTH-001 / RULE-DOC-001 / RULE-DOC-002 / RULE-FE-002 / RULE-BUILD-001 于 2026-08-30 由 `.trellis/tasks/08-30-p3-debt-batch-cleanup` 闭合:三把模块级 dead_code 伞摘除(fallout 仅 1 项 —— `search_memories_fts` 定性为测试锁定件恢复 + 逐项 allow,`RecallStatusFilter::ActiveVerifiedOnly` 逐项 allow 注明策略旋钮;workflow/task.rs 与 memories 两伞零残留);`get_pending_question` + `test_provider` 两个 deprecated IPC 全链删除(Tauri 注册/daemon 路由/http 映射/常量/all_command_names/e2e 路由清单,messageTimeline 双渲染路径定性为旧 DB 行数据兼容并修正过时注释);health `session_count` -1 哨兵删除(零消费方,wire 删字段);drive.rs 72 处任务名注释收敛 + subagent mod.rs max_turns 20→200 修正;Yolo confirm/cancel 的 resolve 失败接 warn toast(+2 vitest);vite manualChunks 核实已实现(build 零告警)。详见 git log。
 
@@ -100,17 +102,6 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
 
-### RULE-TEST-003
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `app/src-tauri/tests/e2e.rs`(`e1a_chat::chat_happy_path_httpmock` :213、`e1b_sse_protocol::large_payload_skips_buffer_but_reaches_live` :486)
-- **Description**: 2026-08-30 发现:干净 HEAD 上 `--test e2e` 即有 2 个既有失败(e1a add_model 422≠200;e1b SSE replay 非空)。非本批改动引入(stash 对照验证),e2e 层处于无人跑的红态
-- **Fix**: 排查两失败根因(疑似 e1a 的 add_model 校验收紧后 fixture 过期、e1b 缓冲语义变化),并把 `--test e2e` 纳入回归基线
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-30 p3-debt-batch-cleanup 回归(stash 对照)
-
 ---
 
 ## 优先级分布
@@ -120,8 +111,8 @@
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
 | P2 | 0 | 全部 closed(RULE-QUEUE-001 2026-08-29 闭合,见上方 P2 段) |
-| P3 | 3 | RULE-PERM-001(审计分页)/ RULE-TEST-001(浏览器 runner 选型)/ RULE-TEST-003(既有 e2e 红) |
-| **Total** | **3** | 当前 open items |
+| P3 | 2 | RULE-PERM-001(审计分页)/ RULE-TEST-001(浏览器 runner 选型) |
+| **Total** | **2** | 当前 open items |
 
 ---
 

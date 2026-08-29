@@ -17,11 +17,12 @@
 //!   `base_url` points at an `httpmock` server returning a canned
 //!   Anthropic SSE response, `POST /api/v1/agent/chat`, and assert
 //!   the agent loop's events arrive on the live `SseRegistry` channel.
-//! - **E1b SSE reconnect protocol** — pure `SseRegistry` pub-API
-//!   contract: replay after `Last-Event-ID`, resync sentinel on
-//!   buffer overrun, large-payload buffer skip, first-connection
-//!   no-replay. Complements the in-crate `sse.rs` unit tests by
-//!   asserting the contract from an external crate.
+//! - **E1b SSE reconnect protocol** — REMOVED 2026-08-30: the four
+//!   pure `SseRegistry` pub-API copies here drifted from the
+//!   authoritative in-crate `sse.rs` suite when WP4 changed
+//!   empty-buffer replay semantics (a copy still asserted the old
+//!   behavior → permanent red). Registry contract tests live only in
+//!   `src/daemon/sse.rs` now; this file keeps router-level groups.
 //! - **E1c snapshot endpoint** — `GET /api/v1/sessions/{id}/snapshot`
 //!   returns 200 + JSON session metadata (the resync recovery path).
 //! - **E1d health wire shape** — `GET /api/v1/health` through the
@@ -48,7 +49,6 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use everlasting_lib::daemon::server::{build_router, load_daemon_state};
-use everlasting_lib::daemon::sse::{SseRegistry, BUFFER_CAPACITY, LARGE_PAYLOAD_THRESHOLD};
 
 // ---------------------------------------------------------------------------
 // Shared harness helpers
@@ -206,6 +206,7 @@ async fn seed_catalog_and_session(
             "max_tokens": 4096,
             "thinking_effort": null,
             "supports_thinking": false,
+            "supports_images": false,
             "context_window": 200000,
         }),
     )
@@ -414,87 +415,6 @@ mod e1a_chat {
             StatusCode::INTERNAL_SERVER_ERROR,
             "no-model chat must surface a structured error, not a 500 panic"
         );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// E1b — SSE reconnect protocol (pure SseRegistry pub API)
-// ---------------------------------------------------------------------------
-
-mod e1b_sse_protocol {
-    use super::*;
-
-    #[derive(serde::Serialize)]
-    struct DummyPayload {
-        request_id: String,
-        text: String,
-    }
-
-    fn payload(text: &str) -> DummyPayload {
-        DummyPayload {
-            request_id: "r1".to_string(),
-            text: text.to_string(),
-        }
-    }
-
-    /// `subscribe(Some(last))` replays only frames with `id > last`.
-    #[tokio::test]
-    async fn replay_returns_frames_after_last_event_id() {
-        let reg = SseRegistry::new();
-        for i in 0..5 {
-            reg.broadcast("chat-event", &payload(&format!("m{i}")));
-        }
-        // ids 1..=5; last=2 → replay ids 3,4,5.
-        let sub = reg.subscribe(Some(2));
-        assert_eq!(sub.replay.len(), 3);
-        assert_eq!(sub.replay[0].id, 3);
-        assert_eq!(sub.replay[2].id, 5);
-    }
-
-    /// When the buffer has evicted frames between `last` and the
-    /// current oldest, `subscribe` returns a single `stream-resync`
-    /// sentinel so the frontend re-fetches a full snapshot.
-    #[tokio::test]
-    async fn resync_sentinel_on_buffer_overrun() {
-        let reg = SseRegistry::new();
-        for _ in 0..(BUFFER_CAPACITY + 10) {
-            reg.broadcast("chat-event", &payload("x"));
-        }
-        // Buffer keeps last 512 → oldest id = 11.
-        // last=9 → gap (id 10 missing) → sentinel.
-        let sub = reg.subscribe(Some(9));
-        assert_eq!(sub.replay.len(), 1);
-        assert_eq!(sub.replay[0].event, "stream-resync");
-    }
-
-    /// A single event larger than `LARGE_PAYLOAD_THRESHOLD` reaches
-    /// live subscribers but is NOT buffered (a reconnect would not
-    /// replay it — the frontend re-fetches via snapshot instead).
-    #[tokio::test]
-    async fn large_payload_skips_buffer_but_reaches_live() {
-        let reg = SseRegistry::new();
-        let mut sub = reg.subscribe(None);
-        let big = "x".repeat(LARGE_PAYLOAD_THRESHOLD + 1);
-        reg.broadcast("tool:result", &payload(&big));
-
-        let frame = sub.live.recv().await.expect("live got large frame");
-        assert_eq!(frame.event, "tool:result");
-        assert!(frame.data.len() > LARGE_PAYLOAD_THRESHOLD);
-
-        // Not buffered: subscribe(Some(0)) replays nothing.
-        let sub2 = reg.subscribe(Some(0));
-        assert!(sub2.replay.is_empty());
-    }
-
-    /// A first connection (last=None) never replays history — the
-    /// frontend pulls current state via snapshot after connecting.
-    #[tokio::test]
-    async fn first_connection_no_replay() {
-        let reg = SseRegistry::new();
-        reg.broadcast("chat-event", &payload("m0"));
-        reg.broadcast("chat-event", &payload("m1"));
-        let sub = reg.subscribe(None);
-        assert!(sub.replay.is_empty());
     }
 }
 

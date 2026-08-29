@@ -333,6 +333,29 @@ token 挂 AppState 字段**(无 OnceLock 必要——纯分配直接构造);不�
 
 ---
 
+## Pattern: SSE 契约测试唯一 home 在 sse.rs 内联;e2e.rs 只留路由级用例(RULE-TEST-003,2026-08-30)
+
+**事故形态**:`tests/e2e.rs` 的 e1b 模块曾放 4 个纯 `SseRegistry` pub-API 单元
+副本;WP4 改 `compute_replay` 语义时内联套件同步更新、e2e 副本未跟上(空 buffer
++ `Some(last)` 从静默空回放改为发哨兵,副本还断言旧行为)→ 永久红。叠加 e2e
+从未进 CI,B1 给 `AddModelRequest` 加必填 `supports_images` 令 fixture 422 后,
+干净 HEAD 长红近两周无人知。
+
+**规则**:
+
+1. SseRegistry / `compute_replay` 契约测试只写 `sse.rs` 内联套件(15 例,
+   含决策表全臂锁定);**禁止在 `tests/e2e.rs` 复制同名/同义单元副本** ——
+   镜像必漂,一处更新另一处必烂。
+2. `tests/e2e.rs` 的定位是路由级集成:经 `build_router` 走公开 HTTP 面
+   (httpmock 假 LLM + 零特权 seeding),e1a chat / e1c snapshot / e1d health /
+   e1e 路由清单。
+3. e2e 已进 CI(2026-08-30,`cargo test --test e2e` 紧随 `--lib`);wire 必填
+   字段演进(如 `AddModelRequest` 加字段)会即时打红 e2e fixture,不再静默烂。
+   排查 e2e 422 第一嫌疑 = req struct 反序列化拒收,diff 对应 `routes/*.rs`
+   的 Request struct 必填字段。
+
+---
+
 ## Pattern: SessionSummary 运行时态 enrich(busy 字段,F6 2026-08-27)
 
 DB 层恒 `busy:false`,**单点 enrich 在 `list_sessions_inner`**(`commands/sessions.rs`)——Tauri IPC 与 daemon REST 双入口共用,读 `session_active_request` map 置真。要点:

@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust (cargo test --lib + fmt + clippy)
+    name: Rust (cargo test --lib + --test e2e + fmt + clippy)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -91,6 +91,13 @@ jobs:
 
       - name: cargo test --lib
         run: cargo test --lib
+
+      # e2e 进回归基线(RULE-TEST-003, 08-30-e2e-red-fix):tests/e2e.rs 是
+      # 进程内 axum router + httpmock 临时端口,无真 daemon/无端口冲突,复用
+      # --lib 的编译与 sidecar 前置即可跑。此前 e2e 从未进 CI,坏在干净 HEAD
+      # 上也无人知(B1 加必填 supports_images 后 fixture 422 烂了近两周)。
+      - name: cargo test --test e2e
+        run: cargo test --test e2e
 
   frontend:
     name: Frontend (vitest + vue-tsc)
