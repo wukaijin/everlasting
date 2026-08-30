@@ -140,6 +140,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/set_web_search_config", post(set_web_search_config))
         .route("/get_app_config", post(get_app_config))
         .route("/set_app_config_flag", post(set_app_config_flag))
+        .route("/set_app_config_list", post(set_app_config_list))
         .with_state(state)
 }
 
@@ -167,6 +168,24 @@ pub async fn set_app_config_flag(
     Json(body): Json<SetAppConfigFlagRequest>,
 ) -> Result<Json<()>, AppCommandError> {
     crate::commands::config::set_app_config_flag_inner(&state, body.key, body.value).await?;
+    Ok(Json(()))
+}
+
+// ---- P3b(2026-08-31,评审 W1):列表型 app_config 字段写通道 ----
+
+/// `set_app_config_list` 请求体(snake_case,扁平顶层字段;白名单
+/// 校验在 `_inner`)。
+#[derive(Deserialize)]
+pub struct SetAppConfigListRequest {
+    pub key: String,
+    pub value: Vec<String>,
+}
+
+pub async fn set_app_config_list(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetAppConfigListRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::config::set_app_config_list_inner(&state, body.key, body.value).await?;
     Ok(Json(()))
 }
 
@@ -610,5 +629,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored, None, "拒绝的 key 不得写库");
+    }
+
+    /// P3b(2026-08-31,评审 W1):`set_app_config_list` 路由 roundtrip
+    /// + 白名单拒绝。08-17 hotfix 先例:新 IPC 命令必须有一条 Router
+    /// oneshot 测试锁 wiring(daemon + Tauri 双端)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_app_config_list_route_roundtrip_and_reject() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let app = router(state.clone());
+
+        async fn post_json(
+            app: &axum::Router,
+            uri: &str,
+            body: &str,
+        ) -> (StatusCode, serde_json::Value) {
+            use tower::ServiceExt;
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        // 白名单内 key:写数组 → get_app_config 读回(生效清单含 ~/.cargo)。
+        let (code, _) = post_json(
+            &app,
+            "/set_app_config_list",
+            r#"{"key":"sandbox_extra_writable","value":["/opt/cache","/data"]}"#,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let (_, v) = post_json(&app, "/get_app_config", "{}").await;
+        let list = v["sandboxExtraWritable"].as_array().expect("list field");
+        let strs: Vec<&str> = list.iter().map(|x| x.as_str().unwrap()).collect();
+        assert!(
+            strs.contains(&"/opt/cache") && strs.contains(&"/data"),
+            "{strs:?}"
+        );
+        assert!(
+            strs.iter().any(|p| p.ends_with(".cargo")),
+            "默认项并入: {strs:?}"
+        );
+
+        // 白名单外 key → 4xx,不落库。
+        let (code, body) = post_json(
+            &app,
+            "/set_app_config_list",
+            r#"{"key":"remote_url","value":["http://evil"]}"#,
+        )
+        .await;
+        assert_ne!(code, StatusCode::OK, "白名单外 list key 必须拒绝: {body}");
+        let stored = crate::db::get_config_value(&state.db, "remote_url")
+            .await
+            .unwrap();
+        assert_eq!(stored, None, "拒绝的 list key 不得写库");
     }
 }

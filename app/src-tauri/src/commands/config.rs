@@ -605,6 +605,49 @@ pub async fn set_app_config_flag(
     set_app_config_flag_inner(&state, key, value).await
 }
 
+// ---------------------------------------------------------------------------
+// P3b(2026-08-31,评审 W1):列表型 app_config 字段的写入口。布尔专用
+// 的 `set_app_config_flag` 写不了字符串数组,新增同款白名单命令;PR3
+// 的设置面「额外可写目录」编辑经此落库。存储形态:JSON 字符串数组
+// (读取端 `sandbox::policy::read_extra_writable` 负责解析 + 并入
+// `~/.cargo` 默认项 + `~` 展开)。
+// ---------------------------------------------------------------------------
+
+/// `set_app_config_list` 允许写的 key 白名单。与 `SETTABLE_APP_FLAGS`
+/// 同款防呆:app_config 其余键各有专属写通道,不得经此绕过。
+const SETTABLE_APP_LISTS: &[&str] = &["sandbox_extra_writable"];
+
+/// 写 app_config 列表字段(白名单内)。key 不在白名单 → `InvalidRequest`
+/// 不写库;value 存为 JSON 数组。参数为扁平标量 + 数组(IPC 形状铁律:
+/// 扁平顶层字段,不做嵌套 struct)。
+pub async fn set_app_config_list_inner(
+    state: &Arc<AppState>,
+    key: String,
+    value: Vec<String>,
+) -> Result<(), AppCommandError> {
+    if !SETTABLE_APP_LISTS.contains(&key.as_str()) {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("unknown app_config list key: {key}"),
+        ));
+    }
+    let json = serde_json::to_string(&value)
+        .map_err(|e| anyhow::anyhow!("set_app_config_list serialize failed: {}", e))?;
+    db::set_config_value(&state.db, &key, &json)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_app_config_list failed: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_app_config_list(
+    state: State<'_, Arc<AppState>>,
+    key: String,
+    value: Vec<String>,
+) -> Result<(), AppCommandError> {
+    set_app_config_list_inner(&state, key, value).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,6 +722,72 @@ mod tests {
                     .unwrap()
                     .is_none(),
                 "拒绝的 key 不得写库: {bad}"
+            );
+        }
+    }
+
+    /// P3b(评审 W1):列表写通道 roundtrip——写 `sandbox_extra_writable`
+    /// → `get_app_config_inner` 返回生效清单 = `~/.cargo` 默认项 + 所写
+    /// 条目(读取端 read_extra_writable 负责解析 JSON)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_list_roundtrip_through_get_app_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+
+        set_app_config_list_inner(
+            &state,
+            "sandbox_extra_writable".to_string(),
+            vec!["/opt/build-cache".to_string(), "~/data".to_string()],
+        )
+        .await
+        .unwrap();
+        let cfg = get_app_config_inner(&state).await.unwrap();
+        assert!(cfg
+            .sandbox_extra_writable
+            .contains(&"/opt/build-cache".to_string()));
+        // ~/.cargo 默认项始终在(R7)。
+        assert!(cfg
+            .sandbox_extra_writable
+            .iter()
+            .any(|p| p.ends_with(".cargo")));
+
+        // 覆盖写:新列表整体替换(编辑语义),旧条目消失。
+        set_app_config_list_inner(
+            &state,
+            "sandbox_extra_writable".to_string(),
+            vec!["/only/this".to_string()],
+        )
+        .await
+        .unwrap();
+        let cfg = get_app_config_inner(&state).await.unwrap();
+        assert!(cfg
+            .sandbox_extra_writable
+            .contains(&"/only/this".to_string()));
+        assert!(!cfg
+            .sandbox_extra_writable
+            .contains(&"/opt/build-cache".to_string()));
+    }
+
+    /// 列表白名单外 key 拒绝(`InvalidRequest`),且不落库。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_list_rejects_non_whitelisted_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        for bad in [
+            "turn_complete_notify_enabled",
+            "remote_url",
+            "future_list_x",
+        ] {
+            let err = set_app_config_list_inner(&state, bad.to_string(), vec!["x".into()])
+                .await
+                .unwrap_err();
+            assert_eq!(err.category, ErrorCategory::InvalidRequest, "{bad}");
+            assert!(
+                db::get_config_value(&state.db, bad)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "拒绝的 list key 不得写库: {bad}"
             );
         }
     }

@@ -50,14 +50,16 @@ beforeEach(() => {
 });
 
 describe("GeneralTab", () => {
-  it("渲染两个开关,缺省 aria-checked=true(store fail-open 缺省开)", async () => {
+  it("渲染三个开关,缺省 aria-checked=true(store fail-open 缺省开)", async () => {
     const w = await mountTab();
     const switches = w.findAll("button[role='switch']");
-    expect(switches).toHaveLength(2);
+    expect(switches).toHaveLength(3);
     expect(switches[0]?.attributes("aria-checked")).toBe("true");
     expect(switches[1]?.attributes("aria-checked")).toBe("true");
+    expect(switches[2]?.attributes("aria-checked")).toBe("true");
     expect(switches[0]?.attributes("aria-label")).toBe("轮次完成通知");
     expect(switches[1]?.attributes("aria-label")).toBe("定时任务调度");
+    expect(switches[2]?.attributes("aria-label")).toBe("只读命令沙盒");
   });
 
   it("点击携带正确的 key + 取反值,成功后 store 更新", async () => {
@@ -114,5 +116,111 @@ describe("GeneralTab", () => {
     resolveWrite(null);
     await flushPromises();
     expect(switchAt(w, 0).attributes("disabled")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3b(2026-08-31, task 08-31-a2-p3b-sandbox-executor):沙盒开关 +
+// 能力徽标 + 额外可写目录列表编辑(set_app_config_list 写通道)。
+// ---------------------------------------------------------------------------
+
+describe("GeneralTab — P3b sandbox", () => {
+  it("渲染第三个开关(只读命令沙盒),缺省开;能力徽标 null 时不显示", async () => {
+    const w = await mountTab();
+    const switches = w.findAll("button[role='switch']");
+    expect(switches).toHaveLength(3);
+    expect(switches[2]?.attributes("aria-label")).toBe("只读命令沙盒");
+    expect(switches[2]?.attributes("aria-checked")).toBe("true");
+    expect(w.find(".general-tab__cap").exists()).toBe(false);
+  });
+
+  it("沙盒开关点击 → set_app_config_flag(sandbox_enabled) + store 更新", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+
+    await switchAt(w, 2).trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenLastCalledWith("set_app_config_flag", {
+      key: "sandbox_enabled",
+      value: false,
+    });
+    expect(pinia.sandboxEnabled).toBe(false);
+    expect(switchAt(w, 2).attributes("aria-checked")).toBe("false");
+  });
+
+  it("capability=true → 「沙盒生效」徽标;false → 「已回退」徽标", async () => {
+    // 在 mount 之后再取 store(与组件同一 pinia 实例)并翻转探测值,
+    // 徽标随响应式更新。
+    const w = await mountTab();
+    const pinia = useConfigStore();
+
+    pinia.sandboxCapability = true;
+    await flushPromises();
+    expect(w.find(".general-tab__cap").text()).toContain("沙盒生效");
+
+    pinia.sandboxCapability = false;
+    await flushPromises();
+    expect(w.find(".general-tab__cap").text()).toContain("已回退");
+  });
+
+  it("store.load() 拉取 get_app_config 的 P3b 三字段(additive,旧 daemon 缺省不炸)", async () => {
+    const pinia = useConfigStore();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_app_config") {
+        return Promise.resolve({
+          turnCompleteNotifyEnabled: true,
+          scheduledTasksEnabled: true,
+          sandboxEnabled: false,
+          sandboxExtraWritable: ["/opt/cache"],
+          sandboxCapability: false,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    await pinia.load();
+    await flushPromises();
+    expect(pinia.sandboxEnabled).toBe(false);
+    expect(pinia.sandboxExtraWritable).toEqual(["/opt/cache"]);
+    expect(pinia.sandboxCapability).toBe(false);
+  });
+
+  it("额外可写目录:添加 → set_app_config_list 携带整列表;移除 → 过滤后写回", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+
+    const input = w.find(".general-tab__extra-input");
+    await input.setValue("/opt/build-cache");
+    await w.find(".general-tab__extra-addbtn").trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenLastCalledWith("set_app_config_list", {
+      key: "sandbox_extra_writable",
+      value: ["/opt/build-cache"],
+    });
+    expect(pinia.sandboxExtraWritable).toEqual(["/opt/build-cache"]);
+    expect(w.find(".general-tab__extra-path").text()).toBe("/opt/build-cache");
+
+    await w.find(".general-tab__extra-remove").trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenLastCalledWith("set_app_config_list", {
+      key: "sandbox_extra_writable",
+      value: [],
+    });
+    expect(pinia.sandboxExtraWritable).toEqual([]);
+    expect(w.find(".general-tab__extra-item").exists()).toBe(false);
+  });
+
+  it("列表写入失败 → toast,store 值保持原状(不乐观提交)", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+
+    const input = w.find(".general-tab__extra-input");
+    await input.setValue("/failing");
+    invokeMock.mockRejectedValueOnce(new Error("daemon unreachable"));
+    await w.find(".general-tab__extra-addbtn").trigger("click");
+    await flushPromises();
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    expect(showToastMock.mock.calls[0]?.[0]).toContain("设置失败");
+    expect(pinia.sandboxExtraWritable).toEqual([]);
+    expect(w.find(".general-tab__extra-item").exists()).toBe(false);
   });
 });

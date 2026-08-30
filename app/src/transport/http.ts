@@ -86,6 +86,9 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // Settings「通用」开关写入口(2026-08-29 settings-shell):缺这行时
   // 浏览器/sidecar 模式报 `unknown cmd "set_app_config_flag"`。
   set_app_config_flag: "config",
+  // P3b(2026-08-31,评审 W1):列表型 app_config 字段写通道
+  // (sandbox_extra_writable;缺这行时 transport-parity 测试红)。
+  set_app_config_list: "config",
   // S2 配对码生成(新 domain pairing)
   generate_pairing_code: "pairing",
   // files

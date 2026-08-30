@@ -65,6 +65,7 @@ KEEP=0
 COMPACT=0
 HANDOFF=0
 ASSERT_TURN_USAGE=0
+SANDBOX_PROBE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -76,6 +77,10 @@ while [ $# -gt 0 ]; do
     --assert-turn-usage) ASSERT_TURN_USAGE=1; shift ;;
     --compact) COMPACT=1; shift ;;
     --handoff) HANDOFF=1; shift ;;
+    # P3b(08-31-a2-p3b, AC8):发一轮会触发 ReadOnly 档 shell 工具命令的
+    # 消息,随后断言 session_audit_events 有 sandboxed_shell_execution 行
+    # (内核不支持 Landlock/seccomp 时 daemon fail-open,断言降级为警告)。
+    --sandbox-probe) SANDBOX_PROBE=1; MESSAGE="请调用 shell 工具执行命令: ls -1 . 然后用一句话告诉我列出了几个条目。除该只读命令外不要执行其他任何工具调用。"; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -408,6 +413,24 @@ print(f"turn_usage events ok: {len(events)} captured, "
 PYEOF2
 )" || { echo "ERR: turn_usage event assertion failed (see above)" >&2; exit 1; }
   echo "$TURN_USAGE_CHECK"
+fi
+
+# -- 3.6 --sandbox-probe assertion (P3b AC8, 08-31-a2-p3b) ---------------------
+# 沙盒误杀检查:--sandbox-probe 轮经 LLM 真实执行了 ReadOnly 档 shell 命令;
+# 轮结束后读 session_audit_events——kind=sandboxed_shell_execution 行存在
+# = 命令确实进了沙盒且正常跑完(无误杀)。内核不支持 Landlock/seccomp 时
+# daemon fail-open(探测失败不落行),此时降级为 WARN 不 fail(AC5 语义)。
+if [ "$SANDBOX_PROBE" = "1" ]; then
+  sleep 2  # 审计写是 best-effort 异步收尾,小睡等它落库
+  SBX_COUNT="$(sqlite3 -readonly "$DB_PATH" \
+    "SELECT COUNT(*) FROM session_audit_events WHERE session_id='$SID' AND kind='sandboxed_shell_execution';")"
+  if [ "$SBX_COUNT" -ge 1 ]; then
+    echo "sandbox audit ok: $SBX_COUNT sandboxed_shell_execution row(s) (AC8, ReadOnly command ran sandboxed, no false kill)"
+  else
+    # fail-open 路径(老内核 / WSL1)下不落沙盒审计行属预期;但 WSL2+
+    # 新内核上 0 行更可能是 LLM 没调 shell 工具或 daemon 二进制太旧。
+    echo "WARN: no sandboxed_shell_execution audit row for session (kernel without Landlock+seccomp → fail-open is fine; otherwise check the LLM actually ran the shell tool / rebuild daemon)"
+  fi
 fi
 
 # ── 4. 报告 ───────────────────────────────────────────────────────────

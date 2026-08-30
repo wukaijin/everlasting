@@ -77,23 +77,23 @@ Landlock + seccomp 沙盒执行器落地到 shell 工具链(前台 `shell` + 后
 
 ## Acceptance Criteria
 
-- [ ] AC1. 集成测试(Linux):ReadOnly 档命令进沙盒后——写 worktree/`/tmp`/spill 成功;
+- [x] AC1. 集成测试(Linux):ReadOnly 档命令进沙盒后——写 worktree/`/tmp`/spill 成功;
       写 `~`、`/usr/local` 被拒;exec `/init` 与 `/mnt/c/**/*.exe` 被拒;读任意路径不受限。
-- [ ] AC2. 集成测试:沙盒内 `bash -c 'echo > /dev/tcp/1.1.1.1/443'` 失败(EPERM);
+- [x] AC2. 集成测试:沙盒内 `bash -c 'echo > /dev/tcp/1.1.1.1/443'` 失败(EPERM);
       AF_UNIX socket(pnpm store 类路径模式)不受影响。
-- [ ] AC3. 集成测试:SideEffect 档(如 `mkdir`)与 Ask 档执行路径与 main 现状一致
+- [x] AC3. 集成测试:SideEffect 档(如 `mkdir`)与 Ask 档执行路径与 main 现状一致
       (无 pre_exec);Yolo 下 ReadOnly 命令同样不沙盒。
-- [ ] AC4. kill-switch 关闭 → spawn 命令与现状一致(不设 pre_exec),全量回归绿。
-- [ ] AC5. 能力探测:模拟探测失败(测试桩)→ fail-open 不沙盒、无 panic、无悬挂,
+- [x] AC4. kill-switch 关闭 → spawn 命令与现状一致(不设 pre_exec),全量回归绿。
+- [x] AC5. 能力探测:模拟探测失败(测试桩)→ fail-open 不沙盒、无 panic、无悬挂,
       日志留痕。
-- [ ] AC6. background_shell 路径同策略:`run_background_shell` 的 ReadOnly 档命令
+- [x] AC6. background_shell 路径同策略:`run_background_shell` 的 ReadOnly 档命令
       同样受沙盒约束(集成测试覆盖)。
-- [ ] AC7. 配置面:`get_app_config` 返回 `sandbox_enabled` / `sandbox_extra_writable`;
+- [x] AC7. 配置面:`get_app_config` 返回 `sandbox_enabled` / `sandbox_extra_writable`;
       沙盒拦截写入时 tool 输出含指引文案(单测钉死文案要点)。
-- [ ] AC8. 全量回归:`cargo test -p everlasting --lib` + e2e + 前端 vitest/build 绿;
+- [x] AC8. 全量回归:`cargo test -p everlasting --lib` + e2e + 前端 vitest/build 绿;
       `turn-smoke.sh` live 过(真实 LLM 跑 ReadOnly 工具命令,确认无误杀,脚本含
       `SandboxedShellExecution` 审计 kind 计数断言)。
-- [ ] AC9. spec 收编:新增 `.trellis/spec/backend/sandbox-executor.md`
+- [x] AC9. spec 收编:新增 `.trellis/spec/backend/sandbox-executor.md`
       (规则集契约 / 五条陷阱 / fail-open 语义 / kill-switch);ROADMAP A2+ P3 行移档。
 
 ## 决策点(评审时定,缺省按推荐)

@@ -122,6 +122,14 @@ export const useConfigStore = defineStore("config", () => {
   // 消费;关掉时不做硬拦截(与后端语义一致:可建任务,只是不触发)。
   const scheduledTasksEnabled = ref(true);
 
+  // P3b 执行期沙盒(2026-08-31, task 08-31-a2-p3b-sandbox-executor):
+  // kill switch 展示值(fail-open 缺省开)、额外可写目录生效清单
+  // (含后端并入的 ~/.cargo 默认项)与能力探测只读派生值(null =
+  // 尚未加载/旧 daemon 无该字段,设置面此时不显示徽标)。
+  const sandboxEnabled = ref(true);
+  const sandboxExtraWritable = ref<string[]>([]);
+  const sandboxCapability = ref<boolean | null>(null);
+
   async function load() {
     // Load providers + models from the catalog (replaces the old
     // `get_llm_config` env path). Store references are obtained at
@@ -153,10 +161,17 @@ export const useConfigStore = defineStore("config", () => {
       const appConfig = await transport.invoke<{
         turnCompleteNotifyEnabled: boolean;
         scheduledTasksEnabled?: boolean;
+        sandboxEnabled?: boolean;
+        sandboxExtraWritable?: string[];
+        sandboxCapability?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
       // F2:additive 字段(旧 daemon 缺省 true)。
       scheduledTasksEnabled.value = appConfig.scheduledTasksEnabled !== false;
+      // P3b:additive 三字段(旧 daemon 缺省 true / [] / null)。
+      sandboxEnabled.value = appConfig.sandboxEnabled !== false;
+      sandboxExtraWritable.value = appConfig.sandboxExtraWritable ?? [];
+      sandboxCapability.value = appConfig.sandboxCapability ?? null;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
     }
@@ -190,6 +205,30 @@ export const useConfigStore = defineStore("config", () => {
     scheduledTasksEnabled.value = on;
   }
 
+  /** Toggle the sandbox kill switch (app_config
+   *  `sandbox_enabled`, P3b R6/D1). Fail-open upstream: only a
+   *  literal `"false"` disables sandboxing. */
+  async function setSandboxEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "sandbox_enabled",
+      value: on,
+    });
+    sandboxEnabled.value = on;
+  }
+
+  /** Persist the extra-writable list (app_config
+   *  `sandbox_extra_writable`, P3b R7, 评审 W1 写通道
+   *  `set_app_config_list`). The backend stores the raw list; the
+   *  read side re-merges the `~/.cargo` default, so the effective
+   *  list here stays in sync after the next `load()`. */
+  async function setSandboxExtraWritable(list: string[]): Promise<void> {
+    await transport.invoke("set_app_config_list", {
+      key: "sandbox_extra_writable",
+      value: list,
+    });
+    sandboxExtraWritable.value = list;
+  }
+
   return {
     model,
     baseUrl,
@@ -198,11 +237,16 @@ export const useConfigStore = defineStore("config", () => {
     homeDir,
     turnCompleteNotify,
     scheduledTasksEnabled,
+    sandboxEnabled,
+    sandboxExtraWritable,
+    sandboxCapability,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,
     setTurnCompleteNotify,
     setScheduledTasksEnabled,
+    setSandboxEnabled,
+    setSandboxExtraWritable,
     load,
   };
 });

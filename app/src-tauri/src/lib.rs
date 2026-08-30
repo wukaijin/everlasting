@@ -256,6 +256,9 @@ pub fn run() {
             // Settings「通用」开关写入口(2026-08-29 settings-shell,
             // 白名单见 commands::config::SETTABLE_APP_FLAGS)。
             commands::config::set_app_config_flag,
+            // P3b(2026-08-31,评审 W1):列表型 app_config 字段写通道
+            // (sandbox_extra_writable,白名单见 SETTABLE_APP_LISTS)。
+            commands::config::set_app_config_list,
             // F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):
             // 管理面 CRUD 四件;调度循环只在 daemon bin 装配(GUI 零
             // timer),这些命令只读写 scheduled_tasks 表 + 校验。
