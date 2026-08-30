@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Row struct camelCase wire 约定 + db 层规范(list_audit_events_page 新 Row/Query 结构)"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon route 注册契约 + all_command_names/http 映射/e2e 清单同步惯例"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppCommandError/InvalidRequest 约定(新 command 错误路径)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store action clusters 约定(audit store 重构)"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest fake transport / 测试环境约定(store+modal 新测试)"}
