@@ -833,6 +833,21 @@ BIN=target/debug/deps/everlasting_lib-<hash>
 
 ---
 
+## 浏览器交互回归(Playwright,2026-08-30)
+
+RULE-TEST-001 落地:jsdom 测不到的交互类回归(真实键盘/指针、滚动联动、弹窗层叠)走 `app/e2e/*.spec.ts`(分层判据与 fixture 契约见 `.trellis/spec/frontend/browser-regression.md`,用例清单 + testid 登记表见 `app/e2e/README.md`)。
+
+```bash
+cd app && pnpm test:e2e
+```
+
+- **首次/升级后装浏览器**:`pnpm exec playwright install chromium`(~120MB,进 `~/.cache/ms-playwright` 按 build 版本隔离)。**本机实测无需 `playwright install-deps`**——ui-review 的 scratch playwright-core 先例已验过 headless Chromium 系统库齐备;若新 build 报缺库再补 `pnpm exec playwright install-deps chromium`。
+- **端口 1422**:playwright webServer 跑 `pnpm dev --port 1422`(CLI 覆盖 vite.config.ts 硬编码的 1420/strictPort;配置里的 `webServer.port` 只管等哪个端口)。1422 同时避开 1420(日常 dev)与 7456(daemon)。本地 `reuseExistingServer` 开着——手动 `pnpm dev --port 1422` 后跑测试可复用调试;1422 被占用时看占用方:应 HTTP → 本地会误复用(boot 对错服务器超时,先 `ss -ltnp | grep 1422` 查占用),不应 HTTP 或 CI(reuse 关闭)→ Playwright fork 的 vite strictPort fail-loud 属预期。
+- **与 ui-review 共存**:两边互不污染——ui-review 是 `~/.cache/everlasting-ui-review` scratch 目录里的独立 `playwright-core`(仅视觉截图),这里是 `app/` 的 devDependency `@playwright/test`(断言体系);共用 `~/.cache/ms-playwright` 下按 build 版本隔离的浏览器目录(如 `chromium-1217` 与 `chromium-1234` 并存),升级一侧不影响另一侧。
+- CI 侧(frontend job,blocking):`actions/cache` 缓存 `~/.cache/ms-playwright`(key 带 OS + `@playwright/test` 版本)→ `playwright install --with-deps chromium`(CI 上 `--with-deps` 装 apt 系统库)→ `pnpm test:e2e`。
+
+---
+
 ## 关联文档
 
 - [spike-001](./_history/spikes/001-wsl-tauri-window.md) — 这些坑的来源 spike

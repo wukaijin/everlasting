@@ -22,6 +22,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Chat Components](./chat.md) | Chat panel, message rendering, tool cards | ✅ Filled |
 | [Memory UI](./memory-ui.md) | Memory modal / preview components | ✅ Filled |
 | [Test Environment Gotchas](./test-environment.md) | vitest + jsdom traps: fake-timers kill rAF (race-fallback pattern), missing scrollIntoView/animate, v-html delegation, canonical transport mock | ✅ Filled |
+| [Browser Regression](./browser-regression.md) | Playwright layer: layering criteria vs vitest/Rust e2e/turn-smoke/ui-review, fixture contract (route-mock fail-loud + fake EventSource), wire casing facts, new-case checklist, measured traps | ✅ Filled |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
