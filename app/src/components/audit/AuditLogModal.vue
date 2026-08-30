@@ -12,8 +12,12 @@
 //      critical" checkbox (reka-ui `CheckboxRoot`/`CheckboxIndicator`,
 //      mirroring `ModelForm.vue`) + a count chip + a manual refresh
 //      button.
-//   4. A scrollable list of `<AuditLogItem>` rows. Empty state
-//      shows "暂无审计事件".
+//   4. A scrollable list of `<AuditLogItem>` rows with a tail
+//      「加载更多」 button (RULE-PERM-001 keyset pagination,
+//      2026-08-30 — the store pulls page 1 = 100 rows on open; the
+//      button is `v-if`'d on `store.hasMore` and appends the next
+//      page via `store.loadMore()`'s `(ts, id)` cursor). Empty
+//      state shows "暂无审计事件".
 //
 // Visual language follows design-tokens.md: every color references
 // a `--color-*` token, no hardcoded hex. The reka-ui `DialogContent`
@@ -29,9 +33,11 @@
 // also `v-if`'d on `currentSessionId`, so the modal shouldn't
 // open in that state in practice).
 //
-// MVP scope per PRD "Edge Cases": no virtual scroll / pagination,
-// no live push. A manual 刷新 button is the stopgap for the
-// "Modal 开着期间 agent 又写新事件" case.
+// Live push is still OOS. A manual 刷新 button re-anchors to the
+// newest page for the "Modal 开着期间 agent 又写新事件" case; the
+// 加载更多 continuation is immune to mid-open appends by keyset
+// construction (new rows insert ABOVE the cursor, never shifting
+// it — the property OFFSET pagination lacks).
 
 import { computed, useId, watch } from "vue";
 import {
@@ -154,6 +160,13 @@ const countText = computed<string>(() => {
 
 async function onRefresh(): Promise<void> {
   await store.refresh();
+}
+
+/** 「加载更多」click — appends the next keyset page. The store
+ *  self-guards concurrent/duplicate invocations, so a double-click
+ *  while `loadingMore` is a silent no-op. */
+async function onLoadMore(): Promise<void> {
+  await store.loadMore();
 }
 </script>
 
@@ -285,16 +298,48 @@ async function onRefresh(): Promise<void> {
             v-else-if="store.filteredEvents.length === 0"
             class="audit-modal__placeholder"
           >
-            {{ store.events.length === 0 ? "暂无审计事件" : "无匹配事件" }}
+            <!-- RULE-PERM-001 注意:过滤已下推服务端,`store.events` 只
+                 含当前过滤的命中行——不能再用它区分「会话真的没有事件」
+                 和「过滤无命中」(旧行为:全量驻留,events 恒为全集)。
+                 判据换成 totalAll(服务端不过滤总数):0 = 会话无事件,
+                 >0 = 过滤无命中。 -->
+            {{ store.totalAll === 0 ? "暂无审计事件" : "无匹配事件" }}
           </div>
 
-          <ul v-else class="audit-modal__list">
-            <AuditLogItem
-              v-for="row in store.filteredEvents"
-              :key="row.id"
-              :row="row"
-            />
-          </ul>
+          <!-- The list branch is a <template v-else> (not a bare
+               <ul v-else>) so the tail 加载更多 button shares the
+               branch: it must only render when the list does (the
+               v-if chain above owns error / loading / empty). -->
+          <template v-else>
+            <ul class="audit-modal__list">
+              <AuditLogItem
+                v-for="row in store.filteredEvents"
+                :key="row.id"
+                :row="row"
+              />
+            </ul>
+
+            <!-- RULE-PERM-001 (2026-08-30) — keyset pagination tail.
+                 Visibility = store.hasMore (events.length < matched):
+                 it disappears once every filtered row is loaded (R1).
+                 The next page's rows arrive strictly OLDER than the
+                 last loaded row (cursor = its (ts, id)), so the
+                 append never duplicates or skips a row even while the
+                 agent writes new events mid-open (R5). -->
+            <div v-if="store.hasMore" class="audit-modal__more">
+              <button
+                type="button"
+                class="audit-modal__more-btn btn btn--muted btn--sm"
+                :disabled="store.loadingMore"
+                title="加载更早的事件"
+                @click="onLoadMore"
+              >
+                <Icon name="chevron-down" :size="12" />
+                <span v-if="store.loadingMore">加载中…</span>
+                <span v-else>加载更多</span>
+              </button>
+            </div>
+          </template>
         </div>
       </DialogContent>
     </DialogPortal>
@@ -613,5 +658,17 @@ async function onRefresh(): Promise<void> {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* 「加载更多」button row at the list tail (RULE-PERM-001). Button
+   styling is carried by the global .btn family (muted·sm — the same
+   variant as the 刷新 button, per the "按钮样式由全局 .btn 家族承载"
+   convention); this rule only handles the row geometry: centered,
+   with breathing room under the last row so the tap target doesn't
+   hug the list edge. */
+.audit-modal__more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 16px 16px;
 }
 </style>
