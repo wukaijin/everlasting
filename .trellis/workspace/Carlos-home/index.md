@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 127
-- **Last Active**: 2026-08-30
+- **Total Sessions**: 128
+- **Last Active**: 2026-08-31
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1248 | Active |
+| `journal-4.md` | ~1271 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 128 | 2026-08-31 | C6 大输出截断统一——契约模块 + spill 迁移 + 两处存量缺陷修复 | `7f65505`, `d2f0c7e`, `1513008` | `main` |
 | 127 | 2026-08-30 | RULE-PERM-001 审计事件 keyset 分页(P3 销账,台账归零) | `4f81306`, `03f9ec8`, `91f5df8`, `2ce510a` | `main` |
 | 126 | 2026-08-30 | RULE-TEST-001 浏览器交互回归流水线:Playwright 基建 + 三试点 + CI blocking 门禁 | `e5a3f61`, `9259ce7`, `f3bb32e` | `main` |
 | 125 | 2026-08-30 | shell description 参数 + ShellCard 重设计 + done 态成功色 | `4b34fa9`, `e18c7b3`, `b3f2da1`, `680dae9` | `main` |

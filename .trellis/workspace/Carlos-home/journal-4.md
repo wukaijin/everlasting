@@ -1246,3 +1246,26 @@ shell/run_background_shell 增加可选 description 参数（display-only，exec
 ### Status
 
 [OK] **Completed**
+
+
+## Session 128: C6 大输出截断统一——契约模块 + spill 迁移 + 两处存量缺陷修复
+
+**Date**: 2026-08-31
+**Task**: C6 大输出截断统一——契约模块 + spill 迁移 + 两处存量缺陷修复
+**Branch**: `main`
+
+### Summary
+
+C6 收口(08-30-c6-output-truncation,评审后三 PR):PR1 tool_output 契约模块(三恢复模式 A 落盘/B range/C 收窄 + 统一标记 golden + RULE-E-009 唯一 head_tail 实现),shell/background_shell(in_memory 第三份独立副本)/read_file/web_fetch/grep 五处迁移;spill 从项目内 .everlasting/outputs 迁 <app_data_dir>/outputs/<session_id>/(sensitive trusted carve-out + delete_session 双路径 sweep,legacy cwd best-effort)。PR2 web_fetch >100KB 落盘恢复(拒 offset 重取:两次 fetch 可漂移),集成测试走通 fetch→spill→read_file offset/limit 恢复链。PR3 grep 行级 file:line 指引入标记 + spec 收编 pattern-output-truncation + ROADMAP 移档。实现期两项计划外修复:>64KB 管道死锁(wait 前预取管道并发排空,spill 对 >64KB 此前从未生效)、shell/in_memory 裸切片 CJK panic(RULE-E-009 违例,含 in_memory 镜像副本);session_id 用 execute 既有 parity 参数(ToolContext 加字段方案取消)。验证:2135 后端测试全绿(净增 17)+ clippy/fmt 干净 + turn-smoke live + 真实 LLM 全链路(spill→路径提取→read_file 分页读回→删会话目录清空)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7f65505` | (see git log) |
+| `d2f0c7e` | (see git log) |
+| `1513008` | (see git log) |
+
+### Status
+
+[OK] **Completed**
