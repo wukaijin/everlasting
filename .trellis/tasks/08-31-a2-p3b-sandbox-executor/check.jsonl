@@ -1,1 +1,6 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 清单入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "提交前质量门(fmt/clippy/全量测试)口径"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "核对:判定层零改动(C2)——classify_prefix/Tier 4 决策无漂移;审计 kind↔类别矩阵新变体过校验"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "核对:shell 家族契约零回归(safe env/PGID/管道排空/通知/sweeper/截断)"}
+{"file": ".trellis/tasks/08-31-a2-p3a-sandbox-spike/research/wsl2-feasibility-landlock.md", "reason": "核对:五条陷阱未在生产代码复现,pre_exec 闭包纯 syscall(design §2.3)"}

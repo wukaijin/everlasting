@@ -1,1 +1,11 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Tier 4 Shell 判定流程与 classify_prefix 三档语义——沙盒触发条件(ReadOnly 档)挂靠点;§4.3 kind↔类别矩阵是 D2 新增审计变体的校验权威"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "shell / run_background_shell 既有契约(safe env / PGID / 管道预取排空 / 完成通知 / sweeper)——pre_exec 施加不得破坏任何一条"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "§7 敏感路径 deny-list 与 trusted carve-out 语义——可写根(worktree/tmp/spill)与 exec 允许面的敏感面参照"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 src/sandbox/ 模块的落位与命名规范"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "能力探测 fail-open 一行日志与施加失败 warn 的日志规范"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "get_app_config 双 transport additive 接线惯例(daemon 路由 + Tauri 命令同步)"}
+{"file": ".trellis/tasks/08-31-a2-p3a-sandbox-spike/research/p3b-design-notes.md", "reason": "spike 移交件:规则集/工程要点/测试矩阵雏形——本任务 design.md 的上游依据"}
+{"file": ".trellis/tasks/08-31-a2-p3a-sandbox-spike/research/wsl2-feasibility-landlock.md", "reason": "Landlock 实测矩阵 + 五条实施陷阱(ABI v1 无 APPEND 位 / rule 权限⊆handled 否则 EINVAL / 设备节点 per-file 放行 / NoNewPrivs 先行 / 探测容忍缺路径)"}
+{"file": ".trellis/tasks/08-31-a2-p3a-sandbox-spike/research/generalization.md", "reason": "能力探测阶梯 + fail-open 语义的出处(R5/AC5 的依据)"}
+{"file": ".trellis/tasks/08-31-a2-p3a-sandbox-spike/artifacts/ll_sbx.c", "reason": "Landlock 规则集的 C 参考实现(fork→NoNewPrivs→restrict_self→exec 全链,含设备 per-file 规则写法)"}
