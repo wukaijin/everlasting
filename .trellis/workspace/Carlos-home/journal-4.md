@@ -1222,3 +1222,27 @@ shell/run_background_shell 增加可选 description 参数（display-only，exec
 ### Status
 
 [OK] **Completed**
+
+
+## Session 127: RULE-PERM-001 审计事件 keyset 分页(P3 销账,台账归零)
+
+**Date**: 2026-08-30
+**Task**: RULE-PERM-001 审计事件 keyset 分页(P3 销账,台账归零)
+**Branch**: `main`
+
+### Summary
+
+审计事件读从全量拉取改 keyset (ts,id) 分页:db 层 list_audit_events_page(过滤/计数下推 SQL,json_valid 守卫畸形 payload,matched/totalAll/totalCritical 随页返回,COUNT FILTER)+ 双 transport additive 接线七处(lib.rs generate_handler + all_command_names + daemon route + http.ts CMD_TO_DOMAIN + e2e fixtures/README),旧全量命令零改动保留给 traceStore(turnSeq 分组需全集)。前端 audit store 分页化(fetchSeq 竞态守卫、getter 名不变接服务端口径)+ Modal「加载更多」。冒烟抓到文案回归:过滤下推后空态判据 events.length===0 失效,改 totalAll 二分「暂无/无匹配」,补测试钉死。live 冒烟 SMOKE OK(dev DB 175 行会话:首页 100/加载更多到 175/按钮消失/critical 0/175/kind 161 与 API 真值一致)。验证:后端 2117 + clippy/fmt + e2e 6,前端 1486 vitest + Playwright e2e 7 + build 全绿。spec 沉淀:keyset 分页契约进 database-guidelines,过滤下推空态口径进 state-management;DEBT.md P3 1→0 四档全零。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4f81306` | (see git log) |
+| `03f9ec8` | (see git log) |
+| `91f5df8` | (see git log) |
+| `2ce510a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
