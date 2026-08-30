@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查基线（测试/命名/错误处理）"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量检查基线"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "核查重点：权限分类路径未被 description 污染（PRD R2/AC5）"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "核查 tool definition 变更是否符合 ToolDef 契约（required 不变、schema 形状）"}
+{"file": ".trellis/spec/frontend/chat/subagent-drawer.md", "reason": "核查 ToolCallHeader 共享组件更名后三处 consumer 一致、无 scoped CSS 泄漏"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "核查新增 UI 全 design token、0 hex"}

@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "ToolDef/builtin_tools 定义约定 + shell spillover 契约背景；改两个 tool definition() 前必读"}
+{"file": ".trellis/spec/backend/tool-contract/06-background-shell.md", "reason": "run_background_shell 契约（schema 与 shell 保持对称）"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "权限分类只看 command 原文的不变量——description 必须远离分类路径（PRD R2/AC5）"}
+{"file": ".trellis/spec/frontend/chat/subagent-drawer.md", "reason": "ToolCallHeader 共享 header 规则（RULE-FrontSubagent-001）；改 filePath→chip prop 涉及三处 consumer"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "0 hex、全 design token 约定；PermissionAskBody 新增行的样式约束"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest 测试环境约定（组件/helper 测试写法）"}
