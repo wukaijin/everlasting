@@ -354,6 +354,11 @@ pub fn run() {
             // command for the AuditLogModal. The write side (⑩
             // `tool_executed`) lands in the agent loop.
             commands::permissions::list_session_audit_events,
+            // RULE-PERM-001 (2026-08-30): keyset-paginated sibling of
+            // list_session_audit_events (AuditLogModal「加载更多」).
+            // Purely additive — the full-pull command above stays for
+            // traceStore (design D3 / R6).
+            commands::permissions::list_session_audit_events_page,
             // E2 (harness trace pipeline, 2026-07-14): trace viewer
             // IPCs — list_turn_traces for 回看, clear_session_trace
             // for the manual cleanup button.

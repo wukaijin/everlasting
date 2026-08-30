@@ -82,6 +82,7 @@ test("…", async ({ page, boot, mockCmd, stream, reqs, waitForCmd }) => {
 | `agent/chat` | `{status:"started"}` | startRequest(F1 ChatAcceptance) |
 | `permissions/list_turn_traces` | `[]` | startRequest → traceStore.loadHistory |
 | `permissions/list_session_audit_events` | `[]` | 同上 |
+| `permissions/list_session_audit_events_page` | `{events:[],matched:0,totalAll:0,totalCritical:0}` | RULE-PERM-001 审计分页读(camelCase 页形状;PR3 AuditLogModal 消费) |
 | `usage/usage_window` | 空 report(camelCase) | ChatInputTokenUsage mount |
 
 未注册的请求 → **500 fail-loud**(防漏 mock 经 vite `/api` proxy 静默漏到

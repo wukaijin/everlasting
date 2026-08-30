@@ -216,6 +216,15 @@ function bootDefaults(): Record<string, MockPayload> {
     // 靠 500 兜底)。
     "permissions/list_turn_traces": [],
     "permissions/list_session_audit_events": [],
+    // RULE-PERM-001(2026-08-30):审计 keyset 分页读。wire 形状 =
+    // AuditEventPageRow(camelCase);PR3 前的 AuditLogModal 仍走
+    // 全量命令,此处提前登记防 catch-all 500 fail-loud 误伤。
+    "permissions/list_session_audit_events_page": {
+      events: [],
+      matched: 0,
+      totalAll: 0,
+      totalCritical: 0,
+    },
   };
 }
 

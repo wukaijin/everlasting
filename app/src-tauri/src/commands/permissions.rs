@@ -437,6 +437,68 @@ pub async fn list_session_audit_events(
     list_session_audit_events_inner(&state, session_id).await
 }
 
+// ---------------------------------------------------------------------------
+// RULE-PERM-001 (2026-08-30) — list_session_audit_events_page
+// ---------------------------------------------------------------------------
+
+/// Keyset-paginated audit read for a session (RULE-PERM-001, 2026-08-30).
+/// The paged sibling of [`list_session_audit_events_inner`] — the old
+/// full-pull command is intentionally untouched (R6: `traceStore`
+/// still consumes it); the AuditLogModal moves to this one.
+///
+/// Validates the keyset cursor contract before dispatching to
+/// `db::list_audit_events_page`: `before_ts` and `before_id` are the
+/// two halves of the `(ts, id)` cursor and must travel together (a
+/// ts-only cursor would silently skip the rest of its own second) —
+/// rejected as `InvalidRequest` so the wire surface is a 400, not a
+/// 500. Filter (`kind` / `critical_only`) semantics, the 100 default /
+/// 500 cap limit and the counts live at the db layer (see
+/// `db::AuditEventPageQuery`).
+pub async fn list_session_audit_events_page_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    query: db::AuditEventPageQuery,
+) -> Result<db::AuditEventPageRow, AppCommandError> {
+    if query.before_ts.is_some() && query.before_id.is_none() {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "list_session_audit_events_page: before_ts requires before_id \
+             (the keyset cursor is (ts, id))",
+        ));
+    }
+    db::list_audit_events_page(&state.db, &session_id, query)
+        .await
+        .map_err(|e| anyhow::anyhow!("list_session_audit_events_page failed: {}", e).into())
+}
+
+/// Tauri args are camelCase on the wire (`sessionId`, `beforeTs`,
+/// `beforeId`, `criticalOnly` — Tauri 2 camelCases the snake_case
+/// Rust parameter names); `criticalOnly` is `Option<bool>` so the
+/// frontend may omit it entirely.
+#[tauri::command]
+pub async fn list_session_audit_events_page(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    limit: Option<i64>,
+    before_ts: Option<String>,
+    before_id: Option<i64>,
+    kind: Option<String>,
+    critical_only: Option<bool>,
+) -> Result<db::AuditEventPageRow, AppCommandError> {
+    list_session_audit_events_page_inner(
+        &state,
+        session_id,
+        db::AuditEventPageQuery {
+            limit,
+            before_ts,
+            before_id,
+            kind,
+            critical_only: critical_only.unwrap_or(false),
+        },
+    )
+    .await
+}
+
 // E2 (harness trace pipeline, 2026-07-14) — list_turn_traces +
 // clear_session_trace IPCs for the trace viewer (child-2 frontend).
 // ---------------------------------------------------------------------------

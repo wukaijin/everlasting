@@ -141,6 +141,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         "grant_tool_permission",
         // C4 (Audit-log query UI, 2026-06-14)
         "list_session_audit_events",
+        // RULE-PERM-001 (2026-08-30): keyset-paginated audit page read
+        // (AuditLogModal「加载更多」); old full-pull command untouched (R6).
+        "list_session_audit_events_page",
         // E2 (harness trace pipeline, 2026-07-14): trace viewer IPCs.
         "list_turn_traces",
         "clear_session_trace",

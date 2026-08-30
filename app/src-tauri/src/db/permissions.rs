@@ -27,6 +27,12 @@
 //! UI query side (C4) is out of scope for A2; PR1 only writes
 //! the rows.
 //!
+//! 4. **Audit-log keyset pagination** ([`list_audit_events_page`],
+//! RULE-PERM-001 2026-08-30) — bounded-page read with server-side
+//! kind/critical filters + exact counts, for the AuditLogModal's
+//! paged UI. The full-pull [`list_audit_events`] is untouched
+//! (`traceStore` still consumes it).
+//!
 //! All functions return `Result<T, sqlx::Error>` (no logging) so
 //! the caller decides how to surface the error (the agent loop
 //! wraps each call in `tracing::warn!` on failure).
@@ -357,6 +363,214 @@ pub struct AuditEventRow {
     /// context. The trace viewer uses this to group audit rows by
     /// turn.
     pub turn_seq: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// Audit-log keyset pagination (RULE-PERM-001, 2026-08-30)
+// ---------------------------------------------------------------------------
+
+/// Default page size for [`list_audit_events_page`] when the caller
+/// omits `limit` (design C3: 页大小固定 100).
+pub const AUDIT_PAGE_DEFAULT_LIMIT: i64 = 100;
+
+/// Hard cap for [`list_audit_events_page`]'s `limit` (design C3:
+/// 后端接受 limit 但 cap 500,防误用). Also the lower clamp bound:
+/// SQLite reads a negative `LIMIT` as *unlimited*, so clamping is a
+/// correctness guard, not just cosmetics — a naive `LIMIT ?` bound
+/// to `-3` would bypass the cap entirely and full-pull the table.
+pub const AUDIT_PAGE_MAX_LIMIT: i64 = 500;
+
+/// Query knobs for [`list_audit_events_page`] — the keyset-paginated,
+/// filter-pushdown sibling of [`list_audit_events`]. The old
+/// full-pull function is intentionally unchanged (design D3 / R6:
+/// `traceStore` still needs every row); new consumers (AuditLogModal)
+/// go through this.
+///
+/// Field notes:
+/// - `limit` — page size; `None` → [`AUDIT_PAGE_DEFAULT_LIMIT`],
+///   values > [`AUDIT_PAGE_MAX_LIMIT`] (or < 1) are clamped.
+/// - `before_ts` / `before_id` — the two halves of the keyset cursor
+///   `(ts, id)`: the `(ts, id)` of the **last row of the previously
+///   fetched page**. `ts` is second-resolution (`datetime('now')`),
+///   so same-second rows are the norm (multiple tool calls per turn)
+///   and the `id` tie-break segment is what makes the cursor exact.
+///   Both must be `Some` together — a partial cursor is rejected with
+///   `sqlx::Error::InvalidArgument` (an `id`-less ts cursor would
+///   silently skip the rest of the cursor's own second).
+/// - `kind` — optional equality filter, pushed to SQL (design D2).
+/// - `critical_only` — when `true`, only rows whose
+///   `payload_json` parses as JSON **and** carries `$.critical = 1`
+///   are returned. The `json_valid` guard is mandatory (R7): NULL or
+///   malformed payloads evaluate to non-critical instead of erroring,
+///   matching the frontend's legacy `isCritical` tolerance.
+#[derive(Debug, Clone, Default)]
+pub struct AuditEventPageQuery {
+    pub limit: Option<i64>,
+    pub before_ts: Option<String>,
+    pub before_id: Option<i64>,
+    pub kind: Option<String>,
+    pub critical_only: bool,
+}
+
+/// Page result for [`list_audit_events_page`]. One call answers the
+/// list AND the counter chips (design D2/R3): `events` is the ordered
+/// page, `matched` is the total hit count under the *active*
+/// kind/critical filters, `total_all` / `total_critical` are the
+/// unfiltered totals (critical count deliberately ignores `kind`, so
+/// the chips stay consistent no matter which filter combination is
+/// active).
+///
+/// Wire shape is camelCase (`#[serde(rename_all = "camelCase")]`,
+/// house rule for every db Row crossing IPC — see the
+/// [`AuditEventRow`] doc for the full rationale).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEventPageRow {
+    /// The page: `ORDER BY ts DESC, id DESC` (explicit id tie-break
+    /// in SQL — the schema index only covers the `ts` segment; the
+    /// frontend must not re-sort, R4).
+    pub events: Vec<AuditEventRow>,
+    /// Rows matching the active kind/critical filters (cursor NOT
+    /// applied — it bounds pages, not counts). Drives the "加载更多"
+    /// visibility (`events.len() < matched`).
+    pub matched: i64,
+    /// Unfiltered row count for the session (== what the old
+    /// full-pull command's `.len()` reported).
+    pub total_all: i64,
+    /// Critical row count for the session, unaffected by `kind`
+    /// (== the modal's critical chip).
+    pub total_critical: i64,
+}
+
+/// Keyset-paginated audit read for `session_id` (RULE-PERM-001,
+/// 2026-08-30). Companion to [`list_audit_events`] — same rows, same
+/// `ts DESC, id DESC` order, but bounded pages, server-side filters
+/// and exact counts so the audit-log UI can page instead of
+/// full-pulling (PRD: 千级行数的 session 会把 IPC 载荷 / 首屏渲染 /
+/// 内存都拖成线性增长).
+///
+/// **Why keyset, not OFFSET (design D1 / R5)**: the table is
+/// append-only and the modal may stay open while the agent writes new
+/// rows. An OFFSET page 2 shifts by one on every newer insert
+/// (duplicate + skipped row); the `(ts, id)` cursor anchors on the
+/// last-seen row, so earlier pages stay stable regardless of
+/// appends. The behavior test
+/// `audit_page_keyset_stable_when_new_row_appended_mid_pagination`
+/// pins this.
+///
+/// **SQL shape** (all fragments are static strings — only the
+/// composition is dynamic; every value is bound, never formatted in):
+/// `kind = ?` for the kind filter,
+/// `(json_valid(payload_json) AND json_extract(payload_json,
+/// '$.critical') = 1)` for critical (the `json_valid` guard keeps
+/// NULL/malformed payloads non-erroring per R7), and
+/// `(ts < ? OR (ts = ? AND id < ?))` for the cursor.
+///
+/// Counts come back in the same call: one query for
+/// `total_all` + `total_critical` (`COUNT(*) FILTER (WHERE ...)`,
+/// SQLite ≥ 3.30) and one `COUNT(*)` with the active filter
+/// predicates for `matched`.
+///
+/// Empty / missing session returns a zeroed page (empty `events`,
+/// three zeros) — NOT an error, mirroring [`list_audit_events`].
+pub async fn list_audit_events_page(
+    pool: &SqlitePool,
+    session_id: &str,
+    query: AuditEventPageQuery,
+) -> Result<AuditEventPageRow, sqlx::Error> {
+    // The cursor is a two-part key: accepting a ts-only cursor would
+    // silently drop the remainder of the cursor's own second.
+    if query.before_ts.is_some() && query.before_id.is_none() {
+        return Err(sqlx::Error::InvalidArgument(
+            "list_audit_events_page: before_ts requires before_id (the keyset cursor is (ts, id))"
+                .to_string(),
+        ));
+    }
+    // Default 100 / cap 500 / clamp off the LIMIT -1 = unlimited footgun.
+    let limit = query
+        .limit
+        .unwrap_or(AUDIT_PAGE_DEFAULT_LIMIT)
+        .clamp(1, AUDIT_PAGE_MAX_LIMIT);
+
+    // Shared filter fragment: composed into both the page query and
+    // the `matched` count so the two can never drift.
+    let mut filter_sql = String::from("session_id = ?");
+    if query.kind.is_some() {
+        filter_sql.push_str(" AND kind = ?");
+    }
+    if query.critical_only {
+        // R7: `json_valid` runs first so NULL / malformed payload rows
+        // fall out as non-critical instead of raising.
+        filter_sql.push_str(
+            " AND (json_valid(payload_json) AND json_extract(payload_json, '$.critical') = 1)",
+        );
+    }
+
+    let mut page_sql = format!(
+        "SELECT id, session_id, ts, kind, payload_json, turn_seq \
+         FROM session_audit_events WHERE {filter_sql}"
+    );
+    if query.before_ts.is_some() {
+        // Keyset cursor: strictly-before the anchor row in
+        // (ts DESC, id DESC) order.
+        page_sql.push_str(" AND (ts < ? OR (ts = ? AND id < ?))");
+    }
+    page_sql.push_str(" ORDER BY ts DESC, id DESC LIMIT ?");
+    let matched_sql =
+        format!("SELECT COUNT(*) AS matched FROM session_audit_events WHERE {filter_sql}");
+
+    // Page query — bind order follows the composed fragment order.
+    let mut page_q = sqlx::query(&page_sql).bind(session_id);
+    if let Some(kind) = &query.kind {
+        page_q = page_q.bind(kind);
+    }
+    if let Some(ts) = &query.before_ts {
+        page_q = page_q.bind(ts).bind(ts).bind(query.before_id);
+    }
+    page_q = page_q.bind(limit);
+    let rows = page_q.fetch_all(pool).await?;
+    let events: Vec<AuditEventRow> = rows
+        .into_iter()
+        .map(|r| {
+            Ok(AuditEventRow {
+                id: r.try_get("id")?,
+                session_id: r.try_get("session_id")?,
+                ts: r.try_get("ts")?,
+                kind: r.try_get("kind")?,
+                payload_json: r.try_get("payload_json")?,
+                turn_seq: r.try_get("turn_seq")?,
+            })
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+
+    // matched: same predicates as the page, cursor NOT applied.
+    let mut matched_q = sqlx::query(&matched_sql).bind(session_id);
+    if let Some(kind) = &query.kind {
+        matched_q = matched_q.bind(kind);
+    }
+    let matched: i64 = matched_q.fetch_one(pool).await?.try_get("matched")?;
+
+    // totals: one query, no kind/critical filters (critical counted
+    // via FILTER so the chip is kind-independent per R3).
+    let totals = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS total_all,
+               COUNT(*) FILTER (WHERE json_valid(payload_json)
+                                AND json_extract(payload_json, '$.critical') = 1)
+                   AS total_critical
+        FROM session_audit_events
+        WHERE session_id = ?
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(AuditEventPageRow {
+        events,
+        matched,
+        total_all: totals.try_get("total_all")?,
+        total_critical: totals.try_get("total_critical")?,
+    })
 }
 
 /// Row shape for [`list_tool_permissions`] and the

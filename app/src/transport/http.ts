@@ -113,6 +113,10 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   clear_session_trace: "permissions",
   grant_tool_permission: "permissions",
   list_session_audit_events: "permissions",
+  // RULE-PERM-001 (2026-08-30): keyset 分页审计读(AuditLogModal「加载
+  // 更多」)。缺这行时浏览器/sidecar 模式报 `unknown cmd`(Tauri IPC
+  // 模式侥幸不经过本表;http.routes-sync.test.ts 守卫)。
+  list_session_audit_events_page: "permissions",
   list_session_tool_permissions: "permissions",
   list_turn_traces: "permissions",
   // 08-20-worker-turn-trace-persist: per-run worker turn rows

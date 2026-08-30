@@ -16,8 +16,9 @@ use crate::projects::DEFAULT_PROJECT_ID;
 use super::{
     migrations::run_migrations,
     permissions::{
-        grant_tool_permission, has_tool_permission, list_audit_events, list_tool_permissions,
-        record_audit_event, revoke_tool_permission, update_session_mode,
+        grant_tool_permission, has_tool_permission, list_audit_events, list_audit_events_page,
+        list_tool_permissions, record_audit_event, revoke_tool_permission, update_session_mode,
+        AuditEventPageQuery, AUDIT_PAGE_DEFAULT_LIMIT, AUDIT_PAGE_MAX_LIMIT,
     },
     sessions::{create_session, delete_session, list_sessions, load_session},
 };
@@ -772,4 +773,574 @@ async fn record_audit_event_persists_turn_seq() {
 
     let mode_row = rows.iter().find(|r| r.kind == "mode_changed").unwrap();
     assert_eq!(mode_row.turn_seq, None);
+}
+
+// ---------------------------------------------------------------------------
+// RULE-PERM-001 (2026-08-30): keyset-paginated audit read
+// (`list_audit_events_page`) — AC1 ordering/cursor/limit, AC2 filters,
+// AC3 counts.
+// ---------------------------------------------------------------------------
+
+/// Seed one audit row with an **explicit** `ts`. `record_audit_event`
+/// stamps `datetime('now')` (1s resolution), which can't pin
+/// same-second vs cross-second determinism for the ordering/cursor
+/// tests — these go through raw INSERT instead (same column set the
+/// production writer uses; `turn_seq` NULL).
+async fn seed_audit_row(
+    pool: &SqlitePool,
+    session_id: &str,
+    ts: &str,
+    kind: &str,
+    payload_json: Option<&str>,
+) -> i64 {
+    let rec = sqlx::query(
+        r#"
+        INSERT INTO session_audit_events (session_id, ts, kind, payload_json, turn_seq)
+        VALUES (?, ?, ?, ?, NULL)
+        "#,
+    )
+    .bind(session_id)
+    .bind(ts)
+    .bind(kind)
+    .bind(payload_json)
+    .execute(pool)
+    .await
+    .unwrap();
+    rec.last_insert_rowid()
+}
+
+/// AC1: `ORDER BY ts DESC, id DESC` — same-second rows must tie-break
+/// by id (newest id first), and a strictly-newer `ts` must sort ahead
+/// of the whole older second. This is the SQL-side guarantee the
+/// frontend's old `sortEvents` second key relied on (R4); the paged
+/// read makes it authoritative so the UI can stop re-sorting.
+#[tokio::test]
+async fn audit_page_orders_ts_desc_id_desc_tie_break() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Four rows in the same wall-clock second (the norm: one turn can
+    // fire several tool audits), inserted in ascending id order, plus
+    // one newer-second row inserted *first* (id 1) to prove ts
+    // dominates id.
+    let new_ts = seed_audit_row(&pool, &s.id, "2026-08-30 10:00:01", "mode_changed", None).await;
+    let id1 = seed_audit_row(&pool, &s.id, "2026-08-30 10:00:00", "tool_allowed", None).await;
+    let id2 = seed_audit_row(&pool, &s.id, "2026-08-30 10:00:00", "tool_allowed", None).await;
+    let id3 = seed_audit_row(&pool, &s.id, "2026-08-30 10:00:00", "tool_denied", None).await;
+    let id4 = seed_audit_row(&pool, &s.id, "2026-08-30 10:00:00", "tool_denied", None).await;
+
+    let page = list_audit_events_page(&pool, &s.id, AuditEventPageQuery::default())
+        .await
+        .unwrap();
+    let ids: Vec<i64> = page.events.iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec![new_ts, id4, id3, id2, id1]);
+}
+
+/// AC1 (R5): the keyset cursor is stable when a newer row is appended
+/// mid-pagination. Page 1 → INSERT a newer row → cursor-fetch page 2:
+/// the combined sequence must have **no duplicates and no gaps**.
+///
+/// This is exactly the scenario OFFSET pagination fails: after the
+/// append the newest row occupies offset slot 0, so `LIMIT 5 OFFSET 5`
+/// returns `6,5,4,3,2` — re-delivering id 6 (duplicate) while id 1
+/// falls off the end (gap). The keyset cursor anchors on
+/// `(ts, id)` of the last-seen row, so appended newer rows never
+/// shift earlier pages.
+#[tokio::test]
+async fn audit_page_keyset_stable_when_new_row_appended_mid_pagination() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Ten rows, ts strictly increasing (so the DESC order is
+    // unambiguous) and ids ascending in lockstep: id N ↔ 10:00:0N.
+    for i in 1..=10_i64 {
+        let ts = format!("2026-08-30 10:00:{:02}", i); // 10:00:01 .. 10:00:10
+        seed_audit_row(&pool, &s.id, &ts, "tool_allowed", None).await;
+    }
+
+    // Page 1 (limit 5) → newest five: ids [10, 9, 8, 7, 6].
+    let page1 = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            limit: Some(5),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let page1_ids: Vec<i64> = page1.events.iter().map(|r| r.id).collect();
+    assert_eq!(page1_ids, vec![10, 9, 8, 7, 6]);
+
+    // Mid-pagination append: a newer audit row lands while the user
+    // is reading page 1 (agent running, modal open).
+    seed_audit_row(&pool, &s.id, "2026-08-30 10:00:11", "tool_denied", None).await;
+
+    // Cursor = last row of page 1 (id 6's (ts, id)); fetch page 2.
+    let anchor = page1.events.last().unwrap();
+    let page2 = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            limit: Some(5),
+            before_ts: Some(anchor.ts.clone()),
+            before_id: Some(anchor.id),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Full walk = the original ten ids, newest first — no 11, no
+    // duplicate 6, no missing 1 (the OFFSET failure mode above).
+    let mut all_ids = page1_ids.clone();
+    all_ids.extend(page2.events.iter().map(|r| r.id));
+    assert_eq!(all_ids, vec![10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    // The appended row is visible to a fresh first page, not retro-
+    // injected into the in-flight walk.
+    assert_eq!(page2.events.len(), 5);
+}
+
+/// AC1 + design C3: `limit` default = 100, values above 500 clamp to
+/// the cap, and values below 1 clamp to 1 (SQLite would read a
+/// negative LIMIT as *unlimited* — the clamp is what keeps the cap
+/// honest against a hostile/negative request).
+#[tokio::test]
+async fn audit_page_respects_limit_and_caps() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // 600 rows with distinct ascending ts: enough to observe both the
+    // default (100) and the cap (500) in one seed.
+    for i in 0..600_i64 {
+        let minute = i / 60;
+        let sec = i % 60;
+        let ts = format!(
+            "2026-08-30 {:02}:{:02}:{:02}",
+            10 + minute / 60,
+            minute % 60,
+            sec
+        );
+        seed_audit_row(&pool, &s.id, &ts, "tool_allowed", None).await;
+    }
+
+    // Default: exactly AUDIT_PAGE_DEFAULT_LIMIT rows of the 600.
+    let page = list_audit_events_page(&pool, &s.id, AuditEventPageQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(page.events.len(), AUDIT_PAGE_DEFAULT_LIMIT as usize);
+    assert_eq!(page.matched, 600);
+
+    // Explicit small limit is honored verbatim.
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            limit: Some(7),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.events.len(), 7);
+
+    // Over-cap request clamps to AUDIT_PAGE_MAX_LIMIT (not 600).
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            limit: Some(10_000),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.events.len(), AUDIT_PAGE_MAX_LIMIT as usize);
+
+    // Sub-1 request (incl. the LIMIT -1 = unlimited footgun) clamps to 1.
+    for bad in [Some(0), Some(-3)] {
+        let page = list_audit_events_page(
+            &pool,
+            &s.id,
+            AuditEventPageQuery {
+                limit: bad,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.events.len(), 1, "limit {bad:?} must clamp to 1");
+    }
+}
+
+/// AC2: the `kind` filter is pushed to SQL and returns exactly the
+/// subset — every returned row carries the requested kind, `matched`
+/// counts the subset, and `total_all`/`total_critical` stay unfiltered.
+#[tokio::test]
+async fn audit_page_kind_filter_matches_subset() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    seed_audit_row(&pool, &s.id, "2026-08-30 10:00:01", "tool_allowed", None).await;
+    seed_audit_row(&pool, &s.id, "2026-08-30 10:00:02", "tool_allowed", None).await;
+    seed_audit_row(&pool, &s.id, "2026-08-30 10:00:03", "tool_denied", None).await;
+    seed_audit_row(&pool, &s.id, "2026-08-30 10:00:04", "mode_changed", None).await;
+
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            kind: Some("tool_allowed".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.events.len(), 2);
+    assert!(page.events.iter().all(|r| r.kind == "tool_allowed"));
+    assert_eq!(page.matched, 2, "matched counts the filtered subset");
+    assert_eq!(page.total_all, 4, "total_all ignores the kind filter");
+    assert_eq!(page.total_critical, 0, "no critical payloads seeded");
+
+    // A kind with no rows: empty page, zero matched, totals intact.
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            kind: Some("no_such_kind".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(page.events.is_empty());
+    assert_eq!(page.matched, 0);
+    assert_eq!(page.total_all, 4);
+}
+
+/// AC2 + R7: the critical filter's four payload states. Only JSON
+/// payloads carrying `$.critical = 1` count as critical; `false`,
+/// NULL payload, and **malformed JSON** must all classify as
+/// non-critical WITHOUT erroring (the `json_valid` guard precedes
+/// `json_extract`; the client-side `isCritical` tolerance this
+/// replaces never errored on these either).
+#[tokio::test]
+async fn audit_page_critical_filter_four_states() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let critical_id = seed_audit_row(
+        &pool,
+        &s.id,
+        "2026-08-30 10:00:01",
+        "tool_denied",
+        Some(r#"{"critical":true,"tool_name":"shell"}"#),
+    )
+    .await;
+    seed_audit_row(
+        &pool,
+        &s.id,
+        "2026-08-30 10:00:02",
+        "tool_allowed",
+        Some(r#"{"critical":false,"tool_name":"read_file"}"#),
+    )
+    .await;
+    // State 3: NULL payload_json entirely.
+    seed_audit_row(&pool, &s.id, "2026-08-30 10:00:03", "mode_changed", None).await;
+    // State 4: malformed JSON text — json_extract alone would raise,
+    // the json_valid guard makes this a plain non-critical row.
+    seed_audit_row(
+        &pool,
+        &s.id,
+        "2026-08-30 10:00:04",
+        "tool_denied",
+        Some("{not valid json"),
+    )
+    .await;
+
+    // Must not error — the `.unwrap()` here IS the R7 assertion.
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            critical_only: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].id, critical_id);
+    assert_eq!(page.matched, 1);
+    assert_eq!(page.total_all, 4);
+    assert_eq!(page.total_critical, 1);
+
+    // And the inverse read (critical_only = false) still returns all
+    // four rows untouched.
+    let page = list_audit_events_page(&pool, &s.id, AuditEventPageQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(page.events.len(), 4);
+}
+
+/// AC3: the three counts are exact against seeded rows, in isolation
+/// and under every filter combination. Key invariant (R3): the
+/// critical count is NOT narrowed by the kind filter, and `matched`
+/// tracks the active kind/critical combination while the two totals
+/// never move.
+#[tokio::test]
+async fn audit_page_counts_exact_with_and_without_filters() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Deterministic mix: 6 rows — 4 tool_denied (2 critical),
+    // 2 mode_changed (0 critical) → totals 6 / 2.
+    let seed = [
+        (
+            "2026-08-30 10:00:01",
+            "tool_denied",
+            Some(r#"{"critical":true}"#),
+        ),
+        (
+            "2026-08-30 10:00:02",
+            "tool_denied",
+            Some(r#"{"critical":false}"#),
+        ),
+        (
+            "2026-08-30 10:00:03",
+            "tool_denied",
+            Some(r#"{"critical":true}"#),
+        ),
+        ("2026-08-30 10:00:04", "tool_denied", None),
+        ("2026-08-30 10:00:05", "mode_changed", None),
+        ("2026-08-30 10:00:06", "mode_changed", None),
+    ];
+    for (ts, kind, payload) in seed {
+        seed_audit_row(&pool, &s.id, ts, kind, payload).await;
+    }
+
+    // Unfiltered: matched == total_all == 6, total_critical == 2.
+    let page = list_audit_events_page(&pool, &s.id, AuditEventPageQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(page.matched, 6);
+    assert_eq!(page.total_all, 6);
+    assert_eq!(page.total_critical, 2);
+
+    // kind only: matched narrows to 4; critical count stays 2 (R3 —
+    // both critical rows are tool_denied here, but the point is the
+    // count is computed without the kind predicate).
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            kind: Some("tool_denied".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.matched, 4);
+    assert_eq!(page.total_all, 6);
+    assert_eq!(page.total_critical, 2);
+
+    // critical only: matched = 2, totals unchanged.
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            critical_only: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.matched, 2);
+    assert_eq!(page.total_all, 6);
+    assert_eq!(page.total_critical, 2);
+
+    // kind + critical: matched = 2 (both criticals are tool_denied).
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            kind: Some("tool_denied".to_string()),
+            critical_only: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.matched, 2);
+
+    // kind + critical with a disjoint kind: matched = 0 while the
+    // totals still report 6 / 2 (chip semantics for a filter combo
+    // that matches nothing).
+    let page = list_audit_events_page(
+        &pool,
+        &s.id,
+        AuditEventPageQuery {
+            kind: Some("mode_changed".to_string()),
+            critical_only: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.matched, 0);
+    assert_eq!(page.total_all, 6);
+    assert_eq!(page.total_critical, 2);
+}
+
+/// AC1/AC3: a session with zero audit rows (or a nonexistent id)
+/// yields a zeroed page — empty `events`, three zero counters — NOT
+/// an error. The modal renders its empty-state placeholder against
+/// this shape.
+#[tokio::test]
+async fn audit_page_empty_session_returns_zeroed_page() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let page = list_audit_events_page(&pool, &s.id, AuditEventPageQuery::default())
+        .await
+        .unwrap();
+    assert!(page.events.is_empty());
+    assert_eq!(page.matched, 0);
+    assert_eq!(page.total_all, 0);
+    assert_eq!(page.total_critical, 0);
+
+    // Nonexistent session id: same zeroed page.
+    let page = list_audit_events_page(
+        &pool,
+        "no-such-session",
+        AuditEventPageQuery {
+            critical_only: true,
+            kind: Some("tool_denied".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(page.events.is_empty());
+    assert_eq!(page.matched, 0);
+    assert_eq!(page.total_all, 0);
+    assert_eq!(page.total_critical, 0);
+}
+
+/// Wire-shape lock for the page envelope (mirrors
+/// `audit_event_row_serializes_to_camel_case_wire_shape`): the page
+/// row crosses IPC with camelCase keys (`totalAll` / `totalCritical`),
+/// never snake_case, per the db-guidelines house rule.
+#[tokio::test]
+async fn audit_event_page_row_serializes_to_camel_case_wire_shape() {
+    use crate::db::permissions::{AuditEventPageRow, AuditEventRow};
+    let row = AuditEventPageRow {
+        events: vec![AuditEventRow {
+            id: 1,
+            session_id: "sess-abc".to_string(),
+            ts: "2026-08-30 10:00:00".to_string(),
+            kind: "tool_executed".to_string(),
+            payload_json: None,
+            turn_seq: None,
+        }],
+        matched: 1,
+        total_all: 9,
+        total_critical: 3,
+    };
+    let v: serde_json::Value = serde_json::to_value(&row).unwrap();
+    let obj = v.as_object().expect("page must serialize to JSON object");
+
+    assert!(
+        obj.contains_key("totalAll")
+            && obj.contains_key("totalCritical")
+            && obj.contains_key("matched")
+            && obj.contains_key("events"),
+        "wire shape must use camelCase totalAll/totalCritical + matched/events, got: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !obj.contains_key("total_all") && !obj.contains_key("total_critical"),
+        "wire shape must NOT leak snake_case count keys"
+    );
+    assert_eq!(obj.get("totalAll").and_then(|v| v.as_i64()), Some(9));
+    assert_eq!(obj.get("totalCritical").and_then(|v| v.as_i64()), Some(3));
+    assert_eq!(obj["events"][0]["sessionId"], "sess-abc");
 }
