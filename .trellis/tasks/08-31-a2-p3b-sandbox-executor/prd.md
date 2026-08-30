@@ -68,6 +68,11 @@ Landlock + seccomp 沙盒执行器落地到 shell 工具链(前台 `shell` + 后
 - 网络白名单 / egress 代理(v1 只做断网)。
 - WSL1 专项支持(落入 fail-open)。
 - read 限制、Landlock ABI ≥4 网络规则(不赌内核版本,断网一律 seccomp)。
+- **interop socket 残余面**(评审 B2/D4):绕过 `/init` 直连 interop unix socket
+  的原始协议路径 v1 不封——seccomp 无法按路径匹配 connect 的 sockaddr 指针,
+  Landlock ABI v1 无 connect 权限位;易用逃逸路径已被 EXECUTE 拒绝面封死,
+  原始协议逆向成本高。完整收口(namespace 路线 tmpfs 盖 socket)归 P3c
+  bwrap 增强档;v1 在 spec 如实记录。
 
 ## Acceptance Criteria
 
@@ -96,3 +101,5 @@ Landlock + seccomp 沙盒执行器落地到 shell 工具链(前台 `shell` + 后
 | D1 | `sandbox_enabled` 默认值 | `true`(fail-open + kill-switch 已足够安全;默认关则上线即死功能) |
 | D2 | 审计 kind 新增 vs 复用 | 新增 `SandboxedShellExecution`(单 enum 追加无迁移) |
 | D3 | bwrap 增强档是否留 P3b 钩子 | 不留(P3c 一起做,避免模块级 dead_code 伞——DEBT 历史教训) |
+| D4 | interop socket 残余面 v1 处置(评审 B2) | 接受并文档化(见非目标;完整收口归 P3c bwrap 档) |
+| D5 | mode 数据流方案(评审 B1) | `ToolContext` 加 `mode` 字段(dispatch 灌入)+ 后台 `Registry::start` 加 `sandbox` 参数下传(design §2.2) |

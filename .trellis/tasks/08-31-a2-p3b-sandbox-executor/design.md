@@ -57,12 +57,26 @@ pub struct SandboxSpec {
 - 工具链探测目录:`~/.cargo/bin`、`/home/linuxbrew/.linuxbrew`(存在才加,
   open 失败跳过——spike 陷阱 5)。
 
-### 2.2 触发判定(R4)
+### 2.2 触发判定(R4)与 mode 数据流(评审 B1 修正)
 
-`maybe_apply(cmd, spec_opt)`:调用方(shell.rs / background_shell)在 spawn 前做
-三重与:`classify_prefix(cmd) == ReadOnly` **且** mode ≠ Yolo **且**
-`sandbox_enabled`(config)且 `Capability::probe().ok()`。任一不满足 → 不设 pre_exec,
-返回 `Applied::No { reason }`(reason 进 tracing,不发审计)。
+**问题**:两条 spawn 路径现状都拿不到 mode——前台 `tools/shell.rs:336 execute` 的
+`ToolContext`(tools/mod.rs:386)无 mode 字段;后台 `BackgroundShellRegistry::start`
+(background_shell/mod.rs:261)签名只有 `(session_id, command, cwd, max_runtime_ms)`。
+而 `session_mode` 只存在于 dispatch 层(`agent/chat_loop/tools.rs` 的 `DispatchCtx`)。
+
+**解法(评审建议 1 + 参数下传,两条路径共用)**:
+
+1. `ToolContext` 加 `mode` 字段,dispatch 层从 `DispatchCtx.session_mode` 灌入
+   (第 9 个字段,构造点单一)——前台 `shell.rs` 直接读。
+2. 后台路径:`Registry::start` trait 签名追加 `sandbox: Option<SandboxSpec>` 参数,
+   由 `run_background_shell` **tool 层**(有 ctx.mode)算好下传;registry 内部
+   spawn 点(in_memory.rs)只消费,不自行判定。trait 加参,全部 impl 同步改。
+3. `maybe_apply(cmd, spec_opt)`:三重与 = `classify_prefix(cmd) == ReadOnly` **且**
+   mode ≠ Yolo **且** `sandbox_enabled`(config)且 `Capability::probe().ok()`。
+   任一不满足 → 不设 pre_exec,返回 `Applied::No { reason }`(reason 进 tracing,
+   不发审计)。
+4. §2.5 的拦截指引判定复用同一状态源:tool 层记 `applied: bool` 本地变量,
+   后验时不再二次查询(评审 W3)。
 
 `classify_prefix` 是纯函数(`agent/permissions/shell_trust.rs:394`),tool 侧重调一次
 无副作用、与 Tier 4 判定同输入同结果——**判定层零改动**(C2)。
@@ -77,9 +91,15 @@ open / 持锁。因此施加分两段:
   { ruleset_fd: RawFd, path_fds: Vec<RawFd>, bpf: Vec<sock_filter> }`。
 - **pre_exec 闭包(纯 syscall)**:`prctl(PR_SET_NO_NEW_PRIVS)` → 逐 fd
   `landlock_add_rule`(PATH_BENEATH,权限位为编译期常量,天然 ⊆ handled——陷阱 2
-  由构造层消灭)→ `landlock_restrict_self` → `prctl(PR_SET_SECCOMP, FILTER, &bpf)`
-  → `close` 全部 fd。任何一步失败 return Err(spawn 失败,走既有
-  `Failed to spawn command` 出口 + 追加 `[sandbox]` 前缀定位)。
+  由构造层消灭;单条失败即整列中止,对齐 spike 探针 `_exit(99)` 语义)→
+  `landlock_restrict_self` → seccomp 装载(见下)→ `close` 全部 fd。任何一步失败
+  return Err(spawn 失败,走既有 `Failed to spawn command` 出口 + 追加 `[sandbox]`
+  前缀定位)。
+- **seccomp 装载细节(评审 W2 澄清)**:`prctl(PR_SET_SECCOMP, FILTER, prog)` 的
+  `sock_fprog` 指向**父进程构造好的 BPF 字节数组**——内核在 prctl 瞬间复制过滤器,
+  引用父进程内存无 malloc;闭包内仅在**栈上**构造 `sock_fprog { len, filter: 指针 }`
+  结构 + 发一次 prctl。fd 量级:ruleset 1 + 路径 ~20(可写根 3 + exec 面 ~10 +
+  设备 6),闭包内逐个 add_rule 后统一 close。
 
 `PreparedSandbox` 生命周期 = 单次 spawn;fd 用后即关,不跨命令复用(ruleset fd
 restrict 后不可复用,语义即如此)。
@@ -105,6 +125,10 @@ sandbox_extra_writable」)。启发式,宁缺勿滥——只追加,不改写命�
 - `commands/config.rs AppConfigPayload` 加 `sandbox_enabled: bool`(默认 true,D1)、
   `sandbox_extra_writable: Vec<String>`(默认 `[]`,读取时并入 `~/.cargo` 默认项);
   `get_app_config` 双 transport additive 返回(C3)。
+- **写通道(评审 W1)**:既有 `set_app_config_flag` 是布尔专用
+  (`SETTABLE_APP_FLAGS` 白名单 + `value: bool`,config.rs:542),数组字段需新增
+  `set_app_config_list` 命令(key 白名单同款模式,daemon route + Tauri 双端同步);
+  归 PR3。布尔开关 `sandbox_enabled` 直接进 `SETTABLE_APP_FLAGS` 既有通道。
 
 ## 3. 数据流(单命令生命周期)
 
@@ -134,6 +158,14 @@ worker(L3)与群聊 / 定时任务(F2)走同一 `execute_tool` 汇合点,**自�
   不做 default-deny syscall 面,限损交给 Landlock,syscall 面不掺和。
 - **审计不存全命令**:审计已有 shell 执行行,本 kind 只记 ruleset 摘要,避免重复
   敏感面。
+- **interop socket 残余面 v1 接受(评审 B2,PRD D4)**:spike landlock 篇留给 P3b 的
+  「已知 interop socket path 白名单化」经设计复核**不可行于 v1**——seccomp BPF 只能
+  检查标量参数,`connect(fd, sockaddr*)` 的路径在指针背后,过滤器无法按路径匹配;
+  Landlock ABI v1 也没有 connect 类权限位。残余面 = 绕过 `/init` 直接实现 interop
+  线协议直连 socket——攻击成本高(需逆向协议),且容易路径(exec `/init`、`.exe`)
+  已被 EXECUTE 拒绝面 + NoNewPrivs 封死。**完整收口归 P3c bwrap 增强档**
+  (tmpfs 盖 socket 路径,namespace 路线可行为);v1 在 spec 与审计指引中如实记录
+  该残余面。
 
 ## 5. 兼容与回滚
 
