@@ -1175,3 +1175,27 @@ DEBT.md P3 批量收敛:闭合 7 条(ALLOW/SHIM/HEALTH/DOC×2/FE-002/BUILD),TEST
 ### Status
 
 [OK] **Completed**
+
+
+## Session 125: shell description 参数 + ShellCard 重设计 + done 态成功色
+
+**Date**: 2026-08-30
+**Task**: shell description 参数 + ShellCard 重设计 + done 态成功色
+**Branch**: `main`
+
+### Summary
+
+shell/run_background_shell 增加可选 description 参数（display-only，execute/权限分类零感知，stub 预算线 4100→4200）；主面板新建 ShellCard 专属卡（命令块常驻+$前缀/cwd 行/三级兜底 chip/一体化审批=风险条+PermissionActions，输出 done 折叠 error 常显，畸形降级 ToolInputBody）；PermissionActions 从 PermissionAskBody 纯搬运抽取（既有测试零改动全绿）；drawer 侧 chip 接 toolHeaderChip + 审批卡 shell ask 增命令行+意图行；ToolCallHeader filePath→chip 更名 + done 态成功色（isSuccess，dispatch 分支排除）；spec 新增 chat/shell-card.md + tool-contract description 条目。验证：前端 1466 测试 + 后端 2108 测试全绿，vue-tsc/cargo fmt clean。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4b34fa9` | (see git log) |
+| `e18c7b3` | (see git log) |
+| `b3f2da1` | (see git log) |
+| `680dae9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
