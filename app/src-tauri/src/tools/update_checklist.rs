@@ -513,6 +513,7 @@ mod tests {
             project_id: "test-proj".to_string(),
             data_dir: PathBuf::from("/tmp"),
             workflow_name: None,
+            mode: crate::db::Mode::Edit,
         }
     }
 
@@ -804,6 +805,7 @@ mod tests {
             project_id: "step26".into(),
             data_dir: proj_tmp.path().to_path_buf(),
             workflow_name: Some("dev".to_string()),
+            mode: crate::db::Mode::Edit,
         };
         (ctx, proj_tmp)
     }
@@ -891,7 +893,8 @@ mod tests {
             db: crate::tools::test_default_pool(),
             project_id: "legacy".into(),
             data_dir: proj_tmp.path().to_path_buf(),
-            workflow_name: None, // <- non-workflow
+            workflow_name: None,
+            mode: crate::db::Mode::Edit, // <- non-workflow
         };
         let handle = new_handle();
         let input = serde_json::json!({

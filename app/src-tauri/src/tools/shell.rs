@@ -413,17 +413,75 @@ pub async fn execute(
     #[cfg(unix)]
     cmd.process_group(0);
 
+    // P3b (08-31-a2-p3b): execution-time sandbox for ReadOnly-tier
+    // commands — the damage limiter UNDER the classification layer
+    // (classification semantics untouched, PRD C2). `decide` is the
+    // four-way gate (ReadOnly ∧ mode≠Yolo ∧ kill-switch ∧ capability);
+    // its result is reused below for the post-hoc write-block guidance
+    // and the audit row (W3: no second query). Fail-open on capability
+    // probe failure (R5); fail-closed on prepare/pre-exec failure
+    // (`[sandbox]`-prefixed spawn error, design §2.3).
+    let sandbox_decision = crate::sandbox::decide(ctx, command, session_id).await;
+    let mut prepared: Option<crate::sandbox::PreparedSandbox> = None;
+    if let crate::sandbox::Decision::Sandbox(spec) = &sandbox_decision {
+        match crate::sandbox::prepare(spec) {
+            Ok(p) => {
+                if let Err(e) = crate::sandbox::apply(&mut cmd, &p) {
+                    return (
+                        format!("[sandbox] Failed to apply sandbox: {}", e),
+                        true,
+                        ToolContextUpdate::default(),
+                        None,
+                    );
+                }
+                prepared = Some(p);
+            }
+            Err(e) => {
+                return (
+                    format!("[sandbox] Failed to prepare sandbox: {}", e),
+                    true,
+                    ToolContextUpdate::default(),
+                    None,
+                );
+            }
+        }
+    }
+
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
+            let prefix = if prepared.is_some() {
+                // pre_exec closure failed inside the forked child —
+                // never run the command unsandboxed by accident.
+                "[sandbox] "
+            } else {
+                ""
+            };
             return (
-                format!("Failed to spawn command: {}", e),
+                format!("{prefix}Failed to spawn command: {}", e),
                 true,
                 ToolContextUpdate::default(),
                 None,
             );
         }
     };
+
+    // P3b (D2): audit the sandboxed execution once the child is
+    // actually running (spawn succeeded). Best-effort — an audit
+    // failure never breaks the command. The payload carries a command
+    // hash + ruleset summary, not the command text (the sibling
+    // `tool_executed` row already has the full input).
+    if let (Some(p), Some(sid)) = (prepared.as_ref(), session_id) {
+        let ruleset = p.summary();
+        let sha = crate::sandbox::command_sha_prefix(command);
+        if let Err(e) = crate::agent::permissions::audit::record_sandboxed_shell_audit(
+            &ctx.db, sid, "shell", &sha, &ruleset, None,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "shell: sandboxed-shell audit write failed");
+        }
+    }
 
     let update = ToolContextUpdate {
         new_cwd: Some(validated_cwd.clone()),
@@ -514,6 +572,21 @@ pub async fn execute(
             "[timeout after {}ms, partial output]\n{}",
             timeout_ms, combined
         );
+    }
+
+    // 6b. P3b (§2.5, R7): post-hoc write-block guidance. When this
+    //     command WAS sandboxed (W3: reuse the decision above — no
+    //     second gate query) and failed with a stderr that smells
+    //     like a Landlock write denial, append one guidance line so
+    //     the model knows the failure is ours and what to do about
+    //     it. Append-only — the command's own output is untouched.
+    let sandbox_applied = prepared.is_some();
+    if sandbox_applied && !result.cancelled && exit_code != 0 {
+        let stderr_str = String::from_utf8_lossy(&result.stderr);
+        if let Some(guidance) = crate::sandbox::write_block_guidance(&stderr_str) {
+            combined.push('\n');
+            combined.push_str(guidance);
+        }
     }
 
     // 7. Disk-spill: if output exceeds the threshold, write the FULL

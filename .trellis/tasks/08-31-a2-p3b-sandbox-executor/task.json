@@ -3,7 +3,7 @@
   "name": "a2-p3b-sandbox-executor",
   "title": "A2+ P3b 执行期沙盒:Landlock+seccomp 执行器接入 shell 工具链",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

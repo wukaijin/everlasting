@@ -274,6 +274,7 @@ mod tests {
             project_id: "test-proj".to_string(),
             data_dir: tmp.path().to_path_buf(),
             workflow_name: None,
+            mode: crate::db::Mode::Edit,
         }
     }
 

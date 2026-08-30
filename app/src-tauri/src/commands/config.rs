@@ -499,6 +499,22 @@ pub struct AppConfigPayload {
     /// `scheduler/mod.rs` 的每 tick 读取)。additive 字段:供前端
     /// 「定时任务」面板展示当前开关状态(design §5)。
     pub scheduled_tasks_enabled: bool,
+    /// P3b 沙盒 kill switch(2026-08-31, task `08-31-a2-p3b-sandbox-executor`,
+    /// R6/D1)。app_config 键 `sandbox_enabled`,fail-open 缺省开
+    /// (仅字面 `"false"` 关,读法同上;单源在 `sandbox::policy::
+    /// sandbox_enabled`)。additive 字段(C3):PR3 设置面展示 +
+    /// 探测结果横幅联动。
+    pub sandbox_enabled: bool,
+    /// P3b 额外可写目录的**生效清单**(R7):`~/.cargo` 默认项 +
+    /// app_config `sandbox_extra_writable`(JSON 数组,`~` 已展开)。
+    /// 单源 `sandbox::policy::read_extra_writable`;PR1 先随
+    /// `get_app_config` additive 暴露,PR3 接编辑 UI
+    /// (`set_app_config_list` 写通道)。
+    pub sandbox_extra_writable: Vec<String>,
+    /// P3b 只读派生字段(R8,design §2.6):进程内能力探测
+    /// (`Capability::probe()` OnceLock 缓存)结果,**不落盘**、
+    /// 无写通道。设置面据此显示「沙盒生效 / 已回退(fail-open)」。
+    pub sandbox_capability: bool,
 }
 
 pub async fn get_app_config_inner(
@@ -516,9 +532,21 @@ pub async fn get_app_config_inner(
             Ok(Some(v)) => v != "false",
             _ => true,
         };
+    // P3b(R8):沙盒开关走单源读法(fail-open);额外可写目录返回
+    // 生效清单(含 ~/.cargo 默认项);capability 是只读派生值。
+    let sandbox_enabled = crate::sandbox::policy::sandbox_enabled(&state.db).await;
+    let sandbox_extra = crate::sandbox::policy::read_extra_writable(&state.db)
+        .await
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let sandbox_capability = crate::sandbox::Capability::probe().ok();
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
         scheduled_tasks_enabled: scheduled_on,
+        sandbox_enabled,
+        sandbox_extra_writable: sandbox_extra,
+        sandbox_capability,
     })
 }
 
@@ -539,7 +567,15 @@ pub async fn get_app_config(
 /// remote_url / web_search key 等敏感键(各有自己的校验命令),不能被
 /// 这个通用布尔入口绕过;新增可 UI 切换的标志位时在此扩名单 +
 /// `AppConfigPayload` 加读字段。
-const SETTABLE_APP_FLAGS: &[&str] = &["turn_complete_notify_enabled", "scheduled_tasks_enabled"];
+///
+/// P3b(W1 落地的一半):布尔 kill switch `sandbox_enabled` 走既有
+/// 通道;数组字段 `sandbox_extra_writable` 不在此(需
+/// `set_app_config_list`,PR3 落地)。
+const SETTABLE_APP_FLAGS: &[&str] = &[
+    "turn_complete_notify_enabled",
+    "scheduled_tasks_enabled",
+    "sandbox_enabled",
+];
 
 /// 写 app_config 布尔开关(白名单内)。key 不在白名单 → `InvalidRequest`
 /// 不写库。参数为**扁平标量**(IPC 形状铁律)。
@@ -580,9 +616,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
 
-        // 缺省(未写)双开关为 true
+        // 缺省(未写)开关全为 true
         let cfg = get_app_config_inner(&state).await.unwrap();
         assert!(cfg.turn_complete_notify_enabled && cfg.scheduled_tasks_enabled);
+        // P3b(R6/D1):kill switch 缺省开;额外可写清单含 ~/.cargo
+        // 默认项(R7);capability 只读派生字段存在(R8)。
+        assert!(
+            cfg.sandbox_enabled,
+            "sandbox_enabled 缺省应为 true(fail-open)"
+        );
+        assert!(
+            cfg.sandbox_extra_writable
+                .iter()
+                .any(|p| p.ends_with(".cargo")),
+            "生效清单应并入 ~/.cargo 默认项"
+        );
 
         for key in SETTABLE_APP_FLAGS {
             set_app_config_flag_inner(&state, key.to_string(), false)
@@ -592,6 +640,7 @@ mod tests {
             let off = match *key {
                 "turn_complete_notify_enabled" => cfg.turn_complete_notify_enabled,
                 "scheduled_tasks_enabled" => cfg.scheduled_tasks_enabled,
+                "sandbox_enabled" => cfg.sandbox_enabled,
                 _ => unreachable!(),
             };
             assert!(!off, "{key} 写 false 后应读回 false");
@@ -601,7 +650,9 @@ mod tests {
                 .unwrap();
         }
         let cfg = get_app_config_inner(&state).await.unwrap();
-        assert!(cfg.turn_complete_notify_enabled && cfg.scheduled_tasks_enabled);
+        assert!(
+            cfg.turn_complete_notify_enabled && cfg.scheduled_tasks_enabled && cfg.sandbox_enabled
+        );
     }
 
     /// 白名单外 key 拒绝(`InvalidRequest`),且不落库。

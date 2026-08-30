@@ -45,6 +45,14 @@ pub enum AuditKind {
     /// loop 拿到 `execute_tool` 返回值之后 (duration + exit_code
     /// 已知), 见 `agent/chat.rs` 的 tool 执行循环。
     ToolExecuted,
+    /// P3b (08-31-a2-p3b-sandbox-executor, D2): ReadOnly 档 shell
+    /// 命令在 Landlock+seccomp 沙盒下执行完成(spawn 成功)。payload
+    /// 携带 `command_sha256_12`(命令哈希前缀——**不存全命令**,全文
+    /// 已由 `tool_executed` 行承载)+ `ruleset`(ruleset 摘要) +
+    /// `tool_name`。落表点在 `tools/shell.rs` spawn 成功后
+    /// (best-effort,同其余 helper)。PR2 起 `run_background_shell`
+    /// 沙盒路径共用本 kind。
+    SandboxedShellExecution,
     /// Yolo 模式下仍被 Tier 2 deny 拦截 (硬墙)
     ToolDeniedYolo,
 
@@ -222,6 +230,7 @@ impl AuditKind {
             Self::PermissionTimeout => "permission_timeout",
             Self::RequestCancelled => "request_cancelled",
             Self::ToolExecuted => "tool_executed",
+            Self::SandboxedShellExecution => "sandboxed_shell_execution",
             Self::EditMessage => "edit_message",
             Self::ResendMessage => "resend_message",
             Self::LoopIntervention => "loop_intervention",
@@ -394,6 +403,43 @@ pub async fn record_message_resend_audit(
         db,
         session_id,
         AuditKind::ResendMessage.as_str(),
+        Some(&payload_str),
+        turn_seq,
+    )
+    .await
+}
+
+/// P3b (2026-08-31, D2): record a `sandboxed_shell_execution` audit
+/// row after a ReadOnly-tier shell command spawned successfully under
+/// the Landlock+seccomp sandbox. Mirrors the other best-effort
+/// helpers (warn + swallow on DB error).
+///
+/// The payload carries a **command hash prefix + ruleset summary**,
+/// not the command text (design §2.6: the full command is already in
+/// the sibling `tool_executed` row; this row exists to answer "which
+/// commands ran sandboxed and with what rule shape").
+///
+/// `turn_seq` is `None` from the tool layer (the shell tool has no
+/// turn context); kept as a parameter so a future caller inside the
+/// agent loop can thread it.
+pub async fn record_sandboxed_shell_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    tool_name: &str,
+    command_sha256_12: &str,
+    ruleset: &str,
+    turn_seq: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "tool_name": tool_name,
+        "command_sha256_12": command_sha256_12,
+        "ruleset": ruleset,
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::SandboxedShellExecution.as_str(),
         Some(&payload_str),
         turn_seq,
     )

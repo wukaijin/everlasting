@@ -421,6 +421,16 @@ pub struct ToolContext {
     /// string here (it pulls `workflow_def.name` which is
     /// validated non-empty at plugin-load time).
     pub workflow_name: Option<String>,
+    /// P3b (08-31-a2-p3b-sandbox-executor, 评审 B1/D5): the
+    /// session's active mode, injected once at turn start
+    /// (`chat_loop::init`) from `sessions.mode`. The sandbox
+    /// trigger (`sandbox::gate`) needs it — the two spawn paths
+    /// (`shell` + background registry consumer) otherwise have
+    /// no access to the mode, which lives only at the dispatch
+    /// layer. Worker subagents inherit the parent mode through
+    /// the same construction site. Copy type — the per-turn
+    /// `ToolContext::clone()` pattern is unaffected.
+    pub mode: crate::db::Mode,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses

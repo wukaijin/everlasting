@@ -1,0 +1,447 @@
+//! P3b — execution-time sandbox (Landlock + seccomp) for ReadOnly-tier
+//! shell commands (task `08-31-a2-p3b-sandbox-executor`).
+//!
+//! The classification layer (`agent::permissions::shell_trust`) can
+//! never be perfect: variable expansion, `eval`, aliases and indirect
+//! side effects are statically invisible. This module is the damage
+//! limiter UNDER that layer: a command classified `ReadOnly` runs
+//! under a Landlock ruleset (EXECUTE + write-family handled, reads
+//! unrestricted) plus a seccomp BPF filter (blocks `socket(AF_INET /
+//! AF_INET6)`, allows AF_UNIX) — so even a misjudged command is
+//! capped at "worktree + tmp + spill writable, everything else
+//! read-only, no outbound network, no `/init` / `/mnt/c` exec".
+//! Classification semantics are untouched (PRD C2).
+//!
+//! # Layout (design.md §1)
+//!
+//! - [`SandboxSpec`] — pure data computed in the parent process
+//!   (`policy::build_spec`). **Source iron rule**: only server-side
+//!   paths enter this structure (session worktree / `/tmp` / spill
+//!   dir / config extras). Nothing the LLM passes in `tool_input`
+//!   can reach it (CVE-2025-59532).
+//! - [`gate`] — the four-way trigger decision (ReadOnly tier ∧ mode
+//!   ≠ Yolo ∧ `sandbox_enabled` ∧ capability probe), pure and
+//!   testable; `decide` composes it with the per-command context.
+//! - [`prepare`] — parent-process "safe zone": opens the ruleset fd
+//!   + one `O_PATH` fd per path, builds the BPF program. May
+//!   allocate / open freely.
+//! - [`apply`] — registers a `pre_exec` closure. The closure runs in
+//!   the forked child on the async-signal-safety edge: it only
+//!   issues raw syscalls (prctl / landlock_add_rule /
+//!   landlock_restrict_self / one seccomp prctl) reading
+//!   parent-constructed memory through an `Arc`; no malloc, no
+//!   open, no locks (design.md §2.3).
+//!
+//! # Failure semantics
+//!
+//! - Capability probe fails (old kernel, WSL1, non-Linux) →
+//!   fail-open: the command runs unsandboxed, one log line, no
+//!   error, no hang (R5; generalization.md §3 ladder).
+//! - Prepare / pre-exec failure → the spawn itself fails with a
+//!   `[sandbox]`-prefixed error (fail-closed: we never half-apply a
+//!   ruleset).
+//! - Kill switch: `sandbox_enabled=false` in app_config → the spawn
+//!   path never registers `pre_exec`, byte-identical to the
+//!   pre-P3b behavior (R6).
+//!
+//! Spike provenance: ruleset recipe + the five implementation traps
+//! come from `.trellis/tasks/08-31-a2-p3a-sandbox-spike/research/
+//! wsl2-feasibility-landlock.md` (ABI v1 subset, rule-access ⊆
+//! handled else EINVAL, per-file device rules, NoNewPrivs first,
+//! tolerate-missing-paths). Trap 2 is eliminated at the type level
+//! by [`landlock::AccessSet`], whose only constructors are subsets
+//! of the handled mask.
+
+pub mod landlock;
+pub mod policy;
+pub mod seccomp;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tokio::process::Command;
+
+use crate::agent::permissions::shell_trust::{self, ShellTrust};
+use crate::db::Mode;
+use crate::tools::ToolContext;
+
+/// Device nodes that get a per-file `WRITE_FILE` rule (spike trap 3:
+/// `O_RDWR` on `/dev/null` counts as WRITE_FILE, without which `git`
+/// dies on its first invocation). The list is a fixed constant —
+/// config only ever adds writable *directories*, never devices.
+pub(crate) const DEVICE_WRITE_PATHS: &[&str] = &[
+    "/dev/null",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/tty",
+];
+
+/// Pure data describing what a sandboxed command may do. Built by
+/// [`policy::build_spec`] in the parent, consumed by [`prepare`].
+///
+/// The two path lists may name the same directories (e.g. `/tmp` is
+/// both executable and writable); `landlock::RulesetBuilder` merges
+/// same-path access rights, mirroring the kernel's union semantics
+/// without relying on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxSpec {
+    /// Writable subtree roots: session worktree + `/tmp` + the
+    /// session spill dir + config `sandbox_extra_writable` entries.
+    pub writable_roots: Vec<PathBuf>,
+    /// Executable subtree roots: PATH dirs + `/dev` + `/tmp` +
+    /// writable roots + probed toolchain dirs. Deliberately NOT
+    /// `/init` / `/mnt/c` (WSL interop containment).
+    pub exec_allow_roots: Vec<PathBuf>,
+    /// Config-derived extra writable roots (already `~`-expanded;
+    /// kept separate from `writable_roots` for audit readability —
+    /// the builder unions them into the write face).
+    pub extra_writable: Vec<PathBuf>,
+}
+
+/// Outcome of the per-command sandbox decision ([`decide`] /
+/// [`gate`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Decision {
+    /// Run the command under the given spec.
+    Sandbox(SandboxSpec),
+    /// Do not sandbox. `reason` goes to tracing (debug) — never to
+    /// the audit log (design §2.2: skips are not security events).
+    Skip { reason: &'static str },
+}
+
+/// Cached kernel capability probe (R5). `OnceLock`-cached: the
+/// kernel does not gain features mid-process, and `PR_GET_SECCOMP`
+/// is cheap but not free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capability {
+    pub landlock: bool,
+    pub seccomp: bool,
+}
+
+impl Capability {
+    /// All-available (the happy path on WSL2 / CI 24.04 runners).
+    pub fn ok(self) -> bool {
+        self.landlock && self.seccomp
+    }
+
+    /// Probe once, cache forever (design.md §2.2 / R5). Never
+    /// panics, never blocks: two prctls/syscalls on first call.
+    pub fn probe() -> Self {
+        use std::sync::OnceLock;
+        static CAP: OnceLock<Capability> = OnceLock::new();
+        *CAP.get_or_init(|| {
+            let cap = probe_once();
+            if cap.ok() {
+                tracing::debug!(?cap, "sandbox: capability probe ok");
+            } else {
+                // R5: fail-open with a one-line log. This fires once
+                // per process (probe is cached) — the degrade reason
+                // ("sandbox inactive: <kernel too old / WSL1>") is
+                // also surfaced via get_app_config sandbox_capability.
+                tracing::info!(
+                    ?cap,
+                    "sandbox: capability probe failed; fail-open (commands run unsandboxed)"
+                );
+            }
+            cap
+        })
+    }
+}
+
+/// Non-cached probe body. Landlock: `landlock_create_ruleset(NULL, 0,
+/// VERSION)` returns the ABI version (≥1) when the LSM is available.
+/// Seccomp: `prctl(PR_GET_SECCOMP)` returns the current mode (≥0)
+/// when compiled in, -1/EINVAL when the kernel lacks seccomp. Both
+/// are read-only probes with no process-state side effects.
+fn probe_once() -> Capability {
+    #[cfg(target_os = "linux")]
+    {
+        let landlock = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::null::<libc::c_void>(),
+                0 as libc::size_t,
+                landlock::LANDLOCK_CREATE_RULESET_VERSION,
+            )
+        } >= 1;
+        let seccomp = unsafe { landlock::prctl(landlock::PR_GET_SECCOMP, 0, 0, 0, 0) } >= 0;
+        Capability { landlock, seccomp }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS / Windows: no Landlock, no seccomp → fail-open (C4).
+        Capability {
+            landlock: false,
+            seccomp: false,
+        }
+    }
+}
+
+/// Evaluate the four-way trigger for one command (design §2.2, R4).
+/// Pure — the caller supplies every input, so tests can drive each
+/// gate independently (AC3 / AC4 / AC5).
+///
+/// Returns `Some(reason)` when the command must NOT be sandboxed
+/// (the reason goes to tracing, never to the audit log — design
+/// §2.2: skips are not security events) and `None` when it may.
+///
+/// Gate order mirrors `decide`: capability first (cheapest, cached),
+/// then the pure classification, then mode, then the config flag.
+/// Keep the order stable: it is the documented evaluation order and
+/// the reason strings double as log text.
+pub(crate) fn gate(
+    command: &str,
+    mode: Mode,
+    cap: Capability,
+    sandbox_enabled: bool,
+) -> Option<&'static str> {
+    if !cap.ok() {
+        return Some("capability probe failed (fail-open)");
+    }
+    if shell_trust::classify_prefix(command) != ShellTrust::ReadOnly {
+        return Some("command is not ReadOnly tier");
+    }
+    if mode == Mode::Yolo {
+        // R4: Yolo already granted full trust by the user.
+        return Some("session mode is Yolo");
+    }
+    if !sandbox_enabled {
+        return Some("sandbox_enabled=false");
+    }
+    None
+}
+
+/// Per-command decision entry point (shell tool family). Reads the
+/// kill-switch + extra-writable config from the session DB pool and
+/// composes [`gate`] with a [`policy::build_spec`] on the Sandbox
+/// path. The returned `Decision` is consumed once by the tool and
+/// reused for the post-hoc write-block guidance (W3: no second
+/// query).
+pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) -> Decision {
+    let enabled = policy::sandbox_enabled(&ctx.db).await;
+    match gate(command, ctx.mode, Capability::probe(), enabled) {
+        Some(reason) => {
+            tracing::debug!(command_sha = %command_sha_prefix(command), reason, "sandbox: skip");
+            Decision::Skip { reason }
+        }
+        None => {
+            let extra = policy::read_extra_writable(&ctx.db).await;
+            Decision::Sandbox(policy::build_spec(ctx, session_id, extra))
+        }
+    }
+}
+
+/// Parent-process preparation (design §2.3 "safe zone"): creates the
+/// Landlock ruleset fd, opens one `O_PATH` fd per rule path, builds
+/// the BPF program. All of this is allowed to allocate / open / take
+/// locks — it never touches the pre_exec edge.
+///
+/// Fails only on kernel-side ruleset creation (e.g. handled mask
+/// rejected) — a missing path is NOT an error (spike trap 5: the
+/// rule is skipped and logged).
+pub fn prepare(spec: &SandboxSpec) -> std::io::Result<PreparedSandbox> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut builder = landlock::RulesetBuilder::new();
+        for root in &spec.exec_allow_roots {
+            builder.allow(root, landlock::AccessSet::EXECUTE);
+        }
+        for root in spec.writable_roots.iter().chain(spec.extra_writable.iter()) {
+            builder.allow(root, landlock::AccessSet::WRITE_FAMILY);
+        }
+        for dev in DEVICE_WRITE_PATHS {
+            builder.allow(std::path::Path::new(dev), landlock::AccessSet::WRITE_FILE);
+        }
+        let ruleset = builder.build()?;
+        let bpf = seccomp::build_inet_block_filter();
+        Ok(PreparedSandbox {
+            data: Arc::new(PreparedData {
+                ruleset_fd: ruleset.ruleset_fd,
+                rules: ruleset.rules,
+                bpf,
+            }),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = spec;
+        // Unreachable in practice: `gate` never returns Sandbox when
+        // the probe fails, and the probe always fails off-Linux. The
+        // stub exists so the tool layer needs no cfg.
+        Ok(PreparedSandbox {
+            data: Arc::new(PreparedData),
+        })
+    }
+}
+
+/// Register the pre_exec application on a command. The closure body
+/// is syscall-only (see module docs); failures surface from
+/// `cmd.spawn()` as an io::Error, which the tool layer reports with
+/// a `[sandbox]` prefix (fail-closed, design §2.3).
+pub fn apply(cmd: &mut Command, prepared: &PreparedSandbox) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let data = Arc::clone(&prepared.data);
+        unsafe {
+            cmd.pre_exec(move || pre_exec_apply(&data));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (cmd, prepared);
+        Ok(())
+    }
+}
+
+/// The syscall-only pre_exec body (Linux). Order is load-bearing:
+/// NoNewPrivs FIRST (spike trap 4 — restrict_self returns EACCES
+/// without it; it also kills the suid escalation surface), then all
+/// add_rule calls (each failure aborts the whole spawn, aligned with
+/// the spike probe's `_exit(99)` semantics), then restrict_self, then
+/// the seccomp filter LAST so the filter never interferes with the
+/// landlock syscalls above it.
+#[cfg(target_os = "linux")]
+fn pre_exec_apply(data: &PreparedData) -> std::io::Result<()> {
+    // 1. PR_SET_NO_NEW_PRIVS — required before restrict_self; also
+    //    blocks suid/sgid privilege gain inside the sandbox.
+    if unsafe { landlock::prctl(landlock::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // 2. Add one PATH_BENEATH rule per (fd, access) pair. Stack-only
+    //    attr struct; the fd numbers were opened in the parent and
+    //    are valid in the forked child until exec.
+    for (fd, access) in &data.rules {
+        let attr = landlock::PathBeneathAttr {
+            allowed_access: *access,
+            parent_fd: *fd,
+        };
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_add_rule,
+                data.ruleset_fd,
+                landlock::LANDLOCK_RULE_PATH_BENEATH,
+                &attr,
+                0 as libc::c_uint,
+            )
+        };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    // 3. Restrict: from here the child can never regain the dropped
+    //    rights (irreversible for the process tree — spike §1).
+    if unsafe {
+        libc::syscall(
+            libc::SYS_landlock_restrict_self,
+            data.ruleset_fd,
+            0 as libc::c_uint,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // 4. Seccomp: the kernel copies the filter program out of
+    //    `data.bpf` during this one prctl (W2: referencing
+    //    parent-constructed memory is safe — no malloc in the
+    //    closure; the sock_fprog header is stack-built).
+    seccomp::install_in_preexec(&data.bpf)?;
+    Ok(())
+}
+
+/// Parent-owned sandbox artifacts for ONE spawn. `Arc<PreparedData>`
+/// is captured by the pre_exec closure ('static requirement) and
+/// read through by reference in the forked child; `Drop` closes the
+/// fds in the parent after `spawn()` returns (std guarantees the
+/// child has already exec'd or died by then — the parent-side close
+/// cannot race the child's use).
+pub struct PreparedSandbox {
+    data: Arc<PreparedData>,
+}
+
+impl PreparedSandbox {
+    /// One-line ruleset summary for the audit payload (design §2.6:
+    /// the audit row records the shape of the ruleset, never the
+    /// command text — the command is already in `tool_executed`).
+    /// Bucketing by access bits is intentionally coarse: rules are
+    /// merged per-path, so a root can legitimately carry EXECUTE +
+    /// write bits at once.
+    pub fn summary(&self) -> String {
+        #[cfg(target_os = "linux")]
+        {
+            format!(
+                "landlock:handled_fs=0x{:x} rules={}; seccomp:inet_block",
+                landlock::HANDLED_ACCESS_FS,
+                self.data.rules.len()
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            "inactive".to_string()
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PreparedData {
+    ruleset_fd: std::os::fd::RawFd,
+    rules: Vec<(std::os::fd::RawFd, u64)>,
+    bpf: Vec<libc::sock_filter>,
+}
+
+#[cfg(not(target_os = "linux"))]
+struct PreparedData;
+
+#[cfg(target_os = "linux")]
+impl Drop for PreparedData {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.ruleset_fd);
+            for (fd, _) in &self.rules {
+                libc::close(*fd);
+            }
+        }
+    }
+}
+
+/// Stable short hash of the command text for audit correlation
+/// (design §2.6: audit row carries a command hash, not the command —
+/// the full text is already stored by `tool_executed`).
+pub(crate) fn command_sha_prefix(command: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(command.as_bytes());
+    let out = h.finalize();
+    out.iter().take(6).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Post-hoc write-block guidance (design §2.5, R7): when a sandboxed
+/// command failed and its stderr smells like a Landlock write denial,
+/// the tool appends this line so the model knows WHY and what to do
+/// (escalate to a user-authorized non-read-only command, or ask the
+/// user to extend `sandbox_extra_writable`). Heuristic, append-only —
+/// the command's own output is never rewritten. `None` = no append
+/// (宁缺勿滥: only the two canonical denial strings trigger it).
+pub(crate) fn write_block_guidance(stderr: &str) -> Option<&'static str> {
+    if stderr.contains("Permission denied") || stderr.contains("Read-only file system") {
+        Some(
+            "[sandbox] The failure above looks like a sandbox write block (writable roots: \
+             the session worktree, /tmp, and the app outputs dir). To write outside those \
+             roots, run the operation as a non-read-only command (the user will be asked for \
+             permission), or ask the user to add the path to `sandbox_extra_writable` in \
+             Settings.",
+        )
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "tests_sandbox.rs"]
+mod tests_sandbox;

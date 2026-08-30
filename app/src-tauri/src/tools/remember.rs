@@ -342,6 +342,7 @@ mod tests {
             project_id: "/repo/proj".to_string(),
             data_dir: std::path::PathBuf::from("/repo"),
             workflow_name: None,
+            mode: crate::db::Mode::Edit,
         };
         (ctx, pool)
     }

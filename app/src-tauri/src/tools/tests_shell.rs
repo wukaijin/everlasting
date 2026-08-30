@@ -16,6 +16,7 @@ fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         project_id: "test-proj".to_string(),
         data_dir: tmp.path().to_path_buf(),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     }
 }
 
@@ -264,6 +265,7 @@ async fn execute_rejects_when_ctx_cwd_outside_root() {
         project_id: "test-proj".to_string(),
         data_dir: tmp.path().to_path_buf(),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     };
     let (msg, is_error, _, _) = execute(
         &serde_json::json!({"command": "pwd"}),

@@ -257,6 +257,7 @@ mod tests {
             project_id: String::new(), // caller overwrites per test
             data_dir: std::path::PathBuf::from("/repo"),
             workflow_name: None,
+            mode: crate::db::Mode::Edit,
         };
         (ctx, pool)
     }

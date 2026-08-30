@@ -195,6 +195,7 @@ fn test_ctx() -> ToolContext {
         project_id: "test-proj".to_string(),
         data_dir: std::path::PathBuf::from("/tmp/everlasting-tool-test"),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     }
 }
 
@@ -538,6 +539,7 @@ fn spill_test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         project_id: "test-proj".to_string(),
         data_dir: tmp.path().to_path_buf(),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     }
 }
 

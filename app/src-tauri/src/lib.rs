@@ -61,6 +61,11 @@ mod llm;
 mod memory;
 mod projects;
 mod resource_loader;
+// P3b 执行期沙盒 (2026-08-31, task `08-31-a2-p3b-sandbox-executor`):
+// Landlock + seccomp 执行器,ReadOnly 档 shell 命令的限损层。crate 私有:
+// 消费者是 tools/shell.rs、tools/run_background_shell.rs (PR2) 与
+// commands/config.rs (设置面读出口)。
+mod sandbox;
 // F2 定时任务 (2026-08-28, task `08-28-f2-scheduled-tasks`): 调度内核
 // (preset 档位纯函数 + 30s tick 单一扫描算法 + TaskOrigin 来源标记)。
 // crate 私有:唯一消费者是 daemon/server.rs 的 spawn_task_scheduler

@@ -279,6 +279,12 @@ pub(crate) async fn prepare_loop_state(
         }
         _ => worktree_path.clone(),
     };
+    // P3b (08-31-a2-p3b, 评审 B1/D5): bind the session mode BEFORE
+    // `turn_ctx` so the ToolContext carries it (the sandbox trigger
+    // in the shell tool family reads `ctx.mode`). Same value the
+    // dispatch layer forwards via `DispatchCtx.session_mode` — one
+    // source (`loaded_session.session.mode`), two consumers.
+    let session_mode = loaded_session.session.mode;
     let turn_ctx = ToolContext {
         worktree_path: worktree_path.clone(),
         cwd: session_cwd.clone(),
@@ -328,6 +334,10 @@ pub(crate) async fn prepare_loop_state(
         // populated by `lib.rs::chat` from the session's
         // `workflow_enabled` toggle + the active plugin.
         workflow_name: workflow_ctx.as_ref().map(|c| c.workflow_def.name.clone()),
+        // P3b (08-31-a2-p3b): session mode for the sandbox trigger —
+        // see the binding above; worker subagents inherit the parent
+        // mode through this same construction site (design §3).
+        mode: session_mode,
     };
     let current_ctx = turn_ctx;
     let last_cwd: Option<PathBuf> = None;
@@ -369,7 +379,6 @@ pub(crate) async fn prepare_loop_state(
     // exit) — no cross-session carry.
     let soft_blocked: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
 
-    let session_mode = loaded_session.session.mode;
     // B6 PR2b (RULE-A-014, 2026-06-20): the `is_worker` parameter
     // (added as the 21st arg) threads the worker path's
     // `PermissionContext.is_worker = true` override into the loop

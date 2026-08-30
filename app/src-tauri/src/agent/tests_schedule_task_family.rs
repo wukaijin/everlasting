@@ -38,6 +38,7 @@ async fn make_ctx() -> (ToolContext, sqlx::SqlitePool) {
         project_id: String::new(),
         data_dir: std::path::PathBuf::from("/repo"),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     };
     (ctx, pool)
 }

@@ -358,6 +358,7 @@ async fn make_ctx(pool: &sqlx::SqlitePool) -> crate::tools::ToolContext {
         project_id: String::new(),
         data_dir: std::path::PathBuf::from("/repo"),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     }
 }
 

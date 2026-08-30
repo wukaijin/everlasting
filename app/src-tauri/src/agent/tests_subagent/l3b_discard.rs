@@ -57,6 +57,7 @@ async fn l3b_discard_worker_happy_path() {
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -127,6 +128,7 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
         workflow_name: None,
+        mode: crate::db::Mode::Edit,
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) =

@@ -39,6 +39,11 @@ fn audit_kind_round_trip() {
         // `AuditKind::LoopIntervention.as_str()` verbatim; both
         // ends of the contract must agree on this string.
         AuditKind::LoopIntervention,
+        // P3b (2026-08-31, D2): sandboxed shell execution kind.
+        // Wire string stable — `record_sandboxed_shell_audit`
+        // writes `AuditKind::SandboxedShellExecution.as_str()`
+        // verbatim; both ends of the contract must agree.
+        AuditKind::SandboxedShellExecution,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
@@ -76,4 +81,9 @@ fn audit_kind_round_trip() {
     // helper writes `AuditKind::LoopIntervention.as_str()` verbatim —
     // both ends of the contract must agree on this string.
     assert_eq!(AuditKind::LoopIntervention.as_str(), "loop_intervention");
+    // P3b (2026-08-31, D2): pin the sandboxed execution wire string.
+    assert_eq!(
+        AuditKind::SandboxedShellExecution.as_str(),
+        "sandboxed_shell_execution"
+    );
 }

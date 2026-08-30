@@ -191,6 +191,7 @@ mod tests {
             project_id: "test".to_string(),
             data_dir: PathBuf::from("/tmp"),
             workflow_name: Some("dev".to_string()),
+            mode: crate::db::Mode::Edit,
         }
     }
 
