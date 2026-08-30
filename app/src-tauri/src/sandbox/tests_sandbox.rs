@@ -321,7 +321,7 @@ async fn spec_merges_extra_writable_without_duplicates() {
     assert_eq!(
         spec.writable_roots
             .iter()
-            .filter(|p| **p == PathBuf::from("/tmp"))
+            .filter(|p| p.as_path() == Path::new("/tmp"))
             .count(),
         1
     );

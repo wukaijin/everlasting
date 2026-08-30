@@ -240,6 +240,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         command: String,
         cwd: PathBuf,
         max_runtime_ms: Option<u64>,
+        sandbox: Option<crate::sandbox::SandboxSpec>,
     ) -> Result<String, BackgroundShellError> {
         // 1. Generate the shell id BEFORE spawning so the registry
         //    can record the entry even if spawn fails (the LLM still
@@ -269,6 +270,17 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         crate::tools::shell::apply_safe_env(&mut cmd);
         #[cfg(unix)]
         cmd.process_group(0);
+
+        // P3b (08-31-a2-p3b): apply the caller-computed sandbox spec.
+        // Prepare (parent zone: ruleset fd + O_PATH fds + BPF) may
+        // fail → Err(Spawn) like any spawn failure (fail-closed);
+        // apply registers the syscall-only pre_exec closure, whose
+        // failures surface from `cmd.spawn()` below through the same
+        // SpawnFailed channel. `None` → byte-identical legacy spawn.
+        if let Some(spec) = &sandbox {
+            let prepared = crate::sandbox::prepare(spec).map_err(BackgroundShellError::Spawn)?;
+            crate::sandbox::apply(&mut cmd, &prepared).map_err(BackgroundShellError::Spawn)?;
+        }
 
         // 3. Spawn. A spawn failure (ENOENT / EACCES) is recorded
         //    as a Done entry with SpawnFailed outcome + a
@@ -837,6 +849,7 @@ mod tests {
                 "yes line | head -c 40000".to_string(),
                 tmp.path().to_path_buf(),
                 Some(10_000),
+                None,
             )
             .await
             .unwrap();
@@ -875,6 +888,128 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    /// P3b AC6 (08-31-a2-p3b): a sandboxed background shell is
+    /// constrained at the registry spawn point. `Some(spec)` → the
+    /// child runs under Landlock+seccomp (write outside the face →
+    /// Failed + "Permission denied" in stderr); `None` → the spawn is
+    /// byte-identical to the legacy path (write anywhere succeeds).
+    /// Skipped (loudly) when the runtime kernel lacks Landlock+seccomp.
+    #[tokio::test]
+    async fn sandboxed_background_shell_enforces_write_face() {
+        if !crate::sandbox::Capability::probe().ok() {
+            eprintln!("SKIP: Landlock/seccomp unavailable on this kernel (fail-open runtime)");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let spec = crate::sandbox::SandboxSpec {
+            writable_roots: vec![wt.clone(), "/tmp".into()],
+            exec_allow_roots: vec![
+                "/usr".into(),
+                "/bin".into(),
+                "/lib".into(),
+                "/lib64".into(),
+                "/dev".into(),
+                "/tmp".into(),
+                wt.clone(),
+            ],
+            extra_writable: vec![],
+        };
+        let reg = InMemoryBackgroundShellRegistry::new();
+
+        async fn wait_terminal(
+            reg: &InMemoryBackgroundShellRegistry,
+            sid: &str,
+            shell_id: &str,
+        ) -> BackgroundShellStatus {
+            for _ in 0..60 {
+                match reg.status(sid, shell_id).await.unwrap() {
+                    s @ (BackgroundShellStatus::Completed { .. }
+                    | BackgroundShellStatus::Killed { .. }) => return s,
+                    BackgroundShellStatus::Running { .. } => {
+                        tokio::time::sleep(Duration::from_millis(50)).await
+                    }
+                }
+            }
+            panic!("background shell did not terminate within 3s");
+        }
+
+        // 1. Sandboxed + write inside the worktree → Completed.
+        let id_ok = reg
+            .start(
+                "s1",
+                "echo hi > sbx_out.txt".to_string(),
+                wt.clone(),
+                Some(10_000),
+                Some(spec.clone()),
+            )
+            .await
+            .unwrap();
+        match wait_terminal(&reg, "s1", &id_ok).await {
+            BackgroundShellStatus::Completed { exit_code, .. } => {
+                assert_eq!(exit_code, 0);
+                assert!(wt.join("sbx_out.txt").exists());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // 2. Sandboxed + write to $HOME → Failed, Permission denied.
+        let id_deny = reg
+            .start(
+                "s1",
+                "echo hi > $HOME/sbx_bg_denied.txt".to_string(),
+                wt.clone(),
+                Some(10_000),
+                Some(spec.clone()),
+            )
+            .await
+            .unwrap();
+        match wait_terminal(&reg, "s1", &id_deny).await {
+            BackgroundShellStatus::Completed { exit_code, .. } => {
+                assert_ne!(exit_code, 0, "write to $HOME must fail under sandbox");
+                // stderr preview is available on Completed; assert there.
+            }
+            other => panic!("command itself should exit, got {other:?}"),
+        }
+        // Wait for the status refresh (the Completed entry carries the
+        // stderr preview) and assert the denial surfaced.
+        match reg.status("s1", &id_deny).await.unwrap() {
+            BackgroundShellStatus::Completed { stderr_preview, .. } => {
+                assert!(
+                    stderr_preview.contains("Permission denied"),
+                    "expected Permission denied in stderr, got: {stderr_preview}"
+                );
+            }
+            other => panic!("expected Completed after terminal, got {other:?}"),
+        }
+        assert!(!std::path::Path::new(&std::env::var("HOME").unwrap())
+            .join("sbx_bg_denied.txt")
+            .exists());
+
+        // 3. No spec → legacy behavior, $HOME write succeeds.
+        let id_none = reg
+            .start(
+                "s1",
+                "echo hi > $HOME/sbx_bg_allowed.txt".to_string(),
+                wt.clone(),
+                Some(10_000),
+                None,
+            )
+            .await
+            .unwrap();
+        match wait_terminal(&reg, "s1", &id_none).await {
+            BackgroundShellStatus::Completed { exit_code, .. } => {
+                assert_eq!(exit_code, 0, "unsandboxed write must succeed");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let home_allowed =
+            std::path::Path::new(&std::env::var("HOME").unwrap()).join("sbx_bg_allowed.txt");
+        assert!(home_allowed.exists(), "legacy path must actually write");
+        let _ = std::fs::remove_file(&home_allowed);
     }
 
     /// The shell id format is `bsh_<uuid>` with no dashes. UUID
@@ -944,6 +1079,7 @@ mod tests {
                 "echo hello".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
             )
             .await
             .expect("start ok");
@@ -977,6 +1113,7 @@ mod tests {
                 "sleep 5".to_string(),
                 tmp.path().to_path_buf(),
                 Some(30_000),
+                None,
             )
             .await
             .unwrap();
@@ -1009,6 +1146,7 @@ mod tests {
                 "echo hello-from-bg && echo stderr-msg >&2".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
             )
             .await
             .unwrap();
@@ -1049,6 +1187,7 @@ mod tests {
                 "sleep 60".to_string(),
                 tmp.path().to_path_buf(),
                 Some(120_000),
+                None,
             )
             .await
             .unwrap();
@@ -1076,6 +1215,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
             )
             .await
             .unwrap();
@@ -1114,6 +1254,7 @@ mod tests {
                 "sleep 5".to_string(),
                 tmp.path().to_path_buf(),
                 Some(30_000),
+                None,
             )
             .await
             .unwrap();
@@ -1135,6 +1276,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
             )
             .await
             .unwrap();
@@ -1144,6 +1286,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
             )
             .await
             .unwrap();
@@ -1153,6 +1296,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
             )
             .await
             .unwrap();
@@ -1199,6 +1343,7 @@ mod tests {
                     "true".to_string(),
                     tmp.path().to_path_buf(),
                     Some(5000),
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1258,6 +1403,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
             )
             .await
             .expect("start ok");
@@ -1326,6 +1472,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
             )
             .await
             .unwrap();

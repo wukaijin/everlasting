@@ -258,12 +258,22 @@ pub trait BackgroundShellRegistry: Send + Sync {
     /// project root (callers run `projects::boundary::assert_within_root`
     /// first); the registry does not re-validate. This mirrors
     /// the synchronous `shell` tool's contract.
+    ///
+    /// P3b (08-31-a2-p3b, 评审 B1/D5): `sandbox` carries the
+    /// caller-computed [`crate::sandbox::SandboxSpec`] — the tool
+    /// layer owns the four-way decision (it has the mode/config
+    /// context), the registry only CONSUMES it: `Some(spec)` → the
+    /// spawn point prepares (parent zone) and applies (pre_exec) the
+    /// ruleset; a prepare failure surfaces as
+    /// [`BackgroundShellError::Spawn`] (fail-closed, same channel as
+    /// any spawn failure). `None` → spawn exactly as before.
     async fn start(
         &self,
         session_id: &str,
         command: String,
         cwd: PathBuf,
         max_runtime_ms: Option<u64>,
+        sandbox: Option<crate::sandbox::SandboxSpec>,
     ) -> Result<String, BackgroundShellError>;
 
     /// Query a background shell's status. Returns

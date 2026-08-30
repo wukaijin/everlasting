@@ -261,6 +261,7 @@ mod tests {
                 "echo round-trip".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
             )
             .await
             .expect("start");
@@ -292,6 +293,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
             )
             .await
             .expect("start");

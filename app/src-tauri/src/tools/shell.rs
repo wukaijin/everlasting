@@ -470,16 +470,22 @@ pub async fn execute(
     // actually running (spawn succeeded). Best-effort — an audit
     // failure never breaks the command. The payload carries a command
     // hash + ruleset summary, not the command text (the sibling
-    // `tool_executed` row already has the full input).
-    if let (Some(p), Some(sid)) = (prepared.as_ref(), session_id) {
-        let ruleset = p.summary();
-        let sha = crate::sandbox::command_sha_prefix(command);
-        if let Err(e) = crate::agent::permissions::audit::record_sandboxed_shell_audit(
-            &ctx.db, sid, "shell", &sha, &ruleset, None,
-        )
-        .await
-        {
-            tracing::warn!(error = %e, "shell: sandboxed-shell audit write failed");
+    // `tool_executed` row already has the full input). W3: the spec
+    // comes from the decision computed before spawn — no re-gate.
+    if prepared.is_some() {
+        if let Some(sid) = session_id {
+            let ruleset = match &sandbox_decision {
+                crate::sandbox::Decision::Sandbox(spec) => spec.summary(),
+                _ => unreachable!("prepared.is_some() implies a Sandbox decision"),
+            };
+            let sha = crate::sandbox::command_sha_prefix(command);
+            if let Err(e) = crate::agent::permissions::audit::record_sandboxed_shell_audit(
+                &ctx.db, sid, "shell", &sha, &ruleset, None,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "shell: sandboxed-shell audit write failed");
+            }
         }
     }
 

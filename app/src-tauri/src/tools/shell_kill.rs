@@ -207,6 +207,7 @@ mod tests {
                 "sleep 60".to_string(),
                 tmp.path().to_path_buf(),
                 Some(120_000),
+                None,
             )
             .await
             .expect("start");
@@ -245,6 +246,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
             )
             .await
             .expect("start");
@@ -282,6 +284,7 @@ mod tests {
                 "sleep 60".to_string(),
                 tmp.path().to_path_buf(),
                 Some(120_000),
+                None,
             )
             .await
             .expect("start");

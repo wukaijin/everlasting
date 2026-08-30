@@ -211,7 +211,38 @@ pub async fn execute(
         }
     };
 
-    // 4. Start the background shell.
+    // 4. P3b (08-31-a2-p3b, 评审 B1/D5): same four-way sandbox gate
+    //    as the synchronous `shell` tool. The decision is computed
+    //    HERE (tool layer has ctx.mode + config access) and handed to
+    //    the registry, which only CONSUMES it at its spawn point
+    //    (design §2.2). The audit row is written by the tool side
+    //    (design §2.6 — the registry has no DB handle) with the same
+    //    hash+summary payload shape as the foreground path.
+    let sandbox_spec = match crate::sandbox::decide(ctx, &command, session_id).await {
+        crate::sandbox::Decision::Sandbox(spec) => {
+            let ruleset = spec.summary();
+            let sha = crate::sandbox::command_sha_prefix(&command);
+            if let Err(e) = crate::agent::permissions::audit::record_sandboxed_shell_audit(
+                &ctx.db,
+                chat_session_id,
+                "run_background_shell",
+                &sha,
+                &ruleset,
+                None,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "run_background_shell: sandbox audit write failed");
+            }
+            Some(spec)
+        }
+        crate::sandbox::Decision::Skip { reason } => {
+            tracing::debug!(reason, "run_background_shell: sandbox skip");
+            None
+        }
+    };
+
+    // 5. Start the background shell.
     match ctx
         .background_shells
         .start(
@@ -219,6 +250,7 @@ pub async fn execute(
             command.clone(),
             validated_cwd.clone(),
             max_runtime_ms,
+            sandbox_spec,
         )
         .await
     {

@@ -361,26 +361,22 @@ pub struct PreparedSandbox {
     data: Arc<PreparedData>,
 }
 
-impl PreparedSandbox {
+impl SandboxSpec {
     /// One-line ruleset summary for the audit payload (design §2.6:
     /// the audit row records the shape of the ruleset, never the
     /// command text — the command is already in `tool_executed`).
-    /// Bucketing by access bits is intentionally coarse: rules are
-    /// merged per-path, so a root can legitimately carry EXECUTE +
-    /// write bits at once.
-    pub fn summary(&self) -> String {
-        #[cfg(target_os = "linux")]
-        {
-            format!(
-                "landlock:handled_fs=0x{:x} rules={}; seccomp:inet_block",
-                landlock::HANDLED_ACCESS_FS,
-                self.data.rules.len()
-            )
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            "inactive".to_string()
-        }
+    /// Root counts, not rule counts: the ruleset builder merges
+    /// same-path access rights, so this stays stable without opening
+    /// any fd — both spawn paths (foreground `shell` + background
+    /// registry consumer) audit with the SAME shape.
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "landlock:exec_roots={} writable_roots={} extra={} devices={}; seccomp:inet_block",
+            self.exec_allow_roots.len(),
+            self.writable_roots.len(),
+            self.extra_writable.len(),
+            DEVICE_WRITE_PATHS.len()
+        )
     }
 }
 
