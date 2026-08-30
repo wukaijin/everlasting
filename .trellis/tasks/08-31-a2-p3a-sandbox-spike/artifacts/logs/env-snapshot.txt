@@ -1,0 +1,22 @@
+# ç¯å¢ƒå¿«ç…§(2026-08-31 02:25:16)
+5.15.153.1-microsoft-standard-WSL2
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+systemd
+WSL Hr,gÿ 2.2.4.0
+…Q8hHr,gÿ 5.15.153.1-2
+WSLg Hr,gÿ 1.0.61
+MSRDC Hr,gÿ 1.2.5326
+Direct3D Hr,gÿ 1.611.1-81528511
+DXCore Hr,gÿ 10.0.26091.1-240325-1447.ge-release
+Windows Hr,gÿ 10.0.26200.9168
+
+max_user_namespaces=47834
+crw-rw---- 1 root kvm 10, 232 Aug 27 21:04 /dev/kvm
+ç”¨æˆ·ä¸åœ¨ kvm ç»„
+
+bubblewrap 0.6.1
+CONFIG_USER_NS=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+CONFIG_SECURITY_LANDLOCK=y
+CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,integrity,bpf"

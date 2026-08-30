@@ -22,8 +22,14 @@
   "parent": null,
   "relatedFiles": [
     "docs/_history/2026-08-28-a2-shell-classification.md",
-    "docs/ROADMAP.md"
+    "docs/ROADMAP.md",
+    "research/wsl2-feasibility-bwrap.md",
+    "research/wsl2-feasibility-landlock.md",
+    "research/generalization.md",
+    "research/prior-art.md",
+    "research/p3b-design-notes.md",
+    "artifacts/README.md"
   ],
-  "notes": "结论:主路线 Landlock+seccomp(纯 Rust 零外部依赖,Codex 同款);bwrap 可选档;microVM 不做。P3b 是否跟上另立项评审。",
+  "notes": "结论:主路线 Landlock+seccomp(纯 Rust 零外部依赖,Codex 同款);bwrap 可选档;microVM 不做。证据=artifacts/(探针+原始日志,可复跑);P3b 移交件=research/p3b-design-notes.md。P3b 是否跟上另立项评审。",
   "meta": {}
 }
