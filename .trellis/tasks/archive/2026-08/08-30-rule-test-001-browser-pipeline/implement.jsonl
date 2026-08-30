@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend spec index (Guidelines Index table) — the new browser-regression guide row gets added here during PR3"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "jsdom traps + canonical transport mock — the browser layer is its sibling; implementer must know what unit level already covers to keep the two layers non-overlapping"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "browser-local mode semantics (no token → no proxy prefix), health handshake DaemonHealth shape — fixture boot contract depends on these (note: SSE lazy-EventSource detail lives in http.ts code comments, not here)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "Chat panel / message rendering / tool cards conventions — pilot specs ① chat-input-keys and ② question-card-scroll live in this surface"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "Hand-rolled outside-click + Esc close pattern — pilot spec ③ revoke confirm dialog asserts pointerdown-outside semantics"}
