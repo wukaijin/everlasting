@@ -72,30 +72,67 @@ describe("DrawerToolCallCard — header rendering", () => {
     expect(w.find(".tool-call-header__name").text()).toBe("grep");
   });
 
-  it("renders the file path when input.path is a non-empty string", () => {
+  it("renders the file path chip when input.path is a non-empty string", () => {
     const w = mountCard({
       call: makeCall({ input: { path: "/repo/src/foo.ts" } }),
     });
-    const path = w.find(".tool-call-header__path");
-    expect(path.exists()).toBe(true);
-    expect(path.text()).toContain("/repo/src/foo.ts");
+    const chip = w.find(".tool-call-header__chip");
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("/repo/src/foo.ts");
   });
 
-  it("does NOT render the path row when input has no `path` key (shell)", () => {
+  // 2026-08-30 (task `08-30-shell-description`, PRD R4/AC3): shell 家族
+  // 的 header chip 数据源换 `toolHeaderChip` —— 缺失 description 时兜底
+  // command 首行(此前 shell 恒无 chip)。原「shell 无 path 行」断言随之
+  // 演进为兜底分支断言(既有断言被 R4 有意取代,非行为漂移)。
+  it("falls back to the command first line for shell without description", () => {
     const w = mountCard({
       call: makeCall({
         name: "shell",
         input: { command: "ls -la" },
       }),
     });
-    expect(w.find(".tool-call-header__path").exists()).toBe(false);
+    const chip = w.find(".tool-call-header__chip");
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("ls -la");
   });
 
-  it("does NOT render the path row when input.path is empty string", () => {
+  it("prefers input.description over the command fallback for shell", () => {
+    const w = mountCard({
+      call: makeCall({
+        name: "shell",
+        input: { command: "ls -la", description: "列出目录内容" },
+      }),
+    });
+    const chip = w.find(".tool-call-header__chip");
+    expect(chip.text()).toContain("列出目录内容");
+    expect(chip.text()).not.toContain("ls -la");
+  });
+
+  it("takes only the first non-empty line of a multi-line command (fallback)", () => {
+    const w = mountCard({
+      call: makeCall({
+        name: "run_background_shell",
+        input: { command: "\n  pnpm build \n--watch" },
+      }),
+    });
+    expect(w.find(".tool-call-header__chip").text()).toContain("pnpm build");
+  });
+
+  it("does NOT render the chip when input.path is empty string", () => {
     const w = mountCard({
       call: makeCall({ input: { path: "" } }),
     });
-    expect(w.find(".tool-call-header__path").exists()).toBe(false);
+    expect(w.find(".tool-call-header__chip").exists()).toBe(false);
+  });
+
+  it("does NOT render a chip for a non-shell tool without path", () => {
+    // 非 shell 工具(如 dispatch_subagent)不享受 command 兜底 —
+    // toolHeaderChip 的兜底分支被 isShellFamilyTool 封闭。
+    const w = mountCard({
+      call: makeCall({ name: "dispatch_subagent", input: { task: "x" } }),
+    });
+    expect(w.find(".tool-call-header__chip").exists()).toBe(false);
   });
 });
 
@@ -137,6 +174,21 @@ describe("DrawerToolCallCard — status row", () => {
   it("does NOT apply --running once a result lands", () => {
     const w = mountCard({ call: makeCall(), result: makeResult() });
     expect(w.find(".drawer-tool-card--running").exists()).toBe(false);
+  });
+
+  // 08-30-shell-description R6: done 态 status(icon+文字)着成功色,
+  // 颜色由共享 ToolCallHeader 的 isSuccess prop 驱动,这里锁接线。
+  it("applies the header --success modifier when a non-error result lands", () => {
+    const w = mountCard({ call: makeCall(), result: makeResult() });
+    expect(w.find(".tool-call-header--success").exists()).toBe(true);
+  });
+
+  it("does NOT apply header --success on error results", () => {
+    const w = mountCard({
+      call: makeCall(),
+      result: makeResult({ isError: true }),
+    });
+    expect(w.find(".tool-call-header--success").exists()).toBe(false);
   });
 });
 

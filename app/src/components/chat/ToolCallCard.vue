@@ -547,12 +547,13 @@ watch(
     <ToolCallHeader
       :icon-name="toolIcon(call.name)"
       :name="call.name"
-      :file-path="filePath"
+      :chip="filePath"
       :status-text="isDispatchSubagent ? dispatchHeaderStatus : statusText"
       :status-icon-name="statusIconName"
       :duration-label="durationLabel"
       :is-error="isError"
       :is-running="!hasResult && !isError"
+      :is-success="hasResult && !isError && !isDispatchSubagent"
     >
       <template #status-extra>
         <button

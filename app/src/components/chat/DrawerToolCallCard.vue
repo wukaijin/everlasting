@@ -46,6 +46,7 @@ import { computed } from "vue";
 import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat.types";
 import {
   toolAccentVar,
+  toolHeaderChip,
   toolIcon,
 } from "../../utils/messageFormat";
 import { abbreviateDuration } from "../../utils/duration";
@@ -76,16 +77,15 @@ const accent = computed(() => {
   return toolAccentVar(props.call.name);
 });
 
-/** Best-effort file path for the header. Most tools pass `path`;
- *  shell uses `command` which is too long, so we leave it out
- *  (matches `ToolCallCard.vue`'s `filePath` computed). */
-const filePath = computed<string | null>(() => {
-  const input = props.call.input;
-  if (!input) return null;
-  const p = input.path;
-  if (typeof p === "string" && p.length > 0) return p;
-  return null;
-});
+/** Header chip via the shared `toolHeaderChip` helper (2026-08-30,
+ *  task `08-30-shell-description` PR2 / PRD R4): path tools keep the
+ *  `input.path` chip (unchanged); shell 家族现在获得 description →
+ *  command 首行的兜底 chip,连续多个 shell 调用在折叠态可扫读。
+ *  drawer 侧只做 chip——命令块不做(design D5:store 边界使 ShellCard
+ *  不可直接复用,命令可见性由审批卡命令行 + input details 覆盖)。 */
+const chip = computed<string | null>(() =>
+  toolHeaderChip(props.call.name, props.call.input),
+);
 
 const statusText = computed<string>(() => {
   if (isError.value) return "error";
@@ -140,12 +140,13 @@ const statusIconName = computed<string>(() => {
     <ToolCallHeader
       :icon-name="toolIcon(call.name)"
       :name="call.name"
-      :file-path="filePath"
+      :chip="chip"
       :status-text="statusText"
       :status-icon-name="statusIconName"
       :duration-label="durationLabel"
       :is-error="isError"
       :is-running="!hasResult && !isError"
+      :is-success="hasResult && !isError"
     />
 
     <!--

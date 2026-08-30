@@ -14,17 +14,22 @@
 // `06-25-debt-frontsubagent-refactor` PRD）。
 //
 // 设计：纯展示，0 store。接收调用方在 script setup 里算好的 props：
-//   - ToolCallCard：iconName=toolIcon(name) / filePath / statusText（含
+//   - ToolCallCard：iconName=toolIcon(name) / chip(路径 chip) / statusText（含
 //     dispatch 分支 workerStatusText）/ statusIconName / durationLabel +
 //     diff-btn 走 #status-extra slot
 //   - DrawerToolCallCard：同 ToolCallCard 但无 slot（无 diff-btn）
 //   - DrawerPermissionAskCard：iconName="shield-check" / suffix="权限询问" /
 //     statusText / statusVariant="accent"（interactive 时）
 //
-// 差异点用可选 props 处理（filePath 仅 tool 变体 / suffix 仅 permission
+// 差异点用可选 props 处理（chip 仅 tool 变体 / suffix 仅 permission
 // 变体 / statusIconName+durationLabel 仅 tool 变体）。error/running 颜色
 // 改 isError/isRunning prop 驱动（不再靠外部 card root `--error` 后代
 // 选择器），header 视觉自洽、可独立测试。
+//
+// 2026-08-30 (task `08-30-shell-description` PR2): prop `filePath` 机械
+// 更名 `chip`（scoped class `__path` → `__chip` 同步）—— 该槽位现在不只
+// 装文件路径，还装 shell 家族的 description / 命令首行（数据源
+// `messageFormat.toolHeaderChip`），按内容更名以名实相符。
 
 import Icon from "../Icon.vue";
 
@@ -34,8 +39,9 @@ const props = withDefaults(
     iconName: string;
     /** Header 标题 —— tool 变体是 tool name，permission 变体是 toolName/fallback。 */
     name: string;
-    /** Tool 变体：文件路径 chip（"· /foo"）。permission 变体不传。null/空 则不渲染。 */
-    filePath?: string | null;
+    /** Tool 变体：标题后 chip（"· <chip>"，路径或 shell 意图/命令首行，
+     *  调用方经 toolHeaderChip() 算好）。permission 变体不传。null/空 则不渲染。 */
+    chip?: string | null;
     /** Permission 变体：后缀标签（如 "权限询问"）。tool 变体不传。 */
     suffix?: string;
     /** 状态文本（右侧）。调用方预算（ToolCallCard 含 dispatch 分支）。 */
@@ -48,16 +54,22 @@ const props = withDefaults(
     isError?: boolean;
     /** 运行态 —— 驱动 status-icon pulse 动画。 */
     isRunning?: boolean;
+    /** 成功态（has result 且非 error）—— status icon + 文本着成功色
+     *  （--color-tool-write，同 EditFileCard +N / 审批 allow 徽章的语义色）。
+     *  duration 保持 secondary（耗时不是状态）。调用方传
+     *  `hasResult && !isError`；dispatch 分支不传（worker 状态另计）。 */
+    isSuccess?: boolean;
     /** 状态行配色：default（muted）/ accent（permission interactive 强调）。 */
     statusVariant?: "default" | "accent";
   }>(),
   {
-    filePath: null,
+    chip: null,
     suffix: undefined,
     statusIconName: undefined,
     durationLabel: undefined,
     isError: false,
     isRunning: false,
+    isSuccess: false,
     statusVariant: "default",
   },
 );
@@ -69,6 +81,7 @@ const props = withDefaults(
     :class="{
       'tool-call-header--error': props.isError,
       'tool-call-header--running': props.isRunning,
+      'tool-call-header--success': props.isSuccess,
       'tool-call-header--status-accent': props.statusVariant === 'accent',
     }"
   >
@@ -78,11 +91,11 @@ const props = withDefaults(
       </span>
       <span class="tool-call-header__name">{{ props.name }}</span>
       <span
-        v-if="props.filePath"
-        class="tool-call-header__path"
-        :title="props.filePath"
+        v-if="props.chip"
+        class="tool-call-header__chip"
+        :title="props.chip"
       >
-        · {{ props.filePath }}
+        · {{ props.chip }}
       </span>
       <span v-if="props.suffix" class="tool-call-header__suffix">
         {{ props.suffix }}
@@ -151,7 +164,7 @@ const props = withDefaults(
   color: var(--color-tool-error-text);
 }
 
-.tool-call-header__path {
+.tool-call-header__chip {
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
   overflow: hidden;
@@ -196,6 +209,14 @@ const props = withDefaults(
 
 .tool-call-header--error .tool-call-header__status {
   color: var(--color-tool-error-text);
+}
+
+/* 成功态：check icon + "done" 文本着成功绿（icon 无独立色，随 status
+   继承；duration 自带 secondary 不跟进——耗时不是状态）。error 优先级
+   更高：规则顺序在 success 之前且二者互斥（isSuccess 由调用方以
+   hasResult && !isError 计算），不需 specificity 裁决。 */
+.tool-call-header--success .tool-call-header__status {
+  color: var(--color-tool-write);
 }
 
 /* Permission interactive：status 用 accent 色吸引用户注意（原

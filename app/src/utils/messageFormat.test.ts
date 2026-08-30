@@ -10,7 +10,12 @@
 // A dedicated test file keeps the fixture readable.
 
 import { describe, it, expect } from "vitest";
-import { extractToolResultDisplay, isRealUserTurnStart } from "./messageFormat";
+import {
+  extractToolResultDisplay,
+  isRealUserTurnStart,
+  isShellFamilyTool,
+  toolHeaderChip,
+} from "./messageFormat";
 
 describe("extractToolResultDisplay", () => {
   it("unwraps the cwd envelope to the result string", () => {
@@ -113,5 +118,98 @@ describe("isRealUserTurnStart (interleaved-thinking run grouping)", () => {
         toolResults: [{ toolUseId: "tu_1", content: "x", isError: true }],
       }),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-08-30 (task `08-30-shell-description` PR2 / design D1): header chip
+// 数据源优先级矩阵 + shell 家族封闭名单。
+// ---------------------------------------------------------------------------
+
+describe("isShellFamilyTool", () => {
+  it("accepts both builtin shell tools", () => {
+    expect(isShellFamilyTool("shell")).toBe(true);
+    expect(isShellFamilyTool("run_background_shell")).toBe(true);
+  });
+
+  it("rejects everything else (closed list)", () => {
+    expect(isShellFamilyTool("read_file")).toBe(false);
+    expect(isShellFamilyTool("shell_status")).toBe(false);
+    expect(isShellFamilyTool("shell_kill")).toBe(false);
+    expect(isShellFamilyTool("")).toBe(false);
+  });
+});
+
+describe("toolHeaderChip (priority matrix)", () => {
+  it("priority 1: input.path wins over everything (non-shell, current behavior)", () => {
+    expect(
+      toolHeaderChip("read_file", { path: "/repo/a.ts", content: "x" }),
+    ).toBe("/repo/a.ts");
+  });
+
+  it("priority 1: path wins even when shell input carries a path-shaped key", () => {
+    // shell 家族 input 无 path(后端 schema 不含),但防御性输入仍按
+    // 优先级链走 —— path 检查在家族检查之前。
+    expect(
+      toolHeaderChip("shell", { path: "/weird", command: "ls" }),
+    ).toBe("/weird");
+  });
+
+  it("priority 2: shell + string description → description", () => {
+    expect(
+      toolHeaderChip("shell", {
+        command: "cargo test",
+        description: "Run unit tests",
+      }),
+    ).toBe("Run unit tests");
+    expect(
+      toolHeaderChip("run_background_shell", {
+        command: "pnpm build",
+        description: "全量构建前端",
+      }),
+    ).toBe("全量构建前端");
+  });
+
+  it("priority 2 skips non-string / empty-string description (畸形按缺失)", () => {
+    expect(
+      toolHeaderChip("shell", { command: "ls", description: 12345 }),
+    ).toBe("ls");
+    expect(toolHeaderChip("shell", { command: "ls", description: "" })).toBe(
+      "ls",
+    );
+    expect(
+      toolHeaderChip("shell", { command: "ls", description: null }),
+    ).toBe("ls");
+  });
+
+  it("priority 3: shell fallback → first non-empty command line", () => {
+    expect(toolHeaderChip("shell", { command: "ls -la" })).toBe("ls -la");
+    expect(
+      toolHeaderChip("shell", { command: "find . -name '*.ts' -print0 \\\n  | xargs -0 wc -l" }),
+    ).toBe("find . -name '*.ts' -print0 \\");
+  });
+
+  it("priority 3: blank lines are skipped, the line is trimmed", () => {
+    expect(
+      toolHeaderChip("shell", { command: "\n\n  cargo build --release  \necho done" }),
+    ).toBe("cargo build --release");
+  });
+
+  it("priority 4: null when shell input has no usable command", () => {
+    expect(toolHeaderChip("shell", {})).toBeNull();
+    expect(toolHeaderChip("shell", { command: "" })).toBeNull();
+    expect(toolHeaderChip("shell", { command: "  \n  " })).toBeNull();
+    expect(toolHeaderChip("shell", { command: 12345 })).toBeNull();
+    expect(toolHeaderChip("run_background_shell", {})).toBeNull();
+  });
+
+  it("priority 4: null for non-shell tools without path", () => {
+    expect(toolHeaderChip("grep", { pattern: "x" })).toBeNull();
+    expect(toolHeaderChip("dispatch_subagent", { task: "x" })).toBeNull();
+  });
+
+  it("safe on undefined / malformed input", () => {
+    expect(toolHeaderChip("shell", undefined)).toBeNull();
+    expect(toolHeaderChip("read_file", undefined)).toBeNull();
   });
 });

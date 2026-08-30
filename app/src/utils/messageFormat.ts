@@ -158,6 +158,55 @@ export function toolIcon(toolName: string): string {
   }
 }
 
+/** shell 工具家族判定(2026-08-30,task `08-30-shell-description`)。
+ *  家族名单封闭(switch 写法对齐 `toolAccentVar`):只认同步 `shell`
+ *  与异步 `run_background_shell`。shell_status / shell_kill 等衍生
+ *  工具是 session_id 工具,不展示 command,不入家族(PRD 非目标)。 */
+export function isShellFamilyTool(toolName: string): boolean {
+  switch (toolName) {
+    case "shell":
+    case "run_background_shell":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Tool-call header chip 数据源(design D1):ShellCard 与
+ *  DrawerToolCallCard 共用。
+ *
+ *  优先级链:
+ *    1. `input.path`(string 非空)—— 路径类工具的现状 chip(非 shell
+ *       家族命中的唯一分支;shell 家族 input 无 path,天然落到 2/3)。
+ *    2. shell 家族且 `input.description` 是 string 非空 —— LLM 填写的
+ *       display-only 意图短句(PRD R1)。
+ *    3. shell 家族兜底:`input.command` 的第一个非空行(多行命令只取
+ *       首行,trim 后返回;chip 是单行槽位,超长由 CSS ellipsis 截断)。
+ *    4. null —— 调用方不渲染 chip。
+ *
+ *  `input` 为 undefined / 字段畸形类型时安全返回,绝不抛错(防御
+ *  LLM 畸形 input;`description` 非字符串按缺失处理,PRD R3)。 */
+export function toolHeaderChip(
+  name: string,
+  input?: Record<string, unknown>,
+): string | null {
+  const path = input?.path;
+  if (typeof path === "string" && path.length > 0) return path;
+  if (!isShellFamilyTool(name)) return null;
+  const description = input?.description;
+  if (typeof description === "string" && description.length > 0) {
+    return description;
+  }
+  const command = input?.command;
+  if (typeof command === "string") {
+    const firstLine = command
+      .split("\n")
+      .find((line) => line.trim().length > 0);
+    if (firstLine !== undefined) return firstLine.trim();
+  }
+  return null;
+}
+
 /** One interleaved-thinking run group: a real user turn plus every
  *  assistant / ghost-user / orphan-repair row visually belonging to
  *  it (the 5b1fc81 run-group contract; see MessageList.vue for the

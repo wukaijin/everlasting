@@ -21,18 +21,25 @@
 // `ToolCallCard.vue:486-525` exactly — the 4-action row
 // (仅一次 / 始终允许|本次运行始终允许 / 拒绝 / 拒绝并说明), the
 // optional feedback textarea, the risk dot, the reason line, the
-// path-with-badge row. The 中间 button label forks by
-// `ask.workerRunId` since task `06-26-subagent-per-run-grant` Step 2
-// (2026-06-26): main-chat → "始终允许" (persists to DB), worker →
-// "本次运行始终允许" (persists to per-run memory cache).
+// path-with-badge row. 2026-08-30 (task `08-30-shell-description`
+// PR2): the 4-action row + feedback interaction moved verbatim into
+// `<PermissionActions>` (shared with `<ShellCard>`'s 一体化审批;
+// class 名/DOM 不变,AC4 既有测试零改动全绿是验收线)。
 //
 // Visual contract (historical mode): info-only, no buttons.
 // Renders the risk label + tool name + path badge (when
 // applicable) + reason (when present). Used by the drawer
 // for worker `permission_ask` transcript entries that were
 // collapsed on the worker side (RULE-A-016 / FT-A-016 PR3a).
+//
+// 2026-08-30 (shell description PR2): shell 家族 ask 新增命令行
+// (`toolInput.command` 原文) + 意图行(`toolInput.description`,
+// muted,缺失/非 string 不渲染)。审批界面命令原文必须始终可见
+// (PRD R2 硬约束 —— description 只作意图补充)。interactive 与
+// historical 同一分支(`isShellFamilyTool` 门控,不按 mode);
+// 主面板 shell ask 走 ShellCard 一体化后不再经过本组件。
 
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import {
   RISK_LABEL_CN,
   RISK_META,
@@ -40,6 +47,8 @@ import {
   type PermissionDecision,
 } from "../../stores/permissions";
 import { isPathInRoot } from "../../utils/path";
+import { isShellFamilyTool } from "../../utils/messageFormat";
+import PermissionActions from "./PermissionActions.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -99,23 +108,23 @@ const props = withDefaults(
 
 const riskMeta = computed(() => RISK_META[props.ask.risk]);
 
-/** 2026-06-26 (task `06-26-subagent-per-run-grant` Step 2): the
- *  "allow_always" button label forks by ask scope.
- *    - Main-chat ask (`ask.workerRunId` absent) → `始终允许`. The
- *      backend persists the grant to `session_tool_permissions`
- *      (survives across requests in the same session).
- *    - Worker ask (`ask.workerRunId` present) → `本次运行始终允许`.
- *      The backend persists the grant to a per-run in-memory cache
- *      (`RunGrantCache`) that dies with the worker run — the label
- *      makes the run-scoped semantics explicit so the user doesn't
- *      confuse it with the main-chat session-level persistence.
- *
- *  The wire is still `"allow_always"`; the backend forks the
- *  persistence target by `is_worker` (parent → DB; worker → run
- *  cache). */
-const allowAlwaysLabel = computed<string>(() =>
-  props.ask.workerRunId ? "本次运行始终允许" : "始终允许",
-);
+/** shell 家族 ask 的命令原文(2026-08-30):审批界面命令必须始终可见
+ *  (PRD R2)——`toolInput.command` 原样展示,pre-wrap + max-height
+ *  滚动。非 shell 家族 / command 缺失或非 string → 不渲染。 */
+const shellCommand = computed<string | null>(() => {
+  if (!isShellFamilyTool(props.ask.toolName)) return null;
+  const c = props.ask.toolInput?.command;
+  return typeof c === "string" && c.length > 0 ? c : null;
+});
+
+/** shell 家族 ask 的意图行(2026-08-30):`toolInput.description`
+ *  是 LLM 填写的 display-only 短句,只作意图补充、绝不替代命令原文
+ *  (PRD R2)。缺失 / 非 string 按缺失处理,不渲染。 */
+const shellIntent = computed<string | null>(() => {
+  if (!isShellFamilyTool(props.ask.toolName)) return null;
+  const d = props.ask.toolInput?.description;
+  return typeof d === "string" && d.length > 0 ? d : null;
+});
 
 /** 2026-06-22 (RULE-WorkerAsk-001): outcome metadata for the
  *  historical card's outcome badge. Drives the Chinese label
@@ -169,29 +178,6 @@ const pathBadgeColor = computed<string>(() =>
     : "var(--color-tool-shell)",
 );
 
-// Interactive-mode-only local state. In historical mode the
-// `v-if="mode === 'interactive'"` gates below ensure these
-// refs are never read, so the cost is just a couple of unused
-// reactive cells.
-const showFeedback = ref(false);
-const feedback = ref("");
-
-function respond(decision: PermissionDecision): void {
-  if (!props.onRespond) return;
-  props.onRespond(decision);
-}
-
-function submitFeedback(): void {
-  if (!props.onRespond) return;
-  props.onRespond("deny", feedback.value.trim() || undefined);
-  showFeedback.value = false;
-  feedback.value = "";
-}
-
-function cancelFeedback(): void {
-  showFeedback.value = false;
-  feedback.value = "";
-}
 </script>
 
 <template>
@@ -212,6 +198,13 @@ function cancelFeedback(): void {
       </span>
     </div>
     <p v-if="ask.reason" class="permission-ask-body__reason">{{ ask.reason }}</p>
+    <!-- shell 家族:命令原文(审批必见,PRD R2)+ 意图行(description,
+         muted、缺失不渲染)。interactive / historical 同一分支,
+         isShellFamilyTool 门控(design D5)。 -->
+    <div v-if="shellCommand" class="permission-ask-body__cmd">
+      <code>{{ shellCommand }}</code>
+    </div>
+    <p v-if="shellIntent" class="permission-ask-body__intent">{{ shellIntent }}</p>
     <div v-if="ask.path" class="permission-ask-body__path">
       <code>{{ ask.path }}</code>
       <span
@@ -221,56 +214,17 @@ function cancelFeedback(): void {
       >{{ pathBadgeText }}</span>
     </div>
 
-    <!-- Interactive: render 4-action approval UI.
-         Only mounts when onRespond is provided AND mode is
-         interactive — if onRespond is undefined the component
-         silently skips (defensive; matches the historical use
-         case semantically). -->
-    <template v-if="mode === 'interactive' && onRespond">
-      <div v-if="showFeedback" class="permission-ask-body__feedback">
-        <textarea
-          v-model="feedback"
-          class="permission-ask-body__textarea"
-          rows="2"
-          placeholder="告诉 agent 为什么拒绝 / 该怎么做（可选）"
-        ></textarea>
-        <div class="permission-ask-body__feedback-actions">
-          <button
-            type="button"
-            class="permission-ask-body__btn permission-ask-body__btn--deny btn btn--muted btn--sm"
-            @click="submitFeedback"
-          >提交拒绝</button>
-          <button
-            type="button"
-            class="permission-ask-body__btn btn btn--muted btn--sm"
-            @click="cancelFeedback"
-          >取消</button>
-        </div>
-      </div>
-      <div v-else class="permission-ask-body__actions">
-        <button
-          type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--once btn btn--muted btn--sm"
-          @click="respond('allow_once')"
-        >仅一次</button>
-        <button
-          v-if="!hideAllowAlways"
-          type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--always btn btn--primary btn--sm"
-          @click="respond('allow_always')"
-        >{{ allowAlwaysLabel }}</button>
-        <button
-          type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--deny btn btn--muted btn--sm"
-          @click="respond('deny')"
-        >拒绝</button>
-        <button
-          type="button"
-          class="permission-ask-body__btn permission-ask-body__btn--deny btn btn--muted btn--sm"
-          @click="showFeedback = true"
-        >拒绝并说明</button>
-      </div>
-    </template>
+    <!-- Interactive: render 4-action approval UI (PermissionActions,
+         2026-08-30 抽取). Only mounts when onRespond is provided AND
+         mode is interactive — if onRespond is undefined the component
+         silently skips (defensive; matches the historical use case
+         semantically). -->
+    <PermissionActions
+      v-if="mode === 'interactive' && onRespond"
+      :ask="ask"
+      :on-respond="onRespond"
+      :hide-allow-always="hideAllowAlways"
+    />
 
     <!-- Historical: info-only marker. Renders a single muted line
          showing the ask context. After the 2026-06-22
@@ -376,33 +330,37 @@ function cancelFeedback(): void {
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
-.permission-ask-body__actions,
-.permission-ask-body__feedback-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+/* shell 家族命令行(2026-08-30):`<code>` mono 语言镜像上方 path 行,
+ * 但 pre-wrap + max-height 200px 滚动(多行命令原样可读;对齐
+ * tool-input-body__pre 既有尺度,design D2)。 */
+.permission-ask-body__cmd {
+  min-width: 0;
 }
 
-/* 按钮由全局 .btn 家族承载(紧凑档 sm:仅一次/取消/拒绝 = muted·sm,
-   始终允许 = primary·sm);deny 是"红字描边"语义,家族无对应变体,
-   本地覆写文字/边框色。 */
-.permission-ask-body__btn--deny {
-  color: var(--color-tool-error-text);
-  border-color: var(--color-tool-error);
+.permission-ask-body__cmd code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  min-width: 0;
 }
 
-.permission-ask-body__textarea {
-  width: 100%;
-  font: inherit;
+/* shell 家族意图行(2026-08-30):description 是 muted 补充,弱于
+ * 命令原文 —— 同 reason 行的排版语言。 */
+.permission-ask-body__intent {
+  margin: 0;
   font-family: var(--font-sans);
   font-size: var(--text-xs);
-  padding: 4px 6px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  resize: vertical;
+  color: var(--color-text-muted);
+  line-height: 1.4;
 }
+
+/* 4 按钮列 / 反馈 textarea / deny 红字描边的规则已随 markup 搬入
+ * `<PermissionActions>`(2026-08-30,行为保持抽取,AC4)。 */
 
 .permission-ask-body__historical-note {
   margin: 0;

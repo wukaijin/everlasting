@@ -173,12 +173,13 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
     <ToolCallHeader
       :icon-name="toolIcon(call.name)"
       :name="call.name"
-      :file-path="filePath"
+      :chip="filePath"
       :status-text="statusText"
       :status-icon-name="statusIconName"
       :duration-label="durationLabel"
       :is-error="isError"
       :is-running="!hasResult && !isError"
+      :is-success="hasResult && !isError"
     >
       <template #status-extra>
         <span v-if="hasInputStrings" class="edit-card__counts" aria-hidden="true">

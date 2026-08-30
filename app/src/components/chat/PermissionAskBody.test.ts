@@ -585,3 +585,130 @@ describe("PermissionAskBody historical mode", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 2026-08-30 (task `08-30-shell-description` PR2 / PRD R4): shell 家族
+// ask 新增命令行(`toolInput.command` 原文,审批必见)+ 意图行
+// (`toolInput.description`,muted、缺失/非 string 不渲染)。
+// interactive / historical 同一分支(isShellFamilyTool 门控,不按 mode);
+// 非 shell ask 不变(无新增行)。
+// ---------------------------------------------------------------------------
+
+describe("PermissionAskBody shell family command + intent lines", () => {
+  it("interactive shell ask renders the command verbatim + the intent line", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "interactive",
+        ask: makeAsk({
+          toolInput: {
+            command: "find . -name '*.ts' -print0 | xargs -0 wc -l",
+            description: "统计 ts 行数",
+          },
+        }),
+        onRespond: vi.fn(),
+        repoRoot: "/data/repo",
+      },
+    });
+    const cmd = w.find(".permission-ask-body__cmd");
+    expect(cmd.exists()).toBe(true);
+    expect(cmd.find("code").text()).toBe(
+      "find . -name '*.ts' -print0 | xargs -0 wc -l",
+    );
+    const intent = w.find(".permission-ask-body__intent");
+    expect(intent.exists()).toBe(true);
+    expect(intent.text()).toBe("统计 ts 行数");
+  });
+
+  it("historical shell ask renders the same command + intent rows (双模式同效)", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "historical",
+        ask: makeAsk({
+          toolInput: { command: "cargo build", description: "构建后端" },
+        }),
+        repoRoot: "/data/repo",
+      },
+    });
+    expect(w.find(".permission-ask-body__cmd code").text()).toBe("cargo build");
+    expect(w.find(".permission-ask-body__intent").text()).toBe("构建后端");
+  });
+
+  it("description missing → only the command line renders", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "interactive",
+        ask: makeAsk({ toolInput: { command: "ls -la" } }),
+        onRespond: vi.fn(),
+        repoRoot: "/data/repo",
+      },
+    });
+    expect(w.find(".permission-ask-body__cmd").exists()).toBe(true);
+    expect(w.find(".permission-ask-body__intent").exists()).toBe(false);
+  });
+
+  it("malformed description (non-string) is treated as missing", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "interactive",
+        ask: makeAsk({
+          toolInput: { command: "ls -la", description: 12345 },
+        }),
+        onRespond: vi.fn(),
+        repoRoot: "/data/repo",
+      },
+    });
+    expect(w.find(".permission-ask-body__cmd").exists()).toBe(true);
+    expect(w.find(".permission-ask-body__intent").exists()).toBe(false);
+  });
+
+  it("missing command → no command line; an orphan intent still renders (fields gated independently)", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "interactive",
+        ask: makeAsk({ toolInput: { description: "孤儿意图" } }),
+        onRespond: vi.fn(),
+        repoRoot: "/data/repo",
+      },
+    });
+    expect(w.find(".permission-ask-body__cmd").exists()).toBe(false);
+    // 命令行与意图行各自独立门控(各看各的字段);意图行不依赖命令存在。
+    expect(w.find(".permission-ask-body__intent").exists()).toBe(true);
+    expect(w.find(".permission-ask-body__intent").text()).toBe("孤儿意图");
+  });
+
+  it("non-shell ask renders NO command/intent rows (unchanged shape)", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "interactive",
+        ask: makeAsk({
+          toolName: "write_file",
+          path: "/data/repo/src/a.ts",
+          toolInput: { path: "/data/repo/src/a.ts", command: "NOT A COMMAND" },
+        }),
+        onRespond: vi.fn(),
+        repoRoot: "/data/repo",
+      },
+    });
+    expect(w.find(".permission-ask-body__cmd").exists()).toBe(false);
+    expect(w.find(".permission-ask-body__intent").exists()).toBe(false);
+    // The path row is untouched for path tools.
+    expect(w.find(".permission-ask-body__path").exists()).toBe(true);
+  });
+
+  it("run_background_shell ask gets the same rows (family member)", () => {
+    const w = mount(PermissionAskBody, {
+      props: {
+        mode: "interactive",
+        ask: makeAsk({
+          toolName: "run_background_shell",
+          toolInput: { command: "pnpm install" },
+        }),
+        onRespond: vi.fn(),
+        repoRoot: "/data/repo",
+      },
+    });
+    expect(w.find(".permission-ask-body__cmd code").text()).toBe(
+      "pnpm install",
+    );
+  });
+});
