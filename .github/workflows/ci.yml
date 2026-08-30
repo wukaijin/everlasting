@@ -100,7 +100,7 @@ jobs:
         run: cargo test --test e2e
 
   frontend:
-    name: Frontend (vitest + vue-tsc)
+    name: Frontend (vitest + vue-tsc + playwright)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -129,3 +129,32 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+
+      # 浏览器交互回归(RULE-TEST-001, .trellis/tasks/08-30-rule-test-001-browser-pipeline):
+      # route-mock 驱动、无 daemon/无 LLM/无网络依赖,确定性用例才准入(D2)。
+      #
+      # 缓存 ~/.cache/ms-playwright:chromium 下载 ~120MB 是本 job 最大的
+      # 冷启动开销;key 带 OS + @playwright/test 版本(jq 提取,pnpm 版本
+      # 同款先例)—— 升级 playwright(→ 浏览器 build 变)时自然 miss 重装,
+      # restore-keys 兜底命中旧目录省部分下载;锁文件其它 bump 不误伤。
+      # 缓存 miss 时由下一步的 install 补齐,命中则近乎零开销。
+      - name: Resolve @playwright/test version
+        id: pw-version
+        run: echo "version=$(jq -r '.devDependencies["@playwright/test"]' package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      # --with-deps:apt 装 headless Chromium 的系统库(libnss3 等),
+      # 只在缓存 miss 时真正耗时;命中时 apt 侧幂等快返。
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # blocking merge gate(retries: CI 1 次,playwright.config.ts;
+      # webServer 自起 vite dev :1422,无 continue-on-error)。
+      - name: Playwright browser regression
+        run: pnpm test:e2e
