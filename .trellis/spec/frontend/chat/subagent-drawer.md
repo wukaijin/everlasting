@@ -18,9 +18,10 @@ worker subagent 的右侧 drawer。reka-ui `Dialog*` 组合实现（@2.9.9 无 `
 | `app/src/components/chat/DrawerSection.vue` | 通用折叠容器(thinking/tools/reply 共用),折叠态 lazy render |
 | `app/src/components/chat/DrawerPromptCard.vue` | `run.task` prompt 卡片(120 截断 + View full) |
 | `app/src/components/chat/DrawerThinkingBlock.vue` | `ThinkingSection` → 共享 `ThinkingBlock` 适配器 |
-| `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片(复用 ToolCallHeader + ToolInputBody/ToolOutputBody,**不 wrap ToolCallCard**) |
-| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片(复用 ToolCallHeader + PermissionAskBody,live interactive + historical outcome badge) |
-| `app/src/components/chat/ToolCallHeader.vue` | ★ (RULE-FrontSubagent-001, 2026-06-25) 共享 tool-card header(纯展示,0 store);ToolCallCard / DrawerToolCallCard / DrawerPermissionAskCard 三处复用,props 驱动差异(filePath/suffix/statusIconName/durationLabel/isError/isRunning/statusVariant) + `#status-extra` slot(ToolCallCard diff-btn) |
+| `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片(复用 ToolCallHeader + ToolInputBody/ToolOutputBody,**不 wrap ToolCallCard**;08-30 起 header chip 数据源 = `toolHeaderChip()`,shell 家族显示 description/命令首行兜底) |
+| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片(复用 ToolCallHeader + PermissionAskBody,live interactive + historical outcome badge;shell ask 经 PermissionAskBody 自带命令行+意图行) |
+| `app/src/components/chat/PermissionActions.vue` | ★ (08-30 shell-description)共享审批 actions(4 按钮 + 拒绝理由 textarea + allowAlwaysLabel 按 workerRunId 分叉);PermissionAskBody 与 ShellCard 共用,props `{ ask, onRespond, hideAllowAlways? }`。**保留 `permission-ask-body__*` DOM 类名**(外部测试锚点,勿改名) |
+| `app/src/components/chat/ToolCallHeader.vue` | ★ (RULE-FrontSubagent-001, 2026-06-25) 共享 tool-card header(纯展示,0 store);ToolCallCard / DrawerToolCallCard / DrawerPermissionAskCard 三处复用,props 驱动差异(chip/suffix/statusIconName/durationLabel/isError/isRunning/statusVariant) + `#status-extra` slot(ToolCallCard diff-btn)。08-30 shell-description:prop `filePath` 更名 `chip`(shell 家族经 `toolHeaderChip()` 填 description/命令首行,不再只装路径) |
 | `app/src/components/chat/MessageItem.vue` | 主消息项(08-07 拆后 1125 行;卡片解析簇在 `messageCards/*`、时间轴在 `messageTimeline.ts`、编辑在 `useMessageEditing.ts`) |
 | `app/src/components/chat/MessageItemEdit.vue` | ★ (06-23 拆)user 消息 inline edit 模式(textarea + Save/Cancel + inline error) |
 | `app/src/components/chat/MessageItemFooter.vue` | ★ (06-23 拆)assistant/user 通用底部两联(error footer + F5 latency chip) |

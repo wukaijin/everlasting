@@ -42,3 +42,15 @@
 - [15-search-history](./tool-contract/15-search-history.md) — `search_history`(D2② agent 驱动跨 session 全文搜索,复用 db::search 共享层 + Tier 5 silent Allow + agent 侧 limit 50 vs modal 200)
 - [16-web-search](./tool-contract/16-web-search.md) — `web_search`(F4 snippet-only 网页搜索,enum dispatch 双后端 Tavily/DDG + key 三态 AEAD 配置 + DDG 202 软封锁语义 + 全名单开闸含项目层 frontmatter)
 - [17-schedule-task-family](./tool-contract/17-schedule-task-family.md) — `schedule_task`/`schedule_status`/`schedule_cancel`(LLM 调度家族,F2 detached dispatch;作者面分离 created_by='agent' + tool 侧 kill switch/上限双 gate + Tier 5 钉住 + pool 级核心范式)
+
+---
+
+## Scenario: shell 家族可选 description 参数(08-30-shell-description)
+
+- `shell` / `run_background_shell` 的 `input_schema` 含**可选** `description`
+  (string,≤10 词主动语态,LLM 填写);`required` 仍为 `["command"]`。
+- **display-only 硬约束**:`execute()` 不读取该字段(有测试锁"畸形值执行结果
+  不变");权限分类(Tier 4 kill-list/前缀)只看 `command` 原文,permissions 模块
+  零感知。给 shell 家族加任何新 input 字段时沿用此审计标准。
+- 消费面全在前端(header chip 兜底链 / 审批意图行),契约见
+  [frontend/chat/shell-card.md](../../frontend/chat/shell-card.md)。

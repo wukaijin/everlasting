@@ -15,6 +15,7 @@
 - [streamcontroller-routing](./chat/streamcontroller-routing.md) — streamController.handleToolCall → feature store 按 tool name 路由(B12 / C2)
 - [message-list-and-markdown](./chat/message-list-and-markdown.md) — MessageList TransitionGroup enter 动画契约 + `.msg__markdown` 跨组件复用节奏镜像(2026-08-14 两个静默失效 bug 沉淀)
 - [search-history-card](./chat/search-history-card.md) — `search_history` 专属卡片(替换渲染先例 / 自取自查 vs streamController 边界 / 四态机 / useSearchModal prefill 契约 + bootingPrefill 防线)
+- [shell-card](./chat/shell-card.md) — `shell`/`run_background_shell` 专属卡 ShellCard(命令块常驻 / 一体化审批 / description display-only 不变量 / toolHeaderChip 兜底链 / PermissionActions 共享审批,2026-08-30)
 - [session-busy-visibility](./chat/session-busy-visibility.md) — session busy 双源合流(streamingSessionIds ∪ serverBusy)+ finalizeRequest 消解 + 完成 toast 抑制规则 + 关闭确认 isTauriWebview 门(F6)
 - [memory-ui.md §V2-2+](./memory-ui.md) — 自主记忆可观测性(recall chip + RuntimeMemoryModal,2026-08-10 从本文挪入)
 
