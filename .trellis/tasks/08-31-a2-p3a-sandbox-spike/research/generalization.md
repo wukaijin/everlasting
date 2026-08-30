@@ -16,7 +16,10 @@ WSL2 的 Linux 内核由 **Windows 侧统一分发**(`wsl --update` / `Microsoft
 - **无 apparmor**(LSM 列表里根本没有)
 
 版本分布(2026-08 调研):本机 WSL 2.2.4 / kernel 5.15.153.1-2;WSL 2.3.0 起切
-6.6 LTS(2.7.0 = 6.6.114,最新内核包到 6.18)。两个大版本都满足上述 config。
+6.6 LTS(2.7.0 = 6.6.114,最新内核包到 6.18)。
+**本节数字属外部调研**(微软 Learn / Phoronix / microsoft-WSL releases,链接见下),
+本机仅能核验到 2.2.4 / 5.15.153 一档,更高版本以引用为准、不再本地复验。
+两个大版本都满足上述 config。
 Landlock ABI 随内核走高(5.15 = v1,6.6 ≈ v3,6.7+ = v4 含 TCP 网络规则)——
 P3b 按 ABI 探测降级,不要按版本号假设。
 
@@ -35,7 +38,7 @@ P3b 按 ABI 探测降级,不要按版本号假设。
 
 | 事实 | 漂移方向 | P3b 对策 |
 |---|---|---|
-| 「bwrap 已装」是假象 | `apt why` 零反向依赖 = 手动装;fresh WSL 没有 | bwrap 只做可选档,启动探测 |
+| 「bwrap 已装」是本机桌面组件的副产品,不是标配 | 反向依赖 = `libwebkit2gtk-4.1-0`(本项目 Tauri GUI 构建依赖)+ `xdg-desktop-portal`;`apt-mark showmanual` 无此包(依赖带入,非手动装)。fresh headless WSL 无桌面组件 → 没有 bwrap | bwrap 只做可选档,启动探测 |
 | 工具链路径(fnm `/run/user/<uid>/...`、linuxbrew 系统位、`~/.cargo`) | 每机每 session 不同(见 bwrap 篇 F 测试的 node 路径) | exec 允许面/缓存可写面 = **探测 + settings 可配置**,daemon 侧解析 |
 | `/dev/kvm` | 依赖 Win11 + BIOS 虚拟化 + 嵌套直通;本机存在但**用户不在 kvm 组**(连本机都要 root 干预) | microVM 路线否决依据之一(另两条见 prior-art 篇) |
 | 发行版 UAPI 头版本 | 22.04 无 APPEND 位(landlock 篇陷阱 1) | Rust 裸常量 / crate 按 ABI 降级 |

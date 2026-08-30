@@ -51,7 +51,7 @@ Windows 侧完全绕开——「损害限制在沙盒可写路径内」的承诺
 | `--clearenv` | ❌ 无效 | socket 发现不依赖 env(J 实测) |
 | tmpfs 盖 `/proc/sys/fs/binfmt_misc` | ❌ 无效 | binfmt 注册表在内核侧(按超级块),遮目录不注销 handler(L 实测) |
 | 沙盒内挂全新空 binfmt_misc 实例 | ❌ `must be superuser` | 此内核(5.15 MS)不允许非特权挂 binfmt(O 实测) |
-| 显式 `/init <exe>` 直调 | 未下结论 | 输出为空,不作证据(M;已从矩阵移除) |
+| 显式 `/init <exe>` 直调 | 未下结论 | 输出为空,不作证据(M;脚本保留作记录,PRD/结论不引用) |
 
 **有效配方**:`--ro-bind /dev/null /init` —— 解释器变成不可读的 /dev/null,exec 链
 在内核解析解释器阶段即失败(P 实测 `Permission denied`)。
@@ -64,7 +64,12 @@ Windows 侧完全绕开——「损害限制在沙盒可写路径内」的承诺
 ## 3. 评估
 
 - 可行性:✅ 全矩阵通过,含 interop 收口。
-- 泛化性:❌ **bwrap 不预装**——本机 `apt why bubblewrap` 零反向依赖 = 手动装的;
-  全新 WSL Ubuntu 第一步就断。分发故事(apt 依赖 / 静态二进制 vendor,LGPL)都要额外成本。
+- 泛化性:❌ **bwrap 非基础镜像标配**——本机的 bwrap 是桌面组件依赖带入的
+  (`apt-cache rdepends --installed`:`libwebkit2gtk-4.1-0`(Tauri GUI 构建依赖)
+  与 `xdg-desktop-portal` 都 Depends 于它;`apt-mark showmanual` 无 bubblewrap,
+  确证非手动安装)。fresh headless WSL 没有这些桌面组件,bwrap 第一步就断。
+  分发故事(apt 依赖 / 静态二进制 vendor,LGPL)都要额外成本。
+  (注:初版此处的证据是「`apt why` 零反向依赖」,系误读——apt 2.4.14 无该子命令,
+  空 stdout 被当成了零依赖;外部评审指出后已更正,见 logs/env-snapshot.txt 修正版。)
 - 隔离强度:namespace 级(独立 pid/mount/net ns),强于 Landlock(无 ns)。
 - 结论:**降级为可选增强档**——探测到 bwrap 且用户显式启用时提供更强隔离;不是依赖。

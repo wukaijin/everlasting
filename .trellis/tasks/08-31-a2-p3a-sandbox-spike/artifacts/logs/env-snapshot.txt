@@ -1,20 +1,19 @@
-# 环境快照(2026-08-31 02:25:16)
-5.15.153.1-microsoft-standard-WSL2
-PRETTY_NAME="Ubuntu 22.04.5 LTS"
-systemd
-WSL Hr,g� 2.2.4.0
-�Q8hHr,g� 5.15.153.1-2
-WSLg Hr,g� 1.0.61
-MSRDC Hr,g� 1.2.5326
-Direct3D Hr,g� 1.611.1-81528511
-DXCore Hr,g� 10.0.26091.1-240325-1447.ge-release
-Windows Hr,g� 10.0.26200.9168
+# 环境快照(2026-08-31 02:51:31)
+- 内核: 5.15.153.1-microsoft-standard-WSL2
+- 发行版: PRETTY_NAME="Ubuntu 22.04.5 LTS"
+- PID1: systemd
+- WSL: WSL 版本： 2.2.4.0 内核版本： 5.15.153.1-2 WSLg 版本： 1.0.61 MSRDC 版本： 1.2.5326 Direct3D 版本： 1.611.1-81528511 DXCore 版本： 10.0.26091.1-240325-1447.ge-release Windows 版本： 10.0.26200.9168 
 
-max_user_namespaces=47834
+- max_user_namespaces=47834
 crw-rw---- 1 root kvm 10, 232 Aug 27 21:04 /dev/kvm
-用户不在 kvm 组
+- 用户不在 kvm 组
 
-bubblewrap 0.6.1
+- bubblewrap 0.6.1
+- apt: apt 2.4.14 (amd64) —— 注:此版本无 'apt why' 子命令
+- bwrap 反向依赖(apt-cache rdepends --installed):   libwebkit2gtk-4.1-0   xdg-desktop-portal 
+- bubblewrap 不在 apt-mark manual 标记(= 依赖带入,非手动安装)
+
+# 内核 config(/proc/config.gz)
 CONFIG_USER_NS=y
 CONFIG_SECCOMP=y
 CONFIG_SECCOMP_FILTER=y
