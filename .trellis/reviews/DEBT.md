@@ -70,7 +70,9 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [1 items]
+## P3 — 轻微(文档/一致性) [0 items]
+
+> 全部 closed(RULE-PERM-001 于 2026-08-30 由 `.trellis/tasks/08-30-rule-perm-001-audit-pagination` 闭合:审计事件读 keyset `(ts,id)` 分页 + 过滤/计数下推 SQL,新命令 `list_session_audit_events_page` 双 transport additive 落地,旧全量命令零改动保留给 traceStore;dev DB 175 行真会话 live 冒烟 SMOKE OK;keyset 契约收编 spec `database-guidelines.md`,「过滤下推后全集派生值换口径」收编 spec `frontend/state-management.md`,详见 git log)。
 
 > RULE-TEST-003 于 2026-08-30 由 `.trellis/tasks/08-30-e2e-red-fix` 闭合:两红均定性测试侧、生产零 diff —— ① e1a fixture 补 B1 后必填的 `supports_images`(422 = serde Json rejection);② e1b 整模块移除(4 个纯 SseRegistry 单元副本,WP4 改 compute_replay 语义时镜像漂移,权威副本在 sse.rs 内联 15 例)。`cargo test --test e2e` 同步进 CI Rust job,基线不再无人跑。spec daemon-server.md 收编「SSE 契约测试唯一 home + e2e 路由级定位 + 422 排查第一嫌疑」。详见 git log。
 
@@ -82,17 +84,6 @@
 
 > RULE-TEST-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-test-002-role-gate-it` 闭合:新增集成用例 `role_gate_denies_then_allows_after_mid_loop_task_json_status_change`(`tests_agent_loop/role_gate_refresh.rs`)——round-1 denial(planning 拒 checker)→ mock LLM 同轮 write_file 翻盘 task.json status(in_progress,事故真实形态)→ round-2 经 drive_turn 轮顶刷新后同一 dispatch 放行(worker marker + call_count==4);变异验证覆盖两类回归(门误接入口快照 / R4 轮顶刷新移除),均精确转红后复原。已知边界:若 `resolve_current_task` 中途恒返 None 门会静默开放,该第三类未覆盖(spec tests-required 条目已注明)。全量 2008 后端测试 + fmt/clippy 绿,生产代码零 diff。详见 git log。
 
-### RULE-PERM-001
-
-- **Level**: P3
-- **Subsystem**: Permission
-- **File**: `app/src-tauri/src/commands/permissions.rs:367-371`
-- **Description**: 审计事件查询 MVP 全量拉取,无分页无虚拟滚动(PRD Edge Cases 标 TODO ">500 条事件的 session");索引让 ORDER BY 够快故暂无实测投诉
-- **Fix**: LIMIT/OFFSET 或 keyset 分页(1–2 天)
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
-
 ---
 
 ## 优先级分布
@@ -102,8 +93,8 @@
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
 | P2 | 0 | 全部 closed(RULE-QUEUE-001 2026-08-29 闭合,见上方 P2 段) |
-| P3 | 1 | RULE-PERM-001(审计分页) |
-| **Total** | **1** | 当前 open items |
+| P3 | 0 | 全部 closed(RULE-PERM-001 2026-08-30 闭合,见上方 P3 段) |
+| **Total** | **0** | 当前 open items |
 
 ---
 
