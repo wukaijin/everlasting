@@ -70,9 +70,11 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [2 items]
+## P3 — 轻微(文档/一致性) [1 items]
 
 > RULE-TEST-003 于 2026-08-30 由 `.trellis/tasks/08-30-e2e-red-fix` 闭合:两红均定性测试侧、生产零 diff —— ① e1a fixture 补 B1 后必填的 `supports_images`(422 = serde Json rejection);② e1b 整模块移除(4 个纯 SseRegistry 单元副本,WP4 改 compute_replay 语义时镜像漂移,权威副本在 sse.rs 内联 15 例)。`cargo test --test e2e` 同步进 CI Rust job,基线不再无人跑。spec daemon-server.md 收编「SSE 契约测试唯一 home + e2e 路由级定位 + 422 排查第一嫌疑」。详见 git log。
+
+> RULE-TEST-001 于 2026-08-30 由 `.trellis/tasks/08-30-rule-test-001-browser-pipeline` 闭合:runner 定案 `@playwright/test` 进 `app/` devDependency(与 ui-review 的 scratch playwright-core 并存互不污染,共用 `~/.cache/ms-playwright` 按 build 版本隔离);环境 = vite dev :1422 + route-mock 全拦截(catch-all miss 500 fail-loud,堵 vite `/api` proxy 漏到真 daemon 的静默面)+ fake EventSource(无重连,重连语义归 Rust e2e);3 条试点 spec 7 用例覆盖键盘(CH5-1 Shift+Enter/Enter)/ 滚动联动(CH8-2 提问卡强制回底 + CH8-2b 排队并存 toast)/ 指针+弹窗(CH7-4 撤销确认 + backdrop click.self)三类 jsdom 盲区;CI frontend job 追加 cache + `install --with-deps chromium` + `test:e2e` blocking(D2:确定性准入,retries CI 1/本地 0);判据与 fixture 契约收编 spec `frontend/browser-regression.md`,本地运行补 HACKING-wsl。`app/src` 零 diff(仅消费既有 CH7-4 testid),e2e 7 + vitest 1466 + build 三绿。详见 git log。
 
 > RULE-ALLOW-001 / RULE-SHIM-001 / RULE-HEALTH-001 / RULE-DOC-001 / RULE-DOC-002 / RULE-FE-002 / RULE-BUILD-001 于 2026-08-30 由 `.trellis/tasks/08-30-p3-debt-batch-cleanup` 闭合:三把模块级 dead_code 伞摘除(fallout 仅 1 项 —— `search_memories_fts` 定性为测试锁定件恢复 + 逐项 allow,`RecallStatusFilter::ActiveVerifiedOnly` 逐项 allow 注明策略旋钮;workflow/task.rs 与 memories 两伞零残留);`get_pending_question` + `test_provider` 两个 deprecated IPC 全链删除(Tauri 注册/daemon 路由/http 映射/常量/all_command_names/e2e 路由清单,messageTimeline 双渲染路径定性为旧 DB 行数据兼容并修正过时注释);health `session_count` -1 哨兵删除(零消费方,wire 删字段);drive.rs 72 处任务名注释收敛 + subagent mod.rs max_turns 20→200 修正;Yolo confirm/cancel 的 resolve 失败接 warn toast(+2 vitest);vite manualChunks 核实已实现(build 零告警)。详见 git log。
 
@@ -91,17 +93,6 @@
 - **Related Task**: null
 - **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
 
-### RULE-TEST-001(2026-08-30 改写:mode-change 链路已覆盖,原描述过时)
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `components/common/MarkdownDetailModal.test.ts:383-390`(jsdom 无法模拟 pointerdown-outside,仅占位守护)
-- **Description**: 08-30 考证:`resolve_mode_change` 的 DB 链路已有 `commands/tests_resolve_mode_change.rs` 6+ 用例覆盖(pure-core 抽取),过时 TODO 注释已修;真实剩余缺口 = 项目无真浏览器 runner,跨组件指针交互类回归无可靠守护手段(ui-review.sh 是视觉评审,非交互回归)
-- **Fix**: playwright(或 webdriverio)选型评估,单独评估任务
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 2026-08-27 技术债盘点(AI 全库扫描)
-
 ---
 
 ## 优先级分布
@@ -111,8 +102,8 @@
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
 | P2 | 0 | 全部 closed(RULE-QUEUE-001 2026-08-29 闭合,见上方 P2 段) |
-| P3 | 2 | RULE-PERM-001(审计分页)/ RULE-TEST-001(浏览器 runner 选型) |
-| **Total** | **2** | 当前 open items |
+| P3 | 1 | RULE-PERM-001(审计分页) |
+| **Total** | **1** | 当前 open items |
 
 ---
 

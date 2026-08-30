@@ -125,8 +125,8 @@
 
 > 自动化手段测不可靠的项,交真人键盘/视觉复核。两项均已复核关闭,留档备查。
 
-- **CH5-1 Shift+Enter 换行**:~~待复核~~ **✅ 已人工复核(2026-08-29,真实键盘):换行正常,关闭。** 原报告为自动化误报——输入框是 CodeMirror 6 contenteditable(`ChatInput.vue:27-32`),keymap 只绑 Enter(`chatInputCodeMirror.ts:771-821`),换行靠浏览器默认行为;非受信合成键盘事件不触发默认插入,自动化测不出是预期的。无需在 keymap 加 Shift-Enter 绑定。
-- **CH14-1 Tab 焦点环弱**:~~待复核~~ **✅ 已人工复核(2026-08-29,真实键盘 Tab 走查):通过,关闭。** `:focus-visible` 基线存在(`style.css:319-353`,accent 20% alpha 3px ring),走查确认每处焦点均有可见指示,强度为「可见但不吵」的设计本意,无需调 alpha。
+- **CH5-1 Shift+Enter 换行**:~~待复核~~ **✅ 已人工复核(2026-08-29,真实键盘):换行正常,关闭。** 原报告为自动化误报——输入框是 CodeMirror 6 contenteditable(`ChatInput.vue:27-32`),keymap 只绑 Enter(`chatInputCodeMirror.ts:771-821`),换行靠浏览器默认行为;非受信合成键盘事件不触发默认插入,自动化测不出是预期的。无需在 keymap 加 Shift-Enter 绑定。**2026-08-30 起浏览器层已自动守护**(`app/e2e/chat-input-keys.spec.ts`:Shift+Enter 换行不发送 + Enter 发送,真实 Chromium trusted keys;见 spec `.trellis/spec/frontend/browser-regression.md`)。
+- **CH14-1 Tab 焦点环弱**:~~待复核~~ **✅ 已人工复核(2026-08-29,真实键盘 Tab 走查):通过,关闭。** `:focus-visible` 基线存在(`style.css:319-353`,accent 20% alpha 3px ring),走查确认每处焦点均有可见指示,强度为「可见但不吵」的设计本意,无需调 alpha。浏览器交互回归基建已就绪(2026-08-30,`.trellis/tasks/08-30-rule-test-001-browser-pipeline`:Playwright + 键盘/指针/弹窗层叠盲区守护),同类「需真人键盘复核」项后续可自动守护。
 
 ---
 
@@ -147,6 +147,6 @@
 
 ## 6. 未覆盖项(下次测试补)
 
-- 工具卡片图片结果展示;粘贴图片到输入区(自动化难构造图像剪贴板)。
+- 工具卡片图片结果展示;粘贴图片到输入区(自动化难构造图像剪贴板)。2026-08-30 注:「难构造」在真实浏览器里可解——Playwright 驱动的 Chromium 能构造真实 DataTransfer 粘贴事件与图像文件(`dispatchEvent` + `ClipboardEvent`/`DataTransfer`,或 `setInputFiles` 造图;现 harness 尚无现成 helper,需在用例侧构造),浏览器交互回归层(`app/e2e/`,判据见 spec `.trellis/spec/frontend/browser-regression.md`)可直接承接此类用例。
 - worktree 型 Worker 的分支徽章与合并控制。
 - 真实远程设备配对(/pairing 提交属外向动作,未执行)。
