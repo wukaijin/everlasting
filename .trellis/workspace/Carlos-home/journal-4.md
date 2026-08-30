@@ -1199,3 +1199,26 @@ shell/run_background_shell 增加可选 description 参数（display-only，exec
 ### Status
 
 [OK] **Completed**
+
+
+## Session 126: RULE-TEST-001 浏览器交互回归流水线:Playwright 基建 + 三试点 + CI blocking 门禁
+
+**Date**: 2026-08-30
+**Task**: RULE-TEST-001 浏览器交互回归流水线:Playwright 基建 + 三试点 + CI blocking 门禁
+**Branch**: `main`
+
+### Summary
+
+建立系统性浏览器交互回归层,闭合 DEBT RULE-TEST-001(P3 台账 2→1)。基建:@playwright/test 进 app/ devDependency,vite dev :1422(CLI 覆盖 config 硬编码 1420/strictPort),catch-all route-mock dispatcher(注册表 miss 500 fail-loud,堵 vite /api→7456 proxy 泄漏面)+ fake EventSource(addInitScript 注入,无重连,emit 驱动 SSE)。三试点各验一类 jsdom 盲区:①Shift+Enter/Enter 真实键盘(CH5-1,CDP trusted input 驱动 CodeMirror);②提问卡强制回底+排队并存(CH8-2,真 load_session 链路种子 + tool:question 认领驱动流式态);③放行撤销确认弹窗(CH7-4,真鼠标点 backdrop 验 pointerdown-outside 分层关闭)。7 用例连跑稳定,app/src 零 diff、零新增 testid。CI frontend job 增 playwright 4 步全 blocking(ms-playwright 缓存 + --with-deps)。流程固化:spec 新档 browser-regression.md(分层判据表 + fixture 词表 + wire 事实[无 envelope/请求顶层 snake_case/应答按 struct 反向] + 新增用例 checklist + 6 实测陷阱)+ HACKING-wsl 运行条目 + BUGLIST §4/§6 精准补注。独立 check 质量门 A–H 全过,修 3 处文档事实(keymap 绑定表述/paste 能力归因/端口占用两分支)。评审贡献:P1 webServer 端口写法、P2 无 envelope+snake_case、P3 引用精确性,连同 vite proxy 泄漏面发现均已固化进文档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e5a3f61` | (see git log) |
+| `9259ce7` | (see git log) |
+| `f3bb32e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
