@@ -89,3 +89,4 @@
 - [pattern-global-loop-semaphore](./agent-loop-architecture/pattern-global-loop-semaphore.md)
 - [pattern-doc-extraction](./agent-loop-architecture/pattern-doc-extraction.md)
 - [pattern-terminal-done-event](./agent-loop-architecture/pattern-terminal-done-event.md)
+- [pattern-output-truncation](./agent-loop-architecture/pattern-output-truncation.md)

@@ -101,6 +101,7 @@
 | **F6** 异步 agent 任务 + **F3** 全局并发闸 | 08-27 | SessionSummary.busy + 跨 session toast + max_concurrent_loops(spec [pattern-global-loop-semaphore](../.trellis/spec/backend/agent-loop-architecture/pattern-global-loop-semaphore.md)) |
 | **F2/F2b** 定时任务 | 08-28 | scheduler 30s tick + due 落账 + origin 链;6 档 + 结束条件(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
 | **LLM schedule_task 家族**(F2 detached dispatch 收口) | 08-29 | 三件套(create/status/cancel,作者面分离 created_by='agent',tool 侧双 gate;spec [tool-contract 17](../.trellis/spec/backend/tool-contract/17-schedule-task-family.md)) |
+| **C6** 大输出截断统一 | 08-30 | tool_output 契约模块(三恢复模式 + 统一标记 + RULE-E-009 唯一实现);spill 迁 app_data_dir/outputs/<session>(权限 carve-out + 双路径 sweep);web_fetch 落盘恢复;修 >64KB 管道死锁(spec [pattern-output-truncation](../.trellis/spec/backend/agent-loop-architecture/pattern-output-truncation.md)) |
 
 ---
 
@@ -129,7 +130,7 @@
 |------|------|------|
 | ~~B9~~ | ~~生成式 UI~~ | ✅ 07-02 部分落地(selector/diff/code_block,button 推后期),见 §1.2 |
 | ~~B9+~~ | ~~生成式 UI 收尾(button + action / diff 应用)~~ | ✅ 07-13 落地(D3 通用 button + D4 diff 应用 + UiDiffApplied 审计),见 §1.2 |
-| C6   | 大输出截断统一 | ⑩ ⑫ 边界处统一处理 |
+| ~~C6~~ | ~~大输出截断统一~~ | ✅ **2026-08-30 落地**(08-30-c6-output-truncation:tool_output 契约模块 + 五工具迁移 + spill 迁 app_data_dir + web_fetch 模式 A 恢复 + grep 行级指引;顺带修 >64KB 管道死锁与 shell/in_memory 裸切片 panic 两处存量缺陷,见 §1.2) |
 | ~~B1~~ | ~~图片支持(multimodal)~~ | ✅ 08-16/17 落地(粘贴+@双入口/wire 双形态/占位降级/images_token 切片/DOMPurify 收紧),见 §1.2 |
 | ~~D2~~ | ~~跨 session 全文搜索(双驱动)~~ | ✅ 双驱动 08-17 全部落地:① 用户驱动(全局 SearchModal + messages_fts + 只读预览定位)+ ② Agent 驱动 `search_history` tool(复用 `db::search` 查询层,不走 IPC),见 §1.2 |
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |

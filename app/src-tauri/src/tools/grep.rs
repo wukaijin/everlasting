@@ -243,8 +243,15 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
 
     // 5. Apply per-line cap. For content mode this is critical to
     //    prevent minified JS / generated code from blowing up the
-    //    agent's context.
-    let capped = cap_line_lengths(&stdout, GREP_MAX_LINE_LENGTH);
+    //    agent's context. C6 (R5): in content mode the truncation
+    //    suffix carries a mode-B recovery hint naming the file:line
+    //    (rg `--line-number` is on), so the LLM can read_file the
+    //    full line instead of guessing.
+    let capped = cap_line_lengths(
+        &stdout,
+        GREP_MAX_LINE_LENGTH,
+        output_mode == OutputMode::Content,
+    );
 
     // 6. For content mode, rg emits `path:line:content`; the path
     //    portion is the canonical absolute path. To keep results
@@ -283,7 +290,32 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
 }
 
 /// Truncate any line longer than `cap` to `cap` chars (with a marker).
-fn cap_line_lengths(s: &str, cap: usize) -> String {
+/// Split an rg content-mode line (`path:line:content`) into its
+/// `(path, line_number)` prefix. Scans for the first `:<digits>:`
+/// boundary — a path containing a `:N:`-shaped segment can
+/// misparse, but the result only feeds a recovery hint, so the
+/// rare mangled hint is acceptable. Returns `None` for non-content
+/// shapes (paths-only mode, rg banner lines).
+fn split_rg_content_line(line: &str) -> Option<(&str, usize)> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1 && j < bytes.len() && bytes[j] == b':' {
+                let n: usize = line[i + 1..j].parse().ok()?;
+                return Some((&line[..i], n));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn cap_line_lengths(s: &str, cap: usize, content_mode: bool) -> String {
     if cap == 0 {
         return s.to_string();
     }
@@ -295,7 +327,15 @@ fn cap_line_lengths(s: &str, cap: usize) -> String {
         if line.chars().count() > cap {
             let truncated: String = line.chars().take(cap).collect();
             out.push_str(&truncated);
-            out.push_str("… <truncated>");
+            // C6 R5: content-mode truncation carries a recovery
+            // hint; paths-only mode keeps the bare suffix.
+            let recovery = match (content_mode, split_rg_content_line(line)) {
+                (true, Some((path, line_no))) => {
+                    format!("… <truncated: line over {cap}-char cap | recover: read_file {path} offset {line_no}>")
+                }
+                _ => "… <truncated>".to_string(),
+            };
+            out.push_str(&recovery);
         } else {
             out.push_str(line);
         }
@@ -478,11 +518,57 @@ mod tests {
     #[tokio::test]
     async fn long_line_is_capped() {
         let s = "a".repeat(GREP_MAX_LINE_LENGTH + 50);
-        let capped = cap_line_lengths(&s, GREP_MAX_LINE_LENGTH);
+        let capped = cap_line_lengths(&s, GREP_MAX_LINE_LENGTH, false);
         // The marker should be present.
         assert!(capped.contains("<truncated>"));
         // The original full string should NOT be present.
         assert!(!capped.contains(&"a".repeat(GREP_MAX_LINE_LENGTH + 50)));
+    }
+
+    /// C6 R5 (AC6): content-mode line truncation carries a
+    /// mode-B recovery hint naming the file:line (rg
+    /// `--line-number` shape `path:line:content`).
+    #[test]
+    fn long_line_content_mode_carries_recovery_hint() {
+        let line = format!(
+            "/proj/src/big.js:42:{}",
+            "a".repeat(GREP_MAX_LINE_LENGTH + 50)
+        );
+        let capped = cap_line_lengths(&line, GREP_MAX_LINE_LENGTH, true);
+        assert!(capped.contains(
+            "… <truncated: line over 500-char cap | recover: read_file /proj/src/big.js offset 42>"
+        ), "got: {}", &capped[..120.min(capped.len())]);
+    }
+
+    /// Paths-only mode (no `path:line:` shape) keeps the bare
+    /// suffix — no line number to point at.
+    #[test]
+    fn long_line_paths_mode_keeps_bare_suffix() {
+        let s = format!("/proj/{}:weird:12x", "a".repeat(GREP_MAX_LINE_LENGTH + 50));
+        // `:weird:` is not `:<digits>:` → no hint even in content mode.
+        let capped = cap_line_lengths(&s, GREP_MAX_LINE_LENGTH, true);
+        assert!(capped.contains("… <truncated>"));
+        assert!(!capped.contains("recover:"));
+    }
+
+    /// `split_rg_content_line` boundary: `:digits:` scan must skip
+    /// non-numeric colon segments and Windows drive prefixes.
+    #[test]
+    fn split_rg_content_line_parses_and_rejects() {
+        assert_eq!(
+            split_rg_content_line("/a/b/c.txt:123:content here"),
+            Some(("/a/b/c.txt", 123))
+        );
+        assert_eq!(
+            split_rg_content_line("C:\\x\\y.rs:7:zz"),
+            Some(("C:\\x\\y.rs", 7))
+        );
+        assert_eq!(split_rg_content_line("plain line no numbers"), None);
+        // Colons inside the path: the first NUMERIC `:N:` wins.
+        assert_eq!(
+            split_rg_content_line("/a:b:c.txt:9:x"),
+            Some(("/a:b:c.txt", 9))
+        );
     }
 
     #[tokio::test]
