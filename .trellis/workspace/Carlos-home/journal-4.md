@@ -1269,3 +1269,24 @@ C6 收口(08-30-c6-output-truncation,评审后三 PR):PR1 tool_output 契约模�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 129: P3b 执行期沙盒(Landlock+seccomp)落地
+
+**Date**: 2026-08-31
+**Task**: P3b 执行期沙盒(Landlock+seccomp)落地
+**Branch**: `main`
+
+### Summary
+
+08-31-a2-p3b-sandbox-executor 三 PR 全部落地并 live 验收:src/sandbox/ 五文件(四项触发与、pre_exec 纯 syscall 纪律、AccessSet 类型保证权限⊆handled、手写 BPF 断网),前台+后台两条 spawn 路径接入,config 三字段+set_app_config_list 双通道,设置面开关/徽标/列表编辑,审计 kind SandboxedShellExecution。实现期修正两条 design 缺口:exec 面补 /lib /lib64 /usr/lib 静态根(动态 ELF 解释器需 EXECUTE,漏则全部二进制 EACCES)、PATH 解析过滤 /mnt/(WSL interop 逃逸)。2162 后端 + 1492 前端全绿,turn-smoke --sandbox-probe live 过(沙盒审计行落库,无误杀),remote E2E 过。spec sandbox-executor.md 收编,P3c(三态 UX/bwrap 档)留 ROADMAP 第四档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4969db0` | (see git log) |
+
+### Status
+
+[OK] **Completed**

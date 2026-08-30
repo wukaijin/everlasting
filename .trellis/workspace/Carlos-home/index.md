@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 128
+- **Total Sessions**: 129
 - **Last Active**: 2026-08-31
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1271 | Active |
+| `journal-4.md` | ~1292 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 129 | 2026-08-31 | P3b 执行期沙盒(Landlock+seccomp)落地 | `4969db0` | `main` |
 | 128 | 2026-08-31 | C6 大输出截断统一——契约模块 + spill 迁移 + 两处存量缺陷修复 | `7f65505`, `d2f0c7e`, `1513008` | `main` |
 | 127 | 2026-08-30 | RULE-PERM-001 审计事件 keyset 分页(P3 销账,台账归零) | `4f81306`, `03f9ec8`, `91f5df8`, `2ce510a` | `main` |
 | 126 | 2026-08-30 | RULE-TEST-001 浏览器交互回归流水线:Playwright 基建 + 三试点 + CI blocking 门禁 | `e5a3f61`, `9259ce7`, `f3bb32e` | `main` |
