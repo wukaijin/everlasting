@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "工具契约总档:截断标记/恢复通路新约定的挂靠点与既有工具描述风格"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "§7 敏感路径 deny-list / 受信 allow-list(read-side decouple)是 trusted outputs/** 扩展的权威档;read 族项目外放行语义在此"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "关卡⑤ unified-context-budget 分层陈述引用(截断=工具侧单发,budget=轮级聚合)"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 tools/tool_output.rs 模块落位与命名规范"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "spill/sweep 失败路径 warn 日志规范(in_memory 现行 warn+None 语义保留)"}

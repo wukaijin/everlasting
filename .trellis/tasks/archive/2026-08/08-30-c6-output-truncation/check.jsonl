@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 清单入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "提交前质量门(fmt/clippy/全量测试)口径"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "核对截断契约新约定与既有工具条目无冲突"}
