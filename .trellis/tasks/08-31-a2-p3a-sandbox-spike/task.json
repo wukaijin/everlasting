@@ -1,0 +1,29 @@
+{
+  "id": "a2-p3a-sandbox-spike",
+  "name": "a2-p3a-sandbox-spike",
+  "title": "A2+ P3a 执行期沙盒 spike:WSL2 可行性与主路线定案",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "Carlos",
+  "assignee": "Carlos",
+  "createdAt": "2026-08-31",
+  "completedAt": "2026-08-31",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "docs/_history/2026-08-28-a2-shell-classification.md",
+    "docs/ROADMAP.md"
+  ],
+  "notes": "结论:主路线 Landlock+seccomp(纯 Rust 零外部依赖,Codex 同款);bwrap 可选档;microVM 不做。P3b 是否跟上另立项评审。",
+  "meta": {}
+}
