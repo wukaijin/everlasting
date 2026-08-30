@@ -559,7 +559,7 @@ async fn execute_tool_inner(
             (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "web_fetch" => {
-            let (out, is_err) = web_fetch::execute(input, ctx).await;
+            let (out, is_err) = web_fetch::execute(input, ctx, session_id).await;
             (out, is_err, ToolContextUpdate::default(), None, None)
         }
         // F4: plain dispatch. Provider routing (auto/tavily/ddg per

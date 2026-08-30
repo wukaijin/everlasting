@@ -331,8 +331,12 @@ pub fn definition() -> ToolDef {
 // session_id)
 // ---------------------------------------------------------------------------
 
-pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, bool) {
-    execute_with(input, ctx, false).await
+pub async fn execute(
+    input: &serde_json::Value,
+    ctx: &ToolContext,
+    session_id: Option<&str>,
+) -> (String, bool) {
+    execute_with(input, ctx, false, session_id).await
 }
 
 /// Test-only entry that bypasses the SSRF block. Used by
@@ -342,13 +346,26 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
 /// out of the production binary.
 #[cfg(test)]
 pub async fn execute_for_test(input: &serde_json::Value, ctx: &ToolContext) -> (String, bool) {
-    execute_with(input, ctx, true).await
+    execute_with(input, ctx, true, None).await
+}
+
+/// Test-only entry with a session id, so the C6 mode-A spill path
+/// (which keys the spill dir by session) can be exercised against
+/// a `httpmock` server. Same SSRF bypass as [`execute_for_test`].
+#[cfg(test)]
+pub async fn execute_for_test_session(
+    input: &serde_json::Value,
+    ctx: &ToolContext,
+    session_id: &str,
+) -> (String, bool) {
+    execute_with(input, ctx, true, Some(session_id)).await
 }
 
 async fn execute_with(
     input: &serde_json::Value,
-    _ctx: &ToolContext,
+    ctx: &ToolContext,
     allow_private: bool,
+    session_id: Option<&str>,
 ) -> (String, bool) {
     let url = match input.get("url").and_then(|v| v.as_str()) {
         Some(u) => u.to_string(),
@@ -361,7 +378,12 @@ async fn execute_with(
         .clamp(1, MAX_TIMEOUT_SECS);
     let format = Format::parse(input.get("format").and_then(|v| v.as_str()));
 
-    match fetch_and_process(&url, timeout_secs, format, allow_private).await {
+    // C6 mode-A spill target (`<data_dir>/outputs/<session_id>/`).
+    // Without a session id (test paths) we fall back to plain
+    // truncation — nothing is written to disk.
+    let spill_target = session_id.map(|sid| (ctx.data_dir.as_path(), sid));
+
+    match fetch_and_process(&url, timeout_secs, format, allow_private, spill_target).await {
         Ok(content) => (content, false),
         Err(e) => (e.to_string(), true),
     }
@@ -376,6 +398,7 @@ async fn fetch_and_process(
     timeout_secs: u64,
     format: Format,
     allow_private: bool,
+    spill_target: Option<(&std::path::Path, &str)>,
 ) -> Result<String, WebFetchError> {
     // 1. Parse + scheme-validate the URL.
     let parsed = reqwest::Url::parse(url)
@@ -494,10 +517,49 @@ async fn fetch_and_process(
     //    passes through as-is.
     let content = convert_body(&body_bytes, &content_type, format)?;
 
-    // 8. Apply head/tail truncation to the converted content
-    //    (attribution prefix is prepended AFTER, so the prefix
-    //    is never truncated).
-    let truncated = truncate_output(content);
+    // 8. C6 mode-A recovery: content over the inline cap spills the
+    //    FULL converted body to `<data_dir>/outputs/<session_id>/`
+    //    and the result carries a head+tail preview whose marker
+    //    names the path (read_file offset/limit pages through it).
+    //    Fetch-again-with-offset is deliberately NOT offered: two
+    //    fetches can observe different content, so the spilled copy
+    //    is the only honest "full output". Spill failure (or no
+    //    session id, test paths) falls back to plain truncation.
+    //    The attribution prefix is prepended AFTER, so the prefix
+    //    is never truncated.
+    let truncated = if content.len() > crate::tools::tool_output::WEB_INLINE_CAP_BYTES {
+        let spilled = match spill_target {
+            Some((data_dir, sid)) => {
+                crate::tools::tool_output::spill(data_dir, Some(sid), content.as_bytes())
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "web_fetch: spill failed; falling back to inline truncation"
+                        );
+                        e
+                    })
+                    .ok()
+            }
+            None => None,
+        };
+        match spilled {
+            Some(path) => {
+                let cap = crate::tools::tool_output::WEB_INLINE_CAP_BYTES;
+                let omitted = content.len() - cap;
+                let marker = crate::tools::tool_output::truncation_marker(
+                    omitted,
+                    content.len(),
+                    crate::tools::tool_output::Unit::Bytes,
+                    &crate::tools::tool_output::Recovery::Spill { path },
+                );
+                crate::tools::tool_output::head_tail_truncate(&content, cap / 2, cap / 2, &marker)
+            }
+            None => truncate_output(content),
+        }
+    } else {
+        content
+    };
 
     // 9. Attribution prefix. Prepending an HTML-comment-style
     //    marker with the final URL, fetch timestamp, status, byte

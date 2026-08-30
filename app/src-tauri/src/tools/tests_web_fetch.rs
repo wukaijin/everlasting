@@ -10,8 +10,8 @@ use httpmock::prelude::*;
 use serde_json::json;
 
 use crate::tools::web_fetch::{
-    definition, execute, execute_for_test, html_to_text, is_blocked, resolve_and_check_sync,
-    truncate_output, Format, WebFetchError,
+    definition, execute, execute_for_test, execute_for_test_session, html_to_text, is_blocked,
+    resolve_and_check_sync, truncate_output, Format, WebFetchError,
 };
 use crate::tools::ToolContext;
 
@@ -168,7 +168,7 @@ fn definition_describes_ssrf_protection() {
 
 #[tokio::test]
 async fn execute_missing_url_param_returns_error() {
-    let (out, is_err) = execute(&json!({}), &test_ctx()).await;
+    let (out, is_err) = execute(&json!({}), &test_ctx(), None).await;
     assert!(is_err);
     assert!(out.contains("Missing"));
 }
@@ -377,7 +377,7 @@ async fn unparseable_url_returns_invalid_url_error() {
 async fn production_entry_blocks_loopback() {
     // 127.0.0.1 should always be rejected, regardless of any
     // test-only override (this is the production path).
-    let (out, is_err) = execute(&json!({"url": "http://127.0.0.1:1/"}), &test_ctx()).await;
+    let (out, is_err) = execute(&json!({"url": "http://127.0.0.1:1/"}), &test_ctx(), None).await;
     assert!(is_err, "127.0.0.1 should be blocked in production");
     assert!(
         out.contains("private") || out.contains("loopback"),
@@ -519,4 +519,120 @@ fn resolve_and_check_sync_blocks_loopback_even_with_bypass() {
     let err = resolve_and_check_sync("127.0.0.1", 80, false)
         .expect_err("loopback must be blocked by redirect SSRF guard");
     assert!(matches!(err, WebFetchError::BlockedAddress(_)));
+}
+
+// ---------------------------------------------------------------------------
+// C6 PR2: mode-A spill recovery (08-30-c6-output-truncation, AC5)
+// ---------------------------------------------------------------------------
+
+/// Test ctx whose data_dir is a tempdir we KEEP (unlike the leaked
+/// `test_ctx`, the spill tests need to inspect the written file).
+fn spill_test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
+    let p = tmp.path().canonicalize().unwrap();
+    ToolContext {
+        worktree_path: p.clone(),
+        cwd: p,
+        checklist: crate::tools::update_checklist::new_handle(),
+        background_shells: crate::background_shell::default_registry(),
+        db: crate::tools::test_default_pool(),
+        project_id: "test-proj".to_string(),
+        data_dir: tmp.path().to_path_buf(),
+        workflow_name: None,
+    }
+}
+
+/// >100 KB converted content spills the full body to
+/// `<data_dir>/outputs/<session_id>/` and the result's marker names
+/// the path with the mode-A recovery hint.
+#[tokio::test]
+async fn large_body_spills_with_recovery_marker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = MockServer::start();
+    // Plain text passthrough (no HTML conversion) keeps the byte
+    // count exact: 150 KB of ASCII.
+    let body = "x".repeat(150 * 1024);
+    let _mock = server.mock(|when, then| {
+        when.method(GET).path("/big");
+        then.status(200)
+            .header("content-type", "text/plain")
+            .body(body.clone());
+    });
+    let url = format!("http://{}/big", server.address());
+
+    let (out, is_err) =
+        execute_for_test_session(&json!({"url": url}), &spill_test_ctx(&tmp), "sess-wf").await;
+    assert!(!is_err, "got error: {}", out);
+    assert!(
+        out.contains("full output: "),
+        "mode-A marker missing: {}",
+        &out[..200.min(out.len())]
+    );
+    assert!(out.contains("recover: read_file with offset/limit"));
+    assert!(out.contains("<truncated: omitted"));
+    // Extract the path from the marker and verify the FULL body landed.
+    let path_str = out
+        .split("full output: ")
+        .nth(1)
+        .unwrap()
+        .split(" | recover")
+        .next()
+        .unwrap()
+        .trim();
+    let path = std::path::Path::new(path_str);
+    assert!(path.starts_with(tmp.path().join("outputs").join("sess-wf")));
+    let saved = std::fs::read(path).unwrap();
+    assert_eq!(saved.len(), 150 * 1024);
+}
+
+/// AC5 full recovery chain: after the spill, `read_file` on the
+/// marker's path with offset/limit pages through the content
+/// (this is exactly what the LLM does next in mode A).
+#[tokio::test]
+async fn spilled_output_readable_via_read_file_offset_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = spill_test_ctx(&tmp);
+    let server = MockServer::start();
+    // 300 numbered lines of ~600 bytes each = 180 KB.
+    let body: String = (0..300)
+        .map(|i| format!("{}{}\n", "y".repeat(590), i))
+        .collect();
+    let _mock = server.mock(|when, then| {
+        when.method(GET).path("/lines");
+        then.status(200)
+            .header("content-type", "text/plain")
+            .body(body);
+    });
+    let url = format!("http://{}/lines", server.address());
+
+    let (out, is_err) = execute_for_test_session(&json!({"url": url}), &ctx, "sess-wf2").await;
+    assert!(!is_err, "got error: {}", out);
+    let path_str = out
+        .split("full output: ")
+        .nth(1)
+        .unwrap()
+        .split(" | recover")
+        .next()
+        .unwrap()
+        .trim()
+        .to_string();
+
+    // Page through the spill exactly like the LLM would.
+    let (page, read_err, _images) = crate::tools::read_file::execute(
+        &json!({"path": path_str, "offset": 5, "limit": 3}),
+        &ctx,
+        None,
+        Some("sess-wf2"),
+    )
+    .await;
+    assert!(!read_err, "read_file failed: {}", page);
+    // Line numbers start at the requested offset (read_file
+    // contract) and the sliced content is the spilled body
+    // (`<n>\t<content>`, content = y-run + trailing index).
+    assert!(
+        page.contains("\t5\t"),
+        "offset numbering missing: {}",
+        &page[..100.min(page.len())]
+    );
+    assert!(page.contains('y'));
+    assert!(page.lines().count() <= 3 + 2); // 3 content lines + truncation guards
 }
