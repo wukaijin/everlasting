@@ -249,7 +249,12 @@ pub fn definition() -> ToolDef {
              Avoid `find -exec` / `-execdir`: they are blocked by the permission \
              kill list (find would run an arbitrary command). To act on find's \
              results, pipe with `-print0 | xargs -0` — e.g. `find . -name '*.ts' \
-             -print0 | xargs -0 wc -l` — which also handles filenames with spaces."
+             -print0 | xargs -0 wc -l` — which also handles filenames with spaces.\n\n\
+             Optional `description`: a short (aim for 10 words or fewer), \
+             active-voice summary of what the command does and why (not a \
+             restatement of the command itself). It is display-only — shown to \
+             the user in the tool call header and permission prompt; it never \
+             affects execution."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -269,6 +274,13 @@ pub fn definition() -> ToolDef {
                     "type": "integer",
                     "description": "Optional. Maximum execution time in milliseconds. Default: 120000 (2 min). Max: 600000 (10 min). \
                                     On timeout the command is killed and partial output is returned. For long commands (full builds, installs, large test suites) set a larger value (e.g. 300000-600000)."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional. A short (aim for 10 words or fewer), active-voice \
+                                    summary of what this command does and why — e.g. \"Run unit \
+                                    tests for the shell tool\". Shown to the user in the tool call \
+                                    header and permission prompt. Do not restate the command itself."
                 }
             },
             "required": ["command"]

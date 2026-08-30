@@ -87,7 +87,12 @@ pub fn definition() -> ToolDef {
              saved to `<cwd>/.everlasting/outputs/<id>.txt`; the status response then carries \
              the path plus a 1 KB head+tail preview.\n\n\
              Environment is restricted to a safe allowlist; API keys and tokens \
-             from the agent process are NOT inherited."
+             from the agent process are NOT inherited.\n\n\
+             Optional `description`: a short (aim for 10 words or fewer), \
+             active-voice summary of what the command does and why (not a \
+             restatement of the command itself). It is display-only — shown to \
+             the user in the tool call header and permission prompt; it never \
+             affects execution."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -109,6 +114,13 @@ pub fn definition() -> ToolDef {
                                     process group is automatically killed. Default: 86400000 \
                                     (24 hours). No upper cap; set a lower value for known-short \
                                     commands."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional. A short (aim for 10 words or fewer), active-voice \
+                                    summary of what this command does and why — e.g. \"Run unit \
+                                    tests for the shell tool\". Shown to the user in the tool call \
+                                    header and permission prompt. Do not restate the command itself."
                 }
             },
             "required": ["command"]
@@ -281,6 +293,93 @@ mod tests {
         // `command` is the only required key.
         let required = schema.get("required").expect("required list");
         assert_eq!(required, &serde_json::json!(["command"]));
+    }
+
+    /// The optional `description` field (display-only intent line,
+    /// 2026-08-30): present in the schema as a string, carries the
+    /// brevity guidance, and MUST stay out of `required` so old
+    /// callers remain wire-compatible.
+    #[test]
+    fn definition_documents_optional_description() {
+        let def = definition();
+        let schema = &def.input_schema;
+        let props = schema.get("properties").expect("schema has properties");
+        let desc = props
+            .get("description")
+            .expect("schema exposes the optional description field");
+        assert_eq!(
+            desc.get("type").and_then(|t| t.as_str()),
+            Some("string"),
+            "description must be typed as string"
+        );
+        let field_desc = desc
+            .get("description")
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        assert!(
+            field_desc.contains("10 words"),
+            "schema description should carry the brevity guidance, got: {field_desc}"
+        );
+        let tool_desc = def
+            .description
+            .as_deref()
+            .expect("bg shell has a description");
+        assert!(
+            tool_desc.contains("description"),
+            "tool description should mention the description field, got: {tool_desc}"
+        );
+        let required = schema.get("required").expect("required list");
+        assert_eq!(
+            required,
+            &serde_json::json!(["command"]),
+            "description must stay optional (required = [command])"
+        );
+    }
+
+    /// AC1 / R2: `description` is display-only — `execute()` never
+    /// reads it. A malformed (non-string) value must not change the
+    /// outcome: the shell still starts. The confirmation text embeds a
+    /// fresh `bsh_<id>` per call, so both contents are compared with
+    /// that token normalized out.
+    #[tokio::test]
+    async fn execute_ignores_malformed_description() {
+        let tmp = tempdir().unwrap();
+        let ctx = test_ctx(&tmp);
+        let (plain, plain_err, _) = execute(
+            &serde_json::json!({"command": "echo hello-bg"}),
+            &ctx,
+            Some("s1"),
+        )
+        .await;
+        let (with_desc, desc_err, _) = execute(
+            &serde_json::json!({"command": "echo hello-bg", "description": 12345}),
+            &ctx,
+            Some("s1"),
+        )
+        .await;
+        assert!(!plain_err);
+        assert!(!desc_err);
+        // Replace the 4th whitespace token (the `bsh_...` id) with a
+        // placeholder so two independent starts compare equal.
+        let normalize = |content: &str| -> String {
+            content
+                .split_whitespace()
+                .enumerate()
+                .map(|(i, tok)| {
+                    if i == 3 {
+                        "ID".to_string()
+                    } else {
+                        tok.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(
+            normalize(&plain),
+            normalize(&with_desc),
+            "malformed description must not change the confirmation"
+        );
     }
 
     #[tokio::test]

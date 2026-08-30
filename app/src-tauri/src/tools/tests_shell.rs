@@ -35,6 +35,74 @@ fn definition_documents_working_directory() {
     assert!(props.get("working_directory").is_some());
 }
 
+/// The optional `description` field (display-only intent line, 2026-08-30)
+/// must be present in the schema as a string and MUST NOT be required —
+/// old sessions / prompt variants that omit it stay wire-compatible.
+#[test]
+fn definition_documents_optional_description() {
+    let def = definition();
+    let schema = &def.input_schema;
+    let props = schema.get("properties").unwrap();
+    let desc = props
+        .get("description")
+        .expect("schema exposes the optional description field");
+    assert_eq!(
+        desc.get("type").and_then(|t| t.as_str()),
+        Some("string"),
+        "description must be typed as string"
+    );
+    let field_desc = desc
+        .get("description")
+        .and_then(|d| d.as_str())
+        .unwrap_or("");
+    assert!(
+        field_desc.contains("10 words"),
+        "schema description should carry the brevity guidance, got: {field_desc}"
+    );
+    // Tool-level description carries the fill-in guidance too.
+    let tool_desc = def.description.as_deref().expect("shell has a description");
+    assert!(
+        tool_desc.contains("description"),
+        "tool description should mention the description field, got: {tool_desc}"
+    );
+    let required = schema.get("required").expect("required list");
+    assert_eq!(
+        required,
+        &serde_json::json!(["command"]),
+        "description must stay optional (required = [command])"
+    );
+}
+
+/// AC1 / R2: `description` is display-only — `execute()` never reads it.
+/// A malformed (non-string) value must leave the execution result
+/// byte-identical to the same call without the field.
+#[tokio::test]
+async fn execute_ignores_malformed_description() {
+    let tmp = tempdir().unwrap();
+    let ctx = test_ctx(&tmp);
+    let token = fresh_token();
+    let (plain, plain_err, _, _) = execute(
+        &serde_json::json!({"command": "echo hi"}),
+        &ctx,
+        None,
+        &token,
+    )
+    .await;
+    let (with_desc, desc_err, _, _) = execute(
+        &serde_json::json!({"command": "echo hi", "description": 12345}),
+        &ctx,
+        None,
+        &token,
+    )
+    .await;
+    assert!(!plain_err);
+    assert!(!desc_err);
+    assert_eq!(
+        plain, with_desc,
+        "malformed description must not change execution"
+    );
+}
+
 /// The timeout description must guide the LLM to raise the
 /// timeout for long commands (builds / installs / large test
 /// suites) instead of silently getting cut off at the 2-minute

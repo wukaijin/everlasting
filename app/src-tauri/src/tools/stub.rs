@@ -338,6 +338,11 @@ mod tests {
     ///    STUB_CANDIDATES 11 → 14(校准注 3 政策的情形:新工具以
     ///    stub 化入列),stub 摘要 ~+128 tok → 实测 4031。线随新增
     ///    基线平移。
+    /// 6. **4100 → 4200(2026-08-30,shell-description)**:shell /
+    ///    run_background_shell 增加可选 `description` 参数(display-only
+    ///    意图行,PRD R1)——schema 字段描述 + 两处 tool description
+    ///    末尾填写指引,~+60 tok → 实测 4160。线随既有工具描述增长
+    ///    平移(同校准注 4 先例)。
     /// dispatch 校准:生产 `model_briefs = list_models`(实测 5 模型),
     /// 用真实 display_name 列表模拟(不是 2 模型的低估值)。
     #[tokio::test]
@@ -378,8 +383,8 @@ mod tests {
         let json = serde_json::to_string(&defs).unwrap_or_default();
         let tokens = crate::memory::tokens::count_tokens(&json).await;
         assert!(
-            tokens <= 4100,
-            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 4100(AC1 线,校准史见上)"
+            tokens <= 4200,
+            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 4200(AC1 线,校准史见上)"
         );
     }
 
