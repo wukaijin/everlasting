@@ -18,19 +18,27 @@
 //! retried by the user with a different cwd).
 //!
 //! Step toolset-extension changes (claude-code style 30K disk
-//! spillover):
+//! spillover; C6 2026-08-30 relocated + unified into
+//! `tools/tool_output.rs`):
 //! - If the command's combined output (stdout + stderr) is over 30 KB,
 //!   the full output is written to
-//!   `<ctx.cwd>/.everlasting/outputs/<uuid>.txt`. The tool_result
-//!   that the LLM sees is a short message: a path to the spillover
-//!   file plus a 1 KB head+tail preview so the LLM can decide whether
-//!   to `read_file` the full output.
-//! - The `.everlasting/outputs/` directory is created on demand and
-//!   pruned on session delete (see `lib.rs::delete_session`).
-//! - Output under 30 KB goes through the legacy head+tail 50 KB
-//!   truncation unchanged (the 30K threshold is the claude-code
-//!   "spill to disk" trigger; the 50K is the step 2 "still inline but
-//!   head+tail" trigger — both apply in order).
+//!   `<ctx.data_dir>/outputs/<session_id>/<uuid>.txt` (out of the
+//!   project tree — the old `<cwd>/.everlasting/outputs/` location
+//!   polluted the agent's own search space and git status). The
+//!   tool_result that the LLM sees is a short message: a path to the
+//!   spillover file plus a 1 KB head+tail preview with the unified
+//!   truncation marker, so the LLM can page through it with
+//!   `read_file` offset/limit.
+//! - The `<data_dir>/outputs/<session_id>/` directory is created on
+//!   demand and pruned on session delete
+//!   (`tool_output::sweep_session_outputs`); the legacy cwd-based
+//!   `cleanup_outputs_dir` keeps sweeping pre-C6 spills best-effort.
+//! - Output under 30 KB goes through the head+tail 50 KB truncation
+//!   unchanged (the 30K threshold is the claude-code "spill to disk"
+//!   trigger; the 50K is the "still inline but head+tail" trigger —
+//!   both apply in order).
+//! - Cancelled / timed-out partial output flows through the same
+//!   spill+truncate treatment (pre-C6 those arms returned unbounded).
 //!
 //! P0 enhancement (2026-06-12):
 //! - `timeout` parameter (int, ms, default 120000, max 600000) lets
@@ -59,27 +67,22 @@
 //!   Windows behaviour is unchanged (it stays on `child.kill()`);
 //!   full Windows `CREATE_NEW_PROCESS_GROUP` is a follow-up.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::llm::types::ToolDef;
 use crate::projects::boundary::assert_within_root;
+use crate::tools::tool_output::{self, Recovery, Unit};
 use crate::tools::{ToolContext, ToolContextUpdate};
 
-/// Max output before truncation (matches ARCHITECTURE.md §2.5.3).
-pub(crate) const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-/// claude-code style threshold: outputs above this size spill to
-/// disk and the LLM gets a path instead of the full text.
-pub(crate) const DISK_SPILL_THRESHOLD: usize = 30 * 1024;
-/// Preview size (head + tail) when we spill to disk. Keeps the
-/// tool_result under ~1.5 KB so the agent's context stays small.
-pub(crate) const PREVIEW_BYTES: usize = 1024;
-/// Sub-directory under cwd where spilled outputs are written.
+/// Legacy pre-C6 spill location under the session cwd. New spills go
+/// to `<data_dir>/outputs/<session_id>/` (`tool_output::spill`); this
+/// constant stays only for `cleanup_outputs_dir`, which sweeps the
+/// legacy directory of sessions that spilled before the relocation.
 pub(crate) const SPILL_DIR: &str = ".everlasting/outputs";
 /// Default command timeout in milliseconds (2 minutes).
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -144,7 +147,10 @@ pub(crate) struct ShellResult {
     pub(crate) timed_out: bool,
 }
 
-/// Kill the child process and collect whatever output was produced.
+/// Kill the child process. Output collection is the caller's job:
+/// the pipes are taken out and drained on spawned tasks BEFORE the
+/// wait/kill select (see `execute`), so after the group kill closes
+/// the write ends, those tasks complete with the partial output.
 ///
 /// On Unix the child was spawned with `process_group(0)`, so the
 /// `sh` process is the leader of a new process group whose PGID
@@ -182,8 +188,8 @@ pub(crate) async fn kill_and_collect(child: &mut Child) -> ShellResult {
     #[cfg(not(unix))]
     {
         // Windows path (MVP, not yet hardened per RULE-E-002). We
-        // fall back to tokio's `child.kill()` which only reaches
-        // the direct child — the same orphan-leak window the Unix
+        // fall back to tokio's `child.kill()` which only reaches the
+        // direct child — the same orphan-leak window the Unix
         // fix closes remains open here until `CREATE_NEW_PROCESS_GROUP`
         // is wired up.
         let _ = child.kill().await;
@@ -191,20 +197,36 @@ pub(crate) async fn kill_and_collect(child: &mut Child) -> ShellResult {
 
     // 2. Wait for the process to exit so we don't leave a zombie.
     let status = child.wait().await.ok();
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_end(&mut stdout).await;
-    }
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_end(&mut stderr).await;
-    }
     ShellResult {
-        stdout,
-        stderr,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
         exit_code: status.and_then(|s| s.code()).unwrap_or(-1),
         cancelled: true,
         timed_out: false,
+    }
+}
+
+/// Drain one child pipe on a spawned task. Returning `None` keeps
+/// the select arms uniform whether or not the pipe was piped.
+/// Shared with `background_shell` (single implementation, no
+/// per-module copies).
+pub(crate) fn spawn_pipe_drain<R>(pipe: Option<R>) -> Option<tokio::task::JoinHandle<Vec<u8>>>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    Some(tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut p) = pipe {
+            let _ = p.read_to_end(&mut buf).await;
+        }
+        buf
+    }))
+}
+
+pub(crate) async fn collect_drain(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    match task {
+        Some(h) => h.await.unwrap_or_default(),
+        None => Vec::new(),
     }
 }
 
@@ -241,9 +263,9 @@ pub fn definition() -> ToolDef {
              (e.g. 300000-600000) so the work is not cut off. Long-running services (dev \
              servers, `--watch`) must still finish within the timeout, split them or poll \
              in separate calls.\n\n\
-             Outputs over 30 KB are saved to `<cwd>/.everlasting/outputs/<id>.txt`; \
-             the tool returns the path plus a short preview so you can read the \
-             full file with read_file.\n\n\
+             Outputs over 30 KB are saved to a spill file under the app data dir \
+             (the tool result shows the exact absolute path); page through it \
+             with read_file offset/limit when you need the full content.\n\n\
              Environment is restricted to a safe allowlist; API keys and tokens \
              from the agent process are NOT inherited.\n\n\
              Avoid `find -exec` / `-execdir`: they are blocked by the permission \
@@ -290,9 +312,9 @@ pub fn definition() -> ToolDef {
 
 /// Execute the tool. Returns `(content, is_error, ctx_update)`.
 ///
-/// `session_id` is currently unused by the shell tool itself, but we
-/// keep it in the signature for parity with the other tools in
-/// `mod.rs::execute_tool` — the dispatch is uniform.
+/// `session_id` keys the C6 disk-spill directory
+/// (`<data_dir>/outputs/<session_id>/`) so session delete can sweep
+/// the whole directory.
 ///
 /// C1 (Cancel): receives a `CancellationToken` so the child process
 /// can be killed on cancel. The flow is:
@@ -314,7 +336,7 @@ pub fn definition() -> ToolDef {
 pub async fn execute(
     input: &serde_json::Value,
     ctx: &ToolContext,
-    _session_id: Option<&str>,
+    session_id: Option<&str>,
     cancel: &CancellationToken,
 ) -> (String, bool, ToolContextUpdate, Option<i32>) {
     let command = match input.get("command").and_then(|v| v.as_str()) {
@@ -411,15 +433,29 @@ pub async fn execute(
     //    and timeout. On cancel/timeout, kill the entire process group
     //    (Unix) or the direct child (Windows) and collect whatever
     //    output was produced so far.
+    //
+    //    The pipes are taken out and drained on spawned tasks BEFORE
+    //    the select: `child.wait()` alone never reads stdout/stderr,
+    //    so a child producing more than the pipe capacity (~64 KB on
+    //    Linux) would block on write, never exit, and burn the whole
+    //    timeout (pre-C6 latent deadlock — every >64 KB command
+    //    effectively timed out; found via the C6 spill test).
+    let stdout_task = spawn_pipe_drain(child.stdout.take());
+    let stderr_task = spawn_pipe_drain(child.stderr.take());
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             tracing::info!("shell: cancellation requested, killing process group");
-            kill_and_collect(&mut child).await
+            let mut r = kill_and_collect(&mut child).await;
+            r.stdout = collect_drain(stdout_task).await;
+            r.stderr = collect_drain(stderr_task).await;
+            r
         }
         _ = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
             tracing::info!("shell: timeout after {}ms, killing process group", timeout_ms);
             let mut r = kill_and_collect(&mut child).await;
+            r.stdout = collect_drain(stdout_task).await;
+            r.stderr = collect_drain(stderr_task).await;
             r.timed_out = true;
             r.cancelled = false; // timeout, not cancel
             r
@@ -427,15 +463,8 @@ pub async fn execute(
         status = child.wait() => {
             match status {
                 Ok(status) => {
-                    let mut stdout = Vec::new();
-                    let mut stderr = Vec::new();
-                    // Best-effort read remaining output.
-                    if let Some(mut out) = child.stdout.take() {
-                        let _ = out.read_to_end(&mut stdout).await;
-                    }
-                    if let Some(mut err) = child.stderr.take() {
-                        let _ = err.read_to_end(&mut stderr).await;
-                    }
+                    let stdout = collect_drain(stdout_task).await;
+                    let stderr = collect_drain(stderr_task).await;
                     ShellResult {
                         stdout,
                         stderr,
@@ -474,33 +503,45 @@ pub async fn execute(
     // audit row records "killed (-1)" distinct from "no exit code".
     let reported_exit_code = Some(exit_code);
 
-    // 6. If cancelled, prepend marker.
+    // 6. Cancel / timeout markers. C6: these arms no longer return
+    //    early — the (potentially huge) partial output flows through
+    //    the same spill/truncate finalize below. Pre-C6 a timed-out
+    //    `cat huge.log` returned its partial output unbounded.
     if result.cancelled {
         combined = format!("[cancelled, partial output]\n{}", combined);
-        return (combined, true, update, reported_exit_code);
-    }
-
-    // 7. If timed out, prepend marker with the timeout duration.
-    if result.timed_out {
+    } else if result.timed_out {
         combined = format!(
             "[timeout after {}ms, partial output]\n{}",
             timeout_ms, combined
         );
-        return (combined, true, update, reported_exit_code);
     }
 
-    // 8. Disk-spill: if output exceeds 30 KB, write the FULL output
-    //    to a file under `<validated_cwd>/.everlasting/outputs/` and
-    //    return a path + preview to the LLM.
-    if combined.len() > DISK_SPILL_THRESHOLD {
-        match spill_to_disk(&validated_cwd, &combined).await {
+    // 7. Disk-spill: if output exceeds the threshold, write the FULL
+    //    output to `<ctx.data_dir>/outputs/<session_id>/` (C6: out
+    //    of the project tree) and return a path + preview to the LLM.
+    if combined.len() > tool_output::SPILL_THRESHOLD_BYTES {
+        match tool_output::spill(&ctx.data_dir, session_id, combined.as_bytes()).await {
             Ok(path) => {
-                let preview = head_tail_preview(&combined, PREVIEW_BYTES);
+                let omitted = combined
+                    .len()
+                    .saturating_sub(tool_output::SPILL_PREVIEW_BYTES * 2);
+                let marker = tool_output::truncation_marker(
+                    omitted,
+                    combined.len(),
+                    Unit::Bytes,
+                    &Recovery::Spill { path: path.clone() },
+                );
+                let preview = tool_output::head_tail_truncate(
+                    &combined,
+                    tool_output::SPILL_PREVIEW_BYTES,
+                    tool_output::SPILL_PREVIEW_BYTES,
+                    &marker,
+                );
                 let msg = format!(
                     "Output saved to {} ({} bytes). First/last {} preview:\n{}\n[exit code: {}]",
                     path.display(),
                     combined.len(),
-                    PREVIEW_BYTES,
+                    tool_output::SPILL_PREVIEW_BYTES,
                     preview,
                     exit_code
                 );
@@ -509,40 +550,40 @@ pub async fn execute(
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    cwd = %validated_cwd.display(),
+                    data_dir = %ctx.data_dir.display(),
                     "shell: disk spill failed; falling back to inline truncation"
                 );
             }
         }
     }
 
-    // 9. Inline path: apply the 50 KB head+tail truncation.
+    // 8. Inline path: apply the 50 KB head+tail truncation. No
+    //    recovery segment — the spill copy doesn't exist and shell
+    //    output is not replayable.
+    let omitted = combined.len().saturating_sub(tool_output::INLINE_CAP_BYTES);
+    let marker =
+        tool_output::truncation_marker(omitted, combined.len(), Unit::Bytes, &Recovery::None);
     (
-        truncate_output(combined),
+        tool_output::head_tail_truncate(
+            &combined,
+            tool_output::INLINE_CAP_BYTES / 2,
+            tool_output::INLINE_CAP_BYTES / 2,
+            &marker,
+        ),
         is_error,
         update,
         reported_exit_code,
     )
 }
 
-/// Write `contents` to `<cwd>/.everlasting/outputs/<uuid>.txt`,
-/// creating the directory if needed. Returns the absolute path.
-pub(crate) async fn spill_to_disk(cwd: &Path, contents: &str) -> std::io::Result<PathBuf> {
-    let dir = cwd.join(SPILL_DIR);
-    tokio::fs::create_dir_all(&dir).await?;
-    let filename = format!("{}.txt", Uuid::new_v4());
-    let path = dir.join(&filename);
-    tokio::fs::write(&path, contents).await?;
-    Ok(path)
-}
-
-/// Best-effort removal of `<cwd>/.everlasting/outputs/`. Called by
-/// `lib.rs::delete_session` per PRD §R8 — when a user deletes a
-/// session we sweep the disk-spilled shell outputs that were
-/// written into that session's cwd. Failures are logged but never
-/// returned: deleting the session is the user's primary intent;
-/// disk cleanup is a side effect that should not block the delete
-/// or surface a confusing error to the UI.
+/// Best-effort removal of the LEGACY pre-C6 spill location
+/// `<cwd>/.everlasting/outputs/`. Called by `delete_session` for
+/// sessions created before the C6 relocation — new spills live in
+/// `<data_dir>/outputs/<session_id>/` and are swept by
+/// `tool_output::sweep_session_outputs`. Failures are logged but
+/// never returned: deleting the session is the user's primary
+/// intent; disk cleanup is a side effect that should not block the
+/// delete or surface a confusing error to the UI.
 ///
 /// A missing directory is a no-op (the session never spilled
 /// anything). We use `remove_dir_all` (not `remove_dir`) because
@@ -557,42 +598,7 @@ pub async fn cleanup_outputs_dir(cwd: &Path) {
             error = %e,
             cwd = %cwd.display(),
             spill_dir = %dir.display(),
-            "shell: failed to clean up disk-spilled outputs on session delete"
+            "shell: failed to clean up legacy disk-spilled outputs on session delete"
         );
     }
-}
-
-/// Produce a head+tail preview of `s` for the disk-spill tool
-/// result. Format: first `cap` bytes, then `\n...<truncated: N bytes>...\n`,
-/// then last `cap` bytes.
-pub(crate) fn head_tail_preview(s: &str, cap: usize) -> String {
-    let len = s.len();
-    if len <= cap * 2 + 64 {
-        return s.to_string();
-    }
-    let head_end = cap;
-    let tail_start = len - cap;
-    let omitted = len - cap * 2;
-    format!(
-        "{}\n...<truncated: omitted {} bytes>...\n{}",
-        &s[..head_end],
-        omitted,
-        &s[tail_start..]
-    )
-}
-
-/// Truncate output exceeding MAX_OUTPUT_BYTES (head + tail, omit middle).
-pub(crate) fn truncate_output(s: String) -> String {
-    if s.len() <= MAX_OUTPUT_BYTES {
-        return s;
-    }
-    let head_end = 25 * 1024;
-    let tail_start = s.len() - 25 * 1024;
-    let omitted = s.len() - MAX_OUTPUT_BYTES;
-    format!(
-        "{}\n<truncated: omitted {} bytes>\n{}",
-        &s[..head_end],
-        omitted,
-        &s[tail_start..]
-    )
 }

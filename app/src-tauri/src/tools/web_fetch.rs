@@ -90,13 +90,10 @@ const MAX_TIMEOUT_SECS: u64 = 120;
 /// cut off a 29.9 s body read right when the data is arriving.
 const TIMEOUT_GRACE_SECS: u64 = 5;
 
-/// Total output size before the head/tail truncation kicks in.
-/// Matches `read_file`'s MAX_OUTPUT_BYTES (50 KB head + 50 KB tail =
-/// 100 KB total window) so the LLM gets a similar "this is what you
-/// would see if you fetched the whole thing" UX.
-const MAX_OUTPUT_BYTES: usize = 100 * 1024;
-const TRUNCATE_HEAD: usize = 50 * 1024;
-const TRUNCATE_TAIL: usize = 50 * 1024;
+// C6: the output cap now lives in `tool_output::WEB_INLINE_CAP_BYTES`
+// (50 KB head + 50 KB tail = 100 KB total window) — same "what you
+// would see if you fetched the whole thing" UX as read_file's
+// INLINE_CAP layout.
 
 /// Max HTTP redirects. 5 matches `curl -L` and OpenCode's policy.
 const MAX_REDIRECTS: usize = 5;
@@ -644,30 +641,23 @@ pub(crate) fn html_to_text(html: &str) -> String {
 }
 
 pub(crate) fn truncate_output(s: String) -> String {
-    if s.len() <= MAX_OUTPUT_BYTES {
+    // C6: delegates to the shared truncation contract. Marker is
+    // mode-less for now (`Recovery::None`) — the mode-A spill
+    // recovery lands in PR2 of the C6 task (08-30-c6-output-
+    // truncation). Boundary-safe slicing + marker format live in
+    // `tools::tool_output` (RULE-E-009).
+    if s.len() <= crate::tools::tool_output::WEB_INLINE_CAP_BYTES {
         return s;
     }
-    // `head_end` / `tail_start` are byte offsets, but a Rust `&str`
-    // slice index MUST land on a UTF-8 char boundary — slicing
-    // mid-character panics ("byte index N is not a char boundary").
-    // This bites on any body with multi-byte chars (CJK, emoji, or
-    // the U+FFFD `�` that `from_utf8_lossy` emits for bad bytes).
-    // Walk head back / tail forward to the nearest boundary first.
-    let mut head_end = TRUNCATE_HEAD;
-    while head_end > 0 && !s.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-    let mut tail_start = s.len() - TRUNCATE_TAIL;
-    while tail_start < s.len() && !s.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
-    let omitted = s.len() - MAX_OUTPUT_BYTES;
-    format!(
-        "{}\n<truncated: omitted {} bytes>\n{}",
-        &s[..head_end],
+    let cap = crate::tools::tool_output::WEB_INLINE_CAP_BYTES;
+    let omitted = s.len() - cap;
+    let marker = crate::tools::tool_output::truncation_marker(
         omitted,
-        &s[tail_start..]
-    )
+        s.len(),
+        crate::tools::tool_output::Unit::Bytes,
+        &crate::tools::tool_output::Recovery::None,
+    );
+    crate::tools::tool_output::head_tail_truncate(&s, cap / 2, cap / 2, &marker)
 }
 
 /// DNS-resolve `host:port` and return the first non-blocked

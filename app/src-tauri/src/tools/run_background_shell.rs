@@ -84,7 +84,7 @@ pub fn definition() -> ToolDef {
              process group is automatically killed. Default: 86400000 (24 hours, no upper \
              cap; the timer exists so a forgotten background build doesn't run forever).\n\n\
              Output handling (same as the synchronous `shell` tool): outputs > 30 KB are \
-             saved to `<cwd>/.everlasting/outputs/<id>.txt`; the status response then carries \
+             saved to a spill file under the app data dir; the status response then carries \
              the path plus a 1 KB head+tail preview.\n\n\
              Environment is restricted to a safe allowlist; API keys and tokens \
              from the agent process are NOT inherited.\n\n\

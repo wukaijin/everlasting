@@ -308,8 +308,11 @@ pub trait BackgroundShellRegistry: Send + Sync {
 pub type DefaultRegistry = Arc<in_memory::InMemoryBackgroundShellRegistry>;
 
 /// Build the default GUI-process registry. Lives here (not in
-/// `in_memory`) so `AppState::load` doesn't have to know the
-/// concrete module path.
+/// `in_memory`) so test helpers don't have to know the concrete
+/// module path. C6: production constructs the registry via
+/// `InMemoryBackgroundShellRegistry::new_with_data_dir` (spill
+/// needs the app data dir); only tests use the bare form.
+#[cfg(test)]
 pub fn default_registry() -> DefaultRegistry {
     Arc::new(in_memory::InMemoryBackgroundShellRegistry::new())
 }

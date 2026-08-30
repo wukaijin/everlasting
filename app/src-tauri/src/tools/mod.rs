@@ -42,6 +42,7 @@ pub mod tests_merge_worker;
 pub mod tests_shell;
 pub mod tests_web_fetch;
 pub mod tests_web_search;
+pub mod tool_output;
 pub mod update_checklist;
 pub mod use_skill;
 pub mod use_ui;

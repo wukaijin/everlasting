@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
@@ -62,21 +61,14 @@ pub(crate) const SHELL_RETENTION_MS: u64 = 3_600_000;
 /// drift is imperceptible against the 1h retention.
 pub(crate) const SWEEP_INTERVAL_MS: u64 = 300_000;
 
-/// Head/tail preview size for `shell_status::stdout_preview` /
-/// `stderr_preview`. Matches [`crate::tools::shell`]'s
-/// `PREVIEW_BYTES`.
-const PREVIEW_BYTES: usize = 1024;
-
-/// Disk-spill threshold: outputs above this size save the full
-/// buffer to `<cwd>/.everlasting/outputs/<uuid>.txt` and the
-/// status response carries a path instead of the full text.
-/// Matches [`crate::tools::shell`]'s `DISK_SPILL_THRESHOLD`.
-const DISK_SPILL_THRESHOLD: usize = 30 * 1024;
-
-/// Per-shell subdirectory under cwd for spilled outputs. Same
-/// path as the synchronous `shell` tool so cleanup
-/// (`cleanup_outputs_dir`) is shared.
-const SPILL_DIR: &str = ".everlasting/outputs";
+// C6 (08-30-c6-output-truncation): the spill threshold / preview
+// size / spill location now live in `tools::tool_output` — this
+// module spilled via its own private copy (constants + `spill_to_disk`
+// + `head_tail_preview`) that had drifted into an independent
+// implementation. Previews and spills below consume the shared
+// contract; spill lands in `<data_dir>/outputs/<session_id>/`
+// (registry `data_dir`, injected by `new_with_data_dir` — the
+// bare `new()` used in tests has none and skips spilling).
 
 /// In-memory GUI-process registry. Constructed once in
 /// `AppState::load`; lives for the process lifetime.
@@ -101,6 +93,9 @@ struct Inner {
     /// Pending completion notifications per session. Drained by
     /// the agent loop each turn.
     notifications: HashMap<String, VecDeque<BackgroundShellNotification>>,
+    /// App data dir for C6 output spills (`<dir>/outputs/<session>/`).
+    /// `None` in test registries (bare `new()`) — spill is skipped.
+    data_dir: Option<PathBuf>,
 }
 
 /// Per-shell state held in the registry. The fields are
@@ -157,6 +152,22 @@ impl InMemoryBackgroundShellRegistry {
             inner: Arc::new(Mutex::new(Inner {
                 shells: HashMap::new(),
                 notifications: HashMap::new(),
+                data_dir: None,
+            })),
+        }
+    }
+
+    /// Production constructor: same as [`new`] but with the app
+    /// data dir, enabling C6 output spills to
+    /// `<data_dir>/outputs/<session_id>/`. Called from
+    /// `AppState::load` (where the Tauri-resolved dir is at hand);
+    /// test registries keep the bare `new()` and skip spilling.
+    pub fn new_with_data_dir(data_dir: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                shells: HashMap::new(),
+                notifications: HashMap::new(),
+                data_dir: Some(data_dir),
             })),
         }
     }
@@ -519,13 +530,13 @@ fn build_status_from_entry(entry: &ShellEntry) -> BackgroundShellStatus {
                 BackgroundShellStatus::Completed {
                     exit_code: notification.exit_code.unwrap_or(-1),
                     completed_at: notification.completed_at,
-                    stdout_preview: head_tail_preview(
+                    stdout_preview: status_preview(
                         &String::from_utf8_lossy(stdout),
-                        PREVIEW_BYTES,
+                        full_output_path.as_deref(),
                     ),
-                    stderr_preview: head_tail_preview(
+                    stderr_preview: status_preview(
                         &String::from_utf8_lossy(stderr),
-                        PREVIEW_BYTES,
+                        full_output_path.as_deref(),
                     ),
                     full_output_path: full_output_path.clone(),
                 }
@@ -540,21 +551,27 @@ fn build_status_from_entry(entry: &ShellEntry) -> BackgroundShellStatus {
     }
 }
 
-/// Head + tail preview string. Mirrors `tools::shell::head_tail_preview`.
-fn head_tail_preview(s: &str, cap: usize) -> String {
-    let len = s.len();
-    if len <= cap * 2 + 64 {
-        return s.to_string();
-    }
-    let head_end = cap;
-    let tail_start = len - cap;
-    let omitted = len - cap * 2;
-    format!(
-        "{}\n...<truncated: omitted {} bytes>...\n{}",
-        &s[..head_end],
+/// Head + tail preview for `shell_status` stdout/stderr fields,
+/// via the shared C6 truncation contract (char-boundary safe —
+/// RULE-E-009; the pre-C6 local mirror sliced raw bytes). When the
+/// full output was spilled, the marker carries the mode-A recovery
+/// path; the `full_output_path` field keeps surfacing it too.
+fn status_preview(s: &str, full_output_path: Option<&str>) -> String {
+    let cap = crate::tools::tool_output::SPILL_PREVIEW_BYTES;
+    let omitted = s.len().saturating_sub(cap * 2);
+    let recovery = match full_output_path {
+        Some(p) => crate::tools::tool_output::Recovery::Spill {
+            path: std::path::PathBuf::from(p),
+        },
+        None => crate::tools::tool_output::Recovery::None,
+    };
+    let marker = crate::tools::tool_output::truncation_marker(
         omitted,
-        &s[tail_start..]
-    )
+        s.len(),
+        crate::tools::tool_output::Unit::Bytes,
+        &recovery,
+    );
+    crate::tools::tool_output::head_tail_truncate(s, cap, cap, &marker)
 }
 
 /// Push `notification` onto `inner.notifications[session_id]`,
@@ -605,33 +622,38 @@ async fn run_background_task(
     let sleep = tokio::time::sleep(std::time::Duration::from_millis(max_runtime_ms));
     tokio::pin!(sleep);
 
+    // C6: drain the pipes on spawned tasks BEFORE the select.
+    // `child.wait()` never reads stdout/stderr, so output larger
+    // than the pipe capacity (~64 KB) would block the child on
+    // write and the max-runtime timer would fire spuriously —
+    // the same latent deadlock the synchronous shell tool had.
+    let stdout_task = crate::tools::shell::spawn_pipe_drain(child.stdout.take());
+    let stderr_task = crate::tools::shell::spawn_pipe_drain(child.stderr.take());
+
     let (trigger, exit_code, stdout, stderr) = tokio::select! {
         biased;
         _ = &mut kill_rx => {
             // External kill (kill() / kill_all_for_session / kill_all).
             let r = kill_and_collect(&mut child).await;
-            (ShellExitTrigger::Killed, Some(r.exit_code), r.stdout, r.stderr)
+            let stdout = crate::tools::shell::collect_drain(stdout_task).await;
+            let stderr = crate::tools::shell::collect_drain(stderr_task).await;
+            (ShellExitTrigger::Killed, Some(r.exit_code), stdout, stderr)
         }
         _ = &mut sleep => {
             // Max runtime elapsed.
             let r = kill_and_collect(&mut child).await;
-            (ShellExitTrigger::TimedOut, Some(r.exit_code), r.stdout, r.stderr)
+            let stdout = crate::tools::shell::collect_drain(stdout_task).await;
+            let stderr = crate::tools::shell::collect_drain(stderr_task).await;
+            (ShellExitTrigger::TimedOut, Some(r.exit_code), stdout, stderr)
         }
         status = child.wait() => {
             let exit_code = match status {
                 Ok(s) => s.code(),
                 Err(_) => None,
             };
-            // Read whatever output remained.
-            let mut stdout_buf = Vec::new();
-            let mut stderr_buf = Vec::new();
-            if let Some(mut out) = child.stdout.take() {
-                let _ = out.read_to_end(&mut stdout_buf).await;
-            }
-            if let Some(mut err) = child.stderr.take() {
-                let _ = err.read_to_end(&mut stderr_buf).await;
-            }
-            (ShellExitTrigger::Normal, exit_code, stdout_buf, stderr_buf)
+            let stdout = crate::tools::shell::collect_drain(stdout_task).await;
+            let stderr = crate::tools::shell::collect_drain(stderr_task).await;
+            (ShellExitTrigger::Normal, exit_code, stdout, stderr)
         }
     };
 
@@ -639,22 +661,33 @@ async fn run_background_task(
     let (outcome, reported_exit_code) = BackgroundShellOutcome::classify(trigger, exit_code);
 
     // Disk-spill for large outputs before we move into the lock.
-    // We need the entry's cwd to pick the spill directory; pull
-    // it out under a brief lock first.
-    let cwd_for_spill: Option<PathBuf> = {
+    // C6: the registry's data_dir (production-only) keys the
+    // session output dir; test registries have none and skip.
+    let data_dir_for_spill: Option<PathBuf> = {
         let g = inner.lock().await;
-        g.shells
-            .get(&(session_id.clone(), shell_id.clone()))
-            .map(|e| e.cwd.clone())
+        g.data_dir.clone()
     };
-    let full_output_path = if stdout.len() + stderr.len() > DISK_SPILL_THRESHOLD {
-        match cwd_for_spill {
-            Some(cwd) => spill_to_disk(&cwd, &stdout, &stderr).await,
-            None => None,
-        }
-    } else {
-        None
-    };
+    let full_output_path =
+        if stdout.len() + stderr.len() > crate::tools::tool_output::SPILL_THRESHOLD_BYTES {
+            match data_dir_for_spill {
+                Some(dir) => {
+                    let mut combined = Vec::with_capacity(stdout.len() + stderr.len() + 16);
+                    combined.extend_from_slice(&stdout);
+                    if !stderr.is_empty() {
+                        combined.push(b'\n');
+                        combined.extend_from_slice(b"[stderr]\n");
+                        combined.extend_from_slice(&stderr);
+                    }
+                    crate::tools::tool_output::spill(&dir, Some(&session_id), &combined)
+                        .await
+                        .ok()
+                        .map(|p| p.to_string_lossy().into_owned())
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
 
     let notification = BackgroundShellNotification {
         shell_session_id: shell_id.clone(),
@@ -704,17 +737,16 @@ async fn started_at_lookup(
         .unwrap_or_else(now_ms)
 }
 
-/// Subset of `tools/shell::kill_and_collect`'s return shape —
-/// we only need exit_code + stdout + stderr here.
+/// Subset of `tools::shell::kill_and_collect`'s return shape —
+/// we only need exit_code here (output is drained by the caller's
+/// pipe tasks).
 struct KillAndCollectResult {
     exit_code: i32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
 }
 
-/// SIGKILL the entire process group + collect stdout/stderr.
-/// Mirrors [`crate::tools::shell::kill_and_collect`] but returns
-/// a smaller struct.
+/// SIGKILL the entire process group + reap. Output collection is
+/// the caller's job (pipes are taken and drained on spawned tasks
+/// before the select — see `run_background_task`).
 async fn kill_and_collect(child: &mut tokio::process::Child) -> KillAndCollectResult {
     #[cfg(unix)]
     {
@@ -738,45 +770,8 @@ async fn kill_and_collect(child: &mut tokio::process::Child) -> KillAndCollectRe
         let _ = child.kill().await;
     }
 
-    let _ = child.wait().await;
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_end(&mut stdout).await;
-    }
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_end(&mut stderr).await;
-    }
     let exit_code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
-    KillAndCollectResult {
-        exit_code,
-        stdout,
-        stderr,
-    }
-}
-
-/// Write combined stdout + stderr to `<cwd>/.everlasting/outputs/<uuid>.txt`.
-/// Returns the absolute path on success. Best-effort: failures
-/// log at `warn!` and return `None`.
-async fn spill_to_disk(cwd: &std::path::Path, stdout: &[u8], stderr: &[u8]) -> Option<String> {
-    let dir = cwd.join(SPILL_DIR);
-    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
-        tracing::warn!(error = %e, "background_shell: create spill dir failed");
-        return None;
-    }
-    let path = dir.join(format!("{}.txt", Uuid::new_v4()));
-    let mut combined = Vec::with_capacity(stdout.len() + stderr.len() + 16);
-    combined.extend_from_slice(stdout);
-    if !stderr.is_empty() {
-        combined.push(b'\n');
-        combined.extend_from_slice(b"[stderr]\n");
-        combined.extend_from_slice(stderr);
-    }
-    if let Err(e) = tokio::fs::write(&path, &combined).await {
-        tracing::warn!(error = %e, "background_shell: spill write failed");
-        return None;
-    }
-    Some(path.to_string_lossy().into_owned())
+    KillAndCollectResult { exit_code }
 }
 
 // ---------------------------------------------------------------------------
@@ -787,24 +782,99 @@ async fn spill_to_disk(cwd: &std::path::Path, stdout: &[u8], stderr: &[u8]) -> O
 mod tests {
     use super::*;
 
-    /// `head_tail_preview` passes through short input untouched.
+    /// `status_preview` passes through short input untouched.
     /// Regression guard: if we ever swap to a different format
     /// (e.g. begin/end markers), the LLM-visible "truncated"
     /// marker must remain.
     #[test]
-    fn head_tail_preview_short_input_unchanged() {
-        assert_eq!(head_tail_preview("hello", 100), "hello");
+    fn status_preview_short_input_unchanged() {
+        assert_eq!(status_preview("hello", None), "hello");
     }
 
     /// Long input gets a head + tail preview with a truncation
     /// marker. The marker string is part of the LLM-facing
     /// surface — keep it stable.
     #[test]
-    fn head_tail_preview_long_input_has_marker() {
+    fn status_preview_long_input_has_marker() {
         let s = "a".repeat(5000);
-        let p = head_tail_preview(&s, 100);
+        let p = status_preview(&s, None);
         assert!(p.starts_with('a'), "head should be all 'a'");
         assert!(p.contains("truncated"));
+    }
+
+    /// C6: a spilled output makes the preview marker carry the
+    /// mode-A recovery path (RULE-E-009 boundary safety is covered
+    /// by the tool_output property tests; this pins the wiring).
+    #[test]
+    fn status_preview_with_spill_path_carries_recovery() {
+        let s = "a".repeat(5000);
+        let p = status_preview(&s, Some("/data/outputs/s1/x.txt"));
+        assert!(p.contains("full output: /data/outputs/s1/x.txt"));
+        assert!(p.contains("recover: read_file with offset/limit"));
+    }
+
+    /// C6 multibyte: CJK preview must not panic (the pre-C6 local
+    /// mirror sliced raw bytes).
+    #[test]
+    fn status_preview_cjk_no_panic() {
+        let s = "汉".repeat(5000);
+        let p = status_preview(&s, None);
+        assert!(p.contains("truncated"));
+        assert!(p.starts_with('汉'));
+    }
+
+    /// C6 / AC3: a registry constructed with the app data dir spills
+    /// large outputs to `<data_dir>/outputs/<session_id>/` (NOT the
+    /// pre-C6 `<cwd>/.everlasting/outputs/`), and the Completed
+    /// status surfaces the path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn large_output_spills_to_session_outputs_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new_with_data_dir(tmp.path().to_path_buf());
+        let shell_id = reg
+            .start(
+                "sess-bg",
+                "yes line | head -c 40000".to_string(),
+                tmp.path().to_path_buf(),
+                Some(10_000),
+            )
+            .await
+            .unwrap();
+        // Wait for completion.
+        let status = 'wait: {
+            for _ in 0..40 {
+                match reg.status("sess-bg", &shell_id).await.unwrap() {
+                    s @ BackgroundShellStatus::Completed { .. } => break 'wait s,
+                    _ => tokio::time::sleep(Duration::from_millis(50)).await,
+                }
+            }
+            panic!("background shell did not complete within 2s");
+        };
+        match status {
+            BackgroundShellStatus::Completed {
+                full_output_path,
+                stdout_preview,
+                ..
+            } => {
+                let path = full_output_path.expect("large output spilled");
+                assert!(
+                    path.starts_with(
+                        tmp.path()
+                            .join("outputs")
+                            .join("sess-bg")
+                            .to_string_lossy()
+                            .as_ref()
+                    ),
+                    "spill must be session-keyed under data_dir, got {path}"
+                );
+                let saved = std::fs::read(&path).unwrap();
+                assert!(saved.len() > crate::tools::tool_output::SPILL_THRESHOLD_BYTES);
+                assert!(stdout_preview.contains("recover: read_file with offset/limit"));
+                // Legacy cwd location must NOT have been written.
+                assert!(!tmp.path().join(".everlasting/outputs").exists());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
     }
 
     /// The shell id format is `bsh_<uuid>` with no dashes. UUID

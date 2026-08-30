@@ -294,7 +294,9 @@ async fn small_output_inline() {
 }
 
 /// AC7.2: output > 30 KB spills to disk and the result mentions
-/// the path and preview.
+/// the path and preview. C6: spill lands in
+/// `<data_dir>/outputs/<session_id>/` (AC3: dir keyed by session id)
+/// and the preview carries the unified mode-A marker.
 #[tokio::test]
 async fn large_output_spills_to_disk() {
     let tmp = tempdir().unwrap();
@@ -302,7 +304,7 @@ async fn large_output_spills_to_disk() {
     let (content, is_error, _, _) = execute(
         &serde_json::json!({"command": "yes line | head -c 40000"}),
         &test_ctx(&tmp),
-        None,
+        Some("sess-ac7"),
         &fresh_token(),
     )
     .await;
@@ -313,8 +315,10 @@ async fn large_output_spills_to_disk() {
         "got: {}",
         &content[..300.min(content.len())]
     );
-    assert!(content.contains(".everlasting/outputs/"));
+    assert!(content.contains("outputs/sess-ac7/"));
     assert!(content.contains("preview"));
+    // Unified mode-A recovery marker (C6 R2).
+    assert!(content.contains("recover: read_file with offset/limit"));
     // The actual file should exist on disk.
     // Parse the path out of the message.
     let path_line = content
@@ -328,27 +332,33 @@ async fn large_output_spills_to_disk() {
         .unwrap();
     let path = std::path::Path::new(path_str);
     assert!(
+        path.starts_with(tmp.path().join("outputs").join("sess-ac7")),
+        "spill must be session-keyed under data_dir, got {}",
+        path.display()
+    );
+    assert!(
         path.exists(),
         "spill file should exist at {}",
         path.display()
     );
     // The file should contain all the original output (not just preview).
     let saved = tokio::fs::read_to_string(path).await.unwrap();
-    assert!(saved.len() > DISK_SPILL_THRESHOLD);
+    assert!(saved.len() > crate::tools::tool_output::SPILL_THRESHOLD_BYTES);
 }
 
-/// AC7.3: the `.everlasting/outputs/` directory is created on demand.
+/// AC7.3: the `<data_dir>/outputs/<session_id>/` directory is created
+/// on demand (C6 relocation).
 #[tokio::test]
 async fn spill_creates_outputs_directory() {
     let tmp = tempdir().unwrap();
     let _ = execute(
         &serde_json::json!({"command": "yes x | head -c 40000"}),
         &test_ctx(&tmp),
-        None,
+        Some("sess-ac73"),
         &fresh_token(),
     )
     .await;
-    let dir = tmp.path().join(".everlasting/outputs");
+    let dir = tmp.path().join("outputs").join("sess-ac73");
     assert!(dir.exists());
     assert!(dir.is_dir());
 }
@@ -405,30 +415,55 @@ async fn cancel_before_spawn() {
     );
 }
 
-/// head_tail_preview unit test — short input passes through.
-#[test]
-fn head_tail_preview_short() {
-    let p = head_tail_preview("hello world", 100);
-    assert_eq!(p, "hello world");
-}
-
-/// head_tail_preview unit test — long input gets head + tail.
-#[test]
-fn head_tail_preview_long() {
-    let s = "a".repeat(5000);
-    let p = head_tail_preview(&s, 100);
-    assert!(p.contains("truncated"));
-    assert!(p.starts_with('a'));
-}
-
-/// spill_to_disk creates the file and the parent directory.
+/// C6 / RULE-E-009 regression (AC2, spill-success arm): >30 KB CJK
+/// output used to panic at the raw 1 KB preview slice (pre-C6
+/// `head_tail_preview` had no char-boundary handling — the
+/// codebase's sole RULE-E-009 violator). The unified path must
+/// return normally with the spill message + preview.
 #[tokio::test]
-async fn spill_to_disk_creates_file() {
+async fn large_cjk_output_spill_preview_no_panic() {
     let tmp = tempdir().unwrap();
-    let path = spill_to_disk(tmp.path(), "the contents").await.unwrap();
-    assert!(path.exists());
-    let read = tokio::fs::read_to_string(&path).await.unwrap();
-    assert_eq!(read, "the contents");
+    // `yes 汉` emits 3-byte chars + newline — fixed byte offsets
+    // land mid-character without boundary handling.
+    let (content, is_error, _, _) = execute(
+        &serde_json::json!({"command": "yes 汉 | head -c 100000"}),
+        &test_ctx(&tmp),
+        Some("sess-cjk"),
+        &fresh_token(),
+    )
+    .await;
+    assert!(!is_error);
+    assert!(content.contains("Output saved to"));
+    assert!(content.contains("recover: read_file with offset/limit"));
+    // Surviving preview edges are valid chars (no U+FFFD soup from
+    // a mid-char slice would also pass `contains`, but the marker
+    // proves the boundary-safe path ran).
+    assert!(content.contains("<truncated: omitted"));
+}
+
+/// C6 / RULE-E-009 regression (AC2, spill-failure fallback arm):
+/// when the spill directory cannot be created (`outputs` occupied
+/// by a regular file), the inline 25 KB head slice of CJK output
+/// must not panic either.
+#[tokio::test]
+async fn large_cjk_output_spill_failure_inline_no_panic() {
+    let tmp = tempdir().unwrap();
+    tokio::fs::write(tmp.path().join("outputs"), b"not a dir")
+        .await
+        .unwrap();
+    let (content, _is_error, _, _) = execute(
+        &serde_json::json!({"command": "yes 汉 | head -c 100000"}),
+        &test_ctx(&tmp),
+        Some("sess-cjk2"),
+        &fresh_token(),
+    )
+    .await;
+    assert!(!content.contains("Output saved to"));
+    assert!(
+        content.contains("<truncated: omitted"),
+        "inline fallback marker missing: {}",
+        &content[..200.min(content.len())]
+    );
 }
 
 /// AC7.4: `cleanup_outputs_dir` removes the spill directory and

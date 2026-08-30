@@ -93,6 +93,12 @@ pub(crate) fn build_trusted_external_patterns(app_data_dir: &Path) -> Vec<String
         .collect();
     if !app_data_dir.as_os_str().is_empty() {
         patterns.push(format!("{}/worktrees/**", app_data_dir.display()));
+        // C6(08-30-c6-output-truncation):工具输出 spill 落
+        // `<app_data_dir>/outputs/<session_id>/` —— app 自建、agent 读、
+        // 只读面,信任推理同 worktrees。没有这条 carve-out,read_file
+        // 恢复 spill 产物每次走 ask_path 弹窗,截断契约的模式 A
+        // 恢复通路名存实亡。
+        patterns.push(format!("{}/outputs/**", app_data_dir.display()));
     }
     patterns
 }
@@ -173,7 +179,8 @@ pub fn is_sensitive_path(abs_path: &Path) -> bool {
 ///
 /// caller(`check.rs` Tier 4 Path 分支)在项目外、deny 未命中、`ask_path`
 /// 之前调用。完整 set 包含 `~/.config/everlasting/**`(static) +
-/// `<app_data_dir>/worktrees/**`(动态,见 `init_trusted_external`)。
+/// `<app_data_dir>/worktrees/**` 与 `<app_data_dir>/outputs/**`
+/// (动态,见 `init_trusted_external`)。
 pub fn is_trusted_external(abs_path: &Path) -> bool {
     trusted_set().is_match(abs_path)
 }
@@ -340,6 +347,35 @@ mod tests {
         assert!(!set.is_match(test_dir.join("not-worktrees/foo")));
         // 4b. worktrees 兄弟目录不命中
         assert!(!set.is_match(test_dir.join("other/foo")));
+    }
+
+    // === 动态段(C6):`<app_data_dir>/outputs/**` ===
+    //
+    // 同上纯函数测法。spill 落点 `<data_dir>/outputs/<session_id>/<uuid>.txt`
+    // 必须免 ask(截断契约模式 A 恢复通路),且不越界到兄弟目录。
+    #[test]
+    fn dynamic_outputs_pattern_builds_and_matches() {
+        let test_dir = std::path::PathBuf::from("/tmp/everlasting-test-app-data");
+        let patterns = build_trusted_external_patterns(&test_dir);
+        let out_pattern = format!("{}/outputs/**", test_dir.display());
+        assert!(
+            patterns.iter().any(|p| p == &out_pattern),
+            "patterns 缺 outputs 段: {patterns:?}"
+        );
+        let pattern_refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+        let set = build_set(&pattern_refs);
+
+        // spill 文件命中(session-keyed + uuid 文件名)
+        assert!(set.is_match(&test_dir.join("outputs/sess-42/abc-uuid.txt")));
+        // _no_session fallback 目录也命中
+        assert!(set.is_match(&test_dir.join("outputs/_no_session/x.txt")));
+        // 兄弟目录不命中(不放大到整个 app_data_dir)
+        assert!(!set.is_match(&test_dir.join("attachments/sess-42/img.png")));
+        assert!(!set.is_match(&test_dir.join("not-outputs/foo")));
+        // deny 优先前提:outputs 常规文件不命中 deny-list
+        assert!(!is_sensitive_path(
+            &test_dir.join("outputs/sess-42/abc.txt")
+        ));
     }
 
     // 空 app_data_dir 不抛、只生成 static 段(防御性,见

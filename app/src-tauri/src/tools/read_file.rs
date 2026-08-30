@@ -35,16 +35,14 @@ use crate::llm::types::{AttachmentRef, ToolDef};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
-/// Max output before truncation (matches ARCHITECTURE.md §2.5.3).
-/// Applies BEFORE the `cat -n` prefix is added, so a 50 KB file still
-/// gets 50 KB of line-numbered output.
-const MAX_OUTPUT_BYTES: usize = 50 * 1024;
+/// Max output before truncation. C6: centralised in
+/// `tools::tool_output` (applies BEFORE the `cat -n` prefix is
+/// added, so a 50 KB file still gets 50 KB of line-numbered output).
+const MAX_OUTPUT_BYTES: usize = crate::tools::tool_output::INLINE_CAP_BYTES;
 
 /// Bytes reserved for the head and tail each, when the file is
-/// truncated. Matches the 25 KB + 25 KB layout used by the step 2
-/// `truncate_output` (we keep the same head/tail split so users who
-/// upgrade mid-conversation see the same pattern).
-const TRUNCATE_HEAD: usize = 25 * 1024;
+/// truncated. Matches the INLINE_CAP_BYTES / 2 head/tail split.
+const TRUNCATE_HEAD: usize = crate::tools::tool_output::INLINE_CAP_BYTES / 2;
 
 pub fn definition() -> ToolDef {
     ToolDef {
@@ -287,14 +285,23 @@ fn truncate_output(content: String, offset: usize, limit: usize) -> String {
 
     // Head+tail truncation on the line-numbered output. Slice at
     // UTF-8 char boundaries (RULE-E-009) — the line-number prefix
-    // is ASCII, but the source lines can be multibyte.
+    // is ASCII, but the source lines can be multibyte. C6: the
+    // middle segment is the unified mode-B marker.
     let head_end = numbered.floor_char_boundary(TRUNCATE_HEAD);
     let tail_start = numbered.ceil_char_boundary(numbered.len().saturating_sub(TRUNCATE_HEAD));
     let omitted = numbered.len() - MAX_OUTPUT_BYTES;
-    format!(
-        "{}\n<truncated: omitted {} bytes>\n{}",
-        &numbered[..head_end],
+    let marker = crate::tools::tool_output::truncation_marker(
         omitted,
+        numbered.len(),
+        crate::tools::tool_output::Unit::Bytes,
+        &crate::tools::tool_output::Recovery::Range {
+            hint: "re-run read_file with offset/limit",
+        },
+    );
+    format!(
+        "{}\n{}\n{}",
+        &numbered[..head_end],
+        marker,
         &numbered[tail_start..]
     )
 }
@@ -315,13 +322,22 @@ pub(crate) fn truncate_full_output(content: &str) -> String {
     // of a multi-byte sequence (CJK / emoji in a ≥50KB file would
     // panic on the byte slice). floor = walk back to a char start
     // (head); ceil = walk forward (tail). Mirrors the byte-walk in
-    // `git::diff::build_untracked_diff`.
+    // `git::diff::build_untracked_diff`. C6: the middle segment is
+    // the unified mode-B marker.
     let head_end = content.floor_char_boundary(TRUNCATE_HEAD);
     let tail_start = content.ceil_char_boundary(content.len() - TRUNCATE_HEAD);
     let omitted = content.len() - MAX_OUTPUT_BYTES;
+    let marker = crate::tools::tool_output::truncation_marker(
+        omitted,
+        content.len(),
+        crate::tools::tool_output::Unit::Bytes,
+        &crate::tools::tool_output::Recovery::Range {
+            hint: "re-run read_file with offset/limit",
+        },
+    );
     let head = add_line_numbers(&content[..head_end]);
     let tail = add_line_numbers(&content[tail_start..]);
-    format!("{}\n<truncated: omitted {} bytes>\n{}", head, omitted, tail)
+    format!("{}\n{}\n{}", head, marker, tail)
 }
 
 /// Add `cat -n` style line numbers to `text`, starting from line 1.

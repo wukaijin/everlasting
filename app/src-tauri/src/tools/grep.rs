@@ -259,9 +259,15 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     let line_count = formatted.lines().count();
     let tail = if let Some(limit) = head_limit {
         if line_count >= limit {
+            // C6: unified marker shape (mode B). The total match
+            // count is unknown post-cut, so the "omitted N of M"
+            // segment becomes the honest "hit head_limit" form.
             format!(
-                "\n(hit head_limit of {}; narrow your pattern or raise the limit)",
-                limit
+                "\n{}",
+                crate::tools::tool_output::hit_limit_marker(
+                    limit,
+                    "narrow the pattern or raise head_limit"
+                )
             )
         } else {
             String::new()

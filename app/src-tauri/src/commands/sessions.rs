@@ -367,6 +367,10 @@ pub async fn delete_session_inner(
         .ok()
         .flatten();
 
+    // C6: sweep the session's spilled tool outputs — the new
+    // session-keyed dir first, then the legacy pre-C6 cwd-based
+    // location (sessions that spilled before the relocation).
+    crate::tools::tool_output::sweep_session_outputs(&state.app_data_dir, &session_id).await;
     if let Some(ref loaded) = session_for_cleanup {
         let cwd = &loaded.session.current_cwd;
         if !cwd.trim().is_empty() {

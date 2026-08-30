@@ -486,7 +486,7 @@ impl AppState {
             tools,
             db,
             catalog: Arc::new(RwLock::new(catalog)),
-            app_data_dir,
+            app_data_dir: app_data_dir.clone(),
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             session_active_request: Arc::new(Mutex::new(HashMap::new())),
             inflight_exits: Arc::new(Mutex::new(HashMap::new())),
@@ -515,7 +515,14 @@ impl AppState {
             // for the process lifetime; `kill_all` is invoked
             // from the `RunEvent::Exit` hook so app shutdown
             // doesn't leak process groups.
-            background_shells: crate::background_shell::default_registry(),
+            // C6: constructed with the app data dir so large-output
+            // spills land in `<dir>/outputs/<session_id>/`
+            // (test registries use the bare `default_registry()`).
+            background_shells: std::sync::Arc::new(
+                crate::background_shell::in_memory::InMemoryBackgroundShellRegistry::new_with_data_dir(
+                    app_data_dir.clone(),
+                ),
+            ),
             // D (2026-08-14): fresh in-memory stub loaded-set registry.
             // Lives for the process lifetime; `delete_session` clears
             // the session's entry (`delete_session_inner`, aligned with
