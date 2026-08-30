@@ -116,6 +116,30 @@ snake_case 服务端形态)。**教训**:RULE-FE-001 登记时记录的修复方
 测试里 seed strip 前先 `await nextTick()` 排干它,否则 watcher 回调会在
 send 的首个 await 处清空 strip 污染断言。
 
+### Convention: 过滤下推服务端后,「全集派生值」全部换服务端口径(RULE-PERM-001,2026-08-30 沉淀)
+
+**What**:把一个 store 的列表过滤从客户端迁到服务端(分页/下推)时,所有曾从
+「全集数组」派生的值——计数 chip、空态判据、hasMore——必须换成服务端返回的
+口径,逐一排查,不能只改过滤本身。
+
+**Why**:audit store 迁移时踩中的回归——空态文案曾用
+`events.length === 0` 区分「会话没有事件」和「过滤无命中」;客户端过滤时代
+`events` 恒为全集所以成立,服务端过滤后 `events` 只含命中行,过滤无命中被
+误报成「暂无审计事件」。这类 break 是**静默的**:不报错、只在特定数据态显示
+错误文案,vitest 不测文案就漏。
+
+**AuditLogModal 落地后的正确口径**(契约见 `stores/audit.ts` 头注):
+
+| 值 | 正确来源 | 错误来源(下推后失效) |
+|---|---|---|
+| 总数 chip | `totalAll`(服务端) | `events.length` |
+| 空态二分 | `totalAll === 0 ? 暂无 : 无匹配` | `events.length === 0` |
+| critical 计数 | `totalCritical`(不受 kind 过滤) | 全集 `filter().length` |
+| hasMore | `events.length < matched` | `filteredEvents === 全集` 假设 |
+
+**Related**:`.trellis/spec/backend/database-guidelines.md`「审计事件 keyset
+分页读」(服务端计数契约:matched / totalAll / totalCritical 随页返回)。
+
 ---
 
 ## State Categories

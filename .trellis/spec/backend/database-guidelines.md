@@ -249,3 +249,44 @@ INSERT INTO messages (...) VALUES (...) ON CONFLICT(session_id, seq) DO UPDATE .
 **Tests**:`db/messages_checkpoint_tests.rs`(file-backed)12 例 +
 `agent/tests_agent_loop/turn_checkpoint.rs` 4 例(含 AC4:孤儿修复后第二
 请求 provider 实收配对 tool_result)。
+
+### Scenario: 审计事件 keyset 分页读(RULE-PERM-001,2026-08-30)
+
+**Scope/Trigger**:给 append-only、按新→旧消费的表加分页读(`session_audit_events`
+→ `db::permissions.rs::list_audit_events_page` + 双 transport 命令
+`list_session_audit_events_page`)。核心决策与陷阱对同形态表
+(逐条追加、秒级 ts、游标消费)直接可复用。
+
+**决策 — keyset `(ts, id)` 游标,禁 OFFSET**:审计表在弹窗开着时会持续追加
+(每 tool call 1–2 行),OFFSET 分页「取页后前移插入」整页位移(重复+跳行);
+`ts` 是 `datetime('now')` 秒级精度,同秒多行是常态(单轮多 tool),游标必须带
+id 段:`(ts < ? OR (ts = ? AND id < ?))`,且 SQL 显式 `ORDER BY ts DESC, id DESC`
+(索引只盖 ts 段;id tie-break 在过滤后子集排序,页级量可接受),前端不许重排。
+
+**Trap 1 — 部分游标**。`before_ts` 不带 `before_id` 会静默跳过游标自身那一秒
+的剩余行。三层拒:`db` 层 `sqlx::Error::InvalidArgument` → command `_inner`
+`InvalidRequest`(daemon 侧 400 非 500)→ 前端恒双发。
+
+**Trap 2 — SQLite `LIMIT` 负数 = 无限**。裸 cap(`min(limit, 500)`)挡不住
+`limit = -3` 全量拉表。必须 clamp 到 `1..=MAX`(此处 `DEFAULT 100 / MAX 500`)。
+
+**Trap 3 — `json_extract` 对畸形 JSON 直接 raise**。服务端化「仅 critical」
+(`payload_json.$.critical = 1`)时,历史行的 NULL/畸形 payload 会把整个查询
+打炸。守卫:`json_valid(payload_json) AND json_extract(...) = 1`——三处都要
+(页谓词、matched COUNT、`COUNT(*) FILTER` 的 total_critical),共享同一
+filter SQL 片段防漂移。
+
+**计数随页返回**(一次调用喂列表 + 计数 chip):`matched`(当前过滤命中,
+游标不参与)、`total_all`(不过滤)、`total_critical`(不受 kind 过滤影响,
+`COUNT(*) FILTER (WHERE json_valid AND json_extract...)`,SQLite ≥ 3.30)。
+前端 `hasMore = events.length < matched` 派生,不搞 limit+1 探针。
+
+**Wire 形状**:`AuditEventPageRow` camelCase(`events/matched/totalAll/
+totalCritical`);旧全量命令 `list_session_audit_events` 零改动(traceStore
+按 turnSeq 分组语义上需要全量行——「读端要全集」的场景别顺手改老命令)。
+
+**Tests**:`db/permissions_tests.rs` 8 例(tie-break / 取页后插入新行不重不漏
+的 keyset 行为测试 / limit clamp / kind 子集 / critical 四态含畸形 JSON 不
+error / 三计数精确 / 空 session 零页 / camelCase wire 锁)+
+`daemon/routes/permissions.rs` 路由 oneshot(snake_case body → camelCase 页、
+critical 下推、部分游标 400)。
