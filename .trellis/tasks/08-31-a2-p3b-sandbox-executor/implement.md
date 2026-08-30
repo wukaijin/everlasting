@@ -8,11 +8,12 @@
 - [ ] `src/sandbox/` 五文件(mod / landlock / seccomp / policy / tests)落地,
       ABI 常量对齐内核 UAPI 头并单测钉死数值(AC1 前置)。
 - [ ] `commands/config.rs` + `daemon/routes/config.rs`:`sandbox_enabled`(默认 true)、
-      `sandbox_extra_writable`(默认 [],读取时并入 `~/.cargo`);`get_app_config`
+      `sandbox_extra_writable`(默认 [],读取时并入 `~/.cargo`)、只读派生字段
+      `sandbox_capability`(`Capability::probe()` 结果,不落盘);`get_app_config`
       双 transport additive(C3)。
-- [ ] `tools/shell.rs` 接入:`maybe_apply`(三重与判定 + 父进程准备 + pre_exec 纯
-      syscall),spawn 管线其余不动;后验拦截指引文案(§2.5,单测钉死要点,
-      复用本次判定结果、不二次查询)。
+- [ ] `tools/shell.rs` 接入:`sandbox::decide`(四项判定)+ `prepare`/`apply`
+      (父进程准备 + pre_exec 纯 syscall),spawn 管线其余不动;后验拦截指引文案
+      (§2.5,单测钉死要点,复用本次判定结果、不二次查询)。
 - [ ] `ToolContext` 加 `mode` 字段(dispatch 层 `DispatchCtx.session_mode` 灌入,
       评审 B1/D5)——前台触发判定的数据来源。
 - [ ] 集成测试 `tests_sandbox.rs`:AC1(写拒/放行/interop 拒/读不控)、AC2(断网 +
@@ -46,7 +47,8 @@
 
 - [ ] 前端 Settings:`sandbox_enabled` 开关(既有 `SETTABLE_APP_FLAGS` 通道)+
       `sandbox_extra_writable` 列表编辑(**新增 `set_app_config_list` 写命令**,
-      daemon route + Tauri 双端,评审 W1;vitest 覆盖 store 读写与默认值)。
+      daemon route + Tauri 双端,评审 W1;vitest 覆盖 store 读写与默认值)+
+      `sandbox_capability` 只读徽标(R8,沙盒生效 / 已回退)。
 - [ ] spec 新增 `.trellis/spec/backend/sandbox-executor.md`:规则集契约(可写根
       来源铁律 / exec 允许面 / 设备清单)、五条陷阱、pre_exec 信号安全纪律、
       fail-open 语义、kill-switch、seccomp 断网契约、interop socket 残余面记录

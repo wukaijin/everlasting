@@ -18,7 +18,8 @@ agent loop ──> permissions::check(Tier 4,零改动)
         │                        │
         └───────────┬────────────┘
                     ▼
-      sandbox::maybe_apply(&mut cmd, &SandboxSpec)   ← 本任务新增,唯一侵入点
+      sandbox::decide(cmd, ctx) → Decision        ← 本任务新增,公共判定入口
+      sandbox::apply(&mut cmd, &PreparedSandbox)  ← 施加入口(两处工具层调用)
                     │ (pre_exec: prctl + landlock + seccomp)
                     ▼
                  spawn(现状管线:apply_safe_env / process_group(0) /
@@ -71,10 +72,12 @@ pub struct SandboxSpec {
 2. 后台路径:`Registry::start` trait 签名追加 `sandbox: Option<SandboxSpec>` 参数,
    由 `run_background_shell` **tool 层**(有 ctx.mode)算好下传;registry 内部
    spawn 点(in_memory.rs)只消费,不自行判定。trait 加参,全部 impl 同步改。
-3. `maybe_apply(cmd, spec_opt)`:三重与 = `classify_prefix(cmd) == ReadOnly` **且**
-   mode ≠ Yolo **且** `sandbox_enabled`(config)且 `Capability::probe().ok()`。
-   任一不满足 → 不设 pre_exec,返回 `Applied::No { reason }`(reason 进 tracing,
-   不发审计)。
+3. **判定与施加拆成两个函数**(前台后台共用):`decide(cmd, ctx) -> Decision`
+   四项判定 = `classify_prefix(cmd) == ReadOnly` **且** mode ≠ Yolo(来源:
+   `ToolContext.mode` 新字段)**且** `sandbox_enabled`(config)**且**
+   `Capability::probe().ok()`。任一不满足 → `Decision::Skip { reason }`
+   (reason 进 tracing,不发审计);全满足 → `Decision::Sandbox(SandboxSpec)`。
+   `apply(&mut cmd, &PreparedSandbox)` 负责 §2.3 的准备与 pre_exec 施加。
 4. §2.5 的拦截指引判定复用同一状态源:tool 层记 `applied: bool` 本地变量,
    后验时不再二次查询(评审 W3)。
 
@@ -90,8 +93,9 @@ open / 持锁。因此施加分两段:
   `open(O_PATH | O_CLOEXEC)` 拿 raw fd、BPF 程序字节构造。产物 = `PreparedSandbox
   { ruleset_fd: RawFd, path_fds: Vec<RawFd>, bpf: Vec<sock_filter> }`。
 - **pre_exec 闭包(纯 syscall)**:`prctl(PR_SET_NO_NEW_PRIVS)` → 逐 fd
-  `landlock_add_rule`(PATH_BENEATH,权限位为编译期常量,天然 ⊆ handled——陷阱 2
-  由构造层消灭;单条失败即整列中止,对齐 spike 探针 `_exit(99)` 语义)→
+  `landlock_add_rule`(PATH_BENEATH,权限位为编译期常量——与 `RulesetBuilder`
+  的类型约束同源,常量即 Builder 接受的合法子集,陷阱 2 由构造层消灭;
+  单条失败即整列中止,对齐 spike 探针 `_exit(99)` 语义)→
   `landlock_restrict_self` → seccomp 装载(见下)→ `close` 全部 fd。任何一步失败
   return Err(spawn 失败,走既有 `Failed to spawn command` 出口 + 追加 `[sandbox]`
   前缀定位)。
@@ -129,19 +133,28 @@ sandbox_extra_writable」)。启发式,宁缺勿滥——只追加,不改写命�
   (`SETTABLE_APP_FLAGS` 白名单 + `value: bool`,config.rs:542),数组字段需新增
   `set_app_config_list` 命令(key 白名单同款模式,daemon route + Tauri 双端同步);
   归 PR3。布尔开关 `sandbox_enabled` 直接进 `SETTABLE_APP_FLAGS` 既有通道。
+- **探测结果可见(R8)**:`get_app_config` 返回中加只读派生字段
+  `sandbox_capability: bool`(`Capability::probe()` 结果,**不落盘**、无写通道),
+  设置面据此显示「沙盒生效 / 已回退(fail-open)」。
 
 ## 3. 数据流(单命令生命周期)
 
 ```
-LLM tool_use(shell, cmd)
+LLM tool_use(shell, cmd)                                    [前台路径]
   → Tier 4 check(不变;ReadOnly → 静默 Allow)
   → shell.rs execute
       1. 参数校验 / cwd 校验(不变)
-      2. sandbox::spec_for(ctx) → Option<SandboxSpec>(父进程,安全区)
-      3. classify_prefix(cmd) == ReadOnly && !yolo && config && capability
-           → prepare(spec) → cmd.pre_exec(纯 syscall 闭包)
+      2. sandbox::decide(cmd, ctx) → Decision
+         (classify==ReadOnly && ctx.mode≠Yolo && config && capability)
+      3. Sandbox(spec) → prepare(父进程,安全区)→ apply(cmd.pre_exec)
       4. spawn → 既有管线(env/PGID/管道预取/超时/截断)
-      5. 退出后:后验指引(§2.5)+ 审计一行(§2.6)
+      5. 退出后:后验指引(§2.5,复用步骤 2 的判定结果)+ 审计一行(§2.6)
+
+LLM tool_use(run_background_shell, cmd)                     [后台路径]
+  → Tier 4 check(不变)→ run_background_shell tool 层
+      1. 同款 sandbox::decide(cmd, ctx)(ToolContext.mode 可得)
+      2. registry.start(..., sandbox: Option<SandboxSpec>) 下传
+      3. registry 内部 spawn 前 prepare + apply(只消费,不判定)
 ```
 
 worker(L3)与群聊 / 定时任务(F2)走同一 `execute_tool` 汇合点,**自动继承**,
@@ -169,7 +182,8 @@ worker(L3)与群聊 / 定时任务(F2)走同一 `execute_tool` 汇合点,**自�
 
 ## 5. 兼容与回滚
 
-- wire:additive(`get_app_config` 新字段);旧前端忽略新字段无影响。
+- wire:additive(`get_app_config` 新字段 + 新命令 `set_app_config_list` +
+  只读派生字段 `sandbox_capability`);旧前端忽略新字段无影响。
 - schema:零迁移(AuditKind 是 Rust enum 序列化为字符串,追加变体不触发 DB 变更)。
 - 回滚:一级 = `sandbox_enabled=false`(配置层,行为回到现状,spawn 不设 pre_exec);
   二级 = git revert 单个 PR。PR 切分保证每个 PR 独立可回滚(见 implement.md)。

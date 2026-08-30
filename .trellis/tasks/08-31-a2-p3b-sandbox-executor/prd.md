@@ -38,8 +38,9 @@ Landlock + seccomp 沙盒执行器落地到 shell 工具链(前台 `shell` + 后
 - R3. **接入点**:`tools/shell.rs` 与 `background_shell` 模块两处 spawn,在 pre-exec
   阶段施加;`shell` / `run_background_shell` 行为语义除沙盒约束外不变
   (超时 / 管道排空 / PGID / safe env / 截断契约全保持)。
-- R4. **触发条件**:命令经 `classify_prefix` 判为 `ReadOnly` 且 mode 非 Yolo 且
-  kill-switch 开启。SideEffect / Ask 档不沙盒(它们本就经用户授权)。
+- R4. **触发条件(四项与)**:命令经 `classify_prefix` 判为 `ReadOnly` 且 mode 非
+  Yolo 且 kill-switch(`sandbox_enabled`)开启且能力探测通过。SideEffect / Ask 档
+  不沙盒(它们本就经用户授权)。数据流落法见 design §2.2(D5)。
 - R5. **能力探测**:进程启动后惰性探测(Landlock ABI ≥1 + seccomp 可用,`OnceLock`
   缓存);任一不可用 → fail-open(不沙盒、不报错、不悬挂)+ 日志一行。
 - R6. **kill-switch**:app config 新增 `sandbox_enabled`(默认 `true`);
@@ -90,7 +91,8 @@ Landlock + seccomp 沙盒执行器落地到 shell 工具链(前台 `shell` + 后
 - [ ] AC7. 配置面:`get_app_config` 返回 `sandbox_enabled` / `sandbox_extra_writable`;
       沙盒拦截写入时 tool 输出含指引文案(单测钉死文案要点)。
 - [ ] AC8. 全量回归:`cargo test -p everlasting --lib` + e2e + 前端 vitest/build 绿;
-      `turn-smoke.sh` live 过(真实 LLM 跑 ReadOnly 工具命令,确认无误杀)。
+      `turn-smoke.sh` live 过(真实 LLM 跑 ReadOnly 工具命令,确认无误杀,脚本含
+      `SandboxedShellExecution` 审计 kind 计数断言)。
 - [ ] AC9. spec 收编:新增 `.trellis/spec/backend/sandbox-executor.md`
       (规则集契约 / 五条陷阱 / fail-open 语义 / kill-switch);ROADMAP A2+ P3 行移档。
 

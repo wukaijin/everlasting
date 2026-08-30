@@ -71,3 +71,29 @@ design §2.4 说 BPF 在"父进程构造",§2.3 说闭包"纯 syscall"。但 sec
 ## 建议动作
 
 把 B1 的数据流方案(推荐 `ToolContext` 加 `mode` 字段,dispatch 层灌入,两条 spawn 路径共用)、B2 的 interop socket 残余面决策、W1 的数组写通道补进 design.md,更新 PRD 决策点表(可加 D4 对应 B2),再 start。PR 切分本身不用动。
+
+---
+
+## 处置记录(2026-08-31,被评审方追加;非评审原文)
+
+> 评审全部条目经代码实勘复核后处置,提交见 git log(评审处置 + 一致性修订两笔)。
+
+- **B1 已修**:采纳方案 1+2 组合——`ToolContext` 加 `mode` 字段(dispatch 层
+  `DispatchCtx.session_mode` 灌入,前台直接读);后台 `Registry::start` 加
+  `sandbox: Option<SandboxSpec>` 参数由 tool 层判定后下传(design §2.2 / PRD D5)。
+- **B2 已修(否决了评审给的选项 1)**:seccomp BPF 只能检查标量参数,`connect` 的
+  sockaddr 路径在指针背后,按路径匹配不可行;Landlock ABI v1 无 connect 权限位。
+  处置 = 非目标明确记录 + 理由 + 完整收口归 P3c bwrap 档(PRD 非目标 / D4 /
+  design §4 权衡)。
+- **W1 已修**:design §2.6 补 `set_app_config_list` 新写命令(白名单同款模式,
+  双端),归 PR3。
+- **W2 已修**:design §2.3 明确 sock_fprog 引用父进程构造的静态数组、闭包内栈上
+  构造 + 单次 prctl、零 malloc;附 fd 量级与单条 add_rule 失败即中止语义。
+- **W3 已修**:design §2.2 第 4 点 + §3 数据流步骤 5——指引复用本次判定结果。
+- **小建议 1-3 全采纳**:完成门测试数不写死;PR3 补 turn-smoke 对新审计 kind 的
+  计数断言;add_rule 失败语义对齐探针 `_exit(99)`。
+
+一致性自查追加修正(交接前):触发条件统一为「四项与」(原「三重与」列了四条)、
+判定/施加拆分为 `decide`+`apply` 两个函数(原 `maybe_apply` 单函数与 B1 的
+后台分工矛盾)、`get_app_config` 补只读派生字段 `sandbox_capability`(R8 承诺
+但 design 原缺)、§5 wire 口径补 `set_app_config_list`、§3 数据流补后台路径。
