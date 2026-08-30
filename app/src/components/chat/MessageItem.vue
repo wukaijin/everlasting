@@ -54,6 +54,7 @@ import ToolCallCard from "./ToolCallCard.vue";
 import DiscussionSummaryCard from "./DiscussionSummaryCard.vue";
 import SearchHistoryCard from "./SearchHistoryCard.vue";
 import EditFileCard from "./EditFileCard.vue";
+import ShellCard from "./ShellCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import RequestModeChangeCard from "./RequestModeChangeCard.vue";
 import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue";
@@ -114,6 +115,10 @@ const END_DISCUSSION_TOOL_NAME = "end_discussion";
  * (替换通用 ToolCallCard,同 end_discussion 先例)。 */
 const SEARCH_HISTORY_TOOL_NAME = "search_history";
 const EDIT_FILE_TOOL_NAME = "edit_file";
+/** 2026-08-30 (shell description PR3): shell 家族的 tool_use 渲染专属
+ * ShellCard(命令块常驻 + 一体化审批,替换通用 ToolCallCard)。 */
+const SHELL_TOOL_NAME = "shell";
+const RUN_BACKGROUND_SHELL_TOOL_NAME = "run_background_shell";
 
 const hasVisibleBubble = computed<boolean>(() => {
   const m = props.message;
@@ -725,6 +730,13 @@ const messageImages = computed<
             :call="item"
             :result="getToolResult(message, item.id)"
           />
+          <!-- 2026-08-30 (shell description PR3): shell 家族走专属
+               ShellCard(命令块常驻 + 一体化审批)。 -->
+          <ShellCard
+            v-else-if="item.name === SHELL_TOOL_NAME || item.name === RUN_BACKGROUND_SHELL_TOOL_NAME"
+            :call="item"
+            :result="getToolResult(message, item.id)"
+          />
           <ToolCallCard
             v-else
             :call="item"
@@ -917,6 +929,11 @@ const messageImages = computed<
         />
         <EditFileCard
           v-else-if="tc.name === EDIT_FILE_TOOL_NAME"
+          :call="tc"
+          :result="getToolResult(message, tc.id)"
+        />
+        <ShellCard
+          v-else-if="tc.name === SHELL_TOOL_NAME || tc.name === RUN_BACKGROUND_SHELL_TOOL_NAME"
           :call="tc"
           :result="getToolResult(message, tc.id)"
         />

@@ -202,8 +202,9 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
     const wrapper = mountItem(message, pinia);
     await flushPromises();
 
-    // Two tool cards rendered (one per tool_use).
-    const toolCards = wrapper.findAll(".tool-card");
+    // Two tool cards rendered (one per tool_use). shell renders the
+    // dedicated ShellCard (2026-08-30, PRD R3) — count both card roots.
+    const toolCards = wrapper.findAll(".tool-card, .shell-card");
     expect(toolCards.length).toBe(2);
     // NO AskUserQuestionCard rendered.
     expect(wrapper.find("[data-testid='ask-card']").exists()).toBe(false);
@@ -240,8 +241,8 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
     const wrapper = mountItem(message, pinia);
     await flushPromises();
 
-    // 3 tool cards rendered.
-    expect(wrapper.findAll(".tool-card").length).toBe(3);
+    // 3 tool cards rendered (shell → 专属 ShellCard,2026-08-30 R3).
+    expect(wrapper.findAll(".tool-card, .shell-card").length).toBe(3);
     // 1 ask card rendered.
     expect(wrapper.findAll("[data-testid='ask-card']").length).toBe(1);
   });
