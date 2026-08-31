@@ -38,6 +38,7 @@ pub mod shell;
 pub mod shell_kill;
 pub mod shell_status;
 pub mod stub;
+pub mod tests_escalation;
 pub mod tests_merge_worker;
 pub mod tests_shell;
 pub mod tests_web_fetch;
@@ -431,6 +432,16 @@ pub struct ToolContext {
     /// the same construction site. Copy type — the per-turn
     /// `ToolContext::clone()` pattern is unaffected.
     pub mode: crate::db::Mode,
+    /// P3c (design §5.2): per-tool-call escalation handle for the
+    /// foreground `shell` tool's sandbox escalation loop (sandbox
+    /// denial → Ask card → one-shot unsandboxed rerun). Built by the
+    /// chat loop's serial dispatch per tool_use (it carries the
+    /// tool_use_id + sink + store + permission context the tool
+    /// layer can't reach); `Default` (None) in every other
+    /// construction site → the escalation degrades to guidance-only.
+    /// The background shell intentionally does NOT consume it
+    /// (model-mediated guidance stays its path this iteration).
+    pub escalation: crate::agent::permissions::escalation::EscalationHandle,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses

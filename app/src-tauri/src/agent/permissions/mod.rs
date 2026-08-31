@@ -74,6 +74,7 @@ pub mod ask;
 pub mod audit;
 pub mod check;
 pub mod dangerous;
+pub mod escalation;
 pub mod mode;
 pub mod payload;
 pub mod run_grant;

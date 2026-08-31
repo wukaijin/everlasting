@@ -309,6 +309,7 @@ mod tests {
     /// per test. Mirrors the field set of `remember::tests::make_ctx`.
     fn dummy_ctx() -> ToolContext {
         ToolContext {
+            escalation: Default::default(),
             worktree_path: std::path::PathBuf::from("/repo/proj"),
             cwd: std::path::PathBuf::from("/repo/proj"),
             checklist: crate::tools::update_checklist::new_handle(),

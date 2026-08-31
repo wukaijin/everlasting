@@ -505,6 +505,7 @@ mod tests {
     /// is gated on `workflow_name.is_some()`.
     fn legacy_ctx() -> ToolContext {
         ToolContext {
+            escalation: Default::default(),
             worktree_path: PathBuf::from("/tmp/test-proj"),
             cwd: PathBuf::from("/tmp/test-proj"),
             checklist: new_handle(),
@@ -797,6 +798,7 @@ mod tests {
         crate::agent::workflow::write_task(proj_tmp.path(), &task).unwrap();
 
         let ctx = ToolContext {
+            escalation: Default::default(),
             worktree_path: proj_tmp.path().to_path_buf(),
             cwd: proj_tmp.path().to_path_buf(),
             checklist: new_handle(),
@@ -886,6 +888,7 @@ mod tests {
         crate::agent::workflow::write_task(proj_tmp.path(), &task).unwrap();
 
         let ctx = ToolContext {
+            escalation: Default::default(),
             worktree_path: proj_tmp.path().to_path_buf(),
             cwd: proj_tmp.path().to_path_buf(),
             checklist: new_handle(),

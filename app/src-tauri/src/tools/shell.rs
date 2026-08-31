@@ -74,6 +74,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
+use crate::db::Mode;
 use crate::llm::types::ToolDef;
 use crate::projects::boundary::assert_within_root;
 use crate::tools::tool_output::{self, Recovery, Unit};
@@ -204,6 +205,59 @@ pub(crate) async fn kill_and_collect(child: &mut Child) -> ShellResult {
         cancelled: true,
         timed_out: false,
     }
+}
+
+/// Configure-free core of both spawn paths: spawn the (already
+/// configured) command, then race completion / cancellation / timeout.
+/// On cancel/timeout the process GROUP is killed (RULE-E-002) and
+/// partial output collected. The pipes are drained on spawned tasks
+/// BEFORE the select: `child.wait()` alone never reads stdout/stderr,
+/// so a child producing more than the pipe capacity (~64 KB on Linux)
+/// would block on write, never exit, and burn the whole timeout
+/// (pre-C6 latent deadlock — found via the C6 spill test).
+///
+/// Shared by the sandboxed first spawn and the P3c unsandboxed
+/// escalation rerun (identical wait semantics; P3c design §5.2).
+async fn spawn_and_collect(
+    cmd: &mut Command,
+    timeout_ms: u64,
+    cancel: &CancellationToken,
+) -> std::io::Result<ShellResult> {
+    let mut child = cmd.spawn()?;
+    let stdout_task = spawn_pipe_drain(child.stdout.take());
+    let stderr_task = spawn_pipe_drain(child.stderr.take());
+    let result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            tracing::info!("shell: cancellation requested, killing process group");
+            let mut r = kill_and_collect(&mut child).await;
+            r.stdout = collect_drain(stdout_task).await;
+            r.stderr = collect_drain(stderr_task).await;
+            r
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
+            tracing::info!("shell: timeout after {}ms, killing process group", timeout_ms);
+            let mut r = kill_and_collect(&mut child).await;
+            r.stdout = collect_drain(stdout_task).await;
+            r.stderr = collect_drain(stderr_task).await;
+            r.timed_out = true;
+            r.cancelled = false; // timeout, not cancel
+            r
+        }
+        status = child.wait() => {
+            let status = status?;
+            let stdout = collect_drain(stdout_task).await;
+            let stderr = collect_drain(stderr_task).await;
+            ShellResult {
+                stdout,
+                stderr,
+                exit_code: status.code().unwrap_or(-1),
+                cancelled: false,
+                timed_out: false,
+            }
+        }
+    };
+    Ok(result)
 }
 
 /// Drain one child pipe on a spawned task. Returning `None` keeps
@@ -447,8 +501,12 @@ pub async fn execute(
         }
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
+    // 4. C1 + timeout: race between child completion, cancellation,
+    //    and timeout (helper shared with the P3c escalation rerun).
+    //    On cancel/timeout, kill the entire process group (Unix) or
+    //    the direct child (Windows) and collect partial output.
+    let mut result = match spawn_and_collect(&mut cmd, timeout_ms, cancel).await {
+        Ok(r) => r,
         Err(e) => {
             let prefix = if prepared.is_some() {
                 // pre_exec closure failed inside the forked child —
@@ -472,6 +530,9 @@ pub async fn execute(
     // hash + ruleset summary, not the command text (the sibling
     // `tool_executed` row already has the full input). W3: the spec
     // comes from the decision computed before spawn — no re-gate.
+    // The escalation rerun (4b below, unsandboxed) adds no second row
+    // — its provenance rides the ask-side audit + the final
+    // `tool_executed` outcome.
     if prepared.is_some() {
         if let Some(sid) = session_id {
             let ruleset = match &sandbox_decision {
@@ -493,61 +554,83 @@ pub async fn execute(
         new_cwd: Some(validated_cwd.clone()),
     };
 
-    // 4. C1 + timeout: race between child completion, cancellation,
-    //    and timeout. On cancel/timeout, kill the entire process group
-    //    (Unix) or the direct child (Windows) and collect whatever
-    //    output was produced so far.
-    //
-    //    The pipes are taken out and drained on spawned tasks BEFORE
-    //    the select: `child.wait()` alone never reads stdout/stderr,
-    //    so a child producing more than the pipe capacity (~64 KB on
-    //    Linux) would block on write, never exit, and burn the whole
-    //    timeout (pre-C6 latent deadlock — every >64 KB command
-    //    effectively timed out; found via the C6 spill test).
-    let stdout_task = spawn_pipe_drain(child.stdout.take());
-    let stderr_task = spawn_pipe_drain(child.stderr.take());
-    let result = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => {
-            tracing::info!("shell: cancellation requested, killing process group");
-            let mut r = kill_and_collect(&mut child).await;
-            r.stdout = collect_drain(stdout_task).await;
-            r.stderr = collect_drain(stderr_task).await;
-            r
-        }
-        _ = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
-            tracing::info!("shell: timeout after {}ms, killing process group", timeout_ms);
-            let mut r = kill_and_collect(&mut child).await;
-            r.stdout = collect_drain(stdout_task).await;
-            r.stderr = collect_drain(stderr_task).await;
-            r.timed_out = true;
-            r.cancelled = false; // timeout, not cancel
-            r
-        }
-        status = child.wait() => {
-            match status {
-                Ok(status) => {
-                    let stdout = collect_drain(stdout_task).await;
-                    let stderr = collect_drain(stderr_task).await;
-                    ShellResult {
-                        stdout,
-                        stderr,
-                        exit_code: status.code().unwrap_or(-1),
-                        cancelled: false,
-                        timed_out: false,
-                    }
+    // 4b. P3c escalation loop (design §5): at most ONE unsandboxed
+    //     rerun per tool call. Fires only when the sandboxed first
+    //     attempt failed on an out-of-face denial (write / network),
+    //     never in Plan mode (D3: no escalation exit there) and never
+    //     when no handle was injected (tests → guidance-only). The
+    //     double-execution boundary is accepted by design (D4): the
+    //     dangerous part never ran once — the first attempt was
+    //     stopped at the failure. Rerun audit provenance = the
+    //     ask-side rows (tool_permission_ask / permission_granted /
+    //     tool_allowed / tool_denied) + the sibling tool_executed row
+    //     carrying the FINAL outcome — no new audit kind (design §3.5
+    //     kind reuse).
+    let mut reran_unsandboxed = false;
+    if prepared.is_some()
+        && !result.cancelled
+        && result.exit_code != 0
+        && ctx.mode != Mode::Plan
+        && !ctx.escalation.is_none()
+    {
+        let stderr_str = String::from_utf8_lossy(&result.stderr);
+        if let Some(kind) = crate::sandbox::classify_block(&stderr_str) {
+            // (a) prefix-grant hit (AC6) → rerun directly, no card.
+            //     Same compound-command gate as Tier 4 (the grant only
+            //     ever covers a single-segment command).
+            let grant_hit = match session_id {
+                Some(sid) => {
+                    crate::agent::permissions::escalation::prefix_grant_hit(&ctx.db, sid, command)
+                        .await
                 }
-                Err(e) => {
-                    return (
-                        format!("Failed to execute command: {}", e),
-                        true,
-                        update,
-                        None,
-                    );
+                None => false,
+            };
+            let approved = if grant_hit {
+                tracing::info!(
+                    command_sha = %crate::sandbox::command_sha_prefix(command),
+                    "shell: sandbox escalation via prefix-grant hit"
+                );
+                true
+            } else {
+                // (b) Ask card: command text + interception cause +
+                //     stderr evidence line. AllowOnce / AllowAlways
+                //     (grant persisted by ask_path) → rerun.
+                matches!(
+                    ctx.escalation.ask(input, command, kind, &stderr_str).await,
+                    crate::agent::permissions::escalation::EscalationOutcome::Approved
+                )
+            };
+            if approved {
+                let mut retry = Command::new("sh");
+                retry
+                    .arg("-c")
+                    .arg(command)
+                    .current_dir(&validated_cwd)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                // Byte-identical env + process group as the first
+                // attempt (RULE-E-001 / RULE-E-002) — only the sandbox
+                // is absent.
+                apply_safe_env(&mut retry);
+                #[cfg(unix)]
+                retry.process_group(0);
+                match spawn_and_collect(&mut retry, timeout_ms, cancel).await {
+                    Ok(r) => {
+                        result = r;
+                        reran_unsandboxed = true;
+                    }
+                    Err(e) => {
+                        return (
+                            format!("Failed to spawn rerun command: {}", e),
+                            true,
+                            update,
+                            None,
+                        );
+                    }
                 }
             }
         }
-    };
+    }
 
     // 5. Format output.
     let mut combined = format_output(&result.stdout, &result.stderr);
@@ -588,7 +671,7 @@ pub async fn execute(
     //     what to do about it. Append-only — the command's own output
     //     is untouched.
     let sandbox_applied = prepared.is_some();
-    if sandbox_applied && !result.cancelled && exit_code != 0 {
+    if sandbox_applied && !reran_unsandboxed && !result.cancelled && exit_code != 0 {
         let stderr_str = String::from_utf8_lossy(&result.stderr);
         if let Some(guidance) = crate::sandbox::failure_guidance(&stderr_str, ctx.mode) {
             combined.push('\n');

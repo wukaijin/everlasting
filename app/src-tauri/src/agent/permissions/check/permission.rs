@@ -322,6 +322,7 @@ pub async fn check(
                         Some(&path_owned),
                         tool_use_id,
                         token,
+                        None,
                     )
                     .await;
                 }
@@ -459,6 +460,7 @@ pub async fn check(
                             None,
                             tool_use_id,
                             token,
+                            None,
                         )
                         .await;
                     }
@@ -487,6 +489,7 @@ pub async fn check(
                         None,
                         tool_use_id,
                         token,
+                        None,
                     )
                     .await;
                 }
@@ -537,6 +540,7 @@ pub async fn check(
                 None,
                 tool_use_id,
                 token,
+                None,
             )
             .await;
         }
@@ -579,6 +583,7 @@ pub async fn check(
                 None,
                 tool_use_id,
                 token,
+                None,
             )
             .await;
         }

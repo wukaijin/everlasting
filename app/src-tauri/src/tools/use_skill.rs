@@ -129,6 +129,7 @@ mod tests {
     /// in other tools' `test_ctx` helpers (see `edit_file::tests`).
     fn make_ctx(project_path: &std::path::Path, workflow_name: Option<String>) -> ToolContext {
         ToolContext {
+            escalation: Default::default(),
             worktree_path: project_path.to_path_buf(),
             cwd: project_path.to_path_buf(),
             checklist: update_checklist::new_handle(),

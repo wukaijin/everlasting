@@ -263,6 +263,7 @@ fn bpf_logic_walk() {
 
 fn policy_ctx(tmp: &tempfile::TempDir) -> crate::tools::ToolContext {
     crate::tools::ToolContext {
+        escalation: Default::default(),
         worktree_path: tmp.path().join("worktree"),
         cwd: tmp.path().join("worktree").join("sub"),
         checklist: crate::tools::update_checklist::new_handle(),

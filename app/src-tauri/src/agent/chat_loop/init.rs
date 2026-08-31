@@ -284,6 +284,7 @@ pub(crate) async fn prepare_loop_state(
     // source (`loaded_session.session.mode`), two consumers.
     let session_mode = loaded_session.session.mode;
     let turn_ctx = ToolContext {
+        escalation: Default::default(),
         worktree_path: worktree_path.clone(),
         cwd: session_cwd.clone(),
         // B12 (2026-06-19): per-request checklist handle. Constructed

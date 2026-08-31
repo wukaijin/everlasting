@@ -144,6 +144,7 @@ pub(super) async fn ask_path(
     path_for_modal: Option<&str>,
     tool_use_id: &str,
     token: &tokio_util::sync::CancellationToken,
+    reason_override: Option<&str>,
 ) -> Decision {
     // 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagents
     // now go through the full interactive ask round-trip (not the
@@ -217,7 +218,12 @@ pub(super) async fn ask_path(
 
         let rid = uuid::Uuid::new_v4().to_string();
         let risk = risk_for_tool(tool_name);
-        let reason = build_ask_reason(tool_name, path_or_cmd, risk);
+        // P3c: the escalation loop passes a dedicated card text
+        // (cause + command + stderr line); `None` keeps the
+        // standard build_ask_reason text.
+        let reason = reason_override
+            .map(str::to_string)
+            .unwrap_or_else(|| build_ask_reason(tool_name, path_or_cmd, risk));
         let payload = PermissionAskPayload {
             rid: rid.clone(),
             // Parent session id — the banner groups worker asks by
@@ -442,7 +448,10 @@ pub(super) async fn ask_path(
     } else {
         let rid = uuid::Uuid::new_v4().to_string();
         let risk = risk_for_tool(tool_name);
-        let reason = build_ask_reason(tool_name, path_or_cmd, risk);
+        // P3c: same override contract as the worker branch above.
+        let reason = reason_override
+            .map(str::to_string)
+            .unwrap_or_else(|| build_ask_reason(tool_name, path_or_cmd, risk));
         let payload = PermissionAskPayload {
             rid: rid.clone(),
             session_id: ctx.session_id.clone(),

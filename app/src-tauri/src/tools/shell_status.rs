@@ -188,6 +188,7 @@ mod tests {
     fn test_ctx() -> (ToolContext, tempfile::TempDir) {
         let tmp = tempdir().unwrap();
         let ctx = ToolContext {
+            escalation: Default::default(),
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
             checklist: crate::tools::update_checklist::new_handle(),

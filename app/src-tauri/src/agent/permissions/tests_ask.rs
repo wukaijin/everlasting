@@ -89,6 +89,7 @@ async fn worker_ask_uses_isolated_permission_session_id() {
             Some("/repo/outside/foo.rs"),
             "tu-worker-1",
             &token_for_task,
+            None,
         )
         .await
     });
@@ -197,6 +198,7 @@ async fn worker_ask_allowed_resolves_allow() {
         Some("/repo/outside/foo.rs"),
         "tu-worker-1",
         &token,
+        None,
     )
     .await;
 
@@ -251,6 +253,7 @@ async fn worker_ask_timeout_resolves_deny() {
                     Some("/repo/outside/foo.rs"),
                     "tu-worker-timeout",
                     &tokio_util::sync::CancellationToken::new(),
+                    None,
                 ),
             )
             .await
@@ -305,6 +308,7 @@ async fn worker_ask_cancelled_resolves_deny() {
             Some("/repo/outside/foo.rs"),
             "tu-worker-cancel",
             &token_for_task,
+            None,
         )
         .await
     });
@@ -373,6 +377,7 @@ async fn worker_ask_user_deny_resolves_deny() {
         Some("/repo/outside/foo.rs"),
         "tu-worker-deny",
         &_token,
+        None,
     )
     .await;
 
@@ -443,6 +448,7 @@ async fn worker_ask_payload_carries_worker_run_id_camel_case() {
             Some("/repo/outside/foo.rs"),
             "tu-worker-wire",
             &token_for_task,
+            None,
         )
         .await;
     });
@@ -567,6 +573,7 @@ async fn worker_ask_allow_always_writes_run_grant_cache_not_db() {
         Some("/repo/outside/foo.rs"),
         "tu-worker-allow-always",
         &token,
+        None,
     )
     .await;
 
@@ -653,6 +660,7 @@ async fn worker_ask_allow_once_does_not_write_run_grant_cache() {
         None,
         "tu-worker-allow-once",
         &token,
+        None,
     )
     .await;
 

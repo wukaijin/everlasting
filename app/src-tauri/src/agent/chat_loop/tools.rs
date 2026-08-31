@@ -1678,12 +1678,34 @@ pub(crate) async fn dispatch_tool_calls(
                         }
                     };
 
+                    // P3c (design §5.2): per-tool-call escalation
+                    // handle, injected ONLY for the foreground `shell`
+                    // (the background shell keeps model-mediated
+                    // guidance this iteration; shell is never
+                    // parallel-eligible so this is the one production
+                    // path that can sandbox). Carries the tool_use_id +
+                    // sink + store + permission context the shell tool
+                    // needs to run the sandbox-denial Ask card. Tests
+                    // and other tools keep `Default` (None) → the
+                    // escalation degrades to guidance-only.
+                    let mut tool_ctx = current_ctx.clone();
+                    if name == "shell" {
+                        tool_ctx.escalation =
+                            crate::agent::permissions::escalation::EscalationHandle::new(
+                                sink.clone(),
+                                permission_asks.clone(),
+                                permission_ctx.clone(),
+                                db.clone(),
+                                token.clone(),
+                                id.clone(),
+                            );
+                    }
                     let tool_exec_start = Instant::now();
                     let (content, is_error, update, exit_code, images) =
                         crate::tools::execute_tool(
                             name,
                             input,
-                            &current_ctx,
+                            &tool_ctx,
                             Some(&read_guard),
                             Some(&session_id),
                             Some(&skill_cache),
