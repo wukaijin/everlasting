@@ -906,6 +906,7 @@ mod tests {
         let wt = tmp.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         let spec = crate::sandbox::SandboxSpec {
+            face: crate::sandbox::Face::ReadWrite,
             writable_roots: vec![wt.clone(), "/tmp".into()],
             exec_allow_roots: vec![
                 "/usr".into(),

@@ -61,7 +61,6 @@ use std::sync::Arc;
 
 use tokio::process::Command;
 
-use crate::agent::permissions::shell_trust::{self, ShellTrust};
 use crate::db::Mode;
 use crate::tools::ToolContext;
 
@@ -78,6 +77,44 @@ pub(crate) const DEVICE_WRITE_PATHS: &[&str] = &[
     "/dev/tty",
 ];
 
+/// Which writable face a sandboxed command gets (P3c, design §3).
+/// Both faces keep `/tmp` + spill + extras writable; they differ in
+/// the session worktree only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Face {
+    /// Worktree writable — the default face (per-project
+    /// `readwrite` policy). Project-internal work is free.
+    ReadWrite,
+    /// Worktree READ-only (Plan mode / per-project `readonly`
+    /// policy). The worktree moves out of the writable roots but
+    /// STAYS on the exec face (project scripts still run).
+    ReadOnly,
+}
+
+impl Face {
+    /// Short token for the audit ruleset summary (`face=ro|rw`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Face::ReadWrite => "rw",
+            Face::ReadOnly => "ro",
+        }
+    }
+}
+
+/// The resolved sandbox policy for one command (P3c, design §1) —
+/// the single source of truth shared by the permission layer (Tier 4
+/// shell short-circuit) and the spawn side ([`decide`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Policy {
+    /// No sandbox — classic pre-execution approval path (Tier 4:
+    /// prefix-grant / three-tier classify / ask).
+    Off,
+    /// Every shell command runs under the sandbox with the given
+    /// face; out-of-face failures escalate at execution time
+    /// (foreground shell) instead of pre-execution approval.
+    Face(Face),
+}
+
 /// Pure data describing what a sandboxed command may do. Built by
 /// [`policy::build_spec`] in the parent, consumed by [`prepare`].
 ///
@@ -87,8 +124,12 @@ pub(crate) const DEVICE_WRITE_PATHS: &[&str] = &[
 /// without relying on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxSpec {
-    /// Writable subtree roots: session worktree + `/tmp` + the
-    /// session spill dir + config `sandbox_extra_writable` entries.
+    /// Which writable face the spec implements (`face=` audit
+    /// segment; P3c design §3).
+    pub face: Face,
+    /// Writable subtree roots: session worktree (ReadWrite face
+    /// only) + `/tmp` + the session spill dir + config
+    /// `sandbox_extra_writable` entries.
     pub writable_roots: Vec<PathBuf>,
     /// Executable subtree roots: PATH dirs + `/dev` + `/tmp` +
     /// writable roots + probed toolchain dirs. Deliberately NOT
@@ -179,56 +220,111 @@ fn probe_once() -> Capability {
     }
 }
 
-/// Evaluate the four-way trigger for one command (design §2.2, R4).
-/// Pure — the caller supplies every input, so tests can drive each
-/// gate independently (AC3 / AC4 / AC5).
+/// Evaluate the sandbox policy for one command context (P3c design
+/// §1 — replaces the P3b four-way `gate`). Pure — the caller supplies
+/// every input, so tests can drive each branch independently.
 ///
-/// Returns `Some(reason)` when the command must NOT be sandboxed
-/// (the reason goes to tracing, never to the audit log — design
-/// §2.2: skips are not security events) and `None` when it may.
+/// Evaluation order is short-circuit and mirrors the staged DB reads
+/// in [`resolve_session_policy`] (config reads are lazy — the
+/// RULE-SBX-004 spirit: a config read must not pay for a decision
+/// already settled by cheaper checks):
 ///
-/// Gate order mirrors `decide`: capability first (cheapest, cached),
-/// then the pure classification, then mode, then the config flag.
-/// Keep the order stable: it is the documented evaluation order and
-/// the reason strings double as log text.
-pub(crate) fn gate(
-    command: &str,
+/// 1. capability probe failed → `Off` (fail-open, unchanged);
+/// 2. mode == Yolo → `Off` (恒不沙盒, unchanged);
+/// 3. project policy == Off → `Off` (per-project opt-out);
+/// 4. kill-switch == false → `Off` (global master, beats every face);
+/// 5. mode == Plan → `Face(ReadOnly)` (session-level read-only face
+///    overrides the project face — D3);
+/// 6. project policy → `Face(its tier)`.
+///
+/// `classify_prefix` no longer participates in the trigger (P3c:
+/// every command sandboxes under a face); the classification layer
+/// semantics are untouched and still serve the Tier 4 path when the
+/// policy resolves `Off`.
+pub fn resolve_policy(
     mode: Mode,
+    project_policy: policy::ProjectSandboxPolicy,
+    kill_switch: bool,
     cap: Capability,
-    sandbox_enabled: bool,
-) -> Option<&'static str> {
+) -> Policy {
     if !cap.ok() {
-        return Some("capability probe failed (fail-open)");
-    }
-    if shell_trust::classify_prefix(command) != ShellTrust::ReadOnly {
-        return Some("command is not ReadOnly tier");
+        return Policy::Off;
     }
     if mode == Mode::Yolo {
         // R4: Yolo already granted full trust by the user.
-        return Some("session mode is Yolo");
+        return Policy::Off;
     }
-    if !sandbox_enabled {
-        return Some("sandbox_enabled=false");
+    if !kill_switch {
+        // Global master switch: off = no sandbox anywhere, including
+        // readonly-face projects.
+        return Policy::Off;
     }
-    None
+    match (project_policy, mode) {
+        (policy::ProjectSandboxPolicy::Off, _) => Policy::Off,
+        // Plan's value is the deterministic read-only face (D3): the
+        // project face is overridden for the session, but a project
+        // opt-out (checked above) still turns the whole chain off —
+        // that combination falls back to the Plan tool filter.
+        (_, Mode::Plan) => Policy::Face(Face::ReadOnly),
+        (policy::ProjectSandboxPolicy::ReadWrite, _) => Policy::Face(Face::ReadWrite),
+        (policy::ProjectSandboxPolicy::ReadOnly, _) => Policy::Face(Face::ReadOnly),
+    }
 }
 
-/// Per-command decision entry point (shell tool family). Reads the
-/// kill-switch + extra-writable config from the session DB pool and
-/// composes [`gate`] with a [`policy::build_spec`] on the Sandbox
-/// path. The returned `Decision` is consumed once by the tool and
-/// reused for the post-hoc write-block guidance (W3: no second
-/// query).
+/// Resolve the policy for one session's shell command from the DB
+/// (design §1.1 "两处消费,一处真源"). Staged reads keep the config
+/// queries lazy: the capability probe is cached, Yolo needs no I/O,
+/// and the project-policy point query (`sessions.project_id` join
+/// `projects`, both PK lookups) runs before the kill-switch config
+/// read. Consumed by the Tier 4 shell short-circuit
+/// (`permissions/check/permission.rs`) and by [`decide`].
+///
+/// Missing session/project rows (fresh test pools, degenerate
+/// states) resolve `Off` — classic behavior, matching the module's
+/// fail-open philosophy.
+pub async fn resolve_session_policy(db: &sqlx::SqlitePool, session_id: &str, mode: Mode) -> Policy {
+    let cap = Capability::probe();
+    if !cap.ok() {
+        return Policy::Off;
+    }
+    if mode == Mode::Yolo {
+        return Policy::Off;
+    }
+    let project_policy = policy::read_project_sandbox_policy(db, session_id).await;
+    if project_policy == policy::ProjectSandboxPolicy::Off {
+        return Policy::Off;
+    }
+    let enabled = policy::sandbox_enabled(db).await;
+    resolve_policy(mode, project_policy, enabled, cap)
+}
+
+/// Per-command decision entry point (shell tool family). Resolves the
+/// policy via [`resolve_session_policy`] and composes a
+/// [`policy::build_spec`] on the Sandbox path. The returned `Decision`
+/// is consumed once by the tool and reused for the post-hoc
+/// write-block guidance and the audit row (W3: no second query).
 pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) -> Decision {
-    let enabled = policy::sandbox_enabled(&ctx.db).await;
-    match gate(command, ctx.mode, Capability::probe(), enabled) {
-        Some(reason) => {
-            tracing::debug!(command_sha = %command_sha_prefix(command), reason, "sandbox: skip");
-            Decision::Skip { reason }
-        }
+    let policy = match session_id {
+        Some(sid) => resolve_session_policy(&ctx.db, sid, ctx.mode).await,
         None => {
+            // No session context (test paths): nothing to resolve a
+            // project policy from → classic unsandboxed behavior.
+            Policy::Off
+        }
+    };
+    match policy {
+        Policy::Off => {
+            tracing::debug!(
+                command_sha = %command_sha_prefix(command),
+                "sandbox: skip (policy Off)"
+            );
+            Decision::Skip {
+                reason: "policy resolved Off",
+            }
+        }
+        Policy::Face(face) => {
             let extra = policy::read_extra_writable(&ctx.db).await;
-            Decision::Sandbox(policy::build_spec(ctx, session_id, extra))
+            Decision::Sandbox(policy::build_spec(ctx, session_id, extra, face))
         }
     }
 }
@@ -371,7 +467,8 @@ impl SandboxSpec {
     /// registry consumer) audit with the SAME shape.
     pub(crate) fn summary(&self) -> String {
         format!(
-            "landlock:exec_roots={} writable_roots={} extra={} devices={}; seccomp:inet_block",
+            "landlock:face={} exec_roots={} writable_roots={} extra={} devices={}; seccomp:inet_block",
+            self.face.as_str(),
             self.exec_allow_roots.len(),
             self.writable_roots.len(),
             self.extra_writable.len(),

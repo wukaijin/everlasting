@@ -68,6 +68,7 @@ fn make_project_row(is_git_repo: bool) -> projects::ProjectRow {
         updated_at: "2026-06-08T00:00:00Z".to_string(),
         hidden: false,
         metadata: None,
+        sandbox_policy: "readwrite".to_string(),
     }
 }
 

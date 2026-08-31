@@ -2,11 +2,11 @@
 //!
 //! - Unit tests (all platforms): ABI constant pins (kernel UAPI
 //!   alignment), AccessSet ⊆ handled (spike trap 2 at type level),
-//!   BPF golden + logic walk, policy spec construction, gate matrix
-//!   (AC3 / AC4 / AC5), guidance copy (AC7).
+//!   BPF golden + logic walk, policy spec construction (both faces),
+//!   resolve_policy matrix (P3c design §1), guidance copy (AC7).
 //! - Integration tests (`#[cfg(target_os = "linux")]` + live
 //!   capability check): real spawns of `sh -c` under the real
-//!   ruleset — write allow/deny, exec interop deny, read
+//!   ruleset — write allow/deny both faces, exec interop deny, read
 //!   unrestricted, network block, AF_UNIX pass (AC1 / AC2). They
 //!   skip (with a loud note, not a silent pass-fail) when the
 //!   runtime kernel lacks Landlock/seccomp, mirroring the spike's
@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{gate, Capability, SandboxSpec, DEVICE_WRITE_PATHS};
+use super::{Capability, SandboxSpec, DEVICE_WRITE_PATHS};
 use crate::db::Mode;
 
 // ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ fn policy_ctx(tmp: &tempfile::TempDir) -> crate::tools::ToolContext {
 async fn spec_roots_follow_server_side_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
-    let spec = super::policy::build_spec(&ctx, Some("sess-1"), vec![]);
+    let spec = super::policy::build_spec(&ctx, Some("sess-1"), vec![], Face::ReadWrite);
     // Writable: worktree (NOT the session cwd subdir — the worktree
     // is the damage-limitation boundary) + /tmp + spill dir.
     assert_eq!(spec.writable_roots.len(), 3);
@@ -310,12 +310,52 @@ async fn spec_roots_follow_server_side_sources() {
         .any(|p| p.starts_with("/mnt/c")));
 }
 
+/// P3c design §3: the ReadOnly face moves the worktree OUT of the
+/// writable roots (only /tmp + spill + extras stay writable) but
+/// keeps it on the EXEC face — project scripts still run.
+#[tokio::test]
+async fn spec_readonly_face_excludes_worktree_write_keeps_exec() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = policy_ctx(&tmp);
+    let spec = super::policy::build_spec(&ctx, Some("sess-1"), vec![], Face::ReadOnly);
+    // Writable: /tmp + spill only — no worktree.
+    assert_eq!(spec.writable_roots.len(), 2);
+    assert!(!spec.writable_roots.contains(&ctx.worktree_path));
+    assert!(spec.writable_roots.contains(&PathBuf::from("/tmp")));
+    assert!(spec
+        .writable_roots
+        .contains(&crate::tools::tool_output::session_outputs_dir(
+            &ctx.data_dir,
+            "sess-1"
+        )));
+    // Exec face still carries the worktree (explicit push — the
+    // writable-roots extend no longer provides it).
+    assert!(
+        spec.exec_allow_roots.contains(&ctx.worktree_path),
+        "readonly face must keep worktree EXECUTE"
+    );
+    // Face rides the spec for the audit summary.
+    assert_eq!(
+        spec.summary(),
+        format!(
+            "landlock:face=ro exec_roots={} writable_roots=2 extra=0 devices={}; seccomp:inet_block",
+            spec.exec_allow_roots.len(),
+            DEVICE_WRITE_PATHS.len()
+        )
+    );
+    // The ReadWrite face summary says rw (both spawn paths audit the
+    // same shape — AC8 face observability).
+    let rw = super::policy::build_spec(&ctx, Some("sess-1"), vec![], Face::ReadWrite);
+    assert!(rw.summary().contains("face=rw"));
+    assert!(rw.summary().contains("writable_roots=3"));
+}
+
 #[tokio::test]
 async fn spec_merges_extra_writable_without_duplicates() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
     let extra = vec![PathBuf::from("/opt/data"), PathBuf::from("/tmp")];
-    let spec = super::policy::build_spec(&ctx, Some("s"), extra);
+    let spec = super::policy::build_spec(&ctx, Some("s"), extra, Face::ReadWrite);
     assert!(spec.writable_roots.contains(&PathBuf::from("/opt/data")));
     // /tmp already a writable root → not duplicated.
     assert_eq!(
@@ -336,8 +376,8 @@ async fn spec_ignores_command_content_by_construction() {
     // only on windows; compare directly).
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
-    let a = super::policy::build_spec(&ctx, Some("s"), vec![]);
-    let b = super::policy::build_spec(&ctx, Some("s"), vec![]);
+    let a = super::policy::build_spec(&ctx, Some("s"), vec![], Face::ReadWrite);
+    let b = super::policy::build_spec(&ctx, Some("s"), vec![], Face::ReadWrite);
     assert_eq!(a, b);
 }
 
@@ -357,7 +397,8 @@ fn device_write_paths_match_spike_recipe() {
 }
 
 // ---------------------------------------------------------------------------
-// Gate matrix (AC3 / AC4 / AC5)
+// Policy matrix (P3c design §1: capability → Yolo → project off →
+// kill-switch → Plan → project face) + DB resolution
 // ---------------------------------------------------------------------------
 
 fn cap_ok() -> Capability {
@@ -367,64 +408,189 @@ fn cap_ok() -> Capability {
     }
 }
 
+use super::policy::ProjectSandboxPolicy as PSP;
+use super::{Face, Policy};
+
+/// The pure decision matrix, all 24 rows: mode × project tier ×
+/// kill-switch × capability. Locks the evaluation order semantics —
+/// especially "Plan overrides the project face but not a project
+/// opt-out" and "kill-switch beats every face".
 #[test]
-fn gate_readonly_edit_enabled_sandboxes() {
-    assert_eq!(gate("ls -la", Mode::Edit, cap_ok(), true), None);
-    assert_eq!(gate("git diff | head", Mode::Plan, cap_ok(), true), None);
+fn resolve_policy_full_matrix() {
+    let modes = [Mode::Edit, Mode::Plan, Mode::Yolo, Mode::Background];
+    let tiers = [PSP::Off, PSP::ReadWrite, PSP::ReadOnly];
+    for mode in modes {
+        for tier in tiers {
+            // Row 1: capability fail → Off everywhere (fail-open).
+            let broken = Capability {
+                landlock: true,
+                seccomp: false,
+            };
+            assert_eq!(super::resolve_policy(mode, tier, true, broken), Policy::Off);
+            // Row 2: Yolo → Off everywhere (恒不沙盒).
+            if mode == Mode::Yolo {
+                assert_eq!(
+                    super::resolve_policy(mode, tier, true, cap_ok()),
+                    Policy::Off
+                );
+                continue;
+            }
+            // Row 3: project off → Off (Tier 4 classic path).
+            if tier == PSP::Off {
+                assert_eq!(
+                    super::resolve_policy(mode, tier, true, cap_ok()),
+                    Policy::Off
+                );
+                assert_eq!(
+                    super::resolve_policy(mode, tier, false, cap_ok()),
+                    Policy::Off
+                );
+                continue;
+            }
+            // Row 4: kill-switch off → Off (global master beats the face).
+            assert_eq!(
+                super::resolve_policy(mode, tier, false, cap_ok()),
+                Policy::Off
+            );
+            // Rows 5/6: face resolution. Plan overrides the project
+            // face with the session-level read-only face (D3);
+            // Edit/Background/Yolo-map take the project tier.
+            let expected = match mode {
+                Mode::Plan => Face::ReadOnly,
+                _ => match tier {
+                    PSP::ReadWrite => Face::ReadWrite,
+                    _ => Face::ReadOnly,
+                },
+            };
+            assert_eq!(
+                super::resolve_policy(mode, tier, true, cap_ok()),
+                Policy::Face(expected),
+                "mode={mode:?} tier={tier:?}"
+            );
+        }
+    }
 }
 
-#[test]
-fn gate_sideeffect_and_ask_tiers_skip() {
-    // AC3: SideEffect (mkdir) / Ask (rm) run exactly as before.
+/// Fresh migrated pool + project row with the given tier + session
+/// row joined to it. Owns its pool (no shared OnceLock state).
+async fn policy_pool(project_id: &str, tier: PSP, session_id: &str) -> sqlx::SqlitePool {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::db::migrations::run_migrations(&pool).await.unwrap();
+    sqlx::query("INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))")
+        .bind(project_id)
+        .bind("p")
+        .bind("/tmp/p")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE projects SET sandbox_policy = ? WHERE id = ?")
+        .bind(tier.as_str())
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // project_id carries a DEFAULT ('<DEFAULT_PROJECT_ID>'), so bind
+    // explicitly; worktree_path/current_cwd have NOT NULL defaults.
+    sqlx::query(
+        "INSERT INTO sessions (id, title, created_at, updated_at, model, project_id) \
+         VALUES (?, 't', datetime('now'), datetime('now'), '', ?)",
+    )
+    .bind(session_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool
+}
+
+/// DB resolution: a readwrite-tier project resolves Face(ReadWrite)
+/// for Edit and Face(ReadOnly) for Plan; the readonly tier maps to
+/// the readonly face in both.
+#[tokio::test]
+async fn resolve_session_policy_follows_project_tier() {
+    let pool = policy_pool("proj-rw", PSP::ReadWrite, "sess-rw").await;
     assert_eq!(
-        gate("mkdir x", Mode::Edit, cap_ok(), true),
-        Some("command is not ReadOnly tier")
+        super::resolve_session_policy(&pool, "sess-rw", Mode::Edit).await,
+        Policy::Face(Face::ReadWrite)
     );
     assert_eq!(
-        gate("rm x", Mode::Edit, cap_ok(), true),
-        Some("command is not ReadOnly tier")
+        super::resolve_session_policy(&pool, "sess-rw", Mode::Plan).await,
+        Policy::Face(Face::ReadOnly)
     );
-    // Command substitution fails-safe to Ask → not sandboxed either.
+
+    let pool = policy_pool("proj-ro", PSP::ReadOnly, "sess-ro").await;
     assert_eq!(
-        gate("echo $(rm x)", Mode::Edit, cap_ok(), true),
-        Some("command is not ReadOnly tier")
+        super::resolve_session_policy(&pool, "sess-ro", Mode::Edit).await,
+        Policy::Face(Face::ReadOnly)
     );
 }
 
-#[test]
-fn gate_yolo_and_kill_switch_skip() {
-    // AC3: Yolo bypasses the sandbox entirely.
+/// DB resolution: project `off` + kill-switch config both resolve
+/// Off; the kill-switch read is SKIPPED for off projects (the staged
+/// reads — SBX-004).
+#[tokio::test]
+async fn resolve_session_policy_off_and_kill_switch() {
+    let pool = policy_pool("proj-off", PSP::Off, "sess-off").await;
     assert_eq!(
-        gate("ls", Mode::Yolo, cap_ok(), true),
-        Some("session mode is Yolo")
+        super::resolve_session_policy(&pool, "sess-off", Mode::Edit).await,
+        Policy::Off
     );
-    // AC4: kill switch → identical-to-legacy behavior.
+
+    // Kill-switch: only the literal "false" disables (fail-open read).
+    let pool = policy_pool("proj-ks", PSP::ReadWrite, "sess-ks").await;
+    sqlx::query("INSERT INTO app_config (key, value) VALUES ('sandbox_enabled', 'false')")
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_eq!(
-        gate("ls", Mode::Edit, cap_ok(), false),
-        Some("sandbox_enabled=false")
+        super::resolve_session_policy(&pool, "sess-ks", Mode::Edit).await,
+        Policy::Off
     );
 }
 
-#[test]
-fn gate_capability_probe_fail_opens() {
-    // AC5: probe stub (landlock + seccomp unavailable) → Skip, the
-    // command runs exactly as the legacy path.
-    let broken = Capability {
-        landlock: false,
-        seccomp: true,
-    };
+/// DB resolution fallbacks: unknown session id (no join row) and
+/// Yolo both resolve Off without touching anything.
+#[tokio::test]
+async fn resolve_session_policy_missing_session_and_yolo() {
+    let pool = policy_pool("proj-x", PSP::ReadWrite, "sess-x").await;
     assert_eq!(
-        gate("ls", Mode::Edit, broken, true),
-        Some("capability probe failed (fail-open)")
+        super::resolve_session_policy(&pool, "no-such-session", Mode::Edit).await,
+        Policy::Off
     );
-    let broken6 = Capability {
-        landlock: true,
-        seccomp: false,
-    };
     assert_eq!(
-        gate("ls", Mode::Edit, broken6, true),
-        Some("capability probe failed (fail-open)")
+        super::resolve_session_policy(&pool, "sess-x", Mode::Yolo).await,
+        Policy::Off
     );
+}
+
+/// decide() end-to-end: readwrite tier sandboxes a SideEffect command
+/// (the P3c behavior change — pre-P3c it skipped), off tier keeps the
+/// legacy skip, and a None session id skips (no policy to resolve).
+#[tokio::test]
+async fn decide_sandboxes_all_tiers_under_readwrite() {
+    use crate::sandbox::Decision;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ctx = policy_ctx(&tmp);
+    let pool = policy_pool("proj-d", PSP::ReadWrite, "sess-d").await;
+    ctx.db = pool;
+
+    // SideEffect-tier command (pre-P3c: Skip) → now sandboxed.
+    let d = super::decide(&ctx, "mkdir x", Some("sess-d")).await;
+    assert!(matches!(d, Decision::Sandbox(_)), "got: {d:?}");
+    // Ask-tier command → sandboxed too (Tier 4 short-circuits the
+    // modal upstream; the spawn side must not re-skip it).
+    let d = super::decide(&ctx, "rm x", Some("sess-d")).await;
+    assert!(matches!(d, Decision::Sandbox(_)), "got: {d:?}");
+
+    // Off tier → legacy skip.
+    let pool = policy_pool("proj-d-off", PSP::Off, "sess-d-off").await;
+    ctx.db = pool;
+    let d = super::decide(&ctx, "mkdir x", Some("sess-d-off")).await;
+    assert!(matches!(d, Decision::Skip { .. }), "got: {d:?}");
+
+    // No session context → skip (cannot resolve a project policy).
+    let d = super::decide(&ctx, "ls", None).await;
+    assert!(matches!(d, Decision::Skip { .. }), "got: {d:?}");
 }
 
 #[test]
@@ -493,6 +659,7 @@ macro_rules! require_sandbox {
 #[cfg(target_os = "linux")]
 fn integration_spec(worktree: &Path) -> SandboxSpec {
     SandboxSpec {
+        face: super::Face::ReadWrite,
         writable_roots: vec![worktree.to_path_buf(), PathBuf::from("/tmp")],
         exec_allow_roots: vec![
             PathBuf::from("/usr"),
@@ -505,6 +672,14 @@ fn integration_spec(worktree: &Path) -> SandboxSpec {
         ],
         extra_writable: vec![],
     }
+}
+
+/// ReadOnly face spec (P3c design §3): worktree OUT of the writable
+/// roots, ON the exec face. Built via `build_spec` so the test pins
+/// the real constructor, not a hand-rolled copy.
+#[cfg(target_os = "linux")]
+fn integration_readonly_spec(ctx: &crate::tools::ToolContext) -> SandboxSpec {
+    super::policy::build_spec(ctx, Some("integ-ro"), vec![], super::Face::ReadOnly)
 }
 
 /// Spawn `sh -c script` under the sandbox, return (exit, stderr).
@@ -553,6 +728,71 @@ async fn integration_write_faces_and_read_freedom() {
     .await;
     assert_ne!(code, 0, "/usr/local write must be denied");
     assert!(err.contains("Permission denied"), "got: {err}");
+}
+
+/// P3c (design §3, AC2 face semantics): under the ReadOnly face the
+/// worktree write is DENIED (Landlock) while executing a project
+/// script from the worktree still WORKS (EXECUTE face kept).
+///
+/// The worktree must live OUTSIDE every writable root for the denial
+/// row to carry signal — tempfile hands out `/tmp`-based dirs and
+/// `/tmp` stays writable under this face, so the worktree is created
+/// under `$HOME` instead (best-effort cleanup; a panic may leave a
+/// `.everlasting-sbx-ro-*` dir behind — acceptable for a test).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn integration_readonly_face_blocks_worktree_write_keeps_exec() {
+    require_sandbox!();
+    let home = match dirs::home_dir() {
+        Some(h) if !h.starts_with("/tmp") => h,
+        _ => {
+            eprintln!("SKIP-row: no usable $HOME outside /tmp for the readonly-face worktree");
+            return;
+        }
+    };
+    let base = home.join(format!(".everlasting-sbx-ro-{}", std::process::id()));
+    let wt = base.join("wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    let ctx = policy_ctx(&tempfile::tempdir().unwrap());
+    // build_spec takes the worktree from ctx — point it at wt. The
+    // data_dir (spill root) stays on the discarded tempdir so the
+    // spill rule never collides with the home-side worktree.
+    let ctx = crate::tools::ToolContext {
+        worktree_path: wt.clone(),
+        ..ctx
+    };
+    let spec = integration_readonly_spec(&ctx);
+    // The executable itself must be executable; put a script in the
+    // worktree and exec it DIRECTLY (`./script.sh` → execve on the
+    // worktree file needs the EXECUTE face; `sh ./script.sh` would
+    // only read it and prove nothing about exec).
+    let script = wt.join("script.sh");
+    std::fs::write(&script, "#!/bin/sh\necho ran\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // Worktree write → denied by the missing writable rule.
+    let (code, err) = run_sandboxed(&spec, "echo hi > ./blocked.txt", &wt).await;
+    assert_ne!(code, 0, "readonly face must deny worktree writes");
+    assert!(err.contains("Permission denied"), "got: {err}");
+
+    // /tmp write (escape hatch) → still allowed.
+    let (code, err) = run_sandboxed(&spec, "echo hi > /tmp/everlasting_sbx_ro.txt", &wt).await;
+    assert_eq!(code, 0, "/tmp write must survive the readonly face: {err}");
+
+    // Executing a project script from the (read-only) worktree →
+    // allowed by the explicit exec push.
+    let (code, err) = run_sandboxed(&spec, "./script.sh", &wt).await;
+    assert_eq!(
+        code, 0,
+        "project script exec must survive readonly face: {err}"
+    );
+
+    // Best-effort cleanup (the test process is unsandboxed).
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[cfg(target_os = "linux")]

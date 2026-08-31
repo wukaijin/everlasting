@@ -1222,3 +1222,205 @@ async fn isolated_worker_read_project_root_skips_ask() {
         );
     }
 }
+
+// =====================================================================
+// P3c (09-01-a2-p3c-sandbox-ux): sandbox face short-circuit — when the
+// resolved project policy puts the session inside the sandbox, the
+// Tier 4 shell approval layers (prefix-grant / classify / ask) are
+// replaced by "Allow now, escalate at execution time". Tier 1–3 above
+// (kill list / sensitive paths / Plan write block) must NOT be
+// replaced. The shared pool pins the backstop project to `off`
+// (classic path); these tests re-seed the tier they exercise.
+// =====================================================================
+
+/// Seed the backstop project (the `parent-sess` session's default
+/// project) to the given tier.
+async fn set_project_tier(pool: &sqlx::SqlitePool, tier: &str) {
+    sqlx::query("UPDATE projects SET sandbox_policy = ? WHERE id = ?")
+        .bind(tier)
+        .bind(crate::projects::DEFAULT_PROJECT_ID)
+        .execute(pool)
+        .await
+        .expect("set project sandbox tier");
+}
+
+/// AC1: Edit + readwrite tier — an Ask-tier command (`rm x`, would
+/// pre-emit a modal in the classic path) short-circuits to silent
+/// Allow. The escalation happens later, at execution time, only when
+/// the command fails out-of-face.
+#[tokio::test]
+async fn tier4_shell_short_circuits_to_allow_when_sandbox_face_active() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    set_project_tier(&pool, "readwrite").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "rm x"}),
+            "tu-sbx-ask-tier",
+            &token,
+        ),
+    )
+    .await
+    .expect("short-circuit must bypass ask_path (would hang on oneshot)");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "sandbox face active → shell short-circuits to Allow"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "sandbox face active → NO permission:ask emission"
+    );
+    // AC8: the Allow decision is audited (ToolAllowed), so the audit
+    // trail keeps its "who decided" row even without an ask.
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT kind FROM session_audit_events WHERE session_id = 'parent-sess'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(
+        rows.iter().any(|(k,)| k == "tool_allowed"),
+        "short-circuit must record a ToolAllowed audit row, got: {rows:?}"
+    );
+}
+
+/// D2 invariant: Tier 2 (kill list) runs BEFORE the short-circuit —
+/// a fork bomb is silently denied even with the sandbox face active.
+#[tokio::test]
+async fn tier2_kill_list_still_precedes_sandbox_short_circuit() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    set_project_tier(&pool, "readwrite").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = crate::agent::permissions::check::check(
+        &ctx,
+        &store,
+        &pool,
+        &sink_arc,
+        "shell",
+        &serde_json::json!({"command": ":(){ :|:& };:"}),
+        "tu-sbx-forkbomb",
+        &token,
+    )
+    .await;
+    match decision {
+        crate::agent::permissions::Decision::Deny { critical: true, .. } => {}
+        other => panic!("fork bomb must be Tier 2 denied (critical), got: {other:?}"),
+    }
+}
+
+/// Project `off` tier → classic path byte-identical: an Ask-tier
+/// command reaches the ask round-trip (no short-circuit). The ask
+/// emission on the captured sink is the signal; the round-trip is
+/// completed via `resolve_ask` (mirrors the production permission
+/// response path) so the check returns a real Decision.
+#[tokio::test]
+async fn tier4_shell_classic_ask_path_survives_under_off_tier() {
+    use crate::agent::permissions::{
+        new_permission_store, resolve_ask, PermissionContext, PermissionResponse,
+    };
+    // worker_test_pool already pins the project to `off`; make it
+    // explicit so the test survives a default flip.
+    let pool = super::tests_common::worker_test_pool().await;
+    set_project_tier(&pool, "off").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    // `rm x` is Ask-tier → ask_path emits + blocks on the oneshot.
+    // Resolve from a sibling task once the emission lands (mirrors
+    // the frontend `permission_response` IPC handler).
+    let resolver_store = store.clone();
+    let resolver_sink = sink.clone();
+    tokio::spawn(async move {
+        for _ in 0..400 {
+            if !resolver_sink.asks.lock().unwrap().is_empty() {
+                let rid = resolver_sink.asks.lock().unwrap()[0].rid.clone();
+                resolve_ask(
+                    &resolver_store,
+                    &rid,
+                    PermissionResponse::Deny {
+                        reason: "test".into(),
+                    },
+                )
+                .await;
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    });
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "rm x"}),
+            "tu-sbx-off-ask",
+            &token,
+        ),
+    )
+    .await
+    .expect("off tier: classic ask round-trip must complete");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Deny { .. }),
+        "off tier: classic Deny after user denial, got: {decision:?}"
+    );
+    assert!(
+        !sink.asks.lock().unwrap().is_empty(),
+        "off tier must keep the classic ask emission (no short-circuit)"
+    );
+}

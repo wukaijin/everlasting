@@ -340,6 +340,31 @@ pub async fn check(
             }
         }
         ToolKind::Shell => {
+            // P3c sandbox face short-circuit (design §1.1): when the
+            // resolved policy puts this session's shell family inside
+            // the sandbox, the pre-execution approval layers below
+            // (prefix-grant / three-tier classify / ask) are REPLACED
+            // by "run sandboxed first; out-of-face failures escalate
+            // at execution time" (tools/shell.rs escalation loop).
+            // Everything above this point (Tier 2 kill list, Tier 2.5
+            // sensitive paths, Tier 3 Plan write-tool block, Yolo
+            // bypass) already ran and is NOT replaced — the sandbox
+            // only takes over the shell approval layer (PRD D2
+            // invariant). `Off` (project off / kill-switch /
+            // capability fail / no session row) falls through
+            // byte-identical to the P3b path.
+            if crate::sandbox::resolve_session_policy(db, &ctx.session_id, ctx.mode).await
+                != crate::sandbox::Policy::Off
+            {
+                tracing::info!(
+                    session_id = %ctx.session_id,
+                    tool = %tool_name,
+                    "permission::check: Tier 4 shell short-circuited (sandbox face active)"
+                );
+                let _ = record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                    .await;
+                return Decision::Allow;
+            }
             let cmd = tool_input
                 .get("command")
                 .and_then(|v| v.as_str())

@@ -11,6 +11,7 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::projects::ProjectRow;
+use crate::sandbox::policy::ProjectSandboxPolicy;
 
 /// Insert a new project row. Returns the inserted row.
 pub async fn create_project(
@@ -52,6 +53,7 @@ pub async fn create_project(
             updated_at: now,
             hidden: false,
             metadata: None,
+            sandbox_policy: ProjectSandboxPolicy::ReadWrite.as_str().to_string(),
         }),
         Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(sqlx::Error::Protocol(
             format!("a project with path '{}' already exists", path),
@@ -71,7 +73,7 @@ pub async fn list_projects(
     let rows = if include_hidden {
         sqlx::query(
             r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
  FROM projects
  ORDER BY created_at ASC
  "#,
@@ -81,7 +83,7 @@ pub async fn list_projects(
     } else {
         sqlx::query(
             r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
  FROM projects
  WHERE hidden = 0
  ORDER BY created_at ASC
@@ -99,7 +101,7 @@ pub async fn list_projects(
 pub async fn list_hidden_projects(pool: &SqlitePool) -> Result<Vec<ProjectRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
  FROM projects
  WHERE hidden = 1
  ORDER BY updated_at DESC
@@ -117,7 +119,7 @@ pub async fn get_project(
 ) -> Result<Option<ProjectRow>, sqlx::Error> {
     let row = sqlx::query(
         r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
  FROM projects
  WHERE id = ?
  "#,
@@ -186,7 +188,7 @@ pub async fn list_projects_with_stale_git_probe(
 ) -> Result<Vec<ProjectRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
  FROM projects
  WHERE is_git_repo = 0 AND hidden = 0
  ORDER BY created_at ASC
@@ -290,5 +292,6 @@ pub(crate) fn row_to_project(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow, s
         updated_at: r.try_get("updated_at")?,
         hidden: r.try_get::<i64, _>("hidden")? != 0,
         metadata: r.try_get("metadata")?,
+        sandbox_policy: r.try_get("sandbox_policy")?,
     })
 }

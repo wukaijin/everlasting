@@ -25,6 +25,10 @@ pub struct ProjectRow {
     pub updated_at: String,
     pub hidden: bool,
     pub metadata: Option<String>,
+    /// P3c per-project sandbox policy tier (`off` / `readwrite` /
+    /// `readonly`). DEFAULT `readwrite` — serialized verbatim; the
+    /// TS side maps it to its union type at the store boundary.
+    pub sandbox_policy: String,
 }
 
 impl ProjectRow {

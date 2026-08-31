@@ -26,6 +26,18 @@ pub(super) async fn worker_test_pool() -> sqlx::SqlitePool {
         .await
         .unwrap();
     crate::db::migrations::run_migrations(&pool).await.unwrap();
+    // P3c: pin the backstop project (the session's default
+    // `project_id` target) to the `off` tier so these fixtures
+    // exercise the CLASSIC Tier 4 path (no sandbox face). Production
+    // default is `readwrite`, but every sandbox-face behavior has its
+    // own tests that explicitly re-seed the tier they need; keeping
+    // the shared pool at `off` mirrors the documented rollback lever
+    // ("project off = P3b behavior") and keeps the pre-P3c approval
+    // tests byte-for-byte meaningful.
+    sqlx::query("UPDATE projects SET sandbox_policy = 'off'")
+        .execute(&pool)
+        .await
+        .expect("pin test project sandbox policy to off");
     // Insert a parent session row so the audit FK is satisfied.
     // `sessions` table is the audit table's parent — without
     // this insert, the audit INSERT in `record_audit` fails

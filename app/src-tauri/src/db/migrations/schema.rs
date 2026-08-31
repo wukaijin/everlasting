@@ -36,7 +36,9 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL,
  hidden INTEGER NOT NULL DEFAULT 0,
- metadata TEXT
+ metadata TEXT,
+ sandbox_policy TEXT NOT NULL DEFAULT 'readwrite'
+   CHECK (sandbox_policy IN ('off', 'readwrite', 'readonly'))
  )
  "#,
     )
@@ -151,6 +153,20 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // brings them up to date. ---
     add_project_column_if_missing(pool, "is_git_repo", "INTEGER NOT NULL DEFAULT 0").await?;
     add_project_column_if_missing(pool, "git_branch", "TEXT").await?;
+
+    // --- P3c (09-01-a2-p3c-sandbox-ux): per-project sandbox policy
+    // tier (`off` / `readwrite` / `readonly`, CHECK-constrained).
+    // Default `readwrite` is the intentional P3c behavior change
+    // (PRD D2): existing projects get "every command sandboxed,
+    // worktree writable" on upgrade; rollback = global kill-switch
+    // or per-project `off`. Present on freshly created tables (see
+    // CREATE TABLE above); the probe + ALTER upgrades older DBs. ---
+    add_project_column_if_missing(
+        pool,
+        "sandbox_policy",
+        "TEXT NOT NULL DEFAULT 'readwrite' CHECK (sandbox_policy IN ('off', 'readwrite', 'readonly'))",
+    )
+    .await?;
 
     // --- messages ---
     sqlx::query(

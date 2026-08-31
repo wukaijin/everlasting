@@ -11,8 +11,95 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
-use super::SandboxSpec;
+use super::{Face, SandboxSpec};
 use crate::tools::ToolContext;
+
+/// Per-project sandbox policy tier (P3c, design §2). Stored in
+/// `projects.sandbox_policy` (TEXT + CHECK constraint, added by the
+/// schema migration); the default is `ReadWrite` — the P3c behavior
+/// change is intentional (PRD D2: SideEffect commands become
+/// sandboxed-with-writable-worktree instead of silently unbounded).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectSandboxPolicy {
+    /// No sandbox for this project — classic Tier 4 approval path.
+    Off,
+    /// Every command sandboxes; worktree writable (default).
+    ReadWrite,
+    /// Every command sandboxes; worktree read-only (hard isolation
+    /// for auditing third-party repos).
+    ReadOnly,
+}
+
+impl ProjectSandboxPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProjectSandboxPolicy::Off => "off",
+            ProjectSandboxPolicy::ReadWrite => "readwrite",
+            ProjectSandboxPolicy::ReadOnly => "readonly",
+        }
+    }
+
+    /// Inverse of [`as_str`]. `None` = value outside the CHECK
+    /// domain (callers degrade to `Off` + warn).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(ProjectSandboxPolicy::Off),
+            "readwrite" => Some(ProjectSandboxPolicy::ReadWrite),
+            "readonly" => Some(ProjectSandboxPolicy::ReadOnly),
+            _ => None,
+        }
+    }
+}
+
+/// Read the project's sandbox policy for a session via
+/// `sessions.project_id` join `projects` (both PK lookups — the
+/// sessions side has `idx_sessions_project_id`, the join lands on
+/// the projects PK). Called per shell command from
+/// `sandbox::resolve_session_policy` at both consumption points
+/// (design §1.1: two consumers, one truth, no cross-layer plumbing).
+///
+/// Fallbacks (fail-open, matching the module philosophy):
+/// - session/project row missing (fresh test pools, orphaned
+///   session) → `Off` (classic behavior);
+/// - value outside the CHECK domain → warn + `Off`;
+/// - DB error → warn + `Off` (never sandbox on an unreadable
+///   policy).
+pub(crate) async fn read_project_sandbox_policy(
+    db: &SqlitePool,
+    session_id: &str,
+) -> ProjectSandboxPolicy {
+    let row: Result<Option<(String,)>, sqlx::Error> = sqlx::query_as(
+        r#"
+        SELECT p.sandbox_policy
+        FROM sessions s
+        JOIN projects p ON p.id = s.project_id
+        WHERE s.id = ?
+        "#,
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await;
+    match row {
+        Ok(Some((v,))) => match ProjectSandboxPolicy::parse(&v) {
+            Some(p) => p,
+            None => {
+                tracing::warn!(
+                    value = %v,
+                    "sandbox: unknown projects.sandbox_policy value, treating as off"
+                );
+                ProjectSandboxPolicy::Off
+            }
+        },
+        Ok(None) => ProjectSandboxPolicy::Off,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "sandbox: failed to read project sandbox policy, treating as off"
+            );
+            ProjectSandboxPolicy::Off
+        }
+    }
+}
 
 /// app_config key for the kill switch (R6). Stored as `"true"` /
 /// `"false"` literals by `set_app_config_flag`; read fail-open:
@@ -113,13 +200,29 @@ fn path_exec_roots() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Build the spec for one session's command.
+/// Build the spec for one session's command under the given face
+/// (P3c design §3).
 ///
-/// - Writable roots: worktree + `/tmp` + spill dir + extras.
-/// - Exec face: PATH dirs + `/dev` + `/tmp` + writable roots +
-///   toolchain dirs. Deliberately absent: `/init`, `/mnt/c`
-///   (WSL interop containment — EXECUTE deny face is the whole
-///   mechanism, spike landlock 篇 §3).
+/// - **ReadWrite face** (default): writable = worktree + `/tmp` +
+///   spill dir + extras.
+/// - **ReadOnly face**: writable = `/tmp` + spill dir + extras —
+///   the worktree moves OUT of the writable roots but is pushed
+///   back onto the EXEC face explicitly (project scripts still
+///   run). Before the face split, the exec face inherited the
+///   worktree indirectly via the writable-roots extend below; with
+///   the worktree removed from the writable side that inheritance
+///   disappears, so the explicit push is load-bearing.
+///
+/// Extras (`~/.cargo` etc.) stay writable under BOTH faces
+/// (user-granted global dirs are orthogonal to the project face);
+/// `/tmp` stays writable under both (the Plan-mode escape hatch,
+/// e.g. `CARGO_TARGET_DIR=/tmp/...` investigative builds — D3).
+///
+/// Exec face (both): PATH dirs + `/lib` `/lib64` `/usr/lib` +
+/// `/dev` + `/tmp` + writable roots + (ReadOnly: the worktree) +
+/// toolchain dirs. Deliberately absent: `/init`, `/mnt/c`
+/// (WSL interop containment — EXECUTE deny face is the whole
+/// mechanism, spike landlock 篇 §3).
 ///
 /// The spill directory is created best-effort here so its rule can
 /// open an fd; a failure is non-fatal (the rule is skipped — the
@@ -129,8 +232,13 @@ pub fn build_spec(
     ctx: &ToolContext,
     session_id: Option<&str>,
     extra_writable: Vec<PathBuf>,
+    face: Face,
 ) -> SandboxSpec {
-    let mut writable_roots: Vec<PathBuf> = vec![ctx.worktree_path.clone(), PathBuf::from("/tmp")];
+    let mut writable_roots: Vec<PathBuf> = Vec::new();
+    if face == Face::ReadWrite {
+        writable_roots.push(ctx.worktree_path.clone());
+    }
+    writable_roots.push(PathBuf::from("/tmp"));
     if let Some(sid) = session_id {
         let spill = crate::tools::tool_output::session_outputs_dir(&ctx.data_dir, sid);
         if let Err(e) = std::fs::create_dir_all(&spill) {
@@ -151,7 +259,7 @@ pub fn build_spec(
     let mut exec_allow_roots = path_exec_roots();
     // ELF interpreter roots (design gap found in implementation, spike
     // recipe had them hardcoded): a dynamically-linked binary's
-    // interpreter (`/lib64/ld-linux-x86-64.so.2`, musl
+    // interpreter (`/lib64/ld-linux-x-86-64.so.2`, musl
     // `/lib/ld-musl-*.so.1`) is opened BY THE KERNEL during execve
     // and needs EXECUTE too. Normal user PATHs never include /lib*,
     // so PATH resolution alone would EACCES every dynamic binary.
@@ -160,6 +268,11 @@ pub fn build_spec(
     exec_allow_roots.push(PathBuf::from("/usr/lib"));
     exec_allow_roots.push(PathBuf::from("/dev"));
     exec_allow_roots.push(PathBuf::from("/tmp"));
+    // ReadOnly face: the worktree left the writable roots above, so
+    // the extend below no longer carries it — re-add it for EXECUTE
+    // only (the builder unions same-path access rights; in the
+    // ReadWrite face this push is a dedup no-op).
+    exec_allow_roots.push(ctx.worktree_path.clone());
     exec_allow_roots.extend(writable_roots.iter().cloned());
     exec_allow_roots.extend(toolchain_exec_roots());
     // Textual dedup, order-stable (first occurrence wins).
@@ -167,6 +280,7 @@ pub fn build_spec(
     exec_allow_roots.retain(|p| seen.insert(p.clone()));
 
     SandboxSpec {
+        face,
         writable_roots,
         exec_allow_roots,
         extra_writable,
