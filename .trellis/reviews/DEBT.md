@@ -83,39 +83,6 @@
 
 ## P3 — 轻微(文档/一致性) [3 items]
 
-### RULE-SBX-002
-
-- **Level**: P3
-- **Subsystem**: Cross
-- **File**: `app/src/components/settings/GeneralTab.vue`(`general-tab__extra-list` 的 v-for)+ `app/src/stores/config.ts`(`sandboxExtraWritable` 直接存后端生效清单)
-- **Description**: 前端把后端并入 `~/.cargo` 后的生效清单当可编辑列表渲染——默认项带移除按钮,点击后本地消失、下次 load 复活(读侧重新并入);组件注释「默认项不在编辑列表里」与实际行为相反。无安全影响(后端单源重并入),属 UX 小困惑 + 注释失真。
-- **Fix**: store 分开 raw 配置列表与 effective 展示清单,或渲染层对 `.cargo` 默认项隐藏移除按钮(约 5-10 行 + vitest)。
-- **Owner**: carlos
-- **Related Task**: null(P3c UX 档可顺带)
-- **Discovered In**: 同 RULE-SBX-001
-
-### RULE-SBX-003
-
-- **Level**: P3
-- **Subsystem**: Tools
-- **File**: `app/src-tauri/src/tools/run_background_shell.rs`(`record_sandboxed_shell_audit` 在 `registry.start` 之前)
-- **Description**: 后台路径的 `sandboxed_shell_execution` 审计行先于 spawn 写——若 `start` 内 prepare 失败(Spawn 错误),命令从未运行但审计已记沙盒执行;前台路径是 spawn 成功后才写,两路口径及与 kind doc 注释(「spawn 成功后」)不一致。
-- **Fix**: 审计块挪到 `registry.start` Ok 分支之后(约 5 行,挪动现有 if 块)。
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 同 RULE-SBX-001
-
-### RULE-SBX-004
-
-- **Level**: P3
-- **Subsystem**: Tools
-- **File**: `app/src-tauri/src/sandbox/mod.rs`(`decide` 先读 `sandbox_enabled` 再进 `gate`)
-- **Description**: `decide()` 在 gate 判定前无条件读 kill-switch——SideEffect/Ask 档命令也付一次 SQLite 读,绕过 gate 文档顺序「config 最后查=少读」的本意;每命令一次索引读,性能无感,仅口径问题。
-- **Fix**: `sandbox_enabled` 读取挪进 gate 通过后的 Sandbox 分支(约 3 行)。
-- **Owner**: carlos
-- **Related Task**: null
-- **Discovered In**: 同 RULE-SBX-001
-
 > 全部 closed(RULE-PERM-001 于 2026-08-30 由 `.trellis/tasks/08-30-rule-perm-001-audit-pagination` 闭合:审计事件读 keyset `(ts,id)` 分页 + 过滤/计数下推 SQL,新命令 `list_session_audit_events_page` 双 transport additive 落地,旧全量命令零改动保留给 traceStore;dev DB 175 行真会话 live 冒烟 SMOKE OK;keyset 契约收编 spec `database-guidelines.md`,「过滤下推后全集派生值换口径」收编 spec `frontend/state-management.md`,详见 git log)。
 
 > RULE-TEST-003 于 2026-08-30 由 `.trellis/tasks/08-30-e2e-red-fix` 闭合:两红均定性测试侧、生产零 diff —— ① e1a fixture 补 B1 后必填的 `supports_images`(422 = serde Json rejection);② e1b 整模块移除(4 个纯 SseRegistry 单元副本,WP4 改 compute_replay 语义时镜像漂移,权威副本在 sse.rs 内联 15 例)。`cargo test --test e2e` 同步进 CI Rust job,基线不再无人跑。spec daemon-server.md 收编「SSE 契约测试唯一 home + e2e 路由级定位 + 422 排查第一嫌疑」。详见 git log。
@@ -128,6 +95,8 @@
 
 > RULE-TEST-002 于 2026-08-27 由 `.trellis/tasks/08-27-rule-test-002-role-gate-it` 闭合:新增集成用例 `role_gate_denies_then_allows_after_mid_loop_task_json_status_change`(`tests_agent_loop/role_gate_refresh.rs`)——round-1 denial(planning 拒 checker)→ mock LLM 同轮 write_file 翻盘 task.json status(in_progress,事故真实形态)→ round-2 经 drive_turn 轮顶刷新后同一 dispatch 放行(worker marker + call_count==4);变异验证覆盖两类回归(门误接入口快照 / R4 轮顶刷新移除),均精确转红后复原。已知边界:若 `resolve_current_task` 中途恒返 None 门会静默开放,该第三类未覆盖(spec tests-required 条目已注明)。全量 2008 后端测试 + fmt/clippy 绿,生产代码零 diff。详见 git log。
 
+> RULE-SBX-002 / RULE-SBX-003 / RULE-SBX-004 于 2026-09-01 由 `.trellis/tasks/09-01-a2-p3c-sandbox-ux`(PR2+PR4)闭合:002 —— `get_app_config` 增 `sandboxExtraWritableRaw`(raw 可编辑)+ 生效清单降级展示层,config store 分离 `sandboxExtraWritableRaw`,GeneralTab 默认 `~/.cargo` 渲染固定 chip(无移除按钮),失真注释修正,「移除后复活」有 vitest 回归锚;003 —— 后台审计块挪 `registry.start` Ok 之后(与前台「spawn 成功才审计」口径一致);004 —— `decide` 重接 `resolve_session_policy` 惰性求值(capability → Yolo → 项目 off → kill-switch → Plan → 项目面),config 读结构性落在 gate 通过后。详见 git log。
+
 ---
 
 ## 优先级分布
@@ -137,8 +106,8 @@
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
 | P2 | 1 | RULE-SBX-001(sandbox 跨平台编译债,非 WSL 环境开发时启动) |
-| P3 | 3 | RULE-SBX-002/003/004(P3b 实施 review 遗留) |
-| **Total** | **4** | 当前 open items |
+| P3 | 0 | 全部 closed(SBX-002/003/004 2026-09-01 由 P3c 任务闭合) |
+| **Total** | **1** | 当前 open items |
 
 ---
 

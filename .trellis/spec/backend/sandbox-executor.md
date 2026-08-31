@@ -1,26 +1,44 @@
-# Sandbox Executor Spec — 执行期沙盒(P3b,2026-08-31)
+# Sandbox Executor Spec — 执行期沙盒(P3b 2026-08-31 + P3c 2026-09-01)
 
-> 任务:`.trellis/tasks/08-31-a2-p3b-sandbox-executor/`(三件套 + review 处置记录)
+> 任务:P3b `.trellis/tasks/08-31-a2-p3b-sandbox-executor/`(三件套 + review 处置记录);
+> P3c `.trellis/tasks/09-01-a2-p3c-sandbox-ux/`(三态 / Plan / 升级闭环,四 PR)。
 > 上游依据:P3a spike `08-31-a2-p3a-sandbox-spike/research/`(wsl2-feasibility-landlock
 > 五条陷阱 / p3b-design-notes / generalization fail-open 阶梯)+ prior-art(CVE-2025-59532)。
-> 模块:`app/src-tauri/src/sandbox/`(mod / landlock / seccomp / policy / tests_sandbox)。
-> 消费方:`tools/shell.rs`(前台)、`background_shell`(PR2 起,registry 只消费)、
-> `commands/config.rs` + `daemon/routes/config.rs`(设置面读写)。
+> 模块:`app/src-tauri/src/sandbox/`(mod / landlock / seccomp / policy / tests_sandbox)、
+> `agent/permissions/escalation.rs`(P3c 升级闭环)。
+> 消费方:`tools/shell.rs`(前台)、`background_shell`(registry 只消费)、
+> `agent/permissions/check/permission.rs`(Tier 4 面短路)、`agent/chat_loop/drive.rs`
+> (Plan tool list)、`commands/config.rs` + `daemon/routes/config.rs`(设置面读写)、
+> `commands/projects.rs` + `daemon/routes/projects.rs`(P3c 项目档位写)。
 
 ## 1. 定位与不变量
 
 - 沙盒是**判定层之下的限损层**:判定层(`shell_trust::classify_prefix` 三档 +
-  `permissions::check` 5-Tier)**零改动**(C2)。沙盒只接 `ReadOnly` 档的 spawn,
-  即使判定错了,损害被限制在「worktree + /tmp + spill + config 额外目录可写、
-  其余只读、无出网(socket AF_INET/AF_INET6 → EPERM)、exec 不到 `/init` 与
-  `/mnt/c`」之内。
-- **触发四项与**(mod.rs `gate`,顺序即评估顺序,勿重排):
-  1. `Capability::probe().ok()`(OnceLock 缓存,失败 → fail-open,不沙盒不报错不悬挂);
-  2. `classify_prefix(cmd) == ReadOnly`(tool 侧重调一次纯函数,与 Tier 4 同输入同结果);
-  3. `mode != Yolo`(mode 来源:`ToolContext.mode`,PR1 在 `chat_loop::init` 单一构造点灌入);
-  4. app_config `sandbox_enabled`(fail-open 读法:仅字面 `"false"` 关)。
-- SideEffect / Ask 档不沙盒(本就经用户授权);Yolo 全放行;kill-switch 关 =
-  spawn 路径不设 pre_exec,行为与 P3b 之前逐字节一致(AC4)。
+  `permissions::check` 5-Tier)语义零改动(C2)。即使判定错了,损害被限制在
+  「可写面(见 §3)+ 其余只读、无出网(socket AF_INET/AF_INET6 → EPERM)、
+  exec 不到 `/init` 与 `/mnt/c`」之内。
+- **触发(P3c `resolve_policy`,design §1 单一真源)**:P3b 的四项与(ReadOnly 档)
+  已废弃;现在 `classify_prefix` **不参与触发** —— 沙盒档下**全命令**进沙盒,
+  判定层只服务 `off` 档的经典路径。求值顺序(capability → Yolo → 项目 off →
+  kill-switch → Plan → 项目面)即惰性读序,勿重排 —— config 读(RULE-SBX-004)
+  结构性落在 gate 通过后:
+  1. `Capability::probe().ok()`(OnceLock 缓存,失败 → Off = fail-open);
+  2. `mode != Yolo`(恒 Off,`ToolContext.mode`,`chat_loop::init` 单一构造点灌入);
+  3. 项目档 `projects.sandbox_policy == 'off'` → Off(`read_project_sandbox_policy`
+     经 `sessions.project_id` join projects 点查;**缺行(测试池/孤儿)→ Off**,
+     未知值/DB 错 → warn + Off,fail-open);
+  4. kill-switch `sandbox_enabled`(fail-open:仅字面 `"false"` 关;master,
+     关 = 全局 Off 含只读档项目);
+  5. `mode == Plan` → `Face(ReadOnly)`(session 级覆盖项目档;但项目 off 已在
+     3 短路 → Plan + off = 回退工具过滤,**绝不落「Plan + 弹窗放行写」**);
+  6. 否则 `Face(项目档)`。
+- **Policy 消费两处、真源一处**(design §1.1):`resolve_session_policy(db, sid, mode)`
+  被 (a) Tier 4 shell 分支头的**短路**(`Policy != Off` → 跳过 prefix-grant/三档
+  分类/ask,直接 Allow + ToolAllowed 审计;短路点在 Tier 1–3 之后 —— kill list /
+  敏感路径 / Plan 写工具硬拒不被取代)和 (b) spawn 侧 `decide` 各自调用(两次
+  点查可接受,不跨层传 Decision)。
+- 不变量:Yolo 恒不沙盒;kill-switch 关 = 不设 pre_exec(P3b 前逐字节一致);
+  Tier 1–3 硬拒层不被任何档位取代 —— 沙盒只接管 shell 的审批层。
 
 ## 2. 规则集契约
 
@@ -95,11 +113,13 @@ fail-closed(spawn 失败,tool 输出 `[sandbox] Failed to …`,绝不半沙盒�
   `sandboxCapability`(只读派生,不落盘)。写:`sandbox_enabled` 走
   `set_app_config_flag` 白名单;数组走新命令 `set_app_config_list`
   (`SETTABLE_APP_LISTS` 白名单同款防呆,daemon route + Tauri 双端)。
-- **拦截指引**(R7/§2.5):已沙盒命令 exit≠0 且 stderr 命中
-  `Permission denied|Read-only file system` → tool 输出尾部追加一行
-  `sandbox::write_block_guidance()`(append-only,宁缺勿滥 — seccomp 的
-  `Operation not permitted` 是断网,**不触发**写指引)。判定复用本轮
-  `decide` 结果(W3),不二次查询。
+- **拦截指引**(R7/§2.5;P3c §5.3 参数化):已沙盒命令 exit≠0 且 stderr 命中
+  特征 → tool 输出尾部追加一行 `sandbox::failure_guidance(stderr, mode)`
+  (append-only,宁缺勿滥)。特征与文案分三路(`classify_block` 共享给升级
+  触发):写(`Permission denied|Read-only file system`)× Edit/Plan、断网
+  (`Operation not permitted`)× Edit/Plan —— Plan 文案明确「设计使然 +
+  diff 提案 + /tmp 逃生口 + 无审批卡」,断网文案独立不再混入写指引。
+  判定复用本轮 `decide` 结果(W3),不二次查询。
 
 ## 6. 已知陷阱(全踩过,勿复现)
 
@@ -138,3 +158,49 @@ socket。v1 **不封**且无法用现有机制封:seccomp BPF 只能检查标量
   set_app_config_list_route_*`:列表写通道 roundtrip / 白名单拒绝。
 - live:`scripts/turn-smoke.sh --sandbox-probe`(AC8)— 真实 LLM 轮执行
   ReadOnly shell 命令,断言审计行存在且无误杀(不支持内核降级为 WARN)。
+- P3c:`resolve_policy_full_matrix`(24 行矩阵)/ 面 spec 构造(ro 面
+  worktree 出可写进 exec)/ `decide_sandboxes_all_tiers_under_readwrite`
+  (SideEffect/Ask 档全进沙盒 = 触发面扩展)/ 真内核 ro 面集成
+  (worktree 写拒 + 项目脚本 exec 过 + /tmp 写过;worktree 须放 $HOME
+  面外 —— tempdir 在 /tmp 下会被 /tmp 可写根吞掉,断言无效)/
+  `tests_check` 面短路三例(短路 Allow + ToolAllowed 审计、Tier 2 fork
+  bomb 先序、off 档经典 ask)/ `tools/tests_escalation.rs` 四路
+  (approve 单卡重跑 / deny 原失败+指引不落盘 / grant-hit 零卡 /
+  复合不享 grant)+ 无句柄退化。`tests_common::worker_test_pool` 把
+  backstop 项目钉 `off` = 经典路径测试锚(P3c 前 P3b 语义),面行为
+  测试显式 re-seed 档位。
+
+## 9. P3c — 面(Face)与只读变体
+
+- `SandboxSpec.face ∈ {ReadWrite, ReadOnly}`,进 `summary()` 审计段
+  (`face=rw|ro`)。**ReadWrite**(默认)= worktree + /tmp + spill + extras
+  可写;**ReadOnly**(Plan / 项目 readonly 档)= worktree 移出可写根、
+  **显式补进 exec 面**(项目脚本仍可运行 —— 旧实现靠 writable_roots extend
+  间接获得,拆面后该 push 是 load-bearing)/tmp + spill + extras 两面均可写
+  (/tmp = Plan 调查型构建逃生口,如 `CARGO_TARGET_DIR=/tmp/...`)。
+- 配置载体:`projects.sandbox_policy TEXT NOT NULL DEFAULT 'readwrite'
+  CHECK (in ('off','readwrite','readonly'))`。**默认 readwrite = 行为变更**
+  (存量项目全命令进沙盒);回滚 = kill-switch 或单项目切 off。写通道
+  `update_project_sandbox_policy`(daemon route + Tauri command,IPC 入口
+  白名单先拒);读侧 ProjectRow 带出。
+
+## 10. P3c — 升级闭环(前台 shell,design §5)
+
+- **触发**(§5.1):`sandbox_applied ∧ exit≠0 ∧ mode≠Plan ∧ classify_block`
+  命中(写串先行,`Operation not permitted` = 断网)。**每 tool call 至多
+  一次**(重跑在结构上不再进升级分支);Plan 排除 = D3 确定性只读身份。
+- **流程**(§5.2):prefix-grant 先查(`escalation::prefix_grant_hit`,
+  `has_structural_metachar` 复合闸同 Tier 4)→ 命中直接不沙盒重跑零弹卡;
+  未命中 → `EscalationHandle::ask` 复用 `ask_path` 弹卡(`reason_override`
+  新参:拦截原因 + 原命令 + stderr 证据行)→ AllowOnce/AllowAlways(grant
+  经 ask_path 既有通道落库,kind↔类别矩阵天然合法)→ **逐字节同
+  command/env/cwd 重跑**(RULE-E-001/002 不变,仅无 pre_exec)/ Deny →
+  原失败 + 模式感知指引。
+- **注入**:EscalationHandle(sink+store+PermissionContext+db+token+
+  tool_use_id)由 serial dispatch **仅对 shell** 灌入(shell 永不进并行批;
+  后台壳维持模型介导);`Default`(None)= 测试路径 → 退化为指引。
+- **双执行边界**(D4 接受):升级仅在面外写/断网被拒后触发 —— 危险部分
+  第一遍未发生;重跑失败按普通失败返回。审计零新 kind:ask 侧既有 kinds +
+  首个 `sandboxed_shell_execution` 行 + `tool_executed` 终态。
+- worker 路径免费成立(ask_path 的 worker store keying / transcript-only
+  审计原样复用)。

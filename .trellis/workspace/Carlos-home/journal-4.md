@@ -1312,3 +1312,64 @@ C6 收口(08-30-c6-output-truncation,评审后三 PR):PR1 tool_output 契约模�
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 131: A2+ P3c 沙盒 UX 增强档(三态 + Plan 沙盒化 + 升级闭环)
+
+**Date**: 2026-09-01
+**Task**: A2+ P3c 沙盒 UX 增强档(`.trellis/tasks/09-01-a2-p3c-sandbox-ux/`)
+**Branch**: `feat/a2-p3c-sandbox-ux`(4 PR 串行,每 PR 独立可合)
+
+### Summary
+
+P3b「仅 ReadOnly 档触发」升级为完整策略层:resolve_policy 单一决策真源 +
+per-project 三态(默认 readwrite = 全命令进沙盒,**默认值即行为变更**)+
+Plan 模式重新暴露 shell 族(session 级只读面)+ 前台 shell 失败升级闭环
+(面外失败 → Ask 卡 → 一次性不沙盒重跑)。清 SBX-002/003/004。
+后端 2204 + 前端 1507 测试全绿,live 烟测(SB 面审计行 + SideEffect 触发面
+扩展 + 新路由 round-trip)过。
+
+### Main Changes
+
+- **PR1**(`a6ed04f`):`gate` 四项与 → `resolve_policy` 纯函数(求值序 =
+  capability → Yolo → 项目 off → kill-switch → Plan → 项目面,config 读
+  惰性 = SBX-004 结构性解决);`Face(RW/RO)` 进 SandboxSpec + summary()
+  face= 审计段;`projects.sandbox_policy` 列(CHECK 三态,DEFAULT
+  'readwrite');Tier 4 shell 分支头短路(Policy≠Off → Allow,短路点在
+  Tier 1–3 之后);worker_test_pool 钉 backstop 项目 off 保经典路径测试。
+- **PR2**(`d873fdb`):`filter_tools_for_mode` + `plan_shell_available`
+  参(Plan+面 → 保留 shell 族;面不可用回退过滤,绝不落「Plan+弹窗写」);
+  指引文案参数化(classify_block + failure_guidance 四变体,Plan 文案
+  「设计使然 + diff + /tmp + 无卡」);SBX-003 后台审计挪 start Ok 后。
+- **PR3**(`d04edd7`):EscalationHandle 进 ToolContext(serial dispatch
+  仅对 shell 灌入);prefix-grant 先查(复合闸同 Tier 4)→ 零卡重跑;
+  ask_path 增 reason_override 复用弹卡;重跑逐字节同 command/env/cwd;
+  每 call 至多一次、Plan 排除、双执行边界注释。
+- **PR4**(`ce4f0d3`):`update_project_sandbox_policy` 双 transport 白名单
+  先拒;ProjectSandboxTab(radio 三态 + master/Yolo 提示);SBX-002 raw/
+  effective 分离(get_app_config 增 raw 字段 + GeneralTab 固定 chip +
+  「移除后复活」回归锚)。
+- 收尾:spec sandbox-executor.md 重写 §1 + 增 §9/§10;ROADMAP A2+ P3c
+  行 + P3 移档;DEBT.md 销 SBX-002/003/004。
+
+### Key Decisions / Gotchas
+
+- **测试池钉 off**:`worker_test_pool` 显式 UPDATE projects SET
+  sandbox_policy='off' —— 迁移链会插 DEFAULT_PROJECT_ID 兜底项目行且
+  默认 readwrite,不钉则全部 Tier 4 经典测试被面短路误杀。面行为测试
+  显式 re-seed 档位。
+- **readonly 面集成测试的 /tmp 陷阱**:tempdir 就在 /tmp 下,而 /tmp 在
+  只读面仍可写 → 「worktree 写拒」断言永假;worktree 必须造在 $HOME
+  面外(测试自清理)。
+- **share sink 身份**:升级闭环测试里 handle 的 sink 与 resolver 轮询的
+  capture 必须同一 Arc 实例(两个 default() 实例 = 0 卡 + 120s 超时)。
+- **ToolContext 加字段的做法**:先加字段再按 E0063 编译错误定位真实
+  struct literal 脚本插入;反过来(先盲插再编译修)会把 `-> ToolContext {`
+  函数签名也插进去,且修复循环会把合法插入一并删掉(本次实际踩了)。
+- **ask_path 5 处调用点**(path/SideEffect/Ask/WebFetch/GitMutation),
+  reason_override 是第 11 参加在 token 后。
+
+### Status
+
+[OK] **Completed** — 待 Checker 子代理验收
