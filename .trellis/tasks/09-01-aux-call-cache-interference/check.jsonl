@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量检查基线(clippy gate 零告警/测试要求)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "核对改动未破坏 Provider 契约与 tools/system wire 形态"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "核对 cache_read 观测口径与 trace 落库不被改动污染"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对摘要旁路失败语义(RULE-A-011/熔断 registry)保持"}

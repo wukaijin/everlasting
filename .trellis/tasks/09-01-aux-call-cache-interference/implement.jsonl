@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider/retry_open 契约与 wire 层(tools/system 形态、cache 语义),归因与实验改动的边界"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 架构与压缩(auto compaction)在 loop 内的位置,R2 实验触发点"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "turn_trace/cache_read 口径与落库契约,R1 DB 归因与 R2 观测依赖"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-011 摘要旁路失败语义(AC4 红线:熔断/剥壳不破坏)"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "daemon.log 请求行(openai.rs:679 tools_count/has_system)与 WARN 打点约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "sqlite 只读查询规范(WAL writer 是 daemon,直查需 -readonly)"}
