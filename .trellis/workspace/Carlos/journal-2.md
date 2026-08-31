@@ -688,3 +688,25 @@ scheduled_tasks 表重建迁移(target_mode/model_id/last_run_session_id,target_
 ### Status
 
 [OK] **Completed**
+
+
+## Session 49: SSE 丢分片与提示词头部缓存失效:取证 + 双修复
+
+**Date**: 2026-08-31
+**Task**: SSE 丢分片与提示词头部缓存失效:取证 + 双修复
+**Branch**: `main`
+
+### Summary
+
+从 DB 275 条 is_error tool_result + daemon.log 归因两类 harness 缺陷并建任务修复:(1) SseParser 无行缓冲,TCP chunk 边界切断 data: 行后半段被静默丢弃,致 tool_use input={} (Missing required parameter 30 例) 与参数/正文静默缺段(引号断裂/old_string 缺段);修复为半行缓冲 + 9 回归测试 + SSE 解析失败日志升 WARN,实测 255 次丢行归零。(2) OpenAI 兼容路径无 cache_control,breadcrumb(messages[0])/instruction 重读/head_sha(system)致状态迁移与新请求边界 cache_read=0(28 万 token 全量重付,seq 435/437 实证);下沉尾部注入 + instruction session 内冻结(带开关)+ repo-state 尾部块 + cache-miss WARN;turn-smoke 两轮实测第二轮命中 99%。遗留:tools=0 辅助调用(疑 truncate_summary)缓存干扰调查(archive 后 implement.md 步骤 6)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2a1b3c6a` | (see git log) |
+| `b797d0c8` | (see git log) |
+
+### Status
+
+[OK] **Completed**

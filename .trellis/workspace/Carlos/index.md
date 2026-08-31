@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 48
+- **Total Sessions**: 49
 - **Last Active**: 2026-08-31
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~690 | Active |
+| `journal-2.md` | ~712 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 49 | 2026-08-31 | SSE 丢分片与提示词头部缓存失效:取证 + 双修复 | `2a1b3c6a`, `b797d0c8` | `main` |
 | 48 | 2026-08-31 | 定时任务目标 session 三档:per_run 每次执行新建 session + 表单 radio 卡片重设计 | `bf28a31c`, `cd212ff4`, `31e5d7dd` | `main` |
 | 47 | 2026-08-27 | chat 事件 payload 补 session_id:跨客户端实时认领 | `68f7cadc` | `main` |
 | 46 | 2026-08-27 | RULE-TEST-002 角色门多轮刷新集成测试落地 + clippy 债务盘点 | `e0649017`, `a45e897b`, `e336b888`, `6133c5d7`, `176e5626` | `main` |
