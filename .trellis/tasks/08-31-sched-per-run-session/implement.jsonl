@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "F2 定时任务执行契约:调度判定/落账/审计/wire 形状,本任务的基线契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与 DB 层惯例(test_pool/列探测/rebuild 先例)"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Settings 表单组件惯例"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui 2.9.9 Select/RadioGroup/portal gotchas"}

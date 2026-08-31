@@ -46,7 +46,8 @@ ChatLoopRequest.origin: Option<TaskOrigin>        // 驱动器取 drained.last()
 CREATE TABLE scheduled_tasks (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  target_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  target_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE, -- 可空(08-31):per_run 恒 NULL
+  target_mode TEXT NOT NULL DEFAULT 'fixed',      -- 08-31: fixed | per_run(CHECK: fixed ⇔ target 非空)
   name TEXT NOT NULL, prompt TEXT NOT NULL,
   schedule TEXT NOT NULL,                          -- ScheduleSpec JSON
   enabled INTEGER NOT NULL DEFAULT 1,
@@ -56,7 +57,9 @@ CREATE TABLE scheduled_tasks (
   next_fire_at INTEGER NOT NULL,                   -- 纯 UI 展示,不参与触发判定
   run_count INTEGER NOT NULL DEFAULT 0,            -- F2b 已 fire 次数(dedup 跳过不计)
   max_runs INTEGER,                                -- F2b 次数上限;NULL = 不限
-  ends_at INTEGER                                  -- F2b 结束日期 epoch ms;NULL = 不限(含当日)
+  ends_at INTEGER,                                 -- F2b 结束日期 epoch ms;NULL = 不限(含当日)
+  model_id TEXT,                                   -- 08-31 per_run 每次建 session 的模型绑定
+  last_run_session_id TEXT                         -- 08-31 per_run 最近 run session(无 FK,防级联删任务)
 );
 
 // wire:POST /api/v1/scheduled_tasks/{list|create|update|delete}_scheduled_tasks
@@ -113,6 +116,17 @@ CREATE TABLE scheduled_tasks (
 - 仅 `target_session_id` 缺省(新建专用 session)分支生效:校验 `models` 表存在(先于建 session,失败不留孤儿行)→ `create_session_in_pool`(绑全局默认)后 `update_session_model_id` 覆盖为指定值。每轮 chat 经 `resolve_model_id_for_session` 优先取该列 —— 定时注入轮次固定模型,不随全局默认漂移。
 - wire:HTTP DTO / Tauri command 均为扁平 `model_id: Option<String>`(缺省/空 = 全局默认);LLM `schedule_task` tool 恒传 `None`(模型指定是用户 UI 面能力)。
 
+**目标 session 三档(08-31-sched-per-run-session,2026-08-31)**:
+
+- **存储**:`target_mode` ∈ `fixed | per_run`(缺省 fixed);`target_session_id` **可空化**(per_run 恒 NULL)。CHECK 不变式:`target_mode='fixed' ⇔ target_session_id IS NOT NULL`。既有库迁移 = **table rebuild**(`schema_helpers::rebuild_scheduled_tasks_for_target_mode`,沿 turn_trace 五步舞;SQLite 无法 ALTER 去 NOT NULL),存量行种子 `target_mode='fixed'`。
+- **per_run 新列**:`model_id`(每次新建 session 的模型绑定,fixed 不用)+ `last_run_session_id`(**无 FK** —— 删旧 run session 不得级联删任务,区分于 fixed 档 target 的 CASCADE)。
+- **tick 内建会话(定案 D3)**:per_run 的 run session 在调度 tick 里、fire seam **之前**创建(`scheduler::create_run_session`:project.path 为 cwd,标题 = `{任务名} {本地 YYYY-MM-DD HH:MM}`,model_id 写 per-session 覆盖列)——`FireContext.target_session_id` 保持 `String`,fire seam 类型与测试替身零改动。创建失败 = due 消费 + `error` 审计(reason 前缀 `session_create_failed`)+ 计数(防重试风暴,与 fire 失败同语义)。
+- **per_run 绕过三闸**(目标恒为本 tick 新建的空闲 session):同 session 串行化(`fired_sessions`)、队列去重(`pending_by_task`)、queue-disabled gate(legacy cancel+replace 危害对全新 session 不存在)。不进 `fired_sessions`。
+- **审计锚点**:`audit_task(session_id: Option<&str>)`——fixed 挂绑定目标;per_run 挂 `last_run_session_id`(`mark_task_fired` 的 COALESCE 参数,dedup/建会话失败传 None 保留旧值);锚点为 NULL(per_run 从未成功建过 session 的极端序列)跳写 + warn。
+- **create/update 语义**:create per_run 带 `target_session_id` → 400 矛盾;update 双层 Option(`target_session_id: Option<Option<String>>`,显式 null = 清绑定)——切 per_run 清 target,切回 fixed 必须选定 session(存量 target 为 NULL 时 400「请先选择」);非法 mode 值 400。wire 用 `deserialize_double_option_string`。
+- **LLM tool 路径不变**:`schedule_task` 恒 fixed/专用语义(per_run 是用户 UI 面能力);`row.target_session_id` Option 化的两处读点 `unwrap_or_default` / `as_deref`。
+- **前端**:目标区三档 radio 卡片组(创建态:指定/新建专用/每次新建;编辑态两档,dedicated 落库后即 fixed 统一回显「指定」);列表卡 per_run 显示「每次新建 session · 最近:{run session 标题}」;update 恒显式带 `targetMode` + `targetSessionId`(per_run 传 null)+ `modelId`(fixed 传 null 清任务行)。
+
 ### 4. Validation & Error Matrix
 
 | 条件 | 行为 |
@@ -140,6 +154,7 @@ CREATE TABLE scheduled_tasks (
 - parity:`daemon/routes/scheduled_tasks.rs` Router oneshot——CRUD roundtrip(含缺省新建专用 session 分支)+ 校验矩阵全臂。
 - **F2b**:compute 三新档的窗口边界 + 两函数互相一致 + monthly 短月跳过(day=31 回看两月);db 的 mark_fired 计数语义(count_fire bool)/ mark_task_completed 只翻 enabled / update 双层 Option(缺省≠null)/ 重启用清零;tick 的四道 gate(max_runs 达限完成恰好审计一次、due>ends_at 不 fire、ends_at 含当日 fire 后完成、dedup 不计数);route 的 end-condition roundtrip(monthly 档过 wire、显式 null 清空、max_runs=0 与过去 ends_at 400);前端 format/store/tab(单位换算、结束条件 args 形状、完成态徽章)。
 - **CH11-1 + model_id**:compute 的 once 窗口三态(未到点/到点/消费后)与 fallback 不变量;tick 的 once fire 后完成(reason=once)+ 未到点等待 + None 分支兜底完成;route 的 once 档过 wire + model_id 覆盖专用 session 列 + 过去 at_ms / 伪造 model_id 400(不留孤儿 session);前端 format(describeSchedule once、completedByOnce、displayNextFireAt)+ tab 表单(datetime-local 校验、模型下拉 args、编辑回填)。
+- **08-31 per_run**:migration rebuild(旧形表手工搭 → rebuild → 行保全 + mode 种子 fixed + 新列 NULL + 幂等);db 的 per_run roundtrip(target NULL / update target 三态 / COALESCE / 删 run session 不级联);tick 的 per_run fire(新建 run session 标题/模型断言、审计挂新 session)、同 tick 双 per_run 都 fire、绕过 queue-disabled + pending dedup、create_run_session 缺 project Err;route 的 per_run roundtrip(create 不建 session / 矛盾 400 / 非法 mode 400 / fixed↔per_run 切换与显式 null 清绑定);前端 tab(三档 radio 切换 args 形状、per_run 编辑回填与 null 清绑定、卡片「每次新建 session · 最近:」)。
 
 ### 7. Wrong vs Correct
 
