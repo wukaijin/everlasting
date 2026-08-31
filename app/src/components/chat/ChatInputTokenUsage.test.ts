@@ -1,7 +1,9 @@
 // ChatInputTokenUsage 测试 — 2026-08-21 迁移(原 QuotaChip.test.ts 并入)。
 // 覆盖:chip 常驻态(上下文 % + 色档)/ 弹层打开渲染上下文进度条 +
 // 上轮明细 + 缓存命中率 / 窗口聚合(总量 + 平均命中率 + provider 拆分 +
-// top session)/ 额度占比条两态 / 设置行本地校验 / 空态(升级前未统计)。
+// top session)/ 额度占比条两态 / 设置行本地校验 / 空态(升级前未统计)/
+// 2026-08-31 数据源修复:上下文占用与构成图例同源(traceStore 最近一轮
+// 优先,session 归属守卫,props 快照仅回退;色档按实时分子重算)。
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
@@ -18,6 +20,7 @@ vi.mock("../../transport", () => ({
 
 import ChatInputTokenUsage from "./ChatInputTokenUsage.vue";
 import { useQuotaStore, type UsageWindowReportWire } from "../../stores/quota";
+import { useChatStore } from "../../stores/chat";
 import { useTraceStore } from "../../stores/traceStore";
 import type { SessionTokenUsage } from "../../stores/chat.types";
 
@@ -83,7 +86,16 @@ async function mountPop(
   seed?: (ts: ReturnType<typeof useTraceStore>) => void,
 ): Promise<VueWrapper> {
   setActivePinia(createPinia());
-  if (seed) seed(useTraceStore());
+  if (seed) {
+    // 2026-08-31 数据源修复:trace 只在 scoped 到当前 session 时被
+    // 采信 —— seed 路径同步把 chatStore / traceStore 归位到同一
+    // session("s1",与 trace 行的 sessionId 一致);seed 回调仍可
+    // 覆写(如跨 session 守卫测试)。
+    useChatStore().currentSessionId = "s1";
+    const ts = useTraceStore();
+    ts.currentSessionId = "s1";
+    seed(ts);
+  }
   invokeMock.mockReset();
   invokeMock.mockResolvedValue(report);
   const wrapper = mount(ChatInputTokenUsage, {
@@ -274,6 +286,87 @@ describe("ChatInputTokenUsage", () => {
     expect(pop.find(".chat-input__token-bar-stack").exists()).toBe(false);
     expect(pop.find(".chat-input__token-bar-fill").exists()).toBe(true);
     expect(pop.find(".chat-input__token-legend").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("live trace overrides the stale last-turn snapshot (chip, head, level, remaining)", async () => {
+    // 2026-08-31 回归:长 turn 期间 done 快照冻结在几十分钟前
+    // (122.3K/61%),turn_usage 实时 trace 已到 180K/90% —— 头部
+    // 必须与构成图例同源走实时,色档按实时分子升档(warn → alert),
+    // 「上轮明细」区保持 props 快照语义不随 trace 漂移。
+    const wrapper = await mountPop(makeReport(), USAGE, (ts) => {
+      ts.currentSessionTraces.set(9, {
+        id: 1,
+        sessionId: "s1",
+        seq: 9,
+        createdAt: "",
+        tokenUsage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          context_input_tokens: 180_000,
+        },
+        toolsToken: 5_000,
+        systemToken: 1_000,
+        memoryToken: 2_000,
+        atFilesToken: 0,
+        imagesToken: 0,
+      });
+    });
+    const chip = wrapper.find(".chat-input__token-usage");
+    expect(chip.text()).toContain("180K");
+    expect(chip.text()).toContain("90% / 200K");
+    expect(chip.classes()).toContain("chat-input__token-usage--alert");
+    await openPopover(wrapper);
+    const pop = wrapper.find(".chat-input__token-popover");
+    expect(pop.find(".chat-input__token-ctx-pct").text()).toBe("90%");
+    expect(pop.find(".chat-input__token-ctx-pct").classes()).toContain(
+      "chat-input__token-ctx-pct--alert",
+    );
+    // 剩余 = 200K - 180K。
+    expect(pop.find(".chat-input__token-ctx-sub").text()).toContain("20K");
+    // 上轮明细仍为 props 快照(input 10K,而非 trace 的 1)。
+    const rowsText = pop.findAll(".chat-input__token-row").map((r) => r.text());
+    expect(rowsText.some((t) => t.includes("input") && t.includes("10K"))).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("ignores traces scoped to another session (falls back to the snapshot)", async () => {
+    // 归属守卫:traceStore 还停在别的 session(切 session 后未发消息
+    // / 未开弹层)时,头部与构成都不得采信那份数据。
+    const wrapper = await mountPop(makeReport(), USAGE, (ts) => {
+      ts.currentSessionId = "other-session";
+      ts.currentSessionTraces.set(9, {
+        id: 1,
+        sessionId: "other-session",
+        seq: 9,
+        createdAt: "",
+        tokenUsage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          context_input_tokens: 180_000,
+        },
+        toolsToken: 5_000,
+        systemToken: 1_000,
+        memoryToken: 2_000,
+        atFilesToken: 0,
+        imagesToken: 0,
+      });
+    });
+    const chip = wrapper.find(".chat-input__token-usage");
+    expect(chip.text()).toContain("122.3K");
+    expect(chip.text()).toContain("61% / 200K");
+    expect(chip.classes()).toContain("chat-input__token-usage--warn");
+    await openPopover(wrapper);
+    const pop = wrapper.find(".chat-input__token-popover");
+    // 构成同守卫:不渲染图例,进度条退化单色档(按 props 61%)。
+    expect(pop.find(".chat-input__token-legend").exists()).toBe(false);
+    expect(pop.find(".chat-input__token-bar-stack").exists()).toBe(false);
+    expect(pop.find(".chat-input__token-bar-fill").exists()).toBe(true);
+    expect(pop.find(".chat-input__token-bar-fill").attributes("style")).toContain("61%");
     wrapper.unmount();
   });
 

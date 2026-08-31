@@ -28,6 +28,16 @@
 // Σinput + Σcc + Σcr(provider 同族不混:Anthropic 贡献三项和、OpenAI
 // 只贡献 input,跨 provider 求和仍是正确口径)。
 //
+// 上下文占用口径(2026-08-31 修复):chip + 大号 % + 剩余改与构成
+// 图例**同源**(traceStore 最近一轮 context_input,带 session 归属
+// 守卫),props 上轮快照仅作 trace 不可用时的回退。此前头部只吃
+// `done` 事件快照,而 done 仅在轮边界到达(队列续轮下 DriverSink
+// 更是吞到驱动器退出才补发,message_queue.rs DriverSink),长 turn
+// 期间头部冻结在几十分钟前、与实时构成同屏自相矛盾(实证:头部
+// 15.3K/2% vs 构成消息单项 177.9K,真实 ~18.5%)。`usageLevel` prop
+// 相应降级为回退档;有 trace 时色档按同一分子本地重算
+// (`tokenUsageLevel`,阈值 50/75 与父级同尺)。
+//
 // 构成口径(budget.rs 不变量,08-19):五归因切片(tools / system+
 // 技能 / memory / @文件 / 图片)之和 ≤ 实发总量,残差 = 总量 − Σ切片
 // ≥ 0 即「消息历史」段(吸收本地 cl100k 估算与 provider 计量的系统
@@ -41,6 +51,7 @@ import { useTraceStore } from "../../stores/traceStore";
 import {
   abbreviateTokens,
   cacheRatePercent,
+  tokenUsageLevel,
   type TokenUsageLevel,
 } from "../../utils/tokenUsage";
 import type { SessionTokenUsage } from "../../stores/chat.types";
@@ -52,7 +63,10 @@ const props = defineProps<{
   tokenUsage: SessionTokenUsage | null;
   /** 当前模型上下文容量(models catalog contextWindow,父级兜底 200K)。 */
   contextWindow: number;
-  /** 父级从 context_input/contextWindow 算好的色档(49/50/74/75 语义)。 */
+  /** 父级从快照 context_input/contextWindow 算好的色档(49/50/74/75
+   *  语义)。2026-08-31 起为**回退档**:有 trace 时组件按同一阈值
+   *  对实时分子本地重算(`displayLevel`),此 prop 仅在 trace 不可
+   *  用、展示退回 props 快照时生效。 */
   usageLevel: TokenUsageLevel | null;
 }>();
 
@@ -123,17 +137,52 @@ onMounted(() => {
 
 // === 上下文占用(进度条主数据)===
 
+// 2026-08-31 修复:展示分子与构成图例同源 —— traceStore 最近一轮
+// context_input 优先,props 上轮快照仅作回退。trace 未 scoped 到当前
+// session(切 session 后未发消息 / 未开弹层)时**不得**采信 trace,
+// 否则会把别的 session 的上下文画到当前头部(latestTrace 的守卫在此)。
+
+/** 当前 session 主 loop 最近一轮带 usage 的 trace(构成切片来源)。 */
+const latestTrace = computed<TurnTrace | null>(() => {
+  const sid = chatStore.currentSessionId;
+  if (sid === null || traceStore.currentSessionId !== sid) return null;
+  let best: TurnTrace | null = null;
+  for (const t of traceStore.currentSessionTraces.values()) {
+    if (!t.tokenUsage) continue;
+    if (!best || t.seq > best.seq) best = t;
+  }
+  return best;
+});
+
+/** 展示口径的 context_input:实时 trace 优先,回退 props 上轮快照。
+ *  `null` = 两者皆无(chip 渲染 "—"、弹层渲染空态)。 */
+const displayContextInput = computed<number | null>(() => {
+  const live = latestTrace.value?.tokenUsage?.context_input_tokens ?? 0;
+  if (live > 0) return live;
+  const snap = props.tokenUsage?.context_input_tokens ?? 0;
+  return snap > 0 ? snap : null;
+});
+
 const contextPct = computed<number | null>(() => {
-  if (!props.tokenUsage || props.contextWindow <= 0) return null;
-  return Math.min(
-    100,
-    Math.round((props.tokenUsage.context_input_tokens / props.contextWindow) * 100),
-  );
+  const num = displayContextInput.value;
+  if (num == null || props.contextWindow <= 0) return null;
+  return Math.min(100, Math.round((num / props.contextWindow) * 100));
 });
 
 const contextRemaining = computed<number | null>(() => {
-  if (!props.tokenUsage) return null;
-  return Math.max(0, props.contextWindow - props.tokenUsage.context_input_tokens);
+  const num = displayContextInput.value;
+  if (num == null) return null;
+  return Math.max(0, props.contextWindow - num);
+});
+
+/** 展示色档:实时分子下按父级同尺(50/75)本地重算;回退 props
+ *  快照时两者同式等值,直接采用 prop(避免双处阈值漂移)。 */
+const displayLevel = computed<TokenUsageLevel | null>(() => {
+  const live = latestTrace.value?.tokenUsage?.context_input_tokens ?? 0;
+  if (live > 0 && props.contextWindow > 0) {
+    return tokenUsageLevel(live / props.contextWindow);
+  }
+  return props.usageLevel;
 });
 
 /** 上轮缓存命中率(cache_read / context_input,unclamped)。 */
@@ -147,16 +196,6 @@ const lastTurnRate = computed<number | null>(() =>
 );
 
 // === 上下文构成(堆叠条 + 图例,数据 = traceStore 最近一轮)===
-
-/** 当前 session 主 loop 最近一轮带 usage 的 trace(构成切片来源)。 */
-const latestTrace = computed<TurnTrace | null>(() => {
-  let best: TurnTrace | null = null;
-  for (const t of traceStore.currentSessionTraces.values()) {
-    if (!t.tokenUsage) continue;
-    if (!best || t.seq > best.seq) best = t;
-  }
-  return best;
-});
 
 interface CompositionSlice {
   key: string;
@@ -225,7 +264,8 @@ const contextComposition = computed<{
   return { slices, ctx };
 });
 
-/** 堆叠条总宽(trace 实发口径;与头部快照数字瞬时差异 <1 轮,可忽略)。 */
+/** 堆叠条总宽(trace 实发口径)。头部 % 自 2026-08-31 起与构成同源
+ *  (同一 ctx 分子),不再存在快照/trace 瞬时分叉。 */
 const stackWidthPct = computed(() => {
   const ctx = contextComposition.value?.ctx ?? 0;
   if (ctx <= 0 || props.contextWindow <= 0) return null;
@@ -328,7 +368,7 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
     <button
       class="chat-input__token-usage"
       :class="{
-        [`chat-input__token-usage--${usageLevel}`]: usageLevel,
+        [`chat-input__token-usage--${displayLevel}`]: displayLevel,
         'chat-input__token-usage--open': open,
       }"
       type="button"
@@ -337,8 +377,8 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
       title="用量明细:上下文 / 上轮 token / 滚动窗口"
       @click="toggle"
     >
-      <template v-if="tokenUsage">
-        {{ abbreviateTokens(tokenUsage.context_input_tokens) }}
+      <template v-if="displayContextInput != null">
+        {{ abbreviateTokens(displayContextInput) }}
         ·
         {{ contextPct }}% / {{ abbreviateTokens(contextWindow) }}
       </template>
@@ -355,14 +395,14 @@ async function jumpToSession(sessionId: string, projectId: string | null): Promi
         <!-- 1. 上下文占用 -->
         <section class="chat-input__token-section">
           <div class="chat-input__token-section-title">上下文占用</div>
-          <template v-if="tokenUsage">
+          <template v-if="displayContextInput != null">
             <div class="chat-input__token-ctx-head">
               <span
                 class="chat-input__token-ctx-pct"
-                :class="usageLevel ? `chat-input__token-ctx-pct--${usageLevel}` : ''"
+                :class="displayLevel ? `chat-input__token-ctx-pct--${displayLevel}` : ''"
               >{{ contextPct }}%</span>
               <span class="chat-input__token-ctx-nums">
-                {{ abbreviateTokens(tokenUsage.context_input_tokens) }} /
+                {{ abbreviateTokens(displayContextInput) }} /
                 {{ abbreviateTokens(contextWindow) }}
               </span>
             </div>
