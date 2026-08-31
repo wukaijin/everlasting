@@ -29,6 +29,8 @@
 | WSS 隧道 | **tokio-tungstenite 0.24**(PC 侧) | 自研 WSS 隧道协议(Frame/StreamEvent),不用 frp / rathole / yamux |
 | 前端路由 | **vue-router 4** | `/pairing` / `/nodes` / `/chat`(remote epic 移动端 PWA) |
 | PWA 壳 | **vite-plugin-pwa** | 移动端 PWA 壳(remote epic) |
+| 浏览器回归 | **@playwright/test ^1.62.1**(devDep) | Playwright 流水线(2026-08-30 RULE-TEST-001):`app/e2e/*.spec.ts` 真实 Chromium + route-mock,CI blocking 门禁;分层问询序见 `.trellis/spec/frontend/browser-regression.md` |
+| 执行期沙盒 | **零新增依赖**(Linux 内核 syscall) | Sandbox P3b(2026-08-31):Landlock ruleset + seccomp BPF + `PR_SET_NO_NEW_PRIVS`,纯 Rust + 既有 `libc` crate,单二进制零外部运行时依赖(弃 bubblewrap);见 `.trellis/spec/backend/sandbox-executor.md` |
 
 ### 1.2 候选但暂不锁定
 
@@ -90,7 +92,7 @@
 | F4 web_search 工具(08-25)| `app/src-tauri/src/tools/web_search/` + `db/config.rs` + `commands/` | enum dispatch 双后端(Tavily keyed / DDG 兜底)+ 30s 预算重试环;key 三态 AEAD 配置(`app_config`,aad=web_search)+ Settings 第 7 tab;`READONLY_TOOL_ALLOWLIST` 第 7 员 + C7D `STUB_CANDIDATES` 第 11 员;**零新增依赖**(用既有 reqwest + 自研 retry) |
 | F5 PDF/docx 原生提取(08-26)| `app/src-tauri/src/agent/doc_extract.rs` + `db/config.rs` | **3 个新增依赖**:`pdf-extract = "0.12"`(vendored path `vendor/pdf-extract`,纯 Rust 读 PDF 文本)+ `quick-xml = "0.42"`(docx `w:t` 提取)+ `calamine = "0.36"`(xlsx/xlsm,chrono feature);`zip` 收紧 `default-features=false, features=["deflate"]`(防 zstd-sys C 编译依赖);三级 cap + `at_files_token` 度量 |
 | F6/F3 异步编排(08-27)| `app/src-tauri/src/commands/sessions.rs` + `chat.rs` + `sidecar.rs` | `SessionSummary.busy` enrich + 轮次终结 toast + `max_concurrent_loops` 信号量 + Tauri 壳关闭确认;**零新增依赖** |
-| F2/F2b 定时任务(08-28)| `app/src-tauri/src/scheduler/` + `db/scheduled_tasks.rs` + `commands/scheduled_tasks.rs` | daemon 常驻 30s tick 调度器(单一扫描 + `due` 落账 + catch-up)+ `scheduled_tasks` 表(双 FK 级联)+ `ScheduledTaskFired` 审计;6 档 preset + `max_runs`/`ends_at` 结束条件;**零新增依赖**(用既有 tokio timer + sqlx) |
+| F2/F2b 定时任务(08-28;08-29 once;08-31 per_run)| `app/src-tauri/src/scheduler/` + `db/scheduled_tasks.rs` + `commands/scheduled_tasks.rs` | daemon 常驻 30s tick 调度器(单一扫描 + `due` 落账 + catch-up)+ `scheduled_tasks` 表(target_session_id 可空化 + target_mode/model_id/last_run_session_id 三列,08-31)+ `ScheduledTaskFired` 审计;7 档 preset(含 once)+ `max_runs`/`ends_at` 结束条件;**零新增依赖**(用既有 tokio timer + sqlx) |
 | C3+ LLM 摘要式压缩(08-18)| `app/src-tauri/src/agent/context.rs::compact_messages` + `messages` 表 metadata kind | `context_window * 0.85` 触发 → LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)`)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组(兜底);`messages.metadata.kind = "compaction_summary"` 元数据;**零新增依赖** |
 | B11 远程遥控通道(08-11~13)| `crates/everlasting-remote/`(独立二进制)+ `crates/everlasting-remote-protocol/` + `app/src-tauri/src/daemon/tunnel/{client,config,dispatcher,manager,node_id,sse_bridge}.rs` + `app/src/components/{settings/RemoteTab,PairingView,NodeListView,RemoteTab}.vue` + `app/src/transport/{auth,http}.ts` | axum 0.7 + `tower-http::ServeDir` + `tokio-tungstenite` 0.24 WSS + `sqlx` + `dashmap` + `subtle`(constant-time compare);**Cargo workspace 翻转**(08-11,根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,`Cargo.lock` / `target` 在根);**新引入依赖** `everlasting-remote-protocol` 内部 crate + `dashmap` + `subtle`,其余借已有 |
 

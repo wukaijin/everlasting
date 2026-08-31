@@ -54,9 +54,9 @@
 **已具备**(完整 commit 走 `git log`,粗粒度状态见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成)):
 
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
-- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~19 加 C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap 6 个新横切关注点)
+- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~31 加 C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap / C6 截断统一 / sandbox 8 个新横切关注点)
 - 多项目 / 多 session 管理(SQLite 持久化)
-- 工具集(2026-08-25 实测 27 个注册名 = 25 builtin(含 F4 `web_search`)+ 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤):
+- 工具集(2026-08-31 实测 30 个注册名 = 28 builtin(含 F4 `web_search` + 08-29 schedule_task 家族三件套)+ 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤 + C7D stub + 群聊白名单):
   - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
   - Shell:`shell`(Bash 落盘 + cat -n)/ `run_background_shell` / `shell_status` / `shell_kill`(L1a 后台 shell,tokio Child 不带 PTY)
   - 联网:`web_fetch`(SSRF 拦截 + 5 MiB body cap,attribution prefix)+ `web_search`(F4 08-25,snippet-only,Tavily/DDG 双后端;固定端点无用户可控 URL → 无 SSRF 面,Tier 5 silent Allow;与 web_fetch 构成 search → fetch 两段式)
@@ -67,7 +67,7 @@
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **28 类 AuditKind**(2026-08-28 实测,`ScheduledTaskFired` 为第 28 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **29 类 AuditKind**(2026-08-31 实测,`SandboxedShellExecution` 为第 29 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)+ **A2+ P3b 执行期沙盒**(Landlock+seccomp,ReadOnly 档 shell 默认进沙盒,详见 [ARCHITECTURE §2.5.16](./ARCHITECTURE.md))(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
 - **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发(2026-08-19 起触发口径统一切换为 system+tools+messages 三部件之和,见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md))→ LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO=0.95`,unified-context-budget 2026-08-19);撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)(详见 [ARCHITECTURE §2.5.5/§2.5.14](./ARCHITECTURE.md))
 - C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)
 - **MAX_TURNS 软卡**(2026-08-19 落地,**替代硬终断**):单聊主 loop 撞线(缺省 200)改 QuestionStore 询问——继续(+200)/ 压缩后续跑 / 停止,10 分钟超时兜底;worker 与群聊 speaker 段保持硬卡直接 break(详见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md))
@@ -94,15 +94,15 @@
 - **F4 `web_search` 工具**(2026-08-25):与 `web_fetch` 两段式分工(Tavily keyed / DDG 兜底),固定端点无 SSRF 面,Tier 5 silent Allow;Settings 第 7 tab 配 key(AEAD 加密)
 - **F5 PDF/docx/xlsx 原生文本提取**(2026-08-26):`agent/doc_extract.rs` 纯函数提取(pdf-extract / quick-xml / calamine,零 Node 运行时零 pdfium),@文件在 Degraded 兜底前分流,成功走 `<doc>` span 注入通道 + `at_files_token` 度量;占位文案升级为指令式自助兜底(长尾格式 agent 自行转换);pptx 用户裁定不做
 - **F6 异步 agent 任务 + F3 全局并发闸**(2026-08-27):`SessionSummary.busy` 运行时 enrich(跨端侧栏红点)+ 轮次终结跨 session toast + `max_concurrent_loops` 全局信号量(缺省 4)+ Tauri 壳关闭确认;零新表零 migration(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md))
-- **F2·F2b 定时任务**(2026-08-28):daemon 常驻调度器(`scheduler/` 30s tick,单一扫描算法 + `due` 落账防相位漂移 + catch-up)+ origin 载体链走 F1 队列入口;preset 6 档 + `max_runs`/`ends_at` 结束条件 + `completed` 审计;Settings 第 8 tab 管理面,PWA 可用(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md) + [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md))
+- **F2·F2b 定时任务**(2026-08-28;08-29 once 档;08-31 per_run 三档):daemon 常驻调度器(`scheduler/` 30s tick,单一扫描算法 + `due` 落账防相位漂移 + catch-up)+ origin 载体链走 F1 队列入口;preset **7 档**(含单次档 once)+ `max_runs`/`ends_at` 结束条件 + `completed` 审计;Settings 第 8 tab 管理面,PWA 可用(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md) + [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md))
 - **stream 事件补 session_id**(2026-08-27):`chat-event` payload 回填 `session_id`,支持跨客户端(remote PWA)按 session 认领
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
 - 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成,见 [decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md))/ ~~`B11` 远程遥控通道~~ **✅ 2026-08-11~13 已实施**(remote-control epic S1~S6b,合并 `94828cb`):中继方案变更为国内 2C2G 服务器 + 自研 Rust remote daemon,PC daemon 权威 + 云端仅中继;详见 [ROADMAP §1.2](./ROADMAP.md))
-- 安全:`A2+ P3` shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail,前置 WSL userns spike;详见 [A2-SHELL-CLASSIFICATION.md](./_history/2026-08-28-a2-shell-classification.md) §4)
+- 安全:`A2+ P3c` 沙盒 UX 增强档(Plan 模式全命令沙盒化 / 三态 per-project 配置 / bwrap 可选增强 / 网络白名单;P3b 主体 2026-08-31 已落地,详见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) A2+ P3b 行 + [A2-SHELL-CLASSIFICATION.md](./_history/2026-08-28-a2-shell-classification.md) §4)
 
-> **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项 + A2+ P3 归 ROADMAP §2 第四档。
+> **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项 + A2+ P3c(UX 档)归 ROADMAP §2 第四档。
 > **2026-08-13 同步**:`B11` 远程遥控通道已由 remote-control epic(S1~S6b)实施,从"未做"移除。
 
 ### 3.2 明确不做(硬约束)

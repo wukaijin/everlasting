@@ -1,8 +1,10 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-08-28(在 2026-08-13 `94828cb` 基础上 + 08-14~28 工具治理 / 压缩升级 / 搜索 / 图片 / 文档提取 / 消息队列 / 定时任务批)
+> **基线**:2026-08-31(在 2026-08-28 基础上 + 08-29~31 批:schedule_task 家族 / C6 输出截断统一 / ShellCard / 审计 keyset 分页 / Playwright 浏览器回归流水线 / Sandbox 执行期沙盒 P3b / 定时任务 per_run 三档)
 > **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_history/reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转 + 08-14~28(C7/C7D/memory-gov/B1/D2/C3+/budget/softcap/worker-trace/F1/F4/F5/F6/F3/F2·F2b)
 > **状态**: 由 CLAUDE.md §Architecture 段引用
+>
+> **2026-08-31 同步**:08-29~31 功能批。§3 后端树补 `sandbox/`(P3b Landlock+seccomp 执行器)+ `tools/tool_output.rs`(C6 截断统一)+ scheduler per_run 三档与 set_app_config_list 写通道;§2 前端树补 `chat/ShellCard.vue` + `chat/PermissionActions.vue` + `settings/ScheduledTasksTab.vue`,§1 顶层树补 `app/e2e/`;§5 IPC 表修正为 107(2026-08-31 实测 invoke_handler 注册数;旧 118 为含注释的 grep 口径)+ 明细补 Scheduled tasks/message_queue/usage/attachments 域与审计分页命令;§6 表数修正为 13 实体 + 2 FTS5 虚拟 + `scheduled_tasks` 补三新列 + AuditKind 28→29;§11 端到端改为 Playwright 自动化(修正旧"无自动化"事实错误)。
 >
 > **2026-08-28 同步**:08-14~28 功能批。§3 后端树补 `scheduler/`(F2 定时调度器)+ `agent/message_queue.rs`(F1)+ `agent/doc_extract.rs`(F5)+ `tools/{search_history.rs,web_search/,stub.rs}`(D2②/F4/C7D);§5 IPC 表 97→118;§6 schema 表 12→14(补 `scheduled_tasks`);AuditKind 17→28。
 >
@@ -51,6 +53,7 @@ everlasting/
 ├── docs/ # 设计文档(全中文)
 ├── scripts/ # ★ (07-23 daemon.sh;08-11 补 remote.sh + deploy-remote.sh + remote-e2e-smoke.mjs)
 ├── app/ #唯一前端应用包(单仓模式;Rust 侧为 workspace 成员)
+│ ├── e2e/ # ★ NEW (08-30 Playwright) — 浏览器回归(fixtures.ts + 3 spec + README)
 │ ├── src/ # Vue3 前端(含 ★ transport/ 抽象层,07-20;router/views/stores + PWA,08-11)
 │ └── src-tauri/ # Rust 后端(Tauri2;daemon 化后含 ★ daemon/ + bin/ + sidecar.rs + tunnel/)
 └── .trellis/ # Trellis 工作流 + spec + tasks + workspace
@@ -85,6 +88,8 @@ app/src/
 │ │ ├── MessageItemEdit.vue # ★ NEW (06-23 拆,~180 行)
 │ │ ├── MessageItemFooter.vue # ★ NEW (06-23 拆,~120 行,error+latency)
 │ │ ├── ThinkingBlock.vue / ToolCallCard.vue / ModelSelect.vue
+│ │ ├── ShellCard.vue # ★ NEW (08-30) — shell 命令专属卡(命令块常驻 + 一体化审批)
+│ │ ├── PermissionActions.vue # ★ NEW (08-30) — 审批按钮组抽取(ShellCard/ToolCallCard 共用)
 │ │ ├── DiffView.vue / DeleteWorktreeConfirm.vue / EmptyProjectState.vue
 │ │ ├── SubagentDrawer.vue # (06-23 拆)1257→~900 行
 │ │ ├── SubagentDrawerHeader.vue # ★ NEW (06-23 拆,~250 行)
@@ -101,6 +106,7 @@ app/src/
 │ │ ├── ModelRow.vue # ★ NEW (8-PR3拆出)
 │ │ ├── ModelForm.vue # ★ NEW (8-PR3拆出)
 │ │ ├── RemoteTab.vue # ★ NEW (08-11 remote) — 远程隧道配置(tunnel 状态 + remote 配置 + 配对入口)
+│ │ ├── ScheduledTasksTab.vue # ★ NEW (08-28 F2) — 定时任务管理 tab(CRUD + 状态 + per_run 三档表单,08-31)
 │ │ └── DeleteModelConfirm.vue # ★ NEW (8-PR3拆出)
 │ └── layout/ # (Opus §4.1漏看,8-PR4阶段补)
 │ ├── AppShell.vue / AppHeader.vue / AppLogo.vue
@@ -123,6 +129,12 @@ app/src/
 │ ├── nodes.ts # ★ NEW (08-11 remote) — 远程节点列表 store
 │ ├── pairing.ts # ★ NEW (08-11 remote) — 配对码兑换 device_token 流
 │ ├── remoteConfig.ts # ★ NEW (08-11 remote) — remote 隧道配置 store(RemoteTab 数据源)
+│ ├── chatModeActions.ts / chatSendActions.ts / chatSessionActions.ts / chatMessageActions.ts # ★ (08-14 拆 chat.ts facade 的动作组合)
+│ ├── messageQueueStore.ts # ★ NEW (08-25 F1) — 消息队列 store(排队提示 + 召回/移除)
+│ ├── scheduledTasks.ts # ★ NEW (08-28 F2) — 定时任务 store(CRUD + 状态)
+│ ├── quota.ts # ★ NEW (08-27 F6) — 用量窗口 store
+│ ├── webSearch.ts # ★ NEW (08-25 F4) — web_search 配置 store
+│ ├── streamEvents.ts / streamRehydrate.ts # ★ (08-14 拆分) — streamController 的 SSE 事件分发 + rehydrate
 │ └── traceStore.test.ts
 └── utils/ # (Opus §4.2漏看,8-PR4阶段补;06-23 加 chatInputCodeMirror)
  ├── lru.ts + .test.ts / markdown.ts + .test.ts
@@ -220,7 +232,7 @@ app/src-tauri/src/
 │ │ ├── store.rs # PermissionStore + register/resolve/cancel
 │ │ ├── payload.rs # PermissionAskPayload + ASK_TIMEOUT
 │ │ ├── mode.rs # mode_system_prefix + filter_tools_for_mode
-│ │ ├── audit.rs # AuditKind 17 variant + 3 record 函数
+│ │ ├── audit.rs # AuditKind 29 variant + 3 record 函数
 │ │ ├── check.rs # check 主函数 + classify + grant checks
 │ │ ├── ask.rs # ask_path + build_ask_reason
 │ │ ├── dangerous.rs / shell_trust.rs # sibling(原拆分前已存在)
@@ -241,11 +253,16 @@ app/src-tauri/src/
 │ ├── question.rs # ★ (07-07) — get_pending_interaction + resolve_mode_change(QuestionStore 升级)
 │ ├── review.rs # ★ (07-26 C2) — get_review_state + get_current_task_slug(review-state.json 三态载荷)
 │ ├── pairing.rs # ★ NEW (08-11 remote) — generate_pairing_code(配对码,远端 PWA 兑换 device_token)
+│ ├── scheduled_tasks.rs # ★ NEW (08-28 F2) — 定时任务 CRUD(create/update/delete/list;08-31 加 per_run 目标 session 三档)
+│ ├── message_queue.rs # ★ NEW (08-25 F1) — 消息队列 IPC(list/remove/recall queued messages)
+│ ├── usage.rs # ★ NEW (08-27 F6) — usage_window(用量窗口)
+│ ├── attachments.rs # ★ NEW (08-27 F5) — save_attachment(@附件落盘)
 │ └── ui.rs # ★ (07-13 B9+) — apply_ui_diff(生成式 UI diff 应用)
-├── tools/ # 内置工具 (25 个 builtin;07-08~10 加 workflow + B6+ 等;07-29 加群聊 nominate_speaker/end_discussion;08-17 加 search_history;08-25 加 web_search)
+├── tools/ # 内置工具 (28 个 builtin;07-08~10 加 workflow 等;07-29 加群聊 nominate_speaker/end_discussion;08-17 加 search_history;08-25 加 web_search;08-29 加 schedule_task 家族 3 个;08-30 C6 截断统一;08-31 sandbox 执行期接入)
 │ ├── mod.rs (builtin_tools + execute_tool 分发 + filter_tools_for_mode/subagent/workflow)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
-│ ├── shell.rs (5min超时 +30K spill)
+│ ├── shell.rs (5min超时;08-30 C6 起输出截断走统一 tool_output 契约 三恢复模式 + spill)
+│ ├── tool_output.rs # ★ NEW (08-30 C6) — tool 输出截断统一契约(三恢复模式:inline 截断 / spill 落盘 / 行级恢复指引;统一 `<truncated>` 标记;spill 落 `app_data_dir/outputs/<session>/`;shell/background/read_file/web_fetch/grep 共用)
 │ ├── shell_kill.rs / shell_status.rs / run_background_shell.rs # L1a 后台 shell(06-19)
 │ ├── grep.rs / glob.rs / list_dir.rs # L2 并发只读集
 │ ├── web_fetch.rs # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
@@ -281,15 +298,22 @@ app/src-tauri/src/
 │ │ ├── manager.rs / dispatcher.rs (TunnelManager + 请求分发 loopback 转发)
 │ │ ├── node_id.rs / sse_bridge.rs (节点 id + SSE 桥接,取消只停转发)
 │ │ └── tests.rs / e2e_tests.rs (单元 + 端到端隧道测试)
-│ └── routes/ # 118 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│ └── routes/ # 107 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
 │ ├── mod.rs / health.rs / stream.rs(SSE)
 │ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
 │ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs / review.rs
-│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs / scheduled_tasks.rs
-├── scheduler/ # ★ NEW (08-28 F2/F2b) — daemon 常驻定时调度器(30s tick + CancellationToken 停机;单一扫描算法 + due 落账 + catch-up;同 session 每 tick 至多一 fire;F2b 四道 gate + completed 审计)
+│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs / scheduled_tasks.rs / message_queue.rs / usage.rs / attachments.rs / pairing.rs
+├── scheduler/ # ★ NEW (08-28 F2/F2b) — daemon 常驻定时调度器(30s tick + CancellationToken 停机;单一扫描算法 + due 落账 + catch-up;同 session 每 tick 至多一 fire;F2b 四道 gate + completed 审计;08-31 per_run 三档)
 │ ├── mod.rs (spawn_task_scheduler + tick 主循环 + kill switch)
 │ ├── compute.rs (most_recent_due / next_fire_display 等纯函数)
+│ ├── tests_tick.rs / tests_lost.rs
 │ └── (fire 走 chat_inner + origin 载体链落 messages.metadata.scheduled)
+├── sandbox/ # ★ NEW (08-31 P3b) — 执行期沙盒(Landlock ruleset + seccomp BPF;ReadOnly 档 shell 命令在沙盒下执行;background_shell 同路径)
+│ ├── mod.rs (入口 + 策略组装 + spawn 沙盒命令)
+│ ├── landlock.rs (Landlock ruleset——文件系统路径限制)
+│ ├── seccomp.rs (seccomp BPF——系统调用过滤)
+│ ├── policy.rs (ruleset 摘要 + 配置解析)
+│ └── tests_sandbox.rs
 ├── bin/ # ★ NEW (07-20) — cargo bin targets
 │ └── everlasting-daemon.rs (daemon 进程入口:resolve_data_dir + clap --port/--data-dir + serve_daemon)
 ├── git/
@@ -310,8 +334,9 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ├── llm/provider::* → llm::client (BlockState) → types/sse/error
  ├── agent::* (chat + chat_loop + subagent/* + provider + system_prompt + thinking + helpers + permissions/* + 6 tests_*.rs)
  │ →引用 llm::provider + tools + db
- ├── commands::* (IPC分发,10 个域;同一 handler 经 daemon/routes/ 双暴露为 REST) → agent + db + git + projects
- ├── tools/* → read_guard
+ ├── commands::* (IPC分发,按域拆;同一 handler 经 daemon/routes/ 双暴露为 REST) → agent + db + git + projects
+ ├── tools/* → read_guard + tool_output(截断契约) + sandbox::{landlock,seccomp}(P3b 执行期沙盒)
+ ├── sandbox/* (landlock + seccomp + policy;shell.rs / run_background_shell.rs 调用)
  ├── skill/* → loader
  ├── memory/* → loader
  ├── git/* (worktree + diff)
@@ -340,10 +365,10 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ▼
 ┌─────────────────────────── 后端 ────────────────────────────┐
 │ everlasting-daemon(axum,独立进程) / 或 Full 模式 GUI 进程 │
-│ daemon/server.rs::build_router (118 个 command 镜像 REST 路由)│
+│ daemon/server.rs::build_router (107 个 command 镜像 REST 路由)│
 │ ├─ commands/* + daemon/routes/* (同一 handler 双暴露 IPC+HTTP)│
 │ ├─ agent/* → llm::provider::* → wire.rs + client.rs │
-│ ├─ tools/* (24 个 builtin + read_guard) │
+│ ├─ tools/* (28 个 builtin + read_guard + tool_output) │
 │ ├─ db/* (CRUD by域 + migrations) │
 │ ├─ git/* (worktree + diff) │
 │ └─ projects/* (boundary + detector + store) │
@@ -367,35 +392,35 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ## 5. Tauri IPC 表面
 
-**总命令数**:118 个(2026-08-28 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 6 个 → 08-14~28 再增 ~21 个(F1 队列 / F4 web_search / F5 提取 / F6 busy / F2 定时任务 的 command))。
+**总命令数**:107 个(2026-08-31 实测 `invoke_handler` 注册数,与 `#[tauri::command]` 属性数一致——旧口径 118 含注释/测试文件引用,已修正;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 → 08-14~28 增 F1 队列/F4 web_search/F5 提取/F6 busy/F2 定时任务 → 08-29~31 增审计 keyset 分页 + set_app_config_list)。
 
-> **daemon 化后双暴露(07-20 Q0 决策)**:这 118 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
+> **daemon 化后双暴露(07-20 Q0 决策)**:这 107 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
 | Agent Loop |1 | `agent/chat.rs` (chat) |
 | Cancel |1 | `commands/cancel.rs` |
-| LLM config |2 | `commands/config.rs` |
-| Provider CRUD |4 | `commands/providers.rs` |
-| Model CRUD |5 | `commands/providers.rs` |
-| Session model |1 | `commands/providers.rs` (update_session_model_id) |
-| Test connection |2 | `commands/providers.rs` (test_provider + test_model) |
-| Session CRUD |4 | `commands/sessions.rs` |
-| Session worktree |1 | `commands/sessions.rs` (diff_worktree) |
-| Worktree |4 | `commands/worktree.rs` (attach/detach/delete + cancel_inflight) |
-| Project CRUD |7 | `commands/projects.rs` |
-| Project pick |1 | `commands/projects.rs` (pick_project_dir) |
-| Permission |2 | `commands/permissions.rs` (permission_response + 读路径) |
-| Memory |1 | `commands/memory.rs` (load_for_session 缓存) |
-| Command palette |1 | `commands/command_palette.rs` (list_panel_items) |
-| Panel / File |2 | `commands/{panel,files}.rs` |
-| Subagent runs |5 | `commands/subagent_runs.rs` (get_subagent_run + list_runs_by_session + list_runs_summary_by_session + …) |
-| Audit (C4) |1 | `commands/audit.rs` (list_audit_events) |
-| Checklist (B12) |1 | `commands/checklist.rs`(随 B12) |
-| Files |1 | `commands/files.rs` (list_files 供 @ 触发) |
-| Review (C2) |3 | `commands/review.rs` (get_review_state + get_current_task_slug + 1) |
-| Remote pairing |1 | `commands/pairing.rs` (generate_pairing_code,08-11) |
-| Remote tunnel config |3 | `commands/config.rs` (get_remote_config + set_remote_config + get_tunnel_status,08-11) |
+| Config / remote / web_search / flags |12 | `commands/config.rs` (get_llm_config / get_home_dir / remote 5 项 / web_search 2 项 / get_app_config + set_app_config_flag + set_app_config_list) |
+| Provider + Model + 测试 |12 | `commands/providers.rs` |
+| Session 域(CRUD + model + metadata + trace 等) |19 | `commands/sessions.rs` |
+| Permission + Audit + 模式 |10 | `commands/permissions.rs` (permission_response / set_session_mode / list_session_tool_permissions / revoke_tool_permission / list_session_audit_events(+_page keyset 分页,08-30)) |
+| Project CRUD |8 | `commands/projects.rs` (含 pick_project_dir + hide/unhide) |
+| Memory |7 | `commands/memory.rs` |
+| Worktree |4 | `commands/worktree.rs` |
+| Subagent runs |4 | `commands/subagent_runs.rs` |
+| Scheduled tasks |4 | `commands/scheduled_tasks.rs` (list/create/update/delete,08-28;per_run 08-31) |
+| Question / mode change |4 | `commands/question.rs` |
+| Message queue |3 | `commands/message_queue.rs` (list/remove/recall,08-25 F1) |
+| Panel |3 | `commands/panel.rs` |
+| Command palette |2 | `commands/command_palette.rs` |
+| Task (workflow) |2 | `commands/task.rs` |
+| Subagents |2 | `commands/subagents.rs` |
+| Review (C2) |2 | `commands/review.rs` |
+| Files |2 | `commands/files.rs` (list_files + list_files_at) |
+| Usage (F6) |2 | `commands/usage.rs` (usage_window) |
+| UI diff |1 | `commands/ui.rs` |
+| Remote pairing |1 | `commands/pairing.rs` |
+| Attachments (F5) |1 | `commands/attachments.rs` (save_attachment,08-27) |
 
 **IPC命名**: Rust snake_case → Tauri2自动 camelCase转换给前端。
 
@@ -405,7 +430,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 **位置**: `app/src-tauri/src/db/mod.rs::run_migrations`
 
-**14 张表**(2026-08-28 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace` + 08-28 F2 加 `scheduled_tasks`;08-11 remote 配置走 `app_config` KV,零 migration):
+**13 张实体表 + 2 张 FTS5 虚拟表**(2026-08-31 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs` + 06-29 V2 2 期 加 `autonomous_memories` + 07-03 B6+ C 加 `subagent_model_overrides` + 07-14 E2 加 `turn_trace` + 08-28 F2 加 `scheduled_tasks`;FTS5 虚拟表 `autonomous_memories_fts` + `messages_fts`;08-11 remote 配置走 `app_config` KV,零 migration。注:`subagent_runs` 由 `widen_subagent_runs_status_check` 表重建模式创建,不在绿色建表段——08-28 同步曾写"14 张"系把 FTS 虚拟表计入的误数,每表一个 FTS 实为 13 实体 + 2 虚拟):
 
 | 表 | 主键 |关键字段 |
 |----|------|---------|
@@ -415,12 +440,13 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 | `providers` | `id` | `name` / `protocol` / `base_url` / `api_key` / `enabled` |
 | `models` | `id` | `provider_id` (FK) / `name` / `model_id` / `max_tokens` / `enabled` |
 | `app_config` | `key` | `value` (JSON) |
-| `session_audit_events` | `id` | `session_id` (FK, ON DELETE CASCADE) / `kind` (AuditKind 28 variant wire string) / `tool_use_id?` / `path?` / `match_kind?` / `match_value?` / `mode?` / `risk?` / `ts` (RFC3339) |
+| `session_audit_events` | `id` | `session_id` (FK, ON DELETE CASCADE) / `kind` (AuditKind 29 variant wire string——08-31 加 `SandboxedShellExecution`) / `tool_use_id?` / `path?` / `match_kind?` / `match_value?` / `mode?` / `risk?` / `ts` (RFC3339) |
 | `session_tool_permissions` | `id` | `session_id` (FK) / `tool_name` / `match_kind` (`tool` / `prefix` / `path`) / `match_value` / `granted_at` |
 | `subagent_runs` | `id` (UUID) | `parent_session_id` (FK, ON DELETE CASCADE) / `parent_request_id` (TEXT, soft FK) / `subagent_name` / `status` (CHECK 5 值) / `started_at` / `finished_at?` / `token_usage_json?` / `summary?` / `transcript_json?` / `transcript_truncated` / `turn_count?`(RULE-FrontSubagent-004 加) / `created_at` |
 | `autonomous_memories` | `id` | `memory_id` (UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` / `tool_name` / `command_pattern` / `path_globs` / `source_session_id` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(★ V2 2 期,06-29) |
 | `subagent_model_overrides` | `agent_name` (TEXT PK) | `model_id` / `updated_at`(★ B6+ C,07-03,builtin agent 全局 DB override,优先级 `DB > frontmatter > parent`) |
 | `turn_trace` | `id` (INTEGER) | `session_id` (FK CASCADE) / `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(★ E2,07-14,UNIQUE(session_id, seq)) |
+| `scheduled_tasks` | `id` (TEXT) | `project_id` (FK CASCADE) / `target_session_id` (FK CASCADE,08-31 起可空) / `target_mode` (CHECK fixed\|per_run,08-31 DEFAULT 'fixed') / `model_id` (TEXT,08-31 per_run 档指定模型) / `last_run_session_id` (TEXT,08-31 per_run 每次执行新建 session 落此) / `name` / `prompt` / `schedule` (JSON) / `enabled` / `created_by` / `created_at` / `last_fired_at?` / `next_fire_at` / `run_count` / `max_runs?` / `ends_at?`(★ F2,08-28;08-31 per_run 三档重建表,CHECK (target_mode='per_run' OR target_session_id IS NOT NULL)) |
 
 **索引**:
 ```sql
@@ -515,6 +541,10 @@ pub trait Provider: Send + Sync {
 
 后端 `anyhow` (边界) + `thiserror` (领域)。`LlmError`5 类分类: Auth / RateLimit / Network / InvalidRequest / Server,中文用户消息见 `app/src-tauri/src/llm/error.rs`。
 
+###8.8 执行期沙盒 (★ 08-31 P3b)
+
+ReadOnly 档 shell 命令在 `sandbox/`(Landlock ruleset + seccomp BPF)下 spawn;仅 ReadOnly 档生效(read/write/ask 档不受影响),`background_shell` 共用路径。详见 `.trellis/spec/backend/sandbox-executor.md`。
+
 ---
 
 ##9. 前端 ↔ 后端数据流
@@ -575,6 +605,8 @@ LLM 返回 tool_use → emit('tool:call') → 前端 ToolCallCard显示
 | `cd app && pnpm tauri build` |前端 type-check + build + Rust编译 +打包 |
 | `cd app && pnpm dev` | 仅 Vite dev server |
 | `cd app && pnpm build` | 仅前端 build |
+| `cd app && pnpm test` | ★ 前端 vitest 单元测试(覆盖 `app/src/**/*.test.ts`) |
+| `cd app && pnpm test:e2e` | ★ NEW (08-30 Playwright) — 浏览器交互回归(app/e2e/,CI blocking 门禁) |
 | `cd app/src-tauri && cargo check` |快速 Rust编译检查 |
 | `cd app/src-tauri && cargo test --lib` | Rust单元测试 |
 | `cd app/src-tauri && cargo build --bin everlasting-daemon` | ★ 只编译 daemon bin(GUI sidecar 模式由 build.rs 自动 staging) |
@@ -599,11 +631,12 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 | Rust单元测试 | `#[cfg(test)]` cargo test | sse / error / 部分 db / 部分 llm / wire.rs47% tests | `app/src-tauri/src/{llm,db,agent}/**` |
 | 前端单元测试 | vitest | markdown + streamController11 it + lru + messageFormat + path | `app/src/utils/*.test.ts` + `app/src/stores/streamController.test.ts` |
 | 前端类型检查 | `vue-tsc --noEmit` | 全 | `pnpm build` |
-|端到端 |手动 | Tauri窗口实测 | (无自动化) |
+| 浏览器交互回归 (e2e) | Playwright (@playwright/test,08-30 RULE-TEST-001) | 三试点:chat-input-keys / permission-revoke-confirm / question-card-scroll,^1.62.1(devDep) | `app/e2e/`(fixtures.ts + 3 spec + README) |
+|端到端(手动) |手动 | Tauri窗口实测 + remote 链路 `scripts/remote-e2e-smoke.mjs` | (手动必经,无自动化脚本) |
 
-**质量门**: `vue-tsc --noEmit`(pre-build) / `cargo check`(dev) / `cargo test --lib`(可选,CI 未配) /手动端到端(必经)。
+**质量门**: `vue-tsc --noEmit`(pre-build) / `cargo check`(dev) / `cargo test --lib`(可选,CI 未配) / `pnpm test:e2e`(Playwright,CI blocking 门禁) /手动端到端(必经)。
 
-**缺口**:端到端无自动化;前端组件测试覆盖率低;Rust集成测试少。
+**缺口**:Rust集成测试少(浏览器层已由 Playwright 覆盖,见 `.trellis/spec/frontend/browser-regression.md`)。
 
 ---
 
@@ -632,6 +665,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 | Markdown 安全 | DOMPurify |3.4.8(锁精确) | `app/package.json` |
 | 前端路由 | vue-router |4 | `app/package.json`(★ 08-11 remote) |
 | PWA | vite-plugin-pwa |1.3.0 | `app/package.json`(★ 08-11 remote,manifest + SW) |
+| 浏览器回归 | @playwright/test | ^1.62.1(devDep) | `app/package.json`(★ 08-30,Playwright 流水线,见 `.trellis/spec/frontend/browser-regression.md`) |
 | 远程服务端 | everlasting-remote |(workspace 内) | `crates/everlasting-remote/Cargo.toml`(★ 08-11,零系统库依赖) |
 | 远程协议 | everlasting-remote-protocol |(workspace 内) | `crates/everlasting-remote-protocol/Cargo.toml`(★ 08-11) |
 
@@ -661,10 +695,11 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ ├── README.md # docs索引
 │ ├── ARCHITECTURE.md #架构 +16阶段生命周期
 │ ├── IMPLEMENTATION.md #8步路线图 +决策日志
-│ ├── DESIGN.md / TECH.md / BACKLOG.md
+│ ├── DESIGN.md / TECH.md / BACKLOG.md / ROADMAP.md # ★ 技术路线图(单一 source of truth)
+│ ├── CONTEXT.md # ★ 术语表 / BUGLIST.md # ★ 缺陷跟踪 / DEBUG_DB.md # ★ SQLite 直连调试
 │ ├── HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md
 │ ├── REMOTE-DEPLOY.md / REMOTE-ACCESS-E2E.md # ★ (08-11/13) — remote 服务端部署 + E2E 验收
-│ ├── _archive/ / _reviews/ / spikes/
+│ ├── _history/ (统一历史归档) / spikes/
 └── .trellis/
  ├── workflow.md
  ├── spec/ # AI协作者规约(8-PR4 已清理空文件)
@@ -679,6 +714,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 1. **CLAUDE.md**(必读)
 2. **IMPLEMENTATION.md**(必读)
+3. **ROADMAP.md**(看当前进度)
 4. **DESIGN.md**(必读)
 5. **ARCHITECTURE.md**(写代码时反复查)
 6. **STRUCTURE.md**(本文,代码结构)
@@ -697,11 +733,11 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ ┌────────────────────┐ transport ┌──────────────────────────┐ │
 │ │ Vue3 Frontend │ http(默认) │ everlasting-daemon │ │
 │ │ (app/src/) │ /tauri(逃生)│ (axum,app/src-tauri/ │ │
-│ │ · Pinia(18 stores) │◄─────────►│ src/daemon/ + bin/) │ │
-│ │ · transport/ 抽象 │ │ ·118 commands→REST 路由 │ │
+│ │ · Pinia(30 stores) │◄─────────►│ src/daemon/ + bin/) │ │
+│ │ · transport/ 抽象 │ │ ·107 commands→REST 路由 │ │
 │ │ · stream1 source │ │ · Provider trait │ │
 │ │ · reka-ui2.9.9 │ │ (Anthropic/OpenAI) │ │
-│ │ · marked+DOMPurify │ │ · Tool registry (24) │ │
+│ │ · marked+DOMPurify │ │ · Tool registry (28) │ │
 │ │ · Vue3.4+ │ │ · git2-rs worktree │ │
 │ │ · BrowserHeader │ │ · sqlx + SQLite │ │
 │ │ (浏览器模式) │ │ · HttpSseSink + ServeDir │ │
@@ -764,4 +800,4 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考);2026-08-13 同步至 `94828cb`(remote-control-epic-s1 + workspace 翻转)。下次重大重构后再次校准。*
+*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考);2026-08-13 同步至 `94828cb`(remote-control-epic-s1 + workspace 翻转);2026-08-31 同步(08-29~31 批:schedule_task 家族 / C6 截断统一 / ShellCard / keyset 分页 / Playwright e2e / Sandbox P3b / per_run。task `08-31-docs-sync-batch`)。下次重大重构后再次校准。*

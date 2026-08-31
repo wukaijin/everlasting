@@ -7,7 +7,7 @@
 
 ## 1. 系统架构
 
-> ✅ **当前状态(2026-08-20)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 5 个续接特性(2026-08-19~20:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,入口索引在 `decisions.md`)。
+> ✅ **当前状态(2026-08-31)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 6 个续接特性(2026-08-19~27:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建 / F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 + F3 并发闸)+ F2·F2b 定时任务(08-28)+ 08-29~31 批(schedule_task 工具家族 / C6 输出截断统一 / ShellCard / 审计 keyset 分页 / Playwright 浏览器回归流水线 / Sandbox P3b / 定时任务 per_run 三档)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) + [IMPLEMENTATION/decisions-2026-08.md](./IMPLEMENTATION/decisions-2026-08.md)(按月分卷,入口索引在 `decisions.md`)。
 >
 > 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
@@ -31,7 +31,7 @@
 ║                           ▼                                            ║
 ║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
 ║  │  axum router (daemon/server.rs::build_router)            │          ║
-║  │   · 118 个 #[tauri::command] 镜像为 REST 路由(2026-08-28 │          ║
+║  │   · 107 个 #[tauri::command] 镜像为 REST 路由(2026-08-31 │          ║
 ║  │     实测)                                              │          ║
 ║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
 ║  │   · /api/v1/attachments/<id> GET 二进制(B1 08-16,首个    │          ║
@@ -40,9 +40,9 @@
 ║  │  ──────────────────────────────────────────────────────  │          ║
 ║  │  AppState (Arc,axum 每个 handler clone 一份)             │          ║
 ║  │   · SQLite pool(持有 WAL writer;Thin 模式 GUI 不开)   │          ║
-║  │   · agent core(Agent Loop / Tool Registry 25 builtin     │          ║
+║  │   · agent core(Agent Loop / Tool Registry 28 builtin     │          ║
 ║  │     + 1 stub 元工具 load_tool_schemas + 1 动态 dispatch  │          ║
-║  │     dispatch_subagent = 27 注册名;                         │          ║
+║  │     dispatch_subagent = 30 注册名;                         │          ║
 ║  │     / Workflow Engine / Resource Loaders /              │          ║
 ║  │     PermissionStore / SessionManager)                   │          ║
 ║  │   · 自研 LLM Provider trait(Anthropic/OpenAI)          │          ║
@@ -101,7 +101,7 @@
 ```
 **进程边界说明**:
 - **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
-- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 118 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-08-28 实测),前端同一份 handler 代码服务 IPC 与 HTTP。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 107 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-08-31 实测),前端同一份 handler 代码服务 IPC 与 HTTP。
 - **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
 - **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
 - **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client(GUI + 浏览器 + 经 remote daemon 的远程 PWA client)共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
@@ -218,17 +218,20 @@
 
 **决策偏差记录**:Phase 3(dogfooding)在 dogfooding 前置条件未满足时由 epic 直接启动完成 —— 见决策日志对应条目。
 
-### 1.6 近期落地特性(2026-08-14~28)
+### 1.6 近期落地特性(2026-08-14~31)
 
 > 2026-08-14~28 批量落地:C7 tools token 治理 / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 搜索 / C3+ 摘要式压缩 / unified-context-budget 统一预算 / MAX_TURNS 软卡 / 手动 /compact / handoff 接力 / worker per-turn 度量 / F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 + F3 并发闸 / F2·F2b 定时任务 / stream session_id。
 >
-> **完整逐项记录(一句 + 链接)见 [ROADMAP.md §1.2](./ROADMAP.md#12-路线图外完成)**——本节不再重复;横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap)的关卡级设计见 §2.5.10~15。F2 定时任务调度内核与 F6/F3 异步编排的关键架构点见下两小节(其余同见 ROADMAP)。
+> 2026-08-29~31 批量落地:schedule_task 工具家族(LLM detached dispatch)/ C6 输出截断统一(三恢复模式契约 + spill 迁 app_data_dir)/ ShellCard 专属卡 + shell 一体化审批 / RULE-PERM-001 审计 keyset 分页 / RULE-TEST-001 Playwright 浏览器回归流水线 / Sandbox 执行期沙盒 P3b(Landlock+seccomp)/ 定时任务 per_run 三档。
+>
+> **完整逐项记录(一句 + 链接)见 [ROADMAP.md §1.2](./ROADMAP.md#12-路线图外完成)**——本节不再重复;横切关注点(C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap / C6 截断 / sandbox)的关卡级设计见 §2.5.10~16。F2 定时任务调度内核与 F6/F3 异步编排的关键架构点见下两小节(其余同见 ROADMAP)。
 
 **F2·F2b 定时任务调度内核(2026-08-28,架构级关键设计)**
 
 - `scheduler/` 模块,daemon 常驻 30s tick + CancellationToken 停机(GUI Full 零 timer 硬约束,调度仅 daemon 进程);单一扫描算法——每 tick 重算「自 `max(created_at, last_fired_at)` 以来最近到期点」,catch-up 与常规触发同一判定,落账记理论到期点 `due` 防相位漂移;同 session 每 tick 至多一 fire
 - origin 载体链:fire = 构造带 origin 的 user message 走 `chat_inner` 同源路径,`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控` 落 `messages.metadata.scheduled`(additive)——F1 队列「闲也入队」路由统一
-- F2b:6 档 preset + `max_runs`/`ends_at` 结束条件 + `completed` 审计;`ScheduledTaskFired` 六动作;`scheduled_tasks_enabled` kill switch fail-open
+- F2b:6 档 preset(08-29 起 7 档,加 once 单次档)+ `max_runs`/`ends_at` 结束条件 + `completed` 审计;`ScheduledTaskFired` 六动作;`scheduled_tasks_enabled` kill switch fail-open
+- 08-31 per_run 三档:目标 session 三档(指定既有 / 新建专用 / **每次执行新建**),`target_mode`/`model_id`/`last_run_session_id` 三新列 + 表重建迁移;per_run 每次触发新建 session(标题 `{任务名} {时间}`),审计挂新 session;LLM `schedule_task` tool 恒 fixed 语义不暴露 per_run(完整 ADR 见 decisions-2026-08.md 08-31 条目)
 - 完整设计:见 [ROADMAP.md §1.2 F2/F2b](./ROADMAP.md) 行 + spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)
 
 **F6 异步任务可观测性 + F3 全局并发闸(2026-08-27)**
@@ -575,8 +578,8 @@ match tool_call.name {
     "write_file"  => tokio::fs::write (autoparse parent dir, boundary check),
     "edit_file"   => ReadGuard 3 道 check (read → fresh → match + uniqueness)
                      + 0 匹配报 hint + N>1 报行号 + 写后自动 invalidate,
-    "shell"       => spawn_command (5min timeout, > 30KB spill to
-                     <cwd>/.everlasting/outputs/<uuid>.txt + 1KB preview),
+    "shell"       => spawn_command (5min timeout, C6 统一截断契约——spill 落
+                     app_data_dir/outputs/<session>/ + 恢复指引),
     "grep"        => tokio::process::Command::new("rg") spawn, 3 output_modes
                      (files_with_matches | content | count), 500-char line cap,
     "glob"        => globset walk, cap 100, mtime desc,
@@ -594,9 +597,9 @@ match tool_call.name {
   - `Fingerprint = { mtime, size, content_hash_head(xxh64 of 8KB) }`
   - `edit_file` 写前 3 道强制 check;`read_file` 成功自动 `record_read`;`edit_file` 写成功自动 `invalidate`
   - Session 隔离,切回不重读;`delete_session` 调 `clear_session` 清表
-- **Bash 落盘**(2026-06-07 工具集扩展批次加):
-  - > 30KB 输出 spill 到 `<session_cwd>/.everlasting/outputs/<uuid>.txt`
-  - Tool result 返回 path + 1KB head+tail preview(让 LLM 拿 path 跟 `read_file` 配合)
+- **Bash 落盘**(C6 统一起,2026-08-30):
+  - 大输出(spill 模式)落盘到 `app_data_dir/outputs/<session_id>/<uuid>.txt`(spill 目录是 sandbox 可写根之一)
+  - Tool result 返回 path + 恢复指引(统一 `<truncated>` 标记;LLM 拿 path 跟 `read_file` 配合,offset/limit 恢复)
   - `delete_session` best-effort 清理 outputs 目录(失败不 cascade)
 - **关卡点**:
   - 真实文件系统操作(IO 错误、权限、磁盘满)
@@ -708,11 +711,11 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
-> **18+ 关卡**(原 16 关卡 + C7 tools token / C7D stub / memory digest / C3+ compaction / unified-context-budget 硬卡 / MAX_TURNS 软卡 6 个新横切关注点,详见 §2.5.10~15)在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION/decisions-2026-06.md / -07.md / -08.md](./IMPLEMENTATION/) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
+> **18+ 关卡**(原 16 关卡 + C7 tools token / C7D stub / memory digest / C3+ compaction / unified-context-budget 硬卡 / MAX_TURNS 软卡 / C6 输出截断统一 / Sandbox 执行期沙盒 8 个新横切关注点,详见 §2.5.10~16)在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION/decisions-2026-06.md / -07.md / -08.md](./IMPLEMENTATION/) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
 
 ### 2.5 横切关注点:16 关之外但必做的事
 
-关卡图是纵向链路,但很多**横切关注点**贯穿多个关卡,容易被遗漏。下面列出 8 个,每个都标出"在哪个关卡被处理 / 关键设计点"。
+关卡图是纵向链路,但很多**横切关注点**贯穿多个关卡,容易被遗漏。下面列出横切关注点(2.5.1~2.5.16),每个都标出"在哪个关卡被处理 / 关键设计点"。
 
 #### 2.5.1 用户中途取消(CancellationToken)
 
@@ -733,15 +736,18 @@ agent loop 结束(text-only response or max_turns reached):
     content: "timeout after 300s, partial output: <截断的前 50KB>",
   }
   ```
+  (截断输出走 C6 统一契约——超时 partial output 同样经 `tool_output.rs` 截断 + 恢复指引,见 §2.5.3)
 - **LLM 据此**:可能重试、可能换 tool、可能放弃;这都是合法策略
 - **实现位置**:⑩ 内部 `tokio::time::timeout` 包执行
 
-#### 2.5.3 ⑩ 大输出截断
+#### 2.5.3 ⑩ 大输出截断(C6 统一契约,2026-08-30 落地,**替代**早期散装 50KB head+tail)
 
-- **阈值**:`shell` / `read_file` 输出 > 50KB 触发
-- **策略**:**head + tail** 各 25KB,中间塞 `<truncated: omitted N bytes, middle>`(LLM 必须能识别被截)
-- **不能只用 head**:tail 通常包含 stack trace / 错误尾部,丢掉就丢诊断
-- **实现位置**:⑩ 末尾、⑫ 之前
+- **统一的对象是「截断契约」,不是「上限数字」**:每次截断必须自带一条恢复通路,且标记 machine-parsable、全工具同一格式
+- **三恢复模式(sanctioned)**:A 落盘 spill + read_file offset/limit 恢复 / B range 参数恢复 / C 收窄 pattern 恢复;统一 `<truncated>` 标记
+- **统一实现**:`tools/tool_output.rs` 契约模块,shell/background_shell/read_file/web_fetch/grep 五工具共用;char-boundary 安全以 RULE-E-009 为准绳(shell 裸切片 panic 为 C6 修复的 P1)
+- **spill 落点**:`app_data_dir/outputs/<session>/`(C6 迁出 `<cwd>/.everlasting/outputs/`——agent 自我污染 / git 噪音 / 语义混杂),read_file 恢复路径捆绑 trusted carve-out
+- **web_fetch 走落盘不走重取**:两次 fetch 内容可漂移,落盘一次、切片多次
+- **实现位置**:⑩ 末尾、⑫ 之前;完整契约见 `.trellis/spec/backend/agent-loop-architecture/pattern-output-truncation.md`
 
 #### 2.5.4 ⑬ 循环检测阈值(C2 已实施 2026-06-24)
 
@@ -784,9 +790,9 @@ agent loop 结束(text-only response or max_turns reached):
 - **存储**:`session_audit_events` 表(SQLite,`session_id` + `ts DESC` 索引)
 - **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
 - **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
-- **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
-- **28 类 AuditKind(2026-08-28 实测,`ScheduledTaskFired` 为第 28 个,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
-  - **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
+- **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序。**2026-08-30 起**(RULE-PERM-001):AuditLogModal 改走 keyset 分页命令 `list_session_audit_events_page`(首屏 100 行 + 「加载更多」,过滤/计数下推 SQL);旧全量命令保留供 traceStore 使用
+- **29 类 AuditKind(2026-08-31 实测,`SandboxedShellExecution` 为第 29 个,见 `app/src-tauri/src/agent/permissions/audit.rs`)** + 完整 schema + payload wire shape + UI 渲染细节,按域分组:
+  - **Tool 域(6)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / SandboxedShellExecution(P3b 08-31,ReadOnly 档 shell 沙盒执行完成,payload 带 command_sha256_12 前缀 + ruleset)/ ToolDeniedYolo
   - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
   - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
   - **Message 域(2)**:EditMessage(D3 PR1)/ ResendMessage(D3 PR3)
@@ -855,6 +861,14 @@ agent loop 结束(text-only response or max_turns reached):
 - **worker per-turn 度量(2026-08-20)**:`turn_trace` 表重建并入 run 维度 — 唯一键 `UNIQUE(session_id, run_id, seq)`(`''` 哨兵 = 主 loop 行,worker 行 = `subagent_runs.id`;不用 NULL 因 SQLite UNIQUE 视 NULL 互异)+ partial index `idx_turn_trace_run`(`WHERE run_id != ''`)+ `list_worker_turn_traces` IPC 全链 + SubagentDrawer「Token 明细」per-run 折叠区(`runTracesByRunId` 粘性缓存)。老库走 `schema_helpers::rebuild_turn_trace_with_run_id` 重建迁移
 - **spec**:`.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md`
 
+#### 2.5.16 ⑩ 执行期沙盒(Sandbox P3b,2026-08-31 落地)
+
+- **定位**:判定层(A2+ P1+P2 复合命令拆分 + 写重定向检测)之下的**执行期限损层**——变量展开 / `$()` / `eval` / alias 等静态盲区把命令误判 ReadOnly 时,损害被限制在「worktree + tmp + spill 可写、其余只读、无出网、无 `/init` 与 `/mnt/c` 执行」之内;判定层语义零改动
+- **主路线(Landlock + seccomp,自研零外部二进制依赖)**:Landlock ruleset(EXECUTE + 写族 handled,读不控)+ seccomp BPF(拦 `socket(AF_INET/AF_INET6)`,AF_UNIX 放行)+ `PR_SET_NO_NEW_PRIVS`;弃 bubblewrap(userns 可用性不稳 + 二进制分发 + interop 逃逸面,spike 08-31 实测定案)
+- **接入与 gates**:`tools/shell.rs` + `background_shell` 两条 spawn 路径 pre-exec 施加;ReadOnly 档默认进沙盒(四道 gate:ReadOnly ∧ 非 Yolo ∧ kill-switch ∧ 能力探测),能力探测失败 **fail-open**,单一 kill-switch 整体关闭回现状;规则集全部服务端解析,永不采信 tool 参数路径(CVE-2025-59532 铁律);exec 允许面显式不含 `/init` 与 `/mnt/c`(WSL interop 收口)
+- **审计**:新增 `AuditKind::SandboxedShellExecution`(第 29 变体,payload `command_sha256_12` 前缀——不存全命令,全文由 `tool_executed` 行承载 + ruleset 摘要)
+- **完整设计**:见 [IMPLEMENTATION/decisions-2026-08.md 2026-08-31 ADR](./IMPLEMENTATION/decisions-2026-08.md) + spike `.trellis/tasks/08-31-a2-p3a-sandbox-spike/`;spec 沉淀 `.trellis/spec/backend/sandbox-executor.md`
+
 ---
 
 ## 3. 决策:每个 Session 一个 Git Worktree
@@ -895,11 +909,11 @@ agent loop 结束(text-only response or max_turns reached):
 - agent core 与 GUI 解耦 —— GUI 重启不影响 daemon 里的长跑 session(Thin 模式 GUI 不持有任何状态)
 
 **架构影响(实际落地)**:
-- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 19 个路由域文件)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)+ `src-tauri/src/sidecar.rs`(GUI 侧 spawn + 生命周期管理)
+- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 26 个路由域文件)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)+ `src-tauri/src/sidecar.rs`(GUI 侧 spawn + 生命周期管理)
 - 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
 - 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
 - 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
-- 118 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-08-28 实测 118** 个)
+- 107 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-08-31 实测 107** 个,旧 118 为含注释的 grep 口径)
 - 新增 `crates/everlasting-remote/`(axum 云服务端:shared_secret auth + device_token、配对码 60s 一次性 + per-IP 限速(`ratelimit.rs`)、WSS 隧道服务端、反向代理、SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表)+ `crates/everlasting-remote-protocol/`(2026-08-11 workspace 翻转:根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,Cargo.lock / target 在根)
 - PC daemon 新增 `src-tauri/src/daemon/tunnel/`(client / config / dispatcher / manager / node_id / sse_bridge;WSS 长连接 + loopback 转发,取消只停转发)
 - 前端新增 `app/src/transport/auth.ts`(device_token / `isRemoteContext()`)+ `app/src/router/index.ts` vue-router `isRemoteContext()` 守卫 + `PairingView` / `NodeListView` / `ChatView` / `RemoteTab.vue` + PWA 壳(vite-plugin-pwa + `public/icons/`);配对流程:PC Remote tab 生成 6 位配对码 → 手机 PWA redeem 换 64-hex device_token → nodes 列表

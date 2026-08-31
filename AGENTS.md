@@ -27,7 +27,10 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 ```bash
 cd app && pnpm test            # run all *.test.ts under app/src
 cd app && pnpm test -- --ui    # interactive watch mode
+cd app && pnpm test:e2e        # Playwright 浏览器交互回归(app/e2e/,真实 Chromium + 门禁)
 ```
+
+Playwright 流水线(2026-08-30,RULE-TEST-001,见 `.trellis/spec/frontend/browser-regression.md`):用例放 `app/e2e/*.spec.ts`,vitest include 天然隔离;CI 只收确定性用例(route-mock 驱动,无 daemon/无 LLM/无网络),时序不确定标 local-only。
 
 **Backend** (Rust `cargo test`). 2026-08-11 workspace 翻转后根目录有 `Cargo.toml`(members = app/src-tauri + crates/everlasting-remote(-protocol);default-members 只含 remote 两 crate)——**根目录裸 `cargo test` 只跑 default-members(remote 两 crate,不会跑 app)**;app 的测试需显式 `-p everlasting`,或 cd app/src-tauri 后裸命令。On WSL you must export `PKG_CONFIG_PATH` or system libs (gdk-pixbuf / webkit2gtk) won't be found — see [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) 坑 1:
 

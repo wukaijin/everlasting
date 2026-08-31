@@ -22,6 +22,8 @@ cd app && pnpm tauri build      # 前端 type-check + build，然后 Rust 编译
 # 仅前端
 cd app && pnpm dev              # 只跑 Vite dev server（无 Tauri）
 cd app && pnpm build            # vue-tsc --noEmit + vite build
+cd app && pnpm test             # vitest 单元测试（覆盖 app/src/**/*.test.ts）
+cd app && pnpm test:e2e         # Playwright 浏览器交互回归（app/e2e/，08-30 RULE-TEST-001）
 
 # Rust（workspace 翻转后：根目录有 workspace Cargo.toml，members = app/src-tauri + crates/everlasting-remote(-protocol)；
 # 根目录裸 cargo build/test 只作用于 default-members（两个 remote crate），不会碰 app）
@@ -80,7 +82,9 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 - **自研 agent core**：不使用 Anthropic Agent SDK / Codex SDK，自己实现 Agent Loop、消息管理、tool 注册、权限检查（见 `docs/IMPLEMENTATION.md §1`）
 - **步骤 1 用手写 SSE 解析**：不用 eventsource-stream crate，`llm/sse.rs` 是自研状态机（已通过 spike-002 验证）
 - **自研 Provider trait（多 Provider 抽象）**：`llm/provider/` 定义 `Provider` trait，`AnthropicProvider` / `OpenAIProvider` 两个实现 + `wire.rs` WireMessage 跨协议中间层（2026-06-08/09 落地，取代早期 rig-core 计划）
-- **18+ 关卡请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`（原 16 关 + C7/C7D/memory-gov/C3+/budget 硬卡/softcap 6 个新横切关注点）
+- **18+ 关卡请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`（原 16 关 + C7/C7D/memory-gov/C3+/budget 硬卡/softcap/C6 截断统一/sandbox 8 个新横切关注点）
+- **执行期沙盒（2026-08-31 P3b）**：ReadOnly 档 shell 命令默认在 Landlock+seccomp 沙盒下执行（判定层之下的执行期限损层），能力探测失败 fail-open，单一 kill-switch；完整设计见 `docs/ARCHITECTURE.md §2.5.16` + `.trellis/spec/backend/sandbox-executor.md`
+- **大输出截断统一（2026-08-30 C6）**：`tools/tool_output.rs` 统一截断契约（三恢复模式 + 统一 `<truncated>` 标记），spill 落 `app_data_dir/outputs/<session>/`（trusted carve-out），见 `docs/ARCHITECTURE.md §2.5.3` + `.trellis/spec/backend/agent-loop-architecture/pattern-output-truncation.md`
 - **Memory/指令文件系统**：4 个指令文件（User/Project × CLAUDE.md/AGENTS.md）固定路径加载 + mtime fence 新鲜度校验（RULE-C-001,notify 已移除）+ `build_instructions_blocks()` 构造带 `cache_control: ephemeral` 的 synthetic user message，实现 prompt caching（2026-06-11 B5 重构落地）
 - **daemon 化（已落地，remote-access Phase 2）**：agent core 从 Tauri GUI 进程拆出为独立 `everlasting-daemon` 进程（axum HTTP server），GUI 作为瘦客户端 spawn daemon 为 sidecar，经**同源 HTTP + SSE** 通信（`httpTransport` 默认）；daemon 用 `tower-http::ServeDir` 同源服务前端 SPA，支持纯浏览器访问（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障逃生舱（回退一体化 Tauri IPC）。决策动机见 [docs/IMPLEMENTATION/ 决策日志](./docs/IMPLEMENTATION/)，编排放 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md)
 - **远程控制（已落地，remote-control epic S1~S6b）**：Cargo workspace 翻转（根 `Cargo.toml`，default-members 只含 remote 两 crate）；新增 `everlasting-remote` 云服务端（axum 0.7 ws + 自研 WSS 隧道协议 + 配对码 60s 一次性 + per-IP 限速 + 反向代理，**仅中继不存 agent 数据**，PC daemon 权威不变）；PC daemon 增加 tunnel client（WSS 长连接 + loopback 转发，**agent core 零改动**）；前端 vue-router + PWA 壳 + 配对/节点视图 + pwa-remote transport 模式；移动端适配（S5/S6a/S6b 含真机迭代）。HTTPS 用户自理（nginx），不做主动推送/多用户/跨节点同步。部署见 [docs/REMOTE-DEPLOY.md](./docs/REMOTE-DEPLOY.md)，E2E 验收见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md)

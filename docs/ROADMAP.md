@@ -100,9 +100,13 @@
 | **F1** 消息队列·用户连发档 | 08-25 | 输入排队 + 续轮批量注入 + TurnContinuation(spec [pattern-message-queue-driver](../.trellis/spec/backend/agent-loop-architecture/pattern-message-queue-driver.md)) |
 | **F5** PDF/docx/xlsx 原生提取 | 08-26 | doc_extract 纯函数 + 指令式自助兜底;xlsx CSV 块(spec [pattern-doc-extraction](../.trellis/spec/backend/agent-loop-architecture/pattern-doc-extraction.md)) |
 | **F6** 异步 agent 任务 + **F3** 全局并发闸 | 08-27 | SessionSummary.busy + 跨 session toast + max_concurrent_loops(spec [pattern-global-loop-semaphore](../.trellis/spec/backend/agent-loop-architecture/pattern-global-loop-semaphore.md)) |
-| **F2/F2b** 定时任务 | 08-28 | scheduler 30s tick + due 落账 + origin 链;6 档 + 结束条件(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
+| **F2/F2b** 定时任务 | 08-28 | scheduler 30s tick + due 落账 + origin 链;7 档(08-29 加 once)+ 结束条件(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
 | **LLM schedule_task 家族**(F2 detached dispatch 收口) | 08-29 | 三件套(create/status/cancel,作者面分离 created_by='agent',tool 侧双 gate;spec [tool-contract 17](../.trellis/spec/backend/tool-contract/17-schedule-task-family.md)) |
 | **C6** 大输出截断统一 | 08-30 | tool_output 契约模块(三恢复模式 + 统一标记 + RULE-E-009 唯一实现);spill 迁 app_data_dir/outputs/<session>(权限 carve-out + 双路径 sweep);web_fetch 落盘恢复;修 >64KB 管道死锁(spec [pattern-output-truncation](../.trellis/spec/backend/agent-loop-architecture/pattern-output-truncation.md)) |
+| **ShellCard** 专属卡 + shell 一体化审批 | 08-30 | shell/run_background_shell 加 description 参数(display-only)+ 命令块常驻 + 审批融卡;PermissionActions 抽取共用(spec [frontend/chat/shell-card.md](../.trellis/spec/frontend/chat/shell-card.md),task `08-30-shell-description`) |
+| **RULE-PERM-001** 审计事件 keyset 分页 | 08-30 | `list_session_audit_events_page` 新增(游标 ts DESC/id DESC + 过滤/计数下推 SQL);旧全量命令保留供 traceStore(task `08-30-rule-perm-001-audit-pagination`,销债 P3) |
+| **RULE-TEST-001** Playwright 浏览器回归流水线 | 08-30 | 真实 Chromium 驱动前端 + route-mock;三试点(Shift+Enter / 提问卡回底 / 放行撤销确认);CI blocking 门禁,确定性用例准入(spec [frontend/browser-regression.md](../.trellis/spec/frontend/browser-regression.md)) |
+| **定时任务 per_run 三档** | 08-31 | 目标 session 新增「每次执行新建」档:target_mode/model_id/last_run_session_id 三列 + 表重建迁移;前端 radio 卡片三档;LLM tool 恒 fixed 不暴露(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
 
 ---
 

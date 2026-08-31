@@ -96,9 +96,9 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 撞线兜底见上节 MAX_TURNS(2026-08-19 起软卡询问,非硬停)。实现见 `app/src-tauri/src/agent/loop_detection.rs`;C2+ 主动干预(每 run `loop_hit_count` N=3 + 三分支询问)见 [ROADMAP §1.2 C2+ 行](./ROADMAP.md#12-路线图外完成)。
 
 ### AuditKind
-`session_audit_events.kind` 字符串枚举,**2026-08-28 实测 28 类**,按域分组(完整 28 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
+`session_audit_events.kind` 字符串枚举,**2026-08-31 实测 29 类**,按域分组(完整 29 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
 
-- **Tool 域(5)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo
+- **Tool 域(6)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / SandboxedShellExecution(P3b 08-31,ReadOnly 档 shell 沙盒执行完成,payload 带 command_sha256_12 前缀 + ruleset)/ ToolDeniedYolo
 - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
 - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
 - **Message 域(2)**:EditMessage(D3 PR1 06-17)/ ResendMessage(D3 PR3 06-17)
@@ -141,8 +141,15 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 - **F5** (2026-08-26):PDF/docx/xlsx 原生文本提取 — `agent/doc_extract.rs` + `InjectionAction::Extracted`(@文件注入第一档;pptx 不做)
 - **F6** (2026-08-27):异步 agent 任务可观测性 — `SessionSummary.busy` + 轮次终结跨 session toast
 - **F3** (2026-08-27):全局并发闸 — `max_concurrent_loops` 信号量(缺省 4)
-- **F2/F2b** (2026-08-28):定时任务 — `scheduler/` 30s tick + `scheduled_tasks` 表 + 6 档 preset + 结束条件(见下节)
+- **F2/F2b** (2026-08-28):定时任务 — `scheduler/` 30s tick + `scheduled_tasks` 表 + 7 档 preset(08-29 加 once)+ 结束条件(见下节)
 - **stream session_id** (2026-08-27):`chat-event` payload 回填 `session_id`(跨客户端认领)
+- **schedule_task 家族** (2026-08-29):LLM detached dispatch — `schedule_task` / `schedule_status` / `schedule_cancel` 三工具(created_by='agent' 作者面分离 + 反滥用上限 20)
+- **C6** (2026-08-30):大输出截断统一 — `tools/tool_output.rs` 契约模块(三恢复模式 + 统一标记)+ spill 迁 `app_data_dir/outputs/<session>`
+- **ShellCard** (2026-08-30):shell 专属卡 — 命令块常驻 + 一体化审批;`PermissionActions.vue` 按钮组抽取共用
+- **keyset 分页** (2026-08-30):审计查询分页 — `list_session_audit_events_page`(游标 ts DESC/id DESC + 过滤/计数下推 SQL)
+- **Playwright 流水线** (2026-08-30):浏览器交互回归 — `app/e2e/*.spec.ts` 真实 Chromium + route-mock,CI blocking
+- **Sandbox** (2026-08-31):执行期沙盒 P3b — Landlock + seccomp,ReadOnly 档 shell 默认进沙盒(见下节)
+- **per_run** (2026-08-31):定时任务目标 session 第三档 — 每次执行新建 session(`target_mode`/`model_id`/`last_run_session_id`,见下节)
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
@@ -160,7 +167,7 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。**2026-08-27 起 `chat-event` payload 回填 `session_id`**(`daemon/sse.rs` 注释契约),非发起端(remote PWA)可跨客户端按 session 认领。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— **2026-08-28 实测 118** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由;同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— **2026-08-31 实测 107** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(旧 118 为含注释/测试文件引用的 grep 口径,已修正);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
 - **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速;WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
 - **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
 - **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。
@@ -168,12 +175,13 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **pwa-remote 模式** — `httpTransport` 内部第三态:前端持有 `device_token` 时请求加 `/api/v1/proxy` 前缀 + Bearer,SSE 带 `access_token`;vue-router 守卫仅 remote-served 语境 gate 配对页。PWA 壳:vite-plugin-pwa + `public/icons/`。
 - **Settings RemoteTab / remoteConfig store** — 前端远程设置入口(`app/src/components/settings/RemoteTab.vue` + `stores/remoteConfig.ts`),GUI 侧配置 remote 隧道相关状态。
 
-### Scheduled Task / ScheduleSpec(F2/F2b 定时任务,2026-08-28)
+### Scheduled Task / ScheduleSpec(F2/F2b 定时任务,2026-08-28;08-29 once 档;08-31 per_run 三档)
 daemon 常驻调度器触发的本地定时任务。相关术语:
 
-- **`scheduled_tasks` 表** — 一行一个任务:`project_id` + `target_session_id`(双 FK CASCADE)/ `name` / `prompt`(触发时注入的 user message 内容)/ `schedule`(JSON:preset 类型 + 参数)/ `enabled` / `run_count` / `max_runs` / `ends_at`(F2b 结束条件两列)/ `last_fired_at` / `next_fire_at`。
-- **ScheduleSpec** — `schedule` JSON 的 schema,6 档 preset:固定时间类 `daily`(每天 HH:MM)/ `hourly`(每小时第 N 分)/ `weekly`(每周 W HH:MM)/ `weekdays`(每工作日)/ `monthly`(每月 D 号,短月无该日**跳过该月**)+ 固定频率类 `every_min`(每 N 分钟,interval 单位换算**纯 UI 做**,后端零感知)。
+- **`scheduled_tasks` 表** — 一行一个任务:`project_id` + `target_session_id`(FK CASCADE,**08-31 起可空**——per_run 恒 NULL)/ `target_mode`('fixed'|'per_run' DEFAULT 'fixed',08-31)/ `model_id`(per_run 每次建 session 的模型,08-31)/ `last_run_session_id`(无 FK,per_run 最近 run session,08-31)/ `name` / `prompt`(触发时注入的 user message 内容)/ `schedule`(JSON:preset 类型 + 参数)/ `enabled` / `run_count` / `max_runs` / `ends_at`(F2b 结束条件两列)/ `last_fired_at` / `next_fire_at`。
+- **ScheduleSpec** — `schedule` JSON 的 schema,**7 档 preset**:固定时间类 `daily`(每天 HH:MM)/ `hourly`(每小时第 N 分)/ `weekly`(每周 W HH:MM)/ `weekdays`(每工作日)/ `monthly`(每月 D 号,短月无该日**跳过该月**)+ 固定频率类 `every_min`(每 N 分钟,interval 单位换算**纯 UI 做**,后端零感知)+ **单次档 `once`**(08-29 CH11-1,`at_ms` epoch ms 触发恰好一次,fire 后即时完成 reason=once;前端隐藏结束条件块)。
 - **origin 载体链** — fire 时构造带 origin 的 user message:`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控`,落 `messages.metadata.scheduled`(additive)。`created_by = 'scheduler'`(F2)区别于 `'user'`。
+- **目标 session 三档(08-31 per_run)** — `target_mode` 区分:**fixed**(绑定既有/专用 session,`target_session_id` 非空)与 **per_run**(每次触发自动新建 session,`target_session_id` 恒 NULL;标题 `{任务名} {YYYY-MM-DD HH:MM}`,模型可选绑 `model_id` 写 per-session 覆盖列,最近一次 run session 落 `last_run_session_id` 无 FK 防级联删任务)。per_run 不受「同 session 每 tick 一 fire」与队列去重约束;审计挂新 session;`schedule_task` LLM tool 恒 fixed 语义不暴露 per_run。
 - **`due` 落账** — fire 时记录**理论到期点**(非实际触发时刻),interval 类任务据此保证无相位漂移。
 - **ScheduledTaskFired** — 审计 kind,六动作:`fired` / `catchup`(停机补跑)/ `skipped_dedup`(同 session 同 tick 已 fire)/ `skipped_queue_disabled` / `lost` / `error`。
 - **kill switch** — `scheduled_tasks_enabled`(app_config,fail-open);per-task `enabled` 是停用。`max_runs` / `ends_at` 命中 → 自动停用保留 + `completed` 审计(恰好一次),重新启用计数清零。
@@ -186,6 +194,14 @@ daemon 常驻调度器触发的本地定时任务。相关术语:
 
 ### Session Preview(会话摘要行)与群聊空 text(2026-08-29)
 `SessionSummary.preview` = 该 session **最后一条 `role='user'` 消息的 `text`**(DB `COALESCE` 子查询,无 user 消息为空串);侧边栏摘要行与删除确认(`needsDeleteConfirmation`)都吃这个字段。**群聊例外**:group_chat 的用户输入不落在 `messages.text`(落讨论配置),其 user 轮次 `text` **恒为空串**——所以群聊 preview 永远为空,任何「preview 判空 = 无内容」的推断对群聊都不成立(BUGLIST CH2-1 实证:38 条消息的群聊曾免确认直删)。涉及群聊有无内容的判断,用 `session_type === 'group_chat'` 单独分支,不要复用 preview 语义。
+
+### Sandbox(执行期沙盒 P3b,2026-08-31)
+判定层(A2+ P1+P2)之下的**执行期限损层**:ReadOnly 档 shell 命令(前台 `shell` + 后台 `run_background_shell`)默认在 Landlock ruleset + seccomp BPF 沙盒下 spawn,误判时损害被限制在「worktree + tmp + spill 可写、其余只读、无出网、无 `/init` 与 `/mnt/c` 执行」。相关术语:
+
+- **主路线** — 自研 Landlock(EXECUTE + 写族 handled,读不控)+ seccomp(拦 `socket(AF_INET/AF_INET6)`,AF_UNIX 放行)+ `PR_SET_NO_NEW_PRIVS`,纯 Rust + 既有 libc,零外部二进制依赖(弃 bubblewrap:userns 不稳 + interop 逃逸,spike 实测)。
+- **可写根 / 规则集** — 可写面 = session cwd + `/tmp` + `outputs/<session>`(C6 spill 目录);exec 允许面 = PATH 解析目录 ∪ /dev ∪ /tmp ∪ 可写根 ∪ 探测工具链目录,**显式不含 `/init` 与 `/mnt/c`**(WSL interop 收口);全部服务端解析,永不采信 tool 参数路径(CVE-2025-59532 铁律)。
+- **gate / kill-switch** — 四道 gate(ReadOnly 档 ∧ 非 Yolo ∧ `sandbox_enabled` kill-switch ∧ 能力探测);能力探测失败 **fail-open**(回退非沙盒行为)。
+- **SandboxedShellExecution** — 审计 kind(第 29 变体):spawn 成功落表,payload `command_sha256_12`(命令哈希 12 位前缀,**不存全命令**,全文由 `tool_executed` 行承载)+ `ruleset` 摘要 + `tool_name`。
 
 ---
 

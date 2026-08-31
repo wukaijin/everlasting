@@ -203,3 +203,57 @@
 - **决策 — F2b 调度模型 additive 扩展**:preset 6 档(固定时间类新增 hourly/weekdays/monthly;interval 加单位换算,**纯 UI 换算**成 every_min,后端零感知零迁移);结束条件 `max_runs`/`ends_at` 通用(completed 审计 reason=max_runs/end_date,恰好一次);`run_count` 只计真正送入 chat_inner 的 fire(dedup 跳过不计数);ends_at **含当日**(判定用 `due > ends_at` 而非 now,保 catch-up 补跑);重新启用计数清零;wire update 双层 Option(显式 null = 清空为不限)。
 - 用户三裁定:短月跳过(monthly 无该日跳过该月,cron 语义)/ 自动停用保留 / 当天仍触发。
 - 任务:`08-28-f2-scheduled-tasks` / `08-28-f2b-schedule-extension`。spec:`backend/scheduled-tasks.md`(§F2 + §F2b)。F1-C cron 消费者交付,**LLM detached dispatch(`schedule_task` tool)仍开放**。
+
+### 2026-08-29 — LLM `schedule_task` 工具家族(detached dispatch 落 LLM 面)
+
+- **Context**:F2 后 daemon 调度器已就位,但只有 Settings UI 能建任务;ROADMAP F1/F2 点名的 follow-up「LLM detached dispatch」把调度器暴露给 agent——对话里一句话自排/查看/取消未来任务。零新表、零调度语义改动,纯粹在 F2 基建之上加 LLM 入口。
+- **决策 — 三工具单模块(命名家族镜像 L1a 三件套)**:`schedule_task`(创建)/ `schedule_status`(列本项目 `created_by='agent'` 的任务)/ `schedule_cancel`(按 id 硬删,仅限 agent 自建行);plain dispatch,注册追加 `builtin_tools()` 尾部(provider prefix cache 契约);创建复用 `create_scheduled_task_inner` 校验矩阵全量白拿。工具名 `schedule_task`/`schedule_status`/`schedule_cancel`。
+- **决策 — `created_by` 参数化(用户/agent 两作者面互不越界)**:agent 创建路径落 `created_by='agent'`(db 参数化,沿用 F2 预留),用户 UI/IPC 恒 `'user'` 零变化;列表/取消只碰 agent 自建行;`ScheduledTaskPayload` 暴露 `created_by`,Settings 任务列表加来源徽标(silent Allow 的可见性补偿)。
+- **决策 — 三面全部 silent Allow + 反滥用上限 20(用户定案 Q2/Q3)**:create/list/cancel 均 `ToolKind::Other` Tier 5(创建零立即副作用,真正执行在 fire 时刻走完整 mode/permission 链,可逆可禁);补偿控制 = 同 project `enabled=1` 且 `created_by='agent'` ≥20 拒绝(上限 gate 在 tool 侧,不进 `_inner`,UI/IPC 路径不受限)+ worker `STRUCTURALLY_DISABLED` + 群聊穷举白名单天然隔离(kill switch 沿用调度器侧)。
+- 任务:`08-29-schedule-task-tool`。spec:`backend/tool-contract/17-schedule-task-family.md` + `backend/scheduled-tasks.md`。
+
+### 2026-08-30 — C6 大输出截断统一(截断契约三模式 + spill 落点迁出项目树)
+
+- **Context**:大输出截断散落各工具,上限口径/标记格式/恢复通路三者均不统一(web_fetch 完全无恢复、grep 行级截断无指引、标记至少 4 种格式、truncate_output 三份重复实现 + background_shell 第四份镜像);评审实锤 shell 裸切片 UTF-8 panic(全库唯一违反已收编 RULE-E-009 char-boundary 规则);shell/background 的 spill 落 `<cwd>/.everlasting/outputs/` 造成 agent 自我污染 + 语义混杂。
+- **决策 — 统一的是「截断契约」不是「上限数字」**:三恢复模式(A 落盘 spill + read_file offset/limit / B range 参数 / C 收窄 pattern)+ 统一 `<truncated>` 标记、machine-parsable;数字留 per-tool(语义不同)但集中一张常量表;shell/background/read_file/web_fetch/grep 五工具共用新 `tools/tool_output.rs` 契约模块。web_fetch 走落盘不走重取(两次 fetch 内容可漂移)。
+- **决策 — spill 迁 `app_data_dir/outputs/<session>/` 而非 `~/.everlasting/`**:app 单根约定(DB/attachments/worktrees 同在 app_data_dir),session-keyed 与 attachments 同构;home 点目录是前 XDG 风格且 macOS/Windows 无对应物;**迁移捆绑 trusted carve-out**(不加 `outputs/**` 的 read_file 恢复每次走 ask_path,恢复通路名存实亡)。
+- **决策 — 统一实现以 RULE-E-009 为准绳**:char-boundary 安全为已收编规则,shell 是唯一违例,统一后 panic→安全截断属预期修复,不为字面「等价」保留裸切片;spill 字节入口 + session_id 走 ToolContext(background_shell 的 `&[u8]` 入口更忠实,`&str` 调用方适配)。
+- 任务:`08-30-c6-output-truncation`。spec:`backend/agent-loop-architecture/pattern-output-truncation.md`。C6 前 ROADMAP 标注含 web_fetch 硬 5MiB 上限与 >100KB 转换截断,一并走新契约。
+
+### 2026-08-30 — ShellCard 专属卡 + shell 一体化审批(顺带 shell tool description 参数)
+
+- **Context**:shell/run_background_shell 的 tool_use input 只有 command/working_directory/timeout,折叠态卡片不可扫读(连续多 shell 调用视觉同质)、审批是「盲签」(ask body 无命令原文,用户看不到命令就做允许/拒绝决策)。用户定案:顺带重设计 shell 卡片与审批卡(三问三答)。
+- **决策 — shell/run_background_shell 加可选 `description` 参数(display-only)**:LLM 填写短句描述;chip 数据源抽纯函数 `messageFormat.ts::toolHeaderChip`(path → shell 家族 string description → 命令首非空行 → null)+ `isShellFamilyTool` 封闭名单;ShellCard 与 DrawerToolCallCard 共用。
+- **决策 — 专用 ShellCard 组件(EditFileCard 先例)**:命令块常驻(`$` + command、pre-wrap、max-height 200px 滚动)+ 一体化审批(命令块 + 风险条 + 按钮融为一个状态,去掉独立「需要权限」盒子;pendingAsk 判定与 ToolCallCard 同源 `permStore.getPending(sid)` + `toolUseId` 匹配)+ 输出默认收起(错误红框常显);MessageItem resolver 按 tool name 替换通用卡。
+- **决策 — `PermissionActions.vue` 审批按钮组抽取**:ShellCard/ToolCallCard 共用(放行/撤销/超时三态按钮列),toolHeaderChip helper 同批落地 + header chip 更名(done 态成功色)。
+- 任务:`08-30-shell-description`。spec:`frontend/chat/shell-card.md` + `backend/tool-contract.md`(description 条目)。
+
+### 2026-08-30 — RULE-PERM-001 审计事件查询 keyset 分页
+
+- **Context**:C4 审计事件查询 MVP 全量拉取(无 LIMIT),长 session 行数到千级时单次 IPC 载荷/首屏渲染/内存驻留线性涨;DEBT P3 债源登记,PRD Edge Cases 原标「>500 条事件的 session」。两个消费方:AuditLogModal(客户端过滤,可改服务端)与 traceStore(按 turnSeq 分组,**语义需要全部行,不动**)。
+- **决策 — 新增 keyset 分页命令,旧全量命令原样保留**:`list_session_audit_events_page`(RUST + daemon HTTP 双 transport,wire additive);keyset 游标 `ts DESC, id DESC`(同秒 tie 由 id 决定,**SQL 保证,前端不再重排**,分页期间新行插入不重复不跳行);类别过滤/仅 critical 下推 SQL + 服务端计数(总数/critical/filtered 对未加载行也准确);弹窗首屏一页 100 行 +「加载更多」续拉,已到末尾入口消失;`payload_json` 畸形行容错对齐客户端视为非 critical);e2e route-mock 清单与 all_command_names 同步登记新命令。
+- 任务:`08-30-rule-perm-001-audit-pagination`。spec:加页码语义 `backend/database-guidelines.md` + `frontend/state-management.md`(audit store 分页状态);销债 DEBT P3(1→0)。
+
+### 2026-08-30 — RULE-TEST-001 浏览器交互回归流水线(Playwright 选型 + CI blocking 门禁)
+
+- **Context**:jsdom 结构性测不到真实交互(真实键盘/指针、滚动+store 联动、弹窗层叠)——BUGLIST CH5-1(Shift+Enter)、CH14-1(焦点环)被迫人工复核;MarkdownDetailModal pointerdown-outside 仅占位;ui-review.sh 是视觉评审(静态截图看不见 hit area/hover/动效),不是交互回归。仓库已有 playwright-core 先例(ui-review 截图)。
+- **决策 — Playwright 单任务全链交付 + 三试点盲区各一**:真实 Chromium 驱动真实前端(vite dev server :1420,route-mock 驱动无 daemon/无 LLM/无网络);试点 ① 键盘类 Shift+Enter vs Enter(CH5-1 原型)② 滚动+store 联动提问卡强制回底(CH8-2,mock SSE 流)③ 指针+弹窗放行撤销确认(CH7-4,pointerdown-outside);用例放 `app/e2e/*.spec.ts`,vitest include 天然隔离。
+- **决策 — CI gate 为 blocking 硬门禁 + 确定性准入标准**:进 frontend job 作 merge 门禁;CI 只收确定性用例(route-mock 无 daemon/LLM/网络)+ Playwright retry 兜底;时序不确定标 local-only 不进 CI;「进 CI」是每条用例的准入标准而非默认;devDep `@playwright/test ^1.62.1`。
+- 任务:`08-30-rule-test-001-browser-pipeline`。spec:`frontend/browser-regression.md`(分层问询序 + fixture 契约 + testid 登记)。销债 DEBT P3。
+
+### 2026-08-31 — Sandbox 执行期沙盒主路线定案(Landlock+seccomp)+ P3b 落地
+
+- **Context**:A2+ 判定层(P1+P2 复合命令拆分 + 写重定向检测)只覆盖静态可判定的命令;变量展开 / `$()` / `eval` / alias / 间接副作用是静态分析永远堵不上的盲区(把 `FOO=rm x` 误判 ReadOnly 即静默放行)。P3 定位为判定层**之下**的执行期限损层。spike(P3a)实测 WSL2 两条候选路线并探查泛化性。
+- **决策 — 主路线 = 自研 Landlock + seccomp,弃 bubblewrap(零外部二进制依赖)**:bwrap 依赖 userns(WSL2 可用性不稳)+ 二进制分发 + interop 逃逸面;Landlock(EXECUTE + 写族 handled,读不控)+ seccomp BPF(拦 `socket(AF_INET/AF_INET6)`,AF_UNIX 放行)+ `PR_SET_NO_NEW_PRIVS` 全在 Linux 内核 syscall,纯 Rust + 既有 libc crate,单二进制零新增依赖;泛化硬约束(C2)。
+- **决策 — P3b 落地范围:ReadOnly 档 shell 默认进沙盒,能力探测失败 fail-open,单一 kill-switch**;规则集:可写根 = session cwd + /tmp + `outputs/<session>`(C6 spill 目录,**全部服务端解析,永不采信 tool 参数路径**——CVE-2025-59532 铁律);exec 允许面 = PATH 解析目录 ∪ /dev ∪ /tmp ∪ 可写根 ∪ 探测工具链目录,**显式不含 /init 与 /mnt/c**(WSL interop 收口);设备节点 per-file WRITE_FILE(/dev/null 等六节点);前台 shell + 后台 run_background_shell 两条 spawn 路径 pre-exec 施加,超时/管道排空/PGID/safe env/截断契约全保持。
+- **决策 — 泛化性:能力探测 + fail-open 阶梯(spec)**:内核侧事实(有无 Landlock ABI/seccomp)用户态探测,不在部署面假设;SBX-001 跨平台编译债登记(P3b 非 WSL 环境开发时再启动);审计落 `SandboxedShellExecution`(AuditKind 第 29 变体,payload 带 command_sha256_12 前缀——不存全命令,全文由 tool_executed 行承载)。
+- 任务:`08-31-a2-p3a-sandbox-spike` / `08-31-a2-p3b-sandbox-executor`。spec:`backend/sandbox-executor.md`;spill 目录交集引用 `agent-loop-architecture/pattern-output-truncation.md`。
+
+### 2026-08-31 — 定时任务目标 session 三档(per_run 每次执行新建 session)
+
+- **Context**:用户直接请求:定时任务目标 session 多一档「每次执行都是新的 session」+ 目标 session 前端 UI 重设计。现状两档(指定既有 chat session / 创建时新建专用固定 session),概念并列不清、专用档模型选择悬在远处。
+- **决策 — `scheduled_tasks` 加三列 + 不变式**:`target_mode`('fixed'|'per_run',默认 'fixed')+ `model_id`(per_run 每次建 session 绑定的模型)+ `last_run_session_id`(无 FK,最近一次 run session,审计锚点 + 列表展示);`target_session_id` 可空化(per_run 恒 NULL,**不指向 run session**——删除旧 run session 不得级联删任务);CHECK `(target_mode='per_run' OR target_session_id IS NOT NULL)`。
+- **决策 — 存量库表重建迁移(去 NOT NULL 无法 ALTER)**:沿 `rebuild_turn_trace_with_run_id` 先例,事务内 rename→create→copy(target_mode='fixed')→drop→reindex(崩溃残留 `scheduled_tasks_old` 守卫)。
+- **决策 — fire 链零改动 + 审计锚点分流**:per_run 的 session 创建发生在调度 tick 内 fire seam 之前(`FireContext.target_session_id` 保持 String,seam 类型与全部既有测试替身零改动);fired/catchup/error 审计挂新 session,`error` reason 增 `session_create_failed`(不重试风暴);per_run 不受「同 session 每 tick 一 fire」与队列去重约束(message_queue_enabled=false 照常 fire——legacy cancel+replace 危害对全新 session 不存在);LLM `schedule_task` tool 路径不暴露 per_run(恒 fixed 语义)。
+- **决策 — 前端 radio 卡片三档(创建态)/ 两档(编辑态)+ 就近模型选择**:AC11-15(reka-ui RadioGroupRoot 先例 DefaultTab,移动端 320-430px 无溢出,触控目标合规;切档清空/回填规则:切 per_run 清空固定绑定,切回 fixed 必须选 session)。
+- 任务:`08-31-sched-per-run-session`。spec:`backend/scheduled-tasks.md`(per_run 契约)+ `frontend/`(表单三档 UI)。LLM schedule_task 面不变(AC10)。
