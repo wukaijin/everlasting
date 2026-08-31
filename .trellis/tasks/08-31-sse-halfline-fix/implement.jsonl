@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "provider/wire/SSE 层契约,SseParser 改动的规范来源"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "静默丢弃改半行缓冲后的日志与降级约定"}
+{"file": ".trellis/tasks/08-31-sse-halfline-fix/research/evidence-sse-fragment-loss.md", "reason": "事故取证:根因链与复现证据"}
