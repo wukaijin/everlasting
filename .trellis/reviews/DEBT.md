@@ -58,7 +58,18 @@
 
 > 全部 closed(RULE-PERSIST-001 于 2026-08-24 由 `.trellis/tasks/08-24-p1-turn-crash-recovery` 闭合,详见 git log)。
 
-## P2 — 健壮性 + 债务,中长期清理 [0 items]
+## P2 — 健壮性 + 债务,中长期清理 [1 item]
+
+### RULE-SBX-001
+
+- **Level**: P2
+- **Subsystem**: Tools
+- **File**: `app/src-tauri/src/sandbox/mod.rs:55`(两个子模块声明无 cfg 门)+ `sandbox/landlock.rs:207`(`SYS_landlock_create_ruleset`)/ `sandbox/seccomp.rs:25`(`sock_filter` / `SECCOMP_MODE_FILTER`)+ `sandbox/tests_sandbox.rs:94`(`SYS_socket=41` 钉死)
+- **Description**: PRD C4(非 Linux 编译通过)实际未达成——`landlock`/`seccomp` 子模块整体无 cfg 门,内部无条件的 `libc::SYS_landlock_*` / `libc::sock_filter` / `SECCOMP_MODE_FILTER` 在 macOS/Windows libc target 不存在,必编译失败;cfg 纪律只覆盖了 `mod.rs` 的 `prepare`/`apply`/`probe` 函数体。另 `abi_libc_syscall_numbers_match_arch_uapi` 钉死 `SYS_socket=41`,aarch64(=198)会红。CI 仅 ubuntu、部署面 Linux/WSL2,当前无实际影响。
+- **Fix**: `#[cfg(target_os = "linux")]` 门住两个子模块声明及引用其类型的 `PreparedData` 字段(约 10-15 行);BPF golden/解释器测试与 ABI 系统调用号测试同步门或按 arch 条件化。**触发条件:转非 WSL / 非 x86_64 环境开发时再启动(2026-08-31 定调,不单独排期)**。
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 2026-08-31 P3b 三 PR 实施 review(session 评审,对象 commits `8c2c881` / `bba8dd2` / `4969db0`)
 
 > 全部 closed(RULE-QUEUE-001 于 2026-08-29 由 `.trellis/tasks/08-29-rule-queue-001-multi-drain-persist` 闭合:init.rs 非尾条 persist 循环 + `ChatLoopRequest.drained` 全量载体;多 drain 全落库集成测试含全 manual 对照;spec driver-pattern / scheduled-tasks origin 链 / signature 三处同步收口,详见 git log)。
 
@@ -70,7 +81,40 @@
 
 > RULE-FE-001 于 2026-08-27 由 `.trellis/tasks/08-27-rule-fe-001-objecturl-revoke` 闭合:send 成功释放 staging strip 时逐 `uploaded[].localUrl` revoke(镜像 `discardStagedImages` 先例,~3 行);债条登记的"reloadAfterFinalize 替换钩子"方向前提已证伪——渲染层 `MessageImages.urlFor` 自 B1 PR5 起 file 优先(daemon GET 路由),blob URL 是从不触发的防御回退,故无需动 reload 枢纽;B1 strip 生命周期(objectURL 三路 revoke + jsdom spy 测试 gotcha)收编 spec `state-management.md` §Chat Store Action Clusters。上传失败不 revoke 保条、F1 排队 / cancel / interrupted 各路径零回归(1268 前端测试 + vue-tsc 全绿)。详见 git log。
 
-## P3 — 轻微(文档/一致性) [0 items]
+## P3 — 轻微(文档/一致性) [3 items]
+
+### RULE-SBX-002
+
+- **Level**: P3
+- **Subsystem**: Cross
+- **File**: `app/src/components/settings/GeneralTab.vue`(`general-tab__extra-list` 的 v-for)+ `app/src/stores/config.ts`(`sandboxExtraWritable` 直接存后端生效清单)
+- **Description**: 前端把后端并入 `~/.cargo` 后的生效清单当可编辑列表渲染——默认项带移除按钮,点击后本地消失、下次 load 复活(读侧重新并入);组件注释「默认项不在编辑列表里」与实际行为相反。无安全影响(后端单源重并入),属 UX 小困惑 + 注释失真。
+- **Fix**: store 分开 raw 配置列表与 effective 展示清单,或渲染层对 `.cargo` 默认项隐藏移除按钮(约 5-10 行 + vitest)。
+- **Owner**: carlos
+- **Related Task**: null(P3c UX 档可顺带)
+- **Discovered In**: 同 RULE-SBX-001
+
+### RULE-SBX-003
+
+- **Level**: P3
+- **Subsystem**: Tools
+- **File**: `app/src-tauri/src/tools/run_background_shell.rs`(`record_sandboxed_shell_audit` 在 `registry.start` 之前)
+- **Description**: 后台路径的 `sandboxed_shell_execution` 审计行先于 spawn 写——若 `start` 内 prepare 失败(Spawn 错误),命令从未运行但审计已记沙盒执行;前台路径是 spawn 成功后才写,两路口径及与 kind doc 注释(「spawn 成功后」)不一致。
+- **Fix**: 审计块挪到 `registry.start` Ok 分支之后(约 5 行,挪动现有 if 块)。
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 同 RULE-SBX-001
+
+### RULE-SBX-004
+
+- **Level**: P3
+- **Subsystem**: Tools
+- **File**: `app/src-tauri/src/sandbox/mod.rs`(`decide` 先读 `sandbox_enabled` 再进 `gate`)
+- **Description**: `decide()` 在 gate 判定前无条件读 kill-switch——SideEffect/Ask 档命令也付一次 SQLite 读,绕过 gate 文档顺序「config 最后查=少读」的本意;每命令一次索引读,性能无感,仅口径问题。
+- **Fix**: `sandbox_enabled` 读取挪进 gate 通过后的 Sandbox 分支(约 3 行)。
+- **Owner**: carlos
+- **Related Task**: null
+- **Discovered In**: 同 RULE-SBX-001
 
 > 全部 closed(RULE-PERM-001 于 2026-08-30 由 `.trellis/tasks/08-30-rule-perm-001-audit-pagination` 闭合:审计事件读 keyset `(ts,id)` 分页 + 过滤/计数下推 SQL,新命令 `list_session_audit_events_page` 双 transport additive 落地,旧全量命令零改动保留给 traceStore;dev DB 175 行真会话 live 冒烟 SMOKE OK;keyset 契约收编 spec `database-guidelines.md`,「过滤下推后全集派生值换口径」收编 spec `frontend/state-management.md`,详见 git log)。
 
@@ -92,9 +136,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(RULE-PERSIST-001 2026-08-24 闭合) |
-| P2 | 0 | 全部 closed(RULE-QUEUE-001 2026-08-29 闭合,见上方 P2 段) |
-| P3 | 0 | 全部 closed(RULE-PERM-001 2026-08-30 闭合,见上方 P3 段) |
-| **Total** | **0** | 当前 open items |
+| P2 | 1 | RULE-SBX-001(sandbox 跨平台编译债,非 WSL 环境开发时启动) |
+| P3 | 3 | RULE-SBX-002/003/004(P3b 实施 review 遗留) |
+| **Total** | **4** | 当前 open items |
 
 ---
 
