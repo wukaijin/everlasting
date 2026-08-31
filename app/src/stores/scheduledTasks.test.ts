@@ -22,6 +22,9 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     id: "task-1",
     project_id: "p1",
     target_session_id: "s1",
+    target_mode: "fixed",
+    model_id: null,
+    last_run_session_id: null,
     name: "早报",
     prompt: "汇总进展",
     schedule: { kind: "daily", at: "09:00" },
@@ -198,6 +201,56 @@ describe("scheduledTasks store", () => {
       id: "task-1",
       maxRuns: null,
       endsAt: 4_102_444_800_000,
+    });
+  });
+
+  it("per_run:create 带 targetMode 且不带 targetSessionId;update 显式 null 透传", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task")
+        return row({ target_mode: "per_run", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    const store = useScheduledTasksStore();
+    await store.create({
+      projectId: "p1",
+      targetMode: "per_run",
+      name: "每跑",
+      prompt: "p",
+      schedule: '{"kind":"interval","every_min":30}',
+      modelId: "model-9",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_scheduled_task", {
+      projectId: "p1",
+      targetMode: "per_run",
+      name: "每跑",
+      prompt: "p",
+      schedule: '{"kind":"interval","every_min":30}',
+      modelId: "model-9",
+    });
+
+    // update:切 per_run → targetSessionId 显式 null(wire null = 清空
+    // 固定绑定)、modelId null = 清模型;缺省字段不进 args。
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task")
+        return row({ target_mode: "per_run", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    await store.update("task-1", {
+      targetMode: "per_run",
+      targetSessionId: null,
+      modelId: null,
+    });
+    const call = invokeMock.mock.calls.find(
+      (c) => c[0] === "update_scheduled_task",
+    );
+    expect(call?.[1]).toEqual({
+      id: "task-1",
+      targetMode: "per_run",
+      targetSessionId: null,
+      modelId: null,
     });
   });
 

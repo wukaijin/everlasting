@@ -7,11 +7,12 @@
 //      prompt 摘要 / 上次·下次触发 / 触发进度(已触发 N/M 次 · 至日期)/
 //      启停 switch / 删除(ConfirmDialog 确认)。停用行灰显;F2b 自动
 //      完成的任务显示「已完成/已结束」(区别于手动停用)。
-//   2. 新建/编辑表单 —— project 下拉 → session 下拉(按 project 过滤,
-//      仅 classic;勾选「新建专用 session」则不选,并可额外指定该
-//      session 的模型[空 = 全局默认,写入 per-session 覆盖列])→
-//      档位(单次 datetime-local[CH11-1]+ F2b 6 档:每小时 分钟 /
-//      每天 时分 / 每工作日 时分 / 每周 周几+时分 / 每月 几号+时分 /
+//   2. 新建/编辑表单 —— project 下拉 → 目标 session 三档 radio 卡片组
+//      (08-31 重设计:指定 session[fixed,classic 下拉] / 新建专用
+//      session[仅创建态,可指定模型写入 per-session 覆盖列] / 每次新建
+//      session[per_run,模型存任务行每轮应用];编辑态两档,专用统一
+//      回显为指定)→ 档位(单次 datetime-local[CH11-1]+ F2b 6 档:每小时
+//      分钟 / 每天 时分 / 每工作日 时分 / 每周 周几+时分 / 每月 几号+时分 /
 //      固定频率 数量+单位[分钟/小时/天/周,提交换算 every_min])→
 //      结束条件(F2b:固定时间 = 永不/次数 N;固定频率 = 永不/结束日期
 //      [含当日,提交转当日 23:59:59.999 本地 ms];单次档无结束条件)→
@@ -39,8 +40,6 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   Label,
-  CheckboxRoot,
-  CheckboxIndicator,
   SelectRoot,
   SelectTrigger,
   SelectValue,
@@ -50,13 +49,20 @@ import {
   SelectViewport,
   SelectItem,
   SelectItemText,
+  RadioGroupRoot,
+  RadioGroupItem,
+  RadioGroupIndicator,
 } from "reka-ui";
 import ConfirmDialog from "../common/ConfirmDialog.vue";
 import AppDatePicker from "../common/AppDatePicker.vue";
 import AppTimeField from "../common/AppTimeField.vue";
 import Icon from "../Icon.vue";
 import { useScheduledTasksStore } from "../../stores/scheduledTasks";
-import type { ScheduledTask, ScheduleSpec } from "../../stores/scheduledTasks";
+import type {
+  ScheduledTask,
+  ScheduleSpec,
+  TargetMode,
+} from "../../stores/scheduledTasks";
 import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useConfigStore } from "../../stores/config";
@@ -115,7 +121,21 @@ async function ensureSessionsFor(projectIds: string[]): Promise<void> {
 function sessionTitleOf(task: ScheduledTask): string {
   const rows = sessionsByProject.get(task.project_id);
   const hit = rows?.find((s) => s.id === task.target_session_id);
-  return hit?.title ?? `session ${task.target_session_id.slice(0, 8)}`;
+  return hit?.title ?? `session ${(task.target_session_id ?? "").slice(0, 8)}`;
+}
+
+/** 卡片 meta 的目标段(08-31-sched-per-run-session):fixed = session
+ *  标题;per_run = 模式名,能解析出最近一次 run session 时追加。 */
+function targetLabelOf(task: ScheduledTask): string {
+  if (task.target_mode === "per_run") {
+    const last = task.last_run_session_id
+      ? sessionsByProject
+          .get(task.project_id)
+          ?.find((s) => s.id === task.last_run_session_id)
+      : undefined;
+    return last ? `每次新建 session · 最近:${last.title}` : "每次新建 session";
+  }
+  return sessionTitleOf(task);
 }
 
 function projectNameOf(task: ScheduledTask): string {
@@ -172,6 +192,28 @@ type FormKind =
   | "monthly"
   | "interval";
 
+/** 目标 session 三档(08-31-sched-per-run-session 表单重设计):
+ *  · existing —— 指定既有 session(fixed 档);
+ *  · dedicated —— 创建时新建专用 session(仅创建态;落库后即 fixed);
+ *  · per_run —— 每次触发自动新建 session(wire target_mode="per_run")。
+ *  编辑态 dedicated 不出现:专用 session 本质是 fixed,统一回显为
+ *  「指定 session」(session 预选)。 */
+type FormTargetMode = "existing" | "dedicated" | "per_run";
+
+const TARGET_MODE_META: Readonly<
+  Record<FormTargetMode, { label: string; desc: string }>
+> = {
+  existing: { label: "指定 session", desc: "注入到你选定的某个既有会话" },
+  dedicated: {
+    label: "新建专用 session",
+    desc: "创建时建一个专属会话,之后固定注入它",
+  },
+  per_run: {
+    label: "每次新建 session",
+    desc: "每次触发自动创建全新会话,各次结果互不干扰",
+  },
+};
+
 /** 档位下拉选项(单次在最前,固定时间次之、固定频率殿后)。 */
 const KIND_OPTIONS: ReadonlyArray<{ value: FormKind; label: string }> = [
   { value: "once", label: "单次" },
@@ -207,6 +249,13 @@ function onPickProject(v: unknown): void {
 
 function onPickSession(v: unknown): void {
   form.targetSessionId = normalizeSelectValue(v);
+}
+
+function onPickTargetMode(v: unknown): void {
+  const m = normalizeSelectValue(v);
+  if (m === "existing" || m === "dedicated" || m === "per_run") {
+    form.targetMode = m as FormTargetMode;
+  }
 }
 
 function onPickKind(v: unknown): void {
@@ -271,7 +320,8 @@ const formError = ref<string | null>(null);
 const form = reactive({
   name: "",
   projectId: "",
-  newDedicated: false,
+  /** 目标 session 档(见 FormTargetMode 注释)。 */
+  targetMode: "existing" as FormTargetMode,
   targetSessionId: "",
   kind: "daily" as FormKind,
   at: "09:00",
@@ -292,10 +342,19 @@ const form = reactive({
   maxRuns: 5,
   /** yyyy-MM-dd(input[type=date] 值;提交转当日 23:59:59.999 本地 ms)。 */
   endDate: "",
-  /** 新建专用 session 绑定的模型(空 = 沿用全局默认;仅创建态有意义)。 */
+  /** 新建专用 / 每次新建 session 的模型(空 = 全局默认;fixed 指定
+   *  既有 session 时不可用——模型跟 session 走)。 */
   modelId: "",
   prompt: "",
 });
+
+/** 目标档选项:创建态三档,编辑态两档(dedicated 不出现)。 */
+const targetModeOptions = computed(() =>
+  (editingId.value
+    ? (["existing", "per_run"] as FormTargetMode[])
+    : (["existing", "dedicated", "per_run"] as FormTargetMode[])
+  ).map((value) => ({ value, ...TARGET_MODE_META[value] })),
+);
 
 /** 固定时间类档位(决定结束条件选项与档位字段渲染)。 */
 const isFixedTime = computed(() => FIXED_TIME_KINDS.has(form.kind));
@@ -306,10 +365,11 @@ const sessionOptions = computed<SessionSummary[]>(() => {
   return rows.filter((s) => s.session_type === "chat");
 });
 
-/** 软警示:所选 session 已有 enabled 任务(编辑时排除自身)。不硬拒 ——
+/** 软警示:所选 session 已有 enabled 任务(编辑时排除自身)。仅
+ *  「指定 session」档适用 —— 专用 / 每次新建都有独享目标。不硬拒 ——
  *  调度器对同 session 每 tick 至多 fire 一个(design §9)。 */
 const softWarning = computed<string | null>(() => {
-  if (form.newDedicated || !form.targetSessionId) return null;
+  if (form.targetMode !== "existing" || !form.targetSessionId) return null;
   const others = store.tasks.filter(
     (t) =>
       t.enabled &&
@@ -346,7 +406,7 @@ function onceAtMs(): number | null {
 function resetForm(): void {
   form.name = "";
   form.projectId = projects.currentProjectId ?? "";
-  form.newDedicated = false;
+  form.targetMode = "existing";
   form.targetSessionId = "";
   form.kind = "daily";
   form.at = "09:00";
@@ -375,8 +435,12 @@ function openEdit(task: ScheduledTask): void {
   editingId.value = task.id;
   form.name = task.name;
   form.projectId = task.project_id;
-  form.newDedicated = false;
-  form.targetSessionId = task.target_session_id;
+  // 目标档回填:per_run 行直接落该档(fixed session 无从回填);
+  // fixed 行(含历史上的「新建专用 session」)统一回显「指定 session」。
+  form.targetMode = task.target_mode === "per_run" ? "per_run" : "existing";
+  form.targetSessionId = task.target_session_id ?? "";
+  // per_run 的模型绑定存任务行 → 回填;fixed 的模型在 session 上,不填。
+  form.modelId = task.target_mode === "per_run" ? (task.model_id ?? "") : "";
   const spec = task.schedule;
   if (spec?.kind === "once") {
     form.kind = "once";
@@ -487,8 +551,10 @@ async function submitForm(): Promise<void> {
     formError.value = "请选择 project";
     return;
   }
-  if (!form.newDedicated && !form.targetSessionId) {
-    formError.value = "请选择目标 session,或勾选「新建专用 session」";
+  // 目标校验:「指定 session」必须选定(编辑态 fixed 同理);专用 /
+  // 每次新建由后端建/每次新建,无需 session。
+  if (form.targetMode === "existing" && !form.targetSessionId) {
+    formError.value = "请选择目标 session";
     return;
   }
   // 档位字段(按档位细分错误信息)。
@@ -559,29 +625,42 @@ async function submitForm(): Promise<void> {
   saving.value = true;
   try {
     const schedule = JSON.stringify(spec);
+    const perRun = form.targetMode === "per_run";
     if (editingId.value) {
       // update 显式带 maxRuns/endsAt(null = 清空):切换结束方式后旧值
-      // 不残留(表单模型每档位只有一个条件)。
+      // 不残留(表单模型每档位只有一个条件)。目标档随 targetMode 显式
+      // 落库:切 per_run 时 targetSessionId 传 null(wire 显式清空固定
+      // 绑定);切回 fixed 时后端校验 session 归属。模型绑定仅 per_run
+      // 存任务行,切回 fixed 显式清空(模型跟 session 走)。
       await store.update(editingId.value, {
         name,
         prompt,
         schedule,
-        ...(form.newDedicated ? {} : { targetSessionId: form.targetSessionId }),
+        targetMode: perRun ? "per_run" : "fixed",
+        targetSessionId: perRun ? null : form.targetSessionId,
+        modelId: perRun ? form.modelId || null : null,
         maxRuns,
         endsAt,
       });
       projects.showToast("任务已更新", "info");
     } else {
+      // 创建态三档:existing → 带 targetSessionId;dedicated → 不带
+      // (后端建专用 session);per_run → targetMode="per_run"。
       await store.create({
         projectId: form.projectId,
-        ...(form.newDedicated ? {} : { targetSessionId: form.targetSessionId }),
+        ...(form.targetMode === "existing"
+          ? { targetSessionId: form.targetSessionId }
+          : {}),
+        ...(perRun ? { targetMode: "per_run" as TargetMode } : {}),
         name,
         prompt,
         schedule,
         ...(maxRuns !== null ? { maxRuns } : {}),
         ...(endsAt !== null ? { endsAt } : {}),
-        // 指定模型仅「新建专用 session」分支生效(空 = 全局默认)。
-        ...(form.newDedicated && form.modelId ? { modelId: form.modelId } : {}),
+        // 模型仅「新建专用 / 每次新建」分支生效(空 = 全局默认)。
+        ...(form.targetMode !== "existing" && form.modelId
+          ? { modelId: form.modelId }
+          : {}),
       });
       projects.showToast("任务已创建", "info");
     }
@@ -696,22 +775,36 @@ onMounted(async () => {
 
       <div class="sched-tab__field">
         <span class="sched-tab__label">目标 session</span>
-        <!-- 「新建专用 session」仅创建态提供;编辑态换目标走下拉
-             (update 不建新 session)。 -->
-        <label v-if="!editingId" class="sched-tab__dedicated">
-          <CheckboxRoot
-            v-model="form.newDedicated"
-            class="sched-tab__checkbox"
-            data-testid="sched-new-dedicated"
+        <!-- 三档 radio 卡片组(08-31 表单重设计):创建态三卡,编辑态
+             两卡(dedicated 落库后即 fixed,统一回显「指定 session」)。 -->
+        <RadioGroupRoot
+          class="sched-tab__target-modes"
+          :model-value="form.targetMode"
+          @update:model-value="onPickTargetMode"
+        >
+          <label
+            v-for="opt in targetModeOptions"
+            :key="opt.value"
+            class="sched-tab__target-card"
+            :class="{
+              'sched-tab__target-card--active': form.targetMode === opt.value,
+            }"
+            :data-testid="`sched-target-${opt.value}`"
           >
-            <CheckboxIndicator class="sched-tab__checkbox-indicator">
-              <Icon name="check" :size="12" />
-            </CheckboxIndicator>
-          </CheckboxRoot>
-          新建专用 session(名称同任务名)
-        </label>
+            <RadioGroupItem :value="opt.value" class="sched-tab__target-radio">
+              <RadioGroupIndicator class="sched-tab__target-radio-indicator" />
+            </RadioGroupItem>
+            <span class="sched-tab__target-text">
+              <span class="sched-tab__target-title">{{ opt.label }}</span>
+              <span class="sched-tab__target-desc">{{ opt.desc }}</span>
+            </span>
+          </label>
+        </RadioGroupRoot>
+
+        <!-- 指定 session:按 project 过滤的下拉(仅 classic;群聊不是
+             合法目标,AC7)。 -->
         <SelectRoot
-          v-if="!form.newDedicated"
+          v-if="form.targetMode === 'existing'"
           :model-value="form.targetSessionId || undefined"
           :disabled="!form.projectId"
           @update:model-value="onPickSession"
@@ -747,45 +840,46 @@ onMounted(async () => {
             </SelectContent>
           </SelectPortal>
         </SelectRoot>
-      </div>
 
-      <!-- 新建专用 session 时的模型选择(空 = 沿用全局默认);写进新
-           session 的 per-session 覆盖列,定时注入的轮次固定用该模型。 -->
-      <div v-if="!editingId && form.newDedicated" class="sched-tab__field">
-        <span class="sched-tab__label">专用 session 模型</span>
-        <SelectRoot
-          :model-value="form.modelId || undefined"
-          @update:model-value="onPickModel"
-        >
-          <SelectTrigger
-            class="sched-tab__trigger"
-            data-testid="sched-model-select"
-            aria-label="专用 session 模型"
+        <!-- 新建专用 / 每次新建:模型选择就近呈现(空 = 沿用全局默认)。
+             专用写进新 session 的 per-session 覆盖列;每次新建存任务行,
+             每轮建 session 时应用,定时注入的轮次固定用该模型。 -->
+        <div v-if="form.targetMode !== 'existing'" class="sched-tab__target-extra">
+          <span class="sched-tab__target-extra-label">session 模型</span>
+          <SelectRoot
+            :model-value="form.modelId || undefined"
+            @update:model-value="onPickModel"
           >
-            <SelectValue placeholder="默认(跟随全局设置)" />
-            <SelectIcon class="sched-tab__trigger-icon">
-              <Icon name="chevron-down" :size="12" />
-            </SelectIcon>
-          </SelectTrigger>
-          <SelectPortal>
-            <SelectContent
-              class="sched-tab__dropdown"
-              position="popper"
-              :side-offset="4"
+            <SelectTrigger
+              class="sched-tab__trigger"
+              data-testid="sched-model-select"
+              aria-label="session 模型"
             >
-              <SelectViewport class="sched-tab__dropdown-viewport">
-                <SelectItem
-                  v-for="m in flatModelOptions"
-                  :key="m.id"
-                  :value="m.id"
-                  class="sched-tab__option"
-                >
-                  <SelectItemText>{{ m.providerDisplayName }} · {{ m.displayName }}</SelectItemText>
-                </SelectItem>
-              </SelectViewport>
-            </SelectContent>
-          </SelectPortal>
-        </SelectRoot>
+              <SelectValue placeholder="默认(跟随全局设置)" />
+              <SelectIcon class="sched-tab__trigger-icon">
+                <Icon name="chevron-down" :size="12" />
+              </SelectIcon>
+            </SelectTrigger>
+            <SelectPortal>
+              <SelectContent
+                class="sched-tab__dropdown"
+                position="popper"
+                :side-offset="4"
+              >
+                <SelectViewport class="sched-tab__dropdown-viewport">
+                  <SelectItem
+                    v-for="m in flatModelOptions"
+                    :key="m.id"
+                    :value="m.id"
+                    class="sched-tab__option"
+                  >
+                    <SelectItemText>{{ m.providerDisplayName }} · {{ m.displayName }}</SelectItemText>
+                  </SelectItem>
+                </SelectViewport>
+              </SelectContent>
+            </SelectPortal>
+          </SelectRoot>
+        </div>
       </div>
 
       <div class="sched-tab__field">
@@ -1090,7 +1184,7 @@ onMounted(async () => {
             </div>
             <div class="sched-tab__card-meta">
               <Icon name="folder" :size="11" />
-              {{ projectNameOf(task) }} · {{ sessionTitleOf(task) }}
+              {{ projectNameOf(task) }} · {{ targetLabelOf(task) }}
             </div>
             <div class="sched-tab__card-meta">
               <Icon name="clock" :size="11" />
@@ -1312,40 +1406,110 @@ onMounted(async () => {
   color: var(--color-accent-text);
 }
 
-.sched-tab__dedicated {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-  cursor: pointer;
+/* 目标 session 三档 radio 卡片组(08-31 重设计;DefaultTab RadioGroup
+   同款基座:RadioGroupItem 是 <button>,压回视觉尺寸,触控目标由整卡
+   label 承担)。桌面一行铺开,窄屏纵向堆叠。 */
+.sched-tab__target-modes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-/* reka Checkbox(ModelForm 同款基座)。 */
-.sched-tab__checkbox {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
+.sched-tab__target-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1 1 180px;
+  padding: 8px 10px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--duration-base) var(--ease-out),
+    background var(--duration-base) var(--ease-out);
+}
+
+.sched-tab__target-card:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.sched-tab__target-card--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-muted);
+}
+
+.sched-tab__target-radio {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--color-bg-border-strong);
+  background: transparent;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   cursor: pointer;
+  transition: border-color var(--duration-base) var(--ease-out);
 }
 
-.sched-tab__checkbox[data-state="checked"] {
-  background: var(--color-accent);
+.sched-tab__target-radio[data-state="checked"] {
   border-color: var(--color-accent);
 }
 
-.sched-tab__checkbox-indicator {
-  color: #fff;
-  display: inline-flex;
+.sched-tab__target-radio-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  display: block;
+}
+
+.sched-tab__target-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sched-tab__target-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.sched-tab__target-card--active .sched-tab__target-title {
+  color: var(--color-accent-text);
+}
+
+.sched-tab__target-desc {
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+/* 档位卡的上下文面板:指定 → session 下拉(自然流);专用 / 每次新建
+   → 就近的模型选择(标签 + 下拉同行,窄屏换行)。 */
+.sched-tab__target-extra {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  line-height: 0;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.sched-tab__target-extra-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.sched-tab__target-extra .sched-tab__trigger {
+  flex: 1 1 220px;
+  max-width: 340px;
 }
 
 /* 档位行:档位下拉 + 按 kind 的参数控件。桌面一行,控件适度伸展
@@ -1654,16 +1818,16 @@ onMounted(async () => {
     flex-direction: column;
   }
 
-  /* 复选框与 switch 同理(DEC-6 chip 例外):CheckboxRoot 渲染为
-     <button>,全局 44px min 规则会把 16px 视觉盒撑成大方块;触控
-     目标改由外层整行 <label> 承担 —— checkbox 压回视觉尺寸,
-     label 行保 44px 高。 */
-  .sched-tab__checkbox {
-    min-width: 0;
-    min-height: 0;
+  /* 目标 radio 卡(RadioGroupItem 是 <button>):同 switch 的 DEC-6
+     chip 例外 —— 压回视觉尺寸,触控目标由整卡 <label> 承担。 */
+  .sched-tab__target-radio {
+    min-width: 14px;
+    min-height: 14px;
   }
 
-  .sched-tab__dedicated {
+  /* 窄屏卡片纵向堆叠,整卡保 44px 触控高。 */
+  .sched-tab__target-card {
+    flex-basis: 100%;
     min-height: 44px;
   }
 

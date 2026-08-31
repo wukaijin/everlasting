@@ -39,11 +39,22 @@ export type ScheduleSpec =
   /** 单次:at_ms(epoch ms 本地时刻)触发恰好一次(CH11-1)。 */
   | { kind: "once"; at_ms: number };
 
+/** 目标模式(wire `target_mode`,08-31-sched-per-run-session):
+ *  `fixed` = 注入固定目标 session;`per_run` = 每次触发自动新建 session。 */
+export type TargetMode = "fixed" | "per_run";
+
 /** `ScheduledTaskPayload` wire 形状(snake_case 直拷)。 */
 export interface ScheduledTask {
   id: string;
   project_id: string;
-  target_session_id: string;
+  /** fixed 档 = 目标 session;per_run 档 = null。 */
+  target_session_id: string | null;
+  /** 目标模式(见 {@link TargetMode})。 */
+  target_mode: TargetMode;
+  /** per_run 档每次新建 session 的模型绑定;null = 全局默认。 */
+  model_id: string | null;
+  /** per_run 档最近一次 fire 新建的 session;null = 从未触发。 */
+  last_run_session_id: string | null;
   name: string;
   prompt: string;
   schedule: ScheduleSpec | null;
@@ -68,8 +79,11 @@ export interface ScheduledTask {
 /** `create_scheduled_task` 入参(camelCase 顶层 key,transport 扳 snake)。 */
 export interface CreateScheduledTaskInput {
   projectId: string;
-  /** undefined / 空 = 新建专用 session(标题同任务名,后端定)。 */
+  /** undefined / 空 = 新建专用 session(标题同任务名,后端定);
+   *  per_run 档不传(后端拒绝两者同时出现)。 */
   targetSessionId?: string;
+  /** "per_run" = 每次执行新建 session(缺省 = fixed)。 */
+  targetMode?: TargetMode;
   name: string;
   prompt: string;
   /** JSON 字符串(前端 stringify preset 对象;后端 parse_schedule 校验)。 */
@@ -79,19 +93,22 @@ export interface CreateScheduledTaskInput {
   maxRuns?: number;
   /** 结束日期 epoch ms(F2b;undefined = 不限)。 */
   endsAt?: number;
-  /** 新建专用 session 绑定的模型 id(undefined = 沿用全局默认;仅
-   *  targetSessionId 缺省的「新建专用 session」分支生效)。 */
+  /** 模型绑定:fixed 档仅「新建专用 session」分支生效(写 session 行);
+   *  per_run 档存任务行,每次新建 session 时应用。undefined = 全局默认。 */
   modelId?: string;
 }
 
 /** `update_scheduled_task` 的部分更新 patch(`undefined` 字段后端不动)。
- *  `maxRuns` / `endsAt` 传 `null` = 显式清空为不限(wire 上是显式
- *  `null`,区别于缺省不动 —— 后端 double option)。 */
+ *  `maxRuns` / `endsAt` / `targetSessionId` / `modelId` 传 `null` = 显式
+ *  清空(wire 显式 `null`,区别于缺省不动 —— 后端 double option;
+ *  targetSessionId 清空即切 per_run 的绑定侧,须随同传 targetMode)。 */
 export interface UpdateScheduledTaskInput {
   name?: string;
   prompt?: string;
   schedule?: string;
-  targetSessionId?: string;
+  targetSessionId?: string | null;
+  targetMode?: TargetMode;
+  modelId?: string | null;
   enabled?: boolean;
   maxRuns?: number | null;
   endsAt?: number | null;
@@ -123,6 +140,7 @@ export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
     const row = await transport.invoke<ScheduledTask>("create_scheduled_task", {
       projectId: input.projectId,
       ...(input.targetSessionId ? { targetSessionId: input.targetSessionId } : {}),
+      ...(input.targetMode ? { targetMode: input.targetMode } : {}),
       name: input.name,
       prompt: input.prompt,
       schedule: input.schedule,
@@ -137,7 +155,8 @@ export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
 
   /** 部分更新(`undefined` 字段不动存量;enabled false→true 时后端置
    *  `last_fired_at = now` + `run_count = 0`,重启用不补跑、计数重置)。
-   *  `maxRuns` / `endsAt` 传 `null` 显式清空为不限。 */
+   *  `maxRuns` / `endsAt` / `targetSessionId` / `modelId` 传 `null` 显式
+   *  清空。 */
   async function update(
     id: string,
     patch: UpdateScheduledTaskInput,
@@ -150,6 +169,8 @@ export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
       ...(patch.targetSessionId !== undefined
         ? { targetSessionId: patch.targetSessionId }
         : {}),
+      ...(patch.targetMode !== undefined ? { targetMode: patch.targetMode } : {}),
+      ...(patch.modelId !== undefined ? { modelId: patch.modelId } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.maxRuns !== undefined ? { maxRuns: patch.maxRuns } : {}),
       ...(patch.endsAt !== undefined ? { endsAt: patch.endsAt } : {}),

@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { defineComponent, h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
-import { SelectRoot } from "reka-ui";
+import { SelectRoot, RadioGroupRoot } from "reka-ui";
 
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({
@@ -49,6 +49,9 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     id: "task-1",
     project_id: "p1",
     target_session_id: "s1",
+    target_mode: "fixed",
+    model_id: null,
+    last_run_session_id: null,
     name: "早报",
     prompt: "汇总昨日进展",
     schedule: { kind: "daily", at: "09:00" },
@@ -128,14 +131,25 @@ function openForm(w: ReturnType<typeof mount>) {
 
 /** 经 SelectRoot 的 update:modelValue 事件选值(等价原 native
  * select.setValue —— 测 v-model 接线,不测弹层交互)。SelectRoot 是
- * renderless provider,按 DOM 序索引:0=project,1=session,2=kind,
- * 3=weekday(仅 weekly 渲染)。 */
+ * renderless provider,按 DOM 序索引:0=project,1=session(仅指定档),
+ * 2=kind,3=weekday(仅 weekly 渲染);专用/每次新建档 session 隐藏,
+ * model 顶到 1。 */
 async function pickSelect(
   form: ReturnType<typeof openForm>,
   index: number,
   value: string,
 ) {
   form.findAllComponents(SelectRoot)[index].vm.$emit("update:modelValue", value);
+  await flushPromises();
+}
+
+/** 目标档 radio(RadioGroupRoot 全表单唯一):emit update:modelValue,
+ *  与 pickSelect 同款接线测法(jsdom 点 label 的转发不可靠)。 */
+async function pickTargetMode(
+  form: ReturnType<typeof openForm>,
+  mode: "existing" | "dedicated" | "per_run",
+) {
+  form.getComponent(RadioGroupRoot).vm.$emit("update:modelValue", mode);
   await flushPromises();
 }
 
@@ -583,7 +597,7 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("create_scheduled_task", expect.anything());
   });
 
-  it("勾选新建专用 session:模型下拉出现,选中的 modelId 进 create args", async () => {
+  it("新建专用 session 档:radio 切换 → 模型下拉出现,选中的 modelId 进 create args", async () => {
     stubBackend([]);
     // 模型目录:onPickModel 只接受 catalog 中的 id,须返回真实条目。
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -612,12 +626,14 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     await form.find("input[type='text']").setValue("专用");
     await pickSelect(form, 0, "p1");
     await form.find("textarea").setValue("p");
-    // 默认态:模型下拉不渲染(仅专用 session 分支)。
+    // 默认「指定 session」档:模型下拉不渲染;三张 radio 卡齐全(创建态)。
     expect(form.find('[data-testid="sched-model-select"]').exists()).toBe(false);
-    await form.get('[data-testid="sched-new-dedicated"]').trigger("click");
-    await flushPromises();
+    expect(form.find('[data-testid="sched-target-existing"]').exists()).toBe(true);
+    expect(form.find('[data-testid="sched-target-dedicated"]').exists()).toBe(true);
+    expect(form.find('[data-testid="sched-target-per_run"]').exists()).toBe(true);
+    await pickTargetMode(form, "dedicated");
     expect(form.find('[data-testid="sched-model-select"]').exists()).toBe(true);
-    // 专用模式 SelectRoot 序:0=project,1=model(session 下拉已隐藏)。
+    // 专用档 SelectRoot 序:0=project,1=model(session 下拉已隐藏)。
     await pickSelect(form, 1, "model-7");
     stubCreate();
     await w.get('[data-testid="sched-submit"]').trigger("click");
@@ -625,6 +641,127 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
     expect(call?.[1].modelId).toBe("model-7");
     expect(call?.[1].targetSessionId).toBeUndefined();
+    expect(call?.[1].targetMode).toBeUndefined();
+  });
+
+  it("每次新建 session 档:create 带 targetMode=per_run 且不带 targetSessionId", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_scheduled_tasks") return [];
+      if (cmd === "list_sessions") {
+        return [{ id: "s1", title: "旧会话", session_type: "chat" }];
+      }
+      if (cmd === "list_models") return [];
+      if (cmd === "get_default_model") return null;
+      return null;
+    });
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("每跑");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "per_run");
+    // session 下拉已隐藏:未选 session 也能提交(无需固定目标)。
+    expect(form.find('[data-testid="sched-session-select"]').exists()).toBe(false);
+    stubCreate();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].targetMode).toBe("per_run");
+    expect(call?.[1].targetSessionId).toBeUndefined();
+  });
+
+  it("per_run 卡片:meta 显示「每次新建 session」,能解析时带最近 run session", async () => {
+    stubBackend([
+      row({
+        id: "per-1",
+        target_mode: "per_run",
+        target_session_id: null,
+        last_run_session_id: null,
+      }),
+      row({
+        id: "per-2",
+        target_mode: "per_run",
+        target_session_id: null,
+        last_run_session_id: "s1",
+      }),
+    ]);
+    const w = await mountTab();
+    const card1 = w.get('[data-testid="sched-card-per-1"]');
+    expect(card1.text()).toContain("每次新建 session");
+    expect(card1.text()).not.toContain("最近:");
+    const card2 = w.get('[data-testid="sched-card-per-2"]');
+    expect(card2.text()).toContain("最近:旧会话");
+  });
+
+  it("per_run 编辑:回填该档 + 模型绑定;update 提交 targetSessionId=null 清固定绑定", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_scheduled_tasks")
+        return [
+          row({
+            target_mode: "per_run",
+            target_session_id: null,
+            model_id: "model-7",
+            last_run_session_id: null,
+          }),
+        ];
+      if (cmd === "list_sessions") {
+        return [{ id: "s1", title: "旧会话", session_type: "chat" }];
+      }
+      if (cmd === "list_models")
+        return [
+          {
+            id: "model-7",
+            providerId: "prov-1",
+            providerDisplayName: "Acme",
+            displayName: "GPT-X",
+            modelName: "gpt-x",
+          },
+        ];
+      if (cmd === "get_default_model") return null;
+      return null;
+    });
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-task-1"]').trigger("click");
+    const form = openForm(w);
+    // 编辑态:dedicated 卡不出现(fixed 行统一回显「指定 session」)。
+    expect(form.find('[data-testid="sched-target-dedicated"]').exists()).toBe(false);
+    expect(form.find('[data-testid="sched-session-select"]').exists()).toBe(false);
+    // per_run 行的模型绑定回填经 SelectRoot model 断言(0=project,1=model)。
+    expect(form.findAllComponents(SelectRoot)[1].props("modelValue")).toBe("model-7");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task")
+        return row({ target_mode: "per_run", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].targetMode).toBe("per_run");
+    expect(call?.[1].targetSessionId).toBeNull();
+    expect(call?.[1].modelId).toBe("model-7");
+  });
+
+  it("fixed 行编辑切到 per_run:update 带 targetMode + targetSessionId null", async () => {
+    stubBackend([row()]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-task-1"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "per_run");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return row({ target_mode: "per_run", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].targetMode).toBe("per_run");
+    expect(call?.[1].targetSessionId).toBeNull();
+    expect(call?.[1].modelId).toBeNull();
   });
 
   it("卡片:once 任务已触发 → 状态「已完成」且「下次」列为 —;过期未触发 → 「已结束」", async () => {
