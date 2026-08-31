@@ -211,64 +211,75 @@ pub async fn execute(
         }
     };
 
-    // 4. P3b (08-31-a2-p3b, 评审 B1/D5): same four-way sandbox gate
+    // 4. P3b (08-31-a2-p3b, 评审 B1/D5): same sandbox policy resolution
     //    as the synchronous `shell` tool. The decision is computed
     //    HERE (tool layer has ctx.mode + config access) and handed to
     //    the registry, which only CONSUMES it at its spawn point
-    //    (design §2.2). The audit row is written by the tool side
-    //    (design §2.6 — the registry has no DB handle) with the same
-    //    hash+summary payload shape as the foreground path.
+    //    (design §2.2).
     let sandbox_spec = match crate::sandbox::decide(ctx, &command, session_id).await {
-        crate::sandbox::Decision::Sandbox(spec) => {
-            let ruleset = spec.summary();
-            let sha = crate::sandbox::command_sha_prefix(&command);
-            if let Err(e) = crate::agent::permissions::audit::record_sandboxed_shell_audit(
-                &ctx.db,
-                chat_session_id,
-                "run_background_shell",
-                &sha,
-                &ruleset,
-                None,
-            )
-            .await
-            {
-                tracing::warn!(error = %e, "run_background_shell: sandbox audit write failed");
-            }
-            Some(spec)
-        }
+        crate::sandbox::Decision::Sandbox(spec) => Some(spec),
         crate::sandbox::Decision::Skip { reason } => {
             tracing::debug!(reason, "run_background_shell: sandbox skip");
             None
         }
     };
 
-    // 5. Start the background shell.
-    match ctx
+    // 5. Start the background shell. The spec is cloned into the
+    //    registry (it consumes it at spawn); the tool-side copy is
+    //    reused below for the post-spawn audit row (same W3 pattern
+    //    as the foreground path).
+    let start_result = ctx
         .background_shells
         .start(
             chat_session_id,
             command.clone(),
             validated_cwd.clone(),
             max_runtime_ms,
-            sandbox_spec,
+            sandbox_spec.clone(),
         )
-        .await
-    {
-        Ok(shell_session_id) => (
-            format!(
-                "Started background shell {shell_session_id} (cwd: {}). Use \
-                 `shell_status` to query progress, or `shell_kill` to terminate. \
-                 When it finishes, you will see a `[system] 后台 shell ... 已完成...` \
-                 message at the start of your next turn.",
-                validated_cwd.display()
-            ),
-            false,
-            ToolContextUpdate {
-                // Mirror `shell::execute`: surface the validated cwd so
-                // the agent loop persists it on turn end.
-                new_cwd: Some(validated_cwd),
-            },
-        ),
+        .await;
+
+    match start_result {
+        Ok(shell_session_id) => {
+            // RULE-SBX-003 (P3c, design §6): audit AFTER a successful
+            // spawn (registry.start Ok) — mirrors the foreground
+            // path's "audit once the child is actually running"
+            // ordering. Pre-P3c the row was written BEFORE start,
+            // so a spawn failure left a lying audit row ("sandboxed
+            // execution" that never executed). Best-effort, same
+            // hash+summary payload shape as the foreground path.
+            if let Some(spec) = &sandbox_spec {
+                let ruleset = spec.summary();
+                let sha = crate::sandbox::command_sha_prefix(&command);
+                if let Err(e) = crate::agent::permissions::audit::record_sandboxed_shell_audit(
+                    &ctx.db,
+                    chat_session_id,
+                    "run_background_shell",
+                    &sha,
+                    &ruleset,
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "run_background_shell: sandbox audit write failed");
+                }
+            }
+            (
+                format!(
+                    "Started background shell {shell_session_id} (cwd: {}). Use \
+                     `shell_status` to query progress, or `shell_kill` to terminate. \
+                     When it finishes, you will see a `[system] 后台 shell ... 已完成...` \
+                     message at the start of your next turn.",
+                    validated_cwd.display()
+                ),
+                false,
+                ToolContextUpdate {
+                    // Mirror `shell::execute`: surface the validated cwd so
+                    // the agent loop persists it on turn end.
+                    new_cwd: Some(validated_cwd),
+                },
+            )
+        }
         Err(crate::background_shell::BackgroundShellError::Spawn(e)) => (
             format!("Failed to spawn background shell: {}", e),
             true,

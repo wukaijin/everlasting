@@ -624,19 +624,55 @@ fn command_sha_prefix_is_stable_12_hex() {
 }
 
 #[test]
-fn guidance_fires_on_permission_denied_and_rofs() {
-    let text = super::write_block_guidance("touch /etc/foo\nPermission denied").expect("fires");
-    // Pinned copy points (design §2.5): what happened + both escape
-    // hatches (authorized non-read-only command / config allowlist).
+fn guidance_edit_write_variant_pins_copy_points() {
+    let text =
+        super::failure_guidance("touch /etc/foo\nPermission denied", Mode::Edit).expect("fires");
+    // Pinned copy points (design §5.3): what happened + escalation
+    // card + both config escape hatches.
     assert!(text.contains("[sandbox]"));
     assert!(text.contains("sandbox_extra_writable"));
-    assert!(text.contains("non-read-only"));
+    assert!(text.contains("escalation"));
     assert!(text.contains("worktree"));
-    assert!(super::write_block_guidance("Read-only file system").is_some());
+    assert!(super::failure_guidance("Read-only file system", Mode::Edit).is_some());
     // Heuristic must stay quiet on unrelated failures (宁缺勿滥).
-    assert!(super::write_block_guidance("command not found").is_none());
-    assert!(super::write_block_guidance("fatal: not a git repository").is_none());
-    assert!(super::write_block_guidance("").is_none());
+    assert!(super::failure_guidance("command not found", Mode::Edit).is_none());
+    assert!(super::failure_guidance("fatal: not a git repository", Mode::Edit).is_none());
+    assert!(super::failure_guidance("", Mode::Edit).is_none());
+}
+
+/// P3c design §5.3 (D3): the Plan variant is mode-aware — by-design
+/// wording, diff proposal, /tmp escape hatch, and an EXPLICIT
+/// no-card statement (Plan has no escalation exit).
+#[test]
+fn guidance_plan_write_variant_is_mode_aware() {
+    let text = super::failure_guidance("Permission denied", Mode::Plan).expect("fires");
+    assert!(text.contains("Plan"));
+    assert!(text.contains("by design"));
+    assert!(text.contains("diff"));
+    assert!(text.contains("Edit mode"));
+    assert!(text.contains("/tmp"));
+    assert!(text.contains("no approval card"));
+    assert!(!text.contains("sandbox_extra_writable"));
+}
+
+/// P3c design §5.3: the network feature (`Operation not permitted`,
+/// seccomp EPERM at socket()) gets its own guidance — never mixed
+/// into the write text. Edit names the escalation path; Plan states
+/// the design intent.
+#[test]
+fn guidance_network_variant_separate_from_write() {
+    let edit = super::failure_guidance("bash: /dev/tcp: Operation not permitted", Mode::Edit)
+        .expect("network fires");
+    assert!(edit.contains("network"));
+    assert!(edit.contains("escalation"));
+    let plan =
+        super::failure_guidance("Operation not permitted", Mode::Plan).expect("plan network fires");
+    assert!(plan.contains("Plan"));
+    assert!(plan.contains("by design"));
+    // Write strings must NOT route to the network text and vice versa.
+    let write = super::failure_guidance("Permission denied", Mode::Edit).unwrap();
+    assert!(!write.contains("network"));
+    assert!(!edit.contains("Permission denied"));
 }
 
 // ---------------------------------------------------------------------------

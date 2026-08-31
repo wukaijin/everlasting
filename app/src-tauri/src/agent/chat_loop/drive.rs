@@ -313,9 +313,29 @@ pub(crate) async fn drive_turn(
     // 变化,tools_token 计数语义不变(仍在"最终发送集合"上序列化
     // —— 压缩只改 messages,不改 tools)。
     let is_group_chat = loaded_session.session.session_type == crate::db::SessionType::GroupChat;
+    // P3c (design §4): Plan keeps the shell tool family ONLY when the
+    // resolved policy grants the session-level read-only face. One
+    // point query per turn (this is the only consumer of the value);
+    // the Tier 4 short-circuit and the spawn side re-resolve on their
+    // own — accepted by design (two consumers, one truth function).
+    // Non-Linux / kill-switch off / project off → false → the filter
+    // drops the family exactly as before the sandbox existed.
+    let plan_shell_available = if session_mode == crate::db::Mode::Plan {
+        matches!(
+            crate::sandbox::resolve_session_policy(&db, &session_id, crate::db::Mode::Plan).await,
+            crate::sandbox::Policy::Face(_)
+        )
+    } else {
+        // Not consulted outside Plan (Edit/Yolo ignore the param).
+        false
+    };
     let mut turn_tool_defs = crate::tools::filter_tools_for_session_type(
         crate::tools::filter_tools_for_workflow(
-            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode),
+            permissions::filter_tools_for_mode(
+                tool_defs.clone(),
+                session_mode,
+                plan_shell_available,
+            ),
             workflow_ctx.is_some(),
         ),
         is_group_chat,

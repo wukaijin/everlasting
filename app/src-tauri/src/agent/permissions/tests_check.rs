@@ -1424,3 +1424,128 @@ async fn tier4_shell_classic_ask_path_survives_under_off_tier() {
         "off tier must keep the classic ask emission (no short-circuit)"
     );
 }
+
+/// P3c AC4: Plan + sandbox face → shell (any tier, incl. SideEffect)
+/// short-circuits to Allow — the Tier 4 Plan branch (SideEffect→Ask,
+/// dormant since 2026-06-14) stays dormant. The read-only guarantee
+/// comes from the FACE (worktree read-only spec), not from approvals.
+#[tokio::test]
+async fn tier4_plan_sideeffect_short_circuits_under_sandbox_face() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    set_project_tier(&pool, "readwrite").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Plan,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "mkdir x"}),
+            "tu-sbx-plan-sideeffect",
+            &token,
+        ),
+    )
+    .await
+    .expect("Plan + face must bypass ask_path");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "Plan + sandbox face → SideEffect shell Allows (sandboxed read-only face)"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "Plan + face must NOT emit the (previously active) SideEffect ask"
+    );
+}
+
+/// P3c AC4 corollary: Plan + project `off` → no face → the tool never
+/// reaches check() (filtered by `filter_tools_for_mode` with
+/// `plan_shell_available = false`); but IF a tool_use somehow arrives,
+/// the policy resolves Off and the shell branch behaves classically.
+/// Here: project off + Plan + SideEffect → the dormant Plan branch
+/// asks (byte-identical to the pre-P3c behavior).
+#[tokio::test]
+async fn tier4_plan_sideeffect_still_asks_under_off_tier() {
+    use crate::agent::permissions::{
+        new_permission_store, resolve_ask, PermissionContext, PermissionResponse,
+    };
+    let pool = super::tests_common::worker_test_pool().await;
+    set_project_tier(&pool, "off").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Plan,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let resolver_store = store.clone();
+    let resolver_sink = sink.clone();
+    tokio::spawn(async move {
+        for _ in 0..400 {
+            if !resolver_sink.asks.lock().unwrap().is_empty() {
+                let rid = resolver_sink.asks.lock().unwrap()[0].rid.clone();
+                resolve_ask(
+                    &resolver_store,
+                    &rid,
+                    PermissionResponse::Deny {
+                        reason: "test".into(),
+                    },
+                )
+                .await;
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    });
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "mkdir x"}),
+            "tu-sbx-plan-off",
+            &token,
+        ),
+    )
+    .await
+    .expect("Plan + off tier: classic ask round-trip must complete");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Deny { .. }),
+        "Plan + off tier → dormant Plan branch fires (classic ask), got: {decision:?}"
+    );
+    assert!(
+        !sink.asks.lock().unwrap().is_empty(),
+        "Plan + off tier must keep the classic SideEffect ask emission"
+    );
+}

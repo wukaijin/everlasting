@@ -510,24 +510,77 @@ pub(crate) fn command_sha_prefix(command: &str) -> String {
     out.iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-/// Post-hoc write-block guidance (design §2.5, R7): when a sandboxed
-/// command failed and its stderr smells like a Landlock write denial,
-/// the tool appends this line so the model knows WHY and what to do
-/// (escalate to a user-authorized non-read-only command, or ask the
-/// user to extend `sandbox_extra_writable`). Heuristic, append-only —
-/// the command's own output is never rewritten. `None` = no append
-/// (宁缺勿滥: only the two canonical denial strings trigger it).
-pub(crate) fn write_block_guidance(stderr: &str) -> Option<&'static str> {
+/// What a sandboxed command's failure stderr smells like (P3c design
+/// §5.1). Conservative substring match on the canonical denial
+/// strings — a miss degrades to no guidance, never to a false
+/// escalation.
+pub(crate) enum SandboxBlockKind {
+    /// Landlock write denial (`Permission denied` /
+    /// `Read-only file system`).
+    Write,
+    /// seccomp egress block (`Operation not permitted` — EPERM at
+    /// `socket()`, before any connect attempt).
+    Network,
+}
+
+/// Classify a failed sandboxed command's stderr. Order matters: the
+/// write strings are checked first (a stderr carrying both is a
+/// write failure with noise). Used by the guidance text (§5.3) and
+/// by the escalation trigger (§5.1) so both share one heuristic.
+pub(crate) fn classify_block(stderr: &str) -> Option<SandboxBlockKind> {
     if stderr.contains("Permission denied") || stderr.contains("Read-only file system") {
-        Some(
-            "[sandbox] The failure above looks like a sandbox write block (writable roots: \
-             the session worktree, /tmp, and the app outputs dir). To write outside those \
-             roots, run the operation as a non-read-only command (the user will be asked for \
-             permission), or ask the user to add the path to `sandbox_extra_writable` in \
-             Settings.",
-        )
+        Some(SandboxBlockKind::Write)
+    } else if stderr.contains("Operation not permitted") {
+        Some(SandboxBlockKind::Network)
     } else {
         None
+    }
+}
+
+/// Post-hoc failure guidance, mode-aware (P3c design §5.3 — replaces
+/// the P3b single write-block line). When a sandboxed command failed
+/// and its stderr smells like a sandbox denial, the tool appends one
+/// line so the model knows WHY and what to do. Heuristic,
+/// append-only — the command's own output is never rewritten.
+/// `None` = no append (宁缺勿滥: only the canonical denial strings
+/// trigger it).
+///
+/// Variants:
+/// - Edit + write: an escalation card may appear for this command;
+///   otherwise adjust `sandbox_extra_writable` / the project tier.
+/// - Plan + write (D3): blocked BY DESIGN — propose a diff, ask the
+///   user to switch to Edit, or use /tmp (no escalation exists).
+/// - Network (both modes): the sandbox has no egress; Edit names the
+///   escalation card, Plan states the design intent.
+pub(crate) fn failure_guidance(stderr: &str, mode: Mode) -> Option<&'static str> {
+    match classify_block(stderr) {
+        Some(SandboxBlockKind::Write) => Some(match mode {
+            Mode::Plan => {
+                "[sandbox] The write above was blocked by the Plan-mode read-only sandbox — \
+                 this is by design. Propose the change as a diff and ask the user to switch \
+                 to Edit mode, or write intermediate artifacts to /tmp (e.g. \
+                 CARGO_TARGET_DIR=/tmp/build) — there is no approval card in Plan mode."
+            }
+            _ => {
+                "[sandbox] The failure above looks like a sandbox write block (writable roots: \
+                 the session worktree, /tmp, and the app outputs dir). Approve the escalation \
+                 card for this command if one appears; otherwise ask the user to add the path \
+                 to `sandbox_extra_writable` in Settings or change the project's sandbox policy."
+            }
+        }),
+        Some(SandboxBlockKind::Network) => Some(match mode {
+            Mode::Plan => {
+                "[sandbox] Outbound network is blocked inside the Plan-mode read-only sandbox — \
+                 this is by design. Ask the user to run the networked command, or switch to \
+                 Edit mode."
+            }
+            _ => {
+                "[sandbox] The failure above looks like the sandbox blocking outbound network \
+                 (no egress inside the sandbox). Approve the escalation card for this command \
+                 if one appears, or ask the user to change the project's sandbox policy."
+            }
+        }),
+        None => None,
     }
 }
 

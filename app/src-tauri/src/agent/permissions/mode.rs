@@ -49,22 +49,31 @@ user sees them per session."
 /// choose the explicit filter per audit §2 recommendation
 /// (saves a turn + reduces confusion). 3 档化 2026-06-13:
 /// Review 移除, 只剩 Plan 一个只读 mode。
+///
+/// P3c `plan_shell_available` (design §4): when the resolved sandbox
+/// policy gives the session a Plan read-only face, the shell tool
+/// family STAYS in the Plan tool list — every command runs under the
+/// deterministic read-only face with NO escalation exit (write
+/// failures get mode-aware guidance instead of a modal). When the
+/// face is unavailable (`false`: kill-switch off / project `off` /
+/// capability probe failed / non-Linux), the shell family is filtered
+/// exactly as before the sandbox existed — the fallback is today's
+/// behavior, never a "Plan + approval-modal write" path.
 pub fn filter_tools_for_mode(
     tools: Vec<crate::llm::ToolDef>,
     mode: Mode,
+    plan_shell_available: bool,
 ) -> Vec<crate::llm::ToolDef> {
     match mode {
         Mode::Plan => tools
             .into_iter()
             .filter(|t| {
+                if matches!(t.name.as_str(), "shell" | "run_background_shell") {
+                    return plan_shell_available;
+                }
                 !matches!(
                     t.name.as_str(),
-                    "write_file"
-                        | "edit_file"
-                        | "shell"
-                        | "run_background_shell"
-                        | "merge_worker"
-                        | "discard_worker"
+                    "write_file" | "edit_file" | "merge_worker" | "discard_worker"
                 )
             })
             .collect(),

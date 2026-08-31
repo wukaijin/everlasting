@@ -580,16 +580,17 @@ pub async fn execute(
         );
     }
 
-    // 6b. P3b (§2.5, R7): post-hoc write-block guidance. When this
-    //     command WAS sandboxed (W3: reuse the decision above — no
-    //     second gate query) and failed with a stderr that smells
-    //     like a Landlock write denial, append one guidance line so
-    //     the model knows the failure is ours and what to do about
-    //     it. Append-only — the command's own output is untouched.
+    // 6b. P3b (§2.5, R7) + P3c (§5.3): post-hoc failure guidance,
+    //     mode-aware. When this command WAS sandboxed (W3: reuse the
+    //     decision above — no second gate query) and failed with a
+    //     stderr that smells like a sandbox denial, append one
+    //     guidance line so the model knows the failure is ours and
+    //     what to do about it. Append-only — the command's own output
+    //     is untouched.
     let sandbox_applied = prepared.is_some();
     if sandbox_applied && !result.cancelled && exit_code != 0 {
         let stderr_str = String::from_utf8_lossy(&result.stderr);
-        if let Some(guidance) = crate::sandbox::write_block_guidance(&stderr_str) {
+        if let Some(guidance) = crate::sandbox::failure_guidance(&stderr_str, ctx.mode) {
             combined.push('\n');
             combined.push_str(guidance);
         }
