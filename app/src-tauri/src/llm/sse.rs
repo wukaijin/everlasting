@@ -1,8 +1,9 @@
 //! SSE (Server-Sent Events) parser.
 //!
 //! Stateful line-oriented parser. Feed arbitrary chunks of text (may not
-//! align to line boundaries); the parser buffers and yields complete events
-//! at the empty-line boundary.
+//! align to line boundaries); the parser buffers — a line split across
+//! chunks at any byte position is reassembled before parsing — and yields
+//! complete events at the empty-line boundary.
 //!
 //! Per HACKING-llm.md "额外观察": the GLM compatibility layer emits a `ping`
 //! heartbeat event we don't care about — the caller must tolerate unknown
@@ -18,9 +19,21 @@ const MAX_DATA_BYTES: usize = 1024 * 1024; // 1 MiB
 pub struct SseParser {
     event_type: String,
     data_buf: String,
+    /// Partial trailing line carried across `feed` calls. A TCP chunk
+    /// boundary can split a line at ANY byte — mid-JSON, or even inside
+    /// the `data:` prefix itself — so only complete lines (terminated
+    /// by '\n') are parsed; the rest waits here. (08-31 incident: a
+    /// `data:` line cut mid-JSON was parsed as complete, its
+    /// continuation then dropped as malformed, silently truncating
+    /// tool arguments and text deltas.)
+    line_buf: String,
+    /// The line being buffered has exceeded the size guard below; its
+    /// remaining bytes are skipped until the terminating '\n' arrives
+    /// (RULE-D-003 OOM guard, extended to the line buffer).
+    oversized_line: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SseEvent {
     pub event: String,
     pub data: String,
@@ -32,11 +45,67 @@ impl SseParser {
     }
 
     /// Feed a chunk of text. Returns zero or more complete events found
-    /// within. Trailing data (event opened but not closed) is buffered for
-    /// the next call.
+    /// within. The chunk may end mid-line (TCP chunk boundaries don't
+    /// align with line boundaries): the partial trailing line is held
+    /// in `line_buf` and completed by the next call, so a `data:` line
+    /// cut at any byte position is reassembled before being parsed.
     pub fn feed(&mut self, chunk: &str) -> Vec<SseEvent> {
         let mut events = Vec::new();
-        for raw_line in chunk.split('\n') {
+
+        // Line buffering: accumulate into `line_buf` and consume only
+        // the complete lines (everything up to and including the last
+        // '\n'); the trailing partial line waits for the next feed.
+        self.line_buf.push_str(chunk);
+        let buffered = std::mem::take(&mut self.line_buf);
+        let (complete, partial) = match buffered.rfind('\n') {
+            Some(idx) => buffered.split_at(idx + 1),
+            None => ("", buffered.as_str()),
+        };
+
+        let mut lines = complete;
+        if self.oversized_line {
+            // `complete` starts inside the dropped oversized line (the
+            // flag is only ever set on an unterminated tail): swallow
+            // its residue up to and including the terminating '\n'.
+            // With no '\n' yet, `partial` is more of the same dropped
+            // line — return WITHOUT re-buffering it. This runs before
+            // the guard below so a fresh oversized partial in this
+            // same feed registers its own flag instead of having it
+            // consumed by the previous line's terminator.
+            match lines.find('\n') {
+                Some(idx) => {
+                    lines = &lines[idx + 1..];
+                    self.oversized_line = false;
+                }
+                // Still no newline (complete is empty here) — nothing
+                // to process this round.
+                None => return events,
+            }
+        }
+        self.line_buf.push_str(partial);
+        // RULE-D-003 OOM guard, line-buffer edition: a partial line
+        // already longer than the event-level cap can never fit under
+        // it once completed (at most the "data: " prefix is stripped),
+        // so stop buffering its bytes; the rest of the line is skipped
+        // when its '\n' finally arrives.
+        if self.line_buf.len() > MAX_DATA_BYTES + "data: ".len() {
+            self.oversized_line = true;
+            self.line_buf.clear();
+        }
+
+        if lines.is_empty() {
+            // No complete line arrived (or the oversized line's
+            // terminator was this chunk's last byte).
+            return events;
+        }
+        // `lines` ends with the '\n' that terminated its last line.
+        // Drop it, or split() would yield a phantom trailing "" that
+        // is not a real empty line — a chunk ending exactly after
+        // "data: x\n" must NOT dispatch the event early and split a
+        // multi-line data payload.
+        let real_lines = &lines[..lines.len() - 1];
+
+        for raw_line in real_lines.split('\n') {
             let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
 
             if line.is_empty() {
@@ -82,6 +151,8 @@ impl SseParser {
     pub fn reset(&mut self) {
         self.event_type.clear();
         self.data_buf.clear();
+        self.line_buf.clear();
+        self.oversized_line = false;
     }
 }
 
@@ -209,6 +280,153 @@ mod tests {
         let chunk = format!("data: {}\n\n", huge);
         let events = p.feed(&chunk);
         assert!(events.is_empty());
+    }
+
+    // --- 08-31 half-line fix: a `data:` line split at a TCP chunk
+    // boundary is reassembled from `line_buf` instead of being parsed
+    // truncated and its continuation dropped as malformed ---
+    // (incident evidence: tool_use input={}, "Unterminated quoted
+    // string", old_string not found; see
+    // .trellis/tasks/08-31-sse-halfline-fix/research/)
+
+    #[test]
+    fn half_line_cut_at_any_position_yields_identical_events() {
+        // Reference: the same stream fed in one piece. The payload has
+        // an event line, TWO data lines (join semantics), CJK text and
+        // JSON braces so cuts land in every kind of content — including
+        // inside the "data:" prefix itself.
+        let stream =
+            "event: ping\ndata: {\"text\":\"好的方案\",\"n\":42}\ndata: second 数据 line\n\n";
+        let mut reference = SseParser::new();
+        let want = reference.feed(stream);
+        assert_eq!(want.len(), 1);
+        assert_eq!(want[0].event, "ping");
+        assert_eq!(
+            want[0].data,
+            "{\"text\":\"好的方案\",\"n\":42}\nsecond 数据 line"
+        );
+
+        let mut cuts: Vec<usize> = stream.char_indices().map(|(i, _)| i).collect();
+        cuts.push(stream.len());
+        for cut in cuts {
+            let mut p = SseParser::new();
+            let mut got = p.feed(&stream[..cut]);
+            got.extend(p.feed(&stream[cut..]));
+            assert_eq!(got, want, "cut at byte {} corrupted events", cut);
+        }
+    }
+
+    #[test]
+    fn data_prefix_cut_across_chunks_is_reassembled() {
+        // The residual "dat" matches no known field prefix — without
+        // line buffering it hit the malformed-drop branch and the whole
+        // data line (rest of the prefix + payload) was lost.
+        let mut p = SseParser::new();
+        assert!(p.feed("event: ping\ndat").is_empty());
+        let events = p.feed("a: {\"ok\":true}\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "ping");
+        assert_eq!(events[0].data, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn cjk_char_cut_across_byte_chunks_parses_identically() {
+        // Provider-realistic two-layer path: raw bytes →
+        // utf8_chunk_text (reassembles a multi-byte char split
+        // mid-sequence) → SseParser::feed (reassembles a line split
+        // mid-line). Every byte position is tried, including cuts
+        // INSIDE the CJK chars.
+        let stream = "data: {\"text\":\"好的方案\"}\n\n";
+        let bytes = stream.as_bytes();
+        let mut reference = SseParser::new();
+        let want = reference.feed(stream);
+
+        for cut in 0..=bytes.len() {
+            let mut carry = Vec::new();
+            let mut p = SseParser::new();
+            let mut got = Vec::new();
+            for part in [&bytes[..cut], &bytes[cut..]] {
+                if let Some(text) = utf8_chunk_text(&mut carry, part).unwrap() {
+                    got.extend(p.feed(&text));
+                }
+            }
+            assert_eq!(got, want, "byte cut at {} corrupted events", cut);
+        }
+    }
+
+    #[test]
+    fn consecutive_events_interleaved_cut_all_delivered() {
+        let mut p = SseParser::new();
+        // Event a's data line is cut mid-JSON.
+        assert!(p.feed("event: a\ndata: {\"i\"").is_empty());
+        // One feed carrying a's tail + terminator + b's head — with b's
+        // data line cut inside the "data" prefix itself.
+        let mid = p.feed(":1}\n\nevent: b\nda");
+        assert_eq!(mid.len(), 1);
+        assert_eq!(mid[0].event, "a");
+        assert_eq!(mid[0].data, "{\"i\":1}");
+        let tail = p.feed("ta: {\"i\":2}\n\n");
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].event, "b");
+        assert_eq!(tail[0].data, "{\"i\":2}");
+    }
+
+    #[test]
+    fn reset_discards_partial_line_and_event_state() {
+        let mut p = SseParser::new();
+        // Half an event name + half a data line buffered mid-line.
+        assert!(p.feed("event: pi\ndata: {\"half").is_empty());
+        p.reset();
+        // Next feed parses from a clean slate: no leftover prefix or
+        // partial line may leak into the new event.
+        let events = p.feed("data: fresh\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "");
+        assert_eq!(events[0].data, "fresh");
+    }
+
+    #[test]
+    fn unterminated_oversized_line_dropped_and_stream_resumes() {
+        // RULE-D-003 OOM guard, line-buffer edition: an unterminated
+        // line past the cap stops accumulating; its late-arriving tail
+        // is skipped and the following healthy event parses normally.
+        let mut p = SseParser::new();
+        let huge = "x".repeat(2 * 1024 * 1024);
+        assert!(p.feed(&format!("data: {}", huge)).is_empty());
+        let events = p.feed(" oversized tail\ndata: ok\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "ok");
+    }
+
+    #[test]
+    fn consecutive_oversized_lines_both_skipped() {
+        // Boundary of the OOM guard: one feed carries the terminator
+        // of the first oversized line AND a second oversized line
+        // still unterminated. The skip flag must survive the first
+        // line's terminator (it belongs to the second line now) — its
+        // residue must never parse into a phantom `data:` event.
+        let mut p = SseParser::new();
+        let huge = "x".repeat(3 * 1024 * 1024);
+        assert!(p
+            .feed(&format!("data: {}\ndata: {}", huge, huge))
+            .is_empty());
+        let events = p.feed("data: injected\n\ndata: ok\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "ok");
+    }
+
+    #[test]
+    fn line_buffer_guard_at_exact_threshold() {
+        // "data: " + exactly MAX_DATA_BYTES payload (line length
+        // MAX + 6) is the largest line the guard still buffers — its
+        // payload fits the event-level cap, so it must survive
+        // intact; the guard only fires strictly beyond it.
+        let payload = "x".repeat(MAX_DATA_BYTES);
+        let mut p = SseParser::new();
+        assert!(p.feed(&format!("data: {}", payload)).is_empty());
+        let events = p.feed("\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data.len(), MAX_DATA_BYTES);
     }
 
     // --- utf8_chunk_text: carry a multibyte char split across chunks ---

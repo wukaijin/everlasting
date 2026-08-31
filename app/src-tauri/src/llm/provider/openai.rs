@@ -786,7 +786,7 @@ impl Provider for OpenAIProvider {
                             let v: Value = match serde_json::from_str(&event.data) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    tracing::debug!(
+                                    tracing::warn!(
                                         error = %e,
                                         data = %event.data,
                                         "openai: failed to parse SSE data JSON"
