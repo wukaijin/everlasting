@@ -3,7 +3,7 @@
   "name": "cache-head-volatility",
   "title": "提示词头部易变注入下沉:消除 OpenAI 路径全量缓存失效",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
