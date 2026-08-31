@@ -19,9 +19,12 @@
 //!   paths enter this structure (session worktree / `/tmp` / spill
 //!   dir / config extras). Nothing the LLM passes in `tool_input`
 //!   can reach it (CVE-2025-59532).
-//! - [`gate`] — the four-way trigger decision (ReadOnly tier ∧ mode
-//!   ≠ Yolo ∧ `sandbox_enabled` ∧ capability probe), pure and
-//!   testable; `decide` composes it with the per-command context.
+//! - [`resolve_policy`] / [`resolve_session_policy`] — the trigger
+//!   decision (P3c: capability → Yolo → project off → kill-switch →
+//!   Plan → project face; pure + testable); `decide` composes it with
+//!   the per-command context. The P3b ReadOnly-tier `gate` is gone:
+//!   under a sandbox face EVERY command sandboxes (`classify_prefix`
+//!   no longer participates in the trigger).
 //! - [`prepare`] — parent-process "safe zone": opens the ruleset fd
 //!   + one `O_PATH` fd per path, builds the BPF program. May
 //!   allocate / open freely.
@@ -142,7 +145,7 @@ pub struct SandboxSpec {
 }
 
 /// Outcome of the per-command sandbox decision ([`decide`] /
-/// [`gate`]).
+/// [`resolve_policy`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// Run the command under the given spec.
@@ -227,12 +230,15 @@ fn probe_once() -> Capability {
 /// Evaluation order is short-circuit and mirrors the staged DB reads
 /// in [`resolve_session_policy`] (config reads are lazy — the
 /// RULE-SBX-004 spirit: a config read must not pay for a decision
-/// already settled by cheaper checks):
+/// already settled by cheaper checks). Both checks 3 and 4 produce
+/// `Off`; the body orders kill-switch before the project tiers for
+/// readability, the staged I/O wrapper preserves the documented
+/// read order:
 ///
 /// 1. capability probe failed → `Off` (fail-open, unchanged);
 /// 2. mode == Yolo → `Off` (恒不沙盒, unchanged);
-/// 3. project policy == Off → `Off` (per-project opt-out);
-/// 4. kill-switch == false → `Off` (global master, beats every face);
+/// 3. kill-switch == false → `Off` (global master, beats every face);
+/// 4. project policy == Off → `Off` (per-project opt-out);
 /// 5. mode == Plan → `Face(ReadOnly)` (session-level read-only face
 ///    overrides the project face — D3);
 /// 6. project policy → `Face(its tier)`.
@@ -363,7 +369,7 @@ pub fn prepare(spec: &SandboxSpec) -> std::io::Result<PreparedSandbox> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = spec;
-        // Unreachable in practice: `gate` never returns Sandbox when
+        // Unreachable in practice: the policy never resolves a face when
         // the probe fails, and the probe always fails off-Linux. The
         // stub exists so the tool layer needs no cfg.
         Ok(PreparedSandbox {

@@ -44,6 +44,7 @@ use crate::sandbox::SandboxBlockKind;
 use crate::state::ChatEventSink;
 
 use super::ask::ask_path;
+use super::audit::{record_audit, AuditKind};
 use super::shell_trust::{first_token_for_allow_always, has_structural_metachar};
 use super::types::PermissionContext;
 use super::PermissionStore;
@@ -135,6 +136,29 @@ impl EscalationHandle {
             // the model gets the failure + guidance either way.
             _ => EscalationOutcome::Denied,
         }
+    }
+    /// Best-effort audit row for the prefix-grant rerun branch (design
+    /// §5.2「重跑 + 审计」): a `tool_allowed` row with an explicit
+    /// reason, so an unsandboxed grant-hit rerun is distinguishable in
+    /// the audit trail from a plain sandboxed failure (no card was
+    /// emitted on this path — the ask-side kinds never fire here).
+    pub async fn audit_grant_rerun(
+        &self,
+        tool_input: &serde_json::Value,
+    ) -> Result<(), sqlx::Error> {
+        let inner = match &self.inner {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        record_audit(
+            &inner.db,
+            &inner.ctx,
+            AuditKind::ToolAllowed,
+            "shell",
+            tool_input,
+            Some("sandbox escalation rerun via prefix-grant hit"),
+        )
+        .await
     }
 }
 

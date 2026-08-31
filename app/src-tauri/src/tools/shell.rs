@@ -467,13 +467,14 @@ pub async fn execute(
     #[cfg(unix)]
     cmd.process_group(0);
 
-    // P3b (08-31-a2-p3b): execution-time sandbox for ReadOnly-tier
-    // commands — the damage limiter UNDER the classification layer
-    // (classification semantics untouched, PRD C2). `decide` is the
-    // four-way gate (ReadOnly ∧ mode≠Yolo ∧ kill-switch ∧ capability);
-    // its result is reused below for the post-hoc write-block guidance
-    // and the audit row (W3: no second query). Fail-open on capability
-    // probe failure (R5); fail-closed on prepare/pre-exec failure
+    // P3b (08-31-a2-p3b) + P3c: execution-time sandbox — the damage
+    // limiter UNDER the classification layer. `decide` resolves the
+    // policy (`resolve_policy`: capability → Yolo → project off →
+    // kill-switch → Plan → project face); under a face EVERY command
+    // sandboxes (classification no longer gates the trigger). Its
+    // result is reused below for the post-hoc guidance and the audit
+    // row (W3: no second query). Fail-open on capability probe
+    // failure (R5); fail-closed on prepare/pre-exec failure
     // (`[sandbox]`-prefixed spawn error, design §2.3).
     let sandbox_decision = crate::sandbox::decide(ctx, command, session_id).await;
     let mut prepared: Option<crate::sandbox::PreparedSandbox> = None;
@@ -569,10 +570,15 @@ pub async fn execute(
     let mut reran_unsandboxed = false;
     if prepared.is_some()
         && !result.cancelled
+        && !result.timed_out
         && result.exit_code != 0
         && ctx.mode != Mode::Plan
         && !ctx.escalation.is_none()
     {
+        // Note: `!result.timed_out` — a timeout kill reports exit -1
+        // with PARTIAL stderr; a denial string in that partial output
+        // would fire a card whose rerun just times out again. The
+        // timeout marker is the user-visible signal for that path.
         let stderr_str = String::from_utf8_lossy(&result.stderr);
         if let Some(kind) = crate::sandbox::classify_block(&stderr_str) {
             // (a) prefix-grant hit (AC6) → rerun directly, no card.
@@ -590,6 +596,12 @@ pub async fn execute(
                     command_sha = %crate::sandbox::command_sha_prefix(command),
                     "shell: sandbox escalation via prefix-grant hit"
                 );
+                // design §5.2「重跑 + 审计」: best-effort ToolAllowed
+                // row so the grant-hit rerun is distinguishable in the
+                // audit trail from a plain sandboxed failure.
+                if let Err(e) = ctx.escalation.audit_grant_rerun(input).await {
+                    tracing::warn!(error = %e, "shell: grant-rerun audit write failed");
+                }
                 true
             } else {
                 // (b) Ask card: command text + interception cause +

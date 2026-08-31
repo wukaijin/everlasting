@@ -381,21 +381,17 @@ export const useProjectsStore = defineStore("projects", () => {
 
   /** P3c: persist the project's sandbox policy tier. Refreshes the
    *  project list so the settings tab reflects the stored value
-   *  (single read model). */
+   *  (single read model). Throws on failure — the caller (settings
+   *  tab) owns the toast, so a store-level toast would double up. */
   async function setProjectSandboxPolicy(
     id: string,
     policy: "off" | "readwrite" | "readonly",
   ): Promise<void> {
-    try {
-      await transport.invoke<ProjectInfo>("update_project_sandbox_policy", {
-        id,
-        policy,
-      });
-      await loadProjects();
-    } catch (e) {
-      showToast(`沙盒策略保存失败: ${extractErrorMessage(e)}`, "error");
-      throw e;
-    }
+    await transport.invoke<ProjectInfo>("update_project_sandbox_policy", {
+      id,
+      policy,
+    });
+    await loadProjects();
   }
 
   function projectById(id: string | null): ProjectInfo | undefined {

@@ -56,11 +56,16 @@ const OPTIONS: PolicyOption[] = [
 const selected = ref<Policy>("readwrite");
 const pending = ref(false);
 
+/** 项目切换与 store 刷新(loadProjects / 他处改档)都回同步本地
+ *  选中;in-flight 期间不回写(避免覆盖乐观选中)。 */
 watch(
-  () => props.projectId,
+  [
+    () => props.projectId,
+    () => projects.projectById(props.projectId)?.sandbox_policy,
+  ],
   () => {
-    const p = projects.projectById(props.projectId);
-    selected.value = p?.sandbox_policy ?? "readwrite";
+    if (pending.value) return;
+    selected.value = projects.projectById(props.projectId)?.sandbox_policy ?? "readwrite";
   },
   { immediate: true },
 );

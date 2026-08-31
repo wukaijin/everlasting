@@ -149,7 +149,7 @@ socket。v1 **不封**且无法用现有机制封:seccomp BPF 只能检查标量
 
 - `sandbox::tests_sandbox`:ABI 常量钉死(`abi_*`)/ BPF golden + 迷你解释器
   逻辑走查(`bpf_*`)/ AccessSet ⊆ handled / spec 来源铁律(command 无法影响
-  spec,编译层无此参数)/ gate 四项矩阵(AC3/4/5)/ 真内核集成矩阵
+  spec,编译层无此参数)/ resolve_policy 全矩阵(P3c §1)/ 真内核集成矩阵
   (写 allow/deny、/init 与 .exe 拒、/dev/tcp EPERM、AF_UNIX 过、git 流程,
   内核不支持时大声 SKIP)。
 - `background_shell::in_memory::tests::sandboxed_background_shell_enforces_write_face`:
