@@ -135,7 +135,25 @@ export interface LoadedSession {
 // `streamController.test.ts` file can call it directly. The
 // public Pinia store API does not re-export this function;
 // callers should go through `ensureLoaded`.
-export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
+//
+// `blockedToolUseIds` (2026-08-31, optional): tool_use ids of
+// blocking interactions (ask_user_question /
+// request_mode_change / request_task_state_transition) that are
+// STILL LIVE in the backend QuestionStore at load time — i.e.
+// the turn is blocked in `execute_blocking` waiting for the
+// user, not dead. The orphan-repair pass below must NOT
+// synthesize the "Tool execution was interrupted … did not run"
+// error for those: the tool IS running, and a synthetic error
+// would render a false error card right next to the live
+// pending card for the same tool_use (the refresh path of the
+// 08-31 incident). Callers derive the set from
+// `reconcilePendingInteractionFromBackend`'s return (pull the
+// authoritative pending state BEFORE calling this). Omitted /
+// empty set = legacy semantics (synthesize for every orphan).
+export function rehydrateMessages(
+  loaded: LoadedMessage[],
+  blockedToolUseIds?: ReadonlySet<string>,
+): ChatMessage[] {
   const out: ChatMessage[] = loaded.map((m) => {
     const blocks = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
     const toolCalls: ChatMessage["toolCalls"] = [];
@@ -355,6 +373,19 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
   // assistant `tool_use` with no following user `tool_result`
   // at all.
   //
+  // 2026-08-31 blocked-skip: an orphan whose id is in
+  // `blockedToolUseIds` is a blocking interaction (ask_user_question
+  // / request_mode_change / request_task_state_transition) that is
+  // STILL LIVE in the backend QuestionStore — the turn is blocked
+  // waiting for the user's answer, so there is no result yet AND
+  // none should be fabricated. Synthesizing "did not run" here
+  // rendered a false ×-error card next to the live pending card
+  // for the same tool_use (the refresh path of the 08-31
+  // incident). Those orphans render as a still-running tool card +
+  // the pending interaction card, and the real result lands in the
+  // DB when the user answers (the post-done `reloadAfterFinalize`
+  // replaces this buffer with the authoritative rows).
+  //
   // Reverse scan so the splice-in's index shift doesn't
   // affect the next iteration (splicing at `i + 1` shifts
   // `i + 1` to `i + 2`, but the loop is going down so we
@@ -380,7 +411,10 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     if (next && next.role === "user") {
       for (const tr of next.toolResults ?? []) coveredIds.add(tr.toolUseId);
     }
-    const orphanCalls = m.toolCalls.filter((tc) => !coveredIds.has(tc.id));
+    const orphanCalls = m.toolCalls.filter(
+      (tc) =>
+        !coveredIds.has(tc.id) && !blockedToolUseIds?.has(tc.id),
+    );
     if (orphanCalls.length === 0) continue;
     const syntheticMsg: ChatMessage = {
       // Distinct id so subsequent `send()`s that build a fresh

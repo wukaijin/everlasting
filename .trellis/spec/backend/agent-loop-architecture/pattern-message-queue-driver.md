@@ -31,7 +31,7 @@ chat_inner 路由临界区(单一 Mutex,锁序 queues → active):
 ## 硬约束(违反即回归)
 
 1. **路由临界区内不得 await**(锁序 queues → active 全仓文档化;`await_inflight_exit` 留在区外)。驱动器退出的「查队列 + 注销」走同一把锁——消灭"break 注销后、新入队无消费者"窗口。
-2. **DriverSink 只在真结束 emit 一次 Done**:单 rid 跨内层轮保活(群聊 stop_reason 白名单的经典聊天泛化),内层 turn 只发常规事件。**`emit_chat_event` 必须按 `forward` 返回值转发;Error 分支不得自转发**(P0 实证:双发导致前端二次 finalize)。
+2. **DriverSink 只在真结束 emit 一次 Done**:单 rid 跨内层轮保活(群聊 stop_reason 白名单的经典聊天泛化),内层 turn 只发常规事件。**`emit_chat_event` 必须按 `forward` 返回值转发;Error 分支不得自转发**(P0 实证:双发导致前端二次 finalize)。**非 chat 通道全数透传**:`tool_question` / `mode_change_request` / `task_state_transition` 在 trait 上是默认静默 no-op,装饰器漏写不报错、只吞事件——2026-08-31 实证三个方法缺失致阻塞交互卡片实时不渲染(刷新靠 `get_pending_interaction` 兜底才恢复)。新增 `ChatEventSink` 通道时,AppHandleSink / HttpSseSink / DriverSink / MockEmitter / RecordingSink 五个实现点必须同步,并在 `driver_sink_forwards_blocking_interaction_channels` 补断言。
 3. **`TurnContinuation` 是唯一的续轮渲染边界,不得泛化 `start` 的 `groupChat` 门控**:`start` 是 run 内每次 LLM 调用的边界(tool_use 后下一轮也发),泛化会把经典多工具轮错误拆泡。handler 三步:物化尾部排队占位 → push 新 assistant 占位 → seal 上一 turn thinking。
 4. **队列项按 uuid 寻址,永不按 position**:位置随增删漂移(撤销后右移全部错位——曾致撤错条/静默失效);`ChatAcceptance::Queued` 必须带 `id`,前端占位按 id 直达后端 IPC。
 5. **注入形态:每条独立 `role:user` APPEND 到 messages 尾部**(与 drive.rs 通知循环同构),cache 断点不变量自动满足;排队项未落过库,不触发 D-D guard;attachments 落盘时序从 turn 启动提前到入队时。

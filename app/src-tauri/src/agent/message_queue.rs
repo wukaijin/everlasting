@@ -310,11 +310,23 @@ pub struct DriverStatus {
 }
 
 /// [`ChatEventSink`] 装饰器:转发一切事件,**吞掉 `Done`**(记录到
-/// [`DriverStatus`]),`Error` 置位后照转。其余四个通道原样透传。
+/// [`DriverStatus`]),`Error` 置位后照转。其余通道原样透传。
 ///
 /// 吞 Done 的理由见 `DriverStatus::last_done`;这是"驱动器只在真
 /// 结束 emit 一次 Done"(design §1)的实现点 —— 不改
 /// `run_chat_loop` 的发射行为,包装发生在 sink 层。
+///
+/// **透传面必须覆盖全部非 chat 通道**(tool_call / tool_result /
+/// permission_ask / tool_question / mode_change_request /
+/// task_state_transition)。后三个是阻塞交互工具
+/// (ask_user_question / request_mode_change /
+/// request_task_state_transition)的卡片事件——trait 为它们提供
+/// **默认静默 no-op**,装饰器漏写转发不会编译报错,只会让前端
+/// 永远收不到卡片(2026-08-31 实证:三个方法缺失导致
+/// dev workflow 的 ask 卡片 + 状态转换卡片实时不渲染,刷新靠
+/// `get_pending_interaction` 拉取才恢复)。新增 trait 通道时,
+/// AppHandleSink / HttpSseSink / DriverSink / MockEmitter /
+/// RecordingSink 五个实现点必须同步。
 pub struct DriverSink {
     inner: Arc<dyn crate::state::ChatEventSink>,
     pub status: Arc<std::sync::Mutex<DriverStatus>>,
@@ -376,6 +388,22 @@ impl crate::state::ChatEventSink for DriverSink {
     fn emit_permission_ask(&self, payload: PermissionAskPayload) {
         self.inner.emit_permission_ask(payload);
     }
+    // 2026-08-31 fix: 三个阻塞交互通道此前缺失 —— trait 默认静默
+    // no-op 把 ask_user_question / request_mode_change /
+    // request_task_state_transition 的卡片事件吞在包装器里,前端
+    // 实时永不渲染、只能刷新靠 get_pending_interaction 拉取兜底。
+    fn emit_tool_question(&self, payload: &crate::agent::question_store::ToolQuestionPayload) {
+        self.inner.emit_tool_question(payload);
+    }
+    fn emit_mode_change_request(&self, payload: &crate::agent::question_store::ModeChangePayload) {
+        self.inner.emit_mode_change_request(payload);
+    }
+    fn emit_task_state_transition(
+        &self,
+        payload: &crate::agent::question_store::TaskStateTransitionPayload,
+    ) {
+        self.inner.emit_task_state_transition(payload);
+    }
 }
 
 #[cfg(test)]
@@ -391,6 +419,9 @@ mod driver_sink_tests {
     #[derive(Default)]
     struct RecordingSink {
         events: Mutex<Vec<ChatEvent>>,
+        questions: Mutex<Vec<crate::agent::question_store::ToolQuestionPayload>>,
+        mode_changes: Mutex<Vec<crate::agent::question_store::ModeChangePayload>>,
+        state_transitions: Mutex<Vec<crate::agent::question_store::TaskStateTransitionPayload>>,
     }
 
     impl ChatEventSink for RecordingSink {
@@ -400,6 +431,18 @@ mod driver_sink_tests {
         fn emit_tool_call(&self, _p: &ToolCallPayload) {}
         fn emit_tool_result(&self, _p: &ToolResultPayload) {}
         fn emit_permission_ask(&self, _p: PermissionAskPayload) {}
+        fn emit_tool_question(&self, p: &crate::agent::question_store::ToolQuestionPayload) {
+            self.questions.lock().unwrap().push(p.clone());
+        }
+        fn emit_mode_change_request(&self, p: &crate::agent::question_store::ModeChangePayload) {
+            self.mode_changes.lock().unwrap().push(p.clone());
+        }
+        fn emit_task_state_transition(
+            &self,
+            p: &crate::agent::question_store::TaskStateTransitionPayload,
+        ) {
+            self.state_transitions.lock().unwrap().push(p.clone());
+        }
     }
 
     fn emit(sink: &DriverSink, event: ChatEvent) {
@@ -483,5 +526,61 @@ mod driver_sink_tests {
             .count();
         assert_eq!(error_count, 1, "Error must be forwarded exactly once");
         assert!(status.lock().unwrap().errored);
+    }
+
+    /// 2026-08-31 回归锁:三个阻塞交互通道(tool_question /
+    /// mode_change_request / task_state_transition)必须穿透包装器。
+    /// 它们在 trait 上是默认静默 no-op,装饰器漏写**不会编译报错**
+    /// ——此前三个方法全部缺失,dev workflow 的 ask 卡片 +
+    /// 状态转换卡片实时不渲染(仅刷新拉取可恢复)。新增
+    /// `ChatEventSink` 通道时在本测试同步补一条断言。
+    #[test]
+    fn driver_sink_forwards_blocking_interaction_channels() {
+        use crate::agent::question_store::{
+            ModeChangePayload, TaskStateTransitionPayload, ToolQuestionPayload,
+        };
+
+        let inner = Arc::new(RecordingSink::default());
+        let (sink, _status) = DriverSink::new(inner.clone());
+
+        sink.emit_tool_question(&ToolQuestionPayload {
+            session_id: "sess-test".into(),
+            tool_use_id: "tu_q".into(),
+            questions: vec![],
+            ts: 0,
+        });
+        sink.emit_mode_change_request(&ModeChangePayload {
+            session_id: "sess-test".into(),
+            tool_use_id: "tu_m".into(),
+            target_mode: "yolo".into(),
+            current_mode: Some("edit".into()),
+            reason: None,
+            ts: 0,
+        });
+        sink.emit_task_state_transition(&TaskStateTransitionPayload {
+            session_id: "sess-test".into(),
+            tool_use_id: "tu_t".into(),
+            target_state: "in_progress".into(),
+            current_state: Some("planning".into()),
+            slug: Some("08-31-docs-sync-batch".into()),
+            reason: None,
+            ts: 0,
+        });
+
+        assert_eq!(
+            inner.questions.lock().unwrap().len(),
+            1,
+            "tool:question must pass through the DriverSink"
+        );
+        assert_eq!(
+            inner.mode_changes.lock().unwrap().len(),
+            1,
+            "mode:change:request must pass through the DriverSink"
+        );
+        assert_eq!(
+            inner.state_transitions.lock().unwrap().len(),
+            1,
+            "task:state:transition:request must pass through the DriverSink"
+        );
     }
 }

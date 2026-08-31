@@ -1102,10 +1102,22 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
    *  (`ensureLoaded` cache-hit, `ensureLoaded` cache-miss,
    *  `reloadAfterFinalize`) all need the same pull logic. The
    *  helper enforces single-source-of-truth (any future fix —
-   *  e.g. debouncing, batching — lands here once). */
+   *  e.g. debouncing, batching — lands here once).
+   *
+   *  2026-08-31: returns the **blocked tool_use id set** derived
+   *  from the freshly-pulled entry — `get_pending_interaction`'
+   *  `tool_use_id` when an interaction is live, empty set when
+   *  not. `rehydrateMessages`' orphan-repair pass consumes this:
+   *  a dangling `tool_use` whose id is in the set is a blocking
+   *  interaction STILL WAITING for the user (the turn is blocked
+   *  in `execute_blocking` on the backend), not an interrupted
+   *  dead call — synthesizing the "did not run" error for it
+   *  fabricated a false error card next to the live pending card
+   *  (the refresh path of the 08-31 incident). Callers that
+   *  don't rehydrate may ignore the return value. */
   async function reconcilePendingInteractionFromBackend(
     sessionId: string,
-  ): Promise<void> {
+  ): Promise<ReadonlySet<string>> {
     try {
       const entry = await transport.invoke<PendingInteraction | null>(
         GET_PENDING_INTERACTION_CMD,
@@ -1117,8 +1129,20 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
       } else {
         cards.removePending(sessionId);
       }
+      const blocked = new Set<string>();
+      if (entry) {
+        // All five PendingInteraction variants carry `tool_use_id`
+        // (the floating synthetic kinds use `loop_intervention_*` /
+        // `turn_limit_softcap_*` ids that never match a real
+        // tool_use block, so adding them is harmless).
+        blocked.add(entry.payload.tool_use_id);
+      }
+      return blocked;
     } catch {
-      // Defensive swallow — see comment above.
+      // Defensive swallow — see comment above. Empty set = rehydrate
+      // falls back to legacy orphan-repair semantics (synthesis for
+      // every dangling tool_use).
+      return new Set<string>();
     }
   }
 
@@ -1374,10 +1398,22 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     requestId?: string,
     opts?: { interrupted?: boolean },
   ): Promise<void> {
+    // 2026-08-31: pull the authoritative pending state BEFORE
+    // rehydrating — the orphan-repair pass needs the blocked
+    // tool_use set to avoid fabricating the "did not run" error
+    // for a blocking interaction that is still live (same
+    // reorder as `ensureLoaded`'s cache-miss path). Fires after
+    // every stream completion — see the helper's doc for the
+    // source-of-truth rationale.
+    const blockedToolUseIds = await reconcilePendingInteractionFromBackend(
+      sessionId,
+    );
     const loaded = await transport.invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
-    const messages = loaded ? rehydrateMessages(loaded.messages) : [];
+    const messages = loaded
+      ? rehydrateMessages(loaded.messages, blockedToolUseIds)
+      : [];
     // putMessages does delete+set in same tick (LRU touch) — Vue
     // batches the update so there's no visible blank gap.
     putMessages(sessionId, messages, false);
@@ -1394,10 +1430,8 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     // text). Drops any prior live state if no committed checklist
     // exists in history.
     useChecklistStore().rehydrateFromMessages(sessionId, messages);
-    // Phase C3 (2026-06-30): same authoritative pull as
-    // `ensureLoaded`. Fires after every stream completion —
-    // see the helper's doc for the source-of-truth rationale.
-    await reconcilePendingInteractionFromBackend(sessionId);
+    // Phase C3 pull moved above the rehydrate (2026-08-31) — the
+    // orphan-repair pass consumes its blocked-tool_use-id return.
     // 08-20-turn-usage-event-quota-view WP3: request 结束 = 一次轻量
     // 配额窗口重查(滑动窗口客户端推算必漂,design 取舍"跑完这轮后
     // 刷新";fire-and-forget,不挡消息面)。R3 interrupted 路径跳过

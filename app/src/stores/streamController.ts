@@ -926,10 +926,21 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       await events.reconcilePendingInteractionFromBackend(sessionId);
       return existing;
     }
+    // 2026-08-31: pull the authoritative pending state BEFORE
+    // rehydrating (was: after the seeding loops) — the orphan-repair
+    // pass inside `rehydrateMessages` consumes the blocked tool_use
+    // id set to skip the synthetic "did not run" error for a
+    // blocking interaction that is still live (the refresh path of
+    // the 08-31 incident: dangling ask tool_use + live pending
+    // fabricated a false error card next to the waiting card).
+    const blockedToolUseIds =
+      await events.reconcilePendingInteractionFromBackend(sessionId);
     const loaded = await transport.invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
-    const messages = loaded ? rehydrateMessages(loaded.messages) : [];
+    const messages = loaded
+      ? rehydrateMessages(loaded.messages, blockedToolUseIds)
+      : [];
     putMessages(sessionId, messages, pinnedSessions.has(sessionId));
     loadedFromDb.add(sessionId);
     // Token usage is seeded from `loadSessions` (chat.ts:393-403)
@@ -972,10 +983,8 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // session whose checklist was set by a prior run, and the
     // card should reflect that history immediately.
     useChecklistStore().rehydrateFromMessages(sessionId, messages);
-    // Phase C3 (2026-06-30): authoritative pull for the
-    // pending-question cache. Single source of truth lives in
-    // the helper `reconcilePendingInteractionFromBackend`.
-    await events.reconcilePendingInteractionFromBackend(sessionId);
+    // Phase C3 pull moved above the rehydrate (2026-08-31) — the
+    // orphan-repair pass consumes its blocked-tool_use-id return.
     // Return the reactive proxy, NOT the plain `messages` array. Callers
     // like `chat.ts` `send` / `resendMessage` push user/assistant
     // placeholders into the returned reference; pushing into the plain

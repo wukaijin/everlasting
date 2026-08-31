@@ -310,6 +310,71 @@ describe("rehydrateMessages — orphan tool_use repair (BUG FIX 2013)", () => {
   });
 });
 
+// =====================================================================
+// 2026-08-31 blocked-skip (DriverSink incident refresh path): a
+// dangling tool_use whose id has a LIVE pending interaction in the
+// backend QuestionStore is a blocking tool (ask_user_question /
+// request_mode_change / request_task_state_transition) still waiting
+// for the user — NOT an interrupted dead call. The orphan-repair pass
+// must not synthesize the "did not run" error for it (that rendered a
+// false ×-error card next to the live pending card after refresh).
+describe("rehydrateMessages — blocked orphan skip (08-31 blocking-interaction incident)", () => {
+  it("does NOT synthesize a result for an orphan whose id is in blockedToolUseIds", () => {
+    const loaded: LoadedMessage[] = [
+      usrTyped(0, "拆完任务跟我对齐"),
+      asst(1, "ok", [
+        toolUse("call_blocked", "ask_user_question", { questions: [] }),
+      ]),
+      // No tool_result yet — the turn is blocked on the backend
+      // waiting for the user's answer.
+      usrTyped(2, "(还没有后续)"),
+    ];
+    const out = rehydrateMessages(loaded, new Set(["call_blocked"]));
+
+    // No synthetic user(tool_result) spliced in — the tool is
+    // running (blocked), not interrupted. The waiting card renders
+    // from the live pending interaction instead.
+    expect(out).toHaveLength(3);
+    expect(out[2].role).toBe("user");
+    expect(out[2].content).toBe("(还没有后续)");
+    expect(out[2].toolResults).toBeUndefined();
+  });
+
+  it("STILL synthesizes for the same orphan when no blocked set is passed (legacy semantics)", () => {
+    const loaded: LoadedMessage[] = [
+      usrTyped(0, "拆完任务跟我对齐"),
+      asst(1, "ok", [
+        toolUse("call_blocked", "ask_user_question", { questions: [] }),
+      ]),
+      usrTyped(2, "next"),
+    ];
+    const out = rehydrateMessages(loaded);
+    // Without the set (e.g. the pending pull failed / daemon died
+    // and lost the pending), legacy orphan-repair semantics apply.
+    expect(out).toHaveLength(4);
+    expect(out[2].toolResults?.[0].toolUseId).toBe("call_blocked");
+    expect(out[2].toolResults?.[0].isError).toBe(true);
+  });
+
+  it("partitions mixed orphans: blocked id skipped, dead id repaired", () => {
+    const loaded: LoadedMessage[] = [
+      usrTyped(0, "go"),
+      asst(1, "ok", [
+        toolUse("call_live", "ask_user_question", { questions: [] }),
+        toolUse("call_dead", "read_file", { path: "foo" }),
+      ]),
+    ];
+    const out = rehydrateMessages(loaded, new Set(["call_live"]));
+
+    // Only the dead orphan gets a synthetic result.
+    expect(out).toHaveLength(3);
+    expect(out[2].role).toBe("user");
+    expect(out[2].toolResults).toHaveLength(1);
+    expect(out[2].toolResults?.[0].toolUseId).toBe("call_dead");
+    expect(out[2].toolResults?.[0].content).toContain("interrupted");
+  });
+});
+
 describe("rehydrateMessages — existing merge step is preserved", () => {
   it("merges a user(tool_result) onto the preceding assistant(tool_use) for UI grouping", () => {
     // This is the pre-existing merge step, kept in the same
