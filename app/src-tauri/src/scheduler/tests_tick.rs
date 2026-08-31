@@ -84,7 +84,9 @@ async fn seed_task(
         &fx.state.db,
         NewScheduledTask {
             project_id: fx.project_id.clone(),
-            target_session_id: fx.session_id.clone(),
+            target_session_id: Some(fx.session_id.clone()),
+            target_mode: crate::db::scheduled_tasks::target_modes::FIXED.into(),
+            model_id: None,
             name: name.to_string(),
             prompt: "汇总昨夜进展".into(),
             schedule_json: serde_json::to_string(&spec).unwrap(),
@@ -108,7 +110,7 @@ async fn seed_task(
         .expect("backdate created_at");
     if let Some(fired) = last_fired_at {
         // 预设 = 模拟一次真实历史 fire(计一次 run_count,同生产语义)。
-        mark_task_fired(&fx.state.db, &task.id, fired, fired + step_ms, true)
+        mark_task_fired(&fx.state.db, &task.id, fired, fired + step_ms, true, None)
             .await
             .expect("preset last_fired_at");
     }
@@ -150,7 +152,9 @@ async fn seed_once_task(
         &fx.state.db,
         NewScheduledTask {
             project_id: fx.project_id.clone(),
-            target_session_id: fx.session_id.clone(),
+            target_session_id: Some(fx.session_id.clone()),
+            target_mode: crate::db::scheduled_tasks::target_modes::FIXED.into(),
+            model_id: None,
             name: name.to_string(),
             prompt: "跑一次就收工".into(),
             schedule_json: serde_json::to_string(&spec).unwrap(),
@@ -755,6 +759,7 @@ async fn once_task_consumed_point_completes_without_firing() {
         now - 3_600_000,
         now + 86_400_000,
         true,
+        None,
     )
     .await
     .expect("preset consumed point");
@@ -772,4 +777,221 @@ async fn once_task_consumed_point_completes_without_firing() {
         audit_actions(&fx).await,
         vec![(actions::COMPLETED.to_string(), Some("once".to_string()))]
     );
+}
+
+// --- per_run 档(08-31-sched-per-run-session)---
+
+use crate::db::scheduled_tasks::target_modes;
+
+/// per_run 任务 seed:不绑定固定 session(target NULL),可选模型绑定,
+/// created_at 回拨同 [`seed_task`]。
+async fn seed_per_run_task(
+    fx: &TickFixture,
+    every_min: u32,
+    name: &str,
+    model_id: Option<&str>,
+) -> crate::db::scheduled_tasks::ScheduledTaskRow {
+    let spec =
+        scheduler::parse_schedule(&format!(r#"{{"kind":"interval","every_min":{every_min}}}"#))
+            .expect("valid interval schedule");
+    let step_ms = (every_min as i64) * 60_000;
+    let task = insert_scheduled_task(
+        &fx.state.db,
+        NewScheduledTask {
+            project_id: fx.project_id.clone(),
+            target_session_id: None,
+            target_mode: target_modes::PER_RUN.into(),
+            model_id: model_id.map(str::to_string),
+            name: name.to_string(),
+            prompt: "每轮全新开始".into(),
+            schedule_json: serde_json::to_string(&spec).unwrap(),
+            enabled: true,
+            created_by: "user".into(),
+            next_fire_at: scheduler::now_epoch_ms() + step_ms,
+            max_runs: None,
+            ends_at: None,
+        },
+    )
+    .await
+    .expect("insert per_run task");
+    sqlx::query("UPDATE scheduled_tasks SET created_at = ? WHERE id = ?")
+        .bind(scheduler::now_epoch_ms() - 6 * 3_600_000)
+        .bind(&task.id)
+        .execute(&fx.state.db)
+        .await
+        .expect("backdate created_at");
+    task
+}
+
+/// 指定 session 的 scheduled_task_fired 审计 `(action, reason?)` 序。
+async fn audit_actions_for(fx: &TickFixture, session_id: &str) -> Vec<(String, Option<String>)> {
+    let rows = sqlx::query(
+        "SELECT payload_json FROM session_audit_events \
+         WHERE session_id = ? AND kind = 'scheduled_task_fired' ORDER BY id ASC",
+    )
+    .bind(session_id)
+    .fetch_all(&fx.state.db)
+    .await
+    .expect("audit query");
+    rows.iter()
+        .filter_map(|r| {
+            use sqlx::Row;
+            let payload: String = r.try_get(0).ok()?;
+            let v: serde_json::Value = serde_json::from_str(&payload).ok()?;
+            Some((
+                v["action"].as_str()?.to_string(),
+                v["reason"].as_str().map(str::to_string),
+            ))
+        })
+        .collect()
+}
+
+/// per_run fire:tick 内新建 run session,fire 注入该新 session(AC2),
+/// `last_run_session_id` 落账,审计挂新 session(AC3),模型绑定应用(AC4)。
+#[tokio::test(flavor = "multi_thread")]
+async fn per_run_task_creates_run_session_and_fires_into_it() {
+    let fx = make_fixture().await;
+    let now = scheduler::now_epoch_ms();
+    let model = crate::db::list_models(&fx.state.db)
+        .await
+        .expect("list models")
+        .into_iter()
+        .next()
+        .expect("seeded model");
+    let task = seed_per_run_task(&fx, 1, "早报", Some(&model.model.id)).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    // 块作用域取记录(guard 随块结束释放,不跨下方 await;clippy
+    // await_holding_lock 不识别 drop(),存量用例 265 行同款告警)。
+    let run_sid = {
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 1, "one due per_run task = one fire");
+        assert_ne!(
+            recs[0].target_session_id, fx.session_id,
+            "fire must target the freshly created session, not the fixture session"
+        );
+        recs[0].target_session_id.clone()
+    };
+
+    // 新 session 行:同 project、标题 = 「任务名 YYYY-MM-DD HH:MM」、
+    // 模型绑定写入 per-session 覆盖列。
+    let session = crate::db::sessions::load_session(&fx.state.db, &run_sid)
+        .await
+        .expect("load run session")
+        .expect("run session row");
+    assert_eq!(session.session.project_id, fx.project_id);
+    assert_eq!(
+        session.session.title,
+        format!("早报 {}", scheduler::compute::format_local_hhmm(now)),
+        "run session title = task name + local fire time"
+    );
+    assert_eq!(
+        session.session.model_id.as_deref(),
+        Some(model.model.id.as_str()),
+        "task-level model binding applied to the new session"
+    );
+
+    // 落账:last_run_session_id = 新 session。
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(
+        row.last_run_session_id.as_deref(),
+        Some(run_sid.as_str()),
+        "accounting records the run session"
+    );
+    assert!(row.last_fired_at.is_some(), "due consumed");
+
+    // 审计挂新 session(AC3);固定 fixture session 上无审计。
+    assert_eq!(
+        audit_actions_for(&fx, &run_sid).await,
+        vec![(actions::FIRED.to_string(), None)]
+    );
+    assert!(audit_actions(&fx).await.is_empty());
+}
+
+/// per_run 不参与「同 session 每 tick 一 fire」:同 tick 两个 per_run
+/// 任务都各自建 session 并 fire(目标互不相同)。
+#[tokio::test(flavor = "multi_thread")]
+async fn two_per_run_tasks_same_tick_fire_independently() {
+    let fx = make_fixture().await;
+    let _a = seed_per_run_task(&fx, 1, "任务A", None).await;
+    let _b = seed_per_run_task(&fx, 1, "任务B", None).await;
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    let recs = records.lock().unwrap();
+    assert_eq!(recs.len(), 2, "no deferral across per_run tasks");
+    assert_ne!(
+        recs[0].target_session_id, recs[1].target_session_id,
+        "each fire gets its own fresh session"
+    );
+}
+
+/// per_run 绕过 queue-disabled gate 与队列去重(pending 滞留 + 开关全关
+/// 仍照常 fire,AC5)。
+#[tokio::test(flavor = "multi_thread")]
+async fn per_run_ignores_queue_disabled_and_pending_dedup() {
+    let fx = make_fixture().await;
+    let task = seed_per_run_task(&fx, 1, "每跑", None).await;
+    // message_queue_enabled=false(fail-open 默认开,须显式写 "false")。
+    crate::db::config::set_config_value(&fx.state.db, "message_queue_enabled", "false")
+        .await
+        .expect("set queue flag");
+
+    let records = Arc::new(StdMutex::new(Vec::new()));
+    // 预置一个「上一次 fire 的条目仍滞留队列」假 uuid:fixed 档会被
+    // dedup 拦下,per_run 无共享队列,不应受影响。
+    let mut pending = HashMap::new();
+    pending.insert(task.id.clone(), uuid::Uuid::new_v4().to_string());
+    scheduler::scheduler_tick_with_fire(&fx.state, &mut pending, &recording_fire(records.clone()))
+        .await;
+
+    assert_eq!(
+        records.lock().unwrap().len(),
+        1,
+        "per_run fires despite queue-disabled + pending dedup"
+    );
+    let run_sid = records.lock().unwrap()[0].target_session_id.clone();
+    let actions = audit_actions_for(&fx, &run_sid).await;
+    assert_eq!(
+        actions,
+        vec![(actions::FIRED.to_string(), None)],
+        "fired (not skipped_queue_disabled / skipped_dedup)"
+    );
+}
+
+/// `create_run_session` 纯函数性:project 不存在 → Err(字符串 reason),
+/// 不留半成品。
+#[tokio::test(flavor = "multi_thread")]
+async fn create_run_session_missing_project_errors() {
+    let fx = make_fixture().await;
+    let row = crate::db::scheduled_tasks::ScheduledTaskRow {
+        id: "t".into(),
+        project_id: "no-such-project".into(),
+        target_session_id: None,
+        target_mode: target_modes::PER_RUN.into(),
+        model_id: None,
+        last_run_session_id: None,
+        name: "孤儿".into(),
+        prompt: "p".into(),
+        schedule_json: r#"{"kind":"interval","every_min":30}"#.into(),
+        enabled: true,
+        created_by: "user".into(),
+        created_at: 1,
+        last_fired_at: None,
+        next_fire_at: 1,
+        run_count: 0,
+        max_runs: None,
+        ends_at: None,
+    };
+    let err = scheduler::create_run_session(&fx.state.db, &row, scheduler::now_epoch_ms())
+        .await
+        .expect_err("missing project must error");
+    assert!(err.contains("不存在"), "error names the project: {err}");
 }

@@ -115,3 +115,124 @@ async fn concurrent_read_during_write_under_wal() {
     );
     txn.commit().await.expect("commit");
 }
+
+/// 08-31-sched-per-run-session:旧形表(F2b 时代,target_session_id
+/// NOT NULL)经 `rebuild_scheduled_tasks_for_target_mode` 重建 —— 数据
+/// 保全 + 新列种子(target_mode='fixed';model_id / last_run_session_id
+/// NULL)+ 幂等(重跑 no-op)。旧形表手工搭:drop 新形表后按旧 DDL 建,
+/// 行内引用的 project/session 由种子保证 FK 成立。
+#[tokio::test]
+async fn rebuild_scheduled_tasks_preserves_rows_and_seeds_target_mode() {
+    use sqlx::Row;
+    let (pool, _path) = fresh_pool().await;
+    // init_pool 只设 pragma,schema 由 run_migrations 建(测试要在新形
+    // 表上搭旧形表,先跑完整迁移)。
+    run_migrations(&pool).await.expect("run migrations");
+
+    let name = format!("rebuild-{}", uuid::Uuid::new_v4().simple());
+    let path = format!("/tmp/rebuild-{name}");
+    crate::db::create_project(&pool, &name, &path, false, None)
+        .await
+        .expect("create project");
+    let project = crate::db::list_projects(&pool, false)
+        .await
+        .expect("list projects")
+        .into_iter()
+        .find(|p| p.name == name)
+        .expect("project row");
+    let session_id = uuid::Uuid::new_v4().to_string();
+    crate::db::create_session(
+        &pool,
+        &session_id,
+        &project.id,
+        &path,
+        "mock-model",
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("create session");
+
+    sqlx::query("DROP TABLE scheduled_tasks")
+        .execute(&pool)
+        .await
+        .expect("drop new-shape table");
+    sqlx::query(
+        r#"
+        CREATE TABLE scheduled_tasks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          target_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          schedule TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_by TEXT NOT NULL DEFAULT 'user',
+          created_at INTEGER NOT NULL,
+          last_fired_at INTEGER,
+          next_fire_at INTEGER NOT NULL,
+          run_count INTEGER NOT NULL DEFAULT 0,
+          max_runs INTEGER,
+          ends_at INTEGER
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create old-shape table");
+    sqlx::query(
+        "INSERT INTO scheduled_tasks \
+         (id, project_id, target_session_id, name, prompt, schedule, enabled, \
+          created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at) \
+         VALUES ('t1', ?, ?, '旧任务', 'p', '{\"kind\":\"daily\",\"at\":\"09:00\"}', \
+                 1, 'user', 100, 200, 300, 2, 5, NULL)",
+    )
+    .bind(&project.id)
+    .bind(&session_id)
+    .execute(&pool)
+    .await
+    .expect("insert legacy row");
+
+    rebuild_scheduled_tasks_for_target_mode(&pool)
+        .await
+        .expect("rebuild");
+    let row = sqlx::query(
+        "SELECT target_session_id, target_mode, model_id, last_run_session_id, \
+                name, run_count, max_runs, enabled FROM scheduled_tasks WHERE id = 't1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("legacy row preserved");
+    assert_eq!(
+        row.try_get::<Option<String>, _>("target_session_id")
+            .expect("target"),
+        Some(session_id),
+        "fixed target preserved through the rebuild"
+    );
+    assert_eq!(
+        row.try_get::<String, _>("target_mode").expect("mode"),
+        "fixed"
+    );
+    assert!(row
+        .try_get::<Option<String>, _>("model_id")
+        .expect("model")
+        .is_none());
+    assert!(row
+        .try_get::<Option<String>, _>("last_run_session_id")
+        .expect("run sid")
+        .is_none());
+    assert_eq!(row.try_get::<String, _>("name").expect("name"), "旧任务");
+    assert_eq!(row.try_get::<i64, _>("run_count").expect("run_count"), 2);
+    assert_eq!(row.try_get::<i64, _>("max_runs").expect("max_runs"), 5);
+
+    // 幂等:重跑 no-op(行不重复、不丢)。
+    rebuild_scheduled_tasks_for_target_mode(&pool)
+        .await
+        .expect("rebuild again");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_tasks")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 1);
+}

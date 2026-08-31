@@ -16,6 +16,16 @@
 
 use sqlx::SqlitePool;
 
+/// 目标 session 模式(`target_mode` 列;08-31-sched-per-run-session)。
+/// `fixed` = 注入到固定目标 session(`target_session_id` 非空,CHECK
+/// 不变式);`per_run` = 每次触发自动新建 session(`target_session_id`
+/// 恒 NULL,`last_run_session_id` 记最近一次的 run session,无 FK ——
+/// 删旧 run session 不得级联删任务)。
+pub mod target_modes {
+    pub const FIXED: &str = "fixed";
+    pub const PER_RUN: &str = "per_run";
+}
+
 /// 供调度器与 UI 读取的任务行。`schedule_json` 是原始 JSON 文本
 /// (反序列化经 [`crate::scheduler::compute::parse_schedule`],校验
 /// 在写入时完成,读取时信任)。
@@ -23,7 +33,17 @@ use sqlx::SqlitePool;
 pub struct ScheduledTaskRow {
     pub id: String,
     pub project_id: String,
-    pub target_session_id: String,
+    /// 固定目标 session;`target_mode = per_run` 时恒 `None`(CHECK
+    /// 不变式:fixed ⇔ 非空)。
+    pub target_session_id: Option<String>,
+    /// 目标模式:[`target_modes::FIXED`] | [`target_modes::PER_RUN`]。
+    pub target_mode: String,
+    /// per_run 档每次新建 session 绑定的模型(None = 全局默认);
+    /// fixed 档不使用(模型绑定在专用 session 行上)。
+    pub model_id: Option<String>,
+    /// per_run 档最近一次 fire 新建的 session(无 FK;审计锚点 +
+    /// 列表展示)。从未 fire 过 = None。
+    pub last_run_session_id: Option<String>,
     pub name: String,
     pub prompt: String,
     pub schedule_json: String,
@@ -48,7 +68,12 @@ pub struct ScheduledTaskRow {
 #[derive(Debug, Clone)]
 pub struct NewScheduledTask {
     pub project_id: String,
-    pub target_session_id: String,
+    /// fixed 档 = 目标 session;per_run 档 = None。
+    pub target_session_id: Option<String>,
+    /// [`target_modes::FIXED`] | [`target_modes::PER_RUN`]。
+    pub target_mode: String,
+    /// per_run 档的模型绑定(None = 全局默认)。
+    pub model_id: Option<String>,
     pub name: String,
     pub prompt: String,
     /// 已过 [`crate::scheduler::compute::parse_schedule`] 校验的 JSON。
@@ -65,14 +90,17 @@ pub struct NewScheduledTask {
 
 /// [`update_scheduled_task`] 的载荷。`None` 字段不动存量;`enabled` 的
 /// false→true 跳变触发 `last_fired_at = now` + `run_count = 0`(重启用
-/// 不补跑、计数重置,design §3 + F2b D8)。`max_runs` / `ends_at` 是双层
-/// Option:外层 `None` = 不动,内层 `None` = 显式清空为不限。
+/// 不补跑、计数重置,design §3 + F2b D8)。`max_runs` / `ends_at` /
+/// `target_session_id` / `model_id` 是双层 Option:外层 `None` = 不动,
+/// 内层 `None` = 显式清空(per_run 切换时 target 清空)。
 #[derive(Debug, Clone, Default)]
 pub struct UpdateScheduledTask {
     pub name: Option<String>,
     pub prompt: Option<String>,
     pub schedule_json: Option<String>,
-    pub target_session_id: Option<String>,
+    pub target_session_id: Option<Option<String>>,
+    pub target_mode: Option<String>,
+    pub model_id: Option<Option<String>>,
     pub enabled: Option<bool>,
     pub max_runs: Option<Option<i64>>,
     pub ends_at: Option<Option<i64>>,
@@ -92,6 +120,9 @@ fn row_from(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduledTaskRow, sqlx::Err
         id: row.try_get("id")?,
         project_id: row.try_get("project_id")?,
         target_session_id: row.try_get("target_session_id")?,
+        target_mode: row.try_get("target_mode")?,
+        model_id: row.try_get("model_id")?,
+        last_run_session_id: row.try_get("last_run_session_id")?,
         name: row.try_get("name")?,
         prompt: row.try_get("prompt")?,
         schedule_json: row.try_get("schedule")?,
@@ -106,7 +137,8 @@ fn row_from(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduledTaskRow, sqlx::Err
     })
 }
 
-const SELECT_COLS: &str = "id, project_id, target_session_id, name, prompt, schedule, \
+const SELECT_COLS: &str = "id, project_id, target_session_id, target_mode, model_id, \
+     last_run_session_id, name, prompt, schedule, \
      enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at";
 
 /// 新建任务。id 服务端生成(uuid);`created_by` 随载荷(`'user'` =
@@ -120,13 +152,15 @@ pub async fn insert_scheduled_task(
     sqlx::query(
         r#"
  INSERT INTO scheduled_tasks
- (id, project_id, target_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)
+ (id, project_id, target_session_id, target_mode, model_id, last_run_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)
  "#,
     )
     .bind(&id)
     .bind(&new.project_id)
     .bind(&new.target_session_id)
+    .bind(&new.target_mode)
+    .bind(&new.model_id)
     .bind(&new.name)
     .bind(&new.prompt)
     .bind(&new.schedule_json)
@@ -230,6 +264,7 @@ pub async fn get_scheduled_task(
 /// 部分更新。enabled false→true 时 `last_fired_at = now`(design §3:
 /// 重启用从下一个到期点开始,不补停用期);其余跳变不触碰基准。
 /// schedule / target_session 变更时展示值 `next_fire_at` 同步重算。
+/// `target_session_id` / `model_id` 是双层 Option(外层不动 / 内层清空)。
 /// 返回更新后的行;id 不存在返回 `None`。
 pub async fn update_scheduled_task(
     pool: &SqlitePool,
@@ -244,9 +279,15 @@ pub async fn update_scheduled_task(
     let schedule_changed = upd.schedule_json.is_some();
     let enabled_changed = upd.enabled.is_some();
     let schedule_json = upd.schedule_json.unwrap_or(existing.schedule_json.clone());
-    let target_session_id = upd
-        .target_session_id
-        .unwrap_or(existing.target_session_id.clone());
+    let target_session_id = match upd.target_session_id {
+        None => existing.target_session_id.clone(),
+        Some(v) => v,
+    };
+    let target_mode = upd.target_mode.unwrap_or(existing.target_mode.clone());
+    let model_id = match upd.model_id {
+        None => existing.model_id.clone(),
+        Some(v) => v,
+    };
     let enabled = upd.enabled.unwrap_or(existing.enabled);
 
     // false→true:用户主动重启用 → 从现在起算,不补跑存量(design §3);
@@ -281,7 +322,7 @@ pub async fn update_scheduled_task(
     sqlx::query(
         r#"
  UPDATE scheduled_tasks
- SET name = ?, prompt = ?, schedule = ?, target_session_id = ?, enabled = ?, last_fired_at = ?, next_fire_at = ?, run_count = ?, max_runs = ?, ends_at = ?
+ SET name = ?, prompt = ?, schedule = ?, target_session_id = ?, target_mode = ?, model_id = ?, enabled = ?, last_fired_at = ?, next_fire_at = ?, run_count = ?, max_runs = ?, ends_at = ?
  WHERE id = ?
  "#,
     )
@@ -289,6 +330,8 @@ pub async fn update_scheduled_task(
     .bind(&prompt)
     .bind(&schedule_json)
     .bind(&target_session_id)
+    .bind(&target_mode)
+    .bind(&model_id)
     .bind(enabled as i64)
     .bind(last_fired_at)
     .bind(next_fire_at)
@@ -306,7 +349,9 @@ pub async fn update_scheduled_task(
 /// `next_fire_at` 写 `next_fire_display(schedule, due)` 展示值。
 /// `count_fire` 控制 `run_count + 1` 与否(F2b):真正送入 chat_inner
 /// 的落账(Queued/Started/Error)计一次;dedup 跳过(prompt 未送达)
-/// 仅消费 due 点不计数。
+/// 仅消费 due 点不计数。`last_run_session_id` 是 per_run 档本次新建的
+/// run session:`Some` 覆写、`None` 保留旧值(COALESCE;fixed 档与
+/// dedup 跳过路径恒传 None)。
 /// 触碰 `last_fired_at` 时**不**套 false→true 语义 —— 本函数只被调度器
 /// 在任务保持 enabled 的前提下调用。返回 affected 行数(0 = 任务已被删)。
 pub async fn mark_task_fired(
@@ -315,13 +360,16 @@ pub async fn mark_task_fired(
     last_fired_at: i64,
     next_fire_at: i64,
     count_fire: bool,
+    last_run_session_id: Option<&str>,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE scheduled_tasks SET last_fired_at = ?, next_fire_at = ?, run_count = run_count + ? WHERE id = ?",
+        "UPDATE scheduled_tasks SET last_fired_at = ?, next_fire_at = ?, run_count = run_count + ?, \
+         last_run_session_id = COALESCE(?, last_run_session_id) WHERE id = ?",
     )
     .bind(last_fired_at)
     .bind(next_fire_at)
     .bind(count_fire as i64)
+    .bind(last_run_session_id)
     .bind(id)
     .execute(pool)
     .await?;
@@ -429,7 +477,9 @@ mod tests {
             pool,
             NewScheduledTask {
                 project_id: project_id.to_string(),
-                target_session_id: session_id.to_string(),
+                target_session_id: Some(session_id.to_string()),
+                target_mode: target_modes::FIXED.into(),
+                model_id: None,
                 name: "早报".into(),
                 prompt: "汇总昨日进展".into(),
                 schedule_json: spec_json(r#"{"kind":"daily","at":"09:00"}"#),
@@ -452,7 +502,8 @@ mod tests {
 
         assert!(!row.id.is_empty(), "server-side uuid id");
         assert_eq!(row.project_id, project_id);
-        assert_eq!(row.target_session_id, session_id);
+        assert_eq!(row.target_session_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(row.target_mode, "fixed", "default mode on plain insert");
         assert_eq!(row.name, "早报");
         assert!(row.enabled);
         assert_eq!(row.created_by, "user");
@@ -496,7 +547,9 @@ mod tests {
             &pool,
             NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: target_modes::FIXED.into(),
+                model_id: None,
                 name: "已触发过".into(),
                 prompt: "p".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
@@ -513,7 +566,9 @@ mod tests {
             &pool,
             NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: target_modes::FIXED.into(),
+                model_id: None,
                 name: "停用".into(),
                 prompt: "p".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":60}"#),
@@ -526,7 +581,7 @@ mod tests {
         )
         .await
         .expect("insert third");
-        mark_task_fired(&pool, &fired.id, 500, 3_500_000, true)
+        mark_task_fired(&pool, &fired.id, 500, 3_500_000, true, None)
             .await
             .expect("mark fired");
 
@@ -544,7 +599,7 @@ mod tests {
         let pool = test_pool().await;
         let (project_id, session_id) = seed_project_session(&pool).await;
         let row = insert_sample(&pool, &project_id, &session_id).await;
-        mark_task_fired(&pool, &row.id, 123, 4_555, true)
+        mark_task_fired(&pool, &row.id, 123, 4_555, true, None)
             .await
             .expect("mark fired");
 
@@ -717,7 +772,7 @@ mod tests {
         let (project_id, session_id) = seed_project_session(&pool).await;
         let row = insert_sample(&pool, &project_id, &session_id).await;
 
-        mark_task_fired(&pool, &row.id, 100, 200, true)
+        mark_task_fired(&pool, &row.id, 100, 200, true, None)
             .await
             .expect("fire");
         assert_eq!(
@@ -729,7 +784,7 @@ mod tests {
             1,
             "count_fire=true increments"
         );
-        mark_task_fired(&pool, &row.id, 300, 400, false)
+        mark_task_fired(&pool, &row.id, 300, 400, false, None)
             .await
             .expect("dedup-style account");
         assert_eq!(
@@ -774,7 +829,9 @@ mod tests {
             &pool,
             NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: target_modes::FIXED.into(),
+                model_id: None,
                 name: "限时".into(),
                 prompt: "p".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
@@ -839,10 +896,10 @@ mod tests {
         assert_eq!(upd.ends_at, None, "explicit null clears");
 
         // 计数两次 → 停用 → 重启用:run_count 清零(F2b D8)。
-        mark_task_fired(&pool, &row.id, 100, 200, true)
+        mark_task_fired(&pool, &row.id, 100, 200, true, None)
             .await
             .expect("fire 1");
-        mark_task_fired(&pool, &row.id, 400, 500, true)
+        mark_task_fired(&pool, &row.id, 400, 500, true, None)
             .await
             .expect("fire 2");
         assert_eq!(
@@ -891,7 +948,9 @@ mod tests {
             &pool,
             NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: target_modes::FIXED.into(),
+                model_id: None,
                 name: "agent 排的".into(),
                 prompt: "每小时检查".into(),
                 schedule_json: spec_json(r#"{"kind":"interval","every_min":60}"#),
@@ -917,5 +976,132 @@ mod tests {
             .await
             .expect("list all");
         assert_eq!(all.len(), 2, "None 过滤不受影响(UI 路径行为零变化)");
+    }
+
+    // --- per_run 档(08-31-sched-per-run-session)---
+
+    /// per_run 行 roundtrip(target NULL + 三新列)+ update 的 target
+    /// 三态(缺省不动 / `Some(Some)` 切 fixed 设目标 / `Some(None)` 切
+    /// per_run 清空)+ `last_run_session_id` 的 COALESCE 语义 + 删 run
+    /// session 不级联删任务(无 FK,AC7)。
+    #[tokio::test]
+    async fn per_run_roundtrip_update_three_state_target_and_no_run_cascade() {
+        let pool = test_pool().await;
+        let (project_id, session_id) = seed_project_session(&pool).await;
+        let row = insert_scheduled_task(
+            &pool,
+            NewScheduledTask {
+                project_id: project_id.clone(),
+                target_session_id: None,
+                target_mode: target_modes::PER_RUN.into(),
+                model_id: Some("m-1".into()),
+                name: "每跑一新".into(),
+                prompt: "p".into(),
+                schedule_json: spec_json(r#"{"kind":"interval","every_min":30}"#),
+                enabled: true,
+                created_by: "user".into(),
+                next_fire_at: 1_000,
+                max_runs: None,
+                ends_at: None,
+            },
+        )
+        .await
+        .expect("insert per_run");
+        assert_eq!(
+            row.target_session_id, None,
+            "per_run binds no fixed session"
+        );
+        assert_eq!(row.target_mode, "per_run");
+        assert_eq!(row.model_id.as_deref(), Some("m-1"));
+        assert_eq!(row.last_run_session_id, None, "never fired");
+
+        // 外层 None(name-only patch):target/mode/model 不动。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                name: Some("改名".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.target_session_id, None);
+        assert_eq!(upd.target_mode, "per_run");
+        assert_eq!(upd.model_id.as_deref(), Some("m-1"));
+
+        // fire 落账带 run session → 记录;None(dedup 路径)保留旧值。
+        mark_task_fired(&pool, &row.id, 100, 200, true, Some("run-sid"))
+            .await
+            .expect("fire with run session");
+        mark_task_fired(&pool, &row.id, 300, 400, false, None)
+            .await
+            .expect("dedup-style accounting");
+        let after = get_scheduled_task(&pool, &row.id).await.unwrap().unwrap();
+        assert_eq!(
+            after.last_run_session_id.as_deref(),
+            Some("run-sid"),
+            "COALESCE keeps the previous run session on None"
+        );
+
+        // Some(Some) + mode fixed:切回固定目标。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                target_session_id: Some(Some(session_id.clone())),
+                target_mode: Some(target_modes::FIXED.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.target_session_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(upd.target_mode, "fixed");
+
+        // Some(None) + mode per_run:清空固定绑定(同语句内两列一起变,
+        // CHECK 不变式在语句级成立)。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                target_session_id: Some(None),
+                target_mode: Some(target_modes::PER_RUN.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.target_session_id, None);
+        assert_eq!(upd.target_mode, "per_run");
+
+        // 删除真实 run session → 任务存活(last_run_session_id 无 FK,
+        // 区别于 fixed 档 target 的级联语义,AC7)。
+        let run_sid = uuid::Uuid::new_v4().to_string();
+        crate::db::create_session(
+            &pool,
+            &run_sid,
+            &project_id,
+            "/tmp/sched-test-per-run",
+            "mock-model",
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create run session");
+        mark_task_fired(&pool, &row.id, 500, 600, true, Some(&run_sid))
+            .await
+            .expect("fire #2");
+        crate::db::delete_session(&pool, &run_sid)
+            .await
+            .expect("delete run session");
+        assert!(
+            get_scheduled_task(&pool, &row.id).await.unwrap().is_some(),
+            "deleting a run session must NOT cascade-delete a per_run task"
+        );
     }
 }

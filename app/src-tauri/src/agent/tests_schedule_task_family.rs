@@ -125,7 +125,9 @@ async fn dispatch_status_and_cancel_roundtrip() {
         &pool,
         db::scheduled_tasks::NewScheduledTask {
             project_id: project_id.clone(),
-            target_session_id: session_id.clone(),
+            target_session_id: Some(session_id.clone()),
+            target_mode: db::scheduled_tasks::target_modes::FIXED.into(),
+            model_id: None,
             name: "用户的".into(),
             prompt: "p".into(),
             schedule_json: r#"{"kind":"daily","at":"09:00"}"#.into(),

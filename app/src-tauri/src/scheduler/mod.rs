@@ -302,44 +302,105 @@ pub(crate) async fn scheduler_tick_with_fire(
             continue;
         }
         hit_any = true;
-        // 同 target session 每 tick 至多 fire 一个任务,余者顺延下 tick
-        // (消掉「多任务同 tick 同 session」对 RULE-QUEUE-001 的确定性
-        // 触发;不前移 last_fired_at,下 tick 自然重判,design §4)。
-        if fired_sessions.contains(&task.target_session_id) {
-            tracing::info!(
-                task_id = %task.id,
-                task_name = %task.name,
-                session_id = %task.target_session_id,
-                "scheduler: same-session task deferred to next tick"
-            );
-            continue;
-        }
-        if !queue_enabled {
-            audit_task(&state.db, &task, actions::SKIPPED_QUEUE_DISABLED, None).await;
-            continue;
-        }
-        // 去重:上一次 fire 的条目仍在队列未被消费 → 本轮跳过(interval
-        // 任务遇慢轮的堆积闸)。该 due 点标记为已消费,prompt 该轮放弃。
-        if let Some(prev_uuid) = pending_by_task.get(&task.id) {
-            let still_queued = crate::agent::message_queue::list_session(
-                &state.message_queues,
-                &task.target_session_id,
-            )
-            .await
-            .iter()
-            .any(|e| e.id == *prev_uuid);
-            if still_queued {
+        let is_per_run = task.target_mode == crate::db::scheduled_tasks::target_modes::PER_RUN;
+        // 本轮 fire 的注入目标:fixed = 绑定的固定 session;per_run =
+        // 下面新建的 run session。
+        let fire_target: String = if is_per_run {
+            // per_run 档(08-31-sched-per-run-session):目标恒为本 tick
+            // 新建的空闲 session —— 同 session 串行化(下方 fixed 分支)、
+            // 队列去重、queue-disabled gate 均不适用(legacy 分支的
+            // cancel+replace 危害对全新 session 不存在;也无共享队列可
+            // 去重)。
+            match create_run_session(&state.db, &task, now_ms).await {
+                Ok(sid) => sid,
+                Err(reason) => {
+                    // 建目标 session 失败:due 消费 + 计数(与 fire 失败
+                    // 同语义,防每 tick 重试风暴,AC6),error 审计锚
+                    // last_run_session_id(从未成功建过则无锚可挂,跳写)。
+                    let reason = format!("session_create_failed: {reason}");
+                    tracing::warn!(
+                        task_id = %task.id,
+                        task_name = %task.name,
+                        reason = %reason,
+                        "scheduler: run session creation failed (accounted)"
+                    );
+                    audit_task(
+                        &state.db,
+                        task.last_run_session_id.as_deref(),
+                        &task,
+                        actions::ERROR,
+                        Some(&reason),
+                    )
+                    .await;
+                    account(&state.db, &task, &spec, due, true, None).await;
+                    maybe_complete_after_fire(&state.db, &task, &spec, due, task.run_count + 1)
+                        .await;
+                    continue;
+                }
+            }
+        } else {
+            let Some(task_session) = task.target_session_id.clone() else {
+                // CHECK 不变式(fixed ⇔ target 非空)被绕过的损坏行:
+                // 跳过不 fire(防御分支,正常不可达)。
+                tracing::warn!(
+                    task_id = %task.id,
+                    "scheduler: fixed task without target session, skipping"
+                );
+                continue;
+            };
+            // 同 target session 每 tick 至多 fire 一个任务,余者顺延下
+            // tick(消掉「多任务同 tick 同 session」对 RULE-QUEUE-001 的
+            // 确定性触发;不前移 last_fired_at,下 tick 自然重判,design §4)。
+            // per_run 不参与:每次目标都是新建 session,天然无冲突。
+            if fired_sessions.contains(&task_session) {
                 tracing::info!(
                     task_id = %task.id,
                     task_name = %task.name,
-                    "scheduler: previous injection still queued, skipping (dedup)"
+                    session_id = %task_session,
+                    "scheduler: same-session task deferred to next tick"
                 );
-                audit_task(&state.db, &task, actions::SKIPPED_DEDUP, None).await;
-                // F2b:dedup 跳过不计数(prompt 未送达),仅消费 due 点。
-                account(&state.db, &task, &spec, due, false).await;
                 continue;
             }
-        }
+            if !queue_enabled {
+                audit_task(
+                    &state.db,
+                    Some(&task_session),
+                    &task,
+                    actions::SKIPPED_QUEUE_DISABLED,
+                    None,
+                )
+                .await;
+                continue;
+            }
+            // 去重:上一次 fire 的条目仍在队列未被消费 → 本轮跳过(interval
+            // 任务遇慢轮的堆积闸)。该 due 点标记为已消费,prompt 该轮放弃。
+            if let Some(prev_uuid) = pending_by_task.get(&task.id) {
+                let still_queued =
+                    crate::agent::message_queue::list_session(&state.message_queues, &task_session)
+                        .await
+                        .iter()
+                        .any(|e| e.id == *prev_uuid);
+                if still_queued {
+                    tracing::info!(
+                        task_id = %task.id,
+                        task_name = %task.name,
+                        "scheduler: previous injection still queued, skipping (dedup)"
+                    );
+                    audit_task(
+                        &state.db,
+                        Some(&task_session),
+                        &task,
+                        actions::SKIPPED_DEDUP,
+                        None,
+                    )
+                    .await;
+                    // F2b:dedup 跳过不计数(prompt 未送达),仅消费 due 点。
+                    account(&state.db, &task, &spec, due, false, None).await;
+                    continue;
+                }
+            }
+            task_session
+        };
 
         // fire(宽限 = 2×tick,超宽限 = 停机错过 → catchup)。
         let action = if now_ms - due > CATCHUP_GRACE_MS {
@@ -351,18 +412,18 @@ pub(crate) async fn scheduler_tick_with_fire(
             task_id: task.id.clone(),
             task_name: task.name.clone(),
             prompt: task.prompt.clone(),
-            target_session_id: task.target_session_id.clone(),
+            target_session_id: fire_target.clone(),
             now_ms,
         };
         match fire(state, ctx).await {
             Ok(crate::agent::chat::ChatAcceptance::Queued { id, .. }) => {
                 // uuid 仅 Queued 返回路径可得;记进去重表(§4.2)。
                 pending_by_task.insert(task.id.clone(), id);
-                audit_task(&state.db, &task, action, None).await;
+                audit_task(&state.db, Some(&fire_target), &task, action, None).await;
             }
             Ok(crate::agent::chat::ChatAcceptance::Started) => {
                 // 闲时条目即时被驱动器消费,无需去重(§4.2 定案,不记)。
-                audit_task(&state.db, &task, action, None).await;
+                audit_task(&state.db, Some(&fire_target), &task, action, None).await;
             }
             Err(e) => {
                 // fire 失败仍落账(due 已消费,防每 tick 重试风暴),
@@ -374,58 +435,129 @@ pub(crate) async fn scheduler_tick_with_fire(
                     reason = %reason,
                     "scheduler: fire failed (accounted, not retried this due point)"
                 );
-                audit_task(&state.db, &task, actions::ERROR, Some(&reason)).await;
+                audit_task(
+                    &state.db,
+                    Some(&fire_target),
+                    &task,
+                    actions::ERROR,
+                    Some(&reason),
+                )
+                .await;
             }
         }
         // F2b:fire 落账计数(Queued/Started/Error 三种结局都算一次
-        // 「已触发」——error 也消费了 due 且有审计可查)。
-        account(&state.db, &task, &spec, due, true).await;
+        // 「已触发」——error 也消费了 due 且有审计可查);per_run 顺带
+        // 落 last_run_session_id(列表展示 + 后续审计锚点)。
+        let run_session = is_per_run.then_some(fire_target.as_str());
+        account(&state.db, &task, &spec, due, true, run_session).await;
         // F2b gate 4:本次 fire 后已达上限 / 下一到期点越过结束日期 /
         // 单次档(唯一到期点已消费)→ 即时完成(不等下 tick 扫死任务;
         // enabled=0 使 completed 审计天然只发一次)。
-        let new_run_count = task.run_count + 1;
-        let next = compute::next_fire_display(&spec, due);
-        let reached_max = task.max_runs.is_some_and(|m| new_run_count >= m);
-        let past_end = task.ends_at.is_some_and(|t| next > t);
-        let once_done = matches!(spec, ScheduleSpec::Once { .. });
-        if reached_max || past_end || once_done {
-            let reason = if reached_max {
-                completion_reasons::MAX_RUNS
-            } else if past_end {
-                completion_reasons::END_DATE
-            } else {
-                completion_reasons::ONCE
-            };
-            complete_task(&state.db, &task, reason).await;
+        maybe_complete_after_fire(&state.db, &task, &spec, due, task.run_count + 1).await;
+        // per_run 不进 fired_sessions(目标 session 每轮全新,无冲突可言)。
+        if !is_per_run {
+            fired_sessions.insert(fire_target);
         }
-        fired_sessions.insert(task.target_session_id.clone());
     }
     if hit_any {
         tracing::debug!(count = fired_sessions.len(), "scheduler tick processed");
     }
 }
 
+/// F2b gate 4 抽出(fire 正常路径与会话创建失败路径共用):本次 fire
+/// 落账后达上限 / 下一到期点越过结束日期 / 单次档已消费 → 即时完成。
+async fn maybe_complete_after_fire(
+    db: &SqlitePool,
+    task: &ScheduledTaskRow,
+    spec: &ScheduleSpec,
+    due: i64,
+    new_run_count: i64,
+) {
+    let next = compute::next_fire_display(spec, due);
+    let reached_max = task.max_runs.is_some_and(|m| new_run_count >= m);
+    let past_end = task.ends_at.is_some_and(|t| next > t);
+    let once_done = matches!(spec, ScheduleSpec::Once { .. });
+    if reached_max || past_end || once_done {
+        let reason = if reached_max {
+            completion_reasons::MAX_RUNS
+        } else if past_end {
+            completion_reasons::END_DATE
+        } else {
+            completion_reasons::ONCE
+        };
+        complete_task(db, task, reason).await;
+    }
+}
+
+/// per_run 档(08-31-sched-per-run-session):为本轮 fire 新建目标
+/// session(AC2)。标题 = `{任务名} {本地 YYYY-MM-DD HH:MM}`(rename
+/// 层截 80 字符);`model_id` 有值时写入 per-session 覆盖列(与专用
+/// session 创建同语义,每轮固定模型不随全局默认漂移,AC4)。cwd 取
+/// project 根。错误统一字符串化(调用方只用于审计 reason)。
+pub(crate) async fn create_run_session(
+    db: &SqlitePool,
+    task: &ScheduledTaskRow,
+    now_ms: i64,
+) -> Result<String, String> {
+    let project = crate::db::get_project(db, &task.project_id)
+        .await
+        .map_err(|e| format!("load project: {e}"))?
+        .ok_or_else(|| format!("project {} 不存在", task.project_id))?;
+    let session = crate::commands::sessions::create_session_in_pool(
+        db,
+        task.project_id.clone(),
+        project.path.clone(),
+        None,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| e.message.clone())?;
+    let title = format!("{} {}", task.name, compute::format_local_hhmm(now_ms));
+    crate::db::rename_session(db, &session.id, &title)
+        .await
+        .map_err(|e| format!("rename run session: {e}"))?;
+    if let Some(mid) = &task.model_id {
+        crate::db::update_session_model_id(db, &session.id, mid)
+            .await
+            .map_err(|e| format!("bind run session model: {e}"))?;
+    }
+    Ok(session.id)
+}
+
 /// fire 落账:`last_fired_at = due`(理论到期点,防相位漂移,design §3)
 /// + 展示用 `next_fire_at` 按 due 重算写回;`count_fire` 控制 `run_count+1`
-/// 与否(F2b:dedup 跳过不计数)。best-effort(失败 warn)。
+/// 与否(F2b:dedup 跳过不计数);`run_session` 是 per_run 档本次新建的
+/// session(None = 保留既有值:fixed 档与 dedup/建会话失败路径恒 None)。
+/// best-effort(失败 warn)。
 async fn account(
     db: &SqlitePool,
     task: &ScheduledTaskRow,
     spec: &ScheduleSpec,
     due: i64,
     count_fire: bool,
+    run_session: Option<&str>,
 ) {
     let next = compute::next_fire_display(spec, due);
-    if let Err(e) =
-        crate::db::scheduled_tasks::mark_task_fired(db, &task.id, due, next, count_fire).await
+    if let Err(e) = crate::db::scheduled_tasks::mark_task_fired(
+        db,
+        &task.id,
+        due,
+        next,
+        count_fire,
+        run_session,
+    )
+    .await
     {
         tracing::warn!(task_id = %task.id, error = %e, "scheduler: accounting write failed");
     }
 }
 
 /// F2b 任务完成落账:`enabled = 0`(退出调度扫描,审计天然只发一次)
-/// + `completed` 审计(附 reason:max_runs / end_date)。best-effort,
-/// 与 fire 审计同语义(失败不阻断 tick)。
+/// + `completed` 审计(附 reason:max_runs / end_date)。审计锚点 = 固定
+/// 目标 session,per_run 退而取最近一次 run session(都无则跳写,
+/// [`audit_task`] 内处理)。best-effort,与 fire 审计同语义(失败不阻断
+/// tick)。
 async fn complete_task(db: &SqlitePool, task: &ScheduledTaskRow, reason: &str) {
     if let Err(e) = crate::db::scheduled_tasks::mark_task_completed(db, &task.id).await {
         tracing::warn!(task_id = %task.id, error = %e, "scheduler: completion write failed");
@@ -436,23 +568,40 @@ async fn complete_task(db: &SqlitePool, task: &ScheduledTaskRow, reason: &str) {
         reason,
         "scheduler: task completed (auto-disabled)"
     );
-    audit_task(db, task, actions::COMPLETED, Some(reason)).await;
+    let anchor = task
+        .target_session_id
+        .as_deref()
+        .or(task.last_run_session_id.as_deref());
+    audit_task(db, anchor, task, actions::COMPLETED, Some(reason)).await;
 }
 
 /// fire 审计(best-effort,挂目标 session,沿 resend 审计惯例不进事务;
 /// design §4.3)。payload:`{task_id, task_name, action[, reason]}`。
-async fn audit_task(db: &SqlitePool, task: &ScheduledTaskRow, action: &str, reason: Option<&str>) {
+/// `session_id` 是审计锚点(fixed = 绑定目标;per_run = 本次/最近一次的
+/// run session);`None`(per_run 从未成功建过 session 的极端序列)跳写
+/// + warn —— 完成态仍由 enabled=0 + UI 卡片可见,审计缺失可接受。
+async fn audit_task(
+    db: &SqlitePool,
+    session_id: Option<&str>,
+    task: &ScheduledTaskRow,
+    action: &str,
+    reason: Option<&str>,
+) {
+    let Some(session_id) = session_id else {
+        tracing::warn!(
+            task_id = %task.id,
+            action,
+            "scheduler: audit skipped (no session anchor)"
+        );
+        return;
+    };
     if let Err(e) = crate::agent::permissions::record_scheduled_task_audit(
-        db,
-        &task.target_session_id,
-        &task.id,
-        &task.name,
-        action,
-        reason,
+        db, session_id, &task.id, &task.name, action, reason,
     )
     .await
     {
         tracing::warn!(
+            session_id = %session_id,
             task_id = %task.id,
             action,
             error = %e,

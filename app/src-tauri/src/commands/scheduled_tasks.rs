@@ -31,7 +31,15 @@ use crate::state::AppState;
 pub struct ScheduledTaskPayload {
     pub id: String,
     pub project_id: String,
-    pub target_session_id: String,
+    /// fixed 档 = 目标 session;per_run 档 = `null`(wire 上前端按
+    /// `target_mode` 区分渲染)。
+    pub target_session_id: Option<String>,
+    /// 目标模式:`fixed` | `per_run`(08-31-sched-per-run-session)。
+    pub target_mode: String,
+    /// per_run 档每次新建 session 的模型绑定;`null` = 全局默认。
+    pub model_id: Option<String>,
+    /// per_run 档最近一次 fire 新建的 session;`null` = 从未触发。
+    pub last_run_session_id: Option<String>,
     pub name: String,
     pub prompt: String,
     pub schedule: serde_json::Value,
@@ -59,6 +67,9 @@ impl From<&st::ScheduledTaskRow> for ScheduledTaskPayload {
             id: row.id.clone(),
             project_id: row.project_id.clone(),
             target_session_id: row.target_session_id.clone(),
+            target_mode: row.target_mode.clone(),
+            model_id: row.model_id.clone(),
+            last_run_session_id: row.last_run_session_id.clone(),
             name: row.name.clone(),
             prompt: row.prompt.clone(),
             schedule,
@@ -116,19 +127,37 @@ pub async fn list_scheduled_tasks(
     list_scheduled_tasks_inner(state.inner(), project_id).await
 }
 
-/// `create_scheduled_task` — `target_session_id` 为 `None` / 空串时新建
-/// 专用 session(标题同任务名,cwd 取 project 根);为 `Some` 时校验存在
-/// 且 classic 且 project 归属一致。`max_runs` / `ends_at` 是 F2b 结束条件
-/// (None = 不限)。`model_id` 仅「新建专用 session」分支生效:校验存在
-/// 后写入新 session 的 per-session 覆盖列(缺省 = 沿用全局默认)。
-/// `created_by` 标作者:`'user'`(UI/IPC 路径,两个 transport 包装恒传)
-/// 或 `'agent'`(LLM `schedule_task` tool)。返回新行(id 服务端生成)。
+/// `target_mode` 归一化 + 校验:None/空 = fixed(缺省向后兼容);
+/// 白名单外拒绝(400 中文错误)。独立小函数供 create / update 共用。
+fn normalize_target_mode(raw: Option<&str>) -> Result<String, AppCommandError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(st::target_modes::FIXED.to_string()),
+        Some(v) if v == st::target_modes::FIXED => Ok(v.to_string()),
+        Some(v) if v == st::target_modes::PER_RUN => Ok(v.to_string()),
+        Some(v) => Err(invalid(format!(
+            "target_mode 只支持 fixed / per_run,得到 {v}"
+        ))),
+    }
+}
+
+/// `create_scheduled_task` — `target_mode` 决定目标解析方式:
+/// · fixed(缺省):`target_session_id` 为 `None`/空串时新建专用 session
+///   (标题同任务名,cwd 取 project 根),为 `Some` 时校验存在且 classic
+///   且 project 归属一致;`model_id` 仅专用 session 分支生效(写入新
+///   session 的 per-session 覆盖列)。
+/// · per_run(08-31-sched-per-run-session):不绑定固定 session(带
+///   `target_session_id` → 400 矛盾);`model_id` 校验存在后存任务行,
+///   每次触发新建 session 时应用。
+/// `max_runs` / `ends_at` 是 F2b 结束条件(None = 不限)。`created_by`
+/// 标作者:`'user'`(UI/IPC 路径,两个 transport 包装恒传)或 `'agent'`
+/// (LLM `schedule_task` tool)。返回新行(id 服务端生成)。
 /// 参数保持扁平标量(IPC 形状铁律,providers.rs 同款 allow)。
 #[allow(clippy::too_many_arguments)]
 pub async fn create_scheduled_task_inner(
     state: &Arc<AppState>,
     project_id: String,
     target_session_id: Option<String>,
+    target_mode: Option<String>,
     name: String,
     prompt: String,
     schedule: String,
@@ -142,6 +171,7 @@ pub async fn create_scheduled_task_inner(
         &state.db,
         project_id,
         target_session_id,
+        target_mode,
         name,
         prompt,
         schedule,
@@ -163,6 +193,7 @@ pub async fn create_scheduled_task_in_pool(
     db: &sqlx::SqlitePool,
     project_id: String,
     target_session_id: Option<String>,
+    target_mode: Option<String>,
     name: String,
     prompt: String,
     schedule: String,
@@ -179,6 +210,8 @@ pub async fn create_scheduled_task_in_pool(
     if prompt.trim().is_empty() {
         return Err(invalid("任务提示词(prompt)不能为空"));
     }
+    let target_mode = normalize_target_mode(target_mode.as_deref())?;
+    let is_per_run = target_mode == st::target_modes::PER_RUN;
     validate_end_conditions(max_runs, ends_at)?;
     // schedule 先过解析器(中文错误信息直出前端)。
     let spec = crate::scheduler::compute::parse_schedule(&schedule).map_err(invalid)?;
@@ -194,7 +227,8 @@ pub async fn create_scheduled_task_in_pool(
     let schedule_json =
         serde_json::to_string(&spec).map_err(|e| invalid(format!("schedule 序列化失败: {e}")))?;
     // 指定模型:必须在 catalog 中存在(校验先于建 session,失败不留
-    // 孤儿行);仅新建专用 session 分支使用。
+    // 孤儿行)。fixed 档仅新建专用 session 分支使用(写入 session 行);
+    // per_run 档存任务行,每次新建 run session 时应用。
     let model_id = match model_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(mid) => {
             let exists = crate::db::get_model(db, mid)
@@ -214,65 +248,83 @@ pub async fn create_scheduled_task_in_pool(
         .map_err(|e| anyhow::anyhow!("create_scheduled_task: load project failed: {}", e))?
         .ok_or_else(|| invalid(format!("project {project_id} 不存在")))?;
 
-    // 目标 session 解析:显式指定 → 校验;缺省 → 新建专用 session
-    // (design §6:title 同任务名,cwd 取 project 根)。
-    let trimmed_target = target_session_id.as_deref().map(str::trim);
-    let target_session_id = match trimmed_target.filter(|s| !s.is_empty()) {
-        Some(sid) => {
-            st::validate_target_session(db, sid)
-                .await
-                .map_err(invalid)?;
-            // project 归属一致(design §6):任务挂 A project、目标 session
-            // 属 B project 会让「按 project 过滤的列表」显示错位的行。
-            let session_project: Option<(String,)> =
-                sqlx::query_as("SELECT project_id FROM sessions WHERE id = ?")
-                    .bind(sid)
-                    .fetch_optional(db)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("create_scheduled_task: load session failed: {}", e)
-                    })?;
-            match session_project {
-                Some((pid,)) if pid == project_id => {}
-                _ => {
-                    return Err(invalid("目标 session 不属于所选 project,请重新选择"));
-                }
-            }
-            sid.to_string()
+    // 目标解析(per_run 档不绑定任何固定 session):
+    // · fixed + 显式 sid → 校验存在 / classic / 归属一致(design §6);
+    // · fixed + 缺省 → 新建专用 session(title 同任务名,cwd 取 project 根);
+    // · per_run → target 恒 None(CHECK 不变式),带 sid 即矛盾请求。
+    let resolved_target = if is_per_run {
+        if target_session_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+        {
+            return Err(invalid(
+                "「每次新建 session」模式下不接受指定目标 session,请二选一",
+            ));
         }
-        None => {
-            let session = crate::commands::sessions::create_session_in_pool(
-                db,
-                project_id.clone(),
-                project.path.clone(),
-                None,
-                None,
-                None,
-            )
-            .await?;
-            // 标题同任务名(design §6);rename 截断 80 字符(db 层)。
-            crate::db::rename_session(db, &session.id, &name)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "create_scheduled_task: rename dedicated session failed: {}",
-                        e
-                    )
-                })?;
-            // 指定模型 → 写 per-session 覆盖列(缺省:create_session_in_pool
-            // 已绑全局默认,不动)。每轮 chat 经 resolve_model_id_for_session
-            // 优先取该列 —— 定时注入的轮次由此固定模型,不随全局默认漂移。
-            if let Some(mid) = &model_id {
-                crate::db::update_session_model_id(db, &session.id, mid)
+        None
+    } else {
+        match target_session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(sid) => {
+                st::validate_target_session(db, sid)
+                    .await
+                    .map_err(invalid)?;
+                // project 归属一致(design §6):任务挂 A project、目标 session
+                // 属 B project 会让「按 project 过滤的列表」显示错位的行。
+                let session_project: Option<(String,)> =
+                    sqlx::query_as("SELECT project_id FROM sessions WHERE id = ?")
+                        .bind(sid)
+                        .fetch_optional(db)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!("create_scheduled_task: load session failed: {}", e)
+                        })?;
+                match session_project {
+                    Some((pid,)) if pid == project_id => {}
+                    _ => {
+                        return Err(invalid("目标 session 不属于所选 project,请重新选择"));
+                    }
+                }
+                Some(sid.to_string())
+            }
+            None => {
+                let session = crate::commands::sessions::create_session_in_pool(
+                    db,
+                    project_id.clone(),
+                    project.path.clone(),
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+                // 标题同任务名(design §6);rename 截断 80 字符(db 层)。
+                crate::db::rename_session(db, &session.id, &name)
                     .await
                     .map_err(|e| {
                         anyhow::anyhow!(
-                            "create_scheduled_task: bind dedicated session model failed: {}",
+                            "create_scheduled_task: rename dedicated session failed: {}",
                             e
                         )
                     })?;
+                // 指定模型 → 写 per-session 覆盖列(缺省:create_session_in_pool
+                // 已绑全局默认,不动)。每轮 chat 经 resolve_model_id_for_session
+                // 优先取该列 —— 定时注入的轮次由此固定模型,不随全局默认漂移。
+                if let Some(mid) = &model_id {
+                    crate::db::update_session_model_id(db, &session.id, mid)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "create_scheduled_task: bind dedicated session model failed: {}",
+                                e
+                            )
+                        })?;
+                }
+                Some(session.id)
             }
-            session.id
         }
     };
 
@@ -283,7 +335,11 @@ pub async fn create_scheduled_task_in_pool(
         db,
         st::NewScheduledTask {
             project_id,
-            target_session_id,
+            target_session_id: resolved_target,
+            target_mode,
+            // per_run:存任务行(每轮建 session 时应用);fixed:模型
+            // 绑定在专用 session 行上,任务行不重复记。
+            model_id: if is_per_run { model_id } else { None },
             name,
             prompt,
             schedule_json,
@@ -305,6 +361,7 @@ pub async fn create_scheduled_task(
     state: State<'_, Arc<AppState>>,
     project_id: String,
     target_session_id: Option<String>,
+    target_mode: Option<String>,
     name: String,
     prompt: String,
     schedule: String,
@@ -317,6 +374,7 @@ pub async fn create_scheduled_task(
         state.inner(),
         project_id,
         target_session_id,
+        target_mode,
         name,
         prompt,
         schedule,
@@ -330,10 +388,17 @@ pub async fn create_scheduled_task(
 }
 
 /// `update_scheduled_task` — 部分更新(`None` 字段不动存量)。schedule /
-/// target_session 变更时同样过校验;enabled false→true 由 WP1 db 层置
+/// target 变更时同样过校验;enabled false→true 由 WP1 db 层置
 /// `last_fired_at = now` + `run_count = 0`(重启用不补跑、计数重置,
-/// design §3 + F2b D8)。`max_runs` / `ends_at` 是 F2b 双层 Option:
-/// 外层 `None` = 不动,内层 `None`(wire 显式 `null`)= 清空为不限。
+/// design §3 + F2b D8)。`max_runs` / `ends_at` / `target_session_id` /
+/// `model_id` 是 F2b 式双层 Option:外层 `None` = 不动,内层 `None`
+/// (wire 显式 `null`)= 清空(target 清空即切 per_run 的绑定侧;
+/// `target_mode` 须随同变更,校验见下)。目标模式规则:
+/// · resolved = per_run:target 写 `Some(None)` 清空;同 patch 再带具体
+///   sid → 400 矛盾。`model_id` 可写/清(存任务行)。
+/// · resolved = fixed:target `Some(Some(sid))` 且变化 → 存在 + classic +
+///   归属校验;patch 缺省而存量无固定目标(per_run 切回未选)→ 400;
+///   显式 `Some(None)` → 400(fixed 必须有目标)。
 /// `next_fire_at` 不由本命令维护(展示值由 db 层在 schedule/enabled 跳变时
 /// 重推,权威触发判定每 tick 重算)。目标不存在返回 `InvalidRequest`
 /// (编辑竞态:行已被他端删除时前端 toast,不静默)。
@@ -344,7 +409,9 @@ pub async fn update_scheduled_task_inner(
     name: Option<String>,
     prompt: Option<String>,
     schedule: Option<String>,
-    target_session_id: Option<String>,
+    target_session_id: Option<Option<String>>,
+    target_mode: Option<String>,
+    model_id: Option<Option<String>>,
     enabled: Option<bool>,
     max_runs: Option<Option<i64>>,
     ends_at: Option<Option<i64>>,
@@ -353,6 +420,12 @@ pub async fn update_scheduled_task_inner(
         .await
         .map_err(|e| anyhow::anyhow!("update_scheduled_task: load failed: {}", e))?
         .ok_or_else(|| invalid(format!("定时任务 {id} 不存在")))?;
+
+    let target_mode = match &target_mode {
+        Some(v) => normalize_target_mode(Some(v))?,
+        None => existing.target_mode.clone(),
+    };
+    let is_per_run = target_mode == st::target_modes::PER_RUN;
 
     // F2b 结束条件:只校验显式写入的值(清空动作不校验);
     // 过去的 ends_at 会立刻完成,视为误操作直接拒绝。
@@ -380,30 +453,82 @@ pub async fn update_scheduled_task_inner(
         }
         None => None,
     };
-    // 新目标 session:存在 + classic + 归属任务的 project(design §6)。
-    let validated_target = match target_session_id.as_deref() {
-        Some(sid) if sid.trim() != existing.target_session_id => {
-            let sid = sid.trim();
-            st::validate_target_session(&state.db, sid)
-                .await
-                .map_err(invalid)?;
-            let session_project: Option<(String,)> =
-                sqlx::query_as("SELECT project_id FROM sessions WHERE id = ?")
-                    .bind(sid)
-                    .fetch_optional(&state.db)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("update_scheduled_task: load session failed: {}", e)
-                    })?;
-            match session_project {
-                Some((pid,)) if pid == existing.project_id => {}
-                _ => {
-                    return Err(invalid("目标 session 不属于该任务所在 project"));
-                }
+
+    // 目标解析(语义见函数头)。validated = None 表示「不写/清空」,
+    // 与「target_mode 变更必须落库」一起组装双层 Option。
+    let mut validated_target: Option<Option<String>> = None;
+    if is_per_run {
+        // 切 per_run:清空固定绑定;同 patch 带 sid 即矛盾。
+        if let Some(Some(sid)) = &target_session_id {
+            if !sid.trim().is_empty() {
+                return Err(invalid(
+                    "「每次新建 session」模式下不接受指定目标 session,请二选一",
+                ));
             }
-            Some(sid.to_string())
         }
-        _ => None,
+        if existing.target_session_id.is_some() || target_session_id.is_some() {
+            validated_target = Some(None);
+        }
+    } else {
+        match &target_session_id {
+            Some(Some(sid))
+                if sid.trim() != existing.target_session_id.as_deref().unwrap_or("") =>
+            {
+                let sid = sid.trim();
+                st::validate_target_session(&state.db, sid)
+                    .await
+                    .map_err(invalid)?;
+                let session_project: Option<(String,)> =
+                    sqlx::query_as("SELECT project_id FROM sessions WHERE id = ?")
+                        .bind(sid)
+                        .fetch_optional(&state.db)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!("update_scheduled_task: load session failed: {}", e)
+                        })?;
+                match session_project {
+                    Some((pid,)) if pid == existing.project_id => {}
+                    _ => {
+                        return Err(invalid("目标 session 不属于该任务所在 project"));
+                    }
+                }
+                validated_target = Some(Some(sid.to_string()));
+            }
+            Some(Some(_)) => {
+                // 与存量相同:显式写回(无害,保持 wire 幂等)。
+                validated_target = target_session_id.clone();
+            }
+            Some(None) => {
+                return Err(invalid("固定目标模式下必须指定目标 session"));
+            }
+            None => {
+                if existing.target_session_id.is_none() {
+                    return Err(invalid(
+                        "该任务当前为「每次新建 session」模式,切换固定目标请先选择 session",
+                    ));
+                }
+                // per_run → fixed 且未换 target(存量非空):无需写
+                // target,mode 单独落库。
+            }
+        }
+    }
+
+    // model_id:外层不动;内层 None 清空 / Some 校验存在后写。
+    // fixed 档该列不参与语义(仅 per_run 存任务行),但写入无害、
+    // 校验照做(防脏数据)。
+    let validated_model = match &model_id {
+        Some(Some(mid)) => {
+            let mid = mid.trim();
+            let exists = crate::db::get_model(&state.db, mid)
+                .await
+                .map_err(|e| anyhow::anyhow!("update_scheduled_task: load model failed: {}", e))?
+                .is_some();
+            if !exists {
+                return Err(invalid(format!("模型 {mid} 不存在,请刷新后重选")));
+            }
+            Some(Some(mid.to_string()))
+        }
+        other => other.clone(),
     };
 
     let updated = st::update_scheduled_task(
@@ -414,6 +539,8 @@ pub async fn update_scheduled_task_inner(
             prompt: prompt.filter(|p| !p.trim().is_empty()),
             schedule_json,
             target_session_id: validated_target,
+            target_mode: (target_mode != existing.target_mode).then_some(target_mode),
+            model_id: validated_model,
             enabled,
             max_runs,
             ends_at,
@@ -433,7 +560,9 @@ pub async fn update_scheduled_task(
     name: Option<String>,
     prompt: Option<String>,
     schedule: Option<String>,
-    target_session_id: Option<String>,
+    target_session_id: Option<Option<String>>,
+    target_mode: Option<String>,
+    model_id: Option<Option<String>>,
     enabled: Option<bool>,
     max_runs: Option<Option<i64>>,
     ends_at: Option<Option<i64>>,
@@ -445,6 +574,8 @@ pub async fn update_scheduled_task(
         prompt,
         schedule,
         target_session_id,
+        target_mode,
+        model_id,
         enabled,
         max_runs,
         ends_at,

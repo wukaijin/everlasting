@@ -16,8 +16,8 @@ use super::columns::{
 };
 use super::schema_helpers::{
     add_turn_trace_provider_id_and_backfill, home_dir_or_dot,
-    migrate_provider_api_keys_to_encrypted, rebuild_turn_trace_with_run_id,
-    widen_subagent_runs_status_check_for_incomplete,
+    migrate_provider_api_keys_to_encrypted, rebuild_scheduled_tasks_for_target_mode,
+    rebuild_turn_trace_with_run_id, widen_subagent_runs_status_check_for_incomplete,
 };
 
 /// Create the schema if it doesn't already exist, then run the step
@@ -1269,17 +1269,25 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // - 双 FK `ON DELETE CASCADE`:删 target session / project 级联删
     //   任务(AC6;依赖 init_pool 的 FK pragma,有
     //   migrations_tests::init_pool_sets_foreign_keys_on 锁定)。
+    //   `target_session_id` 自 08-31-sched-per-run-session 起可空:
+    //   per_run 档(每次执行新建 session)不绑定固定 session,恒 NULL;
+    //   fixed 档非空(CHECK 不变式)。run session 挂 `last_run_session_id`
+    //   (无 FK)—— 删旧 run session 不得级联删任务。
     // - 索引服调度循环的 enabled 扫描 + Settings 面板按期展示排序。
     // 幂等重放:新库直接建,存量库 IF NOT EXISTS no-op;回滚 = revert
     // 后表残留无副作用(无人读,design §10)。
     // F2b 结束条件三列(08-28-f2b-schedule-extension):新库直接建,
     // 存量库走下方 probe+ALTER。
+    // target_mode 三列(08-31-sched-per-run-session):同上;存量库走
+    // schema_helpers::rebuild_scheduled_tasks_for_target_mode 表重建
+    // (去 NOT NULL 无法 ALTER)。
     sqlx::query(
         r#"
  CREATE TABLE IF NOT EXISTS scheduled_tasks (
    id TEXT PRIMARY KEY,
    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-   target_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+   target_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+   target_mode TEXT NOT NULL DEFAULT 'fixed',
    name TEXT NOT NULL,
    prompt TEXT NOT NULL,
    schedule TEXT NOT NULL,
@@ -1290,7 +1298,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
    next_fire_at INTEGER NOT NULL,
    run_count INTEGER NOT NULL DEFAULT 0,
    max_runs INTEGER,
-   ends_at INTEGER
+   ends_at INTEGER,
+   model_id TEXT,
+   last_run_session_id TEXT,
+   CHECK (target_mode = 'fixed' OR target_mode = 'per_run'),
+   CHECK (target_mode = 'per_run' OR target_session_id IS NOT NULL)
  )
  "#,
     )
@@ -1306,9 +1318,13 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
     // F2b:存量库补结束条件三列(新库 CREATE TABLE 已带,probe no-op)。
     // run_count 默认 0;max_runs / ends_at NULL = 不限(F2b prd D10)。
+    // 排在 rebuild 之前:rebuild 的 copy 显式引用这三列。
     add_scheduled_tasks_column_if_missing(pool, "run_count", "INTEGER NOT NULL DEFAULT 0").await?;
     add_scheduled_tasks_column_if_missing(pool, "max_runs", "INTEGER").await?;
     add_scheduled_tasks_column_if_missing(pool, "ends_at", "INTEGER").await?;
+    // target_mode 可空化 + 三新列:存量库表重建(greenfield 已带,probe
+    // no-op)。
+    rebuild_scheduled_tasks_for_target_mode(pool).await?;
 
     Ok(())
 }

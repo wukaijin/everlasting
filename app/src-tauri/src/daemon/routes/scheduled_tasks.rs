@@ -33,13 +33,16 @@ pub async fn list_scheduled_tasks(
 
 /// 请求体 snake_case、扁平标量(同 Tauri command 形参;transport 的
 /// 顶层 camel→snake 转换后两形态等价)。`target_session_id` 缺省 /
-/// 空串 = 新建专用 session(`_inner` 内定案)。`max_runs` / `ends_at`
-/// 是 F2b 结束条件(None = 不限)。`model_id` 仅「新建专用 session」
-/// 分支生效(None = 沿用全局默认模型)。
+/// 空串 = fixed 档新建专用 session(`_inner` 内定案);`target_mode =
+/// "per_run"` = 每次执行新建 session(08-31-sched-per-run-session,
+/// 不接受同时指定 target_session_id)。`max_runs` / `ends_at` 是 F2b
+/// 结束条件(None = 不限)。`model_id`:fixed 专用 session 分支写
+/// session 行,per_run 存任务行(None = 沿用全局默认模型)。
 #[derive(Debug, Deserialize)]
 pub struct CreateScheduledTaskRequest {
     pub project_id: String,
     pub target_session_id: Option<String>,
+    pub target_mode: Option<String>,
     pub name: String,
     pub prompt: String,
     pub schedule: String,
@@ -57,6 +60,7 @@ pub async fn create_scheduled_task(
         &state,
         req.project_id,
         req.target_session_id,
+        req.target_mode,
         req.name,
         req.prompt,
         req.schedule,
@@ -78,7 +82,15 @@ pub struct UpdateScheduledTaskRequest {
     pub name: Option<String>,
     pub prompt: Option<String>,
     pub schedule: Option<String>,
-    pub target_session_id: Option<String>,
+    /// 双层 Option:缺省 = 不动;显式 `null` = 清空固定绑定(切
+    /// per_run 的绑定侧);字符串 = 设定/换绑。`target_mode` 随同校验。
+    #[serde(default, deserialize_with = "deserialize_double_option_string")]
+    pub target_session_id: Option<Option<String>>,
+    /// `fixed` | `per_run`(缺省不动)。
+    pub target_mode: Option<String>,
+    /// 双层 Option(per_run 档任务行模型):缺省 = 不动;`null` = 清空。
+    #[serde(default, deserialize_with = "deserialize_double_option_string")]
+    pub model_id: Option<Option<String>>,
     pub enabled: Option<bool>,
     /// 双层 Option:缺省 = 不动;显式 `null` = 清空为不限;数值 = 写入。
     #[serde(default, deserialize_with = "deserialize_double_option_i64")]
@@ -99,6 +111,17 @@ where
     Ok(Some(Option::<i64>::deserialize(deserializer)?))
 }
 
+/// [`deserialize_double_option_i64`] 的 String 变体(`target_session_id` /
+/// `model_id` 的显式 `null` 清空过 wire)。
+fn deserialize_double_option_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
+}
+
 pub async fn update_scheduled_task(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateScheduledTaskRequest>,
@@ -110,6 +133,8 @@ pub async fn update_scheduled_task(
         req.prompt,
         req.schedule,
         req.target_session_id,
+        req.target_mode,
+        req.model_id,
         req.enabled,
         req.max_runs,
         req.ends_at,
@@ -391,7 +416,8 @@ mod tests {
             .unwrap()
             .expect("task row survives rejected update");
         assert_eq!(
-            row.target_session_id, _session_id,
+            row.target_session_id.as_deref(),
+            Some(_session_id.as_str()),
             "rejected update must not mutate the stored target"
         );
     }
@@ -578,6 +604,141 @@ mod tests {
         assert_eq!(
             sessions_before, sessions_after,
             "rejected model must not leave an orphan dedicated session"
+        );
+    }
+
+    /// per_run 档(08-31-sched-per-run-session)wire 形状:create 携带
+    /// `target_mode:"per_run"` → target_session_id 恒 null、不建 session;
+    /// model_id 存任务行。update 在 fixed ↔ per_run 间切换(切 per_run
+    /// 显式 null 清绑定;切回 fixed 未选 session → 400);矛盾/非法
+    /// target_mode → 400。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn scheduled_tasks_routes_per_run_mode_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let (project_id, session_id) = seed_project_session(&state.db).await;
+        let model = db::list_models(&state.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("seeded model");
+
+        // create per_run + model_id → 200;wire target null;不建 session。
+        let sessions_before = db::sessions::list_sessions(&state.db, &project_id)
+            .await
+            .unwrap()
+            .len();
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"每跑","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","target_mode":"per_run","model_id":"{}"}}"#,
+                model.model.id
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "per_run create: {body}");
+        let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let task_id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["target_mode"], "per_run");
+        assert!(
+            created["target_session_id"].is_null(),
+            "per_run binds no fixed session: {created}"
+        );
+        assert_eq!(
+            created["model_id"], model.model.id,
+            "model binding stored on the task row"
+        );
+        let sessions_after = db::sessions::list_sessions(&state.db, &project_id)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(
+            sessions_before, sessions_after,
+            "per_run create must not create any session"
+        );
+
+        // 矛盾请求:per_run + 显式 target_session_id → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_session_id":"{session_id}","target_mode":"per_run","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "contradiction: {body}");
+        assert!(body.contains("二选一"), "contradiction message: {body}");
+
+        // 非法 target_mode → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_mode":"yolo","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "bogus mode: {body}");
+        assert!(body.contains("target_mode"), "mode gate message: {body}");
+
+        // update:per_run → fixed(选定 session)→ target 落库。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(
+                r#"{{"id":"{task_id}","target_mode":"fixed","target_session_id":"{session_id}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "switch to fixed: {body}");
+        let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(updated["target_mode"], "fixed");
+        assert_eq!(updated["target_session_id"], session_id);
+
+        // update:fixed → per_run(显式 null 清绑定;model_id 同时可清)。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(
+                r#"{{"id":"{task_id}","target_mode":"per_run","target_session_id":null,"model_id":null}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "switch to per_run: {body}");
+        let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(updated["target_mode"], "per_run");
+        assert!(updated["target_session_id"].is_null());
+        assert!(updated["model_id"].is_null(), "model cleared explicitly");
+
+        // update:per_run → fixed 未选 session → 400(存量 target 为 null)。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            r#"{"id":"__T__","target_mode":"fixed"}"#.replace("__T__", &task_id),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "per_run→fixed no target: {body}"
+        );
+        assert!(body.contains("请先选择"), "pick-session message: {body}");
+
+        // update:per_run + 显式 sid → 400 矛盾(update 侧)。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(
+                r#"{{"id":"{task_id}","target_mode":"per_run","target_session_id":"{session_id}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "update contradiction: {body}"
         );
     }
 }

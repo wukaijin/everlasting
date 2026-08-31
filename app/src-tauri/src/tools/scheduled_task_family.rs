@@ -234,6 +234,9 @@ pub async fn execute(
         &ctx.db,
         ctx.project_id.clone(),
         target_session_id.clone(),
+        // agent 路径恒 fixed/专用语义:per_run 是用户 UI 面能力
+        // (08-31-sched-per-run-session AC10),tool schema 不暴露。
+        None,
         parsed.name,
         parsed.prompt,
         schedule_str,
@@ -248,7 +251,8 @@ pub async fn execute(
     .await
     {
         Ok(row) => {
-            let target = target_session_id.unwrap_or_else(|| row.target_session_id.clone());
+            let target = target_session_id
+                .unwrap_or_else(|| row.target_session_id.clone().unwrap_or_default());
             (
                 json!({
                     "ok": true,
@@ -332,7 +336,7 @@ pub async fn status_execute(ctx: &ToolContext) -> (String, bool) {
                     runs,
                     ends,
                     r.id,
-                    r.target_session_id,
+                    r.target_session_id.as_deref().unwrap_or("(per_run)"),
                 ));
             }
             (out, false)
@@ -494,7 +498,9 @@ mod tests {
             pool,
             st::NewScheduledTask {
                 project_id: project_id.to_string(),
-                target_session_id: session_id.to_string(),
+                target_session_id: Some(session_id.to_string()),
+                target_mode: st::target_modes::FIXED.into(),
+                model_id: None,
                 name: name.to_string(),
                 prompt: "p".into(),
                 schedule_json: r#"{"kind":"daily","at":"09:00"}"#.into(),
@@ -635,11 +641,16 @@ mod tests {
             .unwrap()
             .expect("row exists");
         assert_eq!(row.created_by, "agent", "author marker");
-        assert_ne!(row.target_session_id, "", "dedicated session created");
+        assert!(
+            row.target_session_id
+                .as_deref()
+                .is_some_and(|t| !t.is_empty()),
+            "dedicated session created"
+        );
         // The dedicated session exists, belongs to the project, and is
         // titled by the task name.
         let title: (Option<String>,) = sqlx::query_as("SELECT title FROM sessions WHERE id = ?")
-            .bind(&row.target_session_id)
+            .bind(row.target_session_id.as_deref().expect("target"))
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -728,7 +739,9 @@ mod tests {
             &pool,
             st::NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: st::target_modes::FIXED.into(),
+                model_id: None,
                 name: "用户的不受限".into(),
                 prompt: "p".into(),
                 schedule_json: r#"{"kind":"daily","at":"09:00"}"#.into(),
@@ -760,7 +773,9 @@ mod tests {
             &pool,
             st::NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: st::target_modes::FIXED.into(),
+                model_id: None,
                 name: "用户的".into(),
                 prompt: "p".into(),
                 schedule_json: r#"{"kind":"daily","at":"09:00"}"#.into(),
@@ -811,7 +826,9 @@ mod tests {
             &pool,
             st::NewScheduledTask {
                 project_id: project_id.clone(),
-                target_session_id: session_id.clone(),
+                target_session_id: Some(session_id.clone()),
+                target_mode: st::target_modes::FIXED.into(),
+                model_id: None,
                 name: "用户的".into(),
                 prompt: "p".into(),
                 schedule_json: r#"{"kind":"daily","at":"09:00"}"#.into(),
