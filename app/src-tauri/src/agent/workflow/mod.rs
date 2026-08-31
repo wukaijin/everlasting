@@ -50,10 +50,12 @@ pub mod task;
 
 /// Per-session workflow context + per-turn breadcrumb
 /// injection seam (`WorkflowCtx` / `build_workflow_ctx` /
-/// `append_workflow_breadcrumb`). Phase 0 Step 0.5 ships
-/// this; Phase 2 Step 2.5 will add
-/// `append_delegation_template` as a sibling helper that
-/// composes onto the same `messages[0]` block list.
+/// `append_workflow_breadcrumb`). Phase 0 Step 0.5 shipped
+/// this; Phase 2 Step 2.5 added
+/// `append_delegation_template` as a sibling helper. D1
+/// (08-31-cache-head-volatility) moved both injectors from
+/// `messages[0]` to the request TAIL — see `inject.rs`'s
+/// module doc for the prefix-cache rationale.
 pub mod inject;
 
 /// State transition + Rust 固定 hook (`set_task_state` +
@@ -783,29 +785,65 @@ mod tests {
 
     #[test]
     fn append_delegation_template_pushes_to_user_blocks() {
-        // Pure block-append: messages[0] is a user-role
-        // Blocks message → template block pushed.
+        // D1 (08-31-cache-head-volatility): the template appends to
+        // the worker's LAST message (the delegation task), NOT
+        // `messages[0]` (the memory head). A per-dispatch template in
+        // the memory head forked the worker-side cached prefix on
+        // every dispatch.
         use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
-        let mut messages = vec![ChatMessage {
-            role: Role::User,
-            content: MessageContent::Blocks(vec![ContentBlock::Text {
-                text: "memory block".into(),
-                cache_control: None,
-            }]),
-            speaker: None,
-            attachments: None,
-        }];
+        let mut messages = vec![
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![ContentBlock::Text {
+                    text: "memory block".into(),
+                    cache_control: None,
+                }]),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Text("ack".into()),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("delegation task".into()),
+                speaker: None,
+                attachments: None,
+            },
+        ];
         let ok = append_delegation_template(&mut messages, Some("PLUGIN_TEMPLATE".to_string()));
-        assert!(ok, "append must succeed for user-role Blocks messages");
-        if let MessageContent::Blocks(blocks) = &messages[0].content {
-            assert_eq!(blocks.len(), 2, "should have 2 blocks (memory + template)");
-            if let ContentBlock::Text { text, .. } = &blocks[1] {
-                assert_eq!(text, "PLUGIN_TEMPLATE");
-            } else {
-                panic!("expected Text block at index 1");
+        assert!(ok, "append must succeed for a user-role tail message");
+        assert_eq!(messages.len(), 3, "no synthetic message opened");
+        // Head (memory block) untouched.
+        match &messages[0].content {
+            MessageContent::Blocks(bs) => {
+                assert_eq!(bs.len(), 1, "memory head must stay untouched (D1)");
             }
-        } else {
-            panic!("messages[0] should still be Blocks");
+            _ => panic!("messages[0] should still be Blocks"),
+        }
+        // Tail widened to Blocks([task, template]).
+        match &messages[2].content {
+            MessageContent::Blocks(bs) => {
+                assert_eq!(bs.len(), 2, "should have 2 blocks (task + template)");
+                match &bs[0] {
+                    ContentBlock::Text { text, .. } => assert_eq!(text, "delegation task"),
+                    _ => panic!("expected the task text block first"),
+                }
+                match &bs[1] {
+                    ContentBlock::Text {
+                        text,
+                        cache_control,
+                    } => {
+                        assert_eq!(text.trim(), "PLUGIN_TEMPLATE");
+                        assert!(cache_control.is_none());
+                    }
+                    _ => panic!("expected Text block at index 1"),
+                }
+            }
+            _ => panic!("tail message should have been widened to Blocks"),
         }
     }
 

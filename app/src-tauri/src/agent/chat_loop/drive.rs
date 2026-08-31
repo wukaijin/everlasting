@@ -245,39 +245,56 @@ pub(crate) async fn drive_turn(
     // 第三元。下方三个写点(Done 臂 upsert / record_compaction /
     // record_loop_hint)都用它路由。
     let run_key: &str = worker_run_id.unwrap_or("");
-    // refresh `head_sha` + rebuild `system_prompt` at the start of
-    // EVERY turn. The LLM only consumes `system_prompt` once per
-    // turn (at `provider.send`), so refreshing at turn entry is
-    // equivalent to "after every tool execute" — the next
-    // `provider.send` (this turn, or the next turn's) sees the
-    // current HEAD. Pre-fix: `head_sha` was a one-shot `let` at
-    // chat_loop.rs:492 (pre-fix line number), so the LLM saw a
-    // stale SHA on turn 2+ even after a tool call committed. The
-    // `system_prompt_override` worker path is unchanged: when the
-    // 23rd param is `Some(p)`, the worker's
-    // `SubagentDef.system_prompt` is the canonical prompt and the
-    // parent's per-turn rebuild is skipped (workers don't observe
-    // the parent's HEAD anyway — the worker's own lookup is
-    // handled inside its nested `run_chat_loop` invocation).
+    // refresh `head_sha` at the start of EVERY turn and rebuild the
+    // repo-state TAIL block (D3, 08-31-cache-head-volatility). The
+    // LLM only consumes the tail block once per turn (at
+    // `provider.send`), so refreshing at turn entry is equivalent to
+    // "after every tool execute" — the next `provider.send` (this
+    // turn, or the next turn's) sees the current HEAD. Pre-fix:
+    // `head_sha` was a one-shot `let` at chat_loop.rs:492 (pre-fix
+    // line number), so the LLM saw a stale SHA on turn 2+ even
+    // after a tool call committed. The `system_prompt_override`
+    // worker path is unchanged: when the 23rd param is `Some(p)`,
+    // the worker's `SubagentDef.system_prompt` is the canonical
+    // prompt and the parent's per-turn rebuild is skipped (workers
+    // don't observe the parent's HEAD anyway — the worker's own
+    // lookup is handled inside its nested `run_chat_loop`
+    // invocation).
     //
     // Cost: 1 extra `lookup_head_sha` per turn (libgit2
     // `Repository::open` + `head().peel_to_commit()` —
     // sub-millisecond for a local repo, negligible relative to
-    // LLM network latency). Memory cache is NOT busted — the
-    // instructions blocks live in a separate user-role synthetic
-    // message with their own `cache_control: Ephemeral`
-    // breakpoint (see prd §6.1 + the `build_instructions_blocks`
-    // docstring in `memory/loader.rs`).
+    // LLM network latency).
+    //
+    // Cache-correctness (D3 invariant, supersedes the RULE-A-005
+    // note): the system prompt is now **byte-stable within a
+    // session** — `head_sha` no longer appears in it. The SHA
+    // rides a per-turn Text block appended to the request TAIL
+    // (see the turn-assembly site below), so a mid-session commit
+    // no longer forks the byte-0 prefix cache on the
+    // OpenAI-compatible path (`to_wire` drops `cache_control`
+    // there; head immutability is the only lever). The Anthropic
+    // memory breakpoint at `messages[0]` is unaffected either way
+    // (see prd §6.1 + the `build_instructions_blocks` docstring
+    // in `memory/loader.rs`).
+    let mut head_state_block: Option<String> = None;
     if system_prompt_override.as_ref().is_none() {
         head_sha = crate::agent::system_prompt::lookup_head_sha(worktree_path);
         let base_prompt = crate::agent::system_prompt::build_system_prompt(
             &loaded_session.session,
             project,
             worktree_path,
-            &head_sha,
         );
         system_prompt =
             crate::agent::system_prompt::assemble_system_prompt(mode_prefix, &base_prompt);
+        // Non-git projects never showed a HEAD (the old system
+        // worktree line said "N/A — non-git project") — keep that:
+        // only git repos get the tail repo-state block.
+        if project.is_git_repo {
+            head_state_block = Some(crate::agent::system_prompt::build_repo_state_block_text(
+                &head_sha,
+            ));
+        }
     }
 
     // Turn-tool filter chain (provider-agnostic, applied before the
@@ -896,18 +913,29 @@ pub(crate) async fn drive_turn(
             // wants the state breadcrumb in front of the
             // LLM.
             //
-            // Runs AFTER `inject_recall_into_turn` so the
-            // recall text (when present) lands at the
-            // head of `messages[0]`'s block list
-            // (chronologically first per-turn) and the
-            // breadcrumb sits just below it
-            // (chronologically last).
+            // D1 (08-31-cache-head-volatility): the
+            // breadcrumb now appends to the request TAIL
+            // (the last user-role message), NOT
+            // `messages[0]`. The OpenAI-compatible path
+            // prefix-caches from byte 0 with no breakpoint
+            // markers, and the breadcrumb flips per-turn
+            // (status can change mid-loop), so a
+            // head-positioned block forked the whole cached
+            // prefix on every state transition (live
+            // evidence: session d6728b3a seq 435,
+            // cache_read=0 on a 280k-token request). The
+            // recall block above stays at `messages[0]`
+            // (per-request-stable within one user message's
+            // loop). Order within the tail: breadcrumb
+            // first, then the repo-state block below —
+            // both after any tool_results in the same
+            // message, mirroring the loop-hint placement
+            // (wire order-guard safe).
             //
-            // Both injectors share `messages[0]` and rely
-            // on the SAME S-B guard (skip-not-prepend);
-            // see
-            // `agent::workflow::inject::append_workflow_breadcrumb`
-            // for the rationale.
+            // The injection mutates the per-turn REQUEST
+            // clone only — the persisted `messages` Vec
+            // never carries a breadcrumb block, so it does
+            // not accumulate across turns.
             //
             // Nested inside `if !skip_persist` because
             // workers reuse the parent's session_id and
@@ -917,8 +945,8 @@ pub(crate) async fn drive_turn(
             // None`, so the inner `if workflow_ctx` gate
             // would also short-circuit — keeping them
             // together makes the intent clear in one
-            // block ("non-worker path mutations on
-            // messages[0]").
+            // block ("non-worker path mutations on the
+            // request clone").
             // R4 (07-10-workflow-task-json-hardening): refresh
             // `current_task` off disk at turn top so the breadcrumb
             // reflects mid-loop state changes from the previous turn
@@ -961,6 +989,28 @@ pub(crate) async fn drive_turn(
                     .await;
                 }
             }
+        }
+        // D3 (08-31-cache-head-volatility): repo HEAD state rides a
+        // per-turn TAIL block, adjacent to (right after) the
+        // workflow breadcrumb above. RULE-A-005's refresh semantics
+        // are preserved — the model still sees the CURRENT HEAD on
+        // every turn — but the mutation now lands after all cached
+        // prefix content instead of inside the system prompt (a
+        // mid-session commit used to fork the byte-0 prefix on the
+        // OpenAI-compatible path). Gated on the same condition as
+        // the per-turn system rebuild (`system_prompt_override`
+        // None + git project): the worker's override path never had
+        // a HEAD in its prompt, and non-git projects never showed
+        // one either.
+        if let Some(text) = head_state_block.as_ref() {
+            crate::agent::helpers::append_tail_text_block(
+                &mut req,
+                "repo_state_block",
+                ContentBlock::Text {
+                    text: text.clone(),
+                    cache_control: None,
+                },
+            );
         }
         req
     };

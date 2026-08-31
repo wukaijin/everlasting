@@ -20,9 +20,7 @@ use crate::skill::loader::SkillCache;
 use crate::state::ChatEventSink;
 use crate::tools::ToolContext;
 
-use super::{
-    dd_guard_hit, emit_persist_failure, load_for_session, CallerRole, ChatLoopDeps, ChatLoopRequest,
-};
+use super::{dd_guard_hit, emit_persist_failure, CallerRole, ChatLoopDeps, ChatLoopRequest};
 
 /// Output of [`prepare_loop_state`]: everything the turn loop + forced_dispatch
 /// path needs after session/context/messages preparation. Early-return paths
@@ -65,10 +63,10 @@ pub(crate) struct LoopInit {
     /// the system prompt body (send-side part) + the skill-listing
     /// synthetic message (attribution 口径: physically inside
     /// messages, attributed to the system slice, design §2).
-    /// Per-request constant like memory_token; head_sha-driven
-    /// per-turn system rebuilds change a few chars, absorbed by the
-    /// estimate. Worker turns never reach the Done write point
-    /// (skip_persist gate), same as memory_token.
+    /// Per-request constant like memory_token; since D3 the system
+    /// prompt is byte-stable within a session (head_sha moved to a
+    /// tail state block). Worker turns never reach the Done write
+    /// point (skip_persist gate), same as memory_token.
     pub(crate) system_token: u32,
     /// unified-context-budget WP1 (2026-08-19): sum of the @-token
     /// injected-body token estimates across ALL user messages of the
@@ -464,7 +462,25 @@ pub(crate) async fn prepare_loop_state(
     // B5 memory is empty in tests (no memory files written to the
     // temp project dir). Skip the synthetic user/assistant
     // inserts when `load_for_session` returns no layers.
-    let memory_layers = load_for_session(&memory_cache, &project.id, &project.path).await;
+    //
+    // D2 (08-31-cache-head-volatility): the read goes through the
+    // session-scoped freeze (`memory::freeze::load_for_session_
+    // frozen`). The instruction blocks live at `messages[0..1]`
+    // — the head — and the OpenAI-compatible path prefix-caches
+    // from byte 0 with no breakpoints, so a new request re-reading
+    // a mid-session-edited instruction file forked the whole
+    // cached prefix (live evidence: session d6728b3a seq 437).
+    // Within a session the FIRST request's layers are frozen;
+    // worker dispatch (`subagent/prompt.rs`) and the preview UI
+    // (`commands::memory.rs`) keep the fresh mtime-fenced read —
+    // they don't shape the parent loop's head.
+    let memory_layers = crate::memory::freeze::load_for_session_frozen(
+        &memory_cache,
+        &session_id,
+        &project.id,
+        &project.path,
+    )
+    .await;
     // memory-block-governance WP2 (2026-08-15): digest gate — 开关
     // (best-effort 缺省 on,`"false"` 才关,fail-open 同 `tools_stub_enabled`)
     // && 非 worker && 非群聊(与 C7D gate 同款豁免口径;worker 注入走
@@ -684,7 +700,7 @@ pub(crate) async fn prepare_loop_state(
         (if has_memory { 2 } else { 0 }) + (if has_skill_listing { 1 } else { 0 });
 
     // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
-    // `head_sha` is now MUTABLE and refreshed at the start of every
+    // `head_sha` is MUTABLE and refreshed at the start of every
     // turn (before `provider.send`) so the LLM sees the current HEAD
     // after a mid-session commit. Pre-fix: `head_sha` was a one-shot
     // `let` at chat_loop.rs:492 — the 50-turn loop sent a stale SHA
@@ -693,16 +709,16 @@ pub(crate) async fn prepare_loop_state(
     // `Repository::open` + `head().peel_to_commit()`) per turn —
     // negligible relative to LLM network latency.
     //
-    // Cache-correctness (RULE-A-005 invariant, verified in
-    // prd §6.1): the head_sha field lives inside `build_system_prompt`
-    // output, which is fed into the provider's **system** role string.
-    // The 4 instruction files (User/Project × CLAUDE.md/AGENTS.md)
-    // are injected as a SEPARATE user-role synthetic message via
-    // `memory::loader::build_instructions_blocks` and carry their own
-    // `cache_control: Ephemeral` breakpoint — independent of the
-    // system role. So a per-turn system-prompt mutation does NOT
-    // bust the memory cache. The 4 instruction blocks stay cache-hot
-    // across the 50-turn loop.
+    // Cache-correctness (D3, 08-31-cache-head-volatility — supersedes
+    // the old "sha lives in the system prompt" note): the SHA rides a
+    // per-turn TAIL block (`build_repo_state_block_text`), and the
+    // system prompt itself is **byte-stable within a session**. The
+    // OpenAI-compatible path prefix-caches from byte 0 and drops
+    // `cache_control`, so a per-turn mutation inside the system role
+    // forked the whole prefix on every mid-session commit. The 4
+    // instruction files remain a separate user-role synthetic message
+    // with its own `cache_control: Ephemeral` breakpoint — independent
+    // of the system role either way.
     let head_sha = crate::agent::system_prompt::lookup_head_sha(&worktree_path);
     // The 2026-06-21 B6 review defect A fix (the worker's
     // `SubagentDef.system_prompt` override via the 23rd parameter)
@@ -717,15 +733,15 @@ pub(crate) async fn prepare_loop_state(
                 &loaded_session.session,
                 &project,
                 &worktree_path,
-                &head_sha,
             );
             crate::agent::system_prompt::assemble_system_prompt(mode_prefix, &base_prompt)
         }
     };
     // unified-context-budget WP1 (2026-08-19): system 切片 = system
     // prompt 本体(发送部件)+ skill listing(归因,上面已计)。请求
-    // 常量:head_sha 每轮重建只动几个字符,absorbed(见 LoopInit 字段
-    // 注释)。注意与 drive_turn 每轮的 overhead 估算区分 —— 那是
+    // 常量:D3 后 system prompt 在 session 内字节稳定(head_sha 已移
+    // 尾部状态块,见下方 RULE-A-005 注释),估算天然不漂。注意与
+    // drive_turn 每轮的 overhead 估算区分 —— 那是
     // `count_tokens(当前 system_prompt)`(不含 skill listing,它在
     // messages 里),两个口径各自独立(prd D8)。
     let system_token =

@@ -37,12 +37,18 @@
 //! - [`tokens`] — `count_tokens` (cl100k_base via `tiktoken-rs`).
 //! - [`loader`] — `MemoryCache` + `load_for_session` (mtime-fenced
 //!   read-through).
+//! - [`freeze`] — D2 session-scoped freeze of the instruction
+//!   layers (08-31-cache-head-volatility): first request of a
+//!   session wins, later requests reuse the snapshot so the
+//!   `messages[0..1]` head stays byte-stable on the
+//!   OpenAI-compatible byte-0 prefix cache.
 //! - [`commands`] — Tauri command surface (3 commands, lives in
 //!   `crate::commands::memory`).
 //! - [`tests`] — `#[cfg(test)]` integration tests (≥15 cases).
 
 pub mod digest;
 pub mod file;
+pub mod freeze;
 pub mod loader;
 pub mod tokens;
 pub mod types;

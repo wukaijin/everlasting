@@ -8,25 +8,33 @@
 //! `task.rs` is **file IO** (read/write/init). Neither is
 //! the right home for "consult the DB, list the disk, build a
 //! session-scoped context struct, and inject per-turn state
-//! reminders into `messages[0]`". `inject.rs` is the **engine
-//! integration glue** — the bridge that knows about
+//! reminders into the request tail". `inject.rs` is the
+//! **engine integration glue** — the bridge that knows about
 //! `SqlitePool`, `ProjectRow`, `SessionRow`, and the
-//! `messages[0]` cache-control contract.
+//! cache-control contract on user-role messages.
 //!
 //! ## S-B invariant (Phase 0 design review §10.7 + S-B)
 //!
-//! > 注入一律 append 到 per-turn messages[0],`cache_control:
-//! > None`,绝不新开 user message。
+//! > 注入一律 append 到既有 user-role 消息,`cache_control:
+//! > None`,绝不(向头部)新开 user message。
 //!
-//! Workflow breadcrumb injection MUST follow the same rule
-//! as `memory_recall::inject_recall_into_turn`: append a
-//! `ContentBlock::Text` (cache_control: None) to the existing
-//! user-role Blocks message at `messages[0]`. If `messages[0]`
-//! is NOT a user-role Blocks message (defensive — the B5
-//! instruction-files load guarantees it for normal turns, but
-//! edge cases exist), the helper MUST log a `warn!` and skip
-//! — NEVER prepend a synthetic user message, which would
-//! break the Anthropic cache breakpoint at `messages[0]`.
+//! **Tail sink (08-31-cache-head-volatility D1)**: the breadcrumb
+//! used to be appended to `messages[0]` (the instructions
+//! synthetic head). The OpenAI-compatible path has a strict
+//! byte-0 prefix cache with no `cache_control` breakpoints, and
+//! the breadcrumb flips per-turn (status can change mid-loop), so
+//! a head-positioned breadcrumb busted the whole cached prefix on
+//! every state transition (live evidence: session d6728b3a seq
+//! 435, cache_read=0 on a 280k-token request). The block now
+//! appends to the **last** message of the per-turn request clone
+//! — the same position family as the loop-hint (tail = the newest
+//! content, chronologically correct for a "current state"
+//! reminder). The S-B guard semantics are preserved: append into
+//! an existing user-role message (`Text` payloads are widened to
+//! `Blocks` in place); NEVER prepend a synthetic user message,
+//! which would break the Anthropic cache breakpoint at
+//! `messages[0]`. When the guard trips (empty Vec / last message
+//! is assistant), the helper logs a `warn!` and skips.
 //!
 //! ## Engine contract
 //!
@@ -38,8 +46,8 @@
 //! - [`append_workflow_breadcrumb`] (sync, hot-path) is
 //!   called in the per-turn loop AFTER
 //!   `memory_recall::inject_recall_into_turn`. Same Vec
-//!   (`turn_messages`) gets the breadcrumb pushed onto
-//!   `messages[0]`'s block list — never wrapped in a new
+//!   (`turn_messages`) gets the breadcrumb pushed onto the
+//!   LAST message's block list — never wrapped in a new
 //!   `ChatMessage`.
 //!
 //! ## Phase scope
@@ -67,7 +75,7 @@ use crate::agent::workflow::{
     WorkflowDef,
 };
 use crate::db;
-use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
+use crate::llm::types::{ChatMessage, ContentBlock};
 
 // ---------------------------------------------------------------------------
 // WorkflowCtx
@@ -351,44 +359,44 @@ pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
 // append_workflow_breadcrumb — per-turn injection
 // ---------------------------------------------------------------------------
 
-/// Append the workflow breadcrumb to `messages[0]`. Mirrors
-/// `memory_recall::inject_recall_into_turn`'s safety
-/// contract precisely:
+/// Append the workflow breadcrumb to the **last** message of the
+/// per-turn request. Cache-correctness contract (D1,
+/// 08-31-cache-head-volatility):
 ///
-/// - Find `messages[0]`; if it's a user-role
-///   `MessageContent::Blocks`, push a new
-///   `ContentBlock::Text { text, cache_control: None }`.
-/// - If the precondition fails (NOT user-role OR NOT
-///   Blocks), log a `warn!` and skip — never prepend a
-///   synthetic user message (S-B invariant; prepending
-///   would bust the memory cache breakpoint at
+/// - Find the last message; if it's a user-role message, push a
+///   new `ContentBlock::Text { text, cache_control: None }` onto
+///   its block list (a plain `MessageContent::Text` payload is
+///   widened to `Blocks([Text, breadcrumb])` in place — the wire
+///   output is identical on both protocols).
+/// - If the precondition fails (NOT user-role), log a `warn!` and
+///   skip — never prepend a synthetic user message (S-B invariant;
+///   prepending would bust the memory cache breakpoint at
 ///   `messages[0]`).
 ///
+/// WHY the tail (not `messages[0]`): the OpenAI-compatible path
+/// prefix-caches from byte 0 with no breakpoint markers, and the
+/// breadcrumb mutates per-turn (status flips mid-loop), so a
+/// head-positioned block forked the cached prefix on every state
+/// transition. The tail block lives AFTER all cached-prefix
+/// content on every request, so the prefix stays byte-stable.
+///
 /// Called from the per-turn loop in `run_chat_loop`,
-/// *after* `inject_recall_into_turn`. The two helpers
-/// share `messages[0]`'s block list; both rely on the
-/// same S-B guard so the contract is consistent across
-/// all `messages[0]`-mutating helpers.
+/// *after* `inject_recall_into_turn` (recall stays at
+/// `messages[0]`; the two injectors no longer share a target).
+/// The injection mutates the per-turn REQUEST clone only — the
+/// persisted `messages` Vec never carries a breadcrumb block, so
+/// the block does not accumulate across turns.
 ///
 /// Returns `true` when the breadcrumb was appended,
 /// `false` when the S-B guard tripped (caller doesn't
 /// branch on this — the log line is the signal).
 pub fn append_workflow_breadcrumb(turn_messages: &mut [ChatMessage], ctx: &WorkflowCtx) -> bool {
     let block = build_breadcrumb_block(ctx);
-    if let Some(first) = turn_messages.first_mut() {
-        if first.role == Role::User {
-            if let MessageContent::Blocks(ref mut blocks) = first.content {
-                blocks.push(block);
-                return true;
-            }
-        }
-    }
-    tracing::warn!(
-        "append_workflow_breadcrumb: messages[0] is not a user-role Blocks message; \
-         S-B guard forbids prepending a synthetic user message. Breadcrumb skipped \
-         (turn proceeds without state reminder)."
-    );
-    false
+    crate::agent::helpers::append_tail_text_block(
+        turn_messages,
+        "append_workflow_breadcrumb",
+        block,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -396,20 +404,23 @@ pub fn append_workflow_breadcrumb(turn_messages: &mut [ChatMessage], ctx: &Workf
 // delegation template — filled plugin-role system prompt
 // for a worker turn. Lives in `inject.rs` next to
 // `append_workflow_breadcrumb` because both target the
-// same messages[0] block list with the same S-B guard.
+// per-turn tail of the request with the same S-B guard
+// shape.
 //
 // **Step 2.5 contract**:
-// - `compute_delegation_template` substitutes `{title}`
+// - `compute_delegation_template` substitute `{title}`
 //   / `{summary}` / `{state}` / `{relevant_specs}` from
 //   the workflow_ctx + project_path. Returns `None`
 //   when the plugin doesn't define a template for the
 //   role (caller falls back to the sub-agent's own
 //   system prompt).
-// - `append_delegation_template` mutates `messages[0]`
-//   to push the filled template as a Text block. The
-//   same S-B guard as the breadcrumb helper: must be a
-//   user-role Blocks message or the append is silently
-//   skipped (with a `warn!`).
+// - `append_delegation_template` mutates the worker's
+//   LAST message to push the filled template as a Text
+//   block (D1: was `messages[0]`; the tail keeps the
+//   worker's memory-blocks head byte-stable across
+//   dispatches). The same S-B guard as the breadcrumb
+//   helper: must land in a user-role message or the
+//   append is skipped (with a `warn!`).
 // - `cache_control: None` — delegation templates are
 //   per-dispatch (not per-turn stable), so they MUST
 //   NOT mark a cache breakpoint.
@@ -558,17 +569,18 @@ fn resolve_relevant_specs(project_path: &str) -> String {
     }
 }
 
-/// Push the filled delegation template (a Text block) to
-/// `messages[0]`'s block list. Same S-B guard as
-/// `append_workflow_breadcrumb` — silently skipped +
-/// `warn!` when messages[0] isn't a user-role Blocks
-/// message.
+/// Push the filled delegation template (a Text block) onto the
+/// worker's LAST message. Same S-B guard shape as
+/// `append_workflow_breadcrumb` — skipped + `warn!` when the last
+/// message isn't a user-role message.
 ///
 /// `cache_control: None` — delegation templates are
 /// per-dispatch (not per-turn stable), so they MUST NOT
-/// become a cache breakpoint marker. They live alongside
-/// the breadcrumb on messages[0], but never participate
-/// in the worker's prompt-cache breakpoint.
+/// become a cache breakpoint marker. D1 (08-31-cache-head-
+/// volatility): the template used to ride `messages[0]` (the
+/// worker's memory-blocks head); it now rides the tail so the
+/// memory head — and hence the worker-side cached prefix — stays
+/// byte-stable across dispatches of the same project.
 ///
 /// Returns `true` when appended, `false` when the guard
 /// tripped or the template is `None` (no plugin
@@ -583,20 +595,11 @@ pub fn append_delegation_template(turn_messages: &mut [ChatMessage], body: Optio
         text: body,
         cache_control: None,
     };
-    if let Some(first) = turn_messages.first_mut() {
-        if first.role == Role::User {
-            if let MessageContent::Blocks(ref mut blocks) = first.content {
-                blocks.push(block);
-                return true;
-            }
-        }
-    }
-    tracing::warn!(
-        "append_delegation_template: messages[0] is not a user-role Blocks message; \
-         S-B guard forbids prepending a synthetic user message. Template skipped \
-         (worker proceeds without plugin role customization)."
-    );
-    false
+    crate::agent::helpers::append_tail_text_block(
+        turn_messages,
+        "append_delegation_template",
+        block,
+    )
 }
 
 /// Compose the breadcrumb Text block. Three layers:

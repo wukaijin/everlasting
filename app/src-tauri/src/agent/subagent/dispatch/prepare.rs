@@ -252,20 +252,24 @@ pub(crate) async fn prepare_worker(
     };
 
     // W1 (Workflow integration, Step 2.5 — 2026-07-08):
-    // append the filled delegation template to
-    // `worker_messages[0]`'s block list. Only fires when:
+    // append the filled delegation template to the worker's
+    // LAST message (the delegation task). D1
+    // (08-31-cache-head-volatility) moved the target off
+    // `worker_messages[0]` (the memory head) so the worker-side
+    // cached prefix stays byte-stable across dispatches. Only
+    // fires when:
     // - workflow session (`workflow_ctx.is_some()`)
     // - plugin defines a template for the dispatched role
     //
     // The helper handles both guards (`append_delegation_template`
     // returns `false` on `None` template; the S-B guard inside
-    // catches the not-a-user-Blocks-message case). On
+    // catches the not-a-user-message case). On
     // non-workflow callers OR no plugin template → no-op
     // (legacy behavior preserved).
     //
     // **Per M-E**: this is a dispatch-turn-only injection.
-    // The parent's chat_loop's messages[0] is untouched; we
-    // only mutate the worker's messages[0]. The worker
+    // The parent's chat_loop's request is untouched; we
+    // only mutate the worker's messages. The worker
     // sees the template as part of its initial context.
     let filled = workflow_ctx.and_then(|ctx| {
         crate::agent::workflow::compute_delegation_template(ctx, project_path, subagent_name)

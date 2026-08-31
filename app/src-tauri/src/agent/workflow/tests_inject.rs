@@ -52,8 +52,129 @@ fn sample_ctx_no_task() -> WorkflowCtx {
 
 // --- append happy-path ----------------------------------------------
 
+/// Canonical multi-message request shape: [instructions head,
+/// assistant ack, user(tool_results) tail] — mirrors what
+/// `drive_turn` hands the injector on turn 2+ of a workflow loop.
+fn three_message_request() -> Vec<ChatMessage> {
+    vec![
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "instruction banner".to_string(),
+                cache_control: Some(CacheControl::Ephemeral),
+            }]),
+            speaker: None,
+            attachments: None,
+        },
+        ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "toolu_1".to_string(),
+                name: "list_dir".to_string(),
+                input: serde_json::json!({"path": "."}),
+            }]),
+            speaker: None,
+            attachments: None,
+        },
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "toolu_1".to_string(),
+                content: "[\"README.md\"]".to_string(),
+                is_error: false,
+                images: None,
+                resolved: None,
+            }]),
+            speaker: None,
+            attachments: None,
+        },
+    ]
+}
+
+/// D1 (08-31-cache-head-volatility) core invariant: the breadcrumb
+/// appends to the LAST message, never to `messages[0]`. A
+/// head-positioned breadcrumb forked the OpenAI byte-0 prefix
+/// cache on every workflow state transition (session d6728b3a seq
+/// 435 evidence).
+#[test]
+fn append_workflow_breadcrumb_targets_last_message_not_head() {
+    let mut msgs = three_message_request();
+    let head_before = format!("{:?}", msgs[0].content);
+    let tail_before_len = match &msgs[2].content {
+        MessageContent::Blocks(bs) => bs.len(),
+        _ => unreachable!(),
+    };
+    let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
+    assert!(appended);
+
+    // Head untouched, byte-for-byte.
+    assert_eq!(
+        format!("{:?}", msgs[0].content),
+        head_before,
+        "D1: messages[0] (instruction head) must stay untouched — it is \
+         the OpenAI-compatible prefix-cache anchor"
+    );
+    // No new message opened.
+    assert_eq!(msgs.len(), 3, "no synthetic message may be appended");
+    // Tail message gained exactly one block, AFTER the tool_result.
+    match &msgs[2].content {
+        MessageContent::Blocks(bs) => {
+            assert_eq!(bs.len(), tail_before_len + 1);
+            assert!(
+                matches!(bs[0], ContentBlock::ToolResult { .. }),
+                "tool_result must stay first in the tail message"
+            );
+            match bs.last().unwrap() {
+                ContentBlock::Text {
+                    text,
+                    cache_control,
+                } => {
+                    assert!(
+                        cache_control.is_none(),
+                        "breadcrumb block must NOT carry a cache_control marker (S-B)"
+                    );
+                    assert!(text.contains("workflow-task-meta"));
+                }
+                _ => panic!("expected Text block at the tail"),
+            }
+        }
+        _ => panic!("tail message content shape corrupted"),
+    }
+}
+
+/// D1 + wire order-guard: appending the breadcrumb AFTER the
+/// tool_result blocks fans out on the wire as `tool×N → user(text)`
+/// — the shape both protocols accept (`orphan_tool_call_order` in
+/// `to_wire.rs` finds no violation). A block at position 0 of the
+/// tail message would 400 on OpenAI.
+#[test]
+fn breadcrumb_tail_placement_passes_openai_wire_order_guard() {
+    let mut msgs = three_message_request();
+    assert!(append_workflow_breadcrumb(
+        &mut msgs,
+        &sample_ctx_with_task()
+    ));
+    let req = crate::llm::types::ChatRequest {
+        model: "m".to_string(),
+        max_tokens: 100,
+        messages: msgs,
+        system: None,
+        stream: true,
+        tools: vec![],
+        thinking: None,
+    };
+    let wire = crate::llm::provider::wire::chat_request_to_wire(req, None);
+    let violations = crate::llm::provider::wire::orphan_tool_call_order(&wire.messages);
+    assert!(
+        violations.is_empty(),
+        "tail-placed breadcrumb must not violate the OpenAI tool-order guard: {violations:?}"
+    );
+}
+
 #[test]
 fn append_workflow_breadcrumb_appends_block_to_user_messages_zero() {
+    // Degenerate single-message request: the last message IS
+    // messages[0] — the append still lands in a user-role message.
     let mut msgs = vec![fresh_user_message()];
     let initial_block_count = match &msgs[0].content {
         MessageContent::Blocks(bs) => bs.len(),
@@ -81,6 +202,66 @@ fn append_workflow_breadcrumb_appends_block_to_user_messages_zero() {
             }
         }
         _ => panic!("messages[0] content shape corrupted"),
+    }
+}
+
+/// Turn-1 shape: the newest message is a plain typed user message
+/// (`MessageContent::Text`, e.g. "commit"). The helper WIDENS it to
+/// `Blocks([Text, breadcrumb])` instead of skipping — otherwise
+/// every workflow session's first turn would lose the state
+/// reminder. The widened breadcrumb carries a leading "\n" because
+/// the no-marker wire path concatenates adjacent Text blocks with
+/// no delimiter.
+#[test]
+fn append_workflow_breadcrumb_widens_plain_text_tail_message() {
+    let mut msgs = vec![
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "instruction banner".to_string(),
+                cache_control: Some(CacheControl::Ephemeral),
+            }]),
+            speaker: None,
+            attachments: None,
+        },
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("commit".to_string()),
+            speaker: None,
+            attachments: None,
+        },
+    ];
+    let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
+    assert!(
+        appended,
+        "a plain typed user message must still receive the breadcrumb (turn-1 shape)"
+    );
+    match &msgs[1].content {
+        MessageContent::Blocks(bs) => {
+            assert_eq!(bs.len(), 2, "widened to [user text, breadcrumb]");
+            match &bs[0] {
+                ContentBlock::Text {
+                    text,
+                    cache_control,
+                } => {
+                    assert_eq!(text, "commit");
+                    assert!(cache_control.is_none());
+                }
+                _ => panic!("expected original text block first"),
+            }
+            match &bs[1] {
+                ContentBlock::Text {
+                    text,
+                    cache_control,
+                } => {
+                    assert!(text.starts_with('\n'), "separator newline required");
+                    assert!(text.contains("workflow-task-meta"));
+                    assert!(cache_control.is_none());
+                }
+                _ => panic!("expected breadcrumb block second"),
+            }
+        }
+        other => panic!("tail message must be widened to Blocks, got {other:?}"),
     }
 }
 
@@ -312,7 +493,10 @@ fn append_workflow_breadcrumb_skips_when_messages_empty() {
 }
 
 #[test]
-fn append_workflow_breadcrumb_skips_when_first_message_is_assistant() {
+fn append_workflow_breadcrumb_skips_when_last_message_is_assistant() {
+    // D1: the guard now inspects the LAST message. An assistant
+    // tail (degenerate — the loop always closes on a user message)
+    // trips the S-B guard: no synthetic message, no mutation.
     let mut msgs = vec![ChatMessage {
         role: Role::Assistant,
         content: MessageContent::Blocks(vec![ContentBlock::Text {
@@ -327,32 +511,11 @@ fn append_workflow_breadcrumb_skips_when_first_message_is_assistant() {
     assert_eq!(
         msgs.len(),
         1,
-        "S-B: no synthetic prepend; assistant stays at index 0"
+        "S-B: no synthetic append; assistant stays the only message"
     );
     match &msgs[0].content {
         MessageContent::Blocks(bs) => assert_eq!(bs.len(), 1, "no block appended"),
         _ => panic!("messages[0] content shape corrupted"),
-    }
-}
-
-#[test]
-fn append_workflow_breadcrumb_skips_when_user_role_message_is_text_only() {
-    // User-role but plain `MessageContent::Text(...)` (no
-    // Blocks). The helper cannot append to a Text
-    // payload; per S-B, it MUST skip rather than wrap
-    // the breadcrumb in a new user message.
-    let mut msgs = vec![ChatMessage {
-        role: Role::User,
-        content: MessageContent::Text("plain string".to_string()),
-        speaker: None,
-        attachments: None,
-    }];
-    let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
-    assert!(!appended);
-    assert_eq!(msgs.len(), 1, "S-B: no synthetic prepend");
-    match &msgs[0].content {
-        MessageContent::Text(s) => assert_eq!(s, "plain string"),
-        _ => panic!("messages[0] content shape changed unexpectedly"),
     }
 }
 

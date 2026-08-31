@@ -180,7 +180,14 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
             .unwrap_or_else(|| project.path.clone()),
     );
     let head_sha = lookup_head_sha(&worktree_path);
-    let base_prompt = build_system_prompt(&loaded.session, &project, &worktree_path, &head_sha);
+    let base_prompt = build_system_prompt(&loaded.session, &project, &worktree_path);
+    // D3: the SHA no longer rides the system prompt; it rides the
+    // per-turn tail repo-state block. Keep the lookup above only to
+    // assert the prompt is SHA-free (byte-stable within a session).
+    assert!(
+        !base_prompt.contains(&head_sha),
+        "D3 invariant: system prompt must not embed head_sha ({head_sha})"
+    );
     let expected = assemble_system_prompt(mode_system_prefix(loaded.session.mode), &base_prompt);
     assert_eq!(
         received, &expected,

@@ -415,6 +415,14 @@ pub async fn delete_session_inner(
     // 一处清理两边生效。
     crate::memory::digest::registry().clear(&session_id).await;
 
+    // D2 (08-31-cache-head-volatility): clear the session's frozen
+    // instruction-layer snapshot(同上 — session_id 复用不得继承已删
+    // session 的首请求内容;新 session 首请求从盘上重读)。进程级
+    // OnceLock 单例,选型同 digest。
+    crate::memory::freeze::freeze_registry()
+        .clear(&session_id)
+        .await;
+
     // C3 摘要压缩 PR2 (08-18-llm-context-compaction): clear the
     // session's compaction breaker count(熔断 registry 清理,同上 ——
     // session_id 复用不得继承旧 session 的连续失败计数,否则新 session

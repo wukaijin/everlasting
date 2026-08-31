@@ -87,7 +87,6 @@ fn build_system_prompt_no_hardcoded_tool_list() {
         &session,
         &project,
         std::path::Path::new("/home/carlos/code/everlasting"),
-        "abc1234",
     );
     assert!(
         !prompt.contains("read_file, write_file"),
@@ -180,7 +179,6 @@ fn build_system_prompt_active_worktree() {
         &session,
         &project,
         std::path::Path::new("/data/worktrees/p1/test-id"),
-        "abc1234",
     );
     assert!(
         prompt.contains("Session ID: test-id"),
@@ -190,9 +188,14 @@ fn build_system_prompt_active_worktree() {
         prompt.contains("ACTIVE on branch 'session/test-id'"),
         "prompt must label state ACTIVE and include branch name"
     );
+    // D3 (08-31-cache-head-volatility): the HEAD SHA no longer rides
+    // the system prompt (byte-stability within a session is the
+    // OpenAI-compatible prefix-cache invariant). It rides the
+    // per-turn tail repo-state block instead.
     assert!(
-        prompt.contains("HEAD abc1234"),
-        "prompt must include the short HEAD SHA"
+        !prompt.contains("HEAD"),
+        "D3: system prompt must NOT embed a HEAD SHA (got: {})",
+        prompt
     );
     assert!(
         prompt.contains("Working directory: /data/worktrees/p1/test-id"),
@@ -216,7 +219,6 @@ fn build_system_prompt_no_worktree() {
         &session,
         &project,
         std::path::Path::new("/home/carlos/code/everlasting"),
-        "abc1234",
     );
     assert!(
         prompt.contains("NONE — running in project root"),
@@ -248,15 +250,16 @@ fn build_system_prompt_detached_worktree() {
         &session,
         &project,
         std::path::Path::new("/home/carlos/code/everlasting"),
-        "deadbee",
     );
     assert!(
         prompt.contains("DETACHED — was on branch 'session/det-id'"),
         "prompt must label state DETACHED and reference the old branch"
     );
+    // D3: SHA rides the tail repo-state block, not the system prompt.
     assert!(
-        prompt.contains("HEAD deadbee"),
-        "prompt must include the HEAD short SHA"
+        !prompt.contains("HEAD"),
+        "D3: detached worktree line must not embed the HEAD SHA (got: {})",
+        prompt
     );
     assert!(
         prompt.contains("currently in project root"),
@@ -280,7 +283,6 @@ fn build_system_prompt_non_git_project() {
         &session,
         &project,
         std::path::Path::new("/some/non/git/dir"),
-        "not a git repo",
     );
     assert!(
         prompt.contains("Worktree: N/A — non-git project"),
@@ -343,7 +345,6 @@ fn build_system_prompt_includes_today_date_line() {
         &session,
         &project,
         std::path::Path::new("/home/carlos/code/everlasting"),
-        "abc1234",
     );
     assert!(
         prompt.contains("- Date:") && prompt.contains("(UTC"),
@@ -353,32 +354,33 @@ fn build_system_prompt_includes_today_date_line() {
 }
 
 // ---------------------------------------------------------------------------
-// P2 RULE-A-005 (2026-06-24): head_sha refresh after commit
+// P2 RULE-A-005 (2026-06-24) + D3 (08-31-cache-head-volatility):
+// head_sha refresh after commit
 // ---------------------------------------------------------------------------
 //
 // Pre-fix: `lookup_head_sha` was a one-shot at chat_loop.rs:492
 // (pre-fix line), so the 50-turn loop sent a stale SHA on turn 2+
-// even after a tool call committed. Post-fix: `head_sha` is refreshed
-// at the start of every turn (see chat_loop.rs:732-744 in
-// `for turn in 1..=turn_limit`). This test pins the contract
-// `lookup_head_sha` + `build_system_prompt` together so the
-// refresh-pipeline is exercised end-to-end:
+// even after a tool call committed. Post-fix the SHA is refreshed
+// at the start of every turn. D3 moved the SHA's home from the
+// system prompt text to a per-turn TAIL block
+// (`build_repo_state_block_text`), so the refresh contract now
+// pins TWO things:
 //
-//   1. Spin up a temp git repo with commit A → record short SHA-1.
-//   2. Commit B on top → record short SHA-2.
-//   3. Assert the post-fix refresh path produces SHA-2 in a freshly
-//      computed `build_system_prompt` output (i.e. a turn 4 prompt
-//      built AFTER the second commit sees SHA-2, not SHA-1).
+//   1. The system prompt is byte-stable across a mid-session
+//      commit (no SHA anywhere in it) — the OpenAI-compatible
+//      byte-0 prefix cache invariant.
+//   2. The tail repo-state block built from the refreshed SHA
+//      carries the NEW HEAD (SHA-2), not the stale one (SHA-1).
 //
 // We don't run `run_chat_loop` here — the `lookup_head_sha` ↔
-// `build_system_prompt` glue is the testable surface, and the
-// `for turn` loop in `run_chat_loop` is the (uncovered-by-this-test)
-// caller. The integration-level rule is covered by
-// `tests_subagent::system_prompt_override_*` (which exercises the
-// `None` path that drives the per-turn refresh).
+// block-text glue is the testable surface; the integration-level
+// head-stability rule is covered by
+// `tests_agent_loop::cache_head_stability`.
 #[test]
-fn head_sha_refresh_after_commit_updates_system_prompt() {
-    use crate::agent::system_prompt::{build_system_prompt, lookup_head_sha};
+fn head_sha_refresh_updates_tail_block_and_keeps_system_prompt_stable() {
+    use crate::agent::system_prompt::{
+        build_repo_state_block_text, build_system_prompt, lookup_head_sha,
+    };
     use git2::Repository;
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -431,9 +433,6 @@ fn head_sha_refresh_after_commit_updates_system_prompt() {
         "second commit must produce a different SHA; otherwise the refresh is a no-op"
     );
 
-    // Build a system_prompt the way chat_loop.rs would AFTER the
-    // per-turn refresh. It must reflect SHA-2 (the new HEAD), not
-    // SHA-1 (the pre-refresh stale value).
     let session = make_session_row(
         "rule-a005",
         db::WorktreeState::Active,
@@ -441,17 +440,38 @@ fn head_sha_refresh_after_commit_updates_system_prompt() {
     );
     let mut project = make_project_row(true);
     project.path = tmp.path().to_string_lossy().to_string();
-    let prompt_after_refresh = build_system_prompt(&session, &project, tmp.path(), &sha_2);
+
+    // (1) The system prompt is byte-identical across the commit —
+    // byte-stable within a session, no SHA embedded.
+    let before = build_system_prompt(&session, &project, tmp.path());
+    let after = build_system_prompt(&session, &project, tmp.path());
+    assert_eq!(
+        before, after,
+        "system prompt must be deterministic (byte-stable precondition)"
+    );
     assert!(
-        prompt_after_refresh.contains(&format!("HEAD {}", sha_2)),
-        "post-refresh system_prompt must carry SHA-2 ({}) — the per-turn \
+        !before.contains(&sha_1) && !before.contains(&sha_2),
+        "D3: system prompt must not embed any HEAD SHA"
+    );
+
+    // (2) The tail repo-state block built from the post-commit
+    // refresh carries SHA-2 (the new HEAD), not SHA-1 — the model
+    // still sees the latest commit every turn.
+    let block_after_refresh = build_repo_state_block_text(&sha_2);
+    assert!(
+        block_after_refresh.contains(&sha_2),
+        "post-refresh repo-state block must carry SHA-2 ({}) — the per-turn \
          refresh path is what makes the LLM see the latest commit",
         sha_2
     );
     assert!(
-        !prompt_after_refresh.contains(&format!("HEAD {}", sha_1)),
-        "post-refresh system_prompt must NOT carry the stale SHA-1 ({})",
+        !block_after_refresh.contains(&sha_1),
+        "post-refresh repo-state block must NOT carry the stale SHA-1 ({})",
         sha_1
+    );
+    assert!(
+        block_after_refresh.contains("<repo-state>"),
+        "repo-state block must keep the parse anchor wrapper"
     );
 }
 

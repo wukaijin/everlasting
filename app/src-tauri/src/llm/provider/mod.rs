@@ -39,7 +39,7 @@ use std::pin::Pin;
 use futures_util::Stream;
 
 use super::error::LlmError;
-use super::types::{ChatEvent, ChatMessage, ToolDef};
+use super::types::{ChatEvent, ChatMessage, TokenUsage, ToolDef};
 use crate::db::{ModelRow, ProviderRow};
 
 pub use crate::db::ProviderProtocol;
@@ -47,6 +47,58 @@ pub use crate::db::ProviderProtocol;
 pub use anthropic::AnthropicProvider;
 #[allow(unused_imports)]
 pub use openai::OpenAIProvider;
+
+// ---------------------------------------------------------------------------
+// Full-prefix cache-miss sentinel (D5, 08-31-cache-head-volatility)
+// ---------------------------------------------------------------------------
+
+/// Input-token threshold above which a zero `cache_read` is treated
+/// as a **full-prefix cache miss worth alerting on**. A healthy
+/// follow-up turn on a long session reads the previous prefix back
+/// from the cache; `cache_read == 0` on a >50k-token request means
+/// the byte-0 prefix forked (or the upstream cache dropped the
+/// entry) and the whole input is re-billed at full price (live
+/// evidence: session d6728b3a seq 435/437, ~280k input at
+/// cache_read=0). Below the threshold a cold start / first turn is
+/// normal and must not spam the log.
+const CACHE_MISS_WARN_INPUT_THRESHOLD: u32 = 50_000;
+
+/// Warn when a completed turn's usage shows a full-prefix cache miss
+/// (`cache_read_input_tokens == 0 && input_tokens > 50k`). Called
+/// from both provider adapters at the terminal `Done` emission so
+/// the alert is symmetric across protocols. `context` carries the
+/// provider's routing identity (protocol + model + base URL — the
+/// provider layer has no session/request id; the daemon log line
+/// correlates by timestamp with the `→ LLM request` line above it).
+pub(crate) fn warn_on_full_prefix_cache_miss(usage: &TokenUsage, context: &str) {
+    if is_full_prefix_cache_miss(usage) {
+        tracing::warn!(
+            context = %context,
+            input_tokens = usage.input_tokens,
+            cache_read_input_tokens = usage.cache_read_input_tokens,
+            "usage: full-prefix cache MISS on a large request (cache_read=0, \
+             input > {}k) — the byte-0 head likely forked between turns, or the \
+             upstream cache entry was evicted; check head-stability injections \
+             (breadcrumb / instruction freeze / repo-state) if this repeats",
+            CACHE_MISS_WARN_INPUT_THRESHOLD / 1000
+        );
+    }
+}
+
+/// Testable core of [`warn_on_full_prefix_cache_miss`] (same
+/// "testable core" pattern as `memory::freeze::load_frozen_impl`):
+/// pure predicate so the threshold boundary is pinnable without
+/// capturing tracing output.
+///
+/// Boundary notes (pinned by the tests below):
+/// - `input_tokens == 50_000` does NOT trip (design says `> 50k`);
+/// - `cache_read > 0` never trips (a partial/full hit is healthy);
+/// - `cache_read == 0` is the `u32` zero — a provider that did not
+///   report usage at all surfaces as `usage == None` at the call
+///   sites, which never reach this predicate.
+fn is_full_prefix_cache_miss(usage: &TokenUsage) -> bool {
+    usage.cache_read_input_tokens == 0 && usage.input_tokens > CACHE_MISS_WARN_INPUT_THRESHOLD
+}
 
 // ---------------------------------------------------------------------------
 // Provider trait
@@ -224,6 +276,32 @@ pub enum ProviderBuildError {
 mod tests {
     use super::*;
     use crate::db;
+
+    /// D5 (08-31-cache-head-volatility): the full-prefix cache-miss
+    /// predicate's threshold boundaries. Exactly 50k must NOT trip
+    /// (design says `> 50_000`), any cache_read > 0 must NOT trip
+    /// (a hit is healthy), and the None-usage case never reaches
+    /// the predicate (both adapters guard with `if let Some(u)`).
+    #[test]
+    fn full_prefix_cache_miss_threshold_boundaries() {
+        let mk = |input: u32, cache_read: u32| TokenUsage {
+            input_tokens: input,
+            cache_read_input_tokens: cache_read,
+            ..TokenUsage::default()
+        };
+        // The incident shape: ~280k input, zero cache read → trips.
+        assert!(is_full_prefix_cache_miss(&mk(280_368, 0)));
+        // Boundary: exactly 50_000 stays silent (`>`, not `>=`).
+        assert!(!is_full_prefix_cache_miss(&mk(50_000, 0)));
+        // One token above the line trips.
+        assert!(is_full_prefix_cache_miss(&mk(50_001, 0)));
+        // Large input but a healthy cache read → silent.
+        assert!(!is_full_prefix_cache_miss(&mk(280_368, 281_344)));
+        // Even a 1-token read means the prefix was served → silent.
+        assert!(!is_full_prefix_cache_miss(&mk(280_368, 1)));
+        // Cold start below the line → silent (no log spam).
+        assert!(!is_full_prefix_cache_miss(&mk(4_000, 0)));
+    }
 
     fn anthropic_provider_row(api_key: &str) -> ProviderRow {
         ProviderRow {

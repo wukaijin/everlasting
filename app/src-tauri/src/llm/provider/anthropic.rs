@@ -223,6 +223,17 @@ impl AnthropicProvider {
                 }
             }
 
+            // D5 (08-31-cache-head-volatility): full-prefix cache-miss
+            // sentinel, symmetric with the OpenAI adapter — cache_read=0
+            // on a >50k-token request means the cached prefix was lost
+            // (head fork or upstream eviction) and the input re-bills at
+            // full price.
+            if let Some(u) = &usage {
+                super::warn_on_full_prefix_cache_miss(
+                    u,
+                    &format!("anthropic model={} url={}", config.model, url),
+                );
+            }
             yield Ok(ChatEvent::Done { stop_reason, usage });
         }
     }

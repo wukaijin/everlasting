@@ -14,10 +14,11 @@
 /// path is not a git repo, libgit2 fails to open it, or the repo
 /// has no commits yet (e.g. a freshly-`git init`'d empty repo).
 ///
-/// Best-effort by design: this is consumed only by
-/// `build_system_prompt` as a hint to the LLM about the current
-/// HEAD; we never want a transient git error to surface as a
-/// chat failure.
+/// Best-effort by design: this is consumed only by the chat
+/// loop's per-turn repo-state TAIL block
+/// ([`build_repo_state_block_text`]) as a hint to the LLM about
+/// the current HEAD; we never want a transient git error to
+/// surface as a chat failure.
 pub fn lookup_head_sha(path: &std::path::Path) -> String {
     if !path.join(".git").exists() {
         return "not a git repo".to_string();
@@ -63,31 +64,38 @@ where
 /// worktree state so the model is grounded on every turn.
 ///
 /// Three worktree-state phrasings:
-/// - `Active` → "ACTIVE on branch 'session/<id>' (HEAD <short_sha>)"
-/// - `Detached` → "DETACHED — was on branch 'session/<id>'
-///   (HEAD <short_sha>), currently in project root"
+/// - `Active` → "ACTIVE on branch 'session/<id>'"
+/// - `Detached` → "DETACHED — was on branch 'session/<id>',
+///   currently in project root"
 /// - `None` → "NONE — running in project root"
 ///
+/// **D3 (08-31-cache-head-volatility): the HEAD SHA is NOT part
+/// of the system prompt anymore.** The OpenAI-compatible path
+/// prefix-caches from byte 0 (no `cache_control` markers), so the
+/// system prompt must be **byte-stable within a session**; the
+/// per-turn-refreshed SHA now rides the tail repo-state block
+/// ([`build_repo_state_block_text`], appended to the last message
+/// of each request by the chat loop). The model still sees the
+/// current HEAD every turn — the mutation just lands after all
+/// cached prefix content instead of inside it.
+///
 /// **Privacy**: only the `session_id`, `project.name`,
-/// `project.path`, `ctx_root`, and short HEAD SHA are emitted. No
-/// user messages or tool inputs are echoed.
+/// `project.path`, and `ctx_root` are emitted. No user messages
+/// or tool inputs are echoed.
 pub fn build_system_prompt(
     session: &crate::db::SessionRow,
     project: &crate::projects::ProjectRow,
     ctx_root: &std::path::Path,
-    head_sha: &str,
 ) -> String {
     let branch = crate::git::worktree::branch_name(&session.id);
     let worktree_line = if !project.is_git_repo {
         "N/A — non-git project".to_string()
     } else {
         match session.worktree_state {
-            crate::db::WorktreeState::Active => {
-                format!("ACTIVE on branch '{}' (HEAD {})", branch, head_sha)
-            }
+            crate::db::WorktreeState::Active => format!("ACTIVE on branch '{}'", branch),
             crate::db::WorktreeState::Detached => format!(
-                "DETACHED — was on branch '{}' (HEAD {}), currently in project root",
-                branch, head_sha
+                "DETACHED — was on branch '{}', currently in project root",
+                branch
             ),
             crate::db::WorktreeState::None => "NONE — running in project root".to_string(),
         }
@@ -137,11 +145,32 @@ so future pre-tool recall can match it precisely.",
     )
 }
 
+/// D3 (08-31-cache-head-volatility): the per-turn repo HEAD
+/// reminder. The chat loop appends this text as a
+/// `ContentBlock::Text { cache_control: None }` to the LAST
+/// user-role message of each request (adjacent to the workflow
+/// breadcrumb), refreshing `head_sha` at turn entry so the model
+/// still sees the current HEAD after a mid-session commit
+/// (RULE-A-005 refresh semantics preserved). Living at the tail
+/// keeps the system prompt byte-stable within a session, which is
+/// the only lever the OpenAI-compatible path has (its prefix
+/// cache matches from byte 0 and `to_wire` drops `cache_control`).
+///
+/// The `<repo-state>` wrapper gives the model a stable parse
+/// anchor matching the breadcrumb's `<workflow-task-meta>` shape.
+pub fn build_repo_state_block_text(head_sha: &str) -> String {
+    format!("<repo-state>\ncurrent HEAD: {}\n</repo-state>", head_sha)
+}
+
 /// Assemble the full system prompt from its three layers, in
 /// cache-stability order: the stable behavior guidance first, then
 /// the mode prefix, then the per-turn base prompt. Stablest layer
 /// first keeps the upstream prompt-cache prefix warm across turns.
 /// See the [`behavior_prompt`] module for the layering rationale.
+///
+/// D3 note: since the base prompt no longer carries `head_sha`,
+/// the whole assembled string is byte-stable within a session —
+/// the invariant the OpenAI-compatible byte-0 prefix cache needs.
 pub fn assemble_system_prompt(mode_prefix: &str, base_prompt: &str) -> String {
     format!(
         "{}\n\n{}\n\n{}",

@@ -14,6 +14,9 @@
 //!   `chat-event` channel through the `ChatEventSink` trait.
 //! - [`cancel_inflight_for_session`] — destructive-op helper used
 //!   by `delete_session`, `detach_worktree`, `delete_worktree`.
+//! - [`append_tail_text_block`] — D1/D3 (08-31-cache-head-
+//!   volatility): append a per-turn state Text block to the LAST
+//!   user-role message of the request, never to the head.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -100,6 +103,88 @@ session was cancelled before the tool could run. The tool {} did not run.",
         content: MessageContent::Blocks(blocks),
         speaker: None,
         attachments: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tail state-block append (08-31-cache-head-volatility D1/D3)
+// ---------------------------------------------------------------------------
+
+/// Append a per-turn `ContentBlock::Text` (cache_control: None)
+/// to the **last** message of the per-turn request clone.
+///
+/// Cache-correctness contract: the OpenAI-compatible path
+/// prefix-caches from byte 0 with no `cache_control` breakpoints,
+/// so any per-turn-mutating content (workflow breadcrumb, repo
+/// HEAD) must live at the request TAIL — after all stable prefix
+/// content. Anthropic is unaffected (the tail sits after the
+/// `messages[0]` breakpoint either way).
+///
+/// Guard shape (S-B invariant, preserved from the pre-D1
+/// `messages[0]` injectors):
+/// - last message is user-role `Blocks` → push the block;
+/// - last message is user-role `Text(s)` → widen in place to
+///   `Blocks([Text{s}, block])`. The wire output is identical on
+///   both protocols (the no-marker Blocks path concatenates text
+///   blocks), and this is what keeps a plain typed user message
+///   ("commit") from tripping the guard on turn 1;
+/// - anything else (empty Vec, last message assistant) → `warn!`
+///   + skip. NEVER prepend or append a synthetic user message.
+///
+/// `label` names the caller in the skip warning so regressions
+/// are grep-able. Returns `true` when appended.
+pub fn append_tail_text_block(
+    turn_messages: &mut [ChatMessage],
+    label: &str,
+    block: ContentBlock,
+) -> bool {
+    let Some(last) = turn_messages.last_mut() else {
+        tracing::warn!(
+            caller = label,
+            "append_tail_text_block: empty request — S-B guard skips the injection \
+             (turn proceeds without the state reminder)."
+        );
+        return false;
+    };
+    if last.role != Role::User {
+        tracing::warn!(
+            caller = label,
+            "append_tail_text_block: last message is not user-role; \
+             S-B guard forbids synthesizing a new message. Injection skipped \
+             (turn proceeds without the state reminder)."
+        );
+        return false;
+    }
+    match last.content {
+        MessageContent::Blocks(ref mut blocks) => {
+            blocks.push(block);
+            true
+        }
+        MessageContent::Text(ref text) => {
+            let widened = text.clone();
+            let injected = match block {
+                ContentBlock::Text {
+                    text,
+                    cache_control,
+                } => ContentBlock::Text {
+                    // Separator: the no-marker wire path concatenates
+                    // adjacent Text blocks with NO delimiter — without
+                    // the leading "\n" the user's text and the state
+                    // block would mash into one line.
+                    text: format!("\n{}", text),
+                    cache_control,
+                },
+                other => other,
+            };
+            last.content = MessageContent::Blocks(vec![
+                ContentBlock::Text {
+                    text: widened,
+                    cache_control: None,
+                },
+                injected,
+            ]);
+            true
+        }
     }
 }
 

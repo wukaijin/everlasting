@@ -204,8 +204,9 @@ pub(crate) struct ChatLoopRequest {
     pub(crate) sink: Arc<dyn ChatEventSink>,
     // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
     // per-session workflow context. `None` for non-workflow sessions.
-    // When `Some(ctx)`, `messages[0]` gets the state breadcrumb +
-    // current-task metadata appended on every turn. Loop 内可变
+    // When `Some(ctx)`, the state breadcrumb + current-task metadata
+    // are appended to the request TAIL on every turn (D1,
+    // 08-31-cache-head-volatility — was `messages[0]`). Loop 内可变
     // （current_task 每 turn 从盘上刷新），经 TurnCarry/Outcome 穿线。
     pub(crate) workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
     // Group chat (07-29-group-chat): shared turn state for the

@@ -915,6 +915,16 @@ impl Provider for OpenAIProvider {
                 }
             }
 
+            // D5 (08-31-cache-head-volatility): full-prefix cache-miss
+            // sentinel — cache_read=0 on a >50k-token request means the
+            // byte-0 head forked (or the upstream entry was evicted) and
+            // the whole input re-billed at full price.
+            if let Some(u) = &usage {
+                super::warn_on_full_prefix_cache_miss(
+                    u,
+                    &format!("openai model={} url={}", body["model"], url),
+                );
+            }
             yield Ok(ChatEvent::Done { stop_reason, usage });
         };
         Box::pin(s)

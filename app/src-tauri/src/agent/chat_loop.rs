@@ -55,7 +55,6 @@ use crate::agent::question_store::{
 };
 use crate::agent::MAX_TURNS;
 use crate::llm::{ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role};
-use crate::memory::MemoryCache;
 use crate::projects::boundary::is_within_root;
 use crate::state::{ChatEventSink, ToolCallPayload};
 use std::collections::VecDeque;
@@ -1388,14 +1387,6 @@ pub(crate) fn emit_persist_failure(
             category: LlmErrorCategory::Server,
         },
     });
-}
-
-pub(crate) async fn load_for_session(
-    cache: &Arc<MemoryCache>,
-    project_id: &str,
-    project_path: &str,
-) -> Vec<crate::memory::MemoryLayer> {
-    crate::memory::loader::load_for_session(cache, project_id, project_path).await
 }
 
 /// 3b (2026-07-28): C2+ loop-intervention's 4 exit arms all `return`
