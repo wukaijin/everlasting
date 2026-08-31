@@ -51,6 +51,13 @@ export interface ProjectInfo {
   updated_at: string;
   hidden: boolean;
   metadata: string | null;
+  /** P3c per-project sandbox policy tier. `readwrite` is the default
+   *  (every command sandboxed, worktree writable); `readonly` = hard
+   *  isolation (worktree read-only face); `off` = no sandbox (classic
+   *  approval path). Legacy daemons may omit the field — treated as
+   *  `readwrite` by the backend DEFAULT, so the UI defaults its
+   *  selection there when absent. */
+  sandbox_policy?: "off" | "readwrite" | "readonly";
 }
 
 export type ToastKind = "info" | "warn" | "error";
@@ -372,6 +379,25 @@ export const useProjectsStore = defineStore("projects", () => {
     }
   }
 
+  /** P3c: persist the project's sandbox policy tier. Refreshes the
+   *  project list so the settings tab reflects the stored value
+   *  (single read model). */
+  async function setProjectSandboxPolicy(
+    id: string,
+    policy: "off" | "readwrite" | "readonly",
+  ): Promise<void> {
+    try {
+      await transport.invoke<ProjectInfo>("update_project_sandbox_policy", {
+        id,
+        policy,
+      });
+      await loadProjects();
+    } catch (e) {
+      showToast(`沙盒策略保存失败: ${extractErrorMessage(e)}`, "error");
+      throw e;
+    }
+  }
+
   function projectById(id: string | null): ProjectInfo | undefined {
     if (!id) return undefined;
     return projects.value.find((p) => p.id === id);
@@ -401,6 +427,7 @@ export const useProjectsStore = defineStore("projects", () => {
     hideProject,
     unhideProject,
     renameProject,
+    setProjectSandboxPolicy,
     projectById,
     basenameOf,
   };

@@ -59,7 +59,7 @@ describe("GeneralTab", () => {
     expect(switches[2]?.attributes("aria-checked")).toBe("true");
     expect(switches[0]?.attributes("aria-label")).toBe("轮次完成通知");
     expect(switches[1]?.attributes("aria-label")).toBe("定时任务调度");
-    expect(switches[2]?.attributes("aria-label")).toBe("只读命令沙盒");
+    expect(switches[2]?.attributes("aria-label")).toBe("命令沙盒");
   });
 
   it("点击携带正确的 key + 取反值,成功后 store 更新", async () => {
@@ -125,11 +125,11 @@ describe("GeneralTab", () => {
 // ---------------------------------------------------------------------------
 
 describe("GeneralTab — P3b sandbox", () => {
-  it("渲染第三个开关(只读命令沙盒),缺省开;能力徽标 null 时不显示", async () => {
+  it("渲染第三个开关(命令沙盒),缺省开;能力徽标 null 时不显示", async () => {
     const w = await mountTab();
     const switches = w.findAll("button[role='switch']");
     expect(switches).toHaveLength(3);
-    expect(switches[2]?.attributes("aria-label")).toBe("只读命令沙盒");
+    expect(switches[2]?.attributes("aria-label")).toBe("命令沙盒");
     expect(switches[2]?.attributes("aria-checked")).toBe("true");
     expect(w.find(".general-tab__cap").exists()).toBe(false);
   });
@@ -171,7 +171,8 @@ describe("GeneralTab — P3b sandbox", () => {
           turnCompleteNotifyEnabled: true,
           scheduledTasksEnabled: true,
           sandboxEnabled: false,
-          sandboxExtraWritable: ["/opt/cache"],
+          sandboxExtraWritable: ["/root/.cargo", "/opt/cache"],
+          sandboxExtraWritableRaw: ["/opt/cache"],
           sandboxCapability: false,
         });
       }
@@ -180,13 +181,20 @@ describe("GeneralTab — P3b sandbox", () => {
     await pinia.load();
     await flushPromises();
     expect(pinia.sandboxEnabled).toBe(false);
-    expect(pinia.sandboxExtraWritable).toEqual(["/opt/cache"]);
+    expect(pinia.sandboxExtraWritable).toEqual(["/root/.cargo", "/opt/cache"]);
+    expect(pinia.sandboxExtraWritableRaw).toEqual(["/opt/cache"]);
     expect(pinia.sandboxCapability).toBe(false);
   });
 
-  it("额外可写目录:添加 → set_app_config_list 携带整列表;移除 → 过滤后写回", async () => {
+  it("额外可写目录(RULE-SBX-002):编辑 raw 清单;~/.cargo 默认项为固定 chip 不可删", async () => {
     const w = await mountTab();
     const pinia = useConfigStore();
+
+    // 默认 chip 恒在(无移除按钮)。
+    const items = w.findAll(".general-tab__extra-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]!.text()).toContain("~/.cargo");
+    expect(items[0]!.find(".general-tab__extra-remove").exists()).toBe(false);
 
     const input = w.find(".general-tab__extra-input");
     await input.setValue("/opt/build-cache");
@@ -196,20 +204,23 @@ describe("GeneralTab — P3b sandbox", () => {
       key: "sandbox_extra_writable",
       value: ["/opt/build-cache"],
     });
-    expect(pinia.sandboxExtraWritable).toEqual(["/opt/build-cache"]);
-    expect(w.find(".general-tab__extra-path").text()).toBe("/opt/build-cache");
+    // raw ref 更新;生效清单(展示层)不动。
+    expect(pinia.sandboxExtraWritableRaw).toEqual(["/opt/build-cache"]);
+    expect(pinia.sandboxExtraWritable).toEqual([]);
 
-    await w.find(".general-tab__extra-remove").trigger("click");
+    await w.findAll(".general-tab__extra-remove")[0]!.trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenLastCalledWith("set_app_config_list", {
       key: "sandbox_extra_writable",
       value: [],
     });
-    expect(pinia.sandboxExtraWritable).toEqual([]);
-    expect(w.find(".general-tab__extra-item").exists()).toBe(false);
+    expect(pinia.sandboxExtraWritableRaw).toEqual([]);
+    // 回归锚(移除后复活):raw 为空后,列表只剩默认 chip。
+    expect(w.findAll(".general-tab__extra-item")).toHaveLength(1);
+    expect(w.findAll(".general-tab__extra-item")[0]!.text()).toContain("~/.cargo");
   });
 
-  it("列表写入失败 → toast,store 值保持原状(不乐观提交)", async () => {
+  it("列表写入失败 → toast,raw 值保持原状(不乐观提交)", async () => {
     const w = await mountTab();
     const pinia = useConfigStore();
 
@@ -220,7 +231,7 @@ describe("GeneralTab — P3b sandbox", () => {
     await flushPromises();
     expect(showToastMock).toHaveBeenCalledTimes(1);
     expect(showToastMock.mock.calls[0]?.[0]).toContain("设置失败");
-    expect(pinia.sandboxExtraWritable).toEqual([]);
-    expect(w.find(".general-tab__extra-item").exists()).toBe(false);
+    expect(pinia.sandboxExtraWritableRaw).toEqual([]);
+    expect(w.findAll(".general-tab__extra-item")).toHaveLength(1);
   });
 });

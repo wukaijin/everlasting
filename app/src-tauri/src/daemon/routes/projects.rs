@@ -13,7 +13,8 @@ use serde::Deserialize;
 
 use crate::commands::projects::{
     create_project_inner, hide_project_inner, list_hidden_projects_inner, list_projects_inner,
-    unhide_project_inner, update_project_name_inner, update_project_path_inner, ListProjectsFilter,
+    unhide_project_inner, update_project_name_inner, update_project_path_inner,
+    update_project_sandbox_policy_inner, ListProjectsFilter,
 };
 use crate::error::AppCommandError;
 use crate::projects;
@@ -81,6 +82,22 @@ pub async fn update_project_name(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateProjectSandboxPolicyRequest {
+    pub id: String,
+    pub policy: String,
+}
+
+/// P3c(design §2):项目沙盒策略档写入。snake_case 扁平顶层字段
+/// (IPC 形状铁律),白名单校验在 `_inner`。
+pub async fn update_project_sandbox_policy(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateProjectSandboxPolicyRequest>,
+) -> Result<Json<projects::ProjectRow>, AppCommandError> {
+    let result = update_project_sandbox_policy_inner(&state, req.id, req.policy).await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct HideProjectRequest {
     pub id: String,
 }
@@ -113,6 +130,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/create_project", post(create_project))
         .route("/update_project_path", post(update_project_path))
         .route("/update_project_name", post(update_project_name))
+        .route(
+            "/update_project_sandbox_policy",
+            post(update_project_sandbox_policy),
+        )
         .route("/hide_project", post(hide_project))
         .route("/unhide_project", post(unhide_project))
         .with_state(state)

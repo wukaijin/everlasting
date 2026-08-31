@@ -135,6 +135,7 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   list_projects: "projects",
   unhide_project: "projects",
   update_project_name: "projects",
+  update_project_sandbox_policy: "projects",
   update_project_path: "projects",
   // providers
   add_model: "providers",

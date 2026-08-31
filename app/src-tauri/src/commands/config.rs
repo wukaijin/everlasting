@@ -507,10 +507,15 @@ pub struct AppConfigPayload {
     pub sandbox_enabled: bool,
     /// P3b 额外可写目录的**生效清单**(R7):`~/.cargo` 默认项 +
     /// app_config `sandbox_extra_writable`(JSON 数组,`~` 已展开)。
-    /// 单源 `sandbox::policy::read_extra_writable`;PR1 先随
-    /// `get_app_config` additive 暴露,PR3 接编辑 UI
-    /// (`set_app_config_list` 写通道)。
+    /// 单源 `sandbox::policy::read_extra_writable`。
+    /// RULE-SBX-002(P3c):本字段降级为**展示层**;编辑走
+    /// `sandbox_extra_writable_raw`(下方),否则「移除 ~/.cargo 后
+    /// 后端又并入 → 复活」。
     pub sandbox_extra_writable: Vec<String>,
+    /// P3c(RULE-SBX-002):**raw** 额外可写清单 = app_config 存储
+    /// 原样(JSON 数组,不并默认项、不展开 `~`)。设置面编辑本列表;
+    /// 生效清单由后端在读取时并入 `~/.cargo` 默认项。
+    pub sandbox_extra_writable_raw: Vec<String>,
     /// P3b 只读派生字段(R8,design §2.6):进程内能力探测
     /// (`Capability::probe()` OnceLock 缓存)结果,**不落盘**、
     /// 无写通道。设置面据此显示「沙盒生效 / 已回退(fail-open)」。
@@ -540,12 +545,15 @@ pub async fn get_app_config_inner(
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
+    let sandbox_extra_writable_raw =
+        crate::sandbox::policy::read_extra_writable_raw(&state.db).await;
     let sandbox_capability = crate::sandbox::Capability::probe().ok();
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
         scheduled_tasks_enabled: scheduled_on,
         sandbox_enabled,
         sandbox_extra_writable: sandbox_extra,
+        sandbox_extra_writable_raw,
         sandbox_capability,
     })
 }

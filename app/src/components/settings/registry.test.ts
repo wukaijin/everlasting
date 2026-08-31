@@ -28,7 +28,7 @@ describe("settings registry", () => {
     expect(globalCats[0]?.id).toBe(DEFAULT_CATEGORY_ID);
 
     const projectCats = filterCategories("   ", "project");
-    expect(projectCats.map((c) => c.id)).toEqual(["project-memory", "project-subagents"]);
+    expect(projectCats.map((c) => c.id)).toEqual(["project-memory", "project-sandbox", "project-subagents"]);
   });
 
   it("中英文关键词命中 title / description / keywords", () => {

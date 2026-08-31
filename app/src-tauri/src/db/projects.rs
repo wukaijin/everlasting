@@ -256,6 +256,30 @@ pub async fn update_project_name(
     }
 }
 
+/// P3c (design §2): set a project's sandbox policy tier. The value
+/// is validated by the command layer whitelist (and by the DB CHECK
+/// constraint as a backstop); this function stores it verbatim.
+pub async fn set_project_sandbox_policy(
+    pool: &SqlitePool,
+    project_id: &str,
+    policy: &str,
+) -> Result<ProjectRow, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query("UPDATE projects SET sandbox_policy = ?, updated_at = ? WHERE id = ?")
+        .bind(policy)
+        .bind(&now)
+        .bind(project_id)
+        .execute(pool)
+        .await;
+    match res {
+        Ok(r) if r.rows_affected() == 0 => Err(sqlx::Error::RowNotFound),
+        Ok(_) => get_project(pool, project_id)
+            .await
+            .and_then(|opt| opt.ok_or(sqlx::Error::RowNotFound)),
+        Err(e) => Err(e),
+    }
+}
+
 /// Hide a project (× close-tab). Data is preserved. Hidden projects
 /// do not show in the Tab bar but remain available via
 /// [`list_hidden_projects`].

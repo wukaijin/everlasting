@@ -155,6 +155,18 @@ pub(crate) async fn read_extra_writable(db: &SqlitePool) -> Vec<PathBuf> {
     out
 }
 
+/// The RAW extra-writable list (RULE-SBX-002): exactly the JSON
+/// array stored in app_config — no `~/.cargo` default merge, no tilde
+/// expansion. This is what the settings UI edits; the effective list
+/// ([`read_extra_writable`]) is display-only. Empty/missing/malformed
+/// → empty list.
+pub(crate) async fn read_extra_writable_raw(db: &SqlitePool) -> Vec<String> {
+    match crate::db::config::get_config_value(db, CONFIG_EXTRA_KEY).await {
+        Ok(Some(v)) => serde_json::from_str::<Vec<String>>(&v).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// Toolchain dirs probed for the exec face (design §2.1). The
 /// existence probe is cheap (two stats) and only avoids pointless
 /// fd opens at rule time; `~/.cargo/bin` is usually already covered

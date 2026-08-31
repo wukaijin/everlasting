@@ -123,6 +123,40 @@ pub async fn update_project_name(
     update_project_name_inner(&state, id, new_name).await
 }
 
+/// P3c(design §2):`update_project_sandbox_policy` 允许写的档位
+/// 白名单。与 `SETTABLE_APP_FLAGS` 同款防呆:projects.sandbox_policy
+/// 有 DB CHECK 兜底,但 IPC 入口先拒(错误归 `InvalidRequest`),
+/// 不让脏值落库。
+const SETTABLE_SANDBOX_POLICIES: &[&str] = &["off", "readwrite", "readonly"];
+
+pub async fn update_project_sandbox_policy_inner(
+    state: &Arc<AppState>,
+    id: String,
+    policy: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    if !SETTABLE_SANDBOX_POLICIES.contains(&policy.as_str()) {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "unknown sandbox policy: {policy} (expected one of {})",
+                SETTABLE_SANDBOX_POLICIES.join(", ")
+            ),
+        ));
+    }
+    crate::db::projects::set_project_sandbox_policy(&state.db, &id, &policy)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))
+}
+
+#[tauri::command]
+pub async fn update_project_sandbox_policy(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    policy: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    update_project_sandbox_policy_inner(&state, id, policy).await
+}
+
 pub async fn hide_project_inner(state: &Arc<AppState>, id: String) -> Result<(), AppCommandError> {
     projects::store::hide_project(&state.db, &id)
         .await

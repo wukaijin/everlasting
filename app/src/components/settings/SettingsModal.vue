@@ -58,6 +58,7 @@ import SearchTab from "./SearchTab.vue";
 import ScheduledTasksTab from "./ScheduledTasksTab.vue";
 import GeneralTab from "./GeneralTab.vue";
 import ProjectMemoryTab from "./ProjectMemoryTab.vue";
+import ProjectSandboxTab from "./ProjectSandboxTab.vue";
 import ProjectSubagentsTab from "./ProjectSubagentsTab.vue";
 
 const open = defineModel<boolean>("open", { required: true });
@@ -78,6 +79,7 @@ const CATEGORY_COMPONENTS: Record<string, Component> = {
   scheduled: ScheduledTasksTab,
   remote: RemoteTab,
   "project-memory": ProjectMemoryTab,
+  "project-sandbox": ProjectSandboxTab,
   "project-subagents": ProjectSubagentsTab,
 };
 

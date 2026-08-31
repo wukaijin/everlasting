@@ -126,8 +126,12 @@ export const useConfigStore = defineStore("config", () => {
   // kill switch 展示值(fail-open 缺省开)、额外可写目录生效清单
   // (含后端并入的 ~/.cargo 默认项)与能力探测只读派生值(null =
   // 尚未加载/旧 daemon 无该字段,设置面此时不显示徽标)。
+  // RULE-SBX-002(P3c):生效清单降级为**展示层**;编辑走 raw 列表
+  // (下方 sandboxExtraWritableRaw),否则「移除 ~/.cargo 后又被后端
+  // 并入 → 复活」。
   const sandboxEnabled = ref(true);
   const sandboxExtraWritable = ref<string[]>([]);
+  const sandboxExtraWritableRaw = ref<string[]>([]);
   const sandboxCapability = ref<boolean | null>(null);
 
   async function load() {
@@ -163,6 +167,7 @@ export const useConfigStore = defineStore("config", () => {
         scheduledTasksEnabled?: boolean;
         sandboxEnabled?: boolean;
         sandboxExtraWritable?: string[];
+        sandboxExtraWritableRaw?: string[];
         sandboxCapability?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
@@ -171,6 +176,8 @@ export const useConfigStore = defineStore("config", () => {
       // P3b:additive 三字段(旧 daemon 缺省 true / [] / null)。
       sandboxEnabled.value = appConfig.sandboxEnabled !== false;
       sandboxExtraWritable.value = appConfig.sandboxExtraWritable ?? [];
+      // P3c(RULE-SBX-002):raw 编辑清单,旧 daemon 缺省 []。
+      sandboxExtraWritableRaw.value = appConfig.sandboxExtraWritableRaw ?? [];
       sandboxCapability.value = appConfig.sandboxCapability ?? null;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
@@ -216,17 +223,17 @@ export const useConfigStore = defineStore("config", () => {
     sandboxEnabled.value = on;
   }
 
-  /** Persist the extra-writable list (app_config
-   *  `sandbox_extra_writable`, P3b R7, 评审 W1 写通道
-   *  `set_app_config_list`). The backend stores the raw list; the
-   *  read side re-merges the `~/.cargo` default, so the effective
-   *  list here stays in sync after the next `load()`. */
-  async function setSandboxExtraWritable(list: string[]): Promise<void> {
+  /** Persist the RAW extra-writable list (RULE-SBX-002, P3c): the
+   *  editable list is exactly what lands in app_config — the `~/.cargo`
+   *  default is NOT part of it (the backend merges it in at read
+   *  time; the effective `sandboxExtraWritable` ref is display-only
+   *  and refreshes via `load()`). */
+  async function setSandboxExtraWritableRaw(list: string[]): Promise<void> {
     await transport.invoke("set_app_config_list", {
       key: "sandbox_extra_writable",
       value: list,
     });
-    sandboxExtraWritable.value = list;
+    sandboxExtraWritableRaw.value = list;
   }
 
   return {
@@ -239,6 +246,7 @@ export const useConfigStore = defineStore("config", () => {
     scheduledTasksEnabled,
     sandboxEnabled,
     sandboxExtraWritable,
+    sandboxExtraWritableRaw,
     sandboxCapability,
     lastActiveProjectId,
     readLastSession,
@@ -246,7 +254,7 @@ export const useConfigStore = defineStore("config", () => {
     setTurnCompleteNotify,
     setScheduledTasksEnabled,
     setSandboxEnabled,
-    setSandboxExtraWritable,
+    setSandboxExtraWritableRaw,
     load,
   };
 });

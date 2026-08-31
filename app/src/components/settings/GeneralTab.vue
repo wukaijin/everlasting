@@ -10,8 +10,13 @@
 // P3b(2026-08-31, task 08-31-a2-p3b-sandbox-executor):新增执行期
 // 沙盒 kill switch(`sandbox_enabled`,同款布尔白名单通道)、能力探测
 // 徽标(`sandbox_capability` 只读派生,生效/已回退)与「额外可写目录」
-// 列表编辑(写通道 `set_app_config_list`,评审 W1;生效清单 = 本列表
-// + 后端并入的 ~/.cargo 默认项)。
+// 列表编辑(写通道 `set_app_config_list`,评审 W1)。
+//
+// RULE-SBX-002(P3c,2026-09-01):额外可写目录的编辑对象改为 **raw**
+// 清单(app_config 存储原样,`sandboxExtraWritableRaw`);`~/.cargo`
+// 默认项是后端读取时并入的,渲染为不可删的固定 chip。旧实现直接编辑
+// 生效清单——把 ~/.cargo 一并写入 raw,「移除后又被后端并入 → 复活」,
+// 且旧注释声称「默认项不在编辑列表里」与实际不符(本段即修正注释)。
 //
 // 写入策略:pending 期间 switch 保持点击后的目标态(乐观)但禁点;
 // 失败回拨到旧值并 toast。switch 样式复用 ScheduledTasksTab 的
@@ -58,9 +63,9 @@ const rows: FlagRow[] = [
   },
   {
     key: "sandboxEnabled",
-    title: "只读命令沙盒",
+    title: "命令沙盒",
     description:
-      "只读档 shell 命令(LS、git diff 等)在 Landlock+seccomp 沙盒下执行:可写范围限定在项目目录、/tmp 与应用输出目录,且禁止联网。关闭后恢复旧行为。",
+      "shell 命令在 Landlock+seccomp 沙盒下执行:项目目录与 /tmp 内自由读写(P3c 默认档),边界外收紧且禁止联网;越界时弹一次审批卡。项目可单独设档(放行/读写/只读),关闭后全部恢复旧行为。",
     value: () => config.sandboxEnabled,
     set: (on) => config.setSandboxEnabled(on),
   },
@@ -88,10 +93,10 @@ const newListEntry = ref("");
 
 function removeExtraWritable(idx: number): void {
   if (listPending.value) return;
-  const next = config.sandboxExtraWritable.filter((_, i) => i !== idx);
+  const next = config.sandboxExtraWritableRaw.filter((_, i) => i !== idx);
   listPending.value = true;
   config
-    .setSandboxExtraWritable(next)
+    .setSandboxExtraWritableRaw(next)
     .catch((e) => projects.showToast(`设置失败：${extractErrorMessage(e)}`, "error"))
     .finally(() => {
       listPending.value = false;
@@ -101,13 +106,13 @@ function removeExtraWritable(idx: number): void {
 function addExtraWritable(): void {
   const entry = newListEntry.value.trim();
   if (!entry || listPending.value) return;
-  if (config.sandboxExtraWritable.includes(entry)) {
+  if (config.sandboxExtraWritableRaw.includes(entry)) {
     newListEntry.value = "";
     return;
   }
   listPending.value = true;
   config
-    .setSandboxExtraWritable([...config.sandboxExtraWritable, entry])
+    .setSandboxExtraWritableRaw([...config.sandboxExtraWritableRaw, entry])
     .then(() => {
       newListEntry.value = "";
     })
@@ -153,16 +158,20 @@ function addExtraWritable(): void {
       </li>
     </ul>
 
-    <!-- P3b:额外可写目录。生效清单由后端 get_app_config 返回(含
-         ~/.cargo 默认项);这里只编辑用户追加的部分,移除按钮对
-         默认项隐藏(~/.cargo 是后端并入,不在编辑列表里,自然不可删)。 -->
+    <!-- P3b + RULE-SBX-002(P3c):额外可写目录。编辑对象 = raw 清单
+         (app_config 存储原样);~/.cargo 默认项渲染为固定 chip(无移除
+         按钮)—— 它是后端读取时并入的,不在 raw 里,移除它没有任何
+         意义(会「复活」)。 -->
     <div class="general-tab__extra">
       <span class="general-tab__title">沙盒额外可写目录</span>
       <span class="general-tab__desc">
-        在沙盒可写范围(项目目录、/tmp、应用输出、~/.cargo)之外,允许只读命令写入的目录。
+        在沙盒可写范围(项目目录、/tmp、应用输出、~/.cargo)之外,允许命令写入的目录。
       </span>
-      <ul v-if="config.sandboxExtraWritable.length" class="general-tab__extra-list">
-        <li v-for="(entry, idx) in config.sandboxExtraWritable" :key="entry" class="general-tab__extra-item">
+      <ul class="general-tab__extra-list">
+        <li class="general-tab__extra-item">
+          <code class="general-tab__extra-path">~/.cargo(默认,cargo 构建必需)</code>
+        </li>
+        <li v-for="(entry, idx) in config.sandboxExtraWritableRaw" :key="entry" class="general-tab__extra-item">
           <code class="general-tab__extra-path">{{ entry }}</code>
           <button
             type="button"

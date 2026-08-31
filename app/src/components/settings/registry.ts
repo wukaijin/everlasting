@@ -121,6 +121,14 @@ export const SETTINGS_CATEGORIES: ReadonlyArray<SettingsCategory> = [
     keywords: ["memory", "记忆", "指令文件", "claude.md", "agents.md", "项目指令", "project"],
   },
   {
+    id: "project-sandbox",
+    scope: "project",
+    group: null,
+    title: "项目沙盒",
+    description: "当前项目的沙盒策略档:放行 / 读写(默认)/ 只读。",
+    keywords: ["sandbox", "沙盒", "隔离", "策略", "只读", "读写", "放行", "landlock", "project"],
+  },
+  {
     id: "project-subagents",
     scope: "project",
     group: null,

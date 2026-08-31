@@ -421,6 +421,7 @@ pub fn run() {
             commands::projects::create_project,
             commands::projects::update_project_path,
             commands::projects::update_project_name,
+            commands::projects::update_project_sandbox_policy,
             commands::projects::hide_project,
             commands::projects::unhide_project,
             commands::projects::pick_project_dir,
