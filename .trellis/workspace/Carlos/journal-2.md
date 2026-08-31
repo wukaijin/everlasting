@@ -665,3 +665,26 @@ Spec 沉淀:pattern-global-loop-semaphore(含 P1 拒绝依据)、daemon-server b
 ### Status
 
 [OK] Completed(AC1/AC2/AC4 手动验收与 daemon 重启恢复项留用户)
+
+
+## Session 48: 定时任务目标 session 三档:per_run 每次执行新建 session + 表单 radio 卡片重设计
+
+**Date**: 2026-08-31
+**Task**: 定时任务目标 session 三档:per_run 每次执行新建 session + 表单 radio 卡片重设计
+**Branch**: `main`
+
+### Summary
+
+scheduled_tasks 表重建迁移(target_mode/model_id/last_run_session_id,target_session_id 可空化 + CHECK 不变式);调度器 tick 内为 per_run 新建 run session(绕过同 session 串行化/队列去重/queue-disabled,建会话失败消费 due);create/update 档位切换校验 + route/tool 适配(LLM 路径不变);前端目标区三档 radio 卡片重设计 + per_run 卡片 meta。cargo 2169 / vitest 1497 全绿,clippy 无新增,headless 截图验证桌面+移动三档切换。spec scheduled-tasks.md 收编 per_run 契约。遗留:daemon 需 restart 加载新 Rust 二进制。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bf28a31c` | (see git log) |
+| `cd212ff4` | (see git log) |
+| `31e5d7dd` | (see git log) |
+
+### Status
+
+[OK] **Completed**
