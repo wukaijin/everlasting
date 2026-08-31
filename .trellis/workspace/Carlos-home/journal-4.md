@@ -1290,3 +1290,25 @@ C6 收口(08-30-c6-output-truncation,评审后三 PR):PR1 tool_output 契约模�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 130: R5/D4 调查结案:tools=0 辅助调用缓存干扰 — 驱逐假说实验排除
+
+**Date**: 2026-09-01
+**Task**: R5/D4 调查结案:tools=0 辅助调用缓存干扰 — 驱逐假说实验排除
+**Branch**: `main`
+
+### Summary
+
+承接 08-31-cache-head-volatility 遗留 R5/D4 立项并走排除臂结案,零生产代码改动。R1a:tools=0 嫌疑池封闭三族(auto 压缩 drive.rs:2611 / 手动 compact / auto_reflect:453),has_system 字段一刀两断(压缩族 false / reflect true);旧归因 truncate_summary 证伪(纯落盘 helper)。框架修正:seq 285 miss 更可能是本 session 自己的 auto 压缩折叠前缀(机械性 miss),seq 401 部分回退到固定值即保留区边界签名。R2:本机 daemon+deepseek-v4-flash(原事故同栈)两档对照实验——S 条目 31k/旁路 161k 与 S 条目 124k/旁路 266k(对齐事故 280k),旁路插入后主 loop cache_read 逐字节不变,驱逐排除。R1b:原始数据在另一台机,归因命令固化为取证包待远端执行回填。spec 收编 token-usage-tracking(tools=0 归因判别器 + miss 归因次序 + create_session model 参数是 legacy 标签的坑)。实验中修正:create_session model 参数不生效改 update_session_model_id;守卫 tail -N 窗口被大请求日志密度冲掉改时间戳窗口。开局顺带归档 P3a/P3b 两已完成任务(afc91ab/f1b2954)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a0026c` | (see git log) |
+| `8238f44` | (see git log) |
+
+### Status
+
+[OK] **Completed**
