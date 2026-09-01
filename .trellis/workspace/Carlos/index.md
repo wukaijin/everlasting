@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 49
-- **Last Active**: 2026-08-31
+- **Total Sessions**: 50
+- **Last Active**: 2026-09-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~712 | Active |
+| `journal-2.md` | ~733 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 50 | 2026-09-01 | A2+ P3d 后台 shell 升级闭环(B 案:下轮注入时弹卡) | `8fa9047d` | `main` |
 | 49 | 2026-08-31 | SSE 丢分片与提示词头部缓存失效:取证 + 双修复 | `2a1b3c6a`, `b797d0c8` | `main` |
 | 48 | 2026-08-31 | 定时任务目标 session 三档:per_run 每次执行新建 session + 表单 radio 卡片重设计 | `bf28a31c`, `cd212ff4`, `31e5d7dd` | `main` |
 | 47 | 2026-08-27 | chat 事件 payload 补 session_id:跨客户端实时认领 | `68f7cadc` | `main` |

@@ -710,3 +710,24 @@ scheduled_tasks 表重建迁移(target_mode/model_id/last_run_session_id,target_
 ### Status
 
 [OK] **Completed**
+
+
+## Session 50: A2+ P3d 后台 shell 升级闭环(B 案:下轮注入时弹卡)
+
+**Date**: 2026-09-01
+**Task**: A2+ P3d 后台 shell 升级闭环(B 案:下轮注入时弹卡)
+**Branch**: `main`
+
+### Summary
+
+P3c 留下的最后一个沙盒 UX 不对称收口:后台 run_background_shell 面外失败(写被拒/断网)从纯模型介导升级为系统驱动闭环。呈递时机用户裁定 B 案——下轮 drain 后、组装 turn 文本前解析(background_escalation.rs::resolve_all),复用前台 §5.2 全套机制:Plan 门 → escalation_source → prefix-grant 零卡直跑 / Ask 卡经原 tool_use_id 挂回原 bsh 卡(120s,turn token cancel-safe)→ 批准后 registry start(sandbox=None,origin=None) 一次性不沙盒重跑。载荷链:dispatch 对所有工具统一盖章 ToolContext.tool_use_id → registry entry → 等待任务在 Normal+Failed+沙盒+origin+classify_block 命中时烘 EscalationOffer 入通知(Killed/TimedOut/Skip 恒 None);start() 把 sandboxed∧origin 折叠成 escalation_origin 单值。无 offer 通知逐字节走 legacy 格式;LLM 永远只见终态故事,不自己发起重跑。前端一处必要改动(推翻 PRD 零改动假设):ShellCard isPendingApproval 的 !hasResult 守卫对已有结果的后台卡豁免(isBackground),前台 hide-on-result 保留,双向 vitest 锚。计划外修复:①ask.rs 先 emit 后 register 的竞态使 mock resolver 单发 resolve 合法落空,tests_escalation approve 例在并行负载下 flaky——重试到 ok 修复;②root 环境 /proc/1/mem 可写致探针前提失效,geteuid==0 大声 SKIP(本机 root 首次暴露)。验证:后端 2215 绿+clippy/fmt 净,前端 vitest/vue-tsc/build 绿+e2e 7/7(Chromium v1234 重装后),live turn-smoke --sandbox-probe OK(daemon 重建重启);Checker 子代理验收 PASS-with-minor,3 条 P3(mode 双源删 env.mode、escalation 过时注释、N/A 映射去重)当场清零。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8fa9047d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
