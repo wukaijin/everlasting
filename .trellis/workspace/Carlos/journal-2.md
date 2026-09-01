@@ -731,3 +731,24 @@ P3c 留下的最后一个沙盒 UX 不对称收口:后台 run_background_shell �
 ### Status
 
 [OK] **Completed**
+
+
+## Session 51: wf-dev breadcrumb 补 commit 指引
+
+**Date**: 2026-09-02
+**Task**: wf-dev breadcrumb 补 commit 指引
+**Branch**: `main`
+
+### Summary
+
+排查确认 wf dev 内置工作流在提示层对 commit 缺位(breadcrumb 无一句提交引导,状态门禁只管 transition;对比 Trellis Phase 3.4);在 in_progress(收尾整理逻辑 commit)与 done(归档前确认已提交)breadcrumb 补引导文案,builtin 源 + def.rs 常量 + .everlasting 镜像三处同步;全量 lib 2224 测试通过,等价性单测与镜像 diff 守护。未动权限引擎 Edit 模式放行 git commit 的既有设计。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `336a164e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
