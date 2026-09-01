@@ -98,7 +98,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 ### AuditKind
 `session_audit_events.kind` 字符串枚举,**2026-08-31 实测 29 类**,按域分组(完整 29 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
 
-- **Tool 域(6)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / SandboxedShellExecution(P3b 08-31,ReadOnly 档 shell 沙盒执行完成,payload 带 command_sha256_12 前缀 + ruleset)/ ToolDeniedYolo
+- **Tool 域(6)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / SandboxedShellExecution(P3b 08-31 起,沙盒档(sandbox_policy ≠ off,含 Plan 只读面)shell 命令沙盒执行完成,payload 带 command_sha256_12 前缀 + ruleset(含 face)+ tool_name)/ ToolDeniedYolo
 - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
 - **Mode 域(6)**:ModeChanged / YoloEntered / YoloExited / ModeChangeRequested(07-07 request_mode_change 工具)/ ModeChangeAllowed / ModeChangeDenied
 - **Message 域(2)**:EditMessage(D3 PR1 06-17)/ ResendMessage(D3 PR3 06-17)
@@ -148,7 +148,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 - **ShellCard** (2026-08-30):shell 专属卡 — 命令块常驻 + 一体化审批;`PermissionActions.vue` 按钮组抽取共用
 - **keyset 分页** (2026-08-30):审计查询分页 — `list_session_audit_events_page`(游标 ts DESC/id DESC + 过滤/计数下推 SQL)
 - **Playwright 流水线** (2026-08-30):浏览器交互回归 — `app/e2e/*.spec.ts` 真实 Chromium + route-mock,CI blocking
-- **Sandbox** (2026-08-31):执行期沙盒 P3b — Landlock + seccomp,ReadOnly 档 shell 默认进沙盒(见下节)
+- **Sandbox** (2026-08-31~09-01):执行期沙盒 P3b~P3d — Landlock + seccomp;P3c 三态 per-project 配置(默认 readwrite 全命令进沙盒)+ Plan 只读面 + 前台升级闭环;P3d 后台升级闭环(见下节)
 - **per_run** (2026-08-31):定时任务目标 session 第三档 — 每次执行新建 session(`target_mode`/`model_id`/`last_run_session_id`,见下节)
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
@@ -167,7 +167,7 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。**2026-08-27 起 `chat-event` payload 回填 `session_id`**(`daemon/sse.rs` 注释契约),非发起端(remote PWA)可跨客户端按 session 认领。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— **2026-08-31 实测 107** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(旧 118 为含注释/测试文件引用的 grep 口径,已修正);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— **2026-09-01 实测 108** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(08-31 为 107,09-01 增 `update_project_sandbox_policy`;旧 118 为含注释/测试文件引用的 grep 口径,已修正);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
 - **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速;WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
 - **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
 - **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。
@@ -195,13 +195,16 @@ daemon 常驻调度器触发的本地定时任务。相关术语:
 ### Session Preview(会话摘要行)与群聊空 text(2026-08-29)
 `SessionSummary.preview` = 该 session **最后一条 `role='user'` 消息的 `text`**(DB `COALESCE` 子查询,无 user 消息为空串);侧边栏摘要行与删除确认(`needsDeleteConfirmation`)都吃这个字段。**群聊例外**:group_chat 的用户输入不落在 `messages.text`(落讨论配置),其 user 轮次 `text` **恒为空串**——所以群聊 preview 永远为空,任何「preview 判空 = 无内容」的推断对群聊都不成立(BUGLIST CH2-1 实证:38 条消息的群聊曾免确认直删)。涉及群聊有无内容的判断,用 `session_type === 'group_chat'` 单独分支,不要复用 preview 语义。
 
-### Sandbox(执行期沙盒 P3b,2026-08-31)
-判定层(A2+ P1+P2)之下的**执行期限损层**:ReadOnly 档 shell 命令(前台 `shell` + 后台 `run_background_shell`)默认在 Landlock ruleset + seccomp BPF 沙盒下 spawn,误判时损害被限制在「worktree + tmp + spill 可写、其余只读、无出网、无 `/init` 与 `/mnt/c` 执行」。相关术语:
+### Sandbox(执行期沙盒 P3b~P3d,2026-08-31~09-01)
+判定层(A2+ P1+P2)之下的**执行期限损层**:沙盒档下 shell 命令(前台 `shell` + 后台 `run_background_shell`)在 Landlock ruleset + seccomp BPF 沙盒下 spawn,误判时损害被限制在「可写面 + 其余只读、无出网、无 `/init` 与 `/mnt/c` 执行」。P3c 起 `classify_prefix` 判定层**不再参与触发**——沙盒档下全命令进沙盒,判定层只服务 `off` 档经典路径。相关术语:
 
+- **resolve_policy(三态决策链,P3c 单一真源)** — 求值序:capability(失败 fail-open)→ Yolo(恒不沙盒)→ 项目 off → kill-switch(`sandbox_enabled`,关 = 全局 Off)→ Plan(只读面覆盖项目档)→ 项目档面;`resolve_session_policy(db, sid, mode)` 被 Tier 4 shell 分支头短路与 spawn 侧 `decide` 两处消费,真源一处。
+- **`sandbox_policy` 三态** — per-project `off/readwrite/readonly`(默认 **readwrite = 行为变更**,存量项目全命令进沙盒;回滚 = kill-switch 或单项目切 off);写通道 `update_project_sandbox_policy` + 设置面 `ProjectSandboxTab.vue`。
+- **Plan 只读面** — Plan 模式 shell 族回归 tool list;session 级 `Face(ReadOnly)`:worktree 移出可写根、补进 exec 面(项目脚本仍可运行),`/tmp` 为调查型构建逃生口;项目 off 短路在前 → Plan + off 回退工具过滤。
 - **主路线** — 自研 Landlock(EXECUTE + 写族 handled,读不控)+ seccomp(拦 `socket(AF_INET/AF_INET6)`,AF_UNIX 放行)+ `PR_SET_NO_NEW_PRIVS`,纯 Rust + 既有 libc,零外部二进制依赖(弃 bubblewrap:userns 不稳 + interop 逃逸,spike 实测)。
-- **可写根 / 规则集** — 可写面 = session cwd + `/tmp` + `outputs/<session>`(C6 spill 目录);exec 允许面 = PATH 解析目录 ∪ /dev ∪ /tmp ∪ 可写根 ∪ 探测工具链目录,**显式不含 `/init` 与 `/mnt/c`**(WSL interop 收口);全部服务端解析,永不采信 tool 参数路径(CVE-2025-59532 铁律)。
-- **gate / kill-switch** — 四道 gate(ReadOnly 档 ∧ 非 Yolo ∧ `sandbox_enabled` kill-switch ∧ 能力探测);能力探测失败 **fail-open**(回退非沙盒行为)。
-- **SandboxedShellExecution** — 审计 kind(第 29 变体):spawn 成功落表,payload `command_sha256_12`(命令哈希 12 位前缀,**不存全命令**,全文由 `tool_executed` 行承载)+ `ruleset` 摘要 + `tool_name`。
+- **可写根 / 规则集** — 可写面 = session cwd + `/tmp` + `outputs/<session>`(C6 spill 目录)+ extras(`sandbox_extra_writable`;ReadOnly 面 worktree 移出);exec 允许面 = PATH 解析目录(过滤 `/mnt/`)∪ /lib /lib64 /usr/lib 静态根 ∪ /dev /tmp ∪ 可写根 ∪ 探测工具链目录,设备节点 per-file `WRITE_FILE` 放行,**显式不含 `/init` 与 `/mnt/c`**(WSL interop 收口);全部服务端解析,永不采信 tool 参数路径(CVE-2025-59532 铁律)。
+- **升级闭环(前台 P3c / 后台 P3d)** — 沙盒命令面外失败(写拒 / 断网)不再直接返回:前台走 `permissions/escalation.rs` Ask 卡 → 批准一次性不沙盒重跑(prefix-grant 命中零卡);后台 registry 产 `EscalationOffer{tool_use_id, block, stderr_evidence}` → **下轮注入时**(drain 后)`chat_loop/background_escalation.rs::resolve_all` 解析 → Ask 卡挂原调用卡(ShellCard 按 `isBackground` 豁免 `!hasResult`)→ 批准 `start(sandbox=None, origin=None)` 重跑。`ToolContext.tool_use_id` 由 dispatch 统一盖章。
+- **SandboxedShellExecution** — 审计 kind(第 29 变体):spawn 成功落表,payload `command_sha256_12`(命令哈希 12 位前缀,**不存全命令**,全文由 `tool_executed` 行承载)+ `ruleset` 摘要(含 `face=rw|ro`)+ `tool_name`;升级闭环审计**零新 kind**。
 
 ---
 

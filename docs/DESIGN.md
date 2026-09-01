@@ -67,7 +67,7 @@
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **29 类 AuditKind**(2026-08-31 实测,`SandboxedShellExecution` 为第 29 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)+ **A2+ P3b 执行期沙盒**(Landlock+seccomp,ReadOnly 档 shell 默认进沙盒,详见 [ARCHITECTURE §2.5.16](./ARCHITECTURE.md))(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **29 类 AuditKind**(2026-08-31 实测,`SandboxedShellExecution` 为第 29 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)+ **A2+ P3b~P3d 执行期沙盒**(Landlock+seccomp;P3b 08-31 主体落地,P3c 09-01 三态 per-project 配置(`off/readwrite/readonly`,默认 readwrite 全命令进沙盒)/ Plan 只读面 / 前台升级闭环,P3d 09-01 后台升级闭环,详见 [ARCHITECTURE §2.5.16](./ARCHITECTURE.md))(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
 - **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发(2026-08-19 起触发口径统一切换为 system+tools+messages 三部件之和,见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md))→ LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO=0.95`,unified-context-budget 2026-08-19);撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)(详见 [ARCHITECTURE §2.5.5/§2.5.14](./ARCHITECTURE.md))
 - C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)
 - **MAX_TURNS 软卡**(2026-08-19 落地,**替代硬终断**):单聊主 loop 撞线(缺省 200)改 QuestionStore 询问——继续(+200)/ 压缩后续跑 / 停止,10 分钟超时兜底;worker 与群聊 speaker 段保持硬卡直接 break(详见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md))
@@ -100,10 +100,11 @@
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
 - 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成,见 [decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md))/ ~~`B11` 远程遥控通道~~ **✅ 2026-08-11~13 已实施**(remote-control epic S1~S6b,合并 `94828cb`):中继方案变更为国内 2C2G 服务器 + 自研 Rust remote daemon,PC daemon 权威 + 云端仅中继;详见 [ROADMAP §1.2](./ROADMAP.md))
-- 安全:`A2+ P3c` 沙盒 UX 增强档(Plan 模式全命令沙盒化 / 三态 per-project 配置 / bwrap 可选增强 / 网络白名单;P3b 主体 2026-08-31 已落地,详见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) A2+ P3b 行 + [A2-SHELL-CLASSIFICATION.md](./_history/2026-08-28-a2-shell-classification.md) §4)
+- 安全:~~`A2+ P3c` 沙盒 UX 增强档~~ **✅ 2026-09-01 已实施**(P3c:三态 per-project 配置 + Plan 只读面 + 前台升级闭环;P3d:后台升级闭环,见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) A2+ P3c/P3d 行 + [ARCHITECTURE §2.5.16](./ARCHITECTURE.md))。余留 follow-up 仍归 ROADMAP §2:bwrap 可选增强(namespace 路线)+ 网络白名单/egress 代理
 
-> **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项 + A2+ P3c(UX 档)归 ROADMAP §2 第四档。
+> **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项归 ROADMAP §2 第四档。
 > **2026-08-13 同步**:`B11` 远程遥控通道已由 remote-control epic(S1~S6b)实施,从"未做"移除。
+> **2026-09-01 同步**:`A2+ P3c` 沙盒 UX 增强档 + `A2+ P3d` 后台升级闭环均已实施(见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成)),从"未做"移除;余留(bwrap 增强 / 网络白名单)随剩余 2 项归 ROADMAP §2。
 
 ### 3.2 明确不做(硬约束)
 

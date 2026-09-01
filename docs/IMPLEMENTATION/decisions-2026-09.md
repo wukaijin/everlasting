@@ -1,0 +1,17 @@
+### 2026-09-01 — Sandbox P3c 三态策略 + Plan 只读面 + 前台升级闭环
+
+- **Context**:P3b(08-31)只覆盖 ReadOnly 档 shell,触发面窄且语义割裂——「ReadOnly 档 gate 四道」与「判定层三档分类」并存,用户无法按项目表达风险偏好;Plan 模式差异未落地(仍无 shell);沙盒误杀(面外写 / 断网)直接以失败返回,LLM 只能自己瞎重试或放弃。用户请求:per-project 三态配置 + Plan 沙盒化 + 失败升级闭环。
+- **决策 — `resolve_policy` 单一决策真源替代四道 gate**:求值序 capability → Yolo → 项目 off → kill-switch → Plan → 项目面(惰性读序勿重排,config 读结构性落在 gate 通过后,RULE-SBX-004);`resolve_session_policy(db, sid, mode)` 真源一处、消费两处——Tier 4 shell 分支头短路(Policy ≠ Off → 跳过 prefix-grant/三档分类/ask,直接 Allow + ToolAllowed 审计;短路点在 Tier 1–3 之后,硬拒不被取代)+ spawn 侧 `decide`(两次点查可接受,不跨层传 Decision)。
+- **决策 — 三态 per-project `sandbox_policy`(off/readwrite/readonly)由 classify_prefix 判定层接管触发**:P3b 的「ReadOnly 档进沙盒」废弃——沙盒档下**全命令**进沙盒,`classify_prefix` 不再参与触发,只服务 off 档经典路径;默认 **readwrite = 行为变更**(存量项目全命令进沙盒,回滚 = kill-switch 或单项目切 off);`projects.sandbox_policy` 列 + `update_project_sandbox_policy` 写通道(daemon route + Tauri command,白名单先拒)+ 设置面 `ProjectSandboxTab.vue`(RULE-SBX-002 raw/effective 分离)。
+- **决策 — Plan 模式重新暴露 shell 族 + session 级只读面**:Plan 只需「能调查不能改」→ shell 族回归 tool list;`Face(ReadOnly)` = worktree 移出可写根、**显式补进 exec 面**(项目脚本仍可运行),/tmp + spill + extras 两面均可写(/tmp = 调查型构建逃生口);项目 off 已在决策链第 3 位短路 → Plan + off 回退工具过滤,**绝不落「Plan + 弹窗放行写」**。
+- **决策 — 前台升级闭环:面外失败 → Ask 卡 → 一次性不沙盒重跑**:触发 = `sandbox_applied ∧ exit≠0 ∧ mode≠Plan ∧ classify_block` 命中(写串先行,`Operation not permitted` = 断网),每 tool call 至多一次;prefix-grant 先查(命中零卡重跑,复合命令不享 grant)→ 未命中 `EscalationHandle::ask` 复用 ask_path 弹卡(`reason_override` + 原命令 + stderr 证据行)→ 批准**逐字节同 command/env/cwd 重跑**(仅无 pre_exec)/ Deny → 原失败 + 模式感知指引;双执行边界(D4 接受:升级仅在面外写/断网被拒后触发,危险部分第一遍未发生);**审计零新 kind**(ask 侧既有 kinds + 首个 sandboxed_shell_execution 行 + tool_executed 终态);worker 路径免费成立。
+- 任务:`09-01-a2-p3c-sandbox-ux`(四 PR)。spec:`backend/sandbox-executor.md` §1(决策链)/ §9(面)/ §10(前台升级闭环)。
+
+### 2026-09-01 — Sandbox P3d 后台 shell 升级闭环(下轮注入时,B 案)
+
+- **Context**:P3c 前台闭环落地后后台 `run_background_shell` 仍是裸失败——面外写/断网只回 stderr,LLM 无从区分「命令本身失败」与「沙盒拒了合法操作」;后台任务进程已退出,无法像前台那样当场弹卡重跑。需要把闭环补齐到后台路径。
+- **决策 — B 案:下轮注入时解析(呈递方案用户裁定)**:「完成即弹卡」的 A 案被否——detached ask 生命周期 / 失败通知抑制 / 前端 120s 计时三座山的成本不值;B 案 = 通知带 `EscalationOffer{tool_use_id, block, stderr_evidence}`(trigger==Normal ∧ outcome==Failed ∧ 沙盒启动 ∧ origin_tool_use_id 有 ∧ classify_block 命中;Killed/TimedOut/SpawnFailed/成功恒 None,超时 kill 的部分 stderr 不可信),**下轮 drain 之后、组装 turn_messages 之前**(`chat_loop/background_escalation.rs::resolve_all`)解析——用户刚发消息必然在场,前台 120s 超时原样复用,turn token 天然 cancel-safe,零 detached 生命周期。
+- **决策 — `ToolContext.tool_use_id` dispatch 统一盖章(免丢载竞争)**:start 时把 `sandboxed` 与 origin 折叠成单一 `escalation_origin`;origin 来源 = dispatch 对所有工具统一盖章的 `tool_use_id`(P3d 新字段,仅 run_background_shell 消费),不选 registry 事后注册——echo 类毫秒级完成,先 start 后注册有丢载竞争。
+- **决策 — 复用前台原语 + Plan 门 + legacy 逐字节不动**:`ask`/`audit_grant_rerun` 参数化 tool_name=`run_background_shell`;Plan 门取当轮 mode 与前台同源(Plan 中启动、下轮已切 Edit 的升级合法——审批卡即用户同意面);prefix-grant 命名空间跨 shell 族共享(读侧 `IN ('shell','run_background_shell')`);Ask 卡挂**原调用卡**(前端按 toolUseId 匹配,ShellCard `isPendingApproval` 对后台卡按 `isBackground` 豁免 `!hasResult`——升级卡挂在已有结果的卡上,前台 hide-on-result 语义保留);批准 → registry `start(sandbox=None, origin=None)` 一次性不沙盒重跑(重跑结构性不再升级);无 offer 的通知逐字节走 legacy 格式(AC5 回归锚),LLM 永远只看到连贯故事。
+- **测试基建 gotcha**:ask.rs 先 `emit_permission_ask` 后 `register_ask`,mock resolver 首轮 resolve 可能合法落空必须重试到成功(并行负载下 120s 超时赢竞态,approve 例曾 flaky);`geteuid()==0` 时探针前提(OS 拒 /proc/1/mem)不成立,大声 SKIP。
+- 任务:`09-01-a2-p3d-background-escalation`。spec:`backend/sandbox-executor.md` §11 + `backend/tool-contract/06-background-shell.md`(P3d 补)。

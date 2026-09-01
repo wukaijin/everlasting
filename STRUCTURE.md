@@ -1,8 +1,10 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-08-31(在 2026-08-28 基础上 + 08-29~31 批:schedule_task 家族 / C6 输出截断统一 / ShellCard / 审计 keyset 分页 / Playwright 浏览器回归流水线 / Sandbox 执行期沙盒 P3b / 定时任务 per_run 三档)
+> **基线**:2026-09-01(在 2026-08-31 基础上 + 09-01 批:Sandbox P3c 三态 per-project 配置 + Plan 只读面 + 前台升级闭环 / Sandbox P3d 后台升级闭环)
 > **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_history/reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化 + 07-23~08-04 交错思考/review-viz/群聊 + 08-11~13 remote-control epic(remote 服务端 + tunnel client + 移动 PWA)+ workspace 翻转 + 08-14~28(C7/C7D/memory-gov/B1/D2/C3+/budget/softcap/worker-trace/F1/F4/F5/F6/F3/F2·F2b)
 > **状态**: 由 CLAUDE.md §Architecture 段引用
+>
+> **2026-09-01 同步**:Sandbox P3c/P3d 功能批。§3 后端树补 `agent/permissions/escalation.rs`(前台升级闭环)+ `agent/chat_loop/background_escalation.rs`(P3d 后台 EscalationOffer 下轮注入时 resolve)+ `sandbox/` 注释扩三态(P3c `resolve_policy` 决策链 + Plan 只读面 + 前后台升级闭环);§2 前端树补 `settings/ProjectSandboxTab.vue`(项目沙盒三态设置面);§5 IPC 总命令数 107→108(新增 `update_project_sandbox_policy`,2026-09-01 实测 `generate_handler!` 注册数),Projects 域 8→9;§6 `projects` 表补 `sandbox_policy` 列(off/readwrite/readonly 默认 readwrite,AuditKind 29 不变——升级闭环零新 kind);§8.8 执行期沙盒扩 P3c/P3d。
 >
 > **2026-08-31 同步**:08-29~31 功能批。§3 后端树补 `sandbox/`(P3b Landlock+seccomp 执行器)+ `tools/tool_output.rs`(C6 截断统一)+ scheduler per_run 三档与 set_app_config_list 写通道;§2 前端树补 `chat/ShellCard.vue` + `chat/PermissionActions.vue` + `settings/ScheduledTasksTab.vue`,§1 顶层树补 `app/e2e/`;§5 IPC 表修正为 107(2026-08-31 实测 invoke_handler 注册数;旧 118 为含注释的 grep 口径)+ 明细补 Scheduled tasks/message_queue/usage/attachments 域与审计分页命令;§6 表数修正为 13 实体 + 2 FTS5 虚拟 + `scheduled_tasks` 补三新列 + AuditKind 28→29;§11 端到端改为 Playwright 自动化(修正旧"无自动化"事实错误)。
 >
@@ -105,6 +107,7 @@ app/src/
 │ │ ├── ModelsTab.vue # ★容器(364 行,954→364)
 │ │ ├── ModelRow.vue # ★ NEW (8-PR3拆出)
 │ │ ├── ModelForm.vue # ★ NEW (8-PR3拆出)
+│ │ ├── ProjectSandboxTab.vue # ★ NEW (09-01 P3c) — 项目沙盒三态设置面(sandbox_policy raw/effective 分离,RULE-SBX-002)
 │ │ ├── RemoteTab.vue # ★ NEW (08-11 remote) — 远程隧道配置(tunnel 状态 + remote 配置 + 配对入口)
 │ │ ├── ScheduledTasksTab.vue # ★ NEW (08-28 F2) — 定时任务管理 tab(CRUD + 状态 + per_run 三档表单,08-31)
 │ │ └── DeleteModelConfirm.vue # ★ NEW (8-PR3拆出)
@@ -203,6 +206,8 @@ app/src-tauri/src/
 │ ├── chat.rs # Agent Loop entry(IPC 入口)
 │ ├── trace.rs # ★ NEW (07-14 E2) — trace pipeline(3 record_* 双写 emit+upsert)
 │ ├── chat_loop.rs # (06-23 抽 run_subagent 后)2586→~2064 行,主循环 + 主循环辅助
+│ ├── chat_loop/ # (主循环分治子目录:drive/init/tools/suite;09-01 P3d 加 background_escalation)
+│ │ └── background_escalation.rs # ★ NEW (09-01 P3d) — 后台 EscalationOffer 下轮注入时 resolve_all(695 行)
 │ ├── message_queue.rs # ★ NEW (08-25 F1) — per-session 内存消息队列(FIFO/uuid 寻址/上限 20)+ run_queue_driver 驱动器(turn 边界 drain 批量注入)
 │ ├── doc_extract.rs # ★ NEW (08-26 F5) — @文件 PDF/docx/xlsx 原生文本提取纯函数(pdf-extract / quick-xml / calamine,bytes 进文本出)
 │ ├── group_chat.rs / group_chat_loop.rs # ★ NEW (07-29) — 群聊 turn-taking 编排引擎(moderator 轮次控制 + 参与者身份护栏 + 终止/发言人事件 + 逐轮流式;session_type=group_chat 时走此循环)
@@ -233,8 +238,9 @@ app/src-tauri/src/
 │ │ ├── payload.rs # PermissionAskPayload + ASK_TIMEOUT
 │ │ ├── mode.rs # mode_system_prefix + filter_tools_for_mode
 │ │ ├── audit.rs # AuditKind 29 variant + 3 record 函数
-│ │ ├── check.rs # check 主函数 + classify + grant checks
+│ │ ├── check.rs # check 主函数 + classify + grant checks(+ check/ 子目录;P3c 09-01 Tier 4 shell 分支面短路:Policy≠Off 跳过审批直接 Allow)
 │ │ ├── ask.rs # ask_path + build_ask_reason
+│ │ ├── escalation.rs # ★ NEW (09-01 P3c;P3d 参数化) — 前台升级闭环原语:prefix_grant_hit / EscalationHandle::ask / audit_grant_rerun(tool_name 参数化,后台共用)
 │ │ ├── dangerous.rs / shell_trust.rs # sibling(原拆分前已存在)
 │ │ ├── tests_common.rs # (06-23 拆)CaptureAskSink/worker_ctx_with_db/LocalSink
 │ │ ├── tests_check.rs / tests_ask.rs / tests_audit.rs
@@ -258,7 +264,7 @@ app/src-tauri/src/
 │ ├── usage.rs # ★ NEW (08-27 F6) — usage_window(用量窗口)
 │ ├── attachments.rs # ★ NEW (08-27 F5) — save_attachment(@附件落盘)
 │ └── ui.rs # ★ (07-13 B9+) — apply_ui_diff(生成式 UI diff 应用)
-├── tools/ # 内置工具 (28 个 builtin;07-08~10 加 workflow 等;07-29 加群聊 nominate_speaker/end_discussion;08-17 加 search_history;08-25 加 web_search;08-29 加 schedule_task 家族 3 个;08-30 C6 截断统一;08-31 sandbox 执行期接入)
+├── tools/ # 内置工具 (28 个 builtin;07-08~10 加 workflow 等;07-29 加群聊 nominate_speaker/end_discussion;08-17 加 search_history;08-25 加 web_search;08-29 加 schedule_task 家族 3 个;08-30 C6 截断统一;08-31 sandbox 执行期接入;09-01 P3c 三态/Plan 面 + P3d ToolContext.tool_use_id 盖章)
 │ ├── mod.rs (builtin_tools + execute_tool 分发 + filter_tools_for_mode/subagent/workflow)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
 │ ├── shell.rs (5min超时;08-30 C6 起输出截断走统一 tool_output 契约 三恢复模式 + spill)
@@ -298,7 +304,7 @@ app/src-tauri/src/
 │ │ ├── manager.rs / dispatcher.rs (TunnelManager + 请求分发 loopback 转发)
 │ │ ├── node_id.rs / sse_bridge.rs (节点 id + SSE 桥接,取消只停转发)
 │ │ └── tests.rs / e2e_tests.rs (单元 + 端到端隧道测试)
-│ └── routes/ # 107 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│ └── routes/ # 108 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
 │ ├── mod.rs / health.rs / stream.rs(SSE)
 │ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
 │ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs / review.rs
@@ -308,7 +314,7 @@ app/src-tauri/src/
 │ ├── compute.rs (most_recent_due / next_fire_display 等纯函数)
 │ ├── tests_tick.rs / tests_lost.rs
 │ └── (fire 走 chat_inner + origin 载体链落 messages.metadata.scheduled)
-├── sandbox/ # ★ NEW (08-31 P3b) — 执行期沙盒(Landlock ruleset + seccomp BPF;ReadOnly 档 shell 命令在沙盒下执行;background_shell 同路径)
+├── sandbox/ # ★ NEW (08-31 P3b;09-01 P3c 三态) — 执行期沙盒(Landlock ruleset + seccomp BPF;P3b ReadOnly 档 → P3c 三态 per-project `sandbox_policy`(off/readwrite/readonly)全命令进沙盒 + Plan 只读面 + resolve_policy 决策链;前后台升级闭环在 agent/permissions/escalation.rs + chat_loop/background_escalation.rs)
 │ ├── mod.rs (入口 + 策略组装 + spawn 沙盒命令)
 │ ├── landlock.rs (Landlock ruleset——文件系统路径限制)
 │ ├── seccomp.rs (seccomp BPF——系统调用过滤)
@@ -335,8 +341,8 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ├── agent::* (chat + chat_loop + subagent/* + provider + system_prompt + thinking + helpers + permissions/* + 6 tests_*.rs)
  │ →引用 llm::provider + tools + db
  ├── commands::* (IPC分发,按域拆;同一 handler 经 daemon/routes/ 双暴露为 REST) → agent + db + git + projects
- ├── tools/* → read_guard + tool_output(截断契约) + sandbox::{landlock,seccomp}(P3b 执行期沙盒)
- ├── sandbox/* (landlock + seccomp + policy;shell.rs / run_background_shell.rs 调用)
+ ├── tools/* → read_guard + tool_output(截断契约) + sandbox::{landlock,seccomp,policy}(P3b 执行期沙盒 → P3c 三态/Plan 面;ToolContext.tool_use_id dispatch 统一盖章,P3d)
+ ├── sandbox/* (landlock + seccomp + policy(三态 resolve_policy);shell.rs / run_background_shell.rs 调用 + permissions/escalation.rs + chat_loop/background_escalation.rs 升级闭环)
  ├── skill/* → loader
  ├── memory/* → loader
  ├── git/* (worktree + diff)
@@ -365,7 +371,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ▼
 ┌─────────────────────────── 后端 ────────────────────────────┐
 │ everlasting-daemon(axum,独立进程) / 或 Full 模式 GUI 进程 │
-│ daemon/server.rs::build_router (107 个 command 镜像 REST 路由)│
+│ daemon/server.rs::build_router (108 个 command 镜像 REST 路由)│
 │ ├─ commands/* + daemon/routes/* (同一 handler 双暴露 IPC+HTTP)│
 │ ├─ agent/* → llm::provider::* → wire.rs + client.rs │
 │ ├─ tools/* (28 个 builtin + read_guard + tool_output) │
@@ -392,9 +398,9 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 ## 5. Tauri IPC 表面
 
-**总命令数**:107 个(2026-08-31 实测 `invoke_handler` 注册数,与 `#[tauri::command]` 属性数一致——旧口径 118 含注释/测试文件引用,已修正;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 → 08-14~28 增 F1 队列/F4 web_search/F5 提取/F6 busy/F2 定时任务 → 08-29~31 增审计 keyset 分页 + set_app_config_list)。
+**总命令数**:108 个(2026-09-01 实测 `invoke_handler` 注册数,与 `#[tauri::command]` 属性数一致——旧口径 118 含注释/测试文件引用,已修正;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07-23 快照 79 → 08-05 快照 91 → 08-13 remote epic 续增 → 08-14~28 增 F1 队列/F4 web_search/F5 提取/F6 busy/F2 定时任务 → 08-29~31 增审计 keyset 分页 + set_app_config_list → 09-01 增 update_project_sandbox_policy)。
 
-> **daemon 化后双暴露(07-20 Q0 决策)**:这 107 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
+> **daemon 化后双暴露(07-20 Q0 决策)**:这 108 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
@@ -404,7 +410,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 | Provider + Model + 测试 |12 | `commands/providers.rs` |
 | Session 域(CRUD + model + metadata + trace 等) |19 | `commands/sessions.rs` |
 | Permission + Audit + 模式 |10 | `commands/permissions.rs` (permission_response / set_session_mode / list_session_tool_permissions / revoke_tool_permission / list_session_audit_events(+_page keyset 分页,08-30)) |
-| Project CRUD |8 | `commands/projects.rs` (含 pick_project_dir + hide/unhide) |
+| Project CRUD |9 | `commands/projects.rs` (含 pick_project_dir + hide/unhide + update_project_sandbox_policy(09-01 P3c 三态写通道)) |
 | Memory |7 | `commands/memory.rs` |
 | Worktree |4 | `commands/worktree.rs` |
 | Subagent runs |4 | `commands/subagent_runs.rs` |
@@ -434,7 +440,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 
 | 表 | 主键 |关键字段 |
 |----|------|---------|
-| `projects` | `id` (UUID) | `path` / `name` / `is_git_repo` / `git_remote` / `git_branch` / `is_hidden` |
+| `projects` | `id` (UUID) | `path` / `name` / `is_git_repo` / `git_remote` / `git_branch` / `is_hidden` / `sandbox_policy` (09-01 P3c:off/readwrite/readonly,默认 readwrite) |
 | `sessions` | `id` (UUID) | `project_id` (FK) / `title` / `model_id` (FK, nullable) / `session_type` (chat/group_chat,07-29 群聊) / `worktree_path` / `worktree_state` / `current_cwd` / `created_at` / `updated_at` |
 | `messages` | `id` | `session_id` (FK) / `role` / `content` (JSON) / `speaker` (群聊参与者标识,07-29) / `tool_use` (JSON) / `tool_result` (JSON) / `thinking_blocks` (JSON) / `metadata` (JSON, B2 PR3 加:含 `edited_at` / `original_content` 等 D3 字段) / `ttfb_ms` / `gen_ms` / `total_ms` (F5 latency 三列) / `thinking_ms` (F5) / `created_at` |
 | `providers` | `id` | `name` / `protocol` / `base_url` / `api_key` / `enabled` |
@@ -541,9 +547,9 @@ pub trait Provider: Send + Sync {
 
 后端 `anyhow` (边界) + `thiserror` (领域)。`LlmError`5 类分类: Auth / RateLimit / Network / InvalidRequest / Server,中文用户消息见 `app/src-tauri/src/llm/error.rs`。
 
-###8.8 执行期沙盒 (★ 08-31 P3b)
+###8.8 执行期沙盒 (★ 08-31 P3b → 09-01 P3c/P3d)
 
-ReadOnly 档 shell 命令在 `sandbox/`(Landlock ruleset + seccomp BPF)下 spawn;仅 ReadOnly 档生效(read/write/ask 档不受影响),`background_shell` 共用路径。详见 `.trellis/spec/backend/sandbox-executor.md`。
+沙盒档(sandbox_policy ≠ off,含 Plan 只读面)shell 命令在 `sandbox/`(Landlock ruleset + seccomp BPF)下 spawn;P3c 起 `resolve_policy` 三态决策链(capability → Yolo → 项目 off → kill-switch → Plan → 项目面)替代 P3b 的 ReadOnly 档 gate——默认 readwrite 档**全命令**进沙盒,`background_shell` 共用路径;面外失败走升级闭环(前台 `permissions/escalation.rs` Ask 卡 / 后台 `chat_loop/background_escalation.rs` EscalationOffer 下轮注入时 resolve,一次性不沙盒重跑)。详见 `.trellis/spec/backend/sandbox-executor.md`。
 
 ---
 
@@ -734,7 +740,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ │ Vue3 Frontend │ http(默认) │ everlasting-daemon │ │
 │ │ (app/src/) │ /tauri(逃生)│ (axum,app/src-tauri/ │ │
 │ │ · Pinia(30 stores) │◄─────────►│ src/daemon/ + bin/) │ │
-│ │ · transport/ 抽象 │ │ ·107 commands→REST 路由 │ │
+│ │ · transport/ 抽象 │ │ ·108 commands→REST 路由 │ │
 │ │ · stream1 source │ │ · Provider trait │ │
 │ │ · reka-ui2.9.9 │ │ (Anthropic/OpenAI) │ │
 │ │ · marked+DOMPurify │ │ · Tool registry (28) │ │
@@ -800,4 +806,4 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考);2026-08-13 同步至 `94828cb`(remote-control-epic-s1 + workspace 翻转);2026-08-31 同步(08-29~31 批:schedule_task 家族 / C6 截断统一 / ShellCard / keyset 分页 / Playwright e2e / Sandbox P3b / per_run。task `08-31-docs-sync-batch`)。下次重大重构后再次校准。*
+*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化);2026-08-05 同步至 `6449f16`(群聊 + review-viz + 交错思考);2026-08-13 同步至 `94828cb`(remote-control-epic-s1 + workspace 翻转);2026-08-31 同步(08-29~31 批:schedule_task 家族 / C6 截断统一 / ShellCard / keyset 分页 / Playwright e2e / Sandbox P3b / per_run。task `08-31-docs-sync-batch`);2026-09-01 同步(Sandbox P3c/P3d:三态配置 / Plan 只读面 / 前后台升级闭环,IPC 107→108,`projects.sandbox_policy` 列。task `09-01-a2-sandbox-docs-sync`)。下次重大重构后再次校准。*

@@ -1,6 +1,6 @@
 # A2+ Shell 命令只读/副作用精细判定方案
 
-> **状态**:✅ **已实施(P1+P2 于 2026-07-04 落地,见 [IMPLEMENTATION/decisions-2026-07.md](../IMPLEMENTATION/decisions-2026-07.md);P3 沙盒为远期独立任务)**。本文档降为方案回顾,实施细节以 `.trellis/spec/backend/tool-contract.md` 「Compound command classification (A2+)」段为准。
+> **状态**:✅ **已实施(P1+P2 于 2026-07-04 落地,见 [IMPLEMENTATION/decisions-2026-07.md](../IMPLEMENTATION/decisions-2026-07.md);P3 沙盒 P3b/P3c/P3d 已于 2026-08-31~09-01 全部落地,见 [IMPLEMENTATION/decisions-2026-08.md](../IMPLEMENTATION/decisions-2026-08.md) 2026-08-31 ADR + [decisions-2026-09.md](../IMPLEMENTATION/decisions-2026-09.md))**。本文档降为方案回顾,实施细节以 `.trellis/spec/backend/sandbox-executor.md` + `.trellis/spec/backend/tool-contract.md` 「Compound command classification (A2+)」段为准。
 > **日期**:2026-07-03(方案);P1+P2 2026-07-04 落地
 > **关联**:[ROADMAP §2 第三档 A2+](../ROADMAP.md)、模块 `app/src-tauri/src/agent/permissions/`(尤其 `shell_trust.rs` / `check.rs`)
 > **本文档职责**:讲清"为什么做、做什么、分几步、怎么和现有审批管线结合"。**不讲实现细节**(状态机、正则、函数签名留到实施时的 `prd.md` / `design.md`)。
