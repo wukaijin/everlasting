@@ -432,6 +432,24 @@ pub(crate) async fn finalize_dispatch(
     } else {
         content
     };
+    // 09-01-subagent-network-resume: on an error exit that captured
+    // the worker's conversation (drive.rs records it when the
+    // history is pair-safe), tell the parent LLM the run is
+    // resumable and HOW — without this line the parent re-dispatched
+    // a fresh worker from scratch (session 2e438939 burned a second
+    // full checker run after a mid-stream network drop). Same
+    // trailing-append pattern as loop-terminated / changes / resume-
+    // fallback; appended before the resume-fallback note so that
+    // note (when present) stays last per its contract.
+    let content = if status == SubagentStatus::Error && !worker_sink.worker_messages().is_empty() {
+        format!(
+            "{}\n\n[resumable: worker 的对话进度已保留 — 重新 dispatch_subagent 时传 \
+             resume_from=\"{}\" + resume_clarification(说明上次因网络错误中断,从已有进度继续,勿重做已完成的核对) 即可续跑,不要从头重派]",
+            content, worker_run_id
+        )
+    } else {
+        content
+    };
     // C1 (07-26-subagent-resume): when the caller asked to resume a
     // prior run but the resume path fell back to a fresh dispatch
     // (run missing / truncated / cross-session / still-running),
@@ -445,4 +463,114 @@ pub(crate) async fn finalize_dispatch(
         content
     };
     (content, is_error, cancel_parent, None)
+}
+
+// ---------------------------------------------------------------------------
+// 09-01-subagent-network-resume tests — the [resumable: ...] trailing hint
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests_resume_hint {
+    use super::super::super::sink::SubagentBufferSink;
+    use super::*;
+    use crate::llm::types::{ChatMessage, MessageContent, Role};
+    use std::sync::Arc;
+
+    fn one_worker_history() -> Vec<ChatMessage> {
+        vec![ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text("partial verification work".into()),
+            speaker: None,
+            attachments: None,
+        }]
+    }
+
+    async fn run_finalize(
+        status: SubagentStatus,
+        worker_messages: Vec<ChatMessage>,
+    ) -> (String, bool) {
+        let db = crate::tools::test_default_pool();
+        let worker_sink = Arc::new(SubagentBufferSink::new_without_app_handle(
+            "run-hint".into(),
+            "sess-hint".into(),
+        ));
+        if !worker_messages.is_empty() {
+            worker_sink.record_worker_messages(&worker_messages);
+        }
+        let (content, is_error, _cancel_parent, _exit) = finalize_dispatch(
+            &db,
+            "sess-hint",
+            &tokio_util::sync::CancellationToken::new(),
+            &worker_sink,
+            &Some("run-hint".to_string()),
+            "run-hint",
+            &None,
+            "worker/run-hint",
+            &None,
+            &None,
+            WorkerOutcome {
+                worker_text: "worker died mid-check".into(),
+                worker_loop_terminated: false,
+                status,
+            },
+        )
+        .await;
+        (content, is_error)
+    }
+
+    /// Error exit + captured history → the parent tool_result carries a
+    /// [resumable] hint naming the run, so the parent CONTINUES via
+    /// `resume_from` instead of re-dispatching from scratch (the
+    /// session-2e438939 failure mode).
+    #[tokio::test]
+    async fn error_with_captured_history_appends_resumable_hint() {
+        let (content, is_error) = run_finalize(SubagentStatus::Error, one_worker_history()).await;
+        assert!(is_error, "error exit stays is_error=true");
+        assert!(
+            content.contains("[status: error]"),
+            "status prefix unchanged, got: {}",
+            content
+        );
+        assert!(
+            content.contains("[resumable:"),
+            "hint expected, got: {}",
+            content
+        );
+        assert!(
+            content.contains("resume_from=\"run-hint\""),
+            "hint must name the run id, got: {}",
+            content
+        );
+        assert!(
+            content.contains("不要从头重派"),
+            "hint must steer away from fresh re-dispatch, got: {}",
+            content
+        );
+    }
+
+    /// Error exit WITHOUT captured history (cancel-adjacent legacy
+    /// error paths, pre-09-01 runs) → no hint: resume would fall back
+    /// anyway; advertising it would mislead the parent.
+    #[tokio::test]
+    async fn error_without_captured_history_has_no_hint() {
+        let (content, _) = run_finalize(SubagentStatus::Error, Vec::new()).await;
+        assert!(
+            !content.contains("[resumable:"),
+            "no history → no hint, got: {}",
+            content
+        );
+    }
+
+    /// Completed exit → never hints, even with history present.
+    #[tokio::test]
+    async fn completed_never_hints() {
+        let (content, is_error) =
+            run_finalize(SubagentStatus::Completed, one_worker_history()).await;
+        assert!(!is_error);
+        assert!(
+            !content.contains("[resumable:"),
+            "completed must not hint, got: {}",
+            content
+        );
+    }
 }

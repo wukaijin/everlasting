@@ -778,6 +778,7 @@ mod tests {
                 completed_at: None,
                 workflow_plugin: "dev".into(),
             }),
+            malformed_tasks: Vec::new(),
         }
     }
 
@@ -864,6 +865,7 @@ mod tests {
             task_workflow_def: workflow_def.clone(),
             workflow_def,
             current_task: None,
+            malformed_tasks: Vec::new(),
         };
         let input = serde_json::json!({"subagent": "general-purpose"});
         let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
@@ -935,6 +937,7 @@ mod tests {
                 completed_at: None,
                 workflow_plugin: "dev".into(),
             }),
+            malformed_tasks: Vec::new(),
         };
         let input = serde_json::json!({"subagent": "researcher"});
         // dev's planning allows researcher — gate must pass even

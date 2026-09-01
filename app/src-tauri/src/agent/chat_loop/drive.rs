@@ -993,10 +993,18 @@ pub(crate) async fn drive_turn(
             // immutable re-borrow there is fine. Only workflow
             // sessions have a ctx to refresh; non-workflow stays None.
             if let Some(ref mut ctx) = workflow_ctx {
-                ctx.current_task = crate::agent::workflow::inject::resolve_current_task(
-                    &current_ctx.worktree_path,
-                )
-                .await;
+                // 09-01: refresh BOTH fields off the same scan so
+                // the breadcrumb's <workflow-task-warning> section
+                // stays fresh after the LLM repairs a broken
+                // task.json mid-loop (the warning must disappear
+                // the turn after the fix lands).
+                let (fresh_task, fresh_malformed) =
+                    crate::agent::workflow::inject::resolve_tasks_with_notes(
+                        &current_ctx.worktree_path,
+                    )
+                    .await;
+                ctx.current_task = fresh_task;
+                ctx.malformed_tasks = fresh_malformed;
             }
             if let Some(ref ctx) = workflow_ctx {
                 let appended =
@@ -1988,6 +1996,26 @@ pub(crate) async fn drive_turn(
         if !skip_persist {
             persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
             let _ = crate::db::touch_session(&db, &session_id).await;
+        }
+        // 09-01-subagent-network-resume: capture the worker's
+        // conversation on the stream-error exit so a later
+        // `dispatch_subagent` with `resume_from=<run_id>` can
+        // CONTINUE instead of restarting from scratch (a mid-
+        // stream network drop used to discard minutes of work —
+        // session 2e438939 lost a 3.8-min checker run this way).
+        // Pair-safety: `messages` at this point carries the
+        // partial assistant turn (ERROR_MARKER block) and every
+        // emitted tool_use already got its synthetic is_error
+        // tool_result above (RULE-A-007) — the same shape the
+        // MAIN session persists + reloads after an error, so it
+        // is resume-safe. The sink's `record_worker_messages`
+        // is a no-op for non-`SubagentBufferSink` sinks, and
+        // `skip_persist` (worker mode) gates it so the parent
+        // path (which already persisted its partial turn to the
+        // DB) is untouched. Cancel exits keep skipping — a
+        // user-driven stop should not advertise resumability.
+        if skip_persist {
+            sink.record_worker_messages(&messages);
         }
         return Err(());
     }

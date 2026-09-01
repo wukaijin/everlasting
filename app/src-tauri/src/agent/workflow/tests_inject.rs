@@ -38,6 +38,7 @@ fn sample_ctx_with_task() -> WorkflowCtx {
             completed_at: None,
             workflow_plugin: "dev".into(),
         }),
+        malformed_tasks: Vec::new(),
     }
 }
 
@@ -47,6 +48,7 @@ fn sample_ctx_no_task() -> WorkflowCtx {
         task_workflow_def: workflow_def.clone(),
         workflow_def,
         current_task: None,
+        malformed_tasks: Vec::new(),
     }
 }
 
@@ -404,6 +406,7 @@ fn review_ctx_no_task() -> WorkflowCtx {
         task_workflow_def: workflow_def.clone(),
         workflow_def,
         current_task: None,
+        malformed_tasks: Vec::new(),
     }
 }
 
@@ -678,4 +681,142 @@ async fn resolve_current_task_skips_corrupt_task_json_and_picks_valid_one() {
     let resolved = resolve_current_task(project.path()).await;
     assert!(resolved.is_some(), "should walk past bad task.json");
     assert_eq!(resolved.unwrap().slug, "good");
+}
+
+/// 09-01-workflow-task-json-deadlock: the scan behind
+/// `resolve_current_task` must ALSO report the task dirs it
+/// skipped, so the breadcrumb can tell the LLM why "no active
+/// task" resolves while a task dir plainly exists (the silent
+/// swallow dead-locked session 2e438939 between
+/// `request_task_state_transition` and `create_task`).
+#[tokio::test]
+async fn resolve_tasks_with_notes_reports_malformed_alongside_valid() {
+    let project = tempfile::tempdir().unwrap();
+    let tasks = project.path().join(".everlasting/tasks");
+    std::fs::create_dir_all(tasks.join("broken")).unwrap();
+    std::fs::write(tasks.join("broken/task.json"), b"not json {").unwrap();
+    std::fs::create_dir_all(tasks.join("healthy")).unwrap();
+    let task = crate::agent::workflow::TaskJson {
+        id: "id-h".into(),
+        title: "Healthy".into(),
+        slug: "healthy".into(),
+        status: TaskStatus::Planning,
+        created_at: "2026-09-01T00:00:00Z".into(),
+        updated_at: "2026-09-01T00:00:00Z".into(),
+        parent: None,
+        summary: String::new(),
+        items: vec![],
+        completed_at: None,
+        workflow_plugin: "dev".into(),
+    };
+    crate::agent::workflow::write_task(project.path(), &task).unwrap();
+
+    let (resolved, malformed) = resolve_tasks_with_notes(project.path()).await;
+    assert_eq!(resolved.expect("valid task still wins").slug, "healthy");
+    assert_eq!(
+        malformed.len(),
+        1,
+        "one malformed note expected: {:?}",
+        malformed
+    );
+    assert_eq!(malformed[0].0, "broken");
+    assert!(
+        malformed[0].1.contains("task.json malformed"),
+        "note carries the parse error verbatim, got: {}",
+        malformed[0].1
+    );
+}
+
+/// ...and when NOTHING parses, `current_task` is None but the
+/// notes explain it — the exact state the dead-locked session
+/// was in (its only task dir was malformed).
+#[tokio::test]
+async fn resolve_tasks_with_notes_all_malformed_reports_each() {
+    let project = tempfile::tempdir().unwrap();
+    let tasks = project.path().join(".everlasting/tasks");
+    for (slug, body) in [
+        // Missing top-level required `title` — still a hard parse
+        // failure even with the 09-01 item-status default (a
+        // hand-writer can omit the wrong field in more ways than one).
+        (
+            "aaa",
+            "{\"id\":\"t\",\"slug\":\"aaa\",\"status\":\"planning\",\"items\":[]}",
+        ),
+        ("bbb", "garbage {"),
+    ] {
+        std::fs::create_dir_all(tasks.join(slug)).unwrap();
+        std::fs::write(tasks.join(slug).join("task.json"), body).unwrap();
+    }
+    let (resolved, malformed) = resolve_tasks_with_notes(project.path()).await;
+    assert!(resolved.is_none());
+    assert_eq!(malformed.len(), 2, "both dirs reported: {:?}", malformed);
+    let slugs: Vec<&str> = malformed.iter().map(|(s, _)| s.as_str()).collect();
+    assert!(slugs.contains(&"aaa") && slugs.contains(&"bbb"));
+}
+
+/// The breadcrumb renders the notes as a `<workflow-task-warning>`
+/// section in BOTH branches (with + without an active task) — a
+/// malformed dir is invisible to `current_task` resolution either
+/// way, and the warning must steer the LLM to REPAIR the file, not
+/// `rm -rf` / re-`create_task`.
+#[test]
+fn breadcrumb_renders_malformed_warning_section() {
+    let mut ctx = sample_ctx_no_task();
+    ctx.malformed_tasks = vec![(
+        "09-01-a2-sandbox-docs-sync".to_string(),
+        "task.json malformed at ...: missing field `id`".to_string(),
+    )];
+    let body = breadcrumb_body(&ctx);
+    assert!(body.contains("<workflow-task-warning>"), "{}", body);
+    assert!(
+        body.contains("09-01-a2-sandbox-docs-sync"),
+        "slug must appear: {}",
+        body
+    );
+    assert!(
+        body.contains("missing field `id`"),
+        "parse error must appear verbatim: {}",
+        body
+    );
+    assert!(
+        body.to_lowercase().contains("do not rm -rf"),
+        "recovery guidance must forbid rm -rf: {}",
+        body
+    );
+
+    // Some-branch: warning still appended after the active-task meta.
+    let mut ctx = sample_ctx_with_task();
+    ctx.malformed_tasks = vec![("stale-dir".to_string(), "task.json malformed".to_string())];
+    let body = breadcrumb_body(&ctx);
+    assert!(body.contains("<workflow-task-warning>"), "{}", body);
+    assert!(body.contains("stale-dir"));
+
+    // Clean ctx → no warning section at all. (The bootstrap text
+    // MENTIONS the tag by name — "会以 <workflow-task-warning> 形式
+    // 出现" — so assert on a string unique to the rendered section.)
+    let clean = breadcrumb_body(&sample_ctx_no_task());
+    assert!(
+        !clean.contains("FAILED to parse"),
+        "clean session must not render a warning: {}",
+        clean
+    );
+}
+
+/// 09-01: the bootstrap text no longer claims "read_task 会 lenient
+/// 兜底" for hand-written task.json (false — a missing required
+/// field failed the whole parse and got silently swallowed). It
+/// must instead state the actual schema contract for hand-writers.
+#[test]
+fn bootstrap_text_states_real_hand_write_schema() {
+    let body = breadcrumb_body(&sample_ctx_no_task());
+    assert!(
+        !body.contains("lenient 兜底"),
+        "the false leniency claim must be gone: {}",
+        body
+    );
+    assert!(
+        body.contains("items[] 每项必填 id"),
+        "schema note for hand-writers expected: {}",
+        body
+    );
 }

@@ -160,8 +160,18 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
 fn map_task_error_msg(e: &TaskError) -> String {
     match e {
         TaskError::InvalidSlug(msg) => format!("invalid slug/title: {}", msg),
+        // 09-01-workflow-task-json-deadlock: the old text said "open
+        // the existing one" — but no open/adopt tool exists, so the
+        // LLM had no legal move left (transition rejects: no active
+        // task; create rejects: dir exists) and dead-ended into
+        // `rm -rf` (session 2e438939). Point at the real recovery
+        // contract instead: repair the file; the per-turn workflow
+        // scan re-reads task.json and binds the task automatically.
         TaskError::AlreadyExists(path) => format!(
-            "task already exists at {} — open the existing one instead of recreating",
+            "task already exists at {} — continue THAT task, do not recreate. \
+             If its task.json is invalid, fix the file directly (the workflow \
+             breadcrumb lists the exact parse error); the session re-reads it \
+             next turn. Do not rm -rf the directory.",
             path.display()
         ),
         TaskError::NotFound(path) => format!("task not found at {}", path.display()),
@@ -273,6 +283,15 @@ mod tests {
         let (out, is_err) = execute(&input, &ctx).await;
         assert!(is_err, "duplicate slug rejected");
         assert!(out.contains("already exists"), "{}", out);
+        // 09-01-workflow-task-json-deadlock: the rejection must point
+        // at a REAL recovery move. The old "open the existing one"
+        // wording referenced a tool that does not exist and
+        // dead-ended the LLM (session 2e438939 → rm -rf workaround).
+        assert!(
+            out.contains("do not recreate") && out.contains("Do not rm -rf"),
+            "rejection must carry actionable guidance, got: {}",
+            out
+        );
     }
 
     #[tokio::test]

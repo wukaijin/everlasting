@@ -363,3 +363,90 @@ async fn agent_loop_error_emits_turn_complete() {
     assert_eq!(assistants.len(), 1);
     assert_eq!(assistants[0].seq, 1);
 }
+
+// ---------------------------------------------------------------------------
+// 09-01-subagent-network-resume: worker error exit captures messages
+// ---------------------------------------------------------------------------
+
+/// A worker run (skip_persist=true) whose stream dies mid-turn MUST
+/// still snapshot its `Vec<ChatMessage>` via the sink, so
+/// `subagent_runs.messages_json` carries the conversation and a later
+/// `dispatch_subagent { resume_from: <run_id> }` can CONTINUE instead
+/// of restarting from scratch. Before the fix the error exit dropped
+/// the history — session 2e438939 lost a 3.8-minute checker run to a
+/// mid-stream network drop and the parent re-dispatched a duplicate.
+///
+/// Pair-safety precondition verified too: the partial assistant turn
+/// carries ERROR_MARKER, and (unlike cancel) the history is exactly
+/// what the main session would persist + reload after an error.
+#[tokio::test]
+async fn worker_error_exit_snapshots_messages_for_resume() {
+    use crate::agent::subagent::SubagentBufferSink;
+    use crate::llm::error::LlmError;
+
+    let h = make_harness().await;
+    let worker_sink = Arc::new(SubagentBufferSink::new_without_app_handle(
+        "run-err-resume".into(),
+        h.session_id.clone(),
+    ));
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::ThinkingDelta {
+            text: "verifying item 6/7".into(),
+        }),
+        Ok(ChatEvent::Delta {
+            text: "assertion 1-5 passed".into(),
+        }),
+        Err(LlmError::Network(
+            "stream read: error decoding response body".into(),
+        )),
+    ])]));
+
+    let mut role = parent_role(&h);
+    role.is_worker = Some(true);
+    role.skip_persist = true;
+    role.skip_session_active = true;
+
+    let _ = run_chat_loop(
+        chat_loop_request(
+            vec![],
+            mock.clone(),
+            200_000,
+            "rid-worker-err".into(),
+            h.session_id.clone(),
+            test_messages(),
+            worker_sink.clone(),
+        ),
+        chat_loop_deps(&h),
+        role,
+    )
+    .await;
+
+    assert!(worker_sink.had_error(), "sink must flag the error exit");
+    let messages = worker_sink.worker_messages();
+    assert!(
+        !messages.is_empty(),
+        "worker error exit must capture messages for resume"
+    );
+    let last = messages.last().expect("captured");
+    assert_eq!(last.role, crate::llm::types::Role::Assistant);
+    let text = last.content.to_text();
+    assert!(
+        text.contains("assertion 1-5 passed"),
+        "partial text survives in the snapshot, got: {}",
+        text
+    );
+    assert!(
+        text.contains(crate::agent::helpers::ERROR_MARKER),
+        "ERROR_MARKER marks the break point, got: {}",
+        text
+    );
+
+    // The main-session DB must stay untouched (worker mode): the
+    // snapshot is in-memory only, consumed by run_subagent's persist.
+    let assistants = load_assistant_rows(&h.db, &h.session_id).await;
+    assert!(
+        assistants.is_empty(),
+        "worker must not persist rows to the parent session table"
+    );
+}

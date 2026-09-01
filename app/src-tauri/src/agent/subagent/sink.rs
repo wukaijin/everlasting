@@ -187,13 +187,16 @@ pub struct SubagentBufferSink {
     pub(crate) tool_call_received_at: StdMutex<HashMap<String, Instant>>,
     /// C1 (07-26-subagent-resume): the worker's final `Vec<ChatMessage>`
     /// snapshot, captured once by `record_worker_messages` on the chat
-    /// loop's normal completion path. Read by `run_subagent` after the
-    /// worker loop returns to persist into `subagent_runs.messages_json`
-    /// (via `update_run_finished`) so a later `dispatch_subagent` can
-    /// resume the conversation. Stays empty for cancel/error/incomplete
-    /// exits — those don't call `record_worker_messages`, so the
-    /// snapshot is the empty default and resume falls back to fresh
-    /// dispatch (design §5).
+    /// loop's normal completion path — and, since
+    /// 09-01-subagent-network-resume, ALSO on the drive loop's
+    /// stream-error exit (the partial turn is pair-safe there; see
+    /// `drive.rs`). Read by `run_subagent` after the worker loop
+    /// returns to persist into `subagent_runs.messages_json` (via
+    /// `update_run_finished`) so a later `dispatch_subagent` can
+    /// resume the conversation. Stays empty for cancel exits and
+    /// pre-loop setup failures — those never call
+    /// `record_worker_messages`, so the snapshot is the empty
+    /// default and resume falls back to fresh dispatch (design §5).
     pub(crate) worker_messages: StdMutex<Vec<crate::llm::types::ChatMessage>>,
 }
 

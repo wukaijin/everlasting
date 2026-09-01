@@ -136,6 +136,19 @@ pub struct WorkflowCtx {
     /// in place so mid-loop state transitions immediately
     /// surface.
     pub current_task: Option<TaskJson>,
+
+    /// 09-01-workflow-task-json-deadlock: task dirs whose
+    /// `task.json` exists but failed to parse —
+    /// `(slug, error)` pairs collected by the same scan
+    /// that resolves [`current_task`]. The breadcrumb
+    /// renders them as a `<workflow-task-warning>` section
+    /// so the LLM sees WHY the session reports "no active
+    /// task" while a task dir plainly exists on disk, and
+    /// can repair the file instead of dead-locking between
+    /// `request_task_state_transition` ("slug mismatch:
+    /// None") and `create_task` ("already exists").
+    /// Empty when every `task.json` parses (the common case).
+    pub malformed_tasks: Vec<(String, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -215,12 +228,13 @@ pub async fn build_workflow_ctx(
                 task_workflow_def: workflow_def.clone(),
                 workflow_def,
                 current_task: None,
+                malformed_tasks: Vec::new(),
             }));
         }
     };
 
     let project_path = std::path::PathBuf::from(&project.path);
-    let current_task = resolve_current_task(&project_path).await;
+    let (current_task, malformed_tasks) = resolve_tasks_with_notes(&project_path).await;
 
     // Step 2.2 (2026-07-08): load the on-disk plugin
     // (`<project>/.everlasting/workflow/<plugin_name>/workflow.json`)
@@ -248,6 +262,7 @@ pub async fn build_workflow_ctx(
         workflow_def,
         task_workflow_def,
         current_task,
+        malformed_tasks,
     }))
 }
 
@@ -266,11 +281,34 @@ pub async fn build_workflow_ctx(
 /// `task.json` is logged + skipped so a single bad task
 /// doesn't break the whole list. The function returns
 /// the first VALID unfinished task, not the first
-/// encountered file.
+/// encountered file. Use [`resolve_tasks_with_notes`] when
+/// the caller also needs the parse failures surfaced
+/// (breadcrumb / diagnostics).
 pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
+    resolve_tasks_with_notes(project_path).await.0
+}
+
+/// 09-01-workflow-task-json-deadlock: the scan behind
+/// [`resolve_current_task`] that ALSO reports task dirs
+/// whose `task.json` failed to parse, as `(slug, error)`
+/// pairs (serde message included verbatim — the LLM can
+/// act on "missing field `status`" directly).
+///
+/// The silent-swallow posture alone caused a real deadlock
+/// (session 2e438939): the LLM hand-wrote a `task.json`
+/// that failed to parse, every turn resolved
+/// `current_task = None`, and the session dead-locked
+/// between `request_task_state_transition` ("slug
+/// mismatch: None") and `create_task` ("already exists")
+/// until the LLM resorted to `rm -rf`. Surfacing the parse
+/// error in the breadcrumb lets the LLM repair the file
+/// instead.
+pub async fn resolve_tasks_with_notes(
+    project_path: &Path,
+) -> (Option<TaskJson>, Vec<(String, String)>) {
     let tasks_root = project_path.join(".everlasting").join("tasks");
     if !tasks_root.exists() {
-        return None;
+        return (None, Vec::new());
     }
     let mut entries = match std::fs::read_dir(&tasks_root) {
         Ok(it) => it,
@@ -280,7 +318,7 @@ pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
                 error = %e,
                 "resolve_current_task: failed to read tasks dir; treating as no current_task",
             );
-            return None;
+            return (None, Vec::new());
         }
     };
 
@@ -316,6 +354,7 @@ pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
     }
     slugs.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let mut malformed: Vec<(String, String)> = Vec::new();
     for (slug, json_path) in slugs {
         match read_task(project_path, &slug) {
             Ok(task) => {
@@ -338,10 +377,19 @@ pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
                 if task.status != crate::agent::workflow::TaskStatus::Done
                     && task.status != crate::agent::workflow::TaskStatus::Completed
                 {
-                    return Some(task);
+                    return (Some(task), malformed);
                 }
             }
             Err(e) => {
+                // `TaskError::NotFound` = dir without a
+                // task.json that `json_path.exists()` raced
+                // past (deleted mid-scan) — not actionable,
+                // keep it swallow-only. Everything else is a
+                // real parse/IO failure the LLM can repair;
+                // record it for the breadcrumb.
+                if !matches!(e, crate::agent::workflow::TaskError::NotFound(_)) {
+                    malformed.push((slug.clone(), e.to_string()));
+                }
                 tracing::warn!(
                     slug = %slug,
                     path = %json_path.display(),
@@ -352,7 +400,7 @@ pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
             }
         }
     }
-    None
+    (None, malformed)
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +701,7 @@ pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
         Some(task) => {
             // task-fragment branch: 3-line metadata +
             // breadcrumb text + pointer.
-            format!(
+            let body = format!(
                 "<workflow-task-meta>\n\
                  task_id: {id}\n\
                  title: {title}\n\
@@ -667,7 +715,8 @@ pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
                 title = task.title,
                 slug = task.slug,
                 status = task.status.as_str(),
-            )
+            );
+            append_malformed_warning(body, ctx)
         }
         None => {
             // Bootstrap branch (C4 2026-07-27): expose plugin +
@@ -688,18 +737,58 @@ pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
             // plugin IS known, so the set is statically
             // derivable; keeping it literal avoids pulling the
             // whole tool registry into this hot path.
-            format!(
+            //
+            // 09-01-workflow-task-json-deadlock: the old text
+            // claimed "read_task 会 lenient 兜底" for hand-written
+            // task.json — false (a missing required field failed
+            // the whole parse and the swallow dropped it), and it
+            // steered session 2e438939 into hand-writing a
+            // schema-violating file. The schema note now states
+            // the actual contract.
+            let body = format!(
                 "<workflow-task-meta>\n\
                  plugin: {plugin}\n\
                  state: {state} (initial — no active task yet)\n\
                  workflow-only tools you have: create_task, dispatch_subagent, request_task_state_transition, update_checklist\n\
-                 no active task — call the create_task tool to start one (省事、字段全、自带 prd skeleton)。\\n\
-                 (write_file 也行,但 task.json schema 有约束;read_task 会 lenient 兜底,优先用 create_task tool 更稳。)\n\
+                 no active task — call the create_task tool to start one (字段全、自带 prd skeleton,会自动被会话识别)。\n\
+                 (若坚持 write_file 手写 .everlasting/tasks/<slug>/task.json:top-level 必填 id/title/slug/status;items[] 每项必填 id,status 缺省 planning;文件解析失败会以 <workflow-task-warning> 形式出现在本 breadcrumb。)\n\
                  </workflow-task-meta>\n\n\
                  {breadcrumb}\n",
                 plugin = ctx.workflow_def.name,
                 state = ctx.workflow_def.initial,
-            )
+            );
+            append_malformed_warning(body, ctx)
         }
     }
+}
+
+/// 09-01-workflow-task-json-deadlock: render the
+/// [`WorkflowCtx::malformed_tasks`] notes as a trailing
+/// `<workflow-task-warning>` section. Tells the LLM the
+/// exact slug + parse error and the recovery contract:
+/// repair the file (the scan re-reads it every turn) —
+/// NOT `rm -rf`, NOT re-running `create_task` (it will
+/// be rejected with "already exists"). Appended in BOTH
+/// breadcrumb branches: a malformed task dir is invisible
+/// to `current_task` resolution regardless of whether
+/// another valid task is active.
+fn append_malformed_warning(body: String, ctx: &WorkflowCtx) -> String {
+    if ctx.malformed_tasks.is_empty() {
+        return body;
+    }
+    let notes = ctx
+        .malformed_tasks
+        .iter()
+        .map(|(slug, error)| format!("  - {slug}: {error}", slug = slug, error = error))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{body}\n<workflow-task-warning>\n\
+         task dir(s) exist but their task.json FAILED to parse (this is why no active task resolves):\n\
+         {notes}\n\
+         Fix: edit the listed task.json to satisfy the schema — the workflow scan re-reads it every turn and picks it up automatically. Do NOT rm -rf the dir and do NOT retry create_task (rejected: already exists).\n\
+         </workflow-task-warning>\n",
+        body = body,
+        notes = notes,
+    )
 }

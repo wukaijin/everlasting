@@ -868,8 +868,12 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// (gated on `is_worker == Some(true)` — only worker runs are
     /// resume candidates; the parent session is never resumed). The
     /// snapshot is the complete accumulated message history at loop
-    /// exit; cancel / error / incomplete early exits do NOT call it
-    /// (their history is partial and unsafe to resume from — design
+    /// exit. 09-01-subagent-network-resume: the drive loop's
+    /// stream-ERROR exit ALSO records (the partial turn carries
+    /// ERROR_MARKER + synthetic tool_result pairing, so the history
+    /// is resume-safe — see `drive.rs`); cancel exits and pre-loop
+    /// setup failures still do NOT call it (their history is partial
+    /// and unsafe to resume from — design
     /// §5 fallback).
     ///
     /// Default no-op is correct for every sink EXCEPT

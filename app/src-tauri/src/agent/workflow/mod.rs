@@ -675,6 +675,7 @@ mod tests {
                 // C5: dev fixture → dev plugin.
                 workflow_plugin: "dev".into(),
             }),
+            malformed_tasks: Vec::new(),
         }
     }
 

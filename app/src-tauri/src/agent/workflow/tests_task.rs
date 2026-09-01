@@ -256,6 +256,31 @@ fn read_task_lenient_item_status_pending_becomes_custom() {
     );
 }
 
+/// 09-01-workflow-task-json-deadlock: reproduction of session
+/// 2e438939's exact hand-written shape — `items[]` entries with
+/// `{id, summary, tdd}` and NO `status`. The missing field used
+/// to fail the WHOLE file's parse; `resolve_current_task` then
+/// swallowed it every turn → "no active task" deadlock between
+/// `request_task_state_transition` and `create_task`.
+/// `TaskItem::status` now defaults to Planning on read.
+#[test]
+fn read_task_lenient_item_missing_status_defaults_planning() {
+    let d = fresh_project();
+    write_raw_task_json(
+        &proj(&d),
+        "09-01-a2-sandbox-docs-sync",
+        r#"{"id":"t1","title":"T","slug":"09-01-a2-sandbox-docs-sync","status":"planning","created_at":"","updated_at":"","items":[{"id":"it-arch","summary":"ARCHITECTURE.md sync","tdd":false}]}"#,
+    );
+    let task = read_task(&proj(&d), "09-01-a2-sandbox-docs-sync")
+        .expect("missing item status must not fail the file");
+    assert_eq!(
+        task.items[0].status,
+        TaskStatus::Planning,
+        "missing item status → Planning default"
+    );
+    assert_eq!(task.items[0].id, "it-arch");
+}
+
 #[test]
 fn read_task_lenient_item_missing_content_defaults_empty() {
     let d = fresh_project();

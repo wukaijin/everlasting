@@ -166,9 +166,23 @@ pub struct TaskItem {
     pub id: String,
     #[serde(default)]
     pub content: String,
+    /// 09-01-workflow-task-json-deadlock: `#[serde(default)]` — an LLM
+    /// hand-writing `task.json` via `write_file` routinely emits
+    /// `{id, content, tdd}` items without `status`, and the missing
+    /// field used to fail the WHOLE file's parse (which
+    /// `resolve_current_task` then swallowed → "no active task"
+    /// deadlock; session 2e438939 seq 34-58). Defaulting to `Planning`
+    /// keeps the file loadable; `update_checklist` rewrites items with
+    /// the full shape anyway.
+    #[serde(default = "default_item_status")]
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tdd: Option<bool>,
+}
+
+/// Serde default for [`TaskItem::status`] — see the field comment.
+fn default_item_status() -> TaskStatus {
+    TaskStatus::Planning
 }
 
 /// On-disk `.everlasting/tasks/<slug>/task.json` schema.
