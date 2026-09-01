@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
     ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: tmp.path().canonicalize().unwrap(),
         cwd: tmp.path().canonicalize().unwrap(),
@@ -258,6 +259,7 @@ async fn execute_rejects_nonexistent_working_directory() {
 async fn execute_rejects_when_ctx_cwd_outside_root() {
     let tmp = tempdir().unwrap();
     let ctx = ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: tmp.path().canonicalize().unwrap(),
         cwd: PathBuf::from("/etc"),

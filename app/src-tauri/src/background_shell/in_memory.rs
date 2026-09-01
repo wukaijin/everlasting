@@ -28,7 +28,8 @@ use uuid::Uuid;
 
 use super::{
     now_ms, BackgroundShellError, BackgroundShellNotification, BackgroundShellOutcome,
-    BackgroundShellRegistry, BackgroundShellStatus, MonotonicMs, ShellExitTrigger,
+    BackgroundShellRegistry, BackgroundShellStatus, EscalationBlock, EscalationOffer, MonotonicMs,
+    ShellExitTrigger,
 };
 
 /// Maximum number of pending completion notifications per chat
@@ -115,6 +116,11 @@ struct ShellEntry {
     /// `elapsed_ms`. The actual timer lives in the spawned
     /// task via `tokio::time::sleep`.
     max_runtime_ms: u64,
+    /// P3d: originating `run_background_shell` tool_use id (design
+    /// §1.2). Retained for future `shell_status` echo; the wait task
+    /// gets its own copy as a parameter (captured before the spec is
+    /// consumed by prepare/apply).
+    origin_tool_use_id: Option<String>,
     state: ShellState,
     /// `Some` while the shell is running (the spawned task still
     /// owns the matching `Receiver`). Set to `None` by `kill()` /
@@ -221,6 +227,46 @@ impl InMemoryBackgroundShellRegistry {
         });
         before - g.shells.len()
     }
+
+    /// P3d (design §1.4): the rerun inputs for one failed shell, read
+    /// from the entry the drain site just got a notification for. The
+    /// notification deliberately stays lean — command / cwd /
+    /// max_runtime ride here instead (the entry already retained them
+    /// for the future `shell_status` echo). `None` when the entry is
+    /// gone (swept past retention) — the drain site degrades to the
+    /// plain failure text.
+    ///
+    /// Inherent method (NOT on the trait): drain-side escalation is a
+    /// chat-loop concern layered over the concrete GUI impl; the
+    /// future daemon impl will expose the same semantics its own way.
+    pub async fn escalation_source(
+        &self,
+        session_id: &str,
+        shell_session_id: &str,
+    ) -> Option<EscalationSource> {
+        let g = self.inner.lock().await;
+        g.shells
+            .get(&(session_id.to_string(), shell_session_id.to_string()))
+            .map(|e| EscalationSource {
+                command: e.command.clone(),
+                cwd: e.cwd.clone(),
+                max_runtime_ms: e.max_runtime_ms,
+            })
+    }
+}
+
+/// P3d — rerun inputs handed back by
+/// [`InMemoryBackgroundShellRegistry::escalation_source`].
+#[derive(Debug, Clone)]
+pub struct EscalationSource {
+    /// The exact command text of the failed attempt (byte-identical
+    /// rerun — RULE-E-001/002 are re-applied by the registry's own
+    /// spawn path).
+    pub command: String,
+    /// The validated cwd of the failed attempt.
+    pub cwd: PathBuf,
+    /// The original max runtime (applies to the rerun in full).
+    pub max_runtime_ms: u64,
 }
 
 impl Default for InMemoryBackgroundShellRegistry {
@@ -241,6 +287,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         cwd: PathBuf,
         max_runtime_ms: Option<u64>,
         sandbox: Option<crate::sandbox::SandboxSpec>,
+        origin_tool_use_id: Option<String>,
     ) -> Result<String, BackgroundShellError> {
         // 1. Generate the shell id BEFORE spawning so the registry
         //    can record the entry even if spawn fails (the LLM still
@@ -300,6 +347,11 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                     exit_code: None,
                     started_at,
                     completed_at,
+                    // Spawn failures never carry an escalation offer:
+                    // the sandbox denial classification needs a real
+                    // exit + stderr, and the start error already went
+                    // back to the caller as `is_error`.
+                    escalation: None,
                 };
                 {
                     let mut g = self.inner.lock().await;
@@ -310,6 +362,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                             cwd: cwd.clone(),
                             started_at,
                             max_runtime_ms: runtime_ms,
+                            origin_tool_use_id: origin_tool_use_id.clone(),
                             state: ShellState::Done {
                                 notification: notification.clone(),
                                 stdout: Vec::new(),
@@ -328,6 +381,16 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         let pid = child.id();
         let (kill_tx, kill_rx) = oneshot::channel::<()>();
 
+        // P3d: offers only exist for sandbox-originated shells, so the
+        // sandboxed flag and the origin id fold into the single value
+        // the wait task needs — captured HERE because the spec was
+        // consumed by `prepare`/`apply` above and can't be re-derived.
+        let escalation_origin = if sandbox.is_some() {
+            origin_tool_use_id.clone()
+        } else {
+            None
+        };
+
         // 4. Insert the Running entry before spawning the task so
         //    a racing `status()` / `kill()` call sees a consistent
         //    entry (otherwise the task could finish and write the
@@ -342,6 +405,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                     cwd,
                     started_at,
                     max_runtime_ms: runtime_ms,
+                    origin_tool_use_id: origin_tool_use_id.clone(),
                     state: ShellState::Running { pid },
                     kill_tx: Some(kill_tx),
                 },
@@ -357,6 +421,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
             child,
             kill_rx,
             runtime_ms,
+            escalation_origin,
         ));
 
         Ok(shell_id)
@@ -630,6 +695,11 @@ async fn run_background_task(
     mut child: tokio::process::Child,
     mut kill_rx: oneshot::Receiver<()>,
     max_runtime_ms: u64,
+    // P3d: the originating tool_use id, `Some` only when the shell
+    // was started under a sandbox spec (see `start()` — the fold is
+    // deliberate: an unsandboxed shell can never produce a sandbox
+    // denial, so its origin would be dead weight here).
+    escalation_origin: Option<String>,
 ) {
     let sleep = tokio::time::sleep(std::time::Duration::from_millis(max_runtime_ms));
     tokio::pin!(sleep);
@@ -672,6 +742,29 @@ async fn run_background_task(
     let completed_at = now_ms();
     let (outcome, reported_exit_code) = BackgroundShellOutcome::classify(trigger, exit_code);
 
+    // P3d escalation offer (design §1.3): only a sandbox-originated
+    // shell that ran to completion, failed, and whose stderr smells
+    // like a sandbox denial gets an offer. Killed / timed-out /
+    // spawn-failed / unsandboxed shells keep `None` — a timeout kill
+    // reports partial stderr (same exclusion as the foreground
+    // `!timed_out` gate) and a kill is the user acting, not the
+    // sandbox blocking.
+    let escalation =
+        if trigger == ShellExitTrigger::Normal && outcome == BackgroundShellOutcome::Failed {
+            escalation_origin.and_then(|tool_use_id| {
+                let stderr_str = String::from_utf8_lossy(&stderr).into_owned();
+                crate::sandbox::classify_block(&stderr_str).map(|kind| EscalationOffer {
+                    tool_use_id,
+                    block: EscalationBlock::from_sandbox(kind),
+                    stderr_evidence: crate::agent::permissions::escalation::stderr_evidence_line(
+                        &stderr_str,
+                    ),
+                })
+            })
+        } else {
+            None
+        };
+
     // Disk-spill for large outputs before we move into the lock.
     // C6: the registry's data_dir (production-only) keys the
     // session output dir; test registries have none and skip.
@@ -708,6 +801,7 @@ async fn run_background_task(
         exit_code: reported_exit_code,
         started_at: started_at_lookup(&inner, &session_id, &shell_id).await,
         completed_at,
+        escalation,
     };
 
     // Write the result. Brief lock — just a HashMap mutation.
@@ -850,6 +944,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(10_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -946,6 +1041,7 @@ mod tests {
                 wt.clone(),
                 Some(10_000),
                 Some(spec.clone()),
+                None,
             )
             .await
             .unwrap();
@@ -965,6 +1061,7 @@ mod tests {
                 wt.clone(),
                 Some(10_000),
                 Some(spec.clone()),
+                None,
             )
             .await
             .unwrap();
@@ -998,6 +1095,7 @@ mod tests {
                 wt.clone(),
                 Some(10_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1011,6 +1109,157 @@ mod tests {
             std::path::Path::new(&std::env::var("HOME").unwrap()).join("sbx_bg_allowed.txt");
         assert!(home_allowed.exists(), "legacy path must actually write");
         let _ = std::fs::remove_file(&home_allowed);
+    }
+
+    /// P3d (design §1.3): a sandbox-originated shell that exits
+    /// normally with a face-out denial bakes an `EscalationOffer` into
+    /// its notification — carrying the ORIGINAL tool_use id, the
+    /// write-block classification, and a non-empty stderr evidence
+    /// line — and `escalation_source` hands back the rerun inputs.
+    #[tokio::test]
+    async fn escalation_offer_baked_on_face_out_failure() {
+        if !crate::sandbox::Capability::probe().ok() {
+            eprintln!("SKIP: Landlock/seccomp unavailable on this kernel (fail-open runtime)");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let spec = crate::sandbox::SandboxSpec {
+            face: crate::sandbox::Face::ReadWrite,
+            writable_roots: vec![wt.clone(), "/tmp".into()],
+            exec_allow_roots: vec![
+                "/usr".into(),
+                "/bin".into(),
+                "/lib".into(),
+                "/lib64".into(),
+                "/dev".into(),
+                "/tmp".into(),
+                wt.clone(),
+            ],
+            extra_writable: vec![],
+        };
+        let reg = InMemoryBackgroundShellRegistry::new();
+
+        let id = reg
+            .start(
+                "s1",
+                "echo hi > $HOME/p3d_esc_probe.txt".to_string(),
+                wt.clone(),
+                Some(10_000),
+                Some(spec),
+                Some("tu-orig-x".to_string()),
+            )
+            .await
+            .unwrap();
+
+        // Wait for the notification to land, then inspect the offer.
+        let note = loop {
+            let notes = reg.drain_notifications("s1").await;
+            if let Some(n) = notes.into_iter().find(|n| n.shell_session_id == id) {
+                break n;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(
+            matches!(note.outcome, BackgroundShellOutcome::Failed),
+            "face-out write must fail: {note:?}"
+        );
+        let offer = note
+            .escalation
+            .expect("face-out failure under sandbox + origin must carry an offer");
+        assert_eq!(offer.tool_use_id, "tu-orig-x");
+        assert_eq!(offer.block, EscalationBlock::Write);
+        assert!(
+            offer.stderr_evidence.contains("Permission denied"),
+            "evidence line: {}",
+            offer.stderr_evidence
+        );
+
+        // escalation_source hands back the exact rerun inputs.
+        let src = reg.escalation_source("s1", &id).await.expect("entry alive");
+        assert_eq!(src.command, "echo hi > $HOME/p3d_esc_probe.txt");
+        assert_eq!(src.cwd, wt);
+        assert_eq!(src.max_runtime_ms, 10_000);
+    }
+
+    /// P3d negative matrix: no offer without a sandbox origin (plain
+    /// shell, AC5) and none without an origin id (reruns / tests) —
+    /// even when the command fails the same way.
+    #[tokio::test]
+    async fn no_offer_without_sandbox_or_origin() {
+        if !crate::sandbox::Capability::probe().ok() {
+            eprintln!("SKIP: Landlock/seccomp unavailable on this kernel (fail-open runtime)");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let spec = crate::sandbox::SandboxSpec {
+            face: crate::sandbox::Face::ReadWrite,
+            writable_roots: vec![wt.clone(), "/tmp".into()],
+            exec_allow_roots: vec![
+                "/usr".into(),
+                "/bin".into(),
+                "/lib".into(),
+                "/lib64".into(),
+                "/dev".into(),
+                "/tmp".into(),
+                wt.clone(),
+            ],
+            extra_writable: vec![],
+        };
+        let reg = InMemoryBackgroundShellRegistry::new();
+
+        // (a) unsandboxed, same failing command → Failed, NO offer.
+        let id_plain = reg
+            .start(
+                "s1",
+                "false".to_string(),
+                wt.clone(),
+                Some(10_000),
+                None,
+                Some("tu-plain".to_string()),
+            )
+            .await
+            .unwrap();
+        // (b) sandboxed but no origin id (escalation rerun shape) →
+        // NO offer even on a face-out failure.
+        let id_noorigin = reg
+            .start(
+                "s1",
+                "echo hi > $HOME/p3d_esc_probe2.txt".to_string(),
+                wt.clone(),
+                Some(10_000),
+                Some(spec),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut got_plain = None;
+        let mut got_noorigin = None;
+        for _ in 0..60 {
+            let notes = reg.drain_notifications("s1").await;
+            for n in notes {
+                if n.shell_session_id == id_plain && got_plain.is_none() {
+                    got_plain = Some(n);
+                } else if n.shell_session_id == id_noorigin && got_noorigin.is_none() {
+                    got_noorigin = Some(n);
+                }
+            }
+            if got_plain.is_some() && got_noorigin.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let plain = got_plain.expect("plain shell notification");
+        assert!(plain.escalation.is_none(), "unsandboxed → no offer");
+        let noorigin = got_noorigin.expect("sandboxed shell notification");
+        assert!(
+            noorigin.escalation.is_none(),
+            "no origin id → no offer, got {noorigin:?}"
+        );
     }
 
     /// The shell id format is `bsh_<uuid>` with no dashes. UUID
@@ -1081,6 +1330,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(5000),
                 None,
+                None,
             )
             .await
             .expect("start ok");
@@ -1115,6 +1365,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(30_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1147,6 +1398,7 @@ mod tests {
                 "echo hello-from-bg && echo stderr-msg >&2".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
                 None,
             )
             .await
@@ -1189,6 +1441,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(120_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1216,6 +1469,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
                 None,
             )
             .await
@@ -1256,6 +1510,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(30_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1278,6 +1533,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(60_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1288,6 +1544,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(60_000),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1297,6 +1554,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
                 None,
             )
             .await
@@ -1344,6 +1602,7 @@ mod tests {
                     "true".to_string(),
                     tmp.path().to_path_buf(),
                     Some(5000),
+                    None,
                     None,
                 )
                 .await
@@ -1404,6 +1663,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
                 None,
             )
             .await
@@ -1473,6 +1733,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
                 None,
             )
             .await

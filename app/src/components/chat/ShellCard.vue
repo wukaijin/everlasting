@@ -84,13 +84,14 @@ const accent = computed(() => {
 
 const statusText = computed(() => {
   if (isError.value) return "error";
-  if (hasResult.value) return "done";
   if (pendingAsk.value) return "等待审批";
+  if (hasResult.value) return "done";
   return "running…";
 });
 
 const statusIconName = computed(() => {
   if (isError.value) return "x";
+  if (pendingAsk.value) return "ellipsis";
   if (hasResult.value) return "check";
   return "ellipsis";
 });
@@ -129,7 +130,13 @@ const pendingAsk = computed(() => {
   return ask && ask.toolUseId === props.call.id ? ask : undefined;
 });
 
-const isPendingApproval = computed(() => !hasResult.value && !!pendingAsk.value);
+/** 有 ask 挂在本卡 = 可操作。前台流 ask 先于执行,结果一到即应
+ *  撤下审批区(`!hasResult` 守卫);P3d 后台升级卡相反——挂在**已有
+ *  结果**的 run_background_shell 卡上(shell 完成后才弹升级),所以
+ *  后台卡不受该守卫约束。 */
+const isPendingApproval = computed(
+  () => !!pendingAsk.value && (!hasResult.value || isBackground.value),
+);
 
 async function respondApproval(decision: PermissionDecision, reason?: string) {
   if (!pendingAsk.value) return;

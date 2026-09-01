@@ -187,6 +187,7 @@ fn test_ctx() -> ToolContext {
     // so we don't actually touch this path).
     std::mem::forget(tmp);
     ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: p.clone(),
         cwd: p,
@@ -532,6 +533,7 @@ fn resolve_and_check_sync_blocks_loopback_even_with_bypass() {
 fn spill_test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
     let p = tmp.path().canonicalize().unwrap();
     ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: p.clone(),
         cwd: p,

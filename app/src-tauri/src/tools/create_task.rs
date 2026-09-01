@@ -183,6 +183,7 @@ mod tests {
 
     fn ctx_at(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             escalation: Default::default(),
             worktree_path: tmp.path().to_path_buf(),
             cwd: tmp.path().to_path_buf(),

@@ -49,6 +49,7 @@ async fn l3b_discard_worker_happy_path() {
         .expect("set_worktree_path");
 
     let ctx = crate::tools::ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: wt_path.clone(),
         cwd: wt_path.clone(),
@@ -121,6 +122,7 @@ async fn l3b_discard_worker_already_destroyed_errors() {
     // NULL.
 
     let ctx = crate::tools::ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: h.project_path.clone(),
         cwd: h.project_path.clone(),

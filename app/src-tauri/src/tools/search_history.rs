@@ -249,6 +249,7 @@ mod tests {
             .await
             .expect("migrations");
         let ctx = ToolContext {
+            tool_use_id: None,
             escalation: Default::default(),
             worktree_path: std::path::PathBuf::from("/repo/proj"),
             cwd: std::path::PathBuf::from("/repo/proj"),

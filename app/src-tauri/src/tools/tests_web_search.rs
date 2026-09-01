@@ -350,6 +350,7 @@ async fn store_key(pool: &sqlx::SqlitePool, key: &str) {
 
 async fn make_ctx(pool: &sqlx::SqlitePool) -> crate::tools::ToolContext {
     crate::tools::ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: std::path::PathBuf::from("/repo/p"),
         cwd: std::path::PathBuf::from("/repo/p"),

@@ -75,6 +75,7 @@ async fn escalation_pool(session_id: &str) -> sqlx::SqlitePool {
 
 fn esc_ctx(tmp: &tempfile::TempDir, db: sqlx::SqlitePool, handle: EscalationHandle) -> ToolContext {
     ToolContext {
+        tool_use_id: None,
         worktree_path: tmp.path().canonicalize().unwrap(),
         cwd: tmp.path().canonicalize().unwrap(),
         checklist: crate::tools::update_checklist::new_handle(),
@@ -96,20 +97,25 @@ const ALWAYS_DENIED: &str = "touch /proc/1/mem";
 
 /// Wait for the first ask payload and resolve it with `decision`
 /// (mirrors the frontend `permission_response` IPC handler).
+/// `resolve_ask` returns false while the payload has been emitted but
+/// `register_ask` has not yet inserted the oneshot (ask.rs emits
+/// before registering) — retry until the resolve lands, else parallel
+/// test load makes the 120s timeout win the race (observed flaky).
 fn spawn_resolver(
     sink: Arc<EscAskSink>,
     store: crate::agent::permissions::PermissionStore,
     decision: PermissionResponse,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        for _ in 0..600 {
+        for _ in 0..1200 {
             let rid = {
                 let asks = sink.asks.lock().unwrap();
                 asks.first().map(|a| a.rid.clone())
             };
             if let Some(rid) = rid {
-                crate::agent::permissions::resolve_ask(&store, &rid, decision).await;
-                return;
+                if crate::agent::permissions::resolve_ask(&store, &rid, decision.clone()).await {
+                    return;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
@@ -130,6 +136,14 @@ fn count_denial_lines(content: &str) -> usize {
 async fn escalation_approve_reruns_once_without_second_card() {
     if !crate::sandbox::Capability::probe().ok() {
         eprintln!("SKIP: Landlock/seccomp unavailable (fail-open runtime, no escalation)");
+        return;
+    }
+    if unsafe { libc::geteuid() } == 0 {
+        // The probe command's premise is "the OS denies /proc/1/mem
+        // even unsandboxed" — false for root, whose rerun then exits 0
+        // and breaks the plain-failure assertion. Same loud-SKIP
+        // discipline as the kernel probe.
+        eprintln!("SKIP: running as root — /proc/1/mem is writable, probe premise void");
         return;
     }
     let tmp = tempdir().unwrap();

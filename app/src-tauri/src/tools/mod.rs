@@ -439,9 +439,20 @@ pub struct ToolContext {
     /// tool_use_id + sink + store + permission context the tool
     /// layer can't reach); `Default` (None) in every other
     /// construction site → the escalation degrades to guidance-only.
-    /// The background shell intentionally does NOT consume it
-    /// (model-mediated guidance stays its path this iteration).
+    /// The background shell's escalation (P3d) flows through the
+    /// registry notification offer at the drain site, NOT through
+    /// this handle — run_background_shell only consumes
+    /// [`ToolContext::tool_use_id`].
     pub escalation: crate::agent::permissions::escalation::EscalationHandle,
+    /// P3d (design §1.1): the dispatching tool_use id, injected by the
+    /// serial dispatch for EVERY tool (per-call `tool_ctx` clone).
+    /// Only `run_background_shell` consumes it today — it rides into
+    /// the registry as the shell entry's origin id so a later
+    /// face-out failure can attach the escalation Ask card back to
+    /// the original tool call card (frontend matches asks by
+    /// `toolUseId`). `None` at construction sites outside the
+    /// dispatch loop (turn init, most tests).
+    pub tool_use_id: Option<String>,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses

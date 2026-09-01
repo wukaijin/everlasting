@@ -69,6 +69,7 @@ use std::collections::VecDeque;
 // LlmRetrySink、user_message_matches / dd_guard_hit (D-D 守卫)、以及
 // latency / persist 失败 / load_for_session / finalize_pending_tool_results
 // / L2 parallel-eligibility / DispatchBatch 分类等辅助函数。
+pub(crate) mod background_escalation;
 pub(crate) mod drive;
 pub(crate) mod init;
 pub(crate) mod suite;

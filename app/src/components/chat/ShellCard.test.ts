@@ -220,6 +220,27 @@ describe("ShellCard", () => {
       });
     });
 
+    // P3d 回归锚:后台升级卡挂在**已有结果**的 run_background_shell
+    // 卡上(shell 完成后才弹升级审批)。isPendingApproval 不再以
+    // !hasResult 为前置,否则升级按钮永远不渲染。
+    it("P3d: renders approval UI on a DONE background card with a pending escalation ask", () => {
+      armPending({
+        toolName: "run_background_shell",
+        reason:
+          "The command was stopped because an out-of-face write was blocked by the sandbox.",
+      });
+      const w = mountCard({
+        call: makeCall({ name: "run_background_shell" }),
+        result: makeResult({ content: "Started background shell bsh_abc" }),
+      });
+      // 结果已存在(done),但升级审批 UI 必须在场。
+      expect(w.find(".tool-call-header__status").text()).toContain("等待审批");
+      expect(w.find(".shell-card__risk").exists()).toBe(true);
+      expect(w.text()).toContain("仅一次");
+      expect(w.text()).toContain("始终允许");
+      expect(w.text()).toContain("拒绝");
+    });
+
     it("拒绝并说明 opens the textarea and submits the reason through onRespond", async () => {
       armPending();
       const w = mountCard({ call: makeCall() });

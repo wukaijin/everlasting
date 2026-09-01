@@ -99,6 +99,7 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
 
     // Build the ToolContext the merge_worker tool needs.
     let ctx = crate::tools::ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: wt_path.clone(),
         cwd: wt_path.clone(),
@@ -264,6 +265,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
         .expect("set_worktree_path");
 
     let ctx = crate::tools::ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: wt_path.clone(),
         cwd: wt_path.clone(),
@@ -352,6 +354,7 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
     // open the repo + find the parent branch.
     let bogus_wt = h.project_path.join(format!("missing_wt_{}", h.session_id));
     let ctx = crate::tools::ToolContext {
+        tool_use_id: None,
         escalation: Default::default(),
         worktree_path: bogus_wt,
         cwd: h.project_path.clone(),

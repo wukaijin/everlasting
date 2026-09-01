@@ -599,7 +599,7 @@ pub async fn execute(
                 // design §5.2「重跑 + 审计」: best-effort ToolAllowed
                 // row so the grant-hit rerun is distinguishable in the
                 // audit trail from a plain sandboxed failure.
-                if let Err(e) = ctx.escalation.audit_grant_rerun(input).await {
+                if let Err(e) = ctx.escalation.audit_grant_rerun("shell", input).await {
                     tracing::warn!(error = %e, "shell: grant-rerun audit write failed");
                 }
                 true
@@ -608,7 +608,9 @@ pub async fn execute(
                 //     stderr evidence line. AllowOnce / AllowAlways
                 //     (grant persisted by ask_path) → rerun.
                 matches!(
-                    ctx.escalation.ask(input, command, kind, &stderr_str).await,
+                    ctx.escalation
+                        .ask("shell", input, command, kind, &stderr_str)
+                        .await,
                     crate::agent::permissions::escalation::EscalationOutcome::Approved
                 )
             };

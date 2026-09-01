@@ -103,8 +103,14 @@ impl EscalationHandle {
     /// Emits `permission:ask`, writes the ask-side audit rows, and
     /// (on AllowAlways) persists the prefix grant through `ask_path`'s
     /// existing channel — the same rows/kinds the Tier 4 flow writes.
+    /// `tool_name` is the ask's identity ("shell" foreground /
+    /// "run_background_shell" background, P3d): both are
+    /// `ToolKind::Shell`, so the kind↔category grant matrix accepts
+    /// prefix grants for either, and the read side of
+    /// `prefix_grant_hit` covers both names.
     pub async fn ask(
         &self,
+        tool_name: &str,
         tool_input: &serde_json::Value,
         command: &str,
         kind: SandboxBlockKind,
@@ -120,7 +126,7 @@ impl EscalationHandle {
             &inner.db,
             &inner.store,
             &inner.ctx,
-            "shell",
+            tool_name,
             tool_input,
             command,
             // Shell asks render the command inline; no path-scope row.
@@ -144,6 +150,7 @@ impl EscalationHandle {
     /// emitted on this path — the ask-side kinds never fire here).
     pub async fn audit_grant_rerun(
         &self,
+        tool_name: &str,
         tool_input: &serde_json::Value,
     ) -> Result<(), sqlx::Error> {
         let inner = match &self.inner {
@@ -154,7 +161,7 @@ impl EscalationHandle {
             &inner.db,
             &inner.ctx,
             AuditKind::ToolAllowed,
-            "shell",
+            tool_name,
             tool_input,
             Some("sandbox escalation rerun via prefix-grant hit"),
         )
@@ -223,8 +230,11 @@ fn escalation_reason(kind: SandboxBlockKind, command: &str, stderr: &str) -> Str
 
 /// Pick the stderr line that proves the denial (first line containing
 /// a known denial string, else the last non-empty line), truncated —
-/// the card stays readable.
-fn stderr_evidence_line(stderr: &str) -> String {
+/// the card stays readable. `pub(crate)`: the background-shell wait
+/// task reuses it to bake the evidence into the notification's
+/// escalation offer (P3d), so the card at drain time shows the same
+/// line that triggered the offer.
+pub(crate) fn stderr_evidence_line(stderr: &str) -> String {
     const MARKERS: [&str; 3] = [
         "Permission denied",
         "Read-only file system",

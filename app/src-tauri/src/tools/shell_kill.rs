@@ -136,6 +136,7 @@ mod tests {
     fn test_ctx() -> (ToolContext, tempfile::TempDir) {
         let tmp = tempdir().unwrap();
         let ctx = ToolContext {
+            tool_use_id: None,
             escalation: Default::default(),
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
@@ -209,6 +210,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(120_000),
                 None,
+                None,
             )
             .await
             .expect("start");
@@ -248,6 +250,7 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Some(5000),
                 None,
+                None,
             )
             .await
             .expect("start");
@@ -285,6 +288,7 @@ mod tests {
                 "sleep 60".to_string(),
                 tmp.path().to_path_buf(),
                 Some(120_000),
+                None,
                 None,
             )
             .await

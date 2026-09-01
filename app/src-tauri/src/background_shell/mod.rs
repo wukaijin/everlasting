@@ -102,6 +102,64 @@ pub struct BackgroundShellNotification {
     pub started_at: MonotonicMs,
     /// When the shell exited (ms since process boot).
     pub completed_at: MonotonicMs,
+    /// P3d escalation offer (design §1.3): `Some` only when a
+    /// sandbox-originated shell exited normally with a non-zero code
+    /// whose stderr matches a sandbox denial (out-of-face write /
+    /// seccomp network block). The chat loop's drain site turns this
+    /// into the escalation round-trip (approval card → one-shot
+    /// unsandboxed rerun) BEFORE the LLM sees any text. `None` for
+    /// every other path — plain notifications keep today's shape.
+    pub escalation: Option<EscalationOffer>,
+}
+
+/// P3d — everything the drain site needs to run the escalation
+/// round-trip for one failed background shell. The full stderr stays
+/// in the registry entry; the offer carries only the evidence line
+/// (same picker as the foreground card) so notifications stay lean.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct EscalationOffer {
+    /// The originating `run_background_shell` tool_use id. The ask
+    /// card attaches back to that call's card in the transcript
+    /// (frontend matches `ask.toolUseId === call.id`).
+    pub tool_use_id: String,
+    /// Which sandbox mechanism stopped the command (drives the card
+    /// reason text + the failure guidance on the denied path).
+    pub block: EscalationBlock,
+    /// The stderr line that proves the denial
+    /// (`escalation::stderr_evidence_line`), truncated.
+    pub stderr_evidence: String,
+}
+
+/// Which sandbox mechanism produced the denial. Mirrors
+/// [`crate::sandbox::SandboxBlockKind`] as a local serde-friendly
+/// enum — the background-shell wire surface stays self-describing
+/// without leaking the sandbox module's types into its API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationBlock {
+    /// An out-of-face write was denied (EACCES / EROFS family).
+    Write,
+    /// Outbound network was denied (seccomp `socket(AF_INET*)` EPERM).
+    Network,
+}
+
+impl EscalationBlock {
+    /// Round-trip a sandbox classification into the wire enum.
+    pub fn from_sandbox(kind: crate::sandbox::SandboxBlockKind) -> Self {
+        match kind {
+            crate::sandbox::SandboxBlockKind::Write => EscalationBlock::Write,
+            crate::sandbox::SandboxBlockKind::Network => EscalationBlock::Network,
+        }
+    }
+
+    /// Back into the sandbox-layer kind for the escalation card path
+    /// (`EscalationHandle::ask` takes the sandbox enum).
+    pub fn to_sandbox(self) -> crate::sandbox::SandboxBlockKind {
+        match self {
+            EscalationBlock::Write => crate::sandbox::SandboxBlockKind::Write,
+            EscalationBlock::Network => crate::sandbox::SandboxBlockKind::Network,
+        }
+    }
 }
 
 /// The terminal outcome of a background shell. Mirrors the
@@ -267,6 +325,12 @@ pub trait BackgroundShellRegistry: Send + Sync {
     /// ruleset; a prepare failure surfaces as
     /// [`BackgroundShellError::Spawn`] (fail-closed, same channel as
     /// any spawn failure). `None` → spawn exactly as before.
+    ///
+    /// P3d (design §1.2): `origin_tool_use_id` is the dispatching
+    /// tool_use id (from `ToolContext.tool_use_id`), retained on the
+    /// entry so a later face-out failure can offer the escalation
+    /// with the card attached back to the original call. `None` (test
+    /// paths, escalation reruns) simply disables the offer path.
     async fn start(
         &self,
         session_id: &str,
@@ -274,6 +338,7 @@ pub trait BackgroundShellRegistry: Send + Sync {
         cwd: PathBuf,
         max_runtime_ms: Option<u64>,
         sandbox: Option<crate::sandbox::SandboxSpec>,
+        origin_tool_use_id: Option<String>,
     ) -> Result<String, BackgroundShellError>;
 
     /// Query a background shell's status. Returns

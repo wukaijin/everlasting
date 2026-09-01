@@ -1689,6 +1689,12 @@ pub(crate) async fn dispatch_tool_calls(
                     // and other tools keep `Default` (None) → the
                     // escalation degrades to guidance-only.
                     let mut tool_ctx = current_ctx.clone();
+                    // P3d: stamp every tool call with its tool_use id
+                    // (per-call clone). Only run_background_shell
+                    // consumes it today (registry origin id →
+                    // escalation card attach), stamping unconditionally
+                    // keeps the injection point single.
+                    tool_ctx.tool_use_id = Some(id.clone());
                     if name == "shell" {
                         tool_ctx.escalation =
                             crate::agent::permissions::escalation::EscalationHandle::new(

@@ -379,6 +379,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             escalation: Default::default(),
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),

@@ -285,6 +285,9 @@ pub(crate) async fn prepare_loop_state(
     let session_mode = loaded_session.session.mode;
     let turn_ctx = ToolContext {
         escalation: Default::default(),
+        // P3d: no tool call identity at turn-init construction — the
+        // per-call stamp happens in the dispatch loop (tools.rs).
+        tool_use_id: None,
         worktree_path: worktree_path.clone(),
         cwd: session_cwd.clone(),
         // B12 (2026-06-19): per-request checklist handle. Constructed

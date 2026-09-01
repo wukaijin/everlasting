@@ -17,6 +17,7 @@ use futures_util::StreamExt;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::chat_loop::background_escalation;
 use crate::agent::helpers::{
     build_synthetic_tool_result_message, emit_chat_event_via_sink, persist_turn_cwd,
     CANCELLED_MARKER, ERROR_MARKER,
@@ -814,6 +815,27 @@ pub(crate) async fn drive_turn(
     // the per-turn context cost bounded for builds that fan out
     // into many background shells.
     let background_notifications = background_shells.drain_notifications(&session_id).await;
+    // P3d: offers ride on face-out-failed sandboxed shells; resolve
+    // them HERE (before any turn text exists) so the LLM only ever
+    // sees a terminal story — approval card → one-shot unsandboxed
+    // rerun, or failure + guidance. Notifications without an offer
+    // render byte-identically to the pre-P3d format.
+    let background_notification_texts = background_escalation::resolve_all(
+        &background_notifications,
+        &background_escalation::EscalationEnv {
+            registry: background_shells,
+            sink: sink.clone(),
+            store: deps.permission_asks.clone(),
+            // perm_ctx.mode is the turn mode — the Plan gate reads it
+            // (same source the foreground escalation gate consumes
+            // via ToolContext.mode).
+            perm_ctx: permission_ctx.clone(),
+            db: db.clone(),
+            token: token.clone(),
+            session_id: &session_id,
+        },
+    )
+    .await;
     let turn_messages = {
         let checklist_snapshot = current_ctx.checklist.lock().await.clone();
         let mut req = messages.clone();
@@ -844,20 +866,14 @@ pub(crate) async fn drive_turn(
         // checklist block. Same cache-correctness rule — keep
         // the memory breakpoint at messages[0] intact. Each
         // notification gets ONE message so the LLM sees
-        // multiple completions as distinct events.
-        for note in &background_notifications {
-            let text = format!(
-                "[system] 后台 shell {} 已完成,exit code {}。调 shell_status(session_id=\"{}\") 看输出。",
-                note.shell_session_id,
-                note.exit_code
-                    .map(|c: i32| c.to_string())
-                    .unwrap_or_else(|| "N/A".to_string()),
-                note.shell_session_id,
-            );
+        // multiple completions as distinct events. P3d: the
+        // texts were resolved above (offers → terminal
+        // escalation story; plain → legacy format, byte-identical).
+        for text in &background_notification_texts {
             let msg = ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![ContentBlock::Text {
-                    text,
+                    text: text.clone(),
                     cache_control: None,
                 }]),
                 speaker: None,

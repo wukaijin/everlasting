@@ -236,6 +236,10 @@ pub async fn execute(
             validated_cwd.clone(),
             max_runtime_ms,
             sandbox_spec.clone(),
+            // P3d: the dispatching tool_use id rides into the entry so
+            // a later face-out failure can attach the escalation card
+            // back to THIS call's card in the transcript.
+            ctx.tool_use_id.clone(),
         )
         .await;
 
@@ -309,6 +313,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             escalation: Default::default(),
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
