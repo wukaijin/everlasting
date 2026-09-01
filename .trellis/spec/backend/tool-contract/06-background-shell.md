@@ -175,6 +175,18 @@ let turn_messages = {
 - **Empty queue → skip injection** — fast path, no extra
   `.clone()`, no extra `push()`. The `notification count == 0`
   branch is the common case (no background shells active).
+- **P3d (2026-09-01): the drain site resolves escalation offers
+  BEFORE any text is assembled** — a sandbox-originated shell that
+  failed on an out-of-face denial carries
+  `notification.escalation = Some(EscalationOffer)`; the chat loop
+  (`agent/chat_loop/background_escalation.rs::resolve_all`) runs the
+  foreground §5.2 machinery (prefix-grant → Ask card attached to the
+  ORIGINAL run_background_shell call via `offer.tool_use_id` →
+  one-shot unsandboxed rerun via `registry.start(sandbox=None,
+  origin=None)`) and renders exactly ONE terminal text per
+  notification. Notifications without an offer render the legacy
+  format byte-identically. Plan-mode turns never escalate. Full
+  contract: `.trellis/spec/backend/sandbox-executor.md` §11.
 
 #### Permission routing (⑨ 关 Tier 4)
 
