@@ -414,11 +414,11 @@ pub fn default_workflow() -> WorkflowDef {
             ),
             (
                 "in_progress".to_string(),
-                "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后请用户确认转 done".to_string(),
+                "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后把工作改动整理成逻辑 commit 提交,再请用户确认转 done".to_string(),
             ),
             (
                 "done".to_string(),
-                "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地)".to_string(),
+                "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地);归档前确认工作改动已提交,未提交则先提醒用户".to_string(),
             ),
         ]),
         delegation_templates: HashMap::from([

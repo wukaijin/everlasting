@@ -22,8 +22,8 @@
   },
   "breadcrumb": {
     "planning": "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress",
-    "in_progress": "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后请用户确认转 done",
-    "done": "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地)"
+    "in_progress": "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后把工作改动整理成逻辑 commit 提交,再请用户确认转 done",
+    "done": "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地);归档前确认工作改动已提交,未提交则先提醒用户"
   },
   "delegation_templates": {
     "researcher": "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。",
