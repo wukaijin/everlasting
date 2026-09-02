@@ -612,6 +612,9 @@ P4's threshold is **2 consecutive failures followed by a success** (per spike-00
 | `promote_if_eligible_*` (P5) | hit_count 跨 2 升 active;跨 5 + age≥3 天升 verified;demoted 不被 bump 晋升(矩阵拒绝) |
 | `jaccard_*` / `char_trigrams_*` (P5) | 中文短句重叠 Jaccard>0.7;identical=1.0;disjoint=0.0;Unicode char 非 byte |
 | `pick_keeper_*` / `trigger_key_equal_*` (P5) | 高 confidence/hit_count 胜出;trigger_key 三字段(tool+command_pattern+path_globs)全等 |
+| `list_memories_project_isolation` (2026-09-02) | (None, Some("proj-b")) 不返回 proj-a 的 project 行(user 行照常);(None, None) admin 视图返回全表 |
+| `list_memories_filters_by_scope_correctly` (2026-09-02 扩展) | (None, Some(id)) → user + 该项目行(H2 (c));(None, None) → 全部行;Some(Project)+None → Err |
+| `store setRuntimeProjectFilter` (2026-09-02) | "all" → `{ projectId: null }`;pinned id 免 loadForProject 直查;同值 set 不发 IPC |
 
 30+ tests across DB / agent / tool / IPC / store / component.
 
@@ -667,3 +670,53 @@ ContentBlock::Text { text: recall_text, cache_control: None }
 Anthropic's "last cache_control block is the breakpoint" rule: recall blocks must NOT carry a `cache_control` marker. The instruction block already carries the marker; adding another shifts the breakpoint to the recall block and demotes the instructions from cache anchor.
 
 ---
+
+## Addendum: 2026-09-02 跨项目泄漏修复 + Settings 项目过滤 (settings-memory-project-filter)
+
+> **Trigger**: 用户实测——在 jjh-mono 的记忆面板里看到 everlasting 的自主记忆。经 daemon HTTP 复现:`POST /api/v1/memory/list_autonomous_memories`(jjh-mono 的 project_id)返回 14 条,其中 13 条 project 行属于其它项目。
+
+### 根因与契约修正(必须读)
+
+`db/memories/crud.rs` 的 `list_memories` 旧 scope=None 分支**没有任何 WHERE**(裸 `SELECT ... ORDER BY created_at DESC`),而 `commands/memory.rs` 的调用方注释错误地声称"DB 层会按 project_id 过滤 project 行"——两层对 H2 语义的认知漂移,泄漏即漂移的产物。FTS 侧的 `search_memories_fts` 一直是对的,所以 **recall 路径从未泄漏,只有面板列表路径泄漏**。
+
+修正后 `list_memories` 的 H2 语义与 `search_memories_fts` 完全对齐:
+
+| 调用形状 | 语义 |
+|---|---|
+| `(Some(User), _)` | 仅 user 行(project_id 忽略) |
+| `(Some(Project), None)` | **Err**(`ProjectScopeMissingId`) |
+| `(Some(Project), Some(id))` | 仅该项目的行 |
+| `(None, Some(id))` | user 行 + 该项目行(**面板视图,project-isolated**) |
+| `(None, None)` | **全表——admin "全部项目" 视图,故意不过滤**;仅允许 `list_autonomous_memories(project_id=None)` 这一条命令路径调用,per-project 代码路径禁止 |
+
+`list_autonomous_memories` 的 `project_id` 因此从 `String` 变为 `Option<String>`(Tauri command + daemon route 同步):`Some` 走存在性校验 + 隔离查询;`None` 是 Settings 项目过滤的显式 admin 视图。
+
+### 前端过滤器(store: `runtimeProjectFilter`)
+
+三态:`"current"`(默认,跟随 active project——MemoryModal / ProjectTabs 入口零行为变化)/ `"all"`(`{ projectId: null }`)/ 具体 project id(Settings 下拉 pin 定,免 `loadForProject` 直查)。`setRuntimeProjectFilter` 同值 set 是 no-op。UI 仅 Settings MemoryTab 传 `project-filterable` 挂 reka-ui Select(遵循 2026-08-28 "settings 下拉走 reka"决策);全部项目视图给 project 行加属主项目名徽章;scope=project 徽章补 accent 配色(此前 user/project 徽章无任何样式差异,只剩文字可辨)。
+
+### Gotcha(防止复发)
+
+- **改 list/FTS 共享语义时,两个函数必须一起改**——它们各自手写 SQL,没有共享的 WHERE builder。新增 scope 形状时先 grep 两处。
+- **command 层注释不是契约**——本次泄漏的调用方注释言之凿凿"这正是 project-isolation contract",但 DB 层不兑现。隔离语义的权威在 `crud.rs`/`search.rs` 的 SQL + `memories_tests/` 的隔离测试,不在注释。
+- 隔离回归锚点:`list_memories_project_isolation`(对照 FTS 侧的 `search_memories_fts_project_isolation`)。
+
+## Addendum 2: 2026-09-02 pitfall 触发召回跨项目修复(同日第二起泄漏)
+
+> **Trigger**: 第一起草单修完后复查另一条召回路径发现——P3/P5 pre-tool pitfall recall(`find_pitfalls_by_trigger` / `find_pitfalls_by_trigger_all_status`)的 SQL **只有 `tool_name` + `kind='pitfall'` + `status` 过滤,完全没有 scope/project_id 条件**,函数签名里也没有 project_id 参数。project-scope pitfall(如 P4 反思产物)在任何项目的同名工具调用时都会命中。
+
+**更正 Addendum 1 的一个错误结论**:"recall 路径从未泄漏"只对 **FTS 召回**成立;pitfall 触发召回一直跨项目泄漏。自愈教训:recall 有两份手写 SQL,当时只核对了 FTS 那份。
+
+### 修正后的召回隔离契约(全路径)
+
+| 召回路径 | 过滤 | 参数来源 |
+|---|---|---|
+| P2 会话启动 FTS(`search_memories_fts`, scope=None) | `scope='user' OR (scope='project' AND project_id=?)`(H2 (c)) | session 的 project_id |
+| P3/P5 pre-tool pitfall(`find_pitfalls_by_trigger(_all_status)`) | **同上(2026-09-02 新增)**;`project_id: &str` 必填,无 admin 形状 | chat_loop `current_ctx.project_id`(并行/串行两个调用点) |
+
+语义:project 级 pitfall 只在本项目命中;user 级全局命中(与 H2 写入语义对齐)。跨项目命中还会 bump hit_count 污染 P5 晋升输入,修复后一并消除。
+
+### Gotcha
+
+- **签名即契约**:`project_id` 设为必填 `&str`(不是 Option)——pitfall 召回天然 per-session,不存在"查全部"的合法场景;要加 admin 形状必须显式另开函数,不能顺手加 None 分支。
+- 隔离回归锚点(DB 层)`find_pitfalls_project_isolation` + (seam 层)`recall_pitfall_project_isolation`,与 `list_memories_project_isolation` / `search_memories_fts_project_isolation` 构成四点矩阵。
