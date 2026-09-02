@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/09-02-chat-task-panel/research/existing-architecture.md", "reason": "现状架构全图(checklist/subagent/shell 链路 + IPC/事件接线模式 + file:line),实现前必读"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "wire casing 规则:invoke 顶层 camelCase 自动转 snake、Rust struct camelCase 对齐前端"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "chat 组件规范(面板挂 ChatPanel、浮层/z-index 惯例)"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest 陷阱与 canonical transport mock 写法(store/组件测试照抄)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "CSS 变量系统,禁止硬编码色值/px"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 装配点 + SseRegistry 广播,emitter 接线依据"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "domain 错误 typed、边界 anyhow 的分层约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码标准"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层(Rust IPC/事件 → TS store → Vue 组件)数据流一致性检查思路"}
