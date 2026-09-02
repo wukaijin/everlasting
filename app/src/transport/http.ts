@@ -129,6 +129,7 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   revoke_tool_permission: "permissions",
   set_session_mode: "permissions",
   // projects
+  browse_dir: "projects",
   create_project: "projects",
   hide_project: "projects",
   list_hidden_projects: "projects",

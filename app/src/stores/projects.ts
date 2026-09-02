@@ -93,13 +93,12 @@ export const useProjectsStore = defineStore("projects", () => {
   const currentProjectId = ref<string | null>(null);
   const toast = ref<ToastMessage | null>(null);
 
-  // P2.4 D6: browser-mode manual-path entry. When the native folder
-  // picker is unavailable (httpTransport — `pick_project_dir` has no
-  // daemon route), `addProject()` flips this to `true` and the UI
-  // renders a path text-input. The user submits a path →
-  // `addProjectByPath(path)` (the same register-picked-path tail
-  // `addProject` uses for the native-picker success path).
-  const manualPathOpen = ref(false);
+  // 2026-09-02 目录浏览模态框:browser-mode degrade。`pick_project_dir`
+  // 在 httpTransport 下不可用(无 daemon route),`addProject()` 把
+  // 这个翻成 `true`,AppShell 挂载的 DirBrowserModal 打开 —— 用户在
+  // 模态框里点选目录(或手动输入路径 + 前往),选定后走
+  // `addProjectByPath`(与原生选择器成功路径相同的注册尾巴)。
+  const dirBrowserOpen = ref(false);
 
   // -----------------------------------------------------------------------
   // Toast (lightweight, no UI library)
@@ -191,15 +190,13 @@ export const useProjectsStore = defineStore("projects", () => {
    *  misleading "already exists" toast — see fix for the "关闭项目后
    *  无法重新打开" bug (RULE-FrontProj-001).
    *
-   *  **P2.4 D6 (browser degrade)**: under `httpTransport`,
-   *  `pick_project_dir` has no daemon route (the Tauri dialog API
-   *  can't run outside the GUI process), so `invoke` throws an
-   *  "unknown cmd" `TransportError`. We detect that and flip
-   *  `manualPathOpen = true` so the UI offers a manual path text
-   *  input instead of erroring out (Q8v2 manual-input fallback is
-   *  now permitted in browser mode — it was previously rejected
-   *  because Tauri's `pick_folder` WAS the tree-walk, but browsers
-   *  have no equivalent). */
+ *  **P2.4 D6 (browser degrade)**: under `httpTransport`,
+ *  `pick_project_dir` has no daemon route (the Tauri dialog API
+ *  can't run outside the GUI process), so `invoke` throws an
+ *  "unknown cmd" `TransportError`. We detect that and flip
+ *  `dirBrowserOpen = true` so the AppShell-mounted DirBrowserModal
+ *  offers click-to-browse directory selection (with an inline path
+ *  input + 前往 for direct entry). */
   async function addProject(): Promise<ProjectInfo | null> {
     let picked: string | null = null;
     let pickError: string | null = null;
@@ -209,12 +206,13 @@ export const useProjectsStore = defineStore("projects", () => {
       });
     } catch (e) {
       pickError = extractErrorMessage(e);
-      // P2.4 D6: browser-mode degrade. The httpTransport throws a
+      // Browser-mode degrade. The httpTransport throws a
       // TransportError(status=0, "unknown cmd ...") because
-      // `pick_project_dir` is not in CMD_TO_DOMAIN. Surface the
-      // manual-path entry instead of a dead-end error toast.
+      // `pick_project_dir` is not in CMD_TO_DOMAIN. Open the
+      // directory-browser modal instead of dead-ending on an error
+      // toast.
       if (isPickUnavailable(e)) {
-        manualPathOpen.value = true;
+        dirBrowserOpen.value = true;
         return null;
       }
     }
@@ -234,10 +232,10 @@ export const useProjectsStore = defineStore("projects", () => {
     return registerPickedPath(picked);
   }
 
-  /** P2.4 D6: register a manually-entered path (browser-mode entry).
-   *  Same tail as the native-picker success path. Closes the manual
-   *  path input on completion (success or error). Returns the project
-   *  or `null`. */
+  /** Register a path picked in the directory-browser modal (or any
+   *  manual entry). Same tail as the native-picker success path.
+   *  Closes the browser modal on completion (success or error).
+   *  Returns the project or `null`. */
   async function addProjectByPath(path: string): Promise<ProjectInfo | null> {
     const trimmed = path.trim();
     if (!trimmed) {
@@ -245,13 +243,13 @@ export const useProjectsStore = defineStore("projects", () => {
       return null;
     }
     const result = await registerPickedPath(trimmed);
-    manualPathOpen.value = false;
+    dirBrowserOpen.value = false;
     return result;
   }
 
-  /** P2.4 D6: dismiss the manual-path input without registering. */
-  function cancelManualPath(): void {
-    manualPathOpen.value = false;
+  /** Dismiss the directory-browser modal without registering. */
+  function closeDirBrowser(): void {
+    dirBrowserOpen.value = false;
   }
 
   /** Shared register-picked-path tail: dedup against visible + hidden,
@@ -411,14 +409,14 @@ export const useProjectsStore = defineStore("projects", () => {
     hiddenProjects,
     currentProjectId,
     toast,
-    manualPathOpen,
+    dirBrowserOpen,
     showToast,
     dismissToast,
     loadProjects,
     loadHiddenProjects,
     addProject,
     addProjectByPath,
-    cancelManualPath,
+    closeDirBrowser,
     switchProject,
     hideProject,
     unhideProject,

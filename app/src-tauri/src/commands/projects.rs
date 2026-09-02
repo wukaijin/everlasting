@@ -228,3 +228,187 @@ pub async fn pick_project_dir(
         )),
     }
 }
+
+/// One subdirectory row of the browser-mode directory browser
+/// (`browse_dir`).
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseDirEntry {
+    pub name: String,
+    pub path: String,
+}
+
+/// Payload returned by [`browse_dir_inner`]: the canonical directory
+/// the browser modal is currently showing, its parent (for the
+/// ".." / 上一步 row — `None` at the filesystem root), and the
+/// visible subdirectory entries.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseDirPayload {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<BrowseDirEntry>,
+}
+
+/// Browser-mode directory listing for the "添加项目" modal (web
+/// 前端目录浏览选择 —— the degrade when the Tauri native picker is
+/// unavailable; mirrors the GUI picker's outcome: a picked absolute
+/// path fed to `create_project`).
+///
+/// Lists **directories only** (the picker's semantics — files are
+/// not selectable project roots). Dot-directories are filtered
+/// unless `show_hidden`. `path` accepts a leading `~` (expanded via
+/// `dirs::home_dir`, same source as `get_home_dir_inner`). The
+/// path is canonicalized first so `..` segments and symlinks
+/// resolve and the returned `path`/`parent`/entry paths are all
+/// absolute and stable for round-tripping back into
+/// `create_project`.
+///
+/// No `_inner` state dependency (pure filesystem read, like
+/// `get_home_dir_inner`), so the daemon route handler needs no
+/// `AppState`.
+pub async fn browse_dir_inner(
+    path: String,
+    show_hidden: bool,
+) -> Result<BrowseDirPayload, AppCommandError> {
+    let trimmed = path.trim();
+    let expanded: PathBuf = if trimmed == "~" || trimmed.starts_with("~/") {
+        match dirs::home_dir() {
+            Some(home) => {
+                let suffix = trimmed.trim_start_matches('~').trim_start_matches('/');
+                if suffix.is_empty() {
+                    home
+                } else {
+                    home.join(suffix)
+                }
+            }
+            None => PathBuf::from(trimmed),
+        }
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    let canonical = tokio::fs::canonicalize(&expanded).await.map_err(|e| {
+        AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("路径不存在或不可访问: {e}"),
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("不是目录: {}", canonical.display()),
+        ));
+    }
+
+    let mut read = tokio::fs::read_dir(&canonical).await.map_err(|e| {
+        AppCommandError::new(ErrorCategory::InvalidRequest, format!("读取目录失败: {e}"))
+    })?;
+    let mut entries: Vec<BrowseDirEntry> = Vec::new();
+    while let Some(e) = read.next_entry().await.map_err(|e| {
+        AppCommandError::new(ErrorCategory::InvalidRequest, format!("读取目录失败: {e}"))
+    })? {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
+        // `e.path().is_dir()` follows symlinks (unlike
+        // `e.file_type()`), so a symlinked project directory shows
+        // up — matching what a native folder picker offers.
+        if e.path().is_dir() {
+            entries.push(BrowseDirEntry {
+                name,
+                path: e.path().to_string_lossy().into_owned(),
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(BrowseDirPayload {
+        path: canonical.to_string_lossy().into_owned(),
+        parent: canonical.parent().map(|p| p.to_string_lossy().into_owned()),
+        entries,
+    })
+}
+
+/// Tauri wrapper around [`browse_dir_inner`]. Also routed on the
+/// daemon (`POST /api/v1/projects/browse_dir`) — that is the path
+/// the browser-mode modal actually exercises.
+#[tauri::command]
+pub async fn browse_dir(
+    path: String,
+    show_hidden: bool,
+) -> Result<BrowseDirPayload, AppCommandError> {
+    browse_dir_inner(path, show_hidden).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hidden dirs filtered by default (`show_hidden = false`), files
+    /// never listed, entries sorted case-insensitively.
+    #[tokio::test]
+    async fn browse_dir_lists_dirs_only_sorted_hidden_filtered() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Zeta")).unwrap();
+        std::fs::create_dir(tmp.path().join("alpha")).unwrap();
+        std::fs::create_dir(tmp.path().join(".secret")).unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "x").unwrap();
+
+        let payload = browse_dir_inner(tmp.path().to_string_lossy().into_owned(), false)
+            .await
+            .unwrap();
+        let names: Vec<&str> = payload.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["alpha", "Zeta"],
+            "大小写不敏感排序、隐藏目录与文件被过滤"
+        );
+        assert_eq!(
+            payload.path,
+            tmp.path().to_string_lossy(),
+            "返回 canonical 路径"
+        );
+        assert!(payload.parent.is_some(), "tempdir 有父目录");
+
+        // show_hidden = true:dot 目录出现且排最前("." < 字母)
+        let payload = browse_dir_inner(tmp.path().to_string_lossy().into_owned(), true)
+            .await
+            .unwrap();
+        let names: Vec<&str> = payload.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec![".secret", "alpha", "Zeta"]);
+    }
+
+    /// 不存在的路径 / 指向文件的路径 → InvalidRequest 错误(前端模态框
+    /// 显示行内错误,列表保持上一次状态)。
+    #[tokio::test]
+    async fn browse_dir_rejects_missing_path_and_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("f.txt");
+        std::fs::write(&file, "x").unwrap();
+
+        let err = browse_dir_inner(
+            tmp.path().join("nope").to_string_lossy().into_owned(),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.message.contains("路径不存在"), "{}", err.message);
+
+        let err = browse_dir_inner(file.to_string_lossy().into_owned(), false)
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("不是目录"), "{}", err.message);
+    }
+
+    /// `~` 前缀展开到 home(`get_home_dir` 同源的 `dirs::home_dir`),
+    /// 展开后路径存在且是目录(CI 盒子必有 $HOME)。
+    #[tokio::test]
+    async fn browse_dir_expands_tilde_to_home() {
+        let payload = browse_dir_inner("~".to_string(), false).await.unwrap();
+        assert_eq!(
+            payload.path,
+            dirs::home_dir().unwrap().to_string_lossy(),
+            "~ 必须展开为 home 绝对路径"
+        );
+    }
+}

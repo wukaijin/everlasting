@@ -32,6 +32,7 @@ import Sidebar from "./Sidebar.vue";
 import TracePanel from "../trace/TracePanel.vue";
 import ToastProvider from "../common/ToastProvider.vue";
 import SearchModal from "../search/SearchModal.vue";
+import DirBrowserModal from "../DirBrowserModal.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
 
 const projectsStore = useProjectsStore();
@@ -134,6 +135,14 @@ async function onToastClick(): Promise<void> {
          (Cmd/Ctrl+K). Mounted at AppShell level for the same
          reason as TracePanel. -->
     <SearchModal />
+
+    <!-- 2026-09-02 目录浏览模态框:browser-mode「添加项目」的
+         点击点选目录交互(store.dirBrowserOpen 驱动,ProjectTabs
+         「+」与 EmptyProjectState「添加项目」的 pick_project_dir
+         degrade 都汇到这里)。AppShell 单实例挂载 —— ProjectTabs
+         在 AppHeader 与 Sidebar(移动端抽屉)各渲染一次,组件内挂
+         会出现双实例双弹层。 -->
+    <DirBrowserModal v-model:open="projectsStore.dirBrowserOpen" />
 
     <!-- A5 R1 (2026-07-17): reka-ui Toast viewport for global
          error routing. Mounts at AppShell level so all 5 stub

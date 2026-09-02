@@ -126,6 +126,8 @@ pub fn all_command_names() -> Vec<&'static str> {
         "hide_project",
         "unhide_project",
         "pick_project_dir",
+        // 2026-09-02 目录浏览模态框(browser-mode 选项目目录)
+        "browse_dir",
         "read_memory_layers",
         "read_memory_content",
         "open_memory_in_editor",

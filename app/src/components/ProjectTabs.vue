@@ -29,7 +29,6 @@
 // All Memory state lives in `useMemoryStore`; this component no
 // longer holds any Memory UI.
 
-import { ref } from "vue";
 import { useProjectsStore } from "../stores/projects";
 import Icon from "./Icon.vue";
 
@@ -40,11 +39,6 @@ defineProps<{
    *  hands this in; the tab bar is purely presentational. */
   streamingProjectIds: Set<string>;
 }>();
-
-// P2.4 D6: manual-path input model (browser-mode degrade when the
-// native folder picker is unavailable over httpTransport).
-const manualPath = ref("");
-const manualPathBusy = ref(false);
 
 function onTabClick(id: string) {
   void store.switchProject(id);
@@ -57,22 +51,6 @@ function onHide(id: string, e: MouseEvent) {
 
 async function onAdd() {
   await store.addProject();
-}
-
-async function onManualPathSubmit() {
-  if (!manualPath.value.trim() || manualPathBusy.value) return;
-  manualPathBusy.value = true;
-  try {
-    await store.addProjectByPath(manualPath.value);
-    manualPath.value = "";
-  } finally {
-    manualPathBusy.value = false;
-  }
-}
-
-function onManualPathCancel() {
-  manualPath.value = "";
-  store.cancelManualPath();
 }
 
 function tabTooltip(p: {
@@ -140,37 +118,11 @@ function tabTooltip(p: {
     >
       <Icon name="plus" :size="16" />
     </button>
-    <!-- P2.4 D6: browser-mode manual-path entry. Rendered when the
-         native folder picker is unavailable (httpTransport —
-         `pick_project_dir` has no daemon route). The daemon
-         validates the path's existence via `create_project`. -->
-    <div v-if="store.manualPathOpen" class="manual-path">
-      <input
-        v-model="manualPath"
-        class="manual-path__input"
-        type="text"
-        placeholder="/absolute/path/to/project"
-        :disabled="manualPathBusy"
-        autofocus
-        @keydown.enter.prevent="onManualPathSubmit"
-        @keydown.esc.prevent="onManualPathCancel"
-      />
-      <button
-        class="manual-path__btn manual-path__btn--confirm btn btn--ghost btn--icon"
-        :disabled="manualPathBusy || !manualPath.trim()"
-        title="添加"
-        @click="onManualPathSubmit"
-      >
-        <Icon name="check" :size="14" />
-      </button>
-      <button
-        class="manual-path__btn manual-path__btn--cancel btn btn--ghost btn--icon"
-        title="取消"
-        @click="onManualPathCancel"
-      >
-        <Icon name="x" :size="14" />
-      </button>
-    </div>
+    <!-- 2026-09-02:browser-mode 的内联手输路径框已移除,degrade 改为
+         打开 DirBrowserModal(点击点选 + 路径输入 + 前往)。模态框由
+         AppShell 单实例挂载(store.dirBrowserOpen 驱动),此处不再
+         持有任何 UI —— ProjectTabs 在 AppHeader / Sidebar 双处渲染,
+         组件内挂会出双弹层。 -->
   </div>
 </template>
 
@@ -326,49 +278,5 @@ function tabTooltip(p: {
   width: 40px;
   height: 100%;
   padding: 0;
-}
-
-/* P2.4 D6: browser-mode manual-path entry. */
-.manual-path {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  flex-shrink: 0;
-}
-
-.manual-path__input {
-  width: 240px;
-  height: 26px;
-  padding: 0 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  color: var(--color-text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-}
-
-.manual-path__input:focus {
-  /* 自有焦点替代::focus 换 accent 边框(见下),无需 UA 默认环 */
-  outline: none;
-  border-color: var(--color-accent);
-}
-
-.manual-path__input:disabled {
-  opacity: 0.6;
-}
-
-/* 08-24 btn-family:manual-path 确认/取消 26px icon 钮由 ghost·icon
-   家族承载(原 1px 边/裸 4px radius/0.1s 删,落家族);本地保留固定
-   几何。confirm 的 hover 绿字是"路径有效"语义特例,本地覆写。 */
-.manual-path__btn {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-}
-
-.manual-path__btn--confirm:hover:not(:disabled) {
-  color: var(--color-status-success);
 }
 </style>

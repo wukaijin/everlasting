@@ -287,7 +287,8 @@ describe("useProjectsStore — unhideProject return value", () => {
   });
 });
 
-// P2.4 D6: browser-mode manual-path degrade.
+// P2.4 D6: browser-mode degrade(2026-09-02 起为 DirBrowserModal,
+// 原内联手输路径框已移除)。
 describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -299,7 +300,7 @@ describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
     });
   });
 
-  it("pick_project_dir 抛 TransportError(status=0):开 manualPathOpen,return null", async () => {
+  it("pick_project_dir 抛 TransportError(status=0):开 dirBrowserOpen,return null", async () => {
     const store = useProjectsStore();
     await store.loadProjects();
     // Import the mocked TransportError to construct the expected throw.
@@ -317,13 +318,13 @@ describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
     const result = await store.addProject();
 
     expect(result).toBeNull();
-    expect(store.manualPathOpen).toBe(true);
+    expect(store.dirBrowserOpen).toBe(true);
     // Must NOT have called create_project (the dialog never returned a path).
     const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
     expect(calledCmds).not.toContain("create_project");
   });
 
-  it("addProjectByPath:全新路径 → create_project + 关 manualPathOpen", async () => {
+  it("addProjectByPath:全新路径 → create_project + 关 dirBrowserOpen", async () => {
     const store = useProjectsStore();
     await store.loadProjects();
     await store.loadHiddenProjects();
@@ -338,13 +339,13 @@ describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
 
     expect(result?.id).toBe(FRESH_PROJECT.id);
     expect(store.currentProjectId).toBe(FRESH_PROJECT.id);
-    expect(store.manualPathOpen).toBe(false);
+    expect(store.dirBrowserOpen).toBe(false);
   });
 
   it("addProjectByPath:空路径 → toast warn,不调 create_project", async () => {
     const store = useProjectsStore();
     await store.loadProjects();
-    store.manualPathOpen = true;
+    store.dirBrowserOpen = true;
 
     const result = await store.addProjectByPath("   ");
 
@@ -354,13 +355,13 @@ describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
     expect(calledCmds).not.toContain("create_project");
   });
 
-  it("cancelManualPath:关 manualPathOpen", async () => {
+  it("closeDirBrowser:关 dirBrowserOpen", async () => {
     const store = useProjectsStore();
-    store.manualPathOpen = true;
+    store.dirBrowserOpen = true;
 
-    store.cancelManualPath();
+    store.closeDirBrowser();
 
-    expect(store.manualPathOpen).toBe(false);
+    expect(store.dirBrowserOpen).toBe(false);
   });
 });
 

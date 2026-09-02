@@ -453,6 +453,9 @@ pub fn run() {
             commands::projects::hide_project,
             commands::projects::unhide_project,
             commands::projects::pick_project_dir,
+            // 2026-09-02 目录浏览模态框:browser-mode 选项目目录的
+            // 数据源(pick_project_dir 的 web degrade)。
+            commands::projects::browse_dir,
             // Memory (B5: user + project 2-layer loader)
             commands::memory::read_memory_layers,
             commands::memory::read_memory_content,
