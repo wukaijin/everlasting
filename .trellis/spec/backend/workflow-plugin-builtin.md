@@ -90,6 +90,42 @@ loader/frontmatter 之外的**内容级**强约束 —— builtin 插件的 agen
 3. **不承诺 ask 行为**：子代理约束清单未声明 ask 类工具（checker 还只读 + 禁 dispatch），提示词不得写
    "问用户"；向用户澄清一律由主 LLM 依据子代理报告发起。
 
+## dev 插件内容契约(2026-09-02 wf-trellis-alignment 起)
+
+dev workflow 不再是纯线性三态:`transitions` 含回环边 `in_progress→planning`(requires_user_confirm,
+先例:review 的 revising→reviewing);`done` 无出边是**有意设计**(返工应新建任务,防 done↔in_progress
+振荡)。回滚走 `request_task_state_transition` → `set_task_state` 的 no-op hook 分支(零 marker);
+重入 `planning→in_progress` 的 preflight / spec-distillation marker 均幂等(`has_marker` 短路)。
+
+### `{relevant_specs}` 按任务策展(sidecar 优先)
+
+- planning 阶段主 LLM 写 `.everlasting/tasks/<slug>/relevant-specs.jsonl`,每行
+  `{"file": "<repo 相对路径>", "reason": "<为什么相关>"}`(spec + research 文件)。
+- 注入契约:`resolve_relevant_specs(project_path, task_slug: Option<&str>)`(inject.rs)——
+  sidecar 存在且有好行 → 输出 `file — reason` 列表;坏行跳过;空文件 / 全坏 / 缺失 / slug None →
+  **逐字回退旧全树罗列**(含 `(auto-detect via wf-before-dev)` 兜底)。改 fallback 构造 = 破坏兼容,
+  tests_inject 有对拍用例。
+- 已知路径分叉:调用方传入的 `project_path` 是 dispatch 的 `current_ctx.worktree_path`
+  (subagent/dispatch/parse.rs),`current_task` 则源自 DB `project.path` —— session 跑在
+  session worktree 时策展查找 miss,fallback 兜底(有意不为此引入 DB 依赖,改前先读 inject.rs 函数 doc)。
+
+### Gotcha:tasks/ 文件对隔离 worker 结构性不可见
+
+> `.everlasting/tasks/` 整体 gitignored(根 `.gitignore`),而 `isolation: true` 的角色(implementer)
+> 跑在 parent HEAD 检出的真 git worktree(`create_worker`,tests_worktree 钉死)→ research/、
+> relevant-specs.jsonl、task.json 对它**永久不可见,commit 也救不了**(目录根本不进 git)。
+> checker / researcher 无隔离(共享 cwd),不受影响。
+> **唯一可靠通道 = delegation 文本**:派 implementer 前把关键调研结论摘要进 delegation
+> message(wf-brainstorm 已写明);implementer 提示词要求 research 路径 read 不到时写 Known issues,
+> 禁止臆测内容。
+
+### 提示词工具指向
+
+builtin 提示词(skills / delegation_templates / 工具 description)凡涉及「切 state」一律指向
+`request_task_state_transition` —— 它是唯一翻转 `task.json.status` 的通道(Allow 后 IPC handler
+落盘);`ask_user_question` 只提问不落盘。wf-overview 里保留的 ask_user_question 字样只能是
+「它不落盘」的对比澄清。
+
 ## 验证命令
 
 ```bash
