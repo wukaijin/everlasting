@@ -799,3 +799,26 @@ P3c 留下的最后一个沙盒 UX 不对称收口:后台 run_background_shell �
 ### Status
 
 [OK] **Completed**
+
+## Session 54: BACKLOG §5.3/FU-3 收尾——添加项目全模式统一 DirBrowserModal + native picker 整链下线
+
+**Date**: 2026-09-03
+**Task**: 09-03-dirbrowser-desktop-unify
+**Branch**: `main`
+
+### Summary
+
+推荐选题 → brainstorm 两问收敛(整链删除深度 / 键盘导航纳入)→ 实施 → check PASS-with-minor。addProject()→openDirBrowser():桌面/浏览器/sidecar/remote 统一走 browse_dir IPC;pick_project_dir + tauri-plugin-dialog(唯一消费方)整链删除(命令/插件注册/all_command_names/Cargo 依赖/capabilities,Cargo.lock 级联收敛 rfd+tauri-plugin-fs);DirBrowserModal 补 roving tabindex 键盘导航(方向键钳边 + Enter 零 handler 原生激活 + navigate fromList 焦点复位策略);e2e 新 spec 2 用例锁全流程与键盘链路。坑:jsdom 无 Enter activation behavior,单测改两半断言(handler 不 preventDefault + click 导航),原生激活链路归 e2e 真 Chromium。Checker 独立重跑全门(clippy -D warnings/cargo test 2242/vitest 1565/vue-tsc/e2e 9)全绿,唯一 P3 = STRUCTURE.md 两处 stale 当场清零。5 commits(切换+删除 / 键盘 / e2e+文档 / spec 沉淀 / archive)。销 BACKLOG §5.3(2026-06-05 挂起),搜索框为唯一剩余项备案。桌面真机手测留 GUI-capable 机器(PRD 明示)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c64f7243` | refactor(projects): 添加项目全模式统一 DirBrowserModal——下线 native pick_project_dir 与 tauri-plugin-dialog 整链 |
+| `1b711318` | feat(frontend): DirBrowserModal 键盘导航——roving tabindex 方向键钳边移动 + Enter 原生激活 |
+| `06b27c55` | test(e2e): 项目添加全流程 route-mock 用例 + 文档销账 |
+| `28209c2c` | docs(spec): 沉淀 DirBrowserModal 统一入口契约 + roving tabindex 模式 + jsdom Enter activation gotcha |
+
+### Status
+
+[OK] **Completed**
