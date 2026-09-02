@@ -61,7 +61,7 @@ import {
   CalendarIcon,
   ChevronLeftIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink, CornerUpRight } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink, CornerUpRight, Square, Activity } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -173,6 +173,12 @@ const map = {
   // handoff (08-18-handoff-mechanism): 接力行卡片图标 ——
   // "corner-up-right" 表"续跑/接力"语义,与 shrink(收窗)对仗。
   "corner-up-right": CornerUpRight,
+  // 2026-09-02 (task 09-02-chat-task-panel): ActivityPanel 状态图标
+  // 补充 —— `square` 是 killed / timed_out 后台命令的中性终态图标;
+  // `activity` 是面板浮球/标题的「运行状态」图标。同为 lucide 家族,
+  // 线宽与既有 shield-x / clipboard-list 组一致。
+  "square": Square,
+  "activity": Activity,
 } as const;
 
 const Component = computed(() => {

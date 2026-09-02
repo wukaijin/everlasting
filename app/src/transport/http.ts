@@ -200,6 +200,12 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // Tauri-IPC fallback path (the Sidecar spawn) still works
   // because it doesn't consult this table.
   update_session_metadata: "sessions",
+  // background_shells (2026-09-02, task 09-02-chat-task-panel):
+  // 后台 shell 可观测性 IPC(ActivityPanel)。缺映射时浏览器/sidecar
+  // 模式报 `unknown cmd`(Tauri IPC 模式侥幸走 IPC,同
+  // update_session_metadata 的老坑;http.routes-sync.test.ts 守卫)。
+  kill_background_shell: "background_shells",
+  list_background_shells: "background_shells",
   // subagent_runs
   discard_worker_run: "subagent_runs",
   get_subagent_run: "subagent_runs",

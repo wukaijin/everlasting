@@ -8,6 +8,10 @@ import type { ComputedRef, Ref } from "vue";
 import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 import { useChecklistStore } from "./checklist";
+// 2026-09-02 (task `09-02-chat-task-panel`): the ActivityPanel's
+// background-shell cache is session-scoped, cleared alongside the
+// checklist on session delete.
+import { useBackgroundShellsStore } from "./backgroundShells";
 import type { useStreamControllerStore } from "./streamController";
 import type { useProjectsStore } from "./projects";
 import type { useConfigStore } from "./config";
@@ -226,6 +230,11 @@ export function createSessionActions(ctx: SessionActionsContext) {
     // session's checklist state too. The store's per-session
     // map would otherwise retain the entry past the DB row.
     useChecklistStore().clearSession(sessionId);
+    // 2026-09-02 (task `09-02-chat-task-panel`): drop the session's
+    // background-shell summaries too (the backend's delete_session
+    // already kill_all_for_session'd the processes; the rows are
+    // terminal or pruned, but the panel cache must not retain them).
+    useBackgroundShellsStore().clearSession(sessionId);
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = null;
       currentCwd.value = "";

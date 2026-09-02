@@ -65,7 +65,7 @@ import RuntimeMemoryModal from "../memory/RuntimeMemoryModal.vue";
 import GroupChatConfigModal from "./GroupChatConfigModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
 import PermissionGrantsModal from "../permissions/PermissionGrantsModal.vue";
-import ChecklistCard from "./ChecklistCard.vue";
+import ActivityPanel from "./ActivityPanel.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import WorkerAskBanner from "./WorkerAskBanner.vue";
 import ReviewMatrix from "./ReviewMatrix.vue";
@@ -1070,16 +1070,20 @@ onUnmounted(() => reviewStateStore.stop());
     <PermissionGrantsModal v-model:open="grantsModalOpen" />
 
     <!--
-          B12 Checklist (PR2 frontend, 2026-06-19). Floating
-          overlay anchored to the ChatPanel's bottom-right, above
-          the input bar. Reads the current session's checklist
-          from the checklist store. Hidden when no checklist
-          exists for the session (the store returns `null`).
-          z-index is below PermissionModal / modals (the card
+          2026-09-02 (task 09-02-chat-task-panel). Unified run-status
+          floating overlay (replaces the old ChecklistCard): 子代理 /
+          后台命令 / 清单 three sections. Anchored to the ChatPanel's
+          bottom-right, above the input bar. Checklist still comes
+          from the checklist store (render-only migration); the other
+          two sections read their own stores keyed by the session id.
+          z-index is below PermissionModal / modals (the panel
           uses z-index 50; modals teleport to body at z-index
           1000+).
         -->
-    <ChecklistCard :items="currentChecklist" />
+    <ActivityPanel
+      :items="currentChecklist"
+      :session-id="chatStore.currentSessionId"
+    />
 
     <!--
           C2+ loop-intervention floating card (2026-07-28 fix). When
@@ -1163,10 +1167,10 @@ onUnmounted(() => reviewStateStore.stop());
   min-height: 0;
   min-width: 0;
   background: var(--color-bg-app);
-  /* B12 Checklist (PR2 frontend): serve as the positioning
-     context for the absolute-positioned `<ChecklistCard>`
-     overlay. Without `relative`, the card's `position:
-     absolute` would resolve against the nearest positioned
+  /* B12 Checklist (PR2 frontend; 2026-09-02: now the ActivityPanel):
+     serve as the positioning context for the absolute-positioned
+     `<ActivityPanel>` overlay. Without `relative`, the card's
+     `position: absolute` would resolve against the nearest positioned
      ancestor (or the viewport), pulling the card out of the
      ChatPanel's flow. */
   position: relative;
