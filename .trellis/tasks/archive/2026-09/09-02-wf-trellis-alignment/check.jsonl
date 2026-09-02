@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/workflow-plugin-builtin.md", "reason": "对照插件 spec 检查目录/加载/镜像约定未被破坏"}
+{"file": "app/src-tauri/resources/builtin-workflow/dev/README.md", "reason": "镜像一致性验收命令与范围出处"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 Quality Check 入口,全量验收用"}
+{"file": ".trellis/workflow.md", "reason": "验收对照:R1/R2/R3 是否忠实对齐 Trellis 对应机制"}
