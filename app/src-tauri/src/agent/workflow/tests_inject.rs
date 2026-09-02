@@ -820,3 +820,144 @@ fn bootstrap_text_states_real_hand_write_schema() {
         body
     );
 }
+
+// --- 09-02-wf-trellis-alignment R3: relevant-specs.jsonl curation ----
+//
+// `resolve_relevant_specs` is a pure (path, slug) → String helper:
+// curation sidecar wins when present and non-empty; missing / empty
+// / all-bad sidecar falls back to the legacy spec-tree listing,
+// byte-identical to the pre-R3 behavior.
+
+/// Fixture: a project with a populated `.everlasting/spec/` tree so
+/// the fallback branch (tree walk) has something to list — this
+/// proves the curated branch SUPPRESSES the tree listing rather
+/// than the tree simply being empty.
+fn project_with_spec_tree() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec_dir = tmp.path().join(".everlasting").join("spec");
+    std::fs::create_dir_all(spec_dir.join("backend")).unwrap();
+    std::fs::write(spec_dir.join("backend/index.md"), "# backend").unwrap();
+    std::fs::write(spec_dir.join("backend/agent-loop.md"), "# loop").unwrap();
+    std::fs::write(spec_dir.join("top.md"), "# top").unwrap();
+    tmp
+}
+
+fn write_curation(tmp: &tempfile::TempDir, slug: &str, body: &str) {
+    let dir = tmp.path().join(".everlasting").join("tasks").join(slug);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("relevant-specs.jsonl"), body).unwrap();
+}
+
+#[test]
+fn resolve_relevant_specs_uses_curation_sidecar_when_present() {
+    let tmp = project_with_spec_tree();
+    write_curation(
+        &tmp,
+        "my-task",
+        concat!(
+            "{\"file\": \".everlasting/spec/backend/agent-loop.md\", \"reason\": \"改 agent loop 注入层\"}\n",
+            "{\"file\": \".everlasting/tasks/my-task/research/auth-comparison.md\", \"reason\": \"方案选型结论\"}\n",
+            "THIS LINE IS NOT JSON\n",
+        ),
+    );
+    let project_path = tmp.path().to_string_lossy().to_string();
+
+    let out = resolve_relevant_specs(&project_path, Some("my-task"));
+    // Good lines win, rendered as `file — reason`.
+    assert!(
+        out.contains(".everlasting/spec/backend/agent-loop.md — 改 agent loop 注入层"),
+        "curated entry with reason expected, got: {out}"
+    );
+    assert!(
+        out.contains(".everlasting/tasks/my-task/research/auth-comparison.md — 方案选型结论"),
+        "research entries are curated too, got: {out}"
+    );
+    // The malformed line is skipped, not fatal.
+    assert!(
+        !out.contains("THIS LINE IS NOT JSON"),
+        "bad line must be skipped, got: {out}"
+    );
+    // The curated branch SUPPRESSES the tree walk (the spec tree
+    // is populated on purpose — a tree path WITHOUT its curated
+    // entry would mean fallback ran instead).
+    assert!(
+        !out.contains(".everlasting/spec/top.md")
+            && !out.contains(".everlasting/spec/backend/index.md"),
+        "curation must win over the full-tree listing, got: {out}"
+    );
+    assert!(
+        !out.contains(", "),
+        "curated output is newline-joined, got: {out}"
+    );
+}
+
+#[test]
+fn resolve_relevant_specs_missing_sidecar_falls_back_to_tree_listing() {
+    let tmp = project_with_spec_tree();
+    let project_path = tmp.path().to_string_lossy().to_string();
+
+    // No sidecar at all → the pre-R3 behavior verbatim: sorted
+    // recursive .md listing, comma-joined.
+    let out = resolve_relevant_specs(&project_path, Some("my-task"));
+    assert_eq!(
+        out,
+        ".everlasting/spec/backend/agent-loop.md, \
+         .everlasting/spec/backend/index.md, .everlasting/spec/top.md",
+        "missing sidecar must fall back to the legacy tree listing"
+    );
+    // And with NO current task (slug = None) → identical.
+    let out_none = resolve_relevant_specs(&project_path, None);
+    assert_eq!(
+        out, out_none,
+        "slug=None must behave exactly like a missing sidecar"
+    );
+}
+
+#[test]
+fn resolve_relevant_specs_empty_or_all_bad_sidecar_falls_back() {
+    let tmp = project_with_spec_tree();
+    let project_path = tmp.path().to_string_lossy().to_string();
+    let expected_fallback = resolve_relevant_specs(&project_path, None);
+
+    // Empty file → never an empty string; fall back.
+    write_curation(&tmp, "empty", "");
+    let out_empty = resolve_relevant_specs(&project_path, Some("empty"));
+    assert_eq!(
+        out_empty, expected_fallback,
+        "empty sidecar must fall back to the tree listing (never resolve to empty)"
+    );
+
+    // Every line malformed → same fallback.
+    write_curation(&tmp, "all-bad", "not json\n{also bad}\n");
+    let out_bad = resolve_relevant_specs(&project_path, Some("all-bad"));
+    assert_eq!(
+        out_bad, expected_fallback,
+        "all-bad sidecar must fall back to the tree listing"
+    );
+
+    // Parseable JSON but missing a required field → bad line → fallback.
+    write_curation(
+        &tmp,
+        "no-reason",
+        "{\"file\": \".everlasting/spec/top.md\"}\n",
+    );
+    let out_no_reason = resolve_relevant_specs(&project_path, Some("no-reason"));
+    assert_eq!(
+        out_no_reason, expected_fallback,
+        "entries missing `reason` are bad lines; all-bad → fallback"
+    );
+}
+
+#[test]
+fn resolve_relevant_specs_slug_without_task_dir_falls_back() {
+    // slug pointing at a nonexistent task dir — treated exactly
+    // like a missing sidecar.
+    let tmp = project_with_spec_tree();
+    let project_path = tmp.path().to_string_lossy().to_string();
+    let out = resolve_relevant_specs(&project_path, Some("ghost-task"));
+    assert_eq!(
+        out,
+        ".everlasting/spec/backend/agent-loop.md, \
+         .everlasting/spec/backend/index.md, .everlasting/spec/top.md"
+    );
+}

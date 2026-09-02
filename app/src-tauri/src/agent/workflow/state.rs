@@ -683,6 +683,62 @@ mod tests {
         assert_eq!(updated.summary, "initial line\n");
     }
 
+    /// 09-02-wf-trellis-alignment R1: the dev plugin's new
+    /// `in_progress → planning` rollback edge is a PURE state
+    /// rollback — the `(from, to)` hook table has no
+    /// `(InProgress, Planning)` arm, so:
+    /// - no `[wf:*]` marker is appended to `task.summary`,
+    /// - no spec dir is created (that's the distillation hook's
+    ///   side effect, not the rollback's),
+    /// - no progress.md hint is written.
+    /// A later `planning → in_progress` re-entry re-runs preflight
+    /// (idempotent marker short-circuit) — covered by
+    /// `preflight_implement_check_records_marker_only_once`.
+    #[test]
+    fn set_task_state_rollback_to_planning_writes_no_hook_marker() {
+        let d = fresh_project();
+        let path = proj(&d);
+        let task = create_seed(path, "my-feat");
+        let mut t = task;
+        t.status = TaskStatus::InProgress;
+        write_task(path, &t).expect("write");
+
+        let progress_path = super::super::task::task_dir(path, "my-feat").join("progress.md");
+        assert!(!progress_path.exists(), "precondition: no progress.md yet");
+        let spec_dir = path.join(".everlasting").join("spec");
+        assert!(!spec_dir.exists(), "precondition: no spec dir yet");
+
+        let updated = set_task_state(
+            path,
+            "my-feat",
+            &TaskStatus::InProgress,
+            &TaskStatus::Planning,
+        )
+        .expect("rollback transition applies");
+
+        assert_eq!(updated.status, TaskStatus::Planning);
+        // Summary untouched — no spec-distilled, no preflight marker.
+        assert_eq!(
+            updated.summary, "initial line\n",
+            "rollback must not append any hook marker; got: {:?}",
+            updated.summary,
+        );
+        // Disk agrees.
+        let disk = read_task(path, "my-feat").unwrap();
+        assert_eq!(disk.status, TaskStatus::Planning);
+        assert!(
+            !disk.summary.contains("[wf:"),
+            "no marker of ANY kind may land on rollback; got: {:?}",
+            disk.summary,
+        );
+        // Neither hook side effect may fire.
+        assert!(
+            !progress_path.exists(),
+            "rollback must not create the distillation progress hint"
+        );
+        assert!(!spec_dir.exists(), "rollback must not create the spec dir");
+    }
+
     // --- hook idempotency ----------------------------------------------
 
     #[test]

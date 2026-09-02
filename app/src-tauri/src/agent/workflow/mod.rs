@@ -182,10 +182,13 @@ mod tests {
         );
     }
 
+    // 09-02-wf-trellis-alignment R1: dev now declares THREE
+    // transitions — the two forward edges plus the
+    // `in_progress → planning` rollback (loopback).
     #[test]
-    fn default_workflow_has_two_declarative_transitions() {
+    fn default_workflow_has_three_declarative_transitions_all_user_gated() {
         let w = dev();
-        assert_eq!(w.transitions.len(), 2);
+        assert_eq!(w.transitions.len(), 3);
         for t in &w.transitions {
             assert!(
                 t.requires_user_confirm,
@@ -225,6 +228,12 @@ mod tests {
         let w = dev();
         assert!(can_transition(&w, "planning", "in_progress"));
         assert!(can_transition(&w, "in_progress", "done"));
+        // 09-02-wf-trellis-alignment R1: the rollback edge.
+        // This is the legality backbone for
+        // `request_task_state_transition` — before the edge
+        // was declared, an in_progress task had no legal way
+        // back to planning (prd defect found by check).
+        assert!(can_transition(&w, "in_progress", "planning"));
     }
 
     #[test]
@@ -232,9 +241,11 @@ mod tests {
         let w = dev();
         // Skip-ahead: not in the dev plugin's declaration.
         assert!(!can_transition(&w, "planning", "done"));
-        // Reverse: not declared.
-        assert!(!can_transition(&w, "in_progress", "planning"));
+        // Reverse: not declared (done is terminal — rework
+        // should be a NEW task, not a done → in_progress
+        // oscillation).
         assert!(!can_transition(&w, "done", "in_progress"));
+        assert!(!can_transition(&w, "done", "planning"));
         // Legacy pre-merge states are no longer valid edges.
         assert!(!can_transition(&w, "planning", "implement"));
         assert!(!can_transition(&w, "check", "done"));
@@ -781,6 +792,43 @@ mod tests {
             filled.is_none(),
             "general-purpose has no dev-plugin template; expected None (got: {:?})",
             filled
+        );
+    }
+
+    // 09-02-wf-trellis-alignment R3: when the current task has a
+    // `relevant-specs.jsonl` sidecar, `compute_delegation_template`
+    // must thread the task's slug into `resolve_relevant_specs` so
+    // the curated `file — reason` list (not the full-tree listing)
+    // lands in the delegation text.
+    #[test]
+    fn delegation_template_relevant_specs_uses_task_curation_sidecar() {
+        let ctx = dev_ctx_with_task("t", "s", TaskStatus::Planning); // slug = "s1"
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Populate the spec tree too — proves the curated branch
+        // suppresses the tree listing rather than the tree being
+        // empty.
+        let spec_dir = tmp.path().join(".everlasting").join("spec");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(spec_dir.join("top.md"), "# top").unwrap();
+        // The sidecar, under the ctx's task slug.
+        let task_dir = tmp.path().join(".everlasting").join("tasks").join("s1");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        std::fs::write(
+            task_dir.join("relevant-specs.jsonl"),
+            "{\"file\": \".everlasting/spec/top.md\", \"reason\": \"本次要改注入层\"}\n",
+        )
+        .unwrap();
+
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let filled = compute_delegation_template(&ctx, &project_path, "implementer")
+            .expect("dev plugin defines implementer template");
+        assert!(
+            filled.contains(".everlasting/spec/top.md — 本次要改注入层"),
+            "curated entry (file — reason) must appear in the filled template (got: {filled})"
+        );
+        assert!(
+            !filled.contains(".everlasting/spec/top.md, "),
+            "tree listing must be suppressed when curation hits (got: {filled})"
         );
     }
 
