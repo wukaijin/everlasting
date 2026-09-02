@@ -252,7 +252,7 @@ app/src-tauri/src/
 │ ├── providers.rs (Provider/Model CRUD + test_provider + test_model)
 │ ├── sessions.rs (Session CRUD + diff_worktree)
 │ ├── worktree.rs (attach/detach/delete + cancel_inflight)
-│ ├── projects.rs (Project CRUD + pick_project_dir)
+│ ├── projects.rs (Project CRUD + browse_dir 目录浏览)
 │ ├── permissions.rs / memory.rs / command_palette.rs / panel.rs / files.rs / subagent_runs.rs
 │ ├── task.rs # ★ (07-08~10) — task.json CRUD IPC(create_task / read_task / list_tasks / set_task_state / archive_task)
 │ ├── subagents.rs # ★ (07-03) — subagent model override IPC(list_subagents_with_model + set_subagent_model)
@@ -410,7 +410,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
 | Provider + Model + 测试 |12 | `commands/providers.rs` |
 | Session 域(CRUD + model + metadata + trace 等) |19 | `commands/sessions.rs` |
 | Permission + Audit + 模式 |10 | `commands/permissions.rs` (permission_response / set_session_mode / list_session_tool_permissions / revoke_tool_permission / list_session_audit_events(+_page keyset 分页,08-30)) |
-| Project CRUD |9 | `commands/projects.rs` (含 pick_project_dir + hide/unhide + update_project_sandbox_policy(09-01 P3c 三态写通道)) |
+| Project CRUD |9 | `commands/projects.rs` (含 browse_dir 目录浏览 + hide/unhide + update_project_sandbox_policy(09-01 P3c 三态写通道);09-03 下线 native pick_project_dir + tauri-plugin-dialog) |
 | Memory |7 | `commands/memory.rs` |
 | Worktree |4 | `commands/worktree.rs` |
 | Subagent runs |4 | `commands/subagent_runs.rs` |

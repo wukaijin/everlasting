@@ -109,6 +109,7 @@
 | **RULE-PERM-001** 审计事件 keyset 分页 | 08-30 | `list_session_audit_events_page` 新增(游标 ts DESC/id DESC + 过滤/计数下推 SQL);旧全量命令保留供 traceStore(task `08-30-rule-perm-001-audit-pagination`,销债 P3) |
 | **RULE-TEST-001** Playwright 浏览器回归流水线 | 08-30 | 真实 Chromium 驱动前端 + route-mock;三试点(Shift+Enter / 提问卡回底 / 放行撤销确认);CI blocking 门禁,确定性用例准入(spec [frontend/browser-regression.md](../.trellis/spec/frontend/browser-regression.md)) |
 | **定时任务 per_run 三档** | 08-31 | 目标 session 新增「每次执行新建」档:target_mode/model_id/last_run_session_id 三列 + 表重建迁移;前端 radio 卡片三档;LLM tool 恒 fixed 不暴露(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
+| 「添加项目」DirBrowserModal 全模式统一 + 键盘导航 | 09-03 | native 选目录链(命令 + tauri-plugin-dialog 依赖 + 权限)整链下线,DirBrowserModal 成桌面/浏览器统一入口,补 roving tabindex 方向键/Enter/焦点复位(销 BACKLOG §5.3 / FU-3;task [09-03-dirbrowser-desktop-unify](../.trellis/tasks/09-03-dirbrowser-desktop-unify/)) |
 
 ---
 

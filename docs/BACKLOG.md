@@ -166,15 +166,13 @@
 - **关联**:FOLLOW-UP §FU-2(已决策,2026-06-07)。
 - **状态**:⏸ 保持现状,显式决策已记录。
 
-### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ⏸ 未实施(2026-06-07 状态;07-01 间接碰过;08-10 复核仍待做)
+### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ✅ 已落地(2026-09-03)
 
-- **现状**:Tauri native `pick_folder` dialog,WSLg 下走 GTK / xdg-desktop-portal,渲染是 linux GTK 风格。
-- **用户偏好**:"本来期望 dialog 是由前端渲染的"(2026-06-05 session)。希望自渲染:HTML 树形目录 + 搜索框 + 文件图标。
-- **修法**:PR2 frontend 写一个 `<ProjectDirPicker>` 组件,新加 `list_dir(path)` Tauri command 读子目录,前端自渲染树形 + 键盘导航。`pick_project_dir` 废弃。
-- **工作量**:~150 行(frontend ~120 + backend `list_dir` ~30)。**中等优先**(UX 改善,不阻塞功能)。
-- **07-01 关联**:`fe91605 fix: 冷启动不再总是落到第一个项目` 间接碰过项目初始化路径(冷启动回退),但 dialog 仍未实施,留作下次碰项目创建流程时评估。
-- **关联**:PROPOSAL §5.4 (Q8v2 修正) + 用户偏好;FOLLOW-UP §FU-3。
-- **状态**:⏸ 未实施,下次碰 project 创建流程时评估。(2026-08-10 复核:daemon 化后 `pick_project_dir` 无 daemon route,浏览器模式项目添加走 fallback,状态不变)
+- **原始现状**:Tauri native `pick_folder` dialog,WSLg 下走 GTK / xdg-desktop-portal,渲染是 linux GTK 风格。
+- **用户偏好**:"本来期望 dialog 是由前端渲染的"(2026-06-05 session)。希望自渲染:HTML 目录 + 搜索框 + 文件图标。
+- **落地形态**(2026-09-02 `7a747379` + 2026-09-03 `09-03-dirbrowser-desktop-unify`):列表式 `DirBrowserModal`(单击进入 / `..` / 路径直达 / 隐藏目录开关,数据源 `browse_dir` IPC daemon+Tauri 双注册),并于 09-03 升级为**全模式统一入口**——桌面(Tauri)也走它,native `pick_project_dir` 命令 + `tauri-plugin-dialog` 依赖 + `dialog:default` 权限整链删除;同批补齐键盘导航(roving tabindex:方向键钳边移动 / Enter 原生进入 / 输入框不劫持 / 列表导航后焦点复位首行)。注册尾巴(去重 / unhide / create + focus,RULE-FrontProj-001)切换前后零变化。
+- **未交付**:搜索框 / 目录名过滤(原始设想中唯一剩余项,后续按需另立)。
+- **关联**:PROPOSAL §5.4 (Q8v2 修正) + 用户偏好;FOLLOW-UP §FU-3;task [09-03-dirbrowser-desktop-unify](../.trellis/tasks/09-03-dirbrowser-desktop-unify/)。
 
 ### 5.4 trellis 流程 follow-up(非实施)
 
