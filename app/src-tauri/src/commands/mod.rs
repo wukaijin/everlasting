@@ -22,6 +22,10 @@
 //! alongside the rest.
 
 pub mod attachments;
+// 2026-09-02 (task `09-02-chat-task-panel`): background-shell UI
+// observability IPCs (list + kill) for the ActivityPanel. Read/kill
+// only — shell lifecycle itself stays in the registry + tools.
+pub mod background_shells;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
@@ -161,6 +165,13 @@ pub fn all_command_names() -> Vec<&'static str> {
         // per-run detail (with transcript).
         "list_subagent_runs_by_session",
         "get_subagent_run",
+        // 2026-09-02 (task `09-02-chat-task-panel`): background-shell
+        // UI observability IPCs. `list_*` returns the non-pruned
+        // summary list for the ActivityPanel; `kill_*` is the
+        // registry kill passthrough (idempotent). Live updates ride
+        // the `background_shell:update` event, not these.
+        "list_background_shells",
+        "kill_background_shell",
         // L3b PR3 (2026-06-27): merge / discard worker IPCs.
         // The LLM-side path is the `merge_worker` /
         // `discard_worker` tools (tool layer); these commands

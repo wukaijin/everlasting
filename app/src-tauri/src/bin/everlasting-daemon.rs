@@ -164,6 +164,12 @@ async fn main() -> ExitCode {
     // long-lived daemon). Daemon-only; GUI stays timer-free.
     server::spawn_shell_sweeper(&state);
 
+    // 2026-09-02 (task `09-02-chat-task-panel`): shell lifecycle
+    // events (`background_shell:update`) broadcast over SSE.
+    // Assembled once here, before serve — same single-wiring-site
+    // rationale as the sweeper above.
+    server::wire_background_shell_events(&state);
+
     // F2 定时任务调度循环(2026-08-28, task
     // `08-28-f2-scheduled-tasks`): 30s tick 单一扫描算法,到点任务经
     // chat_inner 注入目标 session。**只有这里装配** —— GUI Full 模式

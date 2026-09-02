@@ -20,7 +20,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
@@ -28,8 +28,9 @@ use uuid::Uuid;
 
 use super::{
     now_ms, BackgroundShellError, BackgroundShellNotification, BackgroundShellOutcome,
-    BackgroundShellRegistry, BackgroundShellStatus, EscalationBlock, EscalationOffer, MonotonicMs,
-    ShellExitTrigger,
+    BackgroundShellRegistry, BackgroundShellStatus, BackgroundShellSummary, EscalationBlock,
+    EscalationOffer, MonotonicMs, ShellEventEmitter, ShellEventPayload, ShellExitTrigger,
+    EVENT_NAME,
 };
 
 /// Maximum number of pending completion notifications per chat
@@ -80,6 +81,15 @@ pub(crate) const SWEEP_INTERVAL_MS: u64 = 300_000;
 /// just a HashMap insert + VecDeque push + a small struct move.
 pub struct InMemoryBackgroundShellRegistry {
     inner: Arc<Mutex<Inner>>,
+    /// UI event sink (2026-09-02, task 09-02-chat-task-panel).
+    /// `None` until [`Self::set_event_emitter`] wires one (daemon →
+    /// SSE broadcast; Tauri Full → `AppHandle::emit`; Thin GUI /
+    /// unwired tests → no-op). Deliberately OUTSIDE the tokio
+    /// `Inner`: it's set once at process assembly (before any shell
+    /// can start) and read on the emit path — a std mutex with a
+    /// never-across-await critical section, so a tokio lock would
+    /// buy nothing and complicate the sync emitter signature.
+    notify: StdMutex<Option<ShellEventEmitter>>,
 }
 
 struct Inner {
@@ -160,6 +170,7 @@ impl InMemoryBackgroundShellRegistry {
                 notifications: HashMap::new(),
                 data_dir: None,
             })),
+            notify: StdMutex::new(None),
         }
     }
 
@@ -175,6 +186,50 @@ impl InMemoryBackgroundShellRegistry {
                 notifications: HashMap::new(),
                 data_dir: Some(data_dir),
             })),
+            notify: StdMutex::new(None),
+        }
+    }
+
+    /// Wire the UI event sink. Idempotent-by-first-write: only the
+    /// `None → Some` transition takes effect; a second call is
+    /// ignored with `tracing::warn!`. Rationale: the emitter is
+    /// assembled ONCE at process boot (daemon bin / Tauri setup);
+    /// allowing re-writes would let a stray test or a second wiring
+    /// site silently steal events from the production sink.
+    pub fn set_event_emitter(&self, emitter: ShellEventEmitter) {
+        let mut g = match self.notify.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if g.is_some() {
+            tracing::warn!(
+                "background_shell: set_event_emitter called twice; keeping the first emitter"
+            );
+            return;
+        }
+        *g = Some(emitter);
+    }
+
+    /// Snapshot the current emitter (clone-out so the std mutex is
+    /// never held across the user callback). `None` = unwired →
+    /// emit is a no-op.
+    fn emitter_snapshot(&self) -> Option<ShellEventEmitter> {
+        let g = match self.notify.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        g.clone()
+    }
+
+    /// Fire one [`EVENT_NAME`] event. Synchronous by contract — the
+    /// daemon sink (`SseRegistry::broadcast`) and the Tauri
+    /// `AppHandle::emit` are both non-blocking. **Callers MUST NOT
+    /// hold the registry's tokio lock when calling this** (all three
+    /// emission points drop the lock first — see the call sites).
+    fn emit_event(&self, payload: &ShellEventPayload) {
+        if let Some(emitter) = self.emitter_snapshot() {
+            let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+            emitter(EVENT_NAME, &value);
         }
     }
 
@@ -208,6 +263,15 @@ impl InMemoryBackgroundShellRegistry {
     /// documented "already cleaned up" semantics of
     /// [`BackgroundShellRegistry::status`].
     ///
+    /// Each removed entry fires one `pruned` [`EVENT_NAME`] event
+    /// (2026-09-02, task 09-02-chat-task-panel) AFTER the lock is
+    /// dropped — the payload carries only the ids (the frontend
+    /// drops the row by id; the entry is already gone so there is
+    /// no summary to ship). Emission is collected-in-lock,
+    /// fired-after-drop so the user callback can never re-enter the
+    /// registry lock. Prune is low-frequency (1h retention, 5min
+    /// sweep) so per-entry events are cheap.
+    ///
     /// Inherent method (NOT on the [`BackgroundShellRegistry`]
     /// trait): sweeping is impl-private lifecycle management, not
     /// an LLM tool surface. Called by the daemon sweeper task
@@ -216,16 +280,33 @@ impl InMemoryBackgroundShellRegistry {
     /// tests never wait out a real retention window.
     pub async fn sweep_completed_shells(&self, retention_ms: u64) -> usize {
         let now = now_ms();
-        let mut g = self.inner.lock().await;
-        let before = g.shells.len();
-        g.shells.retain(|_, entry| {
-            !matches!(
-                &entry.state,
-                ShellState::Done { notification, .. }
-                    if now.saturating_sub(notification.completed_at) > retention_ms
-            )
-        });
-        before - g.shells.len()
+        let mut pruned: Vec<(String, String)> = Vec::new();
+        let removed;
+        {
+            let mut g = self.inner.lock().await;
+            let before = g.shells.len();
+            g.shells.retain(|(session_id, shell_session_id), entry| {
+                let expired = matches!(
+                    &entry.state,
+                    ShellState::Done { notification, .. }
+                        if now.saturating_sub(notification.completed_at) > retention_ms
+                );
+                if expired {
+                    pruned.push((session_id.clone(), shell_session_id.clone()));
+                }
+                !expired
+            });
+            removed = before - g.shells.len();
+        }
+        for (session_id, shell_session_id) in pruned {
+            self.emit_event(&ShellEventPayload {
+                kind: "pruned",
+                session_id,
+                shell_session_id,
+                shell: None,
+            });
+        }
+        removed
     }
 
     /// P3d (design §1.4): the rerun inputs for one failed shell, read
@@ -374,6 +455,26 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                     );
                     push_notification_bounded(&mut g, session_id, notification);
                 }
+                // UI event (2026-09-02): a spawn failure lands straight
+                // in a terminal state, so it joins via `exited` (the
+                // panel flips to a terminal row immediately). The
+                // summary is built inside a short lock clone-out and the
+                // event fires AFTER the lock is dropped (no-emit-under-
+                // lock rule).
+                let summary = {
+                    let g = self.inner.lock().await;
+                    g.shells
+                        .get(&(session_id.to_string(), shell_id.clone()))
+                        .map(|e| summary_from_entry(session_id, &shell_id, e, now_ms()))
+                };
+                if let Some(shell) = summary {
+                    self.emit_event(&ShellEventPayload {
+                        kind: "exited",
+                        session_id: session_id.to_string(),
+                        shell_session_id: shell_id.clone(),
+                        shell: Some(shell),
+                    });
+                }
                 return Err(BackgroundShellError::Spawn(e));
             }
         };
@@ -396,7 +497,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         //    entry (otherwise the task could finish and write the
         //    result before we've inserted anything, and the LLM's
         //    immediate `shell_status` would get NotFound).
-        {
+        let start_summary = {
             let mut g = self.inner.lock().await;
             g.shells.insert(
                 (session_id.to_string(), shell_id.clone()),
@@ -411,11 +512,35 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                 },
             );
             // No notification push — only the final state does that.
+            // Summary is built under the same short lock (pure fn) and
+            // cloned out so the event fires lock-free below.
+            g.shells
+                .get(&(session_id.to_string(), shell_id.clone()))
+                .map(|e| summary_from_entry(session_id, &shell_id, e, now_ms()))
+        };
+        // UI event (2026-09-02): fired after the lock block — the
+        // emitter is a user callback and must never run under the
+        // registry lock.
+        if let Some(shell) = start_summary {
+            self.emit_event(&ShellEventPayload {
+                kind: "started",
+                session_id: session_id.to_string(),
+                shell_session_id: shell_id.clone(),
+                shell: Some(shell),
+            });
         }
 
-        // 5. Spawn the background task that owns the child.
+        // 5. Spawn the background task that owns the child. The
+        //    emitter is captured as a start()-time snapshot:
+        //    production wiring happens at process assembly (daemon
+        //    bin / Tauri setup), strictly before any shell can start,
+        //    so the only observable difference vs. read-at-emit is in
+        //    tests that set the emitter mid-flight — documented and
+        //    accepted (keeps the task's parameter list free of a
+        //    registry Arc cycle).
         tokio::spawn(run_background_task(
             self.inner.clone(),
+            self.emitter_snapshot(),
             session_id.to_string(),
             shell_id.clone(),
             child,
@@ -444,6 +569,23 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
             }),
             Some(entry) => Ok(build_status_from_entry(entry)),
         }
+    }
+
+    async fn list_for_session(&self, session_id: &str) -> Vec<BackgroundShellSummary> {
+        let g = self.inner.lock().await;
+        let now = now_ms();
+        let mut out: Vec<BackgroundShellSummary> = g
+            .shells
+            .iter()
+            .filter(|((sid, _), _)| sid == session_id)
+            .map(|((_, shid), entry)| summary_from_entry(session_id, shid, entry, now))
+            .collect();
+        // One shared `now` base for every running row (consistent
+        // elapsed snapshot); sort running-first + newest-start first
+        // so the frontend can render verbatim (it re-sorts after
+        // event upserts with the same comparator shape).
+        out.sort_by(summary_sort);
+        out
     }
 
     async fn kill(
@@ -651,6 +793,104 @@ fn status_preview(s: &str, full_output_path: Option<&str>) -> String {
     crate::tools::tool_output::head_tail_truncate(s, cap, cap, &marker)
 }
 
+// ---------------------------------------------------------------------------
+// UI summary projection (2026-09-02, task 09-02-chat-task-panel)
+// ---------------------------------------------------------------------------
+
+/// Map a terminal [`BackgroundShellOutcome`] to its wire status
+/// string (mirrors the enum's snake_case serde names). `running` is
+/// never produced here — live entries take the `ShellState::Running`
+/// arm of [`summary_from_entry`].
+fn outcome_status(outcome: BackgroundShellOutcome) -> &'static str {
+    match outcome {
+        BackgroundShellOutcome::Completed => "completed",
+        BackgroundShellOutcome::Failed => "failed",
+        BackgroundShellOutcome::Killed => "killed",
+        BackgroundShellOutcome::TimedOut => "timed_out",
+        BackgroundShellOutcome::SpawnFailed => "spawn_failed",
+    }
+}
+
+/// Build the UI-facing [`BackgroundShellSummary`] from a registry
+/// entry. Pure (no I/O) — safe to call inside the registry lock; all
+/// three emission points + `list_for_session` share this one builder
+/// (single source of truth, no copy drift with
+/// `build_status_from_entry`).
+///
+/// `session_id` / `shell_session_id` come from the caller (they are
+/// the map KEY, not stored on [`ShellEntry`]).
+///
+/// Time contract: `elapsed_ms` for a Running entry is `now -
+/// started_at` (same-source monotonic subtraction); for a Done entry
+/// it is the final duration `completed_at - started_at`. Previews are
+/// populated for every terminal outcome (unlike the LLM-facing
+/// `BackgroundShellStatus::Killed`, which omits them) — a killed /
+/// timed-out shell's partial output is exactly what the panel's
+/// expandable preview is for.
+fn summary_from_entry(
+    session_id: &str,
+    shell_session_id: &str,
+    entry: &ShellEntry,
+    now: MonotonicMs,
+) -> BackgroundShellSummary {
+    let (status, elapsed_ms, exit_code, stdout_preview, stderr_preview, full_output_path) =
+        match &entry.state {
+            ShellState::Running { .. } => (
+                "running",
+                now.saturating_sub(entry.started_at),
+                None,
+                None,
+                None,
+                None,
+            ),
+            ShellState::Done {
+                notification,
+                stdout,
+                stderr,
+                full_output_path,
+            } => (
+                outcome_status(notification.outcome),
+                notification
+                    .completed_at
+                    .saturating_sub(notification.started_at),
+                notification.exit_code,
+                Some(status_preview(
+                    &String::from_utf8_lossy(stdout),
+                    full_output_path.as_deref(),
+                )),
+                Some(status_preview(
+                    &String::from_utf8_lossy(stderr),
+                    full_output_path.as_deref(),
+                )),
+                full_output_path.clone(),
+            ),
+        };
+    BackgroundShellSummary {
+        shell_session_id: shell_session_id.to_string(),
+        session_id: session_id.to_string(),
+        command: entry.command.clone(),
+        status: status.to_string(),
+        started_at_ms: entry.started_at,
+        elapsed_ms,
+        exit_code,
+        stdout_preview,
+        stderr_preview,
+        full_output_path,
+        origin_tool_use_id: entry.origin_tool_use_id.clone(),
+    }
+}
+
+/// Sort comparator for summary lists (design §2.1): running first,
+/// then `started_at` descending (newest first). Mirrored by the
+/// frontend store's `compareShells` — keep the two in lockstep.
+fn summary_sort(a: &BackgroundShellSummary, b: &BackgroundShellSummary) -> std::cmp::Ordering {
+    let a_running = a.status == "running";
+    let b_running = b.status == "running";
+    b_running
+        .cmp(&a_running)
+        .then_with(|| b.started_at_ms.cmp(&a.started_at_ms))
+}
+
 /// Push `notification` onto `inner.notifications[session_id]`,
 /// trimming to [`MAX_NOTIFICATIONS_PER_SESSION`] and emitting
 /// `tracing::warn!` on overflow.
@@ -688,8 +928,13 @@ fn push_notification_bounded(
 /// On any branch we read whatever stdout/stderr was buffered,
 /// capture the exit code, then write a single `ShellState::Done`
 /// entry + push a notification.
+#[allow(clippy::too_many_arguments)] // 8th arg = UI emitter snapshot (09-02-chat-task-panel); grouping would obscure the wait-task contract — same rationale as DEBT.md RULE-ARGS-001 sites
 async fn run_background_task(
     inner: Arc<Mutex<Inner>>,
+    // UI event emitter snapshot (2026-09-02, task 09-02-chat-task-
+    // panel): captured at `start()`; `None` = unwired registry (tests,
+    // Thin GUI) → the exited event is a no-op.
+    notify: Option<ShellEventEmitter>,
     session_id: String,
     shell_id: String,
     mut child: tokio::process::Child,
@@ -804,21 +1049,44 @@ async fn run_background_task(
         escalation,
     };
 
-    // Write the result. Brief lock — just a HashMap mutation.
-    let mut g = inner.lock().await;
-    if let Some(entry) = g.shells.get_mut(&(session_id.clone(), shell_id.clone())) {
-        entry.state = ShellState::Done {
-            notification: notification.clone(),
-            stdout,
-            stderr,
-            full_output_path,
-        };
-        // The kill sender is no longer needed (the task is the
-        // only thing that listens on it now).
-        entry.kill_tx = None;
+    // Write the result. Brief lock — just a HashMap mutation. The UI
+    // summary is cloned out under the same lock (pure fn) so the
+    // event below fires lock-free.
+    let exit_shell = {
+        let mut g = inner.lock().await;
+        let mut shell_summary: Option<BackgroundShellSummary> = None;
+        if let Some(entry) = g.shells.get_mut(&(session_id.clone(), shell_id.clone())) {
+            entry.state = ShellState::Done {
+                notification: notification.clone(),
+                stdout,
+                stderr,
+                full_output_path,
+            };
+            // The kill sender is no longer needed (the task is the
+            // only thing that listens on it now).
+            entry.kill_tx = None;
+            shell_summary = Some(summary_from_entry(&session_id, &shell_id, entry, now_ms()));
+        }
+        push_notification_bounded(&mut g, &session_id, notification);
+        shell_summary
+    };
+    // UI event (2026-09-02, task 09-02-chat-task-panel): ALL terminal
+    // paths (normal exit / kill / timeout) converge here — kill and
+    // timeout reach this task via `kill_rx` / the runtime timer, so
+    // this is the single `exited` emission point (the emitter is
+    // fired strictly AFTER the registry lock is dropped).
+    if let Some(shell) = exit_shell {
+        if let Some(emitter) = notify {
+            let payload = ShellEventPayload {
+                kind: "exited",
+                session_id: session_id.clone(),
+                shell_session_id: shell_id.clone(),
+                shell: Some(shell),
+            };
+            let value = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+            emitter(EVENT_NAME, &value);
+        }
     }
-    push_notification_bounded(&mut g, &session_id, notification);
-    drop(g);
     tracing::info!(
         session_id = %session_id,
         shell_id = %shell_id,
@@ -1746,5 +2014,279 @@ mod tests {
         ));
         // Cleanup — don't leave the 30s child running.
         let _ = reg.kill("s1", &shell_id).await;
+    }
+
+    // ----- UI observability tests (2026-09-02, task 09-02-chat-task-
+    // panel): list_for_session + the three EVENT_NAME emission points.
+
+    /// Type alias for the shared event collector — each test owns a
+    /// private registry, so emitter state never crosses tests.
+    type EventLog = Arc<StdMutex<Vec<(String, serde_json::Value)>>>;
+
+    fn event_collector() -> (EventLog, ShellEventEmitter) {
+        let log: EventLog = Arc::new(StdMutex::new(Vec::new()));
+        let sink = Arc::clone(&log);
+        let emitter: ShellEventEmitter = Arc::new(move |name, payload| {
+            sink.lock()
+                .unwrap()
+                .push((name.to_string(), payload.clone()));
+        });
+        (log, emitter)
+    }
+
+    /// `list_for_session` shape + ordering (design §4 Rust test 1):
+    /// a running shell, a normally-completed shell, and a
+    /// spawn-failed entry (forced via a nonexistent cwd — `sh -c`
+    /// itself then fails to spawn, the SpawnFailed channel) all
+    /// appear; running first, terminal rows newest-start first;
+    /// cross-session isolation holds; summary fields carry the
+    /// command / exit code / previews.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_for_session_returns_running_and_done() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+
+        // (t0) still-running row.
+        let running_id = reg
+            .start(
+                "s1",
+                "sleep 30".to_string(),
+                tmp.path().to_path_buf(),
+                Some(60_000),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // (t1) completes quickly.
+        let done_id = reg
+            .start(
+                "s1",
+                "echo hi".to_string(),
+                tmp.path().to_path_buf(),
+                Some(10_000),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        for _ in 0..40 {
+            if let BackgroundShellStatus::Completed { .. } =
+                reg.status("s1", &done_id).await.unwrap()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // (t2) spawn failure via a nonexistent cwd (started LAST →
+        // newest terminal row).
+        let spawn_err = reg
+            .start(
+                "s1",
+                "echo doomed".to_string(),
+                PathBuf::from("/nonexistent-cwd-for-spawn-failure"),
+                Some(10_000),
+                None,
+                None,
+            )
+            .await;
+        assert!(
+            matches!(spawn_err, Err(BackgroundShellError::Spawn(_))),
+            "nonexistent cwd must surface Spawn"
+        );
+        // A different session's shell must NOT leak into s1's list.
+        let other_id = reg
+            .start(
+                "s2",
+                "sleep 30".to_string(),
+                tmp.path().to_path_buf(),
+                Some(60_000),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let list = reg.list_for_session("s1").await;
+        assert_eq!(list.len(), 3, "got: {list:?}");
+        // Row 0: running (elapsed computed at read time).
+        assert_eq!(list[0].status, "running");
+        assert_eq!(list[0].shell_session_id, running_id);
+        assert_eq!(list[0].command, "sleep 30");
+        assert_eq!(list[0].exit_code, None);
+        assert_eq!(list[0].stdout_preview, None);
+        // Terminal rows: newest start first → spawn-failed (t2) then
+        // completed (t1).
+        assert_eq!(list[1].status, "spawn_failed");
+        assert_eq!(list[1].exit_code, None);
+        assert_eq!(list[2].status, "completed");
+        assert_eq!(list[2].shell_session_id, done_id);
+        assert_eq!(list[2].exit_code, Some(0));
+        assert!(
+            list[2]
+                .stdout_preview
+                .as_deref()
+                .unwrap_or("")
+                .contains("hi"),
+            "stdout preview: {:?}",
+            list[2].stdout_preview
+        );
+        // camelCase wire shape (serde rename_all) — the TS mirror
+        // reads shellSessionId / startedAtMs / stdoutPreview.
+        let v = serde_json::to_value(&list[0]).unwrap();
+        assert!(v.get("shellSessionId").is_some(), "wire: {v}");
+        assert!(v.get("startedAtMs").is_some(), "wire: {v}");
+        assert!(v.get("stdoutPreview").is_some(), "wire: {v}");
+
+        // Cross-session filter.
+        let s2_list = reg.list_for_session("s2").await;
+        assert_eq!(s2_list.len(), 1);
+        assert_eq!(s2_list[0].shell_session_id, other_id);
+        // Unknown session → empty, not an error.
+        assert!(reg.list_for_session("s-none").await.is_empty());
+
+        let _ = reg.kill_all_for_session("s1").await;
+        let _ = reg.kill_all_for_session("s2").await;
+    }
+
+    /// Emitter lifecycle (design §4 Rust test 2): `started` fires
+    /// synchronously out of `start()` (with a running summary) and
+    /// `exited` fires when the wait task converges any terminal path
+    /// (with the terminal summary) — in that order.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn emitter_fired_on_started_and_exited() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let (log, emitter) = event_collector();
+        reg.set_event_emitter(emitter);
+
+        let shell_id = reg
+            .start(
+                "s1",
+                "echo hi-from-events".to_string(),
+                tmp.path().to_path_buf(),
+                Some(10_000),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // `started` must already be in the log (synchronous emit
+        // inside start()).
+        {
+            let g = log.lock().unwrap();
+            assert_eq!(g.len(), 1, "started emitted synchronously: {g:?}");
+            assert_eq!(g[0].0, EVENT_NAME);
+            assert_eq!(g[0].1["kind"], "started");
+            assert_eq!(g[0].1["sessionId"], "s1");
+            assert_eq!(g[0].1["shellSessionId"], shell_id);
+            assert_eq!(g[0].1["shell"]["status"], "running");
+        }
+
+        // Wait for terminal.
+        for _ in 0..40 {
+            if let BackgroundShellStatus::Completed { .. } =
+                reg.status("s1", &shell_id).await.unwrap()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // Give the watcher task's post-lock emit a beat to land.
+        for _ in 0..40 {
+            if log.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let g = log.lock().unwrap();
+        assert_eq!(g.len(), 2, "started + exited only: {g:?}");
+        assert_eq!(g[1].1["kind"], "exited");
+        assert_eq!(g[1].1["shellSessionId"], shell_id);
+        assert_eq!(g[1].1["shell"]["status"], "completed");
+        assert_eq!(g[1].1["shell"]["exitCode"], 0);
+        assert!(
+            g[1].1["shell"]["stdoutPreview"]
+                .as_str()
+                .unwrap_or("")
+                .contains("hi-from-events"),
+            "exited preview: {}",
+            g[1].1
+        );
+    }
+
+    /// Pruned emission (design §4 Rust test 3): each swept entry
+    /// fires one `pruned` event with the ids only (`shell: null`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn emitter_fired_on_prune() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let (log, emitter) = event_collector();
+        reg.set_event_emitter(emitter);
+
+        let shell_id = start_and_wait_done(&reg, &tmp).await;
+        // Drain the started/exited events so the log only holds prunes.
+        log.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let removed = reg.sweep_completed_shells(0).await;
+        assert_eq!(removed, 1);
+        let g = log.lock().unwrap();
+        assert_eq!(g.len(), 1, "one pruned event: {g:?}");
+        assert_eq!(g[0].1["kind"], "pruned");
+        assert_eq!(g[0].1["sessionId"], "s1");
+        assert_eq!(g[0].1["shellSessionId"], shell_id);
+        assert!(
+            g[0].1["shell"].is_null(),
+            "pruned carries no summary: {}",
+            g[0].1
+        );
+    }
+
+    /// A second `set_event_emitter` is ignored (warn + keep the
+    /// first) — the emitter is process-boot wiring and must not be
+    /// stealable by a stray second call.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn emitter_set_twice_keeps_first() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let (log_a, emitter_a) = event_collector();
+        let (log_b, emitter_b) = event_collector();
+        reg.set_event_emitter(emitter_a);
+        reg.set_event_emitter(emitter_b); // ignored
+
+        let shell_id = reg
+            .start(
+                "s1",
+                "true".to_string(),
+                tmp.path().to_path_buf(),
+                Some(10_000),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        for _ in 0..40 {
+            if let BackgroundShellStatus::Completed { .. } =
+                reg.status("s1", &shell_id).await.unwrap()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        for _ in 0..40 {
+            if log_a.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            log_a.lock().unwrap().len() >= 1,
+            "first emitter still receives events"
+        );
+        assert!(
+            log_b.lock().unwrap().is_empty(),
+            "second emitter must be ignored"
+        );
     }
 }

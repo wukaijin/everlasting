@@ -181,11 +181,35 @@ pub fn run() {
             }
 
             // ── Full mode (legacy pre-P2.4 path) ──────────────────
+            // Clone BEFORE the `async move` below: the background-shell
+            // emitter closure needs its own AppHandle.
+            let shell_event_handle = app_handle.clone();
             let state = tauri::async_runtime::block_on(async move {
                 std::sync::Arc::new(state::AppState::load(&app_handle).await)
             });
             app.manage(state.clone());
 
+            // 2026-09-02 (task `09-02-chat-task-panel`): wire the
+            // background-shell UI event emitter for Full mode. Payloads
+            // are pre-serialized `serde_json::Value`s (Serialize is
+            // satisfied), so `AppHandle::emit` just forwards them.
+            // Failure only warns (best-effort, mirrors the AppHandleSink
+            // precedent — a dropped panel event self-heals via the next
+            // `list_background_shells` pull). Thin mode returned above
+            // and never wires an emitter (the daemon process owns the
+            // SSE path), so events are a natural no-op there.
+            state.background_shells.set_event_emitter(
+                std::sync::Arc::new(move |name, payload| {
+                    use tauri::Emitter;
+                    if let Err(e) = shell_event_handle.emit(name, payload) {
+                        tracing::warn!(
+                            error = %e,
+                            event = name,
+                            "background_shell event emit failed (non-fatal)"
+                        );
+                    }
+                }),
+            );
             // L3b PR3 (2026-06-27): one-time startup sweep of
             // stale worker worktrees. We iterate every project
             // and call `sweep_stale_worker_worktrees` for each;
@@ -398,6 +422,10 @@ pub fn run() {
             // returns the full `SubagentRunRow` (with transcript).
             commands::subagent_runs::list_subagent_runs_by_session,
             commands::subagent_runs::get_subagent_run,
+            // 2026-09-02 (task `09-02-chat-task-panel`): background-
+            // shell UI observability IPCs for the ActivityPanel.
+            commands::background_shells::list_background_shells,
+            commands::background_shells::kill_background_shell,
             // L3b PR3 (2026-06-27): merge / discard worker IPCs.
             // The LLM-side path is the `merge_worker` /
             // `discard_worker` tools (tool layer); these commands

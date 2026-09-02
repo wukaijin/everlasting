@@ -152,6 +152,26 @@ pub fn spawn_shell_sweeper(state: &AppState) {
     });
 }
 
+/// Wire the background-shell UI event emitter for the daemon process
+/// (2026-09-02, task `09-02-chat-task-panel`): shell lifecycle events
+/// (`background_shell:update`) broadcast to every SSE subscriber via
+/// [`crate::daemon::sse::SseRegistry::broadcast`] — the same
+/// dual-transport pattern as the subagent events. Exposed as a
+/// function (not inlined in the bin) with the same rationale as
+/// `spawn_shell_sweeper`: the bin never touches the private
+/// `background_shell` module directly. Called ONCE from the daemon
+/// bin at assembly, before `serve_daemon`; the Tauri Full mode wires
+/// its own emitter in `lib.rs` setup, and Thin-mode GUIs never wire
+/// one (events stay a registry-level no-op).
+pub fn wire_background_shell_events(state: &AppState) {
+    let sse = state.sse.clone();
+    state
+        .background_shells
+        .set_event_emitter(Arc::new(move |name, payload| {
+            sse.broadcast(name, payload);
+        }));
+}
+
 /// F2 定时任务调度循环(2026-08-28, task `08-28-f2-scheduled-tasks`,
 /// design §5):每 [`crate::scheduler::SCHEDULER_TICK_SECS`](30s)跑一次
 /// 单一扫描算法(`scheduler::scheduler_tick`),到点任务经 `chat_inner`

@@ -556,6 +556,9 @@ mod e1e_router_smoke {
         let routes: &[&str] = &[
             // agent
             "/api/v1/agent/chat",
+            // background_shells (2026-09-02, task 09-02-chat-task-panel)
+            "/api/v1/background_shells/list_background_shells",
+            "/api/v1/background_shells/kill_background_shell",
             // cancel
             "/api/v1/cancel/cancel_chat",
             // command_palette

@@ -21,6 +21,8 @@
 //!
 //! Domain → module map (79 handlers total):
 //! - `agent` (1): `chat`
+//! - `attachments`: attachment save
+//! - `background_shells` (2): `list_background_shells`, `kill_background_shell` (2026-09-02)
 //! - `cancel` (1): `cancel_chat`
 //! - `command_palette` (2): `list_commands`, `get_command_body`
 //! - `config` (2): `get_llm_config`, `get_home_dir`
@@ -42,6 +44,9 @@
 
 pub mod agent;
 pub mod attachments;
+// 2026-09-02 (task `09-02-chat-task-panel`): background-shell UI
+// observability routes (mirror commands::background_shells, Q0 单源).
+pub mod background_shells;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
@@ -91,6 +96,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api/v1/agent", agent::router(state.clone()))
         .nest("/api/v1/attachments", attachments::router(state.clone()))
+        .nest(
+            "/api/v1/background_shells",
+            background_shells::router(state.clone()),
+        )
         .nest("/api/v1/cancel", cancel::router(state.clone()))
         .nest(
             "/api/v1/command_palette",

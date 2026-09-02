@@ -216,6 +216,102 @@ pub(crate) enum ShellExitTrigger {
     TimedOut,
 }
 
+// ---------------------------------------------------------------------------
+// UI observability surface (2026-09-02, task 09-02-chat-task-panel)
+//
+// The LLM-facing surface above (`BackgroundShellStatus` /
+// `BackgroundShellNotification`) is consumed by the shell tools + the
+// agent-loop injection. The chat frontend needs its own read-only
+// projection (`BackgroundShellSummary`) + a push channel
+// (`background_shell:update` events) so the ActivityPanel can render
+// running/terminal shells without polling. Same dual-transport pattern
+// as the subagent events: daemon wires the emitter to
+// `SseRegistry::broadcast` (`daemon::server::wire_background_shell_events`),
+// Tauri Full mode wires it to `AppHandle::emit` (`lib.rs` setup); Thin
+// mode GUI never wires one, making events a no-op there.
+// ---------------------------------------------------------------------------
+
+/// SSE / Tauri event name for background-shell lifecycle pushes.
+/// Consumed by the frontend `stores/backgroundShells.ts` listener
+/// (`transport.listen(EVENT_NAME, ...)`).
+pub const EVENT_NAME: &str = "background_shell:update";
+
+/// Callback signature injected into the registry via
+/// [`in_memory::InMemoryBackgroundShellRegistry::set_event_emitter`].
+/// `(event_name, payload)` — payload is pre-serialized
+/// [`ShellEventPayload`] as a `serde_json::Value` so both the SSE
+/// broadcast and the Tauri emit paths (which take `impl Serialize`)
+/// can consume it without the registry knowing the transport.
+pub type ShellEventEmitter = Arc<dyn Fn(&str, &serde_json::Value) + Send + Sync>;
+
+/// UI-facing summary of one background shell. camelCase wire
+/// (mirrors `SubagentRunSummary`'s `#[serde(rename_all =
+/// "camelCase")]` precedent) so the TS mirror
+/// (`BackgroundShellSummary` in `stores/backgroundShells.ts`) lines
+/// up 1:1.
+///
+/// ⚠️ Time-source contract: `started_at_ms` / `elapsed_ms` are
+/// **process-monotonic** milliseconds ([`MonotonicMs`]). They are
+/// valid ONLY for elapsed/duration arithmetic against each other —
+/// never as wall-clock timestamps, never mixed with `Date.now()` on
+/// the frontend. The frontend displays elapsed/duration only.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundShellSummary {
+    /// The shell's session id (`bsh_xxx`).
+    pub shell_session_id: String,
+    /// The chat session this shell belongs to.
+    pub session_id: String,
+    /// The shell command line (as passed to `sh -c`).
+    pub command: String,
+    /// `"running" | "completed" | "failed" | "killed" | "timed_out" |
+    /// "spawn_failed"` — plain string (not an enum) so the wire shape
+    /// stays additive-friendly; the values mirror
+    /// [`BackgroundShellOutcome`]'s snake_case serde names plus
+    /// `"running"` for live entries.
+    pub status: String,
+    /// Process-monotonic ms when the shell started (see type-level
+    /// time-source contract).
+    pub started_at_ms: MonotonicMs,
+    /// Running: `now - started_at` (computed at read time); terminal:
+    /// `completed_at - started_at` (final duration).
+    pub elapsed_ms: u64,
+    /// Terminal exit code. `None` for running shells and spawn
+    /// failures (mirrors [`BackgroundShellNotification::exit_code`]).
+    pub exit_code: Option<i32>,
+    /// `stdout` head+tail preview (≤1 KiB per side, shared C6
+    /// truncation contract) for terminal entries; `None` while
+    /// running (no buffered output exists in the registry yet).
+    pub stdout_preview: Option<String>,
+    /// Same as [`Self::stdout_preview`] for stderr.
+    pub stderr_preview: Option<String>,
+    /// Set when the combined output exceeded the disk-spill threshold
+    /// (30 KiB) — the frontend surfaces "完整输出已落盘 + path".
+    pub full_output_path: Option<String>,
+    /// P3d: originating `run_background_shell` tool_use id (design
+    /// §1.2), surfaced so a future panel can attach back to the
+    /// dispatching card. `None` for test / rerun shells.
+    pub origin_tool_use_id: Option<String>,
+}
+
+/// Payload of one [`EVENT_NAME`] event. A single struct covers all
+/// three kinds (`kind` discriminates); `shell` carries the full
+/// summary for `started` / `exited` (saves an IPC round-trip — design
+/// §6 trade-off) and is `None` for `pruned` (the frontend only needs
+/// the id to drop the row).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellEventPayload {
+    /// `"started" | "exited" | "pruned"`.
+    pub kind: &'static str,
+    /// The chat session the shell belongs to.
+    pub session_id: String,
+    /// The shell's session id (`bsh_xxx`).
+    pub shell_session_id: String,
+    /// Full summary for `started` / `exited`; `None` for `pruned`.
+    pub shell: Option<BackgroundShellSummary>,
+}
+
 /// Snapshot of a background shell's current state. Returned by
 /// the registry's `status()` for `shell_status` tool responses.
 #[derive(Debug, Clone, Serialize)]
@@ -349,6 +445,14 @@ pub trait BackgroundShellRegistry: Send + Sync {
         session_id: &str,
         shell_session_id: &str,
     ) -> Result<BackgroundShellStatus, BackgroundShellError>;
+
+    /// List every non-pruned shell entry for `session_id` as UI
+    /// summaries (2026-09-02, task 09-02-chat-task-panel). Sorted
+    /// running-first, then by `started_at` descending — the
+    /// ActivityPanel renders rows in this order. Unknown session →
+    /// empty `Vec` (NOT an error; empty lists are a normal UI state).
+    /// Swept (pruned) entries are naturally absent.
+    async fn list_for_session(&self, session_id: &str) -> Vec<BackgroundShellSummary>;
 
     /// Force-kill the background shell's process group. Idempotent
     /// (returns `Ok(())` for already-completed shells — LLM may
