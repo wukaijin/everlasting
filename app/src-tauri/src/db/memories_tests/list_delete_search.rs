@@ -11,7 +11,9 @@ use super::memories::{
 /// - User scope → only user rows (project rows excluded even if
 ///   they share the project_id arg).
 /// - Project scope + id → only that project's rows.
-/// - None → all rows.
+/// - None + id → user rows + that project's rows (H2 branch (c),
+///   the MemoryPreview panel view).
+/// - None + None → all rows (admin "全部项目" view).
 /// Ordered newest-first.
 #[tokio::test]
 async fn list_memories_filters_by_scope_correctly() {
@@ -74,9 +76,67 @@ async fn list_memories_filters_by_scope_correctly() {
         .unwrap_err();
     assert!(matches!(err, MemoryInsertError::ProjectScopeMissingId));
 
-    // None scope — all 3 rows.
+    // None scope + proj-a → user row + proj-a's row; proj-b
+    // excluded (H2 branch (c) — the MemoryPreview panel view).
+    let rows = list_memories(&pool, None, Some("proj-a")).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let ids: Vec<&str> = rows.iter().map(|r| r.memory_id.as_str()).collect();
+    assert!(ids.contains(&"u1"));
+    assert!(ids.contains(&"p1"));
+    assert!(
+        !ids.contains(&"p2"),
+        "other project excluded from panel view"
+    );
+
+    // None scope + None → all 3 rows (admin "全部项目" view; the
+    // only deliberately unfiltered shape).
     let rows = list_memories(&pool, None, None).await.unwrap();
     assert_eq!(rows.len(), 3);
+}
+
+/// Project isolation for the LIST path: a `scope=project` memory in
+/// proj-a is NOT returned when listing via (None, Some("proj-b")).
+/// Regression for the 2026-09-02 leak — the old scope=None arm had
+/// no WHERE clause at all, so the MemoryPreview panel surfaced every
+/// project's memories regardless of the queried project (observed
+/// live: jjh-mono's list returned everlasting's rows over the daemon
+/// HTTP API). The admin (None, None) view is unaffected.
+#[tokio::test]
+async fn list_memories_project_isolation() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "leak-a",
+        MemoryScope::Project,
+        Some("proj-a"),
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "proj-a leak canary",
+        "the proj-a leak canary content",
+    )
+    .await
+    .unwrap();
+    insert_raw(
+        &pool,
+        "global-u",
+        MemoryScope::User,
+        None,
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "global user note",
+        "user-scope content",
+    )
+    .await
+    .unwrap();
+
+    // List proj-b → only the user row; proj-a's row must not leak.
+    let rows = list_memories(&pool, None, Some("proj-b")).await.unwrap();
+    assert_eq!(rows.len(), 1, "only the user-scope row for proj-b");
+    assert_eq!(rows[0].memory_id, "global-u");
+
+    // The admin view still sees everything (1 user + 1 project row).
+    let rows = list_memories(&pool, None, None).await.unwrap();
+    assert_eq!(rows.len(), 2);
 }
 
 /// `delete_memory` removes the row AND the FTS index entries (via

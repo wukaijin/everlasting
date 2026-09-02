@@ -149,7 +149,13 @@ pub async fn get_memory_by_id(
 /// - `(Some(User), _)` → only user-scope rows (project_id ignored).
 /// - `(Some(Project), None)` → Err (project query needs an id).
 /// - `(Some(Project), Some(id))` → only that project's rows.
-/// - `(None, _)` → all rows (both scopes); project_id is ignored.
+/// - `(None, Some(id))` → user-scope rows + that project's rows
+///   (the MemoryPreview panel view; project-isolated — a proj-B
+///   row is never surfaced when querying proj-A).
+/// - `(None, None)` → ALL rows from every project. **Not**
+///   project-isolated: reserved for the explicit "全部项目"
+///   admin view (`list_autonomous_memories` with no project_id).
+///   Do not call this shape from any per-project code path.
 ///
 /// Ordered by `created_at DESC` (newest first) — matches the UI
 /// convention for list endpoints.
@@ -199,7 +205,32 @@ pub async fn list_memories(
             .fetch_all(pool)
             .await?
         }
+        None if project_id.is_some() => {
+            // (None, Some) — the panel view: user layer + THIS
+            // project's rows only. The project filter is load-bearing
+            // here: without it every project's rows leak into the
+            // list (2026-09-02 leak fix; mirrors search_memories_fts
+            // branch (c)).
+            sqlx::query_as::<_, MemoryRow>(
+                r#"
+                SELECT id, memory_id, scope, project_id, kind, status, title, content,
+                       tags, tool_name, command_pattern, path_globs, source_session_id,
+                       source_ref, confidence, hit_count, last_used_at, created_at,
+                       updated_at, demoted_reason, edited_by_user
+                FROM autonomous_memories
+                WHERE scope = 'user'
+                   OR (scope = 'project' AND project_id = ?)
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(project_id)
+            .fetch_all(pool)
+            .await?
+        }
         None => {
+            // (None, None) — admin "全部项目" view, deliberately
+            // unfiltered. See the doc comment: per-project code
+            // paths must pass Some(id).
             sqlx::query_as::<_, MemoryRow>(
                 r#"
                 SELECT id, memory_id, scope, project_id, kind, status, title, content,

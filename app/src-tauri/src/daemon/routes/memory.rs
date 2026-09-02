@@ -63,7 +63,10 @@ pub async fn open_memory_in_editor(
 
 #[derive(Debug, Deserialize)]
 pub struct ListAutonomousMemoriesRequest {
-    pub project_id: String,
+    /// `None` (JSON `null` / omitted) → the explicit "全部项目"
+    /// admin view; `Some(id)` → project-isolated (user layer + that
+    /// project's rows). Mirrors the Tauri command's `Option<String>`.
+    pub project_id: Option<String>,
 }
 
 pub async fn list_autonomous_memories(

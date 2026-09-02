@@ -299,8 +299,9 @@ pub(crate) fn _ensure_used_for_test(_c: &MemoryCache) {}
 // Permission: these are user-driven direct IPCs (the panel is the
 // UI), NOT LLM tool invocations. The ⑨ 关 permission layer does
 // NOT apply (same precedent as the B5 memory-file commands above
-// + the D3 edit/resend commands). The project-isolation check
-// below is the security boundary.
+// + the D3 edit/resend commands). The project-isolation filter
+// below is the boundary — only the explicit `project_id = None`
+// admin call (Settings 全部项目 filter) sees across projects.
 // ---------------------------------------------------------------------------
 
 /// List runtime memories (P2 autonomous memories) visible to the
@@ -308,17 +309,31 @@ pub(crate) fn _ensure_used_for_test(_c: &MemoryCache) {}
 /// project's own project-scope memories, newest first. Used by
 /// the MemoryPreview panel's "runtime memories" list.
 ///
-/// Project isolation: a project-scope memory in another project
-/// is NEVER returned. The user-scope memories are global by
-/// design (cross-project experience).
+/// Project isolation: with `Some(id)`, a project-scope memory in
+/// another project is NEVER returned. The user-scope memories are
+/// global by design (cross-project experience).
+///
+/// `project_id = None` is the explicit "全部项目" admin view
+/// (Settings 的项目过滤器): user-scope rows + EVERY project's
+/// project-scope rows. Only the Settings filter passes None —
+/// per-project callers (MemoryModal / ProjectTabs / ProjectMemoryTab)
+/// always pass Some.
 pub async fn list_autonomous_memories_inner(
     state: &Arc<AppState>,
-    project_id: String,
+    project_id: Option<String>,
 ) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
+    let Some(project_id) = project_id.as_deref() else {
+        // Admin all-projects view (see doc). The DB layer's
+        // (None, None) arm is the only unfiltered shape; per-project
+        // paths must go through the Some branch below.
+        return db_list_memories(&state.db, None, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into());
+    };
     // Verify the project exists (defensive — the IPC is
     // user-driven from the panel, but a stale project_id should
     // surface a clean error rather than an empty list).
-    match db::get_project(&state.db, &project_id).await {
+    match db::get_project(&state.db, project_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             return Err(AppCommandError::new(
@@ -335,11 +350,12 @@ pub async fn list_autonomous_memories_inner(
             )
         }
     }
-    // scope=None → both layers. The DB layer ignores project_id
-    // for user-scope rows (they're global) and filters project-
-    // scope rows by the supplied id. This is exactly the
-    // project-isolation contract.
-    db_list_memories(&state.db, None, Some(&project_id))
+    // scope=None + Some(id) → user layer + THIS project's rows only
+    // (DB H2 branch (c)). The DB-side project filter is the
+    // project-isolation contract (2026-09-02 leak fix: the old
+    // (None, _) arm had no WHERE at all and returned every
+    // project's rows).
+    db_list_memories(&state.db, None, Some(project_id))
         .await
         .map_err(|e| anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into())
 }
@@ -347,7 +363,7 @@ pub async fn list_autonomous_memories_inner(
 #[tauri::command]
 pub async fn list_autonomous_memories(
     state: State<'_, Arc<AppState>>,
-    project_id: String,
+    project_id: Option<String>,
 ) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
     list_autonomous_memories_inner(&state, project_id).await
 }
