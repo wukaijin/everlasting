@@ -75,15 +75,18 @@ use super::permission::{classify_tool, extract_path_arg, ToolKind};
 #[allow(dead_code)]
 pub async fn recall_pitfall_footnote(
     db: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
 ) -> Result<Option<String>, sqlx::Error> {
     // Step 1: extract the relevant probe string from tool_input.
     let (command_pattern, path) = extract_probe_args(tool_name, tool_input);
 
-    // Step 2: probe find_pitfalls_by_trigger.
+    // Step 2: probe find_pitfalls_by_trigger (H2 scope filter: user
+    // rows global + this project's rows).
     let rows = crate::db::memories::find_pitfalls_by_trigger(
         db,
+        project_id,
         tool_name,
         command_pattern.as_deref(),
         path.as_deref(),
@@ -232,11 +235,12 @@ pub const PITFALL_SOFT_BLOCK_ENABLED: bool = true;
 #[allow(dead_code)]
 pub async fn recall_pitfall(
     db: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     already_blocked: &HashSet<String>,
 ) -> PitfallRecall {
-    recall_pitfall_inner(db, tool_name, tool_input, already_blocked)
+    recall_pitfall_inner(db, project_id, tool_name, tool_input, already_blocked)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(
@@ -266,13 +270,20 @@ pub async fn recall_pitfall(
 ///
 /// `PitfallRecall` enum shape is **unchanged** — the sibling
 /// only ADDS the rows; P3/P4/P5 callers and tests do not break.
+///
+/// **`project_id` (H2, 2026-09-02)**: the probing session's project.
+/// The trigger SQL filters `scope='user' OR (scope='project' AND
+/// project_id=?)` — a project-scope pitfall NEVER fires for another
+/// project's session (and its hits never feed that project's P5
+/// promotion). User-scope pitfalls stay global by design.
 pub async fn recall_pitfall_with_hits(
     db: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     already_blocked: &HashSet<String>,
 ) -> (PitfallRecall, Vec<crate::db::memories::MemoryRow>) {
-    recall_pitfall_inner_with_rows(db, tool_name, tool_input, already_blocked)
+    recall_pitfall_inner_with_rows(db, project_id, tool_name, tool_input, already_blocked)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(
@@ -294,17 +305,20 @@ pub async fn recall_pitfall_with_hits(
 #[allow(dead_code)]
 async fn recall_pitfall_inner(
     db: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     already_blocked: &HashSet<String>,
 ) -> Result<PitfallRecall, sqlx::Error> {
     let (recall, _rows) =
-        recall_pitfall_inner_with_rows(db, tool_name, tool_input, already_blocked).await?;
+        recall_pitfall_inner_with_rows(db, project_id, tool_name, tool_input, already_blocked)
+            .await?;
     Ok(recall)
 }
 
 async fn recall_pitfall_inner_with_rows(
     db: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     already_blocked: &HashSet<String>,
@@ -312,6 +326,7 @@ async fn recall_pitfall_inner_with_rows(
     let (command_pattern, path) = extract_probe_args(tool_name, tool_input);
     let rows = crate::db::memories::find_pitfalls_by_trigger_all_status(
         db,
+        project_id,
         tool_name,
         command_pattern.as_deref(),
         path.as_deref(),

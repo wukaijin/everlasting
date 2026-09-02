@@ -237,7 +237,7 @@ async fn recall_pitfall_footnote_active_hit_returns_text() {
     .unwrap();
 
     let input = serde_json::json!({"command": "cargo test --lib"});
-    let footnote = recall_pitfall_footnote(&pool, "shell", &input)
+    let footnote = recall_pitfall_footnote(&pool, "proj-test", "shell", &input)
         .await
         .expect("recall must succeed on a healthy pool");
     let text = footnote.expect("active hit must produce a footnote");
@@ -282,7 +282,7 @@ async fn recall_pitfall_footnote_unrelated_tool_returns_none() {
 
     // A `grep` tool_use with no matching pitfall — must return None.
     let input = serde_json::json!({"path": "src/", "pattern": "foo"});
-    let footnote = recall_pitfall_footnote(&pool, "grep", &input)
+    let footnote = recall_pitfall_footnote(&pool, "proj-test", "grep", &input)
         .await
         .expect("recall must succeed");
     assert!(footnote.is_none());
@@ -316,7 +316,7 @@ async fn recall_pitfall_footnote_verified_hit_returns_none_for_p3() {
         .unwrap();
 
     let input = serde_json::json!({"command": "anything"});
-    let footnote = recall_pitfall_footnote(&pool, "shell", &input)
+    let footnote = recall_pitfall_footnote(&pool, "proj-test", "shell", &input)
         .await
         .expect("recall must succeed");
     assert!(
@@ -350,7 +350,7 @@ async fn recall_pitfall_footnote_candidate_hit_returns_none() {
         .unwrap();
 
     let input = serde_json::json!({"command": "anything"});
-    let footnote = recall_pitfall_footnote(&pool, "shell", &input)
+    let footnote = recall_pitfall_footnote(&pool, "proj-test", "shell", &input)
         .await
         .expect("recall must succeed");
     assert!(
@@ -389,7 +389,7 @@ async fn recall_pitfall_footnote_command_pattern_mismatch_returns_none() {
     // Caller runs `npm install`, NOT `cargo test` → no substring
     // match → no recall.
     let input = serde_json::json!({"command": "npm install"});
-    let footnote = recall_pitfall_footnote(&pool, "shell", &input)
+    let footnote = recall_pitfall_footnote(&pool, "proj-test", "shell", &input)
         .await
         .expect("recall must succeed");
     assert!(
@@ -409,7 +409,7 @@ async fn recall_pitfall_footnote_command_pattern_mismatch_returns_none() {
 async fn recall_pitfall_footnote_empty_db_returns_none() {
     let pool = make_pool().await;
     let input = serde_json::json!({"command": "cargo test"});
-    let footnote = recall_pitfall_footnote(&pool, "shell", &input)
+    let footnote = recall_pitfall_footnote(&pool, "proj-test", "shell", &input)
         .await
         .expect("recall must succeed on empty DB");
     assert!(footnote.is_none());
@@ -501,7 +501,7 @@ async fn p5_recall_verified_full_match_returns_soft_block() {
     .await;
     let input = serde_json::json!({"path": "app/src/foo.rs", "old_string": "a", "new_string": "b"});
     let blocked: HashSet<String> = HashSet::new();
-    let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
+    let outcome = recall_pitfall(&pool, "proj-test", "edit_file", &input, &blocked).await;
     match outcome {
         PitfallRecall::SoftBlock { hint, memory_id } => {
             assert_eq!(memory_id, "v-full");
@@ -530,7 +530,7 @@ async fn p5_recall_active_full_match_returns_footnote() {
     .await;
     let input = serde_json::json!({"path": "app/src/foo.rs", "old_string": "a", "new_string": "b"});
     let blocked: HashSet<String> = HashSet::new();
-    let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
+    let outcome = recall_pitfall(&pool, "proj-test", "edit_file", &input, &blocked).await;
     match outcome {
         PitfallRecall::Footnote(text) => {
             assert!(text.contains("Memory:"));
@@ -558,7 +558,7 @@ async fn p5_recall_candidate_returns_footnote() {
     .await;
     let input = serde_json::json!({"command": "cargo test --lib"});
     let blocked: HashSet<String> = HashSet::new();
-    let outcome = recall_pitfall(&pool, "shell", &input, &blocked).await;
+    let outcome = recall_pitfall(&pool, "proj-test", "shell", &input, &blocked).await;
     match outcome {
         PitfallRecall::Footnote(text) => assert!(text.contains("c-1 title")),
         other => panic!("expected Footnote for candidate, got {other:?}"),
@@ -585,7 +585,7 @@ async fn p5_recall_verified_second_hit_degrades_to_footnote() {
     let input = serde_json::json!({"path": "app/src/foo.rs", "old_string": "a", "new_string": "b"});
     let mut blocked: HashSet<String> = HashSet::new();
     blocked.insert("v-second".to_string());
-    let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
+    let outcome = recall_pitfall(&pool, "proj-test", "edit_file", &input, &blocked).await;
     match outcome {
         PitfallRecall::Footnote(text) => {
             assert!(
@@ -605,7 +605,7 @@ async fn p5_recall_no_match_returns_none() {
     let pool = make_pool().await;
     let input = serde_json::json!({"command": "cargo test"});
     let blocked: HashSet<String> = HashSet::new();
-    let outcome = recall_pitfall(&pool, "shell", &input, &blocked).await;
+    let outcome = recall_pitfall(&pool, "proj-test", "shell", &input, &blocked).await;
     assert_eq!(outcome, PitfallRecall::None);
 }
 
@@ -630,13 +630,69 @@ async fn p5_recall_verified_path_command_agnostic_returns_footnote() {
     .await;
     let input = serde_json::json!({"command": "cargo test --lib"});
     let blocked: HashSet<String> = HashSet::new();
-    let outcome = recall_pitfall(&pool, "shell", &input, &blocked).await;
+    let outcome = recall_pitfall(&pool, "proj-test", "shell", &input, &blocked).await;
     match outcome {
         PitfallRecall::Footnote(text) => {
             assert!(text.contains("v-agnostic title"));
         }
         other => panic!("path/cmd-agnostic verified must be Footnote, got {other:?}"),
     }
+}
+
+/// Scope/project isolation for the recall seam (2026-09-02): a
+/// project-scope pitfall from proj-a does NOT footnote/soft-block a
+/// proj-b session's matching tool call; the same pitfall DOES fire
+/// for its own project. Before the fix the trigger SQL had no scope
+/// filter at all — cross-project hits also bumped `hit_count`,
+/// polluting the P5 promotion input.
+#[tokio::test]
+async fn recall_pitfall_project_isolation() {
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus};
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    // Active project-scope pitfall bound to proj-a (the P4 write shape).
+    insert_raw(
+        &pool,
+        "pit-isolation",
+        MemoryScope::Project,
+        Some("proj-a"),
+        MemoryKind::Pitfall,
+        MemoryStatus::Active,
+        "proj-a bound pitfall",
+        "isolated pitfall content",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE autonomous_memories SET tool_name='shell', command_pattern='cargo test' \
+         WHERE memory_id='pit-isolation'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let input = serde_json::json!({"command": "cargo test --lib"});
+
+    // proj-b session → no recall.
+    let footnote = recall_pitfall_footnote(&pool, "proj-b", "shell", &input)
+        .await
+        .expect("recall must succeed");
+    assert!(
+        footnote.is_none(),
+        "proj-a pitfall must not fire for a proj-b session"
+    );
+
+    // proj-a session → recall fires.
+    let footnote = recall_pitfall_footnote(&pool, "proj-a", "shell", &input)
+        .await
+        .expect("recall must succeed");
+    let text = footnote.expect("own project's pitfall must fire");
+    assert!(text.contains("proj-a bound pitfall"));
+
+    // P5 tiered path shares the isolation (probe as proj-b → None).
+    let blocked: HashSet<String> = HashSet::new();
+    let outcome = recall_pitfall(&pool, "proj-b", "shell", &input, &blocked).await;
+    assert_eq!(outcome, PitfallRecall::None);
 }
 
 // =====================================================================

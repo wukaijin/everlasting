@@ -1005,10 +1005,16 @@ mod tests {
         .await
         .unwrap();
 
-        let footnote =
-            recall_pitfall_footnote(&pool, "shell", &json!({"command": "cargo test --lib"}))
-                .await
-                .expect("recall must succeed on healthy pool");
+        let footnote = recall_pitfall_footnote(
+            &pool,
+            // The pitfall is bound to proj-1 — probe from the same
+            // project (H2 isolation means another project would miss).
+            "proj-1",
+            "shell",
+            &json!({"command": "cargo test --lib"}),
+        )
+        .await
+        .expect("recall must succeed on healthy pool");
         let text = footnote.expect("P3 helper must hit the active pitfall");
         assert!(text.contains("WSL cargo test needs PKG_CONFIG_PATH"));
     }

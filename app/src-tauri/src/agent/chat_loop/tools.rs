@@ -273,6 +273,7 @@ pub(crate) async fn dispatch_tool_calls(
                     let blocked_snapshot = soft_blocked.lock().await.clone();
                     let (pitfall_recall, pitfall_rows) = permissions::recall_pitfall_with_hits(
                         &db,
+                        &project_id,
                         &name,
                         &input,
                         &blocked_snapshot,
@@ -1621,9 +1622,14 @@ pub(crate) async fn dispatch_tool_calls(
                     // "本次召回" chip. Worker isolation is the same as
                     // the parallel path above.
                     let blocked_snapshot = soft_blocked.lock().await.clone();
-                    let (pitfall_recall, pitfall_rows) =
-                        permissions::recall_pitfall_with_hits(&db, name, input, &blocked_snapshot)
-                            .await;
+                    let (pitfall_recall, pitfall_rows) = permissions::recall_pitfall_with_hits(
+                        &db,
+                        &current_ctx.project_id,
+                        name,
+                        input,
+                        &blocked_snapshot,
+                    )
+                    .await;
                     if !pitfall_rows.is_empty() {
                         crate::agent::memory_recall::emit_recall_event(
                             sink.as_ref(),

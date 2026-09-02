@@ -67,19 +67,19 @@ async fn find_pitfalls_by_trigger_tool_name_exact_match() {
         .unwrap();
 
     // Probe for `shell` → only pit-shell (preference excluded despite same tool_name).
-    let rows = find_pitfalls_by_trigger(&pool, "shell", None, None)
+    let rows = find_pitfalls_by_trigger(&pool, "proj-test", "shell", None, None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].memory_id, "pit-shell");
     // Probe for `edit_file` → only pit-edit.
-    let rows = find_pitfalls_by_trigger(&pool, "edit_file", None, None)
+    let rows = find_pitfalls_by_trigger(&pool, "proj-test", "edit_file", None, None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].memory_id, "pit-edit");
     // Probe for an unknown tool → empty.
-    let rows = find_pitfalls_by_trigger(&pool, "grep", None, None)
+    let rows = find_pitfalls_by_trigger(&pool, "proj-test", "grep", None, None)
         .await
         .unwrap();
     assert!(rows.is_empty());
@@ -140,7 +140,7 @@ async fn find_pitfalls_path_globs_semantics() {
 
     // Probe with NO path: path-agnostic fires; path-bound does NOT
     // (can't confirm the glob match; precision-first).
-    let rows = find_pitfalls_by_trigger(&pool, "shell", None, None)
+    let rows = find_pitfalls_by_trigger(&pool, "proj-test", "shell", None, None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1, "only path-agnostic fires without a path");
@@ -148,25 +148,42 @@ async fn find_pitfalls_path_globs_semantics() {
 
     // Probe with a MATCHING path (single-segment after the prefix):
     // both fire.
-    let rows = find_pitfalls_by_trigger(&pool, "shell", None, Some("app/src-tauri/Cargo.toml"))
-        .await
-        .unwrap();
+    let rows = find_pitfalls_by_trigger(
+        &pool,
+        "proj-test",
+        "shell",
+        None,
+        Some("app/src-tauri/Cargo.toml"),
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 2, "both fire when path matches the glob");
 
     // Probe with a NON-MATCHING path: only path-agnostic fires.
     // `app/src-tauri/src/lib.rs` does NOT match `app/src-tauri/*`
     // (`session_tool_permissions`-style glob: `*` doesn't cross `/`).
-    let rows = find_pitfalls_by_trigger(&pool, "shell", None, Some("app/src-tauri/src/lib.rs"))
-        .await
-        .unwrap();
+    let rows = find_pitfalls_by_trigger(
+        &pool,
+        "proj-test",
+        "shell",
+        None,
+        Some("app/src-tauri/src/lib.rs"),
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 1, "deep path doesn't match single-segment glob");
     assert_eq!(rows[0].memory_id, "pit-any");
 
     // Probe with a totally unrelated path: only path-agnostic fires.
-    let rows =
-        find_pitfalls_by_trigger(&pool, "shell", None, Some("/home/user/some-other-dir/foo"))
-            .await
-            .unwrap();
+    let rows = find_pitfalls_by_trigger(
+        &pool,
+        "proj-test",
+        "shell",
+        None,
+        Some("/home/user/some-other-dir/foo"),
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 1, "unrelated path → only path-agnostic");
     assert_eq!(rows[0].memory_id, "pit-any");
 }
@@ -198,13 +215,14 @@ async fn find_pitfalls_command_pattern_substring_filter() {
     .unwrap();
 
     // Matching command — fires.
-    let rows = find_pitfalls_by_trigger(&pool, "shell", Some("cargo test --lib"), None)
-        .await
-        .unwrap();
+    let rows =
+        find_pitfalls_by_trigger(&pool, "proj-test", "shell", Some("cargo test --lib"), None)
+            .await
+            .unwrap();
     assert_eq!(rows.len(), 1);
 
     // Non-matching command — does NOT fire.
-    let rows = find_pitfalls_by_trigger(&pool, "shell", Some("cargo build"), None)
+    let rows = find_pitfalls_by_trigger(&pool, "proj-test", "shell", Some("cargo build"), None)
         .await
         .unwrap();
     assert!(rows.is_empty(), "non-matching command_pattern filtered");
@@ -246,14 +264,14 @@ async fn find_pitfalls_command_pattern_row_without_probe_command_is_skipped() {
     // Probe with NO command (the edit_file / Path-kind probe shape):
     // the constrained row is skipped — both the P3-era filter and
     // the P5 all-status variant share the semantics.
-    let rows = find_pitfalls_by_trigger(&pool, "edit_file", None, None)
+    let rows = find_pitfalls_by_trigger(&pool, "proj-test", "edit_file", None, None)
         .await
         .unwrap();
     assert!(
         rows.is_empty(),
         "command_pattern-constrained row must not fire without a probe command"
     );
-    let rows = find_pitfalls_by_trigger_all_status(&pool, "edit_file", None, None)
+    let rows = find_pitfalls_by_trigger_all_status(&pool, "proj-test", "edit_file", None, None)
         .await
         .unwrap();
     assert!(
@@ -266,6 +284,7 @@ async fn find_pitfalls_command_pattern_row_without_probe_command_is_skipped() {
     // stored substring).
     let rows = find_pitfalls_by_trigger(
         &pool,
+        "proj-test",
         "edit_file",
         Some("error: Missing required parameter: path"),
         None,
@@ -273,4 +292,72 @@ async fn find_pitfalls_command_pattern_row_without_probe_command_is_skipped() {
     .await
     .unwrap();
     assert_eq!(rows.len(), 1, "matching probe command still recalls");
+}
+
+/// Scope/project isolation for the trigger-recall path (H2, added
+/// 2026-09-02): a `scope=project` pitfall in proj-a must NOT fire
+/// when probing from proj-b; user-scope pitfalls stay global. This
+/// is the recall-side twin of `list_memories_project_isolation` —
+/// before the fix, `find_pitfalls_by_trigger(_all_status)` had NO
+/// scope filter at all, so a project pitfall (e.g. P4 reflection
+/// output) footnoted / soft-blocked / fed hit_count promotion in
+/// every project.
+#[tokio::test]
+async fn find_pitfalls_project_isolation() {
+    let pool = make_pool().await;
+    // proj-a project-scope pitfall (the P4 reflection write shape:
+    // scope=Project + project_id bound).
+    insert_raw(
+        &pool,
+        "pit-proj-a",
+        MemoryScope::Project,
+        Some("proj-a"),
+        MemoryKind::Pitfall,
+        MemoryStatus::Active,
+        "proj-a only pitfall",
+        "must not surface in proj-b sessions",
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE autonomous_memories SET tool_name='shell' WHERE memory_id='pit-proj-a'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // User-scope pitfall — global by design.
+    insert_raw(
+        &pool,
+        "pit-global",
+        MemoryScope::User,
+        None,
+        MemoryKind::Pitfall,
+        MemoryStatus::Active,
+        "global pitfall",
+        "surfaces in every project",
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE autonomous_memories SET tool_name='shell' WHERE memory_id='pit-global'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Probe as proj-b → only the user row; proj-a's row is isolated.
+    let rows = find_pitfalls_by_trigger(&pool, "proj-b", "shell", None, None)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "proj-a pitfall isolated from proj-b");
+    assert_eq!(rows[0].memory_id, "pit-global");
+
+    // Probe as proj-a → both rows.
+    let rows = find_pitfalls_by_trigger(&pool, "proj-a", "shell", None, None)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+
+    // The all_status variant (P5 production path) shares the filter.
+    let rows = find_pitfalls_by_trigger_all_status(&pool, "proj-b", "shell", None, None)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "all_status probe isolates too");
+    assert_eq!(rows[0].memory_id, "pit-global");
 }

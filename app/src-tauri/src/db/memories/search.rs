@@ -388,8 +388,18 @@ pub async fn search_memories_fts_recall(
 ///
 /// Only `status IN ('active','verified')` rows are returned (a
 /// `candidate` pitfall hasn't earned recall surface yet).
+///
+/// **scope/project_id interaction (H2, 2026-09-02)**: `project_id`
+/// is the probing session's project — user-scope pitfalls are
+/// global (they surface for every project), project-scope pitfalls
+/// only surface for their own project (`scope='user' OR
+/// (scope='project' AND project_id=?)`). The parameter is NOT
+/// optional: the recall path is per-session by definition, and a
+/// None-style "search everything" shape would leak cross-project
+/// (same drift class as the 2026-09-02 list_memories leak).
 pub async fn find_pitfalls_by_trigger(
     pool: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     command_pattern: Option<&str>,
     path: Option<&str>,
@@ -405,9 +415,11 @@ pub async fn find_pitfalls_by_trigger(
         WHERE tool_name = ?
           AND kind = 'pitfall'
           AND status IN ('active','verified')
+          AND (scope = 'user' OR (scope = 'project' AND project_id = ?))
         "#,
     )
     .bind(tool_name)
+    .bind(project_id)
     .fetch_all(pool)
     .await?;
 
@@ -467,8 +479,13 @@ pub async fn find_pitfalls_by_trigger(
 ///
 /// `demoted` rows stay excluded (they've been aged out / superseded;
 /// the hygiene job can re-promote them via `update_status`).
+///
+/// Scope filter mirrors [`find_pitfalls_by_trigger`]: H2 semantics
+/// (`scope='user' OR (scope='project' AND project_id=?)`) — the
+/// probing session's project id is mandatory (2026-09-02).
 pub async fn find_pitfalls_by_trigger_all_status(
     pool: &SqlitePool,
+    project_id: &str,
     tool_name: &str,
     command_pattern: Option<&str>,
     path: Option<&str>,
@@ -485,9 +502,11 @@ pub async fn find_pitfalls_by_trigger_all_status(
         WHERE tool_name = ?
           AND kind = 'pitfall'
           AND status IN ('candidate','active','verified')
+          AND (scope = 'user' OR (scope = 'project' AND project_id = ?))
         "#,
     )
     .bind(tool_name)
+    .bind(project_id)
     .fetch_all(pool)
     .await?;
 
