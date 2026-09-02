@@ -137,3 +137,31 @@ swapping `invokeMock.mockImplementation` before setup adds an extra microtask
 hop to `list_sessions`, pushing `onProjectChange`'s
 `currentSessionId = null` tail past the drain and into the test
 (`chatSendActions.test.ts` CH8-2b describe, worked example).
+
+## 9. jsdom has no Enter activation behavior (2026-09-03, DirBrowserModal keyboard nav)
+
+**Symptom**: a component relies on the browser's native "Enter on a focused
+`<button>` fires click" behavior (roving tabindex lists where Enter is
+deliberately left un-handled in JS). In vitest+jsdom, triggering
+`keydown Enter` on the focused button does **not** synthesize a click —
+jsdom implements neither the activation behavior nor the default `click()`
+dispatch for Enter/Space on interactive elements (verified by probe, not
+assumed).
+
+**Cause**: activation behavior is a browser input-layer concept; jsdom only
+implements the DOM tree, so "unhandled keydown → native click" never happens.
+
+**Fix (two-half assertion strategy)**: split what jsdom *can* prove from what
+it can't —
+
+1. In vitest, assert the contract pieces: the keydown handler does **not**
+   `preventDefault()` on Enter, and a `trigger("click")` on the row drives the
+   navigation (`browse_dir` called with the row's path) + focus restore.
+2. Lock the real native chain (Enter keydown → browser activation → click) in
+   Playwright e2e against real Chromium (`app/e2e/projects-add-dirbrowser.spec.ts`
+   does exactly this: focus assertion + `press("Enter")` + request assertion).
+
+**Don't** fake it in jsdom by adding a JS Enter→click handler in the component
+just to make the unit test pass — that re-introduces the double-activation
+risk the no-handler design avoids (browser fires click once; a JS handler
+plus native activation can fire twice).

@@ -907,3 +907,31 @@ body > div:has(> .adp__pop) { z-index: var(--z-over-modal); }
 **空白 literal 分段**(dayPeriod 槽位残留),需按 `value.trim() === ""`
 过滤(AppTimeField 的 `visibleSegments`)。分段键入在 vitest+jsdom 可
 直接 `trigger("keydown", { key: "9" })` 驱动。
+
+## Pattern: roving tabindex keyboard nav inside a Dialog(2026-09-03,task `09-03-dirbrowser-desktop-unify`)
+
+**Problem**:DirBrowserModal 这类「行列表 + 路径输入框」的 Dialog 要补方向键
+导航,但不能绕开 reka-ui Dialog 的焦点陷阱(Esc 关窗、Tab 循环),也不能让
+方向键在输入框聚焦时被列表劫持。
+
+**Solution**(三根支柱,全部落在组件内,零全局监听):
+
+1. **roving tabindex**:列表所有行(`..` + entries)中恰一行 `tabindex="0"`
+   (选中行锚 `activeIndex`),其余 `tabindex="-1"`。数学上互斥——`..` 行
+   `activeIndex===0` 与 entry 行 `(parent?1:0)+i` 不可能同时为 0。
+2. **keydown 挂列表容器**(`.dir-browser__list`),不是 document/window:
+   `ArrowDown/ArrowUp` 用 `Math.min/max` 钳边移动 focus(不环绕),
+   `preventDefault()` 只在这两个键上;**Enter 不写 JS handler**——focus 落在
+   原生 `<button>` 上,浏览器自己激活 click。路径输入框在容器之外,天然不
+   被劫持(方向键留在输入框内移动光标)。
+3. **导航发起源区分焦点策略**:`navigate(path, { fromList })`——行点击/`..`
+   行(列表发起)完成后 `nextTick` 把 focus 复位到新列表首行(失败保留旧
+   列表时锚回首行供重试);「前往」/底部「上一步」/隐藏开关发起的不抢焦点。
+   `focusActiveRow` 用 `:not(:disabled)` 选择器避开 busy 行。
+
+**Why**:reka-ui 的焦点陷阱管理 Tab/Esc;在容器级挂 keydown 与之正交,不
+抢占。Enter 走原生激活意味着 jsdom(vitest)测不了完整激活链路——断言策略
+见 `test-environment.md` §9。
+
+**Related**:`DirBrowserModal.vue` 头注释;e2e
+`app/e2e/projects-add-dirbrowser.spec.ts`(真 Chromium 锁 Enter 原生链路)。

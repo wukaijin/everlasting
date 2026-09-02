@@ -140,6 +140,33 @@ send 的首个 await 处清空 strip 污染断言。
 **Related**:`.trellis/spec/backend/database-guidelines.md`「审计事件 keyset
 分页读」(服务端计数契约:matched / totalAll / totalCritical 随页返回)。
 
+### Convention: 项目添加全模式统一走 DirBrowserModal(2026-09-03 沉淀)
+
+**What**:projects store 的「添加项目」入口是 `openDirBrowser()`——只翻
+`dirBrowserOpen = true`,由 AppShell 挂载的 `DirBrowserModal` 提供点选/路径直达
+交互,「选择此目录」出口 `addProjectByPath(path)` 走共享注册尾巴
+`registerPickedPath`(visible 去重 → hidden unhide 恢复 → create + focus,
+RULE-FrontProj-001)。**没有 per-transport 分支**:桌面(Tauri)/浏览器/sidecar/
+remote 全走同一条 `browse_dir` IPC(daemon route + Tauri command 双注册)。
+
+**Why**:native `pick_project_dir`(tauri-plugin-dialog)已于 2026-09-03 整链
+移除——WSLg 下 GTK 风格对话框观感不合预期(BACKLOG §5.3 用户偏好自渲染),
+且它是该插件唯一消费方。**不要在新增交互时想当然加回 `tauri-plugin-dialog`**
+(依赖/插件注册/capabilities 权限都已删);要原生对话框就等于重新引入整条链,
+先确认真的放弃统一 UX 再动。
+
+**Example**:
+
+```ts
+// ProjectTabs / EmptyProjectState 的「添加项目」——就是开模态框,没有 IPC
+function onAdd() {
+  store.openDirBrowser();
+}
+```
+
+**Related**:`reka-ui-usage.md`「roving tabindex keyboard nav inside a Dialog」
+(模态框键盘导航契约);`browser-regression.md`(e2e 全流程锁定用例)。
+
 ---
 
 ## State Categories
