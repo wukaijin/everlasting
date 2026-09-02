@@ -8,14 +8,16 @@ allowed-tools: []
 
 本 skill 是 `dev` workflow(标准开发流)的完整说明。当你处于 workflow session 且 breadcrumb 显示 dev workflow 时,读这个 skill 理解整个流程。
 
-## 整体流程(3 个 state,线性推进)
+## 整体流程(3 个 state,1 条回环边)
 
 ```
-planning → in_progress → done
+planning ⇄ in_progress → done
   调研      实施+验收      沉淀
 ```
 
-每个 state 转移都需要**用户确认**(你用 ask_user_question 申请,用户同意才推进)。
+每个 state 转移都需要**用户确认**(你用 `request_task_state_transition` 申请,用户同意才推进;该工具是唯一翻转 `task.json.status` 的通道,ask_user_question 只提问不落盘)。
+
+**回环边 `in_progress → planning`**:check 揭示 prd 缺陷或需求变化时,申请回 planning 修 prd(仅状态回退,无 hook 副作用);回 planning 后用 `update_checklist` 重拆 items(done 项可保留),修完再申请回 in_progress。done 是终态:需要返工应新建任务,不做 done 回退。
 
 **为什么只有 3 个 state**:implement 和 check 合并为 `in_progress`,因为实施阶段的"写 → 测 → 修"循环不应该由 state machine 建模(那会 state 爆炸)。在 `in_progress` 内,你作为 orchestrator 轮换派 implementer + checker:复杂任务分步,每完成一个 item 派 checker 对抗 review,FAIL 则派 implementer 修,直到 PASS 再推进下一项。
 
@@ -23,10 +25,10 @@ planning → in_progress → done
 
 ### planning(调研 + 写 prd + 拆 checklist)
 > **注意**:prd 可能已被 review session 修订过(回环场景),planning 时先 `read_file` 读最新 prd,不要假设你是在从零写。
-- 只能 dispatch **researcher** 角色(只读调研)
+- 只能 dispatch **researcher** 角色(只读调研);findings 返回后**由你落盘**到 `.everlasting/tasks/<slug>/research/`(方法见 wf-brainstorm)
 - 产出 `.everlasting/tasks/<slug>/prd.md`(需求文档)+ 拆 task.json.items(实施阶段,见 §6.2)
 - **不要写实现代码**
-- 完成后 ask_user_question 申请切 in_progress
+- 完成后用 `request_task_state_transition` 申请切 in_progress
 
 ### in_progress(实施 + 每步验收)
 - 先 `use_skill wf-before-dev` 加载项目 spec 规范
@@ -37,7 +39,8 @@ planning → in_progress → done
   4. 推进下一项
 - tdd item 走 red(写失败测试)→ implement → green(测试通过)
 - 简单任务(单项 / trivial)可以自检,不必每项都派 checker
-- 全部 item done 且最后做一轮全量验收后,ask_user_question 申请切 done
+- check 揭示 prd 缺陷或需求变化 → 用 `request_task_state_transition` 申请回 planning(见上文回环边)
+- 全部 item done 且最后做一轮全量验收后,用 `request_task_state_transition` 申请切 done
 
 ### done(沉淀 + 归档)
 - `use_skill wf-update-spec` 把决策/坑/新 pattern 提炼进 `.everlasting/spec/`
@@ -64,6 +67,8 @@ dispatch 时你会用到 delegation 模板(plugin 配置),模板告诉你"告诉
 | task.json | 起 task 时 | 元数据(id/title/slug/status/summary) |
 | prd.md | planning | 需求文档 |
 | task.json.items | planning | 实施阶段拆分(内嵌 task.json,见 §6.2 S2;LLM 拆,如 后端→测试→前端→联调) |
+| research/ | planning | 调研 findings(主 LLM 从 researcher 返回值落盘,一主题一文件) |
+| relevant-specs.jsonl | planning | spec/research 策展清单(delegation `{relevant_specs}` 注入用;每行 `{"file","reason"}`) |
 | progress.md | state 转移时 | 交接叙述(下次 session 续 task 时读它) |
 | design.md | planning(复杂 task) | 技术设计(可选) |
 
@@ -72,7 +77,7 @@ dispatch 时你会用到 delegation 模板(plugin 配置),模板告诉你"告诉
 ## 门控:违反流程时怎么办
 
 若你想做当前 state 不允许的事(如 planning 想写代码),不要硬闯:
-- 用 ask_user_question 跟用户协商:"这个 task 还在 planning,确认进 in_progress 吗?"
+- 用 `request_task_state_transition` 申请(把理由写进 reason,卡片上用户能看到,如 "planning 已完成,确认进 in_progress 吗?")
 - 用户同意 → 推进 state 继续
 - 用户拒绝 → 回 breadcrumb 提示,继续当前 state 该做的事
 
