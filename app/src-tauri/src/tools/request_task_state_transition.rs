@@ -4,10 +4,11 @@
 //!
 //! Subagent-clone of the workflow state-machine's user-confirmation
 //! gate. Lets the agent ask the user to move the current task's
-//! `task.json.status` from one workflow state to another
-//! (`planning` → `in_progress` → `done` for the dev plugin). The
-//! execution is **blocking** (the agent loop's turn
-//! suspends until the user allows / denies), mirroring
+//! `task.json.status` between workflow states along the edges the
+//! plugin declares — forward (`planning` → `in_progress` → `done`
+//! for the dev plugin) or backward (dev's `in_progress` →
+//! `planning` rollback). The execution is **blocking** (the agent
+//! loop's turn suspends until the user allows / denies), mirroring
 //! `request_mode_change`'s structure.
 //!
 //! ## Why this lives next to the regular tools (not in agent/.
@@ -163,26 +164,28 @@ pub fn definition() -> ToolDef {
     ToolDef {
         name: "request_task_state_transition".to_string(),
         description: Some(
-            "Ask the user to transition the current task to a new workflow state. \
-             The valid target states are those declared by the current \
-             workflow plugin's workflow.json (dev: planning → in_progress → \
-             done; review: intake → reviewing → revising → reported). The \
-             user sees an inline card with the target state, the current \
-             state, and your reason; they choose Allow or Deny. On Allow, \
-             the on-disk task.json is updated and the per-transition Rust \
-             hook (spec-distillation on in_progress→done, preflight on \
-             planning→in_progress for the dev plugin) fires automatically. \
-             On Deny, you get {\"cancelled_by_user\": true} and should \
-             adapt.\n\n\
+            "Ask the user to move the current task between workflow states. \
+             Any state connected to the current state by a transition declared \
+             in the current workflow plugin's workflow.json is a legal target — \
+             forward to the next phase OR backward to an earlier one (rollback). \
+             Typical rollback: the dev plugin's in_progress → planning edge, for \
+             when a check reveals a prd defect or the requirements changed. The \
+             user sees an inline card with the target state, the current state, \
+             and your reason; they choose Allow or Deny. On Allow, the on-disk \
+             task.json is updated and the per-transition Rust hook \
+             (spec-distillation on in_progress→done, preflight on \
+             planning→in_progress for the dev plugin) fires automatically; a \
+             rollback edge fires no hook. On Deny, you get \
+             {\"cancelled_by_user\": true} and should adapt.\n\n\
              Only available in workflow sessions. If the target state is the \
              current state, the call returns {\"noop\": true} and no card is \
-             shown. If the target state is not reachable from the current \
-             state per the plugin's declared transitions, the call returns \
-             {\"invalid_transition\": true} with is_error.\n\n\
-             Use this when you've completed a workflow phase (research, \
-             implementation, review) and need the user to confirm the \
-             transition to the next phase. Do NOT self-advance the state — \
-             the user must approve each transition."
+             shown. If no declared transition connects the current state to the \
+             target state, the call returns {\"invalid_transition\": true} with \
+             is_error.\n\n\
+             Use this whenever the task's state should change and the edge is \
+             declared — including rollbacks; do not route a state change through \
+             plain questions (they never update task.json), and do NOT \
+             self-advance the state — the user must approve each transition."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -191,7 +194,7 @@ pub fn definition() -> ToolDef {
                 "target_state": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "The state to transition to. Must be a state declared by the current workflow plugin's workflow.json and reachable from the current state via a declared transition (e.g. dev: planning | in_progress | done; review: intake | reviewing | revising | reported)."
+                    "description": "The state to transition to. Must be a state declared by the current workflow plugin's workflow.json AND connected to the current state by a declared transition — forward or rollback (dev: planning | in_progress | done; review: intake | reviewing | revising | reported)."
                 },
                 "slug": {
                     "type": "string",

@@ -346,11 +346,20 @@ pub fn delegation_template_for<'a>(def: &'a WorkflowDef, role: &str) -> Option<&
 // dev plugin — the only workflow currently defined
 // ---------------------------------------------------------------------------
 
-/// The hard-coded `dev` workflow. Three states — `planning`
-/// → `in_progress` → `done`. The `in_progress` state allows
-/// both `implementer` and `checker` roles; the main LLM
-/// orchestrates them — implementer writes, checker does
-/// adversarial review per item (fail → back to implementer).
+/// The hard-coded `dev` workflow. Three states —
+/// `planning ⇄ in_progress → done`. The `in_progress →
+/// planning` rollback edge (09-02-wf-trellis-alignment R1)
+/// gives a task an escape hatch when the checker reveals a
+/// prd defect or requirements change mid-implementation; it
+/// is a pure state rollback — the `(from, to)` hook table
+/// has no arm for it, so no marker / spec-dir / progress
+/// write fires on the way back, and a later
+/// `planning → in_progress` re-entry idempotently short-
+/// circuits on the existing preflight marker. The
+/// `in_progress` state allows both `implementer` and
+/// `checker` roles; the main LLM orchestrates them —
+/// implementer writes, checker does adversarial review per
+/// item (fail → back to implementer).
 ///
 /// This is the post-2026-07-10 shape: the former 4-state
 /// machine (`planning → implement → check → done`) collapsed
@@ -365,10 +374,10 @@ pub fn delegation_template_for<'a>(def: &'a WorkflowDef, role: &str) -> Option<&
 /// shape. This constant is now the **fallback** when the
 /// on-disk plugin is missing or malformed.
 ///
-/// **Both transitions require user confirmation** —
-/// the agent cannot self-advance the state; the gate IPC
-/// `resolve_task_state_transition` (Phase 3) fires on
-/// every requested move.
+/// **All three transitions require user confirmation** —
+/// the agent cannot self-advance (or roll back) the state;
+/// the gate IPC `resolve_task_state_transition` (Phase 3)
+/// fires on every requested move.
 ///
 /// **Coordination**: `Pipeline` (roles run sequentially
 /// in declared order). `gather_strategy` is therefore
@@ -378,7 +387,7 @@ pub fn delegation_template_for<'a>(def: &'a WorkflowDef, role: &str) -> Option<&
 pub fn default_workflow() -> WorkflowDef {
     WorkflowDef {
         name: "dev".to_string(),
-        description: "Standard dev workflow: planning → in_progress → done with researcher / implementer / checker roles".to_string(),
+        description: "Standard dev workflow: planning ⇄ in_progress → done with researcher / implementer / checker roles".to_string(),
         states: vec![
             "planning".to_string(),
             "in_progress".to_string(),
@@ -396,6 +405,19 @@ pub fn default_workflow() -> WorkflowDef {
                 to: "done".to_string(),
                 requires_user_confirm: true,
             },
+            // 09-02-wf-trellis-alignment R1: loopback edge. A
+            // pure state rollback — `dispatch_hook` (state.rs)
+            // has no `(InProgress, Planning)` arm, so no
+            // marker/spec-dir/progress write fires; a later
+            // `planning → in_progress` re-enters through the
+            // idempotent preflight marker. Must stay in sync
+            // (field-for-field) with
+            // `resources/builtin-workflow/dev/workflow.json`.
+            Transition {
+                from: "in_progress".to_string(),
+                to: "planning".to_string(),
+                requires_user_confirm: true,
+            },
         ],
         roles_by_state: HashMap::from([
             ("planning".to_string(), vec!["researcher".to_string()]),
@@ -410,11 +432,11 @@ pub fn default_workflow() -> WorkflowDef {
         breadcrumb: HashMap::from([
             (
                 "planning".to_string(),
-                "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress".to_string(),
+                "[Wf · planning · dev] 调研(落盘 research/)+ 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress\n若本任务是从 in_progress 回环回来的:先读最新 prd 与 items,只修缺陷部分,再申请回 in_progress".to_string(),
             ),
             (
                 "in_progress".to_string(),
-                "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后把工作改动整理成逻辑 commit 提交,再请用户确认转 done".to_string(),
+                "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后把工作改动整理成逻辑 commit 提交,再请用户确认转 done\ncheck 揭示 prd 缺陷或需求变化时,用 request_task_state_transition 申请回 planning 修 prd(用户确认);回 planning 后用 update_checklist 重拆 items(done 项可保留)".to_string(),
             ),
             (
                 "done".to_string(),
@@ -424,11 +446,11 @@ pub fn default_workflow() -> WorkflowDef {
         delegation_templates: HashMap::from([
             (
                 "researcher".to_string(),
-                "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。".to_string(),
+                "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。\n输出请按主题分节,主 LLM 会把 findings 落盘到 task 的 research/ 目录。".to_string(),
             ),
             (
                 "implementer".to_string(),
-                "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完运行项目验证(typecheck / lint / 测试,按项目探测)确认不破坏现有行为。".to_string(),
+                "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完运行项目验证(typecheck / lint / 测试,按项目探测)确认不破坏现有行为。\ndelegation 文本中的调研摘要优先于 research/ 路径;路径 read 不到(隔离 worktree 无 .everlasting/tasks/)时在 Known issues 注明,勿臆测内容。".to_string(),
             ),
             (
                 "checker".to_string(),

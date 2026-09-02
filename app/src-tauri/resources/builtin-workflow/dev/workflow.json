@@ -1,6 +1,6 @@
 {
   "name": "dev",
-  "description": "Standard dev workflow: planning → in_progress → done with researcher / implementer / checker roles",
+  "description": "Standard dev workflow: planning ⇄ in_progress → done with researcher / implementer / checker roles",
   "states": ["planning", "in_progress", "done"],
   "initial": "planning",
   "transitions": [
@@ -13,6 +13,11 @@
       "from": "in_progress",
       "to": "done",
       "requires_user_confirm": true
+    },
+    {
+      "from": "in_progress",
+      "to": "planning",
+      "requires_user_confirm": true
     }
   ],
   "roles_by_state": {
@@ -21,13 +26,13 @@
     "done": []
   },
   "breadcrumb": {
-    "planning": "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress",
-    "in_progress": "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后把工作改动整理成逻辑 commit 提交,再请用户确认转 done",
+    "planning": "[Wf · planning · dev] 调研(落盘 research/)+ 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress\n若本任务是从 in_progress 回环回来的:先读最新 prd 与 items,只修缺陷部分,再申请回 in_progress",
+    "in_progress": "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后把工作改动整理成逻辑 commit 提交,再请用户确认转 done\ncheck 揭示 prd 缺陷或需求变化时,用 request_task_state_transition 申请回 planning 修 prd(用户确认);回 planning 后用 update_checklist 重拆 items(done 项可保留)",
     "done": "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地);归档前确认工作改动已提交,未提交则先提醒用户"
   },
   "delegation_templates": {
-    "researcher": "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。",
-    "implementer": "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完运行项目验证(typecheck / lint / 测试,按项目探测)确认不破坏现有行为。",
+    "researcher": "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。\n输出请按主题分节,主 LLM 会把 findings 落盘到 task 的 research/ 目录。",
+    "implementer": "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完运行项目验证(typecheck / lint / 测试,按项目探测)确认不破坏现有行为。\ndelegation 文本中的调研摘要优先于 research/ 路径;路径 read 不到(隔离 worktree 无 .everlasting/tasks/)时在 Known issues 注明,勿臆测内容。",
     "checker": "你是 dev workflow 的 checker 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请运行项目验证(typecheck / lint / 测试,按项目探测)+ 检查 spec 合规;返回 PASS / FAIL + 具体原因给主 LLM。"
   },
   "coordination": "pipeline",

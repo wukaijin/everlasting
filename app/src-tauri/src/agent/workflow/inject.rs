@@ -484,14 +484,15 @@ pub fn append_workflow_breadcrumb(turn_messages: &mut [ChatMessage], ctx: &Workf
 /// - `{state}` → `current_task.status` string (e.g.
 ///   `"planning"` / `"in_progress"` / `"done"`)
 ///
-/// **`{relevant_specs}`** (Step 2.5): scans
-/// `<project>/.everlasting/spec/` for `.md` files when
-/// the directory exists. The scan is a flat listing for
-/// now (FTS5 over `task.summary` is a Phase 3 refinement).
-/// When the spec dir is missing (Phase 3.2 not yet
-/// landed), or no files match, the placeholder resolves
-/// to `(auto-detect via wf-before-dev)` so the worker
-/// always gets an actionable hint.
+/// **`{relevant_specs}`** (Step 2.5; curated since
+/// 09-02-wf-trellis-alignment R3): when the current task has a
+/// `relevant-specs.jsonl` sidecar (`.everlasting/tasks/<slug>/`),
+/// the placeholder resolves to that curated `file — reason` list;
+/// otherwise it falls back to scanning
+/// `<project>/.everlasting/spec/` for `.md` files. When the spec
+/// dir is missing (Phase 3.2 not yet landed), or no files match,
+/// the placeholder resolves to `(auto-detect via wf-before-dev)`
+/// so the worker always gets an actionable hint.
 ///
 /// The placeholder substitution is intentionally
 /// permissive — a missing placeholder in the template
@@ -518,7 +519,8 @@ pub fn compute_delegation_template(
         .as_ref()
         .map(|t| t.status.as_str())
         .unwrap_or("");
-    let relevant_specs = resolve_relevant_specs(project_path);
+    let task_slug = workflow_ctx.current_task.as_ref().map(|t| t.slug.as_str());
+    let relevant_specs = resolve_relevant_specs(project_path, task_slug);
     Some(
         raw.replace("{title}", title)
             .replace("{summary}", summary)
@@ -527,19 +529,40 @@ pub fn compute_delegation_template(
     )
 }
 
-/// Scan `<project>/.everlasting/spec/` for `.md` files
-/// and return a comma-separated path list (relative to
-/// project root). Missing dir or no files →
-/// `(auto-detect via wf-before-dev)`.
+/// Resolve the `{relevant_specs}` placeholder body.
 ///
-/// Step 2.5 ships a flat listing (no FTS5 over
-/// `task.summary` yet — that's a Phase 3 refinement per
-/// the design doc §5.4). The hint text tells the worker
-/// to use the `wf-before-dev` skill as a fallback when
-/// the spec index is empty, matching the workflow
-/// breadcrumb's "use wf-before-dev when nothing's
-/// pinned" convention.
-fn resolve_relevant_specs(project_path: &str) -> String {
+/// **Curated path (09-02-wf-trellis-alignment R3)**: when
+/// `task_slug` is `Some` and
+/// `<project>/.everlasting/tasks/<slug>/relevant-specs.jsonl`
+/// exists, it wins. Each line is `{"file": "...", "reason": "..."}`;
+/// the output is one `file — reason` line per entry. Malformed
+/// lines are SKIPPED (partial curation still beats no curation);
+/// an empty file or a file where every line fails to parse falls
+/// through to the tree-walk fallback below — the placeholder never
+/// resolves to an empty string, the worker always gets an
+/// actionable hint.
+///
+/// **Fallback**: the pre-R3 behavior, byte-identical — a recursive
+/// `.md` listing of `<project>/.everlasting/spec/` (relative paths,
+/// sorted, comma-joined), or `(auto-detect via wf-before-dev)` when
+/// the dir is missing/empty.
+///
+/// **Known path fork (review P3)**: `project_path` here is the
+/// DISPATCHER's path — `current_ctx.worktree_path` (see
+/// `agent/subagent/dispatch/parse.rs`), i.e. the parent session's
+/// worktree — while `task_slug` comes from `workflow_ctx
+/// .current_task`, which `build_workflow_ctx` resolved against the
+/// DB `project.path`. When the session itself runs inside a session
+/// worktree, the two roots diverge and the curation lookup misses;
+/// the fallback below covers that case with the full-tree listing
+/// (accepted; not worth introducing a DB dependency into this
+/// sync, IO-light helper).
+pub(crate) fn resolve_relevant_specs(project_path: &str, task_slug: Option<&str>) -> String {
+    if let Some(slug) = task_slug {
+        if let Some(curated) = read_curated_specs(project_path, slug) {
+            return curated;
+        }
+    }
     let spec_dir = std::path::Path::new(project_path)
         .join(".everlasting")
         .join("spec");
@@ -614,6 +637,61 @@ fn resolve_relevant_specs(project_path: &str) -> String {
         "(auto-detect via wf-before-dev)".to_string()
     } else {
         paths.join(", ")
+    }
+}
+
+/// Per-task spec curation sidecar (09-02-wf-trellis-alignment R3).
+/// Reads `<project>/.everlasting/tasks/<slug>/relevant-specs.jsonl`
+/// — one `{"file": "...", "reason": "..."}` object per line, written
+/// by the main LLM during planning (wf-brainstorm) — and renders it
+/// as `file — reason` lines for the `{relevant_specs}` placeholder.
+///
+/// Returns `None` (→ caller falls back to the full-tree listing)
+/// when the file is missing, unreadable, empty, or contains NOT A
+/// SINGLE valid entry. Blank lines and malformed lines are skipped
+/// individually — a partially-corrupt file still yields its good
+/// entries (partial curation beats no curation).
+///
+/// Deliberately NO per-file existence check on the `file` values:
+/// this stays a pure text renderer (one small file read, no tree
+/// IO, no permission boundary probes). A stale path in the
+/// sidecar surfaces as a failed `read_file` on the worker side,
+/// which the worker handles on its own.
+fn read_curated_specs(project_path: &str, slug: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct RelevantSpecEntry {
+        file: String,
+        reason: String,
+    }
+
+    let sidecar = std::path::Path::new(project_path)
+        .join(".everlasting")
+        .join("tasks")
+        .join(slug)
+        .join("relevant-specs.jsonl");
+    let body = match std::fs::read_to_string(&sidecar) {
+        Ok(b) => b,
+        Err(_) => return None,
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry = match serde_json::from_str::<RelevantSpecEntry>(trimmed) {
+            Ok(e) => e,
+            Err(_) => continue, // malformed line — skip, keep the rest
+        };
+        if entry.file.trim().is_empty() {
+            continue; // parseable but useless — treat as a bad line
+        }
+        lines.push(format!("{} — {}", entry.file, entry.reason));
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
     }
 }
 
