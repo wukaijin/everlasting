@@ -91,7 +91,13 @@ const SAMPLE_LAYER: MemoryLayerInfo = {
   char_count: 0,
 };
 
-function mountPreview(props: { projectId?: string | null; kind?: "user" | "project" | "all" } = {}) {
+function mountPreview(
+  props: {
+    projectId?: string | null;
+    kind?: "user" | "project" | "all";
+    projectFilterable?: boolean;
+  } = {},
+) {
   return mount(MemoryPreview, {
     attachTo: document.body,
     props,
@@ -471,6 +477,126 @@ describe("MemoryPreview — 07-06 runtime row observability", () => {
     await deleteBtn.trigger("click");
     // The delete button must stop propagation — no `manage` event.
     expect(w.emitted("manage")).toBeUndefined();
+    w.unmount();
+  });
+});
+
+// 2026-09-02 (settings-memory-project-filter): the Settings Memory
+// tab passes `projectFilterable` → the 自主记忆 section renders the
+// 项目过滤 reka Select; the 全部项目 view tags project-scope rows
+// with the owning project's name. Hosts that don't pass the prop
+// (MemoryModal / ProjectTabs) must be untouched.
+describe("MemoryPreview — 自主记忆项目过滤 (settings-memory-project-filter)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") return [];
+      if (cmd === "delete_autonomous_memory") return 1;
+      return null;
+    });
+    const projects = useProjectsStore();
+    projects.currentProjectId = "proj-1";
+    projects.projects = [
+      {
+        id: "proj-1",
+        name: "Everlasting",
+        path: "/usr/local/code/github/everlasting",
+        is_git_repo: true,
+        git_branch: "main",
+        is_legacy: false,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        hidden: false,
+        metadata: null,
+      },
+    ];
+  });
+
+  it("renders NO filter select and NO project badge without the prop (hosts unchanged)", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [makeMemory({ id: 11 })];
+      }
+      return null;
+    });
+
+    const w = mountPreview();
+    await flushPromises();
+
+    expect(w.find(".memory-preview__filter-trigger").exists()).toBe(false);
+    // Default filter is "current" → not the all view → no badge.
+    expect(w.find(".runtime-memory__badge--project-name").exists()).toBe(false);
+    // Hint keeps the original wording.
+    expect(w.find(".memory-preview__runtime-hint").text()).toContain(
+      "(user + 当前 project)",
+    );
+    w.unmount();
+  });
+
+  it("renders the filter select with the prop; hint reflects the all view", async () => {
+    const store = useMemoryStore();
+    const refs = storeToRefs(store);
+    refs.runtimeProjectFilter.value = "all";
+
+    const w = mountPreview({ projectFilterable: true });
+    await flushPromises();
+
+    expect(w.find(".memory-preview__filter-trigger").exists()).toBe(true);
+    expect(w.find(".memory-preview__filter-trigger").text()).toContain(
+      "全部项目",
+    );
+    expect(w.find(".memory-preview__runtime-hint").text()).toContain(
+      "(user + 全部项目)",
+    );
+    w.unmount();
+  });
+
+  it("all view: project-scope rows show the owning project name, user rows don't", async () => {
+    const store = useMemoryStore();
+    const refs = storeToRefs(store);
+    refs.runtimeProjectFilter.value = "all";
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [
+          makeMemory({ id: 11, scope: "project", projectId: "proj-1" }),
+          makeMemory({ id: 12, scope: "user", projectId: null }),
+        ];
+      }
+      return null;
+    });
+
+    const w = mountPreview({ projectFilterable: true });
+    await flushPromises();
+
+    const badges = w.findAll(".runtime-memory__badge--project-name");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.text()).toBe("Everlasting");
+    w.unmount();
+  });
+
+  it("pinned filter: hint shows the project name; no project badge outside the all view", async () => {
+    const store = useMemoryStore();
+    const refs = storeToRefs(store);
+    refs.runtimeProjectFilter.value = "proj-1";
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [makeMemory({ id: 11, scope: "project", projectId: "proj-1" })];
+      }
+      return null;
+    });
+
+    const w = mountPreview({ projectFilterable: true });
+    await flushPromises();
+
+    expect(w.find(".memory-preview__runtime-hint").text()).toContain(
+      "(user + Everlasting)",
+    );
+    expect(w.find(".runtime-memory__badge--project-name").exists()).toBe(false);
     w.unmount();
   });
 });

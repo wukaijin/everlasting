@@ -30,6 +30,18 @@ import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, onMounted, ref, watch } from "vue";
 
 import {
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+} from "reka-ui";
+
+import {
   useMemoryStore,
   type AutonomousMemory,
   type MemoryKind,
@@ -50,8 +62,14 @@ const props = withDefaults(
      *  `useProjectsStore().currentProjectId` — the project layers
      *  are scoped to the active project. */
     projectId?: string | null;
+    /** 2026-09-02 (settings-memory-project-filter): render the
+     *  自主记忆 section's 项目过滤 select (当前项目 / 全部项目 /
+     *  pinned project). Only the Settings Memory tab sets this —
+     *  the MemoryModal / ProjectTabs entries keep the implicit
+     *  follow-the-active-project behavior. */
+    projectFilterable?: boolean;
   }>(),
-  { kind: "all", projectId: null },
+  { kind: "all", projectId: null, projectFilterable: false },
 );
 
 const store = useMemoryStore();
@@ -239,6 +257,61 @@ function scopeBadgeText(scope: string): string {
   return scope === "user" ? "user" : "project";
 }
 
+// ---------------------------------------------------------------------
+// 2026-09-02 (settings-memory-project-filter): 自主记忆项目过滤.
+// The select is rendered only when `projectFilterable` is set
+// (Settings Memory tab); the store's `runtimeProjectFilter` decides
+// what `fetchMemories` queries ("current" / "all" / pinned id).
+// ---------------------------------------------------------------------
+
+function onFilterChange(value: string) {
+  void store.setRuntimeProjectFilter(value);
+}
+
+const isAllView = computed(() => store.runtimeProjectFilter === "all");
+
+// Closed-trigger label for the filter select. The portal-mounted
+// SelectContent only registers item texts when open, so SelectValue
+// can't resolve the label while closed — pass it as the placeholder
+// (same pattern as RuntimeMemoryModal's status select).
+const filterValueLabel = computed<string>(() => {
+  const f = store.runtimeProjectFilter;
+  if (f === "current") return "当前项目";
+  if (f === "all") return "全部项目";
+  return projectsStore.projects.find((p) => p.id === f)?.name ?? "指定项目";
+});
+
+// Hint text under the 自主记忆 title reflects the active filter so
+// the scope of the list below is never ambiguous.
+const runtimeHint = computed<string>(() => {
+  const prefix = "agent 通过 remember tool 写入的跨 session 记忆";
+  const f = store.runtimeProjectFilter;
+  if (f === "all") return `${prefix}(user + 全部项目)`;
+  if (f === "current") return `${prefix}(user + 当前 project)`;
+  const pinned = projectsStore.projects.find((p) => p.id === f);
+  return `${prefix}(user + ${pinned ? pinned.name : "指定项目"})`;
+});
+
+// Empty-state wording: "该项目暂无…" reads wrong in the all-projects
+// view (there is no single project to point at).
+const runtimeEmptyText = computed<string>(() =>
+  isAllView.value
+    ? "暂无自主记忆。agent 通过 remember tool 写入后会自动出现在这里。"
+    : "该项目暂无自主记忆。agent 通过 remember tool 写入后会自动出现在这里。",
+);
+
+// In the all-projects view a row's owning project is the one thing
+// the fixed badges can't tell you — render the project name on
+// project-scope rows. Falls back to an id prefix for projects that
+// vanished from the store (deleted / hidden mid-view).
+function projectNameOf(projectId: string | null): string {
+  if (!projectId) return "";
+  return (
+    projectsStore.projects.find((p) => p.id === projectId)?.name ??
+    projectId.slice(0, 8)
+  );
+}
+
 // P2 PR3: human-readable status label.
 const statusLabel: Record<string, string> = {
   candidate: "candidate",
@@ -333,10 +406,55 @@ function formatTimestamp(rfc3339: string): string {
             自主记忆
           </h3>
           <p class="memory-preview__runtime-hint">
-            agent 通过 remember tool 写入的跨 session 记忆(user + 当前 project)
+            {{ runtimeHint }}
           </p>
         </div>
         <div class="memory-preview__runtime-header-right">
+          <SelectRoot
+            v-if="projectFilterable"
+            :model-value="store.runtimeProjectFilter"
+            @update:model-value="onFilterChange($event as string)"
+          >
+            <SelectTrigger
+              class="memory-preview__filter-trigger"
+              aria-label="自主记忆项目过滤"
+            >
+              <SelectValue :placeholder="filterValueLabel" />
+              <SelectIcon class="memory-preview__filter-icon">
+                <Icon name="chevron-down" :size="12" />
+              </SelectIcon>
+            </SelectTrigger>
+            <SelectPortal>
+              <SelectContent
+                class="memory-preview__filter-content"
+                position="popper"
+                :side-offset="4"
+              >
+                <SelectViewport class="memory-preview__filter-viewport">
+                  <SelectItem
+                    value="current"
+                    class="memory-preview__filter-option"
+                  >
+                    <SelectItemText>当前项目</SelectItemText>
+                  </SelectItem>
+                  <SelectItem
+                    value="all"
+                    class="memory-preview__filter-option"
+                  >
+                    <SelectItemText>全部项目</SelectItemText>
+                  </SelectItem>
+                  <SelectItem
+                    v-for="p in projectsStore.projects"
+                    :key="p.id"
+                    :value="p.id"
+                    class="memory-preview__filter-option"
+                  >
+                    <SelectItemText>{{ p.name }}</SelectItemText>
+                  </SelectItem>
+                </SelectViewport>
+              </SelectContent>
+            </SelectPortal>
+          </SelectRoot>
           <span
             v-if="store.runtimeMemories.length > 0"
             class="memory-preview__runtime-count"
@@ -347,7 +465,8 @@ function formatTimestamp(rfc3339: string): string {
             class="memory-preview__refresh btn btn--muted btn--sm"
             type="button"
             :disabled="
-              store.runtimeMemoriesLoading || !effectiveProjectId
+              store.runtimeMemoriesLoading ||
+              (!effectiveProjectId && store.runtimeProjectFilter === 'current')
             "
             @click="store.fetchMemories()"
           >
@@ -366,7 +485,7 @@ function formatTimestamp(rfc3339: string): string {
       </div>
 
       <div
-        v-else-if="!effectiveProjectId"
+        v-else-if="!effectiveProjectId && store.runtimeProjectFilter === 'current'"
         class="memory-preview__empty"
       >
         <p>请先选择一个项目以查看自主记忆。</p>
@@ -385,7 +504,7 @@ function formatTimestamp(rfc3339: string): string {
         v-else-if="store.runtimeMemories.length === 0"
         class="memory-preview__empty"
       >
-        <p>该项目暂无自主记忆。agent 通过 remember tool 写入后会自动出现在这里。</p>
+        <p>{{ runtimeEmptyText }}</p>
       </div>
 
       <ul v-else class="memory-preview__runtime-list">
@@ -414,6 +533,16 @@ function formatTimestamp(rfc3339: string): string {
                 :class="`runtime-memory__badge--scope-${mem.scope}`"
               >
                 {{ scopeBadgeText(mem.scope) }}
+              </span>
+              <!-- 2026-09-02 (settings-memory-project-filter): owning
+                   project name, shown only in the 全部项目 view —
+                   per-project views already know their project. -->
+              <span
+                v-if="isAllView && mem.scope === 'project'"
+                class="runtime-memory__badge runtime-memory__badge--project-name"
+                :title="mem.projectId ?? ''"
+              >
+                {{ projectNameOf(mem.projectId) }}
               </span>
               <span
                 class="runtime-memory__badge"
@@ -679,6 +808,64 @@ function formatTimestamp(rfc3339: string): string {
   color: var(--color-text-muted);
 }
 
+/* --- 2026-09-02 (settings-memory-project-filter): the reka-ui
+   Select for the 项目过滤 control (Settings Memory tab only).
+   Replicates RuntimeMemoryModal's status-select styling, compact —
+   native <select> would clash with the dark reka popovers used in
+   the other Settings tabs (2026-08-28 统一决策, see SearchTab). --- */
+.memory-preview__filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.memory-preview__filter-trigger[data-state="open"] {
+  border-color: var(--color-accent);
+}
+.memory-preview__filter-icon {
+  display: inline-flex;
+  color: var(--color-text-muted);
+}
+
+/* Select portal children need :deep() — see reka-ui-usage.md. */
+:deep(.memory-preview__filter-content) {
+  min-width: 160px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-over-modal) !important;
+  padding: 4px;
+}
+:deep(.memory-preview__filter-viewport) {
+  /* 容器接 programmatic focus,整框上环无意义;内部控件由全局
+     :focus-visible 基线负责(style.css)。 */
+  outline: none;
+}
+:deep(.memory-preview__filter-option) {
+  display: flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+:deep(.memory-preview__filter-option[data-highlighted]) {
+  background: var(--color-bg-surface);
+}
+:deep(.memory-preview__filter-option[data-state="checked"]) {
+  color: var(--color-accent-text);
+}
+
 .memory-preview__runtime-list {
   list-style: none;
   margin: 0;
@@ -756,6 +943,26 @@ function formatTimestamp(rfc3339: string): string {
   border-color: color-mix(in srgb, var(--color-status-warn) 40%, transparent);
 }
 
+/* 2026-09-02 (settings-memory-project-filter): scope-project gets
+   the accent tint so project-bound rows are spottable at a glance
+   (previously both scope badges rendered the identical neutral
+   style — the only difference was two characters of text).
+   scope-user stays neutral: it's the global baseline, not the
+   thing to spot. */
+.runtime-memory__badge--scope-project {
+  color: var(--color-accent-text);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+/* owning-project name badge (全部项目 view only). Neutral + capped
+   so a long project name can't push the row's real content out. */
+.runtime-memory__badge--project-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 07-06 (am-observability-panel B2/R4): provenance badge for
    human-edited rows. Uses the warn hue (amber) so it's visually
    distinct from the kind/scope/status badges but still muted. */
@@ -765,8 +972,9 @@ function formatTimestamp(rfc3339: string): string {
   background: color-mix(in srgb, var(--color-status-warn) 8%, transparent);
 }
 
-/* scope + status badges stay neutral (the kind badge already
-   carries the primary hue). */
+/* scope-user + status badges stay neutral (the kind badge already
+   carries the primary hue; scope-project opts into the accent
+   tint above). */
 
 .runtime-memory__content {
   margin: 0;

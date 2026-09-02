@@ -239,6 +239,7 @@ watch(
               </span>
               <span
                 class="runtime-memory-modal__chip runtime-memory-modal__chip--scope"
+                :class="`runtime-memory-modal__chip--scope-${memory.scope}`"
               >
                 {{ scopeLabel(memory.scope) }}
               </span>
@@ -599,6 +600,12 @@ watch(
   border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
 }
 .runtime-memory-modal__chip--kind-preference {
+  color: var(--color-accent-text);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+/* 2026-09-02 (settings-memory-project-filter): scope-project tint,
+   mirroring MemoryPreview's badge — scope-user stays neutral. */
+.runtime-memory-modal__chip--scope-project {
   color: var(--color-accent-text);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }

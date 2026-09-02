@@ -562,3 +562,76 @@ describe("useMemoryStore — 07-06 status / edit / recall", () => {
     expect(store.recallHitsForSession("never-seen")).toEqual([]);
   });
 });
+
+// 2026-09-02 (settings-memory-project-filter): the 自主记忆 list's
+// project filter. Default "current" keeps the pre-existing
+// follow-the-active-project behavior (MemoryModal / ProjectTabs);
+// "all" hits the backend admin view (projectId: null); a pinned id
+// queries that project without needing loadForProject first.
+describe("useMemoryStore — runtimeProjectFilter (settings 项目过滤)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [USER_MEMORY, PROJECT_MEMORY_A];
+      }
+      return null;
+    });
+  });
+
+  function listCalls() {
+    return invokeMock.mock.calls.filter(
+      (c) => c[0] === "list_autonomous_memories",
+    );
+  }
+
+  it("default filter is 'current': fetch follows lastProjectId (behavior unchanged)", async () => {
+    const store = useMemoryStore();
+    expect(store.runtimeProjectFilter).toBe("current");
+    await store.loadForProject("proj-1");
+    const calls = listCalls();
+    expect(calls[calls.length - 1]?.[1]).toEqual({ projectId: "proj-1" });
+  });
+
+  it("setRuntimeProjectFilter('all') fetches with projectId null (admin all-projects view)", async () => {
+    const store = useMemoryStore();
+    await store.setRuntimeProjectFilter("all");
+
+    expect(listCalls()).toHaveLength(1);
+    expect(listCalls()[0]?.[1]).toEqual({ projectId: null });
+    // The list still populates from the admin view's response.
+    expect(store.runtimeMemories).toHaveLength(2);
+    expect(store.runtimeProjectFilter).toBe("all");
+  });
+
+  it("setRuntimeProjectFilter pins a project id and queries it without loadForProject", async () => {
+    const store = useMemoryStore();
+    // Deliberately NO loadForProject — lastProjectId stays null. A
+    // pinned id must still fetch (that's the point of the Settings
+    // filter: browse a project that isn't active).
+    await store.setRuntimeProjectFilter("proj-9");
+
+    expect(listCalls()).toHaveLength(1);
+    expect(listCalls()[0]?.[1]).toEqual({ projectId: "proj-9" });
+  });
+
+  it("same-value set is a no-op (no IPC, no refetch)", async () => {
+    const store = useMemoryStore();
+    // "current" is already the default.
+    await store.setRuntimeProjectFilter("current");
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("loadForProject with filter 'all' keeps querying the admin view on project switch", async () => {
+    const store = useMemoryStore();
+    await store.setRuntimeProjectFilter("all");
+    invokeMock.mockClear();
+
+    await store.loadForProject("proj-2");
+
+    const calls = listCalls();
+    expect(calls[calls.length - 1]?.[1]).toEqual({ projectId: null });
+  });
+});

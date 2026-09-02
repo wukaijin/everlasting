@@ -220,6 +220,19 @@ export const useMemoryStore = defineStore("memory", () => {
   const runtimeMemoriesLoading = ref<boolean>(false);
   const runtimeMemoriesError = ref<string | null>(null);
 
+  // 2026-09-02 (settings-memory-project-filter): which project the
+  // runtime-memories list queries. Three kinds of value:
+  //   - "current" (default) → follow the active project
+  //     (`lastProjectId`). The MemoryModal / ProjectTabs entries
+  //     never touch the filter, so they keep the pre-existing
+  //     follow-the-project behavior.
+  //   - "all" → the backend's explicit "全部项目" admin view
+  //     (`list_autonomous_memories` with `projectId: null`): user
+  //     layer + EVERY project's project-scope rows.
+  //   - any other string → a pinned project id chosen in the
+  //     Settings Memory tab's 项目过滤 select.
+  const runtimeProjectFilter = ref<string>("current");
+
   // ---------------------------------------------------------------------
   // State — recall hits (07-06 am-observability-panel B1/R2b)
   // ---------------------------------------------------------------------
@@ -370,19 +383,31 @@ export const useMemoryStore = defineStore("memory", () => {
   // P2 PR3: runtime-memory fetching / deleting
   // ---------------------------------------------------------------------
 
-  /** Fetch the list of autonomous (runtime) memories visible to the
-   *  current project. The backend's `list_autonomous_memories`
-   *  command is project-isolated: user-scope rows (global) plus
-   *  this project's own project-scope rows; a project-scope row in
-   *  proj-A is never surfaced when querying proj-B. Newest first
-   *  (the DB ORDER BY `created_at DESC`).
+  /** Fetch the list of autonomous (runtime) memories for the
+   *  current `runtimeProjectFilter` (see its doc for the three
+   *  filter shapes). With the default "current" filter the
+   *  backend's `list_autonomous_memories` command is
+   *  project-isolated: user-scope rows (global) plus this project's
+   *  own project-scope rows; a project-scope row in proj-A is
+   *  never surfaced when querying proj-B. The "all" filter hits the
+   *  explicit admin view (`projectId: null`) which returns every
+   *  project's rows — only the Settings 项目过滤 control sets it.
+   *
+   *  Newest first (the DB ORDER BY `created_at DESC`).
    *
    *  Mirrors the instruction-file `fetchLayers` error policy: a
    *  failure is stored in `runtimeMemoriesError` and the previous
    *  list is left intact (defensive — the panel can still render
    *  the stale state with an error banner). */
   async function fetchMemories(): Promise<void> {
-    if (!lastProjectId.value) {
+    const filter = runtimeProjectFilter.value;
+    const target =
+      filter === "all"
+        ? "all"
+        : filter === "current"
+          ? lastProjectId.value
+          : filter;
+    if (!target) {
       // No project → no memories to fetch. Mirror the instruction
       // file section: render the empty state, not an error. The
       // panel only shows the runtime-memories section when a
@@ -396,7 +421,11 @@ export const useMemoryStore = defineStore("memory", () => {
     try {
       const next = await transport.invoke<AutonomousMemory[]>(
         "list_autonomous_memories",
-        { projectId: lastProjectId.value },
+        // "all" → null → the backend's all-projects admin view;
+        // a concrete id → project-isolated view. The HTTP transport
+        // rewrites the top-level key to snake_case for the daemon
+        // route (Option<String> accepts null).
+        { projectId: target === "all" ? null : target },
       );
       runtimeMemories.value = next;
       runtimeMemoriesError.value = null;
@@ -405,6 +434,17 @@ export const useMemoryStore = defineStore("memory", () => {
     } finally {
       runtimeMemoriesLoading.value = false;
     }
+  }
+
+  /** Switch the runtime-memories project filter (Settings 项目过滤
+   *  select) and immediately re-fetch. Always fetches — even with
+   *  no active project — because both the "all" and pinned-id
+   *  shapes are meaningful without one (the default "current"
+   *  shape would short-circuit in `fetchMemories`). */
+  async function setRuntimeProjectFilter(filter: string): Promise<void> {
+    if (filter === runtimeProjectFilter.value) return;
+    runtimeProjectFilter.value = filter;
+    await fetchMemories();
   }
 
   /** Delete a single runtime memory by its `memoryId` (the UUID
@@ -622,7 +662,9 @@ export const useMemoryStore = defineStore("memory", () => {
     runtimeMemories,
     runtimeMemoriesLoading,
     runtimeMemoriesError,
+    runtimeProjectFilter,
     fetchMemories,
+    setRuntimeProjectFilter,
     deleteMemory,
     // 07-06 (am-observability-panel B1): status + edit + recall
     updateMemoryStatus,
