@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 52
+- **Total Sessions**: 53
 - **Last Active**: 2026-09-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~778 | Active |
+| `journal-2.md` | ~801 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 53 | 2026-09-02 | Chat 运行状态面板:ActivityPanel 三合一 + background shell 可观测性 | `d76398b1`, `1a236d83`, `651709b6` | `main` |
 | 52 | 2026-09-02 | wf-trellis-alignment:builtin dev workflow 对齐 Trellis 三机制 | `488c1632`, `c4895434`, `1e14d15b`, `d42f8fb0` | `main` |
 | 51 | 2026-09-02 | wf-dev breadcrumb 补 commit 指引 | `336a164e` | `main` |
 | 50 | 2026-09-01 | A2+ P3d 后台 shell 升级闭环(B 案:下轮注入时弹卡) | `8fa9047d` | `main` |

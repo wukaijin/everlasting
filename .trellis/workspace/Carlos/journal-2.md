@@ -776,3 +776,26 @@ P3c 留下的最后一个沙盒 UX 不对称收口:后台 run_background_shell �
 ### Status
 
 [OK] **Completed**
+
+
+## Session 53: Chat 运行状态面板:ActivityPanel 三合一 + background shell 可观测性
+
+**Date**: 2026-09-02
+**Task**: Chat 运行状态面板:ActivityPanel 三合一 + background shell 可观测性
+**Branch**: `main`
+
+### Summary
+
+新增 chat 右下 ActivityPanel(子代理/后台命令/清单三 section 合并原 ChecklistCard,checklist store 零逻辑改动)。后端补 background shell 可观测性缺口:registry list_for_session + background_shell:update 事件(started/exited/pruned,emitter 注入 + daemon SSE/Tauri Full 双接线)+ list/kill_background_shell 双模式 IPC(五处注册)。subagent 行点击复用 SubagentDrawer。check 阶段修 2 个 bug:running elapsed 接收时间戳双计、ensureStarted 守卫短路;follow-up 修浮球 solo 图标居中。测试:后端 2235 通过/前端 1547 通过/clippy/vue-tsc/e2e 全绿。spec 沉淀 backend/background-shell-observability.md + frontend/chat/activity-panel.md(双时间源 gotcha:MonotonicMs 禁与 Date.now 混算)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d76398b1` | (see git log) |
+| `1a236d83` | (see git log) |
+| `651709b6` | (see git log) |
+
+### Status
+
+[OK] **Completed**
