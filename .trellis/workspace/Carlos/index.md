@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 51
+- **Total Sessions**: 52
 - **Last Active**: 2026-09-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~754 | Active |
+| `journal-2.md` | ~778 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 52 | 2026-09-02 | wf-trellis-alignment:builtin dev workflow 对齐 Trellis 三机制 | `488c1632`, `c4895434`, `1e14d15b`, `d42f8fb0` | `main` |
 | 51 | 2026-09-02 | wf-dev breadcrumb 补 commit 指引 | `336a164e` | `main` |
 | 50 | 2026-09-01 | A2+ P3d 后台 shell 升级闭环(B 案:下轮注入时弹卡) | `8fa9047d` | `main` |
 | 49 | 2026-08-31 | SSE 丢分片与提示词头部缓存失效:取证 + 双修复 | `2a1b3c6a`, `b797d0c8` | `main` |

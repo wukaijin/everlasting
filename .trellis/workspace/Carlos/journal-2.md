@@ -752,3 +752,27 @@ P3c 留下的最后一个沙盒 UX 不对称收口:后台 run_background_shell �
 ### Status
 
 [OK] **Completed**
+
+
+## Session 52: wf-trellis-alignment:builtin dev workflow 对齐 Trellis 三机制
+
+**Date**: 2026-09-02
+**Task**: wf-trellis-alignment:builtin dev workflow 对齐 Trellis 三机制
+**Branch**: `main`
+
+### Summary
+
+对齐 builtin dev workflow 与 Trellis 流程:R1 声明 in_progress→planning 回环边(三处定义同步,工具文案去前向偏置,state.rs 钉死回滚零 marker);R2 调研落盘 research/ 约定 + 隔离 worker 不可见对策(delegation 摘要通道);R3 relevant-specs.jsonl 按任务策展 {relevant_specs} 注入(fallback 逐字兼容)。外部模型评审 P1-P3 核实后合入(P1 机制修正:tasks/ gitignored 非『未提交』;P2 修 wf-overview/wf-brainstorm 误指 ask_user_question)。全量 2230 tests 绿,镜像 diff 空,spec 沉淀 workflow-plugin-builtin.md 新契约段。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `488c1632` | (see git log) |
+| `c4895434` | (see git log) |
+| `1e14d15b` | (see git log) |
+| `d42f8fb0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
