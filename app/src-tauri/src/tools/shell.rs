@@ -317,6 +317,8 @@ pub fn definition() -> ToolDef {
              (e.g. 300000-600000) so the work is not cut off. Long-running services (dev \
              servers, `--watch`) must still finish within the timeout, split them or poll \
              in separate calls.\n\n\
+             Non-zero exit codes are data, not tool errors — read the \
+             trailing `[exit code: N]` line and judge from the output.\n\n\
              Outputs over 30 KB are saved to a spill file under the app data dir \
              (the tool result shows the exact absolute path); page through it \
              with read_file offset/limit when you need the full content.\n\n\
@@ -656,7 +658,17 @@ pub async fn execute(
         combined = format!("[exit code: {}]", exit_code);
     }
 
-    let is_error = result.cancelled || result.timed_out || exit_code != 0;
+    // 2026-09-02: exit code semantics — a completed run's exit code
+    // is DATA, not a tool failure. The `[exit code: N]` line above
+    // reports it and the model judges from the output (many commands
+    // use non-zero exits as information: `grep` no-match, `diff`
+    // differences-found, `test`). Only infrastructure failures —
+    // user cancel / timeout / spawn error — are tool errors. Same
+    // philosophy as `grep`'s "rg exit1 = no matches is not an error"
+    // (tool-contract spec §is_error semantics). Pre-change every
+    // non-zero exit flipped the UI card into the red error state,
+    // punishing intentional exit-1 commands.
+    let is_error = result.cancelled || result.timed_out;
     // The child ran; surface the exit code so the agent loop can
     // audit it (C4 PR1). `result.exit_code` is `-1` only on the
     // kill-and-collect path when the wait returned no status —

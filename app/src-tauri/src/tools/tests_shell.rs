@@ -152,6 +152,10 @@ async fn execute_echo() {
     assert!(update.new_cwd.is_some());
 }
 
+/// 2026-09-02 exit-code semantics: a command that completes with a
+/// non-zero exit is NOT a tool error. The stderr text and the
+/// `[exit code: N]` marker are the model's signal — the tool itself
+/// ran fine.
 #[tokio::test]
 async fn execute_stderr_command() {
     let tmp = tempdir().unwrap();
@@ -162,8 +166,24 @@ async fn execute_stderr_command() {
         &fresh_token(),
     )
     .await;
-    assert!(is_error);
+    assert!(!is_error, "{}", content);
     assert!(content.contains("error"));
+    assert!(content.contains("[exit code: 1]"));
+}
+
+/// Arbitrary non-zero codes (not just 1) ride the same data path.
+#[tokio::test]
+async fn nonzero_exit_code_is_data_not_error() {
+    let tmp = tempdir().unwrap();
+    let (content, is_error, _, _) = execute(
+        &serde_json::json!({"command": "exit 3"}),
+        &test_ctx(&tmp),
+        None,
+        &fresh_token(),
+    )
+    .await;
+    assert!(!is_error, "{}", content);
+    assert!(content.contains("[exit code: 3]"));
 }
 
 #[tokio::test]

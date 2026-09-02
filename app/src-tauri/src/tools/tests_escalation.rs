@@ -262,7 +262,10 @@ async fn escalation_deny_returns_failure_with_guidance() {
     )
     .await;
 
-    assert!(is_error);
+    // 2026-09-02 exit-code semantics: the deny leaves a non-zero
+    // exit, which is no longer a tool error — the guidance text in
+    // the content is the signal (assertions below).
+    assert!(!is_error);
     assert_eq!(capture.asks.lock().unwrap().len(), 1, "one card");
     // Failure + guidance (the deny branch keeps the sandbox framing).
     assert!(
@@ -396,7 +399,9 @@ async fn escalation_without_handle_degrades_to_guidance() {
         &tokio_util::sync::CancellationToken::new(),
     )
     .await;
-    assert!(is_error);
+    // 2026-09-02 exit-code semantics: guidance-only degradation keeps
+    // is_error false — the "sandbox write block" text is the signal.
+    assert!(!is_error);
     assert!(
         content.contains("sandbox write block"),
         "guidance appended without a handle: {content}"
