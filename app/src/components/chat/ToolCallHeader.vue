@@ -35,7 +35,7 @@ import Icon from "../Icon.vue";
 
 const props = withDefaults(
   defineProps<{
-    /** Tool icon name（heroicons key，调用方 toolIcon(name) 算好）。 */
+    /** Tool icon name（Icon.vue registry key，调用方 toolIcon(name) 算好）。 */
     iconName: string;
     /** Header 标题 —— tool 变体是 tool name，permission 变体是 toolName/fallback。 */
     name: string;

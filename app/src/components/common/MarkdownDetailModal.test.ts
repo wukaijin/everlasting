@@ -43,7 +43,7 @@ function makeModal(props: Partial<ModalProps>) {
     attachTo: document.body,
     props: props as ModalProps,
     // Stub the Icon wrapper so the test doesn't pull in the full
-    // heroicons/lucide registry. Stubbed icons render as
+    // lucide registry. Stubbed icons render as
     // <icon-stub name="..." /> with empty textContent.
     global: {
       stubs: { Icon: true },

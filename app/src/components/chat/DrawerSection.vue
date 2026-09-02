@@ -86,7 +86,7 @@ function toggle(): void {
   open.value = !open.value;
 }
 
-/** Per-type icon name (heroicons key in Icon.vue registry). */
+/** Per-type icon name (key in Icon.vue registry). */
 const iconName = computed<string>(() => {
   switch (props.type) {
     case "thinking":

@@ -26,7 +26,7 @@
 // D6 polish: the AppLogo brand mark is rendered at the FAR LEFT of
 // the bar (before the macOS spacer, before the slot). It opts out of
 // the drag region so it's clickable in the future. Window control
-// buttons now use heroicons instead of the old ー/□/❐/✕ typography.
+// buttons use Icon.vue registry icons instead of the old ー/□/❐/✕ typography.
 //
 // Maximize behavior: every platform defers to the OS-native
 // `toggleMaximize()`. We deliberately do NOT manually setSize +

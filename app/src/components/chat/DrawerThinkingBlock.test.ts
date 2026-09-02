@@ -18,7 +18,7 @@
 //
 // Icon stub note (from memory `subagentdrawer-banner-test-gotchas.md`):
 // ThinkingBlock renders `<Icon name="thinking">` in its header. We
-// stub `Icon` so the test doesn't pull in the full heroicons/lucide
+// stub `Icon` so the test doesn't pull in the full lucide
 // registry. Stubbed icons render as `<icon-stub>` with empty
 // textContent; we assert on spans/classes that carry real text, not
 // on the icon stub.

@@ -108,7 +108,7 @@ const durationLabel = computed<string>(() => {
   return abbreviateDuration(d);
 });
 
-/** Status icon name (heroicons key in Icon.vue registry).
+/** Status icon name (key in Icon.vue registry).
  *  - error   → x
  *  - done    → check
  *  - running → ellipsis (CSS animates the pulse) */

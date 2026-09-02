@@ -744,7 +744,7 @@ cd app/src && grep -rn "background: var(--color-accent)" --include="*.vue" . | g
 ## Icon Sizing
 
 All icons go through the `Icon.vue` wrapper (the only component
-that imports `@lucide/vue` / `@heroicons/vue`); components render
+that imports `@lucide/vue`); components render
 `<Icon name="..." :size="N" />` and never touch the underlying SVG
 libraries directly. The wrapper pins the glyph in a `<span>` with
 `width` / `height` + `flex-shrink: 0` so a flex container can't

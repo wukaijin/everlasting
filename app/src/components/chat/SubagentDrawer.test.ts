@@ -96,7 +96,7 @@ function makeDrawer() {
     attachTo: document.body,
     global: {
       // reka-ui portals via <Teleport to="body">; stub Icon so the
-      // test stays fast and avoids pulling heroicons into jsdom.
+      // test stays fast and avoids pulling the lucide registry into jsdom.
       // Do NOT stub the Drawer* components — we assert against their
       // real rendered output (props → DOM) below.
       stubs: { Icon: true },
