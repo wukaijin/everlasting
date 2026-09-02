@@ -182,7 +182,9 @@ async fn escalation_approve_reruns_once_without_second_card() {
     )
     .await;
 
-    assert!(is_error, "the rerun legitimately fails: {content}");
+    // 2026-09-02 exit-code semantics: the rerun's plain failure is a
+    // non-zero exit, not a tool error — exit + content are the signal.
+    assert!(!is_error);
     assert_eq!(exit, Some(1));
     // Exactly one card for the whole call (§5.1 once-per-call gate).
     let cards = capture.asks.lock().unwrap().len();
