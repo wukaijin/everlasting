@@ -13,7 +13,7 @@
 //! - [`worktree`] — `attach_worktree` / `detach_worktree` /
 //!   `delete_worktree` + the destructive `cancel_inflight_for_session`
 //!   hook
-//! - [`projects`] — Project CRUD + `pick_project_dir`
+//! - [`projects`] — Project CRUD + `browse_dir`
 //! - [`cancel`] — `cancel_chat`
 //!
 //! The `chat` command itself lives in [`crate::agent::chat`]
@@ -125,8 +125,7 @@ pub fn all_command_names() -> Vec<&'static str> {
         "update_project_name",
         "hide_project",
         "unhide_project",
-        "pick_project_dir",
-        // 2026-09-02 目录浏览模态框(browser-mode 选项目目录)
+        // 2026-09-02 目录浏览模态框(「添加项目」全模式统一入口)
         "browse_dir",
         "read_memory_layers",
         "read_memory_content",

@@ -4,33 +4,19 @@
 // which fires the watcher in `chat.ts` and triggers a sessions
 // reload.
 //
-// `pick_project_dir` semantics (Q8v2 / PROPOSAL §5.4):
-//   - `Ok(Some(path))` → user picked; create the project (or focus an
-//     existing one with the same path) and switch to it.
-//   - `Ok(None)` → user cancelled; silent.
-//   - `Err(_)` → dialog failed (e.g. backend dir gone); toast the
-//     error, do NOT re-open the dialog.
+// "添加项目" flow — unified across ALL modes (desktop / browser /
+// sidecar / remote) since 2026-09-03, task
+// `09-03-dirbrowser-desktop-unify`: `openDirBrowser()` opens the
+// frontend-rendered DirBrowserModal (the former Tauri-only native
+// folder picker was fully removed). The modal browses via the
+// `browse_dir` IPC; the chosen path is registered by
+// `addProjectByPath` (dedup / unhide / create + focus,
+// RULE-FrontProj-001).
 
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { transport, type UnlistenFn } from "../transport";
-import { TransportError } from "../transport/http";
 import { extractErrorMessage } from "../utils/useErrorBus";
-
-/** P2.4 D6: detect that `pick_project_dir` is unavailable on the
- *  current transport (httpTransport throws `TransportError` with
- *  status 0 + an "unknown cmd" body because `pick_project_dir` has
- *  no daemon route). Used to flip the manual-path entry on instead
- *  of dead-ending on an error toast. */
-function isPickUnavailable(e: unknown): boolean {
-  if (e instanceof TransportError) {
-    // status 0 = the httpTransport's synthetic "no domain mapping"
-    // error (never a real HTTP status). Body carries the unknown-cmd
-    // message.
-    return e.status === 0;
-  }
-  return false;
-}
 
 /** Project as returned over Tauri IPC. Mirrors `projects::ProjectRow`
  *  in Rust. Field names are snake_case to match the Rust serialization
@@ -93,11 +79,11 @@ export const useProjectsStore = defineStore("projects", () => {
   const currentProjectId = ref<string | null>(null);
   const toast = ref<ToastMessage | null>(null);
 
-  // 2026-09-02 目录浏览模态框:browser-mode degrade。`pick_project_dir`
-  // 在 httpTransport 下不可用(无 daemon route),`addProject()` 把
-  // 这个翻成 `true`,AppShell 挂载的 DirBrowserModal 打开 —— 用户在
-  // 模态框里点选目录(或手动输入路径 + 前往),选定后走
-  // `addProjectByPath`(与原生选择器成功路径相同的注册尾巴)。
+  // DirBrowserModal open flag. `openDirBrowser()` flips this to
+  // `true`; the AppShell-mounted modal browses via `browse_dir` and
+  // registers the chosen path through `addProjectByPath`. Landed
+  // 2026-09-02 as the browser-mode degrade, promoted 2026-09-03 to
+  // the unified "add project" entry for every mode.
   const dirBrowserOpen = ref(false);
 
   // -----------------------------------------------------------------------
@@ -178,64 +164,18 @@ export const useProjectsStore = defineStore("projects", () => {
     );
   }
 
-  /** Open the native folder picker and (on success) register the chosen
-   *  directory as a new project. Returns the created (or already
-   *  existing) project, or `null` if the user cancelled or the picker
-   *  failed.
-   *
-   *  If the picked path matches an already-hidden project (data is
-   *  preserved, just hidden from the tab bar), we auto-unhide it
-   *  instead of erroring. The previous behaviour would hit the
-   *  backend `create_project` SQLite UNIQUE constraint and surface a
-   *  misleading "already exists" toast — see fix for the "关闭项目后
-   *  无法重新打开" bug (RULE-FrontProj-001).
-   *
- *  **P2.4 D6 (browser degrade)**: under `httpTransport`,
- *  `pick_project_dir` has no daemon route (the Tauri dialog API
- *  can't run outside the GUI process), so `invoke` throws an
- *  "unknown cmd" `TransportError`. We detect that and flip
- *  `dirBrowserOpen = true` so the AppShell-mounted DirBrowserModal
- *  offers click-to-browse directory selection (with an inline path
- *  input + 前往 for direct entry). */
-  async function addProject(): Promise<ProjectInfo | null> {
-    let picked: string | null = null;
-    let pickError: string | null = null;
-    try {
-      picked = await transport.invoke<string | null>("pick_project_dir", {
-        fallback: false,
-      });
-    } catch (e) {
-      pickError = extractErrorMessage(e);
-      // Browser-mode degrade. The httpTransport throws a
-      // TransportError(status=0, "unknown cmd ...") because
-      // `pick_project_dir` is not in CMD_TO_DOMAIN. Open the
-      // directory-browser modal instead of dead-ending on an error
-      // toast.
-      if (isPickUnavailable(e)) {
-        dirBrowserOpen.value = true;
-        return null;
-      }
-    }
-
-    if (pickError) {
-      // Dialog could not be opened (or backend dir gone). Show a
-      // toast, do NOT re-open the dialog (Q8v2: no manual input
-      // fallback — Tauri's `pick_folder` IS the tree-walk).
-      showToast(`添加项目失败: ${pickError}`, "error");
-      return null;
-    }
-    if (picked === null) {
-      // User cancelled. Silent.
-      return null;
-    }
-
-    return registerPickedPath(picked);
+  /** Open the DirBrowserModal — the unified "add project" entry for
+   *  every mode (desktop / browser / sidecar / remote). The modal
+   *  (mounted in AppShell, driven by `dirBrowserOpen`) offers
+   *  click-to-browse directory selection with an inline path input +
+   *  前往; the chosen path is registered by `addProjectByPath`. */
+  function openDirBrowser(): void {
+    dirBrowserOpen.value = true;
   }
 
-  /** Register a path picked in the directory-browser modal (or any
-   *  manual entry). Same tail as the native-picker success path.
-   *  Closes the browser modal on completion (success or error).
-   *  Returns the project or `null`. */
+  /** Register a path chosen in the directory-browser modal (or any
+   *  manual entry). Closes the browser modal on completion (success
+   *  or error). Returns the project or `null`. */
   async function addProjectByPath(path: string): Promise<ProjectInfo | null> {
     const trimmed = path.trim();
     if (!trimmed) {
@@ -253,9 +193,8 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   /** Shared register-picked-path tail: dedup against visible + hidden,
-   *  create if new, focus. Used by both the native picker
-   *  (`addProject`) and the manual browser-mode entry
-   *  (`addProjectByPath`). */
+   *  create if new, focus. Entry point is `addProjectByPath` (the
+   *  DirBrowserModal's「选择此目录」exit). */
   async function registerPickedPath(picked: string): Promise<ProjectInfo | null> {
     // Picked a path — check the visible projects first. If the
     // project is already open, just focus it. The lazy `loadHidden`
@@ -342,7 +281,7 @@ export const useProjectsStore = defineStore("projects", () => {
    *  via `currentProjectId` so the caller does not need to do it.
    *
    *  Returns a boolean (rather than just `void`) so that
-   *  `addProject`'s hidden-path branch can avoid showing a
+   *  `registerPickedPath`'s hidden-path branch can avoid showing a
    *  misleading "已重新打开" toast on failure — see the
    *  RULE-FrontProj-001 fix. */
   async function unhideProject(id: string): Promise<boolean> {
@@ -414,8 +353,8 @@ export const useProjectsStore = defineStore("projects", () => {
     dismissToast,
     loadProjects,
     loadHiddenProjects,
-    addProject,
     addProjectByPath,
+    openDirBrowser,
     closeDirBrowser,
     switchProject,
     hideProject,

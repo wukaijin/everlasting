@@ -140,7 +140,9 @@ async fn sweep_stale_workers(db: sqlx::SqlitePool, app_data_dir: std::path::Path
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+        // (2026-09-03) the native dialog plugin was removed together
+        // with the old folder-picker command — the DirBrowserModal is
+        // the unified add-project entry for every mode.
         .plugin(tauri_plugin_os::init())
         // P2.4 D2: shell plugin for spawning the everlasting-daemon
         // sidecar (`app.shell().sidecar(...)` in `sidecar.rs`). The
@@ -452,9 +454,9 @@ pub fn run() {
             commands::projects::update_project_sandbox_policy,
             commands::projects::hide_project,
             commands::projects::unhide_project,
-            commands::projects::pick_project_dir,
-            // 2026-09-02 目录浏览模态框:browser-mode 选项目目录的
-            // 数据源(pick_project_dir 的 web degrade)。
+            // 2026-09-02 目录浏览模态框:「添加项目」全模式统一的
+            // 选目录数据源(DirBrowserModal;原 native picker 已于
+            // 2026-09-03 下线)。
             commands::projects::browse_dir,
             // Memory (B5: user + project 2-layer loader)
             commands::memory::read_memory_layers,

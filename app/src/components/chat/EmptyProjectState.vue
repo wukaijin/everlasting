@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // EmptyProjectState — shown when no project is registered yet. Lets
-// the user add a project (delegating to the projects store's native
-// folder picker) or re-open a recently hidden project. This is
+// the user add a project (opening the projects store's unified
+// DirBrowserModal) or re-open a recently hidden project. This is
 // pre-`ChatPanel` because the panel assumes a project is active.
 //
 // D5 polish: larger title in primary text color, a subtle icon row
@@ -29,8 +29,8 @@ onMounted(async () => {
   }
 });
 
-async function onAdd() {
-  await projectsStore.addProject();
+function onAdd() {
+  projectsStore.openDirBrowser();
 }
 
 async function onUnhide(id: string) {

@@ -49,8 +49,8 @@ function onHide(id: string, e: MouseEvent) {
   void store.hideProject(id);
 }
 
-async function onAdd() {
-  await store.addProject();
+function onAdd() {
+  store.openDirBrowser();
 }
 
 function tabTooltip(p: {
@@ -118,11 +118,11 @@ function tabTooltip(p: {
     >
       <Icon name="plus" :size="16" />
     </button>
-    <!-- 2026-09-02:browser-mode 的内联手输路径框已移除,degrade 改为
-         打开 DirBrowserModal(点击点选 + 路径输入 + 前往)。模态框由
-         AppShell 单实例挂载(store.dirBrowserOpen 驱动),此处不再
-         持有任何 UI —— ProjectTabs 在 AppHeader / Sidebar 双处渲染,
-         组件内挂会出双弹层。 -->
+    <!-- 「+」打开 DirBrowserModal(2026-09-03 起为全模式统一入口,
+         原 native 选目录对话框链已整链下线)。模态框由 AppShell
+         单实例挂载(store.dirBrowserOpen 驱动),此处不再持有任何
+         UI —— ProjectTabs 在 AppHeader / Sidebar 双处渲染,组件内挂
+         会出双弹层。 -->
   </div>
 </template>
 

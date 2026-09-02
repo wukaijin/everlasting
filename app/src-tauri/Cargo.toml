@@ -33,7 +33,9 @@ serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
+# (2026-09-03) the native dialog plugin was removed with the old
+# folder-picker command — the DirBrowserModal is the unified
+# add-project entry.
 # P2.4 D1/D2 (2026-07-22, task `07-20-remote-access-daemon-split`): the
 # GUI spawns the `everlasting-daemon` sidecar via the shell plugin's
 # `Command::new_sidecar` API and `.kill()`s it on `RunEvent::Exit`. The

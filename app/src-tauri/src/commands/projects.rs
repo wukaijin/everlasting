@@ -6,16 +6,16 @@
 //! - [`create_project`] / [`update_project_path`] /
 //!   [`update_project_name`] / [`hide_project`] / [`unhide_project`]
 //!   — Settings panel CRUD.
-//! - [`pick_project_dir`] — native directory picker for the
-//!   "Add Project" flow (Tauri-only; browser-side UX degradation
-//!   lands in P2.4 per PRD R10).
+//! - [`browse_dir`] — directory listing for the "Add Project"
+//!   DirBrowserModal (unified entry for all modes since 2026-09-03;
+//!   the former Tauri-only native picker was removed — see task
+//!   `09-03-dirbrowser-desktop-unify`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri::State;
 
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -188,49 +188,7 @@ pub async fn unhide_project(
     unhide_project_inner(&state, id).await
 }
 
-/// Show a native directory picker. Returns `Some(path)` if the
-/// user picked a directory, `None` if they cancelled or the dialog
-/// is unavailable.
-///
-/// The `fallback` argument is reserved for a future "show manual
-/// input dialog" UX — for now the frontend uses it to decide
-/// whether to surface the fallback input. We do not short-circuit
-/// on it here, because the dialog itself either succeeds or the
-/// frontend reads `None` and shows the manual input.
-///
-/// **Phase 2.2 note**: this command is Tauri-only — there is no
-/// `_inner` extraction because the entire body is the Tauri dialog
-/// API call. The daemon route handler (`daemon::routes::projects`)
-/// surfaces a "use manual path input" error per PRD R10 (browser
-/// UX degradation); P2.4 lands the unified `<ProjectDirPicker
-/// mode="auto">` abstraction.
-#[tauri::command]
-pub async fn pick_project_dir(
-    app: AppHandle,
-    #[allow(unused_variables)] fallback: bool,
-) -> Result<Option<String>, AppCommandError> {
-    let (tx, rx) = tokio::sync::oneshot::channel::<Option<PathBuf>>();
-    app.dialog()
-        .file()
-        .set_title("选择项目目录")
-        .pick_folder(move |folder| {
-            // The callback may fire on the UI thread depending on
-            // the platform; we just need to forward the value.
-            let path = folder.and_then(|fp| fp.into_path().ok());
-            let _ = tx.send(path);
-        });
-    match rx.await {
-        Ok(Some(p)) => Ok(Some(p.to_string_lossy().into_owned())),
-        Ok(None) => Ok(None),
-        Err(_) => Err(AppCommandError::new(
-            ErrorCategory::Server,
-            "dialog channel closed",
-        )),
-    }
-}
-
-/// One subdirectory row of the browser-mode directory browser
-/// (`browse_dir`).
+/// One subdirectory row of the directory browser (`browse_dir`).
 #[derive(Debug, Clone, Serialize)]
 pub struct BrowseDirEntry {
     pub name: String,
@@ -248,10 +206,10 @@ pub struct BrowseDirPayload {
     pub entries: Vec<BrowseDirEntry>,
 }
 
-/// Browser-mode directory listing for the "添加项目" modal (web
-/// 前端目录浏览选择 —— the degrade when the Tauri native picker is
-/// unavailable; mirrors the GUI picker's outcome: a picked absolute
-/// path fed to `create_project`).
+/// Directory listing for the "添加项目" DirBrowserModal — the
+/// unified entry for every mode (desktop / browser / sidecar /
+/// remote) since 2026-09-03. Mirrors the outcome of a folder
+/// picker: a picked absolute path fed to `create_project`.
 ///
 /// Lists **directories only** (the picker's semantics — files are
 /// not selectable project roots). Dot-directories are filtered
@@ -331,7 +289,8 @@ pub async fn browse_dir_inner(
 
 /// Tauri wrapper around [`browse_dir_inner`]. Also routed on the
 /// daemon (`POST /api/v1/projects/browse_dir`) — that is the path
-/// the browser-mode modal actually exercises.
+/// the modal exercises under httpTransport (sidecar / browser /
+/// remote).
 #[tauri::command]
 pub async fn browse_dir(
     path: String,

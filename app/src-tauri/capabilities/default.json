@@ -24,7 +24,6 @@
     "core:window:allow-cursor-position",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "dialog:default",
     "os:default",
     "shell:default",
     {

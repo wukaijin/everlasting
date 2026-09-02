@@ -134,10 +134,9 @@ pub struct BrowseDirRequest {
     pub show_hidden: bool,
 }
 
-/// `POST /api/v1/projects/browse_dir` — browser-mode 目录浏览模态框的
-/// 数据源(Tauri 原生选目录对话框在 daemon 侧不可用,见
-/// `commands::projects::pick_project_dir` 的 Phase 2.2 note)。无
-/// AppState 依赖(纯文件系统读,同 `config::get_home_dir`)。
+/// `POST /api/v1/projects/browse_dir` — 目录浏览模态框的数据源
+/// (2026-09-03 起「添加项目」全模式统一入口)。无 AppState 依赖
+/// (纯文件系统读,同 `config::get_home_dir`)。
 pub async fn browse_dir(
     Json(req): Json<BrowseDirRequest>,
 ) -> Result<Json<BrowseDirPayload>, AppCommandError> {

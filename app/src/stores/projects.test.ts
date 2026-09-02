@@ -1,18 +1,22 @@
-// Tests for `useProjectsStore` — focused on the addProject path
+// Tests for `useProjectsStore` — focused on the "添加项目" flow
 // (RULE-FrontProj-001 fix: "关闭项目后无法重新打开(create_project
 // already exists)").
 //
-// Coverage targets:
-//   1. addProject() hit on a visible project path → focus existing,
-//      do NOT call create_project IPC, do NOT call unhide_project.
-//   2. addProject() hit on a hidden project path → call unhide_project
-//      (NOT create_project), toast "已重新打开", return the now-visible
-//      row.
-//   3. addProject() on a brand-new path → call create_project.
-//   4. addProject() with user cancelling the dialog (picked === null)
-//      → no IPC calls, return null.
-//   5. addProject() with the dialog failing (invoke throws) → no
-//      create_project call, surface error toast, return null.
+// 2026-09-03 (`09-03-dirbrowser-desktop-unify`): the native picker
+// path is gone — `openDirBrowser()` (all modes) opens the
+// DirBrowserModal and `addProjectByPath` is the single registration
+// entry. Coverage targets:
+//
+//   1. openDirBrowser() → flips `dirBrowserOpen`, fires ZERO IPC
+//      (in particular no native pick command — the chain is dead).
+//   2. addProjectByPath() hit on a visible project path → focus
+//      existing, do NOT call create_project, do NOT call
+//      unhide_project.
+//   3. addProjectByPath() hit on a hidden project path → call
+//      unhide_project (NOT create_project), toast "已重新打开",
+//      return the now-visible row.
+//   4. addProjectByPath() on a brand-new path → call create_project.
+//   5. Empty-path guard → warn toast, no IPC.
 //
 // Tauri IPC is mocked so the suite runs in jsdom without a real
 // Tauri runtime.
@@ -28,24 +32,6 @@ vi.mock("../transport", () => ({
     listen: async () => () => {},
   },
 }));
-
-// P2.4 D6: the store imports `TransportError` from `../transport/http`
-// to detect the browser-mode "unknown cmd" path. Provide the real class
-// (the mock above only covers the barrel `../transport`).
-vi.mock("../transport/http", () => ({
-  TransportError: class TransportError extends Error {
-    constructor(
-      public readonly status: number,
-      public readonly body: unknown,
-    ) {
-      const msg =
-        typeof body === "string" ? body : (body as { message?: string })?.message ?? `HTTP ${status}`;
-      super(`[httpTransport] ${status}: ${msg}`);
-      this.name = "TransportError";
-    }
-  },
-}));
-
 
 import { useProjectsStore, type ProjectInfo } from "./projects";
 
@@ -88,7 +74,45 @@ const FRESH_PROJECT = makeProject({
   hidden: false,
 });
 
-describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
+// ---------------------------------------------------------------------------
+// openDirBrowser — unified entry (2026-09-03): flips the modal flag,
+// zero backend traffic. The registration path (create/unhide) only
+// runs when the modal calls addProjectByPath with a chosen path.
+// ---------------------------------------------------------------------------
+describe("useProjectsStore — openDirBrowser (unified entry)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_projects") return [];
+      if (cmd === "list_hidden_projects") return [];
+      return null;
+    });
+  });
+
+  it("翻 dirBrowserOpen,零 IPC(native pick 链已下线)", async () => {
+    const store = useProjectsStore();
+    await store.loadProjects();
+    expect(store.dirBrowserOpen).toBe(false);
+
+    invokeMock.mockClear();
+    store.openDirBrowser();
+
+    expect(store.dirBrowserOpen).toBe(true);
+    expect(invokeMock.mock.calls).toHaveLength(0);
+  });
+
+  it("closeDirBrowser:关 dirBrowserOpen", () => {
+    const store = useProjectsStore();
+    store.dirBrowserOpen = true;
+
+    store.closeDirBrowser();
+
+    expect(store.dirBrowserOpen).toBe(false);
+  });
+});
+
+describe("useProjectsStore — addProjectByPath (RULE-FrontProj-001)", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     invokeMock.mockReset();
@@ -97,7 +121,6 @@ describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return [];
       if (cmd === "list_hidden_projects") return [];
-      if (cmd === "pick_project_dir") return null;
       return null;
     });
   });
@@ -107,21 +130,21 @@ describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return [VISIBLE_PROJECT];
       if (cmd === "list_hidden_projects") return [];
-      if (cmd === "pick_project_dir") return VISIBLE_PROJECT.path;
       return null;
     });
     await store.loadProjects();
+    invokeMock.mockClear();
 
-    const result = await store.addProject();
+    const result = await store.addProjectByPath(VISIBLE_PROJECT.path);
 
     expect(result?.id).toBe(VISIBLE_PROJECT.id);
     expect(store.currentProjectId).toBe(VISIBLE_PROJECT.id);
     // The unhide / create IPCs must NOT be called for the visible
-    // path; the only IPC call after `loadProjects` is `pick_project_dir`.
+    // path; the modal flag closes.
     const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
-    expect(calledCmds).toContain("pick_project_dir");
     expect(calledCmds).not.toContain("unhide_project");
     expect(calledCmds).not.toContain("create_project");
+    expect(store.dirBrowserOpen).toBe(false);
   });
 
   it("命中 hidden 项目路径:调 unhide_project,不调 create_project,toast 成功", async () => {
@@ -133,7 +156,6 @@ describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return visibleNow;
       if (cmd === "list_hidden_projects") return hiddenNow;
-      if (cmd === "pick_project_dir") return HIDDEN_PROJECT.path;
       if (cmd === "unhide_project") {
         // Move the hidden row into the visible list.
         const idx = visibleNow.findIndex((p) => p.id === HIDDEN_PROJECT.id);
@@ -148,8 +170,9 @@ describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
     });
     await store.loadProjects();
     await store.loadHiddenProjects();
+    invokeMock.mockClear();
 
-    const result = await store.addProject();
+    const result = await store.addProjectByPath(HIDDEN_PROJECT.path);
 
     expect(result?.id).toBe(HIDDEN_PROJECT.id);
     expect(store.currentProjectId).toBe(HIDDEN_PROJECT.id);
@@ -166,80 +189,75 @@ describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return [VISIBLE_PROJECT];
       if (cmd === "list_hidden_projects") return [HIDDEN_PROJECT];
-      if (cmd === "pick_project_dir") return "/path/brand-new";
       if (cmd === "create_project") return FRESH_PROJECT;
       return null;
     });
     await store.loadProjects();
     await store.loadHiddenProjects();
+    invokeMock.mockClear();
 
-    const result = await store.addProject();
+    const result = await store.addProjectByPath("/path/brand-new");
 
     expect(result?.id).toBe(FRESH_PROJECT.id);
     expect(store.currentProjectId).toBe(FRESH_PROJECT.id);
     const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
     expect(calledCmds).toContain("create_project");
     expect(calledCmds).not.toContain("unhide_project");
+    expect(store.dirBrowserOpen).toBe(false);
   });
 
-  it("用户取消 dialog (picked === null):不调任何 IPC,return null", async () => {
+  it("空路径 → toast warn,不调 create_project,模态框不关", async () => {
+    const store = useProjectsStore();
+    await store.loadProjects();
+    store.dirBrowserOpen = true;
+
+    const result = await store.addProjectByPath("   ");
+
+    expect(result).toBeNull();
+    expect(store.toast?.kind).toBe("warn");
+    // Empty path never reaches the backend; the modal stays open
+    // for the user to pick a real one.
+    expect(store.dirBrowserOpen).toBe(true);
+    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
+    expect(calledCmds).not.toContain("create_project");
+  });
+
+  it("create_project 失败 → toast error,return null", async () => {
     const store = useProjectsStore();
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return [];
       if (cmd === "list_hidden_projects") return [];
-      if (cmd === "pick_project_dir") return null;
+      if (cmd === "create_project") throw new Error("UNIQUE constraint");
       return null;
     });
     await store.loadProjects();
+    await store.loadHiddenProjects();
 
-    const result = await store.addProject();
-
-    expect(result).toBeNull();
-    expect(store.currentProjectId).toBeNull();
-    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
-    expect(calledCmds).not.toContain("create_project");
-    expect(calledCmds).not.toContain("unhide_project");
-  });
-
-  it("dialog 失败 (invoke throws):toast 错误，不调 create_project,return null", async () => {
-    const store = useProjectsStore();
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "list_projects") return [];
-      if (cmd === "list_hidden_projects") return [];
-      if (cmd === "pick_project_dir") {
-        throw new Error("dialog channel closed");
-      }
-      return null;
-    });
-    await store.loadProjects();
-
-    const result = await store.addProject();
+    const result = await store.addProjectByPath("/path/brand-new");
 
     expect(result).toBeNull();
     expect(store.currentProjectId).toBeNull();
-    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
-    expect(calledCmds).not.toContain("create_project");
-    expect(calledCmds).not.toContain("unhide_project");
+    expect(store.toast?.kind).toBe("error");
   });
 
-  it("hiddenProjects.value 空时 addProject 应先 loadHiddenProjects 再判断 (lazy load 兜底)", async () => {
+  it("hiddenProjects.value 空时应先 loadHiddenProjects 再判断 (lazy load 兜底)", async () => {
     const store = useProjectsStore();
     // Initial state: loadProjects returns visible, hiddenProjects not
-    // yet loaded. User adds a path that matches a hidden project — the
+    // yet loaded. The chosen path matches a hidden project — the
     // store should load hidden first and then auto-unhide.
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return [];
       if (cmd === "list_hidden_projects") return [HIDDEN_PROJECT];
-      if (cmd === "pick_project_dir") return HIDDEN_PROJECT.path;
       if (cmd === "unhide_project") return null;
       return null;
     });
     await store.loadProjects();
-    // NB: NOT calling loadHiddenProjects() here — addProject must do
-    // it itself when hiddenProjects.value is empty.
+    invokeMock.mockClear();
+    // NB: NOT calling loadHiddenProjects() here — registerPickedPath
+    // must do it itself when hiddenProjects.value is empty.
     expect(store.hiddenProjects.length).toBe(0);
 
-    const result = await store.addProject();
+    const result = await store.addProjectByPath(HIDDEN_PROJECT.path);
 
     expect(result?.id).toBe(HIDDEN_PROJECT.id);
     const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
@@ -284,84 +302,6 @@ describe("useProjectsStore — unhideProject return value", () => {
     const ok = await store.unhideProject(HIDDEN_PROJECT.id);
     expect(ok).toBe(false);
     expect(store.currentProjectId).toBeNull();
-  });
-});
-
-// P2.4 D6: browser-mode degrade(2026-09-02 起为 DirBrowserModal,
-// 原内联手输路径框已移除)。
-describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
-  beforeEach(() => {
-    setActivePinia(createPinia());
-    invokeMock.mockReset();
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "list_projects") return [];
-      if (cmd === "list_hidden_projects") return [];
-      return null;
-    });
-  });
-
-  it("pick_project_dir 抛 TransportError(status=0):开 dirBrowserOpen,return null", async () => {
-    const store = useProjectsStore();
-    await store.loadProjects();
-    // Import the mocked TransportError to construct the expected throw.
-    const { TransportError } = await import("../transport/http");
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "pick_project_dir") {
-        throw new TransportError(
-          0,
-          'unknown cmd "pick_project_dir" — no domain mapping',
-        );
-      }
-      return null;
-    });
-
-    const result = await store.addProject();
-
-    expect(result).toBeNull();
-    expect(store.dirBrowserOpen).toBe(true);
-    // Must NOT have called create_project (the dialog never returned a path).
-    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
-    expect(calledCmds).not.toContain("create_project");
-  });
-
-  it("addProjectByPath:全新路径 → create_project + 关 dirBrowserOpen", async () => {
-    const store = useProjectsStore();
-    await store.loadProjects();
-    await store.loadHiddenProjects();
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "list_projects") return [];
-      if (cmd === "list_hidden_projects") return [];
-      if (cmd === "create_project") return FRESH_PROJECT;
-      return null;
-    });
-
-    const result = await store.addProjectByPath("/path/fresh");
-
-    expect(result?.id).toBe(FRESH_PROJECT.id);
-    expect(store.currentProjectId).toBe(FRESH_PROJECT.id);
-    expect(store.dirBrowserOpen).toBe(false);
-  });
-
-  it("addProjectByPath:空路径 → toast warn,不调 create_project", async () => {
-    const store = useProjectsStore();
-    await store.loadProjects();
-    store.dirBrowserOpen = true;
-
-    const result = await store.addProjectByPath("   ");
-
-    expect(result).toBeNull();
-    expect(store.toast?.kind).toBe("warn");
-    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
-    expect(calledCmds).not.toContain("create_project");
-  });
-
-  it("closeDirBrowser:关 dirBrowserOpen", async () => {
-    const store = useProjectsStore();
-    store.dirBrowserOpen = true;
-
-    store.closeDirBrowser();
-
-    expect(store.dirBrowserOpen).toBe(false);
   });
 });
 
