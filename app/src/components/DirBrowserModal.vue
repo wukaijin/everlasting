@@ -1,23 +1,27 @@
 <script setup lang="ts">
-// DirBrowserModal — browser-mode 目录浏览模态框("浏览文件夹")。
-// Tauri 原生选目录对话框在 httpTransport 下不可用(pick_project_dir
-// 无 daemon route),此前 web 模式降级为一条内联手输路径框;本模态框
-// 提供点击点选目录的交互(数据源 `POST /api/v1/projects/browse_dir`),
-// 同时保留路径输入 + 前往,覆盖原手动输入场景。
+// DirBrowserModal — 「添加项目」的目录浏览模态框("浏览文件夹")。
+// 2026-09-03 起为全模式统一入口(桌面 / 浏览器 / sidecar / remote;
+// 原 native 选目录对话框链已整链下线)。数据源
+// `POST /api/v1/projects/browse_dir`,同时保留路径输入 + 前往的
+// 直达场景。
 //
-// 交互契约(对照 GUI 原生 picker,projects store 注释):
+// 交互契约(projects store「添加项目」流):
 //   - 单击目录行 → 进入该目录;".." 行 / 「上一步」 → 上一级。
 //   - 路径输入 + 「前往」 → 直接跳转(支持 ~ 展开,后端负责)。
 //   - 「显示隐藏目录」 toggle → 以 showHidden 重取当前目录。
-//   - 「选择此目录」 → store.addProjectByPath(当前目录) —— 与原生
-//     picker 成功路径相同的注册尾巴(去重 / unhide / create),模态框
+//   - 「选择此目录」 → store.addProjectByPath(当前目录),注册尾巴
+//     为去重 / unhide / create + focus(RULE-FrontProj-001),模态框
 //     由 store 关闭。
+//   - 键盘导航(roving tabindex):方向键在「.. + 目录行」间移动焦点
+//     (钳边不环绕),Enter 走 button 原生激活;列表发起的导航完成后
+//     焦点复位到新列表首行,非列表发起(路径直达 / 前往 / 上一步按钮)
+//     不抢焦点。Esc 关窗沿用 reka-ui Dialog 自带行为。
 //
 // 组合方式镜像 MemoryModal(reka-ui DialogRoot/Portal/Overlay/
 // Content),挂在 AppShell(store 状态驱动,ProjectTabs「+」与
-// EmptyProjectState「添加项目」的 browser degrade 都会翻开它)。
+// EmptyProjectState「添加项目」都汇到这里)。
 
-import { ref, watch } from "vue";
+import { nextTick, ref, watch } from "vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -61,10 +65,22 @@ const showHidden = ref(false);
 const busy = ref(false);
 const error = ref<string | null>(null);
 
+// 键盘导航(roving tabindex):行集合 = 「..」(有父目录时,index 0)
+// + entries。恰一行 tabindex=0(activeIndex 锚定),其余 -1。
+const activeIndex = ref(0);
+const listEl = ref<HTMLElement | null>(null);
+
 /** 导航到指定目录。失败时横幅报错并保留上一次列表(行内重试),
  *  「选择此目录」/「上一步」随之禁用,与原生对话框「路径无效就停在
- *  原地」的体感一致。 */
-async function navigate(path: string): Promise<void> {
+ *  原地」的体感一致。
+ *
+ *  `fromList` = 导航由列表发起(行点击 / 行上 Enter):完成后把焦点
+ *  复位到新列表首行(键盘用户连续走目录不丢焦点)。非列表发起
+ *  (路径直达 / 前往 / 上一步按钮 / 隐藏开关)不抢焦点。 */
+async function navigate(
+  path: string,
+  opts: { fromList?: boolean } = {},
+): Promise<void> {
   if (busy.value) return;
   busy.value = true;
   error.value = null;
@@ -81,6 +97,14 @@ async function navigate(path: string): Promise<void> {
     error.value = extractErrorMessage(e);
   } finally {
     busy.value = false;
+    if (opts.fromList) {
+      // Rows are :disabled while busy — focus AFTER busy clears (and
+      // one tick for the DOM to settle). On failure the previous
+      // list is kept, so this re-anchors the first row for retry.
+      activeIndex.value = 0;
+      await nextTick();
+      focusActiveRow();
+    }
   }
 }
 
@@ -95,6 +119,7 @@ watch(open, async (v) => {
   parentPath.value = null;
   pathDraft.value = "";
   showHidden.value = false;
+  activeIndex.value = 0;
   let home = "/";
   try {
     home = (await transport.invoke<string | null>("get_home_dir", {})) ?? "/";
@@ -109,8 +134,10 @@ function onGo(): void {
   if (p) void navigate(p);
 }
 
-function onUp(): void {
-  if (parentPath.value) void navigate(parentPath.value);
+/** 「上一步」/ ".." 行共用。`fromList` 标记是否由列表行发起(.. 行
+ *  传 true → 导航后焦点复位;底部按钮不抢焦点)。 */
+function onUp(fromList = false): void {
+  if (parentPath.value) void navigate(parentPath.value, { fromList });
 }
 
 function onToggleHidden(): void {
@@ -121,6 +148,50 @@ function onToggleHidden(): void {
 function onSelect(): void {
   if (!currentPath.value || busy.value) return;
   void store.addProjectByPath(currentPath.value);
+}
+
+// --- 键盘导航(roving tabindex)-----------------------------------------
+// ArrowDown/ArrowUp 移动 DOM 焦点(钳边,不环绕);Enter 走 button
+// 原生激活(无 JS handler)。keydown 挂在列表容器上 —— 路径输入框在
+// 容器外,其方向键(移动光标)不会进到这里。
+
+/** 可聚焦行总数:「..」(有父目录时)+ entries。 */
+function rowCount(): number {
+  return (parentPath.value ? 1 : 0) + entries.value.length;
+}
+
+/** entry `i` 的绝对行索引 → roving tabindex 值。 */
+function entryTabIndex(i: number): 0 | -1 {
+  return (parentPath.value ? 1 : 0) + i === activeIndex.value ? 0 : -1;
+}
+
+/** 焦点落到 activeIndex 行(钳到可用范围;busy 行 disabled 不落焦)。 */
+function focusActiveRow(): void {
+  const root = listEl.value;
+  if (!root) return;
+  const rows = Array.from(
+    root.querySelectorAll<HTMLElement>(
+      "button.dir-browser__row:not(:disabled)",
+    ),
+  );
+  if (rows.length === 0) return;
+  const idx = Math.min(activeIndex.value, rows.length - 1);
+  activeIndex.value = idx;
+  rows[idx].focus();
+}
+
+function onListKeydown(e: KeyboardEvent): void {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const count = rowCount();
+  if (count === 0) return;
+  e.preventDefault();
+  const current = Math.min(activeIndex.value, count - 1);
+  const next =
+    e.key === "ArrowDown"
+      ? Math.min(current + 1, count - 1)
+      : Math.max(current - 1, 0);
+  activeIndex.value = next;
+  focusActiveRow();
 }
 </script>
 
@@ -177,7 +248,11 @@ function onSelect(): void {
           </button>
         </div>
 
-        <div class="dir-browser__list">
+        <div
+          ref="listEl"
+          class="dir-browser__list"
+          @keydown="onListKeydown"
+        >
           <div v-if="error" class="dir-browser__error" role="alert">
             <Icon name="warn" :size="14" />
             <span>{{ error }}</span>
@@ -186,21 +261,23 @@ function onSelect(): void {
             v-if="parentPath"
             type="button"
             class="dir-browser__row dir-browser__row--up"
+            :tabindex="activeIndex === 0 ? 0 : -1"
             :disabled="busy"
             title="上一级目录"
-            @click="onUp"
+            @click="onUp(true)"
           >
             <Icon name="folder" :size="15" icon-class="dir-browser__row-icon" />
             <span class="dir-browser__row-name">..</span>
           </button>
           <button
-            v-for="e in entries"
+            v-for="(e, i) in entries"
             :key="e.path"
             type="button"
             class="dir-browser__row"
+            :tabindex="entryTabIndex(i)"
             :disabled="busy"
             :title="e.path"
-            @click="navigate(e.path)"
+            @click="navigate(e.path, { fromList: true })"
           >
             <Icon name="folder" :size="15" icon-class="dir-browser__row-icon" />
             <span class="dir-browser__row-name">{{ e.name }}</span>
@@ -221,7 +298,7 @@ function onSelect(): void {
             type="button"
             class="dir-browser__back btn btn--ghost"
             :disabled="busy || !parentPath || !!error"
-            @click="onUp"
+            @click="onUp(false)"
           >
             上一步
           </button>
