@@ -18,6 +18,7 @@
 - [shell-card](./chat/shell-card.md) — `shell`/`run_background_shell` 专属卡 ShellCard(命令块常驻 / 一体化审批 / description display-only 不变量 / toolHeaderChip 兜底链 / PermissionActions 共享审批,2026-08-30)
 - [session-busy-visibility](./chat/session-busy-visibility.md) — session busy 双源合流(streamingSessionIds ∪ serverBusy)+ finalizeRequest 消解 + 完成 toast 抑制规则 + 关闭确认 isTauriWebview 门(F6)
 - [memory-ui.md §V2-2+](./memory-ui.md) — 自主记忆可观测性(recall chip + RuntimeMemoryModal,2026-08-10 从本文挪入)
+- [activity-panel](./chat/activity-panel.md) — ActivityPanel 运行状态面板(subagent+后台 shell+清单三 section 合并 ChecklistCard / 双时间源 gotcha,2026-09-02)
 
 ---
 
@@ -30,4 +31,5 @@
 > - 改 MessageList 结构 / run-group / enter 动画 / markdown 容器样式 → `chat/message-list-and-markdown.md`
 > - 改 busy 红点 / serverBusy / 完成 toast / CloseGuardDialog → `chat/session-busy-visibility.md`
 - 改 `SearchHistoryCard` / `useSearchModal` prefill / search 命中行 helper → `chat/search-history-card.md`
+> - 改 ActivityPanel / 后台 shell 面板行 / backgroundShells store → `chat/activity-panel.md`
 > - 改 recall chip / RuntimeMemoryModal → [memory-ui.md §V2-2+](./memory-ui.md)

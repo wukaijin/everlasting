@@ -19,6 +19,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Background Shell Observability](./background-shell-observability.md) | 后台 shell UI 可观测性:`list_for_session` + `background_shell:update` 事件 + emitter 双模式接线 + MonotonicMs 显示契约(2026-09-02) | ✅ Filled |
 
 ---
 
