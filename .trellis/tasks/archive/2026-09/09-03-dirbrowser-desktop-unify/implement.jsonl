@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "DirBrowserModal 是 reka-ui Dialog 封装,键盘导航不得绕开其焦点陷阱/Esc;版本钉死约束"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "projects store action cluster 约定;改 addProject→openDirBrowser 需对齐 store 注释纪律"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest+jsdom traps:fake timers/rAF、focus 语义、canonical transport mock——键盘导航用例必读"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由组织约定 + routesync 守卫方向(daemon→CMD_TO_DOMAIN);R2 删命令后注释收口参照"}

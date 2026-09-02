@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/browser-regression.md", "reason": "e2e 新用例准入判据:确定性、route-mock 全拦截、fixture 契约(catch-all miss 500)"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "检查测试实现是否踩 jsdom/fake-timers 已知坑"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "clippy gate 零告警硬标准;Rust 删除面的质量门"}
