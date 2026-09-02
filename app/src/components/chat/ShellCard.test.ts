@@ -10,7 +10,8 @@
 //      测试法:transport mock + 真实 Pinia store)。
 //   5. 命令不重复:一体化审批下命令全文只出现一次(无独立
 //      "需要权限"盒子)。
-//   6. done 折叠 output / error 红框常显。
+//   6. done / error 统一折叠 output(error 走 ToolOutputBody --error
+//      红框样式,默认收起;2026-09-02 起错误全文不再常显)。
 //   7. command 畸形 → ToolInputBody 降级。
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -303,16 +304,20 @@ describe("ShellCard", () => {
   // 5. 输出呈现
   // ----------------------------------------------------------------
   describe("output rendering", () => {
-    it("done → folded ToolOutputBody, no error pre", () => {
+    it("done → folded ToolOutputBody without error styling", () => {
       const w = mountCard({
         call: makeCall(),
         result: makeResult({ content: "ok\n[exit code: 0]" }),
       });
-      expect(w.find(".tool-output-body").exists()).toBe(true);
-      expect(w.find(".shell-card__error-out").exists()).toBe(false);
+      const body = w.find(".tool-output-body");
+      expect(body.exists()).toBe(true);
+      expect(body.classes()).not.toContain("tool-output-body--error");
     });
 
-    it("error → red-framed pre always visible, no folded output", () => {
+    // 2026-09-02:错误输出不再常显——与 done 统一走 ToolOutputBody
+    // 折叠(details 默认收起,summary 展开),红框样式由组件的
+    // --error class 承载;header ✗ error 仍是主信号。
+    it("error → folded ToolOutputBody with error styling, collapsed by default", () => {
       const w = mountCard({
         call: makeCall(),
         result: makeResult({
@@ -320,9 +325,14 @@ describe("ShellCard", () => {
           isError: true,
         }),
       });
-      const err = w.get(".shell-card__error-out");
-      expect(err.text()).toContain("thread panicked");
-      expect(w.find(".tool-output-body").exists()).toBe(false);
+      const body = w.find(".tool-output-body");
+      expect(body.exists()).toBe(true);
+      expect(body.classes()).toContain("tool-output-body--error");
+      // details 默认收起(无 open 属性)——错误全文不直出。
+      expect(body.attributes("open")).toBeUndefined();
+      const pre = w.find(".tool-output-body__pre");
+      expect(pre.classes()).toContain("tool-output-body__pre--error");
+      expect(pre.text()).toContain("thread panicked");
     });
 
     it("error output longer than 500 chars is truncated", () => {
@@ -331,16 +341,15 @@ describe("ShellCard", () => {
         call: makeCall(),
         result: makeResult({ content: long, isError: true }),
       });
-      const err = w.get(".shell-card__error-out");
-      expect(err.text()).toContain("more chars");
+      const pre = w.get(".tool-output-body__pre");
+      expect(pre.text()).toContain("more chars");
       // Truncated at 500 — not the full 2000 chars.
-      expect(err.text().length).toBeLessThan(600);
+      expect(pre.text().length).toBeLessThan(600);
     });
 
     it("no output section while running (命令块即全部)", () => {
       const w = mountCard({ call: makeCall() });
       expect(w.find(".tool-output-body").exists()).toBe(false);
-      expect(w.find(".shell-card__error-out").exists()).toBe(false);
     });
 
     // R6: done 态 header 着成功色(error 不着),锁 ToolCallHeader isSuccess 接线。

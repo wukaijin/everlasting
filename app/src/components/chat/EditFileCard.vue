@@ -142,6 +142,19 @@ const removedCount = computed(() => diffRows.value?.filter((r) => r.kind === "de
 const diffExpanded = ref(false);
 
 // ------------------------------------------------------------------
+// 错误详情折叠(2026-09-02):错误全文不再常显,默认只留一行摘要
+// (首行 + ellipsis),点 toggle 展开。完整文本仍从 displayContent
+// 取,展开后原样渲染(pre-wrap)。
+// ------------------------------------------------------------------
+const errorExpanded = ref(false);
+
+const errorPreview = computed<string>(() => {
+  const c = displayContent.value ?? "";
+  const first = c.split("\n", 1)[0] ?? "";
+  return first.length > 200 ? first.slice(0, 200) + "…" : first;
+});
+
+// ------------------------------------------------------------------
 // inline approval(复用 ToolCallCard 语义,避免审批链路断层)
 // ------------------------------------------------------------------
 
@@ -216,10 +229,26 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
       />
     </div>
 
-    <!-- error banner -->
+    <!-- error banner(默认折叠:一行红色摘要 + toggle,展开看全文;
+         2026-09-02 前错误全文常显,长错误会把卡片撑成一堵红墙) -->
     <div v-if="isError && displayContent" class="edit-card__error">
-      <Icon name="warn" :size="12" icon-class="edit-card__error-icon" />
-      <span class="edit-card__error-text">{{ displayContent }}</span>
+      <button
+        type="button"
+        class="edit-card__error-toggle"
+        :aria-expanded="errorExpanded"
+        :title="errorExpanded ? '收起错误详情' : '展开错误详情'"
+        @click.stop="errorExpanded = !errorExpanded"
+      >
+        <span
+          class="edit-card__toggle-chevron"
+          :class="{ 'edit-card__toggle-chevron--open': errorExpanded }"
+        >
+          <Icon name="chevron-right" :size="12" />
+        </span>
+        <Icon name="warn" :size="12" icon-class="edit-card__error-icon" />
+        <span class="edit-card__error-preview">{{ errorPreview }}</span>
+      </button>
+      <pre v-if="errorExpanded" class="edit-card__error-text">{{ displayContent }}</pre>
     </div>
 
     <!-- git-style diff (默认收起,开关展开) -->
@@ -247,11 +276,8 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
       :name="call.name"
       :input="call.input as Record<string, unknown>"
     />
-
-    <!-- 成功态的结果文案(极简,避免与 diff 重复;错误态已在上方 banner 展示) -->
-    <div v-if="hasResult && !isError && displayContent" class="edit-card__result">
-      {{ displayContent }}
-    </div>
+    <!-- 成功态不渲染结果文案(2026-09-02 移除"Successfully edited"行,
+         header ✓ done + diff 视图已承载全部信号;错误态见上方折叠 banner)。 -->
   </div>
 </template>
 
@@ -326,8 +352,8 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
 .edit-card__error {
   margin-top: 6px;
   display: flex;
-  gap: 6px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
@@ -335,16 +361,45 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
   color: var(--color-tool-error-text);
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
-  white-space: pre-wrap;
-  word-break: break-all;
+}
+
+/* 折叠 toggle 行:chevron + warn + 单行摘要(ellipsis)。button reset
+   后继承容器的红系文字。 */
+.edit-card__error-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.edit-card__error-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .edit-card__error-icon {
   flex-shrink: 0;
-  margin-top: 1px;
 }
 
+/* 展开后的错误全文:pre-wrap + 纵向滚动(超长错误不撑破卡片)。 */
 .edit-card__error-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: inherit;
   min-width: 0;
 }
 
@@ -411,14 +466,6 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
   color: var(--color-text-muted);
   border-top: 1px dashed var(--color-bg-border);
   font-family: var(--font-sans);
-}
-
-.edit-card__result {
-  margin-top: 6px;
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 @media (max-width: 767px) {

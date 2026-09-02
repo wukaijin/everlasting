@@ -15,8 +15,10 @@
 //   - 一体化审批(pendingAsk 且 !hasResult):风险条 +
 //     <PermissionActions>(PR2 抽取的共享按钮列);不渲染独立
 //     "需要权限"容器,命令全文只出现一次
-//   - 输出:done → ToolOutputBody 折叠;error → 红框 pre 常显
-//     (截断 500 字符,不再叠折叠条)
+//   - 输出:done / error 统一走 ToolOutputBody 折叠(error 由组件
+//     的 --error 红框样式 + header ✗ 承载;2026-09-02 起错误全文不再
+//     常显,推翻原 design D4"红框 pre 常显"——长错误把卡片撑成红墙,
+//     且非零 exit code 本身不等于失败,见 shell.rs 同日改动)
 //   - 降级:command 缺失/非 string → ToolInputBody 兜底(EditFileCard
 //     同款防御;description 非字符串由 toolHeaderChip 按缺失处理)
 //
@@ -34,11 +36,9 @@ import {
 } from "../../stores/permissions";
 import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat.types";
 import {
-  extractToolResultDisplay,
   toolAccentVar,
   toolHeaderChip,
   toolIcon,
-  truncateOutput,
 } from "../../utils/messageFormat";
 import { abbreviateDuration } from "../../utils/duration";
 import ToolCallHeader from "./ToolCallHeader.vue";
@@ -103,18 +103,9 @@ const durationLabel = computed(() => {
   return abbreviateDuration(d);
 });
 
-/** done 态的折叠 output 走 ToolOutputBody(content 原样传入,组件内
- *  自行解 envelope);error 态走下方红框 pre,不经此分支。null =
- *  无 result 或 error(模板以 !== null 门控)。 */
-const doneContent = computed<string | null>(() => {
-  if (!props.result || isError.value) return null;
-  return props.result.content;
-});
-
-const errorDisplay = computed<string | null>(() => {
-  if (!props.result || !isError.value) return null;
-  return truncateOutput(extractToolResultDisplay(props.result.content), 500);
-});
+/** 结果体(done 与 error 统一):content 原样传给 ToolOutputBody,
+ *  组件内自行解 envelope + 截断 + 错误样式。无 result 时不渲染。 */
+const resultBody = computed(() => props.result ?? null);
 
 // ------------------------------------------------------------------
 // inline approval(接线照抄 EditFileCard:148-163,0 新 store 逻辑)
@@ -211,18 +202,13 @@ const riskMeta = computed(() =>
       <PermissionActions :ask="pendingAsk" :on-respond="respondApproval" />
     </div>
 
-    <!-- error 态:红框 pre 常显(截断 500,样式对齐
-         tool-output-body__pre--error),不再叠折叠条(design D4)。 -->
-    <pre
-      v-if="errorDisplay"
-      class="shell-card__error-out"
-    >{{ errorDisplay }}</pre>
-
-    <!-- done 态:折叠 output(直接复用现组件)。 -->
+    <!-- 输出(done / error 统一):折叠 details,错误态由
+         ToolOutputBody 的 --error 红框 pre 承载,默认收起点 summary
+         展开(2026-09-02 起不再常显)。 -->
     <ToolOutputBody
-      v-if="doneContent !== null"
-      :content="doneContent"
-      :is-error="false"
+      v-if="resultBody !== null"
+      :content="resultBody.content"
+      :is-error="resultBody.isError"
     />
 
     <!-- 输入缺失 / command 畸形 → 兜底为通用 input 视图(EditFileCard
@@ -354,23 +340,8 @@ const riskMeta = computed(() =>
   word-break: break-word;
 }
 
-/* error 红框 pre 常显:样式对齐 tool-output-body__pre / --error
-   (400 档 error-text 文字 + 500 档 error 边框,08-15 对比度规则)。 */
-.shell-card__error-out {
-  margin: 6px 0 0;
-  padding: 6px 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-tool-error);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
-  font-size: var(--text-xs);
-  line-height: 1.4;
-  color: var(--color-tool-error-text);
-  font-family: var(--font-mono);
-}
+/* error 红框 pre 已随"常显"一起移除(2026-09-02):错误输出统一走
+   ToolOutputBody(折叠 details + --error 红框 pre),见上方模板。 */
 
 @media (max-width: 767px) {
   .shell-card {

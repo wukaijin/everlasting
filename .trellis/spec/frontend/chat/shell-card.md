@@ -42,7 +42,7 @@ shell 家族且 input.command(string)                  → command 第一个非�
 | 等待审批 | "等待审批"(amber pulse) | 命令块 + 风险条(RISK_LABEL_CN/RISK_META + ask.reason) + `<PermissionActions>`;**无**独立"需要权限"盒 |
 | running | running… | 命令块 |
 | done | ✓ + 耗时 | 命令块 + `<ToolOutputBody>` 折叠 |
-| error | ✗ | 命令块 + 红框 pre 常显(`extractToolResultDisplay` + `truncateOutput(,500)`) |
+| error | ✗ | 命令块 + `<ToolOutputBody :is-error>` 折叠(2026-09-02 改:错误全文不再常显,推翻原 design D4"红框 pre 常显"——错误输出与 done 统一走折叠 details,红框样式由组件 `--error` class 承载;后端同期把非零 exit code 改判 `is_error: false`,见 `tool-contract/01-tool-set-extension.md`) |
 | 畸形降级 | — | command 缺失/非 string → 整卡退 `ToolInputBody` |
 
 `run_background_shell` 同卡 + header background pill。命令块:`$` 前缀(muted)+
