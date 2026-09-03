@@ -731,3 +731,78 @@ async fn softcap_group_chat_breaks_without_ask() {
         "群聊路径不落软卡 audit 行"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 9) 全局 ask_no_timeout(2026-09-03, task 09-03-ask-no-timeout):
+//    开关开 → 50ms env 超时被忽略,撞线卡一直挂到 Stop(cancel)才收尾。
+//    不硬等真实 600s:env 调短为 50ms,cancel 在 150ms 触发 —— 若超时臂
+//    仍生效会在 50ms 抢先 timeout_stopped。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn softcap_no_timeout_ignores_short_env_timeout() {
+    let _g = softcap_serial().await;
+    std::env::set_var("EVERLASTING_SOFTCAP_TIMEOUT_MS", "50");
+    let _env = EnvVarGuard("EVERLASTING_SOFTCAP_TIMEOUT_MS");
+
+    let h = make_harness().await;
+    // 开关开(ask_turn_limit_softcap 读同一 db)。
+    crate::db::config::set_config_value(
+        &h.db,
+        crate::agent::permissions::ask::ASK_NO_TIMEOUT_KEY,
+        "true",
+    )
+    .await
+    .expect("set ask_no_timeout=true");
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![tool_use_response(0)]));
+    let token = CancellationToken::new();
+    let cancel_token = token.clone();
+    let store_obs = h.question_store.clone();
+    let sid_obs = h.session_id.clone();
+    // 撞线卡出现后等 120ms(> 50ms env 超时窗)再 Stop —— 若超时臂仍
+    // 生效,50ms 处已 timeout_stopped,轮不到 cancel。
+    tokio::spawn(async move {
+        loop {
+            if store_obs.get_payload(&sid_obs).await.is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                cancel_token.cancel();
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        }
+    });
+
+    run_loop(
+        &h,
+        mock.clone(),
+        "rid-sc-no-timeout",
+        vec![user("hello")],
+        emitter.clone(),
+        Some(1),
+        token,
+        false,
+        false,
+    )
+    .await;
+
+    assert_eq!(mock.call_count(), 1);
+    assert_eq!(
+        emitter.max_turns_done_count(),
+        0,
+        "ask_no_timeout 开 → 不出现 max_turns 终态(超时臂被禁用)"
+    );
+    assert_eq!(
+        emitter.cancel_done_count(),
+        1,
+        "Stop → Done(cancelled) 一次"
+    );
+    assert!(h.question_store.get_payload(&h.session_id).await.is_none());
+    let actions = softcap_audit_actions(&h).await;
+    assert_eq!(
+        actions,
+        vec!["asked".to_string(), "cancelled".to_string()],
+        "无 timeout_stopped 行(超时臂被禁用)"
+    );
+}

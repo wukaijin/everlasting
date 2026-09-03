@@ -336,6 +336,165 @@ async fn worker_ask_cancelled_resolves_deny() {
     );
 }
 
+// =====================================================================
+// 2026-09-03 (task 09-03-ask-no-timeout): global `ask_no_timeout`
+// switch. When the app_config flag is on, the ask timeout arm becomes
+// `pending()` (never fires) — the ask hangs until the user resolves or
+// the token is cancelled.
+//
+// No test below waits a real 120s: the flag-on cases settle via cancel
+// (~150ms) and the timeout arm is overridden to 50ms via
+// `with_ask_timeout_for_test` — the tests assert the 50ms window is
+// IGNORED when the switch is on.
+// =====================================================================
+
+/// Worker ask with `ask_no_timeout` on: the 50ms timeout override must
+/// NOT auto-deny. The ask is settled by a parent-token cancel fired
+/// well past the 50ms window; if the timeout arm were still armed, the
+/// decision would carry the "timed out" reason instead of "cancel".
+#[tokio::test]
+async fn worker_ask_no_timeout_ignores_short_timeout_window() {
+    crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        async {
+            let (pool, store, sink, ctx, token) = worker_ctx_with_db().await;
+            // worker_ctx_with_db builds its own pool — set the switch on
+            // THAT pool so the ask_path read (same `db` handle) sees it.
+            crate::db::config::set_config_value(
+                &pool,
+                crate::agent::permissions::ask::ASK_NO_TIMEOUT_KEY,
+                "true",
+            )
+            .await
+            .expect("set ask_no_timeout=true");
+            let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+            let cancel_token = token.clone();
+            let canceller = tokio::spawn(async move {
+                // Fire at 150ms — 3× the 50ms override. A live timeout
+                // arm would have auto-denied at 50ms.
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                cancel_token.cancel();
+            });
+            let decision = ask_path(
+                &sink_arc,
+                &pool,
+                &store,
+                &ctx,
+                "write_file",
+                &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+                "/repo/outside/foo.rs",
+                Some("/repo/outside/foo.rs"),
+                "tu-worker-no-timeout",
+                &token,
+                None,
+            )
+            .await;
+            let _ = canceller.await;
+            assert!(
+                matches!(decision, Decision::Deny { .. }),
+                "expected Deny after cancel, got {:?}",
+                decision
+            );
+            if let Decision::Deny { reason, .. } = &decision {
+                assert!(
+                    reason.contains("cancel"),
+                    "no-timeout ask must settle via cancel, not timeout; reason: {reason}"
+                );
+                assert!(
+                    !reason.contains("timed out"),
+                    "timeout arm fired despite ask_no_timeout; reason: {reason}"
+                );
+            }
+            // RULE-A-016 lineage: worker ask writes no session_audit_events.
+            let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+                .await
+                .expect("list_audit_events");
+            assert!(
+                events.is_empty(),
+                "RULE-A-016: worker no-timeout ask must NOT write session_audit_events"
+            );
+        },
+    )
+    .await;
+}
+
+/// Parent ask with `ask_no_timeout` on: same shape as the worker test —
+/// the 50ms override must NOT fire; the ask settles via token cancel at
+/// ~150ms, and no `permission_timeout` audit row is written.
+#[tokio::test]
+async fn parent_ask_no_timeout_ignores_short_timeout_window() {
+    crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        async {
+            let pool = worker_test_pool().await;
+            crate::db::config::set_config_value(
+                &pool,
+                crate::agent::permissions::ask::ASK_NO_TIMEOUT_KEY,
+                "true",
+            )
+            .await
+            .expect("set ask_no_timeout=true");
+            let store = crate::agent::permissions::new_permission_store();
+            let sink: std::sync::Arc<dyn crate::state::ChatEventSink> =
+                std::sync::Arc::new(CaptureAskSink::default());
+            let token = tokio_util::sync::CancellationToken::new();
+            let ctx = crate::agent::permissions::PermissionContext {
+                session_id: "parent-sess".to_string(),
+                mode: crate::db::Mode::Edit,
+                cwd: std::path::PathBuf::from("/repo"),
+                is_worker: false,
+                worker_run_id: None,
+                run_grants: None,
+                worktree_path: std::path::PathBuf::from("/repo"),
+                project_main_path: std::path::PathBuf::from("/repo"),
+                turn_seq: None,
+            };
+            let cancel_token = token.clone();
+            let canceller = tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                cancel_token.cancel();
+            });
+            let decision = ask_path(
+                &sink,
+                &pool,
+                &store,
+                &ctx,
+                "write_file",
+                &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+                "/repo/outside/foo.rs",
+                Some("/repo/outside/foo.rs"),
+                "tu-parent-no-timeout",
+                &token,
+                None,
+            )
+            .await;
+            let _ = canceller.await;
+            assert!(
+                matches!(decision, Decision::Deny { .. }),
+                "expected Deny after cancel, got {:?}",
+                decision
+            );
+            if let Decision::Deny { reason, .. } = &decision {
+                assert!(
+                    reason.contains("cancel") && !reason.contains("timed out"),
+                    "no-timeout parent ask must settle via cancel, not timeout; reason: {reason}"
+                );
+            }
+            // Parent path DOES write audit rows (ToolPermissionAsk +
+            // RequestCancelled) — assert no `permission_timeout` appears.
+            let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+                .await
+                .expect("list_audit_events");
+            assert!(
+                !events.iter().any(|e| e.kind == "permission_timeout"),
+                "permission_timeout audit written despite ask_no_timeout: {:?}",
+                events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+            );
+        },
+    )
+    .await;
+}
+
 /// Worker ask user-denied → `Decision::Deny` (the user's
 /// reason is surfaced to the worker LLM via the tool_result).
 /// No audit row (RULE-A-016 lineage).

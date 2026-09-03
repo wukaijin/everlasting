@@ -531,6 +531,13 @@ pub struct AppConfigPayload {
     /// `disk::governor::OUTPUTS_AGE_CLEANUP_ENABLED_KEY`),fail-open
     /// 缺省开;孤儿桶与 `_no_session` 不受此开关管辖(无主恒回收)。
     pub outputs_age_cleanup_enabled: bool,
+    /// 问询永不超时(2026-09-03, task `09-03-ask-no-timeout`):全局
+    /// enable 开关的读出口。app_config 键 `ask_no_timeout`(常量单源
+    /// `permissions::ask::ASK_NO_TIMEOUT_KEY`)。**方向与上述 kill-switch
+    /// 相反**:fail-closed 缺省关(仅字面 `"true"` 开)。开 = 权限审批卡
+    /// 不再 120s 自动拒绝、轮数上限软卡不再 10min 自动停止,无限挂起
+    /// 直到用户响应 / Stop / 删会话。
+    pub ask_no_timeout: bool,
 }
 
 pub async fn get_app_config_inner(
@@ -579,6 +586,9 @@ pub async fn get_app_config_inner(
         Ok(Some(v)) => v != "false",
         _ => true,
     };
+    // 问询永不超时:与上述 kill-switch 反方向 —— enable 语义走单源
+    // 读法(fail-closed 缺省关,仅字面 "true" 开)。
+    let ask_no_timeout = crate::agent::permissions::ask::ask_no_timeout_enabled(&state.db).await;
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
         scheduled_tasks_enabled: scheduled_on,
@@ -588,6 +598,7 @@ pub async fn get_app_config_inner(
         sandbox_capability,
         disk_governor_enabled,
         outputs_age_cleanup_enabled,
+        ask_no_timeout,
     })
 }
 
@@ -620,6 +631,9 @@ const SETTABLE_APP_FLAGS: &[&str] = &[
     // `disk::governor`,此处字面量沿既有白名单形态)。
     "disk_governor_enabled",
     "outputs_age_cleanup_enabled",
+    // 问询永不超时(2026-09-03, task 09-03-ask-no-timeout):常量单源
+    // 在 `permissions::ask::ASK_NO_TIMEOUT_KEY`(enable 语义,fail-closed)。
+    "ask_no_timeout",
 ];
 
 /// 写 app_config 布尔开关(白名单内)。key 不在白名单 → `InvalidRequest`
@@ -718,6 +732,11 @@ mod tests {
             cfg.disk_governor_enabled && cfg.outputs_age_cleanup_enabled,
             "F3 disk flags 缺省应为 true(fail-open)"
         );
+        // 问询永不超时(2026-09-03):enable 语义 fail-closed —— 缺省关。
+        assert!(
+            !cfg.ask_no_timeout,
+            "ask_no_timeout 缺省应为 false(fail-closed enable)"
+        );
         assert!(
             cfg.sandbox_extra_writable
                 .iter()
@@ -736,6 +755,9 @@ mod tests {
                 "sandbox_enabled" => cfg.sandbox_enabled,
                 "disk_governor_enabled" => cfg.disk_governor_enabled,
                 "outputs_age_cleanup_enabled" => cfg.outputs_age_cleanup_enabled,
+                // ask_no_timeout 是 enable 语义:写 false 读回 false 即可,
+                // 与其余 fail-open kill-switch 的缺省方向不同(单测下方单独断言)。
+                "ask_no_timeout" => cfg.ask_no_timeout,
                 _ => unreachable!(),
             };
             assert!(!off, "{key} 写 false 后应读回 false");
@@ -752,6 +774,9 @@ mod tests {
                 && cfg.disk_governor_enabled
                 && cfg.outputs_age_cleanup_enabled
         );
+        // 循环末尾把所有白名单 key 写回 true,ask_no_timeout 也在其中
+        // (enable 语义:写 true 读回 true,见下方单独断言)。
+        assert!(cfg.ask_no_timeout, "ask_no_timeout 写 true 后应读回 true");
     }
 
     /// 白名单外 key 拒绝(`InvalidRequest`),且不落库。

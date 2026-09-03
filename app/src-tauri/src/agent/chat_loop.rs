@@ -1048,6 +1048,12 @@ async fn ask_turn_limit_softcap(
         last_cwd,
     } = ask;
     let continue_label = format!("继续(+{} 轮)", TURN_LIMIT_GRANT);
+    // 2026-09-03 (task 09-03-ask-no-timeout): global switch — when on,
+    // the timeout arm below becomes `pending()` so the softcap card
+    // hangs until the user picks an option or stops the run (no more
+    // automatic `timeout_stopped`). Read once at ask time; a mid-ask
+    // flip does not retroactively settle an already-pending card.
+    let no_timeout = crate::agent::permissions::ask::ask_no_timeout_enabled(db).await;
     let compact_label = "压缩后续跑";
     let stop_label = "停止";
     let mut options = vec![QuestionOption {
@@ -1122,6 +1128,15 @@ async fn ask_turn_limit_softcap(
                 "turn-limit softcap: question asked"
             );
             // Four-arm biased select: cancel / timeout / rx(design §2.1).
+            // timeout 臂在 `no_timeout` 时恒 pending —— 撞线卡一直挂到
+            // 用户点选 / Stop(见函数头 no_timeout 注释)。
+            let mut timeout_arm = Box::pin(async move {
+                if no_timeout {
+                    std::future::pending::<()>().await
+                } else {
+                    tokio::time::sleep(softcap_ask_timeout()).await
+                }
+            });
             tokio::select! {
                             biased;
                             _ = token.cancelled() => {
@@ -1147,7 +1162,7 @@ async fn ask_turn_limit_softcap(
                                 );
                                 SoftcapOutcome::Terminal
                             }
-                            _ = tokio::time::sleep(softcap_ask_timeout()) => {
+                            _ = timeout_arm.as_mut() => {
                                 // 10min(缺省)无响应 → 停止(决议:unattended
                                 // 不替用户确认烧钱;停止 = 今日行为零回归)。
                                 question_store.remove(session_id).await;

@@ -592,6 +592,9 @@ mod tests {
         for (key, field) in [
             ("turn_complete_notify_enabled", "turnCompleteNotifyEnabled"),
             ("scheduled_tasks_enabled", "scheduledTasksEnabled"),
+            // 2026-09-03 (task 09-03-ask-no-timeout):enable 开关
+            // fail-closed(写 false/true 读回一致)。
+            ("ask_no_timeout", "askNoTimeout"),
         ] {
             let (code, v) = post_json(
                 &app,

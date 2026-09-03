@@ -20,6 +20,34 @@ use super::types::{risk_for_tool, Decision, PermissionContext, PermissionRespons
 pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 // ---------------------------------------------------------------------------
+// Global "永不超时" switch (2026-09-03, task 09-03-ask-no-timeout)
+// ---------------------------------------------------------------------------
+
+/// app_config key for the global "wait for the user indefinitely" toggle.
+/// When on, the permission-ask (and turn-limit softcap) timeout arms are
+/// disabled — the ask stays pending until the user responds, cancels, or
+/// the session token is cancelled (Stop / delete session).
+///
+/// **Direction is the OPPOSITE of the repo's kill-switch precedent**
+/// (`sandbox_enabled` / `disk_governor_enabled` are fail-open: absent or
+/// unreadable → `true` = feature on). This is an *enable* flag, so it is
+/// fail-closed: only a literal `"true"` turns it on; absent / unreadable /
+/// any other value → `false` = today's 120s/600s auto-settle behavior,
+/// zero regression on default installs.
+pub(crate) const ASK_NO_TIMEOUT_KEY: &str = "ask_no_timeout";
+
+/// Read the global no-timeout switch. Consulted once per `ask_path`
+/// call (before the select) and per softcap ask — a runtime flip only
+/// affects asks issued after the flip, never an already-pending one
+/// (the timeout future is fixed at select-construction time).
+pub(crate) async fn ask_no_timeout_enabled(db: &sqlx::SqlitePool) -> bool {
+    match crate::db::config::get_config_value(db, ASK_NO_TIMEOUT_KEY).await {
+        Ok(Some(v)) => v == "true",
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test-only timeout override (tokio task-local, RAII)
 // ---------------------------------------------------------------------------
 //
@@ -186,6 +214,11 @@ pub(super) async fn ask_path(
     // worker under Yolo mode never enters `ask_path` — workers
     // inherit parent's mode via `run_subagent`'s `permission_ctx`
     // build (chat_loop.rs:386).
+    // 2026-09-03 (task 09-03-ask-no-timeout): resolve the global
+    // no-timeout switch once, before the select. When on, the
+    // timeout arm below becomes `pending()` (never fires) and only
+    // the cancel / oneshot arms can settle the ask.
+    let no_timeout = ask_no_timeout_enabled(db).await;
     if ctx.is_worker {
         let worker_run_id = ctx.worker_run_id.clone().unwrap_or_else(|| {
             // Defensive: is_worker=true MUST carry worker_run_id.
@@ -265,10 +298,22 @@ pub(super) async fn ask_path(
         // boundary — without bias, the timeout arm might fire even
         // though cancel was ready).
         //
+        // 2026-09-03 (no-timeout switch): when `no_timeout` the timeout
+        // arm is `std::future::pending()` — it never fires, so the ask
+        // hangs until the user responds or cancels. The timeout body is
+        // untouched so the switch-off path stays byte-identical.
+        //
         // Each arm also encodes the RULE-WorkerAsk-001 outcome wire
         // string (`"allow"` / `"deny"` / `"timeout"` / `"cancel"`) so
         // the post-`match` resolve-emit can route correctly. The
         // outcome strings are DEBT-locked four-state.
+        let mut timeout_arm = Box::pin(async move {
+            if no_timeout {
+                std::future::pending::<()>().await
+            } else {
+                tokio::time::sleep(ask_timeout()).await
+            }
+        });
         let resp: Result<PermissionResponse, WorkerAskTerminal> = tokio::select! {
             biased;
             _ = token.cancelled() => {
@@ -301,7 +346,7 @@ pub(super) async fn ask_path(
                     reason: "cancelled by parent session stop".to_string(),
                 })
             }
-            _ = tokio::time::sleep(ask_timeout()) => {
+            _ = timeout_arm.as_mut() => {
                 // 120s (production default) without user response →
                 // Deny. The duration is resolved via [`ask_timeout`] so
                 // tests can shorten it via [`set_ask_timeout_for_test`].
@@ -484,6 +529,16 @@ pub(super) async fn ask_path(
         )
         .await;
         let rx = register_ask(store, &ctx.session_id, rid.clone()).await;
+        // 2026-09-03 (no-timeout switch): same pending()-based timeout
+        // arm as the worker branch above — when `no_timeout` the ask
+        // hangs until the user responds or the token is cancelled.
+        let mut timeout_arm = Box::pin(async move {
+            if no_timeout {
+                std::future::pending::<()>().await
+            } else {
+                tokio::time::sleep(ask_timeout()).await
+            }
+        });
         let resp = tokio::select! {
             biased;
             _ = token.cancelled() => {
@@ -501,7 +556,7 @@ pub(super) async fn ask_path(
                     critical: false,
                 };
             }
-            _ = tokio::time::sleep(ask_timeout()) => {
+            _ = timeout_arm.as_mut() => {
                 // Resolved via [`ask_timeout`] (production 120s; tests
                 // may override via [`set_ask_timeout_for_test`]). The
                 // reason string below keeps the spec'd "120s" wording
