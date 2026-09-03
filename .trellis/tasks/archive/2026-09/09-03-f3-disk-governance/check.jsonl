@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 Quality Check 入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门:clippy -D warnings / 测试覆盖要求"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "校验 spawn_disk_governor 符合 daemon 装配与 shutdown 契约(零 timer 约束/fail-open)"}
+{"file": ".trellis/spec/backend/worktree-contract/worker-sweep.md", "reason": "校验 sweep 本体未被改动、仅新增调用方;locked 容错语义未漂移"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门:vitest/vue-tsc 覆盖要求"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "校验 AC8:浏览器模式路由可达,routes-sync 守卫通过"}
+{"file": ".trellis/tasks/09-03-f3-disk-governance/research/disk-usage-audit.md", "reason": "验收对照:P0-a/P0-b/P1-a/P1-b/P2-a/P2-b 缺口逐项销账"}
+{"file": ".trellis/tasks/09-03-f3-disk-governance/research/integration-points.md", "reason": "验收对照:IPC 五处接线清单 / 设置面 registry 同步 / daemon.sh 共存变更面"}

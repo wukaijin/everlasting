@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 spec 入口:Pre-Development Checklist 与层约定"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 装配/常驻节拍/shutdown 契约——spawn_disk_governor 挂载点与 CancellationToken 约定"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "worktree 生命周期总契约——孤儿 session worktree 回收必须对齐 Active/Detached 语义"}
+{"file": ".trellis/spec/backend/worktree-contract/worker-sweep.md", "reason": "现有 worker sweep 契约(7 天 mtime/locked 跳过/env 覆盖)——PR1 仅做调用方装配,不改本体"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB 操作规范——prune_backups 改预算逻辑涉及"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "日志规范——新文件 layer 的 tracing 用法与 info!/warn! 约定"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-output-truncation.md", "reason": "C6 spill 契约——outputs 回收对三恢复模式的降级影响边界"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端 spec 入口:组件/状态约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新组件 settings/DiskTab.vue 遵循的组件规范"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "configStore additive 开关接线约定(写成功才更新本地 ref)"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "CMD_TO_DOMAIN 映射与浏览器模式可达性——新 IPC 双注册必读"}
+{"file": ".trellis/tasks/09-03-f3-disk-governance/research/disk-usage-audit.md", "reason": "缺口审计:五消费点现状 + file:line 证据(P0/P1/P2 定级依据)"}
+{"file": ".trellis/tasks/09-03-f3-disk-governance/research/integration-points.md", "reason": "接线先例:设置面 registry/节拍形态/日志共存分析/IPC 五处注册清单"}
