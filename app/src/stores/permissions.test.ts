@@ -46,6 +46,7 @@ import {
   ASK_TIMEOUT_MS,
   type PermissionAsk,
 } from "./permissions";
+import { useConfigStore } from "./config";
 
 const sampleAsk: PermissionAsk = {
   rid: "rid-1",
@@ -209,6 +210,28 @@ describe("usePermissionsStore", () => {
       "权限询问已超时，已自动拒绝",
       "warn",
     );
+  });
+
+  // -----------------------------------------------------------------
+  // 2026-09-03 (task 09-03-ask-no-timeout): global `askNoTimeout`
+  // switch ON → no local 120s timer is armed (backend also disables
+  // its auto-deny), so the card stays pending until the user responds.
+  // -----------------------------------------------------------------
+
+  it("askNoTimeout ON → 不 arm 120s timer(卡面保持 pending,无 deny/toast)", () => {
+    vi.useFakeTimers();
+    const toastMock = vi.fn();
+    const store = usePermissionsStore();
+    // 直接置 config store 的开关(transport 已 mock;permissions 经
+    // useConfigStore() 读同一 pinia 实例)。
+    const cfg = useConfigStore();
+    cfg.askNoTimeout = true;
+    store.setPending(sampleAsk);
+    void store.start(toastMock);
+    vi.advanceTimersByTime(ASK_TIMEOUT_MS * 2);
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(store.getPending("sess-1")).toEqual(sampleAsk);
   });
 
   it("stop() tears down the listener + clears all pending", async () => {

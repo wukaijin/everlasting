@@ -50,16 +50,18 @@ beforeEach(() => {
 });
 
 describe("GeneralTab", () => {
-  it("渲染三个开关,缺省 aria-checked=true(store fail-open 缺省开)", async () => {
+  it("渲染四个开关:前三缺省 aria-checked=true(fail-open),askNoTimeout 缺省 false(fail-closed)", async () => {
     const w = await mountTab();
     const switches = w.findAll("button[role='switch']");
-    expect(switches).toHaveLength(3);
+    expect(switches).toHaveLength(4);
     expect(switches[0]?.attributes("aria-checked")).toBe("true");
     expect(switches[1]?.attributes("aria-checked")).toBe("true");
     expect(switches[2]?.attributes("aria-checked")).toBe("true");
+    expect(switches[3]?.attributes("aria-checked")).toBe("false");
     expect(switches[0]?.attributes("aria-label")).toBe("轮次完成通知");
     expect(switches[1]?.attributes("aria-label")).toBe("定时任务调度");
     expect(switches[2]?.attributes("aria-label")).toBe("命令沙盒");
+    expect(switches[3]?.attributes("aria-label")).toBe("等待确认不超时");
   });
 
   it("点击携带正确的 key + 取反值,成功后 store 更新", async () => {
@@ -82,6 +84,20 @@ describe("GeneralTab", () => {
       value: false,
     });
     expect(pinia.scheduledTasksEnabled).toBe(false);
+  });
+
+  it("askNoTimeout 点击:缺省 false → 写 true,key 为 ask_no_timeout,store + aria 跟随", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+
+    await switchAt(w, 3).trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenLastCalledWith("set_app_config_flag", {
+      key: "ask_no_timeout",
+      value: true,
+    });
+    expect(pinia.askNoTimeout).toBe(true);
+    expect(switchAt(w, 3).attributes("aria-checked")).toBe("true");
   });
 
   it("写入失败 → toast 报错,store 值保持原状", async () => {
@@ -128,7 +144,7 @@ describe("GeneralTab — P3b sandbox", () => {
   it("渲染第三个开关(命令沙盒),缺省开;能力徽标 null 时不显示", async () => {
     const w = await mountTab();
     const switches = w.findAll("button[role='switch']");
-    expect(switches).toHaveLength(3);
+    expect(switches).toHaveLength(4);
     expect(switches[2]?.attributes("aria-label")).toBe("命令沙盒");
     expect(switches[2]?.attributes("aria-checked")).toBe("true");
     expect(w.find(".general-tab__cap").exists()).toBe(false);
@@ -184,6 +200,8 @@ describe("GeneralTab — P3b sandbox", () => {
     expect(pinia.sandboxExtraWritable).toEqual(["/root/.cargo", "/opt/cache"]);
     expect(pinia.sandboxExtraWritableRaw).toEqual(["/opt/cache"]);
     expect(pinia.sandboxCapability).toBe(false);
+    // askNoTimeout 未回字段 → 缺省 false(additive + fail-closed)。
+    expect(pinia.askNoTimeout).toBe(false);
   });
 
   it("额外可写目录(RULE-SBX-002):编辑 raw 清单;~/.cargo 默认项为固定 chip 不可删", async () => {

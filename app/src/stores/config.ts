@@ -141,6 +141,13 @@ export const useConfigStore = defineStore("config", () => {
   const diskGovernorEnabled = ref(true);
   const outputsAgeCleanupEnabled = ref(true);
 
+  // 问询永不超时(2026-09-03, task 09-03-ask-no-timeout):全局 enable
+  // 开关(fail-closed,缺省 false —— 与上述 kill-switch 的 fail-open
+  // 方向相反,对齐后端 `ask_no_timeout` 读法:仅字面 "true" 开)。开 =
+  // 权限审批卡与轮数上限「继续?」软卡不再自动超时收尾,一直挂着等
+  // 用户响应。permissions.ts 据此不 arm 本地 120s 计时器。
+  const askNoTimeout = ref(false);
+
   async function load() {
     // Load providers + models from the catalog (replaces the old
     // `get_llm_config` env path). Store references are obtained at
@@ -178,6 +185,7 @@ export const useConfigStore = defineStore("config", () => {
         sandboxCapability?: boolean;
         diskGovernorEnabled?: boolean;
         outputsAgeCleanupEnabled?: boolean;
+        askNoTimeout?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
       // F2:additive 字段(旧 daemon 缺省 true)。
@@ -191,6 +199,9 @@ export const useConfigStore = defineStore("config", () => {
       // F3:additive 两字段(旧 daemon 缺省 true)。
       diskGovernorEnabled.value = appConfig.diskGovernorEnabled !== false;
       outputsAgeCleanupEnabled.value = appConfig.outputsAgeCleanupEnabled !== false;
+      // ask_no_timeout:enable 语义 fail-closed —— 仅字面 true 开,
+      // 旧 daemon / 未存缺省 false(与 kill-switch 的 !== false 相反)。
+      askNoTimeout.value = appConfig.askNoTimeout === true;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
     }
@@ -258,6 +269,20 @@ export const useConfigStore = defineStore("config", () => {
     outputsAgeCleanupEnabled.value = on;
   }
 
+  /** Toggle the global no-timeout switch (app_config
+   *  `ask_no_timeout`, 2026-09-03 task 09-03-ask-no-timeout).
+   *  Enable semantics — fail-closed upstream: only a literal
+   *  `"true"` turns it on. When on, permission asks + the
+   *  turn-limit softcap never auto-settle (frontend arms no
+   *  120s timer either). */
+  async function setAskNoTimeout(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "ask_no_timeout",
+      value: on,
+    });
+    askNoTimeout.value = on;
+  }
+
   /** Persist the RAW extra-writable list (RULE-SBX-002, P3c): the
    *  editable list is exactly what lands in app_config — the `~/.cargo`
    *  default is NOT part of it (the backend merges it in at read
@@ -285,6 +310,7 @@ export const useConfigStore = defineStore("config", () => {
     sandboxCapability,
     diskGovernorEnabled,
     outputsAgeCleanupEnabled,
+    askNoTimeout,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,
@@ -293,6 +319,7 @@ export const useConfigStore = defineStore("config", () => {
     setSandboxEnabled,
     setDiskGovernorEnabled,
     setOutputsAgeCleanupEnabled,
+    setAskNoTimeout,
     setSandboxExtraWritableRaw,
     load,
   };

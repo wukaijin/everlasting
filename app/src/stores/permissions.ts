@@ -43,6 +43,7 @@
 import { defineStore } from "pinia";
 import { reactive, computed } from "vue";
 import { transport, type UnlistenFn } from "../transport";
+import { useConfigStore } from "./config";
 
 /** Per-tool risk level. Serialized to/from the IPC payload —
  *  backend `permissions::Risk` uses `#[serde(rename_all =
@@ -223,8 +224,17 @@ export const usePermissionsStore = defineStore("permissions", () => {
   /** Arm an independent 120s timer for `rid`. When it fires we
    *  best-effort deny (the backend auto-denies at 120s too;
    *  `respond()` no-ops on a stale rid) + surface a toast + the
-   *  matching pending is cleared by `respond()`. */
+   *  matching pending is cleared by `respond()`.
+   *
+   *  2026-09-03 (task 09-03-ask-no-timeout): when the global
+   *  `askNoTimeout` switch is on (backend also disables its 120s
+   *  auto-deny), no timer is armed — the card stays pending until
+   *  the user responds (or the session is torn down / a result
+   *  arrives → `clearPending`). */
   function startAskTimer(rid: string): void {
+    if (useConfigStore().askNoTimeout) {
+      return;
+    }
     const t = window.setTimeout(() => {
       timersByRid.delete(rid);
       void respond(rid, "deny").catch(() => {

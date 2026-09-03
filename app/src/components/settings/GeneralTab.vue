@@ -69,6 +69,14 @@ const rows: FlagRow[] = [
     value: () => config.sandboxEnabled,
     set: (on) => config.setSandboxEnabled(on),
   },
+  {
+    key: "askNoTimeout",
+    title: "等待确认不超时",
+    description:
+      "开启后,需要你确认的卡(权限审批、轮数上限「继续?」)不再超时自动拒绝/停止,会一直挂着直到你响应或停止运行。注意:定时任务在无人值守时弹出的审批同样适用 —— 需你回来处理或手动停止,否则该会话会一直占用。",
+    value: () => config.askNoTimeout,
+    set: (on) => config.setAskNoTimeout(on),
+  },
 ];
 
 async function onToggle(row: FlagRow): Promise<void> {
