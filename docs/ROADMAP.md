@@ -110,6 +110,7 @@
 | **RULE-TEST-001** Playwright 浏览器回归流水线 | 08-30 | 真实 Chromium 驱动前端 + route-mock;三试点(Shift+Enter / 提问卡回底 / 放行撤销确认);CI blocking 门禁,确定性用例准入(spec [frontend/browser-regression.md](../.trellis/spec/frontend/browser-regression.md)) |
 | **定时任务 per_run 三档** | 08-31 | 目标 session 新增「每次执行新建」档:target_mode/model_id/last_run_session_id 三列 + 表重建迁移;前端 radio 卡片三档;LLM tool 恒 fixed 不暴露(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
 | 「添加项目」DirBrowserModal 全模式统一 + 键盘导航 | 09-03 | native 选目录链(命令 + tauri-plugin-dialog 依赖 + 权限)整链下线,DirBrowserModal 成桌面/浏览器统一入口,补 roving tabindex 方向键/Enter/焦点复位(销 BACKLOG §5.3 / FU-3;task [09-03-dirbrowser-desktop-unify](../.trellis/tasks/09-03-dirbrowser-desktop-unify/)) |
+| **F3 磁盘治理** | 09-03 | disk governor 每日节拍修 worker sweep 宿主断链 + 孤儿 worktree/outputs 回收 + 备份 200MiB 预算自适应;日志进程内 10MiB×3 轮转(daemon.sh 脚本轮转退役);WebKitCache 启动阈值清理;设置面「存储」区块(占用概览 + 开关 + 立即清理)(spec [backend/disk-governance](../.trellis/spec/backend/disk-governance.md),task `09-03-f3-disk-governance`;余留 follow-up:DB VACUUM、进程/内存、F1 反压联动) |
 
 ---
 
@@ -152,7 +153,7 @@
 | ~~L3b PR1~~ | ~~worker worktree 隔离核心(PR1 落地,见 §1.2)~~ | 06-27 PR1 已落地,见 §1.2;PR2-4 拆为 follow-up tasks |
 | ~~C7~~ | ~~工具上下文渐进式披露(tools[] token 治理)~~ | ✅ 08-14 落地(R1 度量 + R3 静态裁剪;live 实测 tools 占首轮 context 38.5% → D(Stub)Phase 2 触发线 >15% 已过),见 §1.2 |
 | ~~F1~~ | ~~消息队列(输入排队 / 优先级 / 批量注入)~~ | ✅ **A 档(用户连发)2026-08-25 落地**(排队+续轮批量注入+撤销/退回+Stop 清队;`TurnContinuation` 续轮边界事件),见 §1.2。B 档(优先级分档/抢占)仍开放 —— **C 档 cron 消费者已由 F2 交付(2026-08-28,统一入口 = chat_inner「闲也入队」路由);**LLM detached dispatch 已由 schedule_task 家族交付(2026-08-29)** |
-| **F3** | 资源治理(系统级限损框架) | context/token 治理已落地(unified-context-budget / C7 / memory-gov / B1,见 §1.2);**agent loop 并发上限已落地**(F6 2026-08-27:全局信号量 `max_concurrent_loops` 缺省 4,见 §1.2);余下:进程 / 内存、磁盘(worktree / attachments / 日志),与 F1 反压联动。**边界**:不含 Provider API 限流(C5 已移除,见 §3) |
+| **F3** | 资源治理(系统级限损框架) | context/token 治理已落地(unified-context-budget / C7 / memory-gov / B1,见 §1.2);agent loop 并发上限已落地(F6 2026-08-27:全局信号量 `max_concurrent_loops` 缺省 4,见 §1.2);**磁盘限损已落地(2026-09-03,见 §1.2 F3 磁盘治理行)**;余下 follow-up:进程 / 内存、F1 反压联动。**边界**:不含 Provider API 限流(C5 已移除,见 §3) |
 | ~~F4~~ | ~~Web 搜索工具~~ | ✅ 08-25 落地(`web_search` snippet-only 搜索 + `web_fetch` 全文两段式;Tavily/DDG 双后端;固定端点无 SSRF 面,非原设想"复用 web_fetch 安全模型"),见 §1.2 |
 | ~~F5~~ | ~~PDF/Office 文档阅读~~ | ✅ **第一档(PDF + docx)2026-08-26 落地**;**follow-up xlsx/xlsm 提取同日落地**(每 sheet CSV 块,calamine 纯 Rust);pptx 用户裁定不做;pdfium 渲染扫描件、正式 document skill 仍留 follow-up,见 §1.2 |
 

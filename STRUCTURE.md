@@ -262,6 +262,7 @@ app/src-tauri/src/
 │ ├── scheduled_tasks.rs # ★ NEW (08-28 F2) — 定时任务 CRUD(create/update/delete/list;08-31 加 per_run 目标 session 三档)
 │ ├── message_queue.rs # ★ NEW (08-25 F1) — 消息队列 IPC(list/remove/recall queued messages)
 │ ├── usage.rs # ★ NEW (08-27 F6) — usage_window(用量窗口)
+│ ├── disk.rs # ★ NEW (09-03 F3) — get_disk_usage(7 消费点字节概览)+ run_disk_cleanup(立即清理,直调 governor 不查 kill-switch)
 │ ├── attachments.rs # ★ NEW (08-27 F5) — save_attachment(@附件落盘)
 │ └── ui.rs # ★ (07-13 B9+) — apply_ui_diff(生成式 UI diff 应用)
 ├── tools/ # 内置工具 (28 个 builtin;07-08~10 加 workflow 等;07-29 加群聊 nominate_speaker/end_discussion;08-17 加 search_history;08-25 加 web_search;08-29 加 schedule_task 家族 3 个;08-30 C6 截断统一;08-31 sandbox 执行期接入;09-01 P3c 三态/Plan 面 + P3d ToolContext.tool_use_id 盖章)
@@ -308,12 +309,17 @@ app/src-tauri/src/
 │ ├── mod.rs / health.rs / stream.rs(SSE)
 │ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
 │ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs / review.rs
-│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs / scheduled_tasks.rs / message_queue.rs / usage.rs / attachments.rs / pairing.rs
+│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs / scheduled_tasks.rs / message_queue.rs / usage.rs / attachments.rs / pairing.rs / disk.rs
 ├── scheduler/ # ★ NEW (08-28 F2/F2b) — daemon 常驻定时调度器(30s tick + CancellationToken 停机;单一扫描算法 + due 落账 + catch-up;同 session 每 tick 至多一 fire;F2b 四道 gate + completed 审计;08-31 per_run 三档)
 │ ├── mod.rs (spawn_task_scheduler + tick 主循环 + kill switch)
 │ ├── compute.rs (most_recent_due / next_fire_display 等纯函数)
 │ ├── tests_tick.rs / tests_lost.rs
 │ └── (fire 走 chat_inner + origin 载体链落 messages.metadata.scheduled)
+├── disk/ # ★ NEW (09-03 F3 磁盘治理) — 磁盘限损层(governor 每日节拍 + 日志轮转 + WebKitCache 启动清理;契约见 .trellis/spec/backend/disk-governance.md)
+│ ├── mod.rs
+│ ├── governor.rs (回收函数族 _inner 化:worker sweep 装配修复 + 孤儿 session worktree + outputs 孤儿/按龄 + spawn_disk_governor 24h 节拍首拍延迟 5min;备份预算 prune 在 db/backup.rs)
+│ ├── log_rotation.rs (RotatingFileWriter:daemon bin 进程内文件 layer,10MiB×3 代运行期滚动;daemon.sh 脚本轮转退役)
+│ └── webkit_cache.rs (GUI 启动阈值清理 50MiB;⚠ 装配在 lib.rs setup 公共区——Thin 早退陷阱,源码静态断言守护)
 ├── sandbox/ # ★ NEW (08-31 P3b;09-01 P3c 三态) — 执行期沙盒(Landlock ruleset + seccomp BPF;P3b ReadOnly 档 → P3c 三态 per-project `sandbox_policy`(off/readwrite/readonly)全命令进沙盒 + Plan 只读面 + resolve_policy 决策链;前后台升级闭环在 agent/permissions/escalation.rs + chat_loop/background_escalation.rs)
 │ ├── mod.rs (入口 + 策略组装 + spawn 沙盒命令)
 │ ├── landlock.rs (Landlock ruleset——文件系统路径限制)
@@ -342,6 +348,7 @@ lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  │ →引用 llm::provider + tools + db
  ├── commands::* (IPC分发,按域拆;同一 handler 经 daemon/routes/ 双暴露为 REST) → agent + db + git + projects
  ├── tools/* → read_guard + tool_output(截断契约) + sandbox::{landlock,seccomp,policy}(P3b 执行期沙盒 → P3c 三态/Plan 面;ToolContext.tool_use_id dispatch 统一盖章,P3d)
+ ├── disk/* (governor 回收族 + log_rotation + webkit_cache;09-03 F3;bin/everlasting-daemon 节拍装配 + lib.rs Full 一次性 pass / setup 公共区 WebKitCache)
  ├── sandbox/* (landlock + seccomp + policy(三态 resolve_policy);shell.rs / run_background_shell.rs 调用 + permissions/escalation.rs + chat_loop/background_escalation.rs 升级闭环)
  ├── skill/* → loader
  ├── memory/* → loader

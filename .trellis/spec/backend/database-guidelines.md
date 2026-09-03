@@ -151,11 +151,14 @@ SQLite 无法 `ALTER` 的表级约束变更。先例两则:
 **Signatures**:
 
 ```rust
-// db/backup.rs
-pub const KEEP_BACKUPS: usize = 7;
+// db/backup.rs(F3 磁盘治理 2026-09-03 起 prune 为预算自适应)
+pub const KEEP_BACKUPS: usize = 7;            // 份数硬顶(原固定份数语义并入上限)
+pub const BACKUP_BUDGET_BYTES: u64 = 200MiB;  // env EVERLASTING_BACKUP_BUDGET_MB 覆盖
+pub const MIN_KEEP_BACKUPS: usize = 2;        // 超预算也至少保留的恢复点份数
+pub struct PruneOutcome { pub removed: Vec<PathBuf>, pub reclaimed_bytes: u64 }
 pub fn backup_dir(data_dir: &Path) -> PathBuf;   // data_dir/backups/
 pub async fn backup_database(db: &SqlitePool, dir: &Path) -> std::io::Result<PathBuf>;
-pub fn prune_backups(dir: &Path, keep: usize) -> std::io::Result<Vec<PathBuf>>;  // 返回被删列表
+pub fn prune_backups(dir: &Path, keep: usize) -> std::io::Result<PruneOutcome>;
 
 // daemon/server.rs — daemon 启动即备份一次,之后每 24h;失败仅 warn 等下一周期
 pub fn spawn_backup_task(state: &Arc<AppState>, data_dir: &Path);
@@ -166,6 +169,14 @@ pub fn spawn_backup_task(state: &Arc<AppState>, data_dir: &Path);
 - 备份文件名 `everlasting-YYYYMMDD-HHMMSS.db`(本地时间),同秒已存在
   取 `-2`/`-3` 后缀(上限 999 防死循环)。**文件名字典序 = 时间序**,
   prune 靠这个删最旧 —— 改名格式必须保持可排序。
+- **保留策略(F3 磁盘治理 2026-09-03 起,`prune_backups` 预算自适应)**:
+  从新到旧保留,累计字节数超 `BACKUP_BUDGET_BYTES`(200 MiB,env
+  `EVERLASTING_BACKUP_BUDGET_MB` 覆盖)即停;**恰好等于预算不停**
+  (严格 `>` 才停);至少 `MIN_KEEP_BACKUPS`(2)份(超预算也保留),
+  至多 `KEEP_BACKUPS`(7)份。小备份场景预算不触发,份数语义与旧行为
+  兼容。回收摘要(`PruneOutcome`)供 daemon 备份 task 日志与磁盘
+  governor / `run_disk_cleanup` IPC 双消费,契约细节见
+  [disk-governance](disk-governance.md)。
 - `VACUUM INTO` 路径是拼接 SQL:路径中的 `'` 必须 `''` 转义(SQLite
   字符串字面量标准;**不认反斜杠转义**)。
 - 备份目录跟随 `--data-dir`(sidecar 传 GUI `app_data_dir` 时与 DB
@@ -191,7 +202,11 @@ pub fn spawn_backup_task(state: &Arc<AppState>, data_dir: &Path);
 `backup_creates_valid_copy`(副本用 `mode=ro` 独立 pool 打开数行数 ==
 源库)/ `backup_same_second_collision` / `prune_keeps_newest_n` /
 `prune_ignores_foreign_files` / `backup_uncreatable_dir_returns_err` /
-`backup_dir_with_single_quote_in_path`。
+`backup_dir_with_single_quote_in_path`;F3 预算自适应(2026-09-03):
+`prune_keeps_all_when_within_budget` / `prune_drops_oldest_beyond_budget_
+but_keeps_two` / `prune_never_drops_below_two_even_over_budget` /
+`prune_stops_when_next_file_exceeds_budget`(预算边界:恰好等于不停)/
+`backup_budget_env_resolution`。
 
 ### Scenario: messages.status 检查点列 + 启动恢复(RULE-PERSIST-001 闭合,2026-08-24)
 
