@@ -26,6 +26,8 @@
 //! - `cancel` (1): `cancel_chat`
 //! - `command_palette` (2): `list_commands`, `get_command_body`
 //! - `config` (2): `get_llm_config`, `get_home_dir`
+//! - `disk` (2): `get_disk_usage`, `run_disk_cleanup` (F3 磁盘治理 PR3,
+//!   2026-09-03)
 //! - `files` (2): `list_files`, `list_files_at`
 //! - `health`: `GET /api/v1/health` (B3)
 //! - `memory` (7): `read_memory_layers`, `read_memory_content`, ...
@@ -51,6 +53,9 @@ pub mod background_shells;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
+// F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance` PR3):设置面
+// 「存储」分类 IPC(占用概览 + 手动清理;mirror commands::disk,Q0 单源)。
+pub mod disk;
 pub mod files;
 pub mod health;
 pub mod memory;
@@ -107,6 +112,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             command_palette::router(state.clone()),
         )
         .nest("/api/v1/config", config::router(state.clone()))
+        .nest("/api/v1/disk", disk::router(state.clone()))
         .nest("/api/v1/files", files::router(state.clone()))
         .nest("/api/v1/memory", memory::router(state.clone()))
         .nest(

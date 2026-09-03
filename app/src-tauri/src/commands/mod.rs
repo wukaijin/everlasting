@@ -29,6 +29,10 @@ pub mod background_shells;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
+// F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance` PR3):设置面
+// 「存储」分类两条 IPC(占用概览 get_disk_usage + 手动清理
+// run_disk_cleanup);回收本体在 `disk::governor` 的 `_inner` 族。
+pub mod disk;
 pub mod files;
 pub mod memory;
 pub mod message_queue;
@@ -173,6 +177,11 @@ pub fn all_command_names() -> Vec<&'static str> {
         // the `background_shell:update` event, not these.
         "list_background_shells",
         "kill_background_shell",
+        // F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance` PR3):
+        // 设置面「存储」分类 —— 占用概览 + 手动「立即清理」(回收本体
+        // 在 `disk::governor` 的 `_inner` 族,节拍与按钮共享)。
+        "get_disk_usage",
+        "run_disk_cleanup",
         // L3b PR3 (2026-06-27): merge / discard worker IPCs.
         // The LLM-side path is the `merge_worker` /
         // `discard_worker` tools (tool layer); these commands
