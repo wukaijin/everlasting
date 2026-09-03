@@ -8,8 +8,9 @@
 #
 # 用法:
 #   ./scripts/daemon.sh start   [--port N]   编译 daemon 档二进制 + 启动(前台日志)
-#   ./scripts/daemon.sh bg      [--port N]   同 start,但后台运行 + 日志写文件
-#                                           ($XDG_STATE_HOME 下 daemon.log,追加写 + 启动时轮转)
+#   ./scripts/daemon.sh bg      [--port N]   同 start,但后台运行(日志由 daemon 进程内
+#                                           appender 落 $XDG_STATE_HOME 下 daemon.log,
+#                                           追加写 + >10MiB 滚 3 代)
 #   ./scripts/daemon.sh stop                 停止运行中的 daemon
 #   ./scripts/daemon.sh restart [--port N]   stop + start(改前端后重新 serve dist)
 #   ./scripts/daemon.sh rebuild [--release]  只重新编译二进制(不重启)
@@ -48,7 +49,9 @@ use_release_profile() {
 }
 PID_FILE="$REPO_ROOT/.everlasting-daemon.pid"
 # 2026-08-24 RULE-DAEMON-001 收口:日志从 /tmp(重启即覆盖 + 无限增长)
-# 迁到 XDG state 目录,追加写 + 启动时大小轮转(见 rotate_log)。
+# 迁到 XDG state 目录。2026-09-03 F3 PR2 起追加写 + 大小轮转(>10MiB 滚
+# 3 代)由 daemon 进程内 appender 负责(disk/log_rotation.rs),脚本不再
+# 重定向/轮转,只保留路径常量(logs 子命令 tail 同一路径)。
 # HOME 缺失(cron/systemd 裸环境)时 `${HOME:-…}` 退回 /tmp:`set -u` 下裸
 # `$HOME` 会 unbound 连坐杀死整个脚本(连 help 都打不出),比退化路径更糟。
 STATE_DIR="${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/dev.everlasting.app"
@@ -65,26 +68,10 @@ warn() { printf '\033[33m⚠ %s\033[0m\n' "$*" >&2; } # 黄色 ⚠
 err()  { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; } # 红色 ✗
 die()  { err "$*"; exit 1; }
 
-# ── 日志轮转(RULE-DAEMON-001,2026-08-24)────────────────────────
-# bg 启动前调用:>10MiB 则滚动保留 3 代(daemon.log → .1 → .2 → .3,最旧
-# 删除)。轮转职责单点在启动侧:运行期 daemon 只追加写,单文件增长上限
-# 10MiB,滚动存量最多 3 代(合计 ≈ 4×10MiB 封顶)。GNU stat(-c%s)——
-# 本脚本只面向 WSL/Linux 环境。
-rotate_log() {
-    [[ -f "$LOG_FILE" ]] || return 0
-    local size
-    size="$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)"
-    (( size <= 10 * 1024 * 1024 )) && return 0
-    mkdir -p "$STATE_DIR"
-    # 首次滚动时 .1/.2 尚不存在 —— mv 对缺失源报错,set -e 会连坐中断
-    # do_start。逐代存在性守卫 + 失败降级:轮转是附属保障,任何失败都
-    # 不能反过来挡住 daemon 启动(主 log 滚动失败则继续追加写原文件)。
-    rm -f "$LOG_FILE.3" 2>/dev/null || true
-    [[ -f "$LOG_FILE.2" ]] && mv -f "$LOG_FILE.2" "$LOG_FILE.3" || true
-    [[ -f "$LOG_FILE.1" ]] && mv -f "$LOG_FILE.1" "$LOG_FILE.2" || true
-    mv -f "$LOG_FILE" "$LOG_FILE.1" \
-        || warn "日志滚动失败,继续追加写 $LOG_FILE"
-}
+# ── 日志轮转(RULE-DAEMON-001,2026-08-24;2026-09-03 F3 PR2 退役)──
+# 轮转改由 daemon 进程内 appender 负责(disk/log_rotation.rs:>10MiB 滚
+# 3 代,运行期实时检查而非仅启动时),原 rotate_log 函数删除;存量
+# .1/.2/.3 由 Rust 滚动循环自然覆盖消化,无需迁移。
 
 # ── 进程管理(基于 PID 文件) ───────────────────────────────────────
 # 读 PID 文件;校验进程确实存活(避免 PID 文件陈旧导致误判)。
@@ -140,11 +127,13 @@ do_start() {
 
     log "启动 daemon (port=$port)"
     if $background; then
-        # 2026-08-24 RULE-DAEMON-001:日志追加写(不再重启即覆盖)+
-        # 启动前按大小轮转(见 rotate_log);目录惰性创建,首次 bg 才落地。
+        # 2026-08-24 RULE-DAEMON-001;2026-09-03 F3 PR2:日志落盘改由 daemon
+        # 进程内 appender 负责(追加写 + >10MiB 滚 3 代,路径不变,见
+        # disk/log_rotation.rs),脚本不再 `>> $LOG_FILE` 重定向 —— 消除
+        # 双写者(fd 交错 + 与滚动打架),运行期也能轮转。目录仍兜底创建
+        # (appender 自建,双保险)。
         mkdir -p "$STATE_DIR"
-        rotate_log
-        nohup "$DAEMON_BIN" --port "$port" >> "$LOG_FILE" 2>&1 &
+        nohup "$DAEMON_BIN" --port "$port" >/dev/null 2>&1 &
         local pid=$!
         echo "$pid" > "$PID_FILE"
         sleep 1.5

@@ -102,11 +102,15 @@ pub fn spawn_backup_task(state: &AppState, data_dir: &Path) {
                 }
             }
             // Retention runs after every attempt so the dir stays bounded
-            // even when an earlier backup half-failed.
+            // even when an earlier backup half-failed. F3 磁盘治理
+            // (2026-09-03)起 prune 为预算自适应(200MiB 预算 / 至少 2
+            // 份 / 至多 KEEP_BACKUPS 份),返回携带回收字节数。
             match backup::prune_backups(&backups, backup::KEEP_BACKUPS) {
-                Ok(removed) if !removed.is_empty() => {
-                    tracing::info!(count = removed.len(), "pruned old database backups")
-                }
+                Ok(outcome) if !outcome.removed.is_empty() => tracing::info!(
+                    count = outcome.removed.len(),
+                    reclaimed_bytes = outcome.reclaimed_bytes,
+                    "pruned old database backups"
+                ),
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!(error = %e, "prune database backups failed (non-fatal)")
@@ -215,6 +219,21 @@ pub fn spawn_task_scheduler(state: &Arc<AppState>) {
             }
         }
     });
+}
+
+/// F3 磁盘治理每日节拍(2026-09-03, task `09-03-f3-disk-governance`
+/// PR1):24h 一轮跑回收函数族(worker sweep / 孤儿 session worktree /
+/// outputs / 备份 prune),首拍延迟 5 分钟避开启动 IO(migrate /
+/// backup / orphan-guard)。**唯一装配点 = daemon bin**(GUI Full 模式
+/// 只在启动期跑一次性 pass,零 timer 硬约束保持;Thin 场景由本节拍
+/// 兜底——P0-a worker sweep 宿主断链由此闭合)。停机沿
+/// `spawn_task_scheduler` 样板:token 挂 `AppState.disk_governor_cancel`,
+/// `shutdown_signal` 在 scheduler cancel 同段 cancel。kill-switch
+/// `disk_governor_enabled`(fail-open)每轮重读。本函数是 bin-facing
+/// wrapper(同 `spawn_task_scheduler` 理由:bin 不触 crate 私有模块),
+/// 本体在 `crate::disk::governor`。
+pub fn spawn_disk_governor(state: &Arc<AppState>) {
+    crate::disk::governor::spawn_disk_governor(state);
 }
 
 /// Build the un-mounted daemon router. Exposed so integration tests
@@ -496,6 +515,12 @@ async fn shutdown_signal(state: Arc<AppState>) {
     // 注入由下方 `cancel_and_drain_all_agent_loops` 兜底(该注入已注册
     // 进 cancellations/inflight_exits)。
     state.scheduler_cancel.cancel();
+
+    // 步骤 1.7(F3 磁盘治理, 2026-09-03):停每日磁盘回收节拍(同款
+    // token 样板)。回收是 best-effort 文件操作,cancel 后 tick 循环
+    // 当拍退出即可——正在进行的单项删除不中断、不回滚(被删数据本就
+    // 是裁定可删的),下一轮不再发起。
+    state.disk_governor_cancel.cancel();
 
     // 步骤 2:cancel + drain 所有活跃 agent loop。必须排在 sse.shutdown
     // 之后(先断流、再停处理,语义更干净;且 SSE 关后前端不再收到新事件,

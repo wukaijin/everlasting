@@ -520,6 +520,17 @@ pub struct AppConfigPayload {
     /// (`Capability::probe()` OnceLock 缓存)结果,**不落盘**、
     /// 无写通道。设置面据此显示「沙盒生效 / 已回退(fail-open)」。
     pub sandbox_capability: bool,
+    /// F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance`):
+    /// 每日磁盘回收节拍 kill switch 的读出口。app_config 键
+    /// `disk_governor_enabled`(常量单源 `disk::governor::
+    /// DISK_GOVERNOR_ENABLED_KEY`),fail-open 缺省开(仅字面 `"false"`
+    /// 关)。false 时机停,但手动「立即清理」仍可用(AC9)。
+    pub disk_governor_enabled: bool,
+    /// F3:有主 outputs 桶按龄(30 天)回收的细粒度开关读出口。
+    /// app_config 键 `outputs_age_cleanup_enabled`(常量单源
+    /// `disk::governor::OUTPUTS_AGE_CLEANUP_ENABLED_KEY`),fail-open
+    /// 缺省开;孤儿桶与 `_no_session` 不受此开关管辖(无主恒回收)。
+    pub outputs_age_cleanup_enabled: bool,
 }
 
 pub async fn get_app_config_inner(
@@ -548,6 +559,26 @@ pub async fn get_app_config_inner(
     let sandbox_extra_writable_raw =
         crate::sandbox::policy::read_extra_writable_raw(&state.db).await;
     let sandbox_capability = crate::sandbox::Capability::probe().ok();
+    // F3 磁盘治理:两开关 fail-open 读(键常量与 governor 节拍 / outputs
+    // sweep 单源,防两处字面漂移;读法同上——仅字面 "false" 关)。
+    let disk_governor_enabled = match crate::db::config::get_config_value(
+        &state.db,
+        crate::disk::governor::DISK_GOVERNOR_ENABLED_KEY,
+    )
+    .await
+    {
+        Ok(Some(v)) => v != "false",
+        _ => true,
+    };
+    let outputs_age_cleanup_enabled = match crate::db::config::get_config_value(
+        &state.db,
+        crate::disk::governor::OUTPUTS_AGE_CLEANUP_ENABLED_KEY,
+    )
+    .await
+    {
+        Ok(Some(v)) => v != "false",
+        _ => true,
+    };
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
         scheduled_tasks_enabled: scheduled_on,
@@ -555,6 +586,8 @@ pub async fn get_app_config_inner(
         sandbox_extra_writable: sandbox_extra,
         sandbox_extra_writable_raw,
         sandbox_capability,
+        disk_governor_enabled,
+        outputs_age_cleanup_enabled,
     })
 }
 
@@ -583,6 +616,10 @@ const SETTABLE_APP_FLAGS: &[&str] = &[
     "turn_complete_notify_enabled",
     "scheduled_tasks_enabled",
     "sandbox_enabled",
+    // F3 磁盘治理(2026-09-03):两开关(常量单源在
+    // `disk::governor`,此处字面量沿既有白名单形态)。
+    "disk_governor_enabled",
+    "outputs_age_cleanup_enabled",
 ];
 
 /// 写 app_config 布尔开关(白名单内)。key 不在白名单 → `InvalidRequest`
@@ -676,6 +713,11 @@ mod tests {
             cfg.sandbox_enabled,
             "sandbox_enabled 缺省应为 true(fail-open)"
         );
+        // F3:磁盘治理两开关缺省开(fail-open)。
+        assert!(
+            cfg.disk_governor_enabled && cfg.outputs_age_cleanup_enabled,
+            "F3 disk flags 缺省应为 true(fail-open)"
+        );
         assert!(
             cfg.sandbox_extra_writable
                 .iter()
@@ -692,6 +734,8 @@ mod tests {
                 "turn_complete_notify_enabled" => cfg.turn_complete_notify_enabled,
                 "scheduled_tasks_enabled" => cfg.scheduled_tasks_enabled,
                 "sandbox_enabled" => cfg.sandbox_enabled,
+                "disk_governor_enabled" => cfg.disk_governor_enabled,
+                "outputs_age_cleanup_enabled" => cfg.outputs_age_cleanup_enabled,
                 _ => unreachable!(),
             };
             assert!(!off, "{key} 写 false 后应读回 false");
@@ -702,7 +746,11 @@ mod tests {
         }
         let cfg = get_app_config_inner(&state).await.unwrap();
         assert!(
-            cfg.turn_complete_notify_enabled && cfg.scheduled_tasks_enabled && cfg.sandbox_enabled
+            cfg.turn_complete_notify_enabled
+                && cfg.scheduled_tasks_enabled
+                && cfg.sandbox_enabled
+                && cfg.disk_governor_enabled
+                && cfg.outputs_age_cleanup_enabled
         );
     }
 

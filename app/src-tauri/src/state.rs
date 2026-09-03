@@ -261,6 +261,13 @@ pub struct AppState {
     /// 「AppState::load 绝不 spawn」;GUI Full 模式零 timer 约束保持 ——
     /// 没有 bin 装配就没有循环)。
     pub scheduler_cancel: CancellationToken,
+    /// F3 磁盘治理(2026-09-03, `09-03-f3-disk-governance` design §1):
+    /// 每日磁盘回收节拍的停机令牌(照 `scheduler_cancel` 先例)。
+    /// `spawn_disk_governor`(`daemon/server.rs` wrapper,唯一装配点 =
+    /// daemon bin)的 tick 循环 `select!` 监听它;`shutdown_signal` 在
+    /// scheduler cancel 同段 cancel。`load_inner` 只做纯分配绝不 spawn
+    /// (RULE-DAEMON-001);GUI Full 模式只有启动一次性 pass,无循环。
+    pub disk_governor_cancel: CancellationToken,
 }
 
 impl AppState {
@@ -537,6 +544,9 @@ impl AppState {
             // F2 定时任务:调度循环停机令牌。纯分配无 spawn(RULE-DAEMON-001);
             // 循环本体由 daemon bin 经 spawn_task_scheduler 装配。
             scheduler_cancel: CancellationToken::new(),
+            // F3 磁盘治理:每日回收节拍停机令牌(同款纯分配;循环本体由
+            // daemon bin 经 spawn_disk_governor 装配)。
+            disk_governor_cancel: CancellationToken::new(),
         }
     }
 

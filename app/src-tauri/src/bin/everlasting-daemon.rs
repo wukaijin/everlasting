@@ -50,10 +50,31 @@ use everlasting_lib::daemon::server;
 #[tokio::main]
 async fn main() -> ExitCode {
     // Initialize tracing FIRST so the orphan-guard below can log.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,everlasting=debug")),
+    // F3 PR2(2026-09-03, task `09-03-f3-disk-governance` design §3):多
+    // layer ——
+    // ① 终端流:显式 `.with_writer(std::io::stdout)` 锁定基线。此前
+    //    未配 with_writer,走 tracing-subscriber 0.3 fmt 的**默认 writer
+    //    = stdout**(design §3 基线澄清:非 stderr;daemon.sh `2>&1` 与
+    //    sidecar 双管道均两流全抓,等价)。
+    // ② 文件 sink:`RotatingFileWriter` 进程内追加写 + >10MiB 滚 3 代
+    //    (`$XDG_STATE_HOME` 下 daemon.log,与退役的脚本轮转同路径同参
+    //    数),接管 daemon.sh bg 的 `>> daemon.log` 重定向(消除双写
+    //    者),sidecar 模式的 daemon 日志也首次落盘。文件 layer 关 ANSI
+    //    (旧重定向路径带转义码落盘,现在文件侧干净,终端侧保留)。
+    //    打开失败降级 no-op,daemon 必须能起来。
+    // GUI main.rs 的 init_tracing 不动(GUI 进程保持默认终端输出)。
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,everlasting=debug"));
+    let file_writer = everlasting_lib::disk::log_rotation::RotatingFileWriter::open_default();
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_writer),
         )
         .init();
 
@@ -156,6 +177,13 @@ async fn main() -> ExitCode {
     // failures only warn (insurance layer, never an availability risk).
     // See `spawn_backup_task` for the full contract.
     server::spawn_backup_task(&state, &data_dir);
+
+    // F3 磁盘治理节拍(2026-09-03, task `09-03-f3-disk-governance`):
+    // 24h 一轮跑回收函数族(worker sweep / 孤儿 session worktree /
+    // outputs / 备份 prune),首拍延迟 5 分钟。P0-a 修复:worker sweep
+    // 从此在 daemon(默认 Thin 模式的真正宿主)生效,不再只有 GUI Full
+    // 逃生模式跑。停机令牌见 shutdown_signal 步骤 1.7。
+    server::spawn_disk_governor(&state);
 
     // RULE-SHELL-001 sweeper (2026-08-27, task
     // `08-27-rule-shell-001-sweeper`): every 5min prune Done

@@ -54,6 +54,12 @@ mod diff_apply;
 // (the private `mod commands` etc. are visible to sibling modules
 // inside the same crate, just not to external consumers).
 pub mod daemon;
+// F3 磁盘治理 (2026-09-03, task `09-03-f3-disk-governance`): 回收函数族
+// (worker sweep / 孤儿 session worktree / outputs / 备份 prune)+ daemon
+// 每日节拍 + 日志进程内轮转 writer。`pub`:daemon bin 需要直接装配
+// `log_rotation::RotatingFileWriter` 类型(tracing layer 的类型参数,
+// 无法像函数那样经 server.rs 包装)。
+pub mod disk;
 mod error;
 mod files;
 mod git;
@@ -84,59 +90,6 @@ mod tools;
 use crate::background_shell::BackgroundShellRegistry;
 use tauri::Manager;
 
-/// L3b PR3 (2026-06-27): sweep helper called once at startup.
-/// Walks every project in the DB and sweeps stale worker
-/// worktrees. Best-effort: a project-row load failure is
-/// logged + skipped; a per-project sweep failure is logged +
-/// skipped. The function does not return any value — the
-/// total count is emitted as a `tracing::info!` event at the
-/// end.
-async fn sweep_stale_workers(db: sqlx::SqlitePool, app_data_dir: std::path::PathBuf) {
-    let projects = match crate::db::list_projects(&db, false).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "startup sweep: failed to list projects (non-fatal; skipping sweep)"
-            );
-            return;
-        }
-    };
-    let cleanup_days = crate::git::worktree::resolve_cleanup_period_days(None);
-    let mut total_destroyed = 0usize;
-    for project in &projects {
-        match crate::git::worktree::sweep_stale_worker_worktrees(
-            &app_data_dir,
-            &project.id,
-            std::path::Path::new(&project.path),
-            cleanup_days,
-        ) {
-            Ok(n) => {
-                if n > 0 {
-                    tracing::info!(
-                        project_id = %project.id,
-                        project_name = %project.name,
-                        destroyed = n,
-                        "startup sweep: destroyed stale worker worktrees"
-                    );
-                }
-                total_destroyed += n;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    project_id = %project.id,
-                    project_name = %project.name,
-                    error = %e,
-                    "startup sweep: project sweep failed (non-fatal; continuing)"
-                );
-            }
-        }
-    }
-    if total_destroyed > 0 {
-        tracing::info!(total_destroyed, cleanup_days, "startup sweep: complete");
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -159,6 +112,17 @@ pub fn run() {
             // (`?transport=tauri` / `EVERLASTING_GUI_FULL_STATE=1`)
             // keeps the legacy in-process behavior as the escape hatch.
             let mode = sidecar::GuiMode::resolve(&app_handle);
+
+            // F3 P2-b(2026-09-03):WebKitCache 阈值清理——公共区装配
+            // (陷阱警示见 `disk/webkit_cache.rs` 头注):Thin 分支在下方
+            // `return Ok(())` 早退,本调用必须在其**之前**,否则默认 Thin
+            // 模式永不清理(WebKitCache 正是 Thin GUI webview 的产物);
+            // 装配点由 webkit_cache 模块的源码静态断言测试守护。
+            // Full 分支的 governor 启动 pass(下方)装在 Thin return 之后
+            // 是有意的——Thin 场景由 daemon bin 节拍兜底,两者不要混。
+            if let Ok(cache_data_dir) = app_handle.path().app_data_dir() {
+                crate::disk::webkit_cache::spawn_startup_clean(cache_data_dir);
+            }
 
             if mode == sidecar::GuiMode::Thin {
                 // Thin client: resolve the same data dir the daemon
@@ -212,26 +176,20 @@ pub fn run() {
                     }
                 }),
             );
-            // L3b PR3 (2026-06-27): one-time startup sweep of
-            // stale worker worktrees. We iterate every project
-            // and call `sweep_stale_worker_worktrees` for each;
-            // the sweep destroys worker worktrees whose mtime
-            // is older than `EVERLASTING_CLEANUP_PERIOD_DAYS`
-            // (default 7 days) AND whose libgit2 lock is not
-            // present (a locked worktree is an active worker;
-            // skip it). Best-effort — failures are logged at
-            // `warn!` and never abort the startup sequence.
-            //
-            // Runs as a one-shot background task (not awaited
-            // from the setup closure) so the sweep doesn't
-            // block the Tauri window's first paint. The
-            // `state.db` pool is `Clone` (Arc-internal) so we
-            // can move it into the spawn; the `app_data_dir`
-            // is the same path the AppState already computed.
-            let sweep_db = state.db.clone();
-            let sweep_data_dir = state.app_data_dir.clone();
+            // F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance`):
+            // L3b PR3 的一次性 worker sweep 升级为一次性**完整** governor
+            // pass(worker sweep + 孤儿 session worktree + outputs + 备份
+            // prune,与 daemon 每日节拍同一 `_inner` 函数族;kill-switch
+            // `disk_governor_enabled` 在 pass 入口重读,fail-open)。
+            // 仍是一次性 fire-and-forget spawn(不挂周期 timer)——
+            // 「GUI 主进程零 timer task」硬约束保持。**注意**:本装配点
+            // 在 Thin 分支 return 之后是有意的——Thin 场景由 daemon bin
+            // 的每日节拍兜底(design §1);勿把「Thin 也要跑」的逻辑
+            // 照搬到这个位置(见 PR4 WebKitCache 的陷阱警示)。
+            let gov_db = state.db.clone();
+            let gov_data_dir = state.app_data_dir.clone();
             tauri::async_runtime::spawn(async move {
-                sweep_stale_workers(sweep_db, sweep_data_dir).await;
+                crate::disk::governor::run_governor_pass_once(&gov_db, &gov_data_dir).await;
             });
 
             // P5 (2026-06-29, 06-29-am-p5-quality): one-time startup
@@ -285,6 +243,11 @@ pub fn run() {
             // P3b(2026-08-31,评审 W1):列表型 app_config 字段写通道
             // (sandbox_extra_writable,白名单见 SETTABLE_APP_LISTS)。
             commands::config::set_app_config_list,
+            // F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance`
+            // PR3):设置面「存储」分类 —— 占用概览 + 手动「立即清理」
+            // (daemon HTTP 镜像路由见 daemon/routes/disk.rs)。
+            commands::disk::get_disk_usage,
+            commands::disk::run_disk_cleanup,
             // F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):
             // 管理面 CRUD 四件;调度循环只在 daemon bin 装配(GUI 零
             // timer),这些命令只读写 scheduled_tasks 表 + 校验。

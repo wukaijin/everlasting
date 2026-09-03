@@ -214,6 +214,19 @@ pub async fn list_sessions(
         .collect()
 }
 
+/// 轻量 session 存在性探测(F3 磁盘治理,2026-09-03):孤儿 worktree /
+/// outputs 桶的回收判定用「目录在、DB 行不在 → 孤儿」;比 `load_session`
+/// 便宜(不拉 messages、不映射全列)。**任何** worktree_state(Active /
+/// Detached / none)的行都算存在——Detached 的 worktree 是有意保留的
+/// (commands/worktree.rs 先例),不得按孤儿回收。schema 知识留在本层。
+pub async fn session_exists(pool: &SqlitePool, session_id: &str) -> Result<bool, sqlx::Error> {
+    let hit: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(hit.is_some())
+}
+
 /// Load a session and all its messages. Returns `None` if the session
 /// doesn't exist.
 pub async fn load_session(

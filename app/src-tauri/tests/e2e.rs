@@ -566,6 +566,9 @@ mod e1e_router_smoke {
             "/api/v1/command_palette/get_command_body",
             // config
             "/api/v1/config/get_llm_config",
+            // disk (F3 磁盘治理,2026-09-03, task 09-03-f3-disk-governance)
+            "/api/v1/disk/get_disk_usage",
+            "/api/v1/disk/run_disk_cleanup",
             // files
             "/api/v1/files/list_files",
             "/api/v1/files/list_files_at",
