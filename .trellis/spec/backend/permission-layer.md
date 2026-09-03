@@ -123,6 +123,10 @@ Tier 6. Audit hook      — 每个决策路径写 session_audit_events
   `is_error: true` 可自决;CancellationToken (C1) 才是整轮终止
 - **超时 vs 主动 deny** 在 audit log 区分:`reason` 字段不同
   ("user denied" vs "permission timed out after 120s, treat as denied")
+- **2026-09-03(task `09-03-ask-no-timeout`)**:全局开关 `ask_no_timeout`
+  开 → Tier 3 的 120s 超时臂禁用(timeout sleep 换 `pending()`),
+  审批无限挂起等用户;audit 仍区分路径,但 `permission_timeout` /
+  `worker_ask_timed_out` 不再产生。开关缺省关,行为与本节一致。
 
 #### 4.1. Re-grill update 2026-06-13: 5-tier 重排 + path-based 决策
 
@@ -604,7 +608,7 @@ PR1 在 `agent::permissions::AuditKind` 实现首批 9 行(10 variant,`yolo_ente
 
 | 异常场景 | 处理 |
 |---|---|
-| 用户从不响应 (>120s) | 后端 `tokio::time::sleep(ASK_TIMEOUT)` 触发 → 自动 deny + `is_error: true, content: "permission timed out after 120s, treat as denied"`(提醒 LLM 是超时不是 user 主动)。前端 store 也复制 120s timer 来关 modal + 弹 toast。 |
+| 用户从不响应 (>120s) | 后端 `tokio::time::sleep(ASK_TIMEOUT)` 触发 → 自动 deny + `is_error: true, content: "permission timed out after 120s, treat as denied"`(提醒 LLM 是超时不是 user 主动)。前端 store 也复制 120s timer 来关 modal + 弹 toast。**2026-09-03**(task `09-03-ask-no-timeout`):全局开关 `ask_no_timeout`(app_config,enable 语义 fail-closed 缺省关,单源 `permissions::ask::ASK_NO_TIMEOUT_KEY`)开 → timeout 臂替换为 `pending()` 恒不触发,审批卡无限挂起直到用户响应 / Stop / 删会话;前端 `usePermissionsStore` 同开关下不 arm 本地 timer。轮数上限软卡(`chat_loop.rs` softcap 600s auto-stop)同受此开关管辖。无人值守定时会话同样生效 —— 开关开即无限等待(产品决策,见 task PRD)。 |
 | 重复 `permission_response` | 后端 `HashMap<rid, Sender>`:`send().ok()` 失败(rid 不存在)=> 返回 `Ok(false)`,日志 warn。no-op。 |
 | Session 在等待时被删除 | 当前 MVP `cancel_session_asks` 实现是"清空所有 pending"(rid 没绑 session_id);这会让所有 session 的 oneshot 失败。后续 PR 应改成 `HashMap<(session_id, rid), Sender>` 精细清理。 |
 | `rid` 过期/无效 | 后端校验 rid 存在性,无效 → 日志 warn + no-op + 返回 `Ok(false)`。 |
