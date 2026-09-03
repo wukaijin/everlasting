@@ -57,6 +57,8 @@ import RemoteTab from "./RemoteTab.vue";
 import SearchTab from "./SearchTab.vue";
 import ScheduledTasksTab from "./ScheduledTasksTab.vue";
 import GeneralTab from "./GeneralTab.vue";
+// F3 磁盘治理(2026-09-03):「存储」分组 —— 占用概览 + 回收开关 + 手动清理。
+import DiskTab from "./DiskTab.vue";
 import ProjectMemoryTab from "./ProjectMemoryTab.vue";
 import ProjectSandboxTab from "./ProjectSandboxTab.vue";
 import ProjectSubagentsTab from "./ProjectSubagentsTab.vue";
@@ -77,6 +79,7 @@ const CATEGORY_COMPONENTS: Record<string, Component> = {
   subagents: SubagentsTab,
   search: SearchTab,
   scheduled: ScheduledTasksTab,
+  disk: DiskTab,
   remote: RemoteTab,
   "project-memory": ProjectMemoryTab,
   "project-sandbox": ProjectSandboxTab,

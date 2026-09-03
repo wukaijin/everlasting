@@ -89,6 +89,12 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // P3b(2026-08-31,评审 W1):列表型 app_config 字段写通道
   // (sandbox_extra_writable;缺这行时 transport-parity 测试红)。
   set_app_config_list: "config",
+  // disk(F3 磁盘治理,2026-09-03, task 09-03-f3-disk-governance PR3):
+  // Settings「存储」分类 —— 占用概览 + 手动「立即清理」。缺映射时浏览器/
+  // sidecar/remote 模式打开该 tab 即报 `unknown cmd`(Tauri Full 模式侥幸
+  // 走 IPC,同 set_app_config_flag 的老坑;http.routes-sync.test.ts 守卫)。
+  get_disk_usage: "disk",
+  run_disk_cleanup: "disk",
   // S2 配对码生成(新 domain pairing)
   generate_pairing_code: "pairing",
   // files

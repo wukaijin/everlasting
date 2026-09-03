@@ -134,6 +134,13 @@ export const useConfigStore = defineStore("config", () => {
   const sandboxExtraWritableRaw = ref<string[]>([]);
   const sandboxCapability = ref<boolean | null>(null);
 
+  // F3 磁盘治理(2026-09-03, task 09-03-f3-disk-governance):每日磁盘
+  // 回收节拍 kill switch 与有主 outputs 按龄回收开关的展示值(读法与
+  // 后端 fail-open 一致:仅字面 "false" 关)。节拍开关 false = 自动
+  // 回收停,但手动「立即清理」仍可用(PR3 DiskTab 消费)。
+  const diskGovernorEnabled = ref(true);
+  const outputsAgeCleanupEnabled = ref(true);
+
   async function load() {
     // Load providers + models from the catalog (replaces the old
     // `get_llm_config` env path). Store references are obtained at
@@ -169,6 +176,8 @@ export const useConfigStore = defineStore("config", () => {
         sandboxExtraWritable?: string[];
         sandboxExtraWritableRaw?: string[];
         sandboxCapability?: boolean;
+        diskGovernorEnabled?: boolean;
+        outputsAgeCleanupEnabled?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
       // F2:additive 字段(旧 daemon 缺省 true)。
@@ -179,6 +188,9 @@ export const useConfigStore = defineStore("config", () => {
       // P3c(RULE-SBX-002):raw 编辑清单,旧 daemon 缺省 []。
       sandboxExtraWritableRaw.value = appConfig.sandboxExtraWritableRaw ?? [];
       sandboxCapability.value = appConfig.sandboxCapability ?? null;
+      // F3:additive 两字段(旧 daemon 缺省 true)。
+      diskGovernorEnabled.value = appConfig.diskGovernorEnabled !== false;
+      outputsAgeCleanupEnabled.value = appConfig.outputsAgeCleanupEnabled !== false;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
     }
@@ -223,6 +235,29 @@ export const useConfigStore = defineStore("config", () => {
     sandboxEnabled.value = on;
   }
 
+  /** Toggle the disk-governor daily-beat kill switch (app_config
+   *  `disk_governor_enabled`, F3). Fail-open upstream; `false` stops
+   *  the automatic beat but the manual "clean up now" entry stays
+   *  available (AC9). */
+  async function setDiskGovernorEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "disk_governor_enabled",
+      value: on,
+    });
+    diskGovernorEnabled.value = on;
+  }
+
+  /** Toggle the owned-outputs age-based recycling switch (app_config
+   *  `outputs_age_cleanup_enabled`, F3). Fail-open upstream; orphan
+   *  buckets and `_no_session` are NOT governed by this switch. */
+  async function setOutputsAgeCleanupEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "outputs_age_cleanup_enabled",
+      value: on,
+    });
+    outputsAgeCleanupEnabled.value = on;
+  }
+
   /** Persist the RAW extra-writable list (RULE-SBX-002, P3c): the
    *  editable list is exactly what lands in app_config — the `~/.cargo`
    *  default is NOT part of it (the backend merges it in at read
@@ -248,12 +283,16 @@ export const useConfigStore = defineStore("config", () => {
     sandboxExtraWritable,
     sandboxExtraWritableRaw,
     sandboxCapability,
+    diskGovernorEnabled,
+    outputsAgeCleanupEnabled,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,
     setTurnCompleteNotify,
     setScheduledTasksEnabled,
     setSandboxEnabled,
+    setDiskGovernorEnabled,
+    setOutputsAgeCleanupEnabled,
     setSandboxExtraWritableRaw,
     load,
   };

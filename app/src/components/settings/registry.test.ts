@@ -42,6 +42,9 @@ describe("settings registry", () => {
     expect(filterCategories("总开关", "global").map((c) => c.id)).toContain("general");
     // 中文 title
     expect(filterCategories("定时", "global").map((c) => c.id)).toContain("scheduled");
+    // F3(2026-09-03):磁盘分类的中英文关键词命中。
+    expect(filterCategories("磁盘", "global").map((c) => c.id)).toContain("disk");
+    expect(filterCategories("cleanup", "global").map((c) => c.id)).toContain("disk");
   });
 
   it("无匹配返回空数组", () => {
@@ -67,10 +70,14 @@ describe("settings registry", () => {
     // 首组 = 独立项(通用),无组标签。
     expect(groups[0]).toEqual({ label: null, items: [expect.objectContaining({ id: "general" })] });
     const labels = groups.slice(1).map((g) => g.label);
-    expect(labels).toEqual(["模型", "智能体", "集成", "远程"]);
+    // F3(2026-09-03):新增「存储」组(集成之后、远程之前)。
+    expect(labels).toEqual(["模型", "智能体", "集成", "存储", "远程"]);
     // 模型组内顺序:Providers → Models → Default。
     const modelGroup = groups.find((g) => g.label === "模型");
     expect(modelGroup?.items.map((c) => c.id)).toEqual(["providers", "models", "default"]);
+    // 存储组内:磁盘。
+    const diskGroup = groups.find((g) => g.label === "存储");
+    expect(diskGroup?.items.map((c) => c.id)).toEqual(["disk"]);
     // 项目 scope 无分组:两个独立项合并成一个无标签组。
     const projectGroups = groupCategories(categoriesForScope("project"));
     expect(projectGroups).toHaveLength(1);

@@ -13,8 +13,9 @@
  *  (`<project>/.everlasting/agents/*.md`,frontmatter `model:` 真项目级)。 */
 export type SettingsScope = "global" | "project";
 
-/** 导航分组标签。`null` = 不入组的独立首项(通用)。 */
-export type SettingsGroup = "模型" | "智能体" | "集成" | "远程";
+/** 导航分组标签。`null` = 不入组的独立首项(通用)。
+ *  「存储」(F3 磁盘治理,2026-09-03):磁盘占用 / 回收开关 / 手动清理。 */
+export type SettingsGroup = "模型" | "智能体" | "集成" | "存储" | "远程";
 
 export interface SettingsCategory {
   /** 稳定 id:内容组件映射 + localStorage 记忆上次停留位置共用。 */
@@ -31,11 +32,13 @@ export interface SettingsCategory {
   keywords: string[];
 }
 
-/** 分组展示顺序(全局 scope)。未列出的组排在其后。 */
+/** 分组展示顺序(全局 scope)。未列出的组排在其后。存储排在集成之后、
+ *  远程之前:同属本地应用关注点,且「远程」保持收尾。 */
 export const SETTINGS_GROUP_ORDER: ReadonlyArray<SettingsGroup> = [
   "模型",
   "智能体",
   "集成",
+  "存储",
   "远程",
 ];
 
@@ -103,6 +106,24 @@ export const SETTINGS_CATEGORIES: ReadonlyArray<SettingsCategory> = [
     title: "定时任务",
     description: "跨项目管理定时任务:启停、编辑与运行状态。",
     keywords: ["scheduled", "定时", "任务", "cron", "调度", "触发"],
+  },
+  {
+    id: "disk",
+    scope: "global",
+    group: "存储",
+    title: "磁盘",
+    description: "磁盘占用概览、自动回收开关与手动清理。",
+    keywords: [
+      "disk",
+      "磁盘",
+      "存储",
+      "空间",
+      "占用",
+      "清理",
+      "回收",
+      "cleanup",
+      "usage",
+    ],
   },
   {
     id: "remote",
