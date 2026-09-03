@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 54
+- **Total Sessions**: 55
 - **Last Active**: 2026-09-03
 <!-- @@@/auto:current-status -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 55 | 2026-09-03 | 全局开关:问询永不超时(ask_no_timeout) | (see git log) | `main` |
 | 54 | 2026-09-03 | F3 磁盘治理:worktree/outputs/日志/备份/缓存限损 | `27152a12`, `296e8d12`, `fb467350`, `443baaab` | `main` |
 | 53 | 2026-09-02 | Chat 运行状态面板:ActivityPanel 三合一 + background shell 可观测性 | `d76398b1`, `1a236d83`, `651709b6` | `main` |
 | 52 | 2026-09-02 | wf-trellis-alignment:builtin dev workflow 对齐 Trellis 三机制 | `488c1632`, `c4895434`, `1e14d15b`, `d42f8fb0` | `main` |

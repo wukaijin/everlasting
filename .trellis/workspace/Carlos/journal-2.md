@@ -846,3 +846,27 @@ ROADMAP 第三档 F3 磁盘余留收口(4 PR):摸底实测大头为辅助数据(
 ### Status
 
 [OK] **Completed**
+
+## Session 55: 全局开关:问询永不超时(ask_no_timeout)
+
+**Date**: 2026-09-03
+**Task**: 09-03-ask-no-timeout — 全局开关:问询永不超时(ask_no_timeout)
+**Branch**: `main`
+
+### Summary
+
+给"审批/工具问询有时限、超时自动收尾"的交互加一个全局总开关(单开关,用户决策:全部会话生效 + 开关负责到底,含无人值守定时会话)。
+
+盘点结论:真正会自动收尾的只有两处——① 权限审批(ask.rs Tier3/Tier4,120s 超时自动 Deny,含 shell 沙盒升级前台/后台 + worker 子代理审批,全部汇入 `ask_path` 的两处 timeout 臂);② 轮数上限软卡(chat_loop.rs,600s 无响应自动 `timeout_stopped`)。ask_user_question / 任务状态变更 / 模式切换 / C2+ 干预本就无超时(会一直挂着),不在范围内。
+
+实现:开关单源 `permissions::ask::{ASK_NO_TIMEOUT_KEY, ask_no_timeout_enabled}` —— **方向与仓库 kill-switch 先例相反**:enable 语义 fail-closed,仅字面 `"true"` 开,缺省关 = 今日行为零回归。两处 timeout 臂 sleep 在开关开时替换为 `std::future::pending()`(恒不触发),cancel(Stop/删会话)/resolve 臂保留可解卡。开关在 select 构造时读一次,不回溯已挂起的卡。写出口:`commands/config.rs` `SETTABLE_APP_FLAGS` 白名单 + `AppConfigPayload.ask_no_timeout`(daemon 走同一 `_inner`)。前端:config store ref 缺省 false + setter + load 解析;`permissions.ts::startAskTimer` 开关开时不 arm 本地 120s 计时器(否则前端会先收卡);设置「通用」Tab 新增「等待确认不超时」开关行。
+
+门禁:cargo 2280 passed(新增 3 用例:worker/parent no-timeout 忽略 50ms override 由 cancel 收尾 + softcap no-timeout 忽略 50ms env 由 cancel 收尾;全部不硬等真实时长,靠 cancel 收尾 + 既有 50ms 缩短机制);pnpm 1580 passed(新增 config fail-closed/setter、GeneralTab 开关 3→4、permissions 开时不 arm timer);vue-tsc 干净。spec:permission-layer.md 异常路径表 + 关键行为补全局开关例外。
+
+### Git Commits
+
+(见 git log)
+
+### Status
+
+[OK] **Completed**
