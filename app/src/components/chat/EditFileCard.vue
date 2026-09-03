@@ -142,17 +142,12 @@ const removedCount = computed(() => diffRows.value?.filter((r) => r.kind === "de
 const diffExpanded = ref(false);
 
 // ------------------------------------------------------------------
-// 错误详情折叠(2026-09-02):错误全文不再常显,默认只留一行摘要
-// (首行 + ellipsis),点 toggle 展开。完整文本仍从 displayContent
-// 取,展开后原样渲染(pre-wrap)。
+// 错误详情折叠:单节点 CSS 切换——同一个 button 靠 --open 类在单行
+// 摘要(nowrap + ellipsis)与全文(pre-wrap + 纵滚)之间切换,不再条件
+// 渲染额外的 pre。展开前是两层 DOM(toggle 行 + v-if 的 pre),展开后
+// 摘要与全文上下堆叠成一堵红墙;单节点下展开只是同一行的 CSS 变化。
 // ------------------------------------------------------------------
 const errorExpanded = ref(false);
-
-const errorPreview = computed<string>(() => {
-  const c = displayContent.value ?? "";
-  const first = c.split("\n", 1)[0] ?? "";
-  return first.length > 200 ? first.slice(0, 200) + "…" : first;
-});
 
 // ------------------------------------------------------------------
 // inline approval(复用 ToolCallCard 语义,避免审批链路断层)
@@ -229,26 +224,27 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
       />
     </div>
 
-    <!-- error banner(默认折叠:一行红色摘要 + toggle,展开看全文;
-         2026-09-02 前错误全文常显,长错误会把卡片撑成一堵红墙) -->
+    <!-- error banner(单节点折叠:默认单行摘要 + toggle,点 toggle 后
+         同一节点靠 --open 切到全文;不再 v-if 额外 pre,避免展开后
+         多出一层 DOM) -->
     <div v-if="isError && displayContent" class="edit-card__error">
       <button
         type="button"
         class="edit-card__error-toggle"
+        :class="{ 'edit-card__error-toggle--open': errorExpanded }"
         :aria-expanded="errorExpanded"
         :title="errorExpanded ? '收起错误详情' : '展开错误详情'"
         @click.stop="errorExpanded = !errorExpanded"
       >
         <span
-          class="edit-card__toggle-chevron"
+          class="edit-card__toggle-chevron edit-card__error-chevron"
           :class="{ 'edit-card__toggle-chevron--open': errorExpanded }"
         >
           <Icon name="chevron-right" :size="12" />
         </span>
         <Icon name="warn" :size="12" icon-class="edit-card__error-icon" />
-        <span class="edit-card__error-preview">{{ errorPreview }}</span>
+        <span class="edit-card__error-text">{{ displayContent }}</span>
       </button>
-      <pre v-if="errorExpanded" class="edit-card__error-text">{{ displayContent }}</pre>
     </div>
 
     <!-- git-style diff (默认收起,开关展开) -->
@@ -363,8 +359,9 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
   line-height: var(--leading-normal);
 }
 
-/* 折叠 toggle 行:chevron + warn + 单行摘要(ellipsis)。button reset
-   后继承容器的红系文字。 */
+/* 折叠 toggle:单节点,chevron + warn + 错误文本。默认单行摘要
+   (nowrap + ellipsis);--open 后同一节点切到全文(pre-wrap + 纵滚)—
+   展开只是 CSS 变化,不多渲染一层 DOM。button reset 后继承红系文字。 */
 .edit-card__error-toggle {
   display: flex;
   align-items: center;
@@ -380,27 +377,39 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
   min-width: 0;
 }
 
-.edit-card__error-preview {
+.edit-card__error-toggle--open {
+  align-items: flex-start;
+}
+
+.edit-card__error-toggle--open .edit-card__error-chevron {
+  margin-top: 2px;
+}
+
+/* 折叠态:单行摘要,超长省略。white-space: nowrap 会把换行压成空格,
+   所以视觉上仍是首行内容 + …。 */
+.edit-card__error-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: inherit;
+}
+
+/* 展开态:同一节点切到全文 —— pre-wrap + 纵向滚动(超长错误不撑破卡片)。 */
+.edit-card__error-toggle--open .edit-card__error-text {
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .edit-card__error-icon {
   flex-shrink: 0;
 }
 
-/* 展开后的错误全文:pre-wrap + 纵向滚动(超长错误不撑破卡片)。 */
-.edit-card__error-text {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
-  font-family: inherit;
-  min-width: 0;
+.edit-card__error-toggle--open .edit-card__error-icon {
+  margin-top: 2px;
 }
 
 .edit-card__diff {
