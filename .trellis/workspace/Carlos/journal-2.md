@@ -822,3 +822,27 @@ P3c 留下的最后一个沙盒 UX 不对称收口:后台 run_background_shell �
 ### Status
 
 [OK] **Completed**
+
+
+## Session 54: F3 磁盘治理:worktree/outputs/日志/备份/缓存限损
+
+**Date**: 2026-09-03
+**Task**: F3 磁盘治理:worktree/outputs/日志/备份/缓存限损
+**Branch**: `main`
+
+### Summary
+
+ROADMAP 第三档 F3 磁盘余留收口(4 PR):摸底实测大头为辅助数据(备份 175M/WebKitCache 136M/日志 59M,非原设想的 worktree);P0-a 修 worker sweep 宿主断链(daemon bin 装配 spawn_disk_governor 24h 节拍首拍延迟 5min,CancellationToken 协作停机);P0-b 日志进程内 RotatingFileWriter 10MiB×3 运行期轮转(零依赖手写,daemon.sh 脚本轮转退役、bg 重定向改 /dev/null、logs 子命令不变,sidecar 模式日志首次落盘);P1 孤儿 session worktree(session_exists 判定+destroy,行在含 Detached 不动)+outputs 孤儿桶/有主 30 天按龄(开关默认开,_no_session 孤儿语义不经开关)+UUID 形态护栏+fail-keep;P2 备份 200MiB 预算自适应(至少 2 最多 7,恰等于不停)+WebKitCache GUI 启动 50MiB 阈值清理(⚠ Thin 早退陷阱:装配必须在 setup 公共区 mode resolve 后 Thin return 前,外部评审抓出的最高风险点,源码静态断言测试守护);IPC get_disk_usage/run_disk_cleanup 五处接线(手动入口不查 kill-switch,AC9);设置面新增「存储」分组 DiskTab(占用概览 7 消费点+两开关+立即清理+成功后自动刷新)。外部模型评审 7 条全部核实采纳(tracing 默认 writer 是 stdout 非 stderr 等)。门禁:cargo 2277/clippy/fmt/pnpm 1577/build/e2e 9/turn-smoke 全绿;live 实证 governor 首拍回收 24MB 旧备份。插曲:PR4 派发时实现子代理撞 5h 限额,其已写 webkit_cache.rs 主体,主会话接手修 3 处遗留(include_str 路径/mod 声明/边界值测试)并完成装配与文档;check 子代理 AC1-AC10 全 PASS+自修 2 处(database-guidelines 签名块/e2e 路由清单)。spec 沉淀 disk-governance.md 新契约+daemon-server RULE-DAEMON-001 日志段重写+database-guidelines 备份段;follow-up:DB VACUUM、进程/内存、F1 反压联动。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `27152a12` | (see git log) |
+| `296e8d12` | (see git log) |
+| `fb467350` | (see git log) |
+| `443baaab` | (see git log) |
+
+### Status
+
+[OK] **Completed**
