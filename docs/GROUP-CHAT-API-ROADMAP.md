@@ -11,7 +11,7 @@
 | 里程碑 | 一句话 | 状态 | 规模感 |
 |--------|--------|------|--------|
 | M0 地基 | lifecycle 三态机 + summary 一等字段 + 无人值守安全 + API 契约文档 | ✅ 2026-09-05/06(见 §1) | — |
-| M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;AC5 嵌套臂部分验证) | 小(1-2 天) |
+| M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
 | M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | 🟡 M1 后 | 中(2-4 天 + 协议细节) |
 | M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | 🟠 等 P0 | 中 |
 | M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🔴 远期 | 大(多子项) |
@@ -32,7 +32,7 @@
 
 ## 2. M1 流程固化(✅ 2026-09-06 交付)
 
-**交付**:`scripts/group-chat-run.mjs`(引擎:内省三查询 `projects`/`models`/`presets` + `run` 一条命令全链路 + 中断 cancel + 转录导出 + `--dry-run` 纯静态模板;纯函数区 8 用例 `node --test`)+ `.agents/skills/group-chat/`(LLM 指引门面)+ DAEMON-API.md §6。验收 AC1-AC4 live 通过;AC5(嵌套消费)部分验证——挖出并修复真缺陷:外层 shell 沙箱禁网时,脚本错误文案必须带 `Operation not permitted` 签名沙箱升级链才能触发(errno→strerror 翻译已入 api 层);端到端重试待议。评审团 live verdict 已消化(砍 --add/--drop、PERSONA_COMMON、转录三修、失败路径落转录);per-speaker token 延后(需群聊内部 trace 行打 speaker 标签,见 §6 依赖表)。原定四个待定决策的定夺记录在任务 PRD(`.trellis/tasks/09-06-gce-m1-deliberation-driver/`)。
+**交付**:`scripts/group-chat-run.mjs`(引擎:内省三查询 `projects`/`models`/`presets` + `run` 一条命令全链路 + 中断 cancel + 转录导出 + `--dry-run` 纯静态模板;纯函数区 8 用例 `node --test`)+ `.agents/skills/group-chat/`(LLM 指引门面)+ DAEMON-API.md §6。验收 AC1-AC5 全部 live 通过——**AC5 嵌套消费**(2026-09-06 二跑):daemon 单聊经指引唤起群聊,沙箱升级链自动脱沙箱(两个前置修复:错误文案 errno→strerror 翻译喂 classify_block;prefix 授权按**命令首词 basename** 匹配),群聊与外层并发同跑,summary 转述回单聊。嵌套衍生发现记 M2 论据:后台壳升级重跑换句柄致 agent 双发重试(跑出并发双场)、过时排队消息可触发重复工作。评审团 live verdict 已消化(砍 --add/--drop、PERSONA_COMMON、转录三修、失败路径落转录);per-speaker token 延后(需群聊内部 trace 行打 speaker 标签,见 §6 依赖表)。待定决策定夺记录在任务 PRD(`.trellis/tasks/09-06-gce-m1-deliberation-driver/`)。
 
 - **目标**:把「curl 建群 → 发题 → 轮询 busy/stop_reason → 读 summary → 导转录 → 清理」的人肉验证流程固化为一等驱动入口;任何消费方(人 / cron / 未来的 MCP 层)复用同一实现。
 - **交付物**:驱动脚本 + 2-3 个角色预设(评审团 / 架构决策 / 复盘)+ 流程指引文档(脚本即文档,DAEMON-API.md 加一节链接)。

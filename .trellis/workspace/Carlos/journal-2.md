@@ -891,3 +891,7 @@ GROUP-CHAT-API-ROADMAP M1 落地。立项讨论定三层:平台=daemon 原语(�
 ### Status
 
 [OK] **Completed**(AC5 端到端嵌套重试待用户决定;per-speaker token + 8s 快拒计量记 follow-up,依赖群聊内部 trace speaker 标签)
+
+### AC5 二跑补记(2026-09-06 深夜,用户令重试)
+
+**AC5 ✅ 端到端通过**:vue3-cms 单聊(session 511d62ed)仅凭指引完成「内省→后台跑脚本→沙箱升级自动脱沙箱→群聊并发同跑→读转录→summary 转述」全链;审议产出 file:line 级证据的高质量结论(axios 单例病/5 处 token 散点/四步迁移)。两个前置修复:①脚本错误文案 errno→strerror(EPERM→"Operation not permitted")——classify_block 按字面串触发升级链,原 fetch failed 死锁;②prefix 授权语义=命令首词 basename(shell_trust.rs first_token 取首词 basename 等值查表)——存全路径是死数据,改 match_value=node 直通。衍生发现记 M2:后台壳升级重跑换新句柄+agent 轮询旧句柄见 Failed 手动重发→双场并发(live 实证共跑 3 场);外层 busy 期间排队消息 turn 边界送达可触发过时重做(M4 消息时效)。--out 相对路径落调用方 cwd=转录跟审议对象走,语义正确。中止插曲的七层核查与外层越界读源码(用户手动停,确认零写零影响)见前节。
