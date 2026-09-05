@@ -7,8 +7,8 @@ use crate::projects::DEFAULT_PROJECT_ID;
 
 use super::projects::create_project;
 use super::sessions::{
-    create_session, delete_messages_by_session, delete_session, list_sessions, load_session,
-    persist_turn,
+    clear_group_chat_lifecycle, create_session, delete_messages_by_session, delete_session,
+    finalize_group_chat_lifecycle, list_sessions, load_session, persist_turn,
 };
 use super::test_pool;
 
@@ -336,4 +336,85 @@ async fn list_sessions_preview_truncates_at_80_chars() {
     let list = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
     assert!(list[0].preview.starts_with("a".repeat(80).as_str()));
     assert!(list[0].preview.ends_with('…'));
+}
+
+// ---------------------------------------------------------------------------
+// Group-chat discussion lifecycle (2026-09-05, BUGLIST-group-chat GC2/GC7)
+// ---------------------------------------------------------------------------
+
+/// `finalize_group_chat_lifecycle` + `clear_group_chat_lifecycle`
+/// round-trip: stop_reason + discussion_summary persist, load_session
+/// exposes both as first-class fields, list_sessions carries the stop
+/// reason, and clear resets a reused session for its next run.
+#[tokio::test]
+async fn group_chat_lifecycle_columns_round_trip() {
+    let pool = test_pool().await;
+    let sid = Uuid::new_v4().to_string();
+    create_session(
+        &pool,
+        &sid,
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Fresh session: both lifecycle fields NULL.
+    let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+    assert_eq!(loaded.session.stop_reason, None);
+    assert_eq!(loaded.session.discussion_summary, None);
+
+    // Normal end: stop_reason + summary persisted, readable without
+    // parsing any tool_result content blocks (GC7's core ask).
+    finalize_group_chat_lifecycle(&pool, &sid, "group_chat_end", Some("## 共识清单\n- A"))
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("## 共识清单\n- A")
+    );
+
+    // Non-end exit (max_rounds / cancelled / error): stop_reason
+    // updates, an absent summary leaves the column untouched.
+    finalize_group_chat_lifecycle(&pool, &sid, "max_rounds", None)
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("max_rounds"));
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("## 共识清单\n- A"),
+        "None must NOT clear the summary column (start-of-run clear owns that)"
+    );
+
+    // list_sessions summary carries the stop reason (the poller's
+    // !busy + stop_reason derivation).
+    let summaries = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
+    let me = summaries.iter().find(|s| s.id == sid).unwrap();
+    assert_eq!(me.stop_reason.as_deref(), Some("max_rounds"));
+
+    // Reuse: the next orchestration's start clears both columns.
+    clear_group_chat_lifecycle(&pool, &sid).await.unwrap();
+    let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+    assert_eq!(loaded.session.stop_reason, None);
+    assert_eq!(loaded.session.discussion_summary, None);
+
+    // The three terminal reasons are distinguishable post-hoc (GC2's
+    // core ask) — smoke each value through the column.
+    for reason in ["group_chat_end", "max_rounds", "cancelled", "error"] {
+        finalize_group_chat_lifecycle(&pool, &sid, reason, None)
+            .await
+            .unwrap();
+        let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
+        assert_eq!(loaded.session.stop_reason.as_deref(), Some(reason));
+    }
 }

@@ -72,6 +72,7 @@ use crate::agent::chat_loop::{
 use crate::agent::group_chat::GroupChatCtx;
 use crate::agent::group_chat_prompts::{
     group_chat_tool_defs, moderator_system_prompt, participant_system_prompt, role_history,
+    speaker_last_turn_errored,
 };
 use crate::agent::helpers::emit_chat_event_via_sink;
 use crate::background_shell::DefaultRegistry;
@@ -88,6 +89,20 @@ use crate::tools::read_guard::ReadGuard;
 /// D10 context-window compaction still applies per-turn inside each
 /// `run_chat_loop`; this is an outer-loop safety bound.
 const MAX_ORCHESTRATION_ROUNDS: usize = 30;
+
+/// GC5 (2026-09-05, BUGLIST-group-chat): consecutive ERROR_MARKER
+/// turns that trip the orchestrator's circuit breaker. The 08-04
+/// rewrite already killed the retry-death-loop that BURNED the
+/// 30-round cap; this bound catches the residual face — a speaker
+/// (or the moderator) whose provider keeps failing (400 / 断流 /
+/// auth) so the discussion can't make progress. Each error turn
+/// still persists `[生成出错中断]` (that's what the breaker counts,
+/// via [`speaker_last_turn_errored`]); on the Nth CONSECUTIVE error
+/// the loop halts with `stop_reason = "error"` instead of relying
+/// on the moderator LLM to notice and route around it. A single
+/// clean turn resets the streak (self-healed errors — the observed
+/// seq28 case — never trip the breaker).
+const MAX_CONSECUTIVE_ERROR_TURNS: usize = 3;
 
 // R2 (08-07-group-chat-review-fixes): `stop_reason` values the
 // orchestrator emits on `Done` to surface its boundary behavior to the
@@ -121,6 +136,17 @@ pub const STOP_REASON_GROUP_CHAT_END: &str = "group_chat_end";
 pub const STOP_REASON_MAX_ROUNDS: &str = "max_rounds";
 pub const STOP_REASON_NOMINEE_UNKNOWN: &str = "nominee_unknown";
 pub const STOP_REASON_PARTICIPANT_UNRESOLVED: &str = "participant_unresolved";
+/// GC5 (2026-09-05, BUGLIST-group-chat): the circuit breaker tripped —
+/// `MAX_CONSECUTIVE_ERROR_TURNS` consecutive speaker turns ended with
+/// the persisted `[生成出错中断]` marker. Terminal (same class as
+/// `max_rounds`): the frontend finalize whitelist and `groupChatNotice`
+/// treat it as a terminal abnormal end.
+pub const STOP_REASON_ERROR: &str = "error";
+/// GC2 (2026-09-05, BUGLIST-group-chat): persisted stop reason for a
+/// discussion halted by user Stop (the token cancelled path — the
+/// terminal `Done` emit is suppressed there, but the DB row still
+/// records WHY). Same value as the classic-chat wire `cancelled`.
+pub const STOP_REASON_CANCELLED: &str = "cancelled";
 
 /// Why the outer orchestration loop stopped (R2). Carried out of the
 /// `for` loop so the post-loop terminal `Done` can name the cause. The
@@ -133,6 +159,10 @@ enum HaltReason {
     DiscussionEnded,
     /// Outer loop hit `MAX_ORCHESTRATION_ROUNDS`.
     MaxRounds,
+    /// GC5 (2026-09-05): `MAX_CONSECUTIVE_ERROR_TURNS` consecutive
+    /// speaker turns errored (persisted ERROR_MARKER) — halt instead
+    /// of letting a failing provider burn the round cap.
+    ErrorBreaker,
 }
 
 /// The moderator's system prompt. Tells it to facilitate + use the
@@ -241,11 +271,26 @@ pub async fn run_group_chat_loop(
     let turn_state: SharedTurnState = Arc::new(tokio::sync::Mutex::new(GroupChatTurnState {
         next_speaker: None,
         discussion_ended: false,
+        end_summary: None,
     }));
 
     let moderator_prompt = moderator_system_prompt(&gc_ctx);
     let (moderator_provider, moderator_provider_id) =
         resolve_provider(&worker_catalog, &gc_ctx.moderator_model_id, &db).await;
+
+    // GC2 (2026-09-05, BUGLIST-group-chat): a reused group-chat session
+    // can run a second discussion after the first ended — clear the
+    // lifecycle columns so the「!busy + stop_reason → ended」poller
+    // derivation never reports the PREVIOUS run's reason while the new
+    // one is in flight. Best-effort: a failed annotation must not abort
+    // the discussion.
+    if let Err(e) = db::clear_group_chat_lifecycle(&db, &session_id).await {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            "group_chat: clear_group_chat_lifecycle failed (non-fatal)"
+        );
+    }
 
     // R2 (08-07-group-chat-toolset-and-identity): the reason the loop
     // stopped, if it exited via a `break`. Stays `None` on cancel (the
@@ -257,6 +302,11 @@ pub async fn run_group_chat_loop(
     // research runs that legitimately don't nominate); the moderator
     // simply gets another round, bounded only by MAX_ORCHESTRATION_ROUNDS.
     let mut halt_reason: Option<HaltReason> = None;
+
+    // GC5 (2026-09-05): consecutive-ERROR_MARKER streak across speaker
+    // turns (moderator + participants). Reset by any clean turn; trips
+    // `HaltReason::ErrorBreaker` at `MAX_CONSECUTIVE_ERROR_TURNS`.
+    let mut consecutive_error_turns: usize = 0;
 
     for round in 0..MAX_ORCHESTRATION_ROUNDS {
         if token.is_cancelled() {
@@ -308,8 +358,15 @@ pub async fn run_group_chat_loop(
             // - system_prompt_override=Some(prompt) —— 完全替换父提示词；
             // - group_chat_state=Some(turn_state)：nominate/end 拦截回写点；
             // - current_speaker="moderator"（Phase 4 TODO-A 固定标识）；
-            // - is_worker=Some(false)、skip 三兄弟 false（moderator 回合
-            //   属于会话记录，guard-owned 清理照旧）；
+            // - is_worker=Some(false)、skip_persist=false（moderator 回合
+            //   属于会话记录，全量持久化照旧）；
+            // - GC1（2026-09-05，BUGLIST-group-chat）：skip_session_active
+            //   + skip_cancellations 双 true——F1 队列驱动器同款先例。注册
+            //   由 chat_inner 在 spawn 前完成一次，覆盖整场编排；内层每
+            //   speaker 的 CancellationGuard 若照旧清理，轮间（reload +
+            //   role_history 重建 + LLM 首字节延迟）map 清空、busy 翻
+            //   false，外部轮询器误判「已结束」，且轮间隙用户 Stop 找不
+            //   到 token。编排器在最终退出时统一清两个 map（见函数尾）。
             // - 群聊传空 stub registry：stubify/append gate `!is_group_chat`
             //   与拦截 gate（group_chat_state.is_some()）都会挡掉本路径，
             //   registry 不被读写，只作占位。
@@ -329,9 +386,9 @@ pub async fn run_group_chat_loop(
             });
             let role = CallerRole {
                 is_worker: Some(false),
-                skip_session_active: false,
+                skip_session_active: true,
                 skip_persist: false,
-                skip_cancellations: false,
+                skip_cancellations: true,
                 worker_catalog: worker_catalog.clone(),
                 worker_event_sink: worker_event_sink.clone(),
                 system_prompt_override: Some(prompt),
@@ -364,6 +421,33 @@ pub async fn run_group_chat_loop(
                 role,
             )
             .await;
+
+            // GC5 (2026-09-05): circuit breaker on the moderator's OWN
+            // error turns. Reload + inspect the moderator's latest
+            // persisted assistant row for the ERROR_MARKER the error
+            // path appends (drive.rs). A moderator error INCREMENTS the
+            // streak but a CLEAN arbitration turn does NOT reset it —
+            // an arbitration round is not content progress (the
+            // observed failure face: every nominated participant's
+            // provider is down while the moderator nominates fine;
+            // resetting here would let that burn the whole round cap).
+            // Only a clean PARTICIPANT turn resets (see the participant
+            // check below). The check lives INSIDE the `if let` so a
+            // skipped turn (provider unresolved) never scores against
+            // a stale row.
+            let after_mod = reload_messages(&db, &session_id).await;
+            if speaker_last_turn_errored(&after_mod, "moderator") {
+                consecutive_error_turns += 1;
+                tracing::warn!(
+                    round,
+                    consecutive_error_turns,
+                    "group_chat: moderator turn ended with ERROR_MARKER"
+                );
+                if consecutive_error_turns >= MAX_CONSECUTIVE_ERROR_TURNS {
+                    halt_reason = Some(HaltReason::ErrorBreaker);
+                    break;
+                }
+            }
         }
 
         // --- 2/3. Read turn state ---------------------------------------------
@@ -507,7 +591,9 @@ pub async fn run_group_chat_loop(
         // - group_chat_state 同样 Some（D-D 守卫的范围条件需要——参与者
         //   视图的尾条 user 也是已落库行，避免重持久化；仲裁工具已被
         //   白名单剥离，拦截分支不会触发，design deviation note 见旧注释）；
-        // - current_speaker=Some(name)：Phase 4 TODO-A 归因持久化。
+        // - current_speaker=Some(name)：Phase 4 TODO-A 归因持久化；
+        // - GC1（2026-09-05）：skip 双 true 同 moderator 侧——注册跨轮
+        //   存活，编排器统一收尾（F1 驱动器先例）。
         let deps = ChatLoopDeps::from(ChatLoopDepsParts {
             db: db.clone(),
             cancellations: cancellations.clone(),
@@ -524,9 +610,9 @@ pub async fn run_group_chat_loop(
         });
         let role = CallerRole {
             is_worker: Some(false),
-            skip_session_active: false,
+            skip_session_active: true,
             skip_persist: false,
-            skip_cancellations: false,
+            skip_cancellations: true,
             worker_catalog: worker_catalog.clone(),
             worker_event_sink: worker_event_sink.clone(),
             system_prompt_override: Some(participant_prompt),
@@ -560,6 +646,30 @@ pub async fn run_group_chat_loop(
         )
         .await;
 
+        // GC5 (2026-09-05): participant-side breaker scoring. This is
+        // the ONLY reset point — a clean participant turn is real
+        // content progress (a single self-healed error, the observed
+        // seq28 case, scores 1 and dies here; the moderator noticing +
+        // re-nominating successfully is exactly the recovery we must
+        // NOT punish). A clean moderator arbitration turn deliberately
+        // does NOT reset (see the moderator check above).
+        let after_part = reload_messages(&db, &session_id).await;
+        if speaker_last_turn_errored(&after_part, &participant.name) {
+            consecutive_error_turns += 1;
+            tracing::warn!(
+                round,
+                participant = %participant.name,
+                consecutive_error_turns,
+                "group_chat: participant turn ended with ERROR_MARKER"
+            );
+            if consecutive_error_turns >= MAX_CONSECUTIVE_ERROR_TURNS {
+                halt_reason = Some(HaltReason::ErrorBreaker);
+                break;
+            }
+        } else {
+            consecutive_error_turns = 0;
+        }
+
         // --- 7. Loop back to the moderator --------------------------------
         // No reload here: the next iteration's `round > 0` branch reloads
         // `full` (fresh, includes this participant's rows) before the
@@ -577,6 +687,47 @@ pub async fn run_group_chat_loop(
         halt_reason = Some(HaltReason::MaxRounds);
     }
 
+    // GC7 (2026-09-05): take the moderator's end_discussion summary
+    // (captured by `end_discussion::execute_intercept`) so it lands on
+    // the session row as a first-class column. `None` on every
+    // non-end exit (max_rounds / cancelled / error).
+    let end_summary: Option<String> = {
+        let mut st = turn_state.lock().await;
+        st.end_summary.take()
+    };
+
+    // GC2 (2026-09-05, BUGLIST-group-chat): persist WHY the discussion
+    // stopped — `group_chat_end` / `max_rounds` / `error` / `cancelled`
+    // — onto the session row, so audit / replay / headless drivers can
+    // answer「这场为何结束」from the DB alone (previously the reason
+    // existed only in the transient SSE done event). Written on the
+    // cancel path too (the Done emit below is suppressed there, the DB
+    // row is the only trace). Best-effort: warn + swallow.
+    let stop_reason_str = if token.is_cancelled() {
+        STOP_REASON_CANCELLED
+    } else {
+        match halt_reason {
+            Some(HaltReason::DiscussionEnded) => STOP_REASON_GROUP_CHAT_END,
+            Some(HaltReason::MaxRounds) => STOP_REASON_MAX_ROUNDS,
+            Some(HaltReason::ErrorBreaker) => STOP_REASON_ERROR,
+            // Unreachable: !cancelled → halt_reason was set by a break
+            // or the MaxRounds default above. Defensive fallback keeps
+            // the value stable if a future path forgets to set it.
+            None => STOP_REASON_GROUP_CHAT_END,
+        }
+    };
+    if let Err(e) =
+        db::finalize_group_chat_lifecycle(&db, &session_id, stop_reason_str, end_summary.as_deref())
+            .await
+    {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            stop_reason = stop_reason_str,
+            "group_chat: finalize_group_chat_lifecycle failed (non-fatal)"
+        );
+    }
+
     // Terminal signal for the frontend (08-04 follow-up, user-approved
     // "终止事件 + 逐轮流式"): the orchestrator shares ONE `rid` across
     // every inner `run_chat_loop` (moderator + participants), and each
@@ -592,30 +743,34 @@ pub async fn run_group_chat_loop(
     //
     // R2 (08-07): the `stop_reason` now reflects WHY the loop ended, so
     // the frontend can finalize the terminal cases AND show the user a
-    // notice when the discussion ended abnormally (moderator stuck /
-    // max rounds). `DiscussionEnded` keeps the original `group_chat_end`
-    // value (backward-compat for any frontend path keyed on it); the two
+    // notice when the discussion ended abnormally (max rounds / error
+    // breaker). `DiscussionEnded` keeps the original `group_chat_end`
+    // value (backward-compat for any frontend path keyed on it); the
     // failure paths get their own values and are added to the frontend's
     // finalize whitelist alongside `group_chat_end` / `cancelled`.
     if !token.is_cancelled() {
-        let stop_reason = match halt_reason {
-            Some(HaltReason::DiscussionEnded) => STOP_REASON_GROUP_CHAT_END,
-            Some(HaltReason::MaxRounds) => STOP_REASON_MAX_ROUNDS,
-            // Unreachable: !cancelled → halt_reason was set by a break or
-            // the MaxRounds default above. Defensive fallback keeps the
-            // emit shape stable if a future path forgets to set it.
-            None => STOP_REASON_GROUP_CHAT_END,
-        };
         emit_chat_event_via_sink(
             &sink,
             &session_id,
             &rid,
             &ChatEvent::Done {
-                stop_reason: Some(stop_reason.to_string()),
+                stop_reason: Some(stop_reason_str.to_string()),
                 usage: None,
             },
         );
     }
+
+    // GC1 (2026-09-05, BUGLIST-group-chat): the orchestrator owns the
+    // session's busy / cancel registrations for the WHOLE discussion
+    // (chat_inner registers once before spawn; every inner speaker
+    // call passes the double-skip guard so the entries survive across
+    // turns — F1 queue-driver precedent). THIS is the single exit that
+    // clears them, so `busy` stays true across inter-turn gaps and
+    // drops exactly once, here, when the discussion is over. Symmetric
+    // cleanup of both maps, all exit paths (normal end / max rounds /
+    // error breaker / cancel).
+    cancellations.lock().await.remove(&rid);
+    session_active_request.lock().await.remove(&session_id);
 }
 
 /// Resolve a model_id to a provider via the catalog. Tries the

@@ -368,6 +368,24 @@ pub struct SessionRow {
     /// for a group_chat session. `None` for classic-chat and for
     /// group_chat sessions without a saved config.
     pub metadata: Option<serde_json::Value>,
+    /// Group-chat discussion lifecycle (2026-09-05,
+    /// BUGLIST-group-chat GC2): WHY the last group-chat
+    /// orchestration stopped — one of `group_chat_end` /
+    /// `max_rounds` / `cancelled` / `error`. Written by
+    /// `run_group_chat_loop` at exit, cleared at its start. `None`
+    /// on classic-chat sessions (the column is never written by the
+    /// classic path). Exposed on the wire snake_case, matching the
+    /// sessions-domain convention.
+    pub stop_reason: Option<String>,
+    /// Group-chat discussion summary (2026-09-05,
+    /// BUGLIST-group-chat GC7): the moderator's
+    /// `end_discussion({summary})` closing remark persisted as a
+    /// first-class column so API consumers get it via `load_session`
+    /// without parsing the end_discussion tool_result content
+    /// blocks. `None` unless the discussion ended via end_discussion
+    /// (with or without an explicit summary — the tool's default
+    /// "Discussion ended." remark is stored too).
+    pub discussion_summary: Option<String>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -427,6 +445,13 @@ pub struct SessionSummary {
     /// IPC + daemon REST) agree. Additive on the wire — old clients
     /// ignore the extra field.
     pub busy: bool,
+    /// Group-chat discussion lifecycle (2026-09-05,
+    /// BUGLIST-group-chat GC2): the persisted stop reason of the
+    /// last orchestration (see `SessionRow::stop_reason`). On the
+    /// summary so a `list_sessions` poller can distinguish
+    ///「running」(busy) from「ended and why」(!busy + stop_reason)
+    /// from「never ran」(!busy + NULL) without loading the session.
+    pub stop_reason: Option<String>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

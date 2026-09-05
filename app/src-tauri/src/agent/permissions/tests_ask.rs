@@ -974,3 +974,201 @@ async fn check_parent_path_with_none_run_grants_falls_through_to_ask() {
         captured_asks.len()
     );
 }
+
+// =====================================================================
+// GC3 (2026-09-05, BUGLIST-group-chat): unattended fast-deny. When the
+// sink reports NO live observer (daemon: zero SSE subscribers — the
+// headless-run face), the ask timeout shortens to
+// UNATTENDED_ASK_TIMEOUT and the deny reason names it. Attended sinks
+// keep the classic 120s-window reason. `ask_no_timeout` still wins
+// over both (not re-tested here — the pending() arm is switch-tested
+// in the 09-03 task).
+// =====================================================================
+
+use std::sync::Mutex as StdMutex;
+
+use crate::agent::permissions::PermissionAskPayload;
+use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
+
+/// Sink that reports NO live observer (the daemon headless face).
+#[derive(Default)]
+struct NoObserverSink {
+    asks: StdMutex<Vec<PermissionAskPayload>>,
+}
+impl crate::state::ChatEventSink for NoObserverSink {
+    fn emit_chat_event(&self, _p: &ChatEventPayload) {}
+    fn emit_tool_call(&self, _p: &ToolCallPayload) {}
+    fn emit_tool_result(&self, _p: &ToolResultPayload) {}
+    fn emit_permission_ask(&self, p: PermissionAskPayload) {
+        self.asks.lock().unwrap().push(p);
+    }
+    fn has_live_observer(&self) -> bool {
+        false
+    }
+}
+
+/// Parent-path helper: a NON-worker ctx on the shared test pool.
+async fn parent_ctx_with_db() -> (
+    sqlx::SqlitePool,
+    crate::agent::permissions::PermissionStore,
+    tokio_util::sync::CancellationToken,
+    crate::agent::permissions::PermissionContext,
+) {
+    let pool = worker_test_pool().await;
+    let store = crate::agent::permissions::new_permission_store();
+    let token = tokio_util::sync::CancellationToken::new();
+    let ctx = crate::agent::permissions::PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: std::path::PathBuf::from("/repo"),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: std::path::PathBuf::from("/repo"),
+        project_main_path: std::path::PathBuf::from("/repo"),
+        turn_seq: None,
+    };
+    (pool, store, token, ctx)
+}
+
+/// No observer → fast deny, and the reason names the unattended
+/// fast-deny so the LLM (and the transcript) can tell it apart from a
+/// human denial. The 50ms task-local override stays authoritative via
+/// the `min` (a test must not wait the real 8s).
+#[tokio::test]
+async fn unattended_ask_denies_fast_with_named_reason() {
+    crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        async {
+            let (pool, store, token, ctx) = parent_ctx_with_db().await;
+            let sink: std::sync::Arc<dyn crate::state::ChatEventSink> =
+                std::sync::Arc::new(NoObserverSink::default());
+
+            let decision = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                ask_path(
+                    &sink,
+                    &pool,
+                    &store,
+                    &ctx,
+                    "write_file",
+                    &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+                    "/repo/outside/foo.rs",
+                    Some("/repo/outside/foo.rs"),
+                    "tu-unattended",
+                    &token,
+                    None,
+                ),
+            )
+            .await
+            .expect("unattended fast-deny must settle well within 2s");
+
+            match decision {
+                Decision::Deny { reason, .. } => {
+                    assert!(
+                        reason.contains("no live observer"),
+                        "deny reason must name the unattended fast-deny: {reason}"
+                    );
+                    assert!(
+                        reason.starts_with("permission timed out after"),
+                        "deny reason must keep the stable prefix (worker-branch \
+                         discriminator contract): {reason}"
+                    );
+                }
+                other => panic!("expected Deny, got {other:?}"),
+            }
+        },
+    )
+    .await;
+}
+
+/// Attended sink (default trait answer) → the classic 120s-window
+/// reason, byte-identical to the pre-GC3 wording (regression guard:
+/// attendance detection must not disturb the GUI path).
+#[tokio::test]
+async fn attended_ask_keeps_classic_timeout_reason() {
+    crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        async {
+            let (pool, store, token, ctx) = parent_ctx_with_db().await;
+            let sink: std::sync::Arc<dyn crate::state::ChatEventSink> =
+                std::sync::Arc::new(CaptureAskSink::default());
+
+            let decision = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                ask_path(
+                    &sink,
+                    &pool,
+                    &store,
+                    &ctx,
+                    "write_file",
+                    &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+                    "/repo/outside/foo.rs",
+                    Some("/repo/outside/foo.rs"),
+                    "tu-attended",
+                    &token,
+                    None,
+                ),
+            )
+            .await
+            .expect("attended timeout must settle within 2s");
+
+            match decision {
+                Decision::Deny { reason, .. } => assert_eq!(
+                    reason, "permission timed out after 120s, treat as denied",
+                    "attended deny reason must stay byte-identical (GUI contract)"
+                ),
+                other => panic!("expected Deny, got {other:?}"),
+            }
+        },
+    )
+    .await;
+}
+
+/// Worker branch with no observer: same unattended fast-deny, and the
+/// post-select discrimination (now a `starts_with` prefix match) must
+/// classify it as a timeout — not fall into the user-deny arm.
+#[tokio::test]
+async fn unattended_worker_ask_denies_fast_and_discriminates() {
+    crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        async {
+            let (pool, store, sink, ctx, _token) = worker_ctx_with_db().await;
+            let no_observer: std::sync::Arc<dyn crate::state::ChatEventSink> =
+                std::sync::Arc::new(NoObserverSink::default());
+
+            let decision = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                ask_path(
+                    &no_observer,
+                    &pool,
+                    &store,
+                    &ctx,
+                    "write_file",
+                    &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+                    "/repo/outside/foo.rs",
+                    Some("/repo/outside/foo.rs"),
+                    "tu-worker-unattended",
+                    &tokio_util::sync::CancellationToken::new(),
+                    None,
+                ),
+            )
+            .await
+            .expect("worker unattended fast-deny must settle within 2s");
+
+            match decision {
+                Decision::Deny { reason, .. } => {
+                    assert!(
+                        reason.contains("no live observer"),
+                        "worker deny reason must name the unattended fast-deny: {reason}"
+                    );
+                }
+                other => panic!("expected Deny, got {other:?}"),
+            }
+            // The worker ctx's own sink captured nothing (we passed the
+            // no-observer sink) — trivially true, kept for symmetry.
+            assert!(sink.asks.lock().unwrap().is_empty());
+        },
+    )
+    .await;
+}

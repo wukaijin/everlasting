@@ -125,6 +125,11 @@ pub async fn create_session(
         // hard-coded `::Chat` default).
         session_type: session_type_typed,
         metadata: metadata.and_then(|s| serde_json::from_str(s).ok()),
+        // GC2/GC7 (2026-09-05): lifecycle columns start NULL — the
+        // orchestrator writes them at its exit. Fresh-session value
+        // matches the DB row verbatim (bare INSERT omits both).
+        stop_reason: None,
+        discussion_summary: None,
     })
 }
 
@@ -144,7 +149,7 @@ pub async fn list_sessions(
  s.last_context_input_tokens, s.last_input_tokens,
  s.last_output_tokens, s.last_cache_creation, s.last_cache_read,
  s.color_tag, s.mode, s.workflow_enabled, s.plugin_name,
- s.session_type, s.metadata,
+ s.session_type, s.metadata, s.stop_reason,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -209,6 +214,9 @@ pub async fn list_sessions(
                 // Runtime state, not DB state — enriched by
                 // `list_sessions_inner` from `session_active_request`.
                 busy: false,
+                // GC2 (2026-09-05): persisted lifecycle reason of the
+                // last orchestration (NULL = never ran / classic chat).
+                stop_reason: r.try_get("stop_reason")?,
             })
         })
         .collect()
@@ -242,7 +250,7 @@ pub async fn load_session(
  last_context_input_tokens, last_input_tokens,
  last_output_tokens, last_cache_creation, last_cache_read,
  color_tag, mode, workflow_enabled, plugin_name,
- session_type, metadata
+ session_type, metadata, stop_reason, discussion_summary
  FROM sessions
  WHERE id = ?
  "#,
@@ -289,6 +297,10 @@ pub async fn load_session(
                 plugin_name: r.try_get("plugin_name")?,
                 session_type: crate::db::SessionType::from_str_opt(&session_type_str),
                 metadata,
+                // GC2/GC7 (2026-09-05): lifecycle columns (nullable —
+                // classic-chat sessions and pre-upgrade rows stay NULL).
+                stop_reason: r.try_get("stop_reason")?,
+                discussion_summary: r.try_get("discussion_summary")?,
             }
         }
         None => return Ok(None),
@@ -842,6 +854,70 @@ pub async fn set_session_metadata(
  "#,
     )
     .bind(metadata.to_string())
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Group-chat discussion lifecycle (2026-09-05, BUGLIST-group-chat GC2/GC7)
+// ---------------------------------------------------------------------------
+
+/// Clear the discussion-lifecycle columns (`stop_reason` +
+/// `discussion_summary`) at orchestration START. A reused group-chat
+/// session can run a second discussion after the first ended; the
+/// poller's「!busy + stop_reason → ended」derivation (GC1/GC2) must not
+/// report the stale previous run's reason while the new one is in
+/// flight. Best-effort contract: callers `warn!` + swallow errors (the
+/// orchestration must not abort because a lifecycle annotation failed).
+pub async fn clear_group_chat_lifecycle(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+ UPDATE sessions
+ SET stop_reason = NULL, discussion_summary = NULL, updated_at = ?
+ WHERE id = ?
+ "#,
+    )
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Write the discussion-lifecycle outcome at orchestration EXIT (GC2:
+/// stop_reason persisted; GC7: end_discussion summary as a first-class
+/// column). `discussion_summary = None` leaves the column untouched
+/// rather than clearing it — the only caller (`run_group_chat_loop`)
+/// passes `Some` exactly when the moderator called end_discussion, and
+/// passes `None` for the non-end exits (max_rounds / cancelled /
+/// error), where the column was already reset by
+/// [`clear_group_chat_lifecycle`] at start. Best-effort contract
+/// (same as clear): warn + swallow at the caller.
+pub async fn finalize_group_chat_lifecycle(
+    pool: &SqlitePool,
+    session_id: &str,
+    stop_reason: &str,
+    discussion_summary: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+ UPDATE sessions
+ SET stop_reason = ?,
+     discussion_summary = COALESCE(?, discussion_summary),
+     updated_at = ?
+ WHERE id = ?
+ "#,
+    )
+    .bind(stop_reason)
+    .bind(discussion_summary)
     .bind(&now)
     .bind(session_id)
     .execute(pool)

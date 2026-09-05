@@ -47,6 +47,8 @@ fn make_session_row(
         plugin_name: "dev".to_string(),
         session_type: db::SessionType::Chat,
         metadata: None,
+        stop_reason: None,
+        discussion_summary: None,
     }
 }
 

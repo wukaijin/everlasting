@@ -1776,6 +1776,22 @@ pub(crate) async fn drive_turn(
         });
     }
 
+    // GC4 (2026-09-05, BUGLIST-group-chat): group-chat assistant turns
+    // strip self-referential leading `@<speaker>:` labels from the
+    // LEADING text blocks before persisting. Weak models address
+    // themselves despite the prompt guard; own rows round-trip
+    // verbatim (Anthropic signature), so an unstripped prefix is
+    // re-imitated + one more layer every round. Text-block-level only
+    // — thinking / signature / tool_use blocks untouched, and the
+    // cancel/error markers above start with "\n\n" so they never
+    // match. A prefix-only turn collapses to empty blocks here and
+    // the empty-turn branch below skips persisting it entirely (kills
+    // the observed `@moderator:`-only rows). Classic chat
+    // (current_speaker = None) is byte-identical.
+    if let Some(speaker) = current_speaker.as_deref() {
+        crate::agent::group_chat_prompts::strip_own_prefix_blocks(&mut ordered_blocks, speaker);
+    }
+
     // `assistant_blocks` 直接复用流序累积的 `ordered_blocks`。
     // 旧的分桶循环(thinking→text→tool_use→redacted 硬编码)已删除
     // —— 所有块在循环内已按真实到达顺序填入。

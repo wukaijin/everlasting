@@ -886,3 +886,548 @@ async fn orchestrator_emits_nonterminal_done_for_unknown_nominee() {
         "nominee_unknown must precede group_chat_end: {dones:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// GC1/GC2/GC5/GC7 (2026-09-05, BUGLIST-group-chat): discussion-lifecycle
+// regressions — orchestration-grained busy, persisted stop_reason +
+// discussion_summary, and the consecutive-ERROR_MARKER circuit breaker.
+// ---------------------------------------------------------------------------
+
+/// GC1: sink that snapshots the session's busy state (the
+/// `session_active_request` map, same source `list_sessions_inner`
+/// patches from) at EVERY chat event emitted during the orchestration —
+/// including the `Speaker` events that fire in the inter-turn gaps.
+/// `try_lock` (sync context): a contended lock skips that snapshot
+/// (the orchestrator only holds the lock at start/end, so misses are
+/// practically impossible).
+struct BusyProbeSink {
+    s2p: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    sid: String,
+    inner: MockEmitter,
+    busy_snapshots: Arc<std::sync::Mutex<Vec<bool>>>,
+}
+
+impl BusyProbeSink {
+    fn snapshot(&self) {
+        if let Ok(g) = self.s2p.try_lock() {
+            self.busy_snapshots
+                .lock()
+                .unwrap()
+                .push(g.contains_key(&self.sid));
+        }
+    }
+}
+
+impl crate::state::ChatEventSink for BusyProbeSink {
+    fn emit_chat_event(&self, payload: &crate::state::ChatEventPayload) {
+        self.snapshot();
+        self.inner.emit_chat_event(payload);
+    }
+    fn emit_tool_call(&self, payload: &crate::state::ToolCallPayload) {
+        self.inner.emit_tool_call(payload);
+    }
+    fn emit_tool_result(&self, payload: &crate::state::ToolResultPayload) {
+        self.inner.emit_tool_result(payload);
+    }
+    fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
+        self.inner.emit_permission_ask(payload);
+    }
+}
+
+/// GC1 + GC2 + GC7: busy must be orchestration-grained (no dip in the
+/// inter-turn gaps), the maps must be cleaned exactly at orchestration
+/// exit, and the end state (stop_reason + discussion_summary) must be
+/// persisted on the session row.
+#[tokio::test]
+async fn group_chat_busy_holds_across_turns_and_lifecycle_persists() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Script: nominate M1 → M1 speaks → end_discussion with a summary.
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "b1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "开场",
+        ),
+        mod_tool_turn(
+            "b2",
+            "end_discussion",
+            serde_json::json!({"summary": "## 共识清单\n- 先做 A"}),
+            "收尾",
+        ),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("我是 M1")]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let probe = Arc::new(BusyProbeSink {
+        s2p: h.session_active_request.clone(),
+        sid: gc_session_id.clone(),
+        inner: MockEmitter::new(),
+        busy_snapshots: Arc::new(std::sync::Mutex::new(Vec::new())),
+    });
+
+    // Mimic chat_inner's legacy-path registration (group chat never
+    // enters the F1 routing critical section): claim the session slot
+    // + the rid's cancel token BEFORE the orchestration starts.
+    let token = CancellationToken::new();
+    h.cancellations
+        .lock()
+        .await
+        .insert("rid-gc-busy".to_string(), token.clone());
+    h.session_active_request
+        .lock()
+        .await
+        .insert(gc_session_id.clone(), "rid-gc-busy".to_string());
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-busy".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        probe.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        token,
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    // GC1: every mid-orchestration snapshot saw busy=true — including
+    // the Speaker events fired in the inter-turn gaps (pre-fix, the
+    // first inner guard's Drop evicted the entry and busy dipped).
+    let snapshots = probe.busy_snapshots.lock().unwrap().clone();
+    assert!(
+        snapshots.len() >= 5,
+        "expected a meaningful number of event-time snapshots, got {snapshots:?}"
+    );
+    assert!(
+        snapshots.iter().all(|b| *b),
+        "busy must hold for the WHOLE orchestration (no inter-turn dip): {snapshots:?}"
+    );
+
+    // GC1: orchestration exit is the single cleanup point — both maps
+    // are empty afterwards (the discussion is over, busy=false for
+    // good, not resurrected).
+    assert!(
+        !h.session_active_request
+            .lock()
+            .await
+            .contains_key(&gc_session_id),
+        "session_active_request must be cleared at orchestration exit"
+    );
+    assert!(
+        !h.cancellations.lock().await.contains_key("rid-gc-busy"),
+        "cancellations entry must be cleared at orchestration exit"
+    );
+
+    // GC2 + GC7: lifecycle persisted on the session row (first-class
+    // fields, no tool_result parsing).
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("## 共识清单\n- 先做 A"),
+        "end_discussion summary must be persisted as a first-class field"
+    );
+
+    // GC2: the list_sessions summary carries the stop reason too (the
+    // poller's 「!busy + stop_reason → ended」derivation).
+    let summaries = db::list_sessions(&h.db, &h.project_id)
+        .await
+        .expect("list_sessions");
+    let me = summaries
+        .iter()
+        .find(|s| s.id == gc_session_id)
+        .expect("group-chat session in summaries");
+    assert_eq!(me.stop_reason.as_deref(), Some("group_chat_end"));
+}
+
+/// GC5: three consecutive ERROR_MARKER turns trip the breaker — the
+/// discussion halts with terminal Done + persisted stop_reason
+/// "error", and other speakers see the failed turns as system notes,
+/// never the raw marker.
+#[tokio::test]
+async fn group_chat_error_breaker_halts_after_consecutive_error_turns() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Auth is non-retryable (retry.rs: deterministic failure class) —
+    // one send per error turn, so the scripted counts below are exact.
+    let boom = || {
+        MockResponse::ErrThenEnd(LlmError::Auth(
+            "simulated provider auth failure".to_string(),
+        ))
+    };
+    // r0: nominate M1 → M1 errors (streak 1)
+    // r1: nominate M1 → M1 errors (streak 2)
+    // r2: nominate M2 → M2 errors (streak 3 → breaker trips)
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "e1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "第一次点名",
+        ),
+        mod_tool_turn(
+            "e2",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "再给 M1 一次",
+        ),
+        mod_tool_turn(
+            "e3",
+            "nominate_speaker",
+            serde_json::json!({"name": "M2"}),
+            "换 M2",
+        ),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![boom(), boom()]));
+    let m2 = Arc::new(MockProvider::new(vec![boom()]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    catalog.insert("m2".to_string(), m2.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-err".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    // Terminal Done carries the breaker reason.
+    let dones: Vec<String> = emitter
+        .chat_events()
+        .iter()
+        .filter_map(|p| match &p.event {
+            ChatEvent::Done { stop_reason, .. } => stop_reason.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dones.last().map(String::as_str),
+        Some("error"),
+        "breaker halt must be the terminal Done, got {dones:?}"
+    );
+
+    // GC2: persisted for post-hoc「这场为何结束」.
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("error"));
+    assert!(
+        loaded.session.discussion_summary.is_none(),
+        "no end_discussion happened → no summary"
+    );
+
+    // The loop actually STOPPED at round 2 (3 moderator sends, no 4th).
+    assert_eq!(moderator.call_count(), 3);
+    assert_eq!(m1.call_count(), 2);
+    assert_eq!(m2.call_count(), 1);
+
+    // GC5 view: M2's request history must show M1's failed turns as
+    // system notes, never the raw ERROR_MARKER text.
+    let m2_text = m2
+        .sent_messages()
+        .iter()
+        .flat_map(|msgs| msgs.iter())
+        .map(|m| m.content.to_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !m2_text.contains(crate::agent::helpers::ERROR_MARKER),
+        "other speakers must not see the raw ERROR_MARKER: {m2_text:?}"
+    );
+    assert!(
+        m2_text.contains("系统注记"),
+        "M2 must see the system note for M1's failed turns: {m2_text:?}"
+    );
+}
+
+/// GC2: a discussion that never nominates runs to
+/// MAX_ORCHESTRATION_ROUNDS and the stop reason persisted is
+/// distinguishable from a normal end (group_chat_end) and from the
+/// breaker (error).
+#[tokio::test]
+async fn group_chat_max_rounds_persists_stop_reason() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // 30 rounds of moderator research text, never nominating → the
+    // outer loop exhausts MAX_ORCHESTRATION_ROUNDS.
+    let moderator = Arc::new(MockProvider::new(
+        (0..30).map(|_| text_turn("调研中…")).collect(),
+    ));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-mr".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    assert_eq!(moderator.call_count(), 30);
+    let dones: Vec<String> = emitter
+        .chat_events()
+        .iter()
+        .filter_map(|p| match &p.event {
+            ChatEvent::Done { stop_reason, .. } => stop_reason.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dones.last().map(String::as_str),
+        Some("max_rounds"),
+        "terminal Done must be max_rounds, got {dones:?}"
+    );
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("max_rounds"));
+}
+
+/// GC2: a REUSED group-chat session clears the previous run's
+/// lifecycle columns at the new orchestration's start (the poller
+/// must never see the stale reason while a new discussion runs).
+#[tokio::test]
+async fn group_chat_second_run_clears_stale_stop_reason() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+    // Simulate a previous ended run.
+    db::finalize_group_chat_lifecycle(&h.db, &gc_session_id, "max_rounds", Some("旧总结"))
+        .await
+        .expect("seed previous lifecycle");
+
+    // Second run: nominate nobody for one round... the loop only
+    // clears at start; a single round-0 moderator text turn then a
+    // second scripted end_discussion ends the run cleanly.
+    let moderator = Arc::new(MockProvider::new(vec![mod_tool_turn(
+        "r1",
+        "end_discussion",
+        serde_json::json!({}),
+        "直接结束",
+    )]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-reuse".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end"),
+        "the NEW run's reason must win"
+    );
+    // end_discussion without an explicit summary stores the tool's
+    // default remark — never the PREVIOUS run's summary.
+    assert_ne!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("旧总结"),
+        "stale summary from the previous run must not survive"
+    );
+}
+
+/// GC4: self-referential `@<speaker>:` prefixes are stripped at the
+/// PERSIST site — the stored transcript (and therefore every later
+/// own-history view that feeds the imitation loop) stays clean, and a
+/// prefix-only turn collapses to no row at all.
+#[tokio::test]
+async fn group_chat_strips_own_prefix_on_persist() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // r0: moderator opens with a self-prefixed remark + nominates M1.
+    // r1: moderator closes with an ACCUMULATED double prefix.
+    // M1's turn is prefix-only ("@M1:") — must leave no row.
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "p1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "@moderator: 点名",
+        ),
+        mod_tool_turn(
+            "p2",
+            "end_discussion",
+            serde_json::json!({}),
+            "@moderator: @moderator: 收工",
+        ),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("@M1:")]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-prefix".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+    )
+    .await;
+
+    // Moderator rows: real content survives, ZERO self-prefix layers.
+    let mod_texts: Vec<String> =
+        sqlx::query_as::<_, (String,)>("SELECT text FROM messages WHERE session_id = ? AND speaker = 'moderator' AND role = 'assistant'")
+            .bind(&gc_session_id)
+            .fetch_all(&h.db)
+            .await
+            .expect("fetch moderator rows")
+            .into_iter()
+            .map(|t| t.0)
+            .collect();
+    assert!(
+        mod_texts.iter().any(|t| t.contains("点名")),
+        "moderator content must survive the strip: {mod_texts:?}"
+    );
+    assert!(
+        mod_texts.iter().any(|t| t.contains("收工")),
+        "closing remark must survive (accumulated double prefix stripped): {mod_texts:?}"
+    );
+    assert!(
+        mod_texts.iter().all(|t| !t.contains("@moderator:")),
+        "no self-prefix layer may persist (snowball source): {mod_texts:?}"
+    );
+
+    // M1's prefix-only turn must leave NO assistant row (the observed
+    // seq9/seq38 prefix-only messages are gone at the root).
+    let m1_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = ? AND speaker = 'M1'")
+            .bind(&gc_session_id)
+            .fetch_one(&h.db)
+            .await
+            .expect("count M1 rows");
+    assert_eq!(
+        m1_rows, 0,
+        "prefix-only turn must not persist any row (speaker='M1')"
+    );
+
+    // The discussion still ended normally.
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+}

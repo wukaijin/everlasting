@@ -6,6 +6,7 @@
 //! [`super::group_chat_loop`] 中。
 
 use crate::agent::group_chat::GroupChatCtx;
+use crate::agent::helpers::ERROR_MARKER;
 use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role, ToolDef};
 use crate::tools::end_discussion::END_DISCUSSION_TOOL_NAME;
 use crate::tools::nominate_speaker::NOMINATE_SPEAKER_TOOL_NAME;
@@ -121,7 +122,17 @@ pub(crate) fn role_history(full: &[ChatMessage], current_role: &str) -> Vec<Chat
                     // `to_text()` reuses MessageContent's visible-text
                     // extractor (skips thinking by design — same rule as
                     // the DB `text` column).
+                    //
+                    // GC5 (2026-09-05, BUGLIST-group-chat): an errored
+                    // turn's ERROR_MARKER must NOT enter other speakers'
+                    // view as if the speaker SAID it (seq28 lesson: the
+                    // moderator read it correctly, but that was model
+                    // comprehension, not a mechanism guarantee). Rewrite
+                    // the marker into an explicit system note; the raw
+                    // marker stays only in the persisted row (and in the
+                    // erroring speaker's OWN verbatim view — invariant 1).
                     let text = m.content.to_text();
+                    let text = rewrite_other_error_marker(&text, sp);
                     if !text.is_empty() {
                         out.push(ChatMessage {
                             role: Role::User,
@@ -163,6 +174,143 @@ fn extract_tool_use_ids(c: &MessageContent) -> Vec<String> {
             .collect(),
         MessageContent::Text(_) => Vec::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// GC4/GC5 pure helpers (2026-09-05, BUGLIST-group-chat)
+// ---------------------------------------------------------------------------
+
+/// GC5: rewrite another speaker's ERROR_MARKER into an explicit
+/// system note. Clean text passes through byte-identical. Text
+/// carrying the marker (appended by the loop's error path as a
+/// standalone trailing block — `to_text()` joins the blocks) loses
+/// every marker occurrence and gains an unambiguous 注记 instead,
+/// so no downstream role ever has to *interpret*「[生成出错中断]」
+/// as speech. A marker-only row (empty partial) collapses to just
+/// the note.
+fn rewrite_other_error_marker(text: &str, speaker: &str) -> String {
+    if !text.contains(ERROR_MARKER) {
+        return text.to_string();
+    }
+    let stripped = text.replace(ERROR_MARKER, "");
+    let stripped = stripped.trim();
+    if stripped.is_empty() {
+        format!("[系统注记:{} 的本轮发言因生成错误中断,无内容]", speaker)
+    } else {
+        format!(
+            "{}\n\n[系统注记:{} 的本轮发言在此处因生成错误中断,以上内容可能不完整]",
+            stripped, speaker
+        )
+    }
+}
+
+/// GC5: whether the speaker's LATEST assistant row in the (freshly
+/// reloaded) transcript carries the ERROR_MARKER — i.e. their most
+/// recent `run_chat_loop` ended on the error path. Scans from the
+/// tail (group-chat seq is globally contiguous, so the LAST
+/// assistant row of a speaker IS their latest turn's product) and
+/// stops at the first hit; earlier rows (previous clean turns) never
+/// shadow it. Used by the orchestrator's consecutive-error circuit
+/// breaker on the RAW reload (not on `role_history`, whose view of
+/// other speakers' markers is rewritten by
+/// [`rewrite_other_error_marker`]).
+pub(crate) fn speaker_last_turn_errored(full: &[ChatMessage], speaker: &str) -> bool {
+    full.iter()
+        .rev()
+        .find(|m| m.role == Role::Assistant && m.speaker.as_deref() == Some(speaker))
+        .map(|m| m.content.to_text().contains(ERROR_MARKER))
+        .unwrap_or(false)
+}
+
+/// GC4: strip self-referential leading `@<speaker>: ` prefixes from a
+/// persisted group-chat assistant turn's blocks, in place.
+///
+/// Root cause being treated: weak models start their reply with their
+/// own label (`@moderator: …` / `@陈曦-前端: …`) despite the prompt's
+/// "never start with your OWN name" guard; the model then sees its own
+/// prefixed history back (own rows stay verbatim — Anthropic signature
+/// round-trip) and imitates the prefix AGAIN, one more layer per round
+/// (seq32 one → seq41 two → seq48/57/68 four). Prompt-layer mitigation
+/// cannot stop a model from addressing itself; stripping at the PERSIST
+/// site (text-block level — thinking + signatures untouched) keeps the
+/// stored transcript — and therefore every later own-history view —
+/// clean, which is what feeds the imitation loop.
+///
+/// Semantics:
+/// - Only LEADING `Text` blocks are scanned (a prefix can only be at
+///   the message start); the first non-text block stops the scan.
+/// - Within a leading text block the prefix is stripped REPEATEDLY
+///   (kills already-accumulated layers), then leading spaces/tabs and
+///   ONE leading newline are trimmed so `@X:\nhello` → `hello`.
+/// - A block left empty/whitespace-only after stripping is REMOVED;
+///   if that empties the whole block list, the caller's existing
+///   empty-turn branch skips persisting entirely — that is what kills
+///   the observed prefix-only rows (seq9 `@moderator:`, seq38).
+/// - `@`-mentions of OTHER speakers in the body are untouched (only
+///   the exact `@<speaker>:` self-label at the very start matches).
+pub(crate) fn strip_own_prefix_blocks(blocks: &mut Vec<ContentBlock>, speaker: &str) {
+    if blocks.is_empty() {
+        return;
+    }
+    let mut idx = 0;
+    while idx < blocks.len() {
+        let text = match &blocks[idx] {
+            ContentBlock::Text { text, .. } => text.clone(),
+            _ => break,
+        };
+        match strip_repeated_own_prefix(&text, speaker) {
+            Some(stripped) => {
+                let trimmed = trim_prefix_whitespace(&stripped);
+                if trimmed.is_empty() {
+                    // Prefix-only block (or whitespace residue) — drop it
+                    // and keep scanning the next block as the new head.
+                    blocks.remove(idx);
+                } else {
+                    if let ContentBlock::Text { text, .. } = &mut blocks[idx] {
+                        *text = trimmed.to_string();
+                    }
+                    idx += 1;
+                }
+            }
+            // No self-prefix in this block — it is the real content head;
+            // stop scanning.
+            None => break,
+        }
+    }
+}
+
+/// Strip every leading `@<speaker>:` occurrence from `text`. Returns
+/// `None` when the text does not start with the self-prefix. Both
+/// ASCII `:` and full-width `：` are accepted as the label colon
+/// (participant names are user-authored Chinese; models emit both).
+fn strip_repeated_own_prefix(text: &str, speaker: &str) -> Option<String> {
+    let ascii = format!("@{}:", speaker);
+    let fullwidth = format!("@{}：", speaker);
+    let mut rest = text;
+    let mut stripped_any = false;
+    loop {
+        let next = if let Some(r) = rest.strip_prefix(&ascii) {
+            r
+        } else if let Some(r) = rest.strip_prefix(&fullwidth) {
+            r
+        } else {
+            break;
+        };
+        rest = next.trim_start_matches([' ', '\t']);
+        stripped_any = true;
+    }
+    if stripped_any {
+        Some(rest.to_string())
+    } else {
+        None
+    }
+}
+
+/// After prefix stripping, trim leading spaces/tabs/newlines so the
+/// persisted text starts at the actual content. Bounded to leading
+/// whitespace only — trailing content is preserved verbatim.
+fn trim_prefix_whitespace(s: &str) -> &str {
+    s.trim_start_matches([' ', '\t', '\n', '\r'])
 }
 
 /// Whether the message carries a `tool_result` for any of the given

@@ -352,6 +352,18 @@ impl ChatEventSink for HttpSseSink {
         self.registry
             .broadcast("task:state:transition:request", payload);
     }
+    /// GC3 (2026-09-05, BUGLIST-group-chat): the registry is a single
+    /// global stream (every subscriber receives every session's
+    /// events), so "any subscriber" == "someone could answer this
+    /// session's permission ask". Zero subscribers (headless curl /
+    /// scripted daemon run) → `ask_path` shortens its timeout to the
+    /// unattended fast-deny instead of burning the full 120s per ask.
+    /// A subscriber connecting DURING the grace window still wins via
+    /// the replay buffer + `permission_response` route (the oneshot
+    /// arm settles before the shortened deadline).
+    fn has_live_observer(&self) -> bool {
+        self.registry.subscriber_count() > 0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -643,5 +655,47 @@ mod tests {
         reg.shutdown();
         reg.shutdown(); // 不 panic。
         assert_eq!(reg.subscriber_count(), 0);
+    }
+
+    /// GC3 (2026-09-05, BUGLIST-group-chat): `HttpSseSink::has_live_observer`
+    /// tracks the registry's subscriber count — zero subscribers (the
+    /// headless daemon face) shortens `ask_path`'s timeout to the
+    /// unattended fast-deny; one subscriber (remote PWA / GUI over HTTP)
+    /// restores the normal 120s window. A dropped subscriber's sender is
+    /// evicted LAZILY by the next broadcast's retain — mirroring how a
+    /// dead SSE connection stops counting only after a failed fan-out.
+    #[tokio::test]
+    async fn http_sse_sink_has_live_observer_tracks_subscribers() {
+        #[derive(serde::Serialize)]
+        struct P {
+            request_id: String,
+        }
+        let reg = Arc::new(SseRegistry::new());
+        let sink = HttpSseSink {
+            registry: reg.clone(),
+        };
+        use crate::state::ChatEventSink;
+        assert!(
+            !sink.has_live_observer(),
+            "zero SSE subscribers → no live observer (unattended fast-deny)"
+        );
+        let _sub = reg.subscribe(None);
+        assert!(
+            sink.has_live_observer(),
+            "one live SSE subscriber → observer present (normal 120s window)"
+        );
+        drop(_sub);
+        // Lazy eviction: the stale sender survives until a broadcast's
+        // try_send fails, then retain drops it.
+        reg.broadcast(
+            "chat-event",
+            &P {
+                request_id: "r".to_string(),
+            },
+        );
+        assert!(
+            !sink.has_live_observer(),
+            "subscriber dropped + one broadcast → back to unattended"
+        );
     }
 }

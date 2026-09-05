@@ -531,6 +531,11 @@ export function groupChatNotice(stopReason: string | undefined): string | null {
       return "主持人点名的发言者不在列表中，跳过该轮。";
     case "participant_unresolved":
       return "某参与者的模型不可用，跳过该轮。";
+    // GC5 (2026-09-05, BUGLIST-group-chat): the orchestrator's
+    // consecutive-error circuit breaker tripped — terminal, same
+    // class as max_rounds (the discussion has stopped).
+    case "error":
+      return "连续多轮生成出错，讨论已自动终止。";
     default:
       return null;
   }

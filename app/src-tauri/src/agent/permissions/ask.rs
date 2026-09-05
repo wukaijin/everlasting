@@ -19,6 +19,20 @@ use super::types::{risk_for_tool, Decision, PermissionContext, PermissionRespons
 /// `### IPC 异常路径` "用户从不响应" → 120s auto-deny.
 pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// GC3 (2026-09-05, BUGLIST-group-chat): shortened ask window when
+/// the sink reports NO live observer (`ChatEventSink::has_live_observer`
+/// — daemon: zero SSE subscribers; headless daemon run). The
+/// observed cost of ignoring attendance: a hallucinated out-of-cwd
+/// read in an unattended group chat waited the full 120s × 2 = 4 min
+/// (21% of a 19-min discussion) for a modal nobody could see.
+///
+/// Grace window, not instant-deny: an observer connecting during the
+/// window still wins (the ask is in the SSE replay buffer; a
+/// `permission_response` settles the oneshot before this deadline).
+/// 8s sits in the BUGLIST's 5-10s band. `ask_no_timeout` (explicit
+/// user "wait forever") takes precedence and disables this path.
+pub(crate) const UNATTENDED_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 // ---------------------------------------------------------------------------
 // Global "永不超时" switch (2026-09-03, task 09-03-ask-no-timeout)
 // ---------------------------------------------------------------------------
@@ -92,6 +106,42 @@ fn ask_timeout() -> std::time::Duration {
     // value type is `Duration`, handed back owned). Absent (production
     // tasks + most tests never scope it) → production const.
     ASK_TIMEOUT_OVERRIDE.try_get().unwrap_or(ASK_TIMEOUT)
+}
+
+/// GC3 (2026-09-05): the per-ask timeout decision. Returns
+/// `(unattended, duration)`:
+/// - observer present → `(false, ask_timeout())` (production 120s;
+///   test task-local override as before);
+/// - NO observer → `(true, min(UNATTENDED_ASK_TIMEOUT, ask_timeout()))`
+///   — `min` keeps a test's shortened override authoritative (a test
+///   scoping 50ms stays 50ms unattended) and never lengthens a
+///   config-smaller base.
+/// The `no_timeout` switch is checked by the CALLER (it disables the
+/// timeout arm entirely — an explicit user "wait forever" outranks
+/// attendance detection).
+fn ask_timeout_for_attendance(sink: &Arc<dyn ChatEventSink>) -> (bool, std::time::Duration) {
+    let base = ask_timeout();
+    if sink.has_live_observer() {
+        (false, base)
+    } else {
+        (true, UNATTENDED_ASK_TIMEOUT.min(base))
+    }
+}
+
+/// Deny reason for the timeout arms. Same `permission timed out
+/// after {n}s` prefix for BOTH the normal and unattended paths — the
+/// worker branch discriminates its synthetic Deny sources by that
+/// prefix (`starts_with`), so the wording must stay a prefix, not a
+/// free-form message.
+fn ask_timeout_deny_reason(unattended: bool) -> String {
+    if unattended {
+        format!(
+            "permission timed out after {}s (no live observer — unattended fast-deny), treat as denied",
+            UNATTENDED_ASK_TIMEOUT.as_secs()
+        )
+    } else {
+        "permission timed out after 120s, treat as denied".to_string()
+    }
 }
 
 /// Run `future` with a short ask-timeout scoped on the current task.
@@ -219,6 +269,12 @@ pub(super) async fn ask_path(
     // timeout arm below becomes `pending()` (never fires) and only
     // the cancel / oneshot arms can settle the ask.
     let no_timeout = ask_no_timeout_enabled(db).await;
+    // GC3 (2026-09-05, BUGLIST-group-chat): resolve the attendance
+    // window once, before the select — zero live observers on the
+    // sink's stream shortens the timeout arm (headless daemon runs
+    // shouldn't wait 120s per ask nobody can answer). `no_timeout`
+    // above wins: when set, the timeout arm never fires at all.
+    let (unattended, timeout_dur) = ask_timeout_for_attendance(sink);
     if ctx.is_worker {
         let worker_run_id = ctx.worker_run_id.clone().unwrap_or_else(|| {
             // Defensive: is_worker=true MUST carry worker_run_id.
@@ -292,11 +348,12 @@ pub(super) async fn ask_path(
         // pending asks.)
         let rx = register_ask(store, &permission_session_id, rid.clone()).await;
 
-        // Three-arm select: parent-derived cancel token / 120s timeout
-        // / oneshot response. `biased` ensures the cancel arm is
-        // checked first (in case the user hits Stop right at the 120s
-        // boundary — without bias, the timeout arm might fire even
-        // though cancel was ready).
+        // Three-arm select: parent-derived cancel token / timeout
+        // (120s attended · 8s unattended, GC3) / oneshot response.
+        // `biased` ensures the cancel arm is checked first (in case
+        // the user hits Stop right at the timeout boundary — without
+        // bias, the timeout arm might fire even though cancel was
+        // ready).
         //
         // 2026-09-03 (no-timeout switch): when `no_timeout` the timeout
         // arm is `std::future::pending()` — it never fires, so the ask
@@ -311,7 +368,7 @@ pub(super) async fn ask_path(
             if no_timeout {
                 std::future::pending::<()>().await
             } else {
-                tokio::time::sleep(ask_timeout()).await
+                tokio::time::sleep(timeout_dur).await
             }
         });
         let resp: Result<PermissionResponse, WorkerAskTerminal> = tokio::select! {
@@ -347,10 +404,11 @@ pub(super) async fn ask_path(
                 })
             }
             _ = timeout_arm.as_mut() => {
-                // 120s (production default) without user response →
-                // Deny. The duration is resolved via [`ask_timeout`] so
-                // tests can shorten it via [`set_ask_timeout_for_test`].
-                // Drop the pending oneshot to free the map entry.
+                // Timeout without user response → Deny. Duration is
+                // [`ask_timeout`] (production 120s; tests may override)
+                // when an observer is attached, or the GC3 unattended
+                // fast-deny window when none is. Drop the pending
+                // oneshot to free the map entry.
                 // No audit (RULE-A-016 lineage — see cancel arm).
                 let mut map = store.lock().await;
                 map.remove(&rid);
@@ -359,7 +417,9 @@ pub(super) async fn ask_path(
                     session_id = %ctx.session_id,
                     worker_run_id = %worker_run_id,
                     tool = %tool_name,
-                    "permission::check: worker ask timed out after 120s"
+                    unattended,
+                    timeout_secs = timeout_dur.as_secs(),
+                    "permission::check: worker ask timed out"
                 );
                 // RULE-WorkerAsk-001: record the timeout outcome on
                 // the worker's transcript so the drawer can surface
@@ -373,7 +433,7 @@ pub(super) async fn ask_path(
                 // its tool_result(is_error) content). The downstream
                 // match inspects the `reason` to discriminate.
                 Ok(PermissionResponse::Deny {
-                    reason: "permission timed out after 120s, treat as denied".to_string(),
+                    reason: ask_timeout_deny_reason(unattended),
                 })
             }
             resp = rx => resp.map_err(|_| WorkerAskTerminal::OneshotDropped),
@@ -448,8 +508,15 @@ pub(super) async fn ask_path(
                 // "timeout") inside the select body — we skip re-
                 // recording here. Only the user-initiated Deny path
                 // records its outcome ("deny") at this layer.
+                // GC3 (2026-09-05): the timeout discrimination is a
+                // `starts_with` PREFIX match, not an equality — the
+                // timeout reason now has two spellings (120s attended
+                // / 8s unattended fast-deny, both via
+                // `ask_timeout_deny_reason`), and the prefix is the
+                // stable contract between the select arm and this
+                // discriminator.
                 if reason == "cancelled by parent session stop"
-                    || reason == "permission timed out after 120s, treat as denied"
+                    || reason.starts_with("permission timed out after")
                 {
                     // Outcome already recorded in the select arm.
                     Decision::Deny {
@@ -532,11 +599,13 @@ pub(super) async fn ask_path(
         // 2026-09-03 (no-timeout switch): same pending()-based timeout
         // arm as the worker branch above — when `no_timeout` the ask
         // hangs until the user responds or the token is cancelled.
+        // GC3 (2026-09-05): `timeout_dur` carries the attendance
+        // decision (120s attended / 8s unattended fast-deny).
         let mut timeout_arm = Box::pin(async move {
             if no_timeout {
                 std::future::pending::<()>().await
             } else {
-                tokio::time::sleep(ask_timeout()).await
+                tokio::time::sleep(timeout_dur).await
             }
         });
         let resp = tokio::select! {
@@ -557,23 +626,28 @@ pub(super) async fn ask_path(
                 };
             }
             _ = timeout_arm.as_mut() => {
-                // Resolved via [`ask_timeout`] (production 120s; tests
-                // may override via [`set_ask_timeout_for_test`]). The
-                // reason string below keeps the spec'd "120s" wording
-                // since it is the product contract, not the measured
-                // value — and the worker path string-compares against
-                // it (line ~402) to discriminate timeout from user-deny.
+                // Timed out without a response — [`ask_timeout`]
+                // (production 120s) when an observer is attached, or
+                // the GC3 unattended fast-deny window (8s, no live
+                // SSE subscriber) when none is. Tests may override the
+                // base via [`with_ask_timeout_for_test`] (the `min` in
+                // `ask_timeout_for_attendance` keeps the override
+                // authoritative). The reason string keeps the stable
+                // `permission timed out after …` prefix (worker-branch
+                // discriminator contract).
                 let mut map = store.lock().await;
                 map.remove(&rid);
                 drop(map);
                 tracing::warn!(
                     session_id = %ctx.session_id,
                     tool = %tool_name,
-                    "permission::check: Tier 4 timed out after 120s"
+                    unattended,
+                    timeout_secs = timeout_dur.as_secs(),
+                    "permission::check: Tier 4 ask timed out"
                 );
                 let _ = record_audit( db, ctx, AuditKind::PermissionTimeout, tool_name, tool_input, None).await;
                 return Decision::Deny {
-                    reason: "permission timed out after 120s, treat as denied".to_string(),
+                    reason: ask_timeout_deny_reason(unattended),
                     critical: false,
                 };
             }

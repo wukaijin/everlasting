@@ -42,6 +42,10 @@ pub fn definition() -> ToolDef {
 /// Async execution used by the chat_loop interception handler. Sets
 /// the `discussion_ended` flag + returns the summary (or a default)
 /// as the `tool_result` content.
+///
+/// GC7 (2026-09-05, BUGLIST-group-chat): the summary is ALSO captured
+/// into `end_summary` so the orchestrator persists it to the session
+/// row's first-class `discussion_summary` column at loop exit.
 pub async fn execute_intercept(
     state: &SharedTurnState,
     input: &serde_json::Value,
@@ -52,6 +56,7 @@ pub async fn execute_intercept(
         .unwrap_or("Discussion ended.");
     let mut st = state.lock().await;
     st.discussion_ended = true;
+    st.end_summary = Some(summary.to_string());
     drop(st);
     (summary.to_string(), false)
 }

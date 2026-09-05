@@ -2199,6 +2199,69 @@ describe("rehydrateMessages — interleaved thinking contentBlocks passthrough",
     expect(msgs[1].notice).toContain("轮次上限");
   });
 
+  it("GC5 (2026-09-05): 终端 error(熔断)→ finalize + 挂 notice", () => {
+    // 编排器连续多轮生成错误熔断后发 Done{stop_reason:"error"}。前端
+    // 必须 (a) finalize(循环已退,不再有事件),(b) 挂 notice 说明讨论
+    // 因连续错误自动终止。与 max_rounds 同类终端语义。
+    const stream = useStreamControllerStore();
+    const sid = "gc5-error-breaker-sid";
+    const req = {
+      requestId: "rid-gc5-error",
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      groupChat: true,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(req.requestId, req);
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "聊聊"), asst(1, "", [])]),
+      false,
+    );
+
+    const handleChatEvent = (
+      stream as unknown as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          text?: string;
+          stop_reason?: string;
+          speaker?: string;
+        }) => void;
+      }
+    ).handleChatEvent;
+    const activeReq = () =>
+      (stream as unknown as { activeRequests: Map<string, typeof req> })
+        .activeRequests;
+
+    handleChatEvent({ request_id: "rid-gc5-error", kind: "speaker", speaker: "M1" });
+    handleChatEvent({ request_id: "rid-gc5-error", kind: "start" });
+    handleChatEvent({ request_id: "rid-gc5-error", kind: "delta", text: "M1:(出错)" });
+    handleChatEvent({
+      request_id: "rid-gc5-error",
+      kind: "done",
+      stop_reason: "error",
+    });
+
+    // 终端 stop_reason=error → finalize。
+    expect(activeReq().has("rid-gc5-error")).toBe(false);
+    const msgs = stream.getMessages(sid)!;
+    expect(msgs[1].notice).toBeTruthy();
+    expect(msgs[1].notice).toContain("生成出错");
+  });
+
   it("08-07 R2: 非终端 nominee_unknown → 不 finalize + 挂 notice", () => {
     // 编排器在"提名的名字不在花名册"时发 Done{stop_reason:
     // "nominee_unknown"} 但讨论继续(主持人下一轮重试)。前端必须
@@ -2279,6 +2342,9 @@ describe("groupChatNotice (08-07 R2)", () => {
     expect(groupChatNotice("max_rounds")).toContain("轮次上限");
     expect(groupChatNotice("nominee_unknown")).toContain("不在列表中");
     expect(groupChatNotice("participant_unresolved")).toContain("参与者");
+    // GC5 (2026-09-05, BUGLIST-group-chat GC5): 熔断终端因 — 与 max_rounds
+    // 同类(讨论已停),必须挂提示。
+    expect(groupChatNotice("error")).toContain("生成出错");
   });
 
   it("returns null for non-boundary stop_reasons (no notice)", () => {

@@ -469,6 +469,27 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // pattern — existing rows survive the upgrade with no backfill.
     add_session_column_if_missing(pool, "session_type", "TEXT NOT NULL DEFAULT 'chat'").await?;
 
+    // --- Group-chat discussion lifecycle (2026-09-05,
+    // BUGLIST-group-chat GC2/GC7): two additive nullable columns.
+    //
+    // `stop_reason` — WHY the last group-chat orchestration stopped
+    // (`group_chat_end` / `max_rounds` / `cancelled` / `error`),
+    // written by `run_group_chat_loop` at its exit and cleared at its
+    // start (a reused session starts a fresh discussion). NULL on
+    // classic-chat sessions and on group-chat sessions whose
+    // orchestration never ran post-upgrade. Together with the runtime
+    // `busy` signal (GC1 fix: busy now orchestration-grained) a poller
+    // can derive the full lifecycle: busy → running; !busy +
+    // stop_reason → ended(why); !busy + NULL → never ran.
+    //
+    // `discussion_summary` — the moderator's `end_discussion({summary})`
+    // closing remark as a first-class field (GC7): API consumers read
+    // it from `load_session` / the session row instead of parsing the
+    // end_discussion tool_result content blocks. NULL unless the
+    // discussion ended via end_discussion with a summary.
+    add_session_column_if_missing(pool, "stop_reason", "TEXT").await?;
+    add_session_column_if_missing(pool, "discussion_summary", "TEXT").await?;
+
     sqlx::query(
         r#"
  CREATE TABLE IF NOT EXISTS session_tool_permissions (

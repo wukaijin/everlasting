@@ -1044,4 +1044,247 @@ mod tests {
         use_ids.iter().all(|id| result_ids.contains(id))
             && result_ids.iter().all(|id| use_ids.contains(id))
     }
+
+    // -------------------------------------------------------------------
+    // GC4 (2026-09-05, BUGLIST-group-chat): own-prefix stripping at the
+    // persist site — the snowball root cause was the model seeing its
+    // own prefixed history back and imitating one more layer each round.
+    // -------------------------------------------------------------------
+
+    fn text_block(s: impl Into<String>) -> ContentBlock {
+        ContentBlock::Text {
+            text: s.into(),
+            cache_control: None,
+        }
+    }
+
+    fn blocks_text(blocks: &[ContentBlock]) -> Vec<String> {
+        blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn strip_own_prefix_strips_single_and_accumulated_layers() {
+        // seq32 单层。
+        let mut b = vec![text_block("@moderator: 大家好")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(blocks_text(&b), vec!["大家好".to_string()]);
+
+        // seq48/57/68 四层累积(含层间空白)—— 一律剥到净文本。
+        let mut b = vec![text_block(
+            "@moderator: @moderator: @moderator: @moderator: 结论",
+        )];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(blocks_text(&b), vec!["结论".to_string()]);
+
+        // 中文参与者名 + ASCII 冒号(seq38 形态)。
+        let mut b = vec![text_block("@陈曦-前端: 我的看法")];
+        strip_own_prefix_blocks(&mut b, "陈曦-前端");
+        assert_eq!(blocks_text(&b), vec!["我的看法".to_string()]);
+
+        // 全角冒号容忍。
+        let mut b = vec![text_block("@陈曦-前端：我的看法")];
+        strip_own_prefix_blocks(&mut b, "陈曦-前端");
+        assert_eq!(blocks_text(&b), vec!["我的看法".to_string()]);
+
+        // 前缀后换行再接正文。
+        let mut b = vec![text_block("@moderator:\n开场白")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(blocks_text(&b), vec!["开场白".to_string()]);
+    }
+
+    #[test]
+    fn strip_own_prefix_prefix_only_row_collapses_to_empty() {
+        // seq9 `@moderator:` / seq38 `@陈曦-前端:` —— 仅前缀的空消息
+        // 剥离后块列表为空,调用点(drive.rs)的空 turn 分支据此不落库。
+        let mut b = vec![text_block("@moderator:")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert!(b.is_empty(), "prefix-only row must collapse to no blocks");
+
+        // 多个仅前缀块连排同样清空。
+        let mut b = vec![text_block("@moderator:"), text_block("@moderator: ")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn strip_own_prefix_leaves_other_speaker_mentions_and_structure_alone() {
+        // 他人 @ 称呼在正文里:不剥(修复只针对自指前缀)。
+        let mut b = vec![text_block("@M2: 你说得对,但我补充一点")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(
+            blocks_text(&b),
+            vec!["@M2: 你说得对,但我补充一点".to_string()]
+        );
+
+        // 无前缀的干净文本:逐字节不变。
+        let mut b = vec![text_block("干净发言")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(blocks_text(&b), vec!["干净发言".to_string()]);
+
+        // 前缀块 + ToolUse 块:剥文本前缀,tool 块原样保留。
+        let tool = ContentBlock::ToolUse {
+            id: "t1".to_string(),
+            name: "grep".to_string(),
+            input: serde_json::json!({}),
+        };
+        let mut b = vec![text_block("@moderator: 查一下"), tool];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(blocks_text(&b), vec!["查一下".to_string()]);
+        assert!(matches!(&b[1], ContentBlock::ToolUse { id, .. } if id == "t1"));
+
+        // 首块非文本(thinking 在前):整个扫描不启动,后置文本块
+        // 里的 @ 前缀(流序上不可能,防御性)不动。
+        let mut b = vec![
+            ContentBlock::RedactedThinking {
+                data: "xx".to_string(),
+            },
+            text_block("@moderator: 不该被剥(非 leading)"),
+        ];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(
+            blocks_text(&b),
+            vec!["@moderator: 不该被剥(非 leading)".to_string()]
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // GC5 (2026-09-05, BUGLIST-group-chat): error-marker view rewrite +
+    // latest-turn error detection for the orchestrator's breaker.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn role_history_rewrites_other_speaker_error_marker_to_system_note() {
+        let full = vec![
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("topic".to_string()),
+                speaker: None,
+                attachments: None,
+            },
+            // M1 的错误轮:部分文本 + ERROR_MARKER(独立 Text 块 join 后
+            // 成 `partial\n\n[生成出错中断]`)。
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    text_block("我的部分观点"),
+                    text_block(format!("\n\n{}", crate::agent::helpers::ERROR_MARKER)),
+                ]),
+                speaker: Some("M1".to_string()),
+                attachments: None,
+            },
+            // M1 仅 marker 的空错误轮。
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![text_block(
+                    crate::agent::helpers::ERROR_MARKER,
+                )]),
+                speaker: Some("M1".to_string()),
+                attachments: None,
+            },
+        ];
+
+        let view = role_history(&full, "M2");
+        let texts: Vec<String> = view
+            .iter()
+            .map(|m| m.content.to_text())
+            .filter(|t| !t.is_empty())
+            .collect();
+        // M2 绝不能看到裸 marker;两条错误行都改写为系统注记。
+        assert!(
+            texts
+                .iter()
+                .all(|t| !t.contains(crate::agent::helpers::ERROR_MARKER)),
+            "other speakers must never see the raw ERROR_MARKER: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("系统注记") && t.contains("我的部分观点")),
+            "partial error text survives + gains a note: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("无内容")),
+            "marker-only row collapses to the no-content note: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn role_history_keeps_own_error_marker_verbatim() {
+        // invariant 1:own rows verbatim(Anthropic 签名往返)—— 即使带
+        // ERROR_MARKER 也不改写(修复只作用于「他人行」)。
+        let own = ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![
+                text_block("我的部分观点"),
+                text_block(format!("\n\n{}", crate::agent::helpers::ERROR_MARKER)),
+            ]),
+            speaker: Some("M1".to_string()),
+            attachments: None,
+        };
+        let view = role_history(&[own.clone()], "M1");
+        assert_eq!(view.len(), 1);
+        assert!(
+            view[0]
+                .content
+                .to_text()
+                .contains(crate::agent::helpers::ERROR_MARKER),
+            "own error row must round-trip verbatim"
+        );
+    }
+
+    #[test]
+    fn speaker_last_turn_errored_keys_on_latest_assistant_row() {
+        let err_row = |text: String| ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text(text),
+            speaker: Some("M1".to_string()),
+            attachments: None,
+        };
+        // M1:clean 旧轮 → 错误最新轮 → 检出(取最新,不被旧行遮蔽)。
+        let full = vec![
+            err_row("旧观点".to_string()),
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Text(format!(
+                    "新观点\n\n{}",
+                    crate::agent::helpers::ERROR_MARKER
+                )),
+                speaker: Some("M1".to_string()),
+                attachments: None,
+            },
+        ];
+        assert!(speaker_last_turn_errored(&full, "M1"));
+
+        // M1 全 clean → 不检出。
+        let full = vec![err_row("观点".to_string())];
+        assert!(!speaker_last_turn_errored(&full, "M1"));
+
+        // M1 无行(从未发言)→ 不检出。
+        assert!(!speaker_last_turn_errored(&[], "M1"));
+
+        // 最新轮 clean、更早轮带 marker → 不检出(只看最新)。
+        let full = vec![
+            err_row(format!("旧错误\n\n{}", crate::agent::helpers::ERROR_MARKER)),
+            err_row("恢复后的正常发言".to_string()),
+        ];
+        assert!(
+            !speaker_last_turn_errored(&full, "M1"),
+            "a recovered (clean) latest turn must reset the streak signal"
+        );
+
+        // 他人(M2)的错误行不影响 M1 的判定。
+        let full = vec![ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text(crate::agent::helpers::ERROR_MARKER.to_string()),
+            speaker: Some("M2".to_string()),
+            attachments: None,
+        }];
+        assert!(!speaker_last_turn_errored(&full, "M1"));
+    }
 }

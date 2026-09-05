@@ -32,6 +32,14 @@ pub struct GroupChatTurnState {
     /// `true` once the moderator calls `end_discussion`. The
     /// orchestrator stops the turn-taking loop.
     pub discussion_ended: bool,
+    /// GC7 (2026-09-05, BUGLIST-group-chat): the summary string the
+    /// moderator passed to `end_discussion({summary})` (or the tool's
+    /// default remark). Captured by `end_discussion::execute_intercept`
+    /// so the orchestrator can persist it as the session row's
+    /// first-class `discussion_summary` column at loop exit — API
+    /// consumers then get the consensus list via `load_session`
+    /// without parsing the end_discussion tool_result content blocks.
+    pub end_summary: Option<String>,
 }
 
 pub type SharedTurnState = std::sync::Arc<tokio::sync::Mutex<GroupChatTurnState>>;

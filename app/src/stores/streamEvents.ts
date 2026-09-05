@@ -153,7 +153,8 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         (!req.groupChat ||
           event.stop_reason === "group_chat_end" ||
           event.stop_reason === "cancelled" ||
-          event.stop_reason === "max_rounds"));
+          event.stop_reason === "max_rounds" ||
+          event.stop_reason === "error"));
 
     // F6 异步 agent 任务(2026-08-27):终结事件 → 跨 session 完成/
     // 失败 toast。挂在 msgs 守卫**之前**:后台任务的核心场景就是用户
@@ -601,7 +602,9 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         // request alive and only finalize on the terminal signals —
         // `group_chat_end` (the orchestrator ended the discussion),
         // `max_rounds` (the outer loop hit its bound — added 08-07 R2,
-        // the loop has exited so no further events will arrive), or
+        // the loop has exited so no further events will arrive),
+        // `error` (GC5 2026-09-05: the orchestrator's consecutive-error
+        // circuit breaker tripped — the loop has exited), or
         // `cancelled` (human preemption). The non-terminal
         // `nominee_unknown` / `participant_unresolved` reasons do NOT
         // finalize — the orchestrator keeps going and the post-loop
@@ -614,7 +617,8 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           !req.groupChat ||
           event.stop_reason === "group_chat_end" ||
           event.stop_reason === "cancelled" ||
-          event.stop_reason === "max_rounds";
+          event.stop_reason === "max_rounds" ||
+          event.stop_reason === "error";
         if (isTerminal) {
           finalizeRequest(req.requestId, req.sessionId, false);
         }

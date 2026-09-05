@@ -895,6 +895,26 @@ pub trait ChatEventSink: Send + Sync + 'static {
     fn record_worker_messages(&self, _messages: &[crate::llm::types::ChatMessage]) {
         // Silent no-op — see the doc comment above.
     }
+
+    /// GC3 (2026-09-05, BUGLIST-group-chat): whether any live
+    /// observer is attached to this sink's event stream — i.e.
+    /// whether a human COULD answer a permission ask within the
+    /// normal window. Consulted once per `ask_path` call to pick the
+    /// ask timeout: no observer → the short unattended fast-deny (a
+    /// headless daemon run waiting the full 120s per hallucinated
+    /// out-of-cwd path is pure waste; observed cost: 4 min of a
+    /// 19-min discussion), observer present → the normal 120s window.
+    ///
+    /// Default `true` is the CONSERVATIVE answer ("assume someone is
+    /// watching") — `AppHandleSink` (Tauri GUI, the window is the
+    /// observer) and every test sink inherit it unchanged. The only
+    /// production override is the daemon's `HttpSseSink`, whose
+    /// global SSE registry knows the real subscriber count. The
+    /// `ask_no_timeout` user switch takes precedence over BOTH paths
+    /// (an explicit "wait forever" wins over attendance detection).
+    fn has_live_observer(&self) -> bool {
+        true
+    }
 }
 
 /// Production `AppHandle` adapter. The Tauri trait `Emitter` is in
