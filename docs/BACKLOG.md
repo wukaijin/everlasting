@@ -195,6 +195,7 @@
 
 > 来源:headless 群聊实跑(session `082add5c-a98a-431a-936b-a764eea54ce5`,moderator MiniMax-M3,产品/前端/后端/测试/新用户/安全六视角混编 3 模型,全程读仓库求证)。参与者各自核码后的优先级建议是**参考**,排期归 [ROADMAP §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)。流程缺陷(非功能候选)另见 [BUGLIST-group-chat.md](./BUGLIST-group-chat.md)(GC-x 编号);本附录 N-x 为候选临时编号,立项进 ROADMAP 时换正式编号。
 > 收录规则:只收「现有 docs 无对应条目」的候选;群聊重申既有条目的(A5/A6、A4+、跨设备清单、移除项确认)不重复收录。
+> **2026-09-06 增补**:第二场 live 群聊(session `eb14d2df`,议题即三处求证衍生修复)的共识——止损包(C1.1 ask-free / C1.2 token 预算)、证据链(C2 结构化 summary)、回归闸(C3)、「假注释毒数据」RULE——属群聊**内部改进线**,依赖矩阵与推进记账见 [GROUP-CHAT-API-ROADMAP.md §6](./GROUP-CHAT-API-ROADMAP.md),不在本附录重复立行。
 
 ### B.1 新增候选(grep 全 docs 无既有对应)
 

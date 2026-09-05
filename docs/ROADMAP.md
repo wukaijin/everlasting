@@ -163,6 +163,7 @@
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
+| GCE | 群聊外部调用 / 审议原语(headless 驱动 → MCP → 控制面 → 运营治理)| 2026-09-06 立项,目标与验收已定、**技术方案待定**(逐里程碑列开放问题)。地基(lifecycle 三态机 / summary 一等字段 / 无人值守安全)已于 09-05/06 经两场 live 实跑验证。专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
 | A4+ | 成本聚合视图(token → $) | **可做可不做**(2026-08-30 用户裁定,由第三档移入)。A4 per-session token 累计已有;若做:补跨 session / provider / day 汇总换算 + 每模型 $/M 价格表(provider 层现无 pricing 字段,原"纯前端聚合"估计偏乐观) |
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |

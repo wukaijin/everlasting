@@ -18,6 +18,7 @@
 | [CONTEXT.md](./CONTEXT.md) | 术语表 | 项目 glossary(Token 用量 / Checklist / Subagent / AuditKind / daemon 化进程模型 等) | 写/改跨模块共享概念前对齐术语时 |
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + 决策日志(ADR 性质,只追加,按月分卷,见 [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)) | 想看"为什么这么做"的历史 ADR |
 | [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) | daemon 化编排 | remote-access epic(transport 抽象 / axum daemon / sidecar / httpTransport / ServeDir)的 Phase 编排 + 状态 | 看 daemon 化怎么分阶段落地 / 当前到哪个 Phase |
+| [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) | 群聊外部调用 | 审议原语(驱动脚本 / MCP / 控制面 / 运营治理)M0-M4 里程碑 + 待定决策清单 | 看群聊 headless 调用怎么分层推进、哪些技术方案还没定 |
 | [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) | remote 云服务器部署手册 | everlasting-remote 服务端部署(国内 2C2G 服务器 + nginx + remote.sh / deploy-remote.sh) | 部署 remote daemon / 排查部署问题时 |
 | [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) | 远程访问 E2E 部署与验收手册 | S1+S2+S4+S5 全链路(E2E 隧道管线 / 配对 / PWA)逐场景验收步骤 | 端到端验证远程访问 / 回滚排查时 |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
