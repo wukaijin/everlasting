@@ -188,3 +188,42 @@
 > 📦 **已归档**:本节内容(357 行,7 项远期候选技术评估)于 2026-06-25 归档到 [`docs/_history/backlog-appendix-A.md`](./_history/backlog-appendix-A.md)。**只读不改**。如远期候选进展,新评估直接在 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 中更新。
 >
 > 📌 **新候选(2026-08-24,08-24-btn-family-convergence 完工遗留)**:生成式 UI `ui-prim__btn` 家族(ButtonPrimitive/DiffPrimitive/CodeBlockPrimitive,LLM 渲染 per-action 变色语义)是否消费 `.btn` CSS 家族基类排版(仅吃 padding/字号/过渡,不吃变体色)。当时判定特例保留;若未来 ui-prim 按钮观感与主应用漂移成为问题,再评估。
+
+---
+
+## 附录 B: 群聊共识候选(2026-09-05)
+
+> 来源:headless 群聊实跑(session `082add5c-a98a-431a-936b-a764eea54ce5`,moderator MiniMax-M3,产品/前端/后端/测试/新用户/安全六视角混编 3 模型,全程读仓库求证)。参与者各自核码后的优先级建议是**参考**,排期归 [ROADMAP §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)。流程缺陷(非功能候选)另见 [BUGLIST-group-chat.md](./BUGLIST-group-chat.md)(GC-x 编号);本附录 N-x 为候选临时编号,立项进 ROADMAP 时换正式编号。
+> 收录规则:只收「现有 docs 无对应条目」的候选;群聊重申既有条目的(A5/A6、A4+、跨设备清单、移除项确认)不重复收录。
+
+### B.1 新增候选(grep 全 docs 无既有对应)
+
+| 编号 | 候选 | 群聊建议 | 主张视角 | 一句话依据(参与者的核码结论) |
+|------|------|---------|---------|-------------------------------|
+| N1 | 首次引导 3 步向导 + 报错分级提示 | **P0** | 产品+新用户 | 空状态仅一句「开始对话」,新手不知先配 provider;401/529 裸英文报错死胡同;形态:配 provider → 测试连接 → 开聊(per-row 测试按钮已存在可复用) |
+| N2 | checkpoint / revert 闭环 | P1 上半(**非** P0) | 产品(后端/前端/安全/测试四方修正) | 真痛点但成本被证伪:diff 展示层现成(`git/diff.rs` session 分支),缺 per-turn 文件基线(新写入路径)+ 多 session 原子化;落地路径 = turn 边界 auto-commit + revert=reset;约束:revert 仅 UI 触发、不进 agent 工具、走 dangerous 通道 + audit 归因;前置 = N4 |
+| N3 | 新项目冷启动 `/init` + 轻量 repo map | P1 | 产品 | 4 个指令文件手写、每 session 靠 grep 摸地形;B5 memory digest 只优化注入成本,不解决首印象 |
+| N4 | 长会话渲染虚拟化 | P1(rewind 前置) | 前端 | `MessageList.vue` 裸 v-for 全量 DOM,无 IntersectionObserver/content-visibility;路线(content-visibility vs 真虚拟化)等 N9 基准后定 |
+| N5 | sandbox fail-open 审计可区分 | P1 | 安全+测试 | 审计不区分 sandboxed / failed-open 执行,事后归因混淆 |
+| N6 | 沙盒测试 CI 静默 SKIP 门禁 | P1 | 测试 | `sandbox/tests_sandbox.rs` 4 处 `eprintln!("SKIP")` 后照常通过——无 Landlock/seccomp 主机(macOS runner)沙盒覆盖率=0;修法:`#[cfg(target_os="linux")]` 强制门禁或 Linux docker-runner |
+| N7 | DiffView 增强(行级高亮 / side-by-side / 按文件折叠) | P2 | 前端 | 变更信任闭环的审阅质量面;`DiffPrimitive` 已证明可被任意入口挂载 |
+| N8 | 混沌 / 故障注入冒烟(`chaos-smoke.sh`) | P2 | 测试 | SIGKILL daemon / SSE 中断 / DB 锁 / disk full;RULE-PERSIST-001 是被动恢复,无主动注入 |
+| N9 | 性能基准(cargo criterion + vitest bench) | P2(与 N4/N7 联动) | 测试 | agent loop 启动 P99 / SSE 首字节 / 10k message DB 查询均无基准 |
+| N10 | 本地性一键导出 / 清除(DB + outputs spill + 日志) | P2 | 安全 | 本地优先是卖点但缺出口;跨设备同步(BACKLOG §4)上线前备好 |
+| N11 | 可控灰度 / 回滚 + 崩溃收集(minidump / 符号化) | P2 | 测试 | `daemon.sh restart` 硬切、无版本门 / kill switch;崩溃现场全丢 |
+
+### B.2 既有条目的增量修正(不新增行,仅记注记)
+
+- **B10 飞书([ROADMAP §2 第四档](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排))**:群聊建议收窄首发形态为「任务完成通知」,不做完整 IM 对话——F2/F6 的完成通知目前仅 GUI 内 toast,而 PWA 使用场景恰恰人不在 PC 前。
+- **F6 余留增强(同上 ROADMAP F6 行「系统级通知 / unread 持久化 / 等待态心跳按需另立」)**:群聊确认系统级通知价值被 F2/F6 使用场景放大,优先级信号向上。
+
+### B.3 翻案候选(与既有用户决策冲突,需产品裁定后才可立项)
+
+- **远程隧道来源降级**(群聊安全+测试双视角 P0):tunnel 请求无 scope/来源标记,经 loopback 转发后与本机请求完全等价——手机丢失或 device_token 泄露 = 整台 PC 的 daemon 权限;建议 tunnel 请求加来源标记 + dispatcher 侧默认降级(远程禁写类工具 / 敏感命令拒绝),事前降级 > 事后吊销(吊销机制已有)。
+  ⚠️ **冲突**:[REMOTE-ACCESS-ROADMAP.md P3.3](./REMOTE-ACCESS-ROADMAP.md) 记录「远程读写不对称」已于 **2026-08-16 用户决策取消**——PWA 全权为最终形态,不做远程权限分层。群聊新论据(漏洞窗口不对称:checkpoint 失败最坏无损、隧道旁路静默外泄才暴露)是否构成翻案理由,由用户裁定;维持原决策则本条关闭。
+
+### B.4 待决决策点(非功能项)
+
+- **P0 资源排序**(若 N1 / B.3 / N2 立项撞期):群聊建议 首次引导 > 隧道降级 > checkpoint——留存漏斗 > 安全裸奔 > power feature。
+- **「session 不 auto-commit」旧决策**:N2 的前置 ADR(跨设备 §4 亦有「迁移时强制 commit」关联语义),翻案与否单独决策。
+- **虚拟化路线**:content-visibility vs 真虚拟化(vue-virtual-scroller / 自渲染),等 N9 基准数据后定。

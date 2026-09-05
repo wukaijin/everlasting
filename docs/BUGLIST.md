@@ -4,6 +4,7 @@
 > 原始报告(33 项记录 + 40 余张截图)在测试机 `C:\Users\kaijin\ZCodeProject\everlasting-webui-test\2026-08-29-webui-fulltest-report.md`(仓库外)。
 > **甄别方式**:每项对照源码逐条考证(定位到行级根因)+ 关键截图核验 + SQLite 只读抽查;区分「真缺陷 / 设计特性 / 测试方法局限 / 功能建议」。
 > **用法**:§2 是待修复清单,修复一项就把状态改 ✅ 并填提交引用;§3 已判定设计如此,除非产品主张变更不再重开;§4 待人工复核;§5 功能建议池。编号沿用原报告 CHx-y,可交叉查证。
+> **关联批次**:2026-09-05 群聊 headless 实跑批次(编号 GC-x,格式同本档)见 [BUGLIST-group-chat.md](./BUGLIST-group-chat.md)。
 
 ---
 
