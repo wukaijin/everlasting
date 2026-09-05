@@ -7,9 +7,13 @@ import { useErrorBus } from "./utils/useErrorBus";
 import { transport } from "./transport";
 import { tauriTransport } from "./transport/tauri";
 import { awaitDaemonHealthy, type DaemonHealth } from "./transport/health";
+import { useTheme } from "./composables/useTheme";
 
 const app = createApp(App);
 app.use(createPinia());
+// 主题在 mount 前落到 <html>(读 localStorage,默认 aggressive):
+// mount 后首帧就是目标主题,无闪面。幂等,Sidebar 里再调用无害。
+useTheme();
 // NOTE(router 时序):app.use(router) **不**放这——它会在 module load 时触发
 // initial navigation(async microtask),在 bootstrap 的 `await awaitDaemonHealthy()`
 // 期间 resolve,此时 __DAEMON_HEALTH__ 还没设 → isRemoteContext() 误判 false →

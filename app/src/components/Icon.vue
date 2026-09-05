@@ -54,6 +54,7 @@ import {
   Menu,
   MessagesSquare,
   Minus,
+  Palette,
   Plus,
   RefreshCw,
   Repeat,
@@ -134,6 +135,8 @@ const map = {
   "server": Server,
   "circle-stack": Database,
   "bolt": Zap,
+  // 界面主题切换(经典/激进,Sidebar footer 快速入口)。
+  "palette": Palette,
   "clock": Clock,
   // 08-29 定时任务日期控件(AppDatePicker)。
   "calendar": Calendar,

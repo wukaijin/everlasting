@@ -15,6 +15,9 @@
 }
 
 @import "tailwindcss";
+/* 激进主题实验(:root[data-theme="aggressive"] token 覆盖 + 组件补刀)。
+   @import 必须位于规则前,故紧跟 tailwindcss; classic 渲染不经过此层。 */
+@import "./theme-aggressive.css";
 
 /* ------------------------------------------------------------------------- *
  * Dark theme tokens (Prussian blue palette per spike-003 + research/...)    *

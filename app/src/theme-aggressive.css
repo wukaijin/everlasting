@@ -1,0 +1,120 @@
+/* ------------------------------------------------------------------------- *
+ * Aggressive theme — `:root[data-theme="aggressive"]` 整组 token 覆盖
+ * ------------------------------------------------------------------------- *
+ * 定位:实验性"更激进"的界面方向(dark-tech / terminal-brutalist),
+ * 与 classic(style.css @theme 默认值)一键互切,切换逻辑见
+ * composables/useTheme.ts。设计裁定:
+ *
+ *   1. 形状锁:全线锐角。radius 阶梯压到 2-4px,pill/circle 一并取消
+ *      (发送钮、圆形删除钮在下方组件段转方)。整个界面只剩会话在跑
+ *      状态的小圆点保留圆形(语义状态点,非形状系统成员)。
+ *   2. 单一 accent:volt 荧光柠绿(#a3e635 系)。近黑冷灰底 + 一发
+ *      高饱和荧光色,替代 classic 的 Prussian 蓝。fill 用 lime-400、
+ *      墨色用 lime-300(沿用"填充 500 / 文字 400"原则的暗底变体),
+ *      on-accent 前景翻成近黑(volt 上白字只有 ~1.6:1,黑字 ~12:1)。
+ *   3. 可见网格:border 整档抬亮,面板边界读作"画出来的线"而非
+ *      阴影里的裂缝;阴影只留给浮动层(modal/toast),深度加大。
+ *   4. 密度与字重:token 层不动字号/间距(布局零风险),激进感交给
+ *      锐角 + 网格 + accent + 下方组件段的大写 mono 元数据。
+ *
+ * 组件段(文件下半)用 `html[data-theme="aggressive"]` 前缀(0,3,1)
+ * 压过组件 scoped 规则的 `.x[data-v]`(0,2,0);只挑 classic 的
+ * 结构性写法在 aggressive 下读不对的场合,不做全面重排。
+ * ------------------------------------------------------------------------- */
+
+:root[data-theme="aggressive"] {
+    /* Background layers — 冷石墨近黑,阶梯步长拉大让"层级"更硬 */
+    --color-bg-app: #05070b;
+    --color-bg-surface: #0d1117;
+    --color-bg-elevated: #151b24;
+    --color-bg-border: #252e3b;
+    --color-bg-border-strong: #414d61;
+
+    /* Text — 全档抬亮一档,primary 逼近纯白(仍留余量) */
+    --color-text-primary: #e7ecf3;
+    --color-text-secondary: #aeb9cb;
+    --color-text-muted: #8e99ac;
+    /* volt 上的字必须翻黑:白 on #a3e635 仅 ~1.6:1 */
+    --color-text-on-accent: #10140a;
+
+    /* Accent — volt 荧光柠绿(lime-400 填充 / lime-300 墨色) */
+    --color-accent: #a3e635;
+    --color-accent-hover: #bdf25a;
+    --color-accent-muted: #2c3a12;
+    --color-accent-text: #bef264;
+
+    /* Tool colors — 底变暗后统一上探一档(400 档),荧光家族感 */
+    --color-tool-read: #22d3ee;
+    --color-tool-write: #34d399;
+    --color-tool-shell: #fbbf24;
+    --color-tool-error: #ef4444;
+    --color-tool-error-text: #f87171;
+    --color-tool-thinking: #c4b5fd;
+
+    /* Radius — 锐角锁(pill 也压平:chip/进度条变方角矩形) */
+    --radius-sm: 2px;
+    --radius-md: 2px;
+    --radius-lg: 3px;
+    --radius-xl: 4px;
+    --radius-pill: 4px;
+
+    /* Shadows — 只服务浮动层,深度加大;ring 换 volt */
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.55);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+    --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.65);
+    --shadow-ring: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent);
+}
+
+/* volt 选区:拖黑选中的文字瞬间翻成荧光条 —— 主题的签名细节之一 */
+html[data-theme="aggressive"] ::selection {
+    background: var(--color-accent);
+    color: var(--color-text-on-accent);
+}
+
+/* 极淡扫描线:固定层、pointer-events none、无动画(reduced-motion
+ * 无涉)。2.5% 白每 3px 一条,大块暗面上多一层 CRT 材质感;嫌脏
+ * 删这一条即可,其余主题不受影响。z 用天花板(--z-top=9999)盖过
+ * 一切内容含 toast,保证材质均匀。 */
+html[data-theme="aggressive"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.025) 0 1px,
+        transparent 1px 3px
+    );
+}
+
+/* ------------------------------------------------------------------------- *
+ * 组件段:classic 的结构性写法在 aggressive 下需要补刀的场合
+ * ------------------------------------------------------------------------- */
+
+/* 圆形钮全转方角(锐角锁):发送/停止、回到底部、图片删除等
+   .btn--circle 家族成员。50% 是家族类里的硬写法,此处必须覆写。 */
+html[data-theme="aggressive"] .btn--circle {
+    border-radius: var(--radius-sm);
+}
+
+/* 工具名大写:read_file → READ_FILE。纯 ASCII 安全(mono 栈无 CJK
+   字形的问题只影响中文),终端命令的观感。 */
+html[data-theme="aggressive"] .tool-call-header__name {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* thinking 行头大写:THOUGHT FOR 0.1S。同上,mono + 全大写。 */
+html[data-theme="aggressive"] .thinking__summary {
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+
+/* 侧栏栏头字距拉宽(「会话 SESSIONS」):栏头是界面里少数的
+   "标签位",宽字距是 aggresive 排版的最低成本信号。 */
+html[data-theme="aggressive"] .sidebar__title {
+    letter-spacing: 0.12em;
+}

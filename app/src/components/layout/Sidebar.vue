@@ -33,12 +33,15 @@ import ProjectTabs from "../ProjectTabs.vue";
 import Icon from "../Icon.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
 import { useStreamControllerStore } from "../../stores/streamController";
+import { useTheme } from "../../composables/useTheme";
 
 const chat = useChatStore();
 const streamController = useStreamControllerStore();
 // S5 移动端抽屉:读 mobileNavOpen 绑 :class,选 session 自动 close。
 // 桌面下 mobileNavOpen 被 CSS 忽略(fixed 只在 @media max-width:767px 生效)。
 const { mobileNavOpen, close: closeMobileNav } = useMobileNav();
+// 界面主题(经典/激进):footer 快速切换钮的状态源。
+const { theme, toggleTheme } = useTheme();
 // S5: 选 session 后自动关抽屉(移动端)。currentSessionId 变化即 close。
 // 桌面下 mobileNavOpen 本就被 CSS 忽略,close 无副作用。
 watch(
@@ -183,6 +186,27 @@ function onSearchClear() {
       @search-clear="onSearchClear"
     />
     <div class="sidebar__footer">
+      <!-- 界面主题快速切换(经典/激进):实验期入口放 footer 常驻位,
+           与设置并排;状态/持久化在 useTheme。icon-only,文案进 title。 -->
+      <button
+        type="button"
+        class="sidebar__theme-toggle btn btn--ghost btn--icon"
+        :title="
+          theme === 'aggressive'
+            ? '界面风格:激进(点击切回经典)'
+            : '界面风格:经典(点击切换激进)'
+        "
+        :aria-label="
+          theme === 'aggressive'
+            ? '界面风格:激进(点击切回经典)'
+            : '界面风格:经典(点击切换激进)'
+        "
+        :aria-pressed="theme === 'aggressive'"
+        data-testid="sidebar-theme-toggle"
+        @click="toggleTheme"
+      >
+        <Icon name="palette" :size="16" />
+      </button>
       <button
         type="button"
         class="sidebar__settings btn btn--ghost btn--sm"
@@ -321,6 +345,15 @@ function onSearchClear() {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 6px;
+}
+
+/* 主题切换钮:与 header 的 22px icon 钮同几何(家族 ghost·icon 承载
+   本体,这里只钉固定尺寸)。 */
+.sidebar__theme-toggle {
+  width: 22px;
+  height: 22px;
+  padding: 0;
 }
 
 /* 08-24 btn-family:设置入口由 ghost·sm 家族承载。
