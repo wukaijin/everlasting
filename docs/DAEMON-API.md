@@ -94,7 +94,27 @@ headless(无 SSE 订阅者)时 `permission:ask` 的等待窗口从 120s 缩到 8
 `GET /api/v1/stream` 连接即可;拒绝原因文本中带 `no live observer` 标记的是快速拒,
 `permission_response` 端点照旧可用(8s 窗口内应答仍会生效)。
 
-## 6. 其他常用端点(路径约定)
+## 6. 群聊审议驱动入口(GCE-M1,2026-09-06 起)
+
+headless 消费群聊的**推荐姿势是驱动脚本,不手搓 curl**——生命周期语义(轮询 busy/stop_reason、
+中断 cancel、转录落盘、模型引用 UUID 解析)锁在一份实现里:
+
+```bash
+node scripts/group-chat-run.mjs projects | models | presets   # 建群三要素内省
+node scripts/group-chat-run.mjs run --project <path> --preset review --topic "..." [--dry-run]
+```
+
+实现要点(手搓 curl 前必读):
+
+- **模型引用是 UUID 不是名字**:`metadata.participants[].model` 与 `create_session.model` 进
+  `catalog.get()`(`state.rs` ProviderCatalog,key = `models.id`),参与者解析**无名字 fallback**
+  (名字进 metadata → `participant_unresolved` 跳轮,`group_chat_loop.rs` resolve_provider)。
+  脚本收 UUID/名字并统一解析。
+- `agent/chat` daemon 版是 fire-and-forget(handler 秒回,编排后台跑),终态只看 §4 的
+  busy/stop_reason 轮询;**不挂 SSE** = 保住 §5 的无人值守 8s 快拒。
+- LLM 调用方的指引路径:`.agents/skills/group-chat/`(何时召集/议题写法/结果解读)。
+
+## 7. 其他常用端点(路径约定)
 
 全部为 `POST /api/v1/<domain>/<command>`,body snake_case,与 Tauri command 同名同参:
 `sessions/*`(见 §3)、`permissions/*`(模式切换 / 审批回填 / trace 三条)、
