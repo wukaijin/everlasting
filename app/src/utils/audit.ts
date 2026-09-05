@@ -547,6 +547,12 @@ export function labelForKind(kind: string): string {
 // working.
 export { formatTimeOfDay } from "./time";
 
+// Audit-log day separators (2026-09-05): AuditLogModal groups rows
+// under 今天/昨天/M月D日 rails. Lives in ./time.ts beside the other
+// SQLite-UTC→local helpers; re-exported so the audit components keep
+// a single import site.
+export { formatDayLabel } from "./time";
+
 /** Format `duration_ms` as a short human string.
  *  - < 1000ms   → "123ms"
  *  - < 60_000ms → "1.2s"

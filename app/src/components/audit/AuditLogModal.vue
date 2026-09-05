@@ -64,7 +64,11 @@ import Icon from "../Icon.vue";
 import AuditLogItem from "./AuditLogItem.vue";
 import { useAuditStore } from "../../stores/audit";
 import { useChatStore } from "../../stores/chat";
-import { AUDIT_KIND_OPTIONS } from "../../utils/audit";
+import {
+  AUDIT_KIND_OPTIONS,
+  formatDayLabel,
+  type AuditEventRow,
+} from "../../utils/audit";
 
 const open = defineModel<boolean>("open", { required: true });
 
@@ -91,11 +95,13 @@ const boundSessionId = computed<string | null>(
   () => chatStore.currentSessionId,
 );
 
-/** Display title for the modal header. We snapshot the session
- *  title at the time of opening — the modal is short-lived, so
- *  a rename mid-open is acceptable to show stale (the user would
- *  close + reopen to refresh). Falls back to "当前会话" when no
- *  session is active. */
+/** Header layout (2026-09-05 redesign): the fixed label 「审计日志」
+ *  is the DialogTitle's primary text; the session title renders as a
+ *  secondary chip inside the same DialogTitle (screen readers read
+ *  both as one heading). Splitting the two kills the old
+ *  「审计日志 — 长会话标题…」 one-line cram that ellipsized long
+ *  session names. Falls back to "当前会话" when no session is
+ *  active. Snapshot-at-open semantics unchanged. */
 const sessionTitle = computed<string>(() => {
   const sid = boundSessionId.value;
   if (!sid) return "当前会话";
@@ -103,7 +109,28 @@ const sessionTitle = computed<string>(() => {
   return s?.title?.trim() || "新对话";
 });
 
-const modalTitle = computed<string>(() => `审计日志 — ${sessionTitle.value}`);
+/** Day-grouped view of `store.filteredEvents` for the separator
+ *  rails (2026-09-05 redesign — rows only carried HH:MM:SS, so a
+ *  session spanning days lost its date context). Rows arrive
+ *  newest-first (server ORDER BY ts DESC); each run of rows sharing
+ *  a LOCAL day (今天/昨天/M月D日, via formatDayLabel) collapses
+ *  under one sticky separator. Malformed ts labels fall back to the
+ *  raw "YYYY-MM-DD" prefix so the rail never disappears. */
+const groupedEvents = computed<
+  { key: string; label: string; rows: AuditEventRow[] }[]
+>(() => {
+  const groups: { key: string; label: string; rows: AuditEventRow[] }[] = [];
+  for (const row of store.filteredEvents) {
+    const label = formatDayLabel(row.ts) || row.ts.slice(0, 10);
+    const last = groups[groups.length - 1];
+    if (last && last.key === label) {
+      last.rows.push(row);
+    } else {
+      groups.push({ key: label, label, rows: [row] });
+    }
+  }
+  return groups;
+});
 
 /** Reactively re-load whenever the modal transitions to open.
  *  Skip when `boundSessionId` is null (defensive — the entry
@@ -181,7 +208,10 @@ async function onLoadMore(): Promise<void> {
       >
         <header class="audit-modal__header">
           <DialogTitle class="audit-modal__title">
-            {{ modalTitle }}
+            <span class="audit-modal__title-label">审计日志</span>
+            <span class="audit-modal__title-session">{{
+              sessionTitle
+            }}</span>
           </DialogTitle>
           <DialogClose as-child>
             <button
@@ -291,7 +321,8 @@ async function onLoadMore(): Promise<void> {
             v-else-if="store.loading && store.events.length === 0"
             class="audit-modal__placeholder"
           >
-            正在加载审计事件…
+            <span class="app-spinner app-spinner--sm" aria-hidden="true" />
+            <p class="audit-modal__placeholder-title">正在加载审计事件…</p>
           </div>
 
           <div
@@ -302,8 +333,24 @@ async function onLoadMore(): Promise<void> {
                  含当前过滤的命中行——不能再用它区分「会话真的没有事件」
                  和「过滤无命中」(旧行为:全量驻留,events 恒为全集)。
                  判据换成 totalAll(服务端不过滤总数):0 = 会话无事件,
-                 >0 = 过滤无命中。 -->
-            {{ store.totalAll === 0 ? "暂无审计事件" : "无匹配事件" }}
+                 >0 = 过滤无命中。副行提示各自指向下一步(等 agent
+                 产生动作 / 放宽过滤条件)。 -->
+            <span class="audit-modal__placeholder-icon" aria-hidden="true">
+              <Icon
+                :name="store.totalAll === 0 ? 'clipboard-list' : 'magnifying-glass'"
+                :size="20"
+              />
+            </span>
+            <p class="audit-modal__placeholder-title">
+              {{ store.totalAll === 0 ? "暂无审计事件" : "无匹配事件" }}
+            </p>
+            <p class="audit-modal__placeholder-hint">
+              {{
+                store.totalAll === 0
+                  ? "权限请求、工具执行与模式切换会记录在这里"
+                  : "试试切换类别,或取消勾选「仅 critical」"
+              }}
+            </p>
           </div>
 
           <!-- The list branch is a <template v-else> (not a bare
@@ -312,11 +359,18 @@ async function onLoadMore(): Promise<void> {
                v-if chain above owns error / loading / empty). -->
           <template v-else>
             <ul class="audit-modal__list">
-              <AuditLogItem
-                v-for="row in store.filteredEvents"
-                :key="row.id"
-                :row="row"
-              />
+              <!-- Day rails (2026-09-05 redesign): rows render
+                   newest-first, so the first group is the most
+                   recent day; each sticky rail stays visible while
+                   its day scrolls under it. -->
+              <template v-for="group in groupedEvents" :key="group.key">
+                <li class="audit-modal__day">{{ group.label }}</li>
+                <AuditLogItem
+                  v-for="row in group.rows"
+                  :key="row.id"
+                  :row="row"
+                />
+              </template>
             </ul>
 
             <!-- RULE-PERM-001 (2026-08-30) — keyset pagination tail.
@@ -374,20 +428,15 @@ async function onLoadMore(): Promise<void> {
   width: 80vw;
   min-width: 640px;
   max-width: min(960px, calc(100vw - 40px));
-  /* min-height keeps the modal from looking thin/top-heavy when a
-     session has only 1-2 events (or the empty state). 440px pairs
-     with min-width: 640px to a ~3:4 aspect that feels substantial
-     without crowding the 80vh max-height ceiling. The flex column
-     layout means the extra height is absorbed by
-     `.audit-modal__body` (flex: 1, min-height: 0) — header +
-     filters stay pinned to the top, the list region grows. This
-     matches MemoryModal's approach (it relies on content height +
-     max-height: 80vh + min-height: 0 on the scroll region; here
-     we additionally pin a floor so an empty session doesn't
-     collapse to ~120px tall). No separate footer element exists
-     (the 刷新 button lives inside `.audit-modal__filters`), so
-     there is no fixed-bottom layer to displace. */
-  min-height: 440px;
+  /* Height hugs content (2026-09-05 redesign): the old
+     min-height: 440px floor was meant to keep 1-2 event sessions
+     from looking thin, but it manufactured a ~300px dead zone under
+     a short list — the modal read as broken, not substantial. The
+     flex column absorbs extra height in `.audit-modal__body`
+     (flex: 1, min-height: 0) only past 80vh; short sessions now end
+     where their content ends, and the empty/loading states carry
+     their own vertical presence via the placeholder padding.
+     Mirrors MemoryModal's content-height + max-height approach. */
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
@@ -428,12 +477,34 @@ async function onLoadMore(): Promise<void> {
 
 .audit-modal__title {
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0; /* let the session chip, not the header, absorb overflow */
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
+}
+
+.audit-modal__title-label {
+  flex-shrink: 0;
+}
+
+/* Session-title chip: secondary identity inside the DialogTitle
+   (screen readers read label + chip as one heading). Ellipsizes
+   long session names instead of pushing the close button out. */
+.audit-modal__title-session {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 /* 按钮样式由全局 .btn 家族承载(close = ghost icon / refresh =
@@ -641,17 +712,70 @@ async function onLoadMore(): Promise<void> {
 }
 
 .audit-modal__error {
-  padding: 16px;
+  padding: var(--space-4);
   color: var(--color-tool-error-text);
   font-size: var(--text-sm);
   text-align: center;
 }
 
+/* Empty / loading states (2026-09-05 redesign): composed column —
+   icon tile, title line, and a branch-specific hint that points at
+   the next step (wait for agent activity vs. loosen the filter).
+   With the modal's min-height floor gone, this padding IS the
+   short-state vertical presence. */
 .audit-modal__placeholder {
-  padding: 32px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-4);
   text-align: center;
+}
+
+.audit-modal__placeholder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; /* icon tile: 20px glyph + 10px cushion each side */
+  height: 40px;
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
   color: var(--color-text-muted);
+}
+
+.audit-modal__placeholder-title {
+  margin: 0;
   font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.audit-modal__placeholder-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+/* Day rail (2026-09-05 redesign): sticky local-day separator at
+   the top of each row group. Solid bg-app band — the scroll
+   container's own background — so covered rows' hairlines never
+   bleed through. */
+.audit-modal__day {
+  position: sticky;
+  top: 0;
+  /* Micro-local z (per z-index ladder rule): covers only in-flow
+     sibling rows while scrolling inside `.audit-modal__body`;
+     never leaves the modal's stacking context. */
+  z-index: 1;
+  /* 6px bottom: half-step — 8px reads loose under a 10px label,
+     4px crowds the first row's hairline (spacing half-step rule). */
+  padding: var(--space-2) var(--space-4) 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-app);
+  border-bottom: 1px solid var(--color-bg-border);
 }
 
 .audit-modal__list {

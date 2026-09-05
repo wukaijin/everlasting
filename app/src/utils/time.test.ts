@@ -15,7 +15,7 @@
 // UTC→local intent is documented in the helper itself.)
 
 import { describe, it, expect } from "vitest";
-import { formatTime, formatTimeOfDay } from "./time";
+import { formatTime, formatTimeOfDay, formatDayLabel } from "./time";
 
 function pad(n: number): string {
   return n.toString().padStart(2, "0");
@@ -84,5 +84,47 @@ describe("formatTimeOfDay (SQLite datetime, UTC → local)", () => {
     expect(formatTimeOfDay("2026-08-29")).toBe("2026-08-29");
     expect(formatTimeOfDay("2026-08-29 06:54")).toBe("2026-08-29 06:54");
     expect(formatTimeOfDay("")).toBe("");
+  });
+});
+
+// Day separators in the audit log (2026-09-05): rows only carried
+// HH:MM:SS, so a session spanning days lost its date context. The
+// label must come from the LOCAL day (same UTC→local funnel as
+// formatTimeOfDay), and "now"-relative cases (今天/昨天) are built
+// from the live clock's UTC components so the test is TZ-independent.
+describe("formatDayLabel (SQLite datetime, UTC → local day)", () => {
+  /** Build a SQLite UTC datetime string from a Date's UTC parts. */
+  function sqliteUtc(d: Date): string {
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  }
+
+  it("labels the current local day 今天", () => {
+    expect(formatDayLabel(sqliteUtc(new Date()))).toBe("今天");
+  });
+
+  it("labels 24 hours ago 昨天", () => {
+    expect(formatDayLabel(sqliteUtc(new Date(Date.now() - 24 * 3600 * 1000)))).toBe("昨天");
+  });
+
+  it("labels an older same-year date as M月D日 周X in LOCAL time", () => {
+    const d = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    const expected = `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`;
+    expect(formatDayLabel(sqliteUtc(d))).toBe(expected);
+  });
+
+  it("prefixes the year for cross-year dates", () => {
+    const d = new Date("2020-01-01T00:00:00Z");
+    const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    const expected = `2020年${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`;
+    expect(formatDayLabel("2020-01-01 00:00:00")).toBe(expected);
+  });
+
+  it("returns empty for malformed input (caller falls back to raw prefix)", () => {
+    expect(formatDayLabel("2026-08-29")).toBe("");
+    expect(formatDayLabel("2026-08-29 06:54")).toBe("");
+    expect(formatDayLabel("")).toBe("");
+    expect(formatDayLabel("garbage")).toBe("");
   });
 });

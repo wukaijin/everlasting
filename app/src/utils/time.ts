@@ -33,6 +33,34 @@ export function formatTime(iso: string | null | undefined): string {
   return `${h}:${m}:${s}`;
 }
 
+const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;
+
+/** Format a SQLite `datetime('now')` value ("YYYY-MM-DD HH:MM:SS",
+ *  UTC, no offset marker) as a local day label for the audit-log
+ *  day separators: 今天 / 昨天, otherwise 「M月D日 周X」 (same
+ *  calendar year) or 「YYYY年M月D日 周X」 (cross-year). Same
+ *  UTC→local conversion gotcha as `formatTimeOfDay` (hand `Date` an
+ *  explicit `Z`, read local getters — slicing the raw string would
+ *  group by the UTC day and drift up to a full day). Returns ""
+ *  for malformed input; the caller falls back to the raw date
+ *  prefix so the separator never disappears. */
+export function formatDayLabel(ts: string): string {
+  const idx = ts.indexOf(" ");
+  if (idx < 0) return "";
+  const time = ts.slice(idx + 1);
+  if (time.length !== 8) return "";
+  const d = new Date(`${ts.slice(0, idx)}T${time}Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const dayStart = (x: Date): number =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((dayStart(now) - dayStart(d)) / 86_400_000);
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  const md = `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAY_LABELS[d.getDay()]}`;
+  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}年${md}`;
+}
+
 /** Format a SQLite `datetime('now')` value ("YYYY-MM-DD HH:MM:SS",
  *  UTC, no offset marker) as a local `HH:MM:SS` string.
  *

@@ -179,6 +179,20 @@ const effectiveColor = computed<string>(() =>
   executedFailed.value ? "var(--color-tool-error)" : meta.value.colorVar,
 );
 
+/** Ink variant of `effectiveColor` for TEXT surfaces (the kind
+ *  chip's label). Icons are graphics (3:1 suffices) so they keep
+ *  the 500-tier fill token, but chip text is copy — per
+ *  contrast-color-r1 填充 500 / 文字 400, the two fill tokens that
+ *  numerically fail AA as text (accent 3.14:1, tool-error 4.32:1)
+ *  map to their 400-tier sibling tokens. */
+const FILL_TO_INK: Record<string, string> = {
+  "var(--color-accent)": "var(--color-accent-text)",
+  "var(--color-tool-error)": "var(--color-tool-error-text)",
+};
+const inkColor = computed<string>(
+  () => FILL_TO_INK[effectiveColor.value] ?? effectiveColor.value,
+);
+
 /** Short label for the exit code chip.
  *  - `0`    → "exit 0"
  *  - `-1`   → "killed"
@@ -372,6 +386,12 @@ const isCritical = computed<boolean>(() => {
     class="audit-item"
     :class="{ 'audit-item--critical': isCritical }"
   >
+    <!-- Time lives in its own left gutter column (2026-09-05
+         redesign): a fixed mono rail the eye can scan down the
+         whole list, instead of one wrapped token inside each
+         row's chip line. -->
+    <time class="audit-item__time">{{ timeLabel }}</time>
+
     <span
       class="audit-item__icon"
       :style="{ color: effectiveColor }"
@@ -382,12 +402,11 @@ const isCritical = computed<boolean>(() => {
 
     <div class="audit-item__body">
       <div class="audit-item__head">
-        <time class="audit-item__time">{{ timeLabel }}</time>
         <span
           class="audit-item__kind"
           :style="{
-            color: effectiveColor,
-            borderColor: `color-mix(in srgb, ${effectiveColor} 35%, transparent)`,
+            color: inkColor,
+            borderColor: `color-mix(in srgb, ${inkColor} 35%, transparent)`,
           }"
         >
           {{ kindLabel }}
@@ -450,10 +469,22 @@ const isCritical = computed<boolean>(() => {
 
 <style scoped>
 .audit-item {
+  /* Three-column log row (2026-09-05 redesign): [time gutter]
+     [icon] [body]. The fixed 56px gutter fits the widest
+     "HH:MM:SS" mono rendering (~53px @ 11px) so all times align
+     into one scannable rail. minmax(0, 1fr) keeps long
+     tool_input summaries ellipsizing instead of stretching the
+     row. */
   display: grid;
-  grid-template-columns: 20px 1fr;
-  gap: 8px;
-  padding: 8px 10px;
+  grid-template-columns: 56px 20px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+  /* Left padding is 13px, not --space-4: the 3px critical
+     border-left always reserves its width (transparent on normal
+     rows), so 3 + 13 = the same 16px optical inset as the modal
+     padding on every row. */
+  padding: var(--space-2) var(--space-4);
+  padding-left: 13px;
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-surface);
   border-left: 3px solid transparent;
@@ -470,11 +501,26 @@ const isCritical = computed<boolean>(() => {
   border-left-color: var(--color-tool-error);
 }
 
+/* Time gutter cell. Secondary (not muted) ink per the
+   2026-08-15 contrast decision #4: 11px mono metadata that shows
+   on every row is the "high-frequency" tier. 2px top padding
+   optically aligns the bare 11px digits with the 1px-bordered
+   kind chip on the body's first line. */
+.audit-item__time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  padding-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .audit-item__icon {
   display: inline-flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 2px;
+  padding-top: 3px;
 }
 
 .audit-item__body {
@@ -489,13 +535,6 @@ const isCritical = computed<boolean>(() => {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-}
-
-.audit-item__time {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  flex-shrink: 0;
 }
 
 .audit-item__kind {
@@ -597,11 +636,13 @@ const isCritical = computed<boolean>(() => {
 }
 
 /* F2 定时任务 (2026-08-28): scheduler fire lifecycle line.
-   Accent-tinted mono — 与 leading clock icon 同色系(治理动作)。 */
+   与 leading clock icon 同色系(治理动作)。Ink uses the 400-tier
+   `--color-accent-text`, not `--color-accent` — the fill token as
+   text is 3.14:1 on surface (contrast-color-r1 填充 500 / 文字 400). */
 .audit-item__scheduled {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   line-height: 1.4;
   word-break: break-word;
 }
