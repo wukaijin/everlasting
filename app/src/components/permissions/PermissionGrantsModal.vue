@@ -64,7 +64,11 @@ const sessionTitle = computed<string>(() => {
   return s?.title?.trim() || "新对话";
 });
 
-const modalTitle = computed<string>(() => `放行管理 — ${sessionTitle.value}`);
+/** Header layout (2026-09-05, mirrors AuditLogModal): the fixed
+ *  label 「放行管理」 is the DialogTitle's primary text; the
+ *  session title renders as a secondary chip inside the same
+ *  DialogTitle. Replaces the old 「放行管理 — 会话名」 one-line
+ *  cram that ellipsized long session names. */
 
 /** Reactively re-load whenever the modal transitions to open. */
 watch(
@@ -109,7 +113,12 @@ async function onRevokeConfirm(): Promise<void> {
         @pointerdown-outside="open = false"
       >
         <header class="grant-modal__header">
-          <DialogTitle class="grant-modal__title">{{ modalTitle }}</DialogTitle>
+          <DialogTitle class="grant-modal__title">
+            <span class="grant-modal__title-label">放行管理</span>
+            <span class="grant-modal__title-session">{{
+              sessionTitle
+            }}</span>
+          </DialogTitle>
           <DialogClose as-child>
             <button type="button" class="grant-modal__close btn btn--icon btn--ghost" aria-label="Close">
               <Icon name="x" :size="14" />
@@ -141,11 +150,23 @@ async function onRevokeConfirm(): Promise<void> {
             v-else-if="store.loading && store.grants.length === 0"
             class="grant-modal__placeholder"
           >
-            正在加载放行记录…
+            <span class="app-spinner app-spinner--sm" aria-hidden="true" />
+            <p class="grant-modal__placeholder-title">正在加载放行记录…</p>
           </div>
 
-          <div v-else-if="store.grants.length === 0" class="grant-modal__placeholder">
-            当前会话暂无「始终允许」放行
+          <div
+            v-else-if="store.grants.length === 0"
+            class="grant-modal__placeholder"
+          >
+            <span class="grant-modal__placeholder-icon" aria-hidden="true">
+              <Icon name="key" :size="20" />
+            </span>
+            <p class="grant-modal__placeholder-title">
+              当前会话暂无「始终允许」放行
+            </p>
+            <p class="grant-modal__placeholder-hint">
+              审批弹窗里勾选「始终允许」的放行会列在这里,可随时撤销
+            </p>
           </div>
 
           <ul v-else class="grant-modal__list">
@@ -208,7 +229,12 @@ async function onRevokeConfirm(): Promise<void> {
   width: 80vw;
   min-width: 560px;
   max-width: min(880px, calc(100vw - 40px));
-  min-height: 360px;
+  /* Height hugs content (2026-09-05, mirrors AuditLogModal): the
+     old min-height: 360px manufactured a dead zone under short
+     lists / the empty state. The flex column absorbs extra height
+     in `.grant-modal__body` (flex: 1, min-height: 0) only past
+     80vh; the empty state carries its own vertical presence via
+     the placeholder padding. */
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
@@ -249,12 +275,32 @@ async function onRevokeConfirm(): Promise<void> {
 
 .grant-modal__title {
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0; /* let the session chip, not the header, absorb overflow */
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
+}
+
+.grant-modal__title-label {
+  flex-shrink: 0;
+}
+
+/* Session chip: mirrors .audit-modal__title-session (2026-09-05). */
+.grant-modal__title-session {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 /* 按钮样式由全局 .btn 家族承载(close = ghost icon);flex 几何保留。 */
@@ -278,12 +324,6 @@ async function onRevokeConfirm(): Promise<void> {
   color: var(--color-text-muted);
 }
 
-.grant-modal__count {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-}
-
 /* 按钮样式由全局 .btn 家族承载(refresh = muted·sm,hover 转 accent
    与原语义一致);margin 几何保留。 */
 .grant-modal__refresh {
@@ -298,17 +338,48 @@ async function onRevokeConfirm(): Promise<void> {
 }
 
 .grant-modal__error {
-  padding: 16px;
+  padding: var(--space-4);
   color: var(--color-tool-error-text);
   font-size: var(--text-sm);
   text-align: center;
 }
 
+/* Empty / loading states (2026-09-05): composed tile + title +
+   hint column, mirrors .audit-modal__placeholder. With the
+   modal's min-height floor gone, this padding IS the short-state
+   vertical presence. */
 .grant-modal__placeholder {
-  padding: 32px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-4);
   text-align: center;
+}
+
+.grant-modal__placeholder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; /* icon tile: 20px glyph + 10px cushion each side */
+  height: 40px;
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
   color: var(--color-text-muted);
+}
+
+.grant-modal__placeholder-title {
+  margin: 0;
   font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.grant-modal__placeholder-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 
 .grant-modal__list {

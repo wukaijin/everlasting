@@ -299,6 +299,23 @@ function splitSnippet(snippet: string): [string, string | null, string] {
   return splitSnippetAt(snippet, query.value);
 }
 
+/** Render-ready parts for any hit string (session titles AND
+ *  snippets): [{text, hit}] runs around the first case-insensitive
+ *  query occurrence. 2026-09-05 — before this, title hits rendered
+ *  NO mark at all (the wire has no offsets; only snippets went
+ *  through splitSnippetAt), so a title-heavy result page read as
+ *  "no highlighting". One v-for renders marked and plain runs for
+ *  both surfaces. */
+function highlightParts(text: string): Array<{ text: string; hit: boolean }> {
+  const [before, match, after] = splitSnippetAt(text, query.value);
+  if (match === null) return [{ text, hit: false }];
+  const parts: Array<{ text: string; hit: boolean }> = [];
+  if (before) parts.push({ text: before, hit: false });
+  parts.push({ text: match, hit: true });
+  if (after) parts.push({ text: after, hit: false });
+  return parts;
+}
+
 function timeLabel(iso: string): string {
   return hitTimeLabel(iso);
 }
@@ -397,7 +414,11 @@ function timeLabel(iso: string): string {
                     class="search-modal__row no-focus-ring btn btn--ghost"
                     @click="openInMainWindow({ sessionId: h.session_id, sessionTitle: h.session_title, projectId: h.project_id, seq: null })"
                   >
-                    <span class="search-modal__row-title">{{ h.session_title }}</span>
+                    <span class="search-modal__row-title"
+                      ><template
+                        v-for="(part, i) in highlightParts(h.session_title)"
+                        :key="i"
+                      ><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                     <span class="search-modal__row-meta search-modal__row-meta--prefix-dot">
                       {{ h.project_name ?? h.project_id }} · {{ timeLabel(h.updated_at) }}
                     </span>
@@ -419,7 +440,11 @@ function timeLabel(iso: string): string {
                       title="在主窗口打开该会话"
                       @click="openInMainWindow({ sessionId: s.hit.session_id, sessionTitle: s.hit.session_title, projectId: s.hit.project_id, seq: null })"
                     >
-                      <span class="search-modal__row-title">{{ s.hit.session_title }}</span>
+                      <span class="search-modal__row-title"
+                        ><template
+                          v-for="(part, i) in highlightParts(s.hit.session_title)"
+                          :key="i"
+                        ><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                       <span class="search-modal__row-meta">
                         {{ timeLabel(s.hit.updated_at) }}<template v-if="s.extra > 0"> · 还有 {{ s.extra }} 条</template>
                       </span>
@@ -617,21 +642,22 @@ function timeLabel(iso: string): string {
   flex-shrink: 0;
 }
 
-/* ── Visual hierarchy (08-17 design pass) ─────────────────────────────
-   Three-level stacking — the previous version mixed --text-muted and
-   --text-secondary within the same row so the project / session /
-   meta lines bled together.
+/* ── Visual hierarchy (08-17 design pass; 2026-09-05 区分度 re-tier)
+   Four distinct levels — the first pass still had L2 and the snippet
+   on the same size AND color (snippet only dimmed via opacity), so
+   title / 正文 / meta read as one gray mass (2026-09-05 user report).
 
    L1 section header (e.g. "precaution-frontend"):
-       primary tone + semibold + uppercase + a vertical accent bar;
+       xs + semibold + uppercase + secondary + vertical bar;
        separates "which project am I looking at" from the hits below.
    L2 session title (within a project):
-       primary tone + medium weight, the click target.
+       base(13px) + semibold + primary — the click target, jumps
+       forward on all three axes.
+   Snippet (正文):
+       sm(12px) + regular + secondary — supporting ink, visibly
+       recessed; the mark chip is the only color in the row.
    L3 meta (project · date / 还有 N 条):
-       tertiary muted, smaller, single line.
-   Snippet row:
-       same L1 primary tone but a notch smaller; the mark accent is
-       the only color in the row so the eye lands there. */
+       xs + muted, single line. */
 .search-modal__section {
   display: flex;
   flex-direction: column;
@@ -713,6 +739,13 @@ function timeLabel(iso: string): string {
 .search-modal__row {
   display: flex;
   flex-direction: column;
+  /* align-items: stretch — title-hit rows also carry the global
+     `.btn` family class, whose base centers children
+     (align-items: center). In this column layout that centers the
+     title/meta spans horizontally, i.e. centered search results.
+     Not a family-owned property; this is a layout-geometry
+     override local to the row. */
+  align-items: stretch;
   gap: var(--space-1);
   width: 100%;
   text-align: left;
@@ -735,9 +768,14 @@ function timeLabel(iso: string): string {
 
 /* L2 — session title (title-only hits use this directly). Medium
    weight gives a 1-point distinction from L3 below. */
+/* L2 — session title (title-only hits use this directly). 2026-09-05
+   区分度 pass: bumped to the 13px content tier + semibold — it is
+   THE click target and previously shared size AND color with the
+   snippet below it (differing only by an opacity dim), so title /
+   正文 / meta read as one gray mass. */
 .search-modal__row-title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -766,25 +804,33 @@ function timeLabel(iso: string): string {
   padding-top: var(--space-1);
 }
 
+/* 正文 supporting line: 12px + secondary ink. The old primary +
+   opacity:0.82 dim was the same color-and-size as the title (the
+   区分度 complaint); secondary is the documented supporting-text
+   tier, and a token replaces the ad-hoc opacity dim. */
 .search-modal__snippet {
   font-size: var(--text-sm);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
   line-height: var(--leading-relaxed);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  word-break: break-all;
-  opacity: 0.82;
+  overflow-wrap: anywhere;
 }
 
-/* The highlight mark is the only color in the snippet — keeping
-   it as the strongest visual anchor invites clicks. */
-.search-modal__snippet mark {
-  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
-  color: var(--color-text-primary);
-  border-radius: 2px;
-  padding: 1px 2px;
+/* Hit marks (2026-09-05): solid 60%-accent chip + on-accent ink —
+   white on the mixed chip is ~10:1. The old 28% wash sat near the
+   row background (~1.2:1), invisible at arm's length, and title
+   hits rendered no mark at all; both surfaces now share one style
+   via .search-modal__row-title mark. The mark stays the only color
+   in the row so the eye lands there. */
+.search-modal__snippet mark,
+.search-modal__row-title mark {
+  background: color-mix(in srgb, var(--color-accent) 60%, var(--color-bg-app));
+  color: var(--color-text-on-accent);
+  border-radius: 3px;
+  padding: 0 2px;
   font-weight: var(--weight-medium);
   opacity: 1;
 }

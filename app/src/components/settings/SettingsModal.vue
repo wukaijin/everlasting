@@ -230,12 +230,12 @@ const contentProps = computed<Record<string, unknown>>(() =>
         @pointerdown-outside="open = false"
       >
         <header class="settings-modal__header">
-          <DialogTitle class="settings-modal__title">Settings</DialogTitle>
+          <DialogTitle class="settings-modal__title">设置</DialogTitle>
           <DialogClose as-child>
             <button type="button" class="settings-modal__close btn btn--icon btn--ghost" aria-label="Close">
               <Icon name="x" :size="14" />
               <!-- S6b: 移动端语义化关闭文案(桌面 display:none) -->
-              <span class="settings-modal__close-label">Done</span>
+              <span class="settings-modal__close-label">完成</span>
             </button>
           </DialogClose>
         </header>
