@@ -35,12 +35,39 @@ const args = process.argv.slice(2);
 const outDirIdx = args.indexOf("--out");
 const OUT = outDirIdx >= 0 ? resolve(args[outDirIdx + 1]) : resolve("out/ui-review/specimen");
 const SHOOT = args.includes("--shoot");
+// --theme <name>:非 classic 时读 app/src/theme-<name>.css 的
+// `:root[data-theme="<name>"]` 根块 token 覆盖并 merge(classic 值为底,
+// 覆盖层胜)。样本页 html 同步挂 data-theme,保证 color-mix() 里的
+// var() 引用按目标主题解析。classic 路径行为与历史字节一致。
+const themeIdx = args.indexOf("--theme");
+const THEME = themeIdx >= 0 ? args[themeIdx + 1] : "classic";
 mkdirSync(OUT, { recursive: true });
 
 // ── 解析 style.css 的 --color-* token(@theme 块内;值可为 color-mix())──
 const css = readFileSync(`${REPO}/app/src/style.css`, "utf8");
 const tokens = {};
 for (const m of css.matchAll(/^\s*(--color-[\w-]+):\s*([^;]+);/gm)) tokens[m[1]] = m[2].trim();
+if (THEME !== "classic") {
+  const themeCss = readFileSync(`${REPO}/app/src/theme-${THEME}.css`, "utf8");
+  const rootBlock = themeCss.match(
+    new RegExp(`:root\\[data-theme="${THEME}"\\]\\s*\\{([\\s\\S]*?)\\n\\}`),
+  );
+  if (!rootBlock) {
+    console.error(`✗ theme-${THEME}.css 里没找到 :root[data-theme="${THEME}"] 根块`);
+    process.exit(1);
+  }
+  for (const m of rootBlock[1].matchAll(/^\s*(--[\w-]+):\s*([^;]+);/gm)) tokens[m[1]] = m[2].trim();
+}
+// fallback 组:aggressive 未覆盖、沿用 classic 值的 token,审计时要显式
+// 标出(它们没经过目标主题的设计裁定,是风险位)。
+const FALLBACKED = new Set();
+if (THEME !== "classic") {
+  const classicTokens = {};
+  for (const m of css.matchAll(/^\s*(--color-[\w-]+):\s*([^;]+);/gm)) classicTokens[m[1]] = m[2].trim();
+  for (const k of Object.keys(classicTokens))
+    if (classicTokens[k] === tokens[k] && !/^--color-bg-(hover|active|selected)$/.test(k))
+      FALLBACKED.add(k);
+}
 if (!tokens["--color-text-primary"]) {
   console.error("✗ 未能从 app/src/style.css 解析出 --color-* token(文件结构变了?)");
   process.exit(1);
@@ -104,11 +131,12 @@ const colorTiers = [
 
 const cell = (fgVar, bgVar, fgHex, bgHex) => {
   const banned = DISALLOWED_FG.has(fgVar) && bgVar === "--color-accent-muted";
+  const fb = FALLBACKED.has(fgVar) ? " · <b>fallback</b>" : "";
   return `
   <div class="cell" style="background:var(${bgVar})">
     <p class="body" style="color:var(${fgVar})">${BODY}${banned ? '<span class="ratio disallowed">禁用</span>' : badge(fgHex, bgHex)}</p>
     <p class="meta" style="color:var(${fgVar})">${META}</p>
-    <span class="pair">${fgVar.replace("--color-", "")} × ${bgVar.replace("--color-bg-", "")}</span>
+    <span class="pair">${fgVar.replace("--color-", "")} × ${bgVar.replace("--color-bg-", "")}${fb}</span>
   </div>`;
 };
 
@@ -153,12 +181,37 @@ const vs = (curFg, curBg, candFg, candBg, curFgHex, curBgHex, candFgHex, candBgH
       <p class="${sizeCls}" style="color:${curFg}">${BODY}</p>${badge(curFgHex, curBgHex)}
     </div>
     <div class="cell" style="background:${candBg}">
-      <span class="tag cand">${curBg === candBg ? "对照组B" : "候选"}</span>
+      <span class="tag cand">${curBg === candBg ? "对照组B" : THEME === "aggressive" ? "假想对照" : "候选"}</span>
       <p class="${sizeCls}" style="color:${candFg}">${BODY}</p>${badge(candFgHex, candBgHex)}
     </div>
   </div>`;
 const bgv = (n) => `var(${n})`;
-sections.push(`<section><h2>D · 彩底规则演示 + 未决候选</h2>
+// D 章按主题分支:classic 渲染 08-15 专题的未决候选;aggressive 渲染
+// volt 实验自己的裁决组(on-accent 翻黑、荧光作文字、扫描线材质)。
+const voltSections =
+  THEME === "aggressive"
+    ? `
+  <h3>D1 volt 填充上的前景:on-accent 翻黑(现状)vs 白字(假想对照)</h3><div class="vscol">
+  ${vs("#10140a", bgv("--color-accent"), "#ffffff", bgv("--color-accent"),
+       "#10140a", tokens["--color-accent"], "#ffffff", tokens["--color-accent"])}
+  </div>
+  <h3>D2 accent-text(现状规则:墨走 300 档)vs volt 500 直接当墨(假想对照)</h3><div class="vscol">
+  ${vs(bgv("--color-accent-text"), bgv("--color-bg-surface"), bgv("--color-accent"), bgv("--color-bg-surface"),
+       tokens["--color-accent-text"], tokens["--color-bg-surface"], tokens["--color-accent"], tokens["--color-bg-surface"])}
+  </div>
+  <h3>D3 扫描线材质(2.5% 白 / 3px):11px mono 元数据在无纹理 vs 叠加纹理下</h3>
+  <div class="vscol">
+  <div class="cell" style="background:var(--color-bg-surface)">
+    <span class="tag">无扫描线(对照)</span>
+    <p class="meta" style="color:var(--color-text-muted)">11s · read_file · 2.4K tokens</p>
+  </div>
+  <div class="cell" style="background:var(--color-bg-surface);position:relative;overflow:hidden">
+    <span class="tag">叠加扫描线(现状)</span>
+    <p class="meta" style="color:var(--color-text-muted)">11s · read_file · 2.4K tokens</p>
+    <span style="position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)"></span>
+  </div>
+  </div>`
+    : `
   <h3>D1 彩底(accent-muted)最低 secondary 规则:muted(禁用)vs secondary</h3><div class="vscol">
   ${vs(bgv("--color-text-muted"), bgv("--color-accent-muted"), bgv("--color-text-secondary"), bgv("--color-accent-muted"),
        tokens["--color-text-muted"], tokens["--color-accent-muted"], tokens["--color-text-secondary"], tokens["--color-accent-muted"])}
@@ -166,7 +219,8 @@ sections.push(`<section><h2>D · 彩底规则演示 + 未决候选</h2>
   <h3>D2 elevated 提亮一档(未决:mmx 裁决"半步方案",层级感知专题停泊中)</h3><div class="vscol">
   ${vs(bgv("--color-text-muted"), bgv("--color-bg-elevated"), bgv("--color-text-muted"), CANDIDATES.elevatedUp,
        tokens["--color-text-muted"], tokens["--color-bg-elevated"], tokens["--color-text-muted"], CANDIDATES.elevatedUp)}
-  </div>
+  </div>`;
+sections.push(`<section><h2>D · 彩底规则演示 + 未决候选</h2>${voltSections}
 </section>`);
 
 // ── 组装 HTML(base64 内嵌 HarmonyOS Sans SC,保证字体渲染与真实 app 一致)──
@@ -175,7 +229,7 @@ const fontB64 = readFileSync(
 ).toString("base64");
 const tokenBlock = Object.entries(tokens).map(([k, v]) => `${k}:${v};`).join("");
 
-const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+const html = `<!doctype html><html${THEME === "classic" ? "" : ` data-theme="${THEME}"`}><head><meta charset="utf-8"><style>
 @font-face{font-family:"HarmonyOS Sans SC";src:url(data:font/woff2;base64,${fontB64}) format("woff2");font-weight:400}
 :root{${tokenBlock}}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -195,6 +249,7 @@ h3{font-size:12px;margin:14px 0 8px;color:var(--color-text-secondary)}
 .ratio.aaa{background:#14532d;color:#bbf7d0}.ratio.aa{background:#1e3a5f;color:#bfdbfe}
 .ratio.large{background:#7c2d12;color:#fed7aa}.ratio.fail{background:#7f1d1d;color:#fecaca}
 .ratio.disallowed{background:#374151;color:#d1d5db}
+.pair b{color:var(--color-status-warn);font-weight:600}
 .vscol{display:flex;flex-direction:column;gap:8px}
 .vs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .tag{font-family:var(--font-mono);font-size:9px;color:var(--color-text-muted);display:block;margin-bottom:4px}
@@ -203,14 +258,14 @@ h3{font-size:12px;margin:14px 0 8px;color:var(--color-text-secondary)}
 .staterow:last-child{border-bottom:0}
 .note{font-size:10px;color:var(--color-text-muted);margin-top:8px}
 </style></head><body>
-<h1>对比度样本页 · Contrast Specimen</h1>
-<p class="sub">token 直读自 app/src/style.css;右上角数字 = WCAG 对比度(绿 AAA≥7 / 蓝 AA≥4.5 / 橙 仅大字≥3 / 红 FAIL / 灰=规则禁用对,数字仅供参考)。body 13px 中英混排 + mono 11px 元数据双档。彩底(accent-muted)上的文字组合受彩底规则约束:最低 secondary、禁同色系 accent/紫字。</p>
+<h1>对比度样本页 · Contrast Specimen${THEME === "classic" ? "" : ` · ${THEME} 主题`}</h1>
+<p class="sub">${THEME === "classic" ? "token 直读自 app/src/style.css" : `token = style.css(classic 底)+ theme-${THEME}.css 覆盖;左上角灰底 fallback 徽章 = 主题未覆盖、沿用 classic 值的风险位;D 章「假想对照」格 = 未采纳的反例演示。`}右上角数字 = WCAG 对比度(绿 AAA≥7 / 蓝 AA≥4.5 / 橙 仅大字≥3 / 红 FAIL / 灰=规则禁用对,数字仅供参考)。body 13px 中英混排 + mono 11px 元数据双档。彩底(accent-muted)上的文字组合受彩底规则约束:最低 secondary、禁同色系 accent/紫字。</p>
 ${sections.join("\n")}
 </body></html>`;
 
 const htmlPath = `${OUT}/specimen.html`;
 writeFileSync(htmlPath, html);
-console.log(`✓ ${htmlPath}(${(html.length / 1024).toFixed(0)} KB,token ${Object.keys(tokens).length} 个)`);
+console.log(`✓ ${htmlPath}(${(html.length / 1024).toFixed(0)} KB,token ${Object.keys(tokens).length} 个,theme=${THEME})`);
 
 // ── --shoot:headless 截图(scratch playwright-core,2x DPR 保小字清晰)──
 if (SHOOT) {
