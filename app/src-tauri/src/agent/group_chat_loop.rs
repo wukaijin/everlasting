@@ -57,10 +57,13 @@
 //! }
 //! ```
 //!
-//! Fallback (D7 risk): if the moderator fails to nominate (no tool
-//! call / unknown name / empty participants), we fall back to
-//! round-robin over the participants for one cycle, then give the
-//! moderator another chance. After MAX_ORCHESTRATION_ROUNDS we stop.
+//! Fallback: if the moderator fails to nominate (no tool call), NO
+//! participant is dispatched — the old pre-08-06 round-robin fallback
+//! dispatched the wrong participant (role collapse, sessions
+//! a6c87247 / 4a9d3566 / 093823f3) and was removed. The moderator turn
+//! is simply retried until it nominates or MAX_ORCHESTRATION_ROUNDS
+//! stops the discussion (`stop_reason = "max_rounds"`). Unknown-name /
+//! empty-roster nominations skip that round with a non-terminal notice.
 
 use std::sync::Arc;
 

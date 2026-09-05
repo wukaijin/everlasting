@@ -150,3 +150,4 @@
 - **现象**:live 实跑中认真读代码的参与者(deepseek)得出「participant 回合 max_turns=1,永远撞不响压缩阈值」——前提与实际相反(`group_chat_loop.rs` 实际调用 `max_turns=Some(20)`,08-07 R3;moderator 才是 1)。
 - **根因**:`group_chat_loop.rs` 模块文档 §6 与 `chat_loop.rs` 软卡分支注释双双仍写 1(且互相引用),08-07 R3 改 20 后未同步——模型读的是真代码里的假注释,非幻觉。
 - **修复(2026-09-06)**:两处注释更正为「participant 20 / moderator 1,08-07 R3」。
+- **第四处同类病灶(2026-09-06 第二场 live 群聊现场发现并修复)**:`group_chat_loop.rs` 模块文档 Fallback 段仍描述「no-nominate 时 round-robin 一轮」——该 fallback 08-06 已移除(会派错 participant 致角色塌缩),现状是重试 moderator 直到 MAX_ORCHESTRATION_ROUNDS;更正为现状描述。该场讨论的共识清单本身把「假注释是喂给群聊参与者的毒数据」立为 RULE 候选,见该场 `discussion_summary`。
