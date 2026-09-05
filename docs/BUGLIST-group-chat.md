@@ -16,6 +16,12 @@
 
 主线判定:**群聊编排本身能跑通高质量讨论,短板集中在「讨论生命周期的可观测性」(GC1/GC2)与「无人值守适配」(GC3)**——这两组决定了群聊能否被可靠地自动化驱动;GC4/GC5 是体验与健壮性打磨。
 
+> **2026-09-05 修复**:GC1-GC7 全部修复(同日提交,详见 §2 各条「修复」行)。回归锚点:后端
+> `tests_group_chat`(busy 探针/熔断/max_rounds/前缀剥离/复用清空)、`tests_group_chat_prompts`
+> (剥离/改写/检测纯函数)、`permissions/tests_ask`(无人值守快速拒)、`daemon/sse`(观察者跟踪)、
+> `db/sessions_tests/session_crud`(生命周期列 round-trip);前端 `streamController.test.ts`
+> (error 终结 + notice)。
+
 ---
 
 ## 2. 待修复清单(A 类)
@@ -24,13 +30,13 @@
 
 | 编号 | 级别 | 问题 | 根因位置 | 状态 | 修复提交 |
 |---|---|---|---|---|---|
-| GC1 | **P1** | `busy` 信号是轮次粒度而非整场讨论粒度,外部观测者误判「已结束」 | `group_chat_loop.rs:319,514` + `session_active_request` | ⬜ | — |
-| GC2 | **P1** | 讨论终止原因(stop_reason)不落库,事后不可查 | `db/trace.rs:35`(TurnTraceRow 无此列) | ⬜ | — |
-| GC3 | **P1** | 无人值守时权限审批死区:越界路径 ask 硬等 120s 超时按拒 | `permissions/ask.rs:20`(ASK_TIMEOUT 常量) | ⬜ | — |
-| GC4 | P2 | moderator 自指 `@` 前缀逐轮累积 + 产生仅前缀空消息 | `group_chat_prompts.rs:72-82`(own-row verbatim) | ⬜ | — |
-| GC5 | P2 | `[生成出错中断]` 标记作为普通发言进入后续轮视野,自愈靠模型不靠机制 | `helpers.rs:482` + 编排器无错误轮熔断 | ⬜ | — |
-| GC6 | P3 | turn_trace wire 字段命名(camelCase)无集中文档,API 消费者易踩 | `db/trace.rs:38-62` 注释级约定 | ⬜ | — |
-| GC7 | P3 | end_discussion 共识清单对 API 藏于 tool_result,无一等字段 | `MessageItem.vue:113` 仅 GUI 侧渲染 | ⬜ | — |
+| GC1 | **P1** | `busy` 信号是轮次粒度而非整场讨论粒度,外部观测者误判「已结束」 | `group_chat_loop.rs:319,514` + `session_active_request` | ✅ | `5a64f8ee` |
+| GC2 | **P1** | 讨论终止原因(stop_reason)不落库,事后不可查 | `db/trace.rs:35`(TurnTraceRow 无此列) | ✅ | `5a64f8ee` |
+| GC3 | **P1** | 无人值守时权限审批死区:越界路径 ask 硬等 120s 超时按拒 | `permissions/ask.rs:20`(ASK_TIMEOUT 常量) | ✅ | `5a64f8ee` |
+| GC4 | P2 | moderator 自指 `@` 前缀逐轮累积 + 产生仅前缀空消息 | `group_chat_prompts.rs:72-82`(own-row verbatim) | ✅ | `5a64f8ee` |
+| GC5 | P2 | `[生成出错中断]` 标记作为普通发言进入后续轮视野,自愈靠模型不靠机制 | `helpers.rs:482` + 编排器无错误轮熔断 | ✅ | `5a64f8ee` |
+| GC6 | P3 | turn_trace wire 字段命名(camelCase)无集中文档,API 消费者易踩 | `db/trace.rs:38-62` 注释级约定 | ✅ | `5a64f8ee` |
+| GC7 | P3 | end_discussion 共识清单对 API 藏于 tool_result,无一等字段 | `MessageItem.vue:113` 仅 GUI 侧渲染 | ✅ | `5a64f8ee` |
 
 ### GC1 `busy` 轮次粒度,轮间翻 false(P1)
 
@@ -38,7 +44,8 @@
 - **根因**:`run_group_chat_loop` 是外层编排器,每个 speaker 回合单独调一次 `run_chat_loop`,各自在 `session_active_request` 注册/注销(`group_chat_loop.rs:319`、`:514` 构造 deps;`CallerRole.skip_session_active=false`)→ 轮间(reload 消息 + `role_history` 重建 + LLM 首字节延迟)map 清空,`busy` 翻 false。`list_sessions` 的 busy 表达的是「有无活跃 chat request」,不是「整场编排是否在跑」。
 - **影响**:API 驱动方/remote 客户端/断线重连的 GUI 无法区分「轮间空隙」与「讨论已结束」。GUI 在线时靠 SSE done 事件兜底,但 SSE 不回放历史。
 - **修复方向**:编排级状态一等化——session 暴露 `orchestration_state`(running / ended / stop_reason / rounds_used),或编排期间整体持有 busy。
-- **回归验证**:headless 驱动群聊全程轮询 `list_sessions`,busy/编排态在轮间不回落;讨论结束后状态落 ended 且不再复活。
+- **修复(2026-09-05,`5a64f8ee`)**:采用「编排期间整体持有 busy」——F1 队列驱动器同款先例:内层每 speaker 的 `run_chat_loop` 改传 `skip_session_active + skip_cancellations` 双 true(`chat_inner` 的注册在 spawn 前一次完成、跨轮存活),编排器在**唯一退出点**统一清 `cancellations[rid]` + `session_active_request[sid]`。附带收益:轮间隙用户 Stop / 删除会话也能找到 token 取消整场。观测语义与 GC2 合成:`busy=true` → 进行中;`!busy + stop_reason` → 已结束(原因);`!busy + NULL` → 未跑过。
+- **回归验证**:headless 驱动群聊全程轮询 `list_sessions`,busy/编排态在轮间不回落;讨论结束后状态落 ended 且不再复活。→ 测试锚点 `tests_group_chat::group_chat_busy_holds_across_turns_and_lifecycle_persists`(BusyProbeSink 在每个 chat 事件时刻快照 busy,断言全程含轮间 Speaker 事件无一次回落;退出后两 map 清空)。
 
 ### GC2 讨论终止原因不落库(P1)
 
@@ -46,14 +53,16 @@
 - **根因**:`TurnTraceRow`(`db/trace.rs:35` 起)字段全景只有 token 系列 + compaction/loop_hint/breadcrumb JSON + created_at,**没有 stop_reason 列**;`group_chat_end` / `max_rounds` 只存在于 SSE done 事件的 `stop_reason` 里,不持久化。
 - **影响**:审计、复盘、自动化驱动都缺「讨论生命周期」锚点;与 GC1 是同一观测性缺口的两面,可同一 PR 收口。
 - **修复方向**:stop_reason(至少 group_chat_end / max_rounds / cancelled / error)落 turn_trace 主行或 sessions 行。
-- **回归验证**:分别触发正常收官与 MAX_ORCHESTRATION_ROUNDS 截断,事后查询能区分两者。
+- **修复(2026-09-05,`5a64f8ee`)**:落在 **sessions 行**(一场讨论一行的生命周期锚点,比 per-seq 的 turn_trace 主行更贴合「这场为何结束」):迁移加 `sessions.stop_reason TEXT`(+`discussion_summary`,见 GC7);`run_group_chat_loop` 启动时 `clear_group_chat_lifecycle` 清残留(复用会话不误报上一场的原因),退出时 `finalize_group_chat_lifecycle` 写入四值之一(`group_chat_end` / `max_rounds` / `cancelled` / `error`——cancel 路径 Done 抑制但 DB 仍留痕)。`SessionSummary` 与 `SessionRow` 均暴露 `stop_reason`(wire snake_case,sessions 域约定)。
+- **回归验证**:分别触发正常收官与 MAX_ORCHESTRATION_ROUNDS 截断,事后查询能区分两者。→ 测试锚点 `tests_group_chat::group_chat_max_rounds_persists_stop_reason`、`group_chat_error_breaker_halts_after_consecutive_error_turns`、`group_chat_second_run_clears_stale_stop_reason`、`db/sessions_tests::group_chat_lifecycle_columns_round_trip`(四值 post-hoc 可区分 + 复用清空)。
 
 ### GC3 无人值守权限审批死区:120s × N(P1)
 
 - **现象**:moderator 开场把仓库路径幻觉成 `/home/user/everlasting/docs`(cwd 之外)→ 触发 permission ask → 无 GUI 在线应答 → `ASK_TIMEOUT=120s` 超时按拒,连续两次,开场白卡约 4 分钟(占全程 19 分钟的 21%)。cwd 内读取全程静默放行,只有越界路径触发 ask;deny 本身无害——moderator 收到拒绝后自行绕过继续点名。
 - **根因**:ask 机制假设「有人在看」(SSE `permission:ask` 事件 + snapshot `pending_interaction` + `permission_response` 代批,积木齐全),但不感知订阅者存在与否;超时是全局常量(`permissions/ask.rs:20`),不按 session/场景可配;群聊工具白名单本就只读(`group_chat_prompts.rs:195`),为一条幻觉路径等满 120s 收益为负。
 - **修复方向**(可组合):(a) 无活跃 SSE 订阅者时快速拒(5-10s);(b) 群聊场景路径越界快速 deny 而非 ask;(c) `ASK_TIMEOUT` 按 session/场景可配。
-- **回归验证**:headless 无订阅者时越界路径工具调用 <10s 返回 deny;GUI 在线时审批窗口仍 ≥120s,人工 allow/deny 路径不受影响。
+- **修复(2026-09-05,`5a64f8ee`)**:采用 (a) 通用方案——`ChatEventSink` 新增 `has_live_observer()`(默认 `true` 保守:Tauri GUI/全部测试 sink 不变),仅 daemon 的 `HttpSseSink` 覆盖为 `SseRegistry::subscriber_count() > 0`。`ask_path` 每次调用前解析一次:无观察者 → 超时臂取 `min(UNATTENDED_ASK_TIMEOUT=8s, ask_timeout())`(`min` 保证测试的 task-local 覆写仍权威),deny 原因带 `no live observer` 标记且保持 `permission timed out after` 前缀(worker 分支判别从等值比较放宽为前缀匹配)。`ask_no_timeout` 用户开关优先级仍最高(显式「永不超时」压过在场检测)。8s 宽限内新连上的观察者可从 replay buffer 看到 ask 并经 `permission_response` 应答,oneshot 臂先到先赢。
+- **回归验证**:headless 无订阅者时越界路径工具调用 <10s 返回 deny;GUI 在线时审批窗口仍 ≥120s,人工 allow/deny 路径不受影响。→ 测试锚点 `permissions/tests_ask.rs::unattended_ask_denies_fast_with_named_reason`、`attended_ask_keeps_classic_timeout_reason`(GUI 路径逐字节不变)、`unattended_worker_ask_denies_fast_and_discriminates`、`daemon/sse.rs::http_sse_sink_has_live_observer_tracks_subscribers`。
 
 ### GC4 `@moderator:` 自指前缀逐轮累积(P2)
 
@@ -61,28 +70,32 @@
 - **根因**:已知问题的残留。`group_chat_prompts.rs:72-76` 文档化了双重前缀风险,修法是「他人行改写不带 `@` 前缀、归属交 wire 层 `apply_speaker_prefix`」;但**自己的行按 invariant 1 原样保留**(`:80-82`,Anthropic 签名回传需要)。模型一旦开始自称 `@moderator:`,下一轮看到自己历史带前缀就再模仿一个,无人剥离;prompt 层缓解(教模型用 @ 称呼**他人**)管不住「称呼自己」。
 - **影响**:转录脏、GUI 观感差、轻微 token 浪费;仅前缀空消息污染消息流。
 - **修复方向**:持久化前(或回放时)剥离 own-leading `@<self>: `——text 块级操作,不碰 thinking 签名,修复面小;或 wire 层对 own row 检测自指前缀并告警。
-- **回归验证**:连跑多轮群聊,moderator/参与者持久化文本无自指前缀累积;不再产生仅前缀空消息。
+- **修复(2026-09-05,`5a64f8ee`)**:持久化前剥离——`group_chat_prompts.rs::strip_own_prefix_blocks` 纯函数(text 块级,thinking/签名/tool 块不碰),调用点在 `drive.rs` 收尾持久化之前(`current_speaker` 有值才启用,经典聊逐字节不变):仅扫**前导** Text 块,反复剥离 `@<speaker>:`(ASCII `:` 与全角 `:` 都容忍)至净文本;剥空的块移除,整条剥空的 turn 走既有空轮分支不落库(根除仅前缀空消息);他人 `@` 称呼与正文不动。选持久化侧而非回放侧:own-row verbatim 是模型模仿链的输入源,存库干净 = 后续 own-history 视角干净,雪球从源头断。
+- **回归验证**:连跑多轮群聊,moderator/参与者持久化文本无自指前缀累积;不再产生仅前缀空消息。→ 测试锚点 `tests_group_chat_prompts::strip_own_prefix_*`(单层/四层累积/全角冒号/仅前缀塌空/他人称呼不动/非前导块不动)+ `tests_group_chat::group_chat_strips_own_prefix_on_persist`(端到端:双重前缀剥净、仅前缀 turn 零落库)。
 
 ### GC5 错误标记进入后续发言者视野(P2)
 
 - **现象**:赵拓-后端一轮 `[生成出错中断]`(`helpers.rs:482` ERROR_MARKER)被持久化为该参与者的「发言」(seq28);moderator 识别中断并重新点名,本次自愈成功——但靠的是 moderator 模型的理解力,不是机制保证。
 - **背景**:根因大类(错误重试死循环烧光 30 轮帽)在 08-04 重写已修,有前科案例与测试锚点——`group_chat_loop.rs:19` 引用 DB `d7fe451c`(Anthropic 2013 → ERROR_MARKER 死循环)、`tests_agent_loop/basic.rs:152`;`8be4687f` 为弱模型抢 moderator 身份案例。遗留面:错误标记作为普通文本进入后续轮历史,依赖各角色自行正确解读。
 - **修复方向**:编排器对 ERROR_MARKER 轮计数/熔断(连续 N 次 → 终止并落 stop_reason=error,与 GC2 联动);或 `role_history` 改写时把错误标记行剔除,由编排器以系统注记替代。
-- **回归验证**:人为使某参与者模型连续失败(400/断流),重试有上限且最终终止原因可查;其他参与者视野中错误轮呈现为系统注记而非「某人说了句话」。
+- **修复(2026-09-05,`5a64f8ee`)**:两条都做。(1) **熔断**:编排器在每个 speaker 回合后 reload 并检测该 speaker 最新 assistant 行是否带 ERROR_MARKER(`speaker_last_turn_errored`,raw reload 而非 role_history,不受 (2) 改写影响);连续 3 轮(`MAX_CONSECUTIVE_ERROR_TURNS`)→ 终止,终端 `Done{stop_reason:"error"}` + sessions 行落 `error`(与 GC2 联动)。计数语义:错误轮 +1;**只有参与者的干净发言轮重置**(真正的内容进展);moderator 的干净仲裁轮**不**重置——否则「每个被点名者 provider 都挂、moderator 点名正常」的交替模式永不触发、烧满 30 轮(实测踩中后修正);单个自愈错误(seq28 形态)计 1 后被下一干净轮清零,不受罚。前端 `streamEvents` 终结白名单与 `groupChatNotice` 同步加 `error`。(2) **视野改写**:`role_history` 他人行分支把 ERROR_MARKER 改写为显式 `[系统注记:…]`(部分文本保留 + 注记;仅 marker 行塌缩为无内容注记);own-row verbatim(invariant 1)不动。
+- **回归验证**:人为使某参与者模型连续失败(400/断流),重试有上限且最终终止原因可查;其他参与者视野中错误轮呈现为系统注记而非「某人说了句话」。→ 测试锚点 `tests_group_chat::group_chat_error_breaker_halts_after_consecutive_error_turns`(3 连错熔断 + stop_reason=error + M2 视角无裸 marker 有注记)+ `tests_group_chat_prompts::role_history_rewrites_other_speaker_error_marker_to_system_note` / `role_history_keeps_own_error_marker_verbatim` / `speaker_last_turn_errored_keys_on_latest_assistant_row` + 前端 `streamController.test.ts::GC5 终端 error`。
 
 ### GC6 turn_trace wire 命名无集中文档(P3)
 
 - **现象**:API 消费者按 snake_case 猜字段名查询 `list_turn_traces`,返回行字段全 None(本次实踩);实际 wire 是 camelCase(`runId`/`toolsToken`/`memoryToken`…,`db/trace.rs:38-62` 各字段注释注明)。
 - **根因**:daemon HTTP API 的双向命名约定(请求体 snake_case、行负载 camelCase)只存在于代码注释,无集中 API 文档。
 - **修复方向**:daemon API 文档(或 OpenAPI/JSON Schema 导出)写明命名约定与各 Row 的 wire 字段名。
-- **回归验证**:按文档字段名裸 curl 可正确读出目标字段(含 GC2 落地后的 stop_reason)。
+- **修复(2026-09-05,`5a64f8ee`)**:新增 [docs/DAEMON-API.md](./DAEMON-API.md) ——命名约定总则(请求体恒 snake_case;响应行按域分:sessions 域 snake_case、trace/providers 域 camelCase,含历史成因)+ `TurnTraceRow` 全字段 camelCase 对照表(即本次实踩点)+ sessions 域关键字段 + 群聊生命周期消费指南(GC1/GC2 的 busy×stop_reason 推导表、GC7 的 discussion_summary)+ GC3 无人值守审批窗口说明。源码为权威,文档漂移以源码为准。
+- **回归验证**:按文档字段名裸 curl 可正确读出目标字段(含 GC2 落地后的 stop_reason)。→ 文档即交付;`stop_reason`(sessions 域 snake_case)由 `group_chat_lifecycle_columns_round_trip` 锁定。
 
 ### GC7 end_discussion 总结对 API 藏于 tool_result(P3)
 
 - **现象**:整场最有价值的共识清单只存在于 end_discussion 的 tool_result 内容里(seq69,`{"cwd":…,"result":"## 共识清单…"}`),`load_session` 无一等字段。
 - **根因**:GUI 侧有 `DiscussionSummaryCard` 专门渲染(`MessageItem.vue:113` 起替换通用 ToolCallCard),体验已覆盖;API 消费者只能翻 content blocks 找 tool_result 再 JSON 解包。
 - **修复方向**:`LoadedSession`/session 行带 `discussion_summary`(终局时回填),或独立查询端点。
-- **回归验证**:讨论结束后一次 API 调用直接取到总结文本,无需解析 tool_result。
+- **修复(2026-09-05,`5a64f8ee`)**:session 行一等字段——迁移加 `sessions.discussion_summary TEXT`;`end_discussion::execute_intercept` 把 summary 捕获进 `GroupChatTurnState.end_summary`,编排器在正常收官退出时随 stop_reason 一起 `finalize_group_chat_lifecycle` 落库;`SessionRow.discussion_summary` 经 `load_session` 直接可读(一次 API 调用取总结,无需解析 tool_result)。非收官退出(max_rounds/cancelled/error)不写;每次编排启动清残留。
+- **回归验证**:讨论结束后一次 API 调用直接取到总结文本,无需解析 tool_result。→ 测试锚点 `tests_group_chat::group_chat_busy_holds_across_turns_and_lifecycle_persists`(总结原文 round-trip)+ `group_chat_error_breaker_halts_after_consecutive_error_turns`(非收官不写)+ `db/sessions_tests::group_chat_lifecycle_columns_round_trip`。
 
 ---
 
