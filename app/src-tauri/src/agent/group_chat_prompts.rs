@@ -237,43 +237,55 @@ pub(crate) fn speaker_last_turn_errored(full: &[ChatMessage], speaker: &str) -> 
 /// clean, which is what feeds the imitation loop.
 ///
 /// Semantics:
-/// - Only LEADING `Text` blocks are scanned (a prefix can only be at
-///   the message start); the first non-text block stops the scan.
-/// - Within a leading text block the prefix is stripped REPEATEDLY
-///   (kills already-accumulated layers), then leading spaces/tabs and
-///   ONE leading newline are trimmed so `@X:\nhello` → `hello`.
-/// - A block left empty/whitespace-only after stripping is REMOVED;
-///   if that empties the whole block list, the caller's existing
-///   empty-turn branch skips persisting entirely — that is what kills
-///   the observed prefix-only rows (seq9 `@moderator:`, seq38).
-/// - `@`-mentions of OTHER speakers in the body are untouched (only
-///   the exact `@<speaker>:` self-label at the very start matches).
+/// - The scan hunts for the FIRST `Text` block, SKIPPING any
+///   thinking / redacted-thinking / tool blocks that precede it
+///   (Anthropic interleaved order is `[thinking, text, …]` — the
+///   2026-09-05 live run showed the first-cut "stop at first
+///   non-text block" letting the prefix through on exactly that
+///   shape). Non-text blocks are never modified.
+/// - Within that text block the prefix is stripped REPEATEDLY
+///   (kills already-accumulated layers), then leading whitespace is
+///   trimmed so `@X:\nhello` → `hello`.
+/// - A block left empty/whitespace-only after stripping is REMOVED
+///   and the hunt continues at the next block (consecutive
+///   prefix-only text blocks all die); if that empties the whole
+///   block list, the caller's existing empty-turn branch skips
+///   persisting entirely — that is what kills the observed
+///   prefix-only rows (seq9 `@moderator:`, seq38).
+/// - Once a text block survives (no self-prefix, or non-empty after
+///   stripping) the scan STOPS: later text blocks are message body,
+///   and `@`-mentions of other speakers there are untouched.
 pub(crate) fn strip_own_prefix_blocks(blocks: &mut Vec<ContentBlock>, speaker: &str) {
-    if blocks.is_empty() {
-        return;
-    }
     let mut idx = 0;
     while idx < blocks.len() {
         let text = match &blocks[idx] {
             ContentBlock::Text { text, .. } => text.clone(),
-            _ => break,
+            // Pre-first-text non-text blocks (thinking / tool_use):
+            // skip OVER them while hunting the first text block — the
+            // self-label rides the first TEXT run, wherever the
+            // stream order put it.
+            _ => {
+                idx += 1;
+                continue;
+            }
         };
         match strip_repeated_own_prefix(&text, speaker) {
             Some(stripped) => {
                 let trimmed = trim_prefix_whitespace(&stripped);
                 if trimmed.is_empty() {
                     // Prefix-only block (or whitespace residue) — drop it
-                    // and keep scanning the next block as the new head.
+                    // and keep hunting the next block as the new head.
                     blocks.remove(idx);
                 } else {
                     if let ContentBlock::Text { text, .. } = &mut blocks[idx] {
                         *text = trimmed.to_string();
                     }
-                    idx += 1;
+                    // First real content found — body starts here.
+                    break;
                 }
             }
-            // No self-prefix in this block — it is the real content head;
-            // stop scanning.
+            // No self-prefix in the first text block — it IS the real
+            // content head; stop scanning.
             None => break,
         }
     }

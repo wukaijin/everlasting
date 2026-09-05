@@ -21,6 +21,22 @@
 > (剥离/改写/检测纯函数)、`permissions/tests_ask`(无人值守快速拒)、`daemon/sse`(观察者跟踪)、
 > `db/sessions_tests/session_crud`(生命周期列 round-trip);前端 `streamController.test.ts`
 > (error 终结 + notice)。
+>
+> **2026-09-05 修复后 live 实跑验证**(session `60bcb778`,daemon 重启新二进制,moderator
+> MiniMax-M3 + 3 参与者混编 anthropic/openai,两轮:整场讨论 ~16 分钟/31 条 + 同 session 快速
+> 收官复用;转录 `out/group-chat-gc-fix-verify-20260905.md`,本地不入库):
+> - **GC1**:全程 318 个轮询采样(含所有轮间空隙与 120s 权限等待)busy 回落 **0 次**;结束后
+>   busy=false 不复活(旧二进制轮间必翻 false)。
+> - **GC2**:结束后 sessions 行 `stop_reason=group_chat_end` 可查;第二轮复用时旧值先清后写
+>   (live 验证复用清空语义)。
+> - **GC3**:本场恰好有一次越界 grep 触发 ask;因 tunnel 远程浏览器在线(观察者在场),走了
+>   attended 路径等满 120s + 人工 deny 应答通道正常——实证「GUI 在线窗口 ≥120s 不受影响」的
+>   另一半契约(无人值守 8s 快速拒由单测锁定)。
+> - **GC4**:34 行零仅前缀空消息;实跑抓到第一版「遇 thinking 即停」漏网缺陷并即日修正(见
+>   GC4 条目补丁行)。
+> - **GC5**:本场零错误轮,熔断未触发(正确);错误轮呈现/熔断语义由单测锁定。
+> - **GC7**:`discussion_summary` 一等字段两次落库(第一轮完整共识清单 + 第二轮快速确认),
+>   单次 session 查询直接可读。
 
 ---
 
@@ -70,8 +86,9 @@
 - **根因**:已知问题的残留。`group_chat_prompts.rs:72-76` 文档化了双重前缀风险,修法是「他人行改写不带 `@` 前缀、归属交 wire 层 `apply_speaker_prefix`」;但**自己的行按 invariant 1 原样保留**(`:80-82`,Anthropic 签名回传需要)。模型一旦开始自称 `@moderator:`,下一轮看到自己历史带前缀就再模仿一个,无人剥离;prompt 层缓解(教模型用 @ 称呼**他人**)管不住「称呼自己」。
 - **影响**:转录脏、GUI 观感差、轻微 token 浪费;仅前缀空消息污染消息流。
 - **修复方向**:持久化前(或回放时)剥离 own-leading `@<self>: `——text 块级操作,不碰 thinking 签名,修复面小;或 wire 层对 own row 检测自指前缀并告警。
-- **修复(2026-09-05,`5a64f8ee`)**:持久化前剥离——`group_chat_prompts.rs::strip_own_prefix_blocks` 纯函数(text 块级,thinking/签名/tool 块不碰),调用点在 `drive.rs` 收尾持久化之前(`current_speaker` 有值才启用,经典聊逐字节不变):仅扫**前导** Text 块,反复剥离 `@<speaker>:`(ASCII `:` 与全角 `:` 都容忍)至净文本;剥空的块移除,整条剥空的 turn 走既有空轮分支不落库(根除仅前缀空消息);他人 `@` 称呼与正文不动。选持久化侧而非回放侧:own-row verbatim 是模型模仿链的输入源,存库干净 = 后续 own-history 视角干净,雪球从源头断。
-- **回归验证**:连跑多轮群聊,moderator/参与者持久化文本无自指前缀累积;不再产生仅前缀空消息。→ 测试锚点 `tests_group_chat_prompts::strip_own_prefix_*`(单层/四层累积/全角冒号/仅前缀塌空/他人称呼不动/非前导块不动)+ `tests_group_chat::group_chat_strips_own_prefix_on_persist`(端到端:双重前缀剥净、仅前缀 turn 零落库)。
+- **修复(2026-09-05,`5a64f8ee`)**:持久化前剥离——`group_chat_prompts.rs::strip_own_prefix_blocks` 纯函数(text 块级,thinking/签名/tool 块不碰),调用点在 `drive.rs` 收尾持久化之前(`current_speaker` 有值才启用,经典聊逐字节不变):反复剥离第一个 Text 块的 `@<speaker>:`(ASCII `:` 与全角 `:` 都容忍)至净文本;剥空的块移除,整条剥空的 turn 走既有空轮分支不落库(根除仅前缀空消息);他人 `@` 称呼与正文不动。选持久化侧而非回放侧:own-row verbatim 是模型模仿链的输入源,存库干净 = 后续 own-history 视角干净,雪球从源头断。
+- **修复后 live 实跑补丁(2026-09-05 同日,session `60bcb778`)**:重启 daemon 实跑验证抓到第一版语义缺陷——剥离只扫**前导** Text 块、遇首个非文本块即停,而 Anthropic 交错序常为 `[thinking, text, tool_use]`(该场 seq28/29 实锤两行漏网),thinking 在前时前缀漏过。修正为**跳过非文本块找第一个 Text 块**再剥(找到正文头即停,后续 text 块属 body 不动),补 seq28/29 形态单测锁定。
+- **回归验证**:连跑多轮群聊,moderator/参与者持久化文本无自指前缀累积;不再产生仅前缀空消息。→ 测试锚点 `tests_group_chat_prompts::strip_own_prefix_*`(单层/四层累积/全角冒号/仅前缀塌空/他人称呼不动/thinking 在前跳过/body 不动)+ `tests_group_chat::group_chat_strips_own_prefix_on_persist`(端到端:双重前缀剥净、仅前缀 turn 零落库)。live:2026-09-05 实跑 34 行零仅前缀空消息;前缀剥离路径由实跑形态单测锁定(第二场模型未自称,无可剥样本)。
 
 ### GC5 错误标记进入后续发言者视野(P2)
 

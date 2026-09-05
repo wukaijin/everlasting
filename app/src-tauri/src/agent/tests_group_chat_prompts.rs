@@ -1138,18 +1138,47 @@ mod tests {
         assert_eq!(blocks_text(&b), vec!["查一下".to_string()]);
         assert!(matches!(&b[1], ContentBlock::ToolUse { id, .. } if id == "t1"));
 
-        // 首块非文本(thinking 在前):整个扫描不启动,后置文本块
-        // 里的 @ 前缀(流序上不可能,防御性)不动。
+        // 首块非文本(thinking 在前):**跳过**非文本块继续找第一个
+        // Text 块——2026-09-05 live 实跑实锤的形态(seq28 `[thinking,
+        // text]`,Anthropic 交错序),第一版「遇非文本即停」让前缀
+        // 漏网,本用例锁定修正后的语义。
         let mut b = vec![
             ContentBlock::RedactedThinking {
                 data: "xx".to_string(),
             },
-            text_block("@moderator: 不该被剥(非 leading)"),
+            text_block("@moderator: 摸完了,结论如下"),
         ];
         strip_own_prefix_blocks(&mut b, "moderator");
         assert_eq!(
             blocks_text(&b),
-            vec!["@moderator: 不该被剥(非 leading)".to_string()]
+            vec!["摸完了,结论如下".to_string()],
+            "thinking 在前不得挡住第一个 Text 块的前缀剥离"
+        );
+        // thinking 块本身逐字节不动。
+        assert!(matches!(&b[0], ContentBlock::RedactedThinking { data } if data == "xx"));
+
+        // live 实跑 seq29 形态:`[thinking, text(带前缀), tool_use]`。
+        let mut b = vec![
+            ContentBlock::RedactedThinking {
+                data: "yy".to_string(),
+            },
+            text_block("@moderator: 收官,共识如下"),
+            ContentBlock::ToolUse {
+                id: "t9".to_string(),
+                name: "end_discussion".to_string(),
+                input: serde_json::json!({}),
+            },
+        ];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(blocks_text(&b), vec!["收官,共识如下".to_string()]);
+        assert!(matches!(&b[2], ContentBlock::ToolUse { id, .. } if id == "t9"));
+
+        // 正文里(第一个 Text 块之后)的 @ 前缀是 body,不动。
+        let mut b = vec![text_block("开场"), text_block("@moderator: 正文引用,不剥")];
+        strip_own_prefix_blocks(&mut b, "moderator");
+        assert_eq!(
+            blocks_text(&b),
+            vec!["开场".to_string(), "@moderator: 正文引用,不剥".to_string()]
         );
     }
 
