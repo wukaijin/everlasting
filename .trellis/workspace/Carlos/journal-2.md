@@ -870,3 +870,24 @@ ROADMAP 第三档 F3 磁盘余留收口(4 PR):摸底实测大头为辅助数据(
 ### Status
 
 [OK] **Completed**
+
+## Session 56: GCE-M1 群聊审议驱动:脚本引擎 + skill 指引路径
+
+**Date**: 2026-09-06
+**Task**: 09-06-gce-m1-deliberation-driver — GCE-M1 群聊审议驱动:脚本引擎 + skill 指引路径
+**Branch**: `main`
+
+### Summary
+
+GROUP-CHAT-API-ROADMAP M1 落地。立项讨论定三层:平台=daemon 原语(零改动)/引擎=脚本/skill=门面;brainstorm 五决策(session 默认保留+--cleanup、轮询不挂 SSE 保 8s 快拒、out/ 落点、预设内置常量、skill 名 group-chat)+用户补两议:目录为建群第一要素、AC5 改 daemon 单聊「套娃」消费验收。交付:scripts/group-chat-run.mjs(内省三查询 projects/models/presets + run 全链路:resolveProject→create_session(metadata.participants+UUID)→chat fire-and-forget→轮询 busy/stop_reason→转录导出→退出码 0/2/3/4/1;中断 cancel_chat 保 session;纯函数区 8 用例 node --test)+.agents/skills/group-chat/ + DAEMON-API §6 + AGENTS.md 接线。验收:AC1/AC4 live 13m51s 收官(session aeac878a,议题=评审团评审本引擎,狗血);AC2 60s 中断臂 exit 3 部分转录落盘;AC3 dry-run+单测;AC5 ◐ 用户手动中止——但挖出真缺陷:外层 shell 沙箱 seccomp 禁网+classify_block 只认 "Operation not permitted" 字面串,脚本原报 fetch failed 升级链死锁,修 errno→strerror 翻译(有单测)。评审团 verdict 全消化:砍 --add/--drop、PERSONA_COMMON 单源、转录三修(blockquote/工具轮证据链/summary 警告落文件)、失败路径必落转录;per-speaker token 延后(trace 行需先打 speaker 标签)。实踩:providers 域 wire camelCase(§2 同款);catalog key=UUID 无名字 fallback(preset 存名 run 时解析);daemon chat 秒回编排后台跑;create_session model 参数进 model 列 model_id 被默认模型顶(经典会话 quirk,记录未修);zsh 不分词坑+bg 任务别接 tail 管道(两犯)。AC5 中止后七层核查零影响(两仓库 git 净、零写调用、审批者零放行、daemon 未触碰、无队列残留);观察者已清理。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fc3c5c42` | feat(scripts): GCE-M1 群聊审议驱动引擎 group-chat-run.mjs + 纯函数单测 |
+| `47fc21df` | feat(skill+docs): group-chat skill 指引门面 + DAEMON-API §6 驱动入口 + 路线图 M1 收官 |
+
+### Status
+
+[OK] **Completed**(AC5 端到端嵌套重试待用户决定;per-speaker token + 8s 快拒计量记 follow-up,依赖群聊内部 trace speaker 标签)
