@@ -67,6 +67,14 @@ pub struct GroupChatCtx {
     /// `SessionRow.model` / `model_id` resolves to). The orchestrator
     /// dispatches the moderator turn through this.
     pub moderator_model_id: String,
+    /// The session's working directory, injected into both speaker
+    /// prompts (2026-09-06, live-run lesson). Group-chat prompts fully
+    /// replace the classic system prompt — which is where the
+    /// `- Working directory:` line lives — so without this the speakers
+    /// have NO in-band path knowledge and guess absolute roots (live:
+    /// a moderator burned 5 × 120s permission asks on a hallucinated
+    /// `/home/user/everlasting` before giving up on research).
+    pub project_root: Option<String>,
 }
 
 /// Parse the session's metadata + resolve the moderator model.
@@ -131,9 +139,15 @@ pub async fn build_group_chat_ctx(
         .clone()
         .unwrap_or_else(|| loaded.session.model.clone());
 
+    let project_root = {
+        let cwd = loaded.session.current_cwd;
+        (!cwd.trim().is_empty()).then_some(cwd)
+    };
+
     Ok(Some(GroupChatCtx {
         participants: config.participants,
         moderator_model_id,
+        project_root,
     }))
 }
 

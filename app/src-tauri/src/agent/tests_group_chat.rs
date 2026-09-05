@@ -189,6 +189,7 @@ fn group_chat_ctx() -> GroupChatCtx {
             },
         ],
         moderator_model_id: "moderator".to_string(),
+        project_root: None,
     }
 }
 

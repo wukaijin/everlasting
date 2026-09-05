@@ -150,7 +150,7 @@ mod tests {
     /// participant in the body.
     #[test]
     fn participant_prompt_forbids_self_label_but_allows_mentions() {
-        let p = participant_system_prompt("M3", None);
+        let p = participant_system_prompt("M3", None, None);
         // (a) no `@`-prefixed example in the guard block (it self-primes).
         assert!(
             !p.contains("@moderator:"),
@@ -180,6 +180,7 @@ mod tests {
                 persona_md: None,
             }],
             moderator_model_id: "mod".to_string(),
+            project_root: None,
         };
         let p = moderator_system_prompt(&ctx);
         assert!(
@@ -214,6 +215,7 @@ mod tests {
                 persona_md: None,
             }],
             moderator_model_id: "mod".to_string(),
+            project_root: None,
         };
         let p = moderator_system_prompt(&ctx);
         // Pacing: research is allowed but bounded — must hand the floor.
@@ -229,13 +231,61 @@ mod tests {
         );
     }
 
+    // -------------------------------------------------------------------
+    // 2026-09-06 (live-run lesson, BUGLIST-group-chat §4): group-chat
+    // prompts replace the classic system prompt wholesale, so the
+    // working directory must be injected explicitly — the 09-05 live
+    // run's moderator had zero in-band path knowledge and burned
+    // 5 × 120s permission asks on a hallucinated `/home/user/everlasting`.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn speaker_prompts_carry_working_directory_when_known() {
+        let ctx = GroupChatCtx {
+            participants: vec![crate::agent::group_chat::ParticipantConfig {
+                name: "M3".to_string(),
+                model: "m3".to_string(),
+                persona_md: None,
+            }],
+            moderator_model_id: "mod".to_string(),
+            project_root: Some("/srv/repo".to_string()),
+        };
+        let m = moderator_system_prompt(&ctx);
+        assert!(
+            m.contains("Working directory (project root): `/srv/repo`")
+                && m.contains("prefer relative paths"),
+            "moderator prompt must teach the project root + relative-path usage: {m:?}"
+        );
+        let p = participant_system_prompt("M3", None, Some("/srv/repo"));
+        assert!(
+            p.contains("Working directory (project root): `/srv/repo`")
+                && p.contains("prefer relative paths"),
+            "participant prompt must teach the project root + relative-path usage: {p:?}"
+        );
+    }
+
+    /// Unknown root (empty session cwd) degrades to today's prompt —
+    /// no dangling `## Project context` heading.
+    #[test]
+    fn speaker_prompts_omit_project_context_when_root_unknown() {
+        let ctx = GroupChatCtx {
+            participants: vec![],
+            moderator_model_id: "mod".to_string(),
+            project_root: None,
+        };
+        let m = moderator_system_prompt(&ctx);
+        assert!(!m.contains("## Project context"), "no empty section: {m:?}");
+        let p = participant_system_prompt("M3", None, None);
+        assert!(!p.contains("## Project context"), "no empty section: {p:?}");
+    }
+
     /// R3: the participant prompt must explicitly forbid taking over the
     /// moderator's job — the three failure modes from seq 9 (self-built
     /// checklist, addressing the room as host, inventing system tools/skills
     /// to legitimize hosting).
     #[test]
     fn participant_prompt_forbids_takeover() {
-        let p = participant_system_prompt("M3", None);
+        let p = participant_system_prompt("M3", None, None);
         assert!(
             p.contains("must NOT step in as the host"),
             "participant prompt must forbid taking over the host role: {p:?}"
@@ -263,7 +313,7 @@ mod tests {
     /// 4/5 earlier sessions with participant tool use).
     #[test]
     fn participant_prompt_encourages_research() {
-        let p = participant_system_prompt("M3", None);
+        let p = participant_system_prompt("M3", None, None);
         assert!(
             p.contains("You MAY research the codebase"),
             "participant prompt must allow research: {p:?}"
@@ -972,9 +1022,10 @@ mod tests {
                 persona_md: None,
             }],
             moderator_model_id: same_model.to_string(),
+            project_root: None,
         };
 
-        let participant_prompt = participant_system_prompt("D4F", None);
+        let participant_prompt = participant_system_prompt("D4F", None, None);
         let moderator_prompt = moderator_system_prompt(&ctx);
 
         // Participant prompt: asserts it is D4F + the identity guard.

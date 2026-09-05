@@ -11,12 +11,39 @@ use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role, ToolDef
 use crate::tools::end_discussion::END_DISCUSSION_TOOL_NAME;
 use crate::tools::nominate_speaker::NOMINATE_SPEAKER_TOOL_NAME;
 
+/// 2026-09-06 (live-run lesson, BUGLIST-group-chat §4): group-chat
+/// prompts fully replace the classic system prompt, which is where
+/// the `- Working directory:` line lives — without this block the
+/// speakers have no in-band path knowledge and guess absolute roots
+/// (live evidence: a moderator burned 5 × 120s permission asks on a
+/// hallucinated `/home/user/everlasting` before giving up research).
+/// Teach the working usage directly: relative paths resolve against
+/// the root and never trip the out-of-root permission ask (the two
+/// participants that DID use relative paths sailed through).
+fn project_root_block(project_root: Option<&str>) -> String {
+    match project_root {
+        Some(root) => format!(
+            "## Project context\n\
+             - Working directory (project root): `{root}` — the codebase this \
+             discussion is about.\n\
+             - File tools (read_file / grep / glob / list_dir) resolve RELATIVE \
+             paths against it. Always prefer relative paths like `app/src`; \
+             absolute paths outside the root require user approval and stall or \
+             get denied in unattended runs.\n\
+             \n\
+             "
+        ),
+        None => String::new(),
+    }
+}
+
 pub(crate) fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
     let roster: Vec<String> = ctx
         .participants
         .iter()
         .map(|p| format!("- {} (model: {})", p.name, p.model))
         .collect();
+    let cwd_block = project_root_block(ctx.project_root.as_deref());
     format!(
         "You are the MODERATOR of a group chat discussion. Multiple AI participants \
          take turns discussing a topic the user raised. Your job:\n\
@@ -37,7 +64,7 @@ pub(crate) fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          agree, or push back. Pick the order that best explores the topic. Keep \
          the discussion focused; end it when it has run its course.\n\
          \n\
-         ## Pacing and boundaries (read carefully)\n\
+         {cwd_block}## Pacing and boundaries (read carefully)\n\
          - You MAY research the codebase (read_file / grep / glob / list_dir / \
          web_fetch) to ground the discussion — a brief investigation is good. \
          But research is a MEANS, not the goal: after a short look, hand the \
@@ -406,7 +433,14 @@ pub(crate) fn group_chat_tool_defs(tool_defs: &[ToolDef], is_moderator: bool) ->
 /// Appended to BOTH the persona and the default template — a persona
 /// only describes the persona, it does not defend against role
 /// confusion.
-pub(crate) fn participant_system_prompt(name: &str, persona_md: Option<&str>) -> String {
+///
+/// `project_root` (2026-09-06) feeds [`project_root_block`] — the
+/// working-directory line the classic system prompt normally carries.
+pub(crate) fn participant_system_prompt(
+    name: &str,
+    persona_md: Option<&str>,
+    project_root: Option<&str>,
+) -> String {
     let base = match persona_md {
         Some(p) if !p.trim().is_empty() => p.to_string(),
         _ => format!(
@@ -417,6 +451,7 @@ pub(crate) fn participant_system_prompt(name: &str, persona_md: Option<&str>) ->
             name
         ),
     };
+    let cwd_block = project_root_block(project_root);
     format!(
         "{}\n\n\
          ## Group-chat roles (read carefully)\n\
@@ -435,7 +470,7 @@ pub(crate) fn participant_system_prompt(name: &str, persona_md: Option<&str>) ->
          - Never refer to yourself in the third person.\n\
          - Just say your own piece on the topic and respond to what others said.\n\
          \n\
-         ## Research is allowed (08-07-group-chat-role-history-isolation follow-up)\n\
+         {cwd_block}## Research is allowed (08-07-group-chat-role-history-isolation follow-up)\n\
          You MAY research the codebase to ground your remarks — read_file / grep / glob / list_dir / web_fetch / web_search\n\
          are available to you, and a brief look at the\n\
          code before you speak is good (the moderator will verify / build on it).\n\

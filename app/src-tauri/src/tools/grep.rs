@@ -179,7 +179,26 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     // skip matches in minified bundles), disable the pager.
     cmd.arg("--sort").arg("path");
     cmd.arg("--no-messages");
-    cmd.arg("--").arg(pattern).arg(&validated_root);
+    // rg matches --glob patterns against the paths it PRINTS. With an
+    // absolute root argument rg prints absolute paths, so a
+    // root-relative glob like `app/src/**/*.rs` matches nothing —
+    // live evidence (2026-09-05 group-chat run, BUGLIST-group-chat
+    // §4): grep with a relative glob + the default path returned
+    // "No matches" over files that do match. Run rg with the search
+    // root as its working directory and pass `.` so printed paths
+    // are root-relative and user globs behave as expected. A
+    // non-directory root (a single file, or a missing path) keeps
+    // the direct argument — current_dir would fail the spawn.
+    let root_is_dir = validated_root.is_dir();
+    if root_is_dir {
+        cmd.current_dir(&validated_root);
+    }
+    cmd.arg("--").arg(pattern);
+    if root_is_dir {
+        cmd.arg(".");
+    } else {
+        cmd.arg(&validated_root);
+    }
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -256,9 +275,18 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     // 6. For content mode, rg emits `path:line:content`; the path
     //    portion is the canonical absolute path. To keep results
     //    human-friendly, we rewrite it back to a relative path
-    //    against the project root.
-    let formatted = if output_mode == OutputMode::Content {
-        rewrite_paths_to_relative(&capped, &validated_root, &ctx.worktree_path)
+    //    against the project root. With the dir-root fix above rg
+    //    prints root-relative "./app/src/foo.rs" — route files mode
+    //    through the same rewriter so the "./" prefix is stripped
+    //    there too (the absolute prefix it used to strip is gone by
+    //    construction).
+    let rewrite_root: &Path = if root_is_dir {
+        Path::new(".")
+    } else {
+        &validated_root
+    };
+    let formatted = if root_is_dir || output_mode == OutputMode::Content {
+        rewrite_paths_to_relative(&capped, rewrite_root, &ctx.worktree_path)
     } else {
         capped
     };
@@ -422,6 +450,64 @@ mod tests {
         assert!(!is_err, "{}", content);
         assert!(content.contains("a.rs"));
         assert!(!content.contains("b.rs"));
+    }
+
+    // -------------------------------------------------------------------
+    // 2026-09-06 (live-run lesson, BUGLIST-group-chat §4): rg applies
+    // --glob to the paths it PRINTS. The tool used to pass an absolute
+    // root, so rg printed absolute paths and a root-relative glob like
+    // `sub/**/*.txt` matched NOTHING — a live grep returned "No
+    // matches" over files that do match. The fix runs rg with the
+    // search root as its cwd and passes `.`.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relative_glob_matches_with_default_path() {
+        if !rg_available() {
+            eprintln!("rg not available, skipping");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sub/inner")).unwrap();
+        std::fs::write(tmp.path().join("sub/inner/a.txt"), "needle here\n").unwrap();
+        std::fs::write(tmp.path().join("other.txt"), "nothing\n").unwrap();
+        let (content, is_err) = execute(
+            &serde_json::json!({"pattern": "needle", "glob": "sub/**/*.txt"}),
+            &test_ctx(&tmp),
+        )
+        .await;
+        assert!(!is_err, "{}", content);
+        assert!(
+            content.contains("sub/inner/a.txt"),
+            "relative glob must match with the default path: {content}"
+        );
+        assert!(!content.contains("other.txt"), "got: {content}");
+        // The "./" prefix rg prints for a "." root must be stripped.
+        assert!(
+            !content.contains("./"),
+            "paths must be clean relative: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relative_glob_matches_with_relative_path() {
+        if !rg_available() {
+            eprintln!("rg not available, skipping");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sub/inner")).unwrap();
+        std::fs::write(tmp.path().join("sub/inner/a.txt"), "needle here\n").unwrap();
+        let (content, is_err) = execute(
+            &serde_json::json!({"pattern": "needle", "path": "sub", "glob": "**/*.txt"}),
+            &test_ctx(&tmp),
+        )
+        .await;
+        assert!(!is_err, "{}", content);
+        assert!(
+            content.contains("inner/a.txt"),
+            "relative glob must match with a relative path arg: {content}"
+        );
     }
 
     #[tokio::test]

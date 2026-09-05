@@ -124,3 +124,29 @@
 - **role_history 隔离无串台**:无参与者误认自己是 moderator(08-04 身份混淆根因类别,本次 6 人 × 混编 3 模型未复发)。
 - **权限拒绝不炸循环**:越界路径 deny 后 moderator 自适应绕过继续主持(ask 通道语义正确;慢的问题归 GC3)。
 - **中断自愈**:`[生成出错中断]` 后 moderator 检测并重新点名成功(design D7 fallback 生效;机制加固归 GC5)。
+
+---
+
+## 4. 求证衍生修复(2026-09-06,GC-fix live 转录复盘)
+
+对 09-05 验证 session(`60bcb778`)整场转录做逐条求证,发现三个 GC 清单之外的真实缺陷(论断核查结论:GC1-GC7 相关共识 P0「打断最小语义」依然成立,但其论据中「participant 回合 max_turns=1」「压缩只可能在 moderator 回合触发」两条与代码不符——群聊压缩总 gate 显式排除群聊 `chat_loop/init.rs`(`!worker && !群聊`),群聊任何回合都不做摘要压缩,超线直走机械截断;「当前 speaker 只缺露出」亦过时,`ChatEvent::Speaker` 08-04 起每轮已发):
+
+### D1 群聊 prompt 无 cwd——主持人错路径烧 10 分钟(A 类)
+
+- **现象**:moderator(MiniMax-M3)开场三轮工具调用全部使用幻觉绝对路径 `/home/user/everlasting/...`,5 次 root 外审批 ask × 120s attended 超时,seq1→seq9 烧掉 10 分 08 秒(占整场 16 分钟 2/3),研究预算耗尽后凭记忆开题,直接导致其「群聊是 N session 拼场」错误前提。同场 deepseek/GLM flash 参与者用相对路径全部免审批成功。
+- **根因**:群聊 prompt 是 `system_prompt_override` 完全替换,而 `- Working directory:` 行在经典 prompt(`system_prompt.rs`)里——群聊模型对项目路径**零 in-band 信息**,只能猜。模型侧 seq5 曾从工具报文 envelope 的 `cwd` 字段学到正确路径,seq7 又退回——注意力跟随弱是放大器,不是根因。
+- **修复(2026-09-06)**:`GroupChatCtx` 新增 `project_root`(`build_group_chat_ctx` 从 `SessionRow.current_cwd` 回填);moderator/participant prompt 注入 `## Project context` 块(working directory + 「优先相对路径,绝对路径出 root 需审批」教法);空 cwd 优雅降级为无该节。
+- **回归锚点**:`tests_group_chat_prompts::speaker_prompts_carry_working_directory_when_known` / `speaker_prompts_omit_project_context_when_root_unknown`。
+
+### D2 grep 工具相对 glob 恒零命中(通用工具 bug,A 类)
+
+- **现象**:live 实跑中参与者 grep `{"glob":"app/src/**/*.vue","pattern":"打断|插话|preempt|中断"}`(未传 path)返回 "No matches",据此下了「全部 .vue 零命中」的错误论断;实际 6 个 .vue 文件命中。
+- **根因**:rg 的 `--glob` 匹配的是它**打印的路径**。工具把 root 解析成绝对路径传给 rg → rg 打印绝对路径 → 根相对 glob(`app/src/**`)永远失配。path 缺省 `"."` 也被 resolve 成绝对 cwd,故「缺省 path + 相对 glob」必挂(本机复现:同款命令 exit=1,`**/*.vue` 即正常)。
+- **修复(2026-09-06)**:root 为目录时改用 `cmd.current_dir(root)` + 传 `.` 作搜索根——rg 打印根相对路径,glob 语义即符合直觉;输出统一经 `rewrite_paths_to_relative` 剥 `./` 前缀(files 模式此前不重写,现一并收口)。非目录 root(单文件/缺失路径)保留直传,避免 `current_dir` spawn 失败误报「rg 不在 PATH」。
+- **回归锚点**:`tools::grep::tests::relative_glob_matches_with_default_path` / `relative_glob_matches_with_relative_path`。
+
+### D3 两处过时注释仍在散布 participant `max_turns=1`(文档债,已实际误导)
+
+- **现象**:live 实跑中认真读代码的参与者(deepseek)得出「participant 回合 max_turns=1,永远撞不响压缩阈值」——前提与实际相反(`group_chat_loop.rs` 实际调用 `max_turns=Some(20)`,08-07 R3;moderator 才是 1)。
+- **根因**:`group_chat_loop.rs` 模块文档 §6 与 `chat_loop.rs` 软卡分支注释双双仍写 1(且互相引用),08-07 R3 改 20 后未同步——模型读的是真代码里的假注释,非幻觉。
+- **修复(2026-09-06)**:两处注释更正为「participant 20 / moderator 1,08-07 R3」。

@@ -51,7 +51,8 @@
 //!   3. if end_discussion → break
 //!   4. resolve nominee X → (provider, system_prompt) from GroupChatCtx
 //!   5. reload messages from DB → role_history(full, X.name)
-//!   6. participant X turn → run_chat_loop(X_provider, X_prompt, max_turns=1, speaker=X)
+//!   6. participant X turn → run_chat_loop(X_provider, X_prompt, max_turns=20, speaker=X)
+//!      (20 = 08-07-group-chat-review-fixes R3 参与者多轮调研预算;moderator 是 1)
 //!   └─ back to 1 (round>0 reloads the moderator view)
 //! }
 //! ```
@@ -518,8 +519,11 @@ pub async fn run_group_chat_loop(
         };
         let (participant_provider, participant_provider_id) =
             resolve_provider(&worker_catalog, &participant.model, &db).await;
-        let participant_prompt =
-            participant_system_prompt(&participant.name, participant.persona_md.as_deref());
+        let participant_prompt = participant_system_prompt(
+            &participant.name,
+            participant.persona_md.as_deref(),
+            gc_ctx.project_root.as_deref(),
+        );
 
         let Some(provider) = participant_provider else {
             // R2: same non-terminal notice pattern as nominee_unknown —

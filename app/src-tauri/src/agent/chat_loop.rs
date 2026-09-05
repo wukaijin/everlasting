@@ -727,9 +727,11 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
                 // break into the post-loop hard terminal (worker
                 // messages capture included, 1096-1098 original
                 // semantics). Group chat reuses run_chat_loop for
-                // each per-speaker segment with max_turns=1
-                // (group_chat_loop.rs §54) — its budget exhaustion
-                // is the 30-round orchestration's business, NOT a
+                // each per-speaker segment with max_turns=20 for
+                // participants / 1 for the moderator
+                // (group_chat_loop.rs §6, 08-07 R3) — its budget
+                // exhaustion is the 30-round orchestration's
+                // business, NOT a
                 // softcap ask (R4: 仅单聊主 loop; a softcap here
                 // would also hang speaker turns that end on
                 // tool_use with nobody watching the store).
