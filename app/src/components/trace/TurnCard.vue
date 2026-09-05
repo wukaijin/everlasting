@@ -21,6 +21,8 @@
 import { computed } from "vue";
 import Icon from "../Icon.vue";
 import { abbreviateTokens, tokenUsageLevel } from "../../utils/tokenUsage";
+import { formatTime, formatTimeOfDay } from "../../utils/time";
+import { parseAuditPayload } from "../../utils/audit";
 import { useChatStore } from "../../stores/chat";
 import type { TurnTrace } from "../../types/turnTrace";
 import TraceEventItem from "./TraceEventItem.vue";
@@ -153,7 +155,12 @@ const contextWindowLabel = computed<string>(() => {
 const contextLevel = computed<"ok" | "warn" | "alert" | "none">(() => {
   const pct = contextUtilPct.value;
   if (pct === null) return "none";
-  return tokenUsageLevel(pct);
+  // tokenUsageLevel's contract is a 0-1 RATIO (ChatInputTokenUsage
+  // passes `live / window`); `contextUtilPct` here is a percentage
+  // (×100), so divide back. Passing the raw percent made every turn
+  // ≥0.75% light up alert-red (a 4% turn rendered as a red alarm —
+  // caught in the 2026-09-05 real-UI pass).
+  return tokenUsageLevel(pct / 100);
 });
 
 /** C7 (2026-08-14): tools[] estimated tokens as a share of the
@@ -403,6 +410,41 @@ const isUngroupedBucket = computed<boolean>(
 const ungroupedLabel = computed<string>(() =>
   isUngroupedBucket.value ? "未关联 turn" : `Turn ${props.trace.seq}`,
 );
+
+/** Wall-clock start of the turn, local `HH:MM:SS`. The three
+ *  writers disagree on format — the live path stamps ISO
+ *  (`new Date().toISOString()`), the 回看 path SQLite UTC
+ *  ("YYYY-MM-DD HH:MM:SS", both from `turn_trace.created_at` and
+ *  the audit-only stubs) — so route each to its converter. Empty
+ *  string hides the cell (defensive; both writers always set it). */
+const timeLabel = computed<string>(() => {
+  const ts = props.trace.createdAt;
+  if (!ts) return "";
+  return ts.includes("T") ? formatTime(ts) : formatTimeOfDay(ts);
+});
+
+/** Collapsed audit-row preview: the (deduplicated) tool names this
+ *  turn called, so the user reads what happened without expanding
+ *  the `<details>`. Derived from the same parsed payloads the
+ *  TraceEventItem rows render (tool / tool_executed kinds carry
+ *  `tool_name`); capped at 3 names + "+N" overflow. Volume already
+ *  lives in the count label — the preview only adds variety.
+ *  Empty when the turn's rows carry no tool payloads (mode
+ *  switches, scheduled tasks, …). */
+const auditToolSummary = computed<string>(() => {
+  const names = new Set<string>();
+  for (const ev of auditEvents.value) {
+    const p = parseAuditPayload(ev.kind, ev.payloadJson);
+    if (p.kind === "tool" || p.kind === "tool_executed") {
+      const n = p.payload.tool_name;
+      if (n) names.add(n);
+    }
+  }
+  if (names.size === 0) return "";
+  const list = [...names];
+  const shown = list.slice(0, 3).join(", ");
+  return list.length > 3 ? `${shown} +${list.length - 3}` : shown;
+});
 </script>
 
 <template>
@@ -420,7 +462,16 @@ const ungroupedLabel = computed<string>(() =>
       >
         {{ ungroupedLabel }}
       </span>
-      <span class="turn-card__latency" :title="latencyLabel">
+      <span v-if="timeLabel" class="turn-card__time">{{
+        timeLabel
+      }}</span>
+      <!-- The ungrouped bucket never carries latency data (no turn
+           loop ran), so its "—" cell is pure noise — hidden. -->
+      <span
+        v-if="!isUngroupedBucket"
+        class="turn-card__latency"
+        :title="latencyLabel"
+      >
         <Icon name="clock" :size="12" />
         {{ latencyLabel }}
       </span>
@@ -453,17 +504,55 @@ const ungroupedLabel = computed<string>(() =>
           :title="seg.label"
         />
       </div>
+      <!-- Legend: one cell per NON-ZERO bar field (zero cells like
+           "cc 0" are legend noise — the bar itself already drops
+           zero segments). Each cell carries a 6px swatch in its
+           segment color so text and bar read as one chart. tools/
+           mem/sys keep their documented "surface the 0" gating
+           below (governance visibility), they are not bar segments. -->
       <div class="turn-card__token-legend">
-        <span class="turn-card__token-cell">
+        <span
+          v-if="trace.tokenUsage.input_tokens > 0"
+          class="turn-card__token-cell"
+        >
+          <span
+            class="turn-card__swatch"
+            :style="{ background: 'var(--color-tool-read)' }"
+            aria-hidden="true"
+          />
           in {{ abbreviateTokens(trace.tokenUsage.input_tokens) }}
         </span>
-        <span class="turn-card__token-cell">
+        <span
+          v-if="trace.tokenUsage.cache_creation_input_tokens > 0"
+          class="turn-card__token-cell"
+        >
+          <span
+            class="turn-card__swatch"
+            :style="{ background: 'var(--color-tool-thinking)' }"
+            aria-hidden="true"
+          />
           cc {{ abbreviateTokens(trace.tokenUsage.cache_creation_input_tokens) }}
         </span>
-        <span class="turn-card__token-cell">
+        <span
+          v-if="trace.tokenUsage.cache_read_input_tokens > 0"
+          class="turn-card__token-cell"
+        >
+          <span
+            class="turn-card__swatch"
+            :style="{ background: 'var(--color-accent)' }"
+            aria-hidden="true"
+          />
           cr {{ abbreviateTokens(trace.tokenUsage.cache_read_input_tokens) }}
         </span>
-        <span class="turn-card__token-cell">
+        <span
+          v-if="trace.tokenUsage.output_tokens > 0"
+          class="turn-card__token-cell"
+        >
+          <span
+            class="turn-card__swatch"
+            :style="{ background: 'var(--color-tool-write)' }"
+            aria-hidden="true"
+          />
           out {{ abbreviateTokens(trace.tokenUsage.output_tokens) }}
         </span>
         <!-- C7: separately-measured tools[] token estimate (NOT a
@@ -636,7 +725,11 @@ const ungroupedLabel = computed<string>(() =>
       <details class="turn-card__audits-details">
         <summary class="turn-card__audits-summary">
           <Icon name="terminal" :size="12" />
-          {{ auditEvents.length }} 条审计事件
+          <span>{{ auditEvents.length }} 条审计事件</span>
+          <span
+            v-if="auditToolSummary"
+            class="turn-card__audits-preview"
+          >{{ auditToolSummary }}</span>
         </summary>
         <ul class="turn-card__audits-list">
           <li v-for="ev in auditEvents" :key="ev.id">
@@ -658,7 +751,7 @@ const ungroupedLabel = computed<string>(() =>
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid transparent;
@@ -703,10 +796,23 @@ const ungroupedLabel = computed<string>(() =>
   background: var(--color-bg-elevated);
 }
 
+/* Wall-clock start of the turn (local HH:MM:SS) — pairs with the
+   seq chip; the 2026-09-05 audit-log redesign's gutter vocabulary. */
+.turn-card__time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* Latency + ctx chip sit at the card's right edge; seq + time own
+   the left. margin-left:auto (not a spacer span) keeps the header
+   one flex row. */
 .turn-card__latency {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
@@ -775,7 +881,20 @@ const ungroupedLabel = computed<string>(() =>
 }
 
 .turn-card__token-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   white-space: nowrap;
+}
+
+/* Chart-legend swatch: maps the text cell to its bar segment
+   color (functional legend key, not decoration). */
+.turn-card__swatch {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 
 /* C7: tools[] is a separately-measured slice of context (not one of
@@ -955,6 +1074,18 @@ const ungroupedLabel = computed<string>(() =>
 
 .turn-card__audits-summary::-webkit-details-marker {
   display: none;
+}
+
+/* Collapsed preview: the tool names this turn called, ellipsized
+   so long name lists never push the summary wide. */
+.turn-card__audits-preview {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .turn-card__audits-list {

@@ -165,8 +165,14 @@ watch(
           <h2 class="trace-panel__title">
             <Icon name="chart" :size="14" class="trace-panel__title-icon" />
             Trace 时间线
+            <!-- Session chip inside the same heading (mirrors the
+                 AuditLogModal's 2026-09-05 title treatment): the
+                 fixed label + the bound session as a secondary
+                 pill, no "—" cram in between. -->
+            <span class="trace-panel__session">{{
+              sessionTitle
+            }}</span>
           </h2>
-          <span class="trace-panel__subtitle">— {{ sessionTitle }}</span>
         </div>
         <div class="trace-panel__actions">
           <button
@@ -267,18 +273,27 @@ watch(
   color: var(--color-text-primary);
   margin: 0;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .trace-panel__title-icon {
   color: var(--color-accent-text);
 }
 
-.trace-panel__subtitle {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-  white-space: nowrap;
+/* Session chip (2026-09-05): secondary identity inside the title,
+   mirrors .audit-modal__title-session. Ellipsizes long session
+   names instead of pushing the header actions out. */
+.trace-panel__session {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   min-width: 0;
 }
 

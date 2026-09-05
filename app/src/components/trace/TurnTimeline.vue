@@ -78,10 +78,16 @@ async function onRetry(): Promise<void> {
       </button>
     </div>
 
-    <!-- Empty state -->
+    <!-- Empty state (2026-09-05: composed tile + title + hint,
+         mirroring the AuditLogModal placeholder family) -->
     <div v-else-if="isEmpty" class="turn-timeline__empty">
-      <Icon name="info" :size="14" />
-      <span>该 session 暂无 trace 记录</span>
+      <span class="turn-timeline__empty-icon" aria-hidden="true">
+        <Icon name="chart" :size="20" />
+      </span>
+      <p class="turn-timeline__empty-title">该 session 暂无 trace 记录</p>
+      <p class="turn-timeline__empty-hint">
+        跑一轮对话后,每轮的 token、压缩与循环检测信号会记录在这里
+      </p>
     </div>
 
     <!-- Main timeline (turn-seq ASC) -->
@@ -120,12 +126,36 @@ async function onRetry(): Promise<void> {
 
 .turn-timeline__empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 24px 12px;
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-4);
+  text-align: center;
+}
+
+.turn-timeline__empty-icon {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  width: 40px; /* icon tile: 20px glyph + 10px cushion each side */
+  height: 40px;
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  color: var(--color-text-muted);
+}
+
+.turn-timeline__empty-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.turn-timeline__empty-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 
 .turn-timeline__error {
