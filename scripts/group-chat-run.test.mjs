@@ -80,10 +80,30 @@ test('summarizeToolUses:工具轮证据链(name + 关键参数)', () => {
   assert.match(s, /read_file\{\/a\/b\.rs\}/);
 });
 
-test('defaultTranscriptPath:落在 everlasting 仓库根 out/(非 CWD)', () => {
+test('buildCreateSessionBody:createdVia 增量键(有则盖戳,无则不设键 = GUI 语义)', () => {
+  const stamped = buildCreateSessionBody({
+    projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3',
+    participants: [], createdVia: 'script',
+  });
+  assert.equal(stamped.metadata.created_via, 'script');
+  const mcp = buildCreateSessionBody({
+    projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3',
+    participants: [], createdVia: 'mcp',
+  });
+  assert.equal(mcp.metadata.created_via, 'mcp');
+  // 不传 = 键不存在(GUI/历史 session 的判定语义,不传空串)
+  assert.equal('created_via' in buildCreateSessionBody({
+    projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3', participants: [],
+  }).metadata, false);
+});
+
+test('defaultTranscriptPath:落在 everlasting 仓库根 out/(非 CWD);显式 rootDir 分叉(MCP)', () => {
   const p1 = defaultTranscriptPath('议题 ABC');
   assert.equal(path.dirname(p1), path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'out'));
   assert.match(path.basename(p1), /^group-chat-.+-\d{14}\.md$/);
+  // MCP 消费:转录落讨论 cwd 的 out/(design §6 有意分叉)
+  const p2 = defaultTranscriptPath('议题 ABC', '/work/vue3-cms');
+  assert.equal(path.dirname(p2), '/work/vue3-cms/out');
 });
 
 test('renderTranscript:blockquote 隔离 / 工具轮证据链 / summary 缺失警告 / 阵容可读名', () => {

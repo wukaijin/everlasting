@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), '..');
-const DEFAULT_BASE = process.env.EVERLASTING_BASE || 'http://127.0.0.1:7456';
+export const DEFAULT_BASE = process.env.EVERLASTING_BASE || 'http://127.0.0.1:7456';
 const DEFAULT_TIMEOUT_S = 30 * 60; // 30min:两场 live 实测 9-16min,留余量
 const POLL_INTERVAL_S = 10;
 const CANCEL_SETTLE_S = 60; // cancel 后等 stop_reason=cancelled 落地的兜底窗
@@ -150,13 +150,15 @@ export function resolveParticipants({ preset, participantsJson, set }) {
  * state.rs:42;daemon 版 create_session 无 model_id 参数,UUID 走
  * session.model → moderator 解析的 fallback 路径命中 catalog)。
  */
-export function buildCreateSessionBody({ projectId, projectPath, moderatorModel, participants }) {
+export function buildCreateSessionBody({ projectId, projectPath, moderatorModel, participants, createdVia }) {
   return {
     project_id: projectId,
     initial_cwd: projectPath,
     model: moderatorModel,
     session_type: 'group_chat',
-    metadata: { participants },
+    // createdVia:召集通道归因(GCE-M2 D5):'script'(M1 CLI)/'mcp'(MCP server);
+    // 缺失 = GUI/历史 session。增量键,daemon/GUI 不感知。
+    metadata: createdVia ? { participants, created_via: createdVia } : { participants },
   };
 }
 
@@ -222,14 +224,16 @@ export function summarizeToolUses(content) {
 }
 
 /** 转录落点:everlasting 仓库根 out/(非 CWD —— 嵌套消费约束)。 */
-export function defaultTranscriptPath(topic) {
+export function defaultTranscriptPath(topic, rootDir = REPO_ROOT) {
   const slugBase = String(topic || 'discussion')
     .slice(0, 40)
     .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')
     .toLowerCase() || 'discussion';
   const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-  return path.join(REPO_ROOT, 'out', `group-chat-${slugBase}-${ts}.md`);
+  // rootDir:MCP 消费时传讨论 cwd(转录留在证据基地,design §6 分叉声明);
+  // M1 CLI 不传,默认引擎仓库根(本文件 :20 语义约束,勿改默认)。
+  return path.join(rootDir, 'out', `group-chat-${slugBase}-${ts}.md`);
 }
 
 /**
@@ -288,7 +292,7 @@ export function renderTranscript({ session, messages, startedAtMs, stoppedAtMs, 
 // errno → 沙箱分类器认的字面串(sandbox/mod.rs classify_block:
 // "Permission denied" / "Read-only file system" / "Operation not
 // permitted")。缺这层翻译,嵌套消费里外层 shell 的升级链永远不触发。
-function fetchFailDetail(e) {
+export function fetchFailDetail(e) {
   const cause = e?.cause;
   if (!cause) return e?.message || String(e);
   const code = cause.code || '';
@@ -441,7 +445,7 @@ async function run(argv) {
   const norm = validateModelRefs(models, { moderatorModel, participants });
   const proj = await resolveProject(opt.base, opt.project);
   if (proj.created) say(`# project 不在列表,已创建:${opt.project}`);
-  const createBody = buildCreateSessionBody({ projectId: proj.id, projectPath: opt.project, moderatorModel: norm.moderatorModelId, participants: norm.participants });
+  const createBody = buildCreateSessionBody({ projectId: proj.id, projectPath: opt.project, moderatorModel: norm.moderatorModelId, participants: norm.participants, createdVia: 'script' });
   const session = await createSession(opt.base, createBody);
   const sessionId = session.id;
   emit(`# session: ${sessionId}  moderator: ${moderatorModel}  participants: ${participants.map((p) => `${p.name}/${p.model}`).join(' + ')}`);
