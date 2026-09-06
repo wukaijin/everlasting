@@ -35,19 +35,24 @@ const DEFAULT_TIMEOUT_S = 30 * 60; // 30min:两场 live 实测 9-16min,留余量
 const POLL_INTERVAL_S = 10;
 const CANCEL_SETTLE_S = 60; // cancel 后等 stop_reason=cancelled 落地的兜底窗
 
-// 退出码契约(design.md):stop_reason 四值各占一档,1 留给脚本自身错误
+// 退出码契约(design.md):stop_reason 各值一档,1 留给脚本自身错误。
+// GCE P1a(09-06-gc-p1a-checkpoint-resume):补 interrupted 档 —— daemon
+// 进程级中断(boot sweep 标记,checkpoint 行残留)。它是可续跑态而非
+// 脚本错误:落在 5(区别于 1),转录 note 提示 resume 出口。
 export const EXIT = {
   scriptError: 1,
   groupChatEnd: 0,
   maxRounds: 2,
   cancelled: 3,
   error: 4,
+  interrupted: 5,
 };
 const EXIT_BY_STOP_REASON = {
   group_chat_end: EXIT.groupChatEnd,
   max_rounds: EXIT.maxRounds,
   cancelled: EXIT.cancelled,
   error: EXIT.error,
+  interrupted: EXIT.interrupted,
 };
 
 // ---------------------------------------------------------------------------
@@ -586,6 +591,10 @@ async function run(argv) {
     say(`# --cleanup 只作用于成功路径;本次 stop_reason=${stopReason},session 保留供 post-mortem`);
   }
 
+  if (stopReason === 'interrupted') {
+    emit('# 讨论 daemon 进程级中断(崩溃/被杀);checkpoint 已落库,可续跑:');
+    emit(`#   curl -X POST ${opt.base}/api/v1/agent/resume_group_chat -H 'content-type: application/json' -d '{"session_id":"${sessionId}"}'`);
+  }
   const code = EXIT_BY_STOP_REASON[stopReason] ?? EXIT.scriptError;
   emit(`# stop_reason=${stopReason} → exit ${code}`);
   return code;

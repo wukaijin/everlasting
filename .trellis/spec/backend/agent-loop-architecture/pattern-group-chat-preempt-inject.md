@@ -85,3 +85,45 @@ acceptance 非 `injected` 用自有 rid 即时 cancel 仅作竞态兜底——**
 改动本模式任何一处(注册表生命周期 / 落库时机 / prompt 标记)必跑
 `cargo test --lib "tests_group_chat"`;prompt 结构变更另跑 `scripts/turn-smoke.sh`
 (行为层)。
+
+## P1a 扩展:checkpoint 落库与续跑(09-06-gc-p1a-checkpoint-resume,2026-09-06)
+
+打断的信任底座 = 中断可拾起。三层结构(全 best-effort warn+swallow 契约,
+与 clear/finalize 同族):
+
+1. **`group_chat_checkpoints` 表**(session_id PK,CASCADE):编排器**轮头**
+   upsert(`round` + GC5 streak;preempt 检测后、moderator 轮前——被 preempt 的
+   轮不算「到过」),streak 变更点同步;`ON CONFLICT` 永不触 `started_at`(行
+   生命周期 = 一场讨论;**新场开跑先删旧行**,与 clear_group_chat_lifecycle
+   对称,否则复用 session 携带上一场的 started_at)。
+2. **行存留编码可续跑性**:`cancelled` / `error` 退出**留行**,终局
+   (`group_chat_end` / `preempted` / `max_rounds`)退出**删行**;「行在 +
+   !busy」= 可拾起。删行是 best-effort——**命令侧第五校验(终局 stop_reason
+   拒绝)是 belt,boot sweep 清孤儿行是 braces**,缺一会让直调 API 续跑已
+   收官场、推翻 summary。
+3. **boot sweep**(`recover_group_chat_checkpoints`,挂 `load_inner` 崩溃恢复块,
+   reap_orphaned_runs / recover_interrupted_messages 之后——RULE-PERSIST-001
+   的 session 级兄弟):行在 + stop_reason=NULL(= 无 finalize,只有进程死亡会
+   这样)→ 标 `interrupted`。**不写 `sessions.updated_at`**(侧栏按它排序 +
+   展示,写 boot 时刻 = 排序突变 + 假时刻;中断时刻 ≈ 最后消息时刻)。
+
+**续跑语义**(`resume_group_chat` 命令,daemon 路由 + Tauri 同权):五类校验
+(非群聊 / busy / 无行 / round≥MAX / 终局 stop_reason)→ `ChatEntry{
+resume_group_chat: Some(round)}` 走 chat_inner(复用全套认领/preflight/许可,
+messages 空)。编排器侧:`for round in start_round..MAX`(**预算继承**——
+crash-resume 循环不能无限烧轮)、`round == 0 && resume.is_none()` 才吃传入
+ messages(空尾条绝不进 D-D 持久化)、首 moderator 轮 prompt 追加
+`moderator_resume_instruction()`(wrap-up 同款追加式)、streak 归零。**前端零
+流接线**:新 rid 的 SSE 事件经 adoptForeignRequest 自动认领(scheduled-task
+fire 同款);续跑按钮门 = `stop_reason ∈ {interrupted, cancelled, error}` +
+!busy(TS `SessionSummary` 已补字段;`reloadAfterFinalize` 把 load_session 的
+session 行终局字段合并回 `sessions[]`,否则按钮要等下次 list_sessions)。
+
+**回归锚点(追加)**:`group_chat_resume_enters_at_checkpoint_round_with_reload_and_instruction`
+/ `group_chat_error_exit_keeps_checkpoint_and_fresh_run_resets_it` /
+`group_chat_cancelled_exit_keeps_checkpoint_row`
+(tests_group_chat.rs)+ `resume_group_chat_route_validates_five_gates`
+(routes/agent.rs)+ DB 三例(sessions_tests)。编排器/lifecycle 改动仍必跑
+`cargo test --lib "tests_group_chat"`;live 三链验证范式:SIGKILL(非
+daemon.sh stop——那是 SIGTERM graceful → cancelled)→ 重启见 interrupted →
+resume → group_chat_end。

@@ -77,8 +77,10 @@ export function createLedger({ file = stateFilePath() } = {}) {
 }
 
 /** 会话级终态(GC1/GC2):busy=false 且 stop_reason 非空。
- * 四值枚举 group_chat_end/max_rounds/cancelled/error;轮级跳轮值
- * (nominee_unknown/participant_unresolved)不落 session 终态列,此处不遇。 */
+ * 枚举 group_chat_end/max_rounds/cancelled/error/interrupted(GCE P1a
+ * 09-06 起:interrupted = 进程级中断,boot sweep 标记,可经
+ * resume_group_chat 续跑);轮级跳轮值(nominee_unknown/
+ * participant_unresolved)不落 session 终态列,此处不遇。 */
 export function isTerminal(session) {
   return Boolean(session) && !session.busy && session.stop_reason != null;
 }

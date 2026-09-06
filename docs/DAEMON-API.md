@@ -82,7 +82,10 @@ busy = false + stop_reason = null  → 该会话从未跑过编排(或经典聊�
   `group_chat_end`(正常收官)/ `max_rounds`(30 轮帽截断)/ `cancelled`(用户 Stop 硬停,
   在途发言被斩、无总结)/ `error`(连续 3 轮生成错误熔断)/ `preempted`(2026-09-06 起:
   `preempt_group_chat` 体面打断——在途发言跑完 + moderator 收束轮,`discussion_summary`
-  通常有值;收束轮两次失败兜底立断时 summary 如实缺)。每次新编排启动时清空再回填。
+  通常有值;收束轮两次失败兜底立断时 summary 如实缺)/ `interrupted`(2026-09-06 P1a 起:
+  daemon 进程级中断——崩溃/被杀,无 finalize;由**下次启动的 boot sweep** 标记,
+  `group_chat_checkpoints` 行残留即断点凭据,**可续跑**,见下方「断点续跑」)。每次新编排
+  启动时清空再回填。
 - **`discussion_summary`**(`SessionRow` only,即 `load_session` 可得):moderator
   `end_discussion({summary})` 的收官总结一等字段——共识清单直接可读,无需解析
   end_discussion 的 tool_result content blocks。正常收官与 preempt 收束轮两路写入。
@@ -103,6 +106,15 @@ busy = false + stop_reason = null  → 该会话从未跑过编排(或经典聊�
   无总结);preempt = session 域收束式打断。
 - 两个动作的 MCP 包装见 §6.1(`interrupt_discussion` / `inject_message`,M3 起);
   GUI 打断按钮同权同语义(群聊会话头部 chip,讨论进行中可见)。
+- **断点续跑(GCE P1a,2026-09-06 起)**:`POST /api/v1/agent/resume_group_chat`
+  `{"session_id": "..."}` → 从 checkpoint 落库的断点续(interrupted / cancelled / error
+  态可续;`group_chat_end` / `preempted` / `max_rounds` 终局不可续)。语义:轮预算**继承**
+  (从断点轮起算,30 轮总帽不重置,防 crash-resume 循环烧轮)、GC5 熔断计数归零、moderator
+  首轮带恢复指令(不重新开场)、roster 按当前 metadata 重解析。返回 `{"status":"started"}`
+  后流照常(新 request_id,SSE 消费同 §4);五类校验失败(非群聊 / busy / 无断点 / 预算耗尽 /
+  终局态)返回 400 + 明确文案。checkpoint 行每轮头落库(`group_chat_checkpoints` 表),
+  可续跑退出(cancelled / error)保留、终局退出删除——「行在 + !busy」即可拾起。GUI 续跑
+  按钮同权同语义(可续跑态时群聊 chip 区出现)。
 
 ## 5. 无人值守权限审批(GC3,2026-09-05 起)
 
@@ -200,6 +212,8 @@ Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
     为 null 的普通轮界、跳轮值(`nominee_unknown` / `participant_unresolved`)均非终态。
     **场级**终止 = 编排器 post-loop 的最后一个 `done`,`stop_reason` 与 §4 表同值
     (`group_chat_end` / `max_rounds` / `cancelled` / `error` / `preempted`),此后 `busy=false`。
+    (`interrupted` 永不出现在 SSE——进程级中断意味着 daemon 已死,该值只经 DB/轮询面
+    可见,P1a。)
 - **消费序列范例**:`start_discussion` → 挂流 → 逐轮 `speaker` → `delta`… → 轮 `done` →
   … → 场级 `done`(终态 stop_reason)→ `discussion_status` 复核 → `discussion_result`。
 - **断连恢复**:浏览器 EventSource 自动重连回带 `Last-Event-ID`;daemon 在重放窗口内补发
@@ -213,7 +227,8 @@ Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
 
 全部为 `POST /api/v1/<domain>/<command>`,body snake_case,与 Tauri command 同名同参:
 `sessions/*`(见 §3)、`permissions/*`(模式切换 / 审批回填 / trace 三条)、
-`agent/chat`(发起轮次)、`cancel/*`(Stop)、`message_queue/*`、`config/*`、
+`agent/chat`(发起轮次)、`agent/resume_group_chat`(群聊断点续跑,§4)、
+`cancel/*`(Stop)、`message_queue/*`、`config/*`、
 `providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。唯一 GET:
 `/api/v1/stream`(SSE)与 `/api/v1/sessions/{id}/snapshot`。
 

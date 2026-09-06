@@ -75,7 +75,7 @@ P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一�
 消费(含参与者 speaker)✓。
 
 - **目标**:讨论从「放电影」变「可驾驶」——外部调用方(与 GUI 用户同权)能打断当前 speaker、注入新议题、实时跟随。
-- **上游依赖(2026-09-06 更新)**:**P0 打断最小语义已落地**(task `09-06-gc-p0-preempt-min-semantics`,spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)):注入 = busy 消息进 controls 缓冲非破坏投递(wire `ChatAcceptance::Injected`);打断 = `preempt_group_chat(session_id)` 收束式(`stop_reason=preempted` + summary,失败兜底立断)——M3 `interrupt_discussion` 的内核即此命令 1:1。P1a checkpoint 落库(「中断于 X」可拾起)仍是打断的信任底座余项。
+- **上游依赖(2026-09-06 更新)**:**P0 打断最小语义已落地**(task `09-06-gc-p0-preempt-min-semantics`,spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)):注入 = busy 消息进 controls 缓冲非破坏投递(wire `ChatAcceptance::Injected`);打断 = `preempt_group_chat(session_id)` 收束式(`stop_reason=preempted` + summary,失败兜底立断)——M3 `interrupt_discussion` 的内核即此命令 1:1。**P1a checkpoint 落库 + P1b 续跑已落地(✅ 2026-09-06,task `09-06-gc-p1a-checkpoint-resume`)**:`group_chat_checkpoints` 表(轮头 upsert round+GC5 streak)+ boot sweep(load_inner 标 `interrupted` / 清终局孤儿行,不动 updated_at)+ `resume_group_chat` 命令五类校验(daemon 路由 + Tauri 同权)+ 轮预算继承 + moderator 恢复指令 + GUI 续跑按钮;live 三链验证(SIGKILL → interrupted → resume → group_chat_end,转录 [out/group-chat-p1a-resume-20260906.md](../out/group-chat-p1a-resume-20260906.md))。
 - **验收标准**:① headless 打断后 stop_reason 可区分且 summary 不丢;② 注入消息的 role 归属符合 P0 schema 决议;③ GUI 与 API 两条路同权同语义。
 - **待定决策全部定案(2026-09-06 brainstorm)**:~~preempt 到达后的收束策略~~ 已决(P0):等在途 speaker 完 → moderator 收束轮 + 兜底立断;~~follow 暴露形态~~ **已决:裸 SSE 透传**(仅补消费文档,daemon 零改动;聚合进度事件无真实消费方撑需求,不做);~~打断的权限粒度~~ **已决:沿用 v1 零鉴权全域可打断**(与 M2「v1 零鉴权(本机)」同构;粒度机制推迟 M4 随远程认证一体议,记 §5)。
 
@@ -96,7 +96,7 @@ P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一�
 | 内部共识项(第二场 discussion_summary) | 外部路线图受益方 |
 |---|---|
 | ~~P0 打断最小语义 + preempt/inject schema~~ **✅ 2026-09-06 落地**(task `09-06-gc-p0-preempt-min-semantics`:controls 注册表 + 注入双轨标记 + preempt 收束轮 + `stop_reason=preempted`;spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)) | ~~M3 全部~~ **✅ M3 2026-09-06 交付**(`interrupt_discussion` 内核 = `preempt_group_chat` 命令 1:1;guard 补记见 spec) |
-| P1a checkpoint 落库 / P1b 续跑 | M3 信任底座;M4 定时审议的容错 |
+| ~~P1a checkpoint 落库 / P1b 续跑~~ **✅ 2026-09-06 落地**(task `09-06-gc-p1a-checkpoint-resume`):checkpoint 表 + boot sweep + resume 命令 + GUI 按钮;M4 定时审议容错的地基就绪 | M3 信任底座(**已收口**);M4 定时审议的容错 |
 | C1.1 ask-free moderator 段 | M1/M2 的确定性(外部跑不受审批噪声干扰) |
 | C1.2 token 预算(`stop_reason=budget`) | M4 成本治理 |
 | C2.1 结构化 summary(锚点 + 推测标注) | M2 `discussion_result` 的结论可信度 |
