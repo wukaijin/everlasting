@@ -54,6 +54,11 @@ import { currentDeviceToken, dropCurrentNodeToken } from "./auth";
 export const CMD_TO_DOMAIN: Record<string, string> = {
   // agent
   chat: "agent",
+  // GCE P1a(09-06-gc-p1a-checkpoint-resume):续跑中断的群聊讨论
+  // (与 chat 同 agent 路由域 —— daemon routes/agent.rs 的 router 挂
+  // 两条;缺这行时浏览器/sidecar 模式报 unknown cmd,
+  // http.routes-sync.test.ts 守卫)。Tauri 模式纯透传 command。
+  resume_group_chat: "agent",
   // B1 (2026-08-17): paste-image upload — 缺这行时前端报
   // `unknown cmd "save_attachment"`(PR5 遗漏,贴图发送即断)。
   // GET 附件走 <img> 直连不进本表。

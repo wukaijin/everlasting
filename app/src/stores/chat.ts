@@ -936,6 +936,38 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** GCE P1a(09-06-gc-p1a-checkpoint-resume):续跑中断的群聊讨论 —
+   * 从 checkpoint 落库的断点续(round 继承,总帽不重置),moderator 首轮
+   * 带恢复指令。与 API `resume_group_chat` 同权同语义(两 transport:
+   * Tauri 纯透传 command;http CMD_TO_DOMAIN → agent 域,顶层 key 自动
+   * 扳正 session_id)。受理后**零流接线**:后端 spawn 新 rid 的编排,
+   * SSE 事件经 streamEvents 的 adoptForeignRequest 自动认领(占位/
+   * 流式/收官全既有链路,scheduled-task fire 同款)。busy 在首个事件
+   * 到达前有一段空窗 —— 按钮层用本地 resuming 标记防抖(双击即双
+   * resume,3a 兜底虽能收敛但会浪费一场)。 */
+  async function resumeGroupChat(): Promise<boolean> {
+    const sid = currentSessionId.value;
+    if (!sid) return false;
+    try {
+      const acceptance = await transport.invoke<{ status?: string }>(
+        "resume_group_chat",
+        { sessionId: sid },
+      );
+      if (acceptance?.status === "started") {
+        projectsStore.showToast("已从断点续跑讨论;发送新消息将开始新讨论", "info");
+        return true;
+      }
+      projectsStore.showToast("续跑未受理(讨论可能已在进行)", "warn");
+      return false;
+    } catch (e) {
+      projectsStore.showToast(
+        `续跑失败:${e instanceof Error ? e.message : String(e)}`,
+        "error",
+      );
+      return false;
+    }
+  }
+
   // Send action (08-10-chat-store-split: 拆出 chatSendActions.ts,
   // 工厂 + ctx 注入,函数体原样保留。cancel 5 行循环枢纽留 hub,
   // 经 ctx 注入给 sessions / message / send 三簇)。
@@ -1045,6 +1077,7 @@ export const useChatStore = defineStore("chat", () => {
     send,
     cancel,
     preemptGroupChat,
+    resumeGroupChat,
     // B1 (2026-08-16) image-multimodal: paste-staging strip state +
     // actions. Owned by the send cluster so the send / clear /
     // session-switch lifecycle is store-owned (design §5.1);

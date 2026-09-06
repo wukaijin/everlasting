@@ -244,6 +244,40 @@ function onPreemptGroupChat() {
   void chatStore.preemptGroupChat();
 }
 
+// GCE-P1a (09-06-gc-p1a-checkpoint-resume): 续跑门 —— 群聊 session 处于
+// 可续跑态(!busy + stop_reason ∈ {interrupted, cancelled, error})时可从
+// checkpoint 断点续。数据通路:SessionSummary.stop_reason(wire 已有,TS
+// 已补)+ reloadAfterFinalize 终态合并回写(否则按钮要等下次
+// list_sessions 才出现)。
+const isGroupChatResumable = computed<boolean>(() => {
+  if (!isGroupChat.value) return false;
+  if (chatStore.isCurrentSessionStreaming) return false;
+  const reason = currentSession.value?.stop_reason;
+  return reason === "interrupted" || reason === "cancelled" || reason === "error";
+});
+// 防抖(评审 P2-2):点击到首个 SSE 事件(adoptForeignRequest 认领、
+// streamingSessionIds 亮)之间有一段本地无忙标记的空窗,双击即双
+// resume。resuming 在受理成功后置位,流亮起(认领)或 10s 兜底清零。
+const resuming = ref(false);
+watch(
+  () => chatStore.isCurrentSessionStreaming,
+  (streaming) => {
+    if (streaming) resuming.value = false;
+  },
+);
+async function onResumeGroupChat() {
+  if (resuming.value || chatStore.isCurrentSessionStreaming) return;
+  resuming.value = true;
+  const accepted = await chatStore.resumeGroupChat();
+  if (!accepted) {
+    resuming.value = false;
+    return;
+  }
+  setTimeout(() => {
+    resuming.value = false;
+  }, 10_000);
+}
+
 const currentProject = computed(() =>
   projectsStore.projectById(projectsStore.currentProjectId),
 );
@@ -750,6 +784,36 @@ onUnmounted(() => reviewStateStore.stop());
           <Icon name="square" :size="12" />
           打断
         </button>
+        <!--
+          GCE-P1a (09-06-gc-p1a-checkpoint-resume): 中断通知 + 续跑入口 —
+          与 API resume_group_chat 同权同语义。可续跑态 =
+          !busy + stop_reason ∈ {interrupted, cancelled, error}(中断 =
+          进程级 crash 被 boot sweep 标记;cancelled/error = 硬停/熔断)。
+          通知不带时间戳(精确时刻在 checkpoint 行,不随 wire 出);
+          明示「发送新消息将开始新讨论」防打字误续(评审 P2-4)。
+          resuming 防抖:受理到首个 SSE 事件的空窗内禁用(评审 P2-2)。
+        -->
+        <template v-if="isGroupChatResumable">
+          <span
+            class="chat-panel__chip chat-panel__chip--group-chat mobile-hide-group-chat"
+            data-testid="chat-panel-group-chat-interrupted-notice"
+          >
+            <Icon name="warn" :size="12" />
+            讨论已中断 · 发新消息将开新讨论
+          </span>
+          <button
+            class="chat-panel__chip chat-panel__chip--group-chat btn btn--ghost"
+            type="button"
+            :disabled="resuming"
+            title="从上次中断的轮次继续讨论;发送新消息将开始新讨论,不再续跑"
+            aria-label="续跑中断的群聊讨论"
+            data-testid="chat-panel-group-chat-resume"
+            @click="onResumeGroupChat"
+          >
+            <Icon name="refresh" :size="12" />
+            续跑
+          </button>
+        </template>
         <!--
           F2 定时任务 (2026-08-28): session header 活跃任务徽章 ——
           时钟小 chip,title 列任务名。数据来自 scheduledTasks store

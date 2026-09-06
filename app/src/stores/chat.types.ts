@@ -571,6 +571,17 @@ export interface SessionSummary {
    *  旧 daemon 不回该字段 → undefined,falsy,红点退化为纯本端
    *  推断(向后兼容)。 */
   busy?: boolean;
+  /** GCE P1a(09-06-gc-p1a-checkpoint-resume):群聊终局原因
+   *  (Rust `SessionSummary.stop_reason` 已在 wire,此处补 TS 可见)。
+   *  group_chat 专有;经典 chat 恒 undefined。取值:
+   *  `group_chat_end` / `max_rounds` / `error` / `cancelled` /
+   *  `preempted` / `interrupted`(boot sweep 标记的进程级中断)。
+   *  前端消费:可续跑门(`interrupted`/`cancelled`/`error` + !busy
+   *  → ChatPanel「续跑」按钮)。 */
+  stop_reason?: string | null;
+  /** GCE P1a:interrupted 通知文案(可选)引用的收官总结;wire 已有,
+   *  补 TS 可见(仅 stop_reason ∈ {group_chat_end, preempted} 时非空)。 */
+  discussion_summary?: string | null;
 }
 
 /** Group chat (07-29-group-chat, Phase 4 TODO-D2): one

@@ -1427,6 +1427,24 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     // batches the update so there's no visible blank gap.
     putMessages(sessionId, messages, false);
     loadedFromDb.add(sessionId);
+    // GCE P1a(09-06-gc-p1a-checkpoint-resume):load_session 已带回
+    // 权威 session 行——把群聊终局字段合并回内存 `sessions[]`(终态
+    // 时刻 finalizeRequest 只翻了 busy;不合并的话 stop_reason 要等
+    // 下次 list_sessions 才可见,ChatPanel 的「续跑」按钮
+    // (interrupted/cancelled/error + !busy 门)不出现)。受控字段子集,
+    // 不整行替换(避免覆盖并发写入的其他列)。
+    if (loaded) {
+      const summary = useChatStore().sessions.find((s) => s.id === sessionId);
+      if (summary) {
+        if ("stop_reason" in loaded.session) {
+          summary.stop_reason = loaded.session.stop_reason ?? null;
+        }
+        if ("discussion_summary" in loaded.session) {
+          summary.discussion_summary =
+            loaded.session.discussion_summary ?? null;
+        }
+      }
+    }
     // F4: notify MessageList to re-scroll after buffer replacement
     // to avoid position jitter.
     useChatStore().scrollAfterReload++;

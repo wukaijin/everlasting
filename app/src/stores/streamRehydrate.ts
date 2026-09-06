@@ -123,6 +123,13 @@ export interface LoadedSession {
      *  IPC always sends `metadata` (NULL for non-group-chat
      *  rows per `db::SessionRow::metadata`). */
     metadata?: Record<string, any> | null;
+    /** GCE P1a(09-06-gc-p1a-checkpoint-resume):群聊终局原因
+     *  (wire 已有,补 TS 可见)——`reloadAfterFinalize` 把它合并回
+     *  sessions[](终态后内存 summary 不刷新的话,ChatPanel 的
+     *  「续跑」按钮不出现)。经典 chat 恒 undefined。 */
+    stop_reason?: string | null;
+    /** GCE P1a:收官总结(同上,补 TS 可见)。 */
+    discussion_summary?: string | null;
   };
   messages: LoadedMessage[];
 }
