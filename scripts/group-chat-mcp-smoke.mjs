@@ -9,8 +9,11 @@
 // → result」全链。这是 AC1 的 headless 回归选项;正式门禁是 ZCode 宿主
 // 实跑(implement.md Step 5 归属定案)。
 //
-// 用法:node scripts/group-chat-mcp-smoke.mjs [--live]
+// 用法:node scripts/group-chat-mcp-smoke.mjs [--live] [--bin <path>]
+// --bin <path>:对 standalone bin(deploy 产物)冒烟,替代 node 直连源码;
+// 断言链完全同构,默认行为不变(部署面验收 AC2,任务 09-06-gce-mcp-standalone)。
 import process from 'node:process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -20,14 +23,21 @@ const SERVER = path.join(SCRIPTS, 'group-chat-mcp.mjs');
 const BUDGET = 3200; // M3 四→六工具;评审实测六工具 wire ≈2881 chars
 
 const live = process.argv.includes('--live');
+const binIdx = process.argv.indexOf('--bin');
+const binArg = binIdx !== -1 ? process.argv[binIdx + 1] : null;
+// 拒绝吞掉下一个 flag(--bin --live 会把 "--live" 当 bin 路径 spawn)
+if (binIdx !== -1 && (!binArg || binArg.startsWith('--'))) { console.error('FAIL: --bin 需要一个路径值'); process.exit(1); }
+const binPath = binArg && (binArg === '~' ? os.homedir() : binArg.startsWith('~/') ? path.join(os.homedir(), binArg.slice(2)) : binArg);
 
 const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
 
 const client = new Client({ name: 'group-chat-mcp-smoke', version: '1.0.0' });
-const transport = new StdioClientTransport({ command: process.execPath, args: [SERVER] });
+const transport = binPath
+  ? new StdioClientTransport({ command: binPath, args: [] })
+  : new StdioClientTransport({ command: process.execPath, args: [SERVER] });
 await client.connect(transport);
-process.stderr.write(`[smoke] server spawned over stdio: ${SERVER}\n`);
+process.stderr.write(`[smoke] server spawned over stdio: ${binPath || `node ${SERVER}`}\n`);
 
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
 
