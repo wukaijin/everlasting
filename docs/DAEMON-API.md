@@ -121,6 +121,11 @@ MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,
 四工具(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)。挂载:仓库根
 `.agents/mcp.json`(stdio spawn `scripts/group-chat-mcp.mjs`)。
 
+- ⚠️ **挂载配置必须写绝对路径**——配置文件作用域的 MCP server **不展开
+  `${...}` 模板变量**(那是插件作用域专属特性;字面量路径会让 server 启动即
+  失败、工具注册为 0,Settings → MCP 显示 failed)。换机器克隆本仓库时须改
+  `args` 里的绝对路径。
+
 - ⚠️ **`.agents/mcp.json` 是 same-scope fallback**:若仓库 `.zcode/` 日后定义任何
   MCP server,该文件被整体忽略(非合并)——新增 `.zcode` MCP 配置时须把本条目并入。
 - 分工:**宿主 agent = MCP 工具**;**everlasting 内部 agent(daemon 单聊)= 脚本 + M1 纪律**
