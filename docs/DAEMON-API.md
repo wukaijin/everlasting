@@ -101,6 +101,8 @@ busy = false + stop_reason = null  → 该会话从未跑过编排(或经典聊�
   终态 `stop_reason="preempted"`。无进行中讨论时报错(非幂等静默)。返回
   `{"preempted": true}`。**与 `cancel_chat` 的分工**:cancel = rid 域硬停(Stop 按钮,
   无总结);preempt = session 域收束式打断。
+- 两个动作的 MCP 包装见 §6.1(`interrupt_discussion` / `inject_message`,M3 起);
+  GUI 打断按钮同权同语义(群聊会话头部 chip,讨论进行中可见)。
 
 ## 5. 无人值守权限审批(GC3,2026-09-05 起)
 
@@ -131,9 +133,15 @@ node scripts/group-chat-run.mjs run --project <path> --preset review --topic "..
 
 ### 6.1 MCP 接口层(GCE-M2,2026-09-06 起)——宿主 agent 的首选入口
 
-MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,不跑脚本**:
-`start_discussion` / `discussion_status` / `discussion_result` / `cancel_discussion`
-四工具(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)。
+MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,不跑脚本**。
+六工具 = 生命周期四件套 `start_discussion` / `discussion_status` / `discussion_result` /
+`cancel_discussion`(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)+ **M3 控制面两件**:
+`interrupt_discussion`(session 域收束打断,preempt 端点 1:1,分工同 §4;返回轮询指引)与
+`inject_message`(往**进行中**的讨论注入用户消息,下一 moderator 轮可见)。后者带**前置
+busy guard**:非 busy / 已收官的群聊 session 直接报错不发起——误发会重启编排器并无条件
+清空上一场 stop_reason/summary(代价不可逆),guard 把它挡在客户端层;guard 通过后若
+acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 request_id 即时
+`cancel_chat` 止损再报错。
 
 **挂载(2026-09-06 起用户级)**:`~/.zcode/cli/config.json`(ZCode)/ Claude Code 各自的
 用户级配置,stdio spawn 本仓库 `scripts/group-chat-mcp.mjs` 绝对路径:
@@ -159,6 +167,35 @@ MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,
 - server 记账(session→request_id/project_id)落 `~/.local/state/dev.everlasting.app/mcp-discussions.json`
   (XDG state,原子写)——server 进程随宿主会话生灭,讨论跨进程存活靠它兜底。
 - 冒烟:`node scripts/group-chat-mcp-smoke.mjs`(`--live` 烧真 token 走全链,可选)。
+
+### 6.2 实时跟随(SSE follow,GCE-M3,2026-09-06 起)
+
+打断 / 注入之外的第三权:外部调用方可在 start 后挂一条 SSE 连接**实时跟随**讨论,也可
+只用 §4 的轮询。端点是 §7 的唯一流 `GET /api/v1/stream`——**全局单流**,所有 session 的
+事件共用一条连接,群聊消费方按载荷里的 `session_id` 过滤:
+
+- **事件通道**:SSE `event:` 名即通道。群聊相关的是 `chat-event`;其余(`tool:call` /
+  `tool:result` / `permission:ask` / `tool:question` / `mode:change:request` /
+  `task:state:transition:request` / `subagent:event` / `subagent:finished`)按需消费。
+- **`chat-event` 载荷**(JSON,snake_case):`{ request_id, session_id, kind, ... }`——
+  `kind` 全集(SoT = `llm/types/event.rs` ChatEvent,serde tag;2026-09-06 live 实测核对):
+  - `speaker`(`{ speaker }`)——每个发言者**轮次**开始,编排器发出;后续 `delta` 不带
+    speaker,消费方自行盖戳到当前 speaker(前端同款契约);
+  - `start`——run 内每次 LLM 调用边界;`delta`(`{ text }`) / `thinking_delta` /
+    `signature_delta`——流式增量与思考摘要流;
+  - `turn_usage` / `turn_complete`——轮级用量 / 完成记账;
+  - `done`(`{ stop_reason, usage }`)——**轮**级终止(每个 speaker 轮一次);`stop_reason`
+    为 null 的普通轮界、跳轮值(`nominee_unknown` / `participant_unresolved`)均非终态。
+    **场级**终止 = 编排器 post-loop 的最后一个 `done`,`stop_reason` 与 §4 表同值
+    (`group_chat_end` / `max_rounds` / `cancelled` / `error` / `preempted`),此后 `busy=false`。
+- **消费序列范例**:`start_discussion` → 挂流 → 逐轮 `speaker` → `delta`… → 轮 `done` →
+  … → 场级 `done`(终态 stop_reason)→ `discussion_status` 复核 → `discussion_result`。
+- **断连恢复**:浏览器 EventSource 自动重连回带 `Last-Event-ID`;daemon 在重放窗口内补发
+  (SSE `id:` 字段),超窗发 `stream-resync` sentinel——消费方收到后应
+  `GET /api/v1/sessions/{id}/snapshot` 补齐再续。keepalive 30s。
+- ⚠️ **跟随连接改变无人值守语义**(§5):有活跃 SSE 订阅者时 permission ask 等 120s 而非
+  8s 快拒。follow 消费方要么准备应答 `permission_response`(8s/120s 窗口内先到先赢),
+  要么用完即断——不要挂着纯看。
 
 ## 7. 其他常用端点(路径约定)
 

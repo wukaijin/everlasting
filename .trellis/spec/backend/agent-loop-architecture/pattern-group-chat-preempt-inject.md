@@ -59,7 +59,12 @@ burst(max_turns=20)窗口分钟级,撞上是常态。
 - moderator prompt 内置 `[用户插入]` 语义指引(用户新指令,优先吸收;不因此
   扩大 end_discussion 权限)。纯图片注入 P0 不支持(路由层报错,不静默丢)。
 
-M3 `inject_message` 的参数形状继承本决议(topic 文本 + provenance)。
+M3 `inject_message` 的参数形状继承本决议(topic 文本;已交付 2026-09-06,task
+`09-06-gce-m3-control-plane`)。**M3 落地补记(评审 P1-1)**:空闲/已收官群聊 session 一旦
+收到 chat 消息会重启编排器并无条件清 lifecycle(上一场 stop_reason/summary 不可逆丢失),
+故 MCP `inject_message` 在客户端层前置 busy guard(非 busy 根本不发起),fireChat 后
+acceptance 非 `injected` 用自有 rid 即时 cancel 仅作竞态兜底——**该副作用是 daemon 语义,
+不可在包装层修复;换任何暴露层(GUI 之外的新入口)都必须复制此前置 guard**。
 
 ## 前端契约
 

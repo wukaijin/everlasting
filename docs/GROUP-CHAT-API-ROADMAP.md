@@ -13,7 +13,7 @@
 | M0 地基 | lifecycle 三态机 + summary 一等字段 + 无人值守安全 + API 契约文档 | ✅ 2026-09-05/06(见 §1) | — |
 | M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
 | M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
-| M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | 🟢 **P0 前置已落地(2026-09-06),本体可立项** | 中 |
+| M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | ✅ 2026-09-06(见 §4;P0 前置同日落地) | 中 |
 | M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🔴 远期 | 大(多子项) |
 
 推进原则(沿用 remote-access 先例):每个子阶段 ① 能独立提交 ② 有明确验证标准 ③ GUI/经典聊路径零行为变化。
@@ -58,13 +58,26 @@
 - **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。
 - **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。
 
-## 4. M3 控制面:打断 / 注入 / 跟随(🟢 P0 前置已落地 2026-09-06,本体只剩暴露)
+## 4. M3 控制面:打断 / 注入 / 跟随(✅ 2026-09-06)
+
+**交付(task `09-06-gce-m3-control-plane`,daemon 零 Rust diff 达成)**:MCP 六工具面
+新增 `interrupt_discussion`(preempt 端点 1:1 + 轮询指引)/ `inject_message`(fireChat
+薄包装 + **前置 busy guard**);GUI 打断按钮(群聊 chip 区,讨论进行中可见,与 API 同权同
+语义;Stop/Esc 硬取消与打字注入零回归);[DAEMON-API §6.2](./DAEMON-API.md) SSE follow
+消费专章(裸透传:全局流 / chat-event kind 全集 / session_id 过滤 / Last-Event-ID 重放 /
+stream-resync→snapshot / follow 连接使 ask 走 120s attended 的注意事项)。wire 预算
+2300→3200 两侧锁同步(实测 ≈2876 chars ≈719 token)。**关键设计(评审 P1-1)**:已收官
+群聊误注入会重启编排器抹旧场终态(cancel 救不回)→ guard 在客户端层根本不发起;
+fireChat 后 acceptance 非 `injected` → 自有 rid cancel 竞态兜底。验收 live 两场(session
+`2ba779ec` / `dc9f518b`):preempt 受理 ✓、注入 `[用户插入]` + `metadata.kind=user_inject`
+落库且被 moderator 收束轮吸收 ✓、终态分别实测 `preempted` 与 `group_chat_end`(后者正是
+P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一等字段完整 ✓、SSE 按文档
+消费(含参与者 speaker)✓。
 
 - **目标**:讨论从「放电影」变「可驾驶」——外部调用方(与 GUI 用户同权)能打断当前 speaker、注入新议题、实时跟随。
 - **上游依赖(2026-09-06 更新)**:**P0 打断最小语义已落地**(task `09-06-gc-p0-preempt-min-semantics`,spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)):注入 = busy 消息进 controls 缓冲非破坏投递(wire `ChatAcceptance::Injected`);打断 = `preempt_group_chat(session_id)` 收束式(`stop_reason=preempted` + summary,失败兜底立断)——M3 `interrupt_discussion` 的内核即此命令 1:1。P1a checkpoint 落库(「中断于 X」可拾起)仍是打断的信任底座余项。
-- **交付物**:MCP 工具 `interrupt_discussion` / `inject_message`(schema 遵循 P0 决议)+ GUI 同权入口(打断按钮;打字=注入已随 P0 交付)+ SSE follow 的外部消费文档(daemon 端点已随 P0 交付)。
 - **验收标准**:① headless 打断后 stop_reason 可区分且 summary 不丢;② 注入消息的 role 归属符合 P0 schema 决议;③ GUI 与 API 两条路同权同语义。
-- **待定决策**:~~preempt 到达后的收束策略~~ **已决(2026-09-06)**:等在途 speaker 完 → moderator 收束轮 + 兜底立断;follow 暴露形态(裸 SSE 透传 vs 聚合进度事件);打断的权限粒度(谁能打断谁)。
+- **待定决策全部定案(2026-09-06 brainstorm)**:~~preempt 到达后的收束策略~~ 已决(P0):等在途 speaker 完 → moderator 收束轮 + 兜底立断;~~follow 暴露形态~~ **已决:裸 SSE 透传**(仅补消费文档,daemon 零改动;聚合进度事件无真实消费方撑需求,不做);~~打断的权限粒度~~ **已决:沿用 v1 零鉴权全域可打断**(与 M2「v1 零鉴权(本机)」同构;粒度机制推迟 M4 随远程认证一体议,记 §5)。
 
 ## 5. M4 运营治理(🔴)
 
@@ -73,7 +86,7 @@
 - **定时审议**:cron 定期召集(每周架构复盘 / 发布前评审)——复用 F2 定时任务基础设施 + M1 驱动;待定:产物推送形态(飞书通知走 B10 收窄形态?落地文件?)。
 - **讨论库与检索**:历史审议(转录 + summary)可检索复用——待定:FTS(messages_fts 已有)够不够、要不要独立 discussion 视图表。
 - **成本治理**:per-discussion token 核算(turn_trace 已有 per-turn 数据)+ 预算上限硬停——上游依赖第二场共识 C1.2(`stop_reason=budget`);待定:预算声明位置(开群参数 vs MCP 工具参数 vs 默认档)。
-- **远程暴露认证**:MCP/API 走 remote/tunnel 时的鉴权与降级——必须吸收 BACKLOG 附录 B「隧道来源降级」条目的安全论据与既有用户决策(PWA 全权 vs 分层),**立项前先过一次安全评审**。
+- **远程暴露认证**:MCP/API 走 remote/tunnel 时的鉴权与降级——必须吸收 BACKLOG 附录 B「隧道来源降级」条目的安全论据与既有用户决策(PWA 全权 vs 分层),**立项前先过一次安全评审**。M3 决议(2026-09-06)落账:打断/注入的权限粒度机制在此一并议(本机零鉴权前提下全域可打断;远程暴露时粒度才有意义)。
 - **MCP 部署面(2026-09-06 记,M2 收官后用户指认)**:M2 四工具是**仓库产物**(脚本 + node_modules + 指向源码检出内绝对路径的挂载配置),不随 daemon 分发——只有 daemon bin、无源码的机器上 MCP 层为零(仅剩 M0 裸 HTTP 原语)。这是 D1 的有意识取舍(v1 消费语境 = 本机 dev 工作流),但构成「任何宿主」终态的部署缺口。收口路径:①零成本接受(现状边界);②**单文件可执行(推荐,可独立小项提前做)**:bun/deno compile 打 standalone 二进制随 app 分发,安装器写 user-scope MCP 配置(免 node、绝对路径由安装期产生不进 git,JS 单实现保留,M2 纯逻辑零改动);③daemon 内置 streamable-http MCP endpoint(终态最干净,零外部依赖,也是远程暴露的天然载体;代价 = Rust 背协议 rmcp + 与 JS 引擎双实现,届时 JS 层降级为 dev 工具)。
 
 ## 6. 与群聊内部改进的关系(依赖矩阵)
@@ -82,7 +95,7 @@
 
 | 内部共识项(第二场 discussion_summary) | 外部路线图受益方 |
 |---|---|
-| ~~P0 打断最小语义 + preempt/inject schema~~ **✅ 2026-09-06 落地**(task `09-06-gc-p0-preempt-min-semantics`:controls 注册表 + 注入双轨标记 + preempt 收束轮 + `stop_reason=preempted`;spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)) | M3 全部(M3 本体只剩 API/MCP 暴露:`interrupt_discussion` 内核 = `preempt_group_chat` 命令 1:1) |
+| ~~P0 打断最小语义 + preempt/inject schema~~ **✅ 2026-09-06 落地**(task `09-06-gc-p0-preempt-min-semantics`:controls 注册表 + 注入双轨标记 + preempt 收束轮 + `stop_reason=preempted`;spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)) | ~~M3 全部~~ **✅ M3 2026-09-06 交付**(`interrupt_discussion` 内核 = `preempt_group_chat` 命令 1:1;guard 补记见 spec) |
 | P1a checkpoint 落库 / P1b 续跑 | M3 信任底座;M4 定时审议的容错 |
 | C1.1 ask-free moderator 段 | M1/M2 的确定性(外部跑不受审批噪声干扰) |
 | C1.2 token 预算(`stop_reason=budget`) | M4 成本治理 |
