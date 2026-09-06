@@ -212,6 +212,8 @@ pub fn run() {
             // Agent loop (lives in `agent::chat` because it owns the
             // 20-turn agent loop, not a thin IPC shim).
             agent::chat::chat,
+            // GCE P1a(09-06-gc-p1a-checkpoint-resume):续跑中断的群聊讨论
+            agent::chat::resume_group_chat,
             // Cancel / config
             commands::cancel::cancel_chat,
             // 09-06-gc-p0:群聊体面打断(收束轮 + summary)

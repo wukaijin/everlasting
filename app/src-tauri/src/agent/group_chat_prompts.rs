@@ -101,6 +101,24 @@ pub(crate) fn moderator_wrapup_instruction() -> &'static str {
      user's latest direction."
 }
 
+/// GCE P1a (2026-09-06, task 09-06-gc-p1a-checkpoint-resume): appended
+/// to the moderator's system prompt for the FIRST moderator turn of a
+/// RESUMED run (resume entry, round == start_round). The transcript
+/// below the prompt already contains everything said before the
+/// interruption — this instruction tells the moderator not to waste a
+/// round re-opening or re-summarizing. Same appended-instruction shape
+/// as [`moderator_wrapup_instruction`].
+pub(crate) fn moderator_resume_instruction() -> &'static str {
+    "\n\n## RESUME — this discussion was interrupted and is now resumed\n\
+     The discussion was interrupted (process restart) and has just been \
+     resumed. The transcript already contains everything said before the \
+     interruption — continue moderating the SAME topic from where it \
+     stopped. Do NOT re-open the discussion, re-summarize what was said, \
+     or re-ask questions participants already answered; the next \
+     `nominate_speaker` (or `end_discussion`, if the resumed state \
+     already warrants closing) continues the existing thread."
+}
+
 /// Build a role's isolated LLM history from the shared DB transcript
 /// (08-07-group-chat-role-history-isolation, design §R1 — replaces the
 /// 08-04 `participant_view`).

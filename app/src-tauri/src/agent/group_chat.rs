@@ -117,6 +117,18 @@ pub struct GroupChatControlInner {
 
 pub type GroupChatControl = std::sync::Arc<tokio::sync::Mutex<GroupChatControlInner>>;
 
+/// GCE P1a (2026-09-06, task 09-06-gc-p1a-checkpoint-resume): resume
+/// context for `run_group_chat_loop`. Built by the `resume_group_chat`
+/// command from the persisted checkpoint row. `start_round` is the
+/// round the interrupted discussion reached — the loop enters there,
+/// so the total round budget (`MAX_ORCHESTRATION_ROUNDS`) stays
+/// capped across crash→resume cycles. The GC5 error streak is
+/// deliberately NOT carried: a human intervening resets it to 0.
+#[derive(Debug, Clone, Copy)]
+pub struct GroupChatResume {
+    pub start_round: usize,
+}
+
 /// Parse the session's metadata + resolve the moderator model.
 ///
 /// Mirrors `build_workflow_ctx`:

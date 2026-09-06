@@ -114,9 +114,141 @@ pub async fn chat(
             resend_seq: resendSeq,
             forced_dispatch: forcedDispatch,
             origin: None,
+            resume_group_chat: None,
         },
     )
     .await
+}
+
+// ---------------------------------------------------------------------------
+// GCE P1a (2026-09-06, task 09-06-gc-p1a-checkpoint-resume):
+// `resume_group_chat` — resume an interrupted group-chat discussion
+// from its persisted checkpoint. The 1:1 internal core behind the
+// Tauri command + the daemon `POST /agent/resume_group_chat` route
+// (preempt 三件套 precedent).
+// ---------------------------------------------------------------------------
+
+/// Transport-agnostic validation + dispatch core. Five gates (prd R3):
+/// ① the session exists and is `group_chat`; ② not busy; ③ a
+/// checkpoint row exists (「row present + !busy」= resumable); ④
+/// `round < MAX_ORCHESTRATION_ROUNDS` (budget not exhausted — a
+/// near-cap row would exit via MaxRounds immediately); ⑤ the session's
+/// `stop_reason` is not one of the TERMINAL three (`group_chat_end` /
+/// `preempted` / `max_rounds`) — the row-delete on terminal exits is
+/// best-effort, so a stranded row must not let a direct API call
+/// resume a concluded discussion and overwrite its summary
+/// (review P1-1: gate ⑤ is the belt to the sweep's orphan-heal
+/// braces). On success, delegates to [`chat_inner`] with EMPTY
+/// messages (the resume request carries no new user message — the
+/// reloaded DB transcript is the discussion's state) and the
+/// checkpointed round as `resume_group_chat`.
+pub(crate) async fn resume_group_chat_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    sink: Arc<dyn ChatEventSink>,
+    worker_event_sink: Arc<dyn SubagentEventSink>,
+) -> Result<ChatAcceptance, AppCommandError> {
+    let db = state.db.clone();
+
+    // ① + ⑤: load the session (existence, type, terminal check).
+    let loaded = crate::db::load_session(&db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("load session: {}", e))?
+        .ok_or_else(|| {
+            crate::error::AppCommandError::new(
+                crate::error::ErrorCategory::InvalidRequest,
+                format!("会话不存在:{}", session_id),
+            )
+        })?;
+    if loaded.session.session_type != crate::db::SessionType::GroupChat {
+        return Err(crate::error::AppCommandError::new(
+            crate::error::ErrorCategory::InvalidRequest,
+            "该会话不是群聊会话,无可续跑的讨论",
+        ));
+    }
+    if matches!(
+        loaded.session.stop_reason.as_deref(),
+        Some(
+            crate::agent::group_chat_loop::STOP_REASON_GROUP_CHAT_END
+                | crate::agent::group_chat_loop::STOP_REASON_PREEMPTED
+                | crate::agent::group_chat_loop::STOP_REASON_MAX_ROUNDS
+        )
+    ) {
+        return Err(crate::error::AppCommandError::new(
+            crate::error::ErrorCategory::InvalidRequest,
+            "该讨论已正常结束,不可续跑;发新消息将开始新讨论",
+        ));
+    }
+
+    // ②: a live discussion can't be resumed (inject/preempt instead).
+    if state
+        .session_active_request
+        .lock()
+        .await
+        .contains_key(&session_id)
+    {
+        return Err(crate::error::AppCommandError::new(
+            crate::error::ErrorCategory::InvalidRequest,
+            "该会话有进行中的讨论,不能续跑(可注入或打断)",
+        ));
+    }
+
+    // ③ + ④: the checkpoint row IS the resume context.
+    let checkpoint = crate::db::get_group_chat_checkpoint(&db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("get checkpoint: {}", e))?
+        .ok_or_else(|| {
+            crate::error::AppCommandError::new(
+                crate::error::ErrorCategory::InvalidRequest,
+                "无可续跑的断点(该会话没有中断的讨论)",
+            )
+        })?;
+    if checkpoint.round as usize >= crate::agent::group_chat_loop::MAX_ORCHESTRATION_ROUNDS {
+        return Err(crate::error::AppCommandError::new(
+            crate::error::ErrorCategory::InvalidRequest,
+            "该讨论的轮预算已耗尽,不可续跑",
+        ));
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        round = checkpoint.round,
+        started_at = %checkpoint.started_at,
+        "resume_group_chat: resuming interrupted discussion"
+    );
+
+    chat_inner(
+        state,
+        ChatEntry {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            session_id,
+            messages: Vec::new(),
+            sink,
+            worker_catalog: Some(state.catalog.clone()),
+            worker_event_sink,
+            resend_seq: None,
+            forced_dispatch: None,
+            origin: None,
+            resume_group_chat: Some(checkpoint.round as usize),
+        },
+    )
+    .await
+}
+
+/// `resume_group_chat` Tauri command entry (GUI's 续跑 button).
+/// Thin wrapper: builds the `AppHandleSink` and forwards to
+/// [`resume_group_chat_inner`] — returns `Started` on acceptance and
+/// the discussion streams over the usual `chat-event` channel.
+#[tauri::command]
+pub async fn resume_group_chat(
+    session_id: String,
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+) -> Result<ChatAcceptance, AppCommandError> {
+    let sink: Arc<dyn ChatEventSink> = Arc::new(crate::state::AppHandleSink { app: app.clone() });
+    let worker_event_sink: Arc<dyn SubagentEventSink> =
+        Arc::new(AppHandleSubagentSink { app: app.clone() });
+    resume_group_chat_inner(&state, session_id, sink, worker_event_sink).await
 }
 
 /// Transport-agnostic chat orchestration (P2.3 C5, 2026-07-21).
@@ -200,6 +332,13 @@ pub(crate) struct ChatEntry {
     // 行为逐字节不变。载荷经路由临界区拷入 `QueuedMessage.origin`(忙时
     // 条目由另一个请求的驱动器在 round>0 消费,载体必须在队列项上)。
     pub(crate) origin: Option<crate::scheduler::TaskOrigin>,
+    // GCE P1a (09-06-gc-p1a-checkpoint-resume): `Some(start_round)` =
+    // 续跑中断的群聊讨论。唯一构造点是 `resume_group_chat_inner`
+    // (校验后的 checkpoint round);其余构造点 `None`。携带 round 而非
+    // bool 是为了不在 chat_inner 里二次查库。resume 请求的 messages
+    // 为空(injectable=false → 走 legacy 认领链),群聊分支把它转成
+    // `GroupChatResume` 透传给编排器。
+    pub(crate) resume_group_chat: Option<usize>,
 }
 
 pub(crate) async fn chat_inner(
@@ -216,6 +355,7 @@ pub(crate) async fn chat_inner(
         resend_seq,
         forced_dispatch,
         origin,
+        resume_group_chat,
     } = entry;
     let tool_defs = state.tools.clone();
     // B1 (2026-08-16): image-attachment caps, enforced at the shared
@@ -700,6 +840,10 @@ pub(crate) async fn chat_inner(
         // participants), so all the loop's guarantees (persistence,
         // cancel, tool exec) still hold.
         if let Some(gc_ctx) = group_chat_ctx {
+            // GCE P1a: ChatEntry.resume_group_chat → GroupChatResume
+            // (start_round 已在命令层校验过存在性与上限)。
+            let resume = resume_group_chat
+                .map(|start_round| crate::agent::group_chat::GroupChatResume { start_round });
             crate::agent::group_chat_loop::run_group_chat_loop(
                 tool_defs,
                 context_window,
@@ -725,6 +869,7 @@ pub(crate) async fn chat_inner(
                 question_store,
                 gc_ctx,
                 group_chat_controls,
+                resume,
             )
             .await;
         } else if drive_claimed {

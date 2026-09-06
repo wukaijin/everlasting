@@ -73,7 +73,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::chat_loop::{
     run_chat_loop, CallerRole, ChatLoopDeps, ChatLoopDepsParts, ChatLoopRequest,
 };
-use crate::agent::group_chat::{GroupChatControl, GroupChatCtx};
+use crate::agent::group_chat::{GroupChatControl, GroupChatCtx, GroupChatResume};
 use crate::agent::group_chat_prompts::{
     group_chat_tool_defs, moderator_system_prompt, participant_system_prompt, role_history,
     speaker_last_turn_errored,
@@ -92,7 +92,9 @@ use crate::tools::read_guard::ReadGuard;
 /// runaway loop where the moderator keeps nominating forever. The
 /// D10 context-window compaction still applies per-turn inside each
 /// `run_chat_loop`; this is an outer-loop safety bound.
-const MAX_ORCHESTRATION_ROUNDS: usize = 30;
+/// GCE P1a: `pub(crate)` — the resume command's budget gate
+/// references the same bound a resumed run is capped by.
+pub(crate) const MAX_ORCHESTRATION_ROUNDS: usize = 30;
 
 /// GC5 (2026-09-05, BUGLIST-group-chat): consecutive ERROR_MARKER
 /// turns that trip the orchestrator's circuit breaker. The 08-04
@@ -287,6 +289,13 @@ pub async fn run_group_chat_loop(
     // 统一清理(同 cancellations / session_active_request 的 GC1
     // 先例——注册跨轮存活,单点清理)。
     controls_map: Arc<tokio::sync::Mutex<std::collections::HashMap<String, GroupChatControl>>>,
+    // GCE P1a (09-06-gc-p1a-checkpoint-resume): resume 上下文。Some =
+    // 从 checkpoint 落库的中断点续跑——循环从 start_round 进入
+    // (轮预算继承,总帽不重置)、round 0 一律 reload(resume 请求无
+    // 尾条消息可吃)、恢复后首个 moderator 轮的 prompt 追加
+    // resume 指令、GC5 streak 归零。None = 全新一场(既有行为,
+    // 逐字节不变)。
+    resume: Option<GroupChatResume>,
 ) {
     // Shared turn state — the moderator's run_chat_loop writes here
     // via the nominate_speaker / end_discussion interception.
@@ -327,6 +336,28 @@ pub async fn run_group_chat_loop(
         );
     }
 
+    // GCE P1a (09-06-gc-p1a-checkpoint-resume): checkpoint hygiene.
+    // A FRESH run deletes any stale row here (mirroring the clear
+    // above) so the row that this run's round heads will upsert
+    // carries a new `started_at` (the upsert's ON CONFLICT never
+    // touches it). A RESUMED run keeps the row — it IS this
+    // discussion's checkpoint. Best-effort, same swallow contract.
+    if resume.is_none() {
+        if let Err(e) = db::delete_group_chat_checkpoint(&db, &session_id).await {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "group_chat: deleting stale checkpoint failed (non-fatal)"
+            );
+        }
+    }
+
+    // GCE P1a: resume enters at the checkpointed round — the total
+    // budget stays capped at MAX_ORCHESTRATION_ROUNDS across
+    // crash→resume cycles (a near-cap resume simply ends via
+    // MaxRounds on its first pass through the post-loop default).
+    let start_round = resume.map(|r| r.start_round).unwrap_or(0);
+
     // R2 (08-07-group-chat-toolset-and-identity): the reason the loop
     // stopped, if it exited via a `break`. Stays `None` on cancel (the
     // post-loop emit is suppressed) and is set to `DiscussionEnded` by
@@ -343,7 +374,7 @@ pub async fn run_group_chat_loop(
     // `HaltReason::ErrorBreaker` at `MAX_CONSECUTIVE_ERROR_TURNS`.
     let mut consecutive_error_turns: usize = 0;
 
-    for round in 0..MAX_ORCHESTRATION_ROUNDS {
+    for round in start_round..MAX_ORCHESTRATION_ROUNDS {
         if token.is_cancelled() {
             break;
         }
@@ -388,6 +419,30 @@ pub async fn run_group_chat_loop(
             break;
         }
 
+        // --- 0c. Round head: checkpoint upsert (GCE P1a) ---------------------
+        // Persist「the discussion reached round N」AFTER the preempt
+        // check (a preempted round never ran — the row keeps the last
+        // round that actually started) and BEFORE the moderator turn,
+        // so the crash window is one round. The streak value here is
+        // whatever the previous round's scoring left (0 on entry / on
+        // resume — a resumed run never inherits the interrupted
+        // streak). Best-effort: warn + swallow.
+        if let Err(e) = db::upsert_group_chat_checkpoint(
+            &db,
+            &session_id,
+            round as i64,
+            consecutive_error_turns as i64,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                round,
+                "group_chat: checkpoint upsert failed (non-fatal)"
+            );
+        }
+
         // --- 1. Moderator turn ------------------------------------------------
         // The moderator gets the nominate/end tools (already in
         // builtin_tools) + the shared turn state. Its system prompt
@@ -401,7 +456,11 @@ pub async fn run_group_chat_loop(
         // assistant rows + thinking into one context (串台源, same as
         // participant_view). round 0 uses the caller-supplied `messages`
         // (tail = the new human message); later rounds reload once.
-        let full = if round == 0 {
+        // GCE P1a: a RESUMED run never takes the round-0 branch — its
+        // caller-supplied `messages` is empty (the resume request
+        // carries no new user message); the reloaded DB transcript is
+        // the discussion's entire state.
+        let full = if round == 0 && resume.is_none() {
             messages.clone()
         } else {
             reload_messages(&db, &session_id).await
@@ -426,7 +485,16 @@ pub async fn run_group_chat_loop(
             // per-streak nudge — the streak mechanism is gone). Pacing
             // guidance ("research then nominate") lives in the prompt
             // itself (R3), not in a dynamically-appended nudge.
-            let prompt = moderator_prompt.clone();
+            // GCE P1a exception: the FIRST moderator turn of a resumed
+            // run appends the resume instruction (wrap-up precedent —
+            // tell the moderator the discussion continues instead of
+            // re-opening).
+            let prompt = if resume.is_some() && round == start_round {
+                moderator_prompt.clone()
+                    + crate::agent::group_chat_prompts::moderator_resume_instruction()
+            } else {
+                moderator_prompt.clone()
+            };
             // RULE-ARGS-001：每 speaker 重建三套件（moderator）。
             // 历史契约注记迁入 suite.rs 对应字段文档：
             // - max_turns=Some(1)（08-04 follow-up「moderator 单轮」，用户决议）；
@@ -513,6 +581,16 @@ pub async fn run_group_chat_loop(
             let after_mod = reload_messages(&db, &session_id).await;
             if speaker_last_turn_errored(&after_mod, "moderator") {
                 consecutive_error_turns += 1;
+                // GCE P1a: streak mutation → sync the checkpoint (the
+                // round-head upsert alone would leave a stale streak
+                // if we crash mid-later-round). Best-effort.
+                let _ = db::upsert_group_chat_checkpoint(
+                    &db,
+                    &session_id,
+                    round as i64,
+                    consecutive_error_turns as i64,
+                )
+                .await;
                 tracing::warn!(
                     round,
                     consecutive_error_turns,
@@ -734,6 +812,15 @@ pub async fn run_group_chat_loop(
         let after_part = reload_messages(&db, &session_id).await;
         if speaker_last_turn_errored(&after_part, &participant.name) {
             consecutive_error_turns += 1;
+            // GCE P1a: streak mutation → sync the checkpoint (same
+            // best-effort contract as the moderator-side check).
+            let _ = db::upsert_group_chat_checkpoint(
+                &db,
+                &session_id,
+                round as i64,
+                consecutive_error_turns as i64,
+            )
+            .await;
             tracing::warn!(
                 round,
                 participant = %participant.name,
@@ -745,7 +832,20 @@ pub async fn run_group_chat_loop(
                 break;
             }
         } else {
+            // GCE P1a: the ONLY reset point — a clean participant turn
+            // is real content progress, so the streak it zeroes must
+            // reach the checkpoint too (otherwise a crash right after
+            // a recovery would leave an inflated streak in the row —
+            // moot for resume semantics since a resume resets it
+            // anyway, but the row is also the diagnostics witness).
             consecutive_error_turns = 0;
+            let _ = db::upsert_group_chat_checkpoint(
+                &db,
+                &session_id,
+                round as i64,
+                consecutive_error_turns as i64,
+            )
+            .await;
         }
 
         // --- 7. Loop back to the moderator --------------------------------
@@ -871,6 +971,26 @@ pub async fn run_group_chat_loop(
             stop_reason = stop_reason_str,
             "group_chat: finalize_group_chat_lifecycle failed (non-fatal)"
         );
+    }
+
+    // GCE P1a (09-06-gc-p1a-checkpoint-resume): checkpoint row
+    // keep-or-delete encodes RESUMABILITY (prd Q2). Resumable exits
+    // (`cancelled` / `error`) keep the row — it already holds the
+    // round the discussion reached (round-head + streak upserts), so
+    // a resume re-enters exactly there. Terminal exits
+    // (`group_chat_end` / `preempted` / `max_rounds`) delete it; a
+    // failed delete is the orphan the boot sweep heals (and the
+    // resume command's stop_reason gate rejects regardless).
+    // Best-effort: warn + swallow, same contract as finalize.
+    let keep_checkpoint = matches!(stop_reason_str, STOP_REASON_CANCELLED | STOP_REASON_ERROR);
+    if !keep_checkpoint {
+        if let Err(e) = db::delete_group_chat_checkpoint(&db, &session_id).await {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "group_chat: checkpoint delete on terminal exit failed (non-fatal; boot sweep heals)"
+            );
+        }
     }
 
     // Terminal signal for the frontend (08-04 follow-up, user-approved

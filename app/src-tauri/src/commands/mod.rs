@@ -88,6 +88,7 @@ pub mod worktree;
 pub fn all_command_names() -> Vec<&'static str> {
     vec![
         "chat",
+        "resume_group_chat",
         "cancel_chat",
         "preempt_group_chat",
         "get_llm_config",

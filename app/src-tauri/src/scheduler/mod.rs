@@ -173,6 +173,7 @@ async fn fire_via_chat_inner(state: &Arc<crate::state::AppState>, ctx: FireConte
             resend_seq: None,
             forced_dispatch: None,
             origin: Some(origin),
+            resume_group_chat: None,
         },
     )
     .await

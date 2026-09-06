@@ -247,6 +247,7 @@ async fn group_chat_full_multi_round_flow_no_errors_no_duplicate_tool_results() 
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -744,6 +745,7 @@ async fn participant_gathers_evidence_then_speaks_across_turns() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -863,6 +865,7 @@ async fn orchestrator_emits_nonterminal_done_for_unknown_nominee() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -1023,6 +1026,7 @@ async fn group_chat_busy_holds_across_turns_and_lifecycle_persists() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -1154,6 +1158,7 @@ async fn group_chat_error_breaker_halts_after_consecutive_error_turns() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -1250,6 +1255,7 @@ async fn group_chat_max_rounds_persists_stop_reason() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -1324,6 +1330,7 @@ async fn group_chat_second_run_clears_stale_stop_reason() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -1402,6 +1409,7 @@ async fn group_chat_strips_own_prefix_on_persist() {
         h.question_store.clone(),
         group_chat_ctx(),
         fresh_controls(),
+        None,
     )
     .await;
 
@@ -1618,6 +1626,7 @@ async fn group_chat_inject_lands_next_moderator_round_and_survives_discussion() 
         h.question_store.clone(),
         group_chat_ctx(),
         controls.clone(),
+        None,
     )
     .await;
 
@@ -1775,6 +1784,7 @@ async fn group_chat_preempt_wrapup_produces_summary_and_distinguishable_stop_rea
         h.question_store.clone(),
         group_chat_ctx(),
         controls.clone(),
+        None,
     )
     .await;
 
@@ -1918,6 +1928,7 @@ async fn group_chat_preempt_wrapup_fallback_halts_without_summary() {
         h.question_store.clone(),
         group_chat_ctx(),
         controls.clone(),
+        None,
     )
     .await;
 
@@ -1942,5 +1953,370 @@ async fn group_chat_preempt_wrapup_fallback_halts_without_summary() {
     assert!(
         !controls.lock().await.contains_key(&gc_session_id),
         "controls entry must be removed at orchestration exit"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GCE P1a(2026-09-06,task 09-06-gc-p1a-checkpoint-resume)— checkpoint
+// 落库与续跑。
+// ---------------------------------------------------------------------------
+
+/// P1a AC3(resume 语义):断点续跑——moderator 首轮吃 reload 转录
+/// (resume 请求的空 messages 绝不进历史)、首 moderator 轮 system 带
+/// RESUME 指令且仅此一轮、轮预算从 start_round 起算(round=1 进入,一个
+/// nominate + 一个 end_discussion 即收官)、终局删行 + summary 落库。
+#[tokio::test]
+async fn group_chat_resume_enters_at_checkpoint_round_with_reload_and_instruction() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Seed「interrupted discussion」residue: one prior exchange in the
+    // transcript + a checkpoint row saying the discussion reached
+    // round 1 (crash right after round 0's upsert).
+    db::persist_turn(
+        &h.db,
+        &gc_session_id,
+        Role::User,
+        &MessageContent::Text("中断前的议题".to_string()),
+        0,
+        None,
+        None,
+    )
+    .await
+    .expect("seed prior user row");
+    db::persist_turn(
+        &h.db,
+        &gc_session_id,
+        Role::Assistant,
+        &MessageContent::Text("中断前 M1 的发言".to_string()),
+        1,
+        None,
+        Some("M1"),
+    )
+    .await
+    .expect("seed prior M1 row");
+    db::upsert_group_chat_checkpoint(&h.db, &gc_session_id, 1, 2)
+        .await
+        .expect("seed checkpoint (round=1, stale streak=2 — must not be inherited)");
+
+    // Resumed script: round 1 moderator nominates M1 (first turn →
+    // resume instruction), round 2 moderator ends.
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "rs1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "续场:请 M1 继续",
+        ),
+        mod_tool_turn(
+            "rs2",
+            "end_discussion",
+            serde_json::json!({"summary": "## 续跑共识"}),
+            "续场收束",
+        ),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("续跑后的 M1 发言")]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-resume".to_string(),
+        gc_session_id.clone(),
+        Vec::new(), // resume carries NO new user message
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        fresh_controls(),
+        Some(crate::agent::group_chat::GroupChatResume { start_round: 1 }),
+    )
+    .await;
+
+    assert_eq!(emitter.error_event_count(), 0, "resume must not error");
+
+    // RESUME instruction: first moderator turn only.
+    let systems = moderator.sent_systems();
+    assert_eq!(systems.len(), 2, "two moderator sends (nominate + end)");
+    assert!(
+        systems[0].as_deref().unwrap_or("").contains("## RESUME"),
+        "first resumed moderator turn must carry the resume instruction"
+    );
+    assert!(
+        !systems[1].as_deref().unwrap_or("").contains("## RESUME"),
+        "subsequent rounds must use the plain moderator prompt"
+    );
+
+    // Reload, not the empty `messages` arg: the moderator's first
+    // request must contain the seeded prior exchange.
+    let first_send = &moderator.sent_messages()[0];
+    let texts: Vec<String> = first_send.iter().map(|m| m.content.to_text()).collect();
+    assert!(
+        texts.iter().any(|t| t.contains("中断前的议题")),
+        "resumed moderator must see the reloaded transcript, got: {:?}",
+        texts
+    );
+
+    // Round budget: entering at round 1 with nominate@1 + end@2 —
+    // both sends happened (above) and the discussion closed normally.
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("## 续跑共识")
+    );
+
+    // Terminal exit deletes the checkpoint row.
+    assert!(
+        db::get_group_chat_checkpoint(&h.db, &gc_session_id)
+            .await
+            .expect("get checkpoint")
+            .is_none(),
+        "group_chat_end exit must delete the checkpoint row"
+    );
+}
+
+/// P1a AC1(行存留分流)+ 评审 P1-1 场景:error 熔断退出**保留**行
+/// (round = 终局轮)、且新场开跑会**删旧行重建**(started_at 重置,
+/// 复用 session 不携带上一场的断点身份)。
+#[tokio::test]
+async fn group_chat_error_exit_keeps_checkpoint_and_fresh_run_resets_it() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // 3 consecutive moderator error turns (the breaker path — the
+    // existing error-breaker test's script).
+    let error_stream = || {
+        MockResponse::Events(vec![
+            ok_evt(ChatEvent::Start),
+            Err(LlmError::Auth("provider down".to_string())),
+        ])
+    };
+    let moderator = Arc::new(MockProvider::new(vec![
+        error_stream(),
+        error_stream(),
+        error_stream(),
+        error_stream(),
+    ]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-err-keep".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard.clone(),
+        h.memory_cache.clone(),
+        h.skill_cache.clone(),
+        h.permission_asks.clone(),
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("error"));
+
+    // Resumable exit: the row survives with the final round.
+    let kept = db::get_group_chat_checkpoint(&h.db, &gc_session_id)
+        .await
+        .expect("get checkpoint")
+        .expect("error exit must KEEP the checkpoint row");
+    let first_started_at = kept.started_at.clone();
+    assert_eq!(
+        kept.round, 2,
+        "breaker trips on round 2's third consecutive error"
+    );
+
+    // Fresh second run: the stale row is deleted at start; this run
+    // ends cleanly (single end_discussion round) → row deleted at
+    // exit. To observe the RESET (not just the terminal delete), the
+    // second run errors again and the kept row's started_at must
+    // differ from the first run's.
+    let moderator2 = Arc::new(MockProvider::new(vec![
+        error_stream(),
+        error_stream(),
+        error_stream(),
+        error_stream(),
+    ]));
+    let mut catalog2: ProviderCatalog = HashMap::new();
+    catalog2.insert("moderator".to_string(), moderator2.clone());
+    let catalog2 = Arc::new(tokio::sync::RwLock::new(catalog2));
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-err-2nd".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard.clone(),
+        h.memory_cache.clone(),
+        h.skill_cache.clone(),
+        h.permission_asks.clone(),
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog2),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let second = db::get_group_chat_checkpoint(&h.db, &gc_session_id)
+        .await
+        .expect("get checkpoint")
+        .expect("second error exit keeps its own row");
+    assert_ne!(
+        second.started_at, first_started_at,
+        "a FRESH run must delete the stale row (new discussion identity)"
+    );
+}
+
+/// P1a R5(cancelled 留行):mid-run cancel(Stop)退出保留断点行
+/// —— resume 可拾起硬停的讨论。
+#[tokio::test]
+async fn group_chat_cancelled_exit_keeps_checkpoint_row() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Sink hook: cancel the token when M1's speaker event fires
+    // (mid-run, after round 0's checkpoint upsert).
+    struct CancelOnM1 {
+        inner: MockEmitter,
+        token: CancellationToken,
+    }
+    impl crate::state::ChatEventSink for CancelOnM1 {
+        fn emit_chat_event(&self, payload: &crate::state::ChatEventPayload) {
+            if let ChatEvent::Speaker { speaker } = &payload.event {
+                if speaker == "M1" {
+                    self.token.cancel();
+                }
+            }
+            self.inner.emit_chat_event(payload);
+        }
+        fn emit_tool_call(&self, payload: &crate::state::ToolCallPayload) {
+            self.inner.emit_tool_call(payload);
+        }
+        fn emit_tool_result(&self, payload: &crate::state::ToolResultPayload) {
+            self.inner.emit_tool_result(payload);
+        }
+        fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
+            self.inner.emit_permission_ask(payload);
+        }
+    }
+
+    let moderator = Arc::new(MockProvider::new(vec![mod_tool_turn(
+        "c1",
+        "nominate_speaker",
+        serde_json::json!({"name": "M1"}),
+        "开场",
+    )]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("被硬停的 M1 发言")]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let token = CancellationToken::new();
+    let emitter = Arc::new(CancelOnM1 {
+        inner: MockEmitter::new(),
+        token: token.clone(),
+    });
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-cancel-keep".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        token,
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("cancelled"),
+        "hard Stop persists its reason (GC2)"
+    );
+    assert!(
+        db::get_group_chat_checkpoint(&h.db, &gc_session_id)
+            .await
+            .expect("get checkpoint")
+            .is_some(),
+        "cancelled (resumable) exit must KEEP the checkpoint row"
     );
 }
