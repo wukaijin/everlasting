@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 133
-- **Last Active**: 2026-09-06
+- **Total Sessions**: 134
+- **Last Active**: 2026-09-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1456 | Active |
+| `journal-4.md` | ~1480 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 134 | 2026-09-07 | GCE-P1a 群聊 checkpoint 落库与续跑 | `f2c5da4e`, `b5462b25`, `4ab70b9c`, `8cdd5246` | `main` |
 | 133 | 2026-09-06 | GCE-MCP 部署面收口:standalone bin + 部署器 | `44cb1477`, `e0d2ff0a` | `main` |
 | 132 | 2026-09-06 | GCE-M3 控制面交付:MCP interrupt/inject + GUI 打断 + SSE follow 文档 | `b64c0cc3`, `ba98089f` | `main` |
 | 131 | 2026-09-06 | 群聊 P0 打断最小语义:preempt 信号 + schema 区分(含 daemon 暴露面安全边界立档) | `8a25c301`, `5c3251f5`, `e8e469dd` | `main` |

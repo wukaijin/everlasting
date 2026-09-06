@@ -1454,3 +1454,27 @@ GCE-ROADMAP §5「MCP 部署面」路径②落地(推荐项,用户指认的部�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 134: GCE-P1a 群聊 checkpoint 落库与续跑
+
+**Date**: 2026-09-07
+**Task**: GCE-P1a 群聊 checkpoint 落库与续跑
+**Branch**: `main`
+
+### Summary
+
+GCE-ROADMAP §4/§6 点名的 M3 信任底座余项 + M4 定时审议容错前置,全量落地(checkpoint 表 + boot sweep + resume 命令 + GUI 按钮)。brainstorm 三问定案:Q1 全量含 GUI;Q2 可续跑态 = interrupted/cancelled/error,checkpoint 行存留编码可续跑性;Q3 新表 + boot sweep 写 interrupted(既有「!busy+stop_reason→终态」派生零 API 变更即可见)。外部模型评审甄别后全部采纳无翻案(P0-1 TS SessionSummary 无 stop_reason 字段 + finalize 后内存不刷新→补字段+reloadAfterFinalize 合并回写;P1-1 终局残留→命令第五校验+sweep 孤儿清理双保险;P1-2 sweep 不写 updated_at;P1-3 脚本无 status 子命令+EXIT 档误归→interrupted 专属 exit 5;P2×5+lib.rs invoke_handler 双注册勘误;唯一降级 jsonl 门——inline 实施本可 skip,顺手补真实条目)。交付四提交:f2c5da4e DB 层(表 CASCADE+四函数:upsert ON CONFLICT 不触 started_at/recover 两步=标中断不动 updated_at+清孤儿,挂 load_inner 崩溃恢复块)+b5462b25 编排器与入口(轮头 upsert+GC5 同步、for round in start_round..MAX 预算继承、round0 reload guard、resume 指令追加式、退出留行/删行分流;resume_group_chat_inner 五类校验 InvalidRequest→400+daemon 路由+Tauri 双注册)+4ab70b9c GUI(TS 双类型补字段、终态合并回写、store action 受理后零流接线=adoptForeignRequest 自动认领、可续跑门+防抖按钮+中断 chip、http 映射)+8cdd5246 接线(M1 脚本 interrupted 档+resume 提示、MCP JSDoc、DAEMON-API/GCE-ROADMAP/ROADMAP 三文档、spec pattern P1a 扩展段)。验证:后端 2310 测(2309 过+1 已知负载 flake 隔离绿)+clippy/fmt 净;前端 1601 测+vue-tsc 0+build 过;脚本 11+16 过。live 三链(arch 预设,session 32f167c4):SIGKILL 直杀→重启 sweep 标 interrupted(日志 marked_interrupted=1,行 round=2)→curl resume→moderator 恢复轮精准续场(「上一轮刚把发言权交给架构但其发言尚未产出即中断,现在继续」;被斩半截发言由 RULE-PERSIST-001 标[异常中断已恢复],两层恢复咬合)→~160s group_chat_end+完整 summary+行删;终局场再 resume 被 400 拒。转录 out/group-chat-p1a-resume-20260906.md。live 讨论议题即评审本实现,其结论(规则文案应常驻 chip)当场采纳。坑:本 harness daemon 须后台任务方式起(setsid 不逃);shell http_proxy=127.0.0.1:7897 会给 curl 假应答,本机验证必须 --noproxy;daemon.sh stop 是 SIGTERM graceful→cancelled,测 interrupted 必须 kill -9。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f2c5da4e` | (see git log) |
+| `b5462b25` | (see git log) |
+| `4ab70b9c` | (see git log) |
+| `8cdd5246` | (see git log) |
+
+### Status
+
+[OK] **Completed**
