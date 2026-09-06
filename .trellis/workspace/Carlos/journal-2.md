@@ -918,3 +918,7 @@ ROADMAP M2 落地。brainstorm 五决策:①Node+@modelcontextprotocol/sdk 薄�
 ### Status
 
 [OK] **Completed**(余项:ZCode 新会话工具出现一眼验证;Claude Code 宿主路径待用户代理修复;daemon 绑定面收紧候选独立任务)
+
+### 收官后实踩两修(用户实测反馈)
+
+① **挂载模板变量**:首版 `.agents/mcp.json` 用 `${CLAUDE_PROJECT_DIR}`——配置文件作用域不展开模板(插件专属),字面量 spawn 失败、工具 0;改绝对路径(`039bf10b`),教训:diagnosing-mcp §2 该条当时没读全,规划时误标「变量受支持」。② **resolveProject 撞隐藏项目**(`43756959`):用户 vite-react-ts 会话首跑 start_discussion 报 "project already exists" 400——GUI 隐藏位 hidden=1 使 list_projects 滤掉该行,resolveProject match miss → create_project 撞全表唯一性检查;修 filter:{hidden:true} 查全量(daemon 既有参数零改动)。M1 时代没炸只因验收项目全可见——**新消费通道首跑即挖出共享层潜伏 bug,分层设计(多消费者同引擎)的验证价值实证**。部署面绑定源码检出的缺口也由用户指认,记 roadmap M4「MCP 部署面」follow-up(`0a572ca7`)。
