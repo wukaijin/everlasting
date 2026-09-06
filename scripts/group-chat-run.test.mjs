@@ -7,7 +7,7 @@ import path from 'node:path';
 import {
   EXIT, PRESETS, resolveParticipants, buildCreateSessionBody, buildChatBody,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
-  renderTranscript,
+  renderTranscript, injectGuardDecision, interpretAcceptance,
 } from './group-chat-run.mjs';
 
 const MODELS = [
@@ -135,4 +135,30 @@ test('EXIT 契约:stop_reason 四值各一档,1 留给脚本错误', () => {
   assert.equal(EXIT.cancelled, 3);
   assert.equal(EXIT.error, 4);
   assert.equal(EXIT.scriptError, 1);
+});
+
+test('injectGuardDecision:busy 只信 === true;空闲/已收官一律不发起(评审 P1-1)', () => {
+  assert.deepEqual(injectGuardDecision({ busy: true, stop_reason: null }), { allowed: true });
+  const blocked = injectGuardDecision({ busy: false, stop_reason: 'group_chat_end' });
+  assert.equal(blocked.allowed, false);
+  assert.match(blocked.reason, /start_discussion/); // 指引发起新讨论的正确入口
+  // additive wire:字段缺失 / null summary 都视为闲(误发会抹旧场 summary,宁拒勿发)
+  assert.equal(injectGuardDecision({}).allowed, false);
+  assert.equal(injectGuardDecision(null).allowed, false);
+});
+
+test('interpretAcceptance:injected 唯一成功态;started/queued/未知 = misfire 带止损动作', () => {
+  assert.deepEqual(interpretAcceptance({ status: 'injected' }), { kind: 'injected' });
+  assert.deepEqual(
+    interpretAcceptance({ status: 'started' }),
+    { kind: 'misfire', status: 'started', cancelOwnRequest: true },
+  );
+  assert.deepEqual(
+    interpretAcceptance({ status: 'queued', id: 'q1', position: 2 }),
+    { kind: 'misfire', status: 'queued', cancelOwnRequest: true },
+  );
+  assert.deepEqual(
+    interpretAcceptance(null),
+    { kind: 'misfire', status: 'unknown', cancelOwnRequest: true },
+  );
 });

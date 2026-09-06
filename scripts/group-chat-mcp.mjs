@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// group-chat-mcp.mjs — GCE-M2 MCP 接口层(四工具:召集/轮询/取结论/止损)
+// group-chat-mcp.mjs — GCE-M2 MCP 接口层(四工具:召集/轮询/取结论/止损;
+// M3 增打断/注入两工具,控制面三权齐:cancel 硬停 / interrupt 收束 / inject 注入)
 //
 // 三层架构(M1 定形)中的薄包装:编排语义(建群契约/模型解析/终态判定/
 // 转录渲染)全部 import 自 group-chat-run.mjs(AC②,不是两套);本文件
@@ -30,8 +31,9 @@ import { fileURLToPath } from 'node:url';
 import {
   PRESETS, DEFAULT_BASE, fetchFailDetail,
   resolveParticipants, validateModelRefs, buildCreateSessionBody, buildChatBody,
-  defaultTranscriptPath, renderTranscript,
+  defaultTranscriptPath, renderTranscript, injectGuardDecision, interpretAcceptance,
   resolveProject, listModels, createSession, fireChat, pollSession, loadSession, cancelChat,
+  preemptGroupChat,
 } from './group-chat-run.mjs';
 
 // ---------------------------------------------------------------------------
@@ -93,6 +95,7 @@ export function realDeps(overrides = {}) {
     pollSession: (projectId, sessionId) => pollSession(base, projectId, sessionId),
     loadSession: (sessionId) => loadSession(base, sessionId),
     cancelChat: (requestId) => cancelChat(base, requestId),
+    preemptGroupChat: (sessionId) => preemptGroupChat(base, sessionId),
     ...overrides,
   };
 }
@@ -256,13 +259,60 @@ export async function coreCancel(deps, ledger, sessionId) {
   }
 }
 
+/** GCE-M3 interrupt_discussion:session 域收束打断(preempt 端点 1:1;
+ * 与 coreCancel 的 rid 域硬停相对——收束等在途发言完并落 summary)。
+ * 无进行中讨论 → 端点报错原样透传(无副作用,不需要前置 guard)。 */
+export async function coreInterrupt(deps, ledger, sessionId) {
+  const { preempted } = await deps.preemptGroupChat(sessionId);
+  return {
+    interrupted: preempted === true,
+    session_id: sessionId,
+    hint: 'Wrap-up in progress: the in-flight speaker finishes, then the moderator rounds off (~1-3 min). Poll discussion_status; after it turns terminal (stop_reason=preempted, or group_chat_end if the discussion finished naturally in the same instant), read discussion_result.',
+  };
+}
+
+/** GCE-M3 inject_message:往进行中的讨论注入用户消息(controls 缓冲,
+ * 下一 moderator 轮可见,讨论不死)。主防护 = 前置 busy guard(评审
+ * P1-1:空闲/已收官群聊一旦 fireChat 会重启编排器并无条件抹旧场
+ * summary,cancel 救不回 → 非 busy 根本不发起);fireChat 后 acceptance
+ * 非 injected → 自有 rid 即时 cancel 竞态兜底 + 语义报错。 */
+export async function coreInject(deps, ledger, { session_id: sessionId, text }) {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) {
+    const err = new Error('缺注入文本:text(注入只收文本;纯图片注入不支持)');
+    err.isToolError = true;
+    throw err;
+  }
+  const { summary } = await findSession(deps, ledger, sessionId);
+  const guard = injectGuardDecision(summary);
+  if (!guard.allowed) {
+    const err = new Error(guard.reason);
+    err.isToolError = true;
+    throw err;
+  }
+  const requestId = `gcinject-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const acceptance = await deps.fireChat(buildChatBody({ requestId, sessionId, topic: trimmed }));
+  const verdict = interpretAcceptance(acceptance);
+  if (verdict.kind !== 'injected') {
+    await deps.cancelChat(requestId).catch(() => { /* 止损尽力而为;语义错误照报 */ });
+    const err = new Error(`目标不是进行中的群聊讨论(acceptance=${verdict.status});已止损取消本次请求。发起新讨论请用 start_discussion。`);
+    err.isToolError = true;
+    throw err;
+  }
+  return {
+    injected: true,
+    session_id: sessionId,
+    hint: 'Injected — lands as [用户插入] in the next moderator round; the discussion continues. Poll discussion_status as usual.',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 工具定义区(description+inputSchema 即产品;预算见 TOOLS_BUDGET_CHARS,
 // AC4 单测按 wire 上的 JSON Schema 实测锁上限 —— 宿主注入 LLM context 的
 // 就是 listTools 返回的 schema,这才是预算的地面真值)
 // ---------------------------------------------------------------------------
 
-export const TOOLS_BUDGET_CHARS = 2300; // AC4:四工具 name+description+inputSchema(wire JSON Schema)合计字符上限
+export const TOOLS_BUDGET_CHARS = 3200; // AC4:六工具 name+description+inputSchema(wire JSON Schema)合计字符上限;M3 四→六实测量级 ≈2881(评审实测),余量 ≈10%
 
 /** Zod shape(SDK 1.30 registerTool 只收 Zod;内部转 JSON Schema 上 wire)。
  * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。 */
@@ -281,6 +331,11 @@ export function buildToolShapes(z) {
     discussion_status: { session_id: z.string() },
     discussion_result: { session_id: z.string() },
     cancel_discussion: { session_id: z.string() },
+    interrupt_discussion: { session_id: z.string() },
+    inject_message: {
+      session_id: z.string(),
+      text: z.string().min(1).describe('User message text; lands as [用户插入] in the next moderator round'),
+    },
   };
 }
 
@@ -304,6 +359,16 @@ export const TOOLS = [
     name: 'cancel_discussion',
     description: 'Stop a running discussion (orchestration stops, session kept).',
     shapeKey: 'cancel_discussion',
+  },
+  {
+    name: 'interrupt_discussion',
+    description: 'Gracefully stop a running discussion: in-flight speaker finishes, the moderator wraps up with a summary, stop_reason=preempted. Returns immediately; poll discussion_status (~1-3 min), then read discussion_result.',
+    shapeKey: 'interrupt_discussion',
+  },
+  {
+    name: 'inject_message',
+    description: 'Inject a user message into a RUNNING discussion; the next moderator round sees it and the discussion continues. Errors if the session is not busy — use start_discussion to convene a new one.',
+    shapeKey: 'inject_message',
   },
 ];
 
@@ -330,6 +395,8 @@ export async function createServer({ server, deps = realDeps(), ledger = createL
     discussion_status: ({ session_id }) => coreStatus(deps, ledger, session_id),
     discussion_result: ({ session_id }) => coreResult(deps, ledger, session_id),
     cancel_discussion: ({ session_id }) => coreCancel(deps, ledger, session_id),
+    interrupt_discussion: ({ session_id }) => coreInterrupt(deps, ledger, session_id),
+    inject_message: ({ session_id, text }) => coreInject(deps, ledger, { session_id, text }),
   };
   for (const tool of TOOLS) {
     const handler = handlers[tool.name];

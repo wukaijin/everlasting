@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // group-chat-mcp-smoke.mjs — MCP server 冒烟:真 spawn stdio 进程验收。
 //
-// 非 live(默认,daemon 可跑可不跑):spawn server → tools/list 断言 4 工具
+// 非 live(默认,daemon 可跑可不跑):spawn server → tools/list 断言 6 工具
 // + wire 预算 → callTool discussion_status(不存在 id)断言 handler 链给出
 // 可操作错误(daemon 在跑 = 「session 不存在」;没跑 = daemon 提示)。
 //
@@ -17,7 +17,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(SCRIPTS, 'group-chat-mcp.mjs');
-const BUDGET = 2300;
+const BUDGET = 3200; // M3 四→六工具;评审实测六工具 wire ≈2881 chars
 
 const live = process.argv.includes('--live');
 
@@ -32,13 +32,13 @@ process.stderr.write(`[smoke] server spawned over stdio: ${SERVER}\n`);
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
 
 try {
-  // 1) tools/list:四工具 + wire 预算(宿主注入 context 的地面真值)
+  // 1) tools/list:六工具(M3 起)+ wire 预算(宿主注入 context 的地面真值)
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  const want = ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion'];
+  const want = ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message'];
   if (JSON.stringify(names) !== JSON.stringify(want)) fail(`tools/list 期望 ${want} 实得 ${names}`);
   const chars = JSON.stringify(tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;
-  process.stderr.write(`[smoke] tools/list ok(4);wire schema ${chars} chars ≈ ${Math.round(chars / 4)} tokens(预算 ${BUDGET})\n`);
+  process.stderr.write(`[smoke] tools/list ok(6);wire schema ${chars} chars ≈ ${Math.round(chars / 4)} tokens(预算 ${BUDGET})\n`);
   if (chars > BUDGET) fail(`wire 预算超支:${chars} > ${BUDGET}`);
 
   // 2) handler 链:不存在的 session → 可操作错误(daemon 两态皆算过)

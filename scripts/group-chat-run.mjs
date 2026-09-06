@@ -171,6 +171,30 @@ export function buildChatBody({ requestId, sessionId, topic }) {
   };
 }
 
+// --- GCE-M3 inject_message 判定(mcp.mjs coreInject 消费;纯函数区) ---
+
+/** inject 前置 busy guard(评审 P1-1 主防护):空闲/已收官群聊 session 一旦
+ * fireChat 会重启编排器并无条件 clear_group_chat_lifecycle(抹上一场
+ * stop_reason + summary,cancel 也救不回),故非 busy 一律不发起。
+ * busy 只信 === true(session-busy-visibility 双源合流同规,additive wire)。 */
+export function injectGuardDecision(summary) {
+  if (summary?.busy === true) return { allowed: true };
+  return {
+    allowed: false,
+    reason: `目标不是进行中的群聊讨论(busy=${summary?.busy ?? 'unknown'}, stop_reason=${summary?.stop_reason ?? 'null'})。注入只对进行中的讨论有效;发起新讨论请用 start_discussion。`,
+  };
+}
+
+/** inject 受理判定:agent/chat 恒 JSON 返回 ChatAcceptance(serde tag)。
+ * wire:`{"status":"injected"}`(注入成功)/ `{"status":"started"}`
+ * (打在空闲群聊 = 误起新讨论)/ `{"status":"queued",id,position}`
+ * (打在 busy 经典会话 = 误入 F1 队列)。后两者 misfire:调用方应用
+ * 自有 rid 即时 cancelChat 止损(竞态兜底),再报语义错误。 */
+export function interpretAcceptance(acceptance) {
+  if (acceptance?.status === 'injected') return { kind: 'injected' };
+  return { kind: 'misfire', status: acceptance?.status ?? 'unknown', cancelOwnRequest: true };
+}
+
 /** 物理路径比较(防 /repo/foo vs /repo/foobar 前缀陷阱,spec: project-cwd-boundary)。 */
 function samePhysicalPath(a, b) {
   const norm = (p) => path.resolve(p).replace(/\/+$/, '');
@@ -356,6 +380,12 @@ export function loadSession(base, sessionId) {
 
 export function cancelChat(base, requestId) {
   return api(base, 'cancel/cancel_chat', { body: { request_id: requestId } });
+}
+
+/** GCE-M3:体面打断(session 域收束——等在途发言完 → moderator 收束轮 →
+ * stop_reason=preempted;与 cancelChat 的 rid 域硬停相对,DAEMON-API §4)。 */
+export function preemptGroupChat(base, sessionId) {
+  return api(base, 'cancel/preempt_group_chat', { body: { session_id: sessionId } });
 }
 
 export function deleteSession(base, sessionId) {

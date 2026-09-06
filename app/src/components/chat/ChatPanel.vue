@@ -238,6 +238,12 @@ function openGroupChatEdit() {
   groupChatEditOpen.value = true;
 }
 
+// GCE-M3 (09-06-gce-m3-control-plane): 收束打断入口 —— 与 API 同权同语义,
+// 复用 store action(两 transport 通用);按钮只管可见性与发起。
+function onPreemptGroupChat() {
+  void chatStore.preemptGroupChat();
+}
+
 const currentProject = computed(() =>
   projectsStore.projectById(projectsStore.currentProjectId),
 );
@@ -725,6 +731,24 @@ onUnmounted(() => reviewStateStore.stop());
         >
           <Icon name="users" :size="12" />
           群聊 ({{ groupChatParticipants?.length ?? 0 }} 参与者)
+        </button>
+        <!--
+          GCE-M3 (09-06-gce-m3-control-plane): 群聊收束打断 —— 与 API
+          preempt_group_chat 同权同语义(等在途发言完 → moderator 收束轮,
+          summary 保留);硬取消仍走 ChatInput 的 Stop/Esc。讨论进行中才可见,
+          终态 notice 由 streamController(P0)承担。
+        -->
+        <button
+          v-if="isGroupChat && chatStore.isCurrentSessionStreaming"
+          class="chat-panel__chip chat-panel__chip--group-chat btn btn--ghost"
+          type="button"
+          title="收束打断:在途发言完成后由 moderator 收束并保留结论"
+          aria-label="收束打断群聊讨论"
+          data-testid="chat-panel-group-chat-preempt"
+          @click="onPreemptGroupChat"
+        >
+          <Icon name="square" :size="12" />
+          打断
         </button>
         <!--
           F2 定时任务 (2026-08-28): session header 活跃任务徽章 ——

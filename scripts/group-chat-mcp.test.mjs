@@ -10,7 +10,8 @@ import path from 'node:path';
 
 import {
   TOOLS, TOOLS_BUDGET_CHARS, buildToolShapes, createLedger, isTerminal,
-  coreStart, coreStatus, coreResult, coreCancel, ensureTranscript, realDeps,
+  coreStart, coreStatus, coreResult, coreCancel, coreInterrupt, coreInject,
+  ensureTranscript, realDeps,
 } from './group-chat-mcp.mjs';
 
 const MODELS = [
@@ -22,7 +23,7 @@ const MODELS = [
 
 /** mock deps:按场景注入;记录调用供断言。session 形状 = list_sessions 行。 */
 function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: false } } = {}) {
-  const calls = { createSession: [], fireChat: [], cancelChat: [], pollSession: [], loadSession: [], listModels: 0 };
+  const calls = { createSession: [], fireChat: [], cancelChat: [], pollSession: [], loadSession: [], listModels: 0, preemptGroupChat: [] };
   const deps = {
     base: 'http://mock',
     resolveProject: async () => { calls.resolveProject = (calls.resolveProject || 0) + 1; return project; },
@@ -32,6 +33,7 @@ function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: fals
     pollSession: async (projectId, sessionId) => { calls.pollSession.push([projectId, sessionId]); return session ? { ...session } : null; },
     loadSession: async (sessionId) => { calls.loadSession.push(sessionId); return loaded; },
     cancelChat: async (requestId) => { calls.cancelChat.push(requestId); return {}; },
+    preemptGroupChat: async (sessionId) => { calls.preemptGroupChat.push(sessionId); return { preempted: true }; },
   };
   return { deps, calls };
 }
@@ -45,13 +47,18 @@ function tmpLedger() {
 // 工具面(AC4 预算 + AC2 完整性)
 // ---------------------------------------------------------------------------
 
-test('AC4(文案层):四工具面完整,成本闸/不阻塞语义在 start 描述里(R3)', () => {
+test('AC4(文案层):六工具面完整,成本闸/不阻塞语义在 start 描述里(R3)', () => {
   assert.deepEqual(TOOLS.map((t) => t.name),
-    ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion']);
+    ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message']);
   const desc = TOOLS[0].description;
   assert.match(desc, /5-15 min/);
   assert.match(desc, /tokens/);
   assert.match(desc, /Returns immediately/);
+  // M3 控制面:interrupt = 收束(非硬停,preempted 可辨);inject 仅限 running
+  assert.match(TOOLS[4].description, /Gracefully/);
+  assert.match(TOOLS[4].description, /preempted/);
+  assert.match(TOOLS[5].description, /RUNNING/);
+  assert.match(TOOLS[5].description, /start_discussion/);
   // 字符预算的地面真值在 SDK wire 测试里按 listTools 实测(见下)
 });
 
@@ -269,6 +276,81 @@ test('coreCancel:记账命中传 request_id;cancel 撞已终态幂等成功;记�
 });
 
 // ---------------------------------------------------------------------------
+// coreInterrupt / coreInject(GCE-M3 控制面)
+// ---------------------------------------------------------------------------
+
+test('coreInterrupt:preempt 端点 1:1,响应带轮询指引;端点报错原样透传', async () => {
+  const { deps, calls } = makeMockDeps();
+  const { ledger } = tmpLedger();
+  const out = await coreInterrupt(deps, ledger, 'sess-1');
+  assert.equal(out.interrupted, true);
+  assert.equal(out.session_id, 'sess-1');
+  assert.match(out.hint, /discussion_status/);
+  assert.match(out.hint, /preempted/);
+  assert.match(out.hint, /group_chat_end/, 'P2-1:自然收官竞态的终态别名写进指引');
+  assert.deepEqual(calls.preemptGroupChat, ['sess-1']);
+
+  const failing = {
+    ...deps,
+    preemptGroupChat: async () => { throw new Error('HTTP 400: 该会话当前没有进行中的群聊讨论'); },
+  };
+  await assert.rejects(coreInterrupt(failing, ledger, 'sess-x'), /没有进行中的群聊讨论/);
+});
+
+test('coreInject:busy 群聊注入成功;已收官 session guard 拦截且零 fireChat(评审 P1-1)', async () => {
+  {
+    const { deps, calls } = makeMockDeps({ session: { busy: true, stop_reason: null, id: 'sess-1', project_id: 'proj-1' } });
+    deps.fireChat = async (body) => { calls.fireChat.push(body); return { status: 'injected' }; };
+    const { ledger } = tmpLedger();
+    ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1' });
+    const out = await coreInject(deps, ledger, { session_id: 'sess-1', text: '  请补充证据  ' });
+    assert.equal(out.injected, true);
+    assert.match(out.hint, /moderator/);
+    // 注入文本 trim 后走标准 chat body;rid 前缀 gcinject 区分来源
+    assert.equal(calls.fireChat.length, 1);
+    assert.deepEqual(calls.fireChat[0].messages, [{ role: 'user', content: '请补充证据' }]);
+    assert.match(calls.fireChat[0].request_id, /^gcinject-\d+-/);
+    assert.equal(calls.cancelChat.length, 0);
+  }
+  {
+    // 已收官群聊(评审 P1-1 主防护):guard 根本不发起,零副作用。
+    // 不记账 = 手抄 session_id 的真实路径,走 load_session 兜底链拿 busy。
+    const { deps, calls } = makeMockDeps({
+      session: { busy: false, stop_reason: 'group_chat_end', id: 'sess-1', project_id: 'proj-1' },
+      loaded: { session: { id: 'sess-1', project_id: 'proj-1' }, messages: [] },
+    });
+    const { ledger } = tmpLedger();
+    await assert.rejects(
+      coreInject(deps, ledger, { session_id: 'sess-1', text: 'hi' }),
+      (e) => e.isToolError && /start_discussion/.test(e.message),
+    );
+    assert.equal(calls.fireChat.length, 0, 'guard 拦截:fireChat 一次都不能发');
+    assert.equal(calls.cancelChat.length, 0);
+  }
+  {
+    // 空白文本(zod min(1) 拦不住的语义空)
+    const { deps } = makeMockDeps({ session: { busy: true, stop_reason: null, id: 'sess-1', project_id: 'proj-1' } });
+    const { ledger } = tmpLedger();
+    await assert.rejects(coreInject(deps, ledger, { session_id: 'sess-1', text: '   ' }), /缺注入文本/);
+  }
+});
+
+test('coreInject:guard 后竞态误发(started/queued)→ 自有 rid 止损 + 语义报错', async () => {
+  for (const acceptance of [{ status: 'started' }, { status: 'queued', id: 'q1', position: 2 }]) {
+    const { deps, calls } = makeMockDeps({ session: { busy: true, stop_reason: null, id: 'sess-1', project_id: 'proj-1' } });
+    deps.fireChat = async (body) => { calls.fireChat.push(body); return acceptance; };
+    const { ledger } = tmpLedger();
+    ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1' });
+    await assert.rejects(
+      coreInject(deps, ledger, { session_id: 'sess-1', text: 'hi' }),
+      (e) => e.isToolError && /止损/.test(e.message),
+    );
+    assert.equal(calls.cancelChat.length, 1, '自有 rid 即时 cancel');
+    assert.equal(calls.cancelChat[0], calls.fireChat[0].request_id);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // SDK 协议接线(真 SDK + InMemoryTransport,不 spawn 进程)
 // ---------------------------------------------------------------------------
 
@@ -278,7 +360,8 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool �
   const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
   const { createServer } = await import('./group-chat-mcp.mjs');
 
-  const { deps } = makeMockDeps({ session: { busy: true, stop_reason: null, id: 'sess-1', project_id: 'proj-1' } });
+  const { deps, calls } = makeMockDeps({ session: { busy: true, stop_reason: null, id: 'sess-1', project_id: 'proj-1' } });
+  deps.fireChat = async (body) => { calls.fireChat.push(body); return { status: 'injected' }; };
   const { ledger } = tmpLedger();
   const server = await createServer({ server: new McpServer({ name: 't', version: '0' }), deps, ledger });
   const client = new Client({ name: 't-client', version: '0' });
@@ -286,7 +369,7 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool �
   await Promise.all([server.connect(ct), client.connect(st)]);
 
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 4);
+  assert.equal(listed.tools.length, 6);
 
   // AC4 预算地面真值:宿主注入 LLM context 的就是这份 wire schema
   const wireChars = JSON.stringify(listed.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;
@@ -304,6 +387,14 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool �
   assert.equal(err.isError, true, '非终态走 isError 语义(roadmap:明确报错而非空值)');
   assert.match(JSON.parse(err.content[0].text).error, /still running/);
 
+  // M3 控制面:interrupt 1:1;inject 走 guard(busy mock)成功 + 语义空文本 isError
+  const pre = await client.callTool({ name: 'interrupt_discussion', arguments: { session_id: 'sess-1' } });
+  assert.equal(JSON.parse(pre.content[0].text).interrupted, true);
+  const inj = await client.callTool({ name: 'inject_message', arguments: { session_id: 'sess-1', text: '补充:看 X' } });
+  assert.equal(JSON.parse(inj.content[0].text).injected, true);
+  const blank = await client.callTool({ name: 'inject_message', arguments: { session_id: 'sess-1', text: '  ' } });
+  assert.equal(blank.isError, true, '语义空文本(纯空白)isError');
+
   await client.close();
   await server.close();
 });
@@ -311,5 +402,6 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool �
 test('realDeps 默认不炸(仅构造;BASE 环境变量语义与 M1 单源)', () => {
   const d = realDeps();
   assert.equal(typeof d.pollSession, 'function');
+  assert.equal(typeof d.preemptGroupChat, 'function');
   assert.ok(/^http/.test(d.base));
 });

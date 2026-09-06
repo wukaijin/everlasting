@@ -906,6 +906,36 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** GCE-M3: 群聊体面打断(session 域收束——等在途发言完 → moderator
+   *  收束轮 → `stop_reason: "preempted"`,summary 保留)。与 cancel()
+   *  的 rid 域硬停并存:Stop/Esc 仍是止损最后手段。两 transport 通用
+   *  (Tauri 纯透传 command;http 顶层 key 自动扳正为 session_id)。
+   *  终态呈现零新工作:finalize 白名单(streamEvents isTerminal)+
+   *  preempted notice 已随 P0 交付——本 action 只负责发请求 + toast。 */
+  async function preemptGroupChat() {
+    const sid = currentSessionId.value;
+    if (!sid) return;
+    try {
+      const outcome = await transport.invoke<{ preempted: boolean }>(
+        "preempt_group_chat",
+        { sessionId: sid },
+      );
+      if (outcome?.preempted) {
+        projectsStore.showToast(
+          "收束打断已请求:在途发言完成后由 moderator 收束(约 1-3 分钟)",
+          "info",
+        );
+      } else {
+        projectsStore.showToast("打断未受理(讨论可能已结束)", "warn");
+      }
+    } catch (e) {
+      projectsStore.showToast(
+        `打断失败:${e instanceof Error ? e.message : String(e)}`,
+        "error",
+      );
+    }
+  }
+
   // Send action (08-10-chat-store-split: 拆出 chatSendActions.ts,
   // 工厂 + ctx 注入,函数体原样保留。cancel 5 行循环枢纽留 hub,
   // 经 ctx 注入给 sessions / message / send 三簇)。
@@ -1014,6 +1044,7 @@ export const useChatStore = defineStore("chat", () => {
     // Methods
     send,
     cancel,
+    preemptGroupChat,
     // B1 (2026-08-16) image-multimodal: paste-staging strip state +
     // actions. Owned by the send cluster so the send / clear /
     // session-switch lifecycle is store-owned (design §5.1);
