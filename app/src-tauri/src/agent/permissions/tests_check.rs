@@ -1443,18 +1443,25 @@ async fn tier4_shell_classic_ask_path_survives_under_off_tier() {
         for _ in 0..400 {
             if !resolver_sink.asks.lock().unwrap().is_empty() {
                 let rid = resolver_sink.asks.lock().unwrap()[0].rid.clone();
-                resolve_ask(
+                // resolve_ask returns false while the rid is not yet
+                // registered in the store — retry until the response
+                // lands; the ask round-trip below only completes when
+                // it does.
+                if resolve_ask(
                     &resolver_store,
                     &rid,
                     PermissionResponse::Deny {
                         reason: "test".into(),
                     },
                 )
-                .await;
-                return;
+                .await
+                {
+                    return;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
+        panic!("ask resolver exhausted its poll budget without resolving");
     });
     let decision = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -1568,18 +1575,25 @@ async fn tier4_plan_sideeffect_still_asks_under_off_tier() {
         for _ in 0..400 {
             if !resolver_sink.asks.lock().unwrap().is_empty() {
                 let rid = resolver_sink.asks.lock().unwrap()[0].rid.clone();
-                resolve_ask(
+                // resolve_ask returns false while the rid is not yet
+                // registered in the store — retry until the response
+                // lands; the ask round-trip below only completes when
+                // it does.
+                if resolve_ask(
                     &resolver_store,
                     &rid,
                     PermissionResponse::Deny {
                         reason: "test".into(),
                     },
                 )
-                .await;
-                return;
+                .await
+                {
+                    return;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
+        panic!("ask resolver exhausted its poll budget without resolving");
     });
     let decision = tokio::time::timeout(
         std::time::Duration::from_secs(5),

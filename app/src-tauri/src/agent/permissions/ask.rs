@@ -330,6 +330,20 @@ pub(super) async fn ask_path(
             path: path_for_modal.map(|p| p.to_string()),
             worker_run_id: Some(worker_run_id.clone()),
         };
+        // Register the ask against the worker-owned session_id so the
+        // store's pending map separates worker asks from parent asks.
+        // (Parent production path uses `ctx.session_id`; worker path
+        // uses the prefixed `permission_session_id` so the worker
+        // cannot collide with — or be cancelled by — the parent's
+        // pending asks.)
+        //
+        // Registration MUST precede the emit (both branches): the
+        // oneshot has to exist by the time the rid becomes observable
+        // to responders, or a fast resolve (frontend `permission_response`
+        // IPC, tests) looks up an unregistered rid — the response is
+        // dropped and the ask hangs until timeout.
+        let rx = register_ask(store, &permission_session_id, rid.clone()).await;
+
         // Emit the IPC. On the worker path the sink is the
         // SubagentBufferSink (which appends to the worker's
         // transcript + also forwards to the `subagent:event`
@@ -339,14 +353,6 @@ pub(super) async fn ask_path(
         // is irrelevant here because the worker branch always uses
         // the buffer sink.
         sink.emit_permission_ask(payload);
-
-        // Register the ask against the worker-owned session_id so the
-        // store's pending map separates worker asks from parent asks.
-        // (Parent production path uses `ctx.session_id`; worker path
-        // uses the prefixed `permission_session_id` so the worker
-        // cannot collide with — or be cancelled by — the parent's
-        // pending asks.)
-        let rx = register_ask(store, &permission_session_id, rid.clone()).await;
 
         // Three-arm select: parent-derived cancel token / timeout
         // (120s attended · 8s unattended, GC3) / oneshot response.
@@ -585,6 +591,12 @@ pub(super) async fn ask_path(
             // (the pre-PR1 behavior).
             worker_run_id: None,
         };
+        // Register BEFORE emit (rationale on the worker branch's
+        // register_ask) — here the window was widest: record_audit
+        // below is a real yield point, so a sink-polling responder
+        // could observe the ask payload while the rid was still
+        // unregistered.
+        let rx = register_ask(store, &ctx.session_id, rid.clone()).await;
         sink.emit_permission_ask(payload);
         let _ = record_audit(
             db,
@@ -595,7 +607,6 @@ pub(super) async fn ask_path(
             Some(&reason),
         )
         .await;
-        let rx = register_ask(store, &ctx.session_id, rid.clone()).await;
         // 2026-09-03 (no-timeout switch): same pending()-based timeout
         // arm as the worker branch above — when `no_timeout` the ask
         // hangs until the user responds or the token is cancelled.
