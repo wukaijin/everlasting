@@ -24,6 +24,7 @@
 #![cfg(test)]
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,16 @@ use crate::state::ProviderCatalog;
 
 fn ok_evt(ev: ChatEvent) -> Result<ChatEvent, LlmError> {
     Ok(ev)
+}
+
+/// 09-06-gc-p0: an empty controls registry for orchestrator calls.
+/// Tests that exercise inject/preempt pass a map they keep a handle to.
+fn fresh_controls() -> Arc<
+    tokio::sync::Mutex<
+        std::collections::HashMap<String, crate::agent::group_chat::GroupChatControl>,
+    >,
+> {
+    Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Terminal `Done { stop_reason: Some("end_turn") }`.
@@ -235,6 +246,7 @@ async fn group_chat_full_multi_round_flow_no_errors_no_duplicate_tool_results() 
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -731,6 +743,7 @@ async fn participant_gathers_evidence_then_speaks_across_turns() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -849,6 +862,7 @@ async fn orchestrator_emits_nonterminal_done_for_unknown_nominee() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -1008,6 +1022,7 @@ async fn group_chat_busy_holds_across_turns_and_lifecycle_persists() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -1138,6 +1153,7 @@ async fn group_chat_error_breaker_halts_after_consecutive_error_turns() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -1233,6 +1249,7 @@ async fn group_chat_max_rounds_persists_stop_reason() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -1306,6 +1323,7 @@ async fn group_chat_second_run_clears_stale_stop_reason() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -1383,6 +1401,7 @@ async fn group_chat_strips_own_prefix_on_persist() {
         h.app_data_dir.clone(),
         h.question_store.clone(),
         group_chat_ctx(),
+        fresh_controls(),
     )
     .await;
 
@@ -1430,5 +1449,498 @@ async fn group_chat_strips_own_prefix_on_persist() {
     assert_eq!(
         loaded.session.stop_reason.as_deref(),
         Some("group_chat_end")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 09-06-gc-p0-preempt-min-semantics: inject (R1) + preempt wrap-up (R2)
+// ---------------------------------------------------------------------------
+
+/// P0 hook sink: acts on `Speaker` events mid-orchestration, exactly
+/// where a concurrent API caller would intervene in production.
+///
+/// - M1's `Speaker` event fires between the moderator's nominate and
+///   M1's turn (i.e. the discussion is provably mid-flight): optionally
+///   push an inject into the controls buffer and/or set the preempt
+///   flag.
+/// - The moderator's 2nd `Speaker` event is the preempt WRAP-UP turn:
+///   optionally push an inject there (it can only be flushed at exit —
+///   the wrap-up already reloaded its history).
+///
+/// `try_lock` is safe here (and deterministic for the test): the
+/// orchestrator only takes the control lock at the round head and at
+/// exit — never while an inner turn (whose Speaker events we hook) is
+/// running. Panicking on contention keeps a silent hook miss from
+/// degrading into a confusing assertion failure downstream.
+struct P0HookSink {
+    inner: MockEmitter,
+    controls: Arc<tokio::sync::Mutex<HashMap<String, crate::agent::group_chat::GroupChatControl>>>,
+    sid: String,
+    m1_speaker_inject: Option<String>,
+    m1_speaker_preempt: bool,
+    wrapup_speaker_inject: Option<String>,
+    moderator_speaker_count: std::sync::atomic::AtomicUsize,
+}
+
+impl P0HookSink {
+    fn push_inject(&self, text: &str) {
+        let cmap = self.controls.try_lock().expect("controls map lock");
+        let control = cmap.get(&self.sid).expect("live discussion control entry");
+        let mut inner = control.try_lock().expect("control inner lock");
+        inner.pending_injects.push(ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+            speaker: None,
+            attachments: None,
+        });
+    }
+    fn set_preempt(&self) {
+        let cmap = self.controls.try_lock().expect("controls map lock");
+        let control = cmap.get(&self.sid).expect("live discussion control entry");
+        control
+            .try_lock()
+            .expect("control inner lock")
+            .preempt_requested = true;
+    }
+}
+
+impl crate::state::ChatEventSink for P0HookSink {
+    fn emit_chat_event(&self, payload: &crate::state::ChatEventPayload) {
+        if let ChatEvent::Speaker { speaker } = &payload.event {
+            match speaker.as_str() {
+                "M1" => {
+                    if let Some(t) = &self.m1_speaker_inject {
+                        self.push_inject(t);
+                    }
+                    if self.m1_speaker_preempt {
+                        self.set_preempt();
+                    }
+                }
+                "moderator" => {
+                    let n = self.moderator_speaker_count.fetch_add(1, Ordering::SeqCst);
+                    // n==1 is the SECOND moderator speaker event = the
+                    // preempt wrap-up turn (n==0 is a normal round).
+                    if n == 1 {
+                        if let Some(t) = &self.wrapup_speaker_inject {
+                            self.push_inject(t);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.inner.emit_chat_event(payload);
+    }
+    fn emit_tool_call(&self, payload: &crate::state::ToolCallPayload) {
+        self.inner.emit_tool_call(payload);
+    }
+    fn emit_tool_result(&self, payload: &crate::state::ToolResultPayload) {
+        self.inner.emit_tool_result(payload);
+    }
+    fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
+        self.inner.emit_permission_ask(payload);
+    }
+}
+
+/// E1 + E2 (inject): a user message pushed while the discussion is
+/// mid-flight is persisted with the `[用户插入]` marker + metadata at
+/// the next round head, becomes visible to the NEXT moderator turn,
+/// the discussion is NOT killed (group_chat_end), and the inject row
+/// lands AFTER the in-flight speaker's rows (seq discipline — the
+/// buffer makes a mid-cursor collision architecturally impossible).
+#[tokio::test]
+async fn group_chat_inject_lands_next_moderator_round_and_survives_discussion() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "i1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "开场",
+        ),
+        mod_tool_turn(
+            "i2",
+            "end_discussion",
+            serde_json::json!({"summary": "## 共识\n- 注入已消化"}),
+            "收尾",
+        ),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("我是 M1")]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let controls = fresh_controls();
+    let emitter = Arc::new(P0HookSink {
+        inner: MockEmitter::new(),
+        controls: controls.clone(),
+        sid: gc_session_id.clone(),
+        m1_speaker_inject: Some("补充:重点看看安全问题".to_string()),
+        m1_speaker_preempt: false,
+        wrapup_speaker_inject: None,
+        moderator_speaker_count: std::sync::atomic::AtomicUsize::new(0),
+    });
+
+    let token = CancellationToken::new();
+    h.cancellations
+        .lock()
+        .await
+        .insert("rid-gc-inject".to_string(), token.clone());
+    h.session_active_request
+        .lock()
+        .await
+        .insert(gc_session_id.clone(), "rid-gc-inject".to_string());
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-inject".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        token,
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        controls.clone(),
+    )
+    .await;
+
+    // 讨论不死:正常收官 + summary 落库(毁场路径会变成 cancelled/
+    // 无 summary,或直接丢掉 M1 的发言)。
+    assert_eq!(emitter.inner.error_event_count(), 0);
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end"),
+        "inject must NOT kill the discussion"
+    );
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("## 共识\n- 注入已消化")
+    );
+
+    // 注入行:role=user、双轨标记(text 前缀 + metadata.kind)。
+    let inject_rows: Vec<_> = loaded
+        .messages
+        .iter()
+        .filter(|m| m.text.starts_with("[用户插入] "))
+        .collect();
+    assert_eq!(inject_rows.len(), 1, "exactly one persisted inject row");
+    let inject = inject_rows[0];
+    assert_eq!(inject.role, "user");
+    assert_eq!(
+        inject
+            .metadata
+            .as_ref()
+            .and_then(|md| md.get("kind"))
+            .and_then(|k| k.as_str()),
+        Some("user_inject"),
+        "inject row must carry metadata.kind=user_inject (R3 schema)"
+    );
+    assert_eq!(inject.text, "[用户插入] 补充:重点看看安全问题");
+
+    // E2 seq 纪律:注入行落在 M1 发言之后(轮头 drain 时在途游标已
+    // 释放),无 UNIQUE 冲突(冲突会以 error 事件 / 行缺失暴露)。
+    let m1_max_seq: i64 = loaded
+        .messages
+        .iter()
+        .filter(|m| m.speaker.as_deref() == Some("M1"))
+        .map(|m| m.seq)
+        .max()
+        .expect("M1 spoke");
+    assert!(
+        inject.seq > m1_max_seq,
+        "inject seq {} must follow M1's rows (max {})",
+        inject.seq,
+        m1_max_seq
+    );
+
+    // 下一 moderator 轮(收尾轮,第 2 次 send)的历史里能看到注入。
+    let mod_sends = moderator.sent_messages();
+    assert!(mod_sends.len() >= 2, "moderator ran >= 2 turns");
+    let r1_view_text: String = mod_sends[1]
+        .iter()
+        .map(|m| m.content.to_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        r1_view_text.contains("[用户插入]"),
+        "the next moderator turn must see the persisted inject: {r1_view_text:?}"
+    );
+
+    // E6:注册表条目在编排器退出后必须清掉。
+    assert!(
+        !controls.lock().await.contains_key(&gc_session_id),
+        "controls entry must be removed at orchestration exit"
+    );
+}
+
+/// E3 + E5 + flush (preempt happy path): preempt set mid-flight →
+/// the in-flight speaker finishes → the wrap-up turn runs with the
+/// WRAP-UP prompt (and sees injects drained at the boundary head) →
+/// end_discussion persists a summary → terminal stop_reason=
+/// "preempted" (distinct from cancelled / group_chat_end). An inject
+/// that lands DURING the wrap-up turn is flushed to the DB at exit
+/// (best-effort persistence, still no live seq cursor there).
+#[tokio::test]
+async fn group_chat_preempt_wrapup_produces_summary_and_distinguishable_stop_reason() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // r0: nominate M1;wrap-up:end_discussion 带总结(第一次即命中)。
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "p1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "开场",
+        ),
+        mod_tool_turn(
+            "p2",
+            "end_discussion",
+            serde_json::json!({"summary": "## 打断时共识\n- M1 已发言,结论 A"}),
+            "收束",
+        ),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("我是 M1")]));
+
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let controls = fresh_controls();
+    let emitter = Arc::new(P0HookSink {
+        inner: MockEmitter::new(),
+        controls: controls.clone(),
+        sid: gc_session_id.clone(),
+        // M1 Speaker 事件(在途发言开始前):既注入又打断。
+        m1_speaker_inject: Some("中途补一条".to_string()),
+        m1_speaker_preempt: true,
+        // wrap-up 轮 Speaker 事件:再注一条(只能走退出 flush)。
+        wrapup_speaker_inject: Some("最后一条".to_string()),
+        moderator_speaker_count: std::sync::atomic::AtomicUsize::new(0),
+    });
+
+    let token = CancellationToken::new();
+    h.cancellations
+        .lock()
+        .await
+        .insert("rid-gc-preempt".to_string(), token.clone());
+    h.session_active_request
+        .lock()
+        .await
+        .insert(gc_session_id.clone(), "rid-gc-preempt".to_string());
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-preempt".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        token,
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        controls.clone(),
+    )
+    .await;
+
+    assert_eq!(emitter.inner.error_event_count(), 0);
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    // E5:三态可区分 —— preempted ≠ cancelled ≠ group_chat_end。
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("preempted"),
+        "preempt must persist a distinguishable stop_reason"
+    );
+    assert_ne!("preempted", "cancelled");
+    assert_ne!("preempted", "group_chat_end");
+    // 收束轮产物:summary 落库为一等字段。
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("## 打断时共识\n- M1 已发言,结论 A"),
+        "the wrap-up turn's end_discussion summary must persist"
+    );
+    // 在途发言没被斩:M1 的发言仍在。
+    assert!(
+        loaded
+            .messages
+            .iter()
+            .any(|m| m.speaker.as_deref() == Some("M1")),
+        "the in-flight speaker's remark must survive the preempt"
+    );
+
+    // 收束轮换了 WRAP-UP prompt(断言 system 换装,而非只看行为)。
+    let systems = moderator.sent_systems();
+    assert!(systems.len() >= 2, "moderator ran r0 + wrap-up");
+    assert!(
+        systems[1]
+            .as_deref()
+            .unwrap_or_default()
+            .contains("WRAP-UP"),
+        "wrap-up turn must run with the wrap-up instruction prompt"
+    );
+    // 轮头 drain 的注入进了收束轮视野(r1 head → wrap-up reload)。
+    let mod_sends = moderator.sent_messages();
+    let wrapup_view: String = mod_sends[1]
+        .iter()
+        .map(|m| m.content.to_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        wrapup_view.contains("[用户插入] 中途补一条"),
+        "wrap-up turn must see the boundary-drained inject: {wrapup_view:?}"
+    );
+
+    // flush:wrap-up 期间到达的注入在退出后仍落库(不丢)。
+    let inject_texts: Vec<&str> = loaded
+        .messages
+        .iter()
+        .filter(|m| m.text.starts_with("[用户插入] "))
+        .map(|m| m.text.as_str())
+        .collect();
+    assert_eq!(
+        inject_texts,
+        vec!["[用户插入] 中途补一条", "[用户插入] 最后一条"],
+        "both injects persisted (boundary drain + exit flush)"
+    );
+
+    // E6:注册表清理。
+    assert!(
+        !controls.lock().await.contains_key(&gc_session_id),
+        "controls entry must be removed at orchestration exit"
+    );
+}
+
+/// E4 (preempt fallback): the wrap-up turn fails to call
+/// end_discussion twice (plain text turns) → forced halt: stop_reason
+/// is still "preempted" (distinguishable), summary honestly absent.
+#[tokio::test]
+async fn group_chat_preempt_wrapup_fallback_halts_without_summary() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // r0 nominate;两次 wrap-up 都是纯文本(不调 end_discussion)。
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "f1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "开场",
+        ),
+        text_turn("我不会收束(第一次)"),
+        text_turn("我还是不收束(重试)"),
+    ]));
+    let m1 = Arc::new(MockProvider::new(vec![text_turn("我是 M1")]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let controls = fresh_controls();
+    let emitter = Arc::new(P0HookSink {
+        inner: MockEmitter::new(),
+        controls: controls.clone(),
+        sid: gc_session_id.clone(),
+        m1_speaker_inject: None,
+        m1_speaker_preempt: true,
+        wrapup_speaker_inject: None,
+        moderator_speaker_count: std::sync::atomic::AtomicUsize::new(0),
+    });
+
+    let token = CancellationToken::new();
+    h.cancellations
+        .lock()
+        .await
+        .insert("rid-gc-fallback".to_string(), token.clone());
+    h.session_active_request
+        .lock()
+        .await
+        .insert(gc_session_id.clone(), "rid-gc-fallback".to_string());
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-fallback".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        token,
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        controls.clone(),
+    )
+    .await;
+
+    // moderator 恰好 3 次 send:r0 nominate + 收束尝试 ×2。
+    assert_eq!(moderator.call_count(), 3, "r0 + two wrap-up attempts");
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("preempted"),
+        "forced halt still records the distinguishable preempt reason"
+    );
+    assert_eq!(
+        loaded.session.discussion_summary, None,
+        "fallback halt has no summary — honest absence, not a fake one"
+    );
+    // 兜底立断不再烧轮:M1 之后没有任何 participant 再被点名。
+    assert_eq!(emitter.inner.error_event_count(), 0);
+    assert!(
+        !controls.lock().await.contains_key(&gc_session_id),
+        "controls entry must be removed at orchestration exit"
     );
 }

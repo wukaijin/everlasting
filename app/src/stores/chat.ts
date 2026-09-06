@@ -916,7 +916,6 @@ export const useChatStore = defineStore("chat", () => {
     currentSession,
     controller,
     projectsStore,
-    cancel,
     createNewSession,
     toPayloadContent,
     toPayloadAttachments,

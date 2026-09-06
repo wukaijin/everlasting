@@ -137,6 +137,15 @@ pub struct AppState {
             HashMap<String, std::collections::VecDeque<crate::agent::message_queue::QueuedMessage>>,
         >,
     >,
+    /// 09-06-gc-p0-preempt-min-semantics: per-live-discussion control
+    /// channel (inject buffer + preempt signal), keyed by session_id.
+    /// Registered when `chat_inner` spawns a group-chat orchestration,
+    /// removed by the orchestrator's Drop guard on every exit path.
+    /// Entry presence ⇔ a discussion is running (busy itself still
+    /// reads `session_active_request`). Lock discipline: acquired
+    /// LAST (after `message_queues` → `session_active_request`).
+    pub group_chat_controls:
+        Arc<Mutex<HashMap<String, crate::agent::group_chat::GroupChatControl>>>,
     /// F3 并发闸(2026-08-27, `08-27-f6-async-agent-task`):跨 session
     /// 的全局 agent loop 并发上限。许可在 `chat_inner` spawn 闭包
     /// **开头**获取(不阻塞 handler,`ChatAcceptance` 立返;等闸的
@@ -500,6 +509,7 @@ impl AppState {
             // F1 message queue (2026-08-25): per-session in-memory
             // FIFO of user messages enqueued while a turn runs.
             message_queues: Arc::new(Mutex::new(HashMap::new())),
+            group_chat_controls: Arc::new(Mutex::new(HashMap::new())),
             loop_permits,
             read_guard: ReadGuard::new(),
             memory_cache,

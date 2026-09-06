@@ -60,6 +60,9 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   save_attachment: "attachments",
   // cancel
   cancel_chat: "cancel",
+  // 09-06-gc-p0:群聊体面打断(session 域;与 cancel_chat 同 cancel
+  // 路由域 —— daemon routes/cancel.rs 的 router 挂两条)。
+  preempt_group_chat: "cancel",
   // command_palette
   get_command_body: "command_palette",
   list_commands: "command_palette",
@@ -422,7 +425,8 @@ export const httpTransport: Transport = {
       throw new TransportError(resp.status, body);
     }
     // daemon handler 返回 `Json<T>`。F1 (2026-08-25): chat 现返回
-    // `{status:"started"|"queued", position?}`、cancel_chat 返回
+    // `{status:"started"|"queued"|"injected", position?}`(injected =
+    // 09-06-gc-p0 群聊 busy 注入受理,无流)、cancel_chat 返回
     // `{cancelled, clearedQueued}` —— JSON 透传即 P2-1 的 transport
     // 透传要求;空 body 解析为 null(兼容 legacy 单元返回)。
     const text = await resp.text();

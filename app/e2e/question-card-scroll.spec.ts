@@ -253,8 +253,10 @@ test.describe("提问卡 × 滚动联动(CH8-2)", () => {
       role: "user",
       content: "排队我也要发",
     });
+    // 09-06-gc-p0:文案从「已排队」改为两种受理(排队/注入)通用的
+    // 「已提交」——经典排队与群聊 busy 注入同面向(打字不回答提问卡)。
     await expect(page.locator(".toast.toast--warn")).toContainText(
-      "已排队",
+      "已提交",
     );
     await expect(page.locator(".toast.toast--warn")).toContainText(
       "提问卡",

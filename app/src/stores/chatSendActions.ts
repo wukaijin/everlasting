@@ -31,7 +31,6 @@ export interface SendActionsContext {
   currentSession: ComputedRef<SessionSummary | null>;
   controller: ReturnType<typeof useStreamControllerStore>;
   projectsStore: ReturnType<typeof useProjectsStore>;
-  cancel: () => Promise<void>;
   createNewSession: () => Promise<string>;
   toPayloadContent: (m: ChatMessage) => string | ChatMessagePayload["content"];
   toPayloadAttachments: (m: ChatMessage) => AttachmentWireRef[];
@@ -99,7 +98,6 @@ export function createSendActions(ctx: SendActionsContext) {
     currentSession,
     controller,
     projectsStore,
-    cancel,
     createNewSession,
     toPayloadContent,
     toPayloadAttachments,
@@ -218,32 +216,27 @@ export function createSendActions(ctx: SendActionsContext) {
     // sessions streaming concurrently, but they can't fire a second
     // message into the SAME session while it's still streaming.
     //
-    // Group chat (Phase 4 / D9-Q4): preemptive interrupt. In a
-    // group_chat session a human message while the host/participant
-    // is streaming is *preemptive* — we cancel the in-flight turn
-    // first (the backend `run_group_chat_loop` checks the cancel
-    // token every round and breaks), then continue the normal send
-    // path so the new message lands in the DB and the host re-enters
-    // turn-taking (its reload observes the human interrupt). We do
-    // NOT loosen the guard for ordinary `chat` sessions: there the
-    // original "can't interject while streaming" semantics stay.
+    // 09-06-gc-p0-preempt-min-semantics:群聊 busy 打字语义从 D9-Q4
+    // 「抢占式打断」(先 cancel 整场再重发 = 毁场,旧场丢 summary)
+    // 退役为**注入**——直接发送,后端路由进 controls 缓冲(非破坏),
+    // 返回 `injected`(本 rid 无流;user 消息即时可见)。体面的打断
+    // 入口是 `preempt_group_chat`(收束轮 + summary),GUI 按钮随
+    // M3 同权再上;Stop 保留硬取消语义。
     // F1 消息队列 (2026-08-25): 经典 session 流式中不再丢弃发送 ——
-    // 走排队路径(后端入队,当前轮结束后批量注入续轮)。群聊保持
-    // 抢占语义(cancel + resend)不变。@@ 前缀在流式中直接拒绝(D8):
-    // 强制派发与延迟注入组合语义不清,MVP 不做。
-    const isGroupChat =
-      currentSession.value?.session_type === "group_chat";
-    const queueingClassic = isCurrentSessionStreaming.value && !isGroupChat;
-    if (queueingClassic && trimmed.startsWith("@@")) {
+    // 走排队路径(后端入队,当前轮结束后批量注入续轮)。@@ 前缀在
+    // 流式中直接拒绝(D8,经典排队与群聊注入同规):强制派发与
+    // 延迟注入组合语义不清,MVP 不做。
+    if (isCurrentSessionStreaming.value && trimmed.startsWith("@@")) {
       projectsStore.showToast(
         "流式期间不支持 @@ 派发：请等当前轮结束或先停止",
         "warn",
       );
       return;
     }
-    if (isCurrentSessionStreaming.value && isGroupChat) {
-      await cancel();
-    }
+    // 发送进入「在跑中的会话」(经典=排队续轮;群聊=非破坏注入)。
+    // 守卫处一次定型,后续两处消费(checklist 视图保留 / 提问卡
+    // toast)读同一变量,避免中途 streaming 翻转造成口径漂移。
+    const sendingIntoBusySession = isCurrentSessionStreaming.value;
     const projectId = projectsStore.currentProjectId;
     if (!projectId) {
       throw new Error("send: no current project");
@@ -306,8 +299,9 @@ export function createSendActions(ctx: SendActionsContext) {
     // run will re-derive from history if any update_checklist
     // fires; for the duration of the stream the card stays
     // hidden until the first update_checklist tool_use arrives.
-    // F1: 排队发送不开新轮,不重置在途轮的 checklist 视图。
-    if (!queueingClassic) useChecklistStore().clearForNewRun(sessionId);
+    // F1: 排队发送不开新轮,不重置在途轮的 checklist 视图。(群聊
+    // 注入同理 —— 讨论在跑,checklist 视图属于它。)
+    if (!sendingIntoBusySession) useChecklistStore().clearForNewRun(sessionId);
 
     // B2 PR3 (bug fix 2026-06-17): compute the seq the
     // backend's `chat_loop` will assign to the user row.
@@ -455,10 +449,11 @@ export function createSendActions(ctx: SendActionsContext) {
     // oneshot 等卡片提交 —— 输入框这条路解不开阻塞,用户容易误以为打字
     // 即回答。放在最后一个早期 return(upload 失败)之后,保证 toast 的
     // 「已排队」话音落时发送必然继续;pending 只在 loop 阻塞期存在,
-    // 无需区分种类。
-    if (queueingClassic && useQuestionCardsStore().getPending(sessionId)) {
+    // 无需区分种类。(09-06-gc-p0:群聊 busy 注入同面向 —— 打字进
+    // controls 缓冲,不回答审批卡;文案改两种受理通用。)
+    if (sendingIntoBusySession && useQuestionCardsStore().getPending(sessionId)) {
       projectsStore.showToast(
-        "消息已排队；当前有未回答的提问卡，Agent 正在等待卡片提交",
+        "消息已提交；当前有未回答的提问卡，Agent 正在等待卡片提交",
         "warn",
       );
     }

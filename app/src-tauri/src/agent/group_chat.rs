@@ -77,6 +77,46 @@ pub struct GroupChatCtx {
     pub project_root: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// GroupChatControl(09-06-gc-p0-preempt-min-semantics)
+// ---------------------------------------------------------------------------
+
+/// Per-live-discussion control channel: the inject buffer + the preempt
+/// signal. One entry per session in `AppState::group_chat_controls`,
+/// registered by `chat_inner` when it spawns a group-chat orchestration
+/// (same timing as the `cancellations` registration — GC1: one entry
+/// covers the whole discussion) and removed by the orchestrator's Drop
+/// guard on every exit path.
+///
+/// Two writers, one reader:
+/// - `chat_inner`'s routing critical section **pushes** user messages
+///   into `pending_injects` when the session is busy (R1 inject —
+///   replacing the old legacy 3a path that cancelled the whole
+///   discussion);
+/// - `preempt_group_chat(session_id)` (commands layer) sets
+///   `preempt_requested` (R2);
+/// - the orchestrator **drains** at each round head (persisting injects
+///   while no inner loop holds a seq cursor — see
+///   `db::sessions::insert_user_inject`) and clears `preempt_requested`
+///   when it acts on it.
+///
+/// Lock discipline: `group_chat_controls` is ALWAYS acquired LAST
+/// (after `message_queues` → `session_active_request`).
+#[derive(Debug, Default)]
+pub struct GroupChatControlInner {
+    /// User messages arrived while the discussion is busy. In-memory
+    /// only (same risk posture as the F1 queue — lost on daemon
+    /// restart); persisted by the orchestrator at the round head.
+    pub pending_injects: Vec<crate::llm::types::ChatMessage>,
+    /// R2 preempt: stop the discussion at the next round boundary —
+    /// let the in-flight speaker finish, then one moderator wrap-up
+    /// turn (`end_discussion` → summary), terminal
+    /// `stop_reason = "preempted"`.
+    pub preempt_requested: bool,
+}
+
+pub type GroupChatControl = std::sync::Arc<tokio::sync::Mutex<GroupChatControlInner>>;
+
 /// Parse the session's metadata + resolve the moderator model.
 ///
 /// Mirrors `build_workflow_ctx`:

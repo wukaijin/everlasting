@@ -89,6 +89,7 @@ pub fn all_command_names() -> Vec<&'static str> {
     vec![
         "chat",
         "cancel_chat",
+        "preempt_group_chat",
         "get_llm_config",
         "get_home_dir",
         "list_providers",

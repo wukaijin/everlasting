@@ -92,3 +92,50 @@ pub async fn cancel_chat(
 ) -> Result<CancelOutcome, AppCommandError> {
     cancel_chat_inner(&state, request_id).await
 }
+
+/// 09-06-gc-p0-preempt-min-semantics R2:preempt a LIVE group-chat
+/// discussion by session. Unlike `cancel_chat` (rid-scoped hard Stop:
+/// kills the in-flight speaker, `stop_reason=cancelled`, no summary),
+/// preempt is turn-boundary and graceful: the in-flight speaker
+/// finishes, the orchestrator runs one moderator wrap-up turn
+/// (`end_discussion` → `discussion_summary`), and the discussion ends
+/// with `stop_reason="preempted"`. The 1:1 internal core of M3's
+/// future `interrupt_discussion`.
+///
+/// Errors when the session has no live discussion (the controls
+/// registry has no entry) — callers should surface that loudly (it is
+/// NOT the idempotent-silent face `cancel_chat` has: preempt is an
+/// explicit user/API action against a specific discussion).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreemptOutcome {
+    pub preempted: bool,
+}
+
+pub async fn preempt_group_chat_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+) -> Result<PreemptOutcome, AppCommandError> {
+    // 锁纪律:controls 最后获取(见 state.rs 字段注释);本函数不触
+    // 其他 AppState 锁,无序约束实际生效,但保持纪律以防调用方组合。
+    let control = {
+        let map = state.group_chat_controls.lock().await;
+        map.get(&session_id).cloned()
+    };
+    match control {
+        Some(c) => {
+            c.lock().await.preempt_requested = true;
+            tracing::info!(session_id = %session_id, "preempt_group_chat: requested");
+            Ok(PreemptOutcome { preempted: true })
+        }
+        None => Err(anyhow::anyhow!("该会话当前没有进行中的群聊讨论").into()),
+    }
+}
+
+#[tauri::command]
+pub async fn preempt_group_chat(
+    session_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<PreemptOutcome, AppCommandError> {
+    preempt_group_chat_inner(&state, session_id).await
+}

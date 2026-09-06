@@ -73,9 +73,32 @@ pub(crate) fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          - `nominate_speaker` is the ONLY scheduling mechanism. Do NOT use other \
          tools (checklists, notes, skills, etc.) to build your own \
          speaker-rotation or progress-tracking flow — call `nominate_speaker` \
-         to pick the next speaker, or `end_discussion` to close.",
+         to pick the next speaker, or `end_discussion` to close.\n\
+         \n\
+         ## User injects\n\
+         A user message starting with `[用户插入]` arrived WHILE the discussion \
+         was running. It is a new directive from the user, not a participant's \
+         remark: absorb it with priority — adjust the agenda, point the next \
+         `nominate_speaker` at it, or fold it into the running summary. An \
+         inject does NOT by itself end the discussion; only you decide that \
+         via `end_discussion`.",
         roster.join("\n")
     )
+}
+
+/// R2 (09-06-gc-p0-preempt-min-semantics): appended to the moderator
+/// system prompt for the preempt WRAP-UP turn only. The instruction is
+/// deliberately blunt — this turn must produce an `end_discussion` call;
+/// a nomination here is the failure face the orchestrator's
+/// retry-once-then-halt fallback catches.
+pub(crate) fn moderator_wrapup_instruction() -> &'static str {
+    "\n\n## WRAP-UP — the user has interrupted this discussion\n\
+     The user preempted the discussion; this is the closing turn. Call \
+     `end_discussion({summary: \"...\"})` NOW with a faithful summary of \
+     the progress and consensus so far — mark open questions as open, do \
+     not fabricate conclusions. Do NOT call `nominate_speaker`. If \
+     `[用户插入]` messages arrived, fold them into the summary as the \
+     user's latest direction."
 }
 
 /// Build a role's isolated LLM history from the shared DB transcript

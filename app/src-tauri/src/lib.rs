@@ -214,6 +214,8 @@ pub fn run() {
             agent::chat::chat,
             // Cancel / config
             commands::cancel::cancel_chat,
+            // 09-06-gc-p0:群聊体面打断(收束轮 + summary)
+            commands::cancel::preempt_group_chat,
             commands::message_queue::list_queued_messages,
             commands::message_queue::remove_queued_message,
             commands::message_queue::recall_queued_message,

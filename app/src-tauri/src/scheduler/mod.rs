@@ -425,6 +425,11 @@ pub(crate) async fn scheduler_tick_with_fire(
                 // 闲时条目即时被驱动器消费,无需去重(§4.2 定案,不记)。
                 audit_task(&state.db, Some(&fire_target), &task, action, None).await;
             }
+            Ok(crate::agent::chat::ChatAcceptance::Injected) => {
+                // 09-06-gc-p0:目标群聊在跑,消息已注入 controls 缓冲
+                // (无队列 id,不进去重表;编排器轮头落库投递)。审计照落。
+                audit_task(&state.db, Some(&fire_target), &task, action, None).await;
+            }
             Err(e) => {
                 // fire 失败仍落账(due 已消费,防每 tick 重试风暴),
                 // error 审计附 reason 兜底可观测(design §4.3)。

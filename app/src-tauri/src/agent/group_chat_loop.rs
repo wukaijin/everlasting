@@ -73,7 +73,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::chat_loop::{
     run_chat_loop, CallerRole, ChatLoopDeps, ChatLoopDepsParts, ChatLoopRequest,
 };
-use crate::agent::group_chat::GroupChatCtx;
+use crate::agent::group_chat::{GroupChatControl, GroupChatCtx};
 use crate::agent::group_chat_prompts::{
     group_chat_tool_defs, moderator_system_prompt, participant_system_prompt, role_history,
     speaker_last_turn_errored,
@@ -151,6 +151,14 @@ pub const STOP_REASON_ERROR: &str = "error";
 /// terminal `Done` emit is suppressed there, but the DB row still
 /// records WHY). Same value as the classic-chat wire `cancelled`.
 pub const STOP_REASON_CANCELLED: &str = "cancelled";
+/// 09-06-gc-p0-preempt-min-semantics R2: the discussion was halted by
+/// an explicit preempt (`preempt_group_chat`) — the in-flight speaker
+/// was allowed to finish, then a moderator wrap-up turn ran
+/// (`end_discussion` → `discussion_summary`). Distinguishable from
+/// `cancelled` (hard Stop: no wrap-up, no summary) per M3 AC①; the
+/// frontend treats it as terminal-abnormal (finalize + notice, same
+/// class as `error`).
+pub const STOP_REASON_PREEMPTED: &str = "preempted";
 
 /// Why the outer orchestration loop stopped (R2). Carried out of the
 /// `for` loop so the post-loop terminal `Done` can name the cause. The
@@ -158,6 +166,7 @@ pub const STOP_REASON_CANCELLED: &str = "cancelled";
 /// the failure path is `MaxRounds`. A cancel is NOT a `HaltReason` — the
 /// cancelled inner turn emits `Done { cancelled }` itself and the
 /// post-loop emit is suppressed (unchanged).
+#[derive(PartialEq)]
 enum HaltReason {
     /// Moderator called `end_discussion` (normal end).
     DiscussionEnded,
@@ -167,6 +176,10 @@ enum HaltReason {
     /// speaker turns errored (persisted ERROR_MARKER) — halt instead
     /// of letting a failing provider burn the round cap.
     ErrorBreaker,
+    /// 09-06-gc-p0 R2: `preempt_group_chat` fired — break at the round
+    /// boundary so the post-loop wrap-up turn can run (moderator
+    /// `end_discussion` → summary), terminal `stop_reason="preempted"`.
+    Preempted,
 }
 
 /// The moderator's system prompt. Tells it to facilitate + use the
@@ -269,6 +282,11 @@ pub async fn run_group_chat_loop(
     app_data_dir: std::path::PathBuf,
     question_store: crate::agent::question_store::QuestionStore,
     gc_ctx: GroupChatCtx,
+    // 09-06-gc-p0-preempt-min-semantics: session 键控制注册表
+    // (注入缓冲 + preempt 信号)。编排器在本入口注册条目、退出时
+    // 统一清理(同 cancellations / session_active_request 的 GC1
+    // 先例——注册跨轮存活,单点清理)。
+    controls_map: Arc<tokio::sync::Mutex<std::collections::HashMap<String, GroupChatControl>>>,
 ) {
     // Shared turn state — the moderator's run_chat_loop writes here
     // via the nominate_speaker / end_discussion interception.
@@ -277,6 +295,19 @@ pub async fn run_group_chat_loop(
         discussion_ended: false,
         end_summary: None,
     }));
+
+    // R1/R2: register the per-discussion control channel BEFORE any
+    // turn runs, so a concurrent `chat` (inject) or `preempt_group_chat`
+    // from the moment the discussion becomes busy finds the entry.
+    // Overwrite semantics self-heals a stale entry left by a panicked
+    // prior run (insert over the same session key).
+    let control: GroupChatControl = Arc::new(tokio::sync::Mutex::new(
+        crate::agent::group_chat::GroupChatControlInner::default(),
+    ));
+    controls_map
+        .lock()
+        .await
+        .insert(session_id.clone(), control.clone());
 
     let moderator_prompt = moderator_system_prompt(&gc_ctx);
     let (moderator_provider, moderator_provider_id) =
@@ -314,6 +345,46 @@ pub async fn run_group_chat_loop(
 
     for round in 0..MAX_ORCHESTRATION_ROUNDS {
         if token.is_cancelled() {
+            break;
+        }
+
+        // --- 0a. Round head: persist user injects (R1) -----------------------
+        // 09-06-gc-p0: messages `chat_inner` routed into the control
+        // buffer while the session was busy land here. THIS is the only
+        // safe persist point — the previous inner loop has exited (its
+        // in-memory seq cursor is gone) and the next has not entered,
+        // so `insert_user_inject`'s `MAX(seq)+1` cannot collide with a
+        // live cursor (see its doc: the compaction_summary lesson).
+        // After persisting, the row is picked up by the moderator's
+        // `reload_messages` below (round 0 uses the caller-supplied
+        // transcript, so an inject that lands before the very first
+        // turn becomes visible from round 1 — turn-boundary semantics).
+        let injects: Vec<crate::llm::types::ChatMessage> =
+            std::mem::take(&mut control.lock().await.pending_injects);
+        for msg in &injects {
+            // The routing layer already rejected empty/image-only text;
+            // skip defensively rather than persist a bare marker.
+            let text = msg.content.to_text();
+            if text.trim().is_empty() {
+                continue;
+            }
+            if let Err(e) = db::insert_user_inject(&db, &session_id, &text).await {
+                tracing::warn!(
+                    error = %e,
+                    session_id = %session_id,
+                    "group_chat: persisting user inject failed (dropped)"
+                );
+            }
+        }
+
+        // --- 0b. Round head: preempt check (R2) ------------------------------
+        // Q1 决议(2026-09-06):轮边界语义——在途 speaker 的 turn 已在上
+        // 一轮 await 完毕,此处检测到 preempt 即跳出主循环;收束轮在
+        // post-loop 跑(moderator 收束 → end_discussion → summary →
+        // stop_reason=preempted;收束失败重试一次后兜底立断)。
+        if control.lock().await.preempt_requested {
+            tracing::info!(round, "group_chat: preempt requested; halting for wrap-up");
+            halt_reason = Some(HaltReason::Preempted);
             break;
         }
 
@@ -694,6 +765,72 @@ pub async fn run_group_chat_loop(
         halt_reason = Some(HaltReason::MaxRounds);
     }
 
+    // R2 preempt wrap-up (09-06-gc-p0): the loop broke at a round
+    // boundary because `preempt_group_chat` fired. Q1 决议:让 moderator
+    // 收束一轮 —— reload 给它最新全量视野,换收束指令 prompt,期待它
+    // 调 end_discussion(intercept 回写 turn_state:discussion_ended +
+    // end_summary,正好被下方 GC7 块取走)。失败(不调 end / 报错 /
+    // 被 cancel)重试一次,仍失败则**兜底立断**:stop_reason 仍是
+    // `preempted`(可区分),summary 如实缺 —— 不为收束失败无限烧轮。
+    // 收束轮的 ERROR 不进 GC5 熔断计数(循环已退出,计数器作废)。
+    if token.is_cancelled() {
+        // Stop 先到:止损优先,收束轮不跑(cancelled 语义覆盖)。
+    } else if halt_reason == Some(HaltReason::Preempted) {
+        let wrapup_prompt = moderator_prompt.clone()
+            + crate::agent::group_chat_prompts::moderator_wrapup_instruction();
+        for attempt in 0..2 {
+            if token.is_cancelled() {
+                break;
+            }
+            let full = reload_messages(&db, &session_id).await;
+            let history = role_history(&full, "moderator");
+            emit_chat_event_via_sink(
+                &sink,
+                &session_id,
+                &rid,
+                &ChatEvent::Speaker {
+                    speaker: "moderator".to_string(),
+                },
+            );
+            run_preempt_wrapup_turn(
+                &tool_defs,
+                context_window,
+                provider_id.as_deref(),
+                &rid,
+                &session_id,
+                history,
+                &sink,
+                &db,
+                &cancellations,
+                &session_active_request,
+                &read_guard,
+                &memory_cache,
+                &skill_cache,
+                &permission_asks,
+                &token,
+                &background_shells,
+                &worker_catalog,
+                &worker_event_sink,
+                &subagent_cache,
+                &app_data_dir,
+                &question_store,
+                &turn_state,
+                &wrapup_prompt,
+                moderator_provider.clone(),
+                moderator_provider_id.clone(),
+            )
+            .await;
+            if turn_state.lock().await.discussion_ended {
+                tracing::info!(attempt, "group_chat: preempt wrap-up produced summary");
+                break;
+            }
+            tracing::warn!(
+                attempt,
+                "group_chat: preempt wrap-up turn did not end_discussion"
+            );
+        }
+    }
+
     // GC7 (2026-09-05): take the moderator's end_discussion summary
     // (captured by `end_discussion::execute_intercept`) so it lands on
     // the session row as a first-class column. `None` on every
@@ -717,6 +854,7 @@ pub async fn run_group_chat_loop(
             Some(HaltReason::DiscussionEnded) => STOP_REASON_GROUP_CHAT_END,
             Some(HaltReason::MaxRounds) => STOP_REASON_MAX_ROUNDS,
             Some(HaltReason::ErrorBreaker) => STOP_REASON_ERROR,
+            Some(HaltReason::Preempted) => STOP_REASON_PREEMPTED,
             // Unreachable: !cancelled → halt_reason was set by a break
             // or the MaxRounds default above. Defensive fallback keeps
             // the value stable if a future path forgets to set it.
@@ -778,6 +916,126 @@ pub async fn run_group_chat_loop(
     // error breaker / cancel).
     cancellations.lock().await.remove(&rid);
     session_active_request.lock().await.remove(&session_id);
+
+    // R1 flush + registry cleanup (09-06-gc-p0): injects that arrived
+    // during the final turns (or the wrap-up) are persisted here rather
+    // than lost — this point has no live seq cursor (every inner loop
+    // has exited), so `insert_user_inject` is safe. Then drop the
+    // control entry: after this, a new `chat` on the session takes the
+    // not-busy path (fresh discussion) instead of pushing into a dead
+    // buffer. Order vs the two removals above doesn't matter for seq;
+    // flushing first keeps the message even if a new discussion races
+    // in immediately after.
+    let leftovers: Vec<crate::llm::types::ChatMessage> =
+        std::mem::take(&mut control.lock().await.pending_injects);
+    for msg in &leftovers {
+        let text = msg.content.to_text();
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = db::insert_user_inject(&db, &session_id, &text).await {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "group_chat: flushing leftover inject failed (dropped)"
+            );
+        }
+    }
+    controls_map.lock().await.remove(&session_id);
+}
+
+/// R2 (09-06-gc-p0): the preempt wrap-up moderator turn. Structurally
+/// the main loop's moderator turn with two swaps: the system prompt
+/// carries the wrap-up instruction (调 end_discussion 收束,勿 nominate)
+/// and it runs OUTSIDE the orchestration loop (error turns here never
+/// touch the GC5 breaker — the loop has already exited). The
+/// `end_discussion` interception writes `turn_state.discussion_ended +
+/// end_summary`, which the post-loop GC7/GC2 blocks consume; a turn
+/// that fails to end is retried once by the caller, then the
+/// discussion halts without a summary (兜底立断,如实呈现).
+#[allow(clippy::too_many_arguments)]
+async fn run_preempt_wrapup_turn(
+    tool_defs: &[ToolDef],
+    context_window: u32,
+    provider_id: Option<&str>,
+    rid: &str,
+    session_id: &str,
+    history: Vec<ChatMessage>,
+    sink: &Arc<dyn crate::state::ChatEventSink>,
+    db: &SqlitePool,
+    cancellations: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    session_active_request: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    read_guard: &ReadGuard,
+    memory_cache: &Arc<MemoryCache>,
+    skill_cache: &Arc<SkillCache>,
+    permission_asks: &crate::agent::permissions::PermissionStore,
+    token: &CancellationToken,
+    background_shells: &DefaultRegistry,
+    worker_catalog: &Option<Arc<tokio::sync::RwLock<ProviderCatalog>>>,
+    worker_event_sink: &Arc<dyn crate::agent::subagent::SubagentEventSink>,
+    subagent_cache: &Arc<crate::agent::subagent::SubagentCache>,
+    app_data_dir: &std::path::Path,
+    question_store: &crate::agent::question_store::QuestionStore,
+    turn_state: &SharedTurnState,
+    wrapup_prompt: &str,
+    moderator_provider: Option<Arc<dyn crate::llm::Provider>>,
+    moderator_provider_id: Option<String>,
+) {
+    let Some(provider) = moderator_provider else {
+        tracing::warn!(session_id = %session_id, "group_chat: wrap-up skipped (moderator provider unresolved)");
+        return;
+    };
+    let deps = ChatLoopDeps::from(ChatLoopDepsParts {
+        db: db.clone(),
+        cancellations: cancellations.clone(),
+        session_active_request: session_active_request.clone(),
+        read_guard: read_guard.clone(),
+        memory_cache: memory_cache.clone(),
+        skill_cache: skill_cache.clone(),
+        permission_asks: permission_asks.clone(),
+        token: token.clone(),
+        background_shells: background_shells.clone(),
+        stub_loaded: std::sync::Arc::new(crate::tools::stub::StubRegistry::new()),
+        question_store: question_store.clone(),
+        subagent_cache: subagent_cache.clone(),
+    });
+    let role = CallerRole {
+        is_worker: Some(false),
+        skip_session_active: true,
+        skip_persist: false,
+        skip_cancellations: true,
+        worker_catalog: worker_catalog.clone(),
+        worker_event_sink: worker_event_sink.clone(),
+        system_prompt_override: Some(wrapup_prompt.to_string()),
+        worker_run_id: None,
+        run_grants: None,
+        worktree_override: None,
+        project_main_override: None,
+        app_data_dir: app_data_dir.to_path_buf(),
+        forced_dispatch: None,
+    };
+    let pid = moderator_provider_id.or_else(|| provider_id.map(|s| s.to_string()));
+    run_chat_loop(
+        ChatLoopRequest {
+            tool_defs: group_chat_tool_defs(tool_defs, true),
+            provider,
+            context_window,
+            provider_id: pid,
+            rid: rid.to_string(),
+            session_id: session_id.to_string(),
+            messages: history,
+            sink: sink.clone(),
+            resend_seq: None,
+            max_turns: Some(1),
+            workflow_ctx: None,
+            group_chat_state: Some(turn_state.clone()),
+            current_speaker: Some("moderator".to_string()),
+            drained: Vec::new(),
+        },
+        deps,
+        role,
+    )
+    .await;
 }
 
 /// Resolve a model_id to a provider via the catalog. Tries the

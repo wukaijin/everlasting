@@ -163,7 +163,14 @@ pub async fn chat(
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum ChatAcceptance {
     Started,
-    Queued { id: String, position: usize },
+    Queued {
+        id: String,
+        position: usize,
+    },
+    /// 09-06-gc-p0-preempt-min-semantics R1:消息已注入进行中的群聊
+    /// (controls 缓冲,编排器轮头落库并投递给下一 moderator 轮)。
+    /// 无流、无 rid —— 讨论继续,不新起请求。wire `{"status":"injected"}`。
+    Injected,
 }
 
 /// 传输层入口载荷（RULE-ARGS-001：chat_inner 收敛为二元签名 —— state +
@@ -331,6 +338,7 @@ pub(crate) async fn chat_inner(
     // 轮自动成立。
     // ------------------------------------------------------------------
     let message_queues = state.message_queues.clone();
+    let group_chat_controls = state.group_chat_controls.clone();
     let queue_enabled =
         match crate::db::config::get_config_value(&db, "message_queue_enabled").await {
             Ok(Some(v)) => v != "false",
@@ -343,7 +351,68 @@ pub(crate) async fn chat_inner(
     let mut queued_position: Option<usize> = None;
     let mut pushed_id: Option<String> = None;
     'routing: {
-        if group_chat_ctx.is_some() || !queue_enabled {
+        // 09-06-gc-p0-preempt-min-semantics R1:群聊 busy 期间的用户
+        // 消息走**注入**(非破坏)——推进 controls 缓冲,编排器在轮头
+        // 落库并经 reload 投递给下一 moderator 轮。取代旧 legacy 3a
+        // 路径对群聊的覆盖(3a 会 cancel 掉整场讨论再重开 = 毁场)。
+        // 不受 `message_queue_enabled` 开关约束:注入是群聊原生语义,
+        // 关掉 F1 队列不应把毁场路径请回来。锁纪律:controls 最后获取。
+        if group_chat_ctx.is_some() {
+            let injectable = messages
+                .last()
+                .map(|m| m.role == crate::llm::types::Role::User)
+                .unwrap_or(false);
+            if injectable {
+                let busy = {
+                    let active = session_active_request.lock().await;
+                    active.contains_key(&session_id)
+                };
+                if busy {
+                    let cmap = group_chat_controls.lock().await;
+                    match cmap.get(&session_id) {
+                        Some(control) => {
+                            let text = messages
+                                .last()
+                                .map(|m| m.content.to_text())
+                                .unwrap_or_default();
+                            if text.trim().is_empty() {
+                                // 纯图片注入 P0 不支持(insert_user_inject
+                                // 是 text 行);报错优于静默丢内容。
+                                drop(cmap);
+                                return Err(anyhow::anyhow!(
+                                    "群聊进行中暂不支持纯图片消息注入,请等讨论结束或先停止"
+                                )
+                                .into());
+                            }
+                            control
+                                .lock()
+                                .await
+                                .pending_injects
+                                .push(messages.last().expect("injectable checked").clone());
+                            drop(cmap);
+                            tracing::info!(
+                                session_id = %session_id,
+                                "group_chat: user message injected into live discussion"
+                            );
+                            return Ok(ChatAcceptance::Injected);
+                        }
+                        None => {
+                            // 防御分支:busy 但注册表缺条目(编排器异常
+                            // 退出没清 session_active_request 的病征)。
+                            // 落回 legacy = 现状行为,但必须留痕。
+                            tracing::warn!(
+                                session_id = %session_id,
+                                "group_chat: busy session missing controls entry; falling back to legacy path"
+                            );
+                        }
+                    }
+                }
+            }
+            // 不 busy(正常开新场)/ 无 user 尾条 / 防御缺条目:走
+            // legacy 路径,行为与改动前一致。
+            break 'routing;
+        }
+        if !queue_enabled {
             break 'routing;
         }
         let Some(tail) = messages
@@ -655,6 +724,7 @@ pub(crate) async fn chat_inner(
                 app_data_dir,
                 question_store,
                 gc_ctx,
+                group_chat_controls,
             )
             .await;
         } else if drive_claimed {

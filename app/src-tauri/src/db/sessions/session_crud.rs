@@ -835,6 +835,56 @@ pub async fn insert_compaction_summary(
     Ok(seq + 1)
 }
 
+/// 09-06-gc-p0-preempt-min-semantics:插入一行群聊注入消息
+/// (`role='user'` + `metadata.kind = "user_inject"`)。文本列带
+/// `[用户插入] ` 前缀(双轨标记的 LLM 半边:role_history 对 user 行
+/// 原样透传,metadata 不进 ChatMessage,文本前缀是唯一能到达
+/// moderator 上下文的通道);content 与 text 同值(compaction P1
+/// 契约,两列分叉会让展示与上下文漂移——前缀这次**有意落库**,
+/// 因为注入行只经 DB reload 进入视野、永不进 chat 载荷,前缀不会
+/// 污染 rehydrate/edit 路径)。
+///
+/// **seq 纪律(设计 §2.2,P1 级)**:本函数走 `MAX(seq)+1`,只允许
+/// 在**无活跃 seq 游标**处调用 = 群聊编排器轮头(上一 inner loop 已
+/// 退出、下一未进入)或编排器退出后的 flush。绝不可从命令层对
+/// busy 场次直插——在途 speaker 持内存游标,独立 MAX+1 轻则自己撞
+/// `(session_id, seq)` 主键,重则占走在途轮下一次 persist 要用的
+/// seq、反过来打断发言轮(compaction_summary 同族教训)。
+pub async fn insert_user_inject(
+    pool: &SqlitePool,
+    session_id: &str,
+    text: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let next_seq: i64 =
+        sqlx::query("SELECT COALESCE(MAX(seq), -1) +1 FROM messages WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    let prefixed = format!("[用户插入] {text}");
+    // content = 单 Text 块 JSON(与前缀同值,理由见函数头)。
+    let content_json = serde_json::json!([{ "type": "text", "text": prefixed }]).to_string();
+    let metadata = serde_json::json!({ "kind": "user_inject" }).to_string();
+    sqlx::query(
+        r#"
+ INSERT INTO messages
+ (session_id, role, content, text, has_tool_calls, has_tool_results,
+ created_at, seq, metadata)
+ VALUES (?, 'user', ?, ?,0,0, ?, ?, ?)
+ "#,
+    )
+    .bind(session_id)
+    .bind(&content_json)
+    .bind(&prefixed)
+    .bind(&now)
+    .bind(next_seq)
+    .bind(&metadata)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// 覆写 `sessions.metadata`(整块 JSON 写入)。handoff
 /// (08-18-handoff-mechanism)parent 侧 `handoff_children` 合并写入的
 /// 落点;调用方负责读-改-写合并语义(handoff 用户驱动低频,并发

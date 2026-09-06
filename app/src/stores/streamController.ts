@@ -181,7 +181,9 @@ export interface TurnLatency {
 
 /** F1 (2026-08-25): backend `ChatAcceptance` wire shape (camelCase)。 */
 export interface ChatAcceptanceView {
-  status: "started" | "queued";
+  /** 09-06-gc-p0: `injected` = 群聊 busy 期间的消息已进 controls
+   * 缓冲(非破坏注入,讨论继续;本 rid 无流无事件)。 */
+  status: "started" | "queued" | "injected";
   /** queued 时的队列项 uuid(R8 撤销/退回寻址键)。 */
   id?: string;
   position?: number;
@@ -536,6 +538,10 @@ export function groupChatNotice(stopReason: string | undefined): string | null {
     // class as max_rounds (the discussion has stopped).
     case "error":
       return "连续多轮生成出错，讨论已自动终止。";
+    // 09-06-gc-p0 R2: preempt 收束终态(体面打断——在途发言跑完 +
+    // 主持人收束总结)。summary 已落库可查;此 notice 只提示形态。
+    case "preempted":
+      return "讨论已被打断，主持人已总结当前进展。";
     default:
       return null;
   }
@@ -1182,6 +1188,19 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         }
       }
       void useMessageQueueStore().hydrate(args.sessionId);
+      return requestId;
+    }
+    // 09-06-gc-p0 R1:群聊 busy 注入受理分支。消息已进后端 controls
+    // 缓冲(编排器轮头落库、下一 moderator 轮可见)——本 rid 永远
+    // 不会有事件:请求状态出表、回收 assistant 占位。user 占位保留
+    // 为普通消息(后端已落库语义;无队列徽标,不进经典队列视图)。
+    if (acceptance && acceptance.status === "injected") {
+      activeRequests.delete(requestId);
+      const mmsgs = messagesBySession.get(args.sessionId);
+      if (mmsgs) {
+        const ai = mmsgs.findIndex((m) => m.id === args.assistantMsg.id);
+        if (ai >= 0) mmsgs.splice(ai, 1);
+      }
       return requestId;
     }
     // started 分支:F1 前就有的"新请求清视图"副作用移到受理确认之后 —

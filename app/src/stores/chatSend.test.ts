@@ -1,16 +1,16 @@
-// Tests for `useChatStore.send` — the Phase 4 / D9-Q4 preemptive
-// interrupt fix (group-chat "human preemption").
+// Tests for `useChatStore.send` — group-chat busy-send semantics.
 //
-// Contract under test:
+// Contract under test (09-06-gc-p0-preempt-min-semantics 更新;
+// 原 Phase 4 / D9-Q4「抢占式打断」已退役):
 //   1. Group chat (`session_type === "group_chat"`) while streaming:
-//      `send` is a NO-OP on the old early-return guard and instead
-//      preempts — it fires `cancel_chat` (cancel the in-flight turn)
-//      and then continues the normal send path (`chat` IPC fires).
-//      This is the "human preemption" semantics: cancel → human
-//      message lands → host re-enters turn-taking.
+//      typing = **inject** — only the `chat` IPC fires (the backend
+//      routes the message into the live discussion's controls buffer
+//      and returns `injected`); `cancel_chat` is NEVER called (the
+//      old preemptive-interrupt semantics cancelled the whole
+//      discussion = 毁场). Graceful interruption is a separate
+//      command (`preempt_group_chat`, GUI entry lands with M3).
 //   2. Ordinary chat (`session_type === "chat"`) while streaming:
-//      the original "can't interject while streaming" guard stays —
-//      `send` is a no-op, no IPC at all.
+//      F1 queue path — `chat` fires (backend enqueues), no cancel.
 //   3. Either session type while NOT streaming: normal send path
 //      (`chat` IPC fires, no cancel).
 //
@@ -167,7 +167,11 @@ describe("useChatStore.send — Phase 4 D9-Q4 human preemption", () => {
     store.currentSessionId = sessionId;
   }
 
-  it("group_chat + streaming: preempts — cancel_chat THEN chat", async () => {
+  it("group_chat + streaming: injects — chat fires, NO cancel (09-06-gc-p0)", async () => {
+    // D9-Q4 毁场式抢占(cancel 整场再重发)已退役:busy 打字 = 非破坏
+    // 注入 —— 只发 `chat`(后端路由进 controls 缓冲返回 injected),
+    // 绝不 cancel 在途讨论。体面打断走 `preempt_group_chat`(GUI
+    // 入口随 M3);本用例锁住「打字不再毁场」。
     await setupProjectAndSession("s1", "group_chat");
     const controller = useStreamControllerStore();
     const store = useChatStore();
@@ -180,9 +184,42 @@ describe("useChatStore.send — Phase 4 D9-Q4 human preemption", () => {
     await store.send("let me jump in");
 
     const calls = lifecycleCalls();
-    expect(calls).toEqual(["cancel_chat", "chat"]);
-    // The cancel must target the in-flight request.
-    expect(invokeMock).toHaveBeenCalledWith("cancel_chat", { requestId: rid });
+    expect(calls).toEqual(["chat"]);
+    // 绝不打断在途讨论。
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "cancel_chat",
+      expect.anything(),
+    );
+  });
+
+  it("group_chat + streaming + injected acceptance: assistant placeholder回收,user 消息保留无徽标", async () => {
+    // 09-06-gc-p0 E7:后端对 busy 群聊的消息返回 `{status:"injected"}`
+    // —— 本 rid 无流:assistant 占位回收、activeRequests 出表(不带
+    // 队列徽标,不进经典队列视图)。与 queued 分支的差异就在徽标与
+    // 队列水合两侧。
+    await setupProjectAndSession("s1", "group_chat");
+    const controller = useStreamControllerStore();
+    const store = useChatStore();
+    seedStreamingRequest(controller, "s1", "req-in-flight");
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "chat") return { status: "injected" };
+      return cmd === "list_sessions" ? [] : null;
+    });
+
+    await store.send("递纸条");
+
+    const msgs = controller.getMessages("s1") ?? [];
+    // assistant 占位被回收:user 消息是最后一条。
+    const last = msgs[msgs.length - 1];
+    expect(last?.role).toBe("user");
+    expect(last?.content).toContain("递纸条");
+    // 无队列徽标(注入不是排队)。
+    expect(last?.queued).toBeUndefined();
+    // 本 rid 已出表(已有在途请求除外——注入自身的临时 rid 被回收)。
+    const ridsAfter: string[] = [];
+    controller.activeRequests.forEach((_v, k) => ridsAfter.push(k));
+    expect(ridsAfter).toEqual(["req-in-flight"]);
   });
 
   it("ordinary chat + streaming: queued send goes through (F1 message queue)", async () => {
