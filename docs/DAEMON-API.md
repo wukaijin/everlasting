@@ -118,16 +118,25 @@ node scripts/group-chat-run.mjs run --project <path> --preset review --topic "..
 
 MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,不跑脚本**:
 `start_discussion` / `discussion_status` / `discussion_result` / `cancel_discussion`
-四工具(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)。挂载:仓库根
-`.agents/mcp.json`(stdio spawn `scripts/group-chat-mcp.mjs`)。
+四工具(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)。
+
+**挂载(2026-09-06 起用户级)**:`~/.zcode/cli/config.json`(ZCode)/ Claude Code 各自的
+用户级配置,stdio spawn 本仓库 `scripts/group-chat-mcp.mjs` 绝对路径:
+
+```json
+"mcp": { "servers": { "everlasting-group-chat": {
+  "command": "node",
+  "args": ["/usr/local/code/github/everlasting/scripts/group-chat-mcp.mjs"]
+} } }
+```
 
 - ⚠️ **挂载配置必须写绝对路径**——配置文件作用域的 MCP server **不展开
   `${...}` 模板变量**(那是插件作用域专属特性;字面量路径会让 server 启动即
-  失败、工具注册为 0,Settings → MCP 显示 failed)。换机器克隆本仓库时须改
-  `args` 里的绝对路径。
-
-- ⚠️ **`.agents/mcp.json` 是 same-scope fallback**:若仓库 `.zcode/` 日后定义任何
-  MCP server,该文件被整体忽略(非合并)——新增 `.zcode` MCP 配置时须把本条目并入。
+  失败、工具注册为 0,Settings → MCP 显示 failed)。换机器时须按实际检出路径改
+  `args`(曾用仓库根 `.agents/mcp.json` 挂载,已移除:workspace 作用域只在
+  本仓库会话可见,跨项目不可用——2026-09-06 实测)。
+- 若改用仓库级挂载:放 `.agents/mcp.json` 顶层 `mcpServers` 键;它是 same-scope
+  fallback,同 scope `.zcode` 定义了任何 MCP server 时被整体忽略(非合并)。
 - 分工:**宿主 agent = MCP 工具**;**everlasting 内部 agent(daemon 单聊)= 脚本 + M1 纪律**
   (沙箱 errno 翻译 / prefix 授权 basename / 裸命令,见 SKILL.md 边界)——内部 agent 不是
   MCP client。

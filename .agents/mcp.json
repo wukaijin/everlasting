@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "everlasting-group-chat": {
-      "command": "node",
-      "args": ["/usr/local/code/github/everlasting/scripts/group-chat-mcp.mjs"]
-    }
-  }
-}
