@@ -320,9 +320,13 @@ async function checkDaemon(base) {
   await api(base, 'health', { method: 'GET' });
 }
 
-/** 按路径解析 project;miss 则 create(turn-smoke.sh:119 先例)。 */
+/** 按路径解析 project;miss 则 create(turn-smoke.sh:119 先例)。
+ * 列表必须带 `filter:{hidden:true}` 查全量——hidden(用户 GUI 侧栏隐藏)
+ * 项目不在默认列表里,但 create_project 的唯一性检查查全表:过滤列表
+ * match miss → create 撞 400 "already exists"(2026-09-06 vite-react-ts
+ * live 实证)。 */
 export async function resolveProject(base, projectPath) {
-  const list = await api(base, 'projects/list_projects');
+  const list = await api(base, 'projects/list_projects', { body: { filter: { hidden: true } } });
   const hit = list.find((proj) => samePhysicalPath(proj.path, projectPath));
   if (hit) return { id: hit.id, created: false };
   const created = await api(base, 'projects/create_project', { body: { path: projectPath } });
@@ -567,9 +571,10 @@ function sleep(ms) {
 
 async function cmdProjects(base) {
   await checkDaemon(base);
-  const list = await api(base, 'projects/list_projects');
+  // 含隐藏项(GUI 侧栏隐藏的项目照样能当审议 cwd;排除会重演 resolveProject 撞 400 的困惑)
+  const list = await api(base, 'projects/list_projects', { body: { filter: { hidden: true } } });
   process.stdout.write('project_id                           path\n');
-  for (const p of list) process.stdout.write(`${p.id.padEnd(36)} ${p.path}\n`);
+  for (const p of list) process.stdout.write(`${p.id.padEnd(36)} ${p.path}${p.hidden ? '  (隐藏)' : ''}\n`);
   process.stdout.write(`\n共 ${list.length} 个。run --project <path> 按物理路径匹配,miss 自动创建。\n`);
 }
 
