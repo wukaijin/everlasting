@@ -12,7 +12,7 @@
 |--------|--------|------|--------|
 | M0 地基 | lifecycle 三态机 + summary 一等字段 + 无人值守安全 + API 契约文档 | ✅ 2026-09-05/06(见 §1) | — |
 | M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
-| M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | 🟡 M1 后 | 中(2-4 天 + 协议细节) |
+| M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
 | M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | 🟠 等 P0 | 中 |
 | M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🔴 远期 | 大(多子项) |
 
@@ -43,24 +43,20 @@
   - 转录导出格式与落点(延续 `out/group-chat-*.md` 现状 vs 可配置);
   - 讨论中立的进度呈现(轮询打印 vs 可选 SSE follow 透传)。
 
-## 3. M2 MCP 接口层(🟡)
+## 3. M2 MCP 接口层(✅ 2026-09-06)
+
+**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ `.agents/mcp.json` 宿主挂载 + `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。
 
 - **目标**:任何 MCP 宿主(ZCode / Claude Code / Cursor 等)里的单 agent 可召集跨模型审议——**这是单客户端无法自制的原语**:模型目录、persona 隔离(role_history)、转录持久化、生命周期语义全在 daemon。
-- **工具面草案**(粒度待定):
+- **工具面**(草案即定稿):
   | 工具 | 语义 |
   |---|---|
-  | `start_discussion` | topic + participants(name/model/persona)+ 可选预算上限 → **立即**返回 session_id |
-  | `discussion_status` | busy / stop_reason / 轮次与发言进度,供调用方轮询 |
-  | `discussion_result` | 终态读 summary + 转录(未终态时明确报错而非空值) |
+  | `start_discussion` | topic + cwd + preset?/participants?(名单替换,moderator 恒取预设)→ **立即**返回 session_id |
+  | `discussion_status` | busy / stop_reason / elapsed_s(廉价轮询,无轮次字段),供调用方轮询 |
+  | `discussion_result` | 终态读 summary + roster + stats + 转录路径(未终态时明确报错而非空值) |
   | `cancel_discussion` | 复用现有 cancel 端点(M3 preempt 落地前的唯一止损) |
-- **关键语义(不待定,工具描述必须写死)**:讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。
-- **验收标准**:① MCP inspector 或任一宿主端到端跑通「召集 → 轮询 → 取结论」;② 与 M1 驱动共享同一实现层(不是两套);③ daemon 零改动或改动可独立合入。
-- **待定决策**:
-  - 宿主与语言:Node + @modelcontextprotocol/sdk 薄包装 HTTP(解耦,迭代快)vs Rust bin vs daemon 内置 MCP endpoint(over streamable-http;少一个进程,但 daemon 背协议实现);
-  - transport:stdio(本机宿主)vs streamable-http(为远程宿主留路);
-  - 工具粒度:上表 4 工具 vs 单工具 + 状态机参数(vs 更细的 follow/join);
-  - 鉴权:v1 仅本机 localhost(现状无鉴权)是否够,还是要 token(与 M4 远程认证联动);
-  - 调用方身份归因:`created_by`/origin 标记(对齐 F2 定时任务的 origin 链先例)。
+- **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。
+- **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。
 
 ## 4. M3 控制面:打断 / 注入 / 跟随(🟠)
 
