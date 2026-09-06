@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/09-06-gce-mcp-standalone/research/bun-compile-feasibility.md", "reason": "探针实证:bun compile 可行性、CLI 壳误判根因与 argv[1] 哨兵写法、wire 计数口径差异——实施的全部技术前提"}
+{"file": ".trellis/tasks/archive/2026-09/09-06-gce-m2-mcp-interface/design.md", "reason": "MCP 层设计定案(D1-D5):部署面不得破坏纯逻辑区/预算锁/记账语义"}
+{"file": "docs/DAEMON-API.md", "reason": "§6.1 是部署小节的接线位置;§8 安全边界(零鉴权前提)是部署语境约束"}
+{"file": "docs/GROUP-CHAT-API-ROADMAP.md", "reason": "§5「MCP 部署面」是本任务来源条目,收官需在此落账"}
