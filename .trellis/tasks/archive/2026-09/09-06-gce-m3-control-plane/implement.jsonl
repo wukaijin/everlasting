@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md", "reason": "P0 内核机制与 schema 决议:注入双轨标记 / 收束策略 / seq 纪律 / 回归锚点——MCP 工具包装的内核语义以此为准,改动涉及 Rust 时以此对照是否越界"}
+{"file": "docs/DAEMON-API.md", "reason": "对外契约:preempt 端点与注入受理(§4 进行中干预)、SSE 流(§5/§7)、MCP 工具清单(§6.1)——Phase B/D 实现与文档章节须对齐此档"}
+{"file": "docs/GROUP-CHAT-API-ROADMAP.md", "reason": "M3 目标 / 验收 / 依赖矩阵(§4/§6)与 M4 待定项——验收基线来源,收官时置 ✅ 并落 Q2 决议(打断权限粒度随 M4 认证一体议)"}
+{"file": ".trellis/tasks/09-06-gce-m3-control-plane/review.md", "reason": "planning 门评审:P1-1 前置 guard 与 P2-1 断言放宽为已采纳修订,P3-4 transport 归属部分驳回(chat.ts:788 先例)——实现时按修订后 prd/design 为准"}

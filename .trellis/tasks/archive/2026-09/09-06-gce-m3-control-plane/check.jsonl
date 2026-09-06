@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md", "reason": "核对注入 / preempt 语义零回归:本任务基线是 daemon 零 Rust diff,若 spec 覆盖面(注册表 / 落库时机 / prompt 标记)出现任何改动即违规,必跑 tests_group_chat"}
+{"file": "docs/DAEMON-API.md", "reason": "核对文档与实现一致:六工具描述与 wire 预算 3200、follow 专章的机制表述(事件通道 / Last-Event-ID 重放 / stream-resync / 零订阅者 8s 快拒)逐项对得上 daemon 实际行为"}
+{"file": ".trellis/tasks/09-06-gce-m3-control-plane/review.md", "reason": "放行条件核对:P1-1 前置 guard 已落地(含已收官注入零 fireChat 用例)、AC1/AC2 断言按 P2-1 放宽、P3 行号锚点已修、GUI Stop/Esc 与打字注入零回归"}
