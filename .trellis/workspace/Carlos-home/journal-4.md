@@ -1432,3 +1432,25 @@ M3 本体=纯暴露层(daemon 零 Rust diff):MCP 六工具面新增 interrupt_di
 ### Next Steps
 
 - M4 候选:单文件可执行 MCP 部署面 / P1a checkpoint 落库;注意宿主旧 MCP 进程仍是四工具,新会话才见六工具
+
+
+## Session 133: GCE-MCP 部署面收口:standalone bin + 部署器
+
+**Date**: 2026-09-06
+**Task**: GCE-MCP 部署面收口:standalone bin + 部署器
+**Branch**: `main`
+
+### Summary
+
+GCE-ROADMAP §5「MCP 部署面」路径②落地(推荐项,用户指认的部署缺口)。选型时立项为轻量任务 09-06-gce-mcp-standalone,先以 /tmp 探针实证 bun compile 全链可 packing(244 modules/98MB,initialize+tools/list 六工具过),挖出核心坑:bun compile 下所有打包模块 import.meta.url 指向可执行自身→引擎 CLI 壳守卫(argv[1]===import.meta.url)恒真,usage 污染 stdout 协议通道并 exit(0);解法=部署入口先改写 process.argv[1] 哨兵再动态 import,引擎一行不改(AC3 实证 git diff 空)。交付:standalone-entry.mjs(哨兵入口)+ group-chat-mcp-deploy.mjs(build→install→config 一条命令;纯函数区 node --test;bin 落 XDG data bin/ + sidecar build-info 记 rev/时间戳;配置 mcp.servers 原位替换,写前单份备份、逐字节一致跳过=幂等不 clobber;--revert 回 node 挂载/--uninstall 清理;flag 值拒收 -- 开头)+ smoke --bin(断言链同构)。用户拍板 D2 独立安装脚本(Tauri 分发记 follow-up);部署器纠正任务文档误记:真实配置形状是 mcp.servers 嵌套非顶层 servers(双容器兼容)。验收:32 单测(5+16+11)/双冒烟(wire 2876<3200)/免 node env -i handshake/幂等 md5 复核全绿;实施子代理首次派发撞模型并发限额但实际完成交付(幽灵交付,主会话逐件核检后由 check 子代理复审修复 4 处,含 --config --revert 吞 flag 白构建 98MB);Checker 子代理独立复审 9 项硬验收 PASS-with-minor(补 PRD/research 配置形状勘误注记),revert/uninstall 语义经 /tmp+隔离 XDG_DATA_HOME 全复演。AC4 用户新会话实针:六工具走 bin 可见(OK)。沉淀:.trellis/spec/scripts/ 新层(部署契约+bun compile isMain gotcha 的 Wrong/Correct);文档接线 DAEMON-API §6.1/GCE-ROADMAP §5 落账(follow-up 收窄为跨平台矩阵+Tauri 分发+其他宿主)/AGENTS.md。本机已切 bin 挂载(dogfood),node 挂载保留为开发态默认(--revert 可回)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `44cb1477` | (see git log) |
+| `e0d2ff0a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
