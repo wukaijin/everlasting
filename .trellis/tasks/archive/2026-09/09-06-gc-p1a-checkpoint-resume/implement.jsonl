@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md", "reason": "P1a 的直接上游:controls 注册表生命周期、seq 纪律(轮头是唯一安全落库点)、lifecycle clear/finalize 契约、回归锚点 cargo test --lib tests_group_chat"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "RULE-PERSIST-001 崩溃恢复场景(load_inner 三恢复 pass 并列同构)、表迁移/建表守则、messages_fts 等既有表约束先例"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "群聊编排器在 agent loop 架构中的位置、D-D 入口不变量、skip 双 guard 先例(F1 驱动器)"}
+{"file": "docs/DAEMON-API.md", "reason": "stop_reason 值表与 lifecycle 三态机的公开契约——新增 interrupted 值与 resume 端点要在此落账"}
