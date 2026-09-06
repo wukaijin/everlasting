@@ -922,3 +922,27 @@ ROADMAP M2 落地。brainstorm 五决策:①Node+@modelcontextprotocol/sdk 薄�
 ### 收官后实踩两修(用户实测反馈)
 
 ① **挂载模板变量**:首版 `.agents/mcp.json` 用 `${CLAUDE_PROJECT_DIR}`——配置文件作用域不展开模板(插件专属),字面量 spawn 失败、工具 0;改绝对路径(`039bf10b`),教训:diagnosing-mcp §2 该条当时没读全,规划时误标「变量受支持」。② **resolveProject 撞隐藏项目**(`43756959`):用户 vite-react-ts 会话首跑 start_discussion 报 "project already exists" 400——GUI 隐藏位 hidden=1 使 list_projects 滤掉该行,resolveProject match miss → create_project 撞全表唯一性检查;修 filter:{hidden:true} 查全量(daemon 既有参数零改动)。M1 时代没炸只因验收项目全可见——**新消费通道首跑即挖出共享层潜伏 bug,分层设计(多消费者同引擎)的验证价值实证**。部署面绑定源码检出的缺口也由用户指认,记 roadmap M4「MCP 部署面」follow-up(`0a572ca7`)。
+
+---
+
+## Session 58: 群聊 P0 打断最小语义:preempt 信号 + schema 区分
+
+**Date**: 2026-09-06
+**Task**: 09-06-gc-p0-preempt-min-semantics — 群聊 P0 打断最小语义(GCE-M3 硬前置)
+**Branch**: `main`
+
+### Summary
+
+前置小项:daemon 暴露面安全边界立档(`8a25c301`,DAEMON-API §8:0.0.0.0 是 WSL 承重墙——localhost forwarding 只转发 wildcard listener;Win10 WSL2 NAT 下物理 LAN 不可达,零鉴权「本机 daemon」前提在当前部署成立,接受现状;原生部署不可信网络前须收紧)。推荐评审时用户驳回「直接收紧」(Windows 宿主调用链 + 本机设计有意),降级为评估立档——风险评估修正先于任务立项的实例。
+
+P0 主体(brainstorm 两问:Q1 收束策略=收束轮+兜底立断;Q2 GUI 打字=注入)。关键盘点发现:①GUI 打字打断是 D9-Q4 有意设计但毁场式(先 cancel 整场再重发),API 侧无包装即事故;②注入投递几乎免费(role_history 对 user 行透传,落库即可见);③seq 纪律否决命令层直插(compaction 先例:活跃 loop 持内存游标,直插撞主键甚至打断在途轮)→ controls 缓冲 + 编排器轮头独占落库。交付:GroupChatControl 注册表(state.rs,锁纪律最后获取;编排器注册/单点清理)+ chat.rs 群聊 busy 路由改造(注入返回 ChatAcceptance::Injected,防注册表缺条目 warn 回 legacy)+ insert_user_inject(`[用户插入] ` 前缀 + metadata.kind=user_inject 双轨,前缀有意落库——注入行只经 DB reload 进视野)+ 轮头 drain/preempt 检查 + 收束轮(post-loop moderator WRAP-UP prompt,失败重试 1 次兜底立断;GC5 熔断不涉)+ STOP_REASON_PREEMPTED + preempt_group_chat 命令(session 域,与 cancel_chat rid 域分工;M3 interrupt_discussion 内核 1:1)+ 前端(chatSendActions 先-cancel 退役;Injected 受理回收 assistant 占位;preempted 进 finalize 白名单×2 + notice;CH8-2b toast 文案改「已提交」)。门禁:群聊家族 41(38 既有+3 新剧本:P0HookSink 在 Speaker 事件确定性注入/打断)、全量 lib 2303、clippy --lib -D、fmt、vitest 1592、vue-tsc、e2e 9(修 CH8-2b 文案断言)、turn-smoke live(daemon 重启新二进制)。插曲:全量首跑 1 挂(与并行编译撞车负载抖动,连跑两轮全绿判定 flake)。spec 沉淀 pattern-group-chat-preempt-inject.md(seq 纪律/双轨 schema/注册表生命周期);ROADMAP §1.2 + GCE 路线图 M3 解锁记账(P0 前置 ✅,本体只剩 MCP 暴露 + GUI 按钮 + follow 文档)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (见 git log) | feat(group-chat) + docs 两笔 |
+
+### Status
+
+[OK] **Completed**(可选 live 群聊注入/preempt 实跑未做——烧 token,机制层+turn-smoke 已过;M3 立项即可吃到现成内核)

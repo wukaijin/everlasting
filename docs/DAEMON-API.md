@@ -79,13 +79,28 @@ busy = false + stop_reason = null  → 该会话从未跑过编排(或经典聊�
   `session_active_request` 补写。群聊的 busy 覆盖**整场编排**(moderator + 参与者 + 轮间空隙),
   落 false 即整场终结,不会再复活。
 - **`stop_reason`**(`SessionSummary` + `SessionRow`):持久化的终止原因,取值
-  `group_chat_end`(正常收官)/ `max_rounds`(30 轮帽截断)/ `cancelled`(用户 Stop)/
-  `error`(连续 3 轮生成错误熔断)。每次新编排启动时清空再回填。
+  `group_chat_end`(正常收官)/ `max_rounds`(30 轮帽截断)/ `cancelled`(用户 Stop 硬停,
+  在途发言被斩、无总结)/ `error`(连续 3 轮生成错误熔断)/ `preempted`(2026-09-06 起:
+  `preempt_group_chat` 体面打断——在途发言跑完 + moderator 收束轮,`discussion_summary`
+  通常有值;收束轮两次失败兜底立断时 summary 如实缺)。每次新编排启动时清空再回填。
 - **`discussion_summary`**(`SessionRow` only,即 `load_session` 可得):moderator
   `end_discussion({summary})` 的收官总结一等字段——共识清单直接可读,无需解析
-  end_discussion 的 tool_result content blocks。仅正常收官路径写入。
+  end_discussion 的 tool_result content blocks。正常收官与 preempt 收束轮两路写入。
 - 终止的实时信号:`GET /api/v1/stream`(SSE)上编排器的终端 `Done` 事件
   `stop_reason` 与上表同值;SSE 不回放完整历史,断连后用 snapshot 端点补齐。
+
+**进行中干预(2026-09-06 起,P0 打断最小语义)**:
+
+- **注入(busy 时发消息,非破坏)**:`POST /api/v1/agent/chat` 打到 busy 群聊 → 消息进
+  编排器 controls 缓冲,返回 `{"status":"injected"}`(**无流、无 request_id 事件**),
+  落库带 `[用户插入] ` 文本前缀 + `metadata.kind="user_inject"`,下一 moderator 轮可见。
+  讨论继续不重启(旧 3a 路径会 cancel 整场重开 = 毁场,已对群聊关闭)。纯图片消息注入
+  P0 不支持,报错。不 busy 时行为不变(正常开新场,`{"status":"started"}`)。
+- **体面打断**:`POST /api/v1/cancel/preempt_group_chat` `{"session_id": "..."}` → 置
+  轮边界 preempt 信号:在途发言跑完 → moderator 收束轮(end_discussion 落 summary)→
+  终态 `stop_reason="preempted"`。无进行中讨论时报错(非幂等静默)。返回
+  `{"preempted": true}`。**与 `cancel_chat` 的分工**:cancel = rid 域硬停(Stop 按钮,
+  无总结);preempt = session 域收束式打断。
 
 ## 5. 无人值守权限审批(GC3,2026-09-05 起)
 

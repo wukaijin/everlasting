@@ -13,7 +13,7 @@
 | M0 地基 | lifecycle 三态机 + summary 一等字段 + 无人值守安全 + API 契约文档 | ✅ 2026-09-05/06(见 §1) | — |
 | M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
 | M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
-| M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | 🟠 等 P0 | 中 |
+| M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | 🟢 **P0 前置已落地(2026-09-06),本体可立项** | 中 |
 | M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🔴 远期 | 大(多子项) |
 
 推进原则(沿用 remote-access 先例):每个子阶段 ① 能独立提交 ② 有明确验证标准 ③ GUI/经典聊路径零行为变化。
@@ -58,13 +58,13 @@
 - **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。
 - **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。
 
-## 4. M3 控制面:打断 / 注入 / 跟随(🟠)
+## 4. M3 控制面:打断 / 注入 / 跟随(🟢 P0 前置已落地 2026-09-06,本体只剩暴露)
 
 - **目标**:讨论从「放电影」变「可驾驶」——外部调用方(与 GUI 用户同权)能打断当前 speaker、注入新议题、实时跟随。
-- **上游依赖(群聊内部共识,见 BUGLIST 附录与第二场 discussion_summary)**:**P0 打断最小语义**(SharedTurnState preempt 信号 + preempt/inject schema 区分)是前置;P1a checkpoint 落库(「中断于 X」可拾起)是打断的信任底座。M3 本体只是把这些能力**经 API/MCP 暴露**,不含内部实现。
-- **交付物**:daemon 端点 + MCP 工具 `interrupt_discussion` / `inject_message`(schema 遵循 P0 决议)+ SSE follow 的外部消费文档。
+- **上游依赖(2026-09-06 更新)**:**P0 打断最小语义已落地**(task `09-06-gc-p0-preempt-min-semantics`,spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)):注入 = busy 消息进 controls 缓冲非破坏投递(wire `ChatAcceptance::Injected`);打断 = `preempt_group_chat(session_id)` 收束式(`stop_reason=preempted` + summary,失败兜底立断)——M3 `interrupt_discussion` 的内核即此命令 1:1。P1a checkpoint 落库(「中断于 X」可拾起)仍是打断的信任底座余项。
+- **交付物**:MCP 工具 `interrupt_discussion` / `inject_message`(schema 遵循 P0 决议)+ GUI 同权入口(打断按钮;打字=注入已随 P0 交付)+ SSE follow 的外部消费文档(daemon 端点已随 P0 交付)。
 - **验收标准**:① headless 打断后 stop_reason 可区分且 summary 不丢;② 注入消息的 role 归属符合 P0 schema 决议;③ GUI 与 API 两条路同权同语义。
-- **待定决策**:preempt 到达后的收束策略(moderator 收束 vs 立断);follow 暴露形态(裸 SSE 透传 vs 聚合进度事件);打断的权限粒度(谁能打断谁)。
+- **待定决策**:~~preempt 到达后的收束策略~~ **已决(2026-09-06)**:等在途 speaker 完 → moderator 收束轮 + 兜底立断;follow 暴露形态(裸 SSE 透传 vs 聚合进度事件);打断的权限粒度(谁能打断谁)。
 
 ## 5. M4 运营治理(🔴)
 
@@ -82,7 +82,7 @@
 
 | 内部共识项(第二场 discussion_summary) | 外部路线图受益方 |
 |---|---|
-| P0 打断最小语义 + preempt/inject schema | M3 全部 |
+| ~~P0 打断最小语义 + preempt/inject schema~~ **✅ 2026-09-06 落地**(task `09-06-gc-p0-preempt-min-semantics`:controls 注册表 + 注入双轨标记 + preempt 收束轮 + `stop_reason=preempted`;spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)) | M3 全部(M3 本体只剩 API/MCP 暴露:`interrupt_discussion` 内核 = `preempt_group_chat` 命令 1:1) |
 | P1a checkpoint 落库 / P1b 续跑 | M3 信任底座;M4 定时审议的容错 |
 | C1.1 ask-free moderator 段 | M1/M2 的确定性(外部跑不受审批噪声干扰) |
 | C1.2 token 预算(`stop_reason=budget`) | M4 成本治理 |

@@ -111,6 +111,7 @@
 | **定时任务 per_run 三档** | 08-31 | 目标 session 新增「每次执行新建」档:target_mode/model_id/last_run_session_id 三列 + 表重建迁移;前端 radio 卡片三档;LLM tool 恒 fixed 不暴露(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
 | 「添加项目」DirBrowserModal 全模式统一 + 键盘导航 | 09-03 | native 选目录链(命令 + tauri-plugin-dialog 依赖 + 权限)整链下线,DirBrowserModal 成桌面/浏览器统一入口,补 roving tabindex 方向键/Enter/焦点复位(销 BACKLOG §5.3 / FU-3;task [09-03-dirbrowser-desktop-unify](../.trellis/tasks/09-03-dirbrowser-desktop-unify/)) |
 | **F3 磁盘治理** | 09-03 | disk governor 每日节拍修 worker sweep 宿主断链 + 孤儿 worktree/outputs 回收 + 备份 200MiB 预算自适应;日志进程内 10MiB×3 轮转(daemon.sh 脚本轮转退役);WebKitCache 启动阈值清理;设置面「存储」区块(占用概览 + 开关 + 立即清理)(spec [backend/disk-governance](../.trellis/spec/backend/disk-governance.md),task `09-03-f3-disk-governance`;余留 follow-up:DB VACUUM、进程/内存、F1 反压联动) |
+| **群聊 P0 打断最小语义**(GCE 内部线) | 09-06 | busy 打字/发消息 = 非破坏注入(controls 缓冲 → 编排器轮头落库 `[用户插入]` 双轨标记 → 下一 moderator 轮可见,取代毁场式 3a/D9-Q4 抢占);`preempt_group_chat` 收束式打断(等在途发言完 → moderator 收束轮落 summary → `stop_reason=preempted`,失败兜底立断);M3 控制面硬前置(spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md),task `09-06-gc-p0-preempt-min-semantics`) |
 
 ---
 
