@@ -45,7 +45,7 @@
 
 ## 3. M2 MCP 接口层(✅ 2026-09-06)
 
-**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ `.agents/mcp.json` 宿主挂载 + `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。
+**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ `.agents/mcp.json` 宿主挂载 + `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。**已知边界**:部署面绑定源码检出(挂载配置绝对路径指向仓库),无源码机器不可用——记 §5「MCP 部署面」follow-up。
 
 - **目标**:任何 MCP 宿主(ZCode / Claude Code / Cursor 等)里的单 agent 可召集跨模型审议——**这是单客户端无法自制的原语**:模型目录、persona 隔离(role_history)、转录持久化、生命周期语义全在 daemon。
 - **工具面**(草案即定稿):
@@ -74,6 +74,7 @@
 - **讨论库与检索**:历史审议(转录 + summary)可检索复用——待定:FTS(messages_fts 已有)够不够、要不要独立 discussion 视图表。
 - **成本治理**:per-discussion token 核算(turn_trace 已有 per-turn 数据)+ 预算上限硬停——上游依赖第二场共识 C1.2(`stop_reason=budget`);待定:预算声明位置(开群参数 vs MCP 工具参数 vs 默认档)。
 - **远程暴露认证**:MCP/API 走 remote/tunnel 时的鉴权与降级——必须吸收 BACKLOG 附录 B「隧道来源降级」条目的安全论据与既有用户决策(PWA 全权 vs 分层),**立项前先过一次安全评审**。
+- **MCP 部署面(2026-09-06 记,M2 收官后用户指认)**:M2 四工具是**仓库产物**(脚本 + node_modules + 指向源码检出内绝对路径的挂载配置),不随 daemon 分发——只有 daemon bin、无源码的机器上 MCP 层为零(仅剩 M0 裸 HTTP 原语)。这是 D1 的有意识取舍(v1 消费语境 = 本机 dev 工作流),但构成「任何宿主」终态的部署缺口。收口路径:①零成本接受(现状边界);②**单文件可执行(推荐,可独立小项提前做)**:bun/deno compile 打 standalone 二进制随 app 分发,安装器写 user-scope MCP 配置(免 node、绝对路径由安装期产生不进 git,JS 单实现保留,M2 纯逻辑零改动);③daemon 内置 streamable-http MCP endpoint(终态最干净,零外部依赖,也是远程暴露的天然载体;代价 = Rust 背协议 rmcp + 与 JS 引擎双实现,届时 JS 层降级为 dev 工具)。
 
 ## 6. 与群聊内部改进的关系(依赖矩阵)
 
