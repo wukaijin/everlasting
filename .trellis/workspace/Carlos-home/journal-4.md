@@ -1373,3 +1373,26 @@ Plan 模式重新暴露 shell 族(session 级只读面)+ 前台 shell 失败升�
 ### Status
 
 [OK] **Completed** — 待 Checker 子代理验收
+
+
+## Session 131: 群聊 P0 打断最小语义:preempt 信号 + schema 区分(含 daemon 暴露面安全边界立档)
+
+**Date**: 2026-09-06
+**Task**: 群聊 P0 打断最小语义:preempt 信号 + schema 区分(含 daemon 暴露面安全边界立档)
+**Branch**: `main`
+
+### Summary
+
+两段:①安全评估修正——拟推荐的「daemon 绑定面收紧」经用户质询撤回(0.0.0.0 是 WSL 承重墙:localhost forwarding 只转发 wildcard listener,绑 127.0.0.1 即断 Windows 宿主访问;Win10 WSL2 NAT 下物理 LAN 不可达,零鉴权本机前提在当前部署成立),降级为 DAEMON-API §8 边界立档(8a25c301)。②P0 主体(brainstorm 两问:Q1 收束策略=收束轮+兜底立断;Q2 GUI 打字=注入):盘点三发现——GUI 打字打断是 D9-Q4 有意设计但毁场式(先 cancel 整场再重发)、API 侧无包装即事故;role_history 对 user 行透传使注入投递几乎免费;seq 纪律否决命令层直插(活跃 loop 持内存游标,直插撞主键甚至打断在途轮)→ controls 缓冲 + 编排器轮头独占落库。交付:GroupChatControl 注册表 + chat.rs 群聊 busy 路由(ChatAcceptance::Injected,无流无 rid)+ insert_user_inject 双轨标记([用户插入] 前缀 + metadata.kind=user_inject,前缀有意落库——注入行只经 DB reload 进视野)+ 轮头 drain/preempt + 收束轮(WRAP-UP prompt,失败重试 1 次兜底立断)+ STOP_REASON_PREEMPTED + preempt_group_chat 命令(session 域,M3 interrupt_discussion 内核 1:1)+ 前端(先-cancel 退役/Injected 受理/preempted 白名单×2+notice/CH8-2b 文案)。门禁:群聊 41(38 既有+3 新 P0HookSink 剧本)、全量 lib 2303(首跑 1 挂系并行编译负载抖动,连跑两轮全绿)、clippy/fmt、vitest 1592、vue-tsc、e2e 9、turn-smoke live(daemon 重启新二进制)。spec 沉淀 pattern-group-chat-preempt-inject;M3 解锁记账(🟠→🟢,本体只剩 MCP 暴露+GUI 按钮+follow 文档)。live 群聊注入/preempt 实跑未做(烧 token,机制层已过)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8a25c301` | (see git log) |
+| `5c3251f5` | (see git log) |
+| `e8e469dd` | (see git log) |
+
+### Status
+
+[OK] **Completed**
