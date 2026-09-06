@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 131
+- **Total Sessions**: 132
 - **Last Active**: 2026-09-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1398 | Active |
+| `journal-4.md` | ~1434 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 132 | 2026-09-06 | GCE-M3 控制面交付:MCP interrupt/inject + GUI 打断 + SSE follow 文档 | `b64c0cc3`, `ba98089f` | `main` |
 | 131 | 2026-09-06 | 群聊 P0 打断最小语义:preempt 信号 + schema 区分(含 daemon 暴露面安全边界立档) | `8a25c301`, `5c3251f5`, `e8e469dd` | `main` |
 | 130 | 2026-09-01 | R5/D4 调查结案:tools=0 辅助调用缓存干扰 — 驱逐假说实验排除 | `0a0026c`, `8238f44` | `main` |
 | 129 | 2026-08-31 | P3b 执行期沙盒(Landlock+seccomp)落地 | `4969db0` | `main` |

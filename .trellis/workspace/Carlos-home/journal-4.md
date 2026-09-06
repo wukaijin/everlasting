@@ -1396,3 +1396,39 @@ Plan 模式重新暴露 shell 族(session 级只读面)+ 前台 shell 失败升�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 132: GCE-M3 控制面交付:MCP interrupt/inject + GUI 打断 + SSE follow 文档
+
+**Date**: 2026-09-06
+**Task**: GCE-M3 控制面交付:MCP interrupt/inject + GUI 打断 + SSE follow 文档
+**Branch**: `main`
+
+### Summary
+
+M3 本体=纯暴露层(daemon 零 Rust diff):MCP 六工具面新增 interrupt_discussion(preempt 端点 1:1)与 inject_message(前置 busy guard——已收官群聊误注入会抹旧场终态,评审 P1-1);GUI 群聊打断按钮与 API 同权同语义;DAEMON-API §6.2 SSE follow 消费专章。brainstorm 三决策:裸 SSE 透传 / 零鉴权全域可打断 / wire 预算 3200。
+
+### Main Changes
+
+- MCP:六工具 + guard(非 busy 不发起,misfire 自有 rid cancel 竞态兜底)+ 预算锁两侧 3200(实测 2876 chars);共享层 preemptGroupChat + injectGuardDecision/interpretAcceptance 纯函数
+- GUI:chat store preemptGroupChat action(直用 transport,diff_worktree 先例;评审 P3-4 部分驳回)+ ChatPanel chip 区按钮(streaming && isGroupChat)
+- docs:DAEMON-API §6.2 follow 专章(kind 全集按 live 补全)、roadmap M3 ✅ + Q1/Q2/Q3 落账(权限粒度推迟 M4)、P0 spec guard 补记、AGENTS.md 同步
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b64c0cc3` | (see git log) |
+| `ba98089f` | (see git log) |
+
+### Testing
+
+- [OK] node --test 11+16 全绿;smoke PASS;vitest 1596 全绿(含 chatPreempt 4 例);pnpm build 过;live 三场:2ba779ec/dc9f518b(preempt→preempted 与 group_chat_end 竞态)、e5071574/b2d2add0(MCP 发起+中途插话,插话被共识吸收;尾段插话只落库不进结论的时机语义实测)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- M4 候选:单文件可执行 MCP 部署面 / P1a checkpoint 落库;注意宿主旧 MCP 进程仍是四工具,新会话才见六工具
