@@ -166,7 +166,19 @@ acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 
 - 归因:MCP 建群盖 `metadata.created_via:"mcp"`,M1 脚本盖 `"script"`,GUI/历史 session 无此键。
 - server 记账(session→request_id/project_id)落 `~/.local/state/dev.everlasting.app/mcp-discussions.json`
   (XDG state,原子写)——server 进程随宿主会话生灭,讨论跨进程存活靠它兜底。
-- 冒烟:`node scripts/group-chat-mcp-smoke.mjs`(`--live` 烧真 token 走全链,可选)。
+- 冒烟:`node scripts/group-chat-mcp-smoke.mjs`(`--live` 烧真 token 走全链;`--bin <path>` 对
+  standalone bin 冒烟,断言链同构)。
+
+**部署面(standalone bin,2026-09-06 落地,任务 09-06-gce-mcp-standalone)**:MCP server 可打成
+**bun compile 单文件可执行**(内嵌运行时 + SDK,免 node / 免 node_modules / 免源码检出;98 MB 量级)。
+`node scripts/group-chat-mcp-deploy.mjs` 一条命令 = 构建 → 装到
+`~/.local/share/dev.everlasting.app/bin/everlasting-group-chat-mcp` → 把上方 user-scope 配置**原位替换**为
+`{ command: <bin 绝对路径> }`(写前留单份备份 `config.json.mcp-deploy.bak`,全程幂等)。bin 同目录 sidecar
+`everlasting-group-chat-mcp.build-info`(git short rev + 构建时间戳)用于诊断 stale bin。`--revert` 把配置
+切回 node 挂载(node 挂载保留为**开发态默认**:改 .mjs 无需重编译),`--uninstall` 删配置项与 bin。引擎
+`group-chat-run.mjs` / `group-chat-mcp.mjs` 零改动——bun compile 下 isMain 守卫恒真的误判由部署入口的
+`process.argv[1]` 哨兵化解(根因见任务 research)。v1 只做宿主 linux-x64;跨平台编译矩阵(macOS/Windows)、
+Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
 
 ### 6.2 实时跟随(SSE follow,GCE-M3,2026-09-06 起)
 
