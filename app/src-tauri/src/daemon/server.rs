@@ -12,7 +12,8 @@
 //!    `Arc<AppState>` as `State`.
 //! 3. Bind a `TcpListener` on `0.0.0.0:PORT` (WSL-first — Windows
 //!    host browsers reach the daemon via WSL 2 localhost forwarding;
-//!    see `docs/HACKING-wsl.md`).
+//!    see `docs/HACKING-wsl.md`; 0.0.0.0 与零鉴权的安全边界评估见
+//!    `docs/DAEMON-API.md` §8).
 //! 4. `axum::serve(...).with_graceful_shutdown(...)` — Ctrl+C /
 //!    SIGTERM first calls [`sse::SseRegistry::shutdown`] to end all
 //!    live SSE streams (so the drain isn't blocked by never-finishing

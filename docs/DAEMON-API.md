@@ -152,3 +152,34 @@ MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,
 `agent/chat`(发起轮次)、`cancel/*`(Stop)、`message_queue/*`、`config/*`、
 `providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。唯一 GET:
 `/api/v1/stream`(SSE)与 `/api/v1/sessions/{id}/snapshot`。
+
+## 8. 安全边界:绑定面与零鉴权前提(2026-09-06 评估)
+
+> 来源:GCE-M2 收官勘察发现 daemon 实际 bind `0.0.0.0` 与部分 roadmap 表述不符,
+> 拟「收紧为 localhost」;经评估**接受现状、只立此边界文档**(用户裁定:收紧需先评估,
+> Windows 宿主调用链与「本机 daemon」零鉴权均为有意设计)。
+
+**现状**(`daemon/server.rs` 模块头 + `serve_daemon`):绑定 `0.0.0.0:PORT`,全 API **零鉴权**。
+两者是配套的有意设计,不是疏忽:
+
+- **0.0.0.0 是 WSL 承重墙**:WSL2 的 localhost forwarding **只转发绑定 0.0.0.0 的
+  listener**——改绑 `127.0.0.1` 后 Windows 宿主浏览器/GUI 经 `http://localhost:PORT`
+  的访问直接断(daemon 在 WSL 内,见 `HACKING-wsl.md` 与 REMOTE-ACCESS-ROADMAP
+  「daemon 跑 WSL 2 监听 0.0.0.0 / 宿主经 localhost forwarding 访问」)。
+- **零鉴权前提 = 可达面仅本机**:API 面是完整 agent 控制(chat 连带已存 provider key、
+  shell 执行、文件读写),任何能打到端口的调用方等同坐在键盘前。该前提在不同部署形态下
+  成立与否见下表。
+
+**可达性矩阵**(按部署形态):
+
+| 部署形态 | 实际可达面 | 零鉴权前提 |
+|---|---|---|
+| Win10 + WSL2(NAT,默认) | WSL 内部 + Windows 宿主;**物理 LAN 不可达**——WSL2 虚拟机在宿主 NAT 后,绑定不映射到物理网卡,除非手动 `netsh portproxy` | ✅ 成立(≈本机) |
+| Win11 + WSL2 mirrored(`networkingMode=mirrored`) | WSL 与宿主共享网络栈,0.0.0.0 即宿主所有接口,**LAN 可达** | ⚠️ 需宿主防火墙自行收口 |
+| 原生 Linux / macOS | 所有网络接口,**LAN 可达** | ❌ 不可信网络上不成立(任意同网设备可驱动 agent) |
+| 远程访问路径 | 无入站暴露需求:PC daemon **出站** WSS 连 remote 中继,PWA 连中继不直连 daemon(见 REMOTE-DEPLOY.md) | ✅ 不经过此面 |
+
+**结论与余留**:当前实际部署(Win10 + WSL2 NAT + 出站隧道)暴露面 ≈ 本机,现状接受。
+**原生部署到不可信网络之前**必须先收紧——远期候选(未立项):opt-in bind 配置(默认值
+不动保 WSL 路径零回归)或 host 防火墙指引;群聊侧同款前提见 GROUP-CHAT-API-ROADMAP
+§3「v1 零鉴权(本机)」与 §5 远程暴露认证(立项前先过安全评审)。
