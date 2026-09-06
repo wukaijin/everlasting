@@ -388,6 +388,50 @@ pub struct SessionRow {
     pub discussion_summary: Option<String>,
 }
 
+/// A group-chat discussion checkpoint row (2026-09-06, GCE P1a —
+/// task 09-06-gc-p1a-checkpoint-resume). One row per live-or-
+/// interrupted discussion in `group_chat_checkpoints`: the
+/// orchestrator upserts `round` + `error_streak` at each round head;
+/// row presence encodes resumability (resumable exits keep it,
+/// terminal exits delete it, a crash leaves it behind for the boot
+/// sweep to surface as `stop_reason='interrupted'`).
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupChatCheckpoint {
+    pub session_id: String,
+    /// The orchestration round the discussion reached (0-based,
+    /// bounded by MAX_ORCHESTRATION_ROUNDS). A resume enters the
+    /// loop at this round — the total round budget stays capped.
+    pub round: i64,
+    /// The GC5 consecutive-error streak at the last upsert. NOT
+    /// inherited by a resume (a human intervening resets it to 0);
+    /// persisted for diagnostics.
+    pub error_streak: i64,
+    /// RFC3339. Immutable for the row's lifetime (ON CONFLICT never
+    /// touches it; a fresh discussion deletes any stale row first).
+    pub started_at: String,
+    /// RFC3339 of the last upsert — the closest durable witness of
+    /// WHEN the discussion was interrupted (≈ crash moment, within
+    /// one round).
+    pub updated_at: String,
+}
+
+/// Boot-sweep outcome for `recover_group_chat_checkpoints`
+/// (the `RecoveryReport` shape precedent from
+/// `recover_interrupted_messages`).
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+pub struct CheckpointRecoveryReport {
+    /// Sessions whose surviving checkpoint row marked them
+    /// `stop_reason='interrupted'` (crash residue: stop_reason was
+    /// NULL because no finalize ever ran).
+    pub marked_interrupted: usize,
+    /// Orphan rows deleted: row present while the session already
+    /// holds a TERMINAL stop_reason (`group_chat_end` /
+    /// `preempted` / `max_rounds`) — the self-heal for a
+    /// best-effort delete that failed between finalize and the
+    /// checkpoint delete.
+    pub orphan_rows_deleted: usize,
+}
+
 /// Summary used by `list_sessions` — includes a preview of the most recent
 /// user message so the sidebar can show context without re-loading.
 #[derive(Debug, Clone, Serialize)]

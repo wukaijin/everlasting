@@ -974,3 +974,137 @@ pub async fn finalize_group_chat_lifecycle(
     .await?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Group-chat discussion checkpoint (2026-09-06, GCE P1a — task
+// 09-06-gc-p1a-checkpoint-resume)
+// ---------------------------------------------------------------------------
+
+/// Upsert the discussion checkpoint (round + GC5 error streak).
+/// Called by the orchestrator at each round head and after each
+/// streak mutation — the crash window is therefore one round.
+/// `ON CONFLICT` deliberately does NOT touch `started_at`: a fresh
+/// discussion deletes any stale row at orchestration start (same
+/// symmetry as [`clear_group_chat_lifecycle`]), so the row's
+/// `started_at` is always THIS discussion's start. Best-effort
+/// contract (same as the lifecycle pair): warn + swallow at the
+/// caller.
+pub async fn upsert_group_chat_checkpoint(
+    pool: &SqlitePool,
+    session_id: &str,
+    round: i64,
+    error_streak: i64,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+ INSERT INTO group_chat_checkpoints (session_id, round, error_streak, started_at, updated_at)
+ VALUES (?, ?, ?, ?, ?)
+ ON CONFLICT(session_id) DO UPDATE SET
+     round = excluded.round,
+     error_streak = excluded.error_streak,
+     updated_at = excluded.updated_at
+ "#,
+    )
+    .bind(session_id)
+    .bind(round)
+    .bind(error_streak)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Load the checkpoint row. `None` = no live/interrupted discussion
+/// (the resume command's gate, alongside !busy).
+pub async fn get_group_chat_checkpoint(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<crate::db::types::GroupChatCheckpoint>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, i64, i64, String, String)>(
+        r#"
+ SELECT session_id, round, error_streak, started_at, updated_at
+ FROM group_chat_checkpoints
+ WHERE session_id = ?
+ "#,
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(
+        |(session_id, round, error_streak, started_at, updated_at)| {
+            crate::db::types::GroupChatCheckpoint {
+                session_id,
+                round,
+                error_streak,
+                started_at,
+                updated_at,
+            }
+        },
+    ))
+}
+
+/// Delete the checkpoint row. Called at orchestration start for a
+/// FRESH discussion (stale-row hygiene on a reused session) and at
+/// terminal exits (`group_chat_end` / `preempted` / `max_rounds`) —
+/// resumable exits (`cancelled` / `error`) keep the row.
+pub async fn delete_group_chat_checkpoint(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM group_chat_checkpoints WHERE session_id = ?")
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Boot sweep (P1a R2): surface crash-interrupted discussions and
+/// self-heal orphan rows. Two steps, both idempotent, both safe to
+/// re-run on every startup (`recover_interrupted_messages`
+/// precedent — RULE-PERSIST-001's session-level sibling):
+///
+/// ① mark: a checkpoint row whose session has `stop_reason IS NULL`
+///    belongs to a discussion whose orchestrator never finalized —
+///    i.e. the process died mid-discussion (graceful paths always
+///    finalize, even on cancel). Write `stop_reason='interrupted'`.
+///    Deliberately does NOT bump `sessions.updated_at`: the sidebar
+///    sorts by it, and the interruption moment is already ≈ the
+///    last persisted message time (the sweep runs at BOOT; writing
+///    boot time would lie about both ordering and timing).
+/// ② orphan-heal: a row whose session holds a TERMINAL stop_reason
+///    (`group_chat_end` / `preempted` / `max_rounds`) is residue of
+///    a best-effort delete that failed after finalize — delete it
+///    so「row present」keeps encoding resumability.
+pub async fn recover_group_chat_checkpoints(
+    pool: &SqlitePool,
+) -> Result<crate::db::types::CheckpointRecoveryReport, sqlx::Error> {
+    let marked = sqlx::query(
+        r#"
+ UPDATE sessions
+ SET stop_reason = 'interrupted'
+ WHERE stop_reason IS NULL
+   AND id IN (SELECT session_id FROM group_chat_checkpoints)
+ "#,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    let orphans = sqlx::query(
+        r#"
+ DELETE FROM group_chat_checkpoints
+ WHERE session_id IN (
+     SELECT id FROM sessions
+     WHERE stop_reason IN ('group_chat_end', 'preempted', 'max_rounds')
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(crate::db::types::CheckpointRecoveryReport {
+        marked_interrupted: marked as usize,
+        orphan_rows_deleted: orphans as usize,
+    })
+}

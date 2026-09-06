@@ -25,10 +25,11 @@ pub use messages::{
 };
 #[allow(unused_imports)]
 pub use session_crud::{
-    clear_group_chat_lifecycle, create_session, delete_messages_by_session, delete_session,
-    finalize_group_chat_lifecycle, insert_compaction_summary, insert_system_event,
-    insert_user_inject, list_sessions, load_session, rename_session, session_exists,
+    clear_group_chat_lifecycle, create_session, delete_group_chat_checkpoint,
+    delete_messages_by_session, delete_session, finalize_group_chat_lifecycle,
+    get_group_chat_checkpoint, insert_compaction_summary, insert_system_event, insert_user_inject,
+    list_sessions, load_session, recover_group_chat_checkpoints, rename_session, session_exists,
     set_session_color, set_session_metadata, set_session_plugin_name, set_session_workflow_enabled,
     set_worktree_state, touch_session, update_last_turn_usage, update_session_cwd,
-    update_session_model_id,
+    update_session_model_id, upsert_group_chat_checkpoint,
 };

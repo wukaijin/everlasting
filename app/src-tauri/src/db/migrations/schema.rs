@@ -1363,5 +1363,35 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // no-op)。
     rebuild_scheduled_tasks_for_target_mode(pool).await?;
 
+    // --- Group-chat checkpoint (2026-09-06, GCE P1a checkpoint 落库与
+    // 续跑,task 09-06-gc-p1a-checkpoint-resume): one row per live-or-
+    // interrupted discussion. The orchestrator upserts at each round
+    // head (round + GC5 error streak); exits that are RESUMABLE
+    // (`cancelled` / `error`) keep the row, terminal exits
+    // (`group_chat_end` / `preempted` / `max_rounds`) delete it — so
+    // 「row present + !busy」 encodes resumability. The boot sweep
+    // (`recover_group_chat_checkpoints`, load_inner) marks sessions
+    // whose row survived a crash `stop_reason='interrupted'`.
+    //
+    // `started_at` is immutable for the row's lifetime (ON CONFLICT
+    // never touches it): a fresh discussion deletes any stale row at
+    // orchestration start (mirroring clear_group_chat_lifecycle), so
+    // the row's started_at is always THIS discussion's start — the
+    // sweep deliberately does NOT bump sessions.updated_at (sidebar
+    // sorts by it; the interruption moment ≈ last persisted message).
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS group_chat_checkpoints (
+ session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+ round INTEGER NOT NULL,
+ error_streak INTEGER NOT NULL DEFAULT 0,
+ started_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

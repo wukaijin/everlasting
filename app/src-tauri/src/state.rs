@@ -404,6 +404,31 @@ impl AppState {
             ),
         }
 
+        // GCE P1a (2026-09-06, task 09-06-gc-p1a-checkpoint-resume):
+        // group-chat discussion checkpoint sweep — the session-level
+        // sibling of the pass above. A checkpoint row whose session
+        // never finalized (stop_reason NULL) means the process died
+        // mid-discussion → mark `interrupted` (pollers + the resume
+        // gate read it); rows stranded under a TERMINAL stop_reason
+        // are best-effort-delete residue → drop, keeping「row
+        // present = resumable」honest. Same best-effort, idempotent
+        // shell and same ordering guarantees (runs inside
+        // load_inner, before backup / HTTP handlers).
+        match crate::db::sessions::recover_group_chat_checkpoints(&db).await {
+            Ok(report) if report.marked_interrupted > 0 || report.orphan_rows_deleted > 0 => {
+                tracing::info!(
+                    marked_interrupted = report.marked_interrupted,
+                    orphan_rows_deleted = report.orphan_rows_deleted,
+                    "startup: recovered group-chat checkpoints from crash residue"
+                )
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                "startup: failed to recover group-chat checkpoints (non-fatal)"
+            ),
+        }
+
         // Grill decision #3: build the provider catalog. We do this
         // BEFORE the backfill spawn so a backfill panic doesn't
         // leave the catalog half-built.

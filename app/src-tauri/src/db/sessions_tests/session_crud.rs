@@ -8,7 +8,8 @@ use crate::projects::DEFAULT_PROJECT_ID;
 use super::projects::create_project;
 use super::sessions::{
     clear_group_chat_lifecycle, create_session, delete_messages_by_session, delete_session,
-    finalize_group_chat_lifecycle, list_sessions, load_session, persist_turn,
+    finalize_group_chat_lifecycle, get_group_chat_checkpoint, list_sessions, load_session,
+    persist_turn, recover_group_chat_checkpoints, upsert_group_chat_checkpoint,
 };
 use super::test_pool;
 
@@ -417,4 +418,205 @@ async fn group_chat_lifecycle_columns_round_trip() {
         let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
         assert_eq!(loaded.session.stop_reason.as_deref(), Some(reason));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Group-chat checkpoint (2026-09-06, GCE P1a — task
+// 09-06-gc-p1a-checkpoint-resume)
+// ---------------------------------------------------------------------------
+
+/// P1a AC1 (DB 面):upsert round-trip、`started_at` 行生命周期内
+/// 不可变(ON CONFLICT 不触)、get/delete 语义。
+#[tokio::test]
+async fn group_chat_checkpoint_upsert_round_trip_and_started_at_immutable() {
+    let pool = test_pool().await;
+    let sid = Uuid::new_v4().to_string();
+    create_session(
+        &pool,
+        &sid,
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Round head progression: round 0 (streak 0) → round 2 (streak 1).
+    upsert_group_chat_checkpoint(&pool, &sid, 0, 0)
+        .await
+        .unwrap();
+    let first = get_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.round, 0);
+    assert_eq!(first.error_streak, 0);
+    let started_at = first.started_at.clone();
+
+    upsert_group_chat_checkpoint(&pool, &sid, 2, 1)
+        .await
+        .unwrap();
+    let second = get_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.round, 2);
+    assert_eq!(second.error_streak, 1);
+    assert_eq!(
+        second.started_at, started_at,
+        "ON CONFLICT must never touch started_at (row lifetime = one discussion)"
+    );
+
+    // delete → None (terminal-exit / fresh-start path).
+    super::sessions::delete_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap();
+    assert!(get_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap()
+        .is_none());
+
+    // Fresh row after delete gets a NEW started_at (new discussion).
+    upsert_group_chat_checkpoint(&pool, &sid, 0, 0)
+        .await
+        .unwrap();
+    let third = get_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(third.round, 0);
+    assert_eq!(third.error_streak, 0);
+}
+
+/// P1a AC2 (DB 面):boot sweep 三断言——① crash 残留(行在 +
+/// stop_reason=NULL)标 `interrupted` 且**不动 updated_at**;② 已有
+/// 终态值不被覆盖;③ 孤儿行(行在 + 终局 stop_reason)被清。
+#[tokio::test]
+async fn group_chat_checkpoint_boot_sweep_marks_interrupted_and_heals_orphans() {
+    let pool = test_pool().await;
+    async fn mk_group_session(pool: &sqlx::SqlitePool, tag: &str) -> String {
+        let sid = format!("p1a-{}", tag);
+        create_session(
+            pool,
+            &sid,
+            DEFAULT_PROJECT_ID,
+            "/tmp",
+            "GLM-4.7",
+            None,
+            Some("group_chat"),
+            None,
+        )
+        .await
+        .unwrap();
+        sid
+    }
+
+    // ① crash residue: row present, stop_reason NULL.
+    let crashed = mk_group_session(&pool, "crash").await;
+    upsert_group_chat_checkpoint(&pool, &crashed, 3, 0)
+        .await
+        .unwrap();
+    let before = load_session(&pool, &crashed).await.unwrap().unwrap();
+    let updated_before = before.session.updated_at.clone();
+    // Resume-affecting nuance: the mark must NOT bump updated_at —
+    // sleep a hair so a buggy write would produce a different value.
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+
+    // ② terminal residue: row stranded under a terminal stop_reason
+    // (simulates finalize-ok-but-delete-failed).
+    let orphan = mk_group_session(&pool, "orphan").await;
+    upsert_group_chat_checkpoint(&pool, &orphan, 7, 0)
+        .await
+        .unwrap();
+    finalize_group_chat_lifecycle(&pool, &orphan, "group_chat_end", Some("done"))
+        .await
+        .unwrap();
+
+    // ③ already-terminal WITHOUT row → untouched; and a cancelled
+    // (resumable) session keeps both row and stop_reason as-is.
+    let cancelled = mk_group_session(&pool, "cancelled").await;
+    upsert_group_chat_checkpoint(&pool, &cancelled, 5, 0)
+        .await
+        .unwrap();
+    finalize_group_chat_lifecycle(&pool, &cancelled, "cancelled", None)
+        .await
+        .unwrap();
+
+    let report = recover_group_chat_checkpoints(&pool).await.unwrap();
+    assert_eq!(report.marked_interrupted, 1);
+    assert_eq!(report.orphan_rows_deleted, 1);
+
+    let marked = load_session(&pool, &crashed).await.unwrap().unwrap();
+    assert_eq!(marked.session.stop_reason.as_deref(), Some("interrupted"));
+    assert_eq!(
+        marked.session.updated_at, updated_before,
+        "sweep must not touch sessions.updated_at (sidebar sorts by it)"
+    );
+
+    assert!(
+        get_group_chat_checkpoint(&pool, &orphan)
+            .await
+            .unwrap()
+            .is_none(),
+        "terminal-residue row must be healed away"
+    );
+    let orphan_session = load_session(&pool, &orphan).await.unwrap().unwrap();
+    assert_eq!(
+        orphan_session.session.stop_reason.as_deref(),
+        Some("group_chat_end"),
+        "heal deletes the ROW, never rewrites a terminal stop_reason"
+    );
+
+    let (kept_row, kept_session) = (
+        get_group_chat_checkpoint(&pool, &cancelled).await.unwrap(),
+        load_session(&pool, &cancelled).await.unwrap().unwrap(),
+    );
+    assert!(
+        kept_row.is_some(),
+        "resumable (cancelled) row survives the sweep"
+    );
+    assert_eq!(
+        kept_session.session.stop_reason.as_deref(),
+        Some("cancelled")
+    );
+
+    // Idempotent: a second sweep is a no-op.
+    let again = recover_group_chat_checkpoints(&pool).await.unwrap();
+    assert_eq!(again.marked_interrupted, 0);
+    assert_eq!(again.orphan_rows_deleted, 0);
+}
+
+/// Session delete cascades the checkpoint row (FK ON DELETE CASCADE).
+#[tokio::test]
+async fn group_chat_checkpoint_cascades_on_session_delete() {
+    let pool = test_pool().await;
+    let sid = Uuid::new_v4().to_string();
+    create_session(
+        &pool,
+        &sid,
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+        Some("group_chat"),
+        None,
+    )
+    .await
+    .unwrap();
+    upsert_group_chat_checkpoint(&pool, &sid, 1, 0)
+        .await
+        .unwrap();
+    assert!(get_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap()
+        .is_some());
+
+    delete_session(&pool, &sid).await.unwrap();
+    assert!(get_group_chat_checkpoint(&pool, &sid)
+        .await
+        .unwrap()
+        .is_none());
 }
