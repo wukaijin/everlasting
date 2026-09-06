@@ -114,6 +114,23 @@ node scripts/group-chat-run.mjs run --project <path> --preset review --topic "..
   busy/stop_reason 轮询;**不挂 SSE** = 保住 §5 的无人值守 8s 快拒。
 - LLM 调用方的指引路径:`.agents/skills/group-chat/`(何时召集/议题写法/结果解读)。
 
+### 6.1 MCP 接口层(GCE-M2,2026-09-06 起)——宿主 agent 的首选入口
+
+MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,不跑脚本**:
+`start_discussion` / `discussion_status` / `discussion_result` / `cancel_discussion`
+四工具(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)。挂载:仓库根
+`.agents/mcp.json`(stdio spawn `scripts/group-chat-mcp.mjs`)。
+
+- ⚠️ **`.agents/mcp.json` 是 same-scope fallback**:若仓库 `.zcode/` 日后定义任何
+  MCP server,该文件被整体忽略(非合并)——新增 `.zcode` MCP 配置时须把本条目并入。
+- 分工:**宿主 agent = MCP 工具**;**everlasting 内部 agent(daemon 单聊)= 脚本 + M1 纪律**
+  (沙箱 errno 翻译 / prefix 授权 basename / 裸命令,见 SKILL.md 边界)——内部 agent 不是
+  MCP client。
+- 归因:MCP 建群盖 `metadata.created_via:"mcp"`,M1 脚本盖 `"script"`,GUI/历史 session 无此键。
+- server 记账(session→request_id/project_id)落 `~/.local/state/dev.everlasting.app/mcp-discussions.json`
+  (XDG state,原子写)——server 进程随宿主会话生灭,讨论跨进程存活靠它兜底。
+- 冒烟:`node scripts/group-chat-mcp-smoke.mjs`(`--live` 烧真 token 走全链,可选)。
+
 ## 7. 其他常用端点(路径约定)
 
 全部为 `POST /api/v1/<domain>/<command>`,body snake_case,与 Tauri command 同名同参:

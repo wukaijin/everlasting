@@ -14,6 +14,11 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 - 这个议题值得吗?**单一事实问题不要审议**(直接查代码/文档);**有多视角权衡、结论影响后续走向**的才值得。
 - 议题里的未知能不能先自己消掉?把「X 是什么」消掉,只留「X 该怎么选」给审议。
 
+## 两条入口,先分清你是谁(GCE-M2 起)
+
+- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 四工具**——`start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
+- **everlasting 内部 agent**(daemon 单聊,非 MCP client):走下面的脚本路径。
+
 ## 建群三要素(全靠脚本内省,别背参数)
 
 ```bash
@@ -57,4 +62,4 @@ node scripts/group-chat-run.mjs run \
 
 - 本 skill 不做:打断/注入/实时跟随(M3 之前讨论不可驾驶,发起前把议题写全)。
 - 无人值守安全:无 GUI 观察者时权限请求 8s 快拒,参与者会自己绕路——议题里给的路径要真实存在,减少无效审批。
-- 嵌套消费(在 daemon 会话里由 agent 驱动本脚本):shell 沙箱禁网会拦脚本的 daemon 连接。脱沙箱路径(2026-09-06 live 实证):①脚本错误文案已带 `Operation not permitted (EPERM)` 签名,沙箱升级分类器能识别;②对会话预授权 shell prefix(注意:prefix 授权按**命令首词的 basename** 匹配——存 `node`,不是脚本全路径,全路径是死数据);③命令**务必裸写**,加重定向/`&&` 等组合符授权即失效。满足后沙箱首跑失败会自动无沙箱重跑,零人工。**双发警告**:升级重跑会生成新的后台句柄——原句柄显示 Failed 不代表任务失败,等新句柄/查 session 列表,**不要手动重发**(live 实证:手动重发导致两场审议并发跑,双倍成本)。
+- 嵌套消费(在 daemon 会话里由 agent 驱动本脚本):shell 沙箱禁网会拦脚本的 daemon 连接。脱沙箱路径(2026-09-06 live 实证):①脚本错误文案已带 `Operation not permitted (EPERM)` 签名,沙箱升级分类器能识别;②对会话预授权 shell prefix(注意:prefix 授权按**命令首词的 basename** 匹配——存 `node`,不是脚本全路径,全路径是死数据);③命令**务必裸写**,加重定向/`&&` 等组合符授权即失效。满足后沙箱首跑失败会自动无沙箱重跑,零人工。**双发警告**:升级重跑会生成新的后台句柄——原句柄显示 Failed 不代表任务失败,等新句柄/查 session 列表,**不要手动重发**(live 实证:手动重发导致两场审议并发跑,双倍成本)。MCP 工具入口没有这一整类问题(不经 shell,无沙箱/授权/句柄层)——宿主 agent 优先走 MCP。
