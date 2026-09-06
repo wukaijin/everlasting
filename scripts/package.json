@@ -1,0 +1,13 @@
+{
+  "name": "everlasting-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Repo utility scripts (group-chat driver + MCP server). Deps stay local to scripts/.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  }
+}

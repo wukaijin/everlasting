@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "everlasting-group-chat": {
+      "command": "node",
+      "args": ["${CLAUDE_PROJECT_DIR}/scripts/group-chat-mcp.mjs"],
+      "cwd": "${CLAUDE_PROJECT_DIR}"
+    }
+  }
+}
