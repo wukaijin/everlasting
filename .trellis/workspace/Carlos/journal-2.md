@@ -895,3 +895,26 @@ GROUP-CHAT-API-ROADMAP M1 落地。立项讨论定三层:平台=daemon 原语(�
 ### AC5 二跑补记(2026-09-06 深夜,用户令重试)
 
 **AC5 ✅ 端到端通过**:vue3-cms 单聊(session 511d62ed)仅凭指引完成「内省→后台跑脚本→沙箱升级自动脱沙箱→群聊并发同跑→读转录→summary 转述」全链;审议产出 file:line 级证据的高质量结论(axios 单例病/5 处 token 散点/四步迁移)。两个前置修复:①脚本错误文案 errno→strerror(EPERM→"Operation not permitted")——classify_block 按字面串触发升级链,原 fetch failed 死锁;②prefix 授权语义=命令首词 basename(shell_trust.rs first_token 取首词 basename 等值查表)——存全路径是死数据,改 match_value=node 直通。衍生发现记 M2:后台壳升级重跑换新句柄+agent 轮询旧句柄见 Failed 手动重发→双场并发(live 实证共跑 3 场);外层 busy 期间排队消息 turn 边界送达可触发过时重做(M4 消息时效)。--out 相对路径落调用方 cwd=转录跟审议对象走,语义正确。中止插曲的七层核查与外层越界读源码(用户手动停,确认零写零影响)见前节。
+
+---
+
+## Session 57: GCE-M2 群聊 MCP 接口层:四工具 server + 宿主挂载
+
+**Date**: 2026-09-06
+**Branch**: `main`
+
+### Summary
+
+ROADMAP M2 落地。brainstorm 五决策:①Node+@modelcontextprotocol/sdk 薄包装(与 M1 引擎共享实现层=AC2 零翻译)②v1 只 stdio(远程归 M4 先过安全评审)③四工具+用户约束「llm 初始 context 占用不要太大」→wire 预算锁(实测 1945 字符≈486 token<2300,单测断言地面真值=listTools 返回的 wire schema)④v1 零鉴权(用户:「本机无需鉴权」;勘察发现 daemon 实际 bind 0.0.0.0 非 roadmap 所写 localhost,收紧另开安全线任务)⑤metadata.created_via 三通道归因("mcp"/"script"/缺失=GUI,与 F2 created_by「谁」互补不撞名)。评审(用户投喂另一模型 planning 门评审)甄别:9 成采纳(P1-1 moderator 恒取预设/P1-2 记账补 project_id+两级兜底链/P2-1 ensureTranscript 双入口+导出失败降级/P2-2 砍 rounds_hint/P2-4 AC1 归属写死/P3-2 轮级值/P3-3 转录落点分叉声明),3 处驳回有据:P3-1「行号错」误读(我引的是 daemon/routes/sessions.rs:57,实存)、P3-5 jsonl gate 是 sub-agent 平台专属 inline 跳过(workflow.md:186)、P3-4 JSON 内留注释不可行(警示落 DAEMON-API)。交付:scripts/group-chat-mcp.mjs(纯逻辑区零 SDK import:记账 XDG state 写穿/终态判定/ensureTranscript/兜底链;SDK 1.30 registerTool 三参制+只收 Zod shape——raw JSON Schema 抛错,shape 内部转 wire)+13 用例+M1 微扩 3 件(createdVia 参数/transcript 根目录参数/fetchFailDetail+DEFAULT_BASE 导出,9 用例)+.agents/mcp.json 挂载(${CLAUDE_PROJECT_DIR},插件同款形状)+冒烟(非 live 零成本/--live 全链)。验收 AC1-AC6 全过:live 全链 spawn→start→poll×4→result(session b4ce0a94,40s 速决收官,summary 带 file:line 证据);created_via live 落库抽查;git diff app/src-tauri 空。实踩:SDK callback 直收 args 非 {params};claude headless 宿主被用户侧代理(api.wukaijin.com)模型故障全拒——宿主实跑改经 SDK client live 全链,ZCode 会话内工具出现留用户下次开会一眼验证;scripts/ 首个 npm 依赖(SDK+zod 限 scripts/package.json,勿装根)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c3a5c1be` | feat(scripts): M1 引擎微扩——createdVia 归因参数/转录根目录参数/两导出 |
+| `85c78307` | feat(scripts+agents): GCE-M2 MCP 接口层——四工具 server + 单测 13 用例 + 宿主挂载 + 冒烟 |
+| `f37975c4` | docs(skill+daemon-api+agents): MCP 入口接线——两入口分工/挂载警示/冒烟跑法 |
+
+### Status
+
+[OK] **Completed**(余项:ZCode 新会话工具出现一眼验证;Claude Code 宿主路径待用户代理修复;daemon 绑定面收紧候选独立任务)
