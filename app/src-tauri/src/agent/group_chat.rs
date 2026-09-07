@@ -56,6 +56,17 @@ pub struct GroupChatConfig {
     /// 挂就会把 GUI/MCP 场也导出)。
     #[serde(default)]
     pub created_via: Option<String>,
+    /// C1.2 token budget (09-08-gc-c1-stoploss): the discussion's total
+    /// billed-token ceiling (input + output + cache_creation + cache_read,
+    /// summed across every inner LLM turn). `None` (absent key) = unlimited
+    /// — default-off keeps existing sessions byte-compatible. Exceeded →
+    /// the orchestrator halts at the next round head with
+    /// `stop_reason = "budget"`. Declared per discussion in
+    /// `sessions.metadata`; the scheduled-task / MCP / CLI creation
+    /// channels don't carry it yet (M4 cost governance wires those).
+    /// Additive key: serde's default keeps old metadata deserializing.
+    #[serde(default)]
+    pub token_budget: Option<u64>,
     // 注:metadata 还携带 `scheduled_task_name`(fire 建群时写入)——
     // 转录导出经原始 JSON 读取,不进本结构(serde 忽略未知键)。
 }
@@ -89,6 +100,10 @@ pub struct GroupChatCtx {
     /// `created_via == Some("scheduled")` 读它 —— 见
     /// [`GroupChatConfig::created_via`]。
     pub created_via: Option<String>,
+    /// C1.2 (09-08-gc-c1-stoploss): the declared per-discussion token
+    /// ceiling, `None` = unlimited. Read by the orchestrator's round
+    /// head; see [`GroupChatConfig::token_budget`].
+    pub token_budget: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +199,7 @@ pub async fn build_group_chat_ctx(
             GroupChatConfig {
                 participants: Vec::new(),
                 created_via: None,
+                token_budget: None,
             }
         }),
         None => {
@@ -194,6 +210,7 @@ pub async fn build_group_chat_ctx(
             GroupChatConfig {
                 participants: Vec::new(),
                 created_via: None,
+                token_budget: None,
             }
         }
     };
@@ -217,6 +234,7 @@ pub async fn build_group_chat_ctx(
         moderator_model_id,
         project_root,
         created_via: config.created_via,
+        token_budget: config.token_budget,
     }))
 }
 

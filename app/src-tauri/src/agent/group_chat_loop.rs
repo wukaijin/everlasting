@@ -161,6 +161,14 @@ pub const STOP_REASON_CANCELLED: &str = "cancelled";
 /// frontend treats it as terminal-abnormal (finalize + notice, same
 /// class as `error`).
 pub const STOP_REASON_PREEMPTED: &str = "preempted";
+/// C1.2 (09-08-gc-c1-stoploss): the discussion's declared token budget
+/// (`GroupChatConfig.token_budget`) was exceeded — the orchestrator
+/// halted at the round head. Terminal (same class as `max_rounds` /
+/// `error`): NO wrap-up turn runs (a wrap-up would burn more tokens
+/// against a budget that is already gone — unlike `preempted`, whose
+/// wrap-up is the whole point). The frontend finalize whitelist and
+/// `groupChatNotice` treat it as terminal-abnormal.
+pub const STOP_REASON_BUDGET: &str = "budget";
 
 /// Why the outer orchestration loop stopped (R2). Carried out of the
 /// `for` loop so the post-loop terminal `Done` can name the cause. The
@@ -182,6 +190,108 @@ enum HaltReason {
     /// boundary so the post-loop wrap-up turn can run (moderator
     /// `end_discussion` → summary), terminal `stop_reason="preempted"`.
     Preempted,
+    /// C1.2 (09-08-gc-c1-stoploss): the declared token budget was
+    /// exceeded (checked at the round head against the TallySink
+    /// accumulation). Terminal WITHOUT a wrap-up turn — see
+    /// [`STOP_REASON_BUDGET`].
+    Budget,
+}
+
+// ---------------------------------------------------------------------------
+// C1.2 token budget (09-08-gc-c1-stoploss)
+// ---------------------------------------------------------------------------
+
+/// Running total of billed tokens consumed by THIS discussion run.
+/// Writer = [`TallySink`] (one increment per inner `TurnUsage`);
+/// reader = the round-head budget check. Scoped to the orchestration
+/// call — a reused session's second run starts from zero, and a
+/// resumed run restarts its tally (see the design's interrupted-resume
+/// boundary note).
+#[derive(Default)]
+struct TokenTally(std::sync::atomic::AtomicU64);
+
+impl TokenTally {
+    /// Billed-token 口径 (prd Decisions Q2): input + output +
+    /// cache_creation + cache_read. `context_input_tokens` is the
+    /// trace-view sizing metric and overlaps `input_tokens` — NOT
+    /// counted (double-counting would stop discussions early).
+    fn add_usage(&self, u: &crate::llm::types::TokenUsage) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let billed = u.input_tokens as u64
+            + u.output_tokens as u64
+            + u.cache_creation_input_tokens as u64
+            + u.cache_read_input_tokens as u64;
+        self.0.fetch_add(billed, Relaxed);
+    }
+
+    fn total(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Sink decorator wrapping the discussion's sink for every INNER
+/// speaker turn (moderator / participant / preempt wrap-up): forwards
+/// all [`crate::state::ChatEventSink`] methods to the inner sink
+/// verbatim, and — on `Done { usage: Some(_) }` — adds the turn's
+/// billed tokens to the shared [`TokenTally`] before forwarding.
+///
+/// The orchestrator's own emits (Speaker notices, the terminal Done)
+/// carry `usage: None` and contribute nothing; they flow through the
+/// same wrapper after the shadow so there is exactly one sink identity
+/// across the discussion. `has_live_observer` is FORWARDED (not the
+/// default) — the daemon `HttpSseSink` is the only production
+/// overrider, and losing its answer would silently break the GC3
+/// attendance detection for any non-group-chat consumer of the same
+/// sink identity.
+struct TallySink {
+    inner: Arc<dyn crate::state::ChatEventSink>,
+    tally: Arc<TokenTally>,
+}
+
+impl crate::state::ChatEventSink for TallySink {
+    fn emit_chat_event(&self, payload: &crate::state::ChatEventPayload) {
+        // C1.2 data source: `TurnUsage` fires EXACTLY ONCE per completed
+        // inner LLM turn with the turn's real provider-reported usage
+        // (same values the turn_trace row stores). Deliberately NOT
+        // `Done`: intermediate tool-use turns never emit a Done to the
+        // sink at all (only the terminal one does, carrying just the
+        // LAST turn's usage) — counting Done here would miss the
+        // tool-loop burn entirely AND double-count the final turn.
+        if let ChatEvent::TurnUsage { usage, .. } = &payload.event {
+            self.tally.add_usage(usage);
+        }
+        self.inner.emit_chat_event(payload);
+    }
+    fn emit_tool_call(&self, payload: &crate::state::ToolCallPayload) {
+        self.inner.emit_tool_call(payload);
+    }
+    fn emit_tool_result(&self, payload: &crate::state::ToolResultPayload) {
+        self.inner.emit_tool_result(payload);
+    }
+    fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
+        self.inner.emit_permission_ask(payload);
+    }
+    fn emit_permission_ask_resolved(&self, rid: &str, outcome: &str) {
+        self.inner.emit_permission_ask_resolved(rid, outcome);
+    }
+    fn emit_tool_question(&self, payload: &crate::agent::question_store::ToolQuestionPayload) {
+        self.inner.emit_tool_question(payload);
+    }
+    fn emit_mode_change_request(&self, payload: &crate::agent::question_store::ModeChangePayload) {
+        self.inner.emit_mode_change_request(payload);
+    }
+    fn emit_task_state_transition(
+        &self,
+        payload: &crate::agent::question_store::TaskStateTransitionPayload,
+    ) {
+        self.inner.emit_task_state_transition(payload);
+    }
+    fn record_worker_messages(&self, messages: &[ChatMessage]) {
+        self.inner.record_worker_messages(messages);
+    }
+    fn has_live_observer(&self) -> bool {
+        self.inner.has_live_observer()
+    }
 }
 
 /// The moderator's system prompt. Tells it to facilitate + use the
@@ -297,6 +407,19 @@ pub async fn run_group_chat_loop(
     // 逐字节不变)。
     resume: Option<GroupChatResume>,
 ) {
+    // C1.2 (09-08-gc-c1-stoploss): wrap the caller's sink in the
+    // tallying decorator and shadow it for the REST of this function —
+    // every inner speaker turn (moderator / participant / preempt
+    // wrap-up) and every orchestrator emit now flows through
+    // [`TallySink`], so the billed-token total covers the whole
+    // discussion with one sink identity. The round head reads the
+    // shared tally against `gc_ctx.token_budget`.
+    let tally = Arc::new(TokenTally::default());
+    let sink: Arc<dyn crate::state::ChatEventSink> = Arc::new(TallySink {
+        inner: sink,
+        tally: tally.clone(),
+    });
+
     // Shared turn state — the moderator's run_chat_loop writes here
     // via the nominate_speaker / end_discussion interception.
     let turn_state: SharedTurnState = Arc::new(tokio::sync::Mutex::new(GroupChatTurnState {
@@ -417,6 +540,29 @@ pub async fn run_group_chat_loop(
             tracing::info!(round, "group_chat: preempt requested; halting for wrap-up");
             halt_reason = Some(HaltReason::Preempted);
             break;
+        }
+
+        // --- 0b'. Round head: token budget check (C1.2) -----------------------
+        // Declared ceiling exceeded → terminal halt. AFTER the preempt check
+        // (user intent outranks the budget) and BEFORE the checkpoint upsert
+        // (a budgeted-exhausted round never starts, so the row keeps the
+        // last round that actually began — the post-loop terminal-exit
+        // delete then cleans it up like any other terminal reason).
+        // Overshoot contract: the check sees only COMPLETED inner turns, so
+        // the discussion can exceed the declared value by at most one
+        // speaker turn (participant max_turns=20 / moderator max_turns=1).
+        if let Some(budget) = gc_ctx.token_budget {
+            let spent = tally.total();
+            if spent > budget {
+                tracing::info!(
+                    round,
+                    spent,
+                    budget,
+                    "group_chat: token budget exceeded; halting (no wrap-up)"
+                );
+                halt_reason = Some(HaltReason::Budget);
+                break;
+            }
         }
 
         // --- 0c. Round head: checkpoint upsert (GCE P1a) ---------------------
@@ -955,6 +1101,7 @@ pub async fn run_group_chat_loop(
             Some(HaltReason::MaxRounds) => STOP_REASON_MAX_ROUNDS,
             Some(HaltReason::ErrorBreaker) => STOP_REASON_ERROR,
             Some(HaltReason::Preempted) => STOP_REASON_PREEMPTED,
+            Some(HaltReason::Budget) => STOP_REASON_BUDGET,
             // Unreachable: !cancelled → halt_reason was set by a break
             // or the MaxRounds default above. Defensive fallback keeps
             // the value stable if a future path forgets to set it.

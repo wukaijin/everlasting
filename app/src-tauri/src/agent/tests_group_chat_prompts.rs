@@ -182,6 +182,7 @@ mod tests {
             moderator_model_id: "mod".to_string(),
             project_root: None,
             created_via: None,
+            token_budget: None,
         };
         let p = moderator_system_prompt(&ctx);
         assert!(
@@ -218,6 +219,7 @@ mod tests {
             moderator_model_id: "mod".to_string(),
             project_root: None,
             created_via: None,
+            token_budget: None,
         };
         let p = moderator_system_prompt(&ctx);
         // Pacing: research is allowed but bounded — must hand the floor.
@@ -252,6 +254,7 @@ mod tests {
             moderator_model_id: "mod".to_string(),
             project_root: Some("/srv/repo".to_string()),
             created_via: None,
+            token_budget: None,
         };
         let m = moderator_system_prompt(&ctx);
         assert!(
@@ -276,6 +279,7 @@ mod tests {
             moderator_model_id: "mod".to_string(),
             project_root: None,
             created_via: None,
+            token_budget: None,
         };
         let m = moderator_system_prompt(&ctx);
         assert!(!m.contains("## Project context"), "no empty section: {m:?}");
@@ -1028,6 +1032,7 @@ mod tests {
             moderator_model_id: same_model.to_string(),
             project_root: None,
             created_via: None,
+            token_budget: None,
         };
 
         let participant_prompt = participant_system_prompt("D4F", None, None);

@@ -202,6 +202,7 @@ fn group_chat_ctx() -> GroupChatCtx {
         moderator_model_id: "moderator".to_string(),
         project_root: None,
         created_via: None,
+        token_budget: None,
     }
 }
 
@@ -2372,6 +2373,7 @@ async fn make_scheduled_group_chat_harness(
         moderator_model_id: "moderator".to_string(),
         project_root: None,
         created_via: created_via.map(str::to_string),
+        token_budget: None,
     };
     (h, gc_session_id, ctx)
 }
@@ -2686,4 +2688,301 @@ async fn group_chat_ask_free_denies_out_of_bounds_ask_without_roundtrip() {
         Some("group_chat_end"),
         "discussion finishes normally despite the mid-discussion deny"
     );
+}
+
+// ---------------------------------------------------------------------------
+// C1.2 token budget (09-08-gc-c1-stoploss): three destructive scripts from
+// the second-discussion consensus — 永不点名 / 狂调工具 / 每轮报错 — must
+// each terminate deterministically at a ROUND HEAD once the declared
+// budget (`GroupChatCtx.token_budget`, billed = input+output+cache
+// creation+cache_read) is exceeded, with `stop_reason = "budget"` on the
+// terminal Done AND the sessions row. Sessions that declare NO budget are
+// byte-compatible with pre-C1.2 behavior (every other test in this file
+// runs with `token_budget: None` — that IS the control group).
+// ---------------------------------------------------------------------------
+
+/// A clean text turn whose `Done` reports `tokens` input (billed).
+fn text_turn_with_usage(text: &str, tokens: u32) -> MockResponse {
+    MockResponse::Events(vec![
+        ok_evt(ChatEvent::Start),
+        ok_evt(ChatEvent::Delta {
+            text: text.to_string(),
+        }),
+        ok_evt(ChatEvent::Done {
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage {
+                input_tokens: tokens,
+                ..TokenUsage::default()
+            }),
+        }),
+    ])
+}
+
+/// A tool round (tool_use stop) whose `Done` reports `tokens` input.
+fn tool_round_with_usage(id: &str, path: &str, tokens: u32) -> MockResponse {
+    MockResponse::Events(vec![
+        ok_evt(ChatEvent::Start),
+        ok_evt(ChatEvent::ToolCall {
+            id: id.to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({ "path": path }),
+        }),
+        ok_evt(ChatEvent::Done {
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage {
+                input_tokens: tokens,
+                ..TokenUsage::default()
+            }),
+        }),
+    ])
+}
+
+/// Last terminal `stop_reason` the emitter saw (the orchestrator's
+/// post-loop Done is the only one carrying `budget`).
+fn last_terminal_stop_reason(emitter: &MockEmitter) -> Option<String> {
+    emitter
+        .chat_events()
+        .iter()
+        .filter_map(|p| match &p.event {
+            ChatEvent::Done { stop_reason, .. } => stop_reason.clone(),
+            _ => None,
+        })
+        .last()
+}
+
+#[tokio::test]
+async fn group_chat_budget_halts_when_moderator_never_nominates() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Moderator burns 100 billed tokens per round and NEVER nominates —
+    // with no budget this runs to MAX_ORCHESTRATION_ROUNDS (max_rounds);
+    // with budget=250 it must halt deterministically at a round head
+    // (after the 3rd turn spent = 300 > 250).
+    let moderator = Arc::new(MockProvider::new(
+        (0..5)
+            .map(|i| text_turn_with_usage(&format!("独白 {i}"), 100))
+            .collect::<Vec<_>>(),
+    ));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let mut ctx = group_chat_ctx();
+    ctx.token_budget = Some(250);
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-budget-1".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        mocks_call_count(&moderator),
+        3,
+        "3 turns burned before the round-head trip"
+    );
+    assert_eq!(
+        last_terminal_stop_reason(&emitter).as_deref(),
+        Some("budget")
+    );
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("budget"));
+}
+
+#[tokio::test]
+async fn group_chat_budget_halts_on_tool_loop_burn() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    let notes_path = h.project_path.join("budget-notes.md");
+    tokio::fs::write(&notes_path, "# notes\n")
+        .await
+        .expect("seed");
+    let notes_abs = notes_path.to_str().unwrap().to_string();
+
+    // M1's ONE speaker turn loops 3 tool rounds × 400 billed tokens, then
+    // a 50-token remark — 1250 > budget=1000 accumulated WITHIN the turn
+    // (the 逐块累计 face). The next round head must halt before anyone
+    // else speaks.
+    let m1 = Arc::new(MockProvider::new(vec![
+        tool_round_with_usage("b1", &notes_abs, 400),
+        tool_round_with_usage("b2", &notes_abs, 400),
+        tool_round_with_usage("b3", &notes_abs, 400),
+        text_turn_with_usage("M1 结论", 50),
+    ]));
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "c1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "请 M1",
+        ),
+        // Never reached — budget trips at the round-1 head.
+        mod_tool_turn("c2", "end_discussion", serde_json::json!({}), "结束"),
+    ]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let mut ctx = group_chat_ctx();
+    ctx.token_budget = Some(1000);
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-budget-2".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        mocks_call_count(&moderator),
+        1,
+        "round-1 head trips before the 2nd arbitration"
+    );
+    assert_eq!(
+        last_terminal_stop_reason(&emitter).as_deref(),
+        Some("budget")
+    );
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("budget"));
+}
+
+#[tokio::test]
+async fn group_chat_budget_halts_on_error_turns_with_usage() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // Error turns report NO usage (Done never fires) — they contribute 0
+    // to the tally (documented boundary; the GC5 breaker owns pure-error
+    // burn). M1 errors every time; M2's clean turns burn 600 billed each.
+    // budget=500: after M2's first clean turn spent=600 > 500 → the
+    // round-2 head halts on BUDGET, before M1's second error can stack
+    // the GC5 breaker (which would have said "error").
+    let boom = || MockResponse::ErrThenEnd(LlmError::Auth("simulated auth failure".to_string()));
+    let m1 = Arc::new(MockProvider::new(vec![boom()]));
+    let m2 = Arc::new(MockProvider::new(vec![text_turn_with_usage(
+        "M2 发言",
+        600,
+    )]));
+    let moderator = Arc::new(MockProvider::new(vec![
+        mod_tool_turn(
+            "c1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "请 M1",
+        ),
+        mod_tool_turn(
+            "c2",
+            "nominate_speaker",
+            serde_json::json!({"name": "M2"}),
+            "换 M2",
+        ),
+        // Never reached.
+        mod_tool_turn("c3", "end_discussion", serde_json::json!({}), "结束"),
+    ]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    catalog.insert("m2".to_string(), m2.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let mut ctx = group_chat_ctx();
+    ctx.token_budget = Some(500);
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-budget-3".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        last_terminal_stop_reason(&emitter).as_deref(),
+        Some("budget"),
+        "budget must win over the error breaker when billed tokens accumulated"
+    );
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(loaded.session.stop_reason.as_deref(), Some("budget"));
+}
+
+fn mocks_call_count(p: &std::sync::Arc<MockProvider>) -> usize {
+    p.call_count()
 }
