@@ -152,6 +152,14 @@ pub struct PermissionContext {
     /// branch — the full ask round-trip, per RULE-FrontSubagent-003).
     /// Production chat sets `false`.
     pub is_worker: bool,
+    /// C1.1 ask-free (09-08-gc-c1-stoploss): `true` for group-chat
+    /// speaker turns (derived from `ChatLoopRequest.group_chat_state`
+    /// in `chat_loop/init.rs`). A Tier 4 ask during a discussion must
+    /// not wait on an approval nobody may answer — `ask_path` denies
+    /// it instantly with `ASK_FREE_DENY_REASON` and the speaker LLM
+    /// adapts via the tool_result(is_error) content. `false`
+    /// everywhere else — classic chat ask behavior is unchanged.
+    pub group_chat_ask_free: bool,
     /// 2026-06-22 (RULE-FrontSubagent-003 fix): when `is_worker`
     /// is `true`, this is the worker subagent's `subagent_runs.id`
     /// (DB row UUID, NOT the human-readable `worker_rid`). Used

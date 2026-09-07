@@ -2544,3 +2544,146 @@ async fn transcript_export_failure_does_not_break_finalization() {
         "terminal-exit checkpoint cleanup still ran"
     );
 }
+
+// ---------------------------------------------------------------------------
+// C1.1 ask-free (09-08-gc-c1-stoploss): a group-chat speaker's out-of-root
+// read would be a Tier 4 permission ask in classic chat. In a discussion
+// it must be denied INSTANTLY at the permission layer — no ask round-trip
+// (no `permission_ask` emit, no 120s/8s window), the deny reason lands in
+// the tool_result(is_error) content, and the speaker carries on. The deny
+// reason string is the ask.rs `ASK_FREE_DENY_REASON` contract.
+// ---------------------------------------------------------------------------
+
+fn script_ask_free_mocks(out_path: &str) -> GroupChatMocks {
+    let moderator = Arc::new(MockProvider::new(vec![
+        // Round 0: nominate M1.
+        mod_tool_turn(
+            "c1",
+            "nominate_speaker",
+            serde_json::json!({"name": "M1"}),
+            "主持人:请 M1 调研",
+        ),
+        // Round 1: end_discussion.
+        mod_tool_turn("c2", "end_discussion", serde_json::json!({}), "主持人:结束"),
+    ]));
+    // M1: turn 1 = out-of-root read (Tier 4 ask face), turn 2 = remark
+    // (proves the deny was non-fatal and M1 adapted instead of stalling).
+    let m1 = Arc::new(MockProvider::new(vec![
+        MockResponse::Events(vec![
+            ok_evt(ChatEvent::Start),
+            ok_evt(ChatEvent::ToolCall {
+                id: "r1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": out_path}),
+            }),
+            tool_use_stop(),
+        ]),
+        text_turn("M1: 该路径不可读，跳过，结论 A"),
+    ]));
+    let m2 = Arc::new(MockProvider::new(vec![]));
+
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    catalog.insert("m1".to_string(), m1.clone());
+    catalog.insert("m2".to_string(), m2.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    GroupChatMocks {
+        moderator,
+        m1,
+        m2,
+        catalog: Some(catalog),
+    }
+}
+
+#[tokio::test]
+async fn group_chat_ask_free_denies_out_of_bounds_ask_without_roundtrip() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+
+    // A path OUTSIDE the project root (the harness's project tempdir) —
+    // the exact shape that burned D1's 5 × 120s permission waits.
+    let outside = std::env::temp_dir().join("everlasting-ask-free-probe-deny.md");
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mocks = script_ask_free_mocks(outside.to_str().unwrap());
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-ask-free".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        mocks.catalog.clone(),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        group_chat_ctx(),
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    // Core C1.1 assertion: ZERO ask round-trips — the permission layer
+    // denied synchronously (this also implies zero waiting: without the
+    // ask-free short-circuit this test would emit one ask and stall in
+    // the unattended 8s window before a synthetic deny).
+    assert!(
+        emitter.permission_asks.lock().unwrap().is_empty(),
+        "group-chat speaker turns must never surface a permission ask"
+    );
+
+    // The deny reason (contract string) reached M1's next turn as the
+    // tool_result(is_error) content — the LLM-adaptation channel.
+    let m1_sends = mocks.m1.sent_messages();
+    assert_eq!(
+        mocks.m1.call_count(),
+        2,
+        "M1 must run TWO turns: denied read then the remark"
+    );
+    let saw_deny = m1_sends[1].iter().any(|m| match &m.content {
+        MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+                ..
+            } => {
+                tool_use_id == "r1"
+                    && *is_error
+                    && content.contains(crate::agent::permissions::ask::ASK_FREE_DENY_REASON)
+            }
+            _ => false,
+        }),
+        _ => false,
+    });
+    assert!(
+        saw_deny,
+        "M1's second turn must see the ask-free deny tool_result: {:#?}",
+        m1_sends[1]
+    );
+
+    // The discussion completed normally end-to-end.
+    assert_eq!(emitter.error_event_count(), 0, "no errors end-to-end");
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end"),
+        "discussion finishes normally despite the mid-discussion deny"
+    );
+}

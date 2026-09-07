@@ -104,6 +104,7 @@ pub(super) async fn worker_ctx_with_db() -> (
         mode: Mode::Edit,
         cwd: std::path::PathBuf::from("/repo"),
         is_worker: true,
+        group_chat_ask_free: false,
         worker_run_id: Some("worker-run-1".to_string()),
         // 2026-06-26 (task 06-26-subagent-per-run-grant): None by
         // default for tests that don't exercise the run-grant cache

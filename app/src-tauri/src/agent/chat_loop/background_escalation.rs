@@ -372,6 +372,7 @@ mod tests {
                 mode,
                 cwd: root.clone(),
                 is_worker: false,
+                group_chat_ask_free: false,
                 worker_run_id: None,
                 run_grants: None,
                 worktree_path: root.clone(),

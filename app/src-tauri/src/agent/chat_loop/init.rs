@@ -400,6 +400,13 @@ pub(crate) async fn prepare_loop_state(
         mode: session_mode,
         cwd: session_cwd.clone(),
         is_worker: effective_is_worker,
+        // C1.1 ask-free (09-08-gc-c1-stoploss): a group-chat speaker
+        // turn (moderator or participant — `group_chat_state` is Some
+        // for both) never surfaces a Tier 4 ask; `ask_path` denies
+        // instantly. Derived here so every inner loop of a discussion
+        // inherits it, including the background-escalation re-run
+        // (which clones this ctx).
+        group_chat_ask_free: group_chat_state.is_some(),
         // 2026-06-22 (RULE-FrontSubagent-003 fix): carry the
         // worker_run_id through so `ask_path` can build the
         // worker-owned permission session id and propagate the

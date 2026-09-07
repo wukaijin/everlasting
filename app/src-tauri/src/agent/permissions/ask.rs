@@ -33,6 +33,19 @@ pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120)
 /// user "wait forever") takes precedence and disables this path.
 pub(crate) const UNATTENDED_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// C1.1 ask-free (09-08-gc-c1-stoploss, second-discussion consensus):
+/// deny reason for a Tier 4 ask raised during a group-chat discussion.
+/// A discussion is an unattended batch job EVEN when an observer
+/// happens to be connected — the D1 live run (with a tunnel browser
+/// online) burned 5 × 120s × 5 rounds on asks the observer window
+/// could technically answer but nobody did. `ask_path` denies such
+/// asks instantly (no register / no emit / no timeout arm) and this
+/// reason lands in the tool_result(is_error) content so the speaker
+/// LLM adapts and routes around (GC3 verified deny is harmless).
+/// The exact string is a test-assertion contract — do not reword.
+pub(crate) const ASK_FREE_DENY_REASON: &str =
+    "group chat runs ask-free: permission ask auto-denied; continue without this action";
+
 // ---------------------------------------------------------------------------
 // Global "永不超时" switch (2026-09-03, task 09-03-ask-no-timeout)
 // ---------------------------------------------------------------------------
@@ -224,6 +237,31 @@ pub(super) async fn ask_path(
     token: &tokio_util::sync::CancellationToken,
     reason_override: Option<&str>,
 ) -> Decision {
+    // C1.1 ask-free (09-08-gc-c1-stoploss): a group-chat speaker turn
+    // NEVER surfaces a permission ask — the discussion is an unattended
+    // batch job even with an observer connected (D1: 5 × 120s × 5 rounds
+    // burned with a tunnel browser online). Deny is synchronous here,
+    // before the worker/parent branch and the `ask_no_timeout_enabled`
+    // config read — classic chat pays one bool check, discussions skip
+    // the whole round-trip (no register, no emit, no timeout arm). The
+    // reason lands in the tool_result(is_error) content so the speaker
+    // LLM routes around (GC3 verified deny-harmless). Audit reuses
+    // `ToolDenied` (multi-source variant, reason discriminates).
+    if ctx.group_chat_ask_free {
+        let _ = record_audit(
+            db,
+            ctx,
+            AuditKind::ToolDenied,
+            tool_name,
+            tool_input,
+            Some(ASK_FREE_DENY_REASON),
+        )
+        .await;
+        return Decision::Deny {
+            reason: ASK_FREE_DENY_REASON.to_string(),
+            critical: false,
+        };
+    }
     // 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagents
     // now go through the full interactive ask round-trip (not the
     // pre-fix collapse-to-Deny). The pre-fix behavior silently
