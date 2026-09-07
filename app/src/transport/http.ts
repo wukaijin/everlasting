@@ -161,6 +161,8 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   list_models: "providers",
   list_providers: "providers",
   set_default_model: "providers",
+  set_model_disabled: "providers",
+  set_provider_disabled: "providers",
   test_model: "providers",
   update_model: "providers",
   update_provider: "providers",

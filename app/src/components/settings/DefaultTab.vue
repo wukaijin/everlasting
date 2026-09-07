@@ -11,7 +11,8 @@
 // labelled; reka-ui's RadioGroup gives us all of that for free.
 
 import { RadioGroupRoot, RadioGroupItem, RadioGroupIndicator } from "reka-ui";
-import { useModelsStore } from "../../stores/models";
+import { computed } from "vue";
+import { useModelsStore, isModelEffectivelyDisabled } from "../../stores/models";
 import Icon from "../Icon.vue";
 
 const modelsStore = useModelsStore();
@@ -19,6 +20,33 @@ const modelsStore = useModelsStore();
 function selectDefault(modelId: string) {
   modelsStore.setDefault(modelId);
 }
+
+/** 2026-09-07 (provider-model-disable): 默认模型单选列表 = 启用分组;
+ *  当前默认恰为禁用行时追加兜底分组 —— 否则用户看不到自己在用哪只、
+ *  也无从切走(禁用只是不可「改选」,不影响该模型继续分发)。 */
+const groups = computed(() => {
+  const enabled = modelsStore.enabledModelsGroupedByProvider;
+  const currentId = modelsStore.defaultModelId;
+  const current = currentId ? modelsStore.byId(currentId) : undefined;
+  if (
+    current &&
+    isModelEffectivelyDisabled(current) &&
+    !enabled.some((g) => g.models.some((m) => m.id === current.id))
+  ) {
+    return [
+      ...enabled,
+      {
+        provider: {
+          id: current.providerId,
+          displayName: current.providerDisplayName,
+          protocol: current.providerProtocol,
+        },
+        models: [current],
+      },
+    ];
+  }
+  return enabled;
+});
 </script>
 
 <template>
@@ -36,7 +64,7 @@ function selectDefault(modelId: string) {
 
     <div v-else class="default-tab__groups">
       <div
-        v-for="group in modelsStore.modelsGroupedByProvider"
+        v-for="group in groups"
         :key="group.provider.id"
         class="default-tab__group"
       >
@@ -64,6 +92,12 @@ function selectDefault(modelId: string) {
             <div class="default-tab__option-info">
               <span class="default-tab__option-name">{{ m.displayName }}</span>
               <span class="default-tab__option-id">{{ m.modelName }}</span>
+              <!-- 兜底分组里的当前默认:标注禁用态,提示应改选。 -->
+              <span
+                v-if="m.id === modelsStore.defaultModelId && (m.disabled || m.providerDisabled)"
+                class="default-tab__tag default-tab__tag--disabled"
+                title="当前默认已被禁用(不影响继续使用),建议改选启用模型"
+              >已禁用</span>
               <span v-if="m.supportsThinking" class="default-tab__tag">thinking</span>
               <!-- B1 R1: vision capability tag — same tag treatment as thinking. -->
               <span v-if="m.supportsImages" class="default-tab__tag">vision</span>
@@ -226,6 +260,12 @@ function selectDefault(modelId: string) {
   color: var(--color-accent-text);
   font-family: var(--font-mono);
   flex-shrink: 0;
+}
+
+/* 2026-09-07 (provider-model-disable): 兜底分组里当前默认的禁用标注。 */
+.default-tab__tag--disabled {
+  background: var(--color-bg-border);
+  color: var(--color-text-muted);
 }
 
 /* --- S6b 移动端适配(08-13-mobile-settings, 320-430px) ---

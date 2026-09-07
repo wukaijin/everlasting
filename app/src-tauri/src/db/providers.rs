@@ -87,8 +87,32 @@ pub async fn create_provider(
         base_url: base_url.to_string(),
         api_key: api_key.to_string(),
         has_key: !api_key.is_empty(),
+        disabled: false,
         created_at: now.clone(),
         updated_at: now,
+    })
+}
+
+/// 把一行 `providers` 查询结果映射成 [`ProviderRow`](`disabled` 布尔
+/// 走 INTEGER 0/1 转换;2026-09-07 provider-model-disable)。list / get
+/// 两条读路径共用,避免列清单漂移。
+fn map_provider_row(
+    r: &sqlx::sqlite::SqliteRow,
+    master_key: &[u8; 32],
+) -> Result<ProviderRow, sqlx::Error> {
+    let id: String = r.try_get("id")?;
+    let enc: String = r.try_get("api_key_enc")?;
+    let disabled_i: i32 = r.try_get("disabled")?;
+    Ok(ProviderRow {
+        has_key: !enc.is_empty(),
+        api_key: decrypt_api_key_or_empty(master_key, &enc, &id),
+        disabled: disabled_i != 0,
+        id,
+        protocol: r.try_get("protocol")?,
+        display_name: r.try_get("display_name")?,
+        base_url: r.try_get("base_url")?,
+        created_at: r.try_get("created_at")?,
+        updated_at: r.try_get("updated_at")?,
     })
 }
 
@@ -99,7 +123,7 @@ pub async fn create_provider(
 pub async fn list_providers(pool: &SqlitePool) -> Result<Vec<ProviderRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
- SELECT id, protocol, display_name, base_url, api_key_enc, created_at, updated_at
+ SELECT id, protocol, display_name, base_url, api_key_enc, disabled, created_at, updated_at
  FROM providers
  ORDER BY updated_at DESC
  "#,
@@ -107,22 +131,8 @@ pub async fn list_providers(pool: &SqlitePool) -> Result<Vec<ProviderRow>, sqlx:
     .fetch_all(pool)
     .await?;
     let master_key = crate::crypto::derive_master_key().map_err(crypto_err)?;
-    rows.into_iter()
-        .map(|r| {
-            let id: String = r.try_get("id")?;
-            let enc: String = r.try_get("api_key_enc")?;
-            let api_key = decrypt_api_key_or_empty(&master_key, &enc, &id);
-            Ok(ProviderRow {
-                has_key: !enc.is_empty(),
-                api_key,
-                id,
-                protocol: r.try_get("protocol")?,
-                display_name: r.try_get("display_name")?,
-                base_url: r.try_get("base_url")?,
-                created_at: r.try_get("created_at")?,
-                updated_at: r.try_get("updated_at")?,
-            })
-        })
+    rows.iter()
+        .map(|r| map_provider_row(r, &master_key))
         .collect()
 }
 
@@ -132,7 +142,7 @@ pub async fn list_providers(pool: &SqlitePool) -> Result<Vec<ProviderRow>, sqlx:
 pub async fn get_provider(pool: &SqlitePool, id: &str) -> Result<Option<ProviderRow>, sqlx::Error> {
     let row = sqlx::query(
         r#"
- SELECT id, protocol, display_name, base_url, api_key_enc, created_at, updated_at
+ SELECT id, protocol, display_name, base_url, api_key_enc, disabled, created_at, updated_at
  FROM providers
  WHERE id = ?
  "#,
@@ -144,18 +154,7 @@ pub async fn get_provider(pool: &SqlitePool, id: &str) -> Result<Option<Provider
         None => Ok(None),
         Some(r) => {
             let master_key = crate::crypto::derive_master_key().map_err(crypto_err)?;
-            let rid: String = r.try_get("id")?;
-            let enc: String = r.try_get("api_key_enc")?;
-            Ok(Some(ProviderRow {
-                api_key: decrypt_api_key_or_empty(&master_key, &enc, &rid),
-                has_key: !enc.is_empty(),
-                id: rid,
-                protocol: r.try_get("protocol")?,
-                display_name: r.try_get("display_name")?,
-                base_url: r.try_get("base_url")?,
-                created_at: r.try_get("created_at")?,
-                updated_at: r.try_get("updated_at")?,
-            }))
+            Ok(Some(map_provider_row(&r, &master_key)?))
         }
     }
 }
@@ -232,4 +231,26 @@ pub async fn delete_provider(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::
         .execute(pool)
         .await?;
     Ok(res.rows_affected() > 0)
+}
+
+/// 翻转 provider 的禁用态 (2026-09-07 provider-model-disable).
+/// 返回 `None` = 行不存在;成功时回读整行(复用 get_provider 的
+/// 解密路径)。不触发 catalog 重建 —— 禁用是选用层开关,分发
+/// catalog 照常收录该 provider 的模型(已在用的会话不受影响)。
+pub async fn set_provider_disabled(
+    pool: &SqlitePool,
+    id: &str,
+    disabled: bool,
+) -> Result<Option<ProviderRow>, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query("UPDATE providers SET disabled = ?, updated_at = ? WHERE id = ?")
+        .bind(disabled as i32)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Ok(None);
+    }
+    get_provider(pool, id).await
 }

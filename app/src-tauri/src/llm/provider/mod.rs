@@ -311,6 +311,7 @@ mod tests {
             base_url: "https://api.anthropic.com".to_string(),
             api_key: api_key.to_string(),
             has_key: !api_key.is_empty(),
+            disabled: false,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),
         }
@@ -331,6 +332,7 @@ mod tests {
             supports_thinking: true,
             supports_images: false,
             context_window: 200_000,
+            disabled: false,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),
         }

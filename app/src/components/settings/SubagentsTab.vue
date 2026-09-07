@@ -75,14 +75,25 @@ const sortedRows = computed<SubagentWithModelRow[]>(() => {
  *  by provider display name then model display name. Mirrors
  *  `models.modelsGroupedByProvider` but flattened for the
  *  reka-ui SelectItem loop (grouping via SelectGroup / SelectLabel
- *  was dropping the popover contents in the Tauri webview). */
+ *  was dropping the popover contents in the Tauri webview).
+ *
+ *  2026-09-07 (provider-model-disable): 选项 = 启用模型 ∪ 各行当前已
+ *  解析的模型 id —— 禁用模型不再可被「改选」,但某行已指向它时仍要
+ *  作为选项出现(否则下拉里该行显示为空,用户无从查看/切换)。 */
 const flatModelOptions = computed<ModelWithProvider[]>(() => {
   const groups = models.modelsGroupedByProvider;
   if (!Array.isArray(groups)) return [];
+  const pinned = new Set(
+    sortedRows.value
+      .map((r) => r.resolvedModelId)
+      .filter((id): id is string => id != null),
+  );
   const out: ModelWithProvider[] = [];
   for (const g of groups) {
     for (const m of g.models) {
-      out.push(m);
+      if (pinned.has(m.id) || !(m.disabled || m.providerDisabled)) {
+        out.push(m);
+      }
     }
   }
   // Stable sort by provider display name (resolved via the

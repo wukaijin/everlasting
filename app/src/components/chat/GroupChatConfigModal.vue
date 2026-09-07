@@ -120,8 +120,19 @@ const isValid = computed(() => {
   return true;
 });
 
-// Models available for the dropdown.
+// Models for the dropdown: FULL catalog (modelLabel 反查用 —— 已指向
+// 被禁用模型的行,显示名仍要可解析)。
 const availableModels = computed(() => modelsStore.models ?? []);
+
+// 2026-09-07 (provider-model-disable): 可选项 = 启用模型 ∪ 草稿各行
+// 已选 id。禁用模型不再可被改选,但编辑态回显的旧阵容仍要能显示与
+// 保留(后端 catalog 不滤,禁用不影响已在用的群聊分发)。
+const selectableModels = computed(() => {
+  const pinned = new Set(participants.value.map((p) => p.model).filter(Boolean));
+  return modelsStore.models.filter(
+    (m) => pinned.has(m.id) || !(m.disabled || m.providerDisabled),
+  );
+});
 
 // ---------------------------------------------------------------------
 // Group-chat cache rates (08-10-group-chat-cache-rate, R6/R7)
@@ -190,10 +201,11 @@ watch(
       }));
       rosterSpeakers.value = props.initialParticipants.map((p) => p.name.trim());
     } else if (props.mode === "create") {
-      // Seed two empty participants (D5 minimum).
+      // Seed two empty participants (D5 minimum)。默认模型取首个「启用」
+      // 模型(禁用模型不出现在选项里,也不做默认)。
       participants.value = [
-        { name: "", model: availableModels.value[0]?.id ?? "" },
-        { name: "", model: availableModels.value[0]?.id ?? "" },
+        { name: "", model: selectableModels.value[0]?.id ?? "" },
+        { name: "", model: selectableModels.value[0]?.id ?? "" },
       ];
       rosterSpeakers.value = [];
     }
@@ -226,7 +238,7 @@ function addParticipant() {
   if (participants.value.length >= MAX_PARTICIPANTS) return;
   participants.value.push({
     name: "",
-    model: availableModels.value[0]?.id ?? "",
+    model: selectableModels.value[0]?.id ?? "",
   });
   // Keep the roster snapshot index-aligned with the draft: the new
   // row has no history → empty speaker → "—" rate.
@@ -387,7 +399,7 @@ function modelLabel(id: string): string {
                     >
                       <SelectViewport>
                         <SelectItem
-                          v-for="m in availableModels"
+                          v-for="m in selectableModels"
                           :key="m.id"
                           :value="m.id"
                           class="gcfg-select-item"

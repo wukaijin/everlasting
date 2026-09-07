@@ -22,7 +22,7 @@ import { computed, onUnmounted, ref } from "vue";
 import { transport } from "../../transport";
 
 import { useConfigStore } from "../../stores/config";
-import { useModelsStore } from "../../stores/models";
+import { useModelsStore, isModelEffectivelyDisabled } from "../../stores/models";
 import { useChatStore } from "../../stores/chat";
 import Icon from "../Icon.vue";
 
@@ -53,13 +53,18 @@ const currentModelId = computed<string | null>(() => {
 /** Display label for the current model, or the gray placeholder
  *  string when no model is set. The lookup walks the full list
  *  once per id change — the catalog is small (typical user has
- *  < 20 models). */
+ *  < 20 models). When the current model is effectively disabled
+ *  (2026-09-07 provider-model-disable) the label carries a
+ *  「已禁用」suffix so the user knows why they may want to switch —
+ *  the disabled model keeps dispatching for this session (disable
+ *  only hides it from pickers). */
 const currentModelLabel = computed<string>(() => {
   if (!hasModels.value) return "(未选择模型)";
   const id = currentModelId.value;
   if (!id) return "(未选择模型)";
   const m = modelsStore.models.find((x) => x.id === id);
-  return m?.displayName ?? "(未选择模型)";
+  if (!m) return "(未选择模型)";
+  return isModelEffectivelyDisabled(m) ? `${m.displayName} ·已禁用` : m.displayName;
 });
 
 /** Streaming disables the trigger so the user can't switch
@@ -176,7 +181,7 @@ async function onModelPick(modelId: string) {
         role="menu"
       >
         <div
-          v-for="group in modelsStore.modelsGroupedByProvider"
+          v-for="group in modelsStore.enabledModelsGroupedByProvider"
           :key="group.provider.id"
           class="model-select__group"
         >

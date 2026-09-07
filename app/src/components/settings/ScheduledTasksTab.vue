@@ -338,16 +338,24 @@ function onPickIntervalUnit(v: unknown): void {
 
 /** 模型下拉(新建专用 session 时可选):平铺列表带 provider 前缀
  *  (SubagentsTab 同款 —— reka 分组原语在 Tauri webview 会丢内容)。
- *  `?? []`:load 失败 / 未加载时 models 可能仍为 null(防御,下拉空)。 */
-const flatModelOptions = computed(() =>
-  (models.models ?? [])
+ *  `?? []`:load 失败 / 未加载时 models 可能仍为 null(防御,下拉空)。
+ *  2026-09-07 (provider-model-disable): 选项 = 启用模型 ∪ 表单当前值
+ *  (session 模型 + 主持人)—— 禁用模型不可改选,但编辑态回显的旧值
+ *  仍要可见可切走。 */
+const flatModelOptions = computed(() => {
+  const all = models.models ?? [];
+  const pinned = new Set(
+    [form.modelId, gcModeratorModelId.value].filter((v): v is string => !!v),
+  );
+  return all
+    .filter((m) => pinned.has(m.id) || !(m.disabled || m.providerDisabled))
     .slice()
     .sort(
       (a, b) =>
         a.providerDisplayName.localeCompare(b.providerDisplayName) ||
         a.displayName.localeCompare(b.displayName),
-    ),
-);
+    );
+});
 
 function onPickModel(v: unknown): void {
   const m = normalizeSelectValue(v);

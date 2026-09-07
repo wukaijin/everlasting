@@ -97,10 +97,14 @@ pub fn all_command_names() -> Vec<&'static str> {
         "add_provider",
         "update_provider",
         "delete_provider",
+        // 2026-09-07 (provider-model-disable): 选用层禁用开关(不触
+        // 发 catalog 重建 —— 分发集合与禁用态无关,见 commands/providers.rs)。
+        "set_provider_disabled",
         "list_models",
         "add_model",
         "update_model",
         "delete_model",
+        "set_model_disabled",
         "get_default_model",
         "set_default_model",
         "update_session_model_id",

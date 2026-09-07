@@ -14,7 +14,8 @@ use serde::Deserialize;
 use crate::commands::providers::{
     add_model_inner, add_provider_inner, delete_model_inner, delete_provider_inner,
     get_default_model_inner, list_models_inner, list_providers_inner, set_default_model_inner,
-    test_model_inner, update_model_inner, update_provider_inner, update_session_model_id_inner,
+    set_model_disabled_inner, set_provider_disabled_inner, test_model_inner, update_model_inner,
+    update_provider_inner, update_session_model_id_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;
@@ -179,6 +180,37 @@ pub async fn delete_model(
     Ok(Json(result))
 }
 
+/// 2026-09-07 (provider-model-disable): 模型级禁用开关。Body 字段
+/// snake_case(transport 顶层 key 已做 camelCase→snake_case 转换)。
+#[derive(Debug, Deserialize)]
+pub struct SetModelDisabledRequest {
+    pub id: String,
+    pub disabled: bool,
+}
+
+pub async fn set_model_disabled(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetModelDisabledRequest>,
+) -> Result<Json<Option<db::ModelRow>>, AppCommandError> {
+    let result = set_model_disabled_inner(&state, req.id, req.disabled).await?;
+    Ok(Json(result))
+}
+
+/// 2026-09-07 (provider-model-disable): provider 级禁用开关。
+#[derive(Debug, Deserialize)]
+pub struct SetProviderDisabledRequest {
+    pub id: String,
+    pub disabled: bool,
+}
+
+pub async fn set_provider_disabled(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetProviderDisabledRequest>,
+) -> Result<Json<Option<db::ProviderRow>>, AppCommandError> {
+    let result = set_provider_disabled_inner(&state, req.id, req.disabled).await?;
+    Ok(Json(result))
+}
+
 pub async fn get_default_model(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Option<db::ModelWithProvider>>, AppCommandError> {
@@ -232,10 +264,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/add_provider", post(add_provider))
         .route("/update_provider", post(update_provider))
         .route("/delete_provider", post(delete_provider))
+        .route("/set_provider_disabled", post(set_provider_disabled))
         .route("/list_models", post(list_models))
         .route("/add_model", post(add_model))
         .route("/update_model", post(update_model))
         .route("/delete_model", post(delete_model))
+        .route("/set_model_disabled", post(set_model_disabled))
         .route("/get_default_model", post(get_default_model))
         .route("/set_default_model", post(set_default_model))
         .route("/update_session_model_id", post(update_session_model_id))

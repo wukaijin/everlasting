@@ -23,11 +23,23 @@ export interface ModelWithProvider {
    *  Explicitly configured — no model-name heuristics (design §1). */
   supportsImages: boolean;
   contextWindow: number;
+  /** 2026-09-07 (provider-model-disable): 模型级禁用开关。可选 —— 旧
+   *  daemon 不回传该字段,undefined 按 false(启用)处理。有效禁用 =
+   *  `disabled || providerDisabled`;禁用只过滤「选用列表」,不影响
+   *  已在用的会话 / 全局默认的分发。 */
+  disabled?: boolean;
+  /** 父 provider 的禁用态(后端 JOIN 反范式)。可选,语义同上。 */
+  providerDisabled?: boolean;
   createdAt: string;
   updatedAt: string;
   // Denormalized from the parent provider row (via JOIN).
   providerDisplayName: string;
   providerProtocol: string;
+}
+
+/** 有效禁用判定(旧 daemon 无字段 → undefined 按 false 容错)。 */
+export function isModelEffectivelyDisabled(m: ModelWithProvider): boolean {
+  return !!(m.disabled || m.providerDisabled);
 }
 
 export const useModelsStore = defineStore("models", () => {
@@ -58,6 +70,41 @@ export const useModelsStore = defineStore("models", () => {
       }
     >();
     for (const m of models.value) {
+      if (!groups.has(m.providerId)) {
+        groups.set(m.providerId, {
+          provider: {
+            id: m.providerId,
+            displayName: m.providerDisplayName,
+            protocol: m.providerProtocol,
+          },
+          models: [],
+        });
+      }
+      groups.get(m.providerId)!.models.push(m);
+    }
+    return Array.from(groups.values());
+  });
+
+  /** 2026-09-07 (provider-model-disable): 有效启用的模型(过滤
+   *  `disabled || providerDisabled`)。供各「选用」入口消费 —— 模型
+   *  下拉 / 群聊阵容 / 定时任务 / 默认模型单选;Settings 的 Models
+   *  列表仍用全量 `models`(禁用行要可见、可管理)。当前已选中但被
+   *  禁用的模型由各消费方自行兜底显示(展示查全量,选项查本表)。 */
+  const enabledModels = computed<ModelWithProvider[]>(() =>
+    models.value.filter((m) => !isModelEffectivelyDisabled(m)),
+  );
+
+  /** `enabledModels` 的按 provider 分组形态(镜像
+   *  `modelsGroupedByProvider` 的分组逻辑,仅供选用列表)。 */
+  const enabledModelsGroupedByProvider = computed(() => {
+    const groups = new Map<
+      string,
+      {
+        provider: { id: string; displayName: string; protocol: string };
+        models: ModelWithProvider[];
+      }
+    >();
+    for (const m of enabledModels.value) {
       if (!groups.has(m.providerId)) {
         groups.set(m.providerId, {
           provider: {
@@ -148,6 +195,16 @@ export const useModelsStore = defineStore("models", () => {
     defaultModelId.value = modelId;
   }
 
+  /** 2026-09-07 (provider-model-disable): 翻转模型禁用态并整表刷新
+   *  (providerDisabled 反范式随 list_models 回来;选用列表走 computed
+   *  自动联动)。参数名用 `id` —— 后端 Tauri 命令参数与 daemon 路由
+   *  字段都叫 id(delete_model/delete_provider 同款约定);发 modelId
+   *  会在 HTTP 路径变成 model_id 导致 422 missing field `id`。 */
+  async function setDisabled(id: string, disabled: boolean) {
+    await transport.invoke("set_model_disabled", { id, disabled });
+    await load();
+  }
+
   /** Look up a model by id. Returns `undefined` if not found. */
   function byId(id: string): ModelWithProvider | undefined {
     return models.value.find((m) => m.id === id);
@@ -164,11 +221,14 @@ export const useModelsStore = defineStore("models", () => {
     defaultModel,
     loaded,
     modelsGroupedByProvider,
+    enabledModels,
+    enabledModelsGroupedByProvider,
     load,
     add,
     update,
     remove,
     setDefault,
+    setDisabled,
     byId,
     modelsByProvider,
   };

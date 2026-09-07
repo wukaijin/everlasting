@@ -199,6 +199,16 @@ async function runTest(modelId: string) {
 function openDeleteConfirm(m: ModelWithProvider) {
   deleteConfirmId.value = m.id;
 }
+
+/** 2026-09-07 (provider-model-disable): 翻转单模型禁用态(store 内部
+ *  整表刷新,providerDisabled 反范式随之联动)。 */
+async function toggleDisabled(m: ModelWithProvider) {
+  try {
+    await modelsStore.setDisabled(m.id, !m.disabled);
+  } catch (e) {
+    console.error("toggle model disabled failed:", e);
+  }
+}
 </script>
 
 <template>
@@ -239,9 +249,11 @@ function openDeleteConfirm(m: ModelWithProvider) {
                     :model="m"
                     :test="tests[m.id]"
                     :is-streaming="false"
+                    :is-default="m.id === modelsStore.defaultModelId"
                     @test="runTest(m.id)"
                     @edit="startEdit(m)"
                     @delete="openDeleteConfirm(m)"
+                    @toggle-disabled="toggleDisabled(m)"
                 />
             </div>
 

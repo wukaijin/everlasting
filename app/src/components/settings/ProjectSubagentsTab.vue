@@ -56,14 +56,23 @@ const projectRows = computed<SubagentWithModelRow[]>(() => {
     .sort((a, b) => a.name.localeCompare(b.name));
 });
 
-/** 扁平模型选项(provider 前缀排序),镜像 SubagentsTab。 */
+/** 扁平模型选项(provider 前缀排序),镜像 SubagentsTab。
+ *  2026-09-07 (provider-model-disable): 选项 = 启用模型 ∪ 各行当前
+ *  已解析的模型 id(禁用模型不可改选,但已指向它的行仍需显示)。 */
 const flatModelOptions = computed<ModelWithProvider[]>(() => {
   const groups = models.modelsGroupedByProvider;
   if (!Array.isArray(groups)) return [];
+  const pinned = new Set(
+    projectRows.value
+      .map((r) => r.resolvedModelId)
+      .filter((id): id is string => id != null),
+  );
   const out: ModelWithProvider[] = [];
   for (const g of groups) {
     for (const m of g.models) {
-      out.push(m);
+      if (pinned.has(m.id) || !(m.disabled || m.providerDisabled)) {
+        out.push(m);
+      }
     }
   }
   return out.slice().sort((a, b) => {

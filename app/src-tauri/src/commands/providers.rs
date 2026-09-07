@@ -122,6 +122,30 @@ pub async fn delete_provider(
     delete_provider_inner(&state, id).await
 }
 
+// 2026-09-07 (provider-model-disable): 禁用/启用开关。语义是「选用层
+// 开关」—— 只影响前端各模型选择列表(下拉/群聊阵容/定时任务/默认
+// 模型),分发 catalog 不滤:已引用被禁模型的会话与全局默认继续照常
+// 分发(删除才是破坏性操作,禁用是"暂藏不删"的软态)。因此这里
+// **不** rebuild_catalog —— catalog 里的模型集合与禁用态无关。
+pub async fn set_provider_disabled_inner(
+    state: &Arc<AppState>,
+    id: String,
+    disabled: bool,
+) -> Result<Option<db::ProviderRow>, AppCommandError> {
+    db::set_provider_disabled(&state.db, &id, disabled)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_provider_disabled failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn set_provider_disabled(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    disabled: bool,
+) -> Result<Option<db::ProviderRow>, AppCommandError> {
+    set_provider_disabled_inner(&state, id, disabled).await
+}
+
 pub async fn list_models_inner(
     state: &Arc<AppState>,
 ) -> Result<Vec<db::ModelWithProvider>, AppCommandError> {
@@ -280,6 +304,28 @@ pub async fn delete_model(
     id: String,
 ) -> Result<bool, AppCommandError> {
     delete_model_inner(&state, id).await
+}
+
+/// 2026-09-07 (provider-model-disable): 模型级禁用/启用。同
+/// `set_provider_disabled_inner` 的语义注记 —— 选用层开关,不
+/// rebuild_catalog。
+pub async fn set_model_disabled_inner(
+    state: &Arc<AppState>,
+    id: String,
+    disabled: bool,
+) -> Result<Option<db::ModelRow>, AppCommandError> {
+    db::set_model_disabled(&state.db, &id, disabled)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_model_disabled failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn set_model_disabled(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    disabled: bool,
+) -> Result<Option<db::ModelRow>, AppCommandError> {
+    set_model_disabled_inner(&state, id, disabled).await
 }
 
 pub async fn get_default_model_inner(

@@ -56,6 +56,7 @@ import {
   Minus,
   Palette,
   Plus,
+  Power,
   RefreshCw,
   Repeat,
   Search,
@@ -190,6 +191,9 @@ const map = {
   // `activity` 是面板浮球/标题的「运行状态」图标。
   "square": Square,
   "activity": Activity,
+  // 2026-09-07 (provider-model-disable): Settings 里 provider/model
+  // 行的禁用/启用开关(电源语义,单图标双态由按钮 title 区分)。
+  "power": Power,
 } as const;
 
 const Component = computed(() => {

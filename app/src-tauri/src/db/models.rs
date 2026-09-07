@@ -15,6 +15,29 @@ use uuid::Uuid;
 
 use super::types::{ModelRow, ModelWithProvider};
 
+/// 把一行 `models` 查询结果映射成 [`ModelRow`](`disabled` 布尔走
+/// INTEGER 0/1 转换;2026-09-07 provider-model-disable)。list / get
+/// 两条读路径共用,避免列清单漂移。
+fn map_model_row(r: &sqlx::sqlite::SqliteRow) -> Result<ModelRow, sqlx::Error> {
+    let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
+    let supports_images_i: i32 = r.try_get("supports_images")?;
+    let disabled_i: i32 = r.try_get("disabled")?;
+    Ok(ModelRow {
+        id: r.try_get("id")?,
+        provider_id: r.try_get("provider_id")?,
+        model_name: r.try_get("model_name")?,
+        display_name: r.try_get("display_name")?,
+        max_tokens: r.try_get("max_tokens")?,
+        thinking_effort: r.try_get("thinking_effort")?,
+        supports_thinking: supports_thinking_i != 0,
+        supports_images: supports_images_i != 0,
+        context_window: r.try_get("context_window")?,
+        disabled: disabled_i != 0,
+        created_at: r.try_get("created_at")?,
+        updated_at: r.try_get("updated_at")?,
+    })
+}
+
 /// Insert a new model. Returns the inserted row.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_model(
@@ -61,6 +84,8 @@ pub async fn create_model(
         supports_thinking,
         supports_images,
         context_window,
+        // 新建行恒为启用;禁用只能经 set_model_disabled 翻转。
+        disabled: false,
         created_at: now.clone(),
         updated_at: now,
     })
@@ -74,9 +99,11 @@ pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sq
         r#"
  SELECT m.id, m.provider_id, m.model_name, m.display_name,
  m.max_tokens, m.thinking_effort, m.supports_thinking,
- m.supports_images, m.context_window, m.created_at, m.updated_at,
+ m.supports_images, m.context_window, m.disabled,
+ m.created_at, m.updated_at,
  p.display_name AS provider_display_name,
- p.protocol AS provider_protocol
+ p.protocol AS provider_protocol,
+ p.disabled AS provider_disabled
  FROM models m
  JOIN providers p ON p.id = m.provider_id
  ORDER BY m.updated_at DESC, m.display_name ASC
@@ -84,26 +111,14 @@ pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sq
     )
     .fetch_all(pool)
     .await?;
-    rows.into_iter()
+    rows.iter()
         .map(|r| {
-            let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
-            let supports_images_i: i32 = r.try_get("supports_images")?;
+            let provider_disabled_i: i32 = r.try_get("provider_disabled")?;
             Ok(ModelWithProvider {
-                model: ModelRow {
-                    id: r.try_get("id")?,
-                    provider_id: r.try_get("provider_id")?,
-                    model_name: r.try_get("model_name")?,
-                    display_name: r.try_get("display_name")?,
-                    max_tokens: r.try_get("max_tokens")?,
-                    thinking_effort: r.try_get("thinking_effort")?,
-                    supports_thinking: supports_thinking_i != 0,
-                    supports_images: supports_images_i != 0,
-                    context_window: r.try_get("context_window")?,
-                    created_at: r.try_get("created_at")?,
-                    updated_at: r.try_get("updated_at")?,
-                },
+                model: map_model_row(r)?,
                 provider_display_name: r.try_get("provider_display_name")?,
                 provider_protocol: r.try_get("provider_protocol")?,
+                provider_disabled: provider_disabled_i != 0,
             })
         })
         .collect()
@@ -117,7 +132,7 @@ pub async fn get_model(pool: &SqlitePool, id: &str) -> Result<Option<ModelRow>, 
         r#"
  SELECT id, provider_id, model_name, display_name,
  max_tokens, thinking_effort, supports_thinking, supports_images,
- context_window, created_at, updated_at
+ context_window, disabled, created_at, updated_at
  FROM models
  WHERE id = ?
  "#,
@@ -127,23 +142,7 @@ pub async fn get_model(pool: &SqlitePool, id: &str) -> Result<Option<ModelRow>, 
     .await?;
     match row {
         None => Ok(None),
-        Some(r) => {
-            let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
-            let supports_images_i: i32 = r.try_get("supports_images")?;
-            Ok(Some(ModelRow {
-                id: r.try_get("id")?,
-                provider_id: r.try_get("provider_id")?,
-                model_name: r.try_get("model_name")?,
-                display_name: r.try_get("display_name")?,
-                max_tokens: r.try_get("max_tokens")?,
-                thinking_effort: r.try_get("thinking_effort")?,
-                supports_thinking: supports_thinking_i != 0,
-                supports_images: supports_images_i != 0,
-                context_window: r.try_get("context_window")?,
-                created_at: r.try_get("created_at")?,
-                updated_at: r.try_get("updated_at")?,
-            }))
-        }
+        Some(r) => Ok(Some(map_model_row(&r)?)),
     }
 }
 
@@ -186,19 +185,31 @@ pub async fn update_model(
     if res.rows_affected() == 0 {
         return Ok(None);
     }
-    Ok(Some(ModelRow {
-        id: id.to_string(),
-        provider_id: provider_id.to_string(),
-        model_name: model_name.to_string(),
-        display_name: display_name.to_string(),
-        max_tokens,
-        thinking_effort: thinking_effort.map(str::to_string),
-        supports_thinking,
-        supports_images,
-        context_window,
-        created_at: String::new(),
-        updated_at: now,
-    }))
+    // 回读整行:update 不触碰 disabled 列(禁用态由
+    // set_model_disabled 单独管理),回读才能带回真实值
+    // (镜像 update_provider 的 re-read 模式)。
+    get_model(pool, id).await
+}
+
+/// 翻转模型的禁用态 (2026-09-07 provider-model-disable).
+/// 返回 `None` = 行不存在;成功时回读整行。不触发 catalog
+/// 重建 —— 禁用是选用层开关,分发 catalog 照常收录该模型。
+pub async fn set_model_disabled(
+    pool: &SqlitePool,
+    id: &str,
+    disabled: bool,
+) -> Result<Option<ModelRow>, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query("UPDATE models SET disabled = ?, updated_at = ? WHERE id = ?")
+        .bind(disabled as i32)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Ok(None);
+    }
+    get_model(pool, id).await
 }
 
 /// Delete a model by `id`. Returns whether a row was actually

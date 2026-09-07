@@ -28,6 +28,12 @@ const props = defineProps<{
      *  this row but kept on the props shape for future
      *  "disable-actions-during-stream" parity with WorktreeChip). */
     isStreaming: boolean;
+    /** 2026-09-07 (provider-model-disable follow-up): 该行是否为
+     *  当前全局默认模型(modelsStore.defaultModelId)。默认模型的
+     *  禁用开关被禁用 —— 禁用是选用层开关,而默认模型是新会话的
+     *  静默回退,禁用它会造成「开关已禁但新会话仍在用」的矛盾;
+     *  要停用默认模型,先去 Default 页换默认。 */
+    isDefault: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -40,7 +46,27 @@ const emit = defineEmits<{
     /** User clicked the Delete (trash) button — open the parent's
      *  delete-confirm overlay. */
     delete: [];
+    /** 2026-09-07 (provider-model-disable): user clicked the power
+     *  button — flip THIS model's disabled flag via the parent
+     *  (`modelsStore.setDisabled`). Provider-level disabling lives
+     *  on ProvidersTab; here we only surface its effect. */
+    "toggle-disabled": [];
 }>();
+
+/** 2026-09-07 (provider-model-disable): 有效禁用 = 模型级 OR 父
+ *  provider 级。徽标文案区分来源,开关只翻模型级(provider 级去
+ *  ProvidersTab 关)。 */
+const modelDisabled = computed<boolean>(() => !!props.model.disabled);
+const providerDisabledOnly = computed<boolean>(
+    () => !props.model.disabled && !!props.model.providerDisabled,
+);
+
+/** 2026-09-07 follow-up:默认模型的「禁用」方向被拦截;若默认模型
+ *  已处于禁用态(存量数据/竞态),「启用」方向仍放开 —— 那是恢复
+ *  正常态,不该被误伤。 */
+const disableToggleLocked = computed<boolean>(
+    () => props.isDefault && !modelDisabled.value,
+);
 
 /** PR5: per-row Test result rendering helpers. Extracted from
  *  the template so the runtime narrowing happens in TypeScript
@@ -71,10 +97,27 @@ const testTitle = computed<string>(() =>
 </script>
 
 <template>
-    <div class="model-row">
+    <div class="model-row" :class="{ 'model-row--disabled': modelDisabled || providerDisabledOnly }">
         <div class="model-row__info">
             <span class="model-row__name">{{ model.displayName }}</span>
             <span class="model-row__model-id">{{ model.modelName }}</span>
+            <!-- 2026-09-07 (provider-model-disable): 禁用徽标。模型级
+                 显式「已禁用」;provider 级连坐时显式来源(该模型的
+                 自身开关仍可能在启用位)。 -->
+            <span
+                v-if="modelDisabled"
+                class="model-row__tag model-row__tag--disabled"
+                title="已禁用:不出现在模型选择列表;已在用的会话不受影响"
+            >
+                已禁用
+            </span>
+            <span
+                v-else-if="providerDisabledOnly"
+                class="model-row__tag model-row__tag--disabled"
+                title="所属 provider 已禁用(在 Providers 页启用后恢复可选)"
+            >
+                provider 已禁用
+            </span>
             <span v-if="model.supportsThinking" class="model-row__tag">
                 thinking
             </span>
@@ -112,6 +155,24 @@ const testTitle = computed<string>(() =>
             </span>
         </div>
         <div class="model-row__actions">
+            <button
+                type="button"
+                class="model-row__btn model-row__btn--ghost btn btn--icon btn--ghost"
+                :class="{ 'model-row__btn--off': modelDisabled }"
+                :disabled="isRunning || disableToggleLocked"
+                :title="disableToggleLocked
+                    ? '默认模型不能禁用——请先在 Default 页更换默认模型'
+                    : (modelDisabled
+                        ? '启用该模型(重新进入选择列表)'
+                        : '禁用该模型(从选择列表隐藏,不影响已在用的会话)')"
+                :aria-label="disableToggleLocked
+                    ? `默认模型 ${model.displayName} 不能禁用`
+                    : (modelDisabled ? `启用模型 ${model.displayName}` : `禁用模型 ${model.displayName}`)"
+                :data-testid="`model-toggle-disabled-${model.id}`"
+                @click="emit('toggle-disabled')"
+            >
+                <Icon name="power" :size="12" />
+            </button>
             <button
                 type="button"
                 class="model-row__btn model-row__btn--ghost btn btn--icon btn--ghost"
@@ -186,6 +247,24 @@ const testTitle = computed<string>(() =>
 
 .model-row__tag--muted {
     background: var(--color-bg-border);
+    color: var(--color-text-muted);
+}
+
+/* 2026-09-07 (provider-model-disable): 禁用徽标 + 禁用行降透明。
+   行保持可读可操作(编辑 / 启用 / 测试),只是一眼可辨"不在选用
+   列表里"。 */
+.model-row__tag--disabled {
+    background: var(--color-bg-border);
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+}
+
+.model-row--disabled .model-row__name,
+.model-row--disabled .model-row__model-id {
+    opacity: 0.55;
+}
+
+.model-row__btn--off {
     color: var(--color-text-muted);
 }
 

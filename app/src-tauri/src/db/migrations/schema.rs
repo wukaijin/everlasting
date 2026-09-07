@@ -221,6 +221,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  display_name TEXT NOT NULL,
  base_url TEXT NOT NULL,
  api_key TEXT NOT NULL DEFAULT '',
+ -- 禁用(2026-09-07 provider-model-disable):UI 选用层开关。
+ -- 1 = 该 provider(及其全部模型)从模型选择列表隐藏;分发面
+ -- 不受影响 —— catalog 照常收录,已引用它的会话继续可用。
+ disabled INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL
  )
@@ -240,6 +244,9 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  supports_thinking INTEGER NOT NULL DEFAULT 0,
  supports_images INTEGER NOT NULL DEFAULT 0,
  context_window INTEGER NOT NULL,
+ -- 禁用(2026-09-07 provider-model-disable):单模型级开关,
+ -- 语义同 providers.disabled;有效禁用 = 本列 OR 父 provider.disabled。
+ disabled INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL
  )
@@ -1139,6 +1146,14 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // in the CREATE TABLE above); existing rows default to 0 (text
     // placeholder degradation = pre-B1 behavior).
     add_models_column_if_missing(pool, "supports_images", "INTEGER NOT NULL DEFAULT 0").await?;
+    // 2026-09-07 (provider-model-disable): `providers.disabled` /
+    // `models.disabled` — UI 选用层开关(probe+ALTER 模式,存量行
+    // DEFAULT 0 = 启用,行为不变)。分发明细(为何 catalog 不滤):
+    // 禁用只影响「新选用」的入口(模型下拉 / 群聊阵容 / 定时任务 /
+    // 默认模型单选),已在用该模型的 session / 全局默认继续可分发 ——
+    // 删除才是破坏性操作(disabled 是"暂藏不删"的软态)。
+    add_provider_column_if_missing(pool, "disabled", "INTEGER NOT NULL DEFAULT 0").await?;
+    add_models_column_if_missing(pool, "disabled", "INTEGER NOT NULL DEFAULT 0").await?;
 
     // --- D2 (cross-session search, 2026-08-17): `messages_fts` FTS5
     // virtual table for full-text search over `messages.text`.

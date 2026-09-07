@@ -15,8 +15,12 @@ use sqlx::{Row, SqlitePool};
 use super::{
     config::{get_config_value, seed_default_providers_and_models, set_config_value},
     migrations::run_migrations,
-    models::{create_model, delete_model, list_models, update_model},
-    providers::{create_provider, delete_provider, list_providers, update_provider},
+    models::{
+        create_model, delete_model, get_model, list_models, set_model_disabled, update_model,
+    },
+    providers::{
+        create_provider, delete_provider, list_providers, set_provider_disabled, update_provider,
+    },
 };
 
 async fn make_pool() -> SqlitePool {
@@ -567,4 +571,161 @@ async fn supports_images_roundtrips_and_legacy_defaults_false() {
         .try_get(0)
         .unwrap();
     assert_eq!(raw_val, 0, "legacy row defaults to supports_images = 0");
+}
+
+// ---------------------------------------------------------------------------
+// 2026-09-07 (provider-model-disable): disabled 列 — 选用层开关。
+// 语义边界:disabled 只影响前端选择列表的分发入口;catalog(分发
+// 集合)不滤,已在用的会话/全局默认不受影响 —— 测试锁定列的
+// round-trip + 反范式 join(provider_disabled)+ 存量行默认启用。
+// ---------------------------------------------------------------------------
+
+/// `disabled` 列幂等迁移:二次 run_migrations 不报错、列存在。
+#[tokio::test]
+async fn providers_models_disabled_migration_is_idempotent() {
+    let pool = make_pool().await;
+    run_migrations(&pool)
+        .await
+        .expect("migration re-run is idempotent on disabled");
+    for (table, col) in [("providers", "disabled"), ("models", "disabled")] {
+        let exists: i64 = sqlx::query(&format!(
+            "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{col}'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+        assert_eq!(exists, 1, "{table}.{col} column present");
+    }
+}
+
+/// 禁用态 round-trip:默认启用 → model 级禁用 → provider 级禁用
+/// (有效禁用 = model.disabled OR provider_disabled),list_models /
+/// list_providers / get_model 全部携带真实态。
+#[tokio::test]
+async fn disabled_roundtrips_model_and_provider_levels() {
+    let pool = make_pool().await;
+    let p = create_provider(
+        &pool,
+        "anthropic",
+        "Anthropic官方 (disabled test)",
+        "https://api.anthropic.com",
+        "",
+    )
+    .await
+    .unwrap();
+    assert!(!p.disabled, "new provider defaults to enabled");
+
+    let m = create_model(
+        &pool,
+        &p.id,
+        "disabled-model",
+        "Disabled Model",
+        None,
+        None,
+        false,
+        false,
+        100_000,
+    )
+    .await
+    .unwrap();
+    assert!(!m.disabled, "new model defaults to enabled");
+
+    // Model-level disable round-trips through get / list.
+    let flipped = set_model_disabled(&pool, &m.id, true)
+        .await
+        .unwrap()
+        .expect("row updated");
+    assert!(flipped.disabled);
+    let list = list_models(&pool).await.unwrap();
+    let mwp = list.iter().find(|x| x.model.id == m.id).unwrap();
+    assert!(mwp.model.disabled, "model-level disabled via list_models");
+    assert!(!mwp.provider_disabled, "provider still enabled");
+
+    // Provider-level disable surfaces via the denormalized join column.
+    let pflipped = set_provider_disabled(&pool, &p.id, true)
+        .await
+        .unwrap()
+        .expect("row updated");
+    assert!(pflipped.disabled);
+    let list = list_models(&pool).await.unwrap();
+    let mwp = list.iter().find(|x| x.model.id == m.id).unwrap();
+    assert!(
+        mwp.provider_disabled,
+        "provider-level disable denormalizes onto its models"
+    );
+    assert!(mwp.model.disabled, "model-level flag preserved alongside");
+
+    // update_model (full-row edit) must NOT clobber the disabled state.
+    let edited = update_model(
+        &pool,
+        &m.id,
+        &p.id,
+        "disabled-model",
+        "Disabled Model (renamed)",
+        None,
+        None,
+        false,
+        false,
+        100_000,
+    )
+    .await
+    .unwrap()
+    .expect("row updated");
+    assert!(edited.disabled, "update_model preserves disabled = true");
+
+    // Re-enable both levels.
+    set_model_disabled(&pool, &m.id, false)
+        .await
+        .unwrap()
+        .unwrap();
+    set_provider_disabled(&pool, &p.id, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let list = list_models(&pool).await.unwrap();
+    let mwp = list.iter().find(|x| x.model.id == m.id).unwrap();
+    assert!(!mwp.model.disabled && !mwp.provider_disabled, "re-enabled");
+}
+
+/// 禁用开关点不存在行 → None(镜像 update_* 的 missing-id 契约)。
+#[tokio::test]
+async fn set_disabled_on_missing_id_returns_none() {
+    let pool = make_pool().await;
+    let ghost = "00000000-0000-0000-0000-000000000000";
+    assert!(set_provider_disabled(&pool, ghost, true)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(set_model_disabled(&pool, ghost, true)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// 省略 disabled 列的裸 INSERT(存量行形状)默认 0 = 启用。
+#[tokio::test]
+async fn legacy_disabled_column_defaults_false() {
+    let pool = make_pool().await;
+    let p = create_provider(
+        &pool,
+        "anthropic",
+        "Anthropic官方 (legacy disabled)",
+        "https://api.anthropic.com",
+        "",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO models (id, provider_id, model_name, display_name, \
+ supports_thinking, context_window, created_at, updated_at) \
+ VALUES ('raw-dis-1', ?, 'raw-model', 'Raw', 0, 100000, '2026-09-07T00:00:00Z', '2026-09-07T00:00:00Z')",
+    )
+    .bind(&p.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let m = get_model(&pool, "raw-dis-1").await.unwrap().unwrap();
+    assert!(!m.disabled, "legacy row defaults to disabled = false");
 }

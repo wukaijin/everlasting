@@ -149,6 +149,49 @@ async function confirmDelete() {
   }
 }
 
+/** 2026-09-07 (provider-model-disable): 翻转禁用态。成功后额外刷新
+ *  modelsStore —— providerDisabled 是 list_models 的 JOIN 反范式,不随
+ *  providers 表联动。 */
+async function toggleDisabled(p: ProviderRow) {
+  try {
+    await providersStore.setDisabled(p.id, !p.disabled);
+    await modelsStore.load();
+  } catch (e) {
+    console.error("toggle disabled failed:", e);
+  }
+}
+
+/** 2026-09-07 follow-up(默认模型拦截,与 ModelRow 同款语义):
+ *  provider 拥有当前全局默认模型时锁死「禁用」方向 —— provider 级
+ *  禁用会连坐其全部模型,默认模型是新会话的静默回退,连坐它会造出
+ *  「开关已禁但新会话仍在用」的矛盾。已处于禁用态(存量/竞态)时
+ *  「启用」方向仍放开,恢复正常态不被误伤。 */
+function providerOwnsDefault(p: ProviderRow): boolean {
+  const id = modelsStore.defaultModelId;
+  if (!id) return false;
+  return modelsStore.byId(id)?.providerId === p.id;
+}
+
+function toggleLocked(p: ProviderRow): boolean {
+  return !p.disabled && providerOwnsDefault(p);
+}
+
+function toggleTitle(p: ProviderRow): string {
+  if (toggleLocked(p)) {
+    return "该 provider 含当前默认模型,不能禁用——请先在 Default 页更换默认模型";
+  }
+  return p.disabled
+    ? "启用该 provider(其模型重新进入选择列表)"
+    : "禁用该 provider(其模型从选择列表隐藏,不影响已在用的会话)";
+}
+
+function toggleAriaLabel(p: ProviderRow): string {
+  if (toggleLocked(p)) {
+    return `provider ${p.displayName} 含当前默认模型,不能禁用`;
+  }
+  return p.disabled ? `启用 provider ${p.displayName}` : `禁用 provider ${p.displayName}`;
+}
+
 /** RULE-D-001: 前端只知 key 是否设置 (hasKey), 不持有明文， 故无法 mask
  *  明文 — 显示加密状态. */
 function keyStatusLabel(hasKey: boolean): string {
@@ -185,11 +228,22 @@ function protocolBadgeClass(protocol: string): string {
         v-for="p in providersStore.providers"
         :key="p.id"
         class="providers-tab__row"
+        :class="{ 'providers-tab__row--disabled': p.disabled }"
       >
         <div class="providers-tab__row-info">
           <span class="providers-tab__name">{{ p.displayName }}</span>
           <span :class="['providers-tab__badge', protocolBadgeClass(p.protocol)]">
             {{ p.protocol }}
+          </span>
+          <!-- 2026-09-07 (provider-model-disable): 禁用徽标 —— 禁用是
+               选用层开关(该 provider 及其全部模型从选择列表隐藏),
+               分发不受影响,徽标用 muted 色相而非错误红。 -->
+          <span
+            v-if="p.disabled"
+            class="providers-tab__badge providers-tab__badge--disabled"
+            title="已禁用:该 provider 及其模型不再出现在模型选择列表;已在用的会话不受影响"
+          >
+            已禁用
           </span>
           <span class="providers-tab__url">{{ p.baseUrl }}</span>
           <span
@@ -210,6 +264,18 @@ function protocolBadgeClass(protocol: string): string {
           </span>
         </div>
         <div class="providers-tab__row-actions">
+          <button
+            type="button"
+            class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
+            :class="{ 'providers-tab__btn--off': p.disabled }"
+            :disabled="toggleLocked(p)"
+            :title="toggleTitle(p)"
+            :aria-label="toggleAriaLabel(p)"
+            :data-testid="`providers-toggle-disabled-${p.id}`"
+            @click="toggleDisabled(p)"
+          >
+            <Icon name="power" :size="12" />
+          </button>
           <button
             type="button"
             class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
@@ -425,6 +491,25 @@ function protocolBadgeClass(protocol: string): string {
 .providers-tab__badge--openai {
   background: #1a3a2a;
   color: #10b981;
+}
+
+/* 2026-09-07 (provider-model-disable): 禁用徽标(muted 色相,区别于
+   错误态)与禁用行的降透明 —— 行仍可读、可操作(编辑/启用),只是
+   一眼可辨"不在选用列表里"。 */
+.providers-tab__badge--disabled {
+  background: var(--color-bg-border);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.providers-tab__row--disabled .providers-tab__name,
+.providers-tab__row--disabled .providers-tab__url {
+  opacity: 0.55;
+}
+
+/* 电源开关的"关"态:图标降为 muted(启用态走默认 ghost 色)。 */
+.providers-tab__btn--off {
+  color: var(--color-text-muted);
 }
 
 .providers-tab__url {

@@ -87,6 +87,10 @@ pub struct ProviderRow {
     /// 是否设置了 api_key (基于 `api_key_enc` 非空, 与能否解密无关).
     /// 机器变化导致解密失败时 `api_key` 为空但 `has_key = true`.
     pub has_key: bool,
+    /// 禁用 (2026-09-07 provider-model-disable): UI 选用层开关.
+    /// `true` = 该 provider 及其全部模型从各模型选择列表隐藏;
+    /// 分发 catalog 不滤 —— 已引用它的会话 / 全局默认不受影响.
+    pub disabled: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -112,6 +116,10 @@ pub struct ModelRow {
     /// channel, so the default 0 never breaks existing rows.
     pub supports_images: bool,
     pub context_window: u32,
+    /// 禁用 (2026-09-07 provider-model-disable): 单模型级开关.
+    /// 有效禁用 = 本字段 OR 父 provider 的 `disabled`(wire 侧由
+    /// [`ModelWithProvider::provider_disabled`] 反范式携带).
+    pub disabled: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -128,6 +136,11 @@ pub struct ModelWithProvider {
     pub model: ModelRow,
     pub provider_display_name: String,
     pub provider_protocol: String,
+    /// 2026-09-07 (provider-model-disable): 父 provider 的 `disabled`
+    /// 反范式(JOIN p.disabled)。前端一次 list_models 即可算出有效禁用
+    /// 态(model.disabled || provider_disabled),不必依赖 providers 列表
+    /// 已加载 —— 远端脚本 / 任意消费方都成立。
+    pub provider_disabled: bool,
 }
 
 // ---------------------------------------------------------------------------
