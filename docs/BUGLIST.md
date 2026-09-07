@@ -115,7 +115,7 @@
 | CH7-1 | P2 Edit 模式写文件不询问 | 设计 | 文档化分级策略:`permission.rs:275-294` 项目内写文件静默放行("the user trusts the agent to work in the repo");shell 三档(`shell_trust.rs`);kill list(`dangerous.rs`)连 Yolo 都拦。是否收紧属产品主张 |
 | CH7-2 | P3 拒绝后显示「× error」 | 设计 | 拒绝统一走 error 通道,通用工具卡只有 running/done/error 三态;"user denied" 是后端合成 fallback(`ask.rs:557-565`) |
 | CH8-1 | P2 子代理无提问工具 | 设计 | `tools_filter.rs:42-52` 注释明确:worker 阻塞等用户输入会挂死任务,由父代理转达——报告推测的机制正是设计 |
-| CH10-1 | P3 设置中英混杂 | 设计 | `registry.ts:25` 注释「沿用原 tab 文案保持肌肉记忆」+ 双语 keywords 补偿搜索 |
+| CH10-1 | P3 设置中英混杂 | 设计 | `registry.ts:26` 注释「沿用原 tab 文案保持肌肉记忆」+ 双语 keywords 补偿搜索 |
 | CH11-2 | P3 停用任务仍显示下次时间 | 设计 | design §2 明示灰显展示(后端 `scheduled_tasks.rs:270-279` 注释 + 前端 opacity 0.55) |
 | CH13-观察 | — turn 跳号/耗时— | 设计 | 跳号=压缩摘要占号(`drive.rs:514-520`)+ softcap 询问占号(`chat_loop.rs:668-674`);耗时"—"=无 LLM 调用轮次的预期降级(`TurnCard.vue:99-124`) |
 | CH14-2 | P3 超宽屏消息列不居中 | 设计 | IM 式版式:列表全宽 + 气泡 `min(75%,920px)` 限宽 + user 右/assistant 左(`MessageItem.vue:1163-1170`,08-29 刚调优行长) |

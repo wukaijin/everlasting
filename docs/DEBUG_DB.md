@@ -48,26 +48,27 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 
 ---
 
-## 2. Schema 索引(14 张表 — 13 张业务表 + 1 张 FTS5 虚拟表)
+## 2. Schema 索引(14 张业务表 + 2 张 FTS5 虚拟表)
 
 权威定义在 [`app/src-tauri/src/db/migrations/schema.rs`](../app/src-tauri/src/db/migrations/schema.rs)(`migrations.rs` 是转发 hub,`init_pool` 在 `pool.rs`、schema 序列在 `schema.rs`、一次性数据迁移在 `schema_helpers.rs`);每张表的 CRUD 函数按表分文件组织在 `app/src-tauri/src/db/{table}.rs`。
 
 | # | 表 | 文件 | 关键列 |
 |---|----|------|--------|
-| 1 | `projects` | `db/migrations/schema.rs` | `id` (TEXT PK) / `name` / `path` / `git_branch` / `hidden` / `created_at` / `updated_at` |
+| 1 | `projects` | `db/migrations/schema.rs` | `id` (TEXT PK) / `name` / `path` / `git_branch` / `hidden` / **`sandbox_policy`**(09-01 P3c,`off/readwrite/readonly` 默认 `readwrite`,见 `schema.rs:165-170`) / `created_at` / `updated_at` |
 | 2 | `sessions` | `db/migrations/schema.rs` | `id` / `project_id` / `title` / `model_id` / `mode` (edit/plan/yolo) / `session_type` (chat/group_chat,2026-07-29 群聊) / `cwd` / `color` / token 累计 4 列 |
 | 3 | `messages` | `db/migrations/schema.rs` | `id` (INTEGER PK AUTOINCREMENT) / `session_id` / `seq` / `role` (user/assistant) / `content` (JSON 序列化的 ContentBlock[]) / `text` (纯文本冗余列,messages_fts 的内容源) / `has_tool_calls` / `has_tool_results` / `metadata` (JSON,可空) / `ttfb_ms` / `gen_ms` / `total_ms` / `thinking_ms` / `speaker` (群聊参与者标识,2026-07-29) / **`status`**(08-24 崩溃恢复:NULL=终态 / `in_progress`=流式检查点行(daemon 流式中周期 upsert,重启残留即崩溃现场)/ `interrupted`=启动恢复 pass 标记,内容尾部带 `[异常中断已恢复]` marker 块,见 `db/sessions/messages.rs::recover_interrupted_messages`)。错误状态不在顶层列,在 content JSON 的 tool_result 块 `is_error` 字段(见 §3.4) |
-| 4 | `providers` | `db/migrations/schema.rs` | `id` / `kind` (anthropic/openai) / `base_url` / `has_key` (BOOL,因 RULE-D-001 api_key 加密) |
-| 5 | `models` | `db/migrations/schema.rs` | `id` / `provider_id` / `model_name` / `display_name` / `context_window` / **`thinking_effort`**(07-10 multi-model PR3,缺省 `high`,Anthropic → `thinking.adaptive.effort` / OpenAI → 顶层 `reasoning_effort`)/ **`supports_images`**(B1 08-16, INTEGER NOT NULL DEFAULT 0,见 `db/migrations/schema.rs:1012` `add_models_column_if_missing`) |
+| 4 | `providers` | `db/migrations/schema.rs` | `id` / `kind` (anthropic/openai) / `base_url` / `has_key` (BOOL,因 RULE-D-001 api_key 加密)/ **`disabled`**(09-07,INTEGER 默认 0,禁用后不参与选用层,见 `schema.rs:1155`) |
+| 5 | `models` | `db/migrations/schema.rs` | `id` / `provider_id` / `model_name` / `display_name` / `context_window` / **`thinking_effort`**(07-10 multi-model PR3,缺省 `high`,Anthropic → `thinking.adaptive.effort` / OpenAI → 顶层 `reasoning_effort`)/ **`supports_images`**(B1 08-16, INTEGER NOT NULL DEFAULT 0,见 `db/migrations/schema.rs:1148`)/ **`disabled`**(09-07,INTEGER 默认 0) |
 | 6 | `app_config` | `db/migrations/schema.rs` | 单行 kv 表(默认 model_id / 默认 cwd 等);remote tunnel 4 个 key:`remote_url` / `shared_secret` / `tunnel_node_id` / `tunnel_display_name`(存 daemon DB,清配置即停 tunnel,见 `daemon/tunnel/config.rs`) |
 | 7 | `session_tool_permissions` | `db/migrations/schema.rs` | `session_id` / `match_kind` (tool/prefix/path) / `match_value` / `decision` (allow/deny) / `expires_at` |
-| 8 | `session_audit_events` | `db/migrations/schema.rs` | `id` / `session_id` / `ts` / `kind` (AuditKind 字符串) / `payload_json` / **`turn_seq`**(E2 07-14,nullable,21 类调用点落表时携带对应 turn 序号,见 `db/migrations/schema.rs:936-941`) |
+| 8 | `session_audit_events` | `db/migrations/schema.rs` | `id` / `session_id` / `ts` / `kind` (AuditKind 小写 wire 字符串,见 §3.3 查询 9b 注)/ `payload_json` / **`turn_seq`**(E2 07-14,nullable,21 类调用点落表时携带对应 turn 序号,见 `db/migrations/schema.rs:936-941`) |
 | 9 | `subagent_runs` | `db/migrations/schema_helpers.rs`(约 L153) | `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` (running/completed/cancelled/error/incomplete) / `started_at` / `finished_at` (NULL while running) / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation` (L3b PR1+) |
 | 10 | `autonomous_memories` | `db/migrations/schema.rs` | `id` / `memory_id` (TEXT UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` (JSON) / `tool_name` / `command_pattern` / `path_globs` (JSON) / `source_session_id` / `source_ref` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(V2 2 期,2026-06-29 落地,状态机候选/激活/已验证) |
 | 11 | `subagent_model_overrides` | `db/migrations/schema.rs` | `agent_name` (TEXT PK) / `model_id` / `updated_at`(B6+ C,2026-07-03,builtin agent 无 frontmatter 文件可改 → 全局 DB override,优先级 `DB > frontmatter > parent`) |
 | 12 | `turn_trace` | `db/migrations/schema.rs` | `id` (INTEGER PK) / `session_id` (FK CASCADE) / **`run_id`**(08-20 表重建并入唯一键;**`''` = 主 loop 行哨兵**,worker 行 = `subagent_runs.id`;不用 NULL 因 SQLite UNIQUE 视 NULL 互异)/ `seq` / `token_usage_json` / `compaction_json` / `loop_hint_json` / `breadcrumb_json` / `created_at`(E2,2026-07-14,turn-level harness trace,**UNIQUE(session_id, run_id, seq)**)/ **`tools_token INTEGER`**(C7 08-14,实测 session 起步 tools_token -38.5%)/ **`memory_token INTEGER`**(memory-gov 08-15,实测指令块 -79.5%)/ **`images_token INTEGER`**(B1 PR4 08-16,图片 attachment 计量)/ **`at_files_token INTEGER`**(unified-context-budget WP1 08-19,@文件注入体 cl100k 估算)/ **`system_token INTEGER`**(08-19,system prompt 体 + skill-listing 合成消息)/ **`context_window INTEGER`**(08-19,请求时模型 context_window 快照,前端预算行分母) |
-| 13 | `scheduled_tasks` | `db/migrations/schema.rs:1286` | F2/F2b 定时任务(2026-08-28;08-31 per_run 三档):`id` (TEXT PK) / `project_id` + `target_session_id` (FK CASCADE,**08-31 起可空**——per_run 恒 NULL) / **`target_mode`**('fixed'|'per_run' DEFAULT 'fixed',08-31,CHECK 约束 `target_mode='per_run' OR target_session_id IS NOT NULL`)/ **`model_id`**(08-31,per_run 每次建 session 绑定的模型)/ **`last_run_session_id`**(08-31,无 FK,per_run 最近 run session,删旧 run session 不级联删任务)/ `name` / `prompt` / `schedule` (JSON:preset 类型 + 参数,**7 档**——daily/hourly/weekly/weekdays/monthly/every_min + once(08-29 CH11-1 单次档)) / `enabled` (INTEGER, kill switch 之外的 per-task 开关) / `created_by` (user 默认) / `created_at` / `last_fired_at` / `next_fire_at` / **`run_count`** / **`max_runs`** / **`ends_at`**(F2b 08-28 结束条件两列 + 计数;`run_count` 只计真正送入 chat_inner 的 fire,dedup 跳过不计数)。CRUD 在 `db/scheduled_tasks.rs`;调度内核在 `scheduler/` 模块;08-31 存量库经 `rebuild_scheduled_tasks_for_target_mode` 表重建(target_session_id 去 NOT NULL 无法 ALTER) |
-| 14 | `messages_fts` | `db/migrations/schema.rs:1142` | FTS5 虚拟表(external-content + trigram tokenizer + `UPDATE OF text` 触发器防写放大 + `messages_fts_docsize` 影子表守卫回填,见 `db/migrations/schema.rs:1153-1174` INSERT/DELETE/UPDATE 触发器) — D2 跨 session 全文搜索的存储后端(2026-08-17);另有 `autonomous_memories_fts`(schema.rs:886,自主记忆自身搜索,未在此编号) |
+| 13 | `scheduled_tasks` | `db/migrations/schema.rs`(建表段,以 `// --- F2…` 注释锚点定位;行号曾漂移勿引用) | F2/F2b 定时任务(2026-08-28;08-31 per_run 三档;09-07 增 group_chat 定时审议档):`id` (TEXT PK) / `project_id` + `target_session_id` (FK CASCADE,**08-31 起可空**——per_run 恒 NULL) / **`target_mode`**('fixed'\|'per_run'\|'group_chat' DEFAULT 'fixed';08-31 per_run,09-07 group_chat) / **`model_id`**(08-31,per_run 每次建 session 绑定的模型)/ **`last_run_session_id`**(08-31,无 FK,per_run 最近 run session,删旧 run session 不级联删任务)/ **`group_chat_config`**(09-07,JSON,group_chat 档必填:preset/议题等,CHECK `target_mode <> 'group_chat' OR group_chat_config IS NOT NULL`)/ **`last_fire_outcome`**(09-07,最近一次 fire 结局五值快照 started/resumed/skipped_busy/error/recovered)/ `name` / `prompt` / `schedule` (JSON:preset 类型 + 参数,**7 档**——daily/hourly/weekly/weekdays/monthly/every_min + once(08-29 CH11-1 单次档)) / `enabled` (INTEGER, kill switch 之外的 per-task 开关) / `created_by` (user 默认) / `created_at` / `last_fired_at` / `next_fire_at` / **`run_count`** / **`max_runs`** / **`ends_at`**(F2b 08-28 结束条件两列 + 计数;`run_count` 只计真正送入 chat_inner 的 fire,dedup 跳过不计数)。CRUD 在 `db/scheduled_tasks.rs`;调度内核在 `scheduler/` 模块;08-31 存量库经 `rebuild_scheduled_tasks_for_target_mode` 表重建(target_session_id 去 NOT NULL 无法 ALTER),09-07 经 `rebuild_scheduled_tasks_for_group_chat` 再加 group_chat 档 |
+| 14 | `group_chat_checkpoints` | `db/migrations/schema.rs:1420` | **09-06 P1a**:`session_id` (TEXT PK,FK CASCADE) / `round` / `error_streak` / `started_at` / `updated_at` —— 群聊断点续跑凭据(轮头 upsert;daemon 进程级中断后 boot sweep `recover_group_chat_checkpoints` 标 `interrupted`,`resume_group_chat` 续跑,语义见 [DAEMON-API.md §4](./DAEMON-API.md)) |
+| 15 | `messages_fts` | `db/migrations/schema.rs` | FTS5 虚拟表(external-content + trigram tokenizer + `UPDATE OF text` 触发器防写放大 + `messages_fts_docsize` 影子表守卫回填)—— D2 跨 session 全文搜索的存储后端(2026-08-17);另有 `autonomous_memories_fts`(自主记忆自身搜索,连同 FTS shadow 表不逐一编号) |
 
 **索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` / **`idx_session_audit_events_turn_seq`**(E2 07-14)/ **`idx_turn_trace_run`**(08-20,partial index `ON turn_trace(run_id) WHERE run_id != ''`,专服 `list_worker_turn_traces` 按 run_id 点查)/ **`idx_messages_status`**(08-24,partial index `ON messages(status) WHERE status IS NOT NULL`,启动恢复扫描专用)/ **`idx_scheduled_tasks_due`**(08-28,`ON scheduled_tasks(enabled, next_fire_at)`,调度器每 tick 扫描未到期任务)/ **FTS5 影子表 `messages_fts_docsize`** 索引(`db/migrations/schema.rs` 顶部)。
 
@@ -201,11 +202,13 @@ SELECT id, name, enabled, next_fire_at, last_fired_at,
 FROM scheduled_tasks
 ORDER BY enabled DESC, next_fire_at ASC;
 
--- 9b. 定时任务触发审计(六动作: fired / catchup / skipped_dedup /
---      skipped_queue_disabled / lost / error)
+-- 9b. 定时任务触发审计(kind wire 串是小写 'scheduled_task_fired';payload_json.action
+--      11 值: fired / catchup / skipped_dedup / skipped_queue_disabled / lost / error
+--      + completed(F2b 达上限)+ M4a 群聊档四值 skipped_busy / resumed_group_chat /
+--      fired_group_chat / recovered(09-07))
 SELECT ts, kind, payload_json
 FROM session_audit_events
-WHERE kind = 'ScheduledTaskFired'
+WHERE kind = 'scheduled_task_fired'
 ORDER BY ts DESC
 LIMIT 20;
 ```
@@ -261,7 +264,7 @@ WHERE session_id = 'YOUR_SESSION_ID'
 | Subagent 卡死 | `subagent_runs.status` NOT IN 终态 | 配合 `started_at` 算 wall-clock。**daemon 启动时** `reap_orphaned_runs`(daemon 化后 2026-07:reap 发生在 daemon 的 `load_inner` 即 `state.rs:297`,Thin 模式 GUI 不调 `load_inner`,所以是 daemon 进程在 reap)会把残留 `running`(上一进程崩溃 / 被杀留下的孤儿)标记为 `error`,所以重启后看到的假 running 已被清理 |
 | FTS5 搜索不返回 | `messages_fts`(`messages_fts_docsize` 影子表守卫) | D2 主搜索走 `messages_fts` virtual table(2026-08-17,external-content + trigram),`autonomous_memories_fts` 是另一张 FTS 表(自主记忆自身搜索);`messages_fts` INSERT/UPDATE/DELETE 触发器见 `db/migrations/schema.rs:1062-1085`,`UPDATE OF text` 防写放大 |
 | Memory 召回不命中 | `autonomous_memories.status NOT IN ('verified', 'active')` | status='candidate' 不进 recall;查 `tool_name` / `command_pattern` 是否精确匹配,`hit_count` 是否 < 阈值(quality 层 P5 软拦截) |
-| 定时任务没触发 | `scheduled_tasks.enabled` + `next_fire_at` + kill switch | F2/F2b(08-28;08-31 per_run):全局开关 `scheduled_tasks_enabled`(app_config,fail-open);per-task `enabled`=0 是停用;`next_fire_at` 是理论到期点,过了才 fire;同 session 每 tick 至多一 fire,**per_run 档例外**(每次新建 session,不受同 session 去重与队列约束,重看 `idx_scheduled_tasks_due`)。触发动作落 `ScheduledTaskFired` 审计(见 §3.3 查询 9b) |
+| 定时任务没触发 | `scheduled_tasks.enabled` + `next_fire_at` + kill switch | F2/F2b(08-28;08-31 per_run;09-07 group_chat 定时审议档):全局开关 `scheduled_tasks_enabled`(app_config,fail-open);per-task `enabled`=0 是停用;`next_fire_at` 是理论到期点,过了才 fire;同 session 每 tick 至多一 fire,**per_run 档例外**(每次新建 session,不受同 session 去重与队列约束,重看 `idx_scheduled_tasks_due`)。**group_chat 档**(09-07)排查先看 `last_fire_outcome`(started/resumed/skipped_busy/error/recovered 五值快照)与 `group_chat_config`,转录落 `{app_data_dir}/discussions/`(契约见 DAEMON-API §6.3)。触发动作落 `scheduled_task_fired` 审计(见 §3.3 查询 9b) |
 
 ---
 

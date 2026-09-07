@@ -31,7 +31,7 @@
 ║                           ▼                                            ║
 ║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
 ║  │  axum router (daemon/server.rs::build_router)            │          ║
-║  │   · 108 个 #[tauri::command] 镜像为 REST 路由(2026-09-01 │          ║
+║  │   · 116 个 #[tauri::command] 镜像为 REST 路由(2026-09-07 │          ║
 ║  │     实测)                                              │          ║
 ║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
 ║  │   · /api/v1/attachments/<id> GET 二进制(B1 08-16,首个    │          ║
@@ -101,7 +101,7 @@
 ```
 **进程边界说明**:
 - **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
-- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 108 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-09-01 实测),前端同一份 handler 代码服务 IPC 与 HTTP。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 116 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-09-07 实测),前端同一份 handler 代码服务 IPC 与 HTTP。
 - **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
 - **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
 - **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client(GUI + 浏览器 + 经 remote daemon 的远程 PWA client)共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
@@ -230,7 +230,7 @@
 
 - `scheduler/` 模块,daemon 常驻 30s tick + CancellationToken 停机(GUI Full 零 timer 硬约束,调度仅 daemon 进程);单一扫描算法——每 tick 重算「自 `max(created_at, last_fired_at)` 以来最近到期点」,catch-up 与常规触发同一判定,落账记理论到期点 `due` 防相位漂移;同 session 每 tick 至多一 fire
 - origin 载体链:fire = 构造带 origin 的 user message 走 `chat_inner` 同源路径,`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控` 落 `messages.metadata.scheduled`(additive)——F1 队列「闲也入队」路由统一
-- F2b:6 档 preset(08-29 起 7 档,加 once 单次档)+ `max_runs`/`ends_at` 结束条件 + `completed` 审计;`ScheduledTaskFired` 六动作;`scheduled_tasks_enabled` kill switch fail-open
+- F2b:6 档 preset(08-29 起 7 档,加 once 单次档)+ `max_runs`/`ends_at` 结束条件 + `completed` 审计;`ScheduledTaskFired` 动作 11 个(F2 六种 + completed + M4a 群聊档四值 skipped_busy/resumed_group_chat/fired_group_chat/recovered,09-07);`scheduled_tasks_enabled` kill switch fail-open
 - 08-31 per_run 三档:目标 session 三档(指定既有 / 新建专用 / **每次执行新建**),`target_mode`/`model_id`/`last_run_session_id` 三新列 + 表重建迁移;per_run 每次触发新建 session(标题 `{任务名} {时间}`),审计挂新 session;LLM `schedule_task` tool 恒 fixed 语义不暴露 per_run(完整 ADR 见 decisions-2026-08.md 08-31 条目)
 - 完整设计:见 [ROADMAP.md §1.2 F2/F2b](./ROADMAP.md) 行 + spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)
 
@@ -801,7 +801,7 @@ agent loop 结束(text-only response or max_turns reached):
   - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
   - **Budget 域(1)**:ContextBudgetTrim(08-19 关卡⑤硬卡裁剪,unified-context-budget)
   - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
-  - **Scheduler 域(1)**:ScheduledTaskFired(F2 08-28,动作 fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error)
+  - **Scheduler 域(1)**:ScheduledTaskFired(F2 08-28,动作 11 个:fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error + completed + M4a 群聊档 skipped_busy/resumed_group_chat/fired_group_chat/recovered,09-07)
   - 实现位置:`app/src-tauri/src/agent/permissions/audit.rs`;落表点见各 variant 注释 + [IMPLEMENTATION/decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md) 各月 ADR
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
@@ -914,11 +914,11 @@ agent loop 结束(text-only response or max_turns reached):
 - agent core 与 GUI 解耦 —— GUI 重启不影响 daemon 里的长跑 session(Thin 模式 GUI 不持有任何状态)
 
 **架构影响(实际落地)**:
-- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 26 个路由域文件)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)+ `src-tauri/src/sidecar.rs`(GUI 侧 spawn + 生命周期管理)
+- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 28 个路由域文件,2026-09-07 现状)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)+ `src-tauri/src/sidecar.rs`(GUI 侧 spawn + 生命周期管理)
 - 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
 - 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
 - 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
-- 108 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-09-01 实测 108**(08-31 为 107,09-01 增 update_project_sandbox_policy);旧 118 为含注释的 grep 口径)
+- 116 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-09-07 实测 116**(08-31 为 107,09-01 增 update_project_sandbox_policy,09-02~09-07 再增 8:list/kill_background_shell、get_disk_usage/run_disk_cleanup、resume_group_chat、preempt_group_chat、set_provider_disabled/set_model_disabled);旧 118 为含注释的 grep 口径)
 - 新增 `crates/everlasting-remote/`(axum 云服务端:shared_secret auth + device_token、配对码 60s 一次性 + per-IP 限速(`ratelimit.rs`)、WSS 隧道服务端、反向代理、SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表)+ `crates/everlasting-remote-protocol/`(2026-08-11 workspace 翻转:根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,Cargo.lock / target 在根)
 - PC daemon 新增 `src-tauri/src/daemon/tunnel/`(client / config / dispatcher / manager / node_id / sse_bridge;WSS 长连接 + loopback 转发,取消只停转发)
 - 前端新增 `app/src/transport/auth.ts`(device_token / `isRemoteContext()`)+ `app/src/router/index.ts` vue-router `isRemoteContext()` 守卫 + `PairingView` / `NodeListView` / `ChatView` / `RemoteTab.vue` + PWA 壳(vite-plugin-pwa + `public/icons/`);配对流程:PC Remote tab 生成 6 位配对码 → 手机 PWA redeem 换 64-hex device_token → nodes 列表

@@ -600,7 +600,7 @@ curl -s http://localhost:7456/api/v1/health
 # daemon 是否监听 0.0.0.0:7456(WSL 2 forwarding 需要它绑非 127.0.0.1)
 ss -tlnp | grep 7456
 
-# 看 daemon 日志(bg 模式写 /tmp/everlasting-daemon.log)
+# 看 daemon 日志(bg 模式落 $XDG_STATE_HOME/dev.everlasting.app/daemon.log,进程内轮转)
 ./scripts/daemon.sh logs
 ```
 

@@ -1,7 +1,7 @@
 # CONTEXT.md
 
 > Everlasting 项目术语表(glossary)。
-> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md)),本文件不重复。
+> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08,09}.md` 决策日志(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md)),本文件不重复。
 > 词条内的实现状态为**历史快照**(落地时记录),新进展/新特性只更新 [ROADMAP.md](./ROADMAP.md) 与决策日志,不在此追加;术语新增时才加词条。
 
 ---
@@ -107,7 +107,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 - **TaskStateTransition 域(3)**:TaskStateTransitionRequested / Allowed / Denied(07-08 workflow Phase 3 Step 3.1)
 - **Budget 域(1)**:ContextBudgetTrim(08-19 关卡⑤硬卡裁剪,unified-context-budget)
 - **UI 域(1)**:UiDiffApplied(B9+ D4 07-13 apply_ui_diff IPC 成功)
-- **Scheduler 域(1)**:ScheduledTaskFired(F2 08-28,动作 fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error)
+- **Scheduler 域(1)**:ScheduledTaskFired(F2 08-28,动作 11 个:fired/catchup/skipped_dedup/skipped_queue_disabled/lost/error + completed + M4a 群聊档 skipped_busy/resumed_group_chat/fired_group_chat/recovered,09-07)
 
 每类 payload_json 结构不同;`record_tool_executed_audit` 落 `tool_executed` 的 `{tool_name, tool_input, duration_ms, exit_code}`。查询走 `list_session_audit_events` Tauri command + 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog);E2 07-14 起增 `turn_seq` 列(审计按 turn 落表)。
 
@@ -137,7 +137,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 - **handoff** (2026-08-19):跨 session 接力 — HUD 按 session 隔离 + 接力摘要进下一 session
 - **worker per-turn trace** (2026-08-20):`turn_trace` 并入 run 维度(`UNIQUE(session_id, run_id, seq)`,`''` 哨兵主行)
 - **F1** (2026-08-25):消息队列·用户连发档 — `agent/message_queue.rs` + `ChatEvent::TurnContinuation`(见下节)
-- **F4** (2026-08-25):`web_search` 工具 — Tavily/DDG 双后端,Settings 第 7 tab(`READONLY_TOOL_ALLOWLIST` 第 7 员)
+- **F4** (2026-08-25):`web_search` 工具 — Tavily/DDG 双后端,Settings「集成」组 Search 分类(08-29 起设置面为搜索 + 分组导航,非 tab 式;`READONLY_TOOL_ALLOWLIST` 第 7 员)
 - **F5** (2026-08-26):PDF/docx/xlsx 原生文本提取 — `agent/doc_extract.rs` + `InjectionAction::Extracted`(@文件注入第一档;pptx 不做)
 - **F6** (2026-08-27):异步 agent 任务可观测性 — `SessionSummary.busy` + 轮次终结跨 session toast
 - **F3** (2026-08-27):全局并发闸 — `max_concurrent_loops` 信号量(缺省 4)
@@ -167,7 +167,7 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 - **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。**2026-08-27 起 `chat-event` payload 回填 `session_id`**(`daemon/sse.rs` 注释契约),非发起端(remote PWA)可跨客户端按 session 认领。Full 模式下对应 Tauri `app.emit`。
 - **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
 - **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— **2026-09-01 实测 108** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(08-31 为 107,09-01 增 `update_project_sandbox_policy`;旧 118 为含注释/测试文件引用的 grep 口径,已修正);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **handler 双暴露(Q0 决策)** —— **2026-09-07 实测 116** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(08-31 为 107,09-01 增 `update_project_sandbox_policy`,09-02~09-07 再增 8:list/kill_background_shell、get_disk_usage/run_disk_cleanup、resume_group_chat、preempt_group_chat、set_provider_disabled/set_model_disabled;旧 118 为含注释/测试文件引用的 grep 口径,已修正);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
 - **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速;WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
 - **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
 - **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。
@@ -178,12 +178,12 @@ agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语�
 ### Scheduled Task / ScheduleSpec(F2/F2b 定时任务,2026-08-28;08-29 once 档;08-31 per_run 三档)
 daemon 常驻调度器触发的本地定时任务。相关术语:
 
-- **`scheduled_tasks` 表** — 一行一个任务:`project_id` + `target_session_id`(FK CASCADE,**08-31 起可空**——per_run 恒 NULL)/ `target_mode`('fixed'|'per_run' DEFAULT 'fixed',08-31)/ `model_id`(per_run 每次建 session 的模型,08-31)/ `last_run_session_id`(无 FK,per_run 最近 run session,08-31)/ `name` / `prompt`(触发时注入的 user message 内容)/ `schedule`(JSON:preset 类型 + 参数)/ `enabled` / `run_count` / `max_runs` / `ends_at`(F2b 结束条件两列)/ `last_fired_at` / `next_fire_at`。
+- **`scheduled_tasks` 表** — 一行一个任务:`project_id` + `target_session_id`(FK CASCADE,**08-31 起可空**——per_run 恒 NULL)/ `target_mode`('fixed'|'per_run'|'group_chat' DEFAULT 'fixed';08-31 per_run,09-07 增 group_chat 定时审议档)/ `model_id`(per_run 每次建 session 的模型,08-31)/ `last_run_session_id`(无 FK,per_run 最近 run session,08-31)/ `group_chat_config`(JSON,group_chat 档必填:preset/议题等,09-07)/ `last_fire_outcome`(最近一次 fire 结局五值快照 started/resumed/skipped_busy/error/recovered,09-07)/ `name` / `prompt`(触发时注入的 user message 内容)/ `schedule`(JSON:preset 类型 + 参数)/ `enabled` / `run_count` / `max_runs` / `ends_at`(F2b 结束条件两列)/ `last_fired_at` / `next_fire_at`。
 - **ScheduleSpec** — `schedule` JSON 的 schema,**7 档 preset**:固定时间类 `daily`(每天 HH:MM)/ `hourly`(每小时第 N 分)/ `weekly`(每周 W HH:MM)/ `weekdays`(每工作日)/ `monthly`(每月 D 号,短月无该日**跳过该月**)+ 固定频率类 `every_min`(每 N 分钟,interval 单位换算**纯 UI 做**,后端零感知)+ **单次档 `once`**(08-29 CH11-1,`at_ms` epoch ms 触发恰好一次,fire 后即时完成 reason=once;前端隐藏结束条件块)。
 - **origin 载体链** — fire 时构造带 origin 的 user message:`ChatEntry → QueuedMessage.origin → ChatLoopRequest → persist 门控`,落 `messages.metadata.scheduled`(additive)。`created_by = 'scheduler'`(F2)区别于 `'user'`。
-- **目标 session 三档(08-31 per_run)** — `target_mode` 区分:**fixed**(绑定既有/专用 session,`target_session_id` 非空)与 **per_run**(每次触发自动新建 session,`target_session_id` 恒 NULL;标题 `{任务名} {YYYY-MM-DD HH:MM}`,模型可选绑 `model_id` 写 per-session 覆盖列,最近一次 run session 落 `last_run_session_id` 无 FK 防级联删任务)。per_run 不受「同 session 每 tick 一 fire」与队列去重约束;审计挂新 session;`schedule_task` LLM tool 恒 fixed 语义不暴露 per_run。
+- **目标 session 三档(08-31 per_run)** — `target_mode` 区分:**fixed**(绑定既有/专用 session,`target_session_id` 非空)与 **per_run**(每次触发自动新建 session,`target_session_id` 恒 NULL;标题 `{任务名} {YYYY-MM-DD HH:MM}`,模型可选绑 `model_id` 写 per-session 覆盖列,最近一次 run session 落 `last_run_session_id` 无 FK 防级联删任务)。per_run 不受「同 session 每 tick 一 fire」与队列去重约束;审计挂新 session;`schedule_task` LLM tool 恒 fixed 语义不暴露 per_run。**09-07 起 `target_mode` 增第三值 `group_chat`**(定时审议档,非目标 session 语义:配置走 `group_chat_config`,fire 时 daemon 原生建群发题,转录自动落 `{app_data_dir}/discussions/`,结局快照 `last_fire_outcome`;GUI 创建态 = 既有/专用/per_run/定时审议四选一,详见 DAEMON-API §6.3)。
 - **`due` 落账** — fire 时记录**理论到期点**(非实际触发时刻),interval 类任务据此保证无相位漂移。
-- **ScheduledTaskFired** — 审计 kind,六动作:`fired` / `catchup`(停机补跑)/ `skipped_dedup`(同 session 同 tick 已 fire)/ `skipped_queue_disabled` / `lost` / `error`。
+- **ScheduledTaskFired** — 审计 kind,动作 11 个:`fired` / `catchup`(停机补跑)/ `skipped_dedup`(同 session 同 tick 已 fire)/ `skipped_queue_disabled` / `lost` / `error` + `completed`(F2b 达上限自动停用)+ M4a 群聊档四值 `skipped_busy`(上一场仍 busy 跳过)/ `resumed_group_chat`(interrupted 场自动续跑)/ `fired_group_chat`(开新场)/ `recovered`(僵尸/停摆场回收后开新场,09-07)。
 - **kill switch** — `scheduled_tasks_enabled`(app_config,fail-open);per-task `enabled` 是停用。`max_runs` / `ends_at` 命中 → 自动停用保留 + `completed` 审计(恰好一次),重新启用计数清零。
 
 ### 全局并发闸(F3,2026-08-27)
@@ -210,6 +210,6 @@ daemon 常驻调度器触发的本地定时任务。相关术语:
 
 ## 相关决策
 
-- 设计决策走 [`docs/IMPLEMENTATION/decisions-2026-{06,07,08}.md` 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md);本月新建条目落 `decisions-YYYY-MM.md` + 更新 `[ARCHITECTURE.md](./ARCHITECTURE.md)` 对应章节)
+- 设计决策走 [`docs/IMPLEMENTATION/decisions-2026-{06,07,08,09}.md` 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md);本月新建条目落 `decisions-YYYY-MM.md` + 更新 `[ARCHITECTURE.md](./ARCHITECTURE.md)` 对应章节)
 - A4 Token 相关术语、Checklist(agent 自跟踪清单)均已落地(详见上文 Checklist 条目,B12 2026-06-19),作为术语定义保留
 - 跨层契约走 `.trellis/spec/backend/llm-contract.md` "Scenario: Token Usage Tracking" 段

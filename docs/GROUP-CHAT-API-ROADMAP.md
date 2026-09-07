@@ -1,6 +1,6 @@
 # 群聊外部调用 / 审议原语 — 实施路线图
 
-> **状态(2026-09-06 立项)**:目标与验收已定,**技术方案待定**——每个里程碑带「待定决策」小节列出开放问题,立项实施时逐项定夺后再补 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) 式的可执行拆解。本文只回答「做什么 / 为什么 / 怎么算完成」,不锁「怎么做」。
+> **状态(2026-09-06 立项;2026-09-07 更新)**:目标与验收已定。**M0-M3(地基 / 流程固化 / MCP 接口层 / 控制面)已交付并逐项定案,M4 首子项定时审议(M4a)✅ 2026-09-07 交付**——各里程碑的「待定决策」已全部定案;仅 M4 余项(讨论库检索 / 成本治理 / 远程暴露认证)与部署面 follow-up 方案待定,立项时逐个定夺。本文回答「做什么 / 为什么 / 怎么算完成」;「怎么做」在各里程碑定案后记入交付段。
 > **定位**:群聊对外部调用方(GUI 之外的 daemon API 消费者、脚本、其他 AI agent)成为**可编程的多模型审议原语**:一个调用方说清议题与参与角色,拿回一份有据可查的共识结论。两场 live 实跑(session `60bcb778` 09-05 / `eb14d2df` 09-06,后者 9m11s 收官并现场抓出代码缺陷)已验证该原语的输出质量与驱动可行性。
 > **关联**:[DAEMON-API.md](./DAEMON-API.md)(API 契约,本路线图的地基)/ [BUGLIST-group-chat.md](./BUGLIST-group-chat.md)(GC1-GC7 + §4 D1-D3,地基缺陷修复记录)/ [BACKLOG.md 附录 B](./BACKLOG.md)(N-x 候选;第二场讨论的止损包/证据链/回归闸共识由本文 §6 吸收)/ [ROADMAP.md §2 第四档](./ROADMAP.md)
 
@@ -12,7 +12,7 @@
 |--------|--------|------|--------|
 | M0 地基 | lifecycle 三态机 + summary 一等字段 + 无人值守安全 + API 契约文档 | ✅ 2026-09-05/06(见 §1) | — |
 | M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
-| M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
+| M2 MCP 接口层 | 外部 AI agent 可召集审议:四工具 `start/status/result/cancel`(M3 扩 `interrupt_discussion`/`inject_message` 成六) | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
 | M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | ✅ 2026-09-06(见 §4;P0 前置同日落地) | 中 |
 | M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🟡 首子项定时审议 ✅ 2026-09-07(§5,live 验证通过);余项未动 | 大(多子项) |
 
@@ -28,7 +28,7 @@
 - **工具层正确性**(D2):grep 相对 glob 修复,公共工具层单 agent 同样受益。
 - **契约文档**:[DAEMON-API.md](./DAEMON-API.md)——命名约定、字段对照、群聊生命周期消费指南。
 
-两场实录:[out/group-chat-gc-fix-verify-20260905.md](../out/group-chat-gc-fix-verify-20260905.md) / [out/group-chat-d1d2-verify-20260906.md](../out/group-chat-d1d2-verify-20260906.md)。
+两场实录为 gitignored 本地产物(M1 落账后已随 out/ 清理),live 记录见任务目录 [09-06-gce-m1-deliberation-driver](../.trellis/tasks/archive/2026-09/09-06-gce-m1-deliberation-driver/)(implement.md / review.md)。
 
 ## 2. M1 流程固化(✅ 2026-09-06 交付)
 
@@ -45,7 +45,7 @@
 
 ## 3. M2 MCP 接口层(✅ 2026-09-06)
 
-**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ `.agents/mcp.json` 宿主挂载 + `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。**已知边界**:部署面绑定源码检出(挂载配置绝对路径指向仓库),无源码机器不可用——记 §5「MCP 部署面」follow-up。
+**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ 宿主挂载(2026-09-06 迁**用户级** `~/.zcode/cli/config.json` 的 `mcp.servers`——仓库级 `.agents/mcp.json` 已移除,workspace 作用域跨项目不可见)+ `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。**已知边界**:部署面绑定源码检出(挂载配置绝对路径指向仓库),无源码机器不可用——记 §5「MCP 部署面」follow-up;**该边界已于 2026-09-06 由 §5 路径②(standalone bin,`scripts/group-chat-mcp-deploy.mjs`)收口**。(注:本段工具数/预算/用例数为 M2 交付时快照——2026-09-07 现状:M3 起六工具、wire 预算锁 3200、单测 16 用例,见 §4。) 
 
 - **目标**:任何 MCP 宿主(ZCode / Claude Code / Cursor 等)里的单 agent 可召集跨模型审议——**这是单客户端无法自制的原语**:模型目录、persona 隔离(role_history)、转录持久化、生命周期语义全在 daemon。
 - **工具面**(草案即定稿):
@@ -56,7 +56,7 @@
   | `discussion_result` | 终态读 summary + roster + stats + 转录路径(未终态时明确报错而非空值) |
   | `cancel_discussion` | 复用现有 cancel 端点(M3 preempt 落地前的唯一止损) |
 - **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。
-- **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。
+- **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。*(M3 09-06 起工具面扩为六,wire 预算锁同步上调 3200,见 §4)*
 
 ## 4. M3 控制面:打断 / 注入 / 跟随(✅ 2026-09-06)
 
@@ -75,7 +75,7 @@ P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一�
 消费(含参与者 speaker)✓。
 
 - **目标**:讨论从「放电影」变「可驾驶」——外部调用方(与 GUI 用户同权)能打断当前 speaker、注入新议题、实时跟随。
-- **上游依赖(2026-09-06 更新)**:**P0 打断最小语义已落地**(task `09-06-gc-p0-preempt-min-semantics`,spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)):注入 = busy 消息进 controls 缓冲非破坏投递(wire `ChatAcceptance::Injected`);打断 = `preempt_group_chat(session_id)` 收束式(`stop_reason=preempted` + summary,失败兜底立断)——M3 `interrupt_discussion` 的内核即此命令 1:1。**P1a checkpoint 落库 + P1b 续跑已落地(✅ 2026-09-06,task `09-06-gc-p1a-checkpoint-resume`)**:`group_chat_checkpoints` 表(轮头 upsert round+GC5 streak)+ boot sweep(load_inner 标 `interrupted` / 清终局孤儿行,不动 updated_at)+ `resume_group_chat` 命令五类校验(daemon 路由 + Tauri 同权)+ 轮预算继承 + moderator 恢复指令 + GUI 续跑按钮;live 三链验证(SIGKILL → interrupted → resume → group_chat_end,转录 [out/group-chat-p1a-resume-20260906.md](../out/group-chat-p1a-resume-20260906.md))。
+- **上游依赖(2026-09-06 更新)**:**P0 打断最小语义已落地**(task `09-06-gc-p0-preempt-min-semantics`,spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md)):注入 = busy 消息进 controls 缓冲非破坏投递(wire `ChatAcceptance::Injected`);打断 = `preempt_group_chat(session_id)` 收束式(`stop_reason=preempted` + summary,失败兜底立断)——M3 `interrupt_discussion` 的内核即此命令 1:1。**P1a checkpoint 落库 + P1b 续跑已落地(✅ 2026-09-06,task `09-06-gc-p1a-checkpoint-resume`;提交 09-07 凌晨,沿用 task 日 09-06)**:`group_chat_checkpoints` 表(轮头 upsert round+GC5 streak)+ boot sweep(load_inner 标 `interrupted` / 清终局孤儿行,不动 updated_at)+ `resume_group_chat` 命令五类校验(daemon 路由 + Tauri 同权)+ 轮预算继承 + moderator 恢复指令 + GUI 续跑按钮;live 三链验证(SIGKILL → interrupted → resume → group_chat_end;转录为本地产物不入库,任务目录 [09-06-gc-p1a-checkpoint-resume](../.trellis/tasks/archive/2026-09/09-06-gc-p1a-checkpoint-resume/) implement.md Step 记录完整链路)。
 - **验收标准**:① headless 打断后 stop_reason 可区分且 summary 不丢;② 注入消息的 role 归属符合 P0 schema 决议;③ GUI 与 API 两条路同权同语义。
 - **待定决策全部定案(2026-09-06 brainstorm)**:~~preempt 到达后的收束策略~~ 已决(P0):等在途 speaker 完 → moderator 收束轮 + 兜底立断;~~follow 暴露形态~~ **已决:裸 SSE 透传**(仅补消费文档,daemon 零改动;聚合进度事件无真实消费方撑需求,不做);~~打断的权限粒度~~ **已决:沿用 v1 零鉴权全域可打断**(与 M2「v1 零鉴权(本机)」同构;粒度机制推迟 M4 随远程认证一体议,记 §5)。
 

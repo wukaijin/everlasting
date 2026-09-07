@@ -28,8 +28,6 @@ The project uses reka-ui for:
 
 - `DialogRoot` / `DialogContent` / `DialogOverlay` /
   `DialogTitle` / `DialogClose` (SettingsModal overlay)
-- `TabsRoot` / `TabsList` / `TabsTrigger` / `TabsContent`
-  (SettingsModal inner tabs)
 - `SelectRoot` / `SelectTrigger` / `SelectContent` /
   `SelectItem` / `SelectValue` (Settings forms — protocol,
   provider, thinking effort)
@@ -527,7 +525,7 @@ easier and avoids a parallel "reka-ui CSS" subsystem.
 ```vue
 <!-- SettingsModal.vue -->
 <DialogContent class="settings-modal__content">
-  <DialogTitle class="settings-modal__title">Settings</DialogTitle>
+  <DialogTitle class="settings-modal__title">设置</DialogTitle>
   <!-- ... -->
 </DialogContent>
 ```

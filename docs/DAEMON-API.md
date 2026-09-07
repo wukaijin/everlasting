@@ -170,8 +170,10 @@ acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 
   失败、工具注册为 0,Settings → MCP 显示 failed)。换机器时须按实际检出路径改
   `args`(曾用仓库根 `.agents/mcp.json` 挂载,已移除:workspace 作用域只在
   本仓库会话可见,跨项目不可用——2026-09-06 实测)。
-- 若改用仓库级挂载:放 `.agents/mcp.json` 顶层 `mcpServers` 键;它是 same-scope
-  fallback,同 scope `.zcode` 定义了任何 MCP server 时被整体忽略(非合并)。
+- 仓库级 `.agents/mcp.json` 挂载**已移除**(2026-09-06):workspace 作用域只在
+  本仓库会话可见,跨项目不可用;备选如需仓库级,放 `.agents/mcp.json` 顶层
+  `mcpServers` 键,它是 same-scope fallback,同 scope `.zcode` 定义了任何 MCP
+  server 时被整体忽略(非合并)。
 - 分工:**宿主 agent = MCP 工具**;**everlasting 内部 agent(daemon 单聊)= 脚本 + M1 纪律**
   (沙箱 errno 翻译 / prefix 授权 basename / 裸命令,见 SKILL.md 边界)——内部 agent 不是
   MCP client。
@@ -231,7 +233,7 @@ Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
 
 **建任务**(校验矩阵,违规 400):
 - `target_mode: "group_chat"` + `prompt`(议题原文,fire 时**原样**发题,无注脚)+
-  `schedule`(F2 七种 schedule kind + once 全兼容)。
+  `schedule`(F2 六种周期 kind + once 单次档 = 7 档全兼容)。
 - `group_chat_config` 必填,JSON 形状:`{"moderator_model_id": "...", "participants":
   [{"name": "...", "model_id": "...", "persona_md"?: "..."}]}`——结构校验(非空名单、
   无重名)+ 模型存在性(moderator 与全部 participants 查 models 表)。
@@ -270,8 +272,11 @@ token,不开放给 agent 自主创建);preset 预设在 `scripts/group-chat-pres
 `sessions/*`(见 §3)、`permissions/*`(模式切换 / 审批回填 / trace 三条)、
 `agent/chat`(发起轮次)、`agent/resume_group_chat`(群聊断点续跑,§4)、
 `cancel/*`(Stop)、`message_queue/*`、`config/*`、
-`providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。唯一 GET:
-`/api/v1/stream`(SSE)与 `/api/v1/sessions/{id}/snapshot`。
+`background_shells/*`(list_background_shells / kill_background_shell,09-02)、
+`disk/*`(get_disk_usage / run_disk_cleanup,09-03)、
+`providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。GET 端点:
+`/api/v1/health`、`/api/v1/stream`(SSE)、`/api/v1/sessions/{id}/snapshot`,以及
+二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16);其余全 POST。
 
 ## 8. 安全边界:绑定面与零鉴权前提(2026-09-06 评估)
 

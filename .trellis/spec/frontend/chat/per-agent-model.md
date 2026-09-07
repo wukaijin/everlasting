@@ -4,7 +4,7 @@
 
 ## B6+ C — per-agent model UI + worker model 可观测性 (2026-07-03)
 
-`subagent_runs.model_display TEXT NULL` 列由后端 `dispatch.rs::run_subagent` 写 `resolve_worker_provider` 返回的 `Option<String>`(catalog hit = Some(display);parent 继承 / catalog miss = None → NULL,见 `subagent-runs-schema.md` "B6+ C additions" 段)。前端两个 chip 与一个 Settings tab 依赖该列。
+`subagent_runs.model_display TEXT NULL` 列由后端 `dispatch.rs::run_subagent` 写 `resolve_worker_provider` 返回的 `Option<String>`(catalog hit = Some(display);parent 继承 / catalog miss = None → NULL,见 `subagent-runs-schema.md` "B6+ C additions" 段)。前端两个 chip 与一个 Settings 分类(「智能体」组 Subagents)依赖该列。
 
 ### ToolCallCard dispatch 分支 — `workerModelText` chip
 
@@ -19,7 +19,7 @@ main drawer 已透传 `run`,header 在 name 旁(或 meta 行)直接读 `run?.mod
 
 ### Settings → SubagentsTab (per-agent model config)
 
-新建 `app/src/components/settings/SubagentsTab.vue`(与 `MemoryTab.vue` 同级)+ `app/src/stores/subagents.ts`。`SettingsModal.vue` 加第 5 个 `TabsTrigger value="subagents"`。
+新建 `app/src/components/settings/SubagentsTab.vue`(与 `MemoryTab.vue` 同级)+ `app/src/stores/subagents.ts`。SettingsModal 08-29 起为搜索 + 分组导航(registry.ts 驱动,非 Tabs):在 registry 增 `id:'subagents'` 全局分类(「智能体」组),SettingsModal 经 registry 渲染该分类。
 
 数据源:IPC `list_subagents_with_model(project_path)`(`commands::subagents::list_subagents_with_model`)→ `SubagentWithModelRow[]`,字段含 `resolvedModelId` / `resolvedModelDisplay` / `hasDbOverride` / `writable`(source!=builtin)。下拉数据复用 `useModelsStore.modelsGroupedByProvider`,label = `display_name`,value = `id`(UI 友好,人类不接触 UUID)。
 

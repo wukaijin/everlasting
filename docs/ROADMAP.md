@@ -109,10 +109,11 @@
 | **RULE-PERM-001** 审计事件 keyset 分页 | 08-30 | `list_session_audit_events_page` 新增(游标 ts DESC/id DESC + 过滤/计数下推 SQL);旧全量命令保留供 traceStore(task `08-30-rule-perm-001-audit-pagination`,销债 P3) |
 | **RULE-TEST-001** Playwright 浏览器回归流水线 | 08-30 | 真实 Chromium 驱动前端 + route-mock;三试点(Shift+Enter / 提问卡回底 / 放行撤销确认);CI blocking 门禁,确定性用例准入(spec [frontend/browser-regression.md](../.trellis/spec/frontend/browser-regression.md)) |
 | **定时任务 per_run 三档** | 08-31 | 目标 session 新增「每次执行新建」档:target_mode/model_id/last_run_session_id 三列 + 表重建迁移;前端 radio 卡片三档;LLM tool 恒 fixed 不暴露(spec [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md)) |
-| 「添加项目」DirBrowserModal 全模式统一 + 键盘导航 | 09-03 | native 选目录链(命令 + tauri-plugin-dialog 依赖 + 权限)整链下线,DirBrowserModal 成桌面/浏览器统一入口,补 roving tabindex 方向键/Enter/焦点复位(销 BACKLOG §5.3 / FU-3;task [09-03-dirbrowser-desktop-unify](../.trellis/tasks/09-03-dirbrowser-desktop-unify/)) |
+| 「添加项目」DirBrowserModal 全模式统一 + 键盘导航 | 09-03 | native 选目录链(命令 + tauri-plugin-dialog 依赖 + 权限)整链下线,DirBrowserModal 成桌面/浏览器统一入口,补 roving tabindex 方向键/Enter/焦点复位(销 BACKLOG §5.3 / FU-3;task [09-03-dirbrowser-desktop-unify](../.trellis/tasks/archive/2026-09/09-03-dirbrowser-desktop-unify/)) |
 | **F3 磁盘治理** | 09-03 | disk governor 每日节拍修 worker sweep 宿主断链 + 孤儿 worktree/outputs 回收 + 备份 200MiB 预算自适应;日志进程内 10MiB×3 轮转(daemon.sh 脚本轮转退役);WebKitCache 启动阈值清理;设置面「存储」区块(占用概览 + 开关 + 立即清理)(spec [backend/disk-governance](../.trellis/spec/backend/disk-governance.md),task `09-03-f3-disk-governance`;余留 follow-up:DB VACUUM、进程/内存、F1 反压联动) |
 | **群聊 P1a checkpoint 落库与续跑**(GCE 内部线) | 09-06 | `group_chat_checkpoints` 表 + boot sweep(load_inner 标 `interrupted`、清终局孤儿行)+ `resume_group_chat` 命令(daemon 路由 + Tauri,五类校验;轮预算继承、GC5 计数归零、moderator 恢复指令)+ GUI 可续跑态通知与「续跑」按钮 + M1 脚本 interrupted 档;live 验证 SIGKILL → interrupted → resume → group_chat_end(task `09-06-gc-p1a-checkpoint-resume`,M3 打断信任底座收口、M4 定时审议容错地基) |
 | **群聊 P0 打断最小语义**(GCE 内部线) | 09-06 | busy 打字/发消息 = 非破坏注入(controls 缓冲 → 编排器轮头落库 `[用户插入]` 双轨标记 → 下一 moderator 轮可见,取代毁场式 3a/D9-Q4 抢占);`preempt_group_chat` 收束式打断(等在途发言完 → moderator 收束轮落 summary → `stop_reason=preempted`,失败兜底立断);M3 控制面硬前置(spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md),task `09-06-gc-p0-preempt-min-semantics`) |
+| **GCE 外部线 M0-M3 + M4a**(群聊审议原语) | 09-05~09-07 | M0 地基(lifecycle 三态机 / summary 一等字段 / 无人值守安全)两场 live 验证;M1 驱动脚本 `group-chat-run.mjs` + presets + skill 门面;M2 MCP 接口层(六工具,用户级挂载)+ standalone bin 部署面;M3 控制面(interrupt_discussion / inject_message + SSE follow 消费专章);M4a 定时审议(scheduled_tasks `group_chat` 档 + 四态路由 + 转录自动落盘)。内部线 P0/P1a 见上两行;逐里程碑交付与待定决策见专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
 
 ---
 
@@ -161,15 +162,15 @@
 
 > **已实施的 22 项**(B6 / B6+ / B8 / B12 / B4 / C2 / C2+ / A7 / L2 / L1 / L3a / L3b PR1 / L3b PR2 / L3b PR3 / L3c / L3d / A2+ / A5+ / E1 / V2-2+ / E2 / C7)已从第三档或第四档移到 §1.2 已实施列表。
 
-### 🔴 第四档 — 最远远期(app 主体完善之后)(开放 3 项:B10 / A2+ P3 / A4+;B8、B11、F2、F6 已完成迁 §1.2)
+### 🔴 第四档 — 最远远期(app 主体完善之后)(开放 3 项:B10 / GCE(余 M4 子项)/ A4+;A2+ P3、B8、B11、F2、F6 已完成迁 §1.2)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
-| GCE | 群聊外部调用 / 审议原语(headless 驱动 → MCP → 控制面 → 运营治理)| 2026-09-06 立项,目标与验收已定、**技术方案待定**(逐里程碑列开放问题)。地基(lifecycle 三态机 / summary 一等字段 / 无人值守安全)已于 09-05/06 经两场 live 实跑验证。专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
+| GCE | 群聊外部调用 / 审议原语(headless 驱动 → MCP → 控制面 → 运营治理)| 2026-09-06 立项。**M0 地基 / M1 驱动脚本 / M2 MCP 接口层 / M3 控制面 / M4a 定时审议均已交付(live 验证)**,技术方案随里程碑逐项定案并记交付段;余 M4 子项(讨论库检索 / 成本治理 / 远程暴露认证)与部署面 follow-up(跨平台编译矩阵 / Tauri 分发 / 其他宿主配置)待立项。交付汇总见 §1.2「GCE 外部线」行,逐里程碑详情见专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
 | A4+ | 成本聚合视图(token → $) | **可做可不做**(2026-08-30 用户裁定,由第三档移入)。A4 per-session token 累计已有;若做:补跨 session / provider / day 汇总换算 + 每模型 $/M 价格表(provider 层现无 pricing 字段,原"纯前端聚合"估计偏乐观) |
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |
-| ~~A2+ P3~~ | ~~shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail)~~ | **P3b 主体 2026-08-31 落地**,见 §1.2 A2+ P3b 行。判定层(A2+ P1+P2,07-04)之下的独立**限损层** — 判定错了也限损。P3a spike 同日通过定主路线(Landlock+seccomp 纯 Rust 零依赖);[spike PRD](../.trellis/tasks/08-31-a2-p3a-sandbox-spike/prd.md)。**P3c(UX 增强档)2026-09-01 落地**(见 §1.2 A2+ P3c 行):Plan 模式全命令沙盒化、只读/读写/放行三态 per-project 配置、沙盒失败→Ask 升级闭环(前台)。**余留 → follow-up**:bwrap 可选增强(namespace 路线,顺带收口 interop socket 残余面 — seccomp 无法按路径匹配 connect 的 sockaddr 指针、Landlock ABI v1 无 connect 位,v1 如实记录该残余面)、网络白名单/egress 代理(后台 shell 升级闭环已由 P3c/P3d 于 2026-09-01 交付,见 §1.2)。源方案 [docs/_history/2026-08-28-a2-shell-classification.md](./_history/2026-08-28-a2-shell-classification.md) §4 |
+| ~~A2+ P3~~ | ~~shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail)~~ | **P3b 主体 2026-08-31 落地**,见 §1.2 A2+ P3b 行。判定层(A2+ P1+P2,07-04)之下的独立**限损层** — 判定错了也限损。P3a spike 同日通过定主路线(Landlock+seccomp 纯 Rust 零依赖);[spike PRD](../.trellis/tasks/archive/2026-08/08-31-a2-p3a-sandbox-spike/prd.md)。**P3c(UX 增强档)2026-09-01 落地**(见 §1.2 A2+ P3c 行):Plan 模式全命令沙盒化、只读/读写/放行三态 per-project 配置、沙盒失败→Ask 升级闭环(前台)。**余留 → follow-up**:bwrap 可选增强(namespace 路线,顺带收口 interop socket 残余面 — seccomp 无法按路径匹配 connect 的 sockaddr 指针、Landlock ABI v1 无 connect 位,v1 如实记录该残余面)、网络白名单/egress 代理(后台 shell 升级闭环已由 P3c/P3d 于 2026-09-01 交付,见 §1.2)。源方案 [docs/_history/2026-08-28-a2-shell-classification.md](./_history/2026-08-28-a2-shell-classification.md) §4 |
 | ~~F2~~  | ~~定时任务(本地 cron 式)~~ | ✅ **2026-08-28 落地**(daemon 常驻调度器 + preset 档位 + origin 标记链 + Settings 管理面;触发源 MVP 只做系统时间;catch-up 补跑一次;经两道外部评审,见 §1.2)。**F2b 调度模型扩展同日落地**(6 档 + 次数/日期结束条件,见 §1.2 F2b 行)。**LLM `schedule_task` 家族(detached dispatch)2026-08-29 落地**(create/status/cancel、`created_by='agent'` 作者面分离、tool 侧 kill-switch/上限双 gate,见 §1.2 与 spec tool-contract 17)。余下:fs 事件 / 本地 webhook 触发源 |
 | ~~F6~~ | ~~异步 agent 任务(detach 后台跑)~~ | ✅ **编排面 2026-08-27 落地**(detach 运行时语义本就成立;补跨端 busy 可见性 + 完成 toast + F3 信号量 + 关闭确认,见 §1.2)。余下增强(系统级通知 / unread 持久化 / 等待态心跳)按需另立 |
 

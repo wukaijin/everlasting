@@ -13,6 +13,22 @@ Filled (2026-06-09). Token definitions live in
 `app/src/style.css` (single global stylesheet imported by
 `main.ts`). Components reference tokens via `var(--name)`.
 
+**Theme override layer (2026-09-05, aggressive)**: `style.css`'s `@theme`
+block is the **classic** default. A second stylesheet
+`app/src/theme-aggressive.css` overrides the same `var(--color-*)` set
+under `:root[data-theme="aggressive"]` (sharp corners 2-4px, visible
+grid with brightened borders, single volt lime accent `#a3e635`-family;
+see its header comment for the design rulings). `composables/useTheme.ts`
+owns switching (`ThemeName = "classic" | "aggressive"`, **default
+aggressive** during the experiment; classic = attribute **deleted** so the
+classic path renders byte-identical to history); entry point = Sidebar
+footer toggle; persistence = localStorage (`everlasting.theme`), **not**
+backend `app_config`. Component CSS must keep consuming `var(--color-*)`
+only — the theme swap is pure token-layer, components are untouched.
+Tokens tables below list the **classic** values; when auditing aggressive
+rendering, read `theme-aggressive.css` for the override values (this spec
+predates the layer and its color/radius tables are classic-scoped).
+
 ---
 
 ## Color Tokens
@@ -632,8 +648,8 @@ table is the authoritative "these are intentional" list.
 | `SubagentDrawer.vue:896` (↓N new pill) | `0 2px 8px rgba(0,0,0,0.25)` | Same FAB family, slightly stronger |
 | `SessionList.vue:568` (ctx menu) | `0 4px 16px rgba(0,0,0,0.2)` | Wider blur + lighter alpha than `--shadow-md` |
 | `HiddenProjectsMenu.vue:178` | `0 8px 24px rgba(0,0,0,0.35)` | lg offset/blur but lighter alpha than `--shadow-lg` |
-| `ChecklistCard.vue:269` | `0 6px 24px rgba(0,0,0,0.35)` | Between md/lg for the floating checklist panel |
-| `ChecklistCard.vue:460` | `0 4px 14px rgba(0,0,0,0.3)` | Floating empty-state CTA inside the panel |
+| `ActivityPanel.vue:671` (floating panel shadow,值自 ChecklistCard 原样迁移 09-02) | `0 6px 24px rgba(0,0,0,0.35)` | Between md/lg for the floating activity panel |
+| `ActivityPanel.vue:1012` (悬浮球空态 CTA) | `0 4px 14px rgba(0,0,0,0.3)` | Floating empty-state CTA (migrated from ChecklistCard) |
 | `EmptyProjectState.vue:187` | `0 1px 0 color-mix(accent 35%)` | 1px inner highlight, not an elevation shadow |
 | `MessageActionsMenu.vue:350` | `0 0 0 2px color-mix(accent 25%)` | 2px focus ring (deliberately thinner than `--shadow-ring`'s 3px) |
 | `MemoryLayerItem.vue:240,249` | `0 0 0 2px color-mix(var(--color-status-success)/--warn 25%)` | Status-dot ring; colors tokenized in PR2 (`--color-status-success`/`--color-status-warn`), only the 2px ring form is non-token (vs `--shadow-ring`'s 3px) |

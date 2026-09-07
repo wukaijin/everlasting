@@ -431,6 +431,8 @@ popover 迁移到 ChatPanel header(WorktreeChip 右侧)的 Brain
 - Brain 图标来自新增依赖 `@lucide/vue@^1.17.0`(heroicons 无
   brain;CpuChip 不够精准)。Icon.vue 改造为支持 heroicons +
   lucide 混用,zero glue 必需。
+  *(2026-09-02 superseded:全量迁移 lucide、`@heroicons/vue` 整链
+  移除,Icon.vue 现 lucide-only,无混用态)*
 - Modal 尺寸:`width: 80vw; min-width: 640px; max-width: 900px;
   max-height: 80vh`,内部 MemoryPreview 列表自滚
 
@@ -455,7 +457,8 @@ popover 迁移到 ChatPanel header(WorktreeChip 右侧)的 Brain
   全由 reka-ui Dialog 提供,不需手写
 - ⚠️ 新增 dependency `@lucide/vue` ~2KB tree-shake 后(只导
   Brain 一个图标)。如果未来需要更多 lucide 图标,Icon.vue 已
-  备好混用通路。
+  备好混用通路。*(2026-09-02 superseded:lucide 已是唯一图标源,
+  `@heroicons/vue` 依赖移除;tree-shake 收益随全量迁移放大)*
 - ⚠️ `popover-pattern.md` "Don't: Use reka-ui Popover" 规则
   **仍然适用** — 它针对 popover/dropdown。Modal 走 reka-ui
   `Dialog*` 一直是项目惯例(SettingsModal 是参考)。两个规则
@@ -599,7 +602,7 @@ Panel 卡住等渲染。用户在 editor 保存 → 触发 reload → 下次
 
 - **recall event 路由**:`ChatEvent::Recall { hits }` ride on `chat-event` channel → `streamController.handleChatEvent` 的 `case "recall"` → `useMemoryStore().pushRecallHits(sessionId, hits)`(per-session 累积)。**不**写进 messages buffer(transient,同 `Retrying`)。新 user message(`startRequest`)清空该 session slice(per-turn,design D7)。
 - **recall 状态归属**:`recallHitsBySession: reactive(new Map<sid, RecallHit[]>)` 在 `useMemoryStore`(**不**在 streamController)— `state-management.md:131-139` 跨切面领域状态归 feature store,controller 只路由。`recallHitsForSession(sid)` 是**纯读** computed(getter 不 mutate 自己 track 的 deps — `state-management.md:166-212` 硬规则)。
-- **recall chip 挂载点**:`ChatPanel.vue`(header 下、`<main>` 上方)。`MessageList.vue` **无** banner slot(纯 scroll 容器);`ChatPanel` 是跨切面 overlay 宿主(PermissionModal / ChecklistCard / WorkerAskBanner 先例)。
+- **recall chip 挂载点**:`ChatPanel.vue`(header 下、`<main>` 上方)。`MessageList.vue` **无** banner slot(纯 scroll 容器);`ChatPanel` 是跨切面 overlay 宿主(WorkerAskBanner / ActivityPanel / AuditLogModal 等 Dialog modal 先例;旧 PermissionModal 全局审批与 ChecklistCard 浮层已分别 inline 化与并入 ActivityPanel)。
 - **行点击 → modal**:`MemoryPreview` 的 runtime row `@click` emit `manage(id)` → `MemoryModal` forward → `ChatPanel.onMemoryManage` → 开 `RuntimeMemoryModal`。MemoryPreview **不**硬绑 modal(两处复用:ChatPanel 的 MemoryModal + 未来 Settings;宿主决定)。
 
 ### RuntimeMemoryModal.vue(新建)

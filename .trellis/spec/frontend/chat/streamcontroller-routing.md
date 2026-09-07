@@ -4,7 +4,7 @@
 
 ## Convention: streamController.handleToolCall → feature store 按 tool name 路由（B12 / C2）
 
-> 来源:B12 checklist (2026-06-19,`update_checklist` tool_use 实时驱动 floating ChecklistCard)
+> 来源:B12 checklist (2026-06-19,`update_checklist` tool_use 实时驱动 floating ChecklistCard;2026-09-02 起 checklist 渲染迁入 `<ActivityPanel>`,floating ChecklistCard 形态不复存在)
 > + C2 review-viz (2026-07-27,`write_file` 写 review-state.json 实时驱动 ReviewMatrix)。
 
 ### 模式

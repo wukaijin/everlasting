@@ -440,41 +440,46 @@ mobile-only in practice.
 
 ---
 
-## 8. Horizontal-scrollable tabs + pill highlight (S6b — Settings modal)
+## 8. Horizontal-scrollable tabs + pill highlight (S6b — Settings modal → settings nav)
 
 S6b (`08-13-mobile-settings`) introduced the first horizontal-scroll tab
-navigation (SettingsModal's 6 tabs on ≤767px). Pattern, all inside
+navigation (SettingsModal's 6 tabs on ≤767px). The Settings shell was
+rebuilt on 08-29 from a tab strip into search + scope + grouped nav
+(registry.ts); the mobile pattern **migrated verbatim** to
+`.settings-modal__nav` / `.settings-modal__nav-item` (grouped categories
+scroll horizontally, active category gets the pill). Pattern, all inside
 `@media (max-width: 767px)`:
 
 ```css
-.settings-modal__tabs {
+.settings-modal__nav {
+  flex-direction: row;
+  width: 100%;
+  flex: none;
   overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to right, #000 88%, transparent 100%);
-  mask-image: linear-gradient(to right, #000 88%, transparent 100%);
+  scrollbar-width: none;   /* 隐藏滚动条(仍可触控滑) */
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 8%, #000 92%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, #000 8%, #000 92%, transparent 100%);
 }
-.settings-modal__tab {
+.settings-modal__nav-item {
   flex-shrink: 0;          /* 不被压缩成一团 */
   white-space: nowrap;
-  border-bottom-width: 0;  /* 下划线让位给 pill */
 }
-.settings-modal__tab[data-state="active"] {
+.settings-modal__nav-item--active {
   background: var(--color-accent-muted);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   border-radius: var(--radius-md);
 }
 ```
 
 Conventions:
 
-- **Pill highlight replaces the desktop underline** via reka-ui's
-  `data-state="active"` selector, mobile-only (desktop block untouched).
-- **Edge-fade scroll hint via `mask-image`** (right edge `#000 88% →
-  transparent 100%`), double-written `-webkit-mask-image` + `mask-image`.
-  Accepted trade-off (S6b design): the mask is static, so at viewports
-  where all 6 tabs fit (≈602–767px) it also fades the strip's right
-  edge — cosmetic, outside the supported phone range (320–430px). A
-  scrollable-state-aware mask would need JS; deferred.
+- **Pill highlight replaces the desktop underline** (`.nav-item--active`
+  — the old tab strip's `data-state="active"` selector no longer exists).
+- **Edge-fade scroll hint via `mask-image`**, double-written
+  `-webkit-mask-image` + `mask-image`. The current nav mask is
+  **bilateral** (`transparent 0% → #000 8%` + `#000 92% → transparent
+  100%`), superseding the S6b single right-edge fade whose static right
+  fade could also dim the strip when all items fit (~602–767px).
 - **`-webkit-overflow-scrolling: touch` — removed in review**: the S6b
   design (§2.1) originally specified this property, but it is deprecated
   since iOS 13 (momentum scrolling is the default) and is a no-op on

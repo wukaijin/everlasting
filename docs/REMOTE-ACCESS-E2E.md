@@ -163,7 +163,7 @@ curl https://remote.yourdomain.com/
 ```bash
 # 方式 A:release daemon(serve 前端 + API,生产形态)
 ./scripts/daemon.sh start --no-build   # 前台起 release daemon,默认 :7456
-./scripts/daemon.sh bg --no-build      # 后台起(日志写 /tmp/everlasting-daemon.log)
+./scripts/daemon.sh bg --no-build      # 后台起(日志落 $XDG_STATE_HOME/dev.everlasting.app/daemon.log)
 #   注:2026-08-24 起孤儿守卫(PDEATHSIG)只 gate 到 sidecar 模式
 #   (EVERLASTING_SIDECAR=1,GUI spawn 注入),standalone 的 bg 已恢复可用;
 #   见 bin/everlasting-daemon.rs 的 gate 注释。

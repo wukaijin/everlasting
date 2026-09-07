@@ -16,7 +16,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 
 ## 两条入口,先分清你是谁(GCE-M2 起)
 
-- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 四工具**——`start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
+- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 六工具**(M3 09-06 起)**——`start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
 - **everlasting 内部 agent**(daemon 单聊,非 MCP client):走下面的脚本路径。
 
 ## 建群三要素(全靠脚本内省,别背参数)
@@ -54,12 +54,12 @@ node scripts/group-chat-run.mjs run \
 
 ## 读结果
 
-- 退出码:`0` 正常收官 / `2` 轮次帽(30 轮)截断 / `3` 被取消 / `4` 连续错误熔断 / `1` 脚本自身错(同样导出部分转录,现场不丢)。
+- 退出码:`0` 正常收官 / `2` 轮次帽(30 轮)截断 / `3` 被取消 / `4` 连续错误熔断 / `5` interrupted(daemon 进程级中断,可 `resume_group_chat` 续跑,P1a 09-06 起)/ `1` 脚本自身错(同样导出部分转录,现场不丢)。
 - 转录 markdown:头部有阵容/时长/token/`discussion_summary`(共识清单一等字段,优先读它;缺失时头会有 ⚠️ 警告行),正文 `seqN **speaker**: > 正文`(blockquote 隔离),工具轮带 `工具调用 name{参数}` 证据链。
 - session 默认保留(可在 GUI 复盘整场;`--cleanup` 仅成功路径删)。
 
 ## 边界
 
-- 本 skill 不做:打断/注入/实时跟随(M3 之前讨论不可驾驶,发起前把议题写全)。
+- 本 skill 的**脚本路径**不做:打断/注入/实时跟随(这些在 MCP 工具面才有——`interrupt_discussion`/`inject_message`;实时跟随走 SSE,见 docs/DAEMON-API.md §6.2)。脚本路径下一旦开跑不可中途改议题——发起前把议题写全;需要中途干预请走 MCP 入口。
 - 无人值守安全:无 GUI 观察者时权限请求 8s 快拒,参与者会自己绕路——议题里给的路径要真实存在,减少无效审批。
 - 嵌套消费(在 daemon 会话里由 agent 驱动本脚本):shell 沙箱禁网会拦脚本的 daemon 连接。脱沙箱路径(2026-09-06 live 实证):①脚本错误文案已带 `Operation not permitted (EPERM)` 签名,沙箱升级分类器能识别;②对会话预授权 shell prefix(注意:prefix 授权按**命令首词的 basename** 匹配——存 `node`,不是脚本全路径,全路径是死数据);③命令**务必裸写**,加重定向/`&&` 等组合符授权即失效。满足后沙箱首跑失败会自动无沙箱重跑,零人工。**双发警告**:升级重跑会生成新的后台句柄——原句柄显示 Failed 不代表任务失败,等新句柄/查 session 列表,**不要手动重发**(live 实证:手动重发导致两场审议并发跑,双倍成本)。MCP 工具入口没有这一整类问题(不经 shell,无沙箱/授权/句柄层)——宿主 agent 优先走 MCP。

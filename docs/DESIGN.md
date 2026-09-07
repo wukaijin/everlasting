@@ -13,7 +13,7 @@
 - 之后再回来能快速回到上下文
 - 讨论时有共同语言
 
-讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions-2026-{06,07,08}.md 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 `decisions.md`)。
+讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions-2026-{06,07,08,09}.md 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 `decisions.md`)。
 
 ---
 
@@ -77,7 +77,7 @@
 - A4 Token 用量统计:per-session 累积(4 列)+ ChatInput hint 区 0-49% 绿 / 50-74% 黄 / 75%+ 红
 - D1 session 重命名 + 8 色标记
 - C1 取消机制完整化:tool 执行中途可取消(CancellationToken)
-- **B12** Checklist(agent 自跟踪进度清单):TodoWrite 式 `update_checklist` tool(全量替换 + 三态 pending/in_progress/done + 至多一 in_progress coerce),loop-local Vec,前端 `<ChecklistCard>` 浮层
+- **B12** Checklist(agent 自跟踪进度清单):TodoWrite 式 `update_checklist` tool(全量替换 + 三态 pending/in_progress/done + 至多一 in_progress coerce),loop-local Vec,前端 2026-09-02 起由 `<ActivityPanel>` 运行状态面板的清单 section 渲染(原 `<ChecklistCard>` 浮层随面板三合一合并移除)
 - **L1a** 后台 shell + 完成通知:3 tool(`run_background_shell` / `shell_status` / `shell_kill`),session-scoped,默认 `max_runtime_ms` 24h,APPEND user message 保 memory cache breakpoint
 - **L2** 单 turn 多 tool 并发(只读 batch):`is_parallel_eligible` 纯谓词 + `FuturesUnordered`,并发集合 `{read_file, grep, glob, list_dir, use_skill}`,多 tool_result 单消息打包
 - **L3a-d** Subagent 全套:并发只读 dispatch / worker worktree 隔离 / worker 联网 / frontmatter loader(`~/.config/everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md`)
@@ -91,10 +91,10 @@
 - **B1 image multimodal**(2026-08-16/17):`ContentBlock::Image` / `ImageRef` 双形态 + `models.supports_images` 配置(`INTEGER NOT NULL DEFAULT 0`,`db/migrations/schema.rs:1012`)+ `messages.metadata.attachments[]` 引用 attachments 表 + **首个二进制 GET 路由** `GET /api/v1/attachments/<id>`(daemon `daemon/routes/attachments.rs`,手机 PWA 看图路径)+ `turn_trace.images_token INTEGER` 度量(B1 PR4);不支持 vision 的模型走 ImageRef 占位降级
 - **D2 跨 session 全文搜索**(2026-08-17):`messages_fts` FTS5 虚拟表(`db/migrations/schema.rs:1051`,external-content + trigram + `UPDATE OF text` 防写放大 + `messages_fts_docsize` 影子表守卫回填)+ `db/search.rs` 双路分派(FTS 命中走 rowid → `messages` 主表;0 命中回退 LIKE 兜底)+ `search_messages` POST IPC + 前端 `SearchModal` 两态(空态/命中态按 session 分组)+ Cmd/Ctrl+K 接管
 - **F1 消息队列·用户连发档**(2026-08-25):流式期间编辑器解锁,发送统一入队(后端 per-session 内存队列 `agent/message_queue.rs`,FIFO/uuid 寻址/上限 20),turn 边界驱动器 drain 全队批量注入;`ChatEvent::TurnContinuation` 续轮渲染边界;单条撤销/退回/水合(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md))
-- **F4 `web_search` 工具**(2026-08-25):与 `web_fetch` 两段式分工(Tavily keyed / DDG 兜底),固定端点无 SSRF 面,Tier 5 silent Allow;Settings 第 7 tab 配 key(AEAD 加密)
+- **F4 `web_search` 工具**(2026-08-25):与 `web_fetch` 两段式分工(Tavily keyed / DDG 兜底),固定端点无 SSRF 面,Tier 5 silent Allow;Settings「集成」组 Search 分类配 key(AEAD 加密;设置面 08-29 起为搜索 + 分组导航,非 tab 式)
 - **F5 PDF/docx/xlsx 原生文本提取**(2026-08-26):`agent/doc_extract.rs` 纯函数提取(pdf-extract / quick-xml / calamine,零 Node 运行时零 pdfium),@文件在 Degraded 兜底前分流,成功走 `<doc>` span 注入通道 + `at_files_token` 度量;占位文案升级为指令式自助兜底(长尾格式 agent 自行转换);pptx 用户裁定不做
 - **F6 异步 agent 任务 + F3 全局并发闸**(2026-08-27):`SessionSummary.busy` 运行时 enrich(跨端侧栏红点)+ 轮次终结跨 session toast + `max_concurrent_loops` 全局信号量(缺省 4)+ Tauri 壳关闭确认;零新表零 migration(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md))
-- **F2·F2b 定时任务**(2026-08-28;08-29 once 档;08-31 per_run 三档):daemon 常驻调度器(`scheduler/` 30s tick,单一扫描算法 + `due` 落账防相位漂移 + catch-up)+ origin 载体链走 F1 队列入口;preset **7 档**(含单次档 once)+ `max_runs`/`ends_at` 结束条件 + `completed` 审计;Settings 第 8 tab 管理面,PWA 可用(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md) + [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md))
+- **F2·F2b 定时任务**(2026-08-28;08-29 once 档;08-31 per_run 三档;09-07 增 group_chat 定时审议档):daemon 常驻调度器(`scheduler/` 30s tick,单一扫描算法 + `due` 落账防相位漂移 + catch-up)+ origin 载体链走 F1 队列入口;preset **7 档**(含单次档 once)+ `max_runs`/`ends_at` 结束条件 + `completed` 审计;Settings「集成」组「定时任务」分类管理面(08-29 起非 tab 式),PWA 可用(详见 [ARCHITECTURE §1.6](./ARCHITECTURE.md) + [backend/scheduled-tasks.md](../.trellis/spec/backend/scheduled-tasks.md))
 - **stream 事件补 session_id**(2026-08-27):`chat-event` payload 回填 `session_id`,支持跨客户端(remote PWA)按 session 认领
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):

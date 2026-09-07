@@ -49,7 +49,7 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 # Daemon / 浏览器模式（纯浏览器模式：daemon 同源服务前端 SPA，浏览器开 http://localhost:7456/）
 # 子命令：start / bg / stop / restart / rebuild / status / logs；选项 --port N（默认 7456）/ --no-build
 ./scripts/daemon.sh start      # 编译 release + 前台启动（日志打终端）
-./scripts/daemon.sh bg         # 同 start 但后台（日志写 /tmp/everlasting-daemon.log）
+./scripts/daemon.sh bg         # 同 start 但后台（日志落 $XDG_STATE_HOME/dev.everlasting.app/daemon.log；09-03 F3 起进程内 RotatingFileWriter 轮转，daemon.sh 不再重定向/轮转）
 ./scripts/daemon.sh restart    # stop + bg（改前端后重新 serve dist 的最常用工作流）
 ./scripts/daemon.sh rebuild    # 只重新编译 release 二进制（不重启）
 ./scripts/daemon.sh status     # 进程状态 + GET /api/v1/health
@@ -120,7 +120,7 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 
 所有设计文档在 `docs/` 目录，全中文。入口与分工：
 - **状态 / 排期查 [docs/ROADMAP.md](./docs/ROADMAP.md)**（技术路线图，单一 source of truth：V2 4 档分类 + 已实施粗粒度归类）
-- **决策历史查 [docs/IMPLEMENTATION/](./docs/IMPLEMENTATION/)**（`decisions.md` 索引 + `decisions-2026-{06,07,08}.md` 按月分卷，只追加）
+- **决策历史查 [docs/IMPLEMENTATION/](./docs/IMPLEMENTATION/)**（`decisions.md` 索引 + `decisions-2026-{06,07,08,09}.md` 按月分卷，只追加）
 - `ARCHITECTURE.md` — 系统架构、18+ 关卡请求生命周期、核心决策
 - `DESIGN.md` — 项目能力边界 + 硬约束(明确不做)
 - `TECH.md` — 技术选型决策（锁定/候选/不用）
