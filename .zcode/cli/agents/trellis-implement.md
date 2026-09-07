@@ -2,6 +2,7 @@
 name: trellis-implement
 description: |
   Code implementation expert. Understands specs and requirements, then implements features. No git commit allowed.
+model: "custom:builtin%3Abigmodel-coding-plan:GLM-5.3-Flash"
 color: "#4f46e5"
 ---
 
