@@ -40,8 +40,35 @@ export type ScheduleSpec =
   | { kind: "once"; at_ms: number };
 
 /** 目标模式(wire `target_mode`,08-31-sched-per-run-session):
- *  `fixed` = 注入固定目标 session;`per_run` = 每次触发自动新建 session。 */
-export type TargetMode = "fixed" | "per_run";
+ *  `fixed` = 注入固定目标 session;`per_run` = 每次触发自动新建 session;
+ *  `group_chat` = 定时审议(09-07-gce-m4a,fire 自动建群发题)。 */
+export type TargetMode = "fixed" | "per_run" | "group_chat";
+
+/** M4a 定时审议:存档的展开群聊配置(`group_chat_config` 列 JSON 的
+ *  形状,直拷 Rust `db::scheduled_tasks::GroupChatTaskConfig`)。
+ *  **创建时展开的完整配置** —— preset 展开发生在创建 UI,模型引用是
+ *  models 表 UUID;daemon 与 DB 全程无 preset 名(design §3)。 */
+export interface GroupChatTaskParticipant {
+  name: string;
+  model_id: string;
+  /** 可选内联 persona(展开自 preset;镜像 Rust `Option<String>` +
+   *  `serde(default)`:wire 上缺失 / null / 字符串三态合法)。 */
+  persona_md?: string | null;
+}
+
+export interface GroupChatTaskConfig {
+  moderator_model_id: string;
+  participants: GroupChatTaskParticipant[];
+}
+
+/** M4a:最近一次 fire 的结局快照(wire `last_fire_outcome`,镜像 Rust
+ *  `db::scheduled_tasks::fire_outcomes` 五值;null = 从未触发)。 */
+export type LastFireOutcome =
+  | "started"
+  | "resumed"
+  | "skipped_busy"
+  | "error"
+  | "recovered";
 
 /** `ScheduledTaskPayload` wire 形状(snake_case 直拷)。 */
 export interface ScheduledTask {
@@ -74,6 +101,11 @@ export interface ScheduledTask {
   max_runs: number | null;
   /** 结束日期 epoch ms;null = 不限(F2b;含当日,当日到期点照常触发)。 */
   ends_at: number | null;
+  /** M4a 定时审议档:存档的展开群聊配置(编辑回显用);损坏存量行降级
+   *  null(与 `schedule` 同款),其余档恒 null。 */
+  group_chat_config: GroupChatTaskConfig | null;
+  /** M4a:最近一次 fire 的结局(null = 从未触发);任务卡状态行直读。 */
+  last_fire_outcome: LastFireOutcome | null;
 }
 
 /** `create_scheduled_task` 入参(camelCase 顶层 key,transport 扳 snake)。 */
@@ -82,7 +114,8 @@ export interface CreateScheduledTaskInput {
   /** undefined / 空 = 新建专用 session(标题同任务名,后端定);
    *  per_run 档不传(后端拒绝两者同时出现)。 */
   targetSessionId?: string;
-  /** "per_run" = 每次执行新建 session(缺省 = fixed)。 */
+  /** "per_run" = 每次执行新建 session;"group_chat" = 定时审议自动建群
+   *  (M4a,须随同带 groupChatConfig;缺省 = fixed)。 */
   targetMode?: TargetMode;
   name: string;
   prompt: string;
@@ -94,14 +127,21 @@ export interface CreateScheduledTaskInput {
   /** 结束日期 epoch ms(F2b;undefined = 不限)。 */
   endsAt?: number;
   /** 模型绑定:fixed 档仅「新建专用 session」分支生效(写 session 行);
-   *  per_run 档存任务行,每次新建 session 时应用。undefined = 全局默认。 */
+   *  per_run 档存任务行,每次新建 session 时应用。undefined = 全局默认。
+   *  group_chat 档不收(moderator 在 groupChatConfig 内,后端 400 互斥)。 */
   modelId?: string;
+  /** M4a:targetMode="group_chat" 必带(创建 UI 展开 preset 的结果,
+   *  模型已解析为 UUID);其余档不传(后端 400 互斥)。 */
+  groupChatConfig?: GroupChatTaskConfig;
 }
 
 /** `update_scheduled_task` 的部分更新 patch(`undefined` 字段后端不动)。
  *  `maxRuns` / `endsAt` / `targetSessionId` / `modelId` 传 `null` = 显式
  *  清空(wire 显式 `null`,区别于缺省不动 —— 后端 double option;
- *  targetSessionId 清空即切 per_run 的绑定侧,须随同传 targetMode)。 */
+ *  targetSessionId 清空即切 per_run 的绑定侧,须随同传 targetMode)。
+ *  `groupChatConfig` 同为双层 Option:缺省 = 不动(编辑态未重选 preset
+ *  时保留存档配置);对象 = 校验后写入;显式 `null` = 清空(仅切离
+ *  group_chat 档合法 —— 本档任务切离时后端本就自动清空,前端无需传)。 */
 export interface UpdateScheduledTaskInput {
   name?: string;
   prompt?: string;
@@ -112,6 +152,7 @@ export interface UpdateScheduledTaskInput {
   enabled?: boolean;
   maxRuns?: number | null;
   endsAt?: number | null;
+  groupChatConfig?: GroupChatTaskConfig | null;
 }
 
 export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
@@ -148,6 +189,7 @@ export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
       ...(input.maxRuns !== undefined ? { maxRuns: input.maxRuns } : {}),
       ...(input.endsAt !== undefined ? { endsAt: input.endsAt } : {}),
       ...(input.modelId ? { modelId: input.modelId } : {}),
+      ...(input.groupChatConfig ? { groupChatConfig: input.groupChatConfig } : {}),
     });
     await load();
     return row;
@@ -174,6 +216,10 @@ export const useScheduledTasksStore = defineStore("scheduledTasks", () => {
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.maxRuns !== undefined ? { maxRuns: patch.maxRuns } : {}),
       ...(patch.endsAt !== undefined ? { endsAt: patch.endsAt } : {}),
+      // 双层 Option:显式 null 透传(清空);缺省( undefined)不进 args。
+      ...(patch.groupChatConfig !== undefined
+        ? { groupChatConfig: patch.groupChatConfig }
+        : {}),
     });
     await load();
     return row;

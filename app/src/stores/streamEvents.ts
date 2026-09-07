@@ -28,7 +28,8 @@ import type {
   ToolResultPayload,
   TurnLatency,
 } from "./streamController";
-import { buildPendingNotification, buildTurnFinishedNotification, genId, groupChatNotice } from "./streamController";
+import { buildPendingNotification, buildScheduledDiscussionNotification, buildTurnFinishedNotification, genId, groupChatNotice, resolveScheduledDiscussion } from "./streamController";
+import { useScheduledTasksStore } from "./scheduledTasks";
 import { rehydrateMessages, type LoadedSession } from "./streamRehydrate";
 
 /** R3 (08-24-p1-turn-crash-recovery): marker the daemon's startup
@@ -164,11 +165,35 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     // 不在那个 session(未加载/被逐出),toast 恰恰只有这时有意义。
     // `cancelled` 抑制:用户主动停止不是「完成」,Stop 操作自身已有
     // 反馈(清队 toast / [已停止] 气泡),再弹会打架。
-    if (isTerminal && event.stop_reason !== "cancelled") {
-      maybeNotifyTurnFinished(
+    //
+    // M4a 定时审议(09-07-gce-m4a,评审 P2-9 双弹抑制):终态事件命
+    // 中定时审议场(任务行 last_run_session_id 锚点优先,session
+    // metadata created_via 兜底)→ 路由**专用**收官 toast(「定时审议
+    // 「任务名」已收官(...)」),同时抑制通用轮次通知 —— 否则同一
+    // 终点弹两条。判定不出(如新 fire 的场尚未进前端任务缓存)→ 降级
+    // 走通用通知,不崩。
+    if (isTerminal) {
+      const scheduledTaskName = resolveScheduledDiscussion(
         req.sessionId,
-        event.kind === "error" ? "error" : "done",
+        useScheduledTasksStore().tasks,
+        useChatStore().sessions.find((s) => s.id === req.sessionId)?.metadata,
       );
+      const kind = event.kind === "error" ? ("error" as const) : ("done" as const);
+      if (scheduledTaskName !== null) {
+        if (event.stop_reason !== "cancelled") {
+          const n = buildScheduledDiscussionNotification(
+            req.sessionId,
+            scheduledTaskName,
+            event.stop_reason,
+            kind,
+          );
+          useProjectsStore().showToast(n.message, "info", 6000, {
+            sessionId: n.sessionId,
+          });
+        }
+      } else if (event.stop_reason !== "cancelled") {
+        maybeNotifyTurnFinished(req.sessionId, kind);
+      }
     }
 
     const msgs = messagesBySession.get(req.sessionId);

@@ -514,6 +514,82 @@ export function buildTurnFinishedNotification(
   return { message, sessionId };
 }
 
+// --- M4a 定时审议收官 toast(09-07-gce-m4a;评审 P2-9 双弹抑制)-----------
+
+/** 群聊编排器边界 stop_reason → 收官 toast 的可读短语(与
+ *  `groupChatNotice` 不同族:那里是聊天气泡的异常警示行,这里是「这场
+ *  怎么收官的」归因短语)。已知边界值全部映射;未知值原样透出(防御,
+ *  同 `weekdayLabel` 先例);无 stop_reason 的 error 事件按 kind 兜底。 */
+export function scheduledStopReasonLabel(
+  stopReason: string | null | undefined,
+  kind: "done" | "error" = "done",
+): string {
+  switch (stopReason) {
+    case "group_chat_end":
+      return "正常收官";
+    case "max_rounds":
+      return "达到轮次上限";
+    case "preempted":
+      return "被打断收束";
+    case "cancelled":
+      return "已取消";
+    case "interrupted":
+      return "进程中断";
+    case "error":
+      return "出错终止";
+    case null:
+    case undefined:
+      return kind === "error" ? "出错终止" : "结束";
+    default:
+      return stopReason;
+  }
+}
+
+/** 判定终态事件所属 session 是否为定时审议场(M4a),命中返回任务名。
+ *  两级来源,任务行锚点优先:
+ *  1. scheduledTasks 任务行(`target_mode === "group_chat"` 且
+ *     `last_run_session_id === sessionId` —— fire 落账的容错锚点;
+ *     store 是跨 project 全量列表,foreign session 也命中);
+ *  2. session metadata 三键归因(`created_via === "scheduled"`,fire
+ *     建群写入;侧栏只持当前 project 的 sessions,foreign session 取
+ *     不到 metadata 时返回 null —— 调用方降级走通用通知,不崩)。
+ *  纯函数(无 store 访问),镜像 `buildTurnFinishedNotification` 先例。 */
+export function resolveScheduledDiscussion(
+  sessionId: string,
+  tasks: {
+    target_mode: string;
+    last_run_session_id: string | null;
+    name: string;
+  }[],
+  sessionMetadata: Record<string, unknown> | null | undefined,
+): string | null {
+  const hit = tasks.find(
+    (t) =>
+      t.target_mode === "group_chat" && t.last_run_session_id === sessionId,
+  );
+  if (hit) return hit.name;
+  if (sessionMetadata?.created_via === "scheduled") {
+    const name = sessionMetadata?.scheduled_task_name;
+    return typeof name === "string" && name ? name : "定时审议";
+  }
+  return null;
+}
+
+/** M4a 收官专用 toast 文案(AC4「单弹」的专用臂):
+ *  「定时审议「周度评审」已收官(正常收官)」+ sessionId 附着
+ *  (AppShell 点击跳转)。 */
+export function buildScheduledDiscussionNotification(
+  sessionId: string,
+  taskName: string,
+  stopReason: string | null | undefined,
+  kind: "done" | "error" = "done",
+): { message: string; sessionId: string } {
+  return {
+    message: `定时审议「${taskName}」已收官(${scheduledStopReasonLabel(stopReason, kind)})`,
+    sessionId,
+  };
+}
+
 /** 08-07-group-chat-review-fixes R2: map a group-chat orchestrator
  *  boundary `stop_reason` to a user-facing notice string. Returns
  *  `null` for any reason that is not an orchestrator boundary signal

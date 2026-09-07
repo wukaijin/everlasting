@@ -57,11 +57,18 @@ import ConfirmDialog from "../common/ConfirmDialog.vue";
 import AppDatePicker from "../common/AppDatePicker.vue";
 import AppTimeField from "../common/AppTimeField.vue";
 import Icon from "../Icon.vue";
+// M4a(R7 preset 单一事实源):与 scripts/group-chat-run.mjs 同读
+// scripts/group-chat-presets.json —— 展开发生在本表单(提交时),DB 与
+// daemon 全程不见 preset 名。文件在 app/ 外:vite dev 需 server.fs.allow
+// (vite.config.ts 已配),build/vitest 不受 dev-server 限制。
+import groupChatPresetsJson from "../../../../scripts/group-chat-presets.json";
 import { useScheduledTasksStore } from "../../stores/scheduledTasks";
 import type {
   ScheduledTask,
   ScheduleSpec,
   TargetMode,
+  GroupChatTaskConfig,
+  GroupChatTaskParticipant,
 } from "../../stores/scheduledTasks";
 import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
@@ -82,12 +89,42 @@ import {
   completedByEndDate,
   completedByOnce,
   displayNextFireAt,
+  describeFireOutcome,
+  groupChatCostNote,
 } from "../../utils/scheduledTaskFormat";
 
 const store = useScheduledTasksStore();
 const projects = useProjectsStore();
 const config = useConfigStore();
 const models = useModelsStore();
+
+// --- M4a 定时审议:preset 展开(scripts/group-chat-presets.json)-----------
+
+/** preset 配方的运行时形状(与 M1 `composePresets` 消费的 JSON 同构;
+ *  JSON import 的字面量类型按 key 收窄,动态取档需放宽成 Record)。 */
+interface GcPresetDef {
+  description: string;
+  moderator_model: string;
+  participants: { name: string; model: string; persona: string }[];
+}
+const GC_PRESETS = groupChatPresetsJson as unknown as {
+  persona_common: string;
+  personas: Record<string, string>;
+  presets: Record<string, GcPresetDef>;
+};
+
+/** preset 下拉选项(键序 = JSON 声明序:review / arch / retro)。 */
+const GC_PRESET_OPTIONS = Object.entries(GC_PRESETS.presets).map(
+  ([value, p]) => ({ value, label: `${value} — ${p.description}` }),
+);
+
+/** persona kind → 完整 persona_md(镜像 M1 `composePresets`:边界文本 +
+ *  "\n\n" + 公共纪律;提交时逐字带过,前端不加工)。缺 kind 返回 null
+ *  (正常不可能:JSON 单源固定四 kind;防御转提交错误)。 */
+function gcPersonaMd(kind: string): string | null {
+  const base = GC_PRESETS.personas[kind];
+  return base === undefined ? null : `${base}\n\n${GC_PRESETS.persona_common}`;
+}
 
 // --- 列表区 ---------------------------------------------------------------
 
@@ -125,7 +162,9 @@ function sessionTitleOf(task: ScheduledTask): string {
 }
 
 /** 卡片 meta 的目标段(08-31-sched-per-run-session):fixed = session
- *  标题;per_run = 模式名,能解析出最近一次 run session 时追加。 */
+ *  标题;per_run = 模式名,能解析出最近一次 run session 时追加;
+ *  group_chat(M4a)= 定时审议 + 成本标注,最近场可解析时追加(列表
+ *  展示经 sessionsByProject 缓存联查,零额外 IPC)。 */
 function targetLabelOf(task: ScheduledTask): string {
   if (task.target_mode === "per_run") {
     const last = task.last_run_session_id
@@ -134,6 +173,15 @@ function targetLabelOf(task: ScheduledTask): string {
           ?.find((s) => s.id === task.last_run_session_id)
       : undefined;
     return last ? `每次新建 session · 最近:${last.title}` : "每次新建 session";
+  }
+  if (task.target_mode === "group_chat") {
+    const count = task.group_chat_config?.participants.length ?? 0;
+    const last = task.last_run_session_id
+      ? sessionsByProject
+          .get(task.project_id)
+          ?.find((s) => s.id === task.last_run_session_id)
+      : undefined;
+    return `定时审议 · ${groupChatCostNote(count)}${last ? ` · 最近:${last.title}` : ""}`;
   }
   return sessionTitleOf(task);
 }
@@ -192,13 +240,16 @@ type FormKind =
   | "monthly"
   | "interval";
 
-/** 目标 session 三档(08-31-sched-per-run-session 表单重设计):
+/** 目标 session 四档(08-31 三档 + M4a 定时审议):
  *  · existing —— 指定既有 session(fixed 档);
  *  · dedicated —— 创建时新建专用 session(仅创建态;落库后即 fixed);
- *  · per_run —— 每次触发自动新建 session(wire target_mode="per_run")。
+ *  · per_run —— 每次触发自动新建 session(wire target_mode="per_run");
+ *  · group_chat —— 定时审议(M4a,wire target_mode="group_chat",到点
+ *    自动建群发题)。
  *  编辑态 dedicated 不出现:专用 session 本质是 fixed,统一回显为
- *  「指定 session」(session 预选)。 */
-type FormTargetMode = "existing" | "dedicated" | "per_run";
+ *  「指定 session」(session 预选);group_chat 仅编辑 group_chat 行时
+ *  出现(fixed/per_run 行的编辑卡保持原两档,零回归)。 */
+type FormTargetMode = "existing" | "dedicated" | "per_run" | "group_chat";
 
 const TARGET_MODE_META: Readonly<
   Record<FormTargetMode, { label: string; desc: string }>
@@ -211,6 +262,10 @@ const TARGET_MODE_META: Readonly<
   per_run: {
     label: "每次新建 session",
     desc: "每次触发自动创建全新会话,各次结果互不干扰",
+  },
+  group_chat: {
+    label: "定时审议",
+    desc: "到点自动召集群聊审议并出结论(多模型,成本较高)",
   },
 };
 
@@ -253,7 +308,12 @@ function onPickSession(v: unknown): void {
 
 function onPickTargetMode(v: unknown): void {
   const m = normalizeSelectValue(v);
-  if (m === "existing" || m === "dedicated" || m === "per_run") {
+  if (
+    m === "existing" ||
+    m === "dedicated" ||
+    m === "per_run" ||
+    m === "group_chat"
+  ) {
     form.targetMode = m as FormTargetMode;
   }
 }
@@ -292,6 +352,149 @@ const flatModelOptions = computed(() =>
 function onPickModel(v: unknown): void {
   const m = normalizeSelectValue(v);
   if (m === "" || flatModelOptions.value.some((o) => o.id === m)) form.modelId = m;
+}
+
+// --- M4a group_chat 档:解析 / 展开 / 预览 ---------------------------------
+
+/** 模型引用(名字或 UUID)→ 目录 UUID。镜像 M1 `normalizeModelRef` 的
+ *  两趟语义(UUID → 精确 modelName/displayName → 大小写不敏感;目录里
+ *  存在「glm-5.3 的 modelName == GLM-5.3-Flash 的 displayName」的真实
+ *  撞车,单趟 lowercase 会随数组序漂移)。查不到返回 null(提交时转
+ *  表单错误——预设引用的模型必须真实存在,后端 catalog 预检同样拦截)。 */
+function resolveModelRef(ref: string): string | null {
+  if (!ref) return null;
+  const list = models.models ?? [];
+  const byId = list.find((m) => m.id === ref);
+  if (byId) return byId.id;
+  const exact = list.find(
+    (m) => m.modelName === ref || m.displayName === ref,
+  );
+  if (exact) return exact.id;
+  const lower = ref.toLowerCase();
+  const ci = list.find(
+    (m) =>
+      (m.modelName || "").toLowerCase() === lower ||
+      (m.displayName || "").toLowerCase() === lower,
+  );
+  return ci?.id ?? null;
+}
+
+/** UUID → 「provider · 显示名」(编辑态存档预览的反查;目录缺失回退
+ *  UUID 前 8 位——模型被删后存档行仍可读)。 */
+function modelDisplayName(modelId: string): string {
+  const m = (models.models ?? []).find((x) => x.id === modelId);
+  return m ? `${m.providerDisplayName} · ${m.displayName}` : modelId.slice(0, 8);
+}
+
+function onPickGcPreset(v: unknown): void {
+  const k = normalizeSelectValue(v);
+  if (!k || !(k in GC_PRESETS.presets)) return;
+  form.gcpreset = k;
+  // 换 preset = 重置主持人跟随新 preset 默认(用户可再改选)。
+  form.gcModeratorId =
+    resolveModelRef(GC_PRESETS.presets[k]!.moderator_model) ?? "";
+}
+
+function onPickGcModerator(v: unknown): void {
+  const m = normalizeSelectValue(v);
+  if (m === "" || flatModelOptions.value.some((o) => o.id === m)) {
+    form.gcModeratorId = m;
+  }
+}
+
+/** 生效的主持人模型:显式改选优先,否则当前 preset 的默认(解析自
+ *  模型目录;未解析出 = 空串,提交时报错)。 */
+const gcModeratorModelId = computed<string>(() => {
+  if (form.gcModeratorId) return form.gcModeratorId;
+  const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
+  return preset ? (resolveModelRef(preset.moderator_model) ?? "") : "";
+});
+
+/** 当前 preset 的参与者只读预览(显示名;preset 里的名字解析失败时
+ *  回退显示 preset 原名,提交时再报错拦截)。 */
+const gcPresetRoster = computed<
+  { name: string; model: string }[] | null
+>(() => {
+  const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
+  if (!preset) return null;
+  return preset.participants.map((p) => {
+    const id = resolveModelRef(p.model);
+    const m = id
+      ? (models.models ?? []).find((x) => x.id === id)
+      : undefined;
+    return { name: p.name, model: m ? `${m.providerDisplayName} · ${m.displayName}` : p.model };
+  });
+});
+
+/** 编辑态的存档展开配置(未重选 preset 时回显;重选后预览切到 preset)。 */
+const gcArchivedConfig = computed<GroupChatTaskConfig | null>(() => {
+  if (!editingId.value || form.gcpreset) return null;
+  const task = store.tasks.find((t) => t.id === editingId.value);
+  return task?.target_mode === "group_chat" ? (task.group_chat_config ?? null) : null;
+});
+
+const gcArchivedRoster = computed<{ name: string; model: string }[] | null>(
+  () => {
+    const cfg = gcArchivedConfig.value;
+    if (!cfg || !Array.isArray(cfg.participants)) return null;
+    return cfg.participants.map((p) => ({
+      name: p.name,
+      model: modelDisplayName(p.model_id),
+    }));
+  },
+);
+
+/** 编辑态主持人只读展示(存档 moderator 的显示名)。 */
+const gcArchivedModerator = computed<string>(() =>
+  gcArchivedConfig.value
+    ? modelDisplayName(gcArchivedConfig.value.moderator_model_id)
+    : "",
+);
+
+/** 快照语义提示(编辑态,design §8):未重选 preset = 存档配置继续生效
+ *  (防「改 JSON / 换版本自动生效」误解);重选 = 覆盖警示。 */
+const gcSnapshotHint = computed<string | null>(() => {
+  if (!editingId.value || form.targetMode !== "group_chat") return null;
+  return form.gcpreset
+    ? `提交后将以预设「${form.gcpreset}」重新展开并覆盖存档配置`
+    : "未选择预设:提交后继续使用存档配置(仅在显式重选预设时应用最新 preset)";
+});
+
+/** preset 所选档的描述行(preset 下拉下方的一行说明)。 */
+const gcPresetDescription = computed<string>(
+  () => GC_PRESETS.presets[form.gcpreset]?.description ?? "",
+);
+
+/** 展开 preset → `group_chat_config`(提交时;design §3「展开时机 =
+ *  创建/编辑提交」)。模型名经 `resolveModelRef` 解析成 UUID(与表单
+ *  其余下拉同源 models store),persona_md 逐字来自 JSON。任一模型/
+ *  persona 缺失 → 返回用户可读错误,不发起 IPC。 */
+function expandGcConfig():
+  | { config: GroupChatTaskConfig }
+  | { error: string } {
+  const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
+  if (!preset) return { error: "请选择审议预设" };
+  const moderatorId = gcModeratorModelId.value;
+  if (!moderatorId) {
+    return {
+      error: `预设主持人模型「${preset.moderator_model}」不在模型目录中,请先在「模型」页添加`,
+    };
+  }
+  const participants: GroupChatTaskParticipant[] = [];
+  for (const p of preset.participants) {
+    const id = resolveModelRef(p.model);
+    if (!id) {
+      return {
+        error: `参与者「${p.name}」的模型「${p.model}」不在模型目录中,请先在「模型」页添加`,
+      };
+    }
+    const persona = gcPersonaMd(p.persona);
+    if (persona === null) {
+      return { error: `预设数据缺少 persona「${p.persona}」(group-chat-presets.json)` };
+    }
+    participants.push({ name: p.name, model_id: id, persona_md: persona });
+  }
+  return { config: { moderator_model_id: moderatorId, participants } };
 }
 
 /** 本地 `yyyy-MM-dd` 字符串(`AppDatePicker` 值)。 */
@@ -345,16 +548,29 @@ const form = reactive({
   /** 新建专用 / 每次新建 session 的模型(空 = 全局默认;fixed 指定
    *  既有 session 时不可用——模型跟 session 走)。 */
   modelId: "",
+  /** M4a:审议 preset key(空 = 未选择,仅编辑态出现——沿用存档配置);
+   *  创建态默认 review(design §8,建单压到两步)。 */
+  gcpreset: "",
+  /** M4a:主持人模型 UUID 的显式改选(空 = 跟随 preset 默认)。 */
+  gcModeratorId: "",
   prompt: "",
 });
 
-/** 目标档选项:创建态三档,编辑态两档(dedicated 不出现)。 */
-const targetModeOptions = computed(() =>
-  (editingId.value
+/** 目标档选项:创建态四档;编辑态两档(dedicated 不出现)——编辑
+ *  group_chat 行时补该档(fixed/per_run 行的编辑卡零回归)。 */
+const targetModeOptions = computed(() => {
+  const base = editingId.value
     ? (["existing", "per_run"] as FormTargetMode[])
-    : (["existing", "dedicated", "per_run"] as FormTargetMode[])
-  ).map((value) => ({ value, ...TARGET_MODE_META[value] })),
-);
+    : (["existing", "dedicated", "per_run", "group_chat"] as FormTargetMode[]);
+  const editingTask = editingId.value
+    ? store.tasks.find((t) => t.id === editingId.value)
+    : null;
+  const modes =
+    editingTask?.target_mode === "group_chat" && !base.includes("group_chat")
+      ? [...base, "group_chat" as FormTargetMode]
+      : base;
+  return modes.map((value) => ({ value, ...TARGET_MODE_META[value] }));
+});
 
 /** 固定时间类档位(决定结束条件选项与档位字段渲染)。 */
 const isFixedTime = computed(() => FIXED_TIME_KINDS.has(form.kind));
@@ -421,6 +637,10 @@ function resetForm(): void {
   form.maxRuns = 5;
   form.endDate = "";
   form.modelId = "";
+  // M4a:创建态默认选中 review(design §8,建单压到两步),主持人跟
+  // 随 preset 默认(gcModeratorId 空 = 走 gcModeratorModelId 兜底)。
+  form.gcpreset = "review";
+  form.gcModeratorId = "";
   form.prompt = "";
 }
 
@@ -436,9 +656,18 @@ function openEdit(task: ScheduledTask): void {
   form.name = task.name;
   form.projectId = task.project_id;
   // 目标档回填:per_run 行直接落该档(fixed session 无从回填);
-  // fixed 行(含历史上的「新建专用 session」)统一回显「指定 session」。
-  form.targetMode = task.target_mode === "per_run" ? "per_run" : "existing";
+  // fixed 行(含历史上的「新建专用 session」)统一回显「指定 session」;
+  // group_chat 行(M4a)回显「定时审议」—— preset 置空 = 未选择(使用
+  // 存档配置),存档展开结果经 gcArchivedRoster 只读预览。
+  form.targetMode =
+    task.target_mode === "per_run"
+      ? "per_run"
+      : task.target_mode === "group_chat"
+        ? "group_chat"
+        : "existing";
   form.targetSessionId = task.target_session_id ?? "";
+  form.gcpreset = "";
+  form.gcModeratorId = "";
   // per_run 的模型绑定存任务行 → 回填;fixed 的模型在 session 上,不填。
   form.modelId = task.target_mode === "per_run" ? (task.model_id ?? "") : "";
   const spec = task.schedule;
@@ -557,6 +786,23 @@ async function submitForm(): Promise<void> {
     formError.value = "请选择目标 session";
     return;
   }
+  // M4a 定时审议:展开时机 = 提交(design §3)。preset 选中 → 展开
+  // (模型名 → UUID,persona 逐字);编辑态未重选 preset → 不带
+  // groupChatConfig(后端「缺省不动」语义,存档配置继续生效)。
+  let groupChatConfig: GroupChatTaskConfig | undefined;
+  if (form.targetMode === "group_chat") {
+    if (form.gcpreset) {
+      const expanded = expandGcConfig();
+      if ("error" in expanded) {
+        formError.value = expanded.error;
+        return;
+      }
+      groupChatConfig = expanded.config;
+    } else if (!editingId.value) {
+      formError.value = "请选择审议预设";
+      return;
+    }
+  }
   // 档位字段(按档位细分错误信息)。
   if (form.kind === "once") {
     const t = onceAtMs();
@@ -626,39 +872,51 @@ async function submitForm(): Promise<void> {
   try {
     const schedule = JSON.stringify(spec);
     const perRun = form.targetMode === "per_run";
+    const gc = form.targetMode === "group_chat";
     if (editingId.value) {
       // update 显式带 maxRuns/endsAt(null = 清空):切换结束方式后旧值
       // 不残留(表单模型每档位只有一个条件)。目标档随 targetMode 显式
       // 落库:切 per_run 时 targetSessionId 传 null(wire 显式清空固定
       // 绑定);切回 fixed 时后端校验 session 归属。模型绑定仅 per_run
-      // 存任务行,切回 fixed 显式清空(模型跟 session 走)。
+      // 存任务行,切回 fixed 显式清空(模型跟 session 走)。group_chat
+      // 档(M4a):preset 重选 → 带展开结果;未重选 → 缺省不动(存档
+      // 配置继续);切离 group_chat → 后端自动清 config,前端无需带。
       await store.update(editingId.value, {
         name,
         prompt,
         schedule,
-        targetMode: perRun ? "per_run" : "fixed",
-        targetSessionId: perRun ? null : form.targetSessionId,
+        targetMode: perRun ? "per_run" : gc ? "group_chat" : "fixed",
+        targetSessionId: perRun || gc ? null : form.targetSessionId,
         modelId: perRun ? form.modelId || null : null,
         maxRuns,
         endsAt,
+        ...(groupChatConfig ? { groupChatConfig } : {}),
       });
       projects.showToast("任务已更新", "info");
     } else {
-      // 创建态三档:existing → 带 targetSessionId;dedicated → 不带
-      // (后端建专用 session);per_run → targetMode="per_run"。
+      // 创建态四档:existing → 带 targetSessionId;dedicated → 不带
+      // (后端建专用 session);per_run → targetMode="per_run";
+      // group_chat → targetMode="group_chat" + 展开配置(必带)。
       await store.create({
         projectId: form.projectId,
         ...(form.targetMode === "existing"
           ? { targetSessionId: form.targetSessionId }
           : {}),
         ...(perRun ? { targetMode: "per_run" as TargetMode } : {}),
+        ...(gc && groupChatConfig
+          ? {
+              targetMode: "group_chat" as TargetMode,
+              groupChatConfig,
+            }
+          : {}),
         name,
         prompt,
         schedule,
         ...(maxRuns !== null ? { maxRuns } : {}),
         ...(endsAt !== null ? { endsAt } : {}),
-        // 模型仅「新建专用 / 每次新建」分支生效(空 = 全局默认)。
-        ...(form.targetMode !== "existing" && form.modelId
+        // 模型仅「新建专用 / 每次新建」分支生效(空 = 全局默认;
+        // group_chat 档主持人走 groupChatConfig,不带 modelId)。
+        ...((form.targetMode === "dedicated" || perRun) && form.modelId
           ? { modelId: form.modelId }
           : {}),
       });
@@ -843,8 +1101,13 @@ onMounted(async () => {
 
         <!-- 新建专用 / 每次新建:模型选择就近呈现(空 = 沿用全局默认)。
              专用写进新 session 的 per-session 覆盖列;每次新建存任务行,
-             每轮建 session 时应用,定时注入的轮次固定用该模型。 -->
-        <div v-if="form.targetMode !== 'existing'" class="sched-tab__target-extra">
+             每轮建 session 时应用,定时注入的轮次固定用该模型。
+             (group_chat 档不在此列:主持人模型在下方 group_chat 面板,
+             存 group_chat_config,顶层 model_id 后端 400 互斥。) -->
+        <div
+          v-if="form.targetMode === 'dedicated' || form.targetMode === 'per_run'"
+          class="sched-tab__target-extra"
+        >
           <span class="sched-tab__target-extra-label">session 模型</span>
           <SelectRoot
             :model-value="form.modelId || undefined"
@@ -880,6 +1143,130 @@ onMounted(async () => {
             </SelectPortal>
           </SelectRoot>
         </div>
+
+        <!-- M4a 定时审议(09-07-gce-m4a,design §8):preset 下拉(共享
+             scripts/group-chat-presets.json,创建态默认 review)+ 主持人
+             模型下拉(默认取 preset,可改选)+ 参与阵容只读预览(成本
+             标注 = 提交前唯一事前闸口)。编辑态:preset 占位「未选择(使
+             用存档配置)」+ 快照语义提示;重选 preset = 重新展开覆盖。 -->
+        <template v-if="form.targetMode === 'group_chat'">
+          <div class="sched-tab__target-extra">
+            <span class="sched-tab__target-extra-label">审议预设</span>
+            <SelectRoot
+              :model-value="form.gcpreset || undefined"
+              @update:model-value="onPickGcPreset"
+            >
+              <SelectTrigger
+                class="sched-tab__trigger"
+                data-testid="sched-gc-preset"
+                aria-label="审议预设"
+              >
+                <SelectValue
+                  :placeholder="editingId ? '未选择(使用存档配置)' : '选择预设'"
+                />
+                <SelectIcon class="sched-tab__trigger-icon">
+                  <Icon name="chevron-down" :size="12" />
+                </SelectIcon>
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectContent
+                  class="sched-tab__dropdown"
+                  position="popper"
+                  :side-offset="4"
+                >
+                  <SelectViewport class="sched-tab__dropdown-viewport">
+                    <SelectItem
+                      v-for="p in GC_PRESET_OPTIONS"
+                      :key="p.value"
+                      :value="p.value"
+                      class="sched-tab__option"
+                    >
+                      <SelectItemText>{{ p.label }}</SelectItemText>
+                    </SelectItem>
+                  </SelectViewport>
+                </SelectContent>
+              </SelectPortal>
+            </SelectRoot>
+          </div>
+          <span v-if="gcPresetDescription" class="sched-tab__unit">
+            {{ gcPresetDescription }}
+          </span>
+          <p
+            v-if="gcSnapshotHint"
+            class="sched-tab__softwarn"
+            data-testid="sched-gc-snapshot-hint"
+            role="status"
+          >
+            {{ gcSnapshotHint }}
+          </p>
+          <div
+            v-if="gcModeratorModelId"
+            class="sched-tab__target-extra"
+          >
+            <span class="sched-tab__target-extra-label">主持人模型</span>
+            <SelectRoot
+              :model-value="gcModeratorModelId || undefined"
+              @update:model-value="onPickGcModerator"
+            >
+              <SelectTrigger
+                class="sched-tab__trigger"
+                data-testid="sched-gc-moderator"
+                aria-label="主持人模型"
+              >
+                <SelectValue placeholder="选择主持人模型" />
+                <SelectIcon class="sched-tab__trigger-icon">
+                  <Icon name="chevron-down" :size="12" />
+                </SelectIcon>
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectContent
+                  class="sched-tab__dropdown"
+                  position="popper"
+                  :side-offset="4"
+                >
+                  <SelectViewport class="sched-tab__dropdown-viewport">
+                    <SelectItem
+                      v-for="m in flatModelOptions"
+                      :key="m.id"
+                      :value="m.id"
+                      class="sched-tab__option"
+                    >
+                      <SelectItemText>{{ m.providerDisplayName }} · {{ m.displayName }}</SelectItemText>
+                    </SelectItem>
+                  </SelectViewport>
+                </SelectContent>
+              </SelectPortal>
+            </SelectRoot>
+          </div>
+          <div
+            v-else-if="gcArchivedModerator"
+            class="sched-tab__target-extra"
+          >
+            <span class="sched-tab__target-extra-label">主持人模型(存档)</span>
+            <span class="sched-tab__unit">{{ gcArchivedModerator }}</span>
+          </div>
+          <div
+            v-if="gcPresetRoster || gcArchivedRoster"
+            class="sched-tab__gc-roster"
+            data-testid="sched-gc-participants"
+          >
+            <span class="sched-tab__target-extra-label">
+              {{ gcPresetRoster ? "参与阵容(preset 只读预览)" : "参与阵容(存档配置,只读)" }}
+            </span>
+            <ul class="sched-tab__gc-roster-list">
+              <li
+                v-for="p in gcPresetRoster ?? gcArchivedRoster ?? []"
+                :key="p.name"
+                class="sched-tab__gc-roster-item"
+              >
+                {{ p.name }} · {{ p.model }}
+              </li>
+            </ul>
+            <span class="sched-tab__unit">
+              {{ groupChatCostNote((gcPresetRoster ?? gcArchivedRoster ?? []).length) }}
+            </span>
+          </div>
+        </template>
       </div>
 
       <div class="sched-tab__field">
@@ -1104,12 +1491,22 @@ onMounted(async () => {
       </div>
 
       <Label class="sched-tab__field">
-        <span class="sched-tab__label">提示词(每次触发注入的 user 消息)</span>
+        <span class="sched-tab__label">
+          {{
+            form.targetMode === "group_chat"
+              ? "议题(每次到点开一场讨论)"
+              : "提示词(每次触发注入的 user 消息)"
+          }}
+        </span>
         <textarea
           v-model="form.prompt"
           class="sched-tab__input sched-tab__prompt"
           rows="4"
-          placeholder="如:汇总昨天的工作进展"
+          :placeholder="
+            form.targetMode === 'group_chat'
+              ? '议题质量直接决定产出质量;可含指令,如:自行调研 git log 近一周的改动,评审本次迭代的架构风险'
+              : '如:汇总昨天的工作进展'
+          "
         ></textarea>
       </Label>
 
@@ -1162,6 +1559,15 @@ onMounted(async () => {
           <div class="sched-tab__card-main">
             <div class="sched-tab__card-head">
               <span class="sched-tab__card-name" :title="task.name">{{ task.name }}</span>
+              <!-- 类型徽标(M4a):定时审议任务显式标注(多模型高成本,
+                   与普通注入任务一眼区分)。 -->
+              <span
+                v-if="task.target_mode === 'group_chat'"
+                class="sched-tab__card-origin sched-tab__card-gc"
+                title="定时审议:到点自动召集群聊讨论"
+              >
+                审议
+              </span>
               <!-- 来源徽标(08-29-schedule-task-tool):agent 创建的显式标注,
                    user 创建不标(缺省态零噪音)。 -->
               <span
@@ -1196,6 +1602,15 @@ onMounted(async () => {
             <div class="sched-tab__card-fires">
               <span>上次:{{ formatFireTime(task.last_fired_at) }}</span>
               <span>下次:{{ formatFireTime(displayNextFireAt(task)) }}</span>
+              <!-- M4a:最近一次 fire 结局(评审 P2-8,直读任务行快照列;
+                   null = 从未触发不渲染)。 -->
+              <span
+                v-if="task.last_fire_outcome"
+                :title="`上次触发结局:${task.last_fire_outcome}`"
+                :data-testid="`sched-outcome-${task.id}`"
+              >
+                {{ describeFireOutcome(task.last_fire_outcome) }}
+              </span>
               <span v-if="hasEndCondition(task)">{{ cardEndSummary(task) }}</span>
             </div>
           </div>
@@ -1512,6 +1927,30 @@ onMounted(async () => {
   max-width: 340px;
 }
 
+/* M4a group_chat 参与阵容只读预览:preset 展开的人话名单 + 成本标注
+   (提交前唯一事前闸口)。 */
+.sched-tab__gc-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sched-tab__gc-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sched-tab__gc-roster-item {
+  font-size: var(--text-xs);
+  color: var(--color-text-primary);
+  line-height: 1.5;
+}
+
 /* 档位行:档位下拉 + 按 kind 的参数控件。桌面一行,控件适度伸展
    (flex-grow + max-width 上限)避免只在行首挤一小撮;窄屏换行铺满。 */
 .sched-tab__schedule-row {
@@ -1712,6 +2151,12 @@ onMounted(async () => {
   border: 1px solid var(--color-bg-border-strong);
   border-radius: 999px;
   color: var(--color-text-secondary);
+}
+
+/* M4a 「审议」类型徽标:同描边形态,accent 着色以示多模型高成本档。 */
+.sched-tab__card-gc {
+  color: var(--color-accent-text);
+  border-color: var(--color-accent-muted);
 }
 
 .sched-tab__card-state--off {

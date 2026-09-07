@@ -126,6 +126,13 @@ export default defineConfig(async () => ({
     proxy: {
       "/api": { target: "http://localhost:7456", changeOrigin: true },
     },
+    // M4a(R7 preset 单一事实源,09-07-gce-m4a):ScheduledTasksTab 直接
+    // import 仓库根 scripts/group-chat-presets.json(与 M1 引擎同源)。
+    // 该文件在 vite root(app/)之外 —— 显式放行,否则 dev server 对
+    // /@fs/ 请求回 403(build/vitest 不走 dev-server middleware,不受影响)。
+    fs: {
+      allow: [".", "../scripts"],
+    },
     hmr: host
       ? {
           protocol: "ws",

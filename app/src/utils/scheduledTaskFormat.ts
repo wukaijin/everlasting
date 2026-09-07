@@ -11,7 +11,10 @@
 //     tagged `kind`; weekday is chrono's lowercase 3-letter form).
 //   - Unknown / corrupt `kind` (legacy row) → 「未知档位」 — never throw.
 
-import type { ScheduleSpec } from "../stores/scheduledTasks";
+import type {
+  LastFireOutcome,
+  ScheduleSpec,
+} from "../stores/scheduledTasks";
 
 /** 周几下拉的选项(wire 值 = chrono Weekday serde 形)。 */
 export const WEEKDAY_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
@@ -180,4 +183,41 @@ export function formatFireTime(ms: number | null | undefined): string {
 export function summarizePrompt(prompt: string, max = 60): string {
   const flat = prompt.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+// --- M4a 定时审议(group_chat 档)-------------------------------------------
+
+/** 群聊编排器的轮次帽(镜像 Rust `group_chat_loop.rs` 的
+ *  `MAX_ORCHESTRATION_ROUNDS`);成本标注的唯一口径。 */
+export const GROUP_CHAT_MAX_ROUNDS = 30;
+
+/** 成本标注(group_chat 表单预览 + 列表卡共用;提交前唯一事前闸口):
+ *  「3 参与 × ≤30 轮」。 */
+export function groupChatCostNote(participantCount: number): string {
+  return `${participantCount} 参与 × ≤${GROUP_CHAT_MAX_ROUNDS} 轮`;
+}
+
+/** `last_fire_outcome` 五值 → 人话(M4a 列表卡状态行;评审 P2-8):
+ *  直读任务行,替代审计三层查询。null/undefined = 从未触发(空串,
+ *  调用方不渲染该行);未知值原样透出(防御,同 weekdayLabel 先例)。 */
+export function describeFireOutcome(
+  outcome: LastFireOutcome | string | null | undefined,
+): string {
+  switch (outcome) {
+    case "started":
+      return "已开跑";
+    case "resumed":
+      return "已自动续跑";
+    case "skipped_busy":
+      return "跳过(上一场进行中)";
+    case "error":
+      return "出错";
+    case "recovered":
+      return "已恢复开新场";
+    case null:
+    case undefined:
+      return "";
+    default:
+      return String(outcome);
+  }
 }

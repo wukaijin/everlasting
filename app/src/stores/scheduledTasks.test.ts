@@ -36,6 +36,8 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     run_count: 0,
     max_runs: null,
     ends_at: null,
+    group_chat_config: null,
+    last_fire_outcome: null,
     ...overrides,
   };
 }
@@ -264,6 +266,78 @@ describe("scheduledTasks store", () => {
     const deleted = await store.remove("task-1");
     expect(deleted).toBe(true);
     expect(store.tasks).toHaveLength(0);
+  });
+
+  it("M4a:create 带 targetMode=group_chat + groupChatConfig(展开后的配置)", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task")
+        return row({ target_mode: "group_chat", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    const store = useScheduledTasksStore();
+    await store.create({
+      projectId: "p1",
+      targetMode: "group_chat",
+      name: "每周审议",
+      prompt: "复盘",
+      schedule: '{"kind":"weekly","weekday":"fri","at":"18:00"}',
+      groupChatConfig: {
+        moderator_model_id: "m-uuid-0",
+        participants: [
+          { name: "架构", model_id: "m-uuid-1", persona_md: "视角" },
+        ],
+      },
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_scheduled_task", {
+      projectId: "p1",
+      targetMode: "group_chat",
+      name: "每周审议",
+      prompt: "复盘",
+      schedule: '{"kind":"weekly","weekday":"fri","at":"18:00"}',
+      groupChatConfig: {
+        moderator_model_id: "m-uuid-0",
+        participants: [
+          { name: "架构", model_id: "m-uuid-1", persona_md: "视角" },
+        ],
+      },
+    });
+  });
+
+  it("M4a:update 的 groupChatConfig 双层 Option:对象写入 / 显式 null 透传 / 缺省不动", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return row();
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    const store = useScheduledTasksStore();
+    // 显式 null(切离 group_chat 的清空臂)透传 wire。
+    await store.update("task-1", { groupChatConfig: null });
+    const call = invokeMock.mock.calls.find(
+      (c) => c[0] === "update_scheduled_task",
+    );
+    expect(call?.[1]).toEqual({ id: "task-1", groupChatConfig: null });
+
+    // 对象 = 重选 preset 后的展开结果。
+    invokeMock.mockClear();
+    await store.update("task-1", {
+      groupChatConfig: { moderator_model_id: "m2", participants: [] },
+    });
+    const call2 = invokeMock.mock.calls.find(
+      (c) => c[0] === "update_scheduled_task",
+    );
+    expect(call2?.[1]).toEqual({
+      id: "task-1",
+      groupChatConfig: { moderator_model_id: "m2", participants: [] },
+    });
+
+    // 缺省 = 不动(编辑态未重选 preset,存档配置继续)。
+    invokeMock.mockClear();
+    await store.update("task-1", { enabled: false });
+    const call3 = invokeMock.mock.calls.find(
+      (c) => c[0] === "update_scheduled_task",
+    );
+    expect(call3?.[1]).toEqual({ id: "task-1", enabled: false });
   });
 
   it("load 失败写 error 且保留旧列表", async () => {

@@ -18,6 +18,8 @@ import {
   completedByEndDate,
   completedByOnce,
   displayNextFireAt,
+  describeFireOutcome,
+  groupChatCostNote,
 } from "./scheduledTaskFormat";
 
 describe("describeSchedule", () => {
@@ -227,5 +229,26 @@ describe("summarizePrompt", () => {
     const out = summarizePrompt("a".repeat(80), 60);
     expect(out).toHaveLength(61);
     expect(out.endsWith("…")).toBe(true);
+  });
+});
+
+describe("M4a describeFireOutcome / groupChatCostNote", () => {
+  it("last_fire_outcome 五值 → 人话", () => {
+    expect(describeFireOutcome("started")).toBe("已开跑");
+    expect(describeFireOutcome("resumed")).toBe("已自动续跑");
+    expect(describeFireOutcome("skipped_busy")).toBe("跳过(上一场进行中)");
+    expect(describeFireOutcome("error")).toBe("出错");
+    expect(describeFireOutcome("recovered")).toBe("已恢复开新场");
+  });
+
+  it("null / undefined = 从未触发(空串,调用方不渲染该行);未知值原样透出", () => {
+    expect(describeFireOutcome(null)).toBe("");
+    expect(describeFireOutcome(undefined)).toBe("");
+    expect(describeFireOutcome("mystery")).toBe("mystery");
+  });
+
+  it("成本标注:N 参与 × ≤30 轮(轮帽镜像编排器 MAX_ORCHESTRATION_ROUNDS)", () => {
+    expect(groupChatCostNote(3)).toBe("3 参与 × ≤30 轮");
+    expect(groupChatCostNote(0)).toBe("0 参与 × ≤30 轮");
   });
 });

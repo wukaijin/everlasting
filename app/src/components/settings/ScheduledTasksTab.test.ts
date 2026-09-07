@@ -63,9 +63,55 @@ function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     run_count: 0,
     max_runs: null,
     ends_at: null,
+    group_chat_config: null,
+    last_fire_outcome: null,
     ...overrides,
   };
 }
+
+/** M4a group_chat 行的存档展开配置(形状 = Rust GroupChatTaskConfig)。 */
+function gcConfig(): NonNullable<ScheduledTask["group_chat_config"]> {
+  return {
+    moderator_model_id: "uuid-mini",
+    participants: [
+      { name: "架构", model_id: "uuid-glm", persona_md: "架构视角" },
+      { name: "后端", model_id: "uuid-ds", persona_md: "后端视角" },
+    ],
+  };
+}
+
+/** M4a 模型目录 stub:preset JSON 里的名字(MiniMax-M3 / glm-5.3 /
+ *  GLM-5.3-Flash / deepseek-v4-flash)可解析成 UUID。 */
+const GC_MODELS = [
+  {
+    id: "uuid-mini",
+    providerId: "prov-1",
+    providerDisplayName: "MiniMax",
+    displayName: "MiniMax-M3",
+    modelName: "MiniMax-M3",
+  },
+  {
+    id: "uuid-glm",
+    providerId: "prov-2",
+    providerDisplayName: "Zhipu",
+    displayName: "GLM-5.3",
+    modelName: "glm-5.3",
+  },
+  {
+    id: "uuid-flash",
+    providerId: "prov-2",
+    providerDisplayName: "Zhipu",
+    displayName: "GLM-5.3-Flash",
+    modelName: "GLM-5.3-Flash",
+  },
+  {
+    id: "uuid-ds",
+    providerId: "prov-3",
+    providerDisplayName: "DeepSeek",
+    displayName: "DeepSeek V4",
+    modelName: "deepseek-v4-flash",
+  },
+];
 
 /** list + per-project sessions 的缺省 stub。 */
 function stubBackend(tasks: ScheduledTask[]) {
@@ -83,6 +129,27 @@ function stubBackend(tasks: ScheduledTask[]) {
     }
     // 模型下拉数据源(组件挂载即拉;空列表 = 下拉无可选项)。
     if (cmd === "list_models") return [];
+    if (cmd === "get_default_model") return null;
+    return null;
+  });
+}
+
+/** M4a group_chat 用 stub:模型目录 = GC_MODELS(preset 名字可解析);
+ *  sessions 里带一个 group_chat 场(最近场联查展示用)。 */
+function stubBackendGc(tasks: ScheduledTask[]) {
+  invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "list_scheduled_tasks") return tasks;
+    if (cmd === "list_sessions") {
+      return [
+        {
+          id: "s1",
+          title: args?.projectId === "p1" ? "旧会话" : "beta 会话",
+          session_type: "chat",
+        },
+        { id: "s-gc-run", title: "上一场审议", session_type: "group_chat" },
+      ];
+    }
+    if (cmd === "list_models") return GC_MODELS;
     if (cmd === "get_default_model") return null;
     return null;
   });
@@ -147,7 +214,7 @@ async function pickSelect(
  *  与 pickSelect 同款接线测法(jsdom 点 label 的转发不可靠)。 */
 async function pickTargetMode(
   form: ReturnType<typeof openForm>,
-  mode: "existing" | "dedicated" | "per_run",
+  mode: "existing" | "dedicated" | "per_run" | "group_chat",
 ) {
   form.getComponent(RadioGroupRoot).vm.$emit("update:modelValue", mode);
   await flushPromises();
@@ -816,5 +883,231 @@ describe("ScheduledTasksTab 单次档与模型指定(CH11-1)", () => {
     // 单次档更新显式清空结束条件(不残留旧值)。
     expect(call?.[1].maxRuns).toBeNull();
     expect(call?.[1].endsAt).toBeNull();
+  });
+});
+
+describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
+  function stubCreateGc() {
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task")
+        return row({ id: "new-gc", target_mode: "group_chat", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+  }
+
+  /** group_chat 行存档任务(最近场 + outcome 已落账)。 */
+  function gcRow(): ScheduledTask {
+    return row({
+      id: "gc-1",
+      name: "每周评审",
+      target_mode: "group_chat",
+      target_session_id: null,
+      group_chat_config: gcConfig(),
+      last_run_session_id: "s-gc-run",
+      last_fire_outcome: "started",
+      schedule: { kind: "weekly", weekday: "fri", at: "18:00" },
+    });
+  }
+
+  it("创建态出现第四档 radio;选中后 preset 默认 review + 主持人 + 预览与成本标注", async () => {
+    stubBackendGc([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    expect(form.find('[data-testid="sched-target-group_chat"]').exists()).toBe(true);
+    // session 模型下拉(dedicated/per_run 专用)不渲染;gc 面板渲染。
+    expect(form.find('[data-testid="sched-model-select"]').exists()).toBe(false);
+    await pickTargetMode(form, "group_chat");
+    // gc 档 SelectRoot 序:0=project,1=preset(默认 review),2=moderator,3=kind。
+    expect(form.findAllComponents(SelectRoot)[1].props("modelValue")).toBe("review");
+    expect(form.find('[data-testid="sched-gc-moderator"]').exists()).toBe(true);
+    const roster = form.find('[data-testid="sched-gc-participants"]');
+    expect(roster.exists()).toBe(true);
+    expect(roster.text()).toContain("架构");
+    expect(roster.text()).toContain("Zhipu · GLM-5.3");
+    expect(roster.text()).toContain("3 参与 × ≤30 轮");
+  });
+
+  it("提交 = 提交时展开:preset 名字解析成 UUID + persona_md 逐字;不带 target/modelId", async () => {
+    stubBackendGc([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("每周审议");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("复盘本周改动");
+    await pickTargetMode(form, "group_chat");
+    stubCreateGc();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call).toBeTruthy();
+    expect(call?.[1].targetMode).toBe("group_chat");
+    expect(call?.[1].targetSessionId).toBeUndefined();
+    expect(call?.[1].modelId).toBeUndefined();
+    const cfg = call?.[1].groupChatConfig;
+    expect(cfg.moderator_model_id).toBe("uuid-mini");
+    expect(cfg.participants.map((p: { name: string }) => p.name)).toEqual(["架构", "产品", "后端"]);
+    expect(cfg.participants.map((p: { model_id: string }) => p.model_id)).toEqual([
+      "uuid-glm",
+      "uuid-flash",
+      "uuid-ds",
+    ]);
+    // persona_md = 边界文本 + "\n\n" + 公共纪律(M1 composePresets 同构)。
+    for (const p of cfg.participants) {
+      expect(p.persona_md).toContain("发言纪律");
+      expect(p.persona_md).toContain("\n\n");
+    }
+  });
+
+  it("主持人改选:下拉选另一模型 → 提交的 moderator_model_id 跟随改选", async () => {
+    stubBackendGc([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("每周审议");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "group_chat");
+    await pickSelect(form, 2, "uuid-flash");
+    stubCreateGc();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].groupChatConfig.moderator_model_id).toBe("uuid-flash");
+  });
+
+  it("校验:preset 模型不在目录 → 内联错误,不发起 create(成本防线闸口)", async () => {
+    stubBackend([]); // 模型目录为空 → moderator 解析失败
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("每周审议");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "group_chat");
+    invokeMock.mockClear();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    expect(w.find(".sched-tab__error").text()).toContain("不在模型目录");
+    expect(invokeMock).not.toHaveBeenCalledWith("create_scheduled_task", expect.anything());
+  });
+
+  it("编辑 group_chat 行:preset 占位「未选择(使用存档配置)」+ 存档预览;不重选提交 = 配置缺省不动", async () => {
+    stubBackendGc([gcRow()]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
+    const form = openForm(w);
+    // 编辑态三卡(existing / per_run / group_chat),group_chat 回显。
+    expect(form.find('[data-testid="sched-target-group_chat"]').exists()).toBe(true);
+    expect(form.find('[data-testid="sched-target-dedicated"]').exists()).toBe(false);
+    await pickTargetMode(form, "group_chat");
+    // preset 下拉未选择(modelValue undefined)+ 快照语义提示。
+    expect(form.findAllComponents(SelectRoot)[1].props("modelValue")).toBeUndefined();
+    const hint = form.find('[data-testid="sched-gc-snapshot-hint"]');
+    expect(hint.text()).toContain("未选择预设");
+    expect(hint.text()).toContain("存档配置");
+    // 存档展开结果只读预览(主持人反查显示名 + 参与阵容)。
+    expect(form.text()).toContain("MiniMax · MiniMax-M3");
+    const roster = form.find('[data-testid="sched-gc-participants"]');
+    expect(roster.text()).toContain("架构");
+    expect(roster.text()).toContain("Zhipu · GLM-5.3");
+    expect(roster.text()).toContain("2 参与 × ≤30 轮");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return gcRow();
+      if (cmd === "list_scheduled_tasks") return [gcRow()];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].targetMode).toBe("group_chat");
+    // 缺省不动:groupChatConfig 不进 args(wire 缺省 = 后端保留存档)。
+    expect(call?.[1]).not.toHaveProperty("groupChatConfig");
+  });
+
+  it("编辑重选 preset:预览切换 + 提示变覆盖;提交带重新展开的 groupChatConfig", async () => {
+    stubBackendGc([gcRow()]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "group_chat");
+    // gc 档 SelectRoot 序:0=project,1=preset,2=moderator,3=kind。
+    await pickSelect(form, 1, "arch");
+    const hint = form.find('[data-testid="sched-gc-snapshot-hint"]');
+    expect(hint.text()).toContain("覆盖存档配置");
+    // 预览切到 preset 展开(arch = 架构 + 后端)。
+    const roster = form.find('[data-testid="sched-gc-participants"]');
+    expect(roster.text()).toContain("后端");
+    expect(roster.text()).not.toContain("产品");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return gcRow();
+      if (cmd === "list_scheduled_tasks") return [gcRow()];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].groupChatConfig).toEqual({
+      moderator_model_id: "uuid-mini",
+      participants: [
+        { name: "架构", model_id: "uuid-glm", persona_md: expect.stringContaining("发言纪律") },
+        { name: "后端", model_id: "uuid-ds", persona_md: expect.stringContaining("发言纪律") },
+      ],
+    });
+  });
+
+  it("编辑 group_chat 行切 per_run:提交 targetMode=per_run 且不带配置(后端自动清)", async () => {
+    stubBackendGc([gcRow()]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "per_run");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task")
+        return row({ id: "gc-1", target_mode: "per_run", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].targetMode).toBe("per_run");
+    expect(call?.[1]).not.toHaveProperty("groupChatConfig");
+  });
+
+  it("零回归锚:fixed 行编辑态不出现 group_chat 卡(仍两档)", async () => {
+    stubBackendGc([row()]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-task-1"]').trigger("click");
+    const form = openForm(w);
+    expect(form.find('[data-testid="sched-target-existing"]').exists()).toBe(true);
+    expect(form.find('[data-testid="sched-target-per_run"]').exists()).toBe(true);
+    expect(form.find('[data-testid="sched-target-group_chat"]').exists()).toBe(false);
+  });
+
+  it("卡片:「审议」徽标 + 定时审议 meta(成本标注/最近场)+ outcome 状态行", async () => {
+    stubBackendGc([gcRow()]);
+    const w = await mountTab();
+    const card = w.get('[data-testid="sched-card-gc-1"]');
+    expect(card.find(".sched-tab__card-gc").text()).toBe("审议");
+    expect(card.text()).toContain("定时审议");
+    expect(card.text()).toContain("2 参与 × ≤30 轮");
+    expect(card.text()).toContain("最近:上一场审议");
+    expect(card.find('[data-testid="sched-outcome-gc-1"]').text()).toBe("已开跑");
+  });
+
+  it("卡片:outcome 为 null(从未触发)不渲染状态行", async () => {
+    stubBackendGc([
+      row({ id: "gc-2", target_mode: "group_chat", target_session_id: null, group_chat_config: gcConfig() }),
+    ]);
+    const w = await mountTab();
+    const card = w.get('[data-testid="sched-card-gc-2"]');
+    expect(card.find('[data-testid="sched-outcome-gc-2"]').exists()).toBe(false);
   });
 });
