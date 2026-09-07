@@ -145,13 +145,12 @@ pub struct PermissionContext {
     pub session_id: String,
     pub mode: Mode,
     pub cwd: std::path::PathBuf,
-    /// B6 Subagent (2026-06-19, review #5): `true` when this context
-    /// belongs to a worker agent dispatched via `dispatch_subagent`.
-    /// Worker agents have no UI sink, so a Tier 4 `ask_path` /
-    /// `ask_shell` decision must collapse to `Decision::Deny`
-    /// (cannot surface a permission modal). Production chat sets
-    /// `false`; the worker path sets `true`. The collapse is wired
-    /// at the top of `ask_path`.
+    /// `true` when this context belongs to a worker agent dispatched
+    /// via `dispatch_subagent`. The worker path keys its ask oneshot
+    /// under a worker-scoped permission session id and records the
+    /// outcome on the worker transcript (see `ask_path`'s worker
+    /// branch — the full ask round-trip, per RULE-FrontSubagent-003).
+    /// Production chat sets `false`.
     pub is_worker: bool,
     /// 2026-06-22 (RULE-FrontSubagent-003 fix): when `is_worker`
     /// is `true`, this is the worker subagent's `subagent_runs.id`

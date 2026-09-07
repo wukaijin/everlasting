@@ -24,6 +24,19 @@ Questions to answer:
 
 <!-- Patterns that should never be used and why -->
 
+### Convention(三层强制):复述行为的注释一律删,行为断言一律进测试 —— 「假注释是毒数据」
+
+**What**: 注释只许写**代码本身表达不了的约束**(为什么这么做 / 外部契约 / 陷阱),禁止复述代码正在做什么;对行为的断言一律落成测试(`tests_*` 用例),不落在注释里。已过时的行为描述注释按同罪清理。适用三层:`chat_loop` / `group_chat` / `subagent`(agent loop 全族),其余后端同理参照。
+
+**Why**: RULE-假注释(2026-09-06 第二场群聊共识,session `eb14d2df`):Everlasting 的群聊参与者**会读仓库注释**——假注释不是普通工程债,是喂给 LLM 的毒数据(D3 实证:deepseek 读错注释,错误结论进了共识链)。当日三处修复 + 评审现场发现第四处同类病灶(group_chat_loop.rs round-robin 注释,`66ef6fa4` 已清)坐实必要性。
+
+**判定示例**:
+- 病灶1(`permissions/types.rs` `is_worker`):注释写「worker ask 必须 collapse 到 Deny」,而 2026-06-22 RULE-FrontSubagent-003 已改为完整 ask 往返——行为变了注释没变,群聊参与者读到即被误导。正解:行为契约写进 `tests_ask`(往返语义已有用例锁),注释只留一句现状 + 指向。
+- 病灶2(`group_chat_loop.rs` 头部):round-robin fallback 已移除,注释仍在描述旧行为。正解:`66ef6fa4` 改写为现状描述。
+- 反例(不算病灶):描述「为什么」的注释(如 ask.rs 对 GC3 8s 窗口取值的实证依据)是合法注释——它记录代码表达不了的决策依据。
+
+**How**: 改行为时同步扫同文件注释;发现「注释说 A 代码做 B」,先判断哪个是对的——代码对则改注释并**补测试锁行为**,注释对则修代码。禁止只改注释不补测试(修注释治标不治本,共识原话)。
+
 (To be filled by the team)
 
 ---
