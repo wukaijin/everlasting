@@ -973,6 +973,29 @@ pub async fn run_group_chat_loop(
         );
     }
 
+    // M4a(09-07-gce-m4a-scheduled-deliberation Step 5):定时场终态自动
+    // 导转录。守卫挂在 gc_ctx.created_via(评审 P1-4:终态块全通道共享,
+    // 无承载一挂就把 GUI/MCP 场也导出);失败仅 warn,不影响终态落库
+    // (沿 M2「导出失败降级」先例)。挂点在 checkpoint keep-or-delete
+    // **之前** —— 导出读 checkpoint.started_at 作本讨论真实起点。
+    if gc_ctx.created_via.as_deref() == Some("scheduled") {
+        if let Err(e) = crate::agent::group_chat_transcript::export_scheduled_transcript(
+            &db,
+            &app_data_dir,
+            &session_id,
+            stop_reason_str,
+            end_summary.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "scheduled transcript export failed (non-fatal)"
+            );
+        }
+    }
+
     // GCE P1a (09-06-gc-p1a-checkpoint-resume): checkpoint row
     // keep-or-delete encodes RESUMABILITY (prd Q2). Resumable exits
     // (`cancelled` / `error`) keep the row — it already holds the

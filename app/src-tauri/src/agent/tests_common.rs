@@ -215,6 +215,12 @@ pub(crate) struct TestHarness {
     /// isolation (most) never read this — the tempdir just exists
     /// alongside the project tempdir and is cleaned up on drop.
     pub(crate) app_data_dir: std::path::PathBuf,
+    /// Guard for `app_data_dir` — kept alive for the whole test. The
+    /// path field alone is not enough: when the guard was a dropped
+    /// temporary, `app_data_dir` pointed at a deleted directory the
+    /// moment `make_harness` returned (surfaced by the M4a
+    /// transcript-export tests, which write under it).
+    pub(crate) _app_data_dir: tempfile::TempDir,
     /// D (2026-08-14, `08-14-c7d-tools-stub-registration`): fresh
     /// stub loaded-set registry per test for isolation (no
     /// cross-test loaded-set leak). Threads through `run_chat_loop`'s
@@ -291,6 +297,7 @@ pub(crate) async fn make_harness() -> TestHarness {
         .await
         .expect("set llm_compaction_enabled=false");
 
+    let app_data_dir = tempfile::tempdir().expect("app_data_dir tempdir");
     TestHarness {
         db: pool,
         project_id,
@@ -316,10 +323,11 @@ pub(crate) async fn make_harness() -> TestHarness {
         // under `<app_data_dir>/worktrees/<project_uuid>/worker/
         // <run_id>`. Tests that don't exercise isolation never
         // touch this; the tempdir just exists for uniformity.
-        app_data_dir: tempfile::tempdir()
-            .expect("app_data_dir tempdir")
-            .path()
-            .to_path_buf(),
+        app_data_dir: app_data_dir.path().to_path_buf(),
+        // Same guard-move as `_tempdir` below: without it the tempdir
+        // drops at the end of this expression and `app_data_dir`
+        // dangles (M4a transcript tests write under it).
+        _app_data_dir: app_data_dir,
         // Move the TempDir guard INTO the harness so it lives as
         // long as the harness (i.e. the whole test). Without this
         // move, `dir` drops at the end of `make_harness` and the

@@ -57,6 +57,7 @@ pub mod doc_extract;
 pub mod group_chat;
 pub mod group_chat_loop;
 pub mod group_chat_prompts;
+pub mod group_chat_transcript;
 pub mod helpers;
 pub mod loop_detection;
 pub mod memory_hygiene;

@@ -201,6 +201,7 @@ fn group_chat_ctx() -> GroupChatCtx {
         ],
         moderator_model_id: "moderator".to_string(),
         project_root: None,
+        created_via: None,
     }
 }
 
@@ -2318,5 +2319,228 @@ async fn group_chat_cancelled_exit_keeps_checkpoint_row() {
             .expect("get checkpoint")
             .is_some(),
         "cancelled (resumable) exit must KEEP the checkpoint row"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M4a(09-07-gce-m4a-scheduled-deliberation Step 5):定时场终态自动导转录。
+// 守卫 = gc_ctx.created_via == Some("scheduled")(评审 P1-4);失败仅 warn
+// 不影响终态(M2 先例)。非 scheduled 场不导出(对照组)。
+// ---------------------------------------------------------------------------
+
+/// 建「定时场」harness:session metadata 携带 created_via/scheduled_task_name
+/// + 参与者;ctx 的 created_via = Some("scheduled")。
+async fn make_scheduled_group_chat_harness(
+    created_via: Option<&str>,
+) -> (TestHarness, String, GroupChatCtx) {
+    let h = make_harness().await;
+    let gc_session_id = uuid::Uuid::new_v4().to_string();
+    let metadata = serde_json::json!({
+        "participants": [
+            {"name": "M1", "model": "m1", "persona_md": M1_PERSONA},
+            {"name": "M2", "model": "m2"}
+        ],
+        "created_via": created_via,
+        "scheduled_task_id": "task-1",
+        "scheduled_task_name": "每周审议",
+    });
+    db::create_session(
+        &h.db,
+        &gc_session_id,
+        &h.project_id,
+        h.project_path.to_str().unwrap(),
+        "moderator",
+        Some("moderator"),
+        Some("group_chat"),
+        Some(&metadata.to_string()),
+    )
+    .await
+    .expect("create group_chat session");
+    let ctx = GroupChatCtx {
+        participants: vec![
+            ParticipantConfig {
+                name: "M1".to_string(),
+                model: "m1".to_string(),
+                persona_md: Some(M1_PERSONA.to_string()),
+            },
+            ParticipantConfig {
+                name: "M2".to_string(),
+                model: "m2".to_string(),
+                persona_md: None,
+            },
+        ],
+        moderator_model_id: "moderator".to_string(),
+        project_root: None,
+        created_via: created_via.map(str::to_string),
+    };
+    (h, gc_session_id, ctx)
+}
+
+/// 定时场正常收官(group_chat_end)→ 转录自动落
+/// `{app_data_dir}/discussions/`,头部含任务名 / 参与者 / summary。
+#[tokio::test]
+async fn scheduled_discussion_exports_transcript_on_terminal_exit() {
+    let (h, gc_session_id, ctx) = make_scheduled_group_chat_harness(Some("scheduled")).await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mocks = script_group_chat_mocks();
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-sched".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        mocks.catalog.clone(),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+    let dir = h.app_data_dir.join("discussions");
+    let mut entries = std::fs::read_dir(&dir)
+        .expect("discussions dir created")
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1, "exactly one transcript file");
+    let path = entries.remove(0).unwrap().path();
+    let fname = path.file_name().unwrap().to_string_lossy().to_string();
+    assert!(
+        fname.contains("每周审议"),
+        "filename carries the sanitized task name: {fname}"
+    );
+    assert!(fname.ends_with(&format!("-{}.md", &gc_session_id[..8])));
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("定时审议「每周审议」转录"));
+    assert!(content.contains("M1/m1"));
+    assert!(content.contains("stop_reason: group_chat_end"));
+    assert!(content.contains("## discussion_summary"));
+}
+
+/// 对照组:非 scheduled 场(GUI/MCP/script)终态**不**导出。
+#[tokio::test]
+async fn non_scheduled_discussion_does_not_export_transcript() {
+    let (h, gc_session_id, ctx) = make_scheduled_group_chat_harness(None).await;
+    let mocks = script_group_chat_mocks();
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-manual".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        Arc::new(MockEmitter::new()),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        mocks.catalog.clone(),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+    assert!(
+        !h.app_data_dir.join("discussions").exists(),
+        "non-scheduled discussions must not export"
+    );
+}
+
+/// 导出失败(落点被同名文件占用 → create_dir_all 失败)仅降级 warn:
+/// 终态照常落库、编排器照常退出(不影响 stop_reason / checkpoint 清理)。
+#[tokio::test]
+async fn transcript_export_failure_does_not_break_finalization() {
+    let (h, gc_session_id, ctx) = make_scheduled_group_chat_harness(Some("scheduled")).await;
+    // 占位文件卡住 discussions 路径 → create_dir_all 必败。
+    std::fs::write(h.app_data_dir.join("discussions"), b"not a dir").unwrap();
+    let mocks = script_group_chat_mocks();
+
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-fail".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        Arc::new(MockEmitter::new()),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        mocks.catalog.clone(),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end"),
+        "terminal state finalized despite the export failure"
+    );
+    assert!(
+        db::get_group_chat_checkpoint(&h.db, &gc_session_id)
+            .await
+            .expect("get checkpoint")
+            .is_none(),
+        "terminal-exit checkpoint cleanup still ran"
     );
 }

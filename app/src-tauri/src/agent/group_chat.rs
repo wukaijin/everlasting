@@ -49,6 +49,15 @@ pub struct ParticipantConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GroupChatConfig {
     pub participants: Vec<ParticipantConfig>,
+    /// M4a(09-07-gce-m4a-scheduled-deliberation,评审 P1-4):召集通道
+    /// 归因 —— `'script'`(M1 CLI)/ `'mcp'`(MCP server)/ `'scheduled'`
+    /// (定时任务 fire)。缺省 = GUI/历史 session。**additive 键**:
+    /// 转录自动导出钩子的守卫挂在这上面(终态块全通道共享,无守卫一
+    /// 挂就会把 GUI/MCP 场也导出)。
+    #[serde(default)]
+    pub created_via: Option<String>,
+    // 注:metadata 还携带 `scheduled_task_name`(fire 建群时写入)——
+    // 转录导出经原始 JSON 读取,不进本结构(serde 忽略未知键)。
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +84,11 @@ pub struct GroupChatCtx {
     /// a moderator burned 5 × 120s permission asks on a hallucinated
     /// `/home/user/everlasting` before giving up on research).
     pub project_root: Option<String>,
+    /// M4a:召集通道归因(metadata `created_via`,缺省 None = GUI/
+    /// 历史 session)。终态转录导出钩子守卫
+    /// `created_via == Some("scheduled")` 读它 —— 见
+    /// [`GroupChatConfig::created_via`]。
+    pub created_via: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +183,7 @@ pub async fn build_group_chat_ctx(
             );
             GroupChatConfig {
                 participants: Vec::new(),
+                created_via: None,
             }
         }),
         None => {
@@ -178,6 +193,7 @@ pub async fn build_group_chat_ctx(
             );
             GroupChatConfig {
                 participants: Vec::new(),
+                created_via: None,
             }
         }
     };
@@ -200,6 +216,7 @@ pub async fn build_group_chat_ctx(
         participants: config.participants,
         moderator_model_id,
         project_root,
+        created_via: config.created_via,
     }))
 }
 
