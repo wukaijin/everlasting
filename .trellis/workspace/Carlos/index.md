@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 55
-- **Last Active**: 2026-09-03
+- **Total Sessions**: 56
+- **Last Active**: 2026-09-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~848 | Active |
+| `journal-2.md` | ~945 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 56 | 2026-09-07 | GCE-M4b 讨论库检索——场级检索 + GUI 独立面板 | `3a6a6408` | `main` |
 | 55 | 2026-09-03 | 全局开关:问询永不超时(ask_no_timeout) | (see git log) | `main` |
 | 54 | 2026-09-03 | F3 磁盘治理:worktree/outputs/日志/备份/缓存限损 | `27152a12`, `296e8d12`, `fb467350`, `443baaab` | `main` |
 | 53 | 2026-09-02 | Chat 运行状态面板:ActivityPanel 三合一 + background shell 可观测性 | `d76398b1`, `1a236d83`, `651709b6` | `main` |

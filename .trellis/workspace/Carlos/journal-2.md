@@ -922,3 +922,24 @@ ROADMAP M2 落地。brainstorm 五决策:①Node+@modelcontextprotocol/sdk 薄�
 ### 收官后实踩两修(用户实测反馈)
 
 ① **挂载模板变量**:首版 `.agents/mcp.json` 用 `${CLAUDE_PROJECT_DIR}`——配置文件作用域不展开模板(插件专属),字面量 spawn 失败、工具 0;改绝对路径(`039bf10b`),教训:diagnosing-mcp §2 该条当时没读全,规划时误标「变量受支持」。② **resolveProject 撞隐藏项目**(`43756959`):用户 vite-react-ts 会话首跑 start_discussion 报 "project already exists" 400——GUI 隐藏位 hidden=1 使 list_projects 滤掉该行,resolveProject match miss → create_project 撞全表唯一性检查;修 filter:{hidden:true} 查全量(daemon 既有参数零改动)。M1 时代没炸只因验收项目全可见——**新消费通道首跑即挖出共享层潜伏 bug,分层设计(多消费者同引擎)的验证价值实证**。部署面绑定源码检出的缺口也由用户指认,记 roadmap M4「MCP 部署面」follow-up(`0a572ca7`)。
+
+
+## Session 56: GCE-M4b 讨论库检索——场级检索 + GUI 独立面板
+
+**Date**: 2026-09-07
+**Task**: GCE-M4b 讨论库检索——场级检索 + GUI 独立面板
+**Branch**: `main`
+
+### Summary
+
+GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M4 余项;brainstorm 两决策(GUI 讨论库、独立面板)。形态核心张力调研定案:逐消息已被 messages_fts 覆盖,缺口在场级结论文档;转录.md 是磁盘孤儿(仅定时场、DB 投影)→ 索引源取 DB sessions 行直读 + 程序 LIKE,不建冗余表/不引 FTS5 触发器(场数低 2-3 量级,升 FTS 判定=场数 10^3 或需 bm25);spec 落账 json_valid 双红线(坏 metadata 不许打炸读路径;participants 走 json_each 不拼串防 model 泄漏)。交付:db/search_group_chat.rs(9 字段 hit + list/search + 8 单测)+ 两端点接线四层注册 + DiscussionLibraryModal(分组/搜索 debounce+IME gate+stale guard/筛选 chips/打开会话 openSessionInProject)+ useDiscussionLibrary 单例。质量门:后端 2343 passed、前端 1652 passed、vue-tsc/fmt/clippy 净,check 逐条 AC1-AC5 过零越界。转录路径不入库/不开文件(prd R4 边界)。work commits 4 + archive 自动提交,6 commits ahead origin/main 未 push。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3a6a6408` | (see git log) |
+
+### Status
+
+[OK] **Completed**
