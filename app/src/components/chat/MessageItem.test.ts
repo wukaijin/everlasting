@@ -36,6 +36,7 @@ import { createPinia, setActivePinia, type Pinia } from "pinia";
 
 import MessageItem from "./MessageItem.vue";
 import { useChatStore } from "../../stores/chat";
+import { useModelsStore } from "../../stores/models";
 import { useQuestionCardsStore } from "../../stores/questionCards";
 import type { ChatMessage } from "../../stores/chat.types";
 import type { Question } from "../../stores/questionCards.types";
@@ -559,6 +560,142 @@ describe("MessageItem — group chat speaker chip", () => {
     expect(wrapper.find('[data-testid="msg-speaker-chip-9"]').exists()).toBe(
       false,
     );
+  });
+});
+
+// ---------------------------------------------------------------------
+// 2026-09-07 (provider-model-disable 同批): speaker chip 的模型名段。
+// 参与者经 session metadata roster(name → model id)、主持人经
+// session.model_id 解析回模型显示名;解析链缺位(名字失配 / 模型
+// 已删)时整段省略,chip 退化为纯名字。
+// ---------------------------------------------------------------------
+
+describe("MessageItem — speaker chip model label", () => {
+  /** 造一个 group_chat session 进 chatStore(models 同步塞进
+   *  modelsStore),返回该 session 的 id。 */
+  function seedGroupChatSession(participants: { name: string; model: string }[]) {
+    const chatStore = useChatStore(pinia);
+    const sid = "sess-gc-1";
+    chatStore.sessions = [
+      {
+        id: sid,
+        title: "gc",
+        updated_at: "2026-09-07T00:00:00Z",
+        preview: "",
+        project_id: "__default__",
+        current_cwd: "/tmp",
+        worktree_path: null,
+        worktree_state: "none",
+        last_worktree_path: null,
+        model_id: "m-mod",
+        input_tokens_total: null,
+        output_tokens_total: null,
+        cache_creation_total: null,
+        cache_read_total: null,
+        last_context_input_tokens: null,
+        last_input_tokens: null,
+        last_output_tokens: null,
+        last_cache_creation: null,
+        last_cache_read: null,
+        color_tag: null,
+        mode: "edit",
+        workflow_enabled: false,
+        plugin_name: "dev",
+        session_type: "group_chat",
+        metadata: { participants },
+        busy: false,
+      },
+    ];
+    chatStore.currentSessionId = sid;
+    const modelsStore = useModelsStore(pinia);
+    modelsStore.models = [
+      {
+        id: "m-mod",
+        providerId: "p-1",
+        modelName: "glm-5.3",
+        displayName: "GLM-5.3 主控",
+        maxTokens: null,
+        thinkingEffort: null,
+        supportsThinking: true,
+        supportsImages: false,
+        contextWindow: 200_000,
+        disabled: false,
+        createdAt: "",
+        updatedAt: "",
+        providerDisplayName: "BigModel",
+        providerProtocol: "anthropic",
+      },
+      {
+        id: "m-flash",
+        providerId: "p-1",
+        modelName: "glm-5.3-flash",
+        displayName: "GLM-5.3-Flash",
+        maxTokens: null,
+        thinkingEffort: null,
+        supportsThinking: false,
+        supportsImages: false,
+        contextWindow: 128_000,
+        disabled: false,
+        createdAt: "",
+        updatedAt: "",
+        providerDisplayName: "BigModel",
+        providerProtocol: "anthropic",
+      },
+    ];
+    return sid;
+  }
+
+  it("appends the participant's model display name to the chip", async () => {
+    seedGroupChatSession([{ name: "Alex", model: "m-flash" }]);
+    const message = makeAssistantMessage([], []);
+    message.speaker = "Alex";
+    message.seq = 11;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-11"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("Alex");
+    expect(chip.find(".msg-speaker-chip__model").text()).toContain("GLM-5.3-Flash");
+  });
+
+  it("appends the session model display name for moderator turns", async () => {
+    seedGroupChatSession([{ name: "Alex", model: "m-flash" }]);
+    const message = makeAssistantMessage([], []);
+    message.speaker = "moderator";
+    message.seq = 12;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-12"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("主持人");
+    expect(chip.find(".msg-speaker-chip__model").text()).toContain("GLM-5.3 主控");
+  });
+
+  it("omits the model segment when the speaker is not in the roster", async () => {
+    seedGroupChatSession([{ name: "Alex", model: "m-flash" }]);
+    const message = makeAssistantMessage([], []);
+    // Roster 编辑后遗留的旧 speaker 名(失配)→ 无模型段,chip 仍渲染。
+    message.speaker = "Blake";
+    message.seq = 13;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-13"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("Blake");
+    expect(chip.find(".msg-speaker-chip__model").exists()).toBe(false);
+  });
+
+  it("omits the model segment when the model row no longer exists", async () => {
+    // roster 指向已删除的模型 id(catalog miss)→ 无模型段。
+    seedGroupChatSession([{ name: "Alex", model: "m-deleted" }]);
+    const message = makeAssistantMessage([], []);
+    message.speaker = "Alex";
+    message.seq = 14;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-14"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.find(".msg-speaker-chip__model").exists()).toBe(false);
   });
 });
 

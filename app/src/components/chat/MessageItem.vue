@@ -37,6 +37,7 @@
 import { computed, watch, onUnmounted, ref } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
+import { useModelsStore } from "../../stores/models";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { abbreviateTokens } from "../../utils/tokenUsage";
@@ -187,6 +188,26 @@ const useTimeline = computed(() => shouldUseTimeline(props.message));
 const speakerLabel = computed(() => speakerLabelOf(props.message));
 const speakerAccent = computed(() => speakerAccentOf(props.message));
 const showSpeakerChip = computed(() => showSpeakerChipFor(props.message));
+
+// 群聊 speaker chip 的模型名段(2026-09-07):把 speaker 解析回模型
+// 显示名 —— 参与者走 session metadata 的 roster(name → model id),
+// 主持人走 session 自己的 model_id。解析链任何一环缺位(经典会话
+// 无 speaker / roster 编辑后旧 speaker 名失配 / 模型已删除 / 旧
+// daemon 未加载 models)都返回 null,chip 退化为纯名字(原形态)。
+const modelsStore = useModelsStore();
+const speakerModelLabel = computed<string | null>(() => {
+  const s = props.message.speaker;
+  if (!s || !showSpeakerChip.value) return null;
+  let modelId: string | null = null;
+  if (s === "moderator") {
+    modelId = chatStore.currentSession?.model_id ?? null;
+  } else {
+    modelId =
+      chatStore.currentSessionParticipants?.find((p) => p.name === s)?.model ?? null;
+  }
+  if (!modelId) return null;
+  return modelsStore.byId(modelId)?.displayName ?? null;
+});
 const askCardPropsFor = (tc: { id: string; name: string }) => askCardPropsResolved(props.message, tc);
 const modeChangeCardPropsFor = (tc: { id: string; name: string }) => modeChangeCardPropsResolved(props.message, tc);
 const taskStateTransitionCardPropsFor = (tc: { id: string; name: string }) => taskStateTransitionCardPropsResolved(props.message, tc);
@@ -663,6 +684,10 @@ const messageImages = computed<
       arbitrating). Participants get a hash-derived palette
       color (deterministic — same name = same color across
       reloads + sessions).
+
+      2026-09-07: chip 增加模型名段 —— 参与者 roster / 主持人
+      session.model_id 解析回模型显示名(muted 小字,前缀 ·)。
+      解析不出(旧会话 roster 失配 / 模型已删)时整段省略。
     -->
     <div
       v-if="showSpeakerChip"
@@ -673,6 +698,11 @@ const messageImages = computed<
     >
       <span class="msg-speaker-chip__dot" aria-hidden="true" />
       <span class="msg-speaker-chip__label">{{ speakerLabel }}</span>
+      <span
+        v-if="speakerModelLabel"
+        class="msg-speaker-chip__model"
+        :title="speakerModelLabel"
+      >· {{ speakerModelLabel }}</span>
     </div>
 
     <ThinkingBlock
@@ -1313,6 +1343,17 @@ const messageImages = computed<
 
 .msg-speaker-chip__label {
   white-space: nowrap;
+}
+
+/* 2026-09-07: chip 的模型名段 —— muted 色 + 常规字重,与主名字拉开
+   层级;chip 有 max-width 场景(未来)时省略号,title 兜底全文。 */
+.msg-speaker-chip__model {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  color: var(--color-text-muted);
+  font-weight: 400;
 }
 
 /* Moderator: fixed neutral accent so the role is visually
