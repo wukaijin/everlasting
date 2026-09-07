@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "F2 fire 契约/origin 链/错误矩阵——group_chat 档必须对齐的调度语义与不可破坏的 Bad Cases"}
+{"file": ".trellis/tasks/09-07-gce-m4a-scheduled-deliberation/research/daemon-code-anchors.md", "reason": "fire 链路/建群内部入口/resume 五校验/校验矩阵/审计的 file:line 锚点,实现直接按图索骥"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md", "reason": "群聊 busy/interrupted/preempt 语义与 controls 注册表——fire 三分支判态的依据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration/table rebuild 五步舞与幂等断言要求"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "前端 store 扩展(scheduledTasks.ts/streamEvents.ts)需遵循的状态管理约定"}
+{"file": ".trellis/tasks/09-07-gce-m4a-scheduled-deliberation/review.md", "reason": "评审修订要点(P1 四态路由/半透传 sink/计数矩阵/created_via 承载/outcome 列)——设计以修订后为准"}

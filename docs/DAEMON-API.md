@@ -223,6 +223,47 @@ Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
   8s 快拒。follow 消费方要么准备应答 `permission_response`(8s/120s 窗口内先到先赢),
   要么用完即断——不要挂着纯看。
 
+### 6.3 定时审议(GCE-M4a,2026-09-07 起)——scheduled_tasks 的 group_chat 档
+
+`scheduled_tasks/*` 新增 `target_mode: "group_chat"` 档:定时到点由 **daemon 原生**建群发题
+(复用 F2 30s tick + M0 群聊生命周期;无需外部 cron 驱动脚本)。GUI 之外可经
+`POST /api/v1/scheduled_tasks/create_scheduled_task` 直接建任务,到点后按 §4 消费该 session。
+
+**建任务**(校验矩阵,违规 400):
+- `target_mode: "group_chat"` + `prompt`(议题原文,fire 时**原样**发题,无注脚)+
+  `schedule`(F2 七种 schedule kind + once 全兼容)。
+- `group_chat_config` 必填,JSON 形状:`{"moderator_model_id": "...", "participants":
+  [{"name": "...", "model_id": "...", "persona_md"?: "..."}]}`——结构校验(非空名单、
+  无重名)+ 模型存在性(moderator 与全部 participants 查 models 表)。
+- **不收** `target_session_id`(400 矛盾)与 `model_id`(moderator 在 config 内);
+  `max_runs` / `ends_at` 结束条件与既有档同语义。
+- update 的 `group_chat_config` 为双层 Option:缺省 = 保留存档;对象 = 校验后写入;
+  显式 `null` = 清空(仅切离 group_chat 档合法)。
+
+**fire 语义**(每 due 点四态路由,依据 `last_run_session_id` 所指旧场判定):
+| 旧场状态 | 动作 | `last_fire_outcome` | 计 `run_count` |
+|---|---|---|---|
+| 仍在跑(busy) | 跳过本期 + 审计 `skipped_busy` | `skipped_busy` | 否 |
+| interrupted 且 checkpoint 在(round<30) | 自动续跑(P1a 五闸)+ 审计 `resumed_group_chat` | `resumed` | 是 |
+| interrupted 但 checkpoint 已删 | 审计 error,**本期不动**(绝不双开场) | `error` | 否 |
+| 僵尸(round≥30)/ 停摆(stop_reason NULL 且无 checkpoint) | 补 `finalize(error)` → 审计 `recovered` → 开新场 | `recovered` | 否 |
+| 终态 / 无旧场 | catalog 预检(moderator+participants 模型齐全)→ 建群 → 发题 | `started` | 是 |
+
+计数矩阵:**所有臂都消费 due**(`last_fired_at` 记 due 不记 now);`run_count` 只计真正
+开跑的 fire(开新场受理 / 续跑受理 / 开新场 Err)——busy 跳过与拒绝臂不烧预算。
+
+**归因与产物**:fire 建群写入 session metadata 三键 `created_via="scheduled"` +
+`scheduled_task_id` + `scheduled_task_name`;审计动作 `fired_group_chat` / `resumed_group_chat`
+/ `skipped_busy` / `recovered`(permissions/audit 自由串域);任务行 `last_fire_outcome`
+五值快照(`started/resumed/skipped_busy/error/recovered`)。收官时 daemon **自动导出转录**到
+`{app_data_dir}/discussions/{YYYY-MM-DD}-{任务名}-{sid8}.md`(仅定时场;GUI/MCP/script 场
+不导出),头部含阵容 / 起止 / stop_reason / discussion_summary。GUI 收官单 toast(专用,
+抑制通用轮次通知)。
+
+**边界**:LLM `schedule_task` 工具**不能**建群聊任务(恒 fixed 语义——群聊一场数十万
+token,不开放给 agent 自主创建);preset 预设在 `scripts/group-chat-presets.json`,daemon
+无 preset 概念(前端展开后提交,API 调用方同理)。
+
 ## 7. 其他常用端点(路径约定)
 
 全部为 `POST /api/v1/<domain>/<command>`,body snake_case,与 Tauri command 同名同参:

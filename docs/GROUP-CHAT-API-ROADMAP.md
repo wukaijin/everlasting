@@ -14,7 +14,7 @@
 | M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
 | M2 MCP 接口层 | 外部 AI agent 可召集审议:`start/status/result/cancel` 四工具 | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
 | M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | ✅ 2026-09-06(见 §4;P0 前置同日落地) | 中 |
-| M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🔴 远期 | 大(多子项) |
+| M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🟡 首子项定时审议 ✅ 2026-09-07(§5,live 验证通过);余项未动 | 大(多子项) |
 
 推进原则(沿用 remote-access 先例):每个子阶段 ① 能独立提交 ② 有明确验证标准 ③ GUI/经典聊路径零行为变化。
 
@@ -83,7 +83,7 @@ P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一�
 
 多子项,各自独立立项:
 
-- **定时审议**:cron 定期召集(每周架构复盘 / 发布前评审)——复用 F2 定时任务基础设施 + M1 驱动;待定:产物推送形态(飞书通知走 B10 收窄形态?落地文件?)。
+- **定时审议**:cron 定期召集(每周架构复盘 / 发布前评审)——**✅ 2026-09-07 交付(task `09-07-gce-m4a-scheduled-deliberation`;同日 live 验证通过:完整周期 fire→收官→转录落盘→SSE done、SIGKILL 中断自动 resume 续跑无缝、僵尸场零 token 恢复,记录见任务 implement.md Step 7)**:trigger 拓扑 = **daemon 原生**(scheduled_tasks 新增 `target_mode="group_chat"` + `group_chat_config` 展开配置,fire 直接建群发题,零外部 cron);容错 = 四态路由(busy 跳过+审计不计数 / interrupted 自动续跑(P1a 地基的预期消费方)/ interrupted 无 checkpoint 审计 error 本期不动绝不双开场 / 僵尸 round≥30 与停摆场补 finalize(error) 恢复 / 终态开新)+ catalog 预检;计数矩阵对齐 F2b(全臂消费 due,run_count 只计真开跑);产物 = **落盘 + GUI 通知**(转录自动导 `{app_data_dir}/discussions/`,收官单 toast;飞书推送不在本期,归 B10);议题 = v1 静态文本;preset 单一事实源抽 `scripts/group-chat-presets.json`(M1 脚本 + 前端 vite import 共享,daemon 零 preset 概念);LLM `schedule_task` 工具不开放群聊档。评审(MCP 跨模型审议,session `f60e1212`)5 P1 全部织入设计。契约见 [DAEMON-API §6.3](./DAEMON-API.md)。
 - **讨论库与检索**:历史审议(转录 + summary)可检索复用——待定:FTS(messages_fts 已有)够不够、要不要独立 discussion 视图表。
 - **成本治理**:per-discussion token 核算(turn_trace 已有 per-turn 数据)+ 预算上限硬停——上游依赖第二场共识 C1.2(`stop_reason=budget`);待定:预算声明位置(开群参数 vs MCP 工具参数 vs 默认档)。
 - **远程暴露认证**:MCP/API 走 remote/tunnel 时的鉴权与降级——必须吸收 BACKLOG 附录 B「隧道来源降级」条目的安全论据与既有用户决策(PWA 全权 vs 分层),**立项前先过一次安全评审**。M3 决议(2026-09-06)落账:打断/注入的权限粒度机制在此一并议(本机零鉴权前提下全域可打断;远程暴露时粒度才有意义)。

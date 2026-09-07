@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "对照 F2 契约验证 group_chat 档:due 消费语义/三绕过/审计/Bad Cases 零回归"}
+{"file": ".trellis/tasks/09-07-gce-m4a-scheduled-deliberation/research/daemon-code-anchors.md", "reason": "核对实现落点与锚点一致(校验矩阵改动点/终态钩子位置/审计签名)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量闸:测试矩阵覆盖度与命名"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量闸(第四档表单/通知的组件与测试约定)"}
+{"file": ".trellis/tasks/09-07-gce-m4a-scheduled-deliberation/review.md", "reason": "对照评审 P1/P2 清单逐项验收是否落地"}

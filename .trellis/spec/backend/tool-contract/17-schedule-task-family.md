@@ -74,3 +74,12 @@ pub async fn cancel_execute(input, ctx) -> (String, bool);
   **原样复述服务端 task_id**(tool_result 消费实证)+ 行 `created_by='agent'`;
   status→cancel 闭环 + 行删除。**坑**:`create_project` 第二参是 name,id 必须
   用返回值(mock 种子曾因此全挂「project 不存在」)。
+
+### 4. 档位边界(M4a 补记,09-07-gce-m4a-scheduled-deliberation)
+
+- `schedule_task` 恒 fixed/专用语义:`target_mode` 与 `group_chat_config` 参数
+  **不进 tool 面**(`execute` 调 `create_scheduled_task_in_pool` 恒传
+  `target_mode=fixed` + `group_chat_config=None`)。per_run 与 group_chat(定时
+  审议)同属「用户 UI 面能力」——群聊一场数十万 token,不开放给 agent 自主建。
+- 后续新增 target_mode 档位时**默认不进 tool 面**;要开放须显式立契约(成本
+  论证 + 上限闸),不要顺手透传。
