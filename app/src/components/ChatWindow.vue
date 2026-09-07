@@ -32,7 +32,13 @@ onMounted(async () => {
   if (lastId && projectsStore.projects.find((p) => p.id === lastId)) {
     projectsStore.currentProjectId = lastId;
   } else if (projectsStore.projects.length > 0) {
-    projectsStore.currentProjectId = projectsStore.projects[0].id;
+    // 兜底选第一个 tab 时跳过 legacy 项目(2026-09-07):`__default__`
+    // 按 created_at ASC 恒排第一,首次启动(无 lastActiveProjectId)
+    // 会落在 "Legacy / 未分类" 上,后续建定时任务等以当前项目为默认
+    // 的表单也会跟着选进去。
+    const firstReal =
+      projectsStore.projects.find((p) => !p.is_legacy) ?? projectsStore.projects[0];
+    projectsStore.currentProjectId = firstReal.id;
   }
   // If neither condition holds, the empty state will show. The
   // chat store's watcher fires for `currentProjectId = null` and

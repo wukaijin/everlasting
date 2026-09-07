@@ -34,6 +34,20 @@ pub(super) async fn worker_test_pool() -> sqlx::SqlitePool {
     // the shared pool at `off` mirrors the documented rollback lever
     // ("project off = P3b behavior") and keeps the pre-P3c approval
     // tests byte-for-byte meaningful.
+    // 2026-09-07 backstop-gate follow-up: fresh pools no longer
+    // auto-seed `__default__` (migrations now gate the row on legacy
+    // sessions existing), so insert it here before the blanket pin.
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO projects (id, name, path, is_legacy, created_at, updated_at)
+        VALUES (?, 'backstop', '/tmp/everlasting-permissions-test', 1,
+                datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(crate::projects::DEFAULT_PROJECT_ID)
+    .execute(&pool)
+    .await
+    .expect("seed backstop project for test");
     sqlx::query("UPDATE projects SET sandbox_policy = 'off'")
         .execute(&pool)
         .await

@@ -1255,43 +1255,54 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     super::super::config::seed_default_providers_and_models(pool).await?;
 
     // --- Auto-default project (backstop for legacy sessions) ---
-    // Insert the backstop row *after* the ALTERs so any sessions
-    // created in this same migration (none in normal flow) can FK
-    // against it. For pre-3b-1 sessions, the ALTER DEFAULT
-    // `'__default__'` already wires them up.
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        r#"
+    // Seeded only when sessions actually need the backstop. The
+    // pre-3b-1 upgrade path lands its existing rows on
+    // `__default__` via the ALTER's DEFAULT clause (the COUNT
+    // below runs after those ALTERs), so a real upgrade still
+    // gets the row; a fresh DB has zero sessions and no longer
+    // sprouts a useless "Legacy / 未分类" tab (2026-09-07
+    // follow-up). Databases that already carry the row keep it —
+    // this gate only decides whether to INSERT, never DELETE.
+    let legacy_bound: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE project_id = ?")
+            .bind(DEFAULT_PROJECT_ID)
+            .fetch_one(pool)
+            .await?;
+    if legacy_bound > 0 {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
  INSERT OR IGNORE INTO projects
  (id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata)
  VALUES (?, ?, ?,0, NULL,1, ?, ?,0, NULL)
  "#,
-    )
-    .bind(DEFAULT_PROJECT_ID)
-    .bind("Legacy / 未分类")
-    // path is $HOME at the OS level; canonicalized here so the
-    // "not a git repo" field is conservative. The user can later
-    // reassign the legacy sessions to their real project.
-    .bind(home_dir_or_dot())
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await?;
+        )
+        .bind(DEFAULT_PROJECT_ID)
+        .bind("Legacy / 未分类")
+        // path is $HOME at the OS level; canonicalized here so the
+        // "not a git repo" field is conservative. The user can later
+        // reassign the legacy sessions to their real project.
+        .bind(home_dir_or_dot())
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await?;
 
-    // For any session whose `current_cwd` is still empty (the
-    // pre-3b-1 default we just added), backfill with the backstop
-    // project's path so the agent's first turn doesn't try to
-    // execute with an empty cwd.
-    sqlx::query(
-        r#"
+        // For any session whose `current_cwd` is still empty (the
+        // pre-3b-1 default we just added), backfill with the backstop
+        // project's path so the agent's first turn doesn't try to
+        // execute with an empty cwd.
+        sqlx::query(
+            r#"
  UPDATE sessions
  SET current_cwd = (SELECT path FROM projects WHERE id = ?)
  WHERE current_cwd = '' OR current_cwd IS NULL
  "#,
-    )
-    .bind(DEFAULT_PROJECT_ID)
-    .execute(pool)
-    .await?;
+        )
+        .bind(DEFAULT_PROJECT_ID)
+        .execute(pool)
+        .await?;
+    }
 
     // --- RULE-D-001 (P1 API key 加密, 2026-06-24).
     //

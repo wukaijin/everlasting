@@ -28,16 +28,68 @@ async fn migrations_are_idempotent() {
 }
 
 #[tokio::test]
-async fn default_project_is_seeded() {
+async fn default_project_absent_on_fresh_db() {
+    // 2026-09-07 follow-up: the `__default__` backstop is seeded only
+    // when sessions actually reference it. A fresh DB must not grow a
+    // "Legacy / 未分类" tab.
     let pool = test_pool().await;
+    let projects = list_projects(&pool, true).await.unwrap();
+    assert!(!projects.iter().any(|p| p.id == DEFAULT_PROJECT_ID));
+}
+
+#[tokio::test]
+async fn default_project_seeded_for_pre_3b1_upgrade() {
+    // Simulate a pre-3b-1 database: `sessions` in the old shape
+    // (no project_id / current_cwd) with one existing row. The full
+    // migration must add the columns (DEFAULT wires the row onto
+    // `__default__`), seed the backstop project, and backfill
+    // current_cwd from the backstop's path.
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+ CREATE TABLE sessions (
+ id TEXT PRIMARY KEY,
+ title TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ model TEXT NOT NULL,
+ metadata TEXT
+ )
+ "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sessions (id, title, created_at, updated_at, model) \
+         VALUES ('legacy-1', 'old session', 't0', 't0', 'm')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    run_migrations(&pool).await.unwrap();
+
     let projects = list_projects(&pool, true).await.unwrap();
     let backstop = projects
         .iter()
         .find(|p| p.id == DEFAULT_PROJECT_ID)
-        .expect("default project should be seeded");
+        .expect("default project should be seeded for a DB with legacy sessions");
     assert!(backstop.is_legacy);
     assert_eq!(backstop.name, "Legacy / 未分类");
     assert!(!backstop.hidden);
+
+    let (project_id, current_cwd): (String, String) =
+        sqlx::query_as("SELECT project_id, current_cwd FROM sessions WHERE id = 'legacy-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(project_id, DEFAULT_PROJECT_ID);
+    assert_eq!(current_cwd, backstop.path);
 }
 
 #[tokio::test]
@@ -61,7 +113,6 @@ async fn create_and_list_project() {
     let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&p1.id.as_str()));
     assert!(ids.contains(&p2.id.as_str()));
-    assert!(ids.contains(&DEFAULT_PROJECT_ID));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
