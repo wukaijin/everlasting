@@ -495,15 +495,17 @@ function protocolBadgeClass(protocol: string): string {
 
 /* 2026-09-07 (provider-model-disable): 禁用徽标(muted 色相,区别于
    错误态)与禁用行的降透明 —— 行仍可读、可操作(编辑/启用),只是
-   一眼可辨"不在选用列表里"。 */
+   一眼可辨"不在选用列表里"。二轮反馈(同日):只降 name/url 两段
+   0.55 感知太弱,改为整行降透明 + 徽标加 dashed 描边(形状级区别于
+   context-window 那类 muted 实底 tag)。 */
 .providers-tab__badge--disabled {
   background: var(--color-bg-border);
   color: var(--color-text-muted);
+  border: 1px dashed var(--color-text-muted);
   flex-shrink: 0;
 }
 
-.providers-tab__row--disabled .providers-tab__name,
-.providers-tab__row--disabled .providers-tab__url {
+.providers-tab__row--disabled {
   opacity: 0.55;
 }
 

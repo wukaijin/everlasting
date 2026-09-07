@@ -252,15 +252,16 @@ const testTitle = computed<string>(() =>
 
 /* 2026-09-07 (provider-model-disable): 禁用徽标 + 禁用行降透明。
    行保持可读可操作(编辑 / 启用 / 测试),只是一眼可辨"不在选用
-   列表里"。 */
+   列表里"。二轮反馈(同日):只降 name/id 两段 0.55 感知太弱,改
+   为整行降透明 + 徽标加 dashed 描边(形状级区别于 muted 实底 tag)。 */
 .model-row__tag--disabled {
     background: var(--color-bg-border);
     color: var(--color-text-muted);
+    border: 1px dashed var(--color-text-muted);
     flex-shrink: 0;
 }
 
-.model-row--disabled .model-row__name,
-.model-row--disabled .model-row__model-id {
+.model-row--disabled {
     opacity: 0.55;
 }
 
