@@ -62,7 +62,14 @@ database-guidelines.md 的「IPC payload camelCase」新约定(对齐 `AuditEven
 
 `SessionSummary` 关键字段(全 snake_case):`id` / `title` / `updated_at` / `preview` /
 `project_id` / `current_cwd` / `session_type`(`"chat"` | `"group_chat"`)/ `metadata`(群聊配置
-`{participants: [...]}`)/ **`busy`**(运行时信号,见 §4)/ **`stop_reason`**(见 §4)。
+`{participants: [...], token_budget?: <u64,见下>}`)/ **`busy`**(运行时信号,见 §4)/
+**`stop_reason`**(见 §4)。
+
+群聊 metadata 可选键 `token_budget`(2026-09-08,C1.2 止损包,additive):声明该场讨论的
+token 预算上限(计费口径 = input + output + cache_creation + cache_read 四字段求和,每内层
+LLM 轮的 `TurnUsage` 累计)。超限 → 编排器在下一轮头终态停,`stop_reason="budget"`
+(无收束轮)。缺键 = 不限。GUI 建群弹窗可填;M1 脚本 / MCP / 定时任务通道暂不透传
+(加参归 M4 成本治理)。
 
 `SessionRow` 在 summary 之上多:`created_at` / `model` / `mode` / token 快照
 (`last_context_input_tokens` 等)/ **`stop_reason`** / **`discussion_summary`**(见 §4)。

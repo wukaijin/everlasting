@@ -27,7 +27,7 @@
 
 ### R2 — C1.2 token 预算:`stop_reason=budget` 硬停
 
-- 编排器经 sink 装饰器拦截每个内层 `Done{usage}`,逐块累计声明口径的 token(**口径已定:四计费字段求和** input+output+cache_creation+cache_read,context_input 是 trace 观测口径与 input 重叠不计——用户 2026-09-08 裁定);外层循环头(每 round 的 moderator 仲裁前)检查,超限 → `HaltReason::Budget` → 终态 `stop_reason="budget"`。
+- 编排器经 sink 装饰器拦截每个内层 `TurnUsage` 事件(实施修正:Done 不达中间工具轮),逐块累计声明口径的 token(**口径已定:四计费字段求和** input+output+cache_creation+cache_read,context_input 是 trace 观测口径与 input 重叠不计——用户 2026-09-08 裁定);外层循环头(每 round 的 moderator 仲裁前)检查,超限 → `HaltReason::Budget` → 终态 `stop_reason="budget"`。
 - 复用 GC2 语义:落库 `sessions.stop_reason` + 终态 Done 携带,前端 finalize 白名单 + `groupChatNotice` 增 `budget` 档(streamController.ts:604 switch、streamEvents.ts:623 终态集)。
 - 超限精度契约:检查点在轮头,participant turn 内层 ≤20 次 LLM 调用(max_turns=Some(20))、moderator turn ≤1(Some(1)),故实际消耗 = 声明值 + **一个 speaker turn** 的量级;终止语义 = 越线后于下一轮头确定性停。这是接受的 overshoot 上界,如实写进 design。
 - 预算声明:`GroupChatConfig`(sessions.metadata JSON)增 additive 可选键 `token_budget: Option<u64>`,serde default None = 不限(缺省零行为变更)。通道现状(评审修正):**GUI 通道本任务落地**(Q3);M1 script / MCP start_discussion 建群 body 均为固定键白名单、今天都不传该键,待各自加参归 M4;**M4a 定时场暂不透传**——`GroupChatTaskConfig` 是闭结构(scheduled_tasks.rs:64-68,未知键 serde 静默丢弃)、fire 建群是枚举白名单重建 metadata(scheduler/mod.rs:1032-1048)而非原样展开,透传需 scheduled 侧加字段 + fire 加键,归 M4。默认档(全局缺省上限)归 M4 成本治理,不在本任务。

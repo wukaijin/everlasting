@@ -158,7 +158,10 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           event.stop_reason === "error" ||
           // 09-06-gc-p0 R2: preempt 收束轮后的终态 Done(讨论已被
           // 体面打断,不会再有事件)。
-          event.stop_reason === "preempted"));
+          event.stop_reason === "preempted" ||
+          // C1.2 (09-08-gc-c1-stoploss): 声明 token 预算耗尽,轮头
+          // 终态停(无收束轮,不会再有事件)。
+          event.stop_reason === "budget"));
 
     // F6 异步 agent 任务(2026-08-27):终结事件 → 跨 session 完成/
     // 失败 toast。挂在 msgs 守卫**之前**:后台任务的核心场景就是用户
@@ -648,7 +651,9 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           event.stop_reason === "max_rounds" ||
           event.stop_reason === "error" ||
           // 09-06-gc-p0 R2: preempt 终态(体面打断,收束轮已跑完)。
-          event.stop_reason === "preempted";
+          event.stop_reason === "preempted" ||
+          // C1.2 (09-08-gc-c1-stoploss): token 预算耗尽终态。
+          event.stop_reason === "budget";
         if (isTerminal) {
           finalizeRequest(req.requestId, req.sessionId, false);
         }

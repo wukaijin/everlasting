@@ -531,6 +531,8 @@ export function scheduledStopReasonLabel(
       return "达到轮次上限";
     case "preempted":
       return "被打断收束";
+    case "budget":
+      return "达到 token 预算上限";
     case "cancelled":
       return "已取消";
     case "interrupted":
@@ -618,6 +620,10 @@ export function groupChatNotice(stopReason: string | undefined): string | null {
     // 主持人收束总结)。summary 已落库可查;此 notice 只提示形态。
     case "preempted":
       return "讨论已被打断，主持人已总结当前进展。";
+    // C1.2 (09-08-gc-c1-stoploss): 声明 token 预算耗尽,轮头终态停
+    // (无收束轮)。终态,与 max_rounds / error 同类。
+    case "budget":
+      return "讨论已达 token 预算上限，自动停止。";
     default:
       return null;
   }

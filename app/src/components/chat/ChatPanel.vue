@@ -218,6 +218,11 @@ const isGroupChat = computed(
 const groupChatParticipants = computed(
   () => chatStore.currentSessionParticipants,
 );
+// C1.2 (09-08-gc-c1-stoploss): existing token budget for the edit
+// modal's input prefill (`null` metadata key → undefined → empty input).
+const groupChatTokenBudget = computed<number | null | undefined>(
+  () => currentSession.value?.metadata?.token_budget,
+);
 
 // F2 定时任务 (2026-08-28): session header 活跃任务徽章。数据源是
 // scheduledTasks store 的启动缓存(AppShell 挂载时拉一次 list;
@@ -1120,6 +1125,7 @@ onUnmounted(() => reviewStateStore.stop());
       mode="edit"
       :session-id="chatStore.currentSessionId ?? undefined"
       :initial-participants="groupChatParticipants ?? undefined"
+      :initial-token-budget="groupChatTokenBudget"
     />
 
     <!--

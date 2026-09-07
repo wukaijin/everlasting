@@ -297,3 +297,188 @@ describe("GroupChatConfigModal — cache rates (edit mode)", () => {
     expect(byTestId("gcfg-moderator")).toBeNull();
   });
 });
+
+// =====================================================================
+// C1.2 (09-08-gc-c1-stoploss): token 预算输入——create 写键/留空不写、
+// edit 合并保键(created_via / scheduled_task_name 不丢)、清空 = 删键、
+// 非法输入禁提交。
+// =====================================================================
+import { useProjectsStore } from "../../stores/projects";
+
+describe("GroupChatConfigModal — token budget (C1.2)", () => {
+  afterEach(() => {
+    document
+      .querySelectorAll(".gcfg-content, .gcfg-overlay")
+      .forEach((el) => el.remove());
+  });
+
+  function flush() {
+    return new Promise((r) => setTimeout(r, 0));
+  }
+
+  function fillRoster() {
+    allByTestIdPrefix("gcfg-name-").forEach((el, i) => {
+      const input = el as HTMLInputElement;
+      input.value = `P${i + 1}`;
+      input.dispatchEvent(new Event("input"));
+    });
+    // Model selects default to the first enabled model — no interaction needed.
+  }
+
+  function setBudget(value: string) {
+    const el = byTestId("gcfg-budget") as HTMLInputElement | null;
+    if (!el) throw new Error("budget input not found");
+    el.value = value;
+    el.dispatchEvent(new Event("input"));
+  }
+
+  function lastInvoke(cmd: string): Record<string, unknown> | undefined {
+    const calls = invokeMock.mock.calls.filter((c: unknown[]) => c[0] === cmd);
+    return calls[calls.length - 1]?.[1] as Record<string, unknown> | undefined;
+  }
+
+  it("create:填写预算 → metadata 携带 token_budget;留空 → 不写键", async () => {
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "create_session"
+        ? {
+            id: "new-sess",
+            title: "新对话",
+            created_at: "",
+            updated_at: "",
+            model: "m",
+            project_id: "p1",
+            current_cwd: "",
+          }
+        : cmd === "list_sessions"
+          ? []
+          : null,
+    );
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const modelsStore = useModelsStore();
+    modelsStore.models = MODEL_LIST as never;
+    useProjectsStore().currentProjectId = "p1";
+    const wrapper = mount(GroupChatConfigModal, {
+      props: { open: true, mode: "create" },
+      global: { plugins: [pinia] },
+      attachTo: document.body,
+    });
+    await flush();
+    fillRoster();
+    await flush();
+
+    setBudget("500000");
+    await flush();
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    let meta = lastInvoke("create_session")?.metadata as Record<string, unknown>;
+    expect(meta?.token_budget).toBe(500000);
+
+    setBudget("");
+    await flush();
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    meta = lastInvoke("create_session")?.metadata as Record<string, unknown>;
+    expect(meta).not.toHaveProperty("token_budget");
+    wrapper.unmount();
+  });
+
+  it("edit:合并保键——participants 更新、created_via/scheduled_task_name 保留、预算可设可清", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const chat = useChatStore();
+    chat.sessions = [
+      {
+        id: "s-edit",
+        title: "讨论场",
+        updated_at: "",
+        preview: "",
+        project_id: "p1",
+        current_cwd: "",
+        worktree_path: null,
+        worktree_state: "none",
+        last_worktree_path: null,
+        model_id: null,
+        input_tokens_total: null,
+        output_tokens_total: null,
+        cache_creation_total: null,
+        cache_read_total: null,
+        last_context_input_tokens: null,
+        last_input_tokens: null,
+        last_output_tokens: null,
+        last_cache_creation: null,
+        last_cache_read: null,
+        color_tag: null,
+        mode: "edit",
+        workflow_enabled: false,
+        plugin_name: "dev",
+        session_type: "group_chat",
+        metadata: {
+          participants: [{ name: "旧A", model: "m1" }, { name: "旧B", model: "m2" }],
+          created_via: "scheduled",
+          scheduled_task_name: "每周评审",
+          token_budget: 1000,
+        },
+        busy: false,
+      } as never,
+    ];
+    const wrapper = mount(GroupChatConfigModal, {
+      props: {
+        open: true,
+        mode: "edit",
+        sessionId: "s-edit",
+        initialParticipants: [
+          { name: "旧A", model: "m1" },
+          { name: "旧B", model: "m2" },
+        ],
+        initialTokenBudget: 1000,
+      },
+      global: { plugins: [pinia] },
+      attachTo: document.body,
+    });
+    await flush();
+    expect((byTestId("gcfg-budget") as HTMLInputElement).value).toBe("1000");
+
+    // 改预算 → 保存 → metadata 合并:participants 原样、归因键保留、预算更新。
+    setBudget("9999");
+    await flush();
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    let meta = lastInvoke("update_session_metadata")?.metadata as Record<string, unknown>;
+    expect(meta?.token_budget).toBe(9999);
+    expect(meta?.created_via).toBe("scheduled");
+    expect(meta?.scheduled_task_name).toBe("每周评审");
+    expect((meta?.participants as unknown[]).length).toBe(2);
+
+    // 清空 → 保存 → token_budget 键删除(其余键仍在)。
+    setBudget("");
+    await flush();
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    meta = lastInvoke("update_session_metadata")?.metadata as Record<string, unknown>;
+    expect(meta).not.toHaveProperty("token_budget");
+    expect(meta?.created_via).toBe("scheduled");
+    wrapper.unmount();
+  });
+
+  it("非法预算(0 / 负数 / 非整数 / 非数字)→ 提交禁用;清空恢复", async () => {
+    const wrapper = mountModal({ mode: "create" });
+    await flush();
+    fillRoster();
+    await flush(); // let Vue re-render the disabled binding
+    const submit = () => byTestId("gcfg-submit") as HTMLButtonElement;
+    expect(submit().disabled).toBe(false);
+    // Note: "abc" is not settable on a type="number" input (DOM
+    // sanitizes value to "") — non-numeric rejection is enforced by the
+    // browser, so only numeric-but-invalid cases are testable here.
+    for (const bad of ["0", "-5", "1.5"]) {
+      setBudget(bad);
+      await flush();
+      expect(submit().disabled, `budget=${bad} must disable submit`).toBe(true);
+    }
+    setBudget("");
+    await flush();
+    expect(submit().disabled).toBe(false);
+    wrapper.unmount();
+  });
+});

@@ -67,6 +67,10 @@ const props = defineProps<{
    *  + model + persona). For mode="create" the host should pass
    *  `undefined` (the modal seeds an empty 2-participant default). */
   initialParticipants?: ParticipantConfig[];
+  /** C1.2 (09-08-gc-c1-stoploss): existing `metadata.token_budget`
+   *  for the edit flow (prefills the budget input). `undefined` on
+   *  create (input starts empty = unlimited). */
+  initialTokenBudget?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -93,6 +97,26 @@ const MIN_PARTICIPANTS = 2;
 const errorMessage = ref<string | null>(null);
 const submitting = ref<boolean>(false);
 
+// C1.2 token budget draft (string — number inputs with a possible
+// empty state bind cleanly as text; parsed on submit).
+const tokenBudgetInput = ref<string>("");
+
+const parsedTokenBudget = computed<number | null>(() => {
+  // v-model on type="number" coerces valid input to a NUMBER
+  // (looseToNumber) and keeps invalid input as string — normalize both.
+  const raw = tokenBudgetInput.value;
+  const t = String(raw ?? "").trim();
+  if (t === "") return null;
+  const n = Number(t);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+});
+
+const invalidBudget = computed(() => {
+  const t = String(tokenBudgetInput.value ?? "").trim();
+  return t !== "" && parsedTokenBudget.value === null;
+});
+
 // Names array — drives the "duplicate name" validation.
 const participantNames = computed(() => participants.value.map((p) => p.name.trim()));
 
@@ -117,6 +141,7 @@ const isValid = computed(() => {
   if (emptyName.value) return false;
   if (duplicateName.value) return false;
   if (participants.value.some((p) => !p.model.trim())) return false;
+  if (invalidBudget.value) return false;
   return true;
 });
 
@@ -200,6 +225,8 @@ watch(
         persona_md: p.persona_md,
       }));
       rosterSpeakers.value = props.initialParticipants.map((p) => p.name.trim());
+      tokenBudgetInput.value =
+        typeof props.initialTokenBudget === "number" ? String(props.initialTokenBudget) : "";
     } else if (props.mode === "create") {
       // Seed two empty participants (D5 minimum)。默认模型取首个「启用」
       // 模型(禁用模型不出现在选项里,也不做默认)。
@@ -208,6 +235,7 @@ watch(
         { name: "", model: selectableModels.value[0]?.id ?? "" },
       ];
       rosterSpeakers.value = [];
+      tokenBudgetInput.value = "";
     }
   },
   { immediate: true },
@@ -288,13 +316,18 @@ async function submit() {
           if (pm) out.persona_md = pm;
           return out;
         }),
+        tokenBudget: parsedTokenBudget.value ?? undefined,
       });
       emit("created", newSessionId);
     } else {
       if (!props.sessionId) {
         throw new Error("GroupChatConfigModal: sessionId required for edit mode");
       }
-      await chatStore.updateGroupChatConfig(props.sessionId, payload);
+      await chatStore.updateGroupChatConfig(
+        props.sessionId,
+        payload,
+        parsedTokenBudget.value,
+      );
       emit("updated");
     }
     emit("update:open", false);
@@ -452,6 +485,23 @@ function modelLabel(id: string): string {
           >
             + 添加参与者
           </button>
+
+          <!-- C1.2 (09-08-gc-c1-stoploss): per-discussion token
+               ceiling. Empty = unlimited (no metadata key). Exceeded →
+               the discussion halts at the next round head with
+               stop_reason "budget". -->
+          <label class="gcfg-field">
+            <span class="gcfg-field__label">Token 预算(可选)</span>
+            <input
+              v-model="tokenBudgetInput"
+              type="number"
+              min="1"
+              step="1"
+              class="gcfg-input"
+              placeholder="留空 = 不限;超出后讨论自动停止"
+              data-testid="gcfg-budget"
+            />
+          </label>
 
           <!--
             Moderator zone (08-10-group-chat-cache-rate, R6):

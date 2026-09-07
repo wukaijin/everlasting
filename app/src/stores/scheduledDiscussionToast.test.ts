@@ -77,6 +77,7 @@ describe("scheduledStopReasonLabel(纯函数)", () => {
     expect(scheduledStopReasonLabel("cancelled")).toBe("已取消");
     expect(scheduledStopReasonLabel("interrupted")).toBe("进程中断");
     expect(scheduledStopReasonLabel("error")).toBe("出错终止");
+    expect(scheduledStopReasonLabel("budget")).toBe("达到 token 预算上限");
   });
 
   it("无 stop_reason 的 error 事件按 kind 兜底;未知值原样透出", () => {

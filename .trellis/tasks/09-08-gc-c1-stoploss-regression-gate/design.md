@@ -72,9 +72,9 @@ GroupChatConfig.token_budget: Option<u64>        ← metadata additive 键(serde
 
 ### 2.2 TallySink 装饰器
 
-- `ChatEventSink` trait(state.rs:825 起)**10 个方法**(4 必实现 + 6 带默认实现)全转发;仅 `emit_chat_event` 检查 `ChatEvent::Done { usage: Some(u) }` 累计(`ChatEventPayload.event` 经 serde flatten 可内省),其余透传。**`has_live_observer` 必须显式转发到内层**——daemon HttpSseSink 是唯一生产覆写,漏转发会破坏 GC3 观察者感知(留作未来的暗雷)。~60 行机械代码,放 group_chat_loop.rs(仅群聊用,不导出)。
+- `ChatEventSink` trait(state.rs:825 起)**10 个方法**(4 必实现 + 6 带默认实现)全转发;仅 `emit_chat_event` 检查 `ChatEvent::TurnUsage { usage, .. }` 累计(`ChatEventPayload.event` 经 serde flatten 可内省),其余透传。**`has_live_observer` 必须显式转发到内层**——daemon HttpSseSink 是唯一生产覆写,漏转发会破坏 GC3 观察者感知(留作未来的暗雷)。~60 行机械代码,放 group_chat_loop.rs(仅群聊用,不导出)。
 - 计数器 `AtomicU64`(跨 await 无锁);口径 = **四计费字段求和**(prd Decisions Q2)。`context_input_tokens` 不计(与 input 重叠的 trace 观测口径)。
-- **usage = None 贡献 0**:错误/取消 turn 常无 usage 报告,预算对其失明——该面由 GC5 熔断兜住(连续错误 halt),两机制互补不重叠。design 如实记录此边界。
+- **错误/取消 turn 贡献 0**:错误轮 Done/TurnUsage 均不发,预算对其失明——该面由 GC5 熔断兜住(连续错误 halt),两机制互补不重叠(三剧本之「每轮报错」实测:错误轮零计费、干净轮计费,预算先于熔断触发)。design 如实记录此边界。
 
 ### 2.3 HaltReason::Budget 与终态语义
 

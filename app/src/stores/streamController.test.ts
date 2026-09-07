@@ -2345,6 +2345,8 @@ describe("groupChatNotice (08-07 R2)", () => {
     // GC5 (2026-09-05, BUGLIST-group-chat GC5): 熔断终端因 — 与 max_rounds
     // 同类(讨论已停),必须挂提示。
     expect(groupChatNotice("error")).toContain("生成出错");
+    // C1.2 (09-08-gc-c1-stoploss): token 预算耗尽终态 — 同类。
+    expect(groupChatNotice("budget")).toContain("token 预算");
   });
 
   it("returns null for non-boundary stop_reasons (no notice)", () => {

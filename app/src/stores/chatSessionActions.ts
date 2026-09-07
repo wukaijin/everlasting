@@ -78,6 +78,10 @@ export function createSessionActions(ctx: SessionActionsContext) {
     opts: {
       sessionType?: "chat" | "group_chat";
       participants?: ParticipantConfig[];
+      /** C1.2 (09-08-gc-c1-stoploss): per-discussion token ceiling,
+       *  written as metadata `token_budget`. `undefined` = unlimited
+       *  (key not written — byte-compatible with pre-C1.2 creates). */
+      tokenBudget?: number;
     } = {},
   ): Promise<string> {
     const projectId = projectsStore.currentProjectId;
@@ -93,7 +97,9 @@ export function createSessionActions(ctx: SessionActionsContext) {
     const sessionType = opts.sessionType;
     const metadata =
       opts.sessionType === "group_chat" && opts.participants
-        ? { participants: opts.participants }
+        ? typeof opts.tokenBudget === "number"
+          ? { participants: opts.participants, token_budget: opts.tokenBudget }
+          : { participants: opts.participants }
         : null;
     const session = await transport.invoke<{
       id: string;
@@ -139,6 +145,12 @@ export function createSessionActions(ctx: SessionActionsContext) {
   async function updateGroupChatConfig(
     sessionId: string,
     participants: ParticipantConfig[],
+    /** C1.2: `number` = set `token_budget`; `null` = clear it (input
+     *  emptied → unlimited). The metadata is MERGED over the existing
+     *  row — overwriting it wholesale would silently drop keys this
+     *  modal doesn't own (`created_via` / `scheduled_task_name` /
+     *  `token_budget`). */
+    tokenBudget: number | null,
   ): Promise<void> {
     const summary = sessions.value.find((s) => s.id === sessionId);
     if (summary && summary.session_type !== "group_chat") {
@@ -146,9 +158,18 @@ export function createSessionActions(ctx: SessionActionsContext) {
         `updateGroupChatConfig: session ${sessionId} is not a group_chat session`,
       );
     }
+    const metadata: Record<string, unknown> = {
+      ...(summary?.metadata ?? {}),
+      participants,
+    };
+    if (typeof tokenBudget === "number") {
+      metadata.token_budget = tokenBudget;
+    } else {
+      delete metadata.token_budget;
+    }
     await transport.invoke("update_session_metadata", {
       sessionId,
-      metadata: { participants },
+      metadata,
     });
     // Refresh the session list so the SessionList re-renders
     // with the new metadata. `loadSessions` is the existing
