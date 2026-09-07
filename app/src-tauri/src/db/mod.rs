@@ -74,6 +74,8 @@ pub mod providers;
 pub mod providers_tests;
 pub mod scheduled_tasks;
 pub mod search;
+pub mod search_group_chat;
+pub mod search_group_chat_tests;
 pub mod search_tests;
 pub mod sessions;
 pub mod sessions_tests;

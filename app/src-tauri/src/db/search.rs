@@ -223,7 +223,9 @@ async fn content_hits(
 }
 
 /// Escape `%`, `_`, `\` for a `LIKE … ESCAPE '\'` pattern.
-fn escape_like(q: &str) -> String {
+/// `pub(crate)` so the field-level group-chat search
+/// (`db/search_group_chat.rs`) shares the same escaping contract.
+pub(crate) fn escape_like(q: &str) -> String {
     let mut out = String::with_capacity(q.len());
     for c in q.chars() {
         if matches!(c, '%' | '_' | '\\') {
