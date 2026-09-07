@@ -20,9 +20,10 @@ use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, compact_session_inner, create_session_inner,
     delete_session_inner, diff_worktree_inner, edit_user_message_inner,
-    group_chat_cache_rates_inner, handoff_session_inner, list_sessions_inner, load_session_inner,
-    record_tool_duration_inner, rename_session_inner, search_messages_inner,
-    set_session_color_inner, set_session_plugin_name_inner, set_session_workflow_enabled_inner,
+    group_chat_cache_rates_inner, handoff_session_inner, list_group_chat_sessions_inner,
+    list_sessions_inner, load_session_inner, record_tool_duration_inner, rename_session_inner,
+    search_group_chat_discussions_inner, search_messages_inner, set_session_color_inner,
+    set_session_plugin_name_inner, set_session_workflow_enabled_inner,
     update_message_latency_inner, update_session_metadata_inner,
 };
 use crate::db;
@@ -326,6 +327,50 @@ pub async fn search_messages(
     Ok(Json(result))
 }
 
+/// `POST /api/v1/sessions/list_group_chat_sessions` — GCE M4b
+/// (09-07-gce-m4b-discussion-search): browse every historical
+/// group-chat discussion session (one hit per 场), newest-activity
+/// first. Field-level filters (project / stop_reason) ride as optional
+/// body fields; empty body = full browse. Read-only field-level query
+/// over the `sessions` rows — no FTS, no new tables (see
+/// `db/search_group_chat.rs`).
+#[derive(Debug, Deserialize, Default)]
+pub struct ListGroupChatSessionsRequest {
+    pub project_id: Option<String>,
+    pub stop_reason: Option<String>,
+}
+
+pub async fn list_group_chat_sessions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ListGroupChatSessionsRequest>,
+) -> Result<Json<Vec<db::search_group_chat::GroupChatSessionHit>>, AppCommandError> {
+    let result = list_group_chat_sessions_inner(&state, req.project_id, req.stop_reason).await?;
+    Ok(Json(result))
+}
+
+/// `POST /api/v1/sessions/search_group_chat_discussions` — GCE M4b:
+/// keyword search over historical group-chat discussion sessions. A
+/// non-empty `query` matches title / discussion_summary / task_name /
+/// any participant name (LIKE, wildcards escaped); empty query
+/// degrades to the full browse. Same optional filters as the list
+/// sibling.
+#[derive(Debug, Deserialize, Default)]
+pub struct SearchGroupChatDiscussionsRequest {
+    pub query: String,
+    pub project_id: Option<String>,
+    pub stop_reason: Option<String>,
+}
+
+pub async fn search_group_chat_discussions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SearchGroupChatDiscussionsRequest>,
+) -> Result<Json<Vec<db::search_group_chat::GroupChatSessionHit>>, AppCommandError> {
+    let result =
+        search_group_chat_discussions_inner(&state, req.query, req.project_id, req.stop_reason)
+            .await?;
+    Ok(Json(result))
+}
+
 /// `POST /api/v1/sessions/list_workflow_plugins` — discover
 /// workflow plugins under `<project>/.everlasting/workflow/`.
 /// Phase 2.2 follow-up (2026-07-21): this handler was missing
@@ -402,6 +447,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/edit_user_message", post(edit_user_message))
         .route("/group_chat_cache_rates", post(group_chat_cache_rates))
         .route("/search_messages", post(search_messages))
+        .route("/list_group_chat_sessions", post(list_group_chat_sessions))
+        .route(
+            "/search_group_chat_discussions",
+            post(search_group_chat_discussions),
+        )
         .route("/compact_session", post(compact_session))
         .route("/handoff_session", post(handoff_session))
         .with_state(state)
@@ -483,6 +533,99 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("pineapple"));
+    }
+
+    /// GCE M4b route smoke (spec backend/daemon-server.md §6 — new
+    /// IPC commands get a Router oneshot test): POST
+    /// `/list_group_chat_sessions` + `/search_group_chat_discussions`
+    /// against a group-chat session and assert the wire round-trip
+    /// (snake_case body → `_inner` → `GroupChatSessionHit[]`). The
+    /// browse must return the seeded group-chat session and never the
+    /// classic chat row.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn group_chat_discussion_routes_return_field_level_hits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let pool = &state.db;
+        let project = db::projects::create_project(pool, "gclib", "/tmp/gc_lib", false, None)
+            .await
+            .unwrap();
+        let metadata = serde_json::json!({
+            "participants": [{ "name": "Alice", "model": "model-a" }],
+            "scheduled_task_name": "架构复盘",
+        })
+        .to_string();
+        db::sessions::create_session(
+            pool,
+            "gc-lib-1",
+            &project.id,
+            "/tmp/gc_lib",
+            "GLM-4.7",
+            None,
+            Some("group_chat"),
+            Some(&metadata),
+        )
+        .await
+        .unwrap();
+        db::sessions::create_session(
+            pool,
+            "chat-lib-1",
+            &project.id,
+            "/tmp/gc_lib",
+            "GLM-4.7",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let app = router(state);
+
+        // Browse: one group-chat hit, one JSON round-trip.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/list_group_chat_sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let hits: Vec<db::search_group_chat::GroupChatSessionHit> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(hits.len(), 1, "browse returns only group-chat: {hits:?}");
+        assert_eq!(hits[0].session_id, "gc-lib-1");
+        assert_eq!(hits[0].task_name.as_deref(), Some("架构复盘"));
+        assert_eq!(hits[0].participants, vec!["Alice"]);
+
+        // Keyword search hits the task_name field.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/search_group_chat_discussions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"架构复盘"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let hits: Vec<db::search_group_chat::GroupChatSessionHit> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "gc-lib-1");
     }
 
     /// Manual /compact route smoke (spec backend/daemon-server.md §6):

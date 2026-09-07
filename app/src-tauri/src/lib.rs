@@ -311,6 +311,12 @@ pub fn run() {
             // full-text search over all sessions (FTS5 + LIKE
             // fallback + title rider). Read-only.
             commands::sessions::search_messages,
+            // GCE M4b (09-07-gce-m4b-discussion-search): field-level
+            // discussion-library browse + search over historical
+            // group-chat sessions (one hit per 场; no FTS / no new
+            // tables — see db/search_group_chat.rs). Read-only.
+            commands::sessions::list_group_chat_sessions,
+            commands::sessions::search_group_chat_discussions,
             // Manual /compact (08-18-manual-compact-command): idle-time
             // LLM summary compaction for the current session. Shares the
             // C3+ auto path's pure functions; bypasses the 0.85 trigger

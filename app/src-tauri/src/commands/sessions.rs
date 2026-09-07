@@ -1118,6 +1118,78 @@ pub async fn search_messages(
 }
 
 // ---------------------------------------------------------------------------
+// GCE M4b discussion-library search (09-07-gce-m4b-discussion-search)
+// ---------------------------------------------------------------------------
+
+/// Read the two field-level filters shared by the browse + search
+/// commands into the db-layer filter struct.
+fn group_chat_filters(
+    project_id: Option<String>,
+    stop_reason: Option<String>,
+) -> db::search_group_chat::GroupChatSessionFilters {
+    db::search_group_chat::GroupChatSessionFilters {
+        project_id,
+        stop_reason,
+    }
+}
+
+/// Browse every historical group-chat discussion session (one hit per
+/// 场), newest-activity first. Empty-keyword browse mode for the GUI
+/// 讨论库 panel — `list` needs no query. Optional project / stop_reason
+/// filters. Read-only field-level query over `sessions` rows (no FTS,
+/// no new tables — see `db/search_group_chat.rs`).
+pub async fn list_group_chat_sessions_inner(
+    state: &Arc<AppState>,
+    project_id: Option<String>,
+    stop_reason: Option<String>,
+) -> Result<Vec<db::search_group_chat::GroupChatSessionHit>, AppCommandError> {
+    db::search_group_chat::list_group_chat_sessions(
+        &state.db,
+        &group_chat_filters(project_id, stop_reason),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("list_group_chat_sessions failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn list_group_chat_sessions(
+    state: State<'_, Arc<AppState>>,
+    project_id: Option<String>,
+    stop_reason: Option<String>,
+) -> Result<Vec<db::search_group_chat::GroupChatSessionHit>, AppCommandError> {
+    list_group_chat_sessions_inner(&state, project_id, stop_reason).await
+}
+
+/// Keyword search over group-chat discussion sessions: a hit when the
+/// query matches title / discussion_summary / task_name / any
+/// participant name (LIKE, wildcards escaped). Empty query degrades to
+/// the full browse. Same filters as [`list_group_chat_sessions`].
+pub async fn search_group_chat_discussions_inner(
+    state: &Arc<AppState>,
+    query: String,
+    project_id: Option<String>,
+    stop_reason: Option<String>,
+) -> Result<Vec<db::search_group_chat::GroupChatSessionHit>, AppCommandError> {
+    db::search_group_chat::search_group_chat_discussions(
+        &state.db,
+        &query,
+        &group_chat_filters(project_id, stop_reason),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("search_group_chat_discussions failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn search_group_chat_discussions(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+    project_id: Option<String>,
+    stop_reason: Option<String>,
+) -> Result<Vec<db::search_group_chat::GroupChatSessionHit>, AppCommandError> {
+    search_group_chat_discussions_inner(&state, query, project_id, stop_reason).await
+}
+
+// ---------------------------------------------------------------------------
 // Manual /compact (08-18-manual-compact-command)
 // ---------------------------------------------------------------------------
 

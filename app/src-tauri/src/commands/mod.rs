@@ -237,5 +237,11 @@ pub fn all_command_names() -> Vec<&'static str> {
         // the agent-driven `search_history` tool (driver ②)
         // is a follow-up that bypasses this command.
         "search_messages",
+        // GCE M4b (09-07-gce-m4b-discussion-search): discussion-library
+        // browse + keyword search over historical group-chat sessions
+        // (one hit per 场). Read-only field-level queries over the
+        // `sessions` rows — no FTS, no new tables.
+        "list_group_chat_sessions",
+        "search_group_chat_discussions",
     ]
 }

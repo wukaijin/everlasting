@@ -638,6 +638,10 @@ mod e1e_router_smoke {
             "/api/v1/sessions/update_message_latency",
             "/api/v1/sessions/record_tool_duration",
             "/api/v1/sessions/edit_user_message",
+            // GCE M4b (09-07-gce-m4b-discussion-search): field-level
+            // discussion-library browse + search over group-chat sessions.
+            "/api/v1/sessions/list_group_chat_sessions",
+            "/api/v1/sessions/search_group_chat_discussions",
             // subagent_runs
             "/api/v1/subagent_runs/list_subagent_runs_by_session",
             "/api/v1/subagent_runs/get_subagent_run",
