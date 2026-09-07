@@ -194,6 +194,10 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   rename_session: "sessions",
   // D2 (cross-session search, 2026-08-17): global SearchModal.
   search_messages: "sessions",
+  // GCE M4b (09-07-gce-m4b-discussion-search): discussion-library
+  // browse + keyword search over historical group-chat sessions.
+  list_group_chat_sessions: "sessions",
+  search_group_chat_discussions: "sessions",
   // review (C2)
   get_review_state: "review",
   get_current_task_slug: "review",

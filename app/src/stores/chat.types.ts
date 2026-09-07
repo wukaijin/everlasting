@@ -699,6 +699,26 @@ export interface MessageSearchHit {
   snippet: string | null;
 }
 
+/** GCE M4b (09-07-gce-m4b-discussion-search): one "场" of a
+ *  historical group-chat discussion, from `list_group_chat_sessions`
+ *  / `search_group_chat_discussions`. Wire form mirrors the Rust
+ *  struct (`db/search_group_chat.rs::GroupChatSessionHit`, snake_case,
+ *  no serde rename). Field-level (session-granular) — message-level
+ *  search stays on `MessageSearchHit` / messages_fts. */
+export interface GroupChatSessionHit {
+  session_id: string;
+  project_id: string;
+  title: string;
+  /** `metadata.scheduled_task_name` — 定时场 only; `null` for ad-hoc
+   *  GUI/script discussions. */
+  task_name: string | null;
+  participants: string[];
+  stop_reason: string | null;
+  discussion_summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** User-facing mode subset — the three modes the MVP UI exposes.
  *  Excludes `Background` (reserved in the backend enum for
  *  schema stability but never shown to the user). */

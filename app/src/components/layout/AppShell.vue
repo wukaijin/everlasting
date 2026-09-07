@@ -32,6 +32,7 @@ import Sidebar from "./Sidebar.vue";
 import TracePanel from "../trace/TracePanel.vue";
 import ToastProvider from "../common/ToastProvider.vue";
 import SearchModal from "../search/SearchModal.vue";
+import DiscussionLibraryModal from "../discussions/DiscussionLibraryModal.vue";
 import DirBrowserModal from "../DirBrowserModal.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
 
@@ -135,6 +136,11 @@ async function onToastClick(): Promise<void> {
          (Cmd/Ctrl+K). Mounted at AppShell level for the same
          reason as TracePanel. -->
     <SearchModal />
+
+    <!-- GCE M4b (09-07-gce-m4b-discussion-search): 讨论库面板 ——
+         历史群聊审议(含定时审议)的场级浏览/检索。AppShell 级
+         挂载(理由同 SearchModal):与当前会话无关,随时可达。 -->
+    <DiscussionLibraryModal />
 
     <!-- 目录浏览模态框:「添加项目」的全模式统一入口(2026-09-03 起,
          store.dirBrowserOpen 驱动,ProjectTabs「+」与

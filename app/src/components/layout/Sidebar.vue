@@ -34,6 +34,7 @@ import Icon from "../Icon.vue";
 import { useMobileNav } from "../../composables/useMobileNav";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { useTheme } from "../../composables/useTheme";
+import { useDiscussionLibrary } from "../../composables/useDiscussionLibrary";
 
 const chat = useChatStore();
 const streamController = useStreamControllerStore();
@@ -64,6 +65,11 @@ const groupChatModalOpen = ref<boolean>(false);
 function onNewGroupChat() {
   groupChatModalOpen.value = true;
 }
+
+// GCE M4b (09-07-gce-m4b-discussion-search): 讨论库面板开态
+// (module-level singleton composable; 面板挂载在 AppShell)。
+// 与「新建群聊」并排 —— 发新场前先查历史场(避免重复审议)。
+const { open: openDiscussionLibrary } = useDiscussionLibrary();
 
 const settingsOpen = ref(false);
 
@@ -168,6 +174,17 @@ function onSearchClear() {
           @click="onNewGroupChat"
         >
           <Icon name="users" :size="14" />
+        </button>
+        <button
+          v-if="!searchActive"
+          class="sidebar__action btn btn--ghost btn--icon"
+          type="button"
+          title="讨论库:浏览历史群聊审议"
+          aria-label="讨论库"
+          data-testid="sidebar-discussion-library"
+          @click="openDiscussionLibrary"
+        >
+          <Icon name="circle-stack" :size="14" />
         </button>
         <button
           class="sidebar__add btn btn--ghost btn--icon"
