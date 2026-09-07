@@ -38,6 +38,9 @@ pub async fn list_scheduled_tasks(
 /// 不接受同时指定 target_session_id)。`max_runs` / `ends_at` 是 F2b
 /// 结束条件(None = 不限)。`model_id`:fixed 专用 session 分支写
 /// session 行,per_run 存任务行(None = 沿用全局默认模型)。
+/// `group_chat_config`(M4a):`target_mode = "group_chat"` 的定时审议
+/// 配置(preset 展开后的 moderator + participants;models 均为 UUID),
+/// 仅该档接受。
 #[derive(Debug, Deserialize)]
 pub struct CreateScheduledTaskRequest {
     pub project_id: String,
@@ -50,6 +53,7 @@ pub struct CreateScheduledTaskRequest {
     pub max_runs: Option<i64>,
     pub ends_at: Option<i64>,
     pub model_id: Option<String>,
+    pub group_chat_config: Option<crate::db::scheduled_tasks::GroupChatTaskConfig>,
 }
 
 pub async fn create_scheduled_task(
@@ -71,6 +75,7 @@ pub async fn create_scheduled_task(
         req.max_runs,
         req.ends_at,
         req.model_id,
+        req.group_chat_config,
     )
     .await?;
     Ok(Json(result))
@@ -97,6 +102,13 @@ pub struct UpdateScheduledTaskRequest {
     pub max_runs: Option<Option<i64>>,
     #[serde(default, deserialize_with = "deserialize_double_option_i64")]
     pub ends_at: Option<Option<i64>>,
+    /// M4a 双层 Option(群聊配置):缺省 = 不动;显式 `null` = 清空
+    /// (仅切离 group_chat 档时合法);对象 = 校验后写入。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_double_option_group_chat_config"
+    )]
+    pub group_chat_config: Option<Option<crate::db::scheduled_tasks::GroupChatTaskConfig>>,
 }
 
 /// serde 双层 Option 反序列化(serde 惯例 "double option" 模式):
@@ -122,6 +134,19 @@ where
     Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
+/// [`deserialize_double_option_i64`] 的 GroupChatTaskConfig 变体(M4a
+/// `group_chat_config` 的显式 `null` 清空过 wire)。
+fn deserialize_double_option_group_chat_config<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<crate::db::scheduled_tasks::GroupChatTaskConfig>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<
+        crate::db::scheduled_tasks::GroupChatTaskConfig,
+    >::deserialize(deserializer)?))
+}
+
 pub async fn update_scheduled_task(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateScheduledTaskRequest>,
@@ -138,6 +163,7 @@ pub async fn update_scheduled_task(
         req.enabled,
         req.max_runs,
         req.ends_at,
+        req.group_chat_config,
     )
     .await?;
     Ok(Json(result))
@@ -739,6 +765,177 @@ mod tests {
             status,
             StatusCode::BAD_REQUEST,
             "update contradiction: {body}"
+        );
+    }
+
+    /// M4a 群聊档 wire 形状(09-07-gce-m4a-scheduled-deliberation):
+    /// create 携带 `target_mode:"group_chat"` + `group_chat_config` → 200、
+    /// target 恒 null、不建 session;update 显式 `null` 清 config → 400
+    /// (group_chat 必须持有);切 per_run → config 自动清空;校验矩阵
+    /// 全臂(带 target 400 / 缺 config 400 / config 模型不存在 400 /
+    /// fixed 带 config 400 / group_chat 带 model_id 400)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn scheduled_tasks_routes_group_chat_mode_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let (project_id, _session_id) = seed_project_session(&state.db).await;
+        let models = db::list_models(&state.db).await.unwrap();
+        let (m0, m1) = (&models[0].model.id, &models[1].model.id);
+        let config_json = format!(
+            r#"{{"moderator_model_id":"{m0}","participants":[{{"name":"架构","model_id":"{m1}","persona_md":"视角"}}]}}"#
+        );
+
+        // create:group_chat + config → 200;不建任何 session。
+        let sessions_before = db::sessions::list_sessions(&state.db, &project_id)
+            .await
+            .unwrap()
+            .len();
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"每周审议","prompt":"复盘","schedule":"{{\"kind\":\"weekly\",\"weekday\":\"Fri\",\"at\":\"18:00\"}}","target_mode":"group_chat","group_chat_config":{config_json}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "group_chat create: {body}");
+        let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let task_id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["target_mode"], "group_chat");
+        assert!(created["target_session_id"].is_null());
+        assert_eq!(
+            created["group_chat_config"]["moderator_model_id"], *m0,
+            "config rides the wire for edit round-trip"
+        );
+        assert_eq!(
+            created["group_chat_config"]["participants"][0]["model_id"],
+            *m1
+        );
+        let sessions_after = db::sessions::list_sessions(&state.db, &project_id)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(
+            sessions_before, sessions_after,
+            "group_chat create must not create any session (fire-side owns sessions)"
+        );
+
+        // update:显式 null 清 config → 400(group_chat 必须持有)。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(r#"{{"id":"{task_id}","group_chat_config":null}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "clear-while-gc: {body}");
+        assert!(body.contains("不能清空"), "clear gate message: {body}");
+
+        // update:换 config(合法)→ 200 且新 config 落库。
+        let config_json2 = format!(
+            r#"{{"moderator_model_id":"{m1}","participants":[{{"name":"架构","model_id":"{m0}"}}]}}"#
+        );
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(r#"{{"id":"{task_id}","group_chat_config":{config_json2}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "swap config: {body}");
+        let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(updated["group_chat_config"]["moderator_model_id"], *m1);
+
+        // update:切 per_run → config 自动清空(跨档不留脏数据)。
+        let (status, body) = post_json(
+            &state,
+            "update_scheduled_task",
+            format!(r#"{{"id":"{task_id}","target_mode":"per_run"}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "switch to per_run: {body}");
+        let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(updated["target_mode"], "per_run");
+        assert!(
+            updated["group_chat_config"].is_null(),
+            "config auto-stripped on mode switch away from group_chat"
+        );
+
+        // 校验臂:group_chat + 显式 target → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_session_id":"{_session_id}","target_mode":"group_chat","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","group_chat_config":{config_json}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "gc+target: {body}");
+        assert!(body.contains("二选一"), "contradiction message: {body}");
+
+        // 校验臂:group_chat 缺 config → 400。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_mode":"group_chat","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "gc-no-config: {body}");
+        assert!(body.contains("群聊配置"), "missing-config message: {body}");
+
+        // 校验臂:config 引用不存在的模型 → 400。
+        let bogus = r#"{"moderator_model_id":"no-such-model","participants":[{"name":"架构","model_id":"m"}]}"#;
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_mode":"group_chat","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","group_chat_config":{bogus}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "bogus model: {body}");
+        assert!(body.contains("模型不存在"), "model gate message: {body}");
+
+        // 校验臂:fixed 档带 config → 400 互斥。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","group_chat_config":{config_json}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "fixed+config: {body}");
+        assert!(body.contains("仅「定时审议」"), "mutex message: {body}");
+
+        // 校验臂:group_chat + model_id → 400(moderator 在 config 内)。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_mode":"group_chat","model_id":"{m0}","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","group_chat_config":{config_json}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "gc+model_id: {body}");
+        assert!(
+            body.contains("group_chat_config"),
+            "model_id gate message: {body}"
+        );
+
+        // 校验臂:非法 target_mode(白名单加 group_chat 后仍拒绝 yolo)。
+        let (status, body) = post_json(
+            &state,
+            "create_scheduled_task",
+            format!(
+                r#"{{"project_id":"{project_id}","target_mode":"yolo","name":"x","prompt":"p","schedule":"{{\"kind\":\"interval\",\"every_min\":30}}","group_chat_config":{config_json}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "bogus mode: {body}");
+        assert!(
+            body.contains("group_chat"),
+            "mode whitelist message: {body}"
         );
     }
 }

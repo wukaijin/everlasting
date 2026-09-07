@@ -471,6 +471,125 @@ pub(crate) async fn rebuild_scheduled_tasks_for_target_mode(
     Ok(())
 }
 
+/// 09-07-gce-m4a-scheduled-deliberation:`scheduled_tasks` 定时审议档的
+/// 表重建 —— 新增 `group_chat_config` / `last_fire_outcome` 两列 + CHECK
+/// 约束更新(mode 白名单加 `group_chat`;group_chat ⇒ target NULL 且
+/// config 非空;outcome 五值白名单)。SQLite 无法 ALTER 表级 CHECK,
+/// 沿 [`rebuild_scheduled_tasks_for_target_mode`] 同款五步舞。
+///
+/// 防御三件套同先例:
+/// 1. **Probe**:`pragma_table_info` 找 `group_chat_config` 列,已有即
+///    短路(幂等;greenfield CREATE 已带);整表不存在也 no-op。
+/// 2. **显式列清单 copy**(非 `SELECT *`):两新列在表尾,拷贝种子
+///    `NULL, NULL`(存量行不可能是 group_chat 档 —— 该档随本迁移诞生)。
+/// 3. **事务包裹**:rename → create → copy → drop → reindex。
+///    调用点必须排在 `rebuild_scheduled_tasks_for_target_mode` **之后**
+///    (copy 清单引用 target_mode / model_id / last_run_session_id,
+///    老库要靠前一个 rebuild 补齐这些列)。
+///
+/// **FK 安全**:同前例 —— 无表引用 `scheduled_tasks`,两条出边 FK 全程
+/// 指向同一批行,不切换 `PRAGMA foreign_keys`。新 CHECK 对拷贝行恒真:
+/// 存量行 mode ∈ {fixed, per_run}(旧 CHECK 保证),两新列 NULL。
+pub(crate) async fn rebuild_scheduled_tasks_for_group_chat(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    let table_exists: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_tasks'",
+    )
+    .fetch_one(pool)
+    .await?
+    .try_get(0)?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let has_group_config: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('scheduled_tasks') WHERE name = 'group_chat_config'",
+    )
+    .fetch_one(pool)
+    .await?
+    .try_get(0)?;
+    if has_group_config > 0 {
+        return Ok(());
+    }
+
+    // 残留守卫:崩溃遗留的 scheduled_tasks_old 会撞下面的 RENAME。
+    sqlx::query("DROP TABLE IF EXISTS scheduled_tasks_old")
+        .execute(pool)
+        .await?;
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_old")
+        .execute(&mut *tx)
+        .await?;
+    // 新形状(greenfield CREATE 同款,schema.rs 改列时两处必须同步)。
+    sqlx::query(
+        r#"
+        CREATE TABLE scheduled_tasks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          target_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+          target_mode TEXT NOT NULL DEFAULT 'fixed',
+          name TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          schedule TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_by TEXT NOT NULL DEFAULT 'user',
+          created_at INTEGER NOT NULL,
+          last_fired_at INTEGER,
+          next_fire_at INTEGER NOT NULL,
+          run_count INTEGER NOT NULL DEFAULT 0,
+          max_runs INTEGER,
+          ends_at INTEGER,
+          model_id TEXT,
+          last_run_session_id TEXT,
+          group_chat_config TEXT,
+          last_fire_outcome TEXT,
+          CHECK (target_mode IN ('fixed', 'per_run', 'group_chat')),
+          CHECK (target_mode = 'fixed' OR target_session_id IS NULL),
+          CHECK (target_mode <> 'fixed' OR target_session_id IS NOT NULL),
+          CHECK (target_mode <> 'group_chat' OR group_chat_config IS NOT NULL),
+          CHECK (last_fire_outcome IS NULL OR last_fire_outcome IN
+                 ('started', 'resumed', 'skipped_busy', 'error', 'recovered'))
+        )
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    // 显式列清单:存量行全是 fixed/per_run 档,两新列按定案种子 NULL。
+    sqlx::query(
+        r#"
+        INSERT INTO scheduled_tasks (id, project_id, target_session_id, target_mode,
+                                     name, prompt, schedule, enabled, created_by,
+                                     created_at, last_fired_at, next_fire_at,
+                                     run_count, max_runs, ends_at,
+                                     model_id, last_run_session_id,
+                                     group_chat_config, last_fire_outcome)
+        SELECT id, project_id, target_session_id, target_mode,
+               name, prompt, schedule, enabled, created_by,
+               created_at, last_fired_at, next_fire_at,
+               run_count, max_runs, ends_at,
+               model_id, last_run_session_id,
+               NULL, NULL
+        FROM scheduled_tasks_old
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DROP TABLE scheduled_tasks_old")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
+        ON scheduled_tasks(enabled, next_fire_at)
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// `std::env::home_dir` was removed; this is the cross-platform
 /// fallback. If the env vars are unset we fall back to "." so the
 /// legacy row has *some* path (it'll be wrong, but the row will

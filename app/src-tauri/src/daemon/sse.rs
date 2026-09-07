@@ -55,6 +55,7 @@ use crate::agent::subagent::{
     build_subagent_event_payload, build_subagent_finished_payload, SubagentEventSink,
     TranscriptKind,
 };
+use crate::llm::ChatEvent;
 use crate::state::{ChatEventPayload, ChatEventSink, ToolCallPayload, ToolResultPayload};
 
 /// Replay buffer 上限(design §C1 / §2.2)。超过则淘汰最旧的;
@@ -361,6 +362,49 @@ impl ChatEventSink for HttpSseSink {
     /// A subscriber connecting DURING the grace window still wins via
     /// the replay buffer + `permission_response` route (the oneshot
     /// arm settles before the shortened deadline).
+    fn has_live_observer(&self) -> bool {
+        self.registry.subscriber_count() > 0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ScheduledGroupChatSink — M4a 定时审议的半透传 sink(09-07-gce-m4a-
+// scheduled-deliberation,评审 P1-2:不是 NullSink)
+// ---------------------------------------------------------------------------
+
+/// 定时审议 fire(`scheduler::fire_group_chat`)注入 chat_inner /
+/// resume_group_chat_inner 的 sink。**半透传**,三个刻意决策:
+///
+/// 1. `emit_chat_event` **只转发 `ChatEvent::Done` 类事件**(编排器终态
+///    `Done` 是 AC4 收官 toast 的唯一事件源,纯丢弃会掐死信号;内层
+///    per-speaker Done 也一并放行 —— 前端对非终态 stop_reason 只落
+///    notice 不 finalize,与盯场看 HTTP 直连讨论同款消费逻辑)。流式
+///    Delta / Start / Speaker 等杂项吞掉:无人盯场的定时场不向全局 SSE
+///    灌噪音,内容以 DB / 转录文件为准。
+/// 2. `emit_permission_ask` **照转**:`has_live_observer()` 透传 registry
+///    (盯场观察者在 → GC3 正常 120s 窗口),此时若吞掉 ask 事件,观察
+///    者永远看不到弹窗、ask 必然超时拒 —— 「不误伤盯场观察者」要求
+///    事件面与观察者判定同步透传。`permission_response` route 的应答
+///    通道(oneshot)与事件广播正交,转发即闭环。
+/// 3. 其余 emit(tool:call / tool:result / 各交互卡)走 trait 默认
+///    no-op:定时场的工具活动不入全局流(转录已含工具证据链)。
+pub struct ScheduledGroupChatSink {
+    pub registry: Arc<SseRegistry>,
+}
+
+impl ChatEventSink for ScheduledGroupChatSink {
+    fn emit_chat_event(&self, payload: &ChatEventPayload) {
+        if matches!(payload.event, ChatEvent::Done { .. }) {
+            self.registry.broadcast("chat-event", payload);
+        }
+    }
+    // 吞掉:工具活动不入全局流(转录含工具证据链;半透传定案见
+    // 结构体文档)。
+    fn emit_tool_call(&self, _payload: &ToolCallPayload) {}
+    fn emit_tool_result(&self, _payload: &ToolResultPayload) {}
+    fn emit_permission_ask(&self, payload: PermissionAskPayload) {
+        self.registry.broadcast("permission:ask", &payload);
+    }
     fn has_live_observer(&self) -> bool {
         self.registry.subscriber_count() > 0
     }

@@ -138,6 +138,7 @@ async fn dispatch_status_and_cancel_roundtrip() {
             next_fire_at: 1_000,
             max_runs: None,
             ends_at: None,
+            group_chat_config: None,
         },
     )
     .await

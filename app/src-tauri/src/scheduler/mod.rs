@@ -51,7 +51,7 @@ pub use compute::{parse_schedule, ScheduleSpec};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::db::scheduled_tasks::ScheduledTaskRow;
+use crate::db::scheduled_tasks::{fire_outcomes, GroupChatTaskConfig, ScheduledTaskRow};
 use crate::error::AppCommandError;
 use crate::llm::types::{ChatMessage, MessageContent, Role};
 use sqlx::SqlitePool;
@@ -92,7 +92,7 @@ pub fn now_epoch_ms() -> i64 {
 
 /// 审计动作枚举的字符串形态(prd R3 + F2b):
 /// `fired | catchup | skipped_dedup | skipped_queue_disabled | lost | error
-/// | completed`。
+/// | completed`;M4a 追加群聊档四值(见下方 GROUP_CHAT_* 段)。
 pub mod actions {
     pub const FIRED: &str = "fired";
     pub const CATCHUP: &str = "catchup";
@@ -102,6 +102,16 @@ pub mod actions {
     pub const ERROR: &str = "error";
     /// F2b:任务完成(达次数上限 / 越过结束日期)自动停用。
     pub const COMPLETED: &str = "completed";
+    // --- M4a 群聊档(09-07-gce-m4a-scheduled-deliberation,fire_group_chat) ---
+    /// 上一场仍 busy,本次 due 消费但跳过(不排队不补,不计 run_count)。
+    pub const SKIPPED_BUSY: &str = "skipped_busy";
+    /// interrupted 场自动续跑受理(P1a 地基的预期消费方)。
+    pub const RESUMED_GROUP_CHAT: &str = "resumed_group_chat";
+    /// 开新场受理(catalog 预检 → 建群 → chat_inner)。
+    pub const FIRED_GROUP_CHAT: &str = "fired_group_chat";
+    /// 僵尸场(round≥30)/ 停摆场(NULL+无 checkpoint)补 finalize(error)
+    /// 后回收,随后开新场。
+    pub const RECOVERED: &str = "recovered";
 }
 
 /// F2b completed 动作的 reason 字段:哪种结束条件触发完成。
@@ -303,6 +313,46 @@ pub(crate) async fn scheduler_tick_with_fire(
             continue;
         }
         hit_any = true;
+        // M4a 定时审议档(target_mode = 'group_chat'):fire = 四态路由 +
+        // 开新场,全部在 [`fire_group_chat`] 内闭环(审计 + 计数矩阵 +
+        // gate4 自持)。沿 per_run 三绕过:不进 `fired_sessions`(目标恒
+        // 为本 tick 新建/续跑的场)、不进 `pending_by_task`(不经注入
+        // 队列,无共享条目可去重)、不受 queue-disabled gate 影响
+        // (legacy cancel+replace 危害对 daemon 自建的场不存在)。
+        if task.target_mode == crate::db::scheduled_tasks::target_modes::GROUP_CHAT {
+            let Some(config_raw) = task.group_chat_config.as_deref() else {
+                // 存量行损坏(不应发生:写入时已校验)→ 跳过不 fire、
+                // 不消费 due(与非法 schedule 同款姿态)。
+                tracing::warn!(
+                    task_id = %task.id,
+                    "scheduler: group_chat task without config, skipping"
+                );
+                continue;
+            };
+            let config: crate::db::scheduled_tasks::GroupChatTaskConfig =
+                match serde_json::from_str(config_raw) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(
+                            task_id = %task.id,
+                            error = %e,
+                            "scheduler: invalid group_chat_config, skipping"
+                        );
+                        continue;
+                    }
+                };
+            fire_group_chat(
+                state,
+                &task,
+                &config,
+                due,
+                &spec,
+                now_ms,
+                &production_group_chat_dispatch(),
+            )
+            .await;
+            continue;
+        }
         let is_per_run = task.target_mode == crate::db::scheduled_tasks::target_modes::PER_RUN;
         // 本轮 fire 的注入目标:fixed = 绑定的固定 session;per_run =
         // 下面新建的 run session。
@@ -333,7 +383,7 @@ pub(crate) async fn scheduler_tick_with_fire(
                         Some(&reason),
                     )
                     .await;
-                    account(&state.db, &task, &spec, due, true, None).await;
+                    account(&state.db, &task, &spec, due, true, None, None).await;
                     maybe_complete_after_fire(&state.db, &task, &spec, due, task.run_count + 1)
                         .await;
                     continue;
@@ -396,7 +446,7 @@ pub(crate) async fn scheduler_tick_with_fire(
                     )
                     .await;
                     // F2b:dedup 跳过不计数(prompt 未送达),仅消费 due 点。
-                    account(&state.db, &task, &spec, due, false, None).await;
+                    account(&state.db, &task, &spec, due, false, None, None).await;
                     continue;
                 }
             }
@@ -455,7 +505,7 @@ pub(crate) async fn scheduler_tick_with_fire(
         // 「已触发」——error 也消费了 due 且有审计可查);per_run 顺带
         // 落 last_run_session_id(列表展示 + 后续审计锚点)。
         let run_session = is_per_run.then_some(fire_target.as_str());
-        account(&state.db, &task, &spec, due, true, run_session).await;
+        account(&state.db, &task, &spec, due, true, run_session, None).await;
         // F2b gate 4:本次 fire 后已达上限 / 下一到期点越过结束日期 /
         // 单次档(唯一到期点已消费)→ 即时完成(不等下 tick 扫死任务;
         // enabled=0 使 completed 审计天然只发一次)。
@@ -493,6 +543,615 @@ async fn maybe_complete_after_fire(
         };
         complete_task(db, task, reason).await;
     }
+}
+
+// ---------------------------------------------------------------------------
+// M4a 定时审议 fire_group_chat(09-07-gce-m4a-scheduled-deliberation
+// design §4,评审 P1-1/2/3/5 + P2-6 修订版)
+// ---------------------------------------------------------------------------
+
+/// fire_group_chat 的 dispatch seam(测试注入点):开新场与续跑的两个
+/// 真实副作用点(`chat_inner` / `resume_group_chat_inner`)。生产实现直调;
+/// 测试注入替身 —— resume 的五闸拒绝臂需要替身才能确定性构造(与
+/// [`TickFire`] 同款结论:chat_inner 的 provider 由 catalog 解析,无法
+/// 注入 mock)。`resume` 的 sink 由生产实现内部构造(半透传,见
+/// [`crate::daemon::sse::ScheduledGroupChatSink`])。
+/// 开新场臂的 dispatch 函数类型(type_complexity 收敛:签名过长,
+/// clippy -D warnings 要求别名化;resume 臂少一个 topic 参数)。
+type OpenGroupChatFn = Box<
+    dyn for<'a> Fn(
+            &'a Arc<crate::state::AppState>,
+            String,
+            String,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = FireOutcome> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+type ResumeGroupChatFn = Box<
+    dyn for<'a> Fn(
+            &'a Arc<crate::state::AppState>,
+            String,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = FireOutcome> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+
+pub(crate) struct GroupChatDispatch {
+    /// `(state, 新场 session_id, topic)` → chat_inner 受理结果。
+    pub open: OpenGroupChatFn,
+    /// `(state, 旧场 session_id)` → resume_group_chat_inner 受理结果。
+    pub resume: ResumeGroupChatFn,
+}
+
+/// 生产 dispatch:开新场 = `chat_inner`(topic 原文,**无注脚** —— F2
+/// 注脚会污染议题文本,归因走建群 metadata 三键 + 审计);续跑 =
+/// `resume_group_chat_inner`(P1a 五闸全套)。两路 sink 都是半透传
+/// [`crate::daemon::sse::ScheduledGroupChatSink`]:只转发终态 Done 类
+/// chat 事件(AC4 收官 toast 的唯一事件源)+ permission:ask,
+/// `has_live_observer()` 透传 SSE registry(GC3 无人值守 8s 快拒依赖
+/// 它,恒 false 会误伤盯场观察者 —— 评审 P1-2)。
+fn production_group_chat_dispatch() -> GroupChatDispatch {
+    fn semi_sink(state: &Arc<crate::state::AppState>) -> Arc<dyn crate::state::ChatEventSink> {
+        Arc::new(crate::daemon::sse::ScheduledGroupChatSink {
+            registry: state.sse.clone(),
+        })
+    }
+    fn sub_sink(
+        state: &Arc<crate::state::AppState>,
+    ) -> Arc<dyn crate::agent::subagent::SubagentEventSink> {
+        Arc::new(crate::daemon::sse::HttpSseSubagentSink {
+            registry: state.sse.clone(),
+        })
+    }
+    GroupChatDispatch {
+        open: Box::new(|state, session_id, topic| {
+            Box::pin(async move {
+                let message = ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Text(topic),
+                    speaker: None,
+                    attachments: None,
+                };
+                crate::agent::chat::chat_inner(
+                    state,
+                    crate::agent::chat::ChatEntry {
+                        // 每次 fire 新 uuid request_id(与 fire_via_chat_inner
+                        // 同款;前端 adoptForeignRequest 自动认领)。
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        session_id,
+                        messages: vec![message],
+                        sink: semi_sink(state),
+                        worker_catalog: Some(state.catalog.clone()),
+                        worker_event_sink: sub_sink(state),
+                        resend_seq: None,
+                        forced_dispatch: None,
+                        // 群聊 fire 不走 origin 载体链(不经注入队列,
+                        // metadata 归因在 session 行上)。
+                        origin: None,
+                        resume_group_chat: None,
+                    },
+                )
+                .await
+            })
+        }),
+        resume: Box::new(|state, session_id| {
+            Box::pin(async move {
+                crate::agent::chat::resume_group_chat_inner(
+                    state,
+                    session_id,
+                    semi_sink(state),
+                    sub_sink(state),
+                )
+                .await
+            })
+        }),
+    }
+}
+
+/// 四态路由对 `last_run_session_id` 所指旧场的判定结果(显式读
+/// stop_reason + checkpoint,不做「终态/无」笼统兜底 —— 评审 P1-1/5)。
+enum PriorSessionRoute {
+    /// 无 last_run_session_id / session 已删 / 非群聊 session(防御)。
+    OpenNew,
+    /// 上一场仍在跑(内存 busy 表命中)。
+    Busy,
+    /// stop_reason ∈ {interrupted, NULL} 且 checkpoint 在、round < 30:
+    /// 自动续跑(P1a 地基的预期消费方)。
+    Resume,
+    /// interrupted 但 checkpoint 行已删:resume 闸③必拒 → 拒绝兜底臂。
+    ResumeWouldReject,
+    /// round ≥ 30 僵尸场(boot sweep 标 interrupted 但轮帽终态无人写)
+    /// 或停摆场(stop_reason NULL 且无 checkpoint —— 编排器 spawn 后
+    /// 首轮 checkpoint upsert 前 daemon 重启,boot sweep 不治):
+    /// 补 finalize(error) → recovered → 开新场。
+    RecoverThenOpenNew,
+}
+
+async fn route_prior_session(
+    state: &Arc<crate::state::AppState>,
+    task: &ScheduledTaskRow,
+) -> PriorSessionRoute {
+    let Some(sid) = task.last_run_session_id.as_deref() else {
+        return PriorSessionRoute::OpenNew;
+    };
+    // busy 只认内存注册表(编排器退出即清,GC1 整场 busy 不回落)。
+    if state.session_active_request.lock().await.contains_key(sid) {
+        return PriorSessionRoute::Busy;
+    }
+    let loaded = match crate::db::load_session(&state.db, sid).await {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            // 旧场 session 已被删(无 FK,任务存活)→ 开新场。
+            tracing::info!(
+                task_id = %task.id,
+                session_id = %sid,
+                "fire_group_chat: prior session gone; opening a new discussion"
+            );
+            return PriorSessionRoute::OpenNew;
+        }
+        Err(e) => {
+            // DB 读失败:保守走开新场(chat_inner 侧会再撞同一错误并落
+            // error 审计,不在这里静默吞。
+            tracing::warn!(
+                task_id = %task.id,
+                session_id = %sid,
+                error = %e,
+                "fire_group_chat: load prior session failed; treating as open-new"
+            );
+            return PriorSessionRoute::OpenNew;
+        }
+    };
+    if loaded.session.session_type != crate::db::SessionType::GroupChat {
+        // 防御:last_run_session_id 指到非群聊行(数据损坏)。
+        tracing::warn!(
+            task_id = %task.id,
+            session_id = %sid,
+            "fire_group_chat: prior session is not a group chat; opening a new discussion"
+        );
+        return PriorSessionRoute::OpenNew;
+    }
+    match loaded.session.stop_reason.as_deref() {
+        // 可续跑态:interrupted(boot sweep 标记的崩溃场)。NULL 是同一
+        // 物理态的「sweep 未及跑」窗口(sweep 在 load_inner 早于调度器
+        // 启动,正常运行不可达 —— 防御性并入,续跑无损且不双开场)。
+        // cancelled / error 虽是 P1a 的可续跑终值,但对定时任务语义上
+        // 应开新场:cancelled = 用户显式停了这场(自动 resume 违背用户
+        // 意图);error = GC5 熔断(带病续跑不如新场重来,streak 也不
+        // 该被定时器清零)。终态三值(group_chat_end / preempted /
+        // max_rounds)同理 → OpenNew。
+        Some("interrupted") | None => {
+            match crate::db::get_group_chat_checkpoint(&state.db, sid).await {
+                Ok(Some(cp))
+                    if (cp.round as usize)
+                        >= crate::agent::group_chat_loop::MAX_ORCHESTRATION_ROUNDS =>
+                {
+                    PriorSessionRoute::RecoverThenOpenNew
+                }
+                Ok(Some(_)) => PriorSessionRoute::Resume,
+                Ok(None) if loaded.session.stop_reason.is_some() => {
+                    PriorSessionRoute::ResumeWouldReject
+                }
+                // NULL + 无 checkpoint = 停摆场(评审 P1-5)。
+                Ok(None) => PriorSessionRoute::RecoverThenOpenNew,
+                Err(e) => {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        session_id = %sid,
+                        error = %e,
+                        "fire_group_chat: load checkpoint failed; treating as open-new"
+                    );
+                    PriorSessionRoute::OpenNew
+                }
+            }
+        }
+        _ => PriorSessionRoute::OpenNew,
+    }
+}
+
+/// group_chat 档的 fire 主体(与 [`fire_via_chat_inner`] 平行的新 fire
+/// 分支,M4a design §4)。计数矩阵(评审 P1-3,对齐 F2b「只计真正送入
+/// chat_inner 的 fire」契约):
+/// - **全部路径都消费 due**(account 恒调用,`last_fired_at = due`)
+///   —— 防同 due 重复路由;
+/// - run_count **只计**:开新场受理(outcome=started)、resume 受理
+///   (outcome=resumed)、开新场 Err(outcome=error,与 F2b「Err 也计数」
+///   对齐);**不计**:busy 跳过(skipped_busy)、resume 被五闸拒绝
+///   (error)、catalog 预检不过(error)—— 与 F2b dedup 同类「prompt
+///   未送达」,否则 weekly+max_runs 任务撞 N 次 busy 提前烧完预算。
+pub(crate) async fn fire_group_chat(
+    state: &Arc<crate::state::AppState>,
+    task: &ScheduledTaskRow,
+    config: &GroupChatTaskConfig,
+    due: i64,
+    spec: &ScheduleSpec,
+    now_ms: i64,
+    dispatch: &GroupChatDispatch,
+) {
+    match route_prior_session(state, task).await {
+        PriorSessionRoute::Busy => {
+            let sid = task
+                .last_run_session_id
+                .as_deref()
+                .expect("Busy route implies last_run_session_id");
+            tracing::info!(
+                task_id = %task.id,
+                task_name = %task.name,
+                session_id = %sid,
+                "fire_group_chat: prior discussion busy; skipping this due point"
+            );
+            audit_task(&state.db, Some(sid), task, actions::SKIPPED_BUSY, None).await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                false,
+                None,
+                Some(fire_outcomes::SKIPPED_BUSY),
+            )
+            .await;
+        }
+        PriorSessionRoute::ResumeWouldReject => {
+            let sid = task
+                .last_run_session_id
+                .as_deref()
+                .expect("ResumeWouldReject route implies last_run_session_id");
+            // interrupted 但 checkpoint 行不在:resume 闸③必拒。统一兜底
+            // = audit error + 本期不动(due 已消费,下周期重新路由;
+            // **不降级开新场** —— 评审 P1-1:降级路径的双活场/僵尸场
+            // 风险大于一期不动)。
+            let reason = "resume_rejected: no checkpoint row".to_string();
+            tracing::warn!(
+                task_id = %task.id,
+                session_id = %sid,
+                reason = %reason,
+                "fire_group_chat: resume would be rejected; leaving as-is this cycle"
+            );
+            audit_task(&state.db, Some(sid), task, actions::ERROR, Some(&reason)).await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                false,
+                None,
+                Some(fire_outcomes::ERROR),
+            )
+            .await;
+        }
+        PriorSessionRoute::Resume => {
+            let sid = task
+                .last_run_session_id
+                .as_deref()
+                .expect("Resume route implies last_run_session_id");
+            match (dispatch.resume)(state, sid.to_string()).await {
+                Ok(_) => {
+                    tracing::info!(
+                        task_id = %task.id,
+                        session_id = %sid,
+                        "fire_group_chat: resumed interrupted discussion"
+                    );
+                    audit_task(
+                        &state.db,
+                        Some(sid),
+                        task,
+                        actions::RESUMED_GROUP_CHAT,
+                        None,
+                    )
+                    .await;
+                    account(
+                        &state.db,
+                        task,
+                        spec,
+                        due,
+                        true,
+                        None,
+                        Some(fire_outcomes::RESUMED),
+                    )
+                    .await;
+                    maybe_complete_after_fire(&state.db, task, spec, due, task.run_count + 1).await;
+                }
+                Err(e) => {
+                    // 五闸拒绝(busy 竞态 / checkpoint 已删等):统一兜底
+                    // = audit error + 本期不动,绝不双开场(P1-1)。
+                    let reason = format!(
+                        "resume_rejected: {}",
+                        e.message.chars().take(120).collect::<String>()
+                    );
+                    tracing::warn!(
+                        task_id = %task.id,
+                        session_id = %sid,
+                        reason = %reason,
+                        "fire_group_chat: resume rejected; leaving as-is this cycle"
+                    );
+                    audit_task(&state.db, Some(sid), task, actions::ERROR, Some(&reason)).await;
+                    account(
+                        &state.db,
+                        task,
+                        spec,
+                        due,
+                        false,
+                        None,
+                        Some(fire_outcomes::ERROR),
+                    )
+                    .await;
+                }
+            }
+        }
+        PriorSessionRoute::RecoverThenOpenNew => {
+            let sid = task
+                .last_run_session_id
+                .as_deref()
+                .expect("RecoverThenOpenNew route implies last_run_session_id");
+            // 僵尸/停摆场补 finalize(error 词表,**不发明新
+            // stop_reason**):GUI 假「进行中」消失、变真 chip 可手动续
+            // (P1a 语义);best-effort,失败不阻断开新场。
+            if let Err(e) = crate::db::finalize_group_chat_lifecycle(
+                &state.db,
+                sid,
+                crate::agent::group_chat_loop::STOP_REASON_ERROR,
+                None,
+            )
+            .await
+            {
+                tracing::warn!(
+                    session_id = %sid,
+                    error = %e,
+                    "fire_group_chat: recovering stale discussion finalize failed (non-fatal)"
+                );
+            }
+            audit_task(&state.db, Some(sid), task, actions::RECOVERED, None).await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                false,
+                None,
+                Some(fire_outcomes::RECOVERED),
+            )
+            .await;
+            open_new_group_discussion(state, task, config, due, spec, now_ms, dispatch).await;
+        }
+        PriorSessionRoute::OpenNew => {
+            open_new_group_discussion(state, task, config, due, spec, now_ms, dispatch).await;
+        }
+    }
+}
+
+/// 开新场(M4a design §4):catalog 预检 → 建群(metadata 三键归因)→
+/// chat_inner(topic 无注脚)→ 落账。session 标题沿 per_run
+/// [`create_run_session`] 先例 = `{任务名} {本地 YYYY-MM-DD HH:MM}`。
+async fn open_new_group_discussion(
+    state: &Arc<crate::state::AppState>,
+    task: &ScheduledTaskRow,
+    config: &GroupChatTaskConfig,
+    due: i64,
+    spec: &ScheduleSpec,
+    now_ms: i64,
+    dispatch: &GroupChatDispatch,
+) {
+    // 0. catalog 预检(评审 P2-6):moderator + 全部 participants 查
+    // models 表,任一缺失 → audit error + 不建场(due 消费,不计
+    // run_count)—— 否则 model 被删后每周期落空壳 session + 编排
+    // resolve 失败无限循环。预检与建场之间的 TOCTOU 极小窗口接受
+    // (建场/chat_inner Err 有审计兜底)。
+    async fn model_exists(state: &Arc<crate::state::AppState>, model_id: &str) -> bool {
+        match crate::db::get_model(&state.db, model_id).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => {
+                tracing::warn!(
+                    model_id,
+                    error = %e,
+                    "fire_group_chat: model precheck read failed; treating as missing"
+                );
+                false
+            }
+        }
+    }
+    let mut missing: Vec<String> = Vec::new();
+    if !model_exists(state, &config.moderator_model_id).await {
+        missing.push("moderator".to_string());
+    }
+    for p in &config.participants {
+        if !model_exists(state, &p.model_id).await {
+            missing.push(p.name.clone());
+        }
+    }
+    if !missing.is_empty() {
+        let reason = format!("model_missing: {}", missing.join(" / "));
+        tracing::warn!(
+            task_id = %task.id,
+            task_name = %task.name,
+            reason = %reason,
+            "fire_group_chat: catalog precheck failed; not creating a session"
+        );
+        audit_task(
+            &state.db,
+            task.last_run_session_id.as_deref(),
+            task,
+            actions::ERROR,
+            Some(&reason),
+        )
+        .await;
+        account(
+            &state.db,
+            task,
+            spec,
+            due,
+            false,
+            None,
+            Some(fire_outcomes::ERROR),
+        )
+        .await;
+        return;
+    }
+
+    // 1. 建群(F2 create_run_session 的 tick 内直调先例)。metadata:
+    // participants(config 形状 model_id → session metadata 惯例键
+    // `model`,ParticipantConfig 形状)+ created_via:"scheduled" +
+    // scheduled_task_id / scheduled_task_name 三键归因(转录导出与
+    // 收官 toast 的判定源)。
+    let project = match crate::db::get_project(&state.db, &task.project_id).await {
+        Ok(Some(p)) => p,
+        other => {
+            let reason = format!(
+                "session_create_failed: load project {}: {other:?}",
+                task.project_id
+            );
+            tracing::warn!(
+                task_id = %task.id,
+                reason = %reason,
+                "fire_group_chat: open-new failed (accounted)"
+            );
+            audit_task(
+                &state.db,
+                task.last_run_session_id.as_deref(),
+                task,
+                actions::ERROR,
+                Some(&reason),
+            )
+            .await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                true,
+                None,
+                Some(fire_outcomes::ERROR),
+            )
+            .await;
+            maybe_complete_after_fire(&state.db, task, spec, due, task.run_count + 1).await;
+            return;
+        }
+    };
+    let participants_meta: Vec<serde_json::Value> = config
+        .participants
+        .iter()
+        .map(|p| {
+            let mut v = serde_json::json!({ "name": p.name, "model": p.model_id });
+            if let Some(md) = &p.persona_md {
+                v["persona_md"] = serde_json::json!(md);
+            }
+            v
+        })
+        .collect();
+    let metadata = serde_json::json!({
+        "participants": participants_meta,
+        "created_via": "scheduled",
+        "scheduled_task_id": task.id,
+        "scheduled_task_name": task.name,
+    });
+    let session = match crate::commands::sessions::create_session_in_pool(
+        &state.db,
+        task.project_id.clone(),
+        project.path.clone(),
+        // 主持人模型同时写 legacy label(M1 脚本同款)与下方 per-session
+        // 覆盖列(build_group_chat_ctx 优先读 model_id —— 覆盖列才是权威)。
+        Some(config.moderator_model_id.clone()),
+        Some("group_chat".to_string()),
+        Some(metadata),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            let reason = format!("session_create_failed: {}", e.message);
+            tracing::warn!(
+                task_id = %task.id,
+                reason = %reason,
+                "fire_group_chat: open-new failed (accounted)"
+            );
+            audit_task(
+                &state.db,
+                task.last_run_session_id.as_deref(),
+                task,
+                actions::ERROR,
+                Some(&reason),
+            )
+            .await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                true,
+                None,
+                Some(fire_outcomes::ERROR),
+            )
+            .await;
+            maybe_complete_after_fire(&state.db, task, spec, due, task.run_count + 1).await;
+            return;
+        }
+    };
+    let sid = session.id;
+    // 标题(F2 per_run 同款;失败仅 warn —— 标题是展示件,不阻断开跑)。
+    let title = format!("{} {}", task.name, compute::format_local_hhmm(now_ms));
+    if let Err(e) = crate::db::rename_session(&state.db, &sid, &title).await {
+        tracing::warn!(session_id = %sid, error = %e, "fire_group_chat: rename session failed (non-fatal)");
+    }
+    // moderator 绑 per-session 覆盖列(create_scheduled_task_in_pool 专用
+    // session 分支同款;失败仅 warn —— build_group_chat_ctx 会退回
+    // legacy label,预检已保证该模型存在)。
+    if let Err(e) =
+        crate::db::update_session_model_id(&state.db, &sid, &config.moderator_model_id).await
+    {
+        tracing::warn!(session_id = %sid, error = %e, "fire_group_chat: bind moderator model failed (non-fatal)");
+    }
+
+    // 2. 发题:chat_inner(编排器 spawn 后台跑,fire 只等受理)。
+    match (dispatch.open)(state, sid.clone(), task.prompt.clone()).await {
+        Ok(_) => {
+            tracing::info!(
+                task_id = %task.id,
+                task_name = %task.name,
+                session_id = %sid,
+                "fire_group_chat: opened a new scheduled discussion"
+            );
+            audit_task(&state.db, Some(&sid), task, actions::FIRED_GROUP_CHAT, None).await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                true,
+                Some(&sid),
+                Some(fire_outcomes::STARTED),
+            )
+            .await;
+        }
+        Err(e) => {
+            // 开新场 Err 也计数(F2b「Err 也计数」对齐;session 已建,
+            // last_run_session_id 照落 —— 下周期四态路由接手这个残场)。
+            let reason = format!(
+                "chat_error: {}",
+                e.message.chars().take(120).collect::<String>()
+            );
+            tracing::warn!(
+                task_id = %task.id,
+                session_id = %sid,
+                reason = %reason,
+                "fire_group_chat: dispatch failed (accounted)"
+            );
+            audit_task(&state.db, Some(&sid), task, actions::ERROR, Some(&reason)).await;
+            account(
+                &state.db,
+                task,
+                spec,
+                due,
+                true,
+                Some(&sid),
+                Some(fire_outcomes::ERROR),
+            )
+            .await;
+        }
+    }
+    // gate4 对 Ok/Err 两臂统一(new_run_count = run_count+1)。
+    maybe_complete_after_fire(&state.db, task, spec, due, task.run_count + 1).await;
 }
 
 /// per_run 档(08-31-sched-per-run-session):为本轮 fire 新建目标
@@ -533,9 +1192,11 @@ pub(crate) async fn create_run_session(
 
 /// fire 落账:`last_fired_at = due`(理论到期点,防相位漂移,design §3)
 /// + 展示用 `next_fire_at` 按 due 重算写回;`count_fire` 控制 `run_count+1`
-/// 与否(F2b:dedup 跳过不计数);`run_session` 是 per_run 档本次新建的
-/// session(None = 保留既有值:fixed 档与 dedup/建会话失败路径恒 None)。
-/// best-effort(失败 warn)。
+/// 与否(F2b:dedup 跳过不计数);`run_session` 是 per_run / group_chat
+/// 档本次新建的 session(None = 保留既有值:fixed 档与 dedup/建会话失败
+/// 路径恒 None);`outcome`(M4a)随同条 UPDATE 原子写 `last_fire_outcome`
+/// (fixed/per_run 恒 None,group_chat 传 [`db::scheduled_tasks::fire_outcomes`]
+/// 五值之一)。best-effort(失败 warn)。
 async fn account(
     db: &SqlitePool,
     task: &ScheduledTaskRow,
@@ -543,6 +1204,7 @@ async fn account(
     due: i64,
     count_fire: bool,
     run_session: Option<&str>,
+    outcome: Option<&str>,
 ) {
     let next = compute::next_fire_display(spec, due);
     if let Err(e) = crate::db::scheduled_tasks::mark_task_fired(
@@ -552,6 +1214,7 @@ async fn account(
         next,
         count_fire,
         run_session,
+        outcome,
     )
     .await
     {

@@ -209,6 +209,13 @@ pub enum AuditKind {
     /// - `lost` — 账已落但注入条目被 Stop 语义清队丢弃(best-effort
     ///   兜底;仅覆盖驱动器 cancel break + Stop 命令两处清队点)
     /// - `error` — fire 失败(`reason` 附错误类别,如 `queue_full`)
+    /// - `skipped_busy` — M4a 群聊档:上一场仍 busy,本次 due 消费但
+    ///   跳过(不排队不补,不计 run_count)
+    /// - `resumed_group_chat` — M4a:interrupted 场自动续跑受理
+    /// - `fired_group_chat` — M4a:开新场受理(catalog 预检 → 建群 →
+    ///   chat_inner)
+    /// - `recovered` — M4a:僵尸场(round≥30)/ 停摆场补 finalize(error)
+    ///   后回收(随后开新场)
     ScheduledTaskFired,
 }
 

@@ -247,6 +247,10 @@ pub async fn execute(
         // 模型指定是用户 UI 面的能力:agent 建的专用 session 恒绑
         // 全局默认(与 tool 不暴露 model 参数一致)。
         None,
+        // M4a(09-07-gce-m4a-scheduled-deliberation R8):群聊任务档不
+        // 对 agent 面开放(恒 fixed/专用语义,沿 per_run「用户 UI 面
+        // 能力」定案)。
+        None,
     )
     .await
     {
@@ -511,6 +515,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -752,6 +757,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -786,6 +792,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -839,6 +846,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await

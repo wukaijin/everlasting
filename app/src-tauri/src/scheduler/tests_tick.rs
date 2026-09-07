@@ -95,6 +95,7 @@ async fn seed_task(
             next_fire_at: scheduler::now_epoch_ms() + step_ms,
             max_runs: None,
             ends_at: None,
+            group_chat_config: None,
         },
     )
     .await
@@ -110,9 +111,17 @@ async fn seed_task(
         .expect("backdate created_at");
     if let Some(fired) = last_fired_at {
         // 预设 = 模拟一次真实历史 fire(计一次 run_count,同生产语义)。
-        mark_task_fired(&fx.state.db, &task.id, fired, fired + step_ms, true, None)
-            .await
-            .expect("preset last_fired_at");
+        mark_task_fired(
+            &fx.state.db,
+            &task.id,
+            fired,
+            fired + step_ms,
+            true,
+            None,
+            None,
+        )
+        .await
+        .expect("preset last_fired_at");
     }
     task
 }
@@ -163,6 +172,7 @@ async fn seed_once_task(
             next_fire_at: now + at_offset_ms.max(0),
             max_runs: None,
             ends_at: None,
+            group_chat_config: None,
         },
     )
     .await
@@ -760,6 +770,7 @@ async fn once_task_consumed_point_completes_without_firing() {
         now + 86_400_000,
         true,
         None,
+        None,
     )
     .await
     .expect("preset consumed point");
@@ -810,6 +821,7 @@ async fn seed_per_run_task(
             next_fire_at: scheduler::now_epoch_ms() + step_ms,
             max_runs: None,
             ends_at: None,
+            group_chat_config: None,
         },
     )
     .await
@@ -989,9 +1001,523 @@ async fn create_run_session_missing_project_errors() {
         run_count: 0,
         max_runs: None,
         ends_at: None,
+        group_chat_config: None,
+        last_fire_outcome: None,
     };
     let err = scheduler::create_run_session(&fx.state.db, &row, scheduler::now_epoch_ms())
         .await
         .expect_err("missing project must error");
     assert!(err.contains("不存在"), "error names the project: {err}");
+}
+
+// --- M4a 群聊档 fire_group_chat(09-07-gce-m4a-scheduled-deliberation;
+// 评审五组:tick 路由 / 计数矩阵 / resume 兜底 / 迁移校验(在
+// migrations_tests)/ 对照组(上方 fixed/per_run 既有用例))---
+
+/// 建群聊任务(interval N 分钟,可选预设历史 fire)。config 用种子
+/// model id(catalog 预检过);`bogus_model = true` 时引用不存在的模型。
+async fn seed_group_task(
+    fx: &TickFixture,
+    every_min: u32,
+    name: &str,
+    bogus_model: bool,
+) -> crate::db::scheduled_tasks::ScheduledTaskRow {
+    let spec =
+        scheduler::parse_schedule(&format!(r#"{{"kind":"interval","every_min":{every_min}}}"#))
+            .expect("valid interval schedule");
+    let (m0, m1) = if bogus_model {
+        ("no-such-model".to_string(), "also-missing".to_string())
+    } else {
+        let models = crate::db::list_models(&fx.state.db)
+            .await
+            .expect("list models");
+        let mut ids = models.into_iter().map(|m| m.model.id);
+        (
+            ids.next().expect("seeded model 0"),
+            ids.next().expect("seeded model 1"),
+        )
+    };
+    let config = serde_json::json!({
+        "moderator_model_id": m0,
+        "participants": [{ "name": "架构", "model_id": m1, "persona_md": "视角" }],
+    })
+    .to_string();
+    let task = insert_scheduled_task(
+        &fx.state.db,
+        NewScheduledTask {
+            project_id: fx.project_id.clone(),
+            target_session_id: None,
+            target_mode: crate::db::scheduled_tasks::target_modes::GROUP_CHAT.into(),
+            model_id: None,
+            name: name.to_string(),
+            prompt: "复盘本周架构".into(),
+            schedule_json: serde_json::to_string(&spec).unwrap(),
+            enabled: true,
+            created_by: "user".into(),
+            next_fire_at: scheduler::now_epoch_ms() + 60_000,
+            max_runs: None,
+            ends_at: None,
+            group_chat_config: Some(config),
+        },
+    )
+    .await
+    .expect("insert group task");
+    sqlx::query("UPDATE scheduled_tasks SET created_at = ? WHERE id = ?")
+        .bind(scheduler::now_epoch_ms() - 6 * 3_600_000)
+        .bind(&task.id)
+        .execute(&fx.state.db)
+        .await
+        .expect("backdate created_at");
+    task
+}
+
+/// 建一个 prior 群聊 session 并挂到任务的 last_run_session_id(直写)。
+/// `stop_reason` = None 表示停摆场;checkpoint = Some(round) upsert 行。
+async fn attach_prior_discussion(
+    fx: &TickFixture,
+    task_id: &str,
+    stop_reason: Option<&str>,
+    checkpoint_round: Option<i64>,
+) -> String {
+    let sid = uuid::Uuid::new_v4().to_string();
+    let metadata = r#"{"participants":[{"name":"架构","model":"m1"}],"created_via":"scheduled"}"#;
+    crate::db::create_session(
+        &fx.state.db,
+        &sid,
+        &fx.project_id,
+        "/tmp/tick-test",
+        "mod",
+        None,
+        Some("group_chat"),
+        Some(metadata),
+    )
+    .await
+    .expect("create prior group session");
+    if let Some(reason) = stop_reason {
+        crate::db::finalize_group_chat_lifecycle(&fx.state.db, &sid, reason, None)
+            .await
+            .expect("set prior stop_reason");
+    }
+    if let Some(round) = checkpoint_round {
+        crate::db::upsert_group_chat_checkpoint(&fx.state.db, &sid, round, 0)
+            .await
+            .expect("upsert checkpoint");
+    }
+    sqlx::query("UPDATE scheduled_tasks SET last_run_session_id = ? WHERE id = ?")
+        .bind(&sid)
+        .bind(task_id)
+        .execute(&fx.state.db)
+        .await
+        .expect("attach prior session");
+    sid
+}
+
+/// 开新场(无 last_run_session_id):tick 走四态第 4 臂 → 建群
+/// (metadata 三键归因 + participants + moderator 绑定)→ chat_inner 受理
+/// (测试环境 keyless provider → preflight 恒 Started,确定性)→ 落账。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_opens_new_discussion_with_attribution_metadata() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let models = crate::db::list_models(&fx.state.db).await.unwrap();
+    let m0 = models[0].model.id.clone();
+    let m1 = models[1].model.id.clone();
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 1, "accepted open-new counts");
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("started"));
+    let sid = row
+        .last_run_session_id
+        .clone()
+        .expect("run session recorded");
+    let loaded = crate::db::sessions::load_session(&fx.state.db, &sid)
+        .await
+        .unwrap()
+        .expect("discussion session");
+    assert_eq!(
+        loaded.session.session_type,
+        crate::db::SessionType::GroupChat
+    );
+    assert_eq!(
+        loaded.session.model_id.as_deref(),
+        Some(m0.as_str()),
+        "moderator bound to the per-session override column"
+    );
+    let meta = loaded.session.metadata.expect("metadata");
+    assert_eq!(meta["created_via"], "scheduled");
+    assert_eq!(meta["scheduled_task_id"], *task.id);
+    assert_eq!(meta["scheduled_task_name"], "每周审议");
+    assert_eq!(meta["participants"][0]["model"], *m1);
+    assert_eq!(
+        audit_actions_for(&fx, &sid).await,
+        vec![(actions::FIRED_GROUP_CHAT.to_string(), None)]
+    );
+    assert!(
+        row.last_fired_at.is_some(),
+        "due consumed (last_fired_at recorded)"
+    );
+}
+
+/// 四态第 1 臂 busy:上一场仍在跑(内存注册表)→ 跳过 + 审计
+/// skipped_busy;消费 due 但**不计数**;last_run_session_id 保留旧值
+/// (COALESCE);不建新 session。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_busy_prior_session_skips_without_counting() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(&fx, &task.id, Some("interrupted"), Some(3)).await;
+    // busy:编排器注册形态(session_active_request 含 prior)。
+    fx.state
+        .session_active_request
+        .lock()
+        .await
+        .insert(prior.clone(), "rid-live".to_string());
+    let sessions_before = crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+        .await
+        .unwrap()
+        .len();
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 0, "busy skip must not burn the budget");
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("skipped_busy"));
+    assert_eq!(
+        row.last_run_session_id.as_deref(),
+        Some(prior.as_str()),
+        "COALESCE keeps the prior session"
+    );
+    assert!(row.last_fired_at.is_some(), "due consumed");
+    assert_eq!(
+        audit_actions_for(&fx, &prior).await,
+        vec![(actions::SKIPPED_BUSY.to_string(), None)]
+    );
+    assert_eq!(
+        crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before,
+        "no new discussion opened while busy"
+    );
+}
+
+/// 四态第 2 臂 interrupted + checkpoint(round<30):自动 resume。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_resumes_interrupted_prior_discussion() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(&fx, &task.id, Some("interrupted"), Some(3)).await;
+    let sessions_before = crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+        .await
+        .unwrap()
+        .len();
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 1, "accepted resume counts");
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("resumed"));
+    assert_eq!(row.last_run_session_id.as_deref(), Some(prior.as_str()));
+    assert_eq!(
+        audit_actions_for(&fx, &prior).await,
+        vec![(actions::RESUMED_GROUP_CHAT.to_string(), None)]
+    );
+    assert_eq!(
+        crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before,
+        "resume reuses the old discussion; no new session"
+    );
+}
+
+/// 四态第 2 臂僵尸场:interrupted + checkpoint round ≥ 30(编排器死于
+/// 轮帽中途,终态无人写)→ 补 finalize(error)+ recovered + 开新场;
+/// 旧场 stop_reason 落 error(GUI 假「进行中」消失)。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_zombie_round_cap_recovers_then_opens_new() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(
+        &fx,
+        &task.id,
+        Some("interrupted"),
+        Some(crate::agent::group_chat_loop::MAX_ORCHESTRATION_ROUNDS as i64),
+    )
+    .await;
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    // 旧场:finalize(error)落地。
+    let prior_loaded = crate::db::sessions::load_session(&fx.state.db, &prior)
+        .await
+        .unwrap()
+        .expect("prior row");
+    assert_eq!(prior_loaded.session.stop_reason.as_deref(), Some("error"));
+    assert_eq!(
+        audit_actions_for(&fx, &prior).await,
+        vec![(actions::RECOVERED.to_string(), None)]
+    );
+    // 新场:开跑 + 落账。
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 1);
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("started"));
+    let new_sid = row.last_run_session_id.clone().expect("new session");
+    assert_ne!(new_sid, prior);
+    assert_eq!(
+        audit_actions_for(&fx, &new_sid).await,
+        vec![(actions::FIRED_GROUP_CHAT.to_string(), None)]
+    );
+}
+
+/// 四态第 3 臂停摆场:stop_reason NULL 且无 checkpoint(编排器 spawn 后
+/// 首轮 checkpoint upsert 前 daemon 重启;boot sweep 不治)→ 补
+/// finalize(error)+ recovered + 开新场。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_stale_session_recovers_then_opens_new() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(&fx, &task.id, None, None).await;
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let prior_loaded = crate::db::sessions::load_session(&fx.state.db, &prior)
+        .await
+        .unwrap()
+        .expect("prior row");
+    assert_eq!(
+        prior_loaded.session.stop_reason.as_deref(),
+        Some("error"),
+        "stale session finalized with the existing error vocabulary"
+    );
+    assert_eq!(
+        audit_actions_for(&fx, &prior).await,
+        vec![(actions::RECOVERED.to_string(), None)]
+    );
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 1);
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("started"));
+    assert_ne!(row.last_run_session_id.as_deref(), Some(prior.as_str()));
+}
+
+/// 终态旧场(group_chat_end):四态第 4 臂直接开新场(不 resume、
+/// 不 finalize)。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_terminal_prior_session_opens_new_without_resume() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(&fx, &task.id, Some("group_chat_end"), None).await;
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 1);
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("started"));
+    assert_ne!(row.last_run_session_id.as_deref(), Some(prior.as_str()));
+    // 终态旧场不被触碰(无 recovered / resumed 审计)。
+    assert!(audit_actions_for(&fx, &prior).await.is_empty());
+}
+
+/// 计数矩阵之 catalog 预检臂:config 引用的模型不存在 → audit error
+/// (model_missing)+ 不建场 + 不计数(due 消费)—— 防 model 被删后
+/// 每周期落空壳 session。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_precheck_failure_skips_session_creation() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", true).await;
+    let prior = attach_prior_discussion(&fx, &task.id, Some("group_chat_end"), None).await;
+    let sessions_before = crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+        .await
+        .unwrap()
+        .len();
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 0, "precheck miss must not count");
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("error"));
+    assert_eq!(
+        crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before,
+        "no shell session created"
+    );
+    let audits = audit_actions_for(&fx, &prior).await;
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].0, actions::ERROR);
+    assert!(
+        audits[0]
+            .1
+            .as_deref()
+            .unwrap_or_default()
+            .contains("model_missing"),
+        "reason names the missing models: {:?}",
+        audits[0].1
+    );
+}
+
+/// resume 兜底组:五闸拒绝(busy 竞态 / checkpoint 已删等)→ audit
+/// error + 本期不动(**绝不双开场**)。经 dispatch seam 注入拒绝替身
+/// 确定性构造(生产路径的五闸已在路由预检中等价覆盖)。
+#[tokio::test(flavor = "multi_thread")]
+async fn fire_group_chat_resume_rejected_leaves_task_alone() {
+    use crate::scheduler::{fire_group_chat, GroupChatDispatch};
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(&fx, &task.id, Some("interrupted"), Some(3)).await;
+    // attach 用裸 SQL 改 last_run_session_id;直调 fire_group_chat 传的
+    // 是内存结构体,必须重载 DB 行,否则该字段仍是 NULL → 路由误判
+    // OpenNew(经 scheduler_tick 的用例不受影响,tick 内部自取行)。
+    let task = task_row(&fx, &task.id).await;
+    let sessions_before = crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+        .await
+        .unwrap()
+        .len();
+    let spec = scheduler::parse_schedule(r#"{"kind":"interval","every_min":1}"#).unwrap();
+    let dispatch = GroupChatDispatch {
+        open: Box::new(|_state, _sid, _topic| {
+            Box::pin(async { Ok(crate::agent::chat::ChatAcceptance::Started) })
+        }),
+        resume: Box::new(|_state, _sid| {
+            Box::pin(async {
+                Err(crate::error::AppCommandError::new(
+                    crate::error::ErrorCategory::InvalidRequest,
+                    "该会话有进行中的讨论,不能续跑",
+                ))
+            })
+        }),
+    };
+
+    fire_group_chat(
+        &fx.state,
+        &task,
+        &serde_json::from_str(task.group_chat_config.as_deref().unwrap()).unwrap(),
+        1_000,
+        &spec,
+        scheduler::now_epoch_ms(),
+        &dispatch,
+    )
+    .await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 0, "rejected resume must not count");
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("error"));
+    assert_eq!(
+        row.last_run_session_id.as_deref(),
+        Some(prior.as_str()),
+        "prior session untouched"
+    );
+    let audits = audit_actions_for(&fx, &prior).await;
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].0, actions::ERROR);
+    assert!(audits[0]
+        .1
+        .as_deref()
+        .unwrap_or_default()
+        .contains("resume_rejected"));
+    assert_eq!(
+        crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before,
+        "never opens a second discussion on rejection"
+    );
+}
+
+/// resume 兜底组:interrupted 但 checkpoint 行已删(闸③必拒的前置
+/// 判定)→ 同款「audit error + 不动」兜底,不开新场。
+#[tokio::test(flavor = "multi_thread")]
+async fn fire_group_chat_interrupted_without_checkpoint_rejects() {
+    use crate::scheduler::{fire_group_chat, GroupChatDispatch};
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    let prior = attach_prior_discussion(&fx, &task.id, Some("interrupted"), None).await;
+    // 同 resume_rejected 用例:attach 后必须重载 DB 行再直调 fire。
+    let task = task_row(&fx, &task.id).await;
+    let sessions_before = crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+        .await
+        .unwrap()
+        .len();
+    let spec = scheduler::parse_schedule(r#"{"kind":"interval","every_min":1}"#).unwrap();
+    // open 若被调到即失败 —— 本路径必须 return 于 open 之前。
+    let dispatch = GroupChatDispatch {
+        open: Box::new(|_state, _sid, _topic| {
+            Box::pin(async {
+                panic!("open must not be reached on the no-checkpoint rejection arm")
+            })
+        }),
+        resume: Box::new(|_state, _sid| {
+            Box::pin(async { Ok(crate::agent::chat::ChatAcceptance::Started) })
+        }),
+    };
+
+    fire_group_chat(
+        &fx.state,
+        &task,
+        &serde_json::from_str(task.group_chat_config.as_deref().unwrap()).unwrap(),
+        1_000,
+        &spec,
+        scheduler::now_epoch_ms(),
+        &dispatch,
+    )
+    .await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 0);
+    assert_eq!(row.last_fire_outcome.as_deref(), Some("error"));
+    let audits = audit_actions_for(&fx, &prior).await;
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].0, actions::ERROR);
+    assert!(
+        audits[0]
+            .1
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no checkpoint"),
+        "reason names the missing checkpoint: {:?}",
+        audits[0].1
+    );
+    assert_eq!(
+        crate::db::sessions::list_sessions(&fx.state.db, &fx.project_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before
+    );
+}
+
+/// 对照组红线:kill switch 对群聊档同效(`scheduled_tasks_enabled =
+/// false` → tick 空转,零审计零落账)。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_task_respects_kill_switch() {
+    let fx = make_fixture().await;
+    let task = seed_group_task(&fx, 1, "每周审议", false).await;
+    crate::db::config::set_config_value(&fx.state.db, "scheduled_tasks_enabled", "false")
+        .await
+        .unwrap();
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    let row = task_row(&fx, &task.id).await;
+    assert_eq!(row.run_count, 0);
+    assert!(
+        row.last_fired_at.is_none(),
+        "no due consumed under the kill switch"
+    );
+    assert!(row.last_run_session_id.is_none());
 }

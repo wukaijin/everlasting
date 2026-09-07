@@ -236,3 +236,221 @@ async fn rebuild_scheduled_tasks_preserves_rows_and_seeds_target_mode() {
         .expect("count");
     assert_eq!(count, 1);
 }
+
+/// 09-07-gce-m4a-scheduled-deliberation:per_run 时代旧形表(有
+/// target_mode 三列、无 group_chat 两列)经
+/// `rebuild_scheduled_tasks_for_group_chat` 重建 —— 行保全 + 两新列种子
+/// NULL + 新 CHECK 五臂生效 + 幂等。旧形表手工搭:drop 新形表后按
+/// per_run 时代 DDL 建。
+#[tokio::test]
+async fn rebuild_scheduled_tasks_group_chat_preserves_rows_and_updates_checks() {
+    use sqlx::Row;
+    let (pool, _path) = fresh_pool().await;
+    run_migrations(&pool).await.expect("run migrations");
+
+    let name = format!("rebuild-gc-{}", uuid::Uuid::new_v4().simple());
+    let path = format!("/tmp/rebuild-gc-{name}");
+    crate::db::create_project(&pool, &name, &path, false, None)
+        .await
+        .expect("create project");
+    let project = crate::db::list_projects(&pool, false)
+        .await
+        .expect("list projects")
+        .into_iter()
+        .find(|p| p.name == name)
+        .expect("project row");
+    let session_id = uuid::Uuid::new_v4().to_string();
+    crate::db::create_session(
+        &pool,
+        &session_id,
+        &project.id,
+        &path,
+        "mock-model",
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("create session");
+
+    // 搭 per_run 时代旧形表(无 group_chat_config / last_fire_outcome,
+    // CHECK 还是两臂旧白名单)。
+    sqlx::query("DROP TABLE scheduled_tasks")
+        .execute(&pool)
+        .await
+        .expect("drop new-shape table");
+    sqlx::query(
+        r#"
+        CREATE TABLE scheduled_tasks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          target_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+          target_mode TEXT NOT NULL DEFAULT 'fixed',
+          name TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          schedule TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_by TEXT NOT NULL DEFAULT 'user',
+          created_at INTEGER NOT NULL,
+          last_fired_at INTEGER,
+          next_fire_at INTEGER NOT NULL,
+          run_count INTEGER NOT NULL DEFAULT 0,
+          max_runs INTEGER,
+          ends_at INTEGER,
+          model_id TEXT,
+          last_run_session_id TEXT,
+          CHECK (target_mode = 'fixed' OR target_mode = 'per_run'),
+          CHECK (target_mode = 'per_run' OR target_session_id IS NOT NULL)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create per_run-era table");
+    sqlx::query(
+        "INSERT INTO scheduled_tasks \
+         (id, project_id, target_session_id, target_mode, name, prompt, schedule, enabled, \
+          created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at, \
+          model_id, last_run_session_id) \
+         VALUES ('t1', ?, ?, 'fixed', '固定档', 'p', '{}', 1, 'user', 100, 200, 300, 2, 5, NULL, NULL, NULL)",
+    )
+    .bind(&project.id)
+    .bind(&session_id)
+    .execute(&pool)
+    .await
+    .expect("insert fixed row");
+    sqlx::query(
+        "INSERT INTO scheduled_tasks \
+         (id, project_id, target_session_id, target_mode, name, prompt, schedule, enabled, \
+          created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at, \
+          model_id, last_run_session_id) \
+         VALUES ('t2', ?, NULL, 'per_run', '每次新建', 'p', '{}', 1, 'user', 100, 200, 300, 0, NULL, NULL, NULL, 'run-1')",
+    )
+    .bind(&project.id)
+    .execute(&pool)
+    .await
+    .expect("insert per_run row");
+
+    rebuild_scheduled_tasks_for_group_chat(&pool)
+        .await
+        .expect("rebuild");
+    // 行保全 + 种子:两新列 NULL,既有列原值。
+    for (id, expect_target, expect_run_sid) in
+        [("t1", Some(&session_id), None), ("t2", None, Some("run-1"))]
+    {
+        let row = sqlx::query(
+            "SELECT target_session_id, target_mode, last_run_session_id, run_count, \
+                    group_chat_config, last_fire_outcome FROM scheduled_tasks WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("row preserved");
+        assert_eq!(
+            row.try_get::<Option<String>, _>("target_session_id")
+                .expect("target"),
+            expect_target.map(|s| s.to_string()),
+            "{id}: target preserved"
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("last_run_session_id")
+                .expect("run sid"),
+            expect_run_sid.map(|s| s.to_string()),
+            "{id}: run sid preserved"
+        );
+        assert!(row
+            .try_get::<Option<String>, _>("group_chat_config")
+            .expect("config")
+            .is_none());
+        assert!(row
+            .try_get::<Option<String>, _>("last_fire_outcome")
+            .expect("outcome")
+            .is_none());
+    }
+
+    // 新 CHECK 五臂:mode 白名单 / group_chat ⇒ target NULL + config
+    // 非空 / fixed ⇔ target / outcome 白名单。
+    let cfg = r#"{"moderator_model_id":"m","participants":[{"name":"甲","model_id":"m"}]}"#;
+    let ok_gc = sqlx::query(
+        "INSERT INTO scheduled_tasks (id, project_id, target_session_id, target_mode, name, \
+         prompt, schedule, enabled, created_by, created_at, next_fire_at, group_chat_config) \
+         VALUES ('g1', ?, NULL, 'group_chat', '审议', 'topic', '{}', 1, 'user', 1, 2, ?)",
+    )
+    .bind(&project.id)
+    .bind(cfg)
+    .execute(&pool)
+    .await;
+    assert!(
+        ok_gc.is_ok(),
+        "group_chat row without target + with config is legal"
+    );
+
+    let bad = sqlx::query(
+        "INSERT INTO scheduled_tasks (id, project_id, target_session_id, target_mode, name, \
+         prompt, schedule, enabled, created_by, created_at, next_fire_at, group_chat_config) \
+         VALUES ('g2', ?, NULL, 'group_chat', 'x', 'p', '{}', 1, 'user', 1, 2, NULL)",
+    )
+    .bind(&project.id)
+    .execute(&pool)
+    .await;
+    assert!(bad.is_err(), "group_chat without config must violate CHECK");
+
+    let bad = sqlx::query(
+        "INSERT INTO scheduled_tasks (id, project_id, target_session_id, target_mode, name, \
+         prompt, schedule, enabled, created_by, created_at, next_fire_at, group_chat_config) \
+         VALUES ('g3', ?, ?, 'group_chat', 'x', 'p', '{}', 1, 'user', 1, 2, ?)",
+    )
+    .bind(&project.id)
+    .bind(&session_id)
+    .bind(cfg)
+    .execute(&pool)
+    .await;
+    assert!(
+        bad.is_err(),
+        "group_chat with a fixed target must violate CHECK"
+    );
+
+    let bad = sqlx::query(
+        "INSERT INTO scheduled_tasks (id, project_id, target_session_id, target_mode, name, \
+         prompt, schedule, enabled, created_by, created_at, next_fire_at) \
+         VALUES ('g4', ?, NULL, 'fixed', 'x', 'p', '{}', 1, 'user', 1, 2)",
+    )
+    .bind(&project.id)
+    .execute(&pool)
+    .await;
+    assert!(bad.is_err(), "fixed without target must violate CHECK");
+
+    let bad = sqlx::query(
+        "INSERT INTO scheduled_tasks (id, project_id, target_session_id, target_mode, name, \
+         prompt, schedule, enabled, created_by, created_at, next_fire_at) \
+         VALUES ('g5', ?, NULL, 'yolo', 'x', 'p', '{}', 1, 'user', 1, 2)",
+    )
+    .bind(&project.id)
+    .execute(&pool)
+    .await;
+    assert!(bad.is_err(), "unknown mode must violate CHECK");
+
+    let bad = sqlx::query("UPDATE scheduled_tasks SET last_fire_outcome = 'nope' WHERE id = 'g1'")
+        .execute(&pool)
+        .await;
+    assert!(
+        bad.is_err(),
+        "outcome outside the five-value whitelist must violate CHECK"
+    );
+    let ok = sqlx::query(
+        "UPDATE scheduled_tasks SET last_fire_outcome = 'skipped_busy' WHERE id = 'g1'",
+    )
+    .execute(&pool)
+    .await;
+    assert!(ok.is_ok(), "whitelisted outcome is writable");
+
+    // 幂等:重跑 no-op(行不重复、不丢)。
+    rebuild_scheduled_tasks_for_group_chat(&pool)
+        .await
+        .expect("rebuild again");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_tasks")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 3, "t1 + t2 + g1 survive the idempotent re-run");
+}

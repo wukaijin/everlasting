@@ -16,8 +16,9 @@ use super::columns::{
 };
 use super::schema_helpers::{
     add_turn_trace_provider_id_and_backfill, home_dir_or_dot,
-    migrate_provider_api_keys_to_encrypted, rebuild_scheduled_tasks_for_target_mode,
-    rebuild_turn_trace_with_run_id, widen_subagent_runs_status_check_for_incomplete,
+    migrate_provider_api_keys_to_encrypted, rebuild_scheduled_tasks_for_group_chat,
+    rebuild_scheduled_tasks_for_target_mode, rebuild_turn_trace_with_run_id,
+    widen_subagent_runs_status_check_for_incomplete,
 };
 
 /// Create the schema if it doesn't already exist, then run the step
@@ -1318,6 +1319,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // target_mode 三列(08-31-sched-per-run-session):同上;存量库走
     // schema_helpers::rebuild_scheduled_tasks_for_target_mode 表重建
     // (去 NOT NULL 无法 ALTER)。
+    // group_chat 两列(09-07-gce-m4a-scheduled-deliberation):
+    // `group_chat_config`(定时审议档展开后的完整群聊配置 JSON:
+    // {moderator_model_id, participants:[{name, model_id, persona_md?}]};
+    // daemon fire 侧零 preset 概念,preset 展开发生在创建 UI)+
+    // `last_fire_outcome`(五值快照 started/resumed/skipped_busy/error/
+    // recovered,随 mark_task_fired 同一条 UPDATE 原子写,任务卡
+    // 「上次 fire 怎么了」直读此列)。新 CHECK:mode 白名单加
+    // group_chat;group_chat ⇒ target NULL 且 config 非空;outcome
+    // 白名单。存量库走 rebuild_scheduled_tasks_for_group_chat(同
+    // 五步舞;group_chat 行种子两列 NULL —— 存量行不可能已是该档)。
     sqlx::query(
         r#"
  CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -1338,8 +1349,14 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
    ends_at INTEGER,
    model_id TEXT,
    last_run_session_id TEXT,
-   CHECK (target_mode = 'fixed' OR target_mode = 'per_run'),
-   CHECK (target_mode = 'per_run' OR target_session_id IS NOT NULL)
+   group_chat_config TEXT,
+   last_fire_outcome TEXT,
+   CHECK (target_mode IN ('fixed', 'per_run', 'group_chat')),
+   CHECK (target_mode = 'fixed' OR target_session_id IS NULL),
+   CHECK (target_mode <> 'fixed' OR target_session_id IS NOT NULL),
+   CHECK (target_mode <> 'group_chat' OR group_chat_config IS NOT NULL),
+   CHECK (last_fire_outcome IS NULL OR last_fire_outcome IN
+          ('started', 'resumed', 'skipped_busy', 'error', 'recovered'))
  )
  "#,
     )
@@ -1362,6 +1379,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // target_mode 可空化 + 三新列:存量库表重建(greenfield 已带,probe
     // no-op)。
     rebuild_scheduled_tasks_for_target_mode(pool).await?;
+    // M4a group_chat 档两新列 + CHECK 更宽白名单:存量库表重建
+    // (greenfield 已带,probe no-op)。必须排在 target_mode rebuild
+    // 之后(copy 的显式列清单依赖 target_mode 等列已存在)。
+    rebuild_scheduled_tasks_for_group_chat(pool).await?;
 
     // --- Group-chat checkpoint (2026-09-06, GCE P1a checkpoint 落库与
     // 续跑,task 09-06-gc-p1a-checkpoint-resume): one row per live-or-

@@ -24,6 +24,71 @@ use sqlx::SqlitePool;
 pub mod target_modes {
     pub const FIXED: &str = "fixed";
     pub const PER_RUN: &str = "per_run";
+    /// 09-07-gce-m4a-scheduled-deliberation:定时审议档 —— fire 时 daemon
+    /// 原生建群 + 发题(四态路由见 `scheduler::fire_group_chat`)。
+    /// `target_session_id` 恒 NULL(CHECK 不变式);`group_chat_config`
+    /// 非空(创建时展开的完整群聊配置 JSON);`last_run_session_id` 记
+    /// 最近一场(session 无 FK);`prompt` 复用为议题文本(topic)。
+    pub const GROUP_CHAT: &str = "group_chat";
+}
+
+/// `last_fire_outcome` 列的取值域(M4a 评审 P2-8:五值快照,随
+/// [`mark_task_fired`] 同一条 UPDATE 原子写;任务卡「上次 fire 怎么了」
+/// 直读此列,与 `last_run_session_id`(「哪场」)两轴正交)。
+pub mod fire_outcomes {
+    /// 开新场受理(chat_inner 返回 Ok)。
+    pub const STARTED: &str = "started";
+    /// 自动续跑受理(resume_group_chat 返回 Ok)。
+    pub const RESUMED: &str = "resumed";
+    /// 上一场仍 busy,本次 due 消费但跳过(不计数)。
+    pub const SKIPPED_BUSY: &str = "skipped_busy";
+    /// fire 失败 / resume 被五闸拒绝 / catalog 预检不过。
+    pub const ERROR: &str = "error";
+    /// 僵尸场或停摆场补 finalize(error)后回收。
+    pub const RECOVERED: &str = "recovered";
+}
+
+/// 定时审议任务的群聊配置(`group_chat_config` 列 JSON 的形状,
+/// 09-07-gce-m4a design §2)。**创建时展开的完整配置**:preset 展开发生
+/// 在创建 UI,daemon 与 DB 全程无 preset 名。`participants[].model_id`
+/// 与 `moderator_model_id` 是 models 表 id(UUID);写库前经
+/// [`parse_group_chat_task_config`] + models 存在性校验。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GroupChatTaskParticipant {
+    pub name: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub persona_md: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GroupChatTaskConfig {
+    pub moderator_model_id: String,
+    pub participants: Vec<GroupChatTaskParticipant>,
+}
+
+/// 解析 + 结构校验 `group_chat_config` JSON(create/update 共用):serde
+/// 形状合法、participants 非空、name/model_id 非空串、无重名。
+/// **模型存在性校验**(查 models 表)在 commands 层 —— 这里是纯函数。
+pub fn parse_group_chat_task_config(raw: &str) -> Result<GroupChatTaskConfig, String> {
+    let config: GroupChatTaskConfig =
+        serde_json::from_str(raw).map_err(|e| format!("群聊配置 JSON 非法: {e}"))?;
+    if config.moderator_model_id.trim().is_empty() {
+        return Err("群聊配置缺少 moderator_model_id".to_string());
+    }
+    if config.participants.is_empty() {
+        return Err("群聊配置的参与者名单不能为空".to_string());
+    }
+    let mut names = std::collections::HashSet::new();
+    for p in &config.participants {
+        if p.name.trim().is_empty() || p.model_id.trim().is_empty() {
+            return Err(format!("参与者缺 name/model_id:{}", p.name));
+        }
+        if !names.insert(p.name.trim().to_string()) {
+            return Err(format!("参与者重名:\"{}\"", p.name));
+        }
+    }
+    Ok(config)
 }
 
 /// 供调度器与 UI 读取的任务行。`schedule_json` 是原始 JSON 文本
@@ -61,6 +126,13 @@ pub struct ScheduledTaskRow {
     pub max_runs: Option<i64>,
     /// 结束日期(epoch ms,该时刻前含当日的到期点照常触发);NULL = 不限。
     pub ends_at: Option<i64>,
+    /// M4a 定时审议档:创建时展开的完整群聊配置 JSON
+    /// ([`GroupChatTaskConfig`] 形状;group_chat 档非空 CHECK 不变式,
+    /// 其余档恒 None)。原始 JSON 文本,读取侧信任写入时校验。
+    pub group_chat_config: Option<String>,
+    /// M4a:最近一次 fire 的结局快照([`fire_outcomes`] 五值;NULL =
+    /// 从未 fire)。随 [`mark_task_fired`] 同一条 UPDATE 原子写。
+    pub last_fire_outcome: Option<String>,
 }
 
 /// [`insert_scheduled_task`] 的载荷。`next_fire_at` 由调用方按
@@ -86,6 +158,10 @@ pub struct NewScheduledTask {
     pub next_fire_at: i64,
     pub max_runs: Option<i64>,
     pub ends_at: Option<i64>,
+    /// M4a 定时审议档:展开后的群聊配置规范形 JSON(已过
+    /// [`parse_group_chat_task_config`] + models 存在性校验);仅
+    /// `target_mode = group_chat` 接受,其余档必须 None(互斥)。
+    pub group_chat_config: Option<String>,
 }
 
 /// [`update_scheduled_task`] 的载荷。`None` 字段不动存量;`enabled` 的
@@ -104,6 +180,9 @@ pub struct UpdateScheduledTask {
     pub enabled: Option<bool>,
     pub max_runs: Option<Option<i64>>,
     pub ends_at: Option<Option<i64>>,
+    /// M4a:双层 Option(外层不动 / 内层清空),同 `model_id` 惯例。
+    /// group_chat 档必须持有 config;切离 group_chat 时显式清空。
+    pub group_chat_config: Option<Option<String>>,
 }
 
 /// epoch ms。与 `agent/chat.rs` 路由临界区的 `now_ms` 同口径。
@@ -134,12 +213,15 @@ fn row_from(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduledTaskRow, sqlx::Err
         run_count: row.try_get("run_count")?,
         max_runs: row.try_get("max_runs")?,
         ends_at: row.try_get("ends_at")?,
+        group_chat_config: row.try_get("group_chat_config")?,
+        last_fire_outcome: row.try_get("last_fire_outcome")?,
     })
 }
 
 const SELECT_COLS: &str = "id, project_id, target_session_id, target_mode, model_id, \
      last_run_session_id, name, prompt, schedule, \
-     enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at";
+     enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at, \
+     group_chat_config, last_fire_outcome";
 
 /// 新建任务。id 服务端生成(uuid);`created_by` 随载荷(`'user'` =
 /// UI/IPC 路径,`'agent'` = LLM `schedule_task` tool)。
@@ -152,8 +234,8 @@ pub async fn insert_scheduled_task(
     sqlx::query(
         r#"
  INSERT INTO scheduled_tasks
- (id, project_id, target_session_id, target_mode, model_id, last_run_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)
+ (id, project_id, target_session_id, target_mode, model_id, last_run_session_id, name, prompt, schedule, enabled, created_by, created_at, last_fired_at, next_fire_at, run_count, max_runs, ends_at, group_chat_config)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?)
  "#,
     )
     .bind(&id)
@@ -170,6 +252,7 @@ pub async fn insert_scheduled_task(
     .bind(new.next_fire_at)
     .bind(new.max_runs)
     .bind(new.ends_at)
+    .bind(&new.group_chat_config)
     .execute(pool)
     .await?;
     Ok(get_scheduled_task(pool, &id)
@@ -307,6 +390,13 @@ pub async fn update_scheduled_task(
         None => existing.ends_at,
         Some(v) => v,
     };
+    // M4a:双层 Option(外层不动 / 内层清空 / 值写入)。CHECK 不变式
+    // (group_chat ⇔ config 非空)由 commands 层在 mode+config 同 patch
+    // 组装时保证 —— 本函数是纯落库点,不做跨列语义校验。
+    let group_chat_config = match upd.group_chat_config {
+        None => existing.group_chat_config.clone(),
+        Some(v) => v,
+    };
 
     // 展示值重算时机:schedule 或 enabled 跳变时按当前时刻重推
     // (停用任务存「schedule 的下一个到期点」灰显,design §2)。
@@ -322,7 +412,7 @@ pub async fn update_scheduled_task(
     sqlx::query(
         r#"
  UPDATE scheduled_tasks
- SET name = ?, prompt = ?, schedule = ?, target_session_id = ?, target_mode = ?, model_id = ?, enabled = ?, last_fired_at = ?, next_fire_at = ?, run_count = ?, max_runs = ?, ends_at = ?
+ SET name = ?, prompt = ?, schedule = ?, target_session_id = ?, target_mode = ?, model_id = ?, enabled = ?, last_fired_at = ?, next_fire_at = ?, run_count = ?, max_runs = ?, ends_at = ?, group_chat_config = ?
  WHERE id = ?
  "#,
     )
@@ -338,6 +428,7 @@ pub async fn update_scheduled_task(
     .bind(run_count)
     .bind(max_runs)
     .bind(ends_at)
+    .bind(&group_chat_config)
     .bind(id)
     .execute(pool)
     .await?;
@@ -352,6 +443,9 @@ pub async fn update_scheduled_task(
 /// 仅消费 due 点不计数。`last_run_session_id` 是 per_run 档本次新建的
 /// run session:`Some` 覆写、`None` 保留旧值(COALESCE;fixed 档与
 /// dedup 跳过路径恒传 None)。
+/// `outcome`(M4a 评审 P2-8)是 `last_fire_outcome` 快照:与计数同条
+/// UPDATE 原子写;fixed/per_run 路径恒传 None(该档无此语义,列保持
+/// NULL),group_chat 档传 [`fire_outcomes`] 五值之一。
 /// 触碰 `last_fired_at` 时**不**套 false→true 语义 —— 本函数只被调度器
 /// 在任务保持 enabled 的前提下调用。返回 affected 行数(0 = 任务已被删)。
 pub async fn mark_task_fired(
@@ -361,15 +455,17 @@ pub async fn mark_task_fired(
     next_fire_at: i64,
     count_fire: bool,
     last_run_session_id: Option<&str>,
+    outcome: Option<&str>,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         "UPDATE scheduled_tasks SET last_fired_at = ?, next_fire_at = ?, run_count = run_count + ?, \
-         last_run_session_id = COALESCE(?, last_run_session_id) WHERE id = ?",
+         last_run_session_id = COALESCE(?, last_run_session_id), last_fire_outcome = ? WHERE id = ?",
     )
     .bind(last_fired_at)
     .bind(next_fire_at)
     .bind(count_fire as i64)
     .bind(last_run_session_id)
+    .bind(outcome)
     .bind(id)
     .execute(pool)
     .await?;
@@ -488,6 +584,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -558,6 +655,7 @@ mod tests {
                 next_fire_at: 2_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -577,11 +675,12 @@ mod tests {
                 next_fire_at: 3_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
         .expect("insert third");
-        mark_task_fired(&pool, &fired.id, 500, 3_500_000, true, None)
+        mark_task_fired(&pool, &fired.id, 500, 3_500_000, true, None, None)
             .await
             .expect("mark fired");
 
@@ -599,7 +698,7 @@ mod tests {
         let pool = test_pool().await;
         let (project_id, session_id) = seed_project_session(&pool).await;
         let row = insert_sample(&pool, &project_id, &session_id).await;
-        mark_task_fired(&pool, &row.id, 123, 4_555, true, None)
+        mark_task_fired(&pool, &row.id, 123, 4_555, true, None, None)
             .await
             .expect("mark fired");
 
@@ -772,7 +871,7 @@ mod tests {
         let (project_id, session_id) = seed_project_session(&pool).await;
         let row = insert_sample(&pool, &project_id, &session_id).await;
 
-        mark_task_fired(&pool, &row.id, 100, 200, true, None)
+        mark_task_fired(&pool, &row.id, 100, 200, true, None, None)
             .await
             .expect("fire");
         assert_eq!(
@@ -784,7 +883,7 @@ mod tests {
             1,
             "count_fire=true increments"
         );
-        mark_task_fired(&pool, &row.id, 300, 400, false, None)
+        mark_task_fired(&pool, &row.id, 300, 400, false, None, None)
             .await
             .expect("dedup-style account");
         assert_eq!(
@@ -840,6 +939,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: Some(3),
                 ends_at: Some(9_999_999),
+                group_chat_config: None,
             },
         )
         .await
@@ -896,10 +996,10 @@ mod tests {
         assert_eq!(upd.ends_at, None, "explicit null clears");
 
         // 计数两次 → 停用 → 重启用:run_count 清零(F2b D8)。
-        mark_task_fired(&pool, &row.id, 100, 200, true, None)
+        mark_task_fired(&pool, &row.id, 100, 200, true, None, None)
             .await
             .expect("fire 1");
-        mark_task_fired(&pool, &row.id, 400, 500, true, None)
+        mark_task_fired(&pool, &row.id, 400, 500, true, None, None)
             .await
             .expect("fire 2");
         assert_eq!(
@@ -959,6 +1059,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -1003,6 +1104,7 @@ mod tests {
                 next_fire_at: 1_000,
                 max_runs: None,
                 ends_at: None,
+                group_chat_config: None,
             },
         )
         .await
@@ -1032,10 +1134,10 @@ mod tests {
         assert_eq!(upd.model_id.as_deref(), Some("m-1"));
 
         // fire 落账带 run session → 记录;None(dedup 路径)保留旧值。
-        mark_task_fired(&pool, &row.id, 100, 200, true, Some("run-sid"))
+        mark_task_fired(&pool, &row.id, 100, 200, true, Some("run-sid"), None)
             .await
             .expect("fire with run session");
-        mark_task_fired(&pool, &row.id, 300, 400, false, None)
+        mark_task_fired(&pool, &row.id, 300, 400, false, None, None)
             .await
             .expect("dedup-style accounting");
         let after = get_scheduled_task(&pool, &row.id).await.unwrap().unwrap();
@@ -1093,7 +1195,7 @@ mod tests {
         )
         .await
         .expect("create run session");
-        mark_task_fired(&pool, &row.id, 500, 600, true, Some(&run_sid))
+        mark_task_fired(&pool, &row.id, 500, 600, true, Some(&run_sid), None)
             .await
             .expect("fire #2");
         crate::db::delete_session(&pool, &run_sid)
@@ -1102,6 +1204,141 @@ mod tests {
         assert!(
             get_scheduled_task(&pool, &row.id).await.unwrap().is_some(),
             "deleting a run session must NOT cascade-delete a per_run task"
+        );
+    }
+
+    // --- M4a 群聊档(09-07-gce-m4a-scheduled-deliberation)---
+
+    /// group_chat 行 roundtrip(两新列)+ mark_task_fired 的 outcome 原子
+    /// 写(None 不清旧值?—— 是直写:None → NULL,fixed/per_run 列本就
+    /// 恒 NULL,零行为变化;group_chat 档写五值白名单)+ update 双层
+    /// Option + parse_group_chat_task_config 结构校验全臂。
+    #[tokio::test]
+    async fn group_chat_config_roundtrip_outcome_and_parse_validation() {
+        let pool = test_pool().await;
+        let (project_id, _session_id) = seed_project_session(&pool).await;
+        let config = r#"{"moderator_model_id":"m-mod","participants":[{"name":"架构","model_id":"m-a","persona_md":"视角"},{"name":"产品","model_id":"m-p"}]}"#;
+        let row = insert_scheduled_task(
+            &pool,
+            NewScheduledTask {
+                project_id: project_id.clone(),
+                target_session_id: None,
+                target_mode: target_modes::GROUP_CHAT.into(),
+                model_id: None,
+                name: "每周审议".into(),
+                prompt: "复盘本周架构".into(),
+                schedule_json: spec_json(r#"{"kind":"weekly","weekday":"Fri","at":"18:00"}"#),
+                enabled: true,
+                created_by: "user".into(),
+                next_fire_at: 1_000,
+                max_runs: Some(52),
+                ends_at: None,
+                group_chat_config: Some(config.to_string()),
+            },
+        )
+        .await
+        .expect("insert group_chat task");
+        assert_eq!(row.target_mode, "group_chat");
+        assert!(
+            row.target_session_id.is_none(),
+            "group_chat binds no target"
+        );
+        assert_eq!(row.group_chat_config.as_deref(), Some(config));
+        assert!(row.last_fire_outcome.is_none(), "never fired");
+
+        // fire 落账带 outcome:run_count+1 + last_fire_outcome 同条 UPDATE。
+        mark_task_fired(
+            &pool,
+            &row.id,
+            100,
+            200,
+            true,
+            Some("gc-sid"),
+            Some(fire_outcomes::STARTED),
+        )
+        .await
+        .expect("fire");
+        let after = get_scheduled_task(&pool, &row.id).await.unwrap().unwrap();
+        assert_eq!(after.run_count, 1);
+        assert_eq!(after.last_run_session_id.as_deref(), Some("gc-sid"));
+        assert_eq!(after.last_fire_outcome.as_deref(), Some("started"));
+        // 不计数路径(busy 跳过)只写 outcome,due 消费但不 +1。
+        mark_task_fired(
+            &pool,
+            &row.id,
+            300,
+            400,
+            false,
+            None,
+            Some(fire_outcomes::SKIPPED_BUSY),
+        )
+        .await
+        .expect("skip-style account");
+        let after = get_scheduled_task(&pool, &row.id).await.unwrap().unwrap();
+        assert_eq!(after.run_count, 1, "skip must not increment");
+        assert_eq!(after.last_fire_outcome.as_deref(), Some("skipped_busy"));
+        assert_eq!(
+            after.last_run_session_id.as_deref(),
+            Some("gc-sid"),
+            "COALESCE keeps the prior run session on None"
+        );
+
+        // update 双层 Option:外层 None 不动 / 显式 null 清空 / 值写入。
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                name: Some("改名".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.group_chat_config.as_deref(), Some(config), "untouched");
+        let upd = update_scheduled_task(
+            &pool,
+            &row.id,
+            UpdateScheduledTask {
+                target_mode: Some(target_modes::PER_RUN.into()),
+                group_chat_config: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(upd.target_mode, "per_run");
+        assert!(upd.group_chat_config.is_none(), "explicit null clears");
+
+        // parse 结构校验全臂。
+        assert!(parse_group_chat_task_config(config).is_ok());
+        assert!(
+            parse_group_chat_task_config("{}").is_err(),
+            "missing moderator/participants"
+        );
+        assert!(
+            parse_group_chat_task_config(r#"{"moderator_model_id":"m","participants":[]}"#)
+                .is_err(),
+            "empty roster rejected"
+        );
+        assert!(
+            parse_group_chat_task_config(
+                r#"{"moderator_model_id":"","participants":[{"name":"甲","model_id":"m"}]}"#
+            )
+            .is_err(),
+            "empty moderator rejected"
+        );
+        assert!(
+            parse_group_chat_task_config(
+                r#"{"moderator_model_id":"m","participants":[{"name":"甲","model_id":"m"},{"name":"甲","model_id":"m2"}]}"#
+            )
+            .is_err(),
+            "duplicate names rejected"
+        );
+        assert!(
+            parse_group_chat_task_config("not json").is_err(),
+            "malformed JSON rejected"
         );
     }
 }
