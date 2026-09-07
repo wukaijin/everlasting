@@ -232,12 +232,14 @@ impl TokenTally {
 /// Sink decorator wrapping the discussion's sink for every INNER
 /// speaker turn (moderator / participant / preempt wrap-up): forwards
 /// all [`crate::state::ChatEventSink`] methods to the inner sink
-/// verbatim, and — on `Done { usage: Some(_) }` — adds the turn's
-/// billed tokens to the shared [`TokenTally`] before forwarding.
+/// verbatim, and — on each `TurnUsage` event (exactly one per completed
+/// inner LLM turn) — adds the turn's billed tokens to the shared
+/// [`TokenTally`] before forwarding.
 ///
 /// The orchestrator's own emits (Speaker notices, the terminal Done)
-/// carry `usage: None` and contribute nothing; they flow through the
-/// same wrapper after the shadow so there is exactly one sink identity
+/// flow through the same wrapper after the shadow so there is exactly
+/// one sink identity; they carry no `TurnUsage` and contribute nothing
+/// to the tally.
 /// across the discussion. `has_live_observer` is FORWARDED (not the
 /// default) — the daemon `HttpSseSink` is the only production
 /// overrider, and losing its answer would silently break the GC3
@@ -1148,7 +1150,7 @@ pub async fn run_group_chat_loop(
     // (`cancelled` / `error`) keep the row — it already holds the
     // round the discussion reached (round-head + streak upserts), so
     // a resume re-enters exactly there. Terminal exits
-    // (`group_chat_end` / `preempted` / `max_rounds`) delete it; a
+    // (`group_chat_end` / `preempted` / `max_rounds` / `budget`) delete it; a
     // failed delete is the orphan the boot sweep heals (and the
     // resume command's stop_reason gate rejects regardless).
     // Best-effort: warn + swallow, same contract as finalize.
@@ -1357,4 +1359,101 @@ async fn resolve_provider(
         .flatten()
         .map(|m| m.provider_id);
     (provider, provider_id)
+}
+
+#[cfg(test)]
+mod tally_sink_tests {
+    //! P2-1/P1-1 locks (Checker 2026-09-08, task 09-08-gc-c1-stoploss):
+    //! TallySink's two load-bearing behaviors that the group-chat
+    //! integration tests can't observe from outside the module.
+
+    use super::{TallySink, TokenTally};
+    use crate::llm::types::{ChatEvent, TokenUsage};
+    use crate::state::{ChatEventPayload, ChatEventSink, ToolCallPayload, ToolResultPayload};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    /// Minimal inner sink whose `has_live_observer` is scriptable (the
+    /// default trait impl returns a constant `true`, which would make
+    /// the forwarding assertion meaningless).
+    struct ObserverProbe(AtomicBool);
+    impl ChatEventSink for ObserverProbe {
+        fn emit_chat_event(&self, _p: &ChatEventPayload) {}
+        fn emit_tool_call(&self, _p: &ToolCallPayload) {}
+        fn emit_tool_result(&self, _p: &ToolResultPayload) {}
+        fn emit_permission_ask(&self, _p: crate::agent::permissions::PermissionAskPayload) {}
+        fn has_live_observer(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    fn payload(event: ChatEvent) -> ChatEventPayload {
+        ChatEventPayload {
+            request_id: "rid".to_string(),
+            session_id: "sess".to_string(),
+            event,
+        }
+    }
+
+    /// `has_live_observer` MUST forward to the inner sink — the daemon
+    /// `HttpSseSink` is the only production overrider, and a defaulted
+    /// `true` here would silently break GC3 attendance detection.
+    #[test]
+    fn tally_sink_forwards_has_live_observer() {
+        use std::sync::atomic::Ordering;
+        let inner = Arc::new(ObserverProbe(AtomicBool::new(true)));
+        let sink = TallySink {
+            inner: inner.clone() as Arc<dyn ChatEventSink>,
+            tally: Arc::new(TokenTally::default()),
+        };
+        assert!(sink.has_live_observer());
+        inner.0.store(false, Ordering::Relaxed);
+        assert!(!sink.has_live_observer());
+    }
+
+    /// The tally counts `TurnUsage` ONLY. `Done` never reaches the sink
+    /// for intermediate tool-use turns, and the terminal Done carries
+    /// just the last turn's usage — counting it would double-count that
+    /// turn on top of its TurnUsage.
+    #[test]
+    fn tally_sink_counts_turn_usage_not_done() {
+        let tally = Arc::new(TokenTally::default());
+        let sink = TallySink {
+            inner: Arc::new(ObserverProbe(AtomicBool::new(true))),
+            tally: tally.clone(),
+        };
+        let usage = TokenUsage {
+            input_tokens: 400,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            context_input_tokens: 0,
+        };
+        sink.emit_chat_event(&payload(ChatEvent::TurnUsage {
+            request_id: "rid".to_string(),
+            seq: 1,
+            run_id: "run".to_string(),
+            usage,
+            tools_token: None,
+            memory_token: None,
+            images_token: None,
+            at_files_token: None,
+            system_token: None,
+            context_window: 200_000,
+        }));
+        // A terminal Done carrying the SAME last-turn usage must not
+        // double-count it.
+        sink.emit_chat_event(&payload(ChatEvent::Done {
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage {
+                input_tokens: 400,
+                ..TokenUsage::default()
+            }),
+        }));
+        assert_eq!(
+            tally.total(),
+            400,
+            "exactly one count per TurnUsage; Done ignored"
+        );
+    }
 }

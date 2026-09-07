@@ -33,7 +33,8 @@ use super::types::PermissionContext;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
     // === Tool 域 ===
-    /// ⑨ 关拒绝 (Tier 2 hit, Tier 3 timeout, Tier 3 user deny)
+    /// ⑨ 关拒绝 (Tier 2 hit, Tier 3 timeout, Tier 3 user deny,
+    /// Tier 4 ask-free — group chat, 09-08-gc-c1)
     ToolDenied,
     /// ⑨ 关放行 (Tier 5 默认 OR Tier 3 "始终允许" 命中 OR Tier 3 user "仅一次")
     ToolAllowed,
