@@ -96,6 +96,56 @@ old rows searchable), delete propagation, `UPDATE OF text` red line
 (metadata/latency updates don't churn docsize; text rewrite swaps the index),
 LIKE-wildcard literalism, per-kind limit semantics.
 
+### Scenario: 场级 discussion 检索 — session 行直作文档 + 程序 LIKE(GCE M4b,2026-09-07)
+
+**Scope/Trigger**: 新增「场级」(session 粒度,一场一行)的检索/浏览——
+首个实例是群聊讨论库(`db/search_group_chat.rs`:`list_group_chat_sessions`
+/ `search_group_chat_discussions`,消费面 = GUI 讨论库 + daemon API 两端点)。
+
+**形态决策**:**不建独立冗余表、不引 FTS5 external-content 表 + 实时触发器**。
+主源 = `sessions` 行本身(行即文档),检索字段一部分是列(`title` /
+`discussion_summary` / `stop_reason`),一部分解析自 `metadata` JSON
+(`participants[].name` join、`scheduled_task_name`)。群聊场数 = 数十~数百,
+比 `messages` 低 2-3 个数量级 —— messages_fts 那套(三触发器 +
+`%_docsize` 回填 + `AFTER UPDATE OF` 红线 + boot staleness probe)是为
+「全量消息、每行每 insert/update 同步、10^4+ 行」的必要复杂度;场级表行数
+低,LIKE 全扫毫秒级,触发器同步的复杂度与风险不值。
+
+**LIKE 契约**(与 messages 检索同款):用户关键词 `%q%` 包裹 +
+`ESCAPE '\'` 转义(`%`/`_`/`\` 按字面匹配)。转义 helper
+`db/search.rs::escape_like` 提为 `pub(crate)` 供本模块共用 —— 转义语义
+不许漂移成两份。
+
+**metadata 解析两条红线**:
+1. **`json_valid` 守卫必须包在 json_extract/json_each 之前**(逐字段)。
+   SQLite `json_extract(malformed, ...)` / `json_each(malformed, ...)` 在
+   OR 链前面的分支为假时会 raise(实测,与 audit keyset 的 Trap 3 同族)。
+   schema 里 `sessions.metadata` 是自由 TEXT,历史行可为任意垃圾 ——
+   检索是读路径,一行坏 metadata 不许打炸整个查询。
+2. 参与人命中走 `EXISTS (SELECT 1 FROM json_each(s.metadata,
+   '$.participants') WHERE json_extract(p.value, '$.name') LIKE ?)`,不把
+   JSON 拼进文档字符串再 LIKE(拼串会让 `model`/`persona_md` 等非检索
+   字段泄漏进命中面,还会被含 `,`/`"` 的查询误伤)。
+
+**排序/过滤**:浏览全量 + 关键词检索共用同一 WHERE 骨架,`updated_at
+DESC`;project / stop_reason 精确过滤走绑定 `?`。空关键词 = 浏览(面板
+打开即全量)。一条 SQL 的 OR 命中天然去重(每场一行,无逐字段重复行)。
+
+**summary 晚到**(GC7:终态才稳定落库):场终态前 summary 为空列 —— 该场
+仍以 title/task/participants 可搜,不因 summary 缺失丢场(AC5)。不把
+messages 长文拼进检索文档(逐句已在 messages_fts,场级文档 = summary +
+短字段)。
+
+**升级判定**:场数上 10^3 或需 bm25 语义排序时,按本文件 messages_fts
+模板加 external-content FTS5(内容 = 上述场级列 + metadata 派生),程序
+回填一次;**不破坏查询层契约**(db 函数签名 + wire 形状不变)。
+
+**Tests**(`db/search_group_chat_tests.rs`,8 例 + daemon route oneshot):
+浏览 DESC 且 `session_type='chat'` 永不返回 / project+stop_reason 过滤 /
+关键词四字段各自命中 / participants 只匹配 `name`(不命中同记录的
+`model`)/ 空关键词 = 浏览 / 无命中空数组不报错 / LIKE 通配字面量 /
+坏 metadata 不 raise(浏览 + 检索双路径)。
+
 ### Pattern: SQLite 表约束加宽 = 表重建;哨兵空串;显式列清单(2026-08-20,08-20-worker-turn-trace-persist)
 
 **Scope/Trigger**:给已有表的 `UNIQUE` 表约束加一列(如 `turn_trace` 的

@@ -52,6 +52,13 @@ database-guidelines.md 的「IPC payload camelCase」新约定(对齐 `AuditEven
 - `POST /api/v1/sessions/load_session` 请求 `{"session_id": "..."}` → `LoadedSession | null`
   (`{session: SessionRow, messages: MessageRow[]}`)
 - `GET  /api/v1/sessions/{id}/snapshot` → `{session, pending_interaction}`(断线重连一次性拉全)
+- `POST /api/v1/sessions/list_group_chat_sessions`(2026-09-07,GCE M4b 讨论库)
+  请求 `{"project_id": <opt>, "stop_reason": <opt>}`(空 body / 空对象 = 全量浏览)→
+  `GroupChatSessionHit[]`,按 `updated_at DESC`。只返回 `session_type='group_chat'` 场。
+- `POST /api/v1/sessions/search_group_chat_discussions`(2026-09-07,GCE M4b 讨论库)
+  请求 `{"query": "...", "project_id": <opt>, "stop_reason": <opt>}` → `GroupChatSessionHit[]`
+  (同上过滤 + 关键词命中 title / discussion_summary / task_name / participants 任一即中;
+  `query` 空 / 纯空白 = 全量浏览)。LIKE 匹配 `%`/`_`/`\` 按字面处理(转义同 search_messages)。
 
 `SessionSummary` 关键字段(全 snake_case):`id` / `title` / `updated_at` / `preview` /
 `project_id` / `current_cwd` / `session_type`(`"chat"` | `"group_chat"`)/ `metadata`(群聊配置
@@ -64,6 +71,11 @@ database-guidelines.md 的「IPC payload camelCase」新约定(对齐 `AuditEven
 `Vec<ContentBlock>` JSON)/ `text`(可见文本列)/ `speaker`(群聊发言者;`null` = 经典聊)/
 `status`(`null` = 终态;`"in_progress"` = 流式检查点行;`"interrupted"` = 崩溃恢复行)/
 `ttfb_ms` / `gen_ms` / `total_ms` / `thinking_ms`。
+
+`GroupChatSessionHit`(M4b 讨论库,2026-09-07,全 snake_case,一场一行):`session_id` /
+`project_id` / `title` / `task_name`(`null` = 非定时场;`metadata.scheduled_task_name`)/
+`participants`(`string[]`,`metadata.participants[].name`)/ `stop_reason`(`null` = 从未终局)/
+`discussion_summary`(`null` = 未以 end_discussion 收官)/ `created_at` / `updated_at`。
 
 ## 4. 群聊生命周期消费指南(GC1/GC2/GC7,2026-09-05 起)
 

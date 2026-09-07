@@ -1,6 +1,6 @@
 # 群聊外部调用 / 审议原语 — 实施路线图
 
-> **状态(2026-09-06 立项;2026-09-07 更新)**:目标与验收已定。**M0-M3(地基 / 流程固化 / MCP 接口层 / 控制面)已交付并逐项定案,M4 首子项定时审议(M4a)✅ 2026-09-07 交付**——各里程碑的「待定决策」已全部定案;仅 M4 余项(讨论库检索 / 成本治理 / 远程暴露认证)与部署面 follow-up 方案待定,立项时逐个定夺。本文回答「做什么 / 为什么 / 怎么算完成」;「怎么做」在各里程碑定案后记入交付段。
+> **状态(2026-09-06 立项;2026-09-07 更新)**:目标与验收已定。**M0-M3(地基 / 流程固化 / MCP 接口层 / 控制面)已交付并逐项定案,M4 前两子项定时审议(M4a)与讨论库检索(M4b)✅ 2026-09-07 交付**——各里程碑的「待定决策」已全部定案;仅 M4 余项(成本治理 / 远程暴露认证)与部署面 follow-up 方案待定,立项时逐个定夺。本文回答「做什么 / 为什么 / 怎么算完成」;「怎么做」在各里程碑定案后记入交付段。
 > **定位**:群聊对外部调用方(GUI 之外的 daemon API 消费者、脚本、其他 AI agent)成为**可编程的多模型审议原语**:一个调用方说清议题与参与角色,拿回一份有据可查的共识结论。两场 live 实跑(session `60bcb778` 09-05 / `eb14d2df` 09-06,后者 9m11s 收官并现场抓出代码缺陷)已验证该原语的输出质量与驱动可行性。
 > **关联**:[DAEMON-API.md](./DAEMON-API.md)(API 契约,本路线图的地基)/ [BUGLIST-group-chat.md](./BUGLIST-group-chat.md)(GC1-GC7 + §4 D1-D3,地基缺陷修复记录)/ [BACKLOG.md 附录 B](./BACKLOG.md)(N-x 候选;第二场讨论的止损包/证据链/回归闸共识由本文 §6 吸收)/ [ROADMAP.md §2 第四档](./ROADMAP.md)
 
@@ -14,7 +14,7 @@
 | M1 流程固化 | 驱动脚本 + 角色预设:一场 headless 审议 = 一条命令 | ✅ 2026-09-06(见 §2;含嵌套消费验收) | 小(1-2 天) |
 | M2 MCP 接口层 | 外部 AI agent 可召集审议:四工具 `start/status/result/cancel`(M3 扩 `interrupt_discussion`/`inject_message` 成六) | ✅ 2026-09-06(见 §3) | 中(2-4 天 + 协议细节) |
 | M3 控制面 | 打断 / 注入 / 实时跟随——讨论可驾驶(上游依赖群聊内部 P0 共识) | ✅ 2026-09-06(见 §4;P0 前置同日落地) | 中 |
-| M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🟡 首子项定时审议 ✅ 2026-09-07(§5,live 验证通过);余项未动 | 大(多子项) |
+| M4 运营治理 | 定时审议、讨论库检索、成本核算与上限、远程暴露认证 | 🟡 前两子项(定时审议 M4a、讨论库检索 M4b)✅ 2026-09-07(§5,live/单测验证通过);成本治理与远程暴露认证未动 | 大(多子项) |
 
 推进原则(沿用 remote-access 先例):每个子阶段 ① 能独立提交 ② 有明确验证标准 ③ GUI/经典聊路径零行为变化。
 
@@ -84,7 +84,7 @@ P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一�
 多子项,各自独立立项:
 
 - **定时审议**:cron 定期召集(每周架构复盘 / 发布前评审)——**✅ 2026-09-07 交付(task `09-07-gce-m4a-scheduled-deliberation`;同日 live 验证通过:完整周期 fire→收官→转录落盘→SSE done、SIGKILL 中断自动 resume 续跑无缝、僵尸场零 token 恢复,记录见任务 implement.md Step 7)**:trigger 拓扑 = **daemon 原生**(scheduled_tasks 新增 `target_mode="group_chat"` + `group_chat_config` 展开配置,fire 直接建群发题,零外部 cron);容错 = 四态路由(busy 跳过+审计不计数 / interrupted 自动续跑(P1a 地基的预期消费方)/ interrupted 无 checkpoint 审计 error 本期不动绝不双开场 / 僵尸 round≥30 与停摆场补 finalize(error) 恢复 / 终态开新)+ catalog 预检;计数矩阵对齐 F2b(全臂消费 due,run_count 只计真开跑);产物 = **落盘 + GUI 通知**(转录自动导 `{app_data_dir}/discussions/`,收官单 toast;飞书推送不在本期,归 B10);议题 = v1 静态文本;preset 单一事实源抽 `scripts/group-chat-presets.json`(M1 脚本 + 前端 vite import 共享,daemon 零 preset 概念);LLM `schedule_task` 工具不开放群聊档。评审(MCP 跨模型审议,session `f60e1212`)5 P1 全部织入设计。契约见 [DAEMON-API §6.3](./DAEMON-API.md)。
-- **讨论库与检索**:历史审议(转录 + summary)可检索复用——待定:FTS(messages_fts 已有)够不够、要不要独立 discussion 视图表。
+- **讨论库与检索**:历史审议(转录 + summary)可检索复用——**✅ 2026-09-07 交付(task `09-07-gce-m4b-discussion-search`)**:场级检索 = `sessions` 行直读 + 程序 LIKE,不建 FTS/触发器/冗余表(数据量低;场数上 10^3 再按 database-guidelines FTS5 模板升,查询层契约不变);消费入口 = **GUI 独立「讨论库」面板**(Sidebar 群聊区入口;空关键词浏览全部场 / 关键词命中 title/summary/task_name/participants / 项目 + stop_reason 筛选 / 点行跳回完整会话)。查询层与入口分离(daemon API + Tauri cmd 薄暴露,agent/M1/MCP 后续可复用)。契约见 [DAEMON-API §3](./DAEMON-API.md) 两新端点。
 - **成本治理**:per-discussion token 核算(turn_trace 已有 per-turn 数据)+ 预算上限硬停——上游依赖第二场共识 C1.2(`stop_reason=budget`);待定:预算声明位置(开群参数 vs MCP 工具参数 vs 默认档)。
 - **远程暴露认证**:MCP/API 走 remote/tunnel 时的鉴权与降级——必须吸收 BACKLOG 附录 B「隧道来源降级」条目的安全论据与既有用户决策(PWA 全权 vs 分层),**立项前先过一次安全评审**。M3 决议(2026-09-06)落账:打断/注入的权限粒度机制在此一并议(本机零鉴权前提下全域可打断;远程暴露时粒度才有意义)。
 - **MCP 部署面(2026-09-06 记,M2 收官后用户指认;✅ 路径② 2026-09-06 落地,task `09-06-gce-mcp-standalone`)**:M2 四工具是**仓库产物**(脚本 + node_modules + 指向源码检出内绝对路径的挂载配置),不随 daemon 分发——只有 daemon bin、无源码的机器上 MCP 层为零(仅剩 M0 裸 HTTP 原语)。这是 D1 的有意识取舍(v1 消费语境 = 本机 dev 工作流),但构成「任何宿主」终态的部署缺口。收口路径:①零成本接受(现状边界);②**单文件可执行(推荐,可独立小项提前做)**:bun/deno compile 打 standalone 二进制随 app 分发,安装器写 user-scope MCP 配置(免 node、绝对路径由安装期产生不进 git,JS 单实现保留,M2 纯逻辑零改动);③daemon 内置 streamable-http MCP endpoint(终态最干净,零外部依赖,也是远程暴露的天然载体;代价 = Rust 背协议 rmcp + 与 JS 引擎双实现,届时 JS 层降级为 dev 工具)。**落地记录(路径②)**:`scripts/group-chat-mcp-deploy.mjs` 一条命令 = bun compile standalone bin(落 XDG data 根 `bin/`,免 node/免 node_modules/免源码;sidecar `build-info` 记 git rev + 时间戳诊断 stale bin)→ ZCode user-scope 配置原位替换(备份 + 幂等);`--revert` 回 node 挂载(node 挂载保留为开发态默认)、`--uninstall` 清配置与 bin;引擎一行不改(CLI 壳误判根因与 argv[1] 哨兵解法见任务 research)。**follow-up 收窄为**:跨平台编译矩阵(macOS/Windows,交叉编译 flag 未验)+ Tauri app 分发 + 其他宿主(Claude Code/Cursor)配置写入;路径③仍挂 M4。
