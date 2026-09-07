@@ -1478,3 +1478,28 @@ GCE-ROADMAP §4/§6 点名的 M3 信任底座余项 + M4 定时审议容错前�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 135: GCE-M4a 定时审议交付+live 验证
+
+**Date**: 2026-09-07
+**Task**: GCE-M4a 定时审议交付+live 验证
+**Branch**: `main`
+
+### Summary
+
+M4a 定时审议全链交付并 live 验证通过:scheduled_tasks 新 group_chat 档(表重建迁移+四态路由 Busy/Resume/RecoverThenOpenNew/OpenNew+catalog 预检+计数矩阵对齐 F2b)+ created_via 载体与终态转录自动导出(discussions/ 落盘,文件名清洗)+ GUI 第四档表单与收官专用 toast(双弹抑制)+ preset 单源 group-chat-presets.json(M1 脚本/前端共享)。live:完整周期 fire→收官→转录→SSE done;SIGKILL 中断→boot sweep 标 interrupted→下 due 自动 resume 续跑无缝;僵尸场零 token 恢复(finalize error+recovered 审计,run_count 0)。全量 2330 后端/1628 前端/12 node 测试绿,fmt+clippy 清。P3 观察项:max_runs=1 首场 completed 审计无锚跳过(沿 F2b per_run 既有形态)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5dd08d7d` | (see git log) |
+| `74a8b6b5` | (see git log) |
+| `46c879d0` | (see git log) |
+| `b9c047ac` | (see git log) |
+| `f7db2c3d` | (see git log) |
+
+### Status
+
+[OK] **Completed**

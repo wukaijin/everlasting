@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 134
+- **Total Sessions**: 135
 - **Last Active**: 2026-09-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1480 | Active |
+| `journal-4.md` | ~1505 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 135 | 2026-09-07 | GCE-M4a 定时审议交付+live 验证 | `5dd08d7d`, `74a8b6b5`, `46c879d0`, `b9c047ac`, `f7db2c3d` | `main` |
 | 134 | 2026-09-07 | GCE-P1a 群聊 checkpoint 落库与续跑 | `f2c5da4e`, `b5462b25`, `4ab70b9c`, `8cdd5246` | `main` |
 | 133 | 2026-09-06 | GCE-MCP 部署面收口:standalone bin + 部署器 | `44cb1477`, `e0d2ff0a` | `main` |
 | 132 | 2026-09-06 | GCE-M3 控制面交付:MCP interrupt/inject + GUI 打断 + SSE follow 文档 | `b64c0cc3`, `ba98089f` | `main` |
