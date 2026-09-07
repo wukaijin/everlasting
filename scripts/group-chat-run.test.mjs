@@ -5,10 +5,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
-  EXIT, PRESETS, resolveParticipants, buildCreateSessionBody, buildChatBody,
+  EXIT, PRESETS, composePresets, resolveParticipants, buildCreateSessionBody, buildChatBody,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
   renderTranscript, injectGuardDecision, interpretAcceptance,
 } from './group-chat-run.mjs';
+import presetsFile from './group-chat-presets.json' with { type: 'json' };
 
 const MODELS = [
   { id: 'uuid-glm53', modelName: 'glm-5.3', displayName: 'glm-5.3' },
@@ -161,4 +162,31 @@ test('interpretAcceptance:injected 唯一成功态;started/queued/未知 = misfi
     interpretAcceptance(null),
     { kind: 'misfire', status: 'unknown', cancelOwnRequest: true },
   );
+});
+
+test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用名字,persona 组装含公共纪律', () => {
+  // PRESETS 就是 JSON 组装的结果(同输入同输出,锁组装确定性)。
+  assert.deepEqual(PRESETS, composePresets(presetsFile));
+  // 三预设齐 + 名单/主持人模型与历史阵容一致(名字形态,不是 UUID ——
+  // 名字→UUID 解析发生在 run 时 normalizeModelRef)。
+  assert.deepEqual(Object.keys(PRESETS), ['review', 'arch', 'retro']);
+  assert.equal(PRESETS.review.moderator_model, 'MiniMax-M3');
+  assert.deepEqual(
+    PRESETS.review.participants.map((p) => [p.name, p.model]),
+    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['后端', 'deepseek-v4-flash']],
+  );
+  assert.deepEqual(
+    PRESETS.retro.participants.map((p) => [p.name, p.model]),
+    [['产品', 'GLM-5.3-Flash'], ['局外', 'glm-5.3']],
+  );
+  // persona = 视角边界 + "\n\n" + 公共纪律(与旧内置常量同形)。
+  for (const preset of Object.values(PRESETS)) {
+    for (const p of preset.participants) {
+      assert.ok(p.persona_md.endsWith(presetsFile.persona_common), `${p.name} persona 须以公共纪律收尾`);
+      assert.ok(p.persona_md.includes('\n\n'), `${p.name} persona 须有边界/纪律分隔`);
+    }
+  }
+  // JSON 形状防御:缺 persona kind / 空 presets → 明确报错。
+  assert.throws(() => composePresets({ ...presetsFile, personas: {} }), /缺 persona/);
+  assert.throws(() => composePresets({ persona_common: 'x', personas: presetsFile.personas, presets: {} }), /presets 不能为空/);
 });

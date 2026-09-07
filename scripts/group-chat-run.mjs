@@ -28,6 +28,15 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+// GCE-M4a(R7 preset 单一事实源):预设定义抽到本目录的
+// group-chat-presets.json(引擎 / 前端创建表单 / 未来消费方读同一份)。
+// 用 **静态 import** 而非 fs.readFileSync:bun --compile 的 standalone
+// bin 只内嵌模块图,readFileSync 的旁路文件不会被打包(deploy 面
+// group-chat-mcp-deploy.mjs 依赖此行为)。JSON 里 persona 按 kind 引用
+// (arch/product/backend/outsider)+ persona_common 单点存放公共纪律,
+// compose 出的 persona_md 与旧内置常量逐字节同形(单测锁)。
+import presetsFile from './group-chat-presets.json' with { type: 'json' };
+
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), '..');
 export const DEFAULT_BASE = process.env.EVERLASTING_BASE || 'http://127.0.0.1:7456';
@@ -56,56 +65,46 @@ const EXIT_BY_STOP_REASON = {
 };
 
 // ---------------------------------------------------------------------------
-// 预设(内置常量,Q4 决策)。review = 两场 live(09-05/06)验证过的阵容;
-// persona 只写「视角边界」—— 公共发言纪律抽成 PERSONA_COMMON(评审团
-// 2026-09-06 verdict:三份 persona 重复同一段纪律,内容资产住引擎文件
-// 需收敛)。persona 内容与议题无关:议题经 --topic 传入,不要在 persona
-// 里引用具体项目文档(上版引 BUGLIST 是反面教材,live 抓出)。
-// 模型失配时报错并给出 models 内省提示,绝不静默降级。
+// 预设(R7 单一事实源:group-chat-presets.json)。review = 两场 live
+// (09-05/06)验证过的阵容;模型引用用**名字**(run 时经
+// normalizeModelRef 解析成 UUID —— daemon catalog 只认 UUID,
+// DAEMON-API.md「模型引用只认 UUID(名字由脚本解析)」;前端展开时
+// 同样做名字→UUID 解析)。persona 只写「视角边界」—— 公共发言纪律
+// 单点存放在 JSON 的 persona_common(评审团 2026-09-06 verdict:三份
+// persona 重复同一段纪律,内容资产需收敛)。persona 内容与议题无关:
+// 议题经 --topic 传入,不要在 persona 里引用具体项目文档(上版引
+// BUGLIST 是反面教材,live 抓出)。模型失配时报错并给出 models 内省
+// 提示,绝不静默降级。
 // ---------------------------------------------------------------------------
 
-const PERSONA_COMMON = [
-  '发言纪律(全员):',
-  '- 先证据后观点:引用文件路径或转录原句再下判断;没查证过的结论标注「推测」。',
-  '- 每轮一个论点,说完就停;反驳前先一句话复述对方论点。',
-  '- 结论给可执行的形态(改哪里 / 加什么约束 / 删什么),不做形容词总结。',
-].join('\n');
+/** JSON → 运行时 PRESETS 形状(与旧内置常量同构):participants 的
+ * persona kind 展开为完整 persona_md(边界 + "\n\n" + 公共纪律)。
+ * 导出供单测锁「JSON 是唯一事实源 + 组装确定性」。 */
+export function composePresets(file) {
+  if (!file || typeof file !== 'object') throw new Error('group-chat-presets.json: 顶层必须是 object');
+  const common = String(file.persona_common || '');
+  const persona = (kind) => {
+    const base = file.personas?.[kind];
+    if (!base) throw new Error(`group-chat-presets.json: 缺 persona "${kind}"`);
+    return `${base}\n\n${common}`;
+  };
+  const entries = Object.entries(file.presets || {});
+  if (!entries.length) throw new Error('group-chat-presets.json: presets 不能为空');
+  const out = {};
+  for (const [name, preset] of entries) {
+    if (!preset.moderator_model || !Array.isArray(preset.participants) || !preset.participants.length) {
+      throw new Error(`group-chat-presets.json: 预设 "${name}" 缺 moderator_model 或 participants`);
+    }
+    out[name] = {
+      description: preset.description,
+      moderator_model: preset.moderator_model,
+      participants: preset.participants.map((p) => ({ name: p.name, model: p.model, persona_md: persona(p.persona) })),
+    };
+  }
+  return out;
+}
 
-const PERSONA_ARCH = `你是一名架构评审者。视角边界:系统结构、依赖方向、失败模式与演进成本;不替产品定优先级,不替实现抠细节。\n\n${PERSONA_COMMON}`;
-
-const PERSONA_PRODUCT = `你是一名产品评审者。视角边界:用户场景、体验断层、成本与收益的真实排序;不评价实现内部质量,除非它直接伤害用户可感知的体验。用具体场景说话(「用户在 X 时会撞到 Y」),数字优先于形容词;证据与自己上轮判断矛盾时明说并修正。\n\n${PERSONA_COMMON}`;
-
-const PERSONA_BACKEND = `你是一名后端实现评审者。视角边界:落点、边界条件、测试策略与回归风险;不质疑已被讨论定下的方向,只把方向落成可合入的改动。主张给文件级落点(path:line),区分「编译期依赖」与「验收期依赖」这类真实约束,指出风险时附最小验证法。\n\n${PERSONA_COMMON}`;
-
-const PERSONA_OUTSIDER = `你是一名局外评审者,刻意与项目保持距离。视角边界:假设、惯例与「大家早就知道」的默认值——找对新人 / 外部调用方 / 未来的自己不可见的东西。不参与方案细节站队,只问「这个前提从哪来,去掉会怎样」;每轮至少一个反例或边界场景,收官前把未经检验的假设列成清单。\n\n${PERSONA_COMMON}`;
-
-export const PRESETS = {
-  review: {
-    description: '评审团(三人分工:架构/产品/后端)= 09-05/06 两场 live 验证阵容',
-    moderator_model: 'MiniMax-M3',
-    participants: [
-      { name: '架构', model: 'glm-5.3', persona_md: PERSONA_ARCH },
-      { name: '产品', model: 'GLM-5.3-Flash', persona_md: PERSONA_PRODUCT },
-      { name: '后端', model: 'deepseek-v4-flash', persona_md: PERSONA_BACKEND },
-    ],
-  },
-  arch: {
-    description: '架构决策(双人聚焦:出方案的一方 + 挑结构风险的一方,适合单决策点)',
-    moderator_model: 'MiniMax-M3',
-    participants: [
-      { name: '架构', model: 'glm-5.3', persona_md: PERSONA_ARCH },
-      { name: '后端', model: 'deepseek-v4-flash', persona_md: PERSONA_BACKEND },
-    ],
-  },
-  retro: {
-    description: '复盘(当事视角 + 局外视角,防同温层互相确认)',
-    moderator_model: 'MiniMax-M3',
-    participants: [
-      { name: '产品', model: 'GLM-5.3-Flash', persona_md: PERSONA_PRODUCT },
-      { name: '局外', model: 'glm-5.3', persona_md: PERSONA_OUTSIDER },
-    ],
-  },
-};
+export const PRESETS = composePresets(presetsFile);
 
 // ---------------------------------------------------------------------------
 // 纯函数区(M2 MCP 工具将直接 import 本区;CLI 与未来 MCP 都只是薄壳)
@@ -644,7 +643,7 @@ function cmdPresets() {
   --set <name>.model=<id>            单人换模型(可重复)
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --moderator-model <id>             换主持人
-预设是脚本内置常量;个性化靠覆盖,不靠改脚本。\n`);
+预设单一事实源是 scripts/group-chat-presets.json(M4a R7,定时任务与脚本共享);个性化靠覆盖,不靠改脚本。\n`);
 }
 
 function printRunHelp() {
