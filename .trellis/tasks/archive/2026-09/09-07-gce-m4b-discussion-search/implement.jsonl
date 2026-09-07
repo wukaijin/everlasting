@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "messages_fts FTS5 external-content + 三触发 + %_docsize 回填判定 + LIKE 兜底模板;场级检索(不引 FTS 触发器)的场景会写进此 spec,实施前先读既有红线"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon route 三段式(_inner / Tauri cmd / HTTP route)与命名约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新 DiscussionLibraryModal 组件的结构/样式/事件约定"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "dialog 用法(仿 SearchModal)"}

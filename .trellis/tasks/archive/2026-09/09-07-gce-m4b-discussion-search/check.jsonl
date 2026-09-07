@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查:不新增 FTS 触发器是否与既有红线一致、LIKE 匹配是否正确转义"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 质量检查索引"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend 质量检查索引"}
+{"file": "docs/GROUP-CHAT-API-ROADMAP.md", "reason": "M4 讨论库检索条目上下文,交付后要更新"}
