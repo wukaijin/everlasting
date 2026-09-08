@@ -1503,3 +1503,29 @@ M4a 定时审议全链交付并 live 验证通过:scheduled_tasks 新 group_chat
 ### Status
 
 [OK] **Completed**
+
+
+## Session 136: GCE-M4c 成本治理消费面 + GUI 建群弹窗重设计
+
+**Date**: 2026-09-09
+**Task**: GCE-M4c 成本治理消费面 + GUI 建群弹窗重设计
+**Branch**: `main`
+
+### Summary
+
+C1.2 预算的消费面收官(五问 brainstorm:D1 预设优先单弹窗/D2 议题不进弹窗/D3 核算三层/D4 无默认档/D5 人数维持 2-3)。①声明面四通道全通:GUI 弹窗(已有)+ M1 script --token-budget + MCP start_discussion 可选参(wire 实测 3115<锁 3200)+ M4a 定时 group_chat_config.token_budget(fire 仅声明时写键,不落 null)。②核算三层零新存储:db 查询 group_chat_token_usage(turn_trace JOIN messages.speaker,四计费字段求和;纠正 M1 时代「需打 speaker 标签」误判)+ 讨论库 hit total_tokens 列 + script/MCP 共享 aggregateTokens 客户端聚合(转录计费行/result stats.tokens);live 实测既有场 243.4万 billed tokens 端到端贯通。③弹窗整体重设计(前端子代理交付):preset 单选卡(选中预填,persona 与 composePresets 逐字同形,共享逻辑提取 groupChatPresets.ts)+ 主持人 Select(GUI 首次可选,走 legacy label fallback 同 M1)+ edit 成本区(per-speaker 消耗+缓存率合并行+预算进度条,超额红告警,降级不阻塞)。验证:后端 2354/前端 1674(+17)/脚本 32 全绿,clippy/fmt/vue-tsc 净,六笔提交;截图验证(定向六态+标准七面)抓出并修复 preset 卡 flex min-width:auto 陷阱(纵排满宽,沉淀 spec);Checker 终检修 7 处(最重:aggregateTokens 漏 role=assistant 过滤的口径漂移)。排障附注:finish 前用户 daemon 启动失败报「编译出错」,实为我截图验证遗留的 bg daemon 占 7456 端口(PID 文件失配 stop 清不掉),kill 后干净重启即愈——非编译问题。M4 仅余远程暴露认证(立项前须安全评审);群聊内部线下个候选 C2 证据链。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3f2a9b1` | (see git log) |
+| `72e8907e` | (see git log) |
+| `3380479a` | (see git log) |
+| `29b9fa3a` | (see git log) |
+| `a9d3a718` | (see git log) |
+| `025666a3` | (see git log) |
+
+### Status
+
+[OK] **Completed**
