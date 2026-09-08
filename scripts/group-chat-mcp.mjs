@@ -33,7 +33,7 @@ import {
   resolveParticipants, validateModelRefs, buildCreateSessionBody, buildChatBody,
   defaultTranscriptPath, renderTranscript, injectGuardDecision, interpretAcceptance,
   resolveProject, listModels, createSession, fireChat, pollSession, loadSession, cancelChat,
-  preemptGroupChat,
+  preemptGroupChat, listTurnTraces, aggregateTokens,
 } from './group-chat-run.mjs';
 
 // ---------------------------------------------------------------------------
@@ -96,6 +96,7 @@ export function realDeps(overrides = {}) {
     fireChat: (body) => fireChat(base, body),
     pollSession: (projectId, sessionId) => pollSession(base, projectId, sessionId),
     loadSession: (sessionId) => loadSession(base, sessionId),
+    listTurnTraces: (sessionId) => listTurnTraces(base, sessionId),
     cancelChat: (requestId) => cancelChat(base, requestId),
     preemptGroupChat: (sessionId) => preemptGroupChat(base, sessionId),
     ...overrides,
@@ -109,9 +110,12 @@ export function daemonError(e) {
 }
 
 /** start 编排链:M1 导出全组合;moderator 恒取 preset 预设值。 */
-export async function coreStart(deps, ledger, { topic, cwd, preset = 'review', participants }) {
+export async function coreStart(deps, ledger, { topic, cwd, preset = 'review', participants, tokenBudget }) {
   if (!topic || !String(topic).trim()) throw new Error('缺议题:topic(议题质量直接决定产出质量,不要把答案写进问题)');
   if (!cwd) throw new Error('缺工作目录:cwd(讨论的证据基地)');
+  if (tokenBudget !== undefined && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
+    throw new Error('token_budget 必须是正整数(不限请省略该参数)');
+  }
 
   const roster = resolveParticipants({
     preset,
@@ -130,6 +134,7 @@ export async function coreStart(deps, ledger, { topic, cwd, preset = 'review', p
     moderatorModel: norm.moderatorModelId,
     participants: norm.participants,
     createdVia: 'mcp',
+    tokenBudget,
   }));
   const requestId = `gcmcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await deps.fireChat(buildChatBody({ requestId, sessionId: session.id, topic }));
@@ -206,6 +211,18 @@ export async function coreStatus(deps, ledger, sessionId) {
   return out;
 }
 
+/** gce-m4c:result 的 tokens 键(纯函数 aggregateTokens 的 IO 壳):
+ * listTurnTraces 失败 → 空对象(键整体省略),既有 stats 字段不受影响。 */
+async function computeTokens(deps, sessionId, messages) {
+  try {
+    const traces = await deps.listTurnTraces(sessionId);
+    const { total, per_speaker } = aggregateTokens(traces, messages);
+    return { tokens: { total, per_speaker } };
+  } catch {
+    return {};
+  }
+}
+
 export async function coreResult(deps, ledger, sessionId) {
   const { entry, summary } = await findSession(deps, ledger, sessionId);
   if (!isTerminal(summary)) {
@@ -233,6 +250,10 @@ export async function coreResult(deps, ledger, sessionId) {
       messages: loaded.messages.length,
       elapsed_s: entry?.started_at_ms ? Math.round((Date.now() - entry.started_at_ms) / 1000) : null,
     },
+    // gce-m4c:计费核算(per-speaker + total,与 stop_reason=budget 预算同
+    // 口径四字段求和)。聚合失败(list_turn_traces 不可用)→ 整键省略,
+    // 不污染既有 stats 字段(M2 惰性转录降级同款设计)。
+    ...(await computeTokens(deps, sessionId, loaded.messages)),
     ...transcript,
   };
   if (!loaded.session.discussion_summary) {
@@ -314,7 +335,7 @@ export async function coreInject(deps, ledger, { session_id: sessionId, text }) 
 // 就是 listTools 返回的 schema,这才是预算的地面真值)
 // ---------------------------------------------------------------------------
 
-export const TOOLS_BUDGET_CHARS = 3200; // AC4:六工具 name+description+inputSchema(wire JSON Schema)合计字符上限;M3 四→六实测量级 ≈2881(评审实测),余量 ≈10%
+export const TOOLS_BUDGET_CHARS = 3200; // AC4:六工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,余量 ~85 字符——再扩 description 大概率要升锁(升锁须过评审,同步本注释 + AC4 断言 + spec)
 
 /** Zod shape(SDK 1.30 registerTool 只收 Zod;内部转 JSON Schema 上 wire)。
  * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。 */
@@ -329,6 +350,7 @@ export function buildToolShapes(z) {
         model: z.string().describe('Catalog name or UUID'),
         persona_md: z.string().optional(),
       })).optional().describe('Full roster, replaces preset roster (moderator unchanged)'),
+      token_budget: z.number().int().positive().optional().describe('Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget. Omit = unlimited'),
     },
     discussion_status: { session_id: z.string() },
     discussion_result: { session_id: z.string() },
@@ -393,7 +415,7 @@ export async function createServer({ server, deps = realDeps(), ledger = createL
   const { z } = await import('zod');
   const shapes = buildToolShapes(z);
   const handlers = {
-    start_discussion: ({ topic, cwd, preset, participants }) => coreStart(deps, ledger, { topic, cwd, preset, participants }),
+    start_discussion: ({ topic, cwd, preset, participants, token_budget }) => coreStart(deps, ledger, { topic, cwd, preset, participants, tokenBudget: token_budget }),
     discussion_status: ({ session_id }) => coreStatus(deps, ledger, session_id),
     discussion_result: ({ session_id }) => coreResult(deps, ledger, session_id),
     cancel_discussion: ({ session_id }) => coreCancel(deps, ledger, session_id),

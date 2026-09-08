@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
   EXIT, PRESETS, composePresets, resolveParticipants, buildCreateSessionBody, buildChatBody,
+  aggregateTokens,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
   renderTranscript, injectGuardDecision, interpretAcceptance,
 } from './group-chat-run.mjs';
@@ -96,6 +97,52 @@ test('buildCreateSessionBody:createdVia 增量键(有则盖戳,无则不设键 =
   assert.equal('created_via' in buildCreateSessionBody({
     projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3', participants: [],
   }).metadata, false);
+});
+
+// gce-m4c(09-08):token_budget 声明键 —— 与 createdVia 同一「有才写」纪律。
+test('buildCreateSessionBody:tokenBudget 增量键(声明才写,缺省无键 = 不限)', () => {
+  const withBudget = buildCreateSessionBody({
+    projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3',
+    participants: [], tokenBudget: 400000,
+  });
+  assert.equal(withBudget.metadata.token_budget, 400000);
+  const without = buildCreateSessionBody({
+    projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3', participants: [],
+  });
+  assert.equal('token_budget' in without.metadata, false);
+});
+
+// gce-m4c:客户端核算口径 —— 四计费字段求和、context_input 不计、
+// worker 行(runId≠'')排除、无 speaker 消息可对齐的行排除、按 speaker 聚合。
+test('aggregateTokens:四字段计费口径 + worker/无归属排除 + per_speaker 降序', () => {
+  const traces = [
+    { seq: 1, runId: '', tokenUsageJson: '{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"context_input_tokens":1000}' },
+    { seq: 2, runId: '', tokenUsageJson: '{"input_tokens":200,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"context_input_tokens":200}' },
+    // worker 行:同 seq 有 speaker 消息也必须排除
+    { seq: 2, runId: 'wrk-1', tokenUsageJson: '{"input_tokens":9999,"output_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":9,"context_input_tokens":9}' },
+    // 无 usage / 坏 JSON / 无消息可对齐:全跳过
+    { seq: 3, runId: '', tokenUsageJson: null },
+    { seq: 4, runId: '', tokenUsageJson: '{oops' },
+    { seq: 9, runId: '', tokenUsageJson: '{"input_tokens":500,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}' },
+  ];
+  const messages = [
+    { seq: 1, role: 'assistant', speaker: 'moderator' },
+    { seq: 2, role: 'assistant', speaker: 'Alice' },
+    { seq: 3, role: 'assistant', speaker: 'Alice' },
+    { seq: 9, role: 'assistant', speaker: null }, // 经典行:对齐不上
+    // rewrite 产品行(user 带 speaker):与 daemon SQL 的 role='assistant'
+    // 过滤对齐,seq 撞上 trace 行也不计
+    { seq: 2, role: 'user', speaker: 'Alice' },
+  ];
+  const { total, per_speaker } = aggregateTokens(traces, messages);
+  // moderator 210 + Alice 240(context_input 都没加进去)
+  assert.equal(total, 450);
+  assert.deepEqual(per_speaker, [
+    { speaker: 'Alice', tokens: 240 },
+    { speaker: 'moderator', tokens: 210 },
+  ]);
+  // 空输入 → 零合计,不抛
+  assert.deepEqual(aggregateTokens([], []), { total: 0, per_speaker: [] });
 });
 
 test('defaultTranscriptPath:落在 everlasting 仓库根 out/(非 CWD);显式 rootDir 分叉(MCP)', () => {

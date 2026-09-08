@@ -154,15 +154,20 @@ export function resolveParticipants({ preset, participantsJson, set }) {
  * state.rs:42;daemon 版 create_session 无 model_id 参数,UUID 走
  * session.model → moderator 解析的 fallback 路径命中 catalog)。
  */
-export function buildCreateSessionBody({ projectId, projectPath, moderatorModel, participants, createdVia }) {
+export function buildCreateSessionBody({ projectId, projectPath, moderatorModel, participants, createdVia, tokenBudget }) {
+  const metadata = { participants };
+  // createdVia:召集通道归因(GCE-M2 D5):'script'(M1 CLI)/'mcp'(MCP server);
+  // 缺省 = GUI/历史 session。增量键,daemon/GUI 不感知。
+  if (createdVia) metadata.created_via = createdVia;
+  // gce-m4c(09-08):token 预算声明(C1.2 硬停的 metadata 键)。只在显式
+  // 声明时写 —— 缺键 = 不限,与 GUI 通道语义逐字节一致。
+  if (typeof tokenBudget === 'number') metadata.token_budget = tokenBudget;
   return {
     project_id: projectId,
     initial_cwd: projectPath,
     model: moderatorModel,
     session_type: 'group_chat',
-    // createdVia:召集通道归因(GCE-M2 D5):'script'(M1 CLI)/'mcp'(MCP server);
-    // 缺失 = GUI/历史 session。增量键,daemon/GUI 不感知。
-    metadata: createdVia ? { participants, created_via: createdVia } : { participants },
+    metadata,
   };
 }
 
@@ -175,8 +180,44 @@ export function buildChatBody({ requestId, sessionId, topic }) {
   };
 }
 
-// --- GCE-M3 inject_message 判定(mcp.mjs coreInject 消费;纯函数区) ---
+// --- gce-m4c(09-08):per-discussion token 核算(M1 转录 + MCP result 共用;纯函数) ---
 
+/** turn_trace 行 × messages.speaker 客户端聚合(gce-m4c)。口径与 daemon 侧
+ * `group_chat_token_usage` 钉死在同一 spec 条目:计费 = 四字段求和
+ * (input+output+cache_creation+cache_read,context_input 是观测口径不计);
+ * 过滤 = 仅 usage 非空的主 loop 行(runId='')、且 seq 能对上带 speaker 的
+ * assistant 消息(M1 时代记的「需在 trace 行打 speaker 标签」是误判 ——
+ * messages.speaker 按 (session_id, seq) join 就够,08-10 cache-rate 已验证)。
+ * @param {Array<{seq:number, runId?:string, tokenUsageJson?:string|null}>} turnTraces list_turn_traces 响应行(camelCase wire)
+ * @param {Array<{seq:number, speaker?:string|null, role?:string}>} messages load_session 消息行
+ * @returns {{total:number, per_speaker:Array<{speaker:string, tokens:number}>}} total 降序 */
+export function aggregateTokens(turnTraces, messages) {
+  const speakerBySeq = new Map();
+  for (const m of messages || []) {
+    // role 过滤与 daemon SQL 的 `m.role = 'assistant'` 逐字对齐(SQL 侧
+    // 防的是 rewrite 产品行,持久化写入路径 user 行本不带 speaker,此处
+    // 同防,四实现点过滤集才真正同构)。
+    if (m?.seq == null || !m.speaker || m.role !== 'assistant') continue;
+    speakerBySeq.set(m.seq, m.speaker);
+  }
+  const per = new Map();
+  for (const t of turnTraces || []) {
+    if (!t?.tokenUsageJson || (t.runId ?? '') !== '') continue;
+    const speaker = speakerBySeq.get(t.seq);
+    if (speaker === undefined) continue;
+    let u;
+    try { u = JSON.parse(t.tokenUsageJson); } catch { continue; }
+    const billed = (u.input_tokens || 0) + (u.output_tokens || 0)
+      + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+    per.set(speaker, (per.get(speaker) || 0) + billed);
+  }
+  const per_speaker = [...per.entries()]
+    .map(([speaker, tokens]) => ({ speaker, tokens }))
+    .sort((a, b) => b.tokens - a.tokens);
+  return { total: per_speaker.reduce((s, x) => s + x.tokens, 0), per_speaker };
+}
+
+// --- GCE-M3 inject_message 判定(mcp.mjs coreInject 消费;纯函数区) ---
 /** inject 前置 busy guard(评审 P1-1 主防护):空闲/已收官群聊 session 一旦
  * fireChat 会重启编排器并无条件 clear_group_chat_lifecycle(抹上一场
  * stop_reason + summary,cancel 也救不回),故非 busy 一律不发起。
@@ -266,13 +307,13 @@ export function defaultTranscriptPath(topic, rootDir = REPO_ROOT) {
 
 /**
  * 转录渲染(评审团 verdict「四修」采纳三项:blockquote 隔离碎格式 /
- * 工具轮证据链 / summary 缺失警告落文件;per-speaker token 延后 ——
- * turn_trace 行按 LLM 调用段落落库,与 speaker 对齐有歧义,硬 join
- * 会产错数,需群聊内部先在 trace 行打 speaker 标签,follow-up)。
+ * 工具轮证据链 / summary 缺失警告落文件;gce-m4c 补计费核算行 ——
+ * aggregateTokens 按 (session_id, seq) join messages.speaker,无需在
+ * trace 行打 speaker 标签,当初「per-speaker token 延后」的前提不成立)。
  * speaker:group chat 写入 messages.speaker(moderator/参与者名);
  * null 时按既有惯例:工具轮记 `用户`,user 文本记 **用户**。
  */
-export function renderTranscript({ session, messages, startedAtMs, stoppedAtMs, note, modelNames = {} }) {
+export function renderTranscript({ session, messages, startedAtMs, stoppedAtMs, note, modelNames = {}, tokenUsage }) {
   const p = (label, v) => (v === undefined || v === null || v === '' ? '' : `- ${label}: ${v}\n`);
   const durS = Math.round((stoppedAtMs - startedAtMs) / 1000);
   const disp = (id) => modelNames[id] || id;
@@ -290,6 +331,16 @@ export function renderTranscript({ session, messages, startedAtMs, stoppedAtMs, 
     ? `in ${session.input_tokens_total ?? '?'} / out ${session.output_tokens_total ?? '?'}`
     : null;
   lines.push(p('token', tk));
+  // 计费核算行(gce-m4c):与 stop_reason=budget 的预算口径一致(四字段
+  // 求和)。tokenUsage 缺失(list_turn_traces 调用失败)时静默省略 ——
+  // 核算是转录的增强面,失败不拖垮导出(M2 惰性转录降级同款设计)。
+  const meta = typeof session.metadata === 'string' ? JSON.parse(session.metadata) : session.metadata;
+  const budget = meta?.token_budget;
+  const budgetNote = typeof budget === 'number' ? ` / 预算 ${budget}` : '';
+  const per = tokenUsage?.per_speaker?.map((x) => `${x.speaker} ${x.tokens}`).join(' · ');
+  lines.push(p('计费 token', tokenUsage
+    ? `${tokenUsage.total}${budgetNote}${per ? `(${per})` : ''}`
+    : null));
   if (session.discussion_summary) {
     lines.push(`\n## discussion_summary\n\n${session.discussion_summary}\n`);
   } else if (session.stop_reason === 'group_chat_end') {
@@ -382,6 +433,12 @@ export function loadSession(base, sessionId) {
   return api(base, 'sessions/load_session', { body: { session_id: sessionId } });
 }
 
+/** gce-m4c:turn_trace 行读取(核算数据源)。响应行 camelCase
+ * (tokenUsageJson / runId / seq,DAEMON-API §2);请求体 snake_case。 */
+export function listTurnTraces(base, sessionId) {
+  return api(base, 'permissions/list_turn_traces', { body: { session_id: sessionId } });
+}
+
 export function cancelChat(base, requestId) {
   return api(base, 'cancel/cancel_chat', { body: { request_id: requestId } });
 }
@@ -435,6 +492,12 @@ async function run(argv) {
       case '--preset': opt.preset = next(); break;
       case '--participants': opt.participants = next(); break;
       case '--moderator-model': opt.moderatorModel = next(); break;
+      case '--token-budget': {
+        const n = Number(next());
+        if (!Number.isInteger(n) || n <= 0) throw new Error('--token-budget 必须是正整数(不限请省略该参数)');
+        opt.tokenBudget = n;
+        break;
+      }
       case '--set': opt.set.push(next()); break;
       case '--timeout': opt.timeout = Number(next()); break;
       case '--out': opt.out = next(); break;
@@ -470,6 +533,7 @@ async function run(argv) {
       projectPath: opt.project,
       moderatorModel: '<model-uuid>', // 真跑时由 normalizeModelRef 解析
       participants,
+      tokenBudget: opt.tokenBudget,
     });
     process.stdout.write('=== dry-run:将发出的请求(纯静态模板,不连 daemon)===\n');
     process.stdout.write(`POST /api/v1/sessions/create_session\n${JSON.stringify(createBody, null, 2)}\n\n`);
@@ -483,7 +547,7 @@ async function run(argv) {
   const norm = validateModelRefs(models, { moderatorModel, participants });
   const proj = await resolveProject(opt.base, opt.project);
   if (proj.created) say(`# project 不在列表,已创建:${opt.project}`);
-  const createBody = buildCreateSessionBody({ projectId: proj.id, projectPath: opt.project, moderatorModel: norm.moderatorModelId, participants: norm.participants, createdVia: 'script' });
+  const createBody = buildCreateSessionBody({ projectId: proj.id, projectPath: opt.project, moderatorModel: norm.moderatorModelId, participants: norm.participants, createdVia: 'script', tokenBudget: opt.tokenBudget });
   const session = await createSession(opt.base, createBody);
   const sessionId = session.id;
   emit(`# session: ${sessionId}  moderator: ${moderatorModel}  participants: ${participants.map((p) => `${p.name}/${p.model}`).join(' + ')}`);
@@ -565,6 +629,13 @@ async function run(argv) {
   if (loaded) {
     const outPath = opt.out || defaultTranscriptPath(opt.topic);
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    // 计费核算(gce-m4c):失败降级 —— 转录照导,只是少了计费行。
+    let tokenUsage;
+    try {
+      tokenUsage = aggregateTokens(await listTurnTraces(opt.base, sessionId), loaded.messages);
+    } catch (e) {
+      say(`# token 核算降级(转录照导):${e.message}`);
+    }
     const note = finalError
       ? `脚本错误:${finalError.message}`
       : (interrupted ? (stopReason === 'cancelled' ? '超时/手动中断,部分转录' : '中断竞态') : undefined);
@@ -573,6 +644,7 @@ async function run(argv) {
       messages: loaded.messages,
       startedAtMs, stoppedAtMs, note,
       modelNames: Object.fromEntries(models.map((m) => [m.id, m.displayName || m.modelName])),
+      tokenUsage,
     }));
     emit(`# 转录: ${outPath}`);
     if (loaded.session.discussion_summary) emit(`# discussion_summary:\n${loaded.session.discussion_summary}`);
@@ -655,6 +727,7 @@ function printRunHelp() {
   --preset <name>         review / arch / retro(见 presets 子命令)
   --participants <json>   整名单替换(与 --preset 二选一;增删参与者也走它)
   --moderator-model <id>  主持人模型(默认取预设)
+  --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget;省略 = 不限)
   --set <name>.model=<id>            单人换模型(可重复)
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --timeout <seconds>     默认 1800;超时 cancel 停编排、保 session、导部分转录

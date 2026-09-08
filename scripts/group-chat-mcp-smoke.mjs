@@ -20,7 +20,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(SCRIPTS, 'group-chat-mcp.mjs');
-const BUDGET = 3200; // M3 四→六工具;评审实测六工具 wire ≈2881 chars
+const BUDGET = 3200; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;gce-m4c(09-08)加 token_budget 参后实测 wire ≈3115 chars
 
 const live = process.argv.includes('--live');
 const binIdx = process.argv.indexOf('--bin');

@@ -21,9 +21,10 @@ const MODELS = [
   { id: 'uuid-m3', modelName: 'MiniMax-M3', displayName: 'MiniMax-M3' },
 ];
 
-/** mock deps:按场景注入;记录调用供断言。session 形状 = list_sessions 行。 */
-function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: false } } = {}) {
-  const calls = { createSession: [], fireChat: [], cancelChat: [], pollSession: [], loadSession: [], listModels: 0, preemptGroupChat: [] };
+/** mock deps:按场景注入;记录调用供断言。session 形状 = list_sessions 行。
+ * traces:list_turn_traces 行(缺省 [] —— gce-m4c 核算数据源)。 */
+function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: false }, traces = [] } = {}) {
+  const calls = { createSession: [], fireChat: [], cancelChat: [], pollSession: [], loadSession: [], listModels: 0, preemptGroupChat: [], listTurnTraces: [] };
   const deps = {
     base: 'http://mock',
     resolveProject: async () => { calls.resolveProject = (calls.resolveProject || 0) + 1; return project; },
@@ -32,6 +33,7 @@ function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: fals
     fireChat: async (body) => { calls.fireChat.push(body); return {}; },
     pollSession: async (projectId, sessionId) => { calls.pollSession.push([projectId, sessionId]); return session ? { ...session } : null; },
     loadSession: async (sessionId) => { calls.loadSession.push(sessionId); return loaded; },
+    listTurnTraces: async (sessionId) => { calls.listTurnTraces.push(sessionId); return traces; },
     cancelChat: async (requestId) => { calls.cancelChat.push(requestId); return {}; },
     preemptGroupChat: async (sessionId) => { calls.preemptGroupChat.push(sessionId); return { preempted: true }; },
   };
@@ -137,6 +139,20 @@ test('coreStart:校验错误路径(缺 topic / 未知 preset / 模型失配报�
     coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'review', participants: [{ name: '甲', model: '不存在模型' }] }),
     /不存在模型/,
   );
+  // gce-m4c:预算声明校验(0/负数/非整数都拒;不限 = 省略参数)
+  for (const bad of [0, -5, 1.5]) {
+    await assert.rejects(coreStart(deps, ledger, { topic: 't', cwd: '/w', tokenBudget: bad }), /token_budget/);
+  }
+});
+
+// gce-m4c:token_budget 透传 —— shape 可选参 → metadata 增量键。
+test('coreStart:tokenBudget 声明落建群 metadata;缺省不写键', async () => {
+  const { deps, calls } = makeMockDeps();
+  const { ledger } = tmpLedger();
+  await coreStart(deps, ledger, { topic: '议题', cwd: '/w', tokenBudget: 400000 });
+  assert.equal(calls.createSession[0].metadata.token_budget, 400000);
+  await coreStart(deps, ledger, { topic: '议题2', cwd: '/w' });
+  assert.equal('token_budget' in calls.createSession[1].metadata, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -242,6 +258,45 @@ test('coreResult:非终态明确报错;终态返回 summary/roster/stats/转录;
     const out = await coreResult(deps, ledger, 'sess-1');
     assert.equal(out.summary, null);
     assert.match(out.summary_warning, /discussion_summary 缺失/);
+  }
+});
+
+// gce-m4c:result 的 tokens 键:per-speaker + total;trace 读取失败整键省略。
+test('coreResult:tokens 核算(per_speaker + total);listTurnTraces 失败降级省键', async () => {
+  const traces = [
+    { seq: 1, runId: '', tokenUsageJson: '{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"context_input_tokens":1000}' },
+    { seq: 2, runId: '', tokenUsageJson: '{"input_tokens":200,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"context_input_tokens":200}' },
+    { seq: 2, runId: 'wrk-1', tokenUsageJson: '{"input_tokens":9999,"output_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":9}' },
+  ];
+  const messages = [
+    { seq: 1, role: 'assistant', speaker: 'moderator' },
+    { seq: 2, role: 'assistant', speaker: '甲' },
+  ];
+  const loaded = {
+    session: { busy: false, stop_reason: 'group_chat_end', id: 'sess-1', project_id: 'proj-1', current_cwd: os.tmpdir(), model: 'uuid-m3', metadata: JSON.stringify({ participants: [{ name: '甲', model: 'uuid-glm53' }] }), discussion_summary: 'S' },
+    messages,
+  };
+  {
+    const { deps, calls } = makeMockDeps({ session: { busy: false, stop_reason: 'group_chat_end' }, loaded, traces });
+    const { ledger } = tmpLedger();
+    const out = await coreResult(deps, ledger, 'sess-1');
+    assert.deepEqual(out.tokens, {
+      total: 450,
+      per_speaker: [
+        { speaker: '甲', tokens: 240 },
+        { speaker: 'moderator', tokens: 210 },
+      ],
+    });
+    assert.deepEqual(calls.listTurnTraces, ['sess-1']);
+  }
+  {
+    // 降级:trace 端点挂了 → tokens 键整体不存在,stats 其余字段不受影响。
+    const { deps } = makeMockDeps({ session: { busy: false, stop_reason: 'group_chat_end' }, loaded, traces });
+    deps.listTurnTraces = async () => { throw new Error('daemon 调用失败'); };
+    const { ledger } = tmpLedger();
+    const out = await coreResult(deps, ledger, 'sess-1');
+    assert.equal('tokens' in out, false);
+    assert.equal(typeof out.stats.messages, 'number');
   }
 });
 
