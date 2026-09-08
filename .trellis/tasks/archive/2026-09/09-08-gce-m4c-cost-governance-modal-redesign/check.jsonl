@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "clippy/fmt/test 门 + 假注释 RULE"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "前端测试环境陷阱复核"}
+{"file": ".trellis/spec/scripts/index.md", "reason": "scripts 层检查约定(wire 预算锁)"}

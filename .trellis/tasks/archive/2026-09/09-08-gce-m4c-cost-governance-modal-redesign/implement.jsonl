@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端层入口:Pre-Dev Checklist + 既有指南索引"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "弹窗重设计全部走 --color-*/--radius-* token,禁硬编码"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Dialog/Select 原语约束(preset 卡区/主持人 Select)"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "群聊弹窗移动端全屏覆盖块适配必须保留"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest 陷阱 + canonical transport mock(成本区/缓存率查询)"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "wire casing 约定(snake_case metadata 键)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "db 查询/迁移约束(核算查询零新存储)"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由新增(group_chat_token_usage 端点)"}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "GroupChatTaskConfig 结构与 fire 语义(加 token_budget 键)"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "TokenUsage 五字段与计费口径(四字段求和)"}
