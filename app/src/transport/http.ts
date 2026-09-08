@@ -180,6 +180,10 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   diff_worktree: "sessions",
   edit_user_message: "sessions",
   group_chat_cache_rates: "sessions",
+  // gce-m4c(09-08):per-discussion token 核算(edit 弹窗成本区消费;
+  // 后端 daemon 路由已先行落地,缺这行时浏览器/remote 模式报
+  // `unknown cmd`,http.routes-sync.test.ts 守卫)。
+  group_chat_token_usage: "sessions",
   // /handoff (08-18-handoff-mechanism): 缺这行时浏览器/remote 模式报
   // `unknown cmd "handoff_session"`(Tauri IPC 模式侥幸不经过本表)。
   handoff_session: "sessions",

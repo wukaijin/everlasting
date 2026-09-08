@@ -59,6 +59,11 @@ export interface GroupChatTaskParticipant {
 export interface GroupChatTaskConfig {
   moderator_model_id: string;
   participants: GroupChatTaskParticipant[];
+  /** gce-m4c(09-08,成本治理):每场讨论的 token 预算上限(计费口径 =
+   *  C1.2 四字段求和)。缺省 / undefined = 不限(键不写,与 Rust
+   *  `Option<u64>` + `skip_serializing_if` 对齐;fire 时 Some 才写
+   *  `sessions.metadata.token_budget`)。 */
+  token_budget?: number;
 }
 
 /** M4a:最近一次 fire 的结局快照(wire `last_fire_outcome`,镜像 Rust

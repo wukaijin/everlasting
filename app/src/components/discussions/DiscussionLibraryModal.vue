@@ -36,6 +36,7 @@ import {
 } from "../../utils/sessionGrouping";
 import { scheduledStopReasonLabel } from "../../stores/streamController";
 import { hitTimeLabel } from "../../utils/searchHits";
+import { formatTokensWan } from "../../utils/tokenUsage";
 import Icon from "../Icon.vue";
 
 const QUERY_DEBOUNCE_MS = 250;
@@ -378,6 +379,13 @@ const hasResults = computed(() => hits.value.length > 0);
                       ><span class="discussion-lib__stop-badge">{{ statusLabel(h.stop_reason) }}</span
                       > ·</template
                     >
+                    <!-- gce-m4c(09-08):该场累计 token 消耗(计费四字段;
+                         无 usage 行 / 旧 daemon → 「—」)。 -->
+                    <span
+                      class="discussion-lib__row-tokens"
+                      title="该场累计 token 消耗"
+                      >tokens {{ formatTokensWan(h.total_tokens) }}</span
+                    > ·
                     {{ dateLabel(h.updated_at) }}
                   </span>
                   <span v-if="h.discussion_summary" class="discussion-lib__summary">
@@ -652,6 +660,12 @@ const hasResults = computed(() => hits.value.length > 0);
   align-items: center;
   gap: var(--space-1);
   flex-wrap: wrap;
+}
+
+/* gce-m4c 消耗位:与 meta 行同层级(muted);数字走 mono 家族与
+   卡片 fires 行等 token 计数位一致。 */
+.discussion-lib__row-tokens {
+  font-family: var(--font-mono);
 }
 
 /* summary 预览:正文 supporting line,2-3 行 clamp(与 SearchModal

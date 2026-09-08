@@ -1,32 +1,36 @@
-// GroupChatConfigModal — minimal coverage for the Phase 4 Step 3
-// modal's core invariants (validation + participant uniqueness +
-// save shape). Doesn't go for full DOM integration — the modal
-// reuses reka-ui primitives (Dialog/Select) that already have
-// their own contract; we only test the modal's own logic.
-//
-// Focus: the validation rules (D5: 2-3 participants, name
-// unique, name non-empty, model selected) + the submit disabled
-// state mirror. We don't fire the IPC here — the chat store +
-// transport layer have their own tests; we just verify the
-// modal's UI-contract behavior.
+// GroupChatConfigModal — coverage for the modal's core invariants.
+// Sections:
+//   1. validation (D5: 2-3 participants, unique + non-empty names,
+//      model selected, submit mirror);
+//   2. edit 成本区(gce-m4c 09-08):`group_chat_token_usage` +
+//      `group_chat_cache_rates` 两命令 → per-speaker「tokens · 缓存率」
+//      合并行 + 预算进度条;失败降级「—」;speaker 快照稳定;
+//   3. token 预算两态(C1.2 保留);
+//   4. preset 单选卡 + 主持人 Select(gce-m4c create;persona 组装与
+//      共享模块 composePersonaMd 同形断言、主持人落 create_session 的
+//      model 参数)。
 //
 // Note: reka-ui's Dialog uses `<DialogPortal>` which teleports
 // to `<body>`. The testid selectors in this file therefore
 // query `document` directly (not `wrapper.find(...)`) — the
 // mounted wrapper's DOM doesn't contain the teleported subtree.
+// reka 交互(RadioGroup / Select)走 `vm.$emit("update:modelValue")`
+// 接线测法(jsdom 点 label 的转发不可靠,ScheduledTasksTab 同款)。
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { RadioGroupRoot, SelectRoot } from "reka-ui";
 import { useModelsStore } from "../../stores/models";
 import { useChatStore } from "../../stores/chat";
 import type { SessionSummary } from "../../stores/chat.types";
+import { GC_PRESETS } from "../../utils/groupChatPresets";
 import GroupChatConfigModal from "./GroupChatConfigModal.vue";
 
-// The edit-mode cache-rate feature invokes `group_chat_cache_rates`
-// over the transport. Mock the transport module (same file-level
-// `vi.mock` pattern as `app/src/stores/traceStore.test.ts`) so the
-// modal tests drive the IPC response without a real backend.
+// The edit-mode cost zone invokes `group_chat_cache_rates` +
+// `group_chat_token_usage` over the transport. Mock the transport
+// module (canonical `invokeMock` pattern) so the modal tests drive
+// the IPC responses without a real backend.
 const invokeMock = vi.fn();
 
 vi.mock("../../transport", () => ({
@@ -69,13 +73,55 @@ const MODEL_LIST = [
   },
 ];
 
+/** gce-m4c preset 测试目录:preset JSON 里的名字(MiniMax-M3 / glm-5.3 /
+ *  GLM-5.3-Flash / deepseek-v4-flash)可解析成 UUID。 */
+function modelEntry(
+  id: string,
+  modelName: string,
+  displayName: string,
+  providerDisplayName: string,
+) {
+  return {
+    id,
+    providerId: `prov-${id}`,
+    modelName,
+    displayName,
+    maxTokens: null,
+    thinkingEffort: null,
+    supportsThinking: false,
+    supportsImages: false,
+    contextWindow: 128000,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    providerDisplayName,
+    providerProtocol: "openai",
+  };
+}
+
+const GC_MODEL_LIST = [
+  modelEntry("uuid-mini", "MiniMax-M3", "MiniMax-M3", "MiniMax"),
+  modelEntry("uuid-glm", "glm-5.3", "GLM-5.3", "Zhipu"),
+  modelEntry("uuid-flash", "GLM-5.3-Flash", "GLM-5.3-Flash", "Zhipu"),
+  modelEntry("uuid-ds", "deepseek-v4-flash", "DeepSeek V4", "DeepSeek"),
+];
+
+/** 只有参与者模型、没有 preset 主持人(MiniMax-M3)的目录:锁定
+ *  「主持人解析失败 → 提示条 + 提交禁用;手动改选可恢复」链路。 */
+const GC_MODEL_LIST_NO_MINI = [
+  modelEntry("m1", "gpt-4", "GPT-4", "OpenAI"),
+  modelEntry("uuid-glm", "glm-5.3", "GLM-5.3", "Zhipu"),
+  modelEntry("uuid-flash", "GLM-5.3-Flash", "GLM-5.3-Flash", "Zhipu"),
+  modelEntry("uuid-ds", "deepseek-v4-flash", "DeepSeek V4", "DeepSeek"),
+];
+
 function mountModal(
   props: Partial<InstanceType<typeof GroupChatConfigModal>["$props"]> = {},
+  models: unknown[] = MODEL_LIST,
 ) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const modelsStore = useModelsStore();
-  modelsStore.models = MODEL_LIST as never;
+  modelsStore.models = models as never;
   return mount(GroupChatConfigModal, {
     props: { open: true, mode: "create", ...props },
     global: { plugins: [pinia] },
@@ -90,6 +136,10 @@ function allByTestIdPrefix(prefix: string): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(`[data-testid^="${prefix}"]`));
 }
 
+function flush() {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
 describe("GroupChatConfigModal — validation", () => {
   afterEach(() => {
     // Remove any teleported DOM residue.
@@ -100,7 +150,7 @@ describe("GroupChatConfigModal — validation", () => {
 
   it("seeds 2 empty participants in create mode with disabled submit", async () => {
     mountModal();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     const rows = document.querySelectorAll<HTMLElement>(".gcfg-row");
     expect(rows.length).toBe(2);
     const submit = byTestId("gcfg-submit") as HTMLButtonElement | null;
@@ -110,12 +160,12 @@ describe("GroupChatConfigModal — validation", () => {
 
   it("hides '+' button when 3 participants reached (D5 max)", async () => {
     mountModal();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     const addBtn = byTestId("gcfg-add") as HTMLButtonElement | null;
     expect(addBtn).toBeTruthy();
     addBtn!.click();
     addBtn!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     const rows = document.querySelectorAll<HTMLElement>(".gcfg-row");
     expect(rows.length).toBe(3);
     expect(byTestId("gcfg-add")).toBeNull();
@@ -123,7 +173,7 @@ describe("GroupChatConfigModal — validation", () => {
 
   it("delete (-remove) buttons are disabled when only 2 participants remain", async () => {
     mountModal();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     const removes = allByTestIdPrefix("gcfg-remove-");
     expect(removes.length).toBe(2);
     for (const r of removes) {
@@ -133,21 +183,25 @@ describe("GroupChatConfigModal — validation", () => {
 
   it("emits update:open with false when cancel is clicked", async () => {
     const wrapper = mountModal();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     const cancel = byTestId("gcfg-cancel") as HTMLButtonElement | null;
     expect(cancel).toBeTruthy();
     cancel!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     const events = wrapper.emitted("update:open");
     expect(events).toBeTruthy();
     expect(events![0]).toEqual([false]);
   });
 });
 
-describe("GroupChatConfigModal — cache rates (edit mode)", () => {
-  // Group-chat cache rate (08-10-group-chat-cache-rate, R6/R7):
-  // edit mode shows each speaker's latest LLM call cache rate;
-  // create mode never loads or shows it.
+// =====================================================================
+// gce-m4c (09-08) — edit 成本区:`group_chat_token_usage`(新)与
+// `group_chat_cache_rates`(既有)两次查询,per-speaker「tokens · 缓存率」
+// 合并行 + 预算进度条;失败降级「—」不阻塞编辑。per-row 缓存率行已并入
+// 成本区(design §4.2),旧的 `gcfg-cache-rate-*` 行内 testid 随之退役。
+// =====================================================================
+
+describe("GroupChatConfigModal — edit cost zone (gce-m4c)", () => {
   const roster = [
     { name: "Alice", model: "m1" },
     { name: "Bob", model: "m2" },
@@ -186,6 +240,17 @@ describe("GroupChatConfigModal — cache rates (edit mode)", () => {
     ];
   }
 
+  function stubCostPayload(
+    cacheRates: unknown,
+    tokenUsage: unknown,
+  ) {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "group_chat_cache_rates") return cacheRates;
+      if (cmd === "group_chat_token_usage") return tokenUsage;
+      return null;
+    });
+  }
+
   afterEach(() => {
     invokeMock.mockReset();
     document
@@ -193,107 +258,175 @@ describe("GroupChatConfigModal — cache rates (edit mode)", () => {
       .forEach((el) => el.remove());
   });
 
-  it("renders per-participant + moderator cache rates from the IPC payload", async () => {
-    invokeMock.mockResolvedValue([
-      { speaker: "Alice", cache_read: 50, context_input: 200 },
-      { speaker: "moderator", cache_read: 40, context_input: 100 },
-    ]);
-    mountModal({
+  it("renders merged per-speaker rows (tokens 万单位 + 缓存率) + budget progress from both IPC payloads", async () => {
+    stubCostPayload(
+      [
+        { speaker: "Alice", cache_read: 50, context_input: 200 }, // 25%
+        { speaker: "moderator", cache_read: 40, context_input: 100 }, // 40%
+      ],
+      {
+        total: 265000,
+        by_speaker: [
+          { speaker: "Alice", tokens: 150000 },
+          { speaker: "moderator", tokens: 115000 },
+        ],
+      },
+    );
+    const wrapper = mountModal({
       mode: "edit",
       sessionId: "sess-1",
       initialParticipants: roster,
+      initialTokenBudget: 400000,
     });
-    // Seed the session AFTER mount (the store needs the pinia that
-    // mountModal activates); the moderator computed is reactive.
     seedSession();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
 
-    // One IPC fetch per open, with the session id.
+    // Both queries fire per open, with the session id.
     expect(invokeMock).toHaveBeenCalledWith("group_chat_cache_rates", {
       sessionId: "sess-1",
     });
+    expect(invokeMock).toHaveBeenCalledWith("group_chat_token_usage", {
+      sessionId: "sess-1",
+    });
 
-    // Participant rows: Alice has a row (25%), Bob has none yet.
-    expect(byTestId("gcfg-cache-rate-0")?.textContent).toContain("缓存率 25%");
-    expect(byTestId("gcfg-cache-rate-1")?.textContent).toContain("缓存率 —");
+    // Budget progress: 26.5万 / 40万 (66%).
+    const progress = byTestId("gcfg-budget-progress");
+    expect(progress).toBeTruthy();
+    const text = byTestId("gcfg-budget-text")?.textContent ?? "";
+    expect(text).toContain("26.5万");
+    expect(text).toContain("40万");
+    expect(text).toContain("66%");
 
-    // Moderator zone: model label from the session's model_id +
-    // its own cache rate (40%).
-    const mod = byTestId("gcfg-moderator");
-    expect(mod).toBeTruthy();
-    expect(mod?.textContent).toContain("主持人");
-    expect(mod?.textContent).toContain("GPT-4 (OpenAI)");
-    expect(byTestId("gcfg-moderator-cache-rate")?.textContent).toContain("缓存率 40%");
+    // Merged rows: Alice → 15万 · 缓存 25%;Bob → 无数据「—」;
+    // moderator row last → 主持人 11.5万 · 缓存 40%。
+    const row0 = byTestId("gcfg-cost-row-0")?.textContent ?? "";
+    expect(row0).toContain("Alice");
+    expect(row0).toContain("15万");
+    expect(row0).toContain("缓存 25%");
+    const row1 = byTestId("gcfg-cost-row-1")?.textContent ?? "";
+    expect(row1).toContain("Bob");
+    expect(row1).toContain("tokens —");
+    expect(row1).toContain("缓存 —");
+    const row2 = byTestId("gcfg-cost-row-2")?.textContent ?? "";
+    expect(row2).toContain("主持人");
+    expect(row2).toContain("11.5万");
+    expect(row2).toContain("缓存 40%");
+    wrapper.unmount();
   });
 
-  it("shows '—' placeholders when the IPC returns no rows", async () => {
-    invokeMock.mockResolvedValue([]);
-    mountModal({
+  it("over-budget → full bar + error-text styling", async () => {
+    stubCostPayload(
+      [],
+      { total: 500000, by_speaker: [{ speaker: "Alice", tokens: 500000 }] },
+    );
+    const wrapper = mountModal({
+      mode: "edit",
+      sessionId: "sess-1",
+      initialParticipants: roster,
+      initialTokenBudget: 400000,
+    });
+    seedSession();
+    await flush();
+    const text = byTestId("gcfg-budget-text")?.textContent ?? "";
+    expect(text).toContain("125%");
+    const fill = document.querySelector<HTMLElement>(".gcfg-cost__budget-fill");
+    expect(fill?.classList.contains("gcfg-cost__budget-fill--over")).toBe(true);
+    expect(
+      byTestId("gcfg-budget-text")!.classList.contains("gcfg-cost__budget-text--over"),
+    ).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("shows '—' placeholders in the cost rows when both payloads carry no rows", async () => {
+    stubCostPayload([], { total: 0, by_speaker: [] });
+    const wrapper = mountModal({
       mode: "edit",
       sessionId: "sess-1",
       initialParticipants: roster,
     });
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(byTestId("gcfg-cache-rate-0")?.textContent).toContain("缓存率 —");
-    expect(byTestId("gcfg-cache-rate-1")?.textContent).toContain("缓存率 —");
-    expect(byTestId("gcfg-moderator-cache-rate")?.textContent).toContain("缓存率 —");
+    seedSession();
+    await flush();
+    expect(byTestId("gcfg-budget-progress")).toBeNull(); // 无预算不渲染进度条
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("tokens —");
+    expect(body).toContain("缓存 —");
+    wrapper.unmount();
   });
 
-  it("shows '—' and stays usable when the IPC fetch fails", async () => {
-    invokeMock.mockRejectedValue(new Error("boom"));
+  it("degrades to '—' and stays usable when both queries reject", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    mountModal({
+    invokeMock.mockRejectedValue(new Error("boom"));
+    const wrapper = mountModal({
       mode: "edit",
       sessionId: "sess-1",
       initialParticipants: roster,
+      initialTokenBudget: 400000,
     });
-    await new Promise((r) => setTimeout(r, 0));
+    seedSession();
+    await flush();
     errorSpy.mockRestore();
 
-    // Silent degradation — the edit form itself is untouched.
-    expect(byTestId("gcfg-cache-rate-0")?.textContent).toContain("缓存率 —");
-    expect(byTestId("gcfg-moderator-cache-rate")?.textContent).toContain("缓存率 —");
+    // Silent degradation — rows render placeholders, no progress bar
+    // (usage unknown), and the edit flow itself stays usable: the
+    // seeded roster is valid, so submit remains enabled.
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("tokens —");
+    expect(byTestId("gcfg-budget-progress")).toBeNull();
     const submit = byTestId("gcfg-submit") as HTMLButtonElement | null;
     expect(submit).toBeTruthy();
+    expect(submit!.disabled).toBe(false);
+    const names = allByTestIdPrefix("gcfg-name-");
+    expect(names.length).toBe(2);
+    wrapper.unmount();
   });
 
-  it("keeps rate rows aligned to their speaker when a participant is removed", async () => {
-    // 3 participants so removal is allowed; each has a rate row.
-    invokeMock.mockResolvedValue([
-      { speaker: "Alice", cache_read: 50, context_input: 200 }, // 25%
-      { speaker: "Bob", cache_read: 40, context_input: 100 }, // 40%
-      { speaker: "Carol", cache_read: 60, context_input: 100 }, // 60%
-    ]);
-    mountModal({
+  it("keeps cost rows keyed to their speaker when a participant is removed", async () => {
+    stubCostPayload(
+      [
+        { speaker: "Alice", cache_read: 50, context_input: 200 }, // 25%
+        { speaker: "Bob", cache_read: 40, context_input: 100 }, // 40%
+        { speaker: "Carol", cache_read: 60, context_input: 100 }, // 60%
+      ],
+      {
+        total: 1000,
+        by_speaker: [
+          { speaker: "Alice", tokens: 100 },
+          { speaker: "Bob", tokens: 200 },
+          { speaker: "Carol", tokens: 300 },
+          { speaker: "moderator", tokens: 400 },
+        ],
+      },
+    );
+    const wrapper = mountModal({
       mode: "edit",
       sessionId: "sess-1",
       initialParticipants: [...roster, { name: "Carol", model: "m2" }],
     });
-    await new Promise((r) => setTimeout(r, 0));
+    seedSession();
+    await flush();
 
-    expect(byTestId("gcfg-cache-rate-0")?.textContent).toContain("缓存率 25%");
-    expect(byTestId("gcfg-cache-rate-1")?.textContent).toContain("缓存率 40%");
+    expect(byTestId("gcfg-cost-row-0")?.textContent).toContain("Alice");
 
-    // Remove Alice (row 0). Bob's row shifts to index 0 and must
-    // STILL show Bob's rate — the roster snapshot is spliced in
-    // lockstep with the draft (08-10-group-chat-cache-rate).
+    // Remove Alice (draft row 0). The cost rows reflect the persisted
+    // `messages.speaker` history — they must NOT shift with the draft.
     const remove0 = byTestId("gcfg-remove-0") as HTMLButtonElement | null;
     expect(remove0).toBeTruthy();
     remove0!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
 
-    expect(byTestId("gcfg-cache-rate-0")?.textContent).toContain("缓存率 40%");
-    expect(byTestId("gcfg-cache-rate-1")?.textContent).toContain("缓存率 60%");
-    expect(byTestId("gcfg-cache-rate-2")).toBeNull();
+    expect(byTestId("gcfg-cost-row-0")?.textContent).toContain("Alice");
+    expect(byTestId("gcfg-cost-row-1")?.textContent).toContain("Bob");
+    expect(byTestId("gcfg-cost-row-2")?.textContent).toContain("Carol");
+    expect(byTestId("gcfg-cost-row-3")?.textContent).toContain("主持人");
+    wrapper.unmount();
   });
 
-  it("never loads or renders cache rates in create mode", async () => {
+  it("never loads cache rates or token usage in create mode", async () => {
     mountModal(); // mode = "create" (default)
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
 
     expect(invokeMock).not.toHaveBeenCalled();
-    expect(document.querySelector('[data-testid^="gcfg-cache-rate-"]')).toBeNull();
+    expect(byTestId("gcfg-cost-zone")).toBeNull();
     expect(byTestId("gcfg-moderator")).toBeNull();
   });
 });
@@ -311,10 +444,6 @@ describe("GroupChatConfigModal — token budget (C1.2)", () => {
       .querySelectorAll(".gcfg-content, .gcfg-overlay")
       .forEach((el) => el.remove());
   });
-
-  function flush() {
-    return new Promise((r) => setTimeout(r, 0));
-  }
 
   function fillRoster() {
     allByTestIdPrefix("gcfg-name-").forEach((el, i) => {
@@ -422,6 +551,11 @@ describe("GroupChatConfigModal — token budget (C1.2)", () => {
         busy: false,
       } as never,
     ];
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "group_chat_cache_rates") return [];
+      if (cmd === "group_chat_token_usage") return { total: 0, by_speaker: [] };
+      return null;
+    });
     const wrapper = mount(GroupChatConfigModal, {
       props: {
         open: true,
@@ -479,6 +613,199 @@ describe("GroupChatConfigModal — token budget (C1.2)", () => {
     setBudget("");
     await flush();
     expect(submit().disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("预算量级提示(D4 静态文案)渲染在预算输入下", async () => {
+    const wrapper = mountModal({ mode: "create" });
+    await flush();
+    const hints = Array.from(document.querySelectorAll(".gcfg-field__hint")).map(
+      (h) => h.textContent ?? "",
+    );
+    expect(hints.some((t) => t.includes("留空 = 不限"))).toBe(true);
+    expect(hints.some((t) => t.includes("20-60 万 token"))).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+// =====================================================================
+// gce-m4c (09-08) — create:preset 单选卡 + 主持人 Select。
+// =====================================================================
+
+describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", () => {
+  afterEach(() => {
+    invokeMock.mockReset();
+    document
+      .querySelectorAll(".gcfg-content, .gcfg-overlay")
+      .forEach((el) => el.remove());
+  });
+
+  function stubCreateSession() {
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "create_session"
+        ? {
+            id: "new-gc",
+            title: "新讨论",
+            created_at: "",
+            updated_at: "",
+            model: "uuid-mini",
+            project_id: "p1",
+            current_cwd: "",
+          }
+        : cmd === "list_sessions"
+          ? []
+          : null,
+    );
+  }
+
+  /** 选中 preset 卡(经 RadioGroupRoot 的 update:modelValue 接线)。 */
+  async function pickPreset(
+    wrapper: ReturnType<typeof mount>,
+    key: string,
+  ) {
+    wrapper
+      .getComponent(RadioGroupRoot)
+      .vm.$emit("update:modelValue", key);
+    await flush();
+  }
+
+  /** reka SelectRoot 泛型复杂,VTU 的 VueWrapper.findAllComponents 重载
+   *  解析退化为 DOMWrapper[](vue-tsc TS2339);按组件实例形状断言取
+   *  props/vm(ScheduledTasksTab.test.ts 的 DOMWrapper 版同用法)。 */
+  function selectRootsOf(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAllComponents(SelectRoot) as unknown as Array<{
+      props: (k: string) => unknown;
+      vm: { $emit: (event: string, ...args: unknown[]) => void };
+    }>;
+  }
+
+  it("三张 preset 卡按 JSON 声明序渲染(review/arch/retro)", async () => {
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
+    await flush();
+    const keys = Object.keys(GC_PRESETS.presets);
+    expect(keys).toEqual(["review", "arch", "retro"]);
+    for (const key of keys) {
+      const card = byTestId(`gcfg-preset-${key}`);
+      expect(card).toBeTruthy();
+      expect(card?.textContent).toContain(GC_PRESETS.presets[key]!.description);
+    }
+    // 默认无选中(用户点卡才展开预填;design §4.1)。
+    expect(document.querySelector(".gcfg-preset-card--active")).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("选中 review → 预填三行阵容;persona_md = 边界文本 + \\n\\n + persona_common(共享模块同形)", async () => {
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
+    await flush();
+    await pickPreset(wrapper, "review");
+
+    const def = GC_PRESETS.presets.review!;
+    const names = allByTestIdPrefix("gcfg-name-");
+    expect(names.length).toBe(def.participants.length);
+    def.participants.forEach((p, i) => {
+      expect((names[i] as HTMLInputElement).value).toBe(p.name);
+    });
+    // persona 逐字同形断言:边界 + "\n\n" + 公共纪律(M1 composePresets
+    // / 定时表单 gcPersonaMd 同一拼接)。
+    const personas = allByTestIdPrefix("gcfg-persona-");
+    def.participants.forEach((p, i) => {
+      const expected = `${GC_PRESETS.personas[p.persona]}\n\n${GC_PRESETS.persona_common}`;
+      expect((personas[i] as HTMLTextAreaElement).value).toBe(expected);
+      expect((personas[i] as HTMLTextAreaElement).value).toContain("\n\n");
+    });
+    // 主持人默认 = preset 的 moderator_model 解析结果(uuid-mini)。
+    // SelectRoot 按序:三行参与者各一 + 主持人一个(索引 3)。
+    const selectRoots = selectRootsOf(wrapper);
+    expect(selectRoots.length).toBe(4);
+    expect(selectRoots[3].props("modelValue")).toBe("uuid-mini");
+    // 目录齐全 → 无模型缺失提示条,提交可用。
+    expect(byTestId("gcfg-preset-error")).toBeNull();
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("主持人改选 → create_session 的 model 参数跟随;未改选(preset 默认)也随提交", async () => {
+    stubCreateSession();
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const modelsStore = useModelsStore();
+    modelsStore.models = GC_MODEL_LIST as never;
+    useProjectsStore().currentProjectId = "p1";
+    const wrapper = mount(GroupChatConfigModal, {
+      props: { open: true, mode: "create" },
+      global: { plugins: [pinia] },
+      attachTo: document.body,
+    });
+    await flush();
+    await pickPreset(wrapper, "review");
+
+    // preset 默认主持人直接提交 → model = uuid-mini。
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    let call = invokeMock.mock.calls.find((c) => c[0] === "create_session");
+    expect(call?.[1].model).toBe("uuid-mini");
+    expect(call?.[1].metadata.participants.map((p: { name: string }) => p.name)).toEqual([
+      "架构",
+      "产品",
+      "后端",
+    ]);
+
+    // 手动改选主持人(SelectRoot 序:0-2 = 参与行,3 = 主持人)→ model 跟随改选。
+    invokeMock.mockClear();
+    stubCreateSession();
+    selectRootsOf(wrapper)[3].vm.$emit("update:modelValue", "uuid-ds");
+    await flush();
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    call = invokeMock.mock.calls.find((c) => c[0] === "create_session");
+    expect(call?.[1].model).toBe("uuid-ds");
+    wrapper.unmount();
+  });
+
+  it("preset 主持人解析失败 → 错误条(preset 原名)+ 提交禁用;手动改选可恢复", async () => {
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST_NO_MINI);
+    await flush();
+    await pickPreset(wrapper, "review");
+
+    const bar = byTestId("gcfg-preset-error");
+    expect(bar).toBeTruthy();
+    expect(bar?.textContent).toContain("MiniMax-M3");
+    expect(bar?.textContent).toContain("不在模型目录中,请先在「模型」页添加");
+    // 三行参与者模型都能解析(uuid-glm 等),唯一缺失 = 主持人。
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(true);
+
+    // 手动改选主持人(m1 = GPT-4;SelectRoot 索引 3)→ 提示条消隐,提交恢复。
+    selectRootsOf(wrapper)[3].vm.$emit("update:modelValue", "m1");
+    await flush();
+    expect(byTestId("gcfg-preset-error")).toBeNull();
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("未选 preset 的 create 不带 model 参数(全局默认,零回归)", async () => {
+    stubCreateSession();
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const modelsStore = useModelsStore();
+    modelsStore.models = MODEL_LIST as never;
+    useProjectsStore().currentProjectId = "p1";
+    const wrapper = mount(GroupChatConfigModal, {
+      props: { open: true, mode: "create" },
+      global: { plugins: [pinia] },
+      attachTo: document.body,
+    });
+    await flush();
+    // 手填两行(不经 preset)。
+    allByTestIdPrefix("gcfg-name-").forEach((el, i) => {
+      const input = el as HTMLInputElement;
+      input.value = `P${i + 1}`;
+      input.dispatchEvent(new Event("input"));
+    });
+    await flush();
+    (byTestId("gcfg-submit") as HTMLButtonElement).click();
+    await flush();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_session");
+    expect(call?.[1]).not.toHaveProperty("model");
     wrapper.unmount();
   });
 });

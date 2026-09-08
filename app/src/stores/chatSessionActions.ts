@@ -82,6 +82,13 @@ export function createSessionActions(ctx: SessionActionsContext) {
        *  written as metadata `token_budget`. `undefined` = unlimited
        *  (key not written — byte-compatible with pre-C1.2 creates). */
       tokenBudget?: number;
+      /** gce-m4c (09-08): group-chat moderator model catalog id —
+       *  passed as the `create_session` `model` param (wire has taken
+       *  `Option<String>` all along; the scheduler fire path is the
+       *  precedent). `undefined`/empty = param not sent → backend
+       *  falls back to the global default model (byte-compatible with
+       *  the pre-gce-m4c GUI creates). */
+      modelId?: string;
     } = {},
   ): Promise<string> {
     const projectId = projectsStore.currentProjectId;
@@ -114,6 +121,10 @@ export function createSessionActions(ctx: SessionActionsContext) {
       initialCwd: initialCwd,
       sessionType,
       metadata,
+      // gce-m4c: moderator model (group-chat create only today).
+      // Not sent when unset — backend `model: Option<String>` then
+      // defaults to "" → global default model (unchanged legacy path).
+      ...(opts.modelId ? { model: opts.modelId } : {}),
     });
     currentSessionId.value = session.id;
     // F1: a fresh session must be recorded as last-active here —

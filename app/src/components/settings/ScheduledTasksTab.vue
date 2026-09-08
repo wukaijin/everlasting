@@ -59,9 +59,13 @@ import AppTimeField from "../common/AppTimeField.vue";
 import Icon from "../Icon.vue";
 // M4a(R7 preset 单一事实源):与 scripts/group-chat-run.mjs 同读
 // scripts/group-chat-presets.json —— 展开发生在本表单(提交时),DB 与
-// daemon 全程不见 preset 名。文件在 app/ 外:vite dev 需 server.fs.allow
-// (vite.config.ts 已配),build/vitest 不受 dev-server 限制。
-import groupChatPresetsJson from "../../../../scripts/group-chat-presets.json";
+// daemon 全程不见 preset 名。加载 / persona 组装 / 模型引用解析在
+// gce-m4c Step 5 提取到共享模块(弹窗 preset 卡同源同形)。
+import {
+  GC_PRESETS,
+  composePersonaMd,
+  resolveModelRef,
+} from "../../utils/groupChatPresets";
 import { useScheduledTasksStore } from "../../stores/scheduledTasks";
 import type {
   ScheduledTask,
@@ -99,32 +103,12 @@ const config = useConfigStore();
 const models = useModelsStore();
 
 // --- M4a 定时审议:preset 展开(scripts/group-chat-presets.json)-----------
-
-/** preset 配方的运行时形状(与 M1 `composePresets` 消费的 JSON 同构;
- *  JSON import 的字面量类型按 key 收窄,动态取档需放宽成 Record)。 */
-interface GcPresetDef {
-  description: string;
-  moderator_model: string;
-  participants: { name: string; model: string; persona: string }[];
-}
-const GC_PRESETS = groupChatPresetsJson as unknown as {
-  persona_common: string;
-  personas: Record<string, string>;
-  presets: Record<string, GcPresetDef>;
-};
+// (共享逻辑在 utils/groupChatPresets.ts:gce-m4c Step 5 纯搬家,行为零变化)
 
 /** preset 下拉选项(键序 = JSON 声明序:review / arch / retro)。 */
 const GC_PRESET_OPTIONS = Object.entries(GC_PRESETS.presets).map(
   ([value, p]) => ({ value, label: `${value} — ${p.description}` }),
 );
-
-/** persona kind → 完整 persona_md(镜像 M1 `composePresets`:边界文本 +
- *  "\n\n" + 公共纪律;提交时逐字带过,前端不加工)。缺 kind 返回 null
- *  (正常不可能:JSON 单源固定四 kind;防御转提交错误)。 */
-function gcPersonaMd(kind: string): string | null {
-  const base = GC_PRESETS.personas[kind];
-  return base === undefined ? null : `${base}\n\n${GC_PRESETS.persona_common}`;
-}
 
 // --- 列表区 ---------------------------------------------------------------
 
@@ -364,29 +348,6 @@ function onPickModel(v: unknown): void {
 
 // --- M4a group_chat 档:解析 / 展开 / 预览 ---------------------------------
 
-/** 模型引用(名字或 UUID)→ 目录 UUID。镜像 M1 `normalizeModelRef` 的
- *  两趟语义(UUID → 精确 modelName/displayName → 大小写不敏感;目录里
- *  存在「glm-5.3 的 modelName == GLM-5.3-Flash 的 displayName」的真实
- *  撞车,单趟 lowercase 会随数组序漂移)。查不到返回 null(提交时转
- *  表单错误——预设引用的模型必须真实存在,后端 catalog 预检同样拦截)。 */
-function resolveModelRef(ref: string): string | null {
-  if (!ref) return null;
-  const list = models.models ?? [];
-  const byId = list.find((m) => m.id === ref);
-  if (byId) return byId.id;
-  const exact = list.find(
-    (m) => m.modelName === ref || m.displayName === ref,
-  );
-  if (exact) return exact.id;
-  const lower = ref.toLowerCase();
-  const ci = list.find(
-    (m) =>
-      (m.modelName || "").toLowerCase() === lower ||
-      (m.displayName || "").toLowerCase() === lower,
-  );
-  return ci?.id ?? null;
-}
-
 /** UUID → 「provider · 显示名」(编辑态存档预览的反查;目录缺失回退
  *  UUID 前 8 位——模型被删后存档行仍可读)。 */
 function modelDisplayName(modelId: string): string {
@@ -400,7 +361,7 @@ function onPickGcPreset(v: unknown): void {
   form.gcpreset = k;
   // 换 preset = 重置主持人跟随新 preset 默认(用户可再改选)。
   form.gcModeratorId =
-    resolveModelRef(GC_PRESETS.presets[k]!.moderator_model) ?? "";
+    resolveModelRef(models.models ?? [], GC_PRESETS.presets[k]!.moderator_model) ?? "";
 }
 
 function onPickGcModerator(v: unknown): void {
@@ -415,7 +376,9 @@ function onPickGcModerator(v: unknown): void {
 const gcModeratorModelId = computed<string>(() => {
   if (form.gcModeratorId) return form.gcModeratorId;
   const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
-  return preset ? (resolveModelRef(preset.moderator_model) ?? "") : "";
+  return preset
+    ? (resolveModelRef(models.models ?? [], preset.moderator_model) ?? "")
+    : "";
 });
 
 /** 当前 preset 的参与者只读预览(显示名;preset 里的名字解析失败时
@@ -426,7 +389,7 @@ const gcPresetRoster = computed<
   const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
   if (!preset) return null;
   return preset.participants.map((p) => {
-    const id = resolveModelRef(p.model);
+    const id = resolveModelRef(models.models ?? [], p.model);
     const m = id
       ? (models.models ?? []).find((x) => x.id === id)
       : undefined;
@@ -440,6 +403,40 @@ const gcArchivedConfig = computed<GroupChatTaskConfig | null>(() => {
   const task = store.tasks.find((t) => t.id === editingId.value);
   return task?.target_mode === "group_chat" ? (task.group_chat_config ?? null) : null;
 });
+
+// --- gce-m4c(09-08)Token 预算输入 ----------------------------------------
+// 语义:留空 = 不限;正整数才合法。编辑态单独 dirty 跟踪(design §2.3):
+// 只改预算未重选 preset → 取存档配置 + 新预算整体重交;两处都无变化
+// 维持「不发 groupChatConfig」(后端缺省不动语义保留)。
+
+/** 存档预算(编辑态基线;非 group_chat 行 / 创建态 = null)。 */
+const gcArchivedBudget = computed<number | null>(() => {
+  if (!editingId.value) return null;
+  const task = store.tasks.find((t) => t.id === editingId.value);
+  const cfg = task?.target_mode === "group_chat" ? task.group_chat_config : null;
+  return typeof cfg?.token_budget === "number" ? cfg.token_budget : null;
+});
+
+/** 预算草稿解析:number input 的 v-model 会把合法输入转成 number、非法
+ *  留 string —— 统一归一(空 = null 不限;正整数 = 预算;其余 = null 且
+ *  invalid 置位)。 */
+const gcParsedBudget = computed<number | null>(() => {
+  const t = String(form.gcTokenBudget ?? "").trim();
+  if (t === "") return null;
+  const n = Number(t);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+});
+
+const gcBudgetInvalid = computed<boolean>(() => {
+  const t = String(form.gcTokenBudget ?? "").trim();
+  return t !== "" && gcParsedBudget.value === null;
+});
+
+/** 预算相对存档是否被改动(编辑态重交的触发条件)。 */
+const gcBudgetDirty = computed<boolean>(
+  () => gcParsedBudget.value !== gcArchivedBudget.value,
+);
 
 const gcArchivedRoster = computed<{ name: string; model: string }[] | null>(
   () => {
@@ -490,19 +487,26 @@ function expandGcConfig():
   }
   const participants: GroupChatTaskParticipant[] = [];
   for (const p of preset.participants) {
-    const id = resolveModelRef(p.model);
+    const id = resolveModelRef(models.models ?? [], p.model);
     if (!id) {
       return {
         error: `参与者「${p.name}」的模型「${p.model}」不在模型目录中,请先在「模型」页添加`,
       };
     }
-    const persona = gcPersonaMd(p.persona);
+    const persona = composePersonaMd(p.persona);
     if (persona === null) {
       return { error: `预设数据缺少 persona「${p.persona}」(group-chat-presets.json)` };
     }
     participants.push({ name: p.name, model_id: id, persona_md: persona });
   }
-  return { config: { moderator_model_id: moderatorId, participants } };
+  // 预算显式声明才写键(缺省不带 = 不限,与后端 skip_serializing_if 对齐)。
+  return {
+    config: {
+      moderator_model_id: moderatorId,
+      participants,
+      ...(gcParsedBudget.value !== null ? { token_budget: gcParsedBudget.value } : {}),
+    },
+  };
 }
 
 /** 本地 `yyyy-MM-dd` 字符串(`AppDatePicker` 值)。 */
@@ -561,6 +565,8 @@ const form = reactive({
   gcpreset: "",
   /** M4a:主持人模型 UUID 的显式改选(空 = 跟随 preset 默认)。 */
   gcModeratorId: "",
+  /** gce-m4c:每场讨论 token 预算草稿(空串 = 不限;提交时解析)。 */
+  gcTokenBudget: "",
   prompt: "",
 });
 
@@ -649,6 +655,7 @@ function resetForm(): void {
   // 随 preset 默认(gcModeratorId 空 = 走 gcModeratorModelId 兜底)。
   form.gcpreset = "review";
   form.gcModeratorId = "";
+  form.gcTokenBudget = "";
   form.prompt = "";
 }
 
@@ -676,6 +683,11 @@ function openEdit(task: ScheduledTask): void {
   form.targetSessionId = task.target_session_id ?? "";
   form.gcpreset = "";
   form.gcModeratorId = "";
+  // gce-m4c:存档预算回填(dirty 检测基线 = gcArchivedBudget)。
+  form.gcTokenBudget =
+    typeof task.group_chat_config?.token_budget === "number"
+      ? String(task.group_chat_config.token_budget)
+      : "";
   // per_run 的模型绑定存任务行 → 回填;fixed 的模型在 session 上,不填。
   form.modelId = task.target_mode === "per_run" ? (task.model_id ?? "") : "";
   const spec = task.schedule;
@@ -795,10 +807,16 @@ async function submitForm(): Promise<void> {
     return;
   }
   // M4a 定时审议:展开时机 = 提交(design §3)。preset 选中 → 展开
-  // (模型名 → UUID,persona 逐字);编辑态未重选 preset → 不带
-  // groupChatConfig(后端「缺省不动」语义,存档配置继续生效)。
+  // (模型名 → UUID,persona 逐字,预算草稿随带);编辑态未重选 preset
+  // → 默不带 groupChatConfig(后端「缺省不动」语义,存档配置继续生效),
+  // 仅当预算被改动(gce-m4c design §2.3)时取存档配置 + 新预算整体重交。
   let groupChatConfig: GroupChatTaskConfig | undefined;
   if (form.targetMode === "group_chat") {
+    // 预算校验先行(非法即拦,不发起 IPC)。
+    if (gcBudgetInvalid.value) {
+      formError.value = "Token 预算必须是正整数(留空 = 不限)";
+      return;
+    }
     if (form.gcpreset) {
       const expanded = expandGcConfig();
       if ("error" in expanded) {
@@ -809,6 +827,19 @@ async function submitForm(): Promise<void> {
     } else if (!editingId.value) {
       formError.value = "请选择审议预设";
       return;
+    } else if (gcBudgetDirty.value && gcArchivedConfig.value) {
+      const archived = gcArchivedConfig.value;
+      groupChatConfig = {
+        moderator_model_id: archived.moderator_model_id,
+        participants: archived.participants.map((p) => ({
+          name: p.name,
+          model_id: p.model_id,
+          persona_md: p.persona_md,
+        })),
+        ...(gcParsedBudget.value !== null
+          ? { token_budget: gcParsedBudget.value }
+          : {}),
+      };
     }
   }
   // 档位字段(按档位细分错误信息)。
@@ -887,8 +918,9 @@ async function submitForm(): Promise<void> {
       // 落库:切 per_run 时 targetSessionId 传 null(wire 显式清空固定
       // 绑定);切回 fixed 时后端校验 session 归属。模型绑定仅 per_run
       // 存任务行,切回 fixed 显式清空(模型跟 session 走)。group_chat
-      // 档(M4a):preset 重选 → 带展开结果;未重选 → 缺省不动(存档
-      // 配置继续);切离 group_chat → 后端自动清 config,前端无需带。
+      // 档(M4a):preset 重选 → 带展开结果;未重选但预算改动(gce-m4c)
+      // → 带存档配置 + 新预算;两处都无变化 → 缺省不动(存档配置继续);
+      // 切离 group_chat → 后端自动清 config,前端无需带。
       await store.update(editingId.value, {
         name,
         prompt,
@@ -1274,6 +1306,22 @@ onMounted(async () => {
               {{ groupChatCostNote((gcPresetRoster ?? gcArchivedRoster ?? []).length) }}
             </span>
           </div>
+          <!-- gce-m4c(09-08):每场讨论的 token 预算(可选)。留空 = 不限;
+               编辑态单独 dirty 跟踪——只改预算未重选 preset 也会随存档
+               配置整体重交(design §2.3)。 -->
+          <label class="sched-tab__target-extra sched-tab__gc-budget">
+            <span class="sched-tab__target-extra-label">Token 预算(可选)</span>
+            <input
+              v-model="form.gcTokenBudget"
+              type="number"
+              min="1"
+              step="1"
+              class="sched-tab__input sched-tab__gc-budget-input"
+              placeholder="留空 = 不限"
+              data-testid="sched-gc-budget"
+            />
+            <span class="sched-tab__unit">留空 = 不限;一场讨论通常 20-60 万 token</span>
+          </label>
         </template>
       </div>
 
@@ -1942,6 +1990,13 @@ onMounted(async () => {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+
+/* gce-m4c Token 预算输入行:窄输入 + 量级提示同排,窄屏换行。 */
+.sched-tab__gc-budget-input {
+  flex: 0 1 160px;
+  min-width: 0;
+  width: auto;
 }
 
 .sched-tab__gc-roster-list {

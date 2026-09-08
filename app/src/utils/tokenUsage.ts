@@ -61,6 +61,17 @@ export function abbreviateTokens(n: number): string {
   return m % 1 === 0 ? `${m}M` : `${m.toFixed(1).replace(/\.0$/, "")}M`;
 }
 
+/** gce-m4c(09-08,成本治理):token 消耗的中文万单位缩写 —— 讨论库
+ *  消耗列与群聊弹窗成本区共用。null / undefined → 「—」(无 usage 行
+ *  / 查询失败降级);< 1万 → 精确值;≥ 1万 → 「26.5万」形态(1 位
+ *  小数,尾零裁掉:400000 → 「40万」)。 */
+export function formatTokensWan(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  if (n < 10_000) return `${n}`;
+  const w = n / 10_000;
+  return `${w % 1 === 0 ? w.toString() : w.toFixed(1).replace(/\.0$/, "")}万`;
+}
+
 /** Cache-hit rate of a single LLM call (08-10-group-chat-cache-rate):
  *  `cache_read_input_tokens / context_input_tokens` as a rounded
  *  integer percentage.

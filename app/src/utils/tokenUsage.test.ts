@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   abbreviateTokens,
   cacheRatePercent,
+  formatTokensWan,
   parseTokenUsageJson,
   tokenUsageLevel,
 } from "./tokenUsage";
@@ -163,5 +164,24 @@ describe("cacheRatePercent", () => {
     expect(cacheRatePercent(1, 3)).toBe(33); // 33.33… → 33
     expect(cacheRatePercent(2, 3)).toBe(67); // 66.66… → 67
     expect(cacheRatePercent(150, 400)).toBe(38); // 37.5 → 38
+  });
+});
+
+describe("formatTokensWan (gce-m4c 万单位)", () => {
+  it("null / undefined → '—'(无 usage 行 / 查询失败降级)", () => {
+    expect(formatTokensWan(null)).toBe("—");
+    expect(formatTokensWan(undefined)).toBe("—");
+  });
+
+  it("< 1万 → 精确值", () => {
+    expect(formatTokensWan(0)).toBe("0");
+    expect(formatTokensWan(9999)).toBe("9999");
+  });
+
+  it("≥ 1万 → 万单位 1 位小数,尾零裁掉", () => {
+    expect(formatTokensWan(265000)).toBe("26.5万");
+    expect(formatTokensWan(400000)).toBe("40万");
+    expect(formatTokensWan(10000)).toBe("1万");
+    expect(formatTokensWan(123456)).toBe("12.3万");
   });
 });

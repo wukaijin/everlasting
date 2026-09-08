@@ -46,6 +46,7 @@ function hit(over: Partial<GroupChatSessionHit> = {}): GroupChatSessionHit {
     discussion_summary: "结论:采用 Rust 重写,保留事件溯源。",
     created_at: "2026-09-05T10:00:00+00:00",
     updated_at: "2026-09-05T10:00:00+00:00",
+    total_tokens: null,
     ...over,
   };
 }
@@ -169,6 +170,26 @@ describe("DiscussionLibraryModal", () => {
     const body = document.body.textContent ?? "";
     expect(body).toContain("临时发起的讨论");
     expect(body).toContain("尚未生成总结");
+    wrapper.unmount();
+  });
+
+  // gce-m4c(09-08):每场累计 token 消耗列(万单位;无数据 = 「—」)。
+  it("renders the per-discussion token total in 万 units when present", async () => {
+    invokeMock.mockResolvedValue([hit({ total_tokens: 265000 })]);
+    const wrapper = await mountOpen();
+    await flushPromises();
+    const tokens = document.body.querySelector(".discussion-lib__row-tokens");
+    expect(tokens).not.toBeNull();
+    expect(tokens?.textContent).toContain("26.5万");
+    wrapper.unmount();
+  });
+
+  it("renders '—' for the token total when the hit carries null (no usage rows)", async () => {
+    invokeMock.mockResolvedValue([hit({ total_tokens: null })]);
+    const wrapper = await mountOpen();
+    await flushPromises();
+    const tokens = document.body.querySelector(".discussion-lib__row-tokens");
+    expect(tokens?.textContent).toContain("—");
     wrapper.unmount();
   });
 });

@@ -1110,4 +1110,133 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
     const card = w.get('[data-testid="sched-card-gc-2"]');
     expect(card.find('[data-testid="sched-outcome-gc-2"]').exists()).toBe(false);
   });
+
+  // -------------------------------------------------------------------
+  // gce-m4c(09-08)Token 预算输入:两态落 config + 编辑态 dirty 独立
+  // 重交(design §2.3)+ 非法值拦截。
+  // -------------------------------------------------------------------
+  function gcRowWithBudget(budget: number | null): ScheduledTask {
+    return {
+      ...gcRow(),
+      group_chat_config: {
+        ...gcConfig(),
+        ...(budget !== null ? { token_budget: budget } : {}),
+      },
+    };
+  }
+
+  async function fillGcCreateForm() {
+    stubBackendGc([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("每周审议");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "group_chat");
+    return { w, form };
+  }
+
+  it("创建态预算两态:留空 → config 无 token_budget 键;填数 → 随 config 提交", async () => {
+    // 留空(缺省 = 不限,键不写)。
+    const first = await fillGcCreateForm();
+    stubCreateGc();
+    await first.w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    let call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].groupChatConfig).toBeTruthy();
+    expect(call?.[1].groupChatConfig).not.toHaveProperty("token_budget");
+
+    // 填 500000 → config 带 token_budget。
+    const second = await fillGcCreateForm();
+    await second.form.find('[data-testid="sched-gc-budget"]').setValue("500000");
+    stubCreateGc();
+    await second.w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].groupChatConfig.token_budget).toBe(500000);
+  });
+
+  it("编辑态只改预算未重选 preset:存档配置 + 新预算整体重交", async () => {
+    stubBackendGc([gcRowWithBudget(1000)]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "group_chat");
+    // 存档预算回填;preset 仍「未选择」。
+    expect(
+      (form.find('[data-testid="sched-gc-budget"]').element as HTMLInputElement).value,
+    ).toBe("1000");
+    expect(form.findAllComponents(SelectRoot)[1].props("modelValue")).toBeUndefined();
+    await form.find('[data-testid="sched-gc-budget"]').setValue("9999");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return gcRowWithBudget(9999);
+      if (cmd === "list_scheduled_tasks") return [gcRowWithBudget(9999)];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    // 预算 dirty ⇒ 即使未重选 preset 也整体重交(存档阵容原样 + 新预算)。
+    expect(call?.[1].groupChatConfig).toEqual({
+      moderator_model_id: "uuid-mini",
+      participants: gcConfig().participants,
+      token_budget: 9999,
+    });
+  });
+
+  it("编辑态清空预算(存档有 1000):重交存档配置且无 token_budget 键(清除)", async () => {
+    stubBackendGc([gcRowWithBudget(1000)]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "group_chat");
+    await form.find('[data-testid="sched-gc-budget"]').setValue("");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return gcRow();
+      if (cmd === "list_scheduled_tasks") return [gcRow()];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1].groupChatConfig).toBeTruthy();
+    expect(call?.[1].groupChatConfig).not.toHaveProperty("token_budget");
+    expect(call?.[1].groupChatConfig.participants).toEqual(gcConfig().participants);
+  });
+
+  it("编辑态预算未动且未重选 preset:维持缺省不发(既有语义零回归)", async () => {
+    stubBackendGc([gcRowWithBudget(1000)]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "group_chat");
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "update_scheduled_task") return gcRowWithBudget(1000);
+      if (cmd === "list_scheduled_tasks") return [gcRowWithBudget(1000)];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
+    expect(call?.[1]).not.toHaveProperty("groupChatConfig");
+  });
+
+  it("非法预算(0 / 1.5 / -5)→ 内联错误条,不发起 IPC", async () => {
+    const { w, form } = await fillGcCreateForm();
+    for (const bad of ["0", "1.5", "-5"]) {
+      await form.find('[data-testid="sched-gc-budget"]').setValue(bad);
+      invokeMock.mockClear();
+      await w.get('[data-testid="sched-submit"]').trigger("click");
+      await flushPromises();
+      expect(w.find(".sched-tab__error").text()).toContain("正整数");
+      expect(invokeMock).not.toHaveBeenCalledWith(
+        "create_scheduled_task",
+        expect.anything(),
+      );
+    }
+  });
 });

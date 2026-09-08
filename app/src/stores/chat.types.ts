@@ -636,6 +636,24 @@ export interface SpeakerCacheUsage {
   context_input: number;
 }
 
+/** gce-m4c(09-08,成本治理):`group_chat_token_usage` IPC 返回中的
+ *  单 speaker 行(镜像 Rust `db::trace::SpeakerTokens`,snake_case)。
+ *  `tokens` = 该 speaker 全部轮次计费四字段之和(input + output +
+ *  cache_creation + cache_read;C1.2 硬停同口径)。 */
+export interface SpeakerTokens {
+  speaker: string;
+  tokens: number;
+}
+
+/** gce-m4c:`group_chat_token_usage` IPC 返回(镜像 Rust
+ *  `db::trace::GroupChatTokenUsage`)。`total` = 全 speaker 之和;
+ *  `by_speaker` 按 `tokens` 降序(SQL `ORDER BY tokens DESC`),含
+ *  `"moderator"` 行。 */
+export interface GroupChatTokenUsage {
+  total: number;
+  by_speaker: SpeakerTokens[];
+}
+
 /** Manual /compact result (08-18-manual-compact-command). Wire form
  *  mirrors the Rust `agent::compaction::ManualCompactionOutcome`
  *  (snake_case, no serde rename). `tokens_before` / `tokens_after`
@@ -717,6 +735,10 @@ export interface GroupChatSessionHit {
   discussion_summary: string | null;
   created_at: string;
   updated_at: string;
+  /** gce-m4c(09-08):该场全部轮次的计费 token 总量(turn_trace 四字段
+   *  SUM,`run_id=''` 过滤;零消耗 / 无 trace 行 = null)。旧 daemon 不回
+   *  该字段 → undefined,前端同按「—」降级。 */
+  total_tokens?: number | null;
 }
 
 /** User-facing mode subset — the three modes the MVP UI exposes.
