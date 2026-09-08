@@ -17,7 +17,7 @@
 // reka 交互(RadioGroup / Select)走 `vm.$emit("update:modelValue")`
 // 接线测法(jsdom 点 label 的转发不可靠,ScheduledTasksTab 同款)。
 
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { RadioGroupRoot, SelectRoot } from "reka-ui";
@@ -807,5 +807,197 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     const call = invokeMock.mock.calls.find((c) => c[0] === "create_session");
     expect(call?.[1]).not.toHaveProperty("model");
     wrapper.unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// provider/model 禁用过滤(09-09-gc-disabled-model-leak)。
+//
+// 契约(09-07 provider-model-disable PRD R2 + 09-09 修正):
+//   - create 流禁用模型不可被选/不可做默认/preset 不可静默预填;
+//   - preset 引用禁用模型 → 留空 + 「已被禁用」两态警示 + 提交禁用;
+//   - 主持人 Select 守卫拒选禁用 id;
+//   - edit 回显:本行指向禁用模型仍可见可切走(提交放行),但不出现在
+//     其他行的下拉里(原全局 pinned Set 的跨行泄漏)。
+// ---------------------------------------------------------------------------
+describe("GroupChatConfigModal — provider/model 禁用过滤(09-09)", () => {
+  beforeAll(() => {
+    // jsdom 未实现 Pointer Capture API(reka SelectTrigger 的 pointerdown
+    // handler 会抛);stub 后打开路径走 keydown Enter。ScheduledTasksTab
+    // .test.ts 同款。
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+  });
+
+  afterEach(() => {
+    document
+      .querySelectorAll(".gcfg-content, .gcfg-overlay")
+      .forEach((el) => el.remove());
+  });
+
+  /** 键盘打开行/主持人下拉,快照弹层 option 文本(select 关闭态不渲染
+   *  SelectContent,选项断言必须真实打开;portal teleport 到 body)。 */
+  async function openOptions(triggerTestId: string): Promise<string[]> {
+    byTestId(triggerTestId)?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await flush();
+    await flush();
+    return Array.from(document.querySelectorAll('[role="option"]')).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+  }
+
+  /** 选中 preset 卡(经 RadioGroupRoot 的 update:modelValue 接线;上一
+   *  describe 的同名 helper 是块内私有,此处本地复刻)。 */
+  async function pickPreset(
+    wrapper: ReturnType<typeof mount>,
+    key: string,
+  ) {
+    wrapper
+      .getComponent(RadioGroupRoot)
+      .vm.$emit("update:modelValue", key);
+    await flush();
+  }
+
+  /** SelectRoot 泛型复杂,VTU 的 findAllComponents 重载解析退化(见上一
+   *  describe 同名 helper 注);本地复刻取 props/vm。 */
+  function selectRootsOf(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAllComponents(SelectRoot) as unknown as Array<{
+      props: (k: string) => unknown;
+      vm: { $emit: (event: string, ...args: unknown[]) => void };
+    }>;
+  }
+
+  it("create 种子默认 = 首个启用模型(禁用模型不做默认)", async () => {
+    const wrapper = mountModal(
+      { mode: "create" },
+      [
+        { ...MODEL_LIST[0], id: "m1", disabled: true },
+        MODEL_LIST[1],
+      ],
+    );
+    await flush();
+    const roots = selectRootsOf(wrapper);
+    expect(roots.length).toBe(3); // 2 行 + 主持人
+    expect(roots[0].props("modelValue")).toBe("m2");
+    expect(roots[1].props("modelValue")).toBe("m2");
+    wrapper.unmount();
+  });
+
+  it("行/主持人下拉不提供禁用模型(键盘打开弹层断言)", async () => {
+    const wrapper = mountModal(
+      { mode: "create" },
+      [
+        { ...MODEL_LIST[0], id: "m1", disabled: true },
+        MODEL_LIST[1],
+      ],
+    );
+    await flush();
+    const rowOptions = await openOptions("gcfg-model-0");
+    expect(rowOptions).toEqual(["Claude 3.5 (Anthropic)"]); // m1 被滤
+    wrapper.unmount();
+
+    const wrapper2 = mountModal(
+      { mode: "create" },
+      [
+        { ...MODEL_LIST[0], id: "m1", disabled: true },
+        MODEL_LIST[1],
+      ],
+    );
+    await flush();
+    const moderatorOptions = await openOptions("gcfg-moderator-select");
+    expect(moderatorOptions).toEqual(["Claude 3.5 (Anthropic)"]);
+    wrapper2.unmount();
+  });
+
+  it("preset 主持人被禁用 → 不预填 + 「已被禁用」警示 + 提交禁用;守卫拒选禁用 id", async () => {
+    const catalog = GC_MODEL_LIST.map((m) =>
+      m.id === "uuid-mini" ? { ...m, disabled: true } : m,
+    );
+    const wrapper = mountModal({ mode: "create" }, catalog);
+    await flush();
+    await pickPreset(wrapper, "review");
+
+    // 主持人未预填(启用目录解析失败);参与者三行照常解析。
+    const roots = selectRootsOf(wrapper);
+    expect(roots[3].props("modelValue")).toBeUndefined();
+    const bar = byTestId("gcfg-preset-error");
+    expect(bar).toBeTruthy();
+    expect(bar?.textContent).toContain("已被禁用,请先在「模型」页启用");
+    expect(bar?.textContent).toContain("MiniMax-M3");
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(true);
+
+    // 守卫:emit 禁用 id(uuid-mini)被拒;emit 启用 id(uuid-glm)放行。
+    roots[3].vm.$emit("update:modelValue", "uuid-mini");
+    await flush();
+    expect(selectRootsOf(wrapper)[3].props("modelValue")).toBeUndefined();
+    roots[3].vm.$emit("update:modelValue", "uuid-glm");
+    await flush();
+    expect(selectRootsOf(wrapper)[3].props("modelValue")).toBe("uuid-glm");
+    // 手动改选后警示消隐、提交恢复。
+    expect(byTestId("gcfg-preset-error")).toBeNull();
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("preset 参与者被禁用 → 该行留空 + 行级「已被禁用」警示 + 提交禁用", async () => {
+    const catalog = GC_MODEL_LIST.map((m) =>
+      m.id === "uuid-glm" ? { ...m, providerDisabled: true } : m,
+    );
+    const wrapper = mountModal({ mode: "create" }, catalog);
+    await flush();
+    await pickPreset(wrapper, "review");
+
+    const roots = selectRootsOf(wrapper);
+    expect(roots[0].props("modelValue")).toBe(""); // 架构行 glm 被禁 → 留空
+    expect(roots[1].props("modelValue")).toBe("uuid-flash");
+    const bar = byTestId("gcfg-preset-error");
+    expect(bar?.textContent).toContain("参与者「架构」的模型「glm-5.3」已被禁用");
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("edit 回显:本行禁用模型可见可切走,别行下拉不提供(跨行泄漏修复)", async () => {
+    const catalog = [
+      { ...MODEL_LIST[0], id: "m1", disabled: true },
+      MODEL_LIST[1],
+    ];
+    const initial = [
+      { name: "A", model: "m1" },
+      { name: "B", model: "m2" },
+    ];
+    // 行 0(指向禁用 m1):本行下拉回显 m1。
+    const wrapper = mountModal(
+      {
+        mode: "edit",
+        sessionId: "s-edit",
+        initialParticipants: initial as never,
+      },
+      catalog,
+    );
+    await flush();
+    const row0Options = await openOptions("gcfg-model-0");
+    expect(row0Options).toContain("GPT-4 (OpenAI)"); // 回显:可见可切走
+    expect(row0Options).toContain("Claude 3.5 (Anthropic)");
+    // 编辑态 roster 行指向禁用模型不阻塞提交(已在用的会话不受影响)。
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
+    wrapper.unmount();
+
+    // 行 1(启用 m2):下拉不提供 m1 —— 原全局 pinned Set 会把 m1 带进
+    // 每一行的选项里(本用例锁死的回归点)。
+    const wrapper2 = mountModal(
+      {
+        mode: "edit",
+        sessionId: "s-edit",
+        initialParticipants: initial as never,
+      },
+      catalog,
+    );
+    await flush();
+    const row1Options = await openOptions("gcfg-model-1");
+    expect(row1Options).toEqual(["Claude 3.5 (Anthropic)"]); // m1 不在
+    wrapper2.unmount();
   });
 });

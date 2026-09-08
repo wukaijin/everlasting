@@ -44,7 +44,9 @@ export function composePersonaMd(kind: string): string | null {
 }
 
 /** `resolveModelRef` 可消费的最小模型形状(models store 的
- *  `ModelWithProvider` 的结构子集;调用方直接传 `models.models ?? []`)。 */
+ *  `ModelWithProvider` 的结构子集)。传**哪种目录**由调用方定:create/
+ *  预填路径传 `enabledModels`(禁用模型不得静默预填,09-09);禁用反诊/
+ *  只读预览传全量 `models.models`。 */
 export interface ModelRefLike {
   id: string;
   modelName: string;

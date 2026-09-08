@@ -1239,4 +1239,102 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
       );
     }
   });
+
+  // ------------------------------------------------------------------
+  // provider/model 禁用过滤(09-09-gc-disabled-model-leak):preset 预填
+  // 只对启用目录解析,提交对解析结果二次校验有效禁用;session 模型与
+  // gc 主持人两下拉独立成表(原共用一个 pinned list 互相泄漏)。
+  // ------------------------------------------------------------------
+
+  /** 同 fillGcCreateForm,但模型目录可注入(禁用态用例的 catalog 带-disabled
+   *  / providerDisabled 变体)。 */
+  async function fillGcCreateFormWith(models: unknown[]) {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_scheduled_tasks") return [];
+      if (cmd === "list_sessions") {
+        return [
+          {
+            id: "s1",
+            title: args?.projectId === "p1" ? "旧会话" : "beta 会话",
+            session_type: "chat",
+          },
+          { id: "s-gc-run", title: "上一场审议", session_type: "group_chat" },
+        ];
+      }
+      if (cmd === "list_models") return models;
+      if (cmd === "get_default_model") return null;
+      return null;
+    });
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("每周审议");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "group_chat");
+    return { w, form };
+  }
+
+  /** gc 档主持人 SelectRoot 定位:表单 SelectRoot 个数随档位/结束条件
+   *  增减(0=project,1=preset,kind/unit/endMode 若干……),序号脆弱;
+   *  按 trigger 的 data-testid 结构化定位(subtree 含 sched-gc-moderator)。 */
+  function moderatorRootOf(form: ReturnType<typeof openForm>) {
+    return form.findAllComponents(SelectRoot).find((r: {
+      find: (sel: string) => { exists: () => boolean };
+    }) => r.find('[data-testid="sched-gc-moderator"]').exists());
+  }
+
+  it("主持人模型被禁用(provider 级)→ 主持人不预填;提交报「已被禁用」不发 IPC", async () => {
+    const catalog = GC_MODELS.map((m) =>
+      m.id === "uuid-mini" ? { ...m, providerDisabled: true } : m,
+    );
+    const { w, form } = await fillGcCreateFormWith(catalog);
+    // preset 默认 MiniMax-M3 被禁 → 不预填(启用目录解析失败),下拉以
+    // placeholder 渲染(v-if 放开手动改选路径)。
+    const moderatorRoot = moderatorRootOf(form);
+    expect(moderatorRoot).toBeTruthy();
+    expect(moderatorRoot!.props("modelValue")).toBeUndefined();
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    expect(w.find(".sched-tab__error").text()).toContain(
+      "预设主持人模型「MiniMax-M3」已被禁用,请先在「模型」页启用",
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "create_scheduled_task",
+      expect.anything(),
+    );
+  });
+
+  it("参与者模型被禁用 → 提交报参与者「已被禁用」不发 IPC", async () => {
+    const catalog = GC_MODELS.map((m) =>
+      m.id === "uuid-glm" ? { ...m, disabled: true } : m,
+    );
+    const { w } = await fillGcCreateFormWith(catalog);
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    expect(w.find(".sched-tab__error").text()).toContain(
+      "参与者「架构」的模型「glm-5.3」已被禁用,请先在「模型」页启用",
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "create_scheduled_task",
+      expect.anything(),
+    );
+  });
+
+  it("主持人下拉守卫:emit 禁用 id 被拒,emit 启用 id 放行(字段内回显不越界)", async () => {
+    const catalog = GC_MODELS.map((m) =>
+      m.id === "uuid-mini" ? { ...m, disabled: true } : m,
+    );
+    const { w, form } = await fillGcCreateFormWith(catalog);
+    const moderatorRoot = moderatorRootOf(form)!;
+    // 守卫拒选禁用 uuid-mini(有效主持人保持空 = 提交时报错)。
+    moderatorRoot.vm.$emit("update:modelValue", "uuid-mini");
+    await flushPromises();
+    expect(moderatorRootOf(form)!.props("modelValue")).toBeUndefined();
+    // 改选启用 uuid-glm 放行。
+    moderatorRoot.vm.$emit("update:modelValue", "uuid-glm");
+    await flushPromises();
+    expect(moderatorRootOf(form)!.props("modelValue")).toBe("uuid-glm");
+    expect(w.find(".sched-tab__error").exists()).toBe(false);
+  });
 });

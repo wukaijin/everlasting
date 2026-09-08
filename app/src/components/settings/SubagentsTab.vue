@@ -77,21 +77,20 @@ const sortedRows = computed<SubagentWithModelRow[]>(() => {
  *  reka-ui SelectItem loop (grouping via SelectGroup / SelectLabel
  *  was dropping the popover contents in the Tauri webview).
  *
- *  2026-09-07 (provider-model-disable): 选项 = 启用模型 ∪ 各行当前已
- *  解析的模型 id —— 禁用模型不再可被「改选」,但某行已指向它时仍要
- *  作为选项出现(否则下拉里该行显示为空,用户无从查看/切换)。 */
-const flatModelOptions = computed<ModelWithProvider[]>(() => {
+ *  2026-09-07 (provider-model-disable) + 09-09 修正:选项 = 启用模型
+ *  ∪ **本行**当前已解析的模型 id —— 禁用模型不再可被「改选」,但本行
+ *  已指向它时仍要作为选项出现(否则下拉里该行显示为空,用户无从查看/
+ *  切换)。原版把所有行的已选值收进一个全局 pinned Set:任一行指向禁用
+ *  模型,每行的下拉都会提供它,别行可把禁用模型新选进来;回显是行内
+ *  概念,pinning 收敛到行内。 */
+function rowModelOptions(row: SubagentWithModelRow): ModelWithProvider[] {
   const groups = models.modelsGroupedByProvider;
   if (!Array.isArray(groups)) return [];
-  const pinned = new Set(
-    sortedRows.value
-      .map((r) => r.resolvedModelId)
-      .filter((id): id is string => id != null),
-  );
+  const pinnedId = row.resolvedModelId ?? "";
   const out: ModelWithProvider[] = [];
   for (const g of groups) {
     for (const m of g.models) {
-      if (pinned.has(m.id) || !(m.disabled || m.providerDisabled)) {
+      if (m.id === pinnedId || !(m.disabled || m.providerDisabled)) {
         out.push(m);
       }
     }
@@ -109,7 +108,7 @@ const flatModelOptions = computed<ModelWithProvider[]>(() => {
     if (pa !== pb) return pa.localeCompare(pb);
     return a.displayName.localeCompare(b.displayName);
   });
-});
+}
 
 /** Resolves a model id to its provider display name for the
  *  per-row SelectItem prefix label. */
@@ -342,9 +341,10 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
                     <SelectItemText>继承父级 (inherit)</SelectItemText>
                   </SelectItem>
                   <!-- Provider-grouped model list, flattened
-                       (see UI fix #2 note). -->
+                       (see UI fix #2 note). Per-row options so a
+                       disabled model only echoes in its own row. -->
                   <SelectItem
-                    v-for="m in flatModelOptions"
+                    v-for="m in rowModelOptions(row)"
                     :key="m.id"
                     :value="m.id"
                     class="subagents-tab__option"

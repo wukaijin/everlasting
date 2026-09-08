@@ -77,7 +77,7 @@ import type {
 import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useConfigStore } from "../../stores/config";
-import { useModelsStore } from "../../stores/models";
+import { useModelsStore, isModelEffectivelyDisabled } from "../../stores/models";
 import { transport } from "../../transport";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import {
@@ -320,30 +320,36 @@ function onPickIntervalUnit(v: unknown): void {
   if (INTERVAL_UNITS.some((x) => x.value === u)) form.intervalUnit = u;
 }
 
-/** 模型下拉(新建专用 session 时可选):平铺列表带 provider 前缀
- *  (SubagentsTab 同款 —— reka 分组原语在 Tauri webview 会丢内容)。
- *  `?? []`:load 失败 / 未加载时 models 可能仍为 null(防御,下拉空)。
- *  2026-09-07 (provider-model-disable): 选项 = 启用模型 ∪ 表单当前值
- *  (session 模型 + 主持人)—— 禁用模型不可改选,但编辑态回显的旧值
- *  仍要可见可切走。 */
-const flatModelOptions = computed(() => {
+/** 模型选项工厂(09-09 拆分):启用模型 ∪ **本字段自己**的当前值。
+ *  原版把 session 模型 + gc 主持人收进一个全局 pinned Set —— 一个字段
+ *  指向禁用模型,另一个字段的下拉也会提供它;回显是字段内概念,pinning
+ *  收敛到调用方传参。session 模型(编辑态回显)与 gc 主持人各持一表。 */
+function modelOptionsFor(currentId: string | null | undefined) {
   const all = models.models ?? [];
-  const pinned = new Set(
-    [form.modelId, gcModeratorModelId.value].filter((v): v is string => !!v),
-  );
+  const pinnedId = currentId ?? "";
   return all
-    .filter((m) => pinned.has(m.id) || !(m.disabled || m.providerDisabled))
+    .filter((m) => m.id === pinnedId || !isModelEffectivelyDisabled(m))
     .slice()
     .sort(
       (a, b) =>
         a.providerDisplayName.localeCompare(b.providerDisplayName) ||
         a.displayName.localeCompare(b.displayName),
     );
-});
+}
+
+/** session 模型下拉(新建专用 session / per_run 档):平铺列表带
+ *  provider 前缀(SubagentsTab 同款 —— reka 分组原语在 Tauri webview
+ *  会丢内容)。 */
+const sessionModelOptions = computed(() => modelOptionsFor(form.modelId));
+
+/** gc 主持人下拉(group_chat 档):与 session 模型独立成表,互不 pin。 */
+const gcModeratorOptions = computed(() =>
+  modelOptionsFor(gcModeratorModelId.value),
+);
 
 function onPickModel(v: unknown): void {
   const m = normalizeSelectValue(v);
-  if (m === "" || flatModelOptions.value.some((o) => o.id === m)) form.modelId = m;
+  if (m === "" || sessionModelOptions.value.some((o) => o.id === m)) form.modelId = m;
 }
 
 // --- M4a group_chat 档:解析 / 展开 / 预览 ---------------------------------
@@ -359,25 +365,28 @@ function onPickGcPreset(v: unknown): void {
   const k = normalizeSelectValue(v);
   if (!k || !(k in GC_PRESETS.presets)) return;
   form.gcpreset = k;
-  // 换 preset = 重置主持人跟随新 preset 默认(用户可再改选)。
+  // 换 preset = 重置主持人跟随新 preset 默认(用户可再改选)。09-09:
+  // 只对启用目录解析 —— 禁用模型不预填,提交时 expandGcConfig 给出
+  // 「已被禁用」错误引导启用(与建群弹窗同语义)。
   form.gcModeratorId =
-    resolveModelRef(models.models ?? [], GC_PRESETS.presets[k]!.moderator_model) ?? "";
+    resolveModelRef(models.enabledModels, GC_PRESETS.presets[k]!.moderator_model) ?? "";
 }
 
 function onPickGcModerator(v: unknown): void {
   const m = normalizeSelectValue(v);
-  if (m === "" || flatModelOptions.value.some((o) => o.id === m)) {
+  if (m === "" || gcModeratorOptions.value.some((o) => o.id === m)) {
     form.gcModeratorId = m;
   }
 }
 
 /** 生效的主持人模型:显式改选优先,否则当前 preset 的默认(解析自
- *  模型目录;未解析出 = 空串,提交时报错)。 */
+ *  **启用**目录;未解析出 = 空串,提交时报错)。09-09:启用目录解析,
+ *  禁用的 preset 默认主持人不落表单。 */
 const gcModeratorModelId = computed<string>(() => {
   if (form.gcModeratorId) return form.gcModeratorId;
   const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
   return preset
-    ? (resolveModelRef(models.models ?? [], preset.moderator_model) ?? "")
+    ? (resolveModelRef(models.enabledModels, preset.moderator_model) ?? "")
     : "";
 });
 
@@ -473,7 +482,9 @@ const gcPresetDescription = computed<string>(
 /** 展开 preset → `group_chat_config`(提交时;design §3「展开时机 =
  *  创建/编辑提交」)。模型名经 `resolveModelRef` 解析成 UUID(与表单
  *  其余下拉同源 models store),persona_md 逐字来自 JSON。任一模型/
- *  persona 缺失 → 返回用户可读错误,不发起 IPC。 */
+ *  persona 缺失或**有效禁用** → 返回用户可读错误,不发起 IPC(09-09:
+ *  禁用是选用层开关,新建定时审议不得建在禁用模型上;提交时二次校验
+ *  同时兜住「表单开着时被禁用」的竞态)。 */
 function expandGcConfig():
   | { config: GroupChatTaskConfig }
   | { error: string } {
@@ -481,8 +492,13 @@ function expandGcConfig():
   if (!preset) return { error: "请选择审议预设" };
   const moderatorId = gcModeratorModelId.value;
   if (!moderatorId) {
+    return { error: gcRefUnavailableError("预设主持人模型", preset.moderator_model) };
+  }
+  // 竞态护栏:显式改选时启用、提交时已禁用的主持人。
+  const moderatorModel = (models.models ?? []).find((m) => m.id === moderatorId);
+  if (moderatorModel && isModelEffectivelyDisabled(moderatorModel)) {
     return {
-      error: `预设主持人模型「${preset.moderator_model}」不在模型目录中,请先在「模型」页添加`,
+      error: `主持人模型「${moderatorModel.displayName}」已被禁用,请先在「模型」页启用`,
     };
   }
   const participants: GroupChatTaskParticipant[] = [];
@@ -490,7 +506,13 @@ function expandGcConfig():
     const id = resolveModelRef(models.models ?? [], p.model);
     if (!id) {
       return {
-        error: `参与者「${p.name}」的模型「${p.model}」不在模型目录中,请先在「模型」页添加`,
+        error: gcRefUnavailableError(`参与者「${p.name}」的模型`, p.model),
+      };
+    }
+    const row = (models.models ?? []).find((m) => m.id === id);
+    if (row && isModelEffectivelyDisabled(row)) {
+      return {
+        error: `参与者「${p.name}」的模型「${p.model}」已被禁用,请先在「模型」页启用`,
       };
     }
     const persona = composePersonaMd(p.persona);
@@ -507,6 +529,17 @@ function expandGcConfig():
       ...(gcParsedBudget.value !== null ? { token_budget: gcParsedBudget.value } : {}),
     },
   };
+}
+
+/** preset 引用两态文案:全目录解析得到但有效禁用 → 「已被禁用」;
+ *  解析不到 → 「不在模型目录中」(与建群弹窗 presetWarnings 同形)。 */
+function gcRefUnavailableError(label: string, ref: string): string {
+  const id = resolveModelRef(models.models ?? [], ref);
+  const row = id ? (models.models ?? []).find((m) => m.id === id) : undefined;
+  if (row && isModelEffectivelyDisabled(row)) {
+    return `${label}「${ref}」已被禁用,请先在「模型」页启用`;
+  }
+  return `${label}「${ref}」不在模型目录中,请先在「模型」页添加`;
 }
 
 /** 本地 `yyyy-MM-dd` 字符串(`AppDatePicker` 值)。 */
@@ -1171,7 +1204,7 @@ onMounted(async () => {
               >
                 <SelectViewport class="sched-tab__dropdown-viewport">
                   <SelectItem
-                    v-for="m in flatModelOptions"
+                    v-for="m in sessionModelOptions"
                     :key="m.id"
                     :value="m.id"
                     class="sched-tab__option"
@@ -1239,8 +1272,12 @@ onMounted(async () => {
           >
             {{ gcSnapshotHint }}
           </p>
+          <!-- 主持人下拉:有效主持人已解析,或 preset 已选但默认主持人
+               被禁用/缺失(09-09:此时也要渲染,placeholder 引导手动改选
+               启用模型,不该只剩提交报错一条路)。两态都空 = 编辑态未重选
+               preset → 走下方存档只读回显。 -->
           <div
-            v-if="gcModeratorModelId"
+            v-if="gcModeratorModelId || form.gcpreset"
             class="sched-tab__target-extra"
           >
             <span class="sched-tab__target-extra-label">主持人模型</span>
@@ -1266,7 +1303,7 @@ onMounted(async () => {
                 >
                   <SelectViewport class="sched-tab__dropdown-viewport">
                     <SelectItem
-                      v-for="m in flatModelOptions"
+                      v-for="m in gcModeratorOptions"
                       :key="m.id"
                       :value="m.id"
                       class="sched-tab__option"

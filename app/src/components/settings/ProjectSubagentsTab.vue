@@ -57,20 +57,18 @@ const projectRows = computed<SubagentWithModelRow[]>(() => {
 });
 
 /** 扁平模型选项(provider 前缀排序),镜像 SubagentsTab。
- *  2026-09-07 (provider-model-disable): 选项 = 启用模型 ∪ 各行当前
- *  已解析的模型 id(禁用模型不可改选,但已指向它的行仍需显示)。 */
-const flatModelOptions = computed<ModelWithProvider[]>(() => {
+ *  2026-09-07 (provider-model-disable) + 09-09 修正:选项 = 启用模型 ∪
+ *  **本行**当前已解析的模型 id(禁用模型不可改选,但本行已指向它时仍
+ *  需显示)。原版全局 pinned Set 会让任一行的禁用模型出现在所有行的
+ *  下拉里;回显是行内概念,pinning 收敛到行内。 */
+function rowModelOptions(row: SubagentWithModelRow): ModelWithProvider[] {
   const groups = models.modelsGroupedByProvider;
   if (!Array.isArray(groups)) return [];
-  const pinned = new Set(
-    projectRows.value
-      .map((r) => r.resolvedModelId)
-      .filter((id): id is string => id != null),
-  );
+  const pinnedId = row.resolvedModelId ?? "";
   const out: ModelWithProvider[] = [];
   for (const g of groups) {
     for (const m of g.models) {
-      if (pinned.has(m.id) || !(m.disabled || m.providerDisabled)) {
+      if (m.id === pinnedId || !(m.disabled || m.providerDisabled)) {
         out.push(m);
       }
     }
@@ -81,7 +79,7 @@ const flatModelOptions = computed<ModelWithProvider[]>(() => {
     if (pa !== pb) return pa.localeCompare(pb);
     return a.displayName.localeCompare(b.displayName);
   });
-});
+}
 
 function providerLabelFor(modelId: string): string {
   const groups = models.modelsGroupedByProvider ?? [];
@@ -219,7 +217,7 @@ function isLoading(name: string): boolean {
                       <SelectItemText>继承父级 (inherit)</SelectItemText>
                     </SelectItem>
                     <SelectItem
-                      v-for="m in flatModelOptions"
+                      v-for="m in rowModelOptions(row)"
                       :key="m.id"
                       :value="m.id"
                       class="proj-subagents__option"

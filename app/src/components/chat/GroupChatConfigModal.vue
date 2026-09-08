@@ -56,7 +56,7 @@ import {
   RadioGroupIndicator,
 } from "reka-ui";
 import { useChatStore } from "../../stores/chat";
-import { useModelsStore } from "../../stores/models";
+import { useModelsStore, isModelEffectivelyDisabled } from "../../stores/models";
 import type {
   ParticipantConfig,
   SessionSummary,
@@ -175,18 +175,16 @@ const isValid = computed(() => {
 // 被禁用模型的行,显示名仍要可解析)。
 const availableModels = computed(() => modelsStore.models ?? []);
 
-// 2026-09-07 (provider-model-disable): 可选项 = 启用模型 ∪ 草稿各行
-// 已选 id ∪ 主持人当前值。禁用模型不再可被改选,但编辑态回显的旧阵容
-// 仍要能显示与保留(后端 catalog 不滤,禁用不影响已在用的群聊分发)。
-const selectableModels = computed(() => {
-  const pinned = new Set([
-    ...participants.value.map((p) => p.model),
-    moderatorId.value,
-  ].filter(Boolean));
-  return modelsStore.models.filter(
-    (m) => pinned.has(m.id) || !(m.disabled || m.providerDisabled),
+// 2026-09-07 (provider-model-disable) + 09-09 修正:可选项 = 启用模型,
+// 外加**本字段自己**的当前值(edit 态回显的旧阵容仍可见可切走)。09-07
+// 版把「各行已选值 ∪ 主持人」收进一个全局 pinned Set —— 任一行指向禁用
+// 模型 X,所有行的下拉都会提供 X,别行可把 X 新选进来,与「禁用模型不再
+// 可被改选」矛盾;回显是行内概念,pinning 收敛到行内(调用方传当前值)。
+function modelOptionsFor(currentId: string) {
+  return (modelsStore.models ?? []).filter(
+    (m) => m.id === currentId || !isModelEffectivelyDisabled(m),
   );
-});
+}
 
 // ---------------------------------------------------------------------
 // gce-m4c (09-08): create 模式的 preset 单选卡 + 主持人 Select
@@ -223,22 +221,24 @@ const selectedPreset = ref("");
 const moderatorId = ref("");
 
 /** 选中 preset → 立即展开预填阵容 + 主持人默认(persona_md =
- *  composePersonaMd 展开,与 script/定时表单逐字同形;模型引用解析
- *  失败的行留空模型,由行内空 Select + 提示条暴露,绝不静默造数)。 */
+ *  composePersonaMd 展开,与 script/定时表单逐字同形)。模型引用只对
+ *  **启用目录**解析(09-09:全目录解析会把禁用模型静默预填进 create
+ *  阵容,绕过 09-07 的选用层过滤);禁用/缺失的引用留空模型,由行内空
+ *  Select + 提示条暴露,绝不静默造数。 */
 function applyPreset(key: string): void {
   const def = GC_PRESETS.presets[key];
   if (!def) return;
+  const enabled = modelsStore.enabledModels;
   participants.value = def.participants.map((p) => {
     const persona = composePersonaMd(p.persona);
     const out: ParticipantConfig = {
       name: p.name,
-      model: resolveModelRef(modelsStore.models ?? [], p.model) ?? "",
+      model: resolveModelRef(enabled, p.model) ?? "",
     };
     if (persona !== null) out.persona_md = persona;
     return out;
   });
-  moderatorId.value =
-    resolveModelRef(modelsStore.models ?? [], def.moderator_model) ?? "";
+  moderatorId.value = resolveModelRef(enabled, def.moderator_model) ?? "";
 }
 
 function onPickPreset(v: unknown): void {
@@ -250,27 +250,45 @@ function onPickPreset(v: unknown): void {
 
 function onPickModerator(v: unknown): void {
   const m = normalizeSelectValue(v);
-  if (m === "" || selectableModels.value.some((o) => o.id === m)) {
+  if (m === "" || modelOptionsFor(moderatorId.value).some((o) => o.id === m)) {
     moderatorId.value = m;
   }
 }
 
+/** preset 引用落在禁用模型上的反诊(全目录解析得到,但有效禁用)——
+ *  供提示条给出区别于「不在目录」的文案。复用 resolveModelRef 的两趟
+ *  解析,与 applyPreset 的启用目录解析同形。 */
+function presetRefDisabled(ref: string): boolean {
+  const id = resolveModelRef(modelsStore.models ?? [], ref);
+  if (!id) return false;
+  const m = (modelsStore.models ?? []).find((x) => x.id === id);
+  return !!m && isModelEffectivelyDisabled(m);
+}
+
 /** preset 展开暴露的模型缺失(创建态提示条;绝不静默降级——prd R2):
- *  主持人解析失败显示 preset 原名(定时表单同款文案);参与行模型
- *  解析失败读草稿空模型行(用户手动改选后自然消隐)。 */
+ *  主持人解析失败显示 preset 原名;两态文案——「已被禁用」引导到「模型」
+ *  页启用,「不在模型目录中」引导添加(09-09:禁用是选用层开关,提示
+ *  要说清去向)。参与行读草稿空模型行(用户手动改选后自然消隐)。 */
 const presetWarnings = computed<string[]>(() => {
   if (props.mode !== "create" || !selectedPreset.value) return [];
   const warnings: string[] = [];
   const def = GC_PRESETS.presets[selectedPreset.value]!;
   if (!moderatorId.value) {
     warnings.push(
-      `预设主持人模型「${def.moderator_model}」不在模型目录中,请先在「模型」页添加`,
+      presetRefDisabled(def.moderator_model)
+        ? `预设主持人模型「${def.moderator_model}」已被禁用,请先在「模型」页启用`
+        : `预设主持人模型「${def.moderator_model}」不在模型目录中,请先在「模型」页添加`,
     );
   }
   for (const row of participants.value) {
     if (!row.model.trim()) {
+      // 行名回查 preset 参与者(applyPreset 按名预填)拿模型引用做禁用
+      // 反诊;行已改名对不上 → 退回通用「不在目录」文案(与 09-08 同形)。
+      const ref = def.participants.find((pp) => pp.name === row.name)?.model;
       warnings.push(
-        `参与者「${row.name || "(未命名)"}」的模型不在模型目录中,请先在「模型」页添加`,
+        ref && presetRefDisabled(ref)
+          ? `参与者「${row.name}」的模型「${ref}」已被禁用,请先在「模型」页启用`
+          : `参与者「${row.name || "(未命名)"}」的模型不在模型目录中,请先在「模型」页添加`,
       );
     }
   }
@@ -434,8 +452,8 @@ watch(
       // 模型(禁用模型不出现在选项里,也不做默认)。preset 不预选
       // (design §4.1:用户点卡才展开预填),主持人跟随。
       participants.value = [
-        { name: "", model: selectableModels.value[0]?.id ?? "" },
-        { name: "", model: selectableModels.value[0]?.id ?? "" },
+        { name: "", model: modelsStore.enabledModels[0]?.id ?? "" },
+        { name: "", model: modelsStore.enabledModels[0]?.id ?? "" },
       ];
       selectedPreset.value = "";
       moderatorId.value = "";
@@ -473,7 +491,7 @@ function addParticipant() {
   if (participants.value.length >= MAX_PARTICIPANTS) return;
   participants.value.push({
     name: "",
-    model: selectableModels.value[0]?.id ?? "",
+    model: modelsStore.enabledModels[0]?.id ?? "",
   });
 }
 
@@ -679,7 +697,7 @@ function modelLabel(id: string): string {
                     >
                       <SelectViewport>
                         <SelectItem
-                          v-for="m in selectableModels"
+                          v-for="m in modelOptionsFor(participants[idx].model)"
                           :key="m.id"
                           :value="m.id"
                           class="gcfg-select-item"
@@ -746,7 +764,7 @@ function modelLabel(id: string): string {
                 >
                   <SelectViewport>
                     <SelectItem
-                      v-for="m in selectableModels"
+                      v-for="m in modelOptionsFor(moderatorId)"
                       :key="m.id"
                       :value="m.id"
                       class="gcfg-select-item"
