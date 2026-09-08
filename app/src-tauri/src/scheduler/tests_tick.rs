@@ -1161,6 +1161,122 @@ async fn group_chat_task_opens_new_discussion_with_attribution_metadata() {
     );
 }
 
+/// gce-m4c(09-08):`group_chat_config.token_budget` → fire 建群 metadata
+/// 的 `token_budget` 键。两态锁定:Some → 键带上原值;None(键缺失)→
+/// **不写 null 键**(转录导出/检索按原始 JSON 读 metadata,缺键 = 不限
+/// 的既有语义不变)。预算到线的**停机生效**由 tests_group_chat 的 C1.2
+/// 剧本证明(metadata 键 → 轮头硬停),这里锁透传链本身。
+#[tokio::test(flavor = "multi_thread")]
+async fn group_chat_fire_carries_token_budget_only_when_declared() {
+    // parse 校验:0 不是合法预算(不限 = 省略键,不是 0)。
+    assert!(crate::db::scheduled_tasks::parse_group_chat_task_config(
+        r#"{"moderator_model_id":"m","participants":[{"name":"a","model_id":"m"}],"token_budget":0}"#
+    )
+    .is_err());
+
+    let fx = make_fixture().await;
+    let models = crate::db::list_models(&fx.state.db).await.unwrap();
+    let mut ids = models.into_iter().map(|m| m.model.id);
+    let (m0, m1) = (
+        ids.next().expect("seeded model 0"),
+        ids.next().expect("seeded model 1"),
+    );
+
+    let spec = scheduler::parse_schedule(r#"{"kind":"interval","every_min":30}"#).expect("valid");
+    let with_budget = serde_json::json!({
+        "moderator_model_id": m0,
+        "participants": [{ "name": "架构", "model_id": m1, "persona_md": "视角" }],
+        "token_budget": 400_000u64,
+    })
+    .to_string();
+    let task_with = insert_scheduled_task(
+        &fx.state.db,
+        NewScheduledTask {
+            project_id: fx.project_id.clone(),
+            target_session_id: None,
+            target_mode: crate::db::scheduled_tasks::target_modes::GROUP_CHAT.into(),
+            model_id: None,
+            name: "带预算".into(),
+            prompt: "复盘".into(),
+            schedule_json: serde_json::to_string(&spec).unwrap(),
+            enabled: true,
+            created_by: "user".into(),
+            next_fire_at: scheduler::now_epoch_ms() + 60_000,
+            max_runs: None,
+            ends_at: None,
+            group_chat_config: Some(with_budget),
+        },
+    )
+    .await
+    .expect("insert budget task");
+    let without_budget = serde_json::json!({
+        "moderator_model_id": m0,
+        "participants": [{ "name": "架构", "model_id": m1, "persona_md": "视角" }],
+    })
+    .to_string();
+    let task_without = insert_scheduled_task(
+        &fx.state.db,
+        NewScheduledTask {
+            project_id: fx.project_id.clone(),
+            target_session_id: None,
+            target_mode: crate::db::scheduled_tasks::target_modes::GROUP_CHAT.into(),
+            model_id: None,
+            name: "不带预算".into(),
+            prompt: "复盘".into(),
+            schedule_json: serde_json::to_string(&spec).unwrap(),
+            enabled: true,
+            created_by: "user".into(),
+            next_fire_at: scheduler::now_epoch_ms() + 60_000,
+            max_runs: None,
+            ends_at: None,
+            group_chat_config: Some(without_budget),
+        },
+    )
+    .await
+    .expect("insert budget-less task");
+    // due 判定走 schedule(interval)vs created_at —— 回填 6h 让两个任务
+    // 都到点(seed_group_task 同款手法;next_fire_at 只是展示列)。
+    for id in [&task_with.id, &task_without.id] {
+        sqlx::query("UPDATE scheduled_tasks SET created_at = ? WHERE id = ?")
+            .bind(scheduler::now_epoch_ms() - 6 * 3_600_000)
+            .bind(id)
+            .execute(&fx.state.db)
+            .await
+            .expect("backdate created_at");
+    }
+
+    let mut pending = HashMap::new();
+    scheduler::scheduler_tick(&fx.state, &mut pending).await;
+
+    for (task, expect_budget) in [(&task_with, true), (&task_without, false)] {
+        let row = task_row(&fx, &task.id).await;
+        assert_eq!(
+            row.last_fire_outcome.as_deref(),
+            Some("started"),
+            "task {}: fire accepted",
+            task.name
+        );
+        let sid = row.last_run_session_id.clone().expect("run session");
+        let loaded = crate::db::sessions::load_session(&fx.state.db, &sid)
+            .await
+            .unwrap()
+            .expect("discussion session");
+        let meta = loaded.session.metadata.expect("metadata");
+        if expect_budget {
+            assert_eq!(
+                meta["token_budget"],
+                serde_json::json!(400_000u64),
+                "declared budget lands in session metadata verbatim"
+            );
+        } else {
+            assert!(
+                meta.get("token_budget").is_none(),
+                "no null key for budget-less tasks: {meta}"
+            );
+        }
+    }
+}
+
 /// 四态第 1 臂 busy:上一场仍在跑(内存注册表)→ 跳过 + 审计
 /// skipped_busy;消费 due 但**不计数**;last_run_session_id 保留旧值
 /// (COALESCE);不建新 session。

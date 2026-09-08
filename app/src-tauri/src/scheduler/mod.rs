@@ -1040,12 +1040,18 @@ async fn open_new_group_discussion(
             v
         })
         .collect();
-    let metadata = serde_json::json!({
+    // gce-m4c(09-08):`token_budget` 只在 Some 时插键——fire 白名单是
+    // 枚举重建而非原样展开,显式不写 null(转录导出/检索按原始 JSON 读
+    // metadata,保守不落 null 键;键缺失 = 不限的既有语义不变)。
+    let mut metadata = serde_json::json!({
         "participants": participants_meta,
         "created_via": "scheduled",
         "scheduled_task_id": task.id,
         "scheduled_task_name": task.name,
     });
+    if let Some(budget) = config.token_budget {
+        metadata["token_budget"] = serde_json::json!(budget);
+    }
     let session = match crate::commands::sessions::create_session_in_pool(
         &state.db,
         task.project_id.clone(),

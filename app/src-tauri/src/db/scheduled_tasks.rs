@@ -65,6 +65,12 @@ pub struct GroupChatTaskParticipant {
 pub struct GroupChatTaskConfig {
     pub moderator_model_id: String,
     pub participants: Vec<GroupChatTaskParticipant>,
+    /// gce-m4c(09-08,成本治理):该任务每场讨论的 token 预算上限
+    /// (计费口径 = C1.2 四字段求和)。`None`(键缺失)= 不限——
+    /// additive:既有 `group_chat_config` 行反序列化不变。fire 建群时
+    /// Some 才写 `sessions.metadata.token_budget`(见 `fire_group_chat`)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
 }
 
 /// 解析 + 结构校验 `group_chat_config` JSON(create/update 共用):serde
@@ -75,6 +81,11 @@ pub fn parse_group_chat_task_config(raw: &str) -> Result<GroupChatTaskConfig, St
         serde_json::from_str(raw).map_err(|e| format!("群聊配置 JSON 非法: {e}"))?;
     if config.moderator_model_id.trim().is_empty() {
         return Err("群聊配置缺少 moderator_model_id".to_string());
+    }
+    if let Some(budget) = config.token_budget {
+        if budget == 0 {
+            return Err("群聊配置 token_budget 必须是正整数(不限请省略该键)".to_string());
+        }
     }
     if config.participants.is_empty() {
         return Err("群聊配置的参与者名单不能为空".to_string());
