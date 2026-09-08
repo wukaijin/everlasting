@@ -19,7 +19,10 @@
 //   - 09-09(用户反馈两则):① 补显式「自定义」卡——原 RadioGroup 选中
 //     preset 后无路径回到无预设态,自定义卡 = 无预设初始态的入口;② PC
 //     两栏布局:preset 卡左栏化(SettingsModal 左导航同形)+ 弹窗扩宽,
-//     移动端折回顶部单栏。
+//     移动端折回顶部单栏。③ 同日移动端落地修复:左栏 `flex: none` 特异性
+//     压过单类 flex-basis 覆写,preset 卡按 max-content 撑破窄容器(描述
+//     被裁);全局全屏块的 height 又被 scoped max-height:80vh 压住(§5.4)
+//     —— 均在下方 767 块用同形选择器源序覆写,header/footer 叠 safe-area。
 //   - edit: 阵容编辑照旧(不引入 preset 重选)+ 主持人只读区照旧 +
 //     成本区(per-speaker「tokens · 缓存率」合并行 + 预算进度条;
 //     `group_chat_token_usage` + `group_chat_cache_rates` 两次查询,
@@ -1493,6 +1496,26 @@ function modelLabel(id: string): string {
    此处只做布局自适应:create 两栏回收为单栏滚动列(preset 区折到顶部,
    卡纵排全宽),成本行允许换行)。 --- */
 @media (max-width: 767px) {
+  /* 全屏化补丁(SettingsModal 同款,规范 §5.4 两次踩坑):全局块的
+     height/max-height 带 var(--app-height) 但无 !important,压不过本组件
+     桌面 scoped 的 max-height: 80vh([data-v] 特异性更高;390×844 视口
+     实测截在 675px,footer 悬空 + 底部死区)——同选择器源序靠后覆写回
+     全屏。 */
+  .gcfg-content {
+    height: var(--app-height);
+    max-height: var(--app-height);
+  }
+
+  /* 全屏化后 header 顶到状态栏、footer 贴到屏幕底,各叠 safe-area
+     (viewport-fit=cover;env() 在桌面/无刘海设备 = 0,无害)。 */
+  .gcfg-header {
+    padding-top: calc(10px + var(--safe-area-top));
+  }
+
+  .gcfg-footer {
+    padding-bottom: calc(12px + var(--safe-area-bottom));
+  }
+
   .gcfg-body--create {
     flex-direction: column;
     gap: 12px;
@@ -1518,8 +1541,15 @@ function modelLabel(id: string): string {
     padding: 0;
   }
 
+  /* 卡全宽:必须用与桌面左栏 `flex: none`(.gcfg-body--create 前缀,
+     0,2,0)同形的选择器覆写——单类 `.gcfg-preset-card { flex-basis:
+     100% }` 特异性不够,flex: none 让卡按 max-content 撑破容器(390px
+     视口实测卡宽 449px,长描述被裁且 body 不可横滑)。 */
+  .gcfg-body--create .gcfg-preset-card {
+    flex: 1 1 100%;
+  }
+
   .gcfg-preset-card {
-    flex-basis: 100%;
     min-height: 44px;
   }
 
