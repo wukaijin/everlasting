@@ -539,3 +539,111 @@ async fn mid_flight_session_searchable_by_title_not_summary() {
         "summary is NULL pre-finalize — no summary hit required (AC5)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// total_tokens (09-08-gce-m4c, cost governance)
+// ---------------------------------------------------------------------------
+
+/// Seed one usage-bearing assistant turn (speaker row + trace row)
+/// for a group-chat session — the same derived data the
+/// `group_chat_token_usage` query aggregates.
+async fn seed_usage_turn(
+    pool: &sqlx::SqlitePool,
+    sid: &str,
+    seq: i64,
+    speaker: &str,
+    usage_json: &str,
+) {
+    use crate::db::sessions::persist_turn;
+    use crate::llm::types::{MessageContent, Role};
+    persist_turn(
+        pool,
+        sid,
+        Role::Assistant,
+        &MessageContent::Text(format!("turn {seq}")),
+        seq,
+        None,
+        Some(speaker),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO turn_trace (session_id, run_id, seq, token_usage_json)
+        VALUES (?, '', ?, ?)
+        "#,
+    )
+    .bind(sid)
+    .bind(seq)
+    .bind(usage_json)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn browse_carries_total_tokens_and_none_for_usageless_sessions() {
+    let pool = test_pool().await;
+    let pa = crate::db::projects::create_project(&pool, "pa-cost", "/tmp/gc_pa_cost", false, None)
+        .await
+        .unwrap();
+
+    // Session WITH usage: two speaker turns, four-field sums
+    // 210 + 240 = 450.
+    seed_gc(
+        &pool,
+        &pa.id,
+        "gc-cost",
+        "有消耗的场",
+        Some(&gc_metadata()),
+        Some("结论"),
+        Some("group_chat_end"),
+        "2026-09-05T10:00:00+00:00",
+    )
+    .await;
+    seed_usage_turn(
+        &pool,
+        "gc-cost",
+        1,
+        "Alice",
+        r#"{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"context_input_tokens":1000}"#,
+    )
+    .await;
+    seed_usage_turn(
+        &pool,
+        "gc-cost",
+        2,
+        "moderator",
+        r#"{"input_tokens":200,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"context_input_tokens":200}"#,
+    )
+    .await;
+
+    // Session WITHOUT any turn: total must be None (frontend "—"),
+    // not 0 — "never ran" and "ran but zero-cost" stay distinct.
+    seed_gc(
+        &pool,
+        &pa.id,
+        "gc-fresh",
+        "还没开场的群",
+        Some(&gc_metadata()),
+        None,
+        None,
+        "2026-09-05T09:00:00+00:00",
+    )
+    .await;
+
+    let hits = list_group_chat_sessions(&pool, &GroupChatSessionFilters::default())
+        .await
+        .unwrap();
+    let cost = hits.iter().find(|h| h.session_id == "gc-cost").unwrap();
+    assert_eq!(cost.total_tokens, Some(450), "hit: {cost:?}");
+    let fresh = hits.iter().find(|h| h.session_id == "gc-fresh").unwrap();
+    assert_eq!(fresh.total_tokens, None, "hit: {fresh:?}");
+
+    // The keyword path (search) carries the same column.
+    let found = search_group_chat_discussions(&pool, "有消耗", &GroupChatSessionFilters::default())
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].total_tokens, Some(450));
+}

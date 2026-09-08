@@ -61,6 +61,12 @@ pub struct GroupChatSessionHit {
     /// via `end_discussion` — mid-flight sessions stay searchable by
     /// title / task / participants (AC5).
     pub discussion_summary: Option<String>,
+    /// Total billed tokens of the discussion (09-08-gce-m4c, cost
+    /// governance) — the same four-field sum + row filters as
+    /// [`crate::db::trace::group_chat_token_usage`], so the library
+    /// total and the edit-modal total agree by construction. `None`
+    /// = no usage-bearing turn yet (frontend renders "—").
+    pub total_tokens: Option<u64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -112,7 +118,22 @@ async fn fetch_group_chat_hits(
     let mut sql = String::from(
         r#"
         SELECT s.id, s.project_id, s.title, s.metadata, s.stop_reason,
-               s.discussion_summary, s.created_at, s.updated_at
+               s.discussion_summary, s.created_at, s.updated_at,
+               (
+                   SELECT SUM(
+                       COALESCE(json_extract(t.token_usage_json, '$.input_tokens'), 0)
+                     + COALESCE(json_extract(t.token_usage_json, '$.output_tokens'), 0)
+                     + COALESCE(json_extract(t.token_usage_json, '$.cache_creation_input_tokens'), 0)
+                     + COALESCE(json_extract(t.token_usage_json, '$.cache_read_input_tokens'), 0)
+                   )
+                   FROM turn_trace t
+                   JOIN messages m ON m.session_id = t.session_id AND m.seq = t.seq
+                   WHERE t.session_id = s.id
+                     AND t.run_id = ''
+                     AND t.token_usage_json IS NOT NULL
+                     AND m.role = 'assistant'
+                     AND m.speaker IS NOT NULL
+               ) AS total_tokens
         FROM sessions s
         WHERE s.session_type = 'group_chat'
         "#,
@@ -179,6 +200,11 @@ async fn fetch_group_chat_hits(
             participants,
             stop_reason: r.try_get("stop_reason")?,
             discussion_summary: r.try_get("discussion_summary")?,
+            // SUM over an empty set is SQL NULL → None ("—"); a
+            // usage-bearing session always yields an i64 ≥ 0.
+            total_tokens: r
+                .try_get::<Option<i64>, _>("total_tokens")?
+                .map(|v| v.max(0) as u64),
             created_at: r.try_get("created_at")?,
             updated_at: r.try_get("updated_at")?,
         });
