@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 136
+- **Total Sessions**: 137
 - **Last Active**: 2026-09-09
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1531 | Active |
+| `journal-4.md` | ~1552 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 137 | 2026-09-09 | 群聊禁用模型泄漏修复——preset 启用目录解析 + 行级回显 pinning | `f4e9242b` | `main` |
 | 136 | 2026-09-09 | GCE-M4c 成本治理消费面 + GUI 建群弹窗重设计 | `f3f2a9b1`, `72e8907e`, `3380479a`, `29b9fa3a`, `a9d3a718`, `025666a3` | `main` |
 | 135 | 2026-09-07 | GCE-M4a 定时审议交付+live 验证 | `5dd08d7d`, `74a8b6b5`, `46c879d0`, `b9c047ac`, `f7db2c3d` | `main` |
 | 134 | 2026-09-07 | GCE-P1a 群聊 checkpoint 落库与续跑 | `f2c5da4e`, `b5462b25`, `4ab70b9c`, `8cdd5246` | `main` |

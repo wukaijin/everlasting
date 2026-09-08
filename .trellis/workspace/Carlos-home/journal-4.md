@@ -1529,3 +1529,24 @@ C1.2 预算的消费面收官(五问 brainstorm:D1 预设优先单弹窗/D2 议�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 137: 群聊禁用模型泄漏修复——preset 启用目录解析 + 行级回显 pinning
+
+**Date**: 2026-09-09
+**Task**: 群聊禁用模型泄漏修复——preset 启用目录解析 + 行级回显 pinning
+**Branch**: `main`
+
+### Summary
+
+用户报告:模型/provider 禁用后群聊仍可选。根因两条:①09-08 弹窗重设计的 preset 预填/主持人路径走全目录解析,绕过 09-07 六入口过滤(禁用模型静默预填+提交放行);②「启用∪已选值」并集在四个组件里做成全局 Set,任一行指向禁用模型则所有行下拉都提供它。修复:preset 只对 enabledModels 解析+「已被禁用」两态警示+提交禁用/二次校验;pinning 收敛到行内/字段内(建群弹窗/定时表单/两 Subagents 页);定时主持人区块 v-if 放开手动改选。@模型: 前缀与 CLI 脚本保留全目录(逃生口,PRD out-of-scope)。新增 11 测试用例,全量 1685 全绿,vue-tsc 干净。任务归档 09-09-gc-disabled-model-leak。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f4e9242b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
