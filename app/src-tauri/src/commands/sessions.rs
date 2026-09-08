@@ -1086,6 +1086,34 @@ pub async fn group_chat_cache_rates(
 }
 
 // ---------------------------------------------------------------------------
+// Group-chat token accounting (09-08-gce-m4c, GCE M4 cost governance)
+// ---------------------------------------------------------------------------
+
+/// Per-speaker + total billed tokens for a group-chat session
+/// (edit-modal cost zone + budget-progress read). Same derived-data
+/// approach as the cache-rate read above — zero new storage — and
+/// the billing scope is byte-identical to the C1.2 budget halt
+/// check (four billed fields; `context_input` excluded). Failure
+/// is auxiliary-only: the modal degrades to "—" and never blocks
+/// editing.
+pub async fn group_chat_token_usage_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+) -> Result<db::trace::GroupChatTokenUsage, AppCommandError> {
+    db::trace::group_chat_token_usage(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("group_chat_token_usage failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn group_chat_token_usage(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::trace::GroupChatTokenUsage, AppCommandError> {
+    group_chat_token_usage_inner(&state, session_id).await
+}
+
+// ---------------------------------------------------------------------------
 // D2 cross-session full-text search (08-17-cross-session-search)
 // ---------------------------------------------------------------------------
 

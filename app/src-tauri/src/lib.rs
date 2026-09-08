@@ -307,6 +307,12 @@ pub fn run() {
             // data (`turn_trace` ↔ `messages.speaker` join); the
             // modal swallows failures and renders "—".
             commands::sessions::group_chat_cache_rates,
+            // GCE M4c (09-08-gce-m4c, cost governance): per-speaker
+            // + total billed tokens for a group-chat session
+            // (edit-modal cost zone). Read-only derived data over
+            // the same `turn_trace` ↔ `messages.speaker` join;
+            // billing scope mirrors the C1.2 budget halt check.
+            commands::sessions::group_chat_token_usage,
             // D2 (cross-session search, 2026-08-17): user-facing
             // full-text search over all sessions (FTS5 + LIKE
             // fallback + title rider). Read-only.

@@ -362,6 +362,85 @@ pub async fn list_speaker_cache_usage(
         .collect()
 }
 
+// Group-chat token accounting (09-08-gce-m4c, GCE M4 cost
+// governance) — read side, same derived-data approach as the
+// cache-rate query above: zero new storage.
+// ---------------------------------------------------------------------------
+
+/// One speaker's aggregated billed tokens for a group-chat session
+/// (`speaker` keys match the persisted `messages.speaker` values —
+/// participant names + "moderator").
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SpeakerTokens {
+    pub speaker: String,
+    pub tokens: u64,
+}
+
+/// Per-speaker + total billed tokens for a group-chat session.
+///
+/// Billing scope mirrors `HaltReason::Budget` (C1.2, 09-08
+/// -gc-c1-stoploss): the FOUR billed fields summed
+/// (input + output + cache_creation + cache_read).
+/// `context_input_tokens` is the trace-side observation field that
+/// overlaps input and must NOT be added (double-count).
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupChatTokenUsage {
+    pub total: u64,
+    pub by_speaker: Vec<SpeakerTokens>,
+}
+
+/// Per-speaker aggregated billed tokens for a group-chat session.
+///
+/// Same join shape and row filters as
+/// [`list_speaker_cache_usage`] (assistant rows only, non-NULL
+/// speaker excludes classic-chat rows, non-NULL usage skips
+/// cancel/error turns, `run_id = ''` excludes worker rows) but
+/// AGGREGATES every turn instead of picking each speaker's latest:
+/// GROUP BY speaker over the four-field sum. Retries overwrite
+/// `turn_trace` by `(session_id, seq)` so a retried turn counts
+/// once. `COALESCE(..., 0)` keeps legacy 4-field usage JSON rows
+/// (which always carry the four billed fields; only
+/// `context_input_tokens` postdates them) summing cleanly.
+pub async fn group_chat_token_usage(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<GroupChatTokenUsage, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT m.speaker,
+               SUM(
+                   COALESCE(json_extract(t.token_usage_json, '$.input_tokens'), 0)
+                 + COALESCE(json_extract(t.token_usage_json, '$.output_tokens'), 0)
+                 + COALESCE(json_extract(t.token_usage_json, '$.cache_creation_input_tokens'), 0)
+                 + COALESCE(json_extract(t.token_usage_json, '$.cache_read_input_tokens'), 0)
+               ) AS tokens
+        FROM messages m
+        JOIN turn_trace t ON t.session_id = m.session_id AND t.seq = m.seq
+        WHERE m.session_id = ?
+          AND m.role = 'assistant'
+          AND m.speaker IS NOT NULL
+          AND t.token_usage_json IS NOT NULL
+          AND t.run_id = ''
+        GROUP BY m.speaker
+        ORDER BY tokens DESC
+        "#,
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    let mut total: u64 = 0;
+    let mut by_speaker = Vec::with_capacity(rows.len());
+    for r in rows {
+        let tokens: u64 = r.try_get("tokens")?;
+        total = total.saturating_add(tokens);
+        by_speaker.push(SpeakerTokens {
+            speaker: r.try_get("speaker")?,
+            tokens,
+        });
+    }
+    Ok(GroupChatTokenUsage { total, by_speaker })
+}
+
 // ---------------------------------------------------------------------------
 // Read + clear
 // ---------------------------------------------------------------------------
@@ -1461,6 +1540,180 @@ mod tests {
             "latest turn has no usage → NO fallback to older usage turn: {:?}",
             rows
         );
+    }
+
+    /// Aggregation fixture for `group_chat_token_usage` (09-08
+    /// -gce-m4c). Unlike the latest-turn read above, the accounting
+    /// query SUMS every usage-bearing turn — the exact numbers lock
+    /// the billing scope (four billed fields; `context_input_tokens`
+    /// must NOT be added on top).
+    ///
+    /// | seq | role      | speaker   | trace JSON (4-field sums to)      | expected effect |
+    /// |-----|-----------|-----------|-----------------------------------|------------------|
+    /// | 0   | user      | (none)    | —                                 | excluded (role)  |
+    /// | 1   | assistant | moderator | in100+out10+cr100 (210)           | moderator 210    |
+    /// | 2   | assistant | Alice     | in200+out20+cr20 (240)            | Alice 240        |
+    /// | 3   | assistant | moderator | in500+out50+cr50 (600)            | moderator → 810  |
+    /// | 4   | assistant | Bob       | token_usage_json = NULL           | excluded         |
+    /// | 5   | assistant | Bob       | legacy 4-field (159)              | Bob 159          |
+    /// | 6   | assistant | (none)    | in999+out99+cr999                 | excluded (speaker NULL) |
+    /// | 7   | assistant | Carol     | in700+out70+cr70 (840)            | Carol 840        |
+    /// | 8   | assistant | Carol     | retried: 840 then overwritten by in10+out1+cr7 (18) | Carol → 858 (last write wins, no double count) |
+    /// | 9   | assistant | Alice     | ONLY a worker trace row (run_id='wrk-1', in9999…) | excluded (run_id) — Alice stays 240 |
+    async fn seed_token_usage_fixture(pool: &SqlitePool, sid: &str) {
+        let prompt = MessageContent::Text("prompt".to_string());
+        persist_turn(pool, sid, Role::User, &prompt, 0, None, None)
+            .await
+            .unwrap();
+        for (seq, speaker) in [
+            (1i64, "moderator"),
+            (2, "Alice"),
+            (3, "moderator"),
+            (4, "Bob"),
+            (5, "Bob"),
+            (6, "nobody"),
+            (7, "Carol"),
+            (8, "Carol"),
+            (9, "Alice"),
+        ] {
+            let content = MessageContent::Text(format!("turn {}", seq));
+            let speaker_opt = if speaker == "nobody" {
+                None
+            } else {
+                Some(speaker)
+            };
+            persist_turn(pool, sid, Role::Assistant, &content, seq, None, speaker_opt)
+                .await
+                .unwrap();
+        }
+        insert_trace_token_json(
+            pool,
+            sid,
+            1,
+            Some(r#"{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"context_input_tokens":1000}"#),
+        )
+        .await;
+        insert_trace_token_json(
+            pool,
+            sid,
+            2,
+            Some(r#"{"input_tokens":200,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"context_input_tokens":200}"#),
+        )
+        .await;
+        insert_trace_token_json(
+            pool,
+            sid,
+            3,
+            Some(r#"{"input_tokens":500,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":50,"context_input_tokens":500}"#),
+        )
+        .await;
+        insert_trace_token_json(pool, sid, 4, None).await;
+        // seq 5: legacy 4-field JSON (no context_input_tokens).
+        insert_trace_token_json(
+            pool,
+            sid,
+            5,
+            Some(r#"{"input_tokens":90,"output_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":60}"#),
+        )
+        .await;
+        insert_trace_token_json(
+            pool,
+            sid,
+            6,
+            Some(r#"{"input_tokens":999,"output_tokens":99,"cache_creation_input_tokens":0,"cache_read_input_tokens":999,"context_input_tokens":9999}"#),
+        )
+        .await;
+        insert_trace_token_json(
+            pool,
+            sid,
+            7,
+            Some(r#"{"input_tokens":700,"output_tokens":70,"cache_creation_input_tokens":0,"cache_read_input_tokens":70,"context_input_tokens":700}"#),
+        )
+        .await;
+        // seq 8: retry — the upsert overwrites the same
+        // (session_id, seq) row; the LAST usage must win exactly
+        // once (no double count of the first write).
+        insert_trace_token_json(
+            pool,
+            sid,
+            8,
+            Some(r#"{"input_tokens":700,"output_tokens":70,"cache_creation_input_tokens":0,"cache_read_input_tokens":70,"context_input_tokens":700}"#),
+        )
+        .await;
+        insert_trace_token_json(
+            pool,
+            sid,
+            8,
+            Some(r#"{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":7,"context_input_tokens":100}"#),
+        )
+        .await;
+        // seq 9: Alice's message has ONLY a worker trace row
+        // (run_id != '') — same seq, no main-loop row. Without the
+        // run_id filter the JOIN would pick this up and skew
+        // Alice's sum.
+        sqlx::query(
+            r#"
+            INSERT INTO turn_trace (session_id, run_id, seq, token_usage_json)
+            VALUES (?, 'wrk-1', ?, ?)
+            "#,
+        )
+        .bind(sid)
+        .bind(9i64)
+        .bind(r#"{"input_tokens":9999,"output_tokens":999,"cache_creation_input_tokens":0,"cache_read_input_tokens":9999,"context_input_tokens":99999}"#)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn group_chat_token_usage_sums_four_billed_fields_per_speaker() {
+        let pool = test_pool().await;
+        let sid = seed_session(&pool).await;
+        seed_token_usage_fixture(&pool, &sid).await;
+
+        let usage = group_chat_token_usage(&pool, &sid).await.unwrap();
+
+        // Sorted DESC by tokens: Carol 858 > moderator 810 >
+        // Alice 240 > Bob 159. Bob's NULL-usage turn, the
+        // speaker-NULL row, the worker row and the seq-8 first
+        // write are all absent; context_input never adds on top
+        // (locked by the exact sums: e.g. Alice = 240, not 440).
+        assert_eq!(
+            usage.by_speaker,
+            vec![
+                SpeakerTokens {
+                    speaker: "Carol".to_string(),
+                    tokens: 858
+                },
+                SpeakerTokens {
+                    speaker: "moderator".to_string(),
+                    tokens: 810
+                },
+                SpeakerTokens {
+                    speaker: "Alice".to_string(),
+                    tokens: 240
+                },
+                SpeakerTokens {
+                    speaker: "Bob".to_string(),
+                    tokens: 159
+                },
+            ],
+            "by_speaker: {:?}",
+            usage.by_speaker
+        );
+        assert_eq!(usage.total, 2067, "total: {:?}", usage);
+    }
+
+    #[tokio::test]
+    async fn group_chat_token_usage_empty_session_returns_zero() {
+        let pool = test_pool().await;
+        let sid = seed_session(&pool).await;
+
+        // No messages / traces at all (e.g. freshly created group
+        // chat before the opening turn) → empty breakdown, total 0.
+        let usage = group_chat_token_usage(&pool, &sid).await.unwrap();
+        assert!(usage.by_speaker.is_empty());
+        assert_eq!(usage.total, 0);
     }
 
     #[tokio::test]

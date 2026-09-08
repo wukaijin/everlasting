@@ -20,11 +20,12 @@ use crate::commands::question::get_pending_interaction_inner;
 use crate::commands::sessions::{
     clear_session_messages_inner, compact_session_inner, create_session_inner,
     delete_session_inner, diff_worktree_inner, edit_user_message_inner,
-    group_chat_cache_rates_inner, handoff_session_inner, list_group_chat_sessions_inner,
-    list_sessions_inner, load_session_inner, record_tool_duration_inner, rename_session_inner,
-    search_group_chat_discussions_inner, search_messages_inner, set_session_color_inner,
-    set_session_plugin_name_inner, set_session_workflow_enabled_inner,
-    update_message_latency_inner, update_session_metadata_inner,
+    group_chat_cache_rates_inner, group_chat_token_usage_inner, handoff_session_inner,
+    list_group_chat_sessions_inner, list_sessions_inner, load_session_inner,
+    record_tool_duration_inner, rename_session_inner, search_group_chat_discussions_inner,
+    search_messages_inner, set_session_color_inner, set_session_plugin_name_inner,
+    set_session_workflow_enabled_inner, update_message_latency_inner,
+    update_session_metadata_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;
@@ -305,6 +306,25 @@ pub async fn group_chat_cache_rates(
     Ok(Json(result))
 }
 
+/// `POST /api/v1/sessions/group_chat_token_usage` — per-speaker +
+/// total billed tokens for a group-chat session (09-08-gce-m4c,
+/// GCE M4 cost governance). Billing scope = the C1.2 budget halt
+/// check (four billed fields summed). Consumers: the GUI edit
+/// modal's cost zone; script/MCP aggregate client-side instead
+/// (they already hold `load_session` + `list_turn_traces`).
+#[derive(Debug, Deserialize)]
+pub struct GroupChatTokenUsageRequest {
+    pub session_id: String,
+}
+
+pub async fn group_chat_token_usage(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GroupChatTokenUsageRequest>,
+) -> Result<Json<db::trace::GroupChatTokenUsage>, AppCommandError> {
+    let result = group_chat_token_usage_inner(&state, req.session_id).await?;
+    Ok(Json(result))
+}
+
 /// `POST /api/v1/sessions/search_messages` — D2 cross-session
 /// full-text search (08-17-cross-session-search). POST per the
 /// transport-wide `invoke` contract (all CMD_TO_DOMAIN commands
@@ -446,6 +466,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/record_tool_duration", post(record_tool_duration))
         .route("/edit_user_message", post(edit_user_message))
         .route("/group_chat_cache_rates", post(group_chat_cache_rates))
+        .route("/group_chat_token_usage", post(group_chat_token_usage))
         .route("/search_messages", post(search_messages))
         .route("/list_group_chat_sessions", post(list_group_chat_sessions))
         .route(
