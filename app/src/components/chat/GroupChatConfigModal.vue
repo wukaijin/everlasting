@@ -16,6 +16,10 @@
 //     阵容微调(2-3 上限,交互保留)→ 主持人 Select(preset 默认可改
 //     选,提交写 `create_session` 的 model 参数)→ token_budget 输入 +
 //     量级提示。议题不进弹窗(D2)。
+//   - 09-09(用户反馈两则):① 补显式「自定义」卡——原 RadioGroup 选中
+//     preset 后无路径回到无预设态,自定义卡 = 无预设初始态的入口;② PC
+//     两栏布局:preset 卡左栏化(SettingsModal 左导航同形)+ 弹窗扩宽,
+//     移动端折回顶部单栏。
 //   - edit: 阵容编辑照旧(不引入 preset 重选)+ 主持人只读区照旧 +
 //     成本区(per-speaker「tokens · 缓存率」合并行 + 预算进度条;
 //     `group_chat_token_usage` + `group_chat_cache_rates` 两次查询,
@@ -205,14 +209,31 @@ function presetLabel(key: string): string {
 
 const gcPresetEntries = computed(() => Object.entries(GC_PRESETS.presets));
 
+/** 「自定义」卡哨兵值(RadioGroupItem 需非空字符串 value;选中它 =
+ *  回无预设态)。 */
+const PRESET_CUSTOM = "__custom__";
+
+/** 回到无预设初始态(= create 打开时的种子):2 行空参与者 + 首个启用
+ *  模型默认 + 主持人未选。选中 preset 后再点「自定义」走这里——与
+ *  applyPreset 对称,整表覆写(草稿互切本就无确认)。 */
+function resetToCustom(): void {
+  selectedPreset.value = "";
+  moderatorId.value = "";
+  participants.value = [
+    { name: "", model: modelsStore.enabledModels[0]?.id ?? "" },
+    { name: "", model: modelsStore.enabledModels[0]?.id ?? "" },
+  ];
+}
+
 /** reka `update:model-value` 载荷归一化(ScheduledTasksTab 同款)。 */
 function normalizeSelectValue(v: unknown): string {
   if (Array.isArray(v)) return typeof v[0] === "string" ? v[0] : "";
   return typeof v === "string" ? v : "";
 }
 
-/** 当前选中的 preset("" = 未选择——改任何阵容字段不回退此状态,
- *  无「自定义」显式态;design §4.1)。 */
+/** 当前选中的 preset("" = 自定义/未选择)。09-09:无预设态有显式
+ *  「自定义」卡入口(原「无自定义显式态」设计在 RadioGroup 上是死角
+ *  ——选了就退不回);改任何阵容字段仍不回退此状态。 */
 const selectedPreset = ref("");
 
 /** 主持人模型目录 id(create 模式草稿;空 = 未解析/未改选)。选中
@@ -243,6 +264,10 @@ function applyPreset(key: string): void {
 
 function onPickPreset(v: unknown): void {
   const k = normalizeSelectValue(v);
+  if (k === PRESET_CUSTOM) {
+    resetToCustom();
+    return;
+  }
   if (!k || !(k in GC_PRESETS.presets)) return;
   selectedPreset.value = k;
   applyPreset(k);
@@ -448,15 +473,10 @@ watch(
       tokenBudgetInput.value =
         typeof props.initialTokenBudget === "number" ? String(props.initialTokenBudget) : "";
     } else if (props.mode === "create") {
-      // Seed two empty participants (D5 minimum)。默认模型取首个「启用」
-      // 模型(禁用模型不出现在选项里,也不做默认)。preset 不预选
-      // (design §4.1:用户点卡才展开预填),主持人跟随。
-      participants.value = [
-        { name: "", model: modelsStore.enabledModels[0]?.id ?? "" },
-        { name: "", model: modelsStore.enabledModels[0]?.id ?? "" },
-      ];
-      selectedPreset.value = "";
-      moderatorId.value = "";
+      // Seed = 无预设初始态(「自定义」卡选中,preset 不预选——用户点卡
+      // 才展开预填;design §4.1)。2 行空参与者 + 首个启用模型默认
+      // (禁用模型不做默认),主持人未选。
+      resetToCustom();
       costSpeakers.value = [];
       tokenBudgetInput.value = "";
     }
@@ -578,7 +598,10 @@ function modelLabel(id: string): string {
   <DialogRoot :open="open" @update:open="(v: boolean) => emit('update:open', v)">
     <DialogPortal>
       <DialogOverlay class="gcfg-overlay" />
-      <DialogContent class="gcfg-content">
+      <DialogContent
+        class="gcfg-content"
+        :class="{ 'gcfg-content--create': mode === 'create' }"
+      >
         <div class="gcfg-header">
           <div class="gcfg-header__text">
             <DialogTitle class="gcfg-title">
@@ -597,22 +620,35 @@ function modelLabel(id: string): string {
 
         <!-- 滚动 body: 错误条 + 参与者列表 + 添加按钮。
              标题/副标题/footer 留在滚动区外, 内容超高时只滚动这里。
-             见 R3 / RuntimeMemoryModal 的 flex-column + overflow body 模式。 -->
-        <div class="gcfg-body">
-          <div v-if="errorMessage" class="gcfg-error" role="alert">
-            {{ errorMessage }}
-          </div>
-
-          <!-- gce-m4c(09-08,design §4.1):preset 单选卡区(create)。
-               键序 = JSON 声明序;选中即预填阵容 + 主持人默认,改动阵容
-               字段不回退 preset 状态(无「自定义」显式态)。 -->
+             见 R3 / RuntimeMemoryModal 的 flex-column + overflow body 模式。
+             09-09:create 态变两栏(preset 左栏 + 表单右栏,SettingsModal
+             左导航同形,滚动下放到左右子栏);edit 与移动端(下方 767 块)
+             回收为单栏滚动列。 -->
+        <div class="gcfg-body" :class="{ 'gcfg-body--create': mode === 'create' }">
+          <!-- gce-m4c + 09-09:preset 左栏(create)。首卡「自定义」= 无预设
+               初始态的显式入口(原 RadioGroup 选了退不回,09-09 用户实证);
+               其余键序 = JSON 声明序,选中即预填阵容 + 主持人默认,改动阵容
+               字段不回退 preset 状态。 -->
           <div v-if="mode === 'create'" class="gcfg-presets">
             <span class="gcfg-field__label">审议预设</span>
             <RadioGroupRoot
               class="gcfg-preset-cards"
-              :model-value="selectedPreset || undefined"
+              :model-value="selectedPreset || PRESET_CUSTOM"
               @update:model-value="onPickPreset"
             >
+              <label
+                class="gcfg-preset-card"
+                :class="{ 'gcfg-preset-card--active': !selectedPreset }"
+                data-testid="gcfg-preset-custom"
+              >
+                <RadioGroupItem :value="PRESET_CUSTOM" class="gcfg-preset-radio">
+                  <RadioGroupIndicator class="gcfg-preset-radio-indicator" />
+                </RadioGroupItem>
+                <span class="gcfg-preset-text">
+                  <span class="gcfg-preset-name">自定义</span>
+                  <span class="gcfg-preset-desc">手动配置参与者与主持人</span>
+                </span>
+              </label>
               <label
                 v-for="[key, def] in gcPresetEntries"
                 :key="key"
@@ -631,6 +667,11 @@ function modelLabel(id: string): string {
                 </span>
               </label>
             </RadioGroupRoot>
+          </div>
+
+          <div class="gcfg-main">
+          <div v-if="errorMessage" class="gcfg-error" role="alert">
+            {{ errorMessage }}
           </div>
 
           <!-- preset 展开暴露的模型缺失(create;定时表单同款文案形态,
@@ -868,6 +909,7 @@ function modelLabel(id: string): string {
               </li>
             </ul>
           </div>
+          </div>
         </div>
 
         <div class="gcfg-footer">
@@ -942,6 +984,12 @@ function modelLabel(id: string): string {
     forwards;
 }
 
+/* 09-09:create 两栏(preset 左栏 + 表单右栏)→ 扩宽;edit 无 preset
+   区,维持单栏 640px。移动端全屏化由全局 style.css 块接管。 */
+.gcfg-content--create {
+  width: min(880px, calc(100vw - 40px));
+}
+
 @keyframes gcfg-zoom {
   from {
     opacity: 0;
@@ -1006,6 +1054,51 @@ function modelLabel(id: string): string {
   overflow-y: auto;
   padding: 16px;
   background: var(--color-bg-app);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 09-09:create 双栏:body 变行容器,滚动下放到左右子栏(左 = preset
+   栏自有滚动,右 = 表单栏自有滚动,SettingsModal 左导航同形)。edit
+   态无 preset 区,走上面的单栏滚动基线;移动端在下方 767 块回收。 */
+.gcfg-body--create {
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.gcfg-body--create .gcfg-presets {
+  /* 248px:长描述折 2 行(220px 会折 3 行,720p 视口下 5 卡溢出滚动)。 */
+  width: 248px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  border-right: 1px solid var(--color-bg-border);
+  overflow-y: auto;
+}
+
+.gcfg-body--create .gcfg-preset-cards {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.gcfg-body--create .gcfg-preset-card {
+  flex: none;
+}
+
+.gcfg-body--create .gcfg-main {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* 表单列(edit 态是 body 的唯一子项,body 自滚;create 态由上面的
+   覆盖块接管滚动 + padding)。 */
+.gcfg-main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1096,9 +1189,8 @@ function modelLabel(id: string): string {
   align-items: flex-start;
   gap: 8px;
   flex: 1 1 160px;
-  /* min-width:auto(= min-content)会被 nowrap 描述行撑到 ~450px,
-     三卡挤不下一行逐张换行满宽 —— 显式归零让 160px basis 生效,
-     描述交给 .gcfg-preset-desc 的 ellipsis 截断。 */
+  /* 归零让 flex-basis 生效,描述行换行不撑破窄容器(09-09 左栏化后
+     描述由 .gcfg-preset-desc 自然换行,原三卡横挤的 ellipsis 退役)。 */
   min-width: 0;
   padding: 8px 10px;
   background: var(--color-bg-surface);
@@ -1169,9 +1261,6 @@ function modelLabel(id: string): string {
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
   color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* 表单 hint 行(预算量级提示 / 主持人说明)。 */
@@ -1401,8 +1490,34 @@ function modelLabel(id: string): string {
 }
 
 /* --- 移动端(@media 全屏块命中 .gcfg-content 由全局 style.css 承担;
-   此处只做新区的布局自适应:preset 卡纵向堆叠,成本行允许换行)。 --- */
+   此处只做布局自适应:create 两栏回收为单栏滚动列(preset 区折到顶部,
+   卡纵排全宽),成本行允许换行)。 --- */
 @media (max-width: 767px) {
+  .gcfg-body--create {
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    overflow-y: auto;
+  }
+
+  .gcfg-body--create .gcfg-presets {
+    width: auto;
+    padding: 0 0 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-bg-border);
+    overflow: visible;
+  }
+
+  .gcfg-body--create .gcfg-preset-cards {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .gcfg-body--create .gcfg-main {
+    overflow: visible;
+    padding: 0;
+  }
+
   .gcfg-preset-card {
     flex-basis: 100%;
     min-height: 44px;

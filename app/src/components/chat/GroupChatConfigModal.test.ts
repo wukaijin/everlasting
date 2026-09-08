@@ -679,18 +679,22 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     }>;
   }
 
-  it("四张 preset 卡按 JSON 声明序渲染(review/fe_review/arch/retro)", async () => {
+  it("preset 卡渲染:自定义卡 + JSON 声明序四预设;默认自定义选中", async () => {
     const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
     await flush();
     const keys = Object.keys(GC_PRESETS.presets);
     expect(keys).toEqual(["review", "fe_review", "arch", "retro"]);
+    // 09-09:首卡「自定义」= 无预设初始态的显式入口(RadioGroup 选了
+    // 退不回的补路),默认选中;preset 卡不预选(用户点卡才展开预填)。
+    expect(byTestId("gcfg-preset-custom")).toBeTruthy();
+    expect(byTestId("gcfg-preset-custom")?.textContent).toContain("自定义");
+    const active = document.querySelector<HTMLElement>(".gcfg-preset-card--active");
+    expect(active?.dataset.testid).toBe("gcfg-preset-custom");
     for (const key of keys) {
       const card = byTestId(`gcfg-preset-${key}`);
       expect(card).toBeTruthy();
       expect(card?.textContent).toContain(GC_PRESETS.presets[key]!.description);
     }
-    // 默认无选中(用户点卡才展开预填;design §4.1)。
-    expect(document.querySelector(".gcfg-preset-card--active")).toBeNull();
     wrapper.unmount();
   });
 
@@ -721,6 +725,34 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     // 目录齐全 → 无模型缺失提示条,提交可用。
     expect(byTestId("gcfg-preset-error")).toBeNull();
     expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("选中 preset 后点「自定义」→ 恢复无预设初始态(09-09 退路)", async () => {
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
+    await flush();
+    await pickPreset(wrapper, "review");
+    expect(document.querySelectorAll(".gcfg-row").length).toBe(3);
+
+    await pickPreset(wrapper, "__custom__");
+
+    // 阵容回到 create 种子:2 行空名 + 首个启用模型;主持人未选。
+    const names = allByTestIdPrefix("gcfg-name-");
+    expect(names.length).toBe(2);
+    expect((names[0] as HTMLInputElement).value).toBe("");
+    const roots = selectRootsOf(wrapper);
+    expect(roots.length).toBe(3); // 2 行 + 主持人
+    expect(roots[0].props("modelValue")).toBe("uuid-mini"); // 首个启用模型
+    expect(roots[2].props("modelValue")).toBeUndefined(); // 主持人空
+    // 自定义卡高亮、preset 卡去高亮;警示条消隐;空名 → 提交禁用。
+    expect(
+      byTestId("gcfg-preset-custom")?.classList.contains("gcfg-preset-card--active"),
+    ).toBe(true);
+    expect(
+      byTestId("gcfg-preset-review")?.classList.contains("gcfg-preset-card--active"),
+    ).toBe(false);
+    expect(byTestId("gcfg-preset-error")).toBeNull();
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(true);
     wrapper.unmount();
   });
 
