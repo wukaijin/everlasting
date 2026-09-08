@@ -214,14 +214,20 @@ test('interpretAcceptance:injected 唯一成功态;started/queued/未知 = misfi
 test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用名字,persona 组装含公共纪律', () => {
   // PRESETS 就是 JSON 组装的结果(同输入同输出,锁组装确定性)。
   assert.deepEqual(PRESETS, composePresets(presetsFile));
-  // 三预设齐 + 名单/主持人模型与历史阵容一致(名字形态,不是 UUID ——
-  // 名字→UUID 解析发生在 run 时 normalizeModelRef)。
-  assert.deepEqual(Object.keys(PRESETS), ['review', 'arch', 'retro']);
+  // 四预设齐 + 名单/主持人模型与历史阵容一致(名字形态,不是 UUID ——
+  // 名字→UUID 解析发生在 run 时 normalizeModelRef)。fe_review = review 的
+  // 前端变体(backend→frontend),阵容镜像断言在下方。
+  assert.deepEqual(Object.keys(PRESETS), ['review', 'fe_review', 'arch', 'retro']);
   assert.equal(PRESETS.review.moderator_model, 'MiniMax-M3');
   assert.deepEqual(
     PRESETS.review.participants.map((p) => [p.name, p.model]),
     [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['后端', 'deepseek-v4-flash']],
   );
+  assert.deepEqual(
+    PRESETS.fe_review.participants.map((p) => [p.name, p.model]),
+    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['前端', 'deepseek-v4-flash']],
+  );
+  assert.equal(PRESETS.fe_review.moderator_model, 'MiniMax-M3');
   assert.deepEqual(
     PRESETS.retro.participants.map((p) => [p.name, p.model]),
     [['产品', 'GLM-5.3-Flash'], ['局外', 'glm-5.3']],

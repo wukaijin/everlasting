@@ -105,7 +105,7 @@ const models = useModelsStore();
 // --- M4a 定时审议:preset 展开(scripts/group-chat-presets.json)-----------
 // (共享逻辑在 utils/groupChatPresets.ts:gce-m4c Step 5 纯搬家,行为零变化)
 
-/** preset 下拉选项(键序 = JSON 声明序:review / arch / retro)。 */
+/** preset 下拉选项(键序 = JSON 声明序:review / fe_review / arch / retro)。 */
 const GC_PRESET_OPTIONS = Object.entries(GC_PRESETS.presets).map(
   ([value, p]) => ({ value, label: `${value} — ${p.description}` }),
 );

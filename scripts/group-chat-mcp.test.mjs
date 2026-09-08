@@ -7,12 +7,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { z } from 'zod';
 
 import {
   TOOLS, TOOLS_BUDGET_CHARS, buildToolShapes, createLedger, isTerminal,
   coreStart, coreStatus, coreResult, coreCancel, coreInterrupt, coreInject,
   ensureTranscript, realDeps,
 } from './group-chat-mcp.mjs';
+import { PRESETS } from './group-chat-run.mjs';
 
 const MODELS = [
   { id: 'uuid-glm53', modelName: 'glm-5.3', displayName: 'glm-5.3' },
@@ -61,6 +63,9 @@ test('AC4(文案层):六工具面完整,成本闸/不阻塞语义在 start 描�
   assert.match(TOOLS[4].description, /preempted/);
   assert.match(TOOLS[5].description, /RUNNING/);
   assert.match(TOOLS[5].description, /start_discussion/);
+  // preset enum 是全链路唯一的硬编码预设清单(其余消费方都 import
+  // presets.json)——与引擎 PRESETS 对齐,防止加预设漏改 enum。
+  assert.deepEqual(buildToolShapes(z).start_discussion.preset.unwrap().options, Object.keys(PRESETS));
   // 字符预算的地面真值在 SDK wire 测试里按 listTools 实测(见下)
 });
 

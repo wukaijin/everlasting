@@ -24,7 +24,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 ```bash
 node scripts/group-chat-run.mjs projects   # ① 目录:审议对象的项目(证据基地)
 node scripts/group-chat-run.mjs models     # ② 模型:当前可用清单(UUID/名字都收)
-node scripts/group-chat-run.mjs presets    # ③ 配方:review/arch/retro + 覆盖语法
+node scripts/group-chat-run.mjs presets    # ③ 配方:review/fe_review/arch/retro + 覆盖语法
 ```
 
 **目录(--project)是第一要素**:参与者能查什么证据由它决定,默认当前目录。
@@ -35,7 +35,7 @@ node scripts/group-chat-run.mjs presets    # ③ 配方:review/arch/retro + 覆�
 ```bash
 node scripts/group-chat-run.mjs run \
   --project /path/to/repo \
-  --preset review \                # 评审团(架构+产品+后端);单决策点用 arch;复盘用 retro
+  --preset review \                # 评审团(架构+产品+后端);前端改动用 fe_review;单决策点用 arch;复盘用 retro
   --topic-file /tmp/topic.md \     # 主推:长议题/含引号都走文件(短议题可 --topic 内联)
   --timeout 1800                   # 默认 30min;超时自动 cancel 并导部分转录
 ```

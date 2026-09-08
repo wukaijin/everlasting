@@ -724,7 +724,7 @@ function printRunHelp() {
   --project <path>        审议对象的项目目录(证据基地;默认当前目录;miss 自动创建)
   --topic-file <path>     议题文件(主推;长议题/含引号转义都走文件)
   --topic <text>          议题内联(短议题用)
-  --preset <name>         review / arch / retro(见 presets 子命令)
+  --preset <name>         review / fe_review / arch / retro(见 presets 子命令)
   --participants <json>   整名单替换(与 --preset 二选一;增删参与者也走它)
   --moderator-model <id>  主持人模型(默认取预设)
   --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget;省略 = 不限)

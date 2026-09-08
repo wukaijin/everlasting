@@ -11,7 +11,7 @@
 //     sessionId; closes on success.
 //
 // gce-m4c (09-08, 预设优先单弹窗重设计, design §4):
-//   - create: preset 单选卡区(review/arch/retro,共享
+//   - create: preset 单选卡区(review/fe_review/arch/retro,共享
 //     scripts/group-chat-presets.json,选中即预填阵容 + 主持人默认)→
 //     阵容微调(2-3 上限,交互保留)→ 主持人 Select(preset 默认可改
 //     选,提交写 `create_session` 的 model 参数)→ token_budget 输入 +
@@ -192,10 +192,11 @@ const selectableModels = computed(() => {
 // gce-m4c (09-08): create 模式的 preset 单选卡 + 主持人 Select
 // ---------------------------------------------------------------------
 
-// preset 键序 = JSON 声明序(review / arch / retro);卡的展示名是
+// preset 键序 = JSON 声明序(review / fe_review / arch / retro);卡的展示名是
 // 纯 UI 映射(描述文案取 JSON `description`)。
 const GC_PRESET_LABELS: Record<string, string> = {
   review: "评审团",
+  fe_review: "前端评审",
   arch: "架构",
   retro: "复盘",
 };

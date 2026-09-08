@@ -679,11 +679,11 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     }>;
   }
 
-  it("三张 preset 卡按 JSON 声明序渲染(review/arch/retro)", async () => {
+  it("四张 preset 卡按 JSON 声明序渲染(review/fe_review/arch/retro)", async () => {
     const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
     await flush();
     const keys = Object.keys(GC_PRESETS.presets);
-    expect(keys).toEqual(["review", "arch", "retro"]);
+    expect(keys).toEqual(["review", "fe_review", "arch", "retro"]);
     for (const key of keys) {
       const card = byTestId(`gcfg-preset-${key}`);
       expect(card).toBeTruthy();

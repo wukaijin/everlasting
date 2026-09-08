@@ -335,7 +335,7 @@ export async function coreInject(deps, ledger, { session_id: sessionId, text }) 
 // 就是 listTools 返回的 schema,这才是预算的地面真值)
 // ---------------------------------------------------------------------------
 
-export const TOOLS_BUDGET_CHARS = 3200; // AC4:六工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,余量 ~85 字符——再扩 description 大概率要升锁(升锁须过评审,同步本注释 + AC4 断言 + spec)
+export const TOOLS_BUDGET_CHARS = 3200; // AC4:六工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设(enum+描述)后 3162,余量 ~38 字符——再扩 description 大概率要升锁(升锁须过评审,同步本注释 + AC4 断言 + spec)
 
 /** Zod shape(SDK 1.30 registerTool 只收 Zod;内部转 JSON Schema 上 wire)。
  * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。 */
@@ -344,7 +344,7 @@ export function buildToolShapes(z) {
     start_discussion: {
       topic: z.string().describe('The question; evidence-backed, do not bake the answer in'),
       cwd: z.string().describe('Project dir as evidence base'),
-      preset: z.enum(['review', 'arch', 'retro']).optional().describe('Participant preset'),
+      preset: z.enum(['review', 'fe_review', 'arch', 'retro']).optional().describe('Participant preset'),
       participants: z.array(z.object({
         name: z.string(),
         model: z.string().describe('Catalog name or UUID'),
@@ -366,7 +366,7 @@ export function buildToolShapes(z) {
 export const TOOLS = [
   {
     name: 'start_discussion',
-    description: 'Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min, hundreds of thousands of tokens. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: review (arch+product+backend), arch (2-person), retro (product+outsider).',
+    description: 'Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min, hundreds of thousands of tokens. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: review (arch+product+backend), fe_review (arch+product+frontend), arch (2-person), retro (product+outsider).',
     shapeKey: 'start_discussion',
   },
   {
