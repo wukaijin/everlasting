@@ -114,6 +114,7 @@
 | **群聊 P1a checkpoint 落库与续跑**(GCE 内部线) | 09-06 | `group_chat_checkpoints` 表 + boot sweep(load_inner 标 `interrupted`、清终局孤儿行)+ `resume_group_chat` 命令(daemon 路由 + Tauri,五类校验;轮预算继承、GC5 计数归零、moderator 恢复指令)+ GUI 可续跑态通知与「续跑」按钮 + M1 脚本 interrupted 档;live 验证 SIGKILL → interrupted → resume → group_chat_end(task `09-06-gc-p1a-checkpoint-resume`,M3 打断信任底座收口、M4 定时审议容错地基) |
 | **群聊 P0 打断最小语义**(GCE 内部线) | 09-06 | busy 打字/发消息 = 非破坏注入(controls 缓冲 → 编排器轮头落库 `[用户插入]` 双轨标记 → 下一 moderator 轮可见,取代毁场式 3a/D9-Q4 抢占);`preempt_group_chat` 收束式打断(等在途发言完 → moderator 收束轮落 summary → `stop_reason=preempted`,失败兜底立断);M3 控制面硬前置(spec [pattern-group-chat-preempt-inject](../.trellis/spec/backend/agent-loop-architecture/pattern-group-chat-preempt-inject.md),task `09-06-gc-p0-preempt-min-semantics`) |
 | **GCE 外部线 M0-M3 + M4a**(群聊审议原语) | 09-05~09-07 | M0 地基(lifecycle 三态机 / summary 一等字段 / 无人值守安全)两场 live 验证;M1 驱动脚本 `group-chat-run.mjs` + presets + skill 门面;M2 MCP 接口层(六工具,用户级挂载)+ standalone bin 部署面;M3 控制面(interrupt_discussion / inject_message + SSE follow 消费专章);M4a 定时审议(scheduled_tasks `group_chat` 档 + 四态路由 + 转录自动落盘)。内部线 P0/P1a 见上两行;逐里程碑交付与待定决策见专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
+| **GCE M4b/M4c + 群聊止损包**(内部线 C1) | 09-07~09-08 | M4b 讨论库检索(sessions 直读 + 程序 LIKE,GUI 独立面板,场级检索复用);C1 止损包(ask-free 全讨论 + `token_budget` 硬停 `stop_reason=budget` + MockProvider 回归闸 + 假注释 RULE 进 spec,第二场共识,task `09-08-gc-c1-stoploss`);M4c 成本治理(C1.2 四通道声明面:GUI/M1 `--token-budget`/MCP 可选参/定时 config 键;核算三层:daemon `group_chat_token_usage` 查询【turn_trace JOIN messages.speaker 零新存储】+ 讨论库 `total_tokens` 列 + script/MCP `aggregateTokens` 共享聚合;**GUI 建群弹窗整体重设计**:preset 优先单弹窗 + 主持人可选 + edit 成本区/预算进度条,task `09-08-gce-m4c-cost-governance-modal-redesign`)。M4 仅余远程暴露认证 | 
 
 ---
 
@@ -166,7 +167,7 @@
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
-| GCE | 群聊外部调用 / 审议原语(headless 驱动 → MCP → 控制面 → 运营治理)| 2026-09-06 立项。**M0 地基 / M1 驱动脚本 / M2 MCP 接口层 / M3 控制面 / M4a 定时审议均已交付(live 验证)**,技术方案随里程碑逐项定案并记交付段;余 M4 子项(讨论库检索 / 成本治理 / 远程暴露认证)与部署面 follow-up(跨平台编译矩阵 / Tauri 分发 / 其他宿主配置)待立项。交付汇总见 §1.2「GCE 外部线」行,逐里程碑详情见专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
+| GCE | 群聊外部调用 / 审议原语(headless 驱动 → MCP → 控制面 → 运营治理)| 2026-09-06 立项。**M0-M3 / M4a 定时审议 / M4b 讨论库检索 / M4c 成本治理均已交付(live/单测验证;内部线 P0/P1a/C1 同步收口)**,技术方案随里程碑逐项定案并记交付段;仅余远程暴露认证(立项前须安全评审)与部署面 follow-up(跨平台编译矩阵 / Tauri 分发 / 其他宿主配置)。交付汇总见 §1.2「GCE 外部线」行,逐里程碑详情见专档 [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) |
 | B10  | 飞书 IM | daemon 化已于 2026-07 作为独立基础设施落地(见 §1.2 "daemon 化" epic);B10 现可基于既有 daemon + transport 抽象推进,不再是"重大架构变更"阻塞。本档只评估飞书 channel 接入 |
 | A4+ | 成本聚合视图(token → $) | **可做可不做**(2026-08-30 用户裁定,由第三档移入)。A4 per-session token 累计已有;若做:补跨 session / provider / day 汇总换算 + 每模型 $/M 价格表(provider 层现无 pricing 字段,原"纯前端聚合"估计偏乐观) |
 | ~~B11~~ | ~~远程遥控通道(原"云端同步 Cloudflare Workers + D1")~~ | ✅ **08-11~13 已实施**(remote-control epic S1~S6b,08-13 合入 main),见 §1.2。中继方案:国内 2C2G 服务器 + 自研 Rust remote daemon;不做主动推送、不做多用户、不做跨节点同步 |

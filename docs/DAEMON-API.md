@@ -68,8 +68,14 @@ database-guidelines.md 的「IPC payload camelCase」新约定(对齐 `AuditEven
 群聊 metadata 可选键 `token_budget`(2026-09-08,C1.2 止损包,additive):声明该场讨论的
 token 预算上限(计费口径 = input + output + cache_creation + cache_read 四字段求和,每内层
 LLM 轮的 `TurnUsage` 累计)。超限 → 编排器在下一轮头终态停,`stop_reason="budget"`
-(无收束轮)。缺键 = 不限。GUI 建群弹窗可填;M1 脚本 / MCP / 定时任务通道暂不透传
-(加参归 M4 成本治理)。
+(无收束轮)。缺键 = 不限。**四通道声明面(2026-09-08,M4 成本治理)**:GUI 建群弹窗 /
+M1 脚本 `--token-budget <n>` / MCP `start_discussion` 的 `token_budget` 可选参 /
+定时任务 `group_chat_config.token_budget`(§6.3)——全部「显式声明才限,缺省无键」。
+核算读侧:`POST /api/v1/sessions/group_chat_token_usage`(2026-09-08,M4c),请求
+`{"session_id": "..."}` → `{"total": <u64>, "by_speaker": [{"speaker": "...",
+"tokens": <u64>}]}`(tokens 降序;同口径四字段求和,`turn_trace` JOIN `messages.speaker`,
+worker 行/无 usage 行排除;GUI edit 弹窗成本区消费,脚本/MCP 走 `list_turn_traces` +
+`load_session` 客户端聚合同口径)。
 
 `SessionRow` 在 summary 之上多:`created_at` / `model` / `mode` / token 快照
 (`last_context_input_tokens` 等)/ **`stop_reason`** / **`discussion_summary`**(见 §4)。
@@ -82,7 +88,8 @@ LLM 轮的 `TurnUsage` 累计)。超限 → 编排器在下一轮头终态停,`s
 `GroupChatSessionHit`(M4b 讨论库,2026-09-07,全 snake_case,一场一行):`session_id` /
 `project_id` / `title` / `task_name`(`null` = 非定时场;`metadata.scheduled_task_name`)/
 `participants`(`string[]`,`metadata.participants[].name`)/ `stop_reason`(`null` = 从未终局)/
-`discussion_summary`(`null` = 未以 end_discussion 收官)/ `created_at` / `updated_at`。
+`discussion_summary`(`null` = 未以 end_discussion 收官)/ `total_tokens`(`null` = 尚无计费
+轮,2026-09-08 M4c;与 group_chat_token_usage 同口径的场级合计)/ `created_at` / `updated_at`。
 
 ## 4. 群聊生命周期消费指南(GC1/GC2/GC7,2026-09-05 起)
 
@@ -254,8 +261,10 @@ Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
 - `target_mode: "group_chat"` + `prompt`(议题原文,fire 时**原样**发题,无注脚)+
   `schedule`(F2 六种周期 kind + once 单次档 = 7 档全兼容)。
 - `group_chat_config` 必填,JSON 形状:`{"moderator_model_id": "...", "participants":
-  [{"name": "...", "model_id": "...", "persona_md"?: "..."}]}`——结构校验(非空名单、
-  无重名)+ 模型存在性(moderator 与全部 participants 查 models 表)。
+  [{"name": "...", "model_id": "...", "persona_md"?: "..."}], "token_budget"?: <u64>}`——
+  结构校验(非空名单、无重名;`token_budget` 有值必须正整数,不限 = 省略键)+
+  模型存在性(moderator 与全部 participants 查 models 表)。fire 建群时 `token_budget`
+  仅在声明时写入 `sessions.metadata`(不落 null 键,2026-09-08 M4c)。
 - **不收** `target_session_id`(400 矛盾)与 `model_id`(moderator 在 config 内);
   `max_runs` / `ends_at` 结束条件与既有档同语义。
 - update 的 `group_chat_config` 为双层 Option:缺省 = 保留存档;对象 = 校验后写入;
