@@ -32,8 +32,10 @@ pub struct Conclusion {
     pub stance: Stance,
 }
 
-/// 证据锚点。`check` 由 [`validate_anchors`] 回填;`None` = 未校验
-/// (live 期 GUI 从 tool_use input 渲染时、或 root 缺失场)。
+/// 证据锚点。`check` 由 [`validate_anchors`] 回填;`None` = 校验尚未
+/// 跑过(live 期 GUI 直接渲染 tool_use input 时)。root 缺失 /
+/// canonicalize root 失败不是 `None`——那场全部锚点显式标
+/// `Some(Unvalidated)`(「查过但查不了」与「没查过」是两个信号)。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Anchor {
     pub path: String,
