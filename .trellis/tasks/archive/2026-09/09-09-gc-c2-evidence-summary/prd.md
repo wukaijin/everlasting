@@ -57,12 +57,12 @@
 
 ## Acceptance Criteria
 
-- [ ] AC1(结构化生产):moderator 收束产出结构化 conclusions(含锚点与 stance)+ open_questions;prompt 教学锚点进 `tests_group_chat_prompts`;MockProvider 剧本覆盖 verified+锚点 / inferred 无锚点 / disputed / 开放问题四形态。
-- [ ] AC2(锚点校验):五臂单测全绿(ok / not_found / line_out_of_range / outside_root 不触 fs / 无 root 全 unvalidated);IO 错误不 fail 整场;校验结果落 detail。
-- [ ] AC3(落库与复用):finalize 落 `discussion_detail`;**复用场重置清空 detail** 有专项断言;SessionRow 带回;存量 8 断言 + 19 既有群聊用例零改动全绿(缺省零行为变更)。
-- [ ] AC4(消费面):GUI 卡结构化渲染(stance 徽章 + 锚点 check 记号 + 无结构兜底)vitest 过;MCP result detail + JS 转录节 node --test 过;Rust 转录节单测过;旧场(mock 无 detail)四消费面零回归。
-- [ ] AC5(门禁):`cargo test -p everlasting --lib` 全绿(基线 2343+)+ `cd app && pnpm test` 全绿(基线 1652+)+ clippy/fmt/vue-tsc 净 + `node --test scripts/group-chat-run.test.mjs`、`node --test scripts/group-chat-mcp.test.mjs` 全绿。
-- [ ] AC6(live):一场 `group-chat-run` 实跑,收官行带 detail、转录含 conclusions 节、锚点校验结果与仓库实际状态一致(抽查 ≥2 锚点)。
+- [x] AC1(结构化生产):moderator 收束产出结构化 conclusions(含锚点与 stance)+ open_questions;prompt 教学锚点进 `tests_group_chat_prompts`;MockProvider 剧本覆盖 verified+锚点 / inferred 无锚点 / disputed / 开放问题四形态。
+- [x] AC2(锚点校验):五臂单测全绿(ok / not_found / line_out_of_range / outside_root 不触 fs / 无 root 全 unvalidated);IO 错误不 fail 整场;校验结果落 detail。
+- [x] AC3(落库与复用):finalize 落 `discussion_detail`;**复用场重置清空 detail** 有专项断言;SessionRow 带回;存量 8 断言 + 19 既有群聊用例零改动全绿(缺省零行为变更)。
+- [x] AC4(消费面):GUI 卡结构化渲染(stance 徽章 + 锚点 check 记号 + 无结构兜底)vitest 过;MCP result detail + JS 转录节 node --test 过;Rust 转录节单测过;旧场(mock 无 detail)四消费面零回归。
+- [x] AC5(门禁):`cargo test -p everlasting --lib` 全绿(基线 2343+)+ `cd app && pnpm test` 全绿(基线 1652+)+ clippy/fmt/vue-tsc 净 + `node --test scripts/group-chat-run.test.mjs`、`node --test scripts/group-chat-mcp.test.mjs` 全绿。
+- [x] AC6(live):一场 `group-chat-run` 实跑,收官行带 detail、转录含 conclusions 节、锚点校验结果与仓库实际状态一致(抽查 ≥2 锚点)。
 
 ## Out of Scope
 
