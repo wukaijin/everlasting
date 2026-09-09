@@ -130,6 +130,8 @@ export interface LoadedSession {
     stop_reason?: string | null;
     /** GCE P1a:收官总结(同上,补 TS 可见)。 */
     discussion_summary?: string | null;
+    /** C2 证据链(09-09):结构化收官结论 JSON(锚点带 check)。 */
+    discussion_detail?: string | null;
   };
   messages: LoadedMessage[];
 }

@@ -582,6 +582,35 @@ export interface SessionSummary {
   /** GCE P1a:interrupted 通知文案(可选)引用的收官总结;wire 已有,
    *  补 TS 可见(仅 stop_reason ∈ {group_chat_end, preempted} 时非空)。 */
   discussion_summary?: string | null;
+  /** C2 证据链(09-09-gc-c2-evidence-summary):结构化收官结论的
+   *  JSON 文本(`DiscussionDetail` wire 形态,锚点带 `check` 校验
+   *  结果)。null = 无结构化产物(旧场 / 只发 summary 的收官);
+   *  `reloadAfterFinalize` 从 load_session 受控合并(同
+   *  stop_reason/discussion_summary 模式)。 */
+  discussion_detail?: string | null;
+}
+
+/** C2 证据链(09-09-gc-c2-evidence-summary):`end_discussion` 结构化
+ *  收官结论。手写镜像 Rust `agent::discussion_detail::DiscussionDetail`
+ *  (snake_case wire,仓库无 codegen 管线,与 ParticipantConfig 同
+ *  手写同形惯例)。两个来源:`ToolCallInfo.input`(live 期,无 check)
+ *  与 `SessionSummary.discussion_detail` JSON(收官后,含 check)。 */
+export interface DiscussionDetail {
+  conclusions: DiscussionConclusion[];
+  open_questions: string[];
+}
+
+export interface DiscussionConclusion {
+  claim: string;
+  anchors: DiscussionAnchor[];
+  stance: "verified" | "inferred" | "disputed";
+}
+
+export interface DiscussionAnchor {
+  path: string;
+  line?: number | null;
+  /** 锚点后校验结果(编排器落库前回填);缺省 = 未校验(live 期)。 */
+  check?: "ok" | "not_found" | "line_out_of_range" | "outside_root" | "unvalidated";
 }
 
 /** Group chat (07-29-group-chat, Phase 4 TODO-D2): one

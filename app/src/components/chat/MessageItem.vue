@@ -112,6 +112,18 @@ const controller = useStreamControllerStore();
 // follow-up): its `summary` is the discussion's final conclusion — render
 // a visible DiscussionSummaryCard instead of a plain ToolCallCard.
 const END_DISCUSSION_TOOL_NAME = "end_discussion";
+
+/** C2 证据链(09-09):收官卡的锚点校验记号数据源 —— store 从
+ *  load_session 合并的行级 `discussion_detail`(收官后非空)。跨会话
+ *  只读预览(readonly)不查 store:currentSessionId 属于别的会话,
+ *  叠上去就是他场的校验结果(live 期卡先从 tool_use input 渲染,
+ *  未校验记号是如实的)。 */
+const endDiscussionValidatedDetail = computed<string | null>(() => {
+  if (props.readonly) return null;
+  const sid = chatStore.currentSessionId;
+  if (!sid) return null;
+  return chatStore.sessions.find((s) => s.id === sid)?.discussion_detail ?? null;
+});
 /** D2②+: search_history 的 tool_use 渲染专属 SearchHistoryCard
  * (替换通用 ToolCallCard,同 end_discussion 先例)。 */
 const SEARCH_HISTORY_TOOL_NAME = "search_history";
@@ -951,6 +963,7 @@ const messageImages = computed<
           v-if="tc.name === END_DISCUSSION_TOOL_NAME"
           :call="tc"
           :result="getToolResult(message, tc.id)"
+          :validated-detail="endDiscussionValidatedDetail"
         />
         <SearchHistoryCard
           v-else-if="tc.name === SEARCH_HISTORY_TOOL_NAME"

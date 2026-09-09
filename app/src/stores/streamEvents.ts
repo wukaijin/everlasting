@@ -1473,6 +1473,12 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           summary.discussion_summary =
             loaded.session.discussion_summary ?? null;
         }
+        // C2 证据链(09-09):结构化收官结论同路合并(收官卡的锚点
+        // 校验记号从此通道到达;live 期卡先从 tool_use input 渲染)。
+        if ("discussion_detail" in loaded.session) {
+          summary.discussion_detail =
+            loaded.session.discussion_detail ?? null;
+        }
       }
     }
     // F4: notify MessageList to re-scroll after buffer replacement
