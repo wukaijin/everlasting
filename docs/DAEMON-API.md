@@ -78,7 +78,8 @@ worker 行/无 usage 行排除;GUI edit 弹窗成本区消费,脚本/MCP 走 `li
 `load_session` 客户端聚合同口径)。
 
 `SessionRow` 在 summary 之上多:`created_at` / `model` / `mode` / token 快照
-(`last_context_input_tokens` 等)/ **`stop_reason`** / **`discussion_summary`**(见 §4)。
+(`last_context_input_tokens` 等)/ **`stop_reason`** / **`discussion_summary`** /
+**`discussion_detail`**(C2 结构化收官结论,见 §4)。
 
 `MessageRow` 关键字段:`seq` / `role`(`"user"` | `"assistant"`)/ `content`(序列化
 `Vec<ContentBlock>` JSON)/ `text`(可见文本列)/ `speaker`(群聊发言者;`null` = 经典聊)/
@@ -115,6 +116,16 @@ busy = false + stop_reason = null  → 该会话从未跑过编排(或经典聊�
 - **`discussion_summary`**(`SessionRow` only,即 `load_session` 可得):moderator
   `end_discussion({summary})` 的收官总结一等字段——共识清单直接可读,无需解析
   end_discussion 的 tool_result content blocks。正常收官与 preempt 收束轮两路写入。
+- **`discussion_detail`**(`SessionRow` only,C2 证据链 2026-09-09 起):结构化收官结论的
+  JSON 文本,形状 `{"conclusions": [{"claim", "anchors": [{"path", "line"?, "check"?}],
+  "stance": "verified"|"inferred"|"disputed"}], "open_questions": [string]}`(全 snake_case)。
+  `stance` 是 moderator 自报可信度(实证读码 / 推测 / 争议);`check` 是编排器落库前的
+  **锚点后校验**结果(`ok` / `not_found` / `line_out_of_range` / `outside_root` /
+  `unvalidated`,root 外路径零 fs 访问)——校验**只标注不修改**,不改写 claim 与
+  stance,断证信号留给消费方。`null` = 该场收官无结构化产物(旧场 / 只发 summary 的
+  朴素收官);与 summary 同生命周期,复用场重置清空。消费面:MCP
+  `discussion_result.detail`(坏 JSON 降级 `detail_warning`)、GUI 收官卡(stance 徽章 +
+  锚点核验记号)、M1/定时双转录导出器的 `## conclusions` / `## open_questions` 节。
 - 终止的实时信号:`GET /api/v1/stream`(SSE)上编排器的终端 `Done` 事件
   `stop_reason` 与上表同值;SSE 不回放完整历史,断连后用 snapshot 端点补齐。
 
@@ -204,6 +215,9 @@ acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 
   (沙箱 errno 翻译 / prefix 授权 basename / 裸命令,见 SKILL.md 边界)——内部 agent 不是
   MCP client。
 - 归因:MCP 建群盖 `metadata.created_via:"mcp"`,M1 脚本盖 `"script"`,GUI/历史 session 无此键。
+- `discussion_result` 输出自 2026-09-09 起携带 **`detail`**(§4 `discussion_detail` 的解析
+  对象;只发 summary 收官的场与旧场无此键)——外部 agent 消费结论时可按 `stance` 分层
+  可信度、按锚点 `check` 判断证据是否断链;坏 JSON 降级 `detail_warning` 不炸。
 - server 记账(session→request_id/project_id)落 `~/.local/state/dev.everlasting.app/mcp-discussions.json`
   (XDG state,原子写)——server 进程随宿主会话生灭,讨论跨进程存活靠它兜底。
 - 冒烟:`node scripts/group-chat-mcp-smoke.mjs`(`--live` 烧真 token 走全链;`--bin <path>` 对

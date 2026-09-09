@@ -99,7 +99,7 @@ P2-1 预测的同刻自然收官竞态,AC 断言按此放宽)✓、summary 一�
 | ~~P1a checkpoint 落库 / P1b 续跑~~ **✅ 2026-09-06 落地**(task `09-06-gc-p1a-checkpoint-resume`):checkpoint 表 + boot sweep + resume 命令 + GUI 按钮;M4 定时审议容错的地基就绪 | M3 信任底座(**已收口**);M4 定时审议的容错 |
 | ~~C1.1 ask-free~~ **✅ 2026-09-08 落地**(task `09-08-gc-c1-stoploss`,全讨论范围裁定) | M1/M2 的确定性(**已兑现**:外部跑零权限等待) |
 | ~~C1.2 token 预算(`stop_reason=budget`)~~ **✅ 2026-09-08 落地**(同上任务) | ~~M4 成本治理~~ **✅ M4c 2026-09-08 交付**(四通道声明面 + 三层核算,§5) |
-| C2.1 结构化 summary(锚点 + 推测标注) | M2 `discussion_result` 的结论可信度 |
+| ~~C2.1 结构化 summary(锚点 + 推测标注)~~ **✅ 2026-09-09 落地**(task `09-09-gc-c2-evidence-summary`:`end_discussion` 结构化参数 + 锚点后校验「只标注不修改」+ `sessions.discussion_detail` 列 + 四消费面——GUI 收官卡 stance 徽章 / MCP `discussion_result.detail` / M1+定时双转录 `## conclusions` 节;依赖矩阵至此清零) | ~~M2 `discussion_result` 的结论可信度~~ **已兑现**(result 带 `detail`,外部 agent 可信度分层消费) |
 | ~~C3.1 机制层 CI~~ **✅ 2026-09-08 落地**(MockProvider 剧本:ask-free 拒绝路径 / budget 三破坏剧本) | 全里程碑的回归闸(已进 `cargo test --lib`) |
 | ~~RULE「假注释是毒数据」~~ **✅ 2026-09-08 进 spec**(`.trellis/spec/backend/quality-guidelines.md`) | 全部(三层生效) |
 
