@@ -8,7 +8,7 @@ import {
   EXIT, PRESETS, composePresets, resolveParticipants, buildCreateSessionBody, buildChatBody,
   aggregateTokens,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
-  renderTranscript, injectGuardDecision, interpretAcceptance,
+  renderTranscript, renderConclusionsSection, injectGuardDecision, interpretAcceptance,
 } from './group-chat-run.mjs';
 import presetsFile from './group-chat-presets.json' with { type: 'json' };
 
@@ -242,4 +242,40 @@ test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用�
   // JSON 形状防御:缺 persona kind / 空 presets → 明确报错。
   assert.throws(() => composePresets({ ...presetsFile, personas: {} }), /缺 persona/);
   assert.throws(() => composePresets({ persona_common: 'x', personas: presetsFile.personas, presets: {} }), /presets 不能为空/);
+});
+
+// C2 证据链(09-09-gc-c2-evidence-summary):结构化结论节渲染。
+test('renderConclusionsSection:stance 标注 + 锚点校验记号 + 开放问题;坏 JSON/空 detail 省略', () => {
+  const detail = JSON.stringify({
+    conclusions: [
+      { claim: '实锚', anchors: [{ path: 'a.rs', line: 2, check: 'ok' }], stance: 'verified' },
+      { claim: '断证', anchors: [{ path: 'b.rs', line: 9, check: 'not_found' }], stance: 'verified' },
+      { claim: '推测' }, // stance 缺省 inferred
+      { claim: '争议', anchors: [{ path: 'c.rs' }], stance: 'disputed' },
+    ],
+    open_questions: ['何时复核'],
+  });
+  const out = renderConclusionsSection(detail);
+  assert.match(out, /## conclusions/);
+  assert.match(out, /- \[verified\] 实锚 — `a\.rs:2` ✓/);
+  assert.match(out, /- \[verified\] 断证 — `b\.rs:9` ⚠\(not_found\)/);
+  assert.match(out, /- \[inferred\] 推测\n/);
+  assert.match(out, /- \[disputed\] 争议 — `c\.rs`\n/);
+  assert.match(out, /## open_questions\n\n- 何时复核/);
+  // 降级三臂:坏 JSON / 空结构 / null → 空串(旧场零回归)。
+  assert.equal(renderConclusionsSection('{not json'), '');
+  assert.equal(renderConclusionsSection('{"conclusions":[],"open_questions":[]}'), '');
+  assert.equal(renderConclusionsSection(null), '');
+});
+
+test('renderTranscript:session 带 discussion_detail 渲染 conclusions 节;旧场无键省略', () => {
+  const base = { id: 'sid-2', title: 't', metadata: null, stop_reason: 'group_chat_end', discussion_summary: 'S' };
+  const withDetail = renderTranscript({
+    session: { ...base, discussion_detail: JSON.stringify({ conclusions: [{ claim: 'C1', stance: 'verified' }], open_questions: [] }) },
+    messages: [], startedAtMs: 0, stoppedAtMs: 1000,
+  });
+  assert.match(withDetail, /discussion_summary\n\nS/);
+  assert.match(withDetail, /## conclusions\n\n- \[verified\] C1/);
+  const legacy = renderTranscript({ session: base, messages: [], startedAtMs: 0, stoppedAtMs: 1000 });
+  assert.doesNotMatch(legacy, /## conclusions/);
 });

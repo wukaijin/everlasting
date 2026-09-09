@@ -465,3 +465,36 @@ test('realDeps 默认不炸(仅构造;BASE 环境变量语义与 M1 单源)', ()
   assert.equal(typeof d.preemptGroupChat, 'function');
   assert.ok(/^http/.test(d.base));
 });
+
+// C2 证据链(09-09-gc-c2-evidence-summary):result 的 detail 键。
+test('coreResult:detail 结构化结论透传;坏 JSON 降级 detail_warning;无 detail 不设键', async () => {
+  const mk = (detailJson) => ({
+    session: { busy: false, stop_reason: 'group_chat_end', id: 'sess-1', project_id: 'proj-1', current_cwd: os.tmpdir(), model: 'uuid-m3', metadata: JSON.stringify({ participants: [] }), discussion_summary: 'S', ...(detailJson !== undefined ? { discussion_detail: detailJson } : {}) },
+    messages: [],
+  });
+  const detail = { conclusions: [{ claim: 'C1', anchors: [{ path: 'a.rs', line: 2, check: 'ok' }], stance: 'verified' }], open_questions: ['q'] };
+  {
+    const { deps } = makeMockDeps({ session: { busy: false, stop_reason: 'group_chat_end' }, loaded: mk(JSON.stringify(detail)) });
+    const { ledger } = tmpLedger();
+    const out = await coreResult(deps, ledger, 'sess-1');
+    assert.deepEqual(out.detail, detail);
+    assert.equal(out.detail_warning, undefined);
+  }
+  {
+    // 坏 JSON:detail 缺键 + warning,不炸 result。
+    const { deps } = makeMockDeps({ session: { busy: false, stop_reason: 'group_chat_end' }, loaded: mk('{broken') });
+    const { ledger } = tmpLedger();
+    const out = await coreResult(deps, ledger, 'sess-1');
+    assert.equal(out.detail, undefined);
+    assert.match(out.detail_warning, /非法 JSON/);
+    assert.equal(out.summary, 'S');
+  }
+  {
+    // 旧场无键:不设 detail / detail_warning。
+    const { deps } = makeMockDeps({ session: { busy: false, stop_reason: 'group_chat_end' }, loaded: mk(undefined) });
+    const { ledger } = tmpLedger();
+    const out = await coreResult(deps, ledger, 'sess-1');
+    assert.equal(out.detail, undefined);
+    assert.equal(out.detail_warning, undefined);
+  }
+});

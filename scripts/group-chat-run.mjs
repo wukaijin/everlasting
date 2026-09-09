@@ -313,6 +313,50 @@ export function defaultTranscriptPath(topic, rootDir = REPO_ROOT) {
  * speaker:group chat 写入 messages.speaker(moderator/参与者名);
  * null 时按既有惯例:工具轮记 `用户`,user 文本记 **用户**。
  */
+/**
+ * C2 证据链(09-09-gc-c2-evidence-summary):结构化结论节(与 Rust
+ * `render_conclusions_section` 结构同形,两套实现定位见文件头)。detail
+ * 为 sessions.discussion_detail 列的 JSON 文本;坏 JSON / 空 detail →
+ * 空串(旧场零回归)。锚点后缀记号:✓ = ok,⚠(check) = 断证,无记号
+ * = 未校验(live 期 / root 缺失场)。
+ */
+export function renderConclusionsSection(detailJson) {
+  let d = null;
+  try {
+    d = typeof detailJson === 'string' ? JSON.parse(detailJson) : detailJson;
+  } catch { return ''; }
+  if (!d || typeof d !== 'object') return '';
+  const conclusions = Array.isArray(d.conclusions) ? d.conclusions : [];
+  const openQuestions = Array.isArray(d.open_questions)
+    ? d.open_questions.filter((q) => typeof q === 'string' && q.trim()) : [];
+  if (!conclusions.length && !openQuestions.length) return '';
+  const anchorSuffix = (a) => {
+    const loc = a && typeof a.path === 'string' ? (a.line != null ? `${a.path}:${a.line}` : a.path) : null;
+    if (!loc) return null;
+    if (a.check === 'ok') return `\`${loc}\` ✓`;
+    if (a.check === 'not_found' || a.check === 'line_out_of_range' || a.check === 'outside_root') {
+      return `\`${loc}\` ⚠(${a.check})`;
+    }
+    return `\`${loc}\``;
+  };
+  const out = [];
+  if (conclusions.length) {
+    out.push('\n## conclusions\n\n');
+    for (const c of conclusions) {
+      if (!c || typeof c.claim !== 'string' || !c.claim.trim()) continue;
+      const stance = c.stance === 'verified' || c.stance === 'disputed' ? c.stance : 'inferred';
+      const anchors = (Array.isArray(c.anchors) ? c.anchors : [])
+        .map(anchorSuffix).filter(Boolean).join(' ');
+      out.push(anchors ? `- [${stance}] ${c.claim} — ${anchors}\n` : `- [${stance}] ${c.claim}\n`);
+    }
+  }
+  if (openQuestions.length) {
+    out.push('\n## open_questions\n\n');
+    for (const q of openQuestions) out.push(`- ${q}\n`);
+  }
+  return out.join('');
+}
+
 export function renderTranscript({ session, messages, startedAtMs, stoppedAtMs, note, modelNames = {}, tokenUsage }) {
   const p = (label, v) => (v === undefined || v === null || v === '' ? '' : `- ${label}: ${v}\n`);
   const durS = Math.round((stoppedAtMs - startedAtMs) / 1000);
@@ -346,6 +390,8 @@ export function renderTranscript({ session, messages, startedAtMs, stoppedAtMs, 
   } else if (session.stop_reason === 'group_chat_end') {
     lines.push('\n> ⚠️ 正常收官但 discussion_summary 缺失(moderator 未走 end_discussion;读转录尾段人工收束)\n');
   }
+  // C2 证据链(09-09):结构化结论节(detail 坏 JSON / 旧场 → 空串省略)。
+  lines.push(renderConclusionsSection(session.discussion_detail));
   lines.push('\n---\n');
   for (const m of messages) {
     const speaker = m.speaker ?? '用户';

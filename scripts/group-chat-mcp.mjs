@@ -239,9 +239,21 @@ export async function coreResult(deps, ledger, sessionId) {
   } catch { /* 同 ensureTranscript:目录失败降级 UUID 原样 */ }
   const meta = typeof loaded.session.metadata === 'string' ? JSON.parse(loaded.session.metadata) : loaded.session.metadata;
   const disp = (id) => modelNames[id] || id;
+  // C2 证据链(09-09):结构化结论(锚点带校验结果)。坏 JSON → null
+  // + detail_warning,不炸 result(与 summary_warning 同款降级)。
+  let detail = null;
+  let detailWarning = null;
+  if (loaded.session.discussion_detail) {
+    try {
+      detail = JSON.parse(loaded.session.discussion_detail);
+    } catch {
+      detailWarning = 'discussion_detail 非法 JSON(列数据损坏);读转录尾段人工收束';
+    }
+  }
   const out = {
     stop_reason: summary.stop_reason,
     summary: loaded.session.discussion_summary || null,
+    ...(detail ? { detail } : {}),
     roster: {
       moderator: disp(loaded.session.model || loaded.session.model_id || ''),
       participants: (meta?.participants || []).map((p) => `${p.name}/${disp(p.model)}`),
@@ -259,6 +271,7 @@ export async function coreResult(deps, ledger, sessionId) {
   if (!loaded.session.discussion_summary) {
     out.summary_warning = '正常收官但 discussion_summary 缺失(moderator 未走 end_discussion);读转录尾段人工收束';
   }
+  if (detailWarning) out.detail_warning = detailWarning;
   return out;
 }
 
