@@ -36,6 +36,7 @@
 
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import { classifyDroppedFiles } from "../../utils/dragDropFiles";
+import { colorTagForName, COLOR_PALETTE } from "../../utils/colorTag";
 // 08-18(handoff/compact): 摘要 loading 遮罩的 HUD 动效(纯 SMIL,
 // <img> 引用即可动画)。来源 brand/motion/logo-hud.svg。
 import logoHudUrl from "../../assets/logo-hud.svg";
@@ -242,6 +243,25 @@ function openGroupChatEdit() {
   if (!isGroupChat.value) return;
   groupChatEditOpen.value = true;
 }
+
+// 群聊 roster 头像簇(2026-09-10 gc-panel-visual-identity):编辑入口
+// chip 内嵌最多 4 个参与者首字头像。颜色与消息行的身份头/色轨同源
+// (colorTagForName 哈希同一名字恒同色),用户在读到第一条发言前就
+// 学会"谁是什么颜色";超出 4 人显示 +N。roster 未加载(空数组)时
+// 头像簇不渲染,chip 退回 icon + 文案的原形态。
+const ROSTER_PREVIEW_MAX = 4;
+const rosterPreview = computed(() =>
+  (groupChatParticipants.value ?? [])
+    .slice(0, ROSTER_PREVIEW_MAX)
+    .map((p) => ({
+      name: p.name,
+      initial: p.name.charAt(0).toUpperCase(),
+      color: COLOR_PALETTE[colorTagForName(p.name)],
+    })),
+);
+const rosterOverflow = computed(() =>
+  Math.max(0, (groupChatParticipants.value?.length ?? 0) - ROSTER_PREVIEW_MAX),
+);
 
 // GCE-M3 (09-06-gce-m3-control-plane): 收束打断入口 —— 与 API 同权同语义,
 // 复用 store action(两 transport 通用);按钮只管可见性与发起。
@@ -744,7 +764,12 @@ onUnmounted(() => reviewStateStore.stop());
 </script>
 
 <template>
-  <section class="chat-panel" @dragover.prevent @drop.prevent="onPanelDrop">
+  <section
+    class="chat-panel"
+    :class="{ 'chat-panel--group-chat': isGroupChat }"
+    @dragover.prevent
+    @drop.prevent="onPanelDrop"
+  >
     <header class="chat-panel__header">
       <div class="chat-panel__title-row">
         <h1 class="chat-panel__title">{{ currentSessionTitle }}</h1>
@@ -758,6 +783,11 @@ onUnmounted(() => reviewStateStore.stop());
           the edit modal — same affordance as the dedicated
           "编辑参与者" button (below), so the user has 2
           discoverable paths to the same action.
+
+          2026-09-10 gc-panel-visual-identity: chip 头部内嵌 roster
+          头像簇(≤4 首字头像 + 超出 +N,palette 色与消息行同源)——
+          群聊模式的即时视觉信号,颜色映射在读消息前建立。roster
+          未加载时退回 users icon。
         -->
         <button
           v-if="isGroupChat"
@@ -768,7 +798,21 @@ onUnmounted(() => reviewStateStore.stop());
           data-testid="chat-panel-group-chat-edit"
           @click="openGroupChatEdit"
         >
-          <Icon name="users" :size="12" />
+          <span
+            v-if="rosterPreview.length > 0"
+            class="gch-roster"
+            aria-hidden="true"
+          >
+            <span
+              v-for="p in rosterPreview"
+              :key="p.name"
+              class="gch-roster__avatar"
+              :style="{ '--gc-speaker': p.color }"
+              :title="p.name"
+            >{{ p.initial }}</span>
+            <span v-if="rosterOverflow > 0" class="gch-roster__more">+{{ rosterOverflow }}</span>
+          </span>
+          <Icon v-else name="users" :size="12" />
           群聊 ({{ groupChatParticipants?.length ?? 0 }} 参与者)
         </button>
         <!--
@@ -1078,6 +1122,7 @@ onUnmounted(() => reviewStateStore.stop());
 
     <ChatInput
       :sending="chatStore.isCurrentSessionStreaming"
+      :placeholder="isGroupChat ? '发起新一场讨论…' : undefined"
       @send="(text: string, staged: StagedImage[]) => emit('send', text, staged)"
       @stop="onStop"
     />
@@ -1475,6 +1520,50 @@ onUnmounted(() => reviewStateStore.stop());
   border-color: var(--color-accent-muted);
   font: inherit;
   flex-shrink: 0;
+}
+
+/* 2026-09-10 gc-panel-visual-identity: roster 头像簇(编辑入口 chip 内)。
+   16px 首字圆(比消息行的 18px 收一档,匹配头部密度),palette 色
+   16% 底 + 40% 描边 + 同色首字 —— 与 MessageItem 的
+   .msg-speaker-chip__avatar 同一视觉词汇,--gc-speaker 变量经行内
+   style 下发(颜色源 colorTagForName,与消息行哈希同源同值)。 */
+.gch-roster {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.gch-roster__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--gc-speaker, var(--color-accent)) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gc-speaker, var(--color-accent)) 40%, transparent);
+  color: var(--gc-speaker, var(--color-accent));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.gch-roster__more {
+  font-size: var(--text-2xs);
+  color: var(--color-text-muted);
+  line-height: 1;
+}
+
+/* 2026-09-10 gc-panel-visual-identity: 群聊「房间」底色 —— 消息区在
+   bg-app 上叠一层 60% bg-surface 的 tint,与单聊的消息区在明度上有
+   一档可辨差异(≈ #10151c vs #0a0e14;首截 45% 实测静态截图不可辨,
+   VLM 亮度盲区之外按大面积底色感知提档)。只染 __main(转录室);
+   header / 输入区等 chrome 保持原样,主题不翻转。气泡 / 工具卡
+   (elevated #1a2030)在 tint 上仍有清晰层级;timeline 透明文本走
+   text-primary,对比度不受影响。 */
+.chat-panel--group-chat .chat-panel__main {
+  background: color-mix(in srgb, var(--color-bg-surface) 60%, var(--color-bg-app));
 }
 
 /* Memory entry button (2026-06-11). 08-24 btn-family:四个兄弟

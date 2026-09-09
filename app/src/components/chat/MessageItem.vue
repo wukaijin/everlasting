@@ -201,6 +201,26 @@ const speakerLabel = computed(() => speakerLabelOf(props.message));
 const speakerAccent = computed(() => speakerAccentOf(props.message));
 const showSpeakerChip = computed(() => showSpeakerChipFor(props.message));
 
+// 群聊转录样式(2026-09-10 gc-panel-visual-identity):群聊里带 speaker
+// 的 assistant 行分两种形态 —— 参与者 = 身份头(彩色首字头像 + 彩色名
+// + 2px 色轨),主持人 = 中性 pill(chip 维持系统标签观感)。两种类都
+// 挂在根 <li> 上供 scoped CSS 消费;经典 chat(speaker 为空)零影响。
+const isGroupModerator = computed(
+  () => props.message.speaker === "moderator" && props.message.role === "assistant",
+);
+const isGroupParticipant = computed(
+  () =>
+    !!props.message.speaker &&
+    props.message.speaker !== "moderator" &&
+    props.message.role === "assistant",
+);
+// 头像首字:参与者名首个字符(CJK 名取首汉字,拉丁名取首字母,大写化
+// 仅对 ASCII 生效 —— toUpperCase 对汉字是无害恒等)。
+const speakerInitial = computed<string>(() => {
+  const s = props.message.speaker ?? "";
+  return s ? s.charAt(0).toUpperCase() : "";
+});
+
 // 群聊 speaker chip 的模型名段(2026-09-07):把 speaker 解析回模型
 // 显示名 —— 参与者走 session metadata 的 roster(name → model id),
 // 主持人走 session 自己的 model_id。解析链任何一环缺位(经典会话
@@ -598,6 +618,12 @@ const messageImages = computed<
       {
         'msg--err': message.error,
         'msg--editing': isEditingThisMessage,
+        // 群聊转录样式:参与者行带 palette 色轨(类名与 chip 的
+        // speakerAccent 同源,--gc-speaker 色值变量定义在下方 8 条
+        // palette 规则里);主持人行只 muted 正文,不动布局。
+        'msg--gc-participant': isGroupParticipant,
+        'msg--gc-moderator': isGroupModerator,
+        ...(isGroupParticipant ? { [`msg--gc-${speakerAccent}`]: true } : {}),
       },
     ]"
   >
@@ -704,11 +730,19 @@ const messageImages = computed<
     <div
       v-if="showSpeakerChip"
       class="msg-speaker-chip"
-      :class="`msg-speaker-chip--${speakerAccent}`"
+      :class="[
+        `msg-speaker-chip--${speakerAccent}`,
+        isGroupParticipant ? 'msg-speaker-chip--participant' : 'msg-speaker-chip--moderator',
+      ]"
       :data-testid="`msg-speaker-chip-${message.seq}`"
       :data-speaker="message.speaker"
     >
-      <span class="msg-speaker-chip__dot" aria-hidden="true" />
+      <span
+        v-if="isGroupParticipant"
+        class="msg-speaker-chip__avatar"
+        aria-hidden="true"
+      >{{ speakerInitial }}</span>
+      <span v-else class="msg-speaker-chip__dot" aria-hidden="true" />
       <span class="msg-speaker-chip__label">{{ speakerLabel }}</span>
       <span
         v-if="speakerModelLabel"
@@ -1319,17 +1353,14 @@ const messageImages = computed<
 }
 
 /* Group chat (07-29-group-chat, Phase 4 Step 4 TODO-F4):
-   speaker chip. Small pill at the top of the row, before
-   the ThinkingBlock / bubble. The chip pairs a 6px colored
-   dot with the speaker's display name. Color comes from one
-   of two buckets:
-     - "neutral" (moderator): fixed accent, no palette.
-     - "palette-N" (participant): one of the 8-color palette
-       from `utils/colorTag.ts` (djb2 hash of the speaker
-       name → N). Same name = same color across reloads +
-       sessions, deterministic without needing a DB lookup.
-   The chip is rendered only on assistant rows (the v-if
-   guard on the template side skips user rows). */
+   speaker chip → 双形态(2026-09-10 gc-panel-visual-identity)。
+   基线(无修饰 / moderator)= 原 pill 形态:系统标签观感,主持人
+   专用。participant 形态 = 开放式身份头:去掉 pill 底/边,彩色首字
+   头像 + 彩色名 + muted 模型名 —— 与单聊的"无名气泡"拉开,一眼
+   看出谁在发言。颜色来自 `utils/colorTag.ts` 的 8 色板(djb2 哈希
+   参与者名 → N,同名恒同色),经行级 `--gc-speaker` 自定义属性下发
+   (定义在下方 8 条 `.msg--gc-palette-N` 规则,chip 是行的后代,
+   var 继承)。 */
 .msg-speaker-chip {
   display: inline-flex;
   align-items: center;
@@ -1344,6 +1375,43 @@ const messageImages = computed<
   color: var(--ev-color-text, #e0e0e0);
   border: 1px solid var(--ev-color-border, #444);
   align-self: flex-start;
+}
+
+/* 参与者身份头:拆掉 pill 外壳。色值走行级 --gc-speaker(兜底
+   accent,防 palette 类缺位的未来路径)。 */
+.msg-speaker-chip--participant {
+  gap: 8px;
+  margin: 0 0 4px;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+/* 首字头像:18px 圆,palette 色 16% 底 + 40% 描边 + 同色首字。
+   底色是深底上的浅 tint,首字对比度按 bg-app 层核算(≥5:1,AA)。 */
+.msg-speaker-chip__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--gc-speaker, var(--color-accent)) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gc-speaker, var(--color-accent)) 40%, transparent);
+  color: var(--gc-speaker, var(--color-accent));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* 参与者名:palette 色 + 600 字重(群聊身份锚点,Slack/Discord 的
+   彩色用户名词汇)。色板 8 值在 bg-app 上最差 #6a82b5 ≈ 5.1:1,过 AA。 */
+.msg-speaker-chip--participant .msg-speaker-chip__label {
+  color: var(--gc-speaker, var(--color-text-primary));
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
 }
 
 .msg-speaker-chip__dot {
@@ -1376,19 +1444,33 @@ const messageImages = computed<
   background: var(--ev-color-accent, #4a8eff);
 }
 
-/* Participant chips: 8 palette buckets matching
-   `utils/colorTag.ts::COLOR_PALETTE`. Each bucket sets the
-   dot color; the chip background stays neutral so the
-   visual weight is dominated by the dot + label, not the
-   chip background — keeps the chat readable. */
-.msg-speaker-chip--palette-0 .msg-speaker-chip__dot { background: #d4826a; }
-.msg-speaker-chip--palette-1 .msg-speaker-chip__dot { background: #6a9e7e; }
-.msg-speaker-chip--palette-2 .msg-speaker-chip__dot { background: #6a82b5; }
-.msg-speaker-chip--palette-3 .msg-speaker-chip__dot { background: #b56a9e; }
-.msg-speaker-chip--palette-4 .msg-speaker-chip__dot { background: #8eb56a; }
-.msg-speaker-chip--palette-5 .msg-speaker-chip__dot { background: #6ab5ae; }
-.msg-speaker-chip--palette-6 .msg-speaker-chip__dot { background: #b5a06a; }
-.msg-speaker-chip--palette-7 .msg-speaker-chip__dot { background: #9e6ab5; }
+/* 行级 palette 色值单源:8 条规则只发 --gc-speaker 变量,行内色轨
+   (inset box-shadow)与 chip 的头像/名色都从这继承 —— 同一参与者
+   的轨/头像/名三处恒同色。色值与 utils/colorTag.ts::COLOR_PALETTE
+   一一对应(该文件是权威源,此处是 CSS 侧镜像,改板需两处同步)。 */
+.msg--gc-palette-0 { --gc-speaker: #d4826a; }
+.msg--gc-palette-1 { --gc-speaker: #6a9e7e; }
+.msg--gc-palette-2 { --gc-speaker: #6a82b5; }
+.msg--gc-palette-3 { --gc-speaker: #b56a9e; }
+.msg--gc-palette-4 { --gc-speaker: #8eb56a; }
+.msg--gc-palette-5 { --gc-speaker: #6ab5ae; }
+.msg--gc-palette-6 { --gc-speaker: #b5a06a; }
+.msg--gc-palette-7 { --gc-speaker: #9e6ab5; }
+
+/* 参与者行:2px palette 色轨(inset box-shadow,复用用户气泡 3px
+   accent 左轨的"这是谁的输入"词汇,不扰动布局)。轨 + 身份头 + 开放
+   正文 = 转录形态;单聊气泡形态零改动。 */
+.msg--gc-participant {
+  box-shadow: inset 2px 0 0 var(--gc-speaker, var(--color-accent));
+  padding-left: var(--space-2);
+}
+
+/* 主持人行:编排性发言(点名/收束),非内容产出 —— 正文降一档为
+   secondary 色,pill chip 已标明身份。仅动 timeline/气泡文字色,
+   工具卡(含 DiscussionSummaryCard)保持原样。 */
+.msg--assistant.msg--gc-moderator .msg__bubble {
+  color: var(--color-text-secondary);
+}
 
 /* D3 PR2: the inline edit mode gets a subtle accent border
    + a tinted background to signal "this row is in

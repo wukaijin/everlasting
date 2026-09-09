@@ -564,6 +564,61 @@ describe("MessageItem — group chat speaker chip", () => {
 });
 
 // ---------------------------------------------------------------------
+// 2026-09-10 gc-panel-visual-identity: 群聊转录行级样式。参与者行 =
+// msg--gc-participant + msg--gc-palette-N(色轨/头像/彩色名的挂点),
+// 主持人行 = msg--gc-moderator(chip 维持中性 pill),经典行两者皆无。
+// ---------------------------------------------------------------------
+
+describe("MessageItem — group chat transcript row classes", () => {
+  it("marks participant rows with msg--gc-participant + palette class and renders the avatar initial", async () => {
+    const message = makeAssistantMessage([], []);
+    message.speaker = "Alex";
+    message.seq = 21;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const row = wrapper.find("li.msg");
+    expect(row.classes()).toContain("msg--gc-participant");
+    // palette index comes from colorTagForName("Alex") — assert the
+    // class prefix rather than the exact bucket so a palette re-hash
+    // doesn't break this test (the hash itself is covered in
+    // utils/colorTag tests).
+    expect(row.classes().some((c) => /^msg--gc-palette-\d$/.test(c))).toBe(true);
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-21"]');
+    expect(chip.classes()).toContain("msg-speaker-chip--participant");
+    // Identity header avatar carries the speaker's initial.
+    expect(chip.find(".msg-speaker-chip__avatar").text()).toBe("A");
+    // Participant form replaces the pill dot.
+    expect(chip.find(".msg-speaker-chip__dot").exists()).toBe(false);
+  });
+
+  it("marks moderator rows with msg--gc-moderator only and keeps the pill dot", async () => {
+    const message = makeAssistantMessage([], []);
+    message.speaker = "moderator";
+    message.seq = 22;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const row = wrapper.find("li.msg");
+    expect(row.classes()).toContain("msg--gc-moderator");
+    expect(row.classes()).not.toContain("msg--gc-participant");
+    const chip = wrapper.find('[data-testid="msg-speaker-chip-22"]');
+    expect(chip.classes()).toContain("msg-speaker-chip--moderator");
+    expect(chip.find(".msg-speaker-chip__dot").exists()).toBe(true);
+    expect(chip.find(".msg-speaker-chip__avatar").exists()).toBe(false);
+  });
+
+  it("leaves classic assistant rows without any gc row class", async () => {
+    const message = makeAssistantMessage([], []);
+    message.seq = 23;
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+    const row = wrapper.find("li.msg");
+    expect(row.classes()).not.toContain("msg--gc-participant");
+    expect(row.classes()).not.toContain("msg--gc-moderator");
+    expect(row.classes().some((c) => /^msg--gc-palette-\d$/.test(c))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------
 // 2026-09-07 (provider-model-disable 同批): speaker chip 的模型名段。
 // 参与者经 session metadata roster(name → model id)、主持人经
 // session.model_id 解析回模型显示名;解析链缺位(名字失配 / 模型
