@@ -287,6 +287,38 @@ mod tests {
         assert!(!p.contains("## Project context"), "no empty section: {p:?}");
     }
 
+    /// C2 证据链(2026-09-09):moderator prompt 必须教学结构化收官契约
+    /// (conclusions 锚点 + stance 三档 + open_questions),wrap-up 指令
+    /// 同样适用(打断收官也要带结构化,且 honestly downgrade)。
+    #[test]
+    fn moderator_prompt_teaches_structured_closing_contract() {
+        let ctx = GroupChatCtx {
+            participants: vec![],
+            moderator_model_id: "mod".to_string(),
+            project_root: None,
+            created_via: None,
+            token_budget: None,
+        };
+        let m = moderator_system_prompt(&ctx);
+        assert!(
+            m.contains("`conclusions`") && m.contains("`open_questions`"),
+            "moderator prompt must name the structured params: {m:?}"
+        );
+        assert!(
+            m.contains("\"verified\"") && m.contains("\"inferred\"") && m.contains("\"disputed\""),
+            "moderator prompt must teach all three stances: {m:?}"
+        );
+        assert!(
+            m.contains("ACTUALLY read"),
+            "moderator prompt must tie anchors to evidence actually read: {m:?}"
+        );
+        let w = moderator_wrapup_instruction();
+        assert!(
+            w.contains("`conclusions`") && w.contains("inferred"),
+            "wrap-up instruction must carry the same structured contract: {w:?}"
+        );
+    }
+
     /// R3: the participant prompt must explicitly forbid taking over the
     /// moderator's job — the three failure modes from seq 9 (self-built
     /// checklist, addressing the room as host, inventing system tools/skills

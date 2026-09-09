@@ -399,6 +399,15 @@ pub struct SessionRow {
     /// (with or without an explicit summary — the tool's default
     /// "Discussion ended." remark is stored too).
     pub discussion_summary: Option<String>,
+    /// Group-chat structured conclusions (C2 证据链, 2026-09-09):
+    /// JSON text of `DiscussionDetail` (conclusions[{claim, anchors,
+    /// stance}] + open_questions), anchor `check` filled by the
+    /// orchestrator's post-validation before persist. `None` = no
+    /// structured output for this closing (legacy sessions /
+    /// summary-only end_discussion). Same lifecycle as
+    /// `discussion_summary`: cleared when a reused session starts a
+    /// fresh discussion.
+    pub discussion_detail: Option<String>,
 }
 
 /// A group-chat discussion checkpoint row (2026-09-06, GCE P1a —

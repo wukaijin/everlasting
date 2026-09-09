@@ -53,6 +53,7 @@ pub mod chat;
 pub mod chat_loop;
 pub mod compaction;
 pub mod context;
+pub mod discussion_detail;
 pub mod doc_extract;
 pub mod group_chat;
 pub mod group_chat_loop;

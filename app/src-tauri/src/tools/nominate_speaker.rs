@@ -14,6 +14,7 @@
 //! turn ends cleanly: `should_continue` sees no further tool_use and
 //! `run_chat_loop` returns at the natural turn boundary).
 
+use crate::agent::discussion_detail::DiscussionDetail;
 use crate::llm::types::ToolDef;
 
 /// Shared, mutable turn state threaded through `run_group_chat_loop`.
@@ -40,6 +41,11 @@ pub struct GroupChatTurnState {
     /// consumers then get the consensus list via `load_session`
     /// without parsing the end_discussion tool_result content blocks.
     pub end_summary: Option<String>,
+    /// C2 证据链(2026-09-09):`end_discussion` 的结构化参数
+    /// (conclusions + open_questions)宽容解析产物。编排器落库前对
+    /// 锚点校验(`discussion_detail::validate_anchors`),再持久化为
+    /// `sessions.discussion_detail`;`None` = 本次收官无结构化产物。
+    pub end_detail: Option<DiscussionDetail>,
 }
 
 pub type SharedTurnState = std::sync::Arc<tokio::sync::Mutex<GroupChatTurnState>>;

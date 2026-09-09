@@ -130,6 +130,8 @@ pub async fn create_session(
         // matches the DB row verbatim (bare INSERT omits both).
         stop_reason: None,
         discussion_summary: None,
+        // C2 (2026-09-09): same lifecycle — starts NULL.
+        discussion_detail: None,
     })
 }
 
@@ -250,7 +252,7 @@ pub async fn load_session(
  last_context_input_tokens, last_input_tokens,
  last_output_tokens, last_cache_creation, last_cache_read,
  color_tag, mode, workflow_enabled, plugin_name,
- session_type, metadata, stop_reason, discussion_summary
+        session_type, metadata, stop_reason, discussion_summary, discussion_detail
  FROM sessions
  WHERE id = ?
  "#,
@@ -301,6 +303,7 @@ pub async fn load_session(
                 // classic-chat sessions and pre-upgrade rows stay NULL).
                 stop_reason: r.try_get("stop_reason")?,
                 discussion_summary: r.try_get("discussion_summary")?,
+                discussion_detail: r.try_get("discussion_detail")?,
             }
         }
         None => return Ok(None),
@@ -916,12 +919,15 @@ pub async fn set_session_metadata(
 // ---------------------------------------------------------------------------
 
 /// Clear the discussion-lifecycle columns (`stop_reason` +
-/// `discussion_summary`) at orchestration START. A reused group-chat
-/// session can run a second discussion after the first ended; the
-/// poller's「!busy + stop_reason → ended」derivation (GC1/GC2) must not
-/// report the stale previous run's reason while the new one is in
-/// flight. Best-effort contract: callers `warn!` + swallow errors (the
-/// orchestration must not abort because a lifecycle annotation failed).
+/// `discussion_summary` + `discussion_detail`) at orchestration START.
+/// A reused group-chat session can run a second discussion after the
+/// first ended; the poller's「!busy + stop_reason → ended」derivation
+/// (GC1/GC2) must not report the stale previous run's reason while the
+/// new one is in flight, and a stale structured detail (C2) would let
+/// the second run's consumers read the FIRST run's anchor-checked
+/// conclusions. Best-effort contract: callers `warn!` + swallow errors
+/// (the orchestration must not abort because a lifecycle annotation
+/// failed).
 pub async fn clear_group_chat_lifecycle(
     pool: &SqlitePool,
     session_id: &str,
@@ -930,7 +936,7 @@ pub async fn clear_group_chat_lifecycle(
     sqlx::query(
         r#"
  UPDATE sessions
- SET stop_reason = NULL, discussion_summary = NULL, updated_at = ?
+ SET stop_reason = NULL, discussion_summary = NULL, discussion_detail = NULL, updated_at = ?
  WHERE id = ?
  "#,
     )
@@ -955,6 +961,7 @@ pub async fn finalize_group_chat_lifecycle(
     session_id: &str,
     stop_reason: &str,
     discussion_summary: Option<&str>,
+    discussion_detail: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -962,12 +969,14 @@ pub async fn finalize_group_chat_lifecycle(
  UPDATE sessions
  SET stop_reason = ?,
      discussion_summary = COALESCE(?, discussion_summary),
+     discussion_detail = COALESCE(?, discussion_detail),
      updated_at = ?
  WHERE id = ?
  "#,
     )
     .bind(stop_reason)
     .bind(discussion_summary)
+    .bind(discussion_detail)
     .bind(&now)
     .bind(session_id)
     .execute(pool)

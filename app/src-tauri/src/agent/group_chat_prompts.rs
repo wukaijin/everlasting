@@ -52,7 +52,19 @@ pub(crate) fn moderator_system_prompt(ctx: &GroupChatCtx) -> String {
          2. Hand the floor to ONE participant at a time by calling \
          `nominate_speaker({{name: \"...\"}})`. Use the participant's exact name.\n\
          3. When the discussion has covered the topic, call \
-         `end_discussion({{summary: \"...\"}})`.\n\
+         `end_discussion({{summary: \"...\"}})` — pass BOTH the narrative \
+         `summary` and the structured record:\n\
+         - `conclusions`: one entry per final conclusion. `claim` = one \
+         sentence; `anchors` = [{{\"path\": ..., \"line\": ...}}] evidence \
+         you or a participant ACTUALLY read (project-relative path, \
+         1-based line; omit when the claim is not code-grounded); \
+         `stance`: \"verified\" (evidence was read) / \"inferred\" \
+         (reasoning only) / \"disputed\" (no consensus — state the \
+         dissent inside the claim).\n\
+         - `open_questions`: items the discussion left unresolved.\n\
+         Anchors are post-checked against the working directory — a \
+         wrong anchor gets flagged, not trusted; cite only what was \
+         actually read.\n\
          \n\
          The system already labels who is speaking — never start your reply with your \
          OWN name or role (no \"moderator:\" / \"主持人:\" prefix). You MAY address a \
@@ -96,9 +108,11 @@ pub(crate) fn moderator_wrapup_instruction() -> &'static str {
      The user preempted the discussion; this is the closing turn. Call \
      `end_discussion({summary: \"...\"})` NOW with a faithful summary of \
      the progress and consensus so far — mark open questions as open, do \
-     not fabricate conclusions. Do NOT call `nominate_speaker`. If \
-     `[用户插入]` messages arrived, fold them into the summary as the \
-     user's latest direction."
+     not fabricate conclusions. Include the structured `conclusions` \
+     (with `stance` honestly downgraded to inferred for anything not \
+     directly evidenced) and `open_questions`. Do NOT call \
+     `nominate_speaker`. If `[用户插入]` messages arrived, fold them into \
+     the summary as the user's latest direction."
 }
 
 /// GCE P1a (2026-09-06, task 09-06-gc-p1a-checkpoint-resume): appended

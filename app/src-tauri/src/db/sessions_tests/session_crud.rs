@@ -369,11 +369,20 @@ async fn group_chat_lifecycle_columns_round_trip() {
     assert_eq!(loaded.session.stop_reason, None);
     assert_eq!(loaded.session.discussion_summary, None);
 
-    // Normal end: stop_reason + summary persisted, readable without
-    // parsing any tool_result content blocks (GC7's core ask).
-    finalize_group_chat_lifecycle(&pool, &sid, "group_chat_end", Some("## 共识清单\n- A"))
-        .await
-        .unwrap();
+    // Normal end: stop_reason + summary + structured detail persisted,
+    // readable without parsing any tool_result content blocks (GC7's
+    // core ask; C2 adds discussion_detail).
+    let detail_json =
+        r#"{"conclusions":[{"claim":"A","anchors":[],"stance":"verified"}],"open_questions":[]}"#;
+    finalize_group_chat_lifecycle(
+        &pool,
+        &sid,
+        "group_chat_end",
+        Some("## 共识清单\n- A"),
+        Some(detail_json),
+    )
+    .await
+    .unwrap();
     let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
     assert_eq!(
         loaded.session.stop_reason.as_deref(),
@@ -383,10 +392,15 @@ async fn group_chat_lifecycle_columns_round_trip() {
         loaded.session.discussion_summary.as_deref(),
         Some("## 共识清单\n- A")
     );
+    assert_eq!(
+        loaded.session.discussion_detail.as_deref(),
+        Some(detail_json),
+        "C2: structured detail persists alongside the summary"
+    );
 
     // Non-end exit (max_rounds / cancelled / error): stop_reason
     // updates, an absent summary leaves the column untouched.
-    finalize_group_chat_lifecycle(&pool, &sid, "max_rounds", None)
+    finalize_group_chat_lifecycle(&pool, &sid, "max_rounds", None, None)
         .await
         .unwrap();
     let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
@@ -396,6 +410,11 @@ async fn group_chat_lifecycle_columns_round_trip() {
         Some("## 共识清单\n- A"),
         "None must NOT clear the summary column (start-of-run clear owns that)"
     );
+    assert_eq!(
+        loaded.session.discussion_detail.as_deref(),
+        Some(detail_json),
+        "None must NOT clear the detail column either (same COALESCE contract)"
+    );
 
     // list_sessions summary carries the stop reason (the poller's
     // !busy + stop_reason derivation).
@@ -403,16 +422,19 @@ async fn group_chat_lifecycle_columns_round_trip() {
     let me = summaries.iter().find(|s| s.id == sid).unwrap();
     assert_eq!(me.stop_reason.as_deref(), Some("max_rounds"));
 
-    // Reuse: the next orchestration's start clears both columns.
+    // Reuse: the next orchestration's start clears all three columns
+    // (a stale detail would feed consumers the previous run's
+    // anchor-checked conclusions).
     clear_group_chat_lifecycle(&pool, &sid).await.unwrap();
     let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
     assert_eq!(loaded.session.stop_reason, None);
     assert_eq!(loaded.session.discussion_summary, None);
+    assert_eq!(loaded.session.discussion_detail, None);
 
     // The three terminal reasons are distinguishable post-hoc (GC2's
     // core ask) — smoke each value through the column.
     for reason in ["group_chat_end", "max_rounds", "cancelled", "error"] {
-        finalize_group_chat_lifecycle(&pool, &sid, reason, None)
+        finalize_group_chat_lifecycle(&pool, &sid, reason, None, None)
             .await
             .unwrap();
         let loaded = load_session(&pool, &sid).await.unwrap().unwrap();
@@ -531,7 +553,7 @@ async fn group_chat_checkpoint_boot_sweep_marks_interrupted_and_heals_orphans() 
     upsert_group_chat_checkpoint(&pool, &orphan, 7, 0)
         .await
         .unwrap();
-    finalize_group_chat_lifecycle(&pool, &orphan, "group_chat_end", Some("done"))
+    finalize_group_chat_lifecycle(&pool, &orphan, "group_chat_end", Some("done"), None)
         .await
         .unwrap();
 
@@ -541,7 +563,7 @@ async fn group_chat_checkpoint_boot_sweep_marks_interrupted_and_heals_orphans() 
     upsert_group_chat_checkpoint(&pool, &cancelled, 5, 0)
         .await
         .unwrap();
-    finalize_group_chat_lifecycle(&pool, &cancelled, "cancelled", None)
+    finalize_group_chat_lifecycle(&pool, &cancelled, "cancelled", None, None)
         .await
         .unwrap();
 

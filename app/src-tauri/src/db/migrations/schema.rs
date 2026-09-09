@@ -495,8 +495,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // it from `load_session` / the session row instead of parsing the
     // end_discussion tool_result content blocks. NULL unless the
     // discussion ended via end_discussion with a summary.
+    //
+    // `discussion_detail` — C2 证据链(2026-09-09):结构化收官结论
+    // (conclusions[{claim, anchors[{path, line?, check?}], stance}] +
+    // open_questions)的 JSON 文本,锚点 `check` 为编排器落库前的后
+    // 校验结果(只标注不修改)。NULL = 本次收官无结构化产物(旧场 /
+    // 只发 summary 的收官);与 summary 同生命周期:复用场重置清空。
     add_session_column_if_missing(pool, "stop_reason", "TEXT").await?;
     add_session_column_if_missing(pool, "discussion_summary", "TEXT").await?;
+    add_session_column_if_missing(pool, "discussion_detail", "TEXT").await?;
 
     sqlx::query(
         r#"

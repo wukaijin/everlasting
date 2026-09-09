@@ -893,6 +893,7 @@ pub(crate) async fn fire_group_chat(
                 sid,
                 crate::agent::group_chat_loop::STOP_REASON_ERROR,
                 None,
+                None,
             )
             .await
             {

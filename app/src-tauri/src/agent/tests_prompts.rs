@@ -49,6 +49,7 @@ fn make_session_row(
         metadata: None,
         stop_reason: None,
         discussion_summary: None,
+        discussion_detail: None,
     }
 }
 

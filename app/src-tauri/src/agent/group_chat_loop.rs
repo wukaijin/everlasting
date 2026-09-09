@@ -428,6 +428,7 @@ pub async fn run_group_chat_loop(
         next_speaker: None,
         discussion_ended: false,
         end_summary: None,
+        end_detail: None,
     }));
 
     // R1/R2: register the per-discussion control channel BEFORE any
@@ -1083,10 +1084,28 @@ pub async fn run_group_chat_loop(
     // (captured by `end_discussion::execute_intercept`) so it lands on
     // the session row as a first-class column. `None` on every
     // non-end exit (max_rounds / cancelled / error).
-    let end_summary: Option<String> = {
+    let (end_summary, end_detail) = {
         let mut st = turn_state.lock().await;
-        st.end_summary.take()
+        (st.end_summary.take(), st.end_detail.take())
     };
+
+    // C2 证据链(2026-09-09):结构化结论的锚点后校验 + 序列化。
+    // 校验只标注不修改(用户裁定),任何失败降级为「无结构化产物」,
+    // 不影响收官落库。
+    let end_detail_json: Option<String> = end_detail.and_then(|mut d| {
+        crate::agent::discussion_detail::validate_anchors(
+            &mut d,
+            gc_ctx.project_root.as_deref().map(std::path::Path::new),
+        );
+        match serde_json::to_string(&d) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(error = %e, session_id = %session_id,
+                    "group_chat: discussion_detail serialize failed (dropping detail)");
+                None
+            }
+        }
+    });
 
     // GC2 (2026-09-05, BUGLIST-group-chat): persist WHY the discussion
     // stopped — `group_chat_end` / `max_rounds` / `error` / `cancelled`
@@ -1110,9 +1129,14 @@ pub async fn run_group_chat_loop(
             None => STOP_REASON_GROUP_CHAT_END,
         }
     };
-    if let Err(e) =
-        db::finalize_group_chat_lifecycle(&db, &session_id, stop_reason_str, end_summary.as_deref())
-            .await
+    if let Err(e) = db::finalize_group_chat_lifecycle(
+        &db,
+        &session_id,
+        stop_reason_str,
+        end_summary.as_deref(),
+        end_detail_json.as_deref(),
+    )
+    .await
     {
         tracing::warn!(
             error = %e,

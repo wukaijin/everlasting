@@ -1094,7 +1094,7 @@ async fn attach_prior_discussion(
     .await
     .expect("create prior group session");
     if let Some(reason) = stop_reason {
-        crate::db::finalize_group_chat_lifecycle(&fx.state.db, &sid, reason, None)
+        crate::db::finalize_group_chat_lifecycle(&fx.state.db, &sid, reason, None, None)
             .await
             .expect("set prior stop_reason");
     }

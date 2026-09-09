@@ -34,6 +34,7 @@ use super::tests_common::{
     TestHarness,
 };
 use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::discussion_detail::{AnchorCheck, DiscussionDetail, Stance};
 use crate::agent::group_chat::{GroupChatCtx, ParticipantConfig};
 use crate::agent::group_chat_loop::run_group_chat_loop;
 use crate::db;
@@ -1288,10 +1289,17 @@ async fn group_chat_max_rounds_persists_stop_reason() {
 #[tokio::test]
 async fn group_chat_second_run_clears_stale_stop_reason() {
     let (h, gc_session_id) = make_group_chat_harness().await;
-    // Simulate a previous ended run.
-    db::finalize_group_chat_lifecycle(&h.db, &gc_session_id, "max_rounds", Some("旧总结"))
-        .await
-        .expect("seed previous lifecycle");
+    // Simulate a previous ended run (with structured detail — C2: a
+    // stale detail must not survive into the second run's consumers).
+    db::finalize_group_chat_lifecycle(
+        &h.db,
+        &gc_session_id,
+        "max_rounds",
+        Some("旧总结"),
+        Some(r#"{"conclusions":[{"claim":"旧结论","anchors":[],"stance":"verified"}],"open_questions":[]}"#),
+    )
+    .await
+    .expect("seed previous lifecycle");
 
     // Second run: nominate nobody for one round... the loop only
     // clears at start; a single round-0 moderator text turn then a
@@ -1352,6 +1360,123 @@ async fn group_chat_second_run_clears_stale_stop_reason() {
         Some("旧总结"),
         "stale summary from the previous run must not survive"
     );
+    // C2 (2026-09-09): the stale structured detail from the previous
+    // run must be cleared too — the second run closed without
+    // structured params, so a surviving detail would feed consumers
+    // the FIRST run's anchor-checked conclusions.
+    assert!(
+        loaded.session.discussion_detail.is_none(),
+        "stale discussion_detail from the previous run must not survive, got {:?}",
+        loaded.session.discussion_detail
+    );
+}
+
+/// C2 (2026-09-09) E2E: a structured end_discussion persists as the
+/// `discussion_detail` column with anchor `check` results filled by
+/// the orchestrator's post-validation against the real project root.
+/// Coexists with the narrative `discussion_summary` (both first-class).
+#[tokio::test]
+async fn group_chat_structured_end_discussion_persists_validated_detail() {
+    let (h, gc_session_id) = make_group_chat_harness().await;
+    // Real fixture files under the harness project root for anchors.
+    std::fs::write(h.project_path.join("fixture_a.rs"), "l1\nl2\nl3\n").unwrap();
+
+    let moderator = Arc::new(MockProvider::new(vec![mod_tool_turn(
+        "cd1",
+        "end_discussion",
+        serde_json::json!({
+            "summary": "收官叙事",
+            "conclusions": [
+                {"claim": "实锚结论", "anchors": [{"path": "fixture_a.rs", "line": 2}], "stance": "verified"},
+                {"claim": "越界锚", "anchors": [{"path": "fixture_a.rs", "line": 99}]},
+                {"claim": "缺失锚", "anchors": [{"path": "missing.rs"}]},
+                {"claim": "无锚推测", "stance": "inferred"},
+                {"claim": "争议项", "stance": "disputed"}
+            ],
+            "open_questions": ["何时复核"]
+        }),
+        "结束",
+    )]));
+    let mut catalog: ProviderCatalog = HashMap::new();
+    catalog.insert("moderator".to_string(), moderator.clone());
+    let catalog = Arc::new(tokio::sync::RwLock::new(catalog));
+
+    let ctx = GroupChatCtx {
+        project_root: Some(h.project_path.to_string_lossy().to_string()),
+        ..group_chat_ctx()
+    };
+
+    let emitter = Arc::new(MockEmitter::new());
+    run_group_chat_loop(
+        crate::tools::builtin_tools(),
+        200_000,
+        None,
+        "rid-gc-c2".to_string(),
+        gc_session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations.clone(),
+        h.session_active_request.clone(),
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        Some(catalog),
+        Arc::new(crate::agent::subagent::ThreadLocalSubagentSink),
+        h.subagent_cache.clone(),
+        h.app_data_dir.clone(),
+        h.question_store.clone(),
+        ctx,
+        fresh_controls(),
+        None,
+    )
+    .await;
+
+    let loaded = db::load_session(&h.db, &gc_session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    assert_eq!(
+        loaded.session.stop_reason.as_deref(),
+        Some("group_chat_end")
+    );
+    assert_eq!(
+        loaded.session.discussion_summary.as_deref(),
+        Some("收官叙事"),
+        "narrative summary stays first-class alongside the structured detail"
+    );
+    let raw = loaded
+        .session
+        .discussion_detail
+        .as_deref()
+        .expect("structured detail must persist");
+    let detail: DiscussionDetail = serde_json::from_str(raw).expect("detail is valid JSON");
+    assert_eq!(detail.conclusions.len(), 5);
+    assert_eq!(detail.open_questions, vec!["何时复核"]);
+    // Anchor checks — annotated, never rewritten (stance untouched).
+    assert_eq!(
+        detail.conclusions[0].anchors[0].check,
+        Some(AnchorCheck::Ok)
+    );
+    assert_eq!(
+        detail.conclusions[1].anchors[0].check,
+        Some(AnchorCheck::LineOutOfRange)
+    );
+    assert_eq!(
+        detail.conclusions[2].anchors[0].check,
+        Some(AnchorCheck::NotFound)
+    );
+    assert!(detail.conclusions[3].anchors.is_empty());
+    // Stances survive validation verbatim (只标注不修改): declared
+    // stances keep their value, omitted stance = inferred default.
+    assert_eq!(detail.conclusions[0].stance, Stance::Verified);
+    assert_eq!(detail.conclusions[1].stance, Stance::Inferred);
+    assert_eq!(detail.conclusions[3].stance, Stance::Inferred);
+    assert_eq!(detail.conclusions[4].stance, Stance::Disputed);
 }
 
 /// GC4: self-referential `@<speaker>:` prefixes are stripped at the

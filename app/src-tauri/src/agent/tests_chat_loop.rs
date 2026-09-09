@@ -122,6 +122,7 @@ fn group_chat_state() -> Option<crate::tools::nominate_speaker::SharedTurnState>
             next_speaker: None,
             discussion_ended: false,
             end_summary: None,
+            end_detail: None,
         },
     )))
 }

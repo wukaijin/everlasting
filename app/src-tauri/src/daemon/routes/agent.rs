@@ -166,7 +166,7 @@ mod resume_tests {
         )
         .await
         .unwrap();
-        db::sessions::finalize_group_chat_lifecycle(pool, &resumed.id, "interrupted", None)
+        db::sessions::finalize_group_chat_lifecycle(pool, &resumed.id, "interrupted", None, None)
             .await
             .unwrap();
         db::sessions::upsert_group_chat_checkpoint(pool, &resumed.id, 1, 0)
@@ -192,6 +192,7 @@ mod resume_tests {
             &stranded.id,
             "group_chat_end",
             Some("已收官"),
+            None,
         )
         .await
         .unwrap();
@@ -212,7 +213,7 @@ mod resume_tests {
         )
         .await
         .unwrap();
-        db::sessions::finalize_group_chat_lifecycle(pool, &rowless.id, "interrupted", None)
+        db::sessions::finalize_group_chat_lifecycle(pool, &rowless.id, "interrupted", None, None)
             .await
             .unwrap();
 
@@ -229,7 +230,7 @@ mod resume_tests {
         )
         .await
         .unwrap();
-        db::sessions::finalize_group_chat_lifecycle(pool, &exhausted.id, "interrupted", None)
+        db::sessions::finalize_group_chat_lifecycle(pool, &exhausted.id, "interrupted", None, None)
             .await
             .unwrap();
         db::sessions::upsert_group_chat_checkpoint(

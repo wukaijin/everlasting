@@ -101,6 +101,8 @@ pub(crate) struct TranscriptRenderArgs<'a> {
     pub stop_reason: &'a str,
     pub messages: &'a [crate::db::types::MessageRow],
     pub discussion_summary: Option<&'a str>,
+    /// C2 证据链:结构化结论(锚点带校验结果)。None/空 = 省略节。
+    pub discussion_detail: Option<&'a crate::agent::discussion_detail::DiscussionDetail>,
 }
 
 /// 渲染转录 markdown(纯函数)。结构:
@@ -118,6 +120,7 @@ pub(crate) fn render_scheduled_transcript(args: &TranscriptRenderArgs<'_>) -> St
         stop_reason,
         messages,
         discussion_summary,
+        discussion_detail,
     } = args;
     let roster = if participants.is_empty() {
         moderator_label.to_string()
@@ -176,6 +179,79 @@ pub(crate) fn render_scheduled_transcript(args: &TranscriptRenderArgs<'_>) -> St
         }
         _ => {
             out.push_str("\n## discussion_summary\n\n(缺失:本场未走 end_discussion 收束,读转录尾段人工收束)\n");
+        }
+    }
+    out.push_str(&render_conclusions_section(*discussion_detail));
+    out
+}
+
+/// C2 证据链:结构化结论节(纯函数)。detail None 或 conclusions 空 →
+/// 空串(旧场零回归);锚点后缀校验记号:✓ = ok,⚠(check) = 断证,
+/// 无记号 = 未校验(live 期/root 缺失)。
+fn render_conclusions_section(
+    detail: Option<&crate::agent::discussion_detail::DiscussionDetail>,
+) -> String {
+    use crate::agent::discussion_detail::{AnchorCheck, DiscussionDetail, Stance};
+
+    fn anchor_suffix(a: &crate::agent::discussion_detail::Anchor) -> String {
+        let loc = match a.line {
+            Some(l) => format!("{}:{}", a.path, l),
+            None => a.path.clone(),
+        };
+        match a.check {
+            Some(AnchorCheck::Ok) => format!("`{loc}` ✓"),
+            Some(
+                c
+                @ (AnchorCheck::NotFound | AnchorCheck::LineOutOfRange | AnchorCheck::OutsideRoot),
+            ) => {
+                let word = match c {
+                    AnchorCheck::NotFound => "not_found",
+                    AnchorCheck::LineOutOfRange => "line_out_of_range",
+                    AnchorCheck::OutsideRoot => "outside_root",
+                    _ => unreachable!(),
+                };
+                format!("`{loc}` ⚠({word})")
+            }
+            _ => format!("`{loc}`"),
+        }
+    }
+
+    let Some(DiscussionDetail {
+        conclusions,
+        open_questions,
+    }) = detail
+    else {
+        return String::new();
+    };
+    if conclusions.is_empty() && open_questions.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    if !conclusions.is_empty() {
+        out.push_str("\n## conclusions\n\n");
+        for c in conclusions {
+            let stance = match c.stance {
+                Stance::Verified => "verified",
+                Stance::Inferred => "inferred",
+                Stance::Disputed => "disputed",
+            };
+            if c.anchors.is_empty() {
+                out.push_str(&format!("- [{stance}] {}\n", c.claim));
+            } else {
+                let anchors = c
+                    .anchors
+                    .iter()
+                    .map(anchor_suffix)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                out.push_str(&format!("- [{stance}] {} — {anchors}\n", c.claim));
+            }
+        }
+    }
+    if !open_questions.is_empty() {
+        out.push_str("\n## open_questions\n\n");
+        for q in open_questions {
+            out.push_str(&format!("- {q}\n"));
         }
     }
     out
@@ -248,6 +324,13 @@ pub(crate) async fn export_scheduled_transcript(
         stop_reason,
         messages: &loaded.messages,
         discussion_summary,
+        // C2:行里读(单一事实源 = DB,导出前 finalize 已落列);
+        // 坏 JSON 降级 None,不阻断导出。
+        discussion_detail: session
+            .discussion_detail
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .as_ref(),
     });
     let date = chrono::Local::now().format("%Y-%m-%d");
     let sid8: String = session_id.chars().take(8).collect();
@@ -372,6 +455,7 @@ mod tests {
             stop_reason: "group_chat_end",
             messages: &messages,
             discussion_summary: Some("共识A"),
+            discussion_detail: None,
         });
         // 头部最低集。
         assert!(out.contains("# 定时审议「每周复盘」转录"));
@@ -405,8 +489,37 @@ mod tests {
             stop_reason: "max_rounds",
             messages: &[],
             discussion_summary: None,
+            discussion_detail: None,
         });
         assert!(out.contains("缺失:本场未走 end_discussion 收束"));
+    }
+
+    /// C2 证据链:conclusions / open_questions 节渲染(stance 标注 +
+    /// 锚点校验记号);detail None 或空 = 省略节(旧场零回归)。
+    #[test]
+    fn render_conclusions_section_with_anchor_checks() {
+        let detail: crate::agent::discussion_detail::DiscussionDetail =
+            serde_json::from_str(
+                r#"{"conclusions":[
+                    {"claim":"实锚","anchors":[{"path":"a.rs","line":2,"check":"ok"}],"stance":"verified"},
+                    {"claim":"断证","anchors":[{"path":"b.rs","line":9,"check":"not_found"}],"stance":"verified"},
+                    {"claim":"推测","stance":"inferred"},
+                    {"claim":"争议","anchors":[{"path":"c.rs"}],"stance":"disputed"}
+                ],"open_questions":["何时复核"]}"#,
+            )
+            .unwrap();
+        let out = render_conclusions_section(Some(&detail));
+        assert!(out.contains("## conclusions"));
+        assert!(out.contains("- [verified] 实锚 — `a.rs:2` ✓"));
+        assert!(out.contains("- [verified] 断证 — `b.rs:9` ⚠(not_found)"));
+        assert!(out.contains("- [inferred] 推测\n"));
+        assert!(out.contains("- [disputed] 争议 — `c.rs`\n"));
+        assert!(out.contains("## open_questions\n\n- 何时复核\n"));
+
+        // None / 空 detail = 空串,主渲染不受影响。
+        assert_eq!(render_conclusions_section(None), "");
+        let empty = crate::agent::discussion_detail::DiscussionDetail::default();
+        assert_eq!(render_conclusions_section(Some(&empty)), "");
     }
 
     /// 导出集成:seed 定时场 session(metadata 归因 + checkpoint 起点)
