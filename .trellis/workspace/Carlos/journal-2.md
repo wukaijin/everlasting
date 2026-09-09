@@ -943,3 +943,37 @@ GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M
 ### Status
 
 [OK] **Completed**
+
+
+## Session 57: C2 证据链:群聊结构化 summary(锚点+推测标注+锚点后校验)
+
+**Date**: 2026-09-09
+**Task**: C2 证据链:群聊结构化 summary(锚点+推测标注+锚点后校验)
+**Branch**: `main`
+
+### Summary
+
+群聊内部改进线依赖矩阵收官项落地(ROADMAP §6 C2.1 → M2 discussion_result 结论可信度,矩阵至此清零)。三项用户裁定:schema 结构化参数(summary 文本保留)/ 无效锚点只标注不修改 / 全消费面。交付:新模块 discussion_detail.rs(serde 类型 snake_case + 宽容解析逐条不连坐 + 锚点校验五臂,root 外零 fs、16MiB 数行帽)+ end_discussion 增 conclusions[{claim,anchors,stance}]/open_questions(additive 零回归)+ sessions.discussion_detail 列(finish COALESCE / clear 三列全清防复用场带断证结论,专项断言锁)+ moderator prompt 三处教学 + Rust/JS 双转录 ## conclusions 节 + MCP result.detail(坏 JSON 降级)+ GUI 收官卡双通道(live call.input 渲染 stance 徽章,收官后 store 合并叠 path+line 核验记号;readonly 预览不查 store 防叠他场)。门禁:cargo 2371/vitest 1693(卡新增 7 用例)/clippy/fmt/vue-tsc/e2e 9/node --test 16+19/MCP 冒烟全绿;live 场 026b420c(议题=评审 C2 实现本身,自狗粮)9 结论(6 实证+3 推测)22 锚点全 check=ok、抽查 3 锚点吻合、wire/转录/MCP 源全通——评审团实抓新代码注释失真一处当日修(Anchor.check 注释 root 缺失语义,假注释 RULE 自审成立),另 5 项 P2 打磨候选记任务 follow-ups.md(✓ 记号对 file-only 锚点语义过强/unvalidated 与未校验视觉同形/双侧渲染器防御不对称/canonicalize 错误粒度/claim 换行转义)。spec 沉淀 pattern-group-chat-structured-summary(七节 code-spec)。观察项:open_questions 混入工具调用标记残片(moderator glitch,惰性文本无执行面)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `049fc5fb` | (see git log) |
+| `10344a33` | (see git log) |
+| `02f69736` | (see git log) |
+| `518c1f62` | (see git log) |
+| `d853a6ba` | (see git log) |
+| `89a187bf` | (see git log) |
+
+### Testing
+
+- [OK] cargo -p everlasting --lib 2371; pnpm test 1693; vue-tsc 净; e2e 9; node --test 16+19; MCP smoke PASS; live AC6 session 026b420c
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- follow-ups.md 五项 P2 打磨候选;GCE 线下一大项=远程暴露认证(需 B.3 翻案裁定 + 安全评审前置)
