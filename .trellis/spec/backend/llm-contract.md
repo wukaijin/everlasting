@@ -136,6 +136,30 @@ problem — the agent loop sees a generic 400 and retries, which 400s again.
   same repair shape as the error path's `build_synthetic_tool_result_message`.
   Test: `turn_checkpoint.rs` AC4 (second request's provider payload actually
   contains the paired tool_result).
+- **Wire round-trip splitting a multi-result user row (09-11-deepseek-
+  tool-result-split-400, 2026-09-11)**: the pair-atomicity rule extends to
+  the **outbound wire shape** — ALL `tool_result` blocks answering one
+  assistant message must ride in the **single user message immediately
+  after it**. The PR2/PR3 wire round-trip lifted each `ToolResult` block
+  into its own `WireMessage::Tool` and mapped each back as a separate
+  `role:"user"` message; native Anthropic merges consecutive user messages
+  so it tolerated the split, but **strict Anthropic-schema relays validate
+  per-message**: the wukaijin deepseek channel 400s it with
+  `messages.N: tool_use ids were found without tool_result blocks
+  immediately after` (glm channels on the same relay are tolerant — the
+  asymmetry cost a full RCA: group-chat session `caa5020a`, deepseek-flash
+  participant three-struck `[生成出错中断]` while glm speakers with 2–4
+  tool_use per message passed). Fix: `fuse_adjacent_tool_results`
+  (`llm/provider/wire/from_wire.rs`) fuses runs of ≥2 pure-tool_result user
+  messages back into ONE message at `wire_messages_to_chat_messages` exit;
+  a trailing plain-text user message (loop-detection hint) is deliberately
+  NOT folded in — the wire layer has lost row boundaries and the next user
+  row may be another group-chat speaker's text. Note `orphan_tool_use_ids`
+  does NOT catch this class (results EXIST in history, only split apart).
+  Tests: `round_trip_fuses_adjacent_tool_results_into_one_user_message`,
+  `round_trip_keeps_trailing_loop_hint_outside_fused_results` (wire),
+  `outbound_body_carries_all_tool_results_in_one_user_message_after_
+  multi_tool_use` (anthropic body-level, replays the incident shape).
 
 **Test coverage** (in `agent/context.rs`):
 - `case_3_tool_use_tool_result_pair_intact_or_dropped_together`

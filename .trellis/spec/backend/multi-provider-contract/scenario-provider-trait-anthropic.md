@@ -108,6 +108,7 @@ per the PR2 PRD D1 decision.
 | `model` field | `LLM_MODEL` | `model.model_name` |
 | Tool definitions | `builtin_tools()` | Identical (catalog dispatch doesn't touch tools) |
 | SSE event sequence | text / tool_use / thinking / redacted_thinking + signature_delta | Identical (the `BlockState` state machine is unchanged) |
+| messages[] tool_result placement | One `user` message may carry N `tool_result` blocks | Identical — the PR3 wire round-trip must NOT leave a multi-result user row split into consecutive single-result user messages: `fuse_adjacent_tool_results` (`wire/from_wire.rs`, 09-11-deepseek-tool-result-split-400) fuses them back at `wire_messages_to_chat_messages` exit. Native Anthropic tolerates the split (merges consecutive user messages) but strict Anthropic-schema relays (wukaijin deepseek channel) 400 it per-message — see llm-contract.md §Pair Atomicity |
 
 #### Provider dispatch timing
 
