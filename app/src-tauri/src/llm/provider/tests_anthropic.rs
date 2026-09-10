@@ -595,6 +595,118 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // 出站 body 回归(09-11-deepseek-tool-result-split-400,AC1)
+    //
+    // 事故形态:一条 assistant 消息带 ≥2 个 tool_use,引擎把全部
+    // tool_result 持久化在同一条 user 行。wire 往返曾把该行拆成
+    // 「N 条连续 user 消息、每条单 result」,wukaijin 中继 deepseek
+    // 通道逐消息严格校验配对 → 400
+    // `messages.8: tool_use ids were found without tool_result blocks
+    // immediately after: call_01_...`(daemon.log 2026-09-10T18:37:37,
+    // request id 202609101837310534880798268d9d6cGfkTNvW)。
+    //
+    // 本测试按 `AnthropicProvider::send` 的出站管线重建 body
+    // (wire 往返 + strip + reasoning_fix + speaker_prefix),断言
+    // 紧邻 assistant 之后的 user 消息**一条**且同时携带全部 result。
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn outbound_body_carries_all_tool_results_in_one_user_message_after_multi_tool_use() {
+        use crate::llm::provider::wire::{
+            chat_request_to_wire, strip_unsupported, wire_messages_to_chat_messages,
+            WireCapabilities,
+        };
+
+        let req = chat_request_with_messages(vec![
+            serde_json::json!({
+                "role": "user",
+                "content": "评审 apps/web 的架构"
+            }),
+            serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "ground my remarks", "signature": "sig1"},
+                    {"type": "tool_use", "id": "call_00", "name": "read_file",
+                     "input": {"path": "docs/specs/web.md"}},
+                    {"type": "tool_use", "id": "call_01", "name": "list_dir",
+                     "input": {"path": "apps/web"}}
+                ]
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_00",
+                     "content": "# web 前端结构约定…"},
+                    {"type": "tool_result", "tool_use_id": "call_01",
+                     "content": "README.md\nsrc/\npackage.json"}
+                ]
+            }),
+        ]);
+
+        // send() 的 body 构建管线(除 HTTP 外全量)。
+        let mut wire = chat_request_to_wire(req, None);
+        let caps = WireCapabilities {
+            supports_thinking: true,
+            supports_reasoning_effort: true,
+            supports_thinking_signatures: true,
+            supports_images: true,
+        };
+        wire.messages = strip_unsupported(wire.messages, &caps);
+        let req = ChatRequest {
+            model: wire.model,
+            max_tokens: wire.max_tokens.unwrap_or(16384),
+            messages: wire_messages_to_chat_messages(wire.messages),
+            system: wire.system,
+            stream: true,
+            tools: vec![],
+            thinking: Some(ThinkingConfig::Adaptive {
+                display: "summarized".to_string(),
+                effort: "high".to_string(),
+            }),
+        };
+        let mut body = apply_deepseek_reasoning_fix(&req);
+        apply_speaker_prefix(&mut body);
+
+        let messages = body["messages"].as_array().expect("messages array");
+        // 定位带 tool_use 的 assistant 消息。
+        let assistant_idx = messages
+            .iter()
+            .position(|m| {
+                m["role"] == "assistant"
+                    && m["content"]
+                        .as_array()
+                        .map(|bs| bs.iter().any(|b| b["type"] == "tool_use"))
+                        .unwrap_or(false)
+            })
+            .expect("assistant with tool_use present");
+        // 紧邻的下一条消息就是(且仅是)那条 user 消息——不存在
+        // 第二条只携带 call_01 result 的拆分尾巴。
+        let next = messages
+            .get(assistant_idx + 1)
+            .expect("a message immediately after the tool_use assistant message");
+        assert_eq!(next["role"], "user", "immediately-next message is user");
+        let result_ids: Vec<&str> = next["content"]
+            .as_array()
+            .expect("content block array")
+            .iter()
+            .filter(|b| b["type"] == "tool_result")
+            .map(|b| b["tool_use_id"].as_str().expect("tool_use_id str"))
+            .collect();
+        assert_eq!(
+            result_ids,
+            vec!["call_00", "call_01"],
+            "BOTH results in the ONE immediately-next user message"
+        );
+        // 且该 user 消息之后不再有孤立的第二条 tool_result 消息。
+        let trailing = messages.get(assistant_idx + 2);
+        assert!(
+            trailing.is_none(),
+            "no split remainder after the fused result message: {:?}",
+            trailing
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // 事件 handler 单元测试(08-08-a-class-anthropic-split 提取后新增,AC7)
     // -----------------------------------------------------------------------
 

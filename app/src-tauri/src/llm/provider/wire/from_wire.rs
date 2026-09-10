@@ -85,10 +85,102 @@ pub fn wire_tools_to_tool_defs(tools: Vec<WireTool>) -> Vec<ToolDef> {
 /// PR2 SSE parser (which already speaks the Anthropic wire
 /// format) is reused. Pure function; no IO.
 pub fn wire_messages_to_chat_messages(messages: Vec<WireMessage>) -> Vec<ChatMessage> {
-    messages
-        .into_iter()
-        .flat_map(wire_message_to_chat_messages)
-        .collect()
+    fuse_adjacent_tool_results(
+        messages
+            .into_iter()
+            .flat_map(wire_message_to_chat_messages)
+            .collect(),
+    )
+}
+
+/// Fuse runs of consecutive user messages whose content is
+/// exclusively `tool_result` blocks back into ONE user message
+/// carrying all the blocks (09-11-deepseek-tool-result-split-400).
+///
+/// Why this exists: the forward pass (`chat_message_to_wire_messages`)
+/// lifts each `ToolResult` block of a persisted user row into its own
+/// `WireMessage::Tool`, and this file's inverse maps each back to a
+/// separate `role: "user"` message — so a row `[tool_result × N]`
+/// round-trips into N consecutive single-result user messages. Native
+/// Anthropic merges consecutive user messages before validating, but
+/// strict Anthropic-schema relays validate per-message: the
+/// wukaijin.com deepseek channel rejects the split shape with
+/// `400 messages.N: tool_use ids were found without tool_result
+/// blocks immediately after` when one assistant message carried ≥2
+/// tool_use blocks (incident 2026-09-10 18:37 UTC, group-chat session
+/// caa5020a: deepseek-flash three-struck while glm channels on the
+/// same relay accepted the identical shape). Fusing restores the
+/// pre-PR2 wire shape the provider-trait spec froze as 1:1.
+///
+/// Scope rules (deliberate — see task design.md):
+/// - Only runs of ≥2 fuse; a lone tool-result message is untouched.
+/// - A following plain-text user message (e.g. the loop-detection
+///   hint that tools.rs appends as a trailing Text block) is NOT
+///   folded into the fused result message: the wire layer has lost
+///   the original row boundary, and in group chat the next user row
+///   may be another speaker's rewritten text — gluing it onto the
+///   results would corrupt speaker attribution. Consecutive user
+///   messages are wire-legal for both protocols; the pairing check
+///   only requires the results to sit in the message immediately
+///   after the assistant's tool_use.
+pub(crate) fn fuse_adjacent_tool_results(msgs: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::with_capacity(msgs.len());
+    let mut run: Vec<ChatMessage> = Vec::new();
+    for m in msgs {
+        if is_pure_tool_result_user(&m) {
+            run.push(m);
+        } else {
+            flush_tool_result_run(&mut out, &mut run);
+            out.push(m);
+        }
+    }
+    flush_tool_result_run(&mut out, &mut run);
+    out
+}
+
+/// Whether the message is a `role: user` row whose content blocks
+/// are all `tool_result` (the shape the `WireMessage::Tool` arm
+/// produces, plus any hypothetical multi-block pure-result row).
+fn is_pure_tool_result_user(m: &ChatMessage) -> bool {
+    m.role == Role::User
+        && match &m.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .all(|b| matches!(b, ContentBlock::ToolResult { .. })),
+            MessageContent::Text(_) => false,
+        }
+}
+
+/// Merge a buffered run of pure tool-result user messages into `out`.
+/// Runs of length ≤1 push through untouched (original message
+/// identity preserved); longer runs collapse into one user message
+/// with the blocks concatenated in arrival order. The fused message
+/// takes the first message's `speaker`/`attachments` (both `None`
+/// for every producer of this shape today).
+fn flush_tool_result_run(out: &mut Vec<ChatMessage>, run: &mut Vec<ChatMessage>) {
+    if run.len() <= 1 {
+        out.append(run);
+        return;
+    }
+    let mut iter = run.drain(..);
+    let first = iter
+        .next()
+        .expect("flush_tool_result_run: run.len() >= 2 guarantees a first element");
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    if let MessageContent::Blocks(bs) = &first.content {
+        blocks.extend(bs.iter().cloned());
+    }
+    for m in iter {
+        if let MessageContent::Blocks(bs) = &m.content {
+            blocks.extend(bs.iter().cloned());
+        }
+    }
+    out.push(ChatMessage {
+        role: Role::User,
+        content: MessageContent::Blocks(blocks),
+        speaker: first.speaker,
+        attachments: first.attachments,
+    });
 }
 
 fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {

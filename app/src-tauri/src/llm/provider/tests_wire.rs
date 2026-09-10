@@ -1122,6 +1122,179 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------
+    // fuse_adjacent_tool_results (09-11-deepseek-tool-result-split-400)
+    //
+    // Incident shape: one assistant message with ≥2 tool_use blocks +
+    // one user row with the matching tool_results. The wire round-trip
+    // used to fan the results out into consecutive single-result user
+    // messages; strict Anthropic-schema relays (wukaijin deepseek
+    // channel) 400 that shape with "tool_use ids were found without
+    // tool_result blocks immediately after".
+    // -----------------------------------------------------------------
+
+    fn tool_result_block(id: &str, content: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.to_string(),
+            content: content.to_string(),
+            is_error: false,
+            images: None,
+            resolved: None,
+        }
+    }
+
+    fn round_trip(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+        let req = ChatRequest {
+            model: "m".to_string(),
+            max_tokens: 1024,
+            system: None,
+            messages,
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        wire_messages_to_chat_messages(wire.messages)
+    }
+
+    fn tool_use_block(id: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: id.to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": "a.txt"}),
+        }
+    }
+
+    /// ①②③ Incident shape: assistant[tool_use×2] + user[tool_result×2]
+    /// round-trips to the assistant followed by exactly ONE user
+    /// message carrying BOTH results in original order.
+    #[test]
+    fn round_trip_fuses_adjacent_tool_results_into_one_user_message() {
+        let back = round_trip(vec![
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Thinking {
+                        thinking: "two files".to_string(),
+                        signature: "sig".to_string(),
+                    },
+                    tool_use_block("call_00"),
+                    tool_use_block("call_01"),
+                ]),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![
+                    tool_result_block("call_00", "content of a"),
+                    tool_result_block("call_01", "dir listing"),
+                ]),
+                speaker: None,
+                attachments: None,
+            },
+        ]);
+        assert_eq!(back.len(), 2, "assistant + ONE fused user message");
+        assert!(matches!(back[0].role, Role::Assistant));
+        let MessageContent::Blocks(blocks) = &back[1].content else {
+            panic!("expected Blocks content");
+        };
+        assert_eq!(blocks.len(), 2, "both results in the one message");
+        assert!(
+            matches!(&blocks[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_00")
+        );
+        assert!(
+            matches!(&blocks[1], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_01")
+        );
+    }
+
+    /// ② A text user message between two results breaks the run —
+    /// no cross-text fusion (the wire layer lost row boundaries;
+    /// fusing across text would glue unrelated content).
+    #[test]
+    fn round_trip_does_not_fuse_across_text_user_message() {
+        let back = round_trip(vec![
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result_block("t1", "r1")]),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("speaker text between".to_string()),
+                speaker: Some("moderator".to_string()),
+                attachments: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![tool_result_block("t2", "r2")]),
+                speaker: None,
+                attachments: None,
+            },
+        ]);
+        assert_eq!(back.len(), 3);
+        assert!(matches!(&back[0].content, MessageContent::Blocks(b) if b.len() == 1));
+        assert!(matches!(&back[1].content, MessageContent::Text(t) if t == "speaker text between"));
+        assert_eq!(back[1].speaker.as_deref(), Some("moderator"));
+        assert!(matches!(&back[2].content, MessageContent::Blocks(b) if b.len() == 1));
+    }
+
+    /// ③ A lone tool-result message round-trips unchanged (runs of
+    /// length 1 push through untouched).
+    #[test]
+    fn round_trip_keeps_lone_tool_result_message_as_is() {
+        let original = vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![tool_result_block("solo", "only one")]),
+            speaker: None,
+            attachments: None,
+        }];
+        let back = round_trip(original);
+        assert_eq!(back.len(), 1);
+        let MessageContent::Blocks(blocks) = &back[0].content else {
+            panic!("expected Blocks content");
+        };
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            matches!(&blocks[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "solo")
+        );
+    }
+
+    /// ④ The loop-detection hint (tools.rs ⑬ appends it as a
+    /// trailing Text block of the results row): after fusion the
+    /// hint stays a SEPARATE user message — never folded into the
+    /// fused result message (which would need row boundaries the
+    /// wire layer no longer has).
+    #[test]
+    fn round_trip_keeps_trailing_loop_hint_outside_fused_results() {
+        let back = round_trip(vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![
+                tool_result_block("call_00", "r0"),
+                tool_result_block("call_01", "r1"),
+                ContentBlock::Text {
+                    text: "⚠️  loop detected".to_string(),
+                    cache_control: None,
+                },
+            ]),
+            speaker: None,
+            attachments: None,
+        }]);
+        assert_eq!(back.len(), 2, "fused results + separate hint message");
+        let MessageContent::Blocks(blocks) = &back[0].content else {
+            panic!("expected Blocks content");
+        };
+        assert_eq!(blocks.len(), 2, "results only — no hint inside");
+        assert!(blocks
+            .iter()
+            .all(|b| matches!(b, ContentBlock::ToolResult { .. })));
+        assert!(
+            matches!(&back[1].content, MessageContent::Text(t) if t.starts_with("⚠️")),
+            "hint rides as its own trailing user message"
+        );
+    }
+
     #[test]
     fn user_blocks_with_cache_control_are_not_concatenated() {
         // Two user messages, both with cacheable text blocks —
