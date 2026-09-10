@@ -78,7 +78,7 @@ const projectsStore = useProjectsStore();
 // Which project id to actually query. The ProjectTabs dropdown
 // always passes its own `projectId`; the Settings page omits it
 // and falls back to the active project (so opening Settings from
-// project A's dropdown still shows project A's CLAUDE.md /
+// project A's dropdown still shows project A's EVERLASTING.md /
 // AGENTS.md).
 const effectiveProjectId = computed<string | null>(() => {
   if (props.projectId) return props.projectId;
@@ -162,13 +162,20 @@ const headerTitle = computed<string>(() => {
 
 const headerHint = computed<string>(() => {
   if (props.kind === "user") {
-    return "~/.config/everlasting/CLAUDE.md + AGENTS.md(全局，所有项目可见)";
+    return "~/.config/everlasting/EVERLASTING.md + AGENTS.md(全局，所有项目可见)";
   }
   if (props.kind === "project") {
-    return "项目根目录下的 CLAUDE.md + AGENTS.md(仅本项目可见)";
+    return "项目根目录下的 EVERLASTING.md + AGENTS.md(仅本项目可见)";
   }
   return "用户 + 项目，共 4 个指令文件";
 });
+
+// 2026-09-10 hard switch (review P0 #6): legacy CLAUDE.md files
+// that still exist on disk but are no longer loaded. The static
+// banner keeps the silent invalidation visible — every mount
+// re-checks, nothing to dismiss or miss (unlike a one-shot toast).
+const legacyFiles = computed<string[]>(() => store.legacyFiles);
+const legacyCount = computed<number>(() => legacyFiles.value.length);
 
 // ---------------------------------------------------------------------
 // P2 PR3: runtime-memories section
@@ -365,6 +372,19 @@ function formatTimestamp(rfc3339: string): string {
     <div v-if="store.error" class="memory-preview__error">
       <Icon name="warn" :size="14" />
       <span>指令文件暂不可用:{{ store.error }}</span>
+    </div>
+
+    <!-- 2026-09-10 hard switch: pre-rename CLAUDE.md files still on
+         disk are no longer loaded. Static banner (re-checked every
+         mount — review P0 #6); the paths double as the "where did
+         my instructions go" breadcrumb. -->
+    <div v-if="legacyCount > 0" class="memory-preview__legacy" data-testid="memory-legacy-banner">
+      <Icon name="warn" :size="14" />
+      <span>
+        检测到 {{ legacyCount }} 个旧 CLAUDE.md 已不再加载:
+        {{ legacyFiles.join("、") }}。如需继续使用,请将其重命名为
+        EVERLASTING.md 并移至对应指令目录。
+      </span>
     </div>
 
     <div
@@ -713,6 +733,23 @@ function formatTimestamp(rfc3339: string): string {
   border-radius: var(--radius-md);
   color: var(--color-tool-error-text);
   font-size: var(--text-sm);
+}
+
+/* 2026-09-10 hard switch: legacy CLAUDE.md notice — informational
+   (amber posture via --color-status-warn, not the error red):
+   the files exist but are intentionally not loaded anymore. */
+.memory-preview__legacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--color-status-warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-status-warn) 40%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--color-status-warn);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  word-break: break-all;
 }
 
 .memory-preview__empty,

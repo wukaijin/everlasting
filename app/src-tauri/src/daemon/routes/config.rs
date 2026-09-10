@@ -595,6 +595,24 @@ mod tests {
             // 2026-09-03 (task 09-03-ask-no-timeout):enable 开关
             // fail-closed(写 false/true 读回一致)。
             ("ask_no_timeout", "askNoTimeout"),
+            // 2026-09-10 hard switch PR2:4 槽位记忆植入开关走同款
+            // HTTP 写读闭环(键常量单源 `memory::flags::KEY_*`)。
+            (
+                crate::memory::flags::KEY_USER_EVERLASTING,
+                "memoryUserEverlastingEnabled",
+            ),
+            (
+                crate::memory::flags::KEY_USER_AGENTS,
+                "memoryUserAgentsEnabled",
+            ),
+            (
+                crate::memory::flags::KEY_PROJECT_EVERLASTING,
+                "memoryProjectEverlastingEnabled",
+            ),
+            (
+                crate::memory::flags::KEY_PROJECT_AGENTS,
+                "memoryProjectAgentsEnabled",
+            ),
         ] {
             let (code, v) = post_json(
                 &app,

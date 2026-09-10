@@ -84,8 +84,8 @@ function makeMemory(overrides: Partial<AutonomousMemory> = {}): AutonomousMemory
 
 const SAMPLE_LAYER: MemoryLayerInfo = {
   kind: "project",
-  source: "claude",
-  path: "/home/x/code/everlasting/CLAUDE.md",
+  source: "everlasting",
+  path: "/home/x/code/everlasting/EVERLASTING.md",
   tokens: 0,
   status: { kind: "missing" },
   char_count: 0,
@@ -346,9 +346,9 @@ describe("MemoryPreview — instruction-file section is unchanged (regression lo
     const store = useMemoryStore();
     const refs = storeToRefs(store);
     const fourMissingLayers: MemoryLayerInfo[] = [
-      { ...SAMPLE_LAYER, kind: "user", source: "claude", path: "/home/x/.claude/CLAUDE.md" },
+      { ...SAMPLE_LAYER, kind: "user", source: "everlasting", path: "/home/x/.config/everlasting/EVERLASTING.md" },
       { ...SAMPLE_LAYER, kind: "user", source: "agents", path: "/home/x/.config/everlasting/AGENTS.md" },
-      { ...SAMPLE_LAYER, kind: "project", source: "claude" },
+      { ...SAMPLE_LAYER, kind: "project", source: "everlasting" },
       { ...SAMPLE_LAYER, kind: "project", source: "agents" },
     ];
     invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
@@ -373,6 +373,122 @@ describe("MemoryPreview — instruction-file section is unchanged (regression lo
     expect(refs.layers.value).toHaveLength(4);
     expect(w.text()).toContain("0 loaded");
     expect(w.text()).toContain("4 missing");
+    w.unmount();
+  });
+});
+
+// 2026-09-10 hard switch (task 09-10-memory-everlasting-md-hard-switch):
+// two skew/legacy behaviors. (1) An OLD daemon still sends
+// `source: "claude"` — the store normalizes it and the layer title
+// must read EVERLASTING.md (review P0 #1: the old ternary's else
+// silently mislabeled it as AGENTS.md). (2) The additive
+// `read_legacy_memory_files` command drives the static banner
+// (review P0 #6); an old daemon that doesn't know the command (or
+// errors) fails open to "no banner".
+describe("MemoryPreview — 2026-09-10 hard switch legacy handling", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") return [];
+      if (cmd === "delete_autonomous_memory") return 1;
+      return null;
+    });
+    const projects = useProjectsStore();
+    projects.currentProjectId = "proj-1";
+  });
+
+  it("normalizes a legacy 'claude' source from an old daemon and labels it EVERLASTING.md", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") {
+        return [
+          {
+            ...SAMPLE_LAYER,
+            kind: "user",
+            // Old-daemon wire value (pre-rename).
+            source: "claude",
+            path: "/home/x/.claude/CLAUDE.md",
+          },
+        ];
+      }
+      if (cmd === "list_autonomous_memories") return [];
+      return null;
+    });
+
+    const w = mountPreview({ kind: "user" });
+    await flushPromises();
+
+    const store = useMemoryStore();
+    expect(store.layers[0]?.source).toBe("everlasting");
+    expect(w.text()).toContain("[User EVERLASTING.md]");
+    // The mislabel regression this test exists to pin.
+    expect(w.text()).not.toContain("[User AGENTS.md]");
+    w.unmount();
+  });
+
+  it("shows the legacy banner when read_legacy_memory_files reports leftover files", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "read_legacy_memory_files") {
+        return ["/home/x/.claude/CLAUDE.md", "/home/x/code/everlasting/CLAUDE.md"];
+      }
+      if (cmd === "list_autonomous_memories") return [];
+      return null;
+    });
+
+    const w = mountPreview({ kind: "all" });
+    await flushPromises();
+
+    const banner = w.find('[data-testid="memory-legacy-banner"]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain("检测到 2 个旧 CLAUDE.md 已不再加载");
+    expect(banner.text()).toContain("/home/x/.claude/CLAUDE.md");
+    w.unmount();
+  });
+
+  it("fails open (no banner) when the daemon predates read_legacy_memory_files", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "read_legacy_memory_files") {
+        throw new Error("unknown command");
+      }
+      if (cmd === "list_autonomous_memories") return [];
+      return null;
+    });
+
+    const w = mountPreview({ kind: "all" });
+    await flushPromises();
+
+    expect(w.find('[data-testid="memory-legacy-banner"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  // PR2: 槽位开关关闭 → 层状态 kind=disabled,卡片渲染"已禁用"
+  // 徽标文案且不可展开(区别于"未创建")。
+  it("renders a disabled slot as 已禁用 (not 未创建), head not expandable", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") {
+        return [
+          {
+            ...SAMPLE_LAYER,
+            kind: "project",
+            source: "agents",
+            status: { kind: "disabled" },
+          },
+        ];
+      }
+      if (cmd === "list_autonomous_memories") return [];
+      return null;
+    });
+
+    const w = mountPreview({ kind: "project" });
+    await flushPromises();
+
+    expect(w.text()).toContain("已禁用");
+    expect(w.text()).not.toContain("未创建");
+    const head = w.find(".memory-layer__head");
+    expect(head.attributes("disabled")).toBeDefined();
     w.unmount();
   });
 });

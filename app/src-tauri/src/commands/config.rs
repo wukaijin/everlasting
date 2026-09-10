@@ -538,6 +538,16 @@ pub struct AppConfigPayload {
     /// 不再 120s 自动拒绝、轮数上限软卡不再 10min 自动停止,无限挂起
     /// 直到用户响应 / Stop / 删会话。
     pub ask_no_timeout: bool,
+    /// 2026-09-10 hard switch PR2(任务
+    /// `09-10-memory-everlasting-md-hard-switch`):4 槽位记忆植入
+    /// 开关的读出口。常量单源 `memory::flags::KEY_*`,fail-open 缺省
+    /// 开(仅字面 `"false"` 关)。关 = 对应槽位不进 banner / 注入块 /
+    /// `memory_token`(层降级 `LayerStatus::Disabled`);Settings
+    /// Memory 面的 4 个开关经 `set_app_config_flag` 写入。
+    pub memory_user_everlasting_enabled: bool,
+    pub memory_user_agents_enabled: bool,
+    pub memory_project_everlasting_enabled: bool,
+    pub memory_project_agents_enabled: bool,
 }
 
 pub async fn get_app_config_inner(
@@ -589,6 +599,9 @@ pub async fn get_app_config_inner(
     // 问询永不超时:与上述 kill-switch 反方向 —— enable 语义走单源
     // 读法(fail-closed 缺省关,仅字面 "true" 开)。
     let ask_no_timeout = crate::agent::permissions::ask::ask_no_timeout_enabled(&state.db).await;
+    // 2026-09-10 hard switch PR2:4 槽位记忆植入开关(单源读法
+    // `MemorySlotFlags::read`,fail-open 缺省开)。
+    let slot_flags = crate::memory::flags::MemorySlotFlags::read(&state.db).await;
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
         scheduled_tasks_enabled: scheduled_on,
@@ -599,6 +612,10 @@ pub async fn get_app_config_inner(
         disk_governor_enabled,
         outputs_age_cleanup_enabled,
         ask_no_timeout,
+        memory_user_everlasting_enabled: slot_flags.user_everlasting,
+        memory_user_agents_enabled: slot_flags.user_agents,
+        memory_project_everlasting_enabled: slot_flags.project_everlasting,
+        memory_project_agents_enabled: slot_flags.project_agents,
     })
 }
 
@@ -634,6 +651,12 @@ const SETTABLE_APP_FLAGS: &[&str] = &[
     // 问询永不超时(2026-09-03, task 09-03-ask-no-timeout):常量单源
     // 在 `permissions::ask::ASK_NO_TIMEOUT_KEY`(enable 语义,fail-closed)。
     "ask_no_timeout",
+    // 2026-09-10 hard switch PR2:4 槽位记忆植入开关(常量单源在
+    // `memory::flags`,fail-open 缺省开)。
+    crate::memory::flags::KEY_USER_EVERLASTING,
+    crate::memory::flags::KEY_USER_AGENTS,
+    crate::memory::flags::KEY_PROJECT_EVERLASTING,
+    crate::memory::flags::KEY_PROJECT_AGENTS,
 ];
 
 /// 写 app_config 布尔开关(白名单内)。key 不在白名单 → `InvalidRequest`
@@ -737,6 +760,15 @@ mod tests {
             !cfg.ask_no_timeout,
             "ask_no_timeout 缺省应为 false(fail-closed enable)"
         );
+        // 2026-09-10 hard switch PR2:4 槽位记忆植入开关缺省全开
+        //(fail-open;不写 key = 注入行为与开关机制落地前一致)。
+        assert!(
+            cfg.memory_user_everlasting_enabled
+                && cfg.memory_user_agents_enabled
+                && cfg.memory_project_everlasting_enabled
+                && cfg.memory_project_agents_enabled,
+            "4 槽位记忆开关缺省应为 true(fail-open)"
+        );
         assert!(
             cfg.sandbox_extra_writable
                 .iter()
@@ -758,6 +790,12 @@ mod tests {
                 // ask_no_timeout 是 enable 语义:写 false 读回 false 即可,
                 // 与其余 fail-open kill-switch 的缺省方向不同(单测下方单独断言)。
                 "ask_no_timeout" => cfg.ask_no_timeout,
+                crate::memory::flags::KEY_USER_EVERLASTING => cfg.memory_user_everlasting_enabled,
+                crate::memory::flags::KEY_USER_AGENTS => cfg.memory_user_agents_enabled,
+                crate::memory::flags::KEY_PROJECT_EVERLASTING => {
+                    cfg.memory_project_everlasting_enabled
+                }
+                crate::memory::flags::KEY_PROJECT_AGENTS => cfg.memory_project_agents_enabled,
                 _ => unreachable!(),
             };
             assert!(!off, "{key} 写 false 后应读回 false");

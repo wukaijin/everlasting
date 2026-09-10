@@ -3,13 +3,14 @@
 // (2026-08-29 settings-shell 重构)。
 //
 // 薄封装:复用 MemoryPreview(kind="project")展示当前选中项目的
-// CLAUDE.md + AGENTS.md 指令层。此前项目层只有 ProjectTabs 的
+// EVERLASTING.md + AGENTS.md 指令层。此前项目层只有 ProjectTabs 的
 // Memory 下拉(MemoryModal)一个入口;Settings 的 Memory 分类刻意
 // 只显示用户层 —— 项目 scope 落地后这里补上项目层入口,两者读同
 // 一个 `memory` store,MemoryPreview 自理加载(mount 与 projectId
 // 变化时自动 reload)。
 
 import MemoryPreview from "../memory/MemoryPreview.vue";
+import MemorySlotToggles from "../memory/MemorySlotToggles.vue";
 
 defineProps<{
   /** 项目 scope 选择器当前选中的项目 id(null = 无可见项目)。 */
@@ -19,6 +20,9 @@ defineProps<{
 
 <template>
   <div class="project-memory-tab">
+    <!-- 2026-09-10 hard switch PR2:项目层两槽位的注入开关(全局
+         开关,作用于所有项目的项目层槽位)。 -->
+    <MemorySlotToggles scope="project" />
     <MemoryPreview v-if="projectId" kind="project" :project-id="projectId" />
     <p v-else class="project-memory-tab__empty">没有可选项目。</p>
   </div>

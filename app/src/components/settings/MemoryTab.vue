@@ -2,7 +2,7 @@
 // MemoryTab — Settings page tab content for the B5 memory preview.
 //
 // The Settings "全局" scope is project-agnostic: it shows the 2 User
-// layers (User CLAUDE.md + User AGENTS.md) only, since those
+// layers (User EVERLASTING.md + User AGENTS.md) only, since those
 // are global across all projects. The Project layers are scoped to
 // the selected project and live behind the ProjectTabs "Memory"
 // dropdown AND the Settings「项目」scope (ProjectMemoryTab,
@@ -13,6 +13,7 @@
 // just the tab-content shell with a one-line description.
 
 import MemoryPreview from "../memory/MemoryPreview.vue";
+import MemorySlotToggles from "../memory/MemorySlotToggles.vue";
 </script>
 
 <template>
@@ -21,6 +22,8 @@ import MemoryPreview from "../memory/MemoryPreview.vue";
       您的个人指令文件 — 在 session 启动时自动注入到对话上下文中(全局，所有项目可见)。
       点击展开预览;修改后 1 秒内自动重新加载。
     </p>
+    <!-- 2026-09-10 hard switch PR2:用户层两槽位的注入开关。 -->
+    <MemorySlotToggles scope="user" />
     <!-- project-filterable: the 自主记忆 section gets the 项目过滤
          select (当前项目 / 全部项目 / pinned project). Settings 是
          管理台 —— 它需要跨项目查看;MemoryModal / ProjectTabs 入口

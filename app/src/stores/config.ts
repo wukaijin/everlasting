@@ -148,6 +148,16 @@ export const useConfigStore = defineStore("config", () => {
   // 用户响应。permissions.ts 据此不 arm 本地 120s 计时器。
   const askNoTimeout = ref(false);
 
+  // 2026-09-10 hard switch PR2(任务 09-10-memory-everlasting-md-hard-switch):
+  // 4 槽位记忆植入开关的展示值(fail-open 缺省开,仅字面 "false" 关,
+  // 与后端 `memory::flags` 单源读法一致)。关 = 对应槽位不注入会话
+  //(层降级 disabled,Preview 徽标可见)。生效语义:主循环下一会话
+  //(D2 freeze 强制)、worker 下一 dispatch。
+  const memoryUserEverlastingEnabled = ref(true);
+  const memoryUserAgentsEnabled = ref(true);
+  const memoryProjectEverlastingEnabled = ref(true);
+  const memoryProjectAgentsEnabled = ref(true);
+
   async function load() {
     // Load providers + models from the catalog (replaces the old
     // `get_llm_config` env path). Store references are obtained at
@@ -186,6 +196,10 @@ export const useConfigStore = defineStore("config", () => {
         diskGovernorEnabled?: boolean;
         outputsAgeCleanupEnabled?: boolean;
         askNoTimeout?: boolean;
+        memoryUserEverlastingEnabled?: boolean;
+        memoryUserAgentsEnabled?: boolean;
+        memoryProjectEverlastingEnabled?: boolean;
+        memoryProjectAgentsEnabled?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
       // F2:additive 字段(旧 daemon 缺省 true)。
@@ -202,6 +216,12 @@ export const useConfigStore = defineStore("config", () => {
       // ask_no_timeout:enable 语义 fail-closed —— 仅字面 true 开,
       // 旧 daemon / 未存缺省 false(与 kill-switch 的 !== false 相反)。
       askNoTimeout.value = appConfig.askNoTimeout === true;
+      // 2026-09-10 hard switch PR2:4 槽位记忆植入开关(additive,旧
+      // daemon 缺省 true)。
+      memoryUserEverlastingEnabled.value = appConfig.memoryUserEverlastingEnabled !== false;
+      memoryUserAgentsEnabled.value = appConfig.memoryUserAgentsEnabled !== false;
+      memoryProjectEverlastingEnabled.value = appConfig.memoryProjectEverlastingEnabled !== false;
+      memoryProjectAgentsEnabled.value = appConfig.memoryProjectAgentsEnabled !== false;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
     }
@@ -283,6 +303,40 @@ export const useConfigStore = defineStore("config", () => {
     askNoTimeout.value = on;
   }
 
+  // 2026-09-10 hard switch PR2:4 槽位记忆植入开关写入口(key 常量与
+  // 后端 `memory::flags::KEY_*` 一一对应)。
+  async function setMemoryUserEverlastingEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "memory_user_everlasting_enabled",
+      value: on,
+    });
+    memoryUserEverlastingEnabled.value = on;
+  }
+
+  async function setMemoryUserAgentsEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "memory_user_agents_enabled",
+      value: on,
+    });
+    memoryUserAgentsEnabled.value = on;
+  }
+
+  async function setMemoryProjectEverlastingEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "memory_project_everlasting_enabled",
+      value: on,
+    });
+    memoryProjectEverlastingEnabled.value = on;
+  }
+
+  async function setMemoryProjectAgentsEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "memory_project_agents_enabled",
+      value: on,
+    });
+    memoryProjectAgentsEnabled.value = on;
+  }
+
   /** Persist the RAW extra-writable list (RULE-SBX-002, P3c): the
    *  editable list is exactly what lands in app_config — the `~/.cargo`
    *  default is NOT part of it (the backend merges it in at read
@@ -311,6 +365,10 @@ export const useConfigStore = defineStore("config", () => {
     diskGovernorEnabled,
     outputsAgeCleanupEnabled,
     askNoTimeout,
+    memoryUserEverlastingEnabled,
+    memoryUserAgentsEnabled,
+    memoryProjectEverlastingEnabled,
+    memoryProjectAgentsEnabled,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,
@@ -320,6 +378,10 @@ export const useConfigStore = defineStore("config", () => {
     setDiskGovernorEnabled,
     setOutputsAgeCleanupEnabled,
     setAskNoTimeout,
+    setMemoryUserEverlastingEnabled,
+    setMemoryUserAgentsEnabled,
+    setMemoryProjectEverlastingEnabled,
+    setMemoryProjectAgentsEnabled,
     setSandboxExtraWritableRaw,
     load,
   };

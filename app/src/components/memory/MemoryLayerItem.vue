@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // MemoryLayerItem — single layer card in the Memory Preview panel.
 //
-// Renders one of the 4 fixed memory files (User CLAUDE.md /
-// User AGENTS.md / Project CLAUDE.md / Project AGENTS.md) with:
-//   - Title row: `[User CLAUDE.md]` + token count + status badge
+// Renders one of the 4 fixed memory files (User EVERLASTING.md /
+// User AGENTS.md / Project EVERLASTING.md / Project AGENTS.md) with:
+//   - Title row: `[User EVERLASTING.md]` + token count + status badge
 //   - Body: rendered markdown (or "Missing" / "Error" placeholder)
 //   - Footer: "在外部编辑器打开" button (only when Loaded)
 //
@@ -58,6 +58,11 @@ const isLoaded = computed<boolean>(
 const isMissing = computed<boolean>(
   () => props.layer.status.kind === "missing",
 );
+// 2026-09-10 hard switch PR2: 槽位注入开关关闭(区别于"未创建"——
+// 文件可能在盘上,只是不注入)。
+const isDisabled = computed<boolean>(
+  () => props.layer.status.kind === "disabled",
+);
 const isError = computed<boolean>(
   () => props.layer.status.kind === "error",
 );
@@ -65,19 +70,31 @@ const errorReason = computed<string | null>(
   () => (props.layer.status.kind === "error" ? props.layer.status.reason : null),
 );
 
-// Stable label like `[User CLAUDE.md]`. The Rust side already
+// Stable label like `[User EVERLASTING.md]`. The Rust side already
 // renders this in the LLM banner; we use the same string for
 // visual consistency.
+//
+// 2026-09-10 hard switch: explicit map — an UNKNOWN source value
+// renders raw instead of silently falling through to AGENTS.md
+// (the old ternary's else made new-frontend/old-daemon skew look
+// like a mislabeled file; review P0 #1). The store normalizes the
+// legacy `"claude"` before it gets here.
+const SOURCE_FILENAMES: Record<string, string> = {
+  everlasting: "EVERLASTING.md",
+  agents: "AGENTS.md",
+};
 const title = computed<string>(() => {
   const k =
     props.layer.kind.charAt(0).toUpperCase() + props.layer.kind.slice(1);
-  return `[${k} ${props.layer.source === "claude" ? "CLAUDE.md" : "AGENTS.md"}]`;
+  const file = SOURCE_FILENAMES[props.layer.source] ?? props.layer.source;
+  return `[${k} ${file}]`;
 });
 
 // Token / char count display. Token is the LLM-facing number
 // (cl100k_base estimate). Char count is the local-only secondary
 // indicator — the human eye reads it as "size".
 const meta = computed<string>(() => {
+  if (isDisabled.value) return "已禁用";
   if (isMissing.value) return "未创建";
   if (isError.value) return "加载失败";
   // Loaded: "<N> tokens" + char count for human reading.
@@ -132,6 +149,7 @@ function onOpenEditor() {
     :class="{
       'memory-layer--loaded': isLoaded,
       'memory-layer--missing': isMissing,
+      'memory-layer--disabled': isDisabled,
       'memory-layer--error': isError,
     }"
   >
@@ -139,7 +157,7 @@ function onOpenEditor() {
       class="memory-layer__head btn btn--ghost"
       :aria-expanded="expanded"
       type="button"
-      :disabled="isMissing"
+      :disabled="isMissing || isDisabled"
       @click="expanded = !expanded"
     >
       <span
@@ -147,6 +165,7 @@ function onOpenEditor() {
         :class="{
           'memory-layer__status--loaded': isLoaded,
           'memory-layer__status--missing': isMissing,
+          'memory-layer__status--disabled': isDisabled,
           'memory-layer__status--error': isError,
         }"
         :title="errorReason ?? ''"
@@ -209,6 +228,12 @@ function onOpenEditor() {
   opacity: 0.6;
 }
 
+/* disabled(注入开关关闭):比 missing 略暗一档的观感,但状态点
+ * 用 accent 系区分 —— 文件在盘上、被主动关掉,不是"没配"。 */
+.memory-layer--disabled {
+  opacity: 0.75;
+}
+
 /* 折叠头由全局 .btn 家族承载(ghost);此处仅通栏几何。 */
 .memory-layer__head {
   width: 100%;
@@ -243,6 +268,13 @@ function onOpenEditor() {
 
 .memory-layer__status--missing {
   background: var(--color-text-muted);
+}
+
+/* disabled 状态点:空心(accent 描边 + 透明芯)—— 与 loaded 实心
+ * 绿、missing 灰、error 琥珀一眼区分。 */
+.memory-layer__status--disabled {
+  background: transparent;
+  border: 1.5px solid var(--color-accent);
 }
 
 .memory-layer__status--error {
