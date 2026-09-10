@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Pair Atomicity(C3)不变量出处;本次要扩展的 wire 出站形态契约"}
+{"file": ".trellis/spec/backend/multi-provider-contract/scenario-provider-trait-anthropic.md", "reason": "Anthropic 路径与 legacy 1:1 行为契约 + provider 出站链路结构"}
+{"file": ".trellis/tasks/09-11-deepseek-tool-result-split-400/research/root-cause.md", "reason": "事故证据链:时序/DB/日志三方对照,修复必须消灭的出站形态"}
