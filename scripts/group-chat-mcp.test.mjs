@@ -51,9 +51,9 @@ function tmpLedger() {
 // 工具面(AC4 预算 + AC2 完整性)
 // ---------------------------------------------------------------------------
 
-test('AC4(文案层):六工具面完整,成本闸/不阻塞语义在 start 描述里(R3)', () => {
+test('AC4(文案层):七工具面完整,成本闸/不阻塞语义在 start 描述里(R3)', () => {
   assert.deepEqual(TOOLS.map((t) => t.name),
-    ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message']);
+    ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message', 'list_models']);
   const desc = TOOLS[0].description;
   assert.match(desc, /5-15 min/);
   assert.match(desc, /tokens/);
@@ -66,6 +66,9 @@ test('AC4(文案层):六工具面完整,成本闸/不阻塞语义在 start 描�
   // preset enum 是全链路唯一的硬编码预设清单(其余消费方都 import
   // presets.json)——与引擎 PRESETS 对齐,防止加预设漏改 enum。
   assert.deepEqual(buildToolShapes(z).start_discussion.preset.unwrap().options, Object.keys(PRESETS));
+  // 09-11 list_models:零参只读,描述说清用途(查目录再发起)
+  assert.match(TOOLS[6].description, /List available models/);
+  assert.deepEqual(buildToolShapes(z).list_models, {});
   // 字符预算的地面真值在 SDK wire 测试里按 listTools 实测(见下)
 });
 
@@ -414,7 +417,7 @@ test('coreInject:guard 后竞态误发(started/queued)→ 自有 rid 止损 + �
 // SDK 协议接线(真 SDK + InMemoryTransport,不 spawn 进程)
 // ---------------------------------------------------------------------------
 
-test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool 走 handler', async () => {
+test('SDK 接线:InMemoryTransport 全链——tools/list 七工具 + callTool 走 handler', async () => {
   const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
@@ -429,7 +432,7 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool �
   await Promise.all([server.connect(ct), client.connect(st)]);
 
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 6);
+  assert.equal(listed.tools.length, 7);
 
   // AC4 预算地面真值:宿主注入 LLM context 的就是这份 wire schema
   const wireChars = JSON.stringify(listed.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;
@@ -452,6 +455,14 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 四工具 + callTool �
   assert.equal(JSON.parse(pre.content[0].text).interrupted, true);
   const inj = await client.callTool({ name: 'inject_message', arguments: { session_id: 'sess-1', text: '补充:看 X' } });
   assert.equal(JSON.parse(inj.content[0].text).injected, true);
+
+  // 09-11 list_models:目录透传(名字/UUID 双引用;displayName 优先,provider 缺省 null)
+  const lm = await client.callTool({ name: 'list_models', arguments: {} });
+  assert.equal(lm.isError, undefined);
+  const lmPayload = JSON.parse(lm.content[0].text);
+  assert.equal(lmPayload.models.length, MODELS.length);
+  assert.deepEqual(lmPayload.models[1], { id: 'uuid-flash', name: 'GLM-5.3-Flash', model_name: 'glm-5.3-flash', provider: null });
+  assert.match(lmPayload.hint, /name or UUID/);
   const blank = await client.callTool({ name: 'inject_message', arguments: { session_id: 'sess-1', text: '  ' } });
   assert.equal(blank.isError, true, '语义空文本(纯空白)isError');
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // group-chat-mcp.mjs — GCE-M2 MCP 接口层(四工具:召集/轮询/取结论/止损;
-// M3 增打断/注入两工具,控制面三权齐:cancel 硬停 / interrupt 收束 / inject 注入)
+// M3 增打断/注入两工具,控制面三权齐:cancel 硬停 / interrupt 收束 / inject 注入;
+// 09-11 增 list_models 只读内省,宿主发起前可查可用模型)
 //
 // 三层架构(M1 定形)中的薄包装:编排语义(建群契约/模型解析/终态判定/
 // 转录渲染)全部 import 自 group-chat-run.mjs(AC②,不是两套);本文件
@@ -348,7 +349,7 @@ export async function coreInject(deps, ledger, { session_id: sessionId, text }) 
 // 就是 listTools 返回的 schema,这才是预算的地面真值)
 // ---------------------------------------------------------------------------
 
-export const TOOLS_BUDGET_CHARS = 3200; // AC4:六工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设(enum+描述)后 3162,余量 ~38 字符——再扩 description 大概率要升锁(升锁须过评审,同步本注释 + AC4 断言 + spec)
+export const TOOLS_BUDGET_CHARS = 3500; // AC4:七工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设后 3162(3200 锁,余 ~38),09-11 加 list_models 后实测 3403——评审放行升到 3500(升锁须过评审,同步本注释 + AC4 断言 + smoke BUDGET + spec)
 
 /** Zod shape(SDK 1.30 registerTool 只收 Zod;内部转 JSON Schema 上 wire)。
  * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。 */
@@ -373,6 +374,7 @@ export function buildToolShapes(z) {
       session_id: z.string(),
       text: z.string().min(1).describe('User message text; lands as [用户插入] in the next moderator round'),
     },
+    list_models: {},
   };
 }
 
@@ -407,7 +409,27 @@ export const TOOLS = [
     description: 'Inject a user message into a RUNNING discussion; the next moderator round sees it and the discussion continues. Errors if the session is not busy — use start_discussion to convene a new one.',
     shapeKey: 'inject_message',
   },
+  {
+    name: 'list_models',
+    description: 'List available models (name + UUID) for start_discussion participants/moderator. Cheap metadata call.',
+    shapeKey: 'list_models',
+  },
 ];
+
+/** list_models(09-11):daemon 模型目录只读透传。名字或 UUID 皆可作
+ * start_discussion 的引用(start 时两趟解析),目录运行时取,永不过期。 */
+export async function coreModels(deps) {
+  const models = await deps.listModels();
+  return {
+    models: models.map((m) => ({
+      id: m.id,
+      name: m.displayName || m.modelName,
+      model_name: m.modelName || null,
+      provider: m.providerDisplayName || null,
+    })),
+    hint: 'Reference by name or UUID in start_discussion (participants[].model / preset moderator). Resolved at start time.',
+  };
+}
 
 // ---------------------------------------------------------------------------
 // SDK 接线区(薄壳:handler 只做参数透传 + 错误翻译)
@@ -434,6 +456,7 @@ export async function createServer({ server, deps = realDeps(), ledger = createL
     cancel_discussion: ({ session_id }) => coreCancel(deps, ledger, session_id),
     interrupt_discussion: ({ session_id }) => coreInterrupt(deps, ledger, session_id),
     inject_message: ({ session_id, text }) => coreInject(deps, ledger, { session_id, text }),
+    list_models: () => coreModels(deps),
   };
   for (const tool of TOOLS) {
     const handler = handlers[tool.name];

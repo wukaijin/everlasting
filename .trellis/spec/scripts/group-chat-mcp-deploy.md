@@ -44,7 +44,7 @@ MCP server(`scripts/group-chat-mcp.mjs`)有两种等价运行形态:**node 直�
 ## 6. Tests Required
 
 - `node --test scripts/group-chat-mcp-deploy.test.mjs`(纯函数:merge 保键/幂等、骨架与双容器兼容、损坏拒绝、revert/uninstall 语义、parseArgs 守卫)
-- `node scripts/group-chat-mcp-smoke.mjs [--bin <path>]` —— 双形态**同构**断言链(spawn + tools/list 六工具 + wire 预算 3200 + handler 错误链);node 直连必须持续为默认回归路径
+- `node scripts/group-chat-mcp-smoke.mjs [--bin <path>]` —— 双形态**同构**断言链(spawn + tools/list 七工具 + wire 预算 3500 + handler 错误链);node 直连必须持续为默认回归路径
 - 免 node 实证:`env -i HOME=... PATH=/usr/bin:/bin` 下 bin 完成 MCP handshake(自包含)
 - AC 级守门:`git diff --stat -- scripts/group-chat-run.mjs scripts/group-chat-mcp.mjs app/` 必须恒为空(引擎与 Rust/前端零改动)
 

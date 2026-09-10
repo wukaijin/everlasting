@@ -16,7 +16,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 
 ## 两条入口,先分清你是谁(GCE-M2 起)
 
-- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 六工具**(M3 09-06 起)**——`start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
+- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 七工具**(M3 09-06 起控制面,09-11 起 `list_models` 内省)**——拿不准可用模型先 `list_models`(返回名字+UUID,两者皆可作引用);召集 `start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
 - **everlasting 内部 agent**(daemon 单聊,非 MCP client):走下面的脚本路径。
 
 ## 建群三要素(全靠脚本内省,别背参数)

@@ -20,7 +20,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(SCRIPTS, 'group-chat-mcp.mjs');
-const BUDGET = 3200; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;gce-m4c(09-08)加 token_budget 参后实测 wire ≈3115 chars
+const BUDGET = 3500; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;09-11 加 list_models 后实测 wire ≈3403 chars
 
 const live = process.argv.includes('--live');
 const binIdx = process.argv.indexOf('--bin');
@@ -42,13 +42,13 @@ process.stderr.write(`[smoke] server spawned over stdio: ${binPath || `node ${SE
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
 
 try {
-  // 1) tools/list:六工具(M3 起)+ wire 预算(宿主注入 context 的地面真值)
+  // 1) tools/list:七工具(M3 控制面 + 09-11 list_models)+ wire 预算(宿主注入 context 的地面真值)
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  const want = ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message'];
+  const want = ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message', 'list_models'];
   if (JSON.stringify(names) !== JSON.stringify(want)) fail(`tools/list 期望 ${want} 实得 ${names}`);
   const chars = JSON.stringify(tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;
-  process.stderr.write(`[smoke] tools/list ok(6);wire schema ${chars} chars ≈ ${Math.round(chars / 4)} tokens(预算 ${BUDGET})\n`);
+  process.stderr.write(`[smoke] tools/list ok(7);wire schema ${chars} chars ≈ ${Math.round(chars / 4)} tokens(预算 ${BUDGET})\n`);
   if (chars > BUDGET) fail(`wire 预算超支:${chars} > ${BUDGET}`);
 
   // 2) handler 链:不存在的 session → 可操作错误(daemon 两态皆算过)
