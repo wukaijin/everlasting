@@ -977,3 +977,25 @@ GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M
 ### Next Steps
 
 - follow-ups.md 五项 P2 打磨候选;GCE 线下一大项=远程暴露认证(需 B.3 翻案裁定 + 安全评审前置)
+
+
+## Session 58: 记忆层 CLAUDE.md 硬切换 EVERLASTING.md + 4 槽位植入开关
+
+**Date**: 2026-09-11
+**Task**: 记忆层 CLAUDE.md 硬切换 EVERLASTING.md + 4 槽位植入开关
+**Branch**: `main`
+
+### Summary
+
+需求评估→群聊评审(session 55838776,六条 P0 并入完成定义)→两段实施全绿收官。fac5fb05 机制层:MemorySource::Claude→Everlasting(serde rename+alias+wire-pin 单测),~/.claude 互操作槽退役、User 层统一 ~/.config/everlasting/;LayerStatus::Disabled + memory/flags.rs(MemorySlotFlags fail-open + apply_slot_flags 单点过滤),施加点下沉四处(freeze-miss/worker dispatch/digest executor 堵穿透/read_memory_layers);additive 命令 read_legacy_memory_files;TS 读侧 normalize 旧值 claude;spec/docs 白名单 6 卷 + decisions-2026-09.md(根 CLAUDE.md 保留口径重校)。ee65a1d4 设置面:SETTABLE_APP_FLAGS+payload+逐 key match 测试,MemorySlotToggles 嵌 Memory/ProjectMemory 两 Tab,disabled 徽标,legacy 检测条。验证:cargo --lib 2373 全绿/vitest 1704 全绿/clippy 0 警/fmt/vue-tsc 净;live 对照(HTTP 断言槽位指向 EVERLASTING.md+legacy 双命中;turn-smoke 开关关→memory_token 空 input 5747,开→2598 input 8045)。踩坑记录:daemon 跑仓库根 target/daemon 专用产物,app/src-tauri/target/debug 编译无效,须经 daemon.sh 重建重启才吃到新代码;本机 ~/.claude/CLAUDE.md(36B)已停止注入,如需迁移至 ~/.config/everlasting/EVERLASTING.md。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fac5fb05` | (see git log) |
+| `ee65a1d4` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 57
-- **Last Active**: 2026-09-09
+- **Total Sessions**: 58
+- **Last Active**: 2026-09-11
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~979 | Active |
+| `journal-2.md` | ~1001 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 58 | 2026-09-11 | 记忆层 CLAUDE.md 硬切换 EVERLASTING.md + 4 槽位植入开关 | `fac5fb05`, `ee65a1d4` | `main` |
 | 57 | 2026-09-09 | C2 证据链:群聊结构化 summary(锚点+推测标注+锚点后校验) | `049fc5fb`, `10344a33`, `02f69736`, `518c1f62`, `d853a6ba`, `89a187bf` | `main` |
 | 56 | 2026-09-07 | GCE-M4b 讨论库检索——场级检索 + GUI 独立面板 | `3a6a6408` | `main` |
 | 55 | 2026-09-03 | 全局开关:问询永不超时(ask_no_timeout) | (see git log) | `main` |
