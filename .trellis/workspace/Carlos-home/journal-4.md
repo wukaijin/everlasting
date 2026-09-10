@@ -1550,3 +1550,24 @@ C1.2 预算的消费面收官(五问 brainstorm:D1 预设优先单弹窗/D2 议�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 138: 修复 wire 层 tool_result 拆条致 deepseek 中继 400 生成中断
+
+**Date**: 2026-09-11
+**Task**: 修复 wire 层 tool_result 拆条致 deepseek 中继 400 生成中断
+**Branch**: `main`
+
+### Summary
+
+RCA:群聊 caa5020a deepseek-flash 三振 [生成出错中断]——Anthropic adapter wire 往返把一条含 N 个 tool_result 的 user 行拆成 N 条连续单-result 消息,wukaijin 中继 deepseek 通道逐消息严格校验配对故必 400(glm 通道宽容,同形态全过,构成对照证据)。修复:from_wire 出口 fuse_adjacent_tool_results 融合回一条(尾部 loop hint 不折入,wire 层已失行边界);恢复 pre-PR2 出站形态。测试 5 新例 + 全量 2378 passed;live:deepseek-flash 群聊单消息双 tool_use 回轮开流成功零 400;daemon 已重编重启载入修复。spec:llm-contract Pair Atomicity 增补 wire 出站形态条目 + provider-trait 1:1 表补行。任务 09-11-deepseek-tool-result-split-400 已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d05026c9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
