@@ -1,5 +1,5 @@
 //! D2 (08-31-cache-head-volatility): session-scoped freeze of the
-//! 4 instruction files (User/Project × CLAUDE.md/AGENTS.md).
+//! 4 instruction files (User/Project × EVERLASTING.md/AGENTS.md).
 //!
 //! ## Why
 //!
@@ -44,6 +44,7 @@ use std::sync::{Arc, OnceLock};
 
 use tokio::sync::RwLock;
 
+use crate::memory::flags::{apply_slot_flags, MemorySlotFlags};
 use crate::memory::loader::{load_for_session, MemoryCache};
 use crate::memory::types::MemoryLayer;
 
@@ -98,11 +99,19 @@ impl InstructionFreeze {
 /// `load_for_session` with the D2 session freeze in front. See
 /// the module doc for the rationale. Exposed as the single read
 /// site `chat_loop/init.rs` consumes.
+///
+/// 2026-09-10 hard switch PR2: `flags` is applied **inside the
+/// freeze-miss branch** — the frozen snapshot itself carries the
+/// `Disabled` demotions, so "toggle takes effect next session"
+/// is enforced by the freeze mechanism (a mid-session toggle
+/// can never fork the cached head; a mid-session re-enable
+/// equally waits for the next session).
 pub async fn load_for_session_frozen(
     cache: &MemoryCache,
     session_id: &str,
     project_id: &str,
     project_path: &str,
+    flags: &MemorySlotFlags,
 ) -> Vec<MemoryLayer> {
     load_frozen_impl(
         cache,
@@ -110,6 +119,7 @@ pub async fn load_for_session_frozen(
         project_id,
         project_path,
         INSTRUCTION_FREEZE_ENABLED,
+        flags,
     )
     .await
 }
@@ -123,18 +133,27 @@ async fn load_frozen_impl(
     project_id: &str,
     project_path: &str,
     enabled: bool,
+    flags: &MemorySlotFlags,
 ) -> Vec<MemoryLayer> {
     if enabled {
         if let Some(frozen) = freeze_registry().get(session_id).await {
             return (*frozen).clone();
         }
-        let layers = load_for_session(cache, project_id, project_path).await;
+        let layers = apply_slot_flags(
+            load_for_session(cache, project_id, project_path).await,
+            flags,
+        );
         freeze_registry().set(session_id, layers.clone()).await;
         layers
     } else {
-        // Kill-switch off: pre-D2 behavior, byte-identical
-        // (mtime-fenced read-through every request).
-        load_for_session(cache, project_id, project_path).await
+        // Kill-switch off: pre-D2 read-through + the same single
+        // flags application point. With the freeze gone a toggle
+        // takes effect on the next request — head stability is
+        // already waived in this rollback mode.
+        apply_slot_flags(
+            load_for_session(cache, project_id, project_path).await,
+            flags,
+        )
     }
 }
 
@@ -147,10 +166,10 @@ mod tests {
     use super::*;
     use crate::memory::types::{LayerStatus, MemoryKind, MemorySource};
 
-    /// Write a project CLAUDE.md with a distinct mtime so the
+    /// Write a project EVERLASTING.md with a distinct mtime so the
     /// loader's mtime fence sees each write as a change.
     fn write_project_claude(project_path: &std::path::Path, content: &str, stamp: u64) {
-        let file = project_path.join("CLAUDE.md");
+        let file = project_path.join("EVERLASTING.md");
         std::fs::write(&file, content).unwrap();
         let f = std::fs::File::options().write(true).open(&file).unwrap();
         f.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(stamp))
@@ -162,11 +181,11 @@ mod tests {
             .iter()
             .find(|l| {
                 l.kind == MemoryKind::Project
-                    && l.source == MemorySource::Claude
+                    && l.source == MemorySource::Everlasting
                     && matches!(l.status, LayerStatus::Loaded)
             })
             .map(|l| l.content.clone())
-            .expect("project CLAUDE.md layer must be Loaded")
+            .expect("project EVERLASTING.md layer must be Loaded")
     }
 
     #[tokio::test]
@@ -179,7 +198,15 @@ mod tests {
         let sid = format!("freeze-{}", uuid::Uuid::new_v4());
 
         // First request: reads FIRST-CONTENT off disk, freezes it.
-        let first = load_frozen_impl(&cache, &sid, "pid", &project_path, true).await;
+        let first = load_frozen_impl(
+            &cache,
+            &sid,
+            "pid",
+            &project_path,
+            true,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
         assert_eq!(project_layer_content(&first), "FIRST-CONTENT");
 
         // Mid-session disk change (agent edited the instruction file).
@@ -187,7 +214,15 @@ mod tests {
 
         // Second request of the SAME session: still FIRST-CONTENT
         // (frozen) — this is the seq-437 regression guard.
-        let second = load_frozen_impl(&cache, &sid, "pid", &project_path, true).await;
+        let second = load_frozen_impl(
+            &cache,
+            &sid,
+            "pid",
+            &project_path,
+            true,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
         assert_eq!(
             project_layer_content(&second),
             "FIRST-CONTENT",
@@ -197,7 +232,15 @@ mod tests {
         // A DIFFERENT session sees the new content (no cross-session
         // leakage of the freeze).
         let other_sid = format!("freeze-{}", uuid::Uuid::new_v4());
-        let other = load_frozen_impl(&cache, &other_sid, "pid", &project_path, true).await;
+        let other = load_frozen_impl(
+            &cache,
+            &other_sid,
+            "pid",
+            &project_path,
+            true,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
         assert_eq!(
             project_layer_content(&other),
             "SECOND-CONTENT",
@@ -214,11 +257,27 @@ mod tests {
         let cache = MemoryCache::new();
         let sid = format!("freeze-off-{}", uuid::Uuid::new_v4());
 
-        let first = load_frozen_impl(&cache, &sid, "pid", &project_path, false).await;
+        let first = load_frozen_impl(
+            &cache,
+            &sid,
+            "pid",
+            &project_path,
+            false,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
         assert_eq!(project_layer_content(&first), "BEFORE");
 
         write_project_claude(dir.path(), "AFTER", 2_000);
-        let second = load_frozen_impl(&cache, &sid, "pid", &project_path, false).await;
+        let second = load_frozen_impl(
+            &cache,
+            &sid,
+            "pid",
+            &project_path,
+            false,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
         assert_eq!(
             project_layer_content(&second),
             "AFTER",
@@ -234,7 +293,15 @@ mod tests {
 
         let cache = MemoryCache::new();
         let sid = format!("freeze-clear-{}", uuid::Uuid::new_v4());
-        let _ = load_frozen_impl(&cache, &sid, "pid", &project_path, true).await;
+        let _ = load_frozen_impl(
+            &cache,
+            &sid,
+            "pid",
+            &project_path,
+            true,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
 
         write_project_claude(dir.path(), "TWO", 2_000);
         freeze_registry().clear(&sid).await;
@@ -242,7 +309,15 @@ mod tests {
         // After clear, the session re-freezes from the CURRENT disk
         // state (delete_session_inner contract: a reused session_id
         // must not inherit the old snapshot).
-        let reread = load_frozen_impl(&cache, &sid, "pid", &project_path, true).await;
+        let reread = load_frozen_impl(
+            &cache,
+            &sid,
+            "pid",
+            &project_path,
+            true,
+            &MemorySlotFlags::all_on(),
+        )
+        .await;
         assert_eq!(project_layer_content(&reread), "TWO");
     }
 }

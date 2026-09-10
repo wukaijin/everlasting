@@ -1,14 +1,16 @@
-// Memory store — wraps the 3 B5 memory Tauri commands into a reactive
-// cache that the Memory Preview panel reads from, plus the 2 P2
+// Memory store — wraps the B5 memory Tauri commands into a reactive
+// cache that the Memory Preview panel reads from, plus the P2
 // runtime-memory commands (`list_autonomous_memories` /
-// `delete_autonomous_memory`).
+// `delete_autonomous_memory`) and the 2026-09-10 hard-switch legacy
+// detector (`read_legacy_memory_files`).
 //
 // PRD: B5 Memory V2 1 期 (2026-06-10). PR1 of the task (backend) shipped
 // the 3 commands: `read_memory_layers`, `read_memory_content`,
 // `open_memory_in_editor`. This store is the single source of truth
-// for the frontend's view of the 4 fixed memory files (User CLAUDE.md
-// + User AGENTS.md + Project CLAUDE.md + Project AGENTS.md) AND the
-// P2 runtime memories (autonomous memories the agent wrote via
+// for the frontend's view of the 4 fixed memory files (User
+// EVERLASTING.md + User AGENTS.md + Project EVERLASTING.md + Project
+// AGENTS.md — renamed from CLAUDE.md by the 2026-09-10 hard switch)
+// AND the P2 runtime memories (autonomous memories the agent wrote via
 // `remember` tool / will be written via P4 reflection).
 //
 // State model:
@@ -54,21 +56,43 @@ import { extractErrorMessage } from "../utils/useErrorBus";
 
 export type MemoryKind = "user" | "project" | "session" | "runtime";
 
-export type MemorySource = "claude" | "agents";
+export type MemorySource = "everlasting" | "agents";
+
+/** Wire-facing source: the two known values plus arbitrary
+ *  pass-through strings (unknown values render raw — never
+ *  silently relabeled; `string & {}` keeps the union's
+ *  autocomplete). */
+export type MemorySourceWire = MemorySource | (string & {});
+
+/** 2026-09-10 hard switch (task 09-10-memory-everlasting-md-hard-switch):
+ *  the "main memory" slot was renamed CLAUDE.md → EVERLASTING.md and the
+ *  wire value went `"claude"` → `"everlasting"`. A new frontend can face
+ *  an OLD daemon (PWA-cached bundle vs stale daemon is a mechanism-pushed
+ *  stable state — see the task's design.md D1.4), whose payloads still
+ *  say `"claude"`. TS has no serde alias, so the store normalizes at the
+ *  read boundary; unknown values pass through verbatim (the layer item
+ *  renders them raw instead of silently mislabeling as AGENTS.md). */
+function normalizeSource(raw: string): MemorySourceWire {
+  if (raw === "claude") return "everlasting";
+  return raw;
+}
 
 /** Status: a discriminated union matching the Rust `LayerStatus`:
  *  - `Loaded`     → `null` (no extra payload)
  *  - `Missing`    → `null`
+ *  - `Disabled`   → `null` (2026-09-10 hard switch PR2: the slot's
+ *                   injection is toggled off via the 4-slot flags)
  *  - `Error`      → `{ reason: string }`
  *  The `kind` field is the discriminator. */
 export type LayerStatus =
   | { kind: "loaded" }
   | { kind: "missing" }
+  | { kind: "disabled" }
   | { kind: "error"; reason: string };
 
 export interface MemoryLayerInfo {
   kind: MemoryKind;
-  source: MemorySource;
+  source: MemorySourceWire;
   path: string;
   tokens: number;
   status: LayerStatus;
@@ -212,6 +236,12 @@ export const useMemoryStore = defineStore("memory", () => {
   const error = ref<string | null>(null);
   const lastProjectId = ref<string | null>(null);
 
+  // 2026-09-10 hard switch: legacy CLAUDE.md paths that still
+  // exist on disk but are no longer loaded. Drives the preview
+  // panel's static banner (the only UI compensation for the
+  // silent invalidation — review P0 #6).
+  const legacyFiles = ref<string[]>([]);
+
   // ---------------------------------------------------------------------
   // State — runtime-memories section (P2 PR3; additive)
   // ---------------------------------------------------------------------
@@ -283,7 +313,10 @@ export const useMemoryStore = defineStore("memory", () => {
       const next = await transport.invoke<MemoryLayerInfo[]>("read_memory_layers", {
         projectId,
       });
-      layers.value = next;
+      layers.value = next.map((l) => ({
+        ...l,
+        source: normalizeSource(l.source),
+      }));
       // Invalidate the content cache when the layer set changes
       // (paths may have moved; stale entries would render old
       // bodies for new paths). Easiest correct behavior: drop the
@@ -294,6 +327,21 @@ export const useMemoryStore = defineStore("memory", () => {
       error.value = extractErrorMessage(e);
     } finally {
       loading.value = false;
+    }
+    // Legacy CLAUDE.md detection (2026-09-10 hard switch, review
+    // P0 #6): a separate additive command so the layers envelope
+    // stays stable. Old daemons don't know it — treat any error
+    // as "no legacy info" (fail-open; the banner simply doesn't
+    // show, matching the panel's best-effort posture).
+    try {
+      const legacy = await transport.invoke<string[]>("read_legacy_memory_files", {
+        projectId,
+      });
+      // Coerce defensively: a null/undefined payload (test mocks,
+      // protocol hiccups) must not poison `legacyFiles.length`.
+      legacyFiles.value = Array.isArray(legacy) ? legacy : [];
+    } catch {
+      legacyFiles.value = [];
     }
   }
 
@@ -653,6 +701,7 @@ export const useMemoryStore = defineStore("memory", () => {
     loading,
     error,
     lastProjectId,
+    legacyFiles,
     loadForProject,
     refresh,
     fetchContent,

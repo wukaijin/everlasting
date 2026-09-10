@@ -443,6 +443,9 @@ pub fn run() {
             commands::memory::read_memory_layers,
             commands::memory::read_memory_content,
             commands::memory::open_memory_in_editor,
+            // 2026-09-10 hard switch: legacy CLAUDE.md detection for
+            // the preview banner (review P0 #6).
+            commands::memory::read_legacy_memory_files,
             // P2 (2026-06-29): runtime autonomous-memory CRUD.
             commands::memory::list_autonomous_memories,
             commands::memory::delete_autonomous_memory,

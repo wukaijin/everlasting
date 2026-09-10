@@ -245,8 +245,18 @@ pub(crate) async fn prepare_worker(
         )
         .await
     } else {
+        // 2026-09-10 hard switch PR2: dispatch-time flags read
+        // (next-dispatch semantics; see `memory::flags`).
+        let slot_flags = crate::memory::flags::MemorySlotFlags::read(db).await;
         (
-            build_worker_messages(memory_cache, project_id, project_path, &final_task).await,
+            build_worker_messages(
+                memory_cache,
+                project_id,
+                project_path,
+                &final_task,
+                &slot_flags,
+            )
+            .await,
             None,
         )
     };

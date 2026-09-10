@@ -9,7 +9,7 @@
 
 /** 设置的两个 scope。后端设置存全是 daemon 级全局 KV(`app_config`),
  *  「项目」scope 只收编真实项目级的数据:项目指令文件
- *  (`<project>/CLAUDE.md` + `AGENTS.md`)与项目子代理定义
+ *  (`<project>/EVERLASTING.md` + `AGENTS.md`)与项目子代理定义
  *  (`<project>/.everlasting/agents/*.md`,frontmatter `model:` 真项目级)。 */
 export type SettingsScope = "global" | "project";
 
@@ -80,7 +80,7 @@ export const SETTINGS_CATEGORIES: ReadonlyArray<SettingsCategory> = [
     scope: "global",
     group: "智能体",
     title: "Memory",
-    description: "用户级指令文件(User CLAUDE.md / AGENTS.md)预览。",
+    description: "用户级指令文件(User EVERLASTING.md / AGENTS.md)预览。",
     keywords: ["memory", "记忆", "指令文件", "claude.md", "agents.md", "用户指令"],
   },
   {
@@ -138,7 +138,7 @@ export const SETTINGS_CATEGORIES: ReadonlyArray<SettingsCategory> = [
     scope: "project",
     group: null,
     title: "项目指令文件",
-    description: "当前项目的 CLAUDE.md / AGENTS.md 指令层预览。",
+    description: "当前项目的 EVERLASTING.md / AGENTS.md 指令层预览。",
     keywords: ["memory", "记忆", "指令文件", "claude.md", "agents.md", "项目指令", "project"],
   },
   {

@@ -3,7 +3,7 @@
 ### 1. Scope / Trigger
 
 - Trigger: the agent loop needs to inject per-user / per-project
-  Markdown memory (CLAUDE.md / AGENTS.md) at the ⑤a context-
+  Markdown memory (EVERLASTING.md / AGENTS.md) at the ⑤a context-
   construction stage (per `docs/ARCHITECTURE.md` §2.2).
 - Why code-spec depth: the system prompt is the LLM's only
   ground truth on the user's environment. A misformatted
@@ -20,8 +20,8 @@
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryKind {
-    User,      // ~/.claude/CLAUDE.md (Claude Code interop) + ~/.config/everlasting/AGENTS.md (Everlasting-native)
-    Project,   // <project.path>/{CLAUDE.md,AGENTS.md}
+    User,      // ~/.config/everlasting/{EVERLASTING.md,AGENTS.md} — one dir since the 2026-09-10 hard switch
+    Project,   // <project.path>/{EVERLASTING.md,AGENTS.md}
     #[allow(dead_code)] Session,  // V2 2 期
     #[allow(dead_code)] Runtime,  // V2 2 期
 }
@@ -29,7 +29,7 @@ pub enum MemoryKind {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemorySource {
-    Claude,    // CLAUDE.md
+    Claude,    // EVERLASTING.md
     Agents,    // AGENTS.md
 }
 
@@ -110,7 +110,7 @@ pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock>;
 //            — the cache breakpoint on subsequent turns.
 //   Blocks 1..N: per loaded layer, in canonical order, with
 //            AGENTS.md wrapped in <primary instructions>...</primary>
-//            and CLAUDE.md in <reference>...</reference>.
+//            and EVERLASTING.md in <reference>...</reference>.
 //            No cache_control on body blocks (Anthropic's
 //            "last cache_control block is the breakpoint" rule
 //            means only Block 0 needs the marker).
@@ -127,22 +127,21 @@ pub async fn count_tokens(text: &str) -> u32;  // cl100k_base
 
 | Layer | Source | Path |
 |---|---|---|
-| User | CLAUDE.md | `<home_dir>/.claude/CLAUDE.md` |
+| User | EVERLASTING.md | `<config_dir>/everlasting/EVERLASTING.md` |
 | User | AGENTS.md | `<config_dir>/everlasting/AGENTS.md` |
-| Project | CLAUDE.md | `<project.path>/CLAUDE.md` |
+| Project | EVERLASTING.md | `<project.path>/EVERLASTING.md` |
 | Project | AGENTS.md | `<project.path>/AGENTS.md` |
-
-`<home_dir>` is `dirs::home_dir()` — on Linux (the dev
-platform) this is `~/.claude/`. This path matches Claude
-Code's own user-level CLAUDE.md so the two tools share the
-same file (locked 2026-06-26 user-claude-md-home-dir).
 
 `<config_dir>` is `dirs::config_dir()` — on Linux (the dev
 platform) this is `~/.config/`. The trailing `/everlasting/`
 subdirectory is hard-coded (so the loader never collides with
-other tools' `~/.config/` files). AGENTS.md is
-Everlasting-native and stays in the original location; only
-CLAUDE.md moved.
+other tools' `~/.config/` files). Both User-layer files share
+this one directory since the **2026-09-10 hard switch** (task
+`09-10-memory-everlasting-md-hard-switch`), which renamed the
+main-memory slot CLAUDE.md → EVERLASTING.md and retired the
+`~/.claude/` Claude-Code interop slot introduced by the
+2026-06-26 decision (no fallback, no dual read; leftover
+CLAUDE.md files are surfaced by `read_legacy_memory_files`).
 
 `<project.path>` is the raw `projects.path` column from SQLite;
 the chat command has already validated it through
@@ -151,9 +150,9 @@ the chat command has already validated it through
 #### Canonical order
 
 `load_for_session` returns 4 layers in this order:
-1. User CLAUDE.md
+1. User EVERLASTING.md
 2. User AGENTS.md
-3. Project CLAUDE.md
+3. Project EVERLASTING.md
 4. Project AGENTS.md
 
 The chat command and the Tauri command `read_memory_layers`
@@ -168,9 +167,9 @@ The chat command's `build_context` step calls
 prompt:
 
 ```text
-<system>已加载 N 个 memory: [User CLAUDE.md] (X tokens) / [Project AGENTS.md] (Y tokens)</system>
+<system>已加载 N 个 memory: [User EVERLASTING.md] (X tokens) / [Project AGENTS.md] (Y tokens)</system>
 
-[User CLAUDE.md]
+[User EVERLASTING.md]
 <user claude body>
 
 [Project AGENTS.md]
@@ -212,7 +211,7 @@ is rejected with `LayerStatus::Error`. Rationale: 4 files *
 100 KiB ≈ 100K tokens (the entire context window of a 200K
 model). A single memory file > 100 KiB is almost certainly
 a content-store accidentally placed at a memory path, not
-a real CLAUDE.md. Frontend can offer the user a "preview
+a real EVERLASTING.md. Frontend can offer the user a "preview
 the over-cap file" path (out of scope for PR1).
 
 #### Token estimation
@@ -263,7 +262,7 @@ it is added.)
 |---|---|
 | `ANTHROPIC_API_KEY` missing | Memory loads as normal; only LLM call fails. |
 | All 4 memory files missing | Empty banner + empty layers block; chat proceeds with base prompt alone. |
-| User CLAUDE.md > 100 KiB | User CLAUDE.md → `Error`; rest of system unaffected. The banner lists only loaded layers. |
+| User EVERLASTING.md > 100 KiB | User EVERLASTING.md → `Error`; rest of system unaffected. The banner lists only loaded layers. |
 | Project path is a symlink to outside the project | The chat command's existing `assert_within_root` rejects it before `load_for_session` is called. |
 | notify watcher fails to start (inotify limit, etc.) | `tracing::warn!`; cache works as a pure read-through (no hot-reload). Subsequent `invalidate_*` calls from `delete_session` still work. |
 | notify fires an event for a non-memory file in the user dir | Filtered out by `lookup_key`; no cache mutation. |
@@ -276,7 +275,7 @@ it is added.)
 
 #### Good: typical happy path
 
-1. User has `~/.claude/CLAUDE.md` (1 KB, 250
+1. User has `~/.config/everlasting/EVERLASTING.md` (1 KB, 250
    tokens) and `<project>/AGENTS.md` (4 KB, 1000 tokens).
 2. App starts → watcher registers the user dir and the
    project dir. Both directories are non-recursive.
@@ -284,14 +283,14 @@ it is added.)
 4. Chat command → `load_for_session` → cache miss on first
    call → reads both files → returns 2 loaded + 2 missing.
 5. `build_banner` returns
-   `"<system>已加载 2 个 memory: [User CLAUDE.md] (250 tokens) / [Project AGENTS.md] (1000 tokens)</system>"`.
+   `"<system>已加载 2 个 memory: [User EVERLASTING.md] (250 tokens) / [Project AGENTS.md] (1000 tokens)</system>"`.
 6. `build_layers_block` returns the 2 section bodies.
 7. System prompt = banner + layers block + base prompt.
 8. LLM sees the memory at the top of its context.
-9. User edits `~/.claude/CLAUDE.md` in
+9. User edits `~/.config/everlasting/EVERLASTING.md` in
    `$EDITOR`. Editor save fires 3 inotify events.
 10. Watcher debounces → 1 second after the last event, the
-    user CLAUDE.md slot is invalidated.
+    user EVERLASTING.md slot is invalidated.
 11. User sends another question. Next `load_for_session`
     sees the cache miss, re-reads, and the new content is
     in the prompt.
@@ -319,7 +318,7 @@ NOT leak arbitrary file content to the frontend.
 
 #### Bad: 100 KiB file in a memory path
 
-1. User has a 200 KiB `CLAUDE.md` (mistakenly placed a
+1. User has a 200 KiB `EVERLASTING.md` (mistakenly placed a
    content dump there).
 2. `load_file_inner` checks `meta.len() > MAX_FILE_SIZE`
    → returns `Error { reason: "file is 204800 bytes, exceeds 102400 byte cap" }`.
@@ -332,7 +331,7 @@ NOT leak arbitrary file content to the frontend.
 #### Bad: editor save during an in-flight chat
 
 1. Chat is mid-stream, system prompt already built.
-2. User saves `CLAUDE.md`.
+2. User saves `EVERLASTING.md`.
 3. Watcher invalidates the cache slot.
 4. The in-flight turn completes with the OLD system prompt
    (intentional — system prompt is per-turn, not per-token).
@@ -380,7 +379,7 @@ pub async fn load_layer(...) -> Result<MemoryLayer, String> {
 }
 ```
 
-A user who hasn't set up `CLAUDE.md` is the COMMON case (a
+A user who hasn't set up `EVERLASTING.md` is the COMMON case (a
 fresh install). Making memory load a hard requirement
 silently bricks every new user. The whole point of B5 is
 that memory is **opportunistic**, not mandatory.
@@ -413,7 +412,7 @@ pub async fn load_for_session(...) -> Vec<MemoryLayer> {
 }
 ```
 
-The user edits `CLAUDE.md` and wonders why their changes
+The user edits `EVERLASTING.md` and wonders why their changes
 aren't picked up. The PRD explicitly demands hot-reload
 (`notify` listener).
 

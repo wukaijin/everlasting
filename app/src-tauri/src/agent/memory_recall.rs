@@ -258,7 +258,7 @@ pub fn recall_block(text: String) -> ContentBlock {
 /// instruction message at position 0 (no memory files loaded), the
 /// recall block is wrapped in its own synthetic user message and
 /// prepended (so it still surfaces — recall works even on a fresh
-/// install with no CLAUDE.md).
+/// install with no EVERLASTING.md).
 ///
 /// **Mutates `turn_messages`** (the request clone), NOT the
 /// persisted `messages`. The persisted Vec is byte-identical

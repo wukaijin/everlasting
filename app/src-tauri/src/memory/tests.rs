@@ -53,28 +53,6 @@ impl Drop for UserDirGuard {
     }
 }
 
-/// Test-only: temporarily override the User-layer CLAUDE.md
-/// directory for the duration of a test. Mirrors [`UserDirGuard`]
-/// but targets the separate `user_claude_dir()` slot (locked by
-/// 2026-06-26 user-claude-md-home-dir — CLAUDE.md lives at
-/// `~/.claude/`, AGENTS.md still lives at `~/.config/everlasting/`).
-pub struct UserClaudeDirGuard {
-    previous: Option<PathBuf>,
-}
-
-impl UserClaudeDirGuard {
-    pub fn new(path: PathBuf) -> Self {
-        let previous = crate::memory::file::set_user_claude_dir_for_test(Some(path));
-        Self { previous }
-    }
-}
-
-impl Drop for UserClaudeDirGuard {
-    fn drop(&mut self) {
-        crate::memory::file::set_user_claude_dir_for_test(self.previous.clone());
-    }
-}
-
 // ---------------------------------------------------------------------------
 // `tokens` tests
 // ---------------------------------------------------------------------------
@@ -130,7 +108,7 @@ async fn tokens_count_mixed() {
 #[tokio::test]
 async fn file_load_missing_returns_missing_status() {
     let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("CLAUDE.md");
+    let p = dir.path().join("EVERLASTING.md");
     let (content, tokens, status) = load_file_for_test(&p).await;
     assert_eq!(content, "");
     assert_eq!(tokens, 0);
@@ -140,7 +118,7 @@ async fn file_load_missing_returns_missing_status() {
 #[tokio::test]
 async fn file_load_loaded_returns_body_and_tokens() {
     let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("CLAUDE.md");
+    let p = dir.path().join("EVERLASTING.md");
     std::fs::write(&p, "# Hello, world.\nThis is a test.").unwrap();
     let (content, tokens, status) = load_file_for_test(&p).await;
     assert!(matches!(status, LayerStatus::Loaded));
@@ -162,7 +140,7 @@ async fn file_load_empty_file_is_loaded_with_zero_tokens() {
 #[tokio::test]
 async fn file_load_oversize_returns_error() {
     let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("CLAUDE.md");
+    let p = dir.path().join("EVERLASTING.md");
     // Write one byte past the cap.
     let big = vec![b'x'; (MAX_FILE_SIZE + 1) as usize];
     std::fs::write(&p, &big).unwrap();
@@ -179,7 +157,7 @@ async fn file_load_oversize_returns_error() {
 #[tokio::test]
 async fn file_load_non_utf8_returns_error() {
     let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("CLAUDE.md");
+    let p = dir.path().join("EVERLASTING.md");
     // 0xFF 0xFE is not valid UTF-8.
     std::fs::write(&p, [0xFFu8, 0xFEu8, 0xFDu8]).unwrap();
     let (content, tokens, status) = load_file_for_test(&p).await;
@@ -206,15 +184,17 @@ async fn load_file_for_test(p: &std::path::Path) -> (String, u32, LayerStatus) {
 
 #[tokio::test]
 async fn loader_load_for_session_with_all_files_present() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "user claude body").unwrap();
-    std::fs::write(user_agents_dir.path().join("AGENTS.md"), "user agents body").unwrap();
-    std::fs::write(project_dir.path().join("CLAUDE.md"), "project claude body").unwrap();
+    std::fs::write(user_dir.path().join("EVERLASTING.md"), "user claude body").unwrap();
+    std::fs::write(user_dir.path().join("AGENTS.md"), "user agents body").unwrap();
+    std::fs::write(
+        project_dir.path().join("EVERLASTING.md"),
+        "project claude body",
+    )
+    .unwrap();
     std::fs::write(project_dir.path().join("AGENTS.md"), "project agents body").unwrap();
 
     let cache = MemoryCache::new();
@@ -224,7 +204,7 @@ async fn loader_load_for_session_with_all_files_present() {
         assert!(matches!(l.status, LayerStatus::Loaded), "{:?}", l);
     }
     assert_eq!(layers[0].kind, MemoryKind::User);
-    assert_eq!(layers[0].source, MemorySource::Claude);
+    assert_eq!(layers[0].source, MemorySource::Everlasting);
     assert_eq!(layers[1].source, MemorySource::Agents);
     assert_eq!(layers[2].kind, MemoryKind::Project);
     assert_eq!(layers[3].source, MemorySource::Agents);
@@ -234,11 +214,9 @@ async fn loader_load_for_session_with_all_files_present() {
 
 #[tokio::test]
 async fn loader_load_for_session_with_all_files_missing() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
     // No files written — every layer should be Missing.
     let cache = MemoryCache::new();
@@ -251,33 +229,29 @@ async fn loader_load_for_session_with_all_files_missing() {
 
 #[tokio::test]
 async fn loader_load_for_session_partial_files() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
-    // Only User CLAUDE.md and Project AGENTS.md.
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "u-c body").unwrap();
+    // Only User EVERLASTING.md and Project AGENTS.md.
+    std::fs::write(user_dir.path().join("EVERLASTING.md"), "u-c body").unwrap();
     std::fs::write(project_dir.path().join("AGENTS.md"), "p-a body").unwrap();
 
     let cache = MemoryCache::new();
     let layers = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(layers.len(), 4);
-    assert_eq!(layers[0].status, LayerStatus::Loaded); // User Claude
+    assert_eq!(layers[0].status, LayerStatus::Loaded); // User Everlasting
     assert_eq!(layers[1].status, LayerStatus::Missing); // User Agents
-    assert_eq!(layers[2].status, LayerStatus::Missing); // Project Claude
+    assert_eq!(layers[2].status, LayerStatus::Missing); // Project Everlasting
     assert_eq!(layers[3].status, LayerStatus::Loaded); // Project Agents
 }
 
 #[tokio::test]
 async fn loader_mtime_fence_sees_file_change() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "v1").unwrap();
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    std::fs::write(user_dir.path().join("EVERLASTING.md"), "v1").unwrap();
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -298,7 +272,7 @@ async fn loader_mtime_fence_sees_file_change() {
     // until the mtime moves, and bails if the FS genuinely can't
     // distinguish writes at all (which would itself invalidate
     // the fence contract the test exists to guard).
-    let changed_path = user_claude_dir.path().join("CLAUDE.md");
+    let changed_path = user_dir.path().join("EVERLASTING.md");
     let first_mtime = std::fs::metadata(&changed_path)
         .unwrap()
         .modified()
@@ -329,12 +303,10 @@ async fn loader_mtime_fence_sees_file_change() {
 
 #[tokio::test]
 async fn loader_mtime_fence_hit_when_unchanged() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "stable body").unwrap();
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    std::fs::write(user_dir.path().join("EVERLASTING.md"), "stable body").unwrap();
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -350,17 +322,15 @@ async fn loader_mtime_fence_sees_file_appear() {
     // File absent at first load → Missing (cached with mtime
     // None). File appears → next load's stat yields Some; the
     // None != Some trips the fence → reload → Loaded.
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(first[0].status, LayerStatus::Missing);
 
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "appeared").unwrap();
+    std::fs::write(user_dir.path().join("EVERLASTING.md"), "appeared").unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(15)).await;
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -373,18 +343,16 @@ async fn loader_mtime_fence_sees_file_vanish() {
     // File present → Loaded (mtime Some). File removed → next
     // load's stat yields None; Some != None trips the fence →
     // reload → Missing.
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "here").unwrap();
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    std::fs::write(user_dir.path().join("EVERLASTING.md"), "here").unwrap();
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(first[0].status, LayerStatus::Loaded);
 
-    std::fs::remove_file(user_claude_dir.path().join("CLAUDE.md")).unwrap();
+    std::fs::remove_file(user_dir.path().join("EVERLASTING.md")).unwrap();
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(second[0].status, LayerStatus::Missing);
@@ -392,21 +360,19 @@ async fn loader_mtime_fence_sees_file_vanish() {
 
 #[tokio::test]
 async fn loader_different_projects_have_independent_caches() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let proj_a = tempfile::tempdir().unwrap();
     let proj_b = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
-    std::fs::write(proj_a.path().join("CLAUDE.md"), "a body").unwrap();
-    std::fs::write(proj_b.path().join("CLAUDE.md"), "b body").unwrap();
+    std::fs::write(proj_a.path().join("EVERLASTING.md"), "a body").unwrap();
+    std::fs::write(proj_b.path().join("EVERLASTING.md"), "b body").unwrap();
 
     let cache = MemoryCache::new();
     let layers_a = load_for_session(&cache, "proj-a", proj_a.path().to_str().unwrap()).await;
     let layers_b = load_for_session(&cache, "proj-b", proj_b.path().to_str().unwrap()).await;
 
-    // Project Claude is index 2 in the canonical order.
+    // Project Everlasting is index 2 in the canonical order.
     assert_eq!(layers_a[2].content, "a body");
     assert_eq!(layers_b[2].content, "b body");
 }
@@ -418,9 +384,9 @@ async fn loader_different_projects_have_independent_caches() {
 #[tokio::test]
 async fn banner_with_no_loaded_layers_is_empty() {
     let layers = vec![
-        missing_layer(MemoryKind::User, MemorySource::Claude),
+        missing_layer(MemoryKind::User, MemorySource::Everlasting),
         missing_layer(MemoryKind::User, MemorySource::Agents),
-        missing_layer(MemoryKind::Project, MemorySource::Claude),
+        missing_layer(MemoryKind::Project, MemorySource::Everlasting),
         missing_layer(MemoryKind::Project, MemorySource::Agents),
     ];
     assert_eq!(build_banner(&layers), "");
@@ -429,15 +395,15 @@ async fn banner_with_no_loaded_layers_is_empty() {
 #[tokio::test]
 async fn banner_with_some_loaded_layers_lists_them() {
     let layers = vec![
-        loaded_layer(MemoryKind::User, MemorySource::Claude, "hi", 1),
+        loaded_layer(MemoryKind::User, MemorySource::Everlasting, "hi", 1),
         missing_layer(MemoryKind::User, MemorySource::Agents),
-        missing_layer(MemoryKind::Project, MemorySource::Claude),
+        missing_layer(MemoryKind::Project, MemorySource::Everlasting),
         missing_layer(MemoryKind::Project, MemorySource::Agents),
     ];
     let banner = build_banner(&layers);
     assert!(banner.contains("<system>"));
     assert!(banner.contains("</system>"));
-    assert!(banner.contains("[User CLAUDE.md]"));
+    assert!(banner.contains("[User EVERLASTING.md]"));
     assert!(banner.contains("1 tokens"));
     // Missing layers should not appear in the banner.
     assert!(!banner.contains("[User AGENTS.md]"));
@@ -449,71 +415,70 @@ async fn banner_with_some_loaded_layers_lists_them() {
 
 #[tokio::test]
 async fn all_paths_yields_four_entries_in_canonical_order() {
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let _user_dir_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
     let entries = all_paths(Some(project_dir.path().to_str().unwrap()));
     // Both User-layer dirs are overridden → expect exactly 4
     // entries in canonical order.
     assert_eq!(entries.len(), 4);
     assert_eq!(entries[0].0, MemoryKind::User);
-    assert_eq!(entries[0].1, MemorySource::Claude);
+    assert_eq!(entries[0].1, MemorySource::Everlasting);
     assert_eq!(entries[1].0, MemoryKind::User);
     assert_eq!(entries[1].1, MemorySource::Agents);
     assert_eq!(entries[2].0, MemoryKind::Project);
-    assert_eq!(entries[2].1, MemorySource::Claude);
+    assert_eq!(entries[2].1, MemorySource::Everlasting);
     assert_eq!(entries[3].0, MemoryKind::Project);
     assert_eq!(entries[3].1, MemorySource::Agents);
 }
 
 // ---------------------------------------------------------------------------
-// 2026-06-26 user-claude-md-home-dir — User CLAUDE.md lives at
-// `~/.claude/CLAUDE.md` (Claude Code interop), User AGENTS.md
-// stays at `~/.config/everlasting/AGENTS.md`.
+// 2026-09-10 hard switch — both User-layer files share one dir
+// (`user_dir()` / `~/.config/everlasting/`); the `~/.claude/`
+// interop slot is retired (task 09-10-memory-everlasting-md-hard-switch).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn resolve_path_user_claude_uses_override_dir() {
-    // With `UserClaudeDirGuard` pointing at a tempdir, the
-    // resolved User CLAUDE.md path must live under that tempdir.
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let _guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let resolved = crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Claude, None);
-    let path = resolved.expect("resolve_path should yield Some when override is set");
-    assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("CLAUDE.md"));
-    assert_eq!(path.parent(), Some(user_claude_dir.path()));
+async fn resolve_path_user_sources_share_user_dir() {
+    // With `UserDirGuard` pointing at a tempdir, BOTH User-layer
+    // sources resolve under that same tempdir.
+    let user_dir = tempfile::tempdir().unwrap();
+    let _guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    for source in [MemorySource::Everlasting, MemorySource::Agents] {
+        let resolved = crate::memory::file::resolve_path(MemoryKind::User, source, None);
+        let path = resolved.expect("resolve_path should yield Some when override is set");
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some(source.filename())
+        );
+        assert_eq!(path.parent(), Some(user_dir.path()));
+    }
 }
 
 #[tokio::test]
-async fn resolve_path_user_agents_keeps_user_dir_override() {
-    // Regression: AGENTS.md path resolution MUST continue to use
-    // `user_dir()` (`~/.config/everlasting/`), not
-    // `user_claude_dir()` — even when `UserClaudeDirGuard` is
-    // active. The two User-layer dirs are independent.
-    let user_claude_dir = tempfile::tempdir().unwrap();
-    let user_agents_dir = tempfile::tempdir().unwrap();
-    let _claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let _agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
-    let resolved = crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Agents, None);
-    let path = resolved.expect("resolve_path should yield Some when override is set");
-    assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("AGENTS.md"));
-    assert_eq!(path.parent(), Some(user_agents_dir.path()));
-}
-
-#[tokio::test]
-async fn user_claude_dir_unset_returns_home_dot_claude() {
-    // Clear any prior override (tests run on the same thread —
-    // the per-test guards drop at the end of their test, but be
-    // defensive here) and assert the un-overridden value matches
-    // `dirs::home_dir().map(|p| p.join(".claude"))`.
-    let _guard = UserClaudeDirGuard::new(tempfile::tempdir().unwrap().path().to_path_buf());
-    let _restore = crate::memory::file::set_user_claude_dir_for_test(None);
-    let resolved = crate::memory::file::user_claude_dir();
-    let expected = dirs::home_dir().map(|p| p.join(".claude"));
-    assert_eq!(resolved, expected);
+async fn memory_source_serde_wire_pins() {
+    // Serialize side: the wire values are "everlasting" / "agents".
+    assert_eq!(
+        serde_json::to_string(&MemorySource::Everlasting).unwrap(),
+        "\"everlasting\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MemorySource::Agents).unwrap(),
+        "\"agents\""
+    );
+    // Deserialize side: the pre-rename "claude" payload still
+    // resolves to the Everlasting variant (Rust-side skew guard;
+    // the TS read side normalizes independently — see
+    // app/src/stores/memory.ts).
+    assert_eq!(
+        serde_json::from_str::<MemorySource>("\"claude\"").unwrap(),
+        MemorySource::Everlasting
+    );
+    assert_eq!(
+        serde_json::from_str::<MemorySource>("\"everlasting\"").unwrap(),
+        MemorySource::Everlasting
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -527,8 +492,10 @@ async fn memory_cache_arc_smoke() {
     // 2026-06-15) — freshness is now the mtime fence's job,
     // covered by the loader_mtime_fence_* tests above.
     let cache = Arc::new(MemoryCache::new());
-    let _ = cache.peek_user(MemorySource::Claude).await;
-    let _ = cache.peek_project("missing-id", MemorySource::Claude).await;
+    let _ = cache.peek_user(MemorySource::Everlasting).await;
+    let _ = cache
+        .peek_project("missing-id", MemorySource::Everlasting)
+        .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +547,7 @@ fn digest_off_is_byte_identical_to_legacy() {
     let layers = vec![
         loaded_layer(
             MemoryKind::User,
-            MemorySource::Claude,
+            MemorySource::Everlasting,
             "user claude body",
             900,
         ),
@@ -592,7 +559,7 @@ fn digest_off_is_byte_identical_to_legacy() {
         ),
         loaded_layer(
             MemoryKind::Project,
-            MemorySource::Claude,
+            MemorySource::Everlasting,
             "## Alpha\nalpha body\n## Beta\nbeta body",
             2000,
         ),
@@ -607,18 +574,23 @@ fn digest_off_is_byte_identical_to_legacy() {
 }
 
 /// digest_on 时:banner 块不变(唯一 cache 断点,I1);AGENTS 层逐字节
-/// 不变(primary 永不 digest);大 CLAUDE 层 body 换目录且仍在
-/// `<reference>` 包裹内(I3);≤600 tok 的小 CLAUDE 层不 digest。
+/// 不变(primary 永不 digest);大 EVERLASTING 层 body 换目录且仍在
+/// `<reference>` 包裹内(I3);≤600 tok 的小 EVERLASTING 层不 digest。
 #[test]
 fn digest_on_swaps_only_large_claude_body() {
     let layers = vec![
-        // 小 CLAUDE(≤600)→ 全量豁免。
-        loaded_layer(MemoryKind::User, MemorySource::Claude, "tiny claude", 10),
+        // 小 EVERLASTING(≤600)→ 全量豁免。
+        loaded_layer(
+            MemoryKind::User,
+            MemorySource::Everlasting,
+            "tiny claude",
+            10,
+        ),
         missing_layer(MemoryKind::User, MemorySource::Agents),
-        // 大 CLAUDE(>600)→ digest。
+        // 大 EVERLASTING(>600)→ digest。
         loaded_layer(
             MemoryKind::Project,
-            MemorySource::Claude,
+            MemorySource::Everlasting,
             "## Alpha\nFIRST-LINE\nDEEP-CONTENT-XYZ\n\n## Beta\nbeta line\nDEEP-BETA-XYZ",
             2000,
         ),
@@ -643,17 +615,17 @@ fn digest_on_swaps_only_large_claude_body() {
         other => panic!("expected Text block, got {:?}", other),
     };
 
-    // 小 CLAUDE 块逐字节一致。
+    // 小 EVERLASTING 块逐字节一致。
     assert_eq!(body_text(&legacy, 1), body_text(&digested, 1));
 
-    // 大 CLAUDE 块:包裹仍在,目录进来了,深层正文没了。
+    // 大 EVERLASTING 块:包裹仍在,目录进来了,深层正文没了。
     let claude_digest = body_text(&digested, 2);
     assert!(claude_digest.starts_with("<reference>"));
     assert!(claude_digest.contains("[digest — 2 sections"));
     assert!(claude_digest.contains("FIRST-LINE"));
     assert!(!claude_digest.contains("DEEP-CONTENT-XYZ"));
     // label 行保留(banner label 与 load_memory_sections 寻址命名空间一致)。
-    assert!(claude_digest.contains("[Project CLAUDE.md]"));
+    assert!(claude_digest.contains("[Project EVERLASTING.md]"));
 
     // AGENTS 块逐字节一致。
     assert_eq!(body_text(&legacy, 3), body_text(&digested, 3));
@@ -665,12 +637,12 @@ fn digest_on_swaps_only_large_claude_body() {
 fn digest_on_includes_loaded_section_full_text() {
     let layers = vec![loaded_layer(
         MemoryKind::Project,
-        MemorySource::Claude,
+        MemorySource::Everlasting,
         "## Alpha\nFIRST-LINE\nDEEP-CONTENT-XYZ",
         2000,
     )];
     let loaded: std::collections::HashSet<String> = [crate::memory::digest::section_key(
-        "Project CLAUDE.md",
+        "Project EVERLASTING.md",
         "Alpha",
     )]
     .into_iter()
@@ -692,9 +664,9 @@ fn digest_on_includes_loaded_section_full_text() {
 #[test]
 fn instructions_blocks_empty_when_no_layer_loaded() {
     let layers = vec![
-        missing_layer(MemoryKind::User, MemorySource::Claude),
+        missing_layer(MemoryKind::User, MemorySource::Everlasting),
         missing_layer(MemoryKind::User, MemorySource::Agents),
-        missing_layer(MemoryKind::Project, MemorySource::Claude),
+        missing_layer(MemoryKind::Project, MemorySource::Everlasting),
         missing_layer(MemoryKind::Project, MemorySource::Agents),
     ];
     let blocks = build_instructions_blocks(&layers);
@@ -706,16 +678,16 @@ fn instructions_blocks_empty_when_no_layer_loaded() {
 /// - Block 0: the banner text with `cache_control: Some(Ephemeral)`
 ///   (the Anthropic cache breakpoint).
 /// - Blocks 1..N: per loaded layer in canonical order, wrapped
-///   in `<primary>` for AGENTS.md and `<reference>` for CLAUDE.md
+///   in `<primary>` for AGENTS.md and `<reference>` for EVERLASTING.md
 ///   (review §3 Q4 decision). No cache_control on the body blocks
 ///   — only the first block is the marker.
 #[test]
 fn instructions_blocks_marks_only_first_block_as_cacheable() {
     let layers = vec![
-        // First loaded: User CLAUDE.md → goes in block 1 as <reference>
+        // First loaded: User EVERLASTING.md → goes in block 1 as <reference>
         loaded_layer(
             MemoryKind::User,
-            MemorySource::Claude,
+            MemorySource::Everlasting,
             "user-claude-body",
             5,
         ),
@@ -726,7 +698,7 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
             "user-agents-body",
             5,
         ),
-        missing_layer(MemoryKind::Project, MemorySource::Claude),
+        missing_layer(MemoryKind::Project, MemorySource::Everlasting),
         // Fourth loaded: Project AGENTS.md → block 3 as <primary>
         loaded_layer(
             MemoryKind::Project,
@@ -746,7 +718,7 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
             cache_control,
         } => {
             assert!(text.starts_with("<system>已加载"));
-            assert!(text.contains("User CLAUDE.md"));
+            assert!(text.contains("User EVERLASTING.md"));
             assert!(text.contains("User AGENTS.md"));
             assert!(text.contains("Project AGENTS.md"));
             assert_eq!(*cache_control, Some(CacheControl::Ephemeral));
@@ -754,7 +726,7 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
         other => panic!("expected Text block, got {:?}", other),
     }
 
-    // Block 1: User CLAUDE.md → <reference> wrapper, no cache_control
+    // Block 1: User EVERLASTING.md → <reference> wrapper, no cache_control
     match &blocks[1] {
         ContentBlock::Text {
             text,

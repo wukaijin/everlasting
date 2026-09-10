@@ -10,7 +10,7 @@
 // Composition mirrors SettingsModal (`reka-ui` DialogRoot /
 // DialogPortal / DialogOverlay / DialogContent / DialogClose),
 // but skips Tabs — this modal only renders the 2 project layers
-// (CLAUDE.md + AGENTS.md) for the active project. User-layer
+// (EVERLASTING.md + AGENTS.md) for the active project. User-layer
 // memory continues to live in the Settings → Memory tab.
 //
 // Sizing: width `80vw` clamped to `min 640px / max 900px`, height

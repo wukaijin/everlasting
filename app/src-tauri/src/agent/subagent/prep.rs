@@ -80,7 +80,8 @@ pub(crate) async fn build_resume_messages(
     project_path: &str,
 ) -> (Vec<crate::llm::types::ChatMessage>, Option<String>) {
     let fresh = || async {
-        build_worker_messages(memory_cache, project_id, project_path, final_task).await
+        let flags = crate::memory::flags::MemorySlotFlags::read(db).await;
+        build_worker_messages(memory_cache, project_id, project_path, final_task, &flags).await
     };
     let loaded = match crate::db::subagent_runs::load_messages_by_run_id(db, run_id).await {
         Ok(x) => x,

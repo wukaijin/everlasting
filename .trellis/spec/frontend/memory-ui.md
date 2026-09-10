@@ -41,7 +41,10 @@
 ```typescript
 // app/src/stores/memory.ts
 export type MemoryKind = "user" | "project" | "session" | "runtime";
-export type MemorySource = "claude" | "agents";
+// 2026-09-10 hard switch: "everlasting" | "agents". The DTO field
+// is MemorySourceWire (union + string passthrough) — unknown wire
+// values render raw; the store maps the legacy "claude" → "everlasting".
+export type MemorySource = "everlasting" | "agents";
 export type LayerStatus =
   | { kind: "loaded" }
   | { kind: "missing" }
@@ -93,8 +96,10 @@ export const useMemoryStore = defineStore("memory", () => {
 [
   {
     "kind": "user",            // lowercase (#[serde(rename_all = "lowercase")])
-    "source": "claude",        // snake_case (#[serde(rename_all = "snake_case")])
-    "path": "/home/x/.claude/CLAUDE.md", // PathBuf → string; locked 2026-06-26 user-claude-md-home-dir (Claude Code interop)
+    "source": "everlasting",   // snake_case (#[serde(rename_all = "snake_case")]);
+                               // 2026-09-10 hard switch — pre-rename payloads said
+                               // "claude"; the store normalizes at the read boundary
+    "path": "/home/x/.config/everlasting/EVERLASTING.md", // PathBuf → string
     "tokens": 142,
     "status": { "kind": "loaded" },
     "char_count": 487
@@ -102,15 +107,15 @@ export const useMemoryStore = defineStore("memory", () => {
   {
     "kind": "user",
     "source": "agents",
-    "path": "/home/x/.config/everlasting/AGENTS.md", // PathBuf → string; AGENTS.md stays at the original location (only CLAUDE.md moved 2026-06-26)
+    "path": "/home/x/.config/everlasting/AGENTS.md", // PathBuf → string; AGENTS.md stays at the original location (only EVERLASTING.md moved 2026-06-26)
     "tokens": 0,
     "status": { "kind": "missing" },
     "char_count": 0
   },
   {
     "kind": "project",
-    "source": "claude",
-    "path": "/home/x/code/foo/CLAUDE.md",
+    "source": "everlasting",
+    "path": "/home/x/code/foo/EVERLASTING.md",
     "tokens": 89,
     "status": { "kind": "error", "reason": "Permission denied" },
     "char_count": 0
@@ -161,12 +166,12 @@ export const useMemoryStore = defineStore("memory", () => {
 
 ### 5. Good / Base / Bad Cases
 
-#### Good: Settings page → Memory tab → preview User CLAUDE.md
+#### Good: Settings page → Memory tab → preview User EVERLASTING.md
 
 1. 用户点 Settings → Memory tab
 2. `<MemoryTab>` 渲染 → `<MemoryPreview kind="user">` 渲染
 3. `onMounted` → `store.loadForProject(currentProjectId)` → IPC
-4. 后端返回 2 个 User layer (CLAUDE.md Loaded, AGENTS.md Missing)
+4. 后端返回 2 个 User layer (EVERLASTING.md Loaded, AGENTS.md Missing)
 5. Panel 渲染 1 个绿点 + 1 个灰点 + 顶部 chip "1 loaded · 1 missing"
 6. 用户点绿点 → `MemoryLayerItem` 展开 → lazy fetch content →
    `renderMarkdown` 渲染 sanitized HTML
@@ -176,7 +181,7 @@ export const useMemoryStore = defineStore("memory", () => {
    invalidate(目前不 emit Tauri event,前端不感知;下个 turn
    注入新内容)
 
-#### Base: Project CLAUDE.md 完全不存在
+#### Base: Project EVERLASTING.md 完全不存在
 
 1. 用户切到 project A,Memory dropdown 打开
 2. `<MemoryPreview kind="project">` 渲染 → 2 个 Project layer,
@@ -197,7 +202,7 @@ export const useMemoryStore = defineStore("memory", () => {
 
 #### Bad: 嵌入了 `<script>` 的恶意 memory 文件
 
-1. (假设) 用户的 `CLAUDE.md` 包含 `<script>alert(1)</script>`
+1. (假设) 用户的 `EVERLASTING.md` 包含 `<script>alert(1)</script>`
 2. 后端 `read_memory_content` 读取文件,内容传给前端
 3. 前端 `renderMarkdown(text)` 走 `marked.parse` + `DOMPurify.sanitize`
 4. DOMPurify 默认 strip `<script>` → 输出空字符串
@@ -219,18 +224,17 @@ export const useMemoryStore = defineStore("memory", () => {
 
 1. `cd app && pnpm tauri dev`
 2. 打开 Settings → Memory tab
-   - 看到 User CLAUDE.md / User AGENTS.md 2 个卡片
+   - 看到 User EVERLASTING.md / User AGENTS.md 2 个卡片
    - 缺失的显示灰点 + "(文件不存在)"
    - 存在的显示绿点 + token 数
 3. 点击存在的卡片 → 展开 → markdown 渲染
 4. 点 "在外部编辑器打开" → 外部编辑器打开
 5. 在 Settings Memory tab 之外,切到 ProjectTabs → 点 Memory 按钮
-   - 看到 Project CLAUDE.md / Project AGENTS.md 2 个卡片
+   - 看到 Project EVERLASTING.md / Project AGENTS.md 2 个卡片
 6. 切换 project → Memory dropdown 关闭(避免 stale state)
-7. 修改 `~/.claude/CLAUDE.md`(Claude Code interop
-   路径,2026-06-26 user-claude-md-home-dir)→ 1s 内 watcher
-   触发 → 下一个 user message 重新加载
-   (本期前端不感知此事件,backend 已处理)
+7. 修改 `~/.config/everlasting/EVERLASTING.md`(2026-09-10
+   硬切换后的统一用户层路径)→ 下一次 read_memory_layers 的
+   mtime fence 重新加载(本期前端不感知此事件,backend 已处理)
 
 ### 7. Wrong vs Correct
 
@@ -241,7 +245,7 @@ export const useMemoryStore = defineStore("memory", () => {
 <div v-html="layer.content" />
 ```
 
-攻击向量:`CLAUDE.md` 里写 `<img src=x onerror=alert(1)>` →
+攻击向量:`EVERLASTING.md` 里写 `<img src=x onerror=alert(1)>` →
 `v-html` 直接执行 → 任意 JS 执行。
 
 #### Correct: 走 `renderMarkdown` 渲染 pipeline
@@ -506,7 +510,7 @@ Rust `PathBuf` 在 Tauri IPC 中序列化为 **string**,不是
 
 ### Mistake: 渲染 100KB markdown 不截断
 
-CLAUDE.md / AGENTS.md 上限是 100KB(PR1 的 `MAX_FILE_SIZE`),
+EVERLASTING.md / AGENTS.md 上限是 100KB(PR1 的 `MAX_FILE_SIZE`),
 marked + DOMPurify 解析 100KB markdown 可能要 1-2 秒 +
 Panel 卡住等渲染。用户在 editor 保存 → 触发 reload → 下次
 展开卡顿。

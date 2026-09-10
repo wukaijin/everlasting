@@ -485,11 +485,20 @@ pub(crate) async fn prepare_loop_state(
     // worker dispatch (`subagent/prompt.rs`) and the preview UI
     // (`commands::memory.rs`) keep the fresh mtime-fenced read —
     // they don't shape the parent loop's head.
+    //
+    // 2026-09-10 hard switch PR2: 4-slot flags are read here and
+    // applied INSIDE the freeze-miss branch — the frozen snapshot
+    // carries the Disabled demotions, so a mid-session toggle
+    // takes effect next session (mechanism-enforced, not doc-
+    // enforced; worker/digest/preview apply at their own read
+    // points, see `memory::flags`).
+    let slot_flags = crate::memory::flags::MemorySlotFlags::read(&db).await;
     let memory_layers = crate::memory::freeze::load_for_session_frozen(
         &memory_cache,
         &session_id,
         &project.id,
         &project.path,
+        &slot_flags,
     )
     .await;
     // memory-block-governance WP2 (2026-08-15): digest gate — 开关

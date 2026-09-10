@@ -36,7 +36,7 @@ pub enum Role {
 ///
 /// The B5 memory refactor (2026-06-11) attaches `Ephemeral` to
 /// the first content block of the synthetic "instructions" user
-/// message so the 4 instruction files (CLAUDE.md / AGENTS.md ×
+/// message so the 4 instruction files (EVERLASTING.md / AGENTS.md ×
 /// user / project) are cached on turn 1 and read from cache on
 /// turns 2..MAX_TURNS. Without this marker, Anthropic would
 /// 100% miss every turn and re-bill the full instructions

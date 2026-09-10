@@ -104,7 +104,7 @@ Box::pin(run_chat_loop(
 
 #### worker context(`subagent.rs::build_worker_messages`,`chat_loop.rs::run_chat_loop` 传入)
 
-- `messages[0]` = `build_instructions_blocks(memory_cache)` synthetic user message(4 文件:User/Project × CLAUDE.md/AGENTS.md,带 `cache_control: Ephemeral`,worker **自己** cache breakpoint,与父正交)
+- `messages[0]` = `build_instructions_blocks(memory_cache)` synthetic user message(4 文件:User/Project × EVERLASTING.md/AGENTS.md,带 `cache_control: Ephemeral`,worker **自己** cache breakpoint,与父正交)
 - (可选) `messages[1]` = synthetic assistant ack("Understood. I will follow these instructions...")—— 镜像 main loop 的 memory pair 保持 Anthropic wire user/assistant 交替
 - 末尾 `messages.push` delegation task user message(**APPEND,不 prepend**)
 

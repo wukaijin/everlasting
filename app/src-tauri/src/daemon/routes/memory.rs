@@ -13,8 +13,8 @@ use serde::Deserialize;
 
 use crate::commands::memory::{
     delete_autonomous_memory_inner, list_autonomous_memories_inner, open_memory_in_editor_inner,
-    read_memory_content_inner, read_memory_layers_inner, update_autonomous_memory_inner,
-    update_autonomous_memory_status_inner,
+    read_legacy_memory_files_inner, read_memory_content_inner, read_memory_layers_inner,
+    update_autonomous_memory_inner, update_autonomous_memory_status_inner,
 };
 use crate::error::AppCommandError;
 use crate::memory::types::MemoryLayerInfo;
@@ -30,6 +30,19 @@ pub async fn read_memory_layers(
     Json(req): Json<ReadMemoryLayersRequest>,
 ) -> Result<Json<Vec<MemoryLayerInfo>>, AppCommandError> {
     let result = read_memory_layers_inner(&state, req.project_id).await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReadLegacyMemoryFilesRequest {
+    pub project_id: String,
+}
+
+pub async fn read_legacy_memory_files(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReadLegacyMemoryFilesRequest>,
+) -> Result<Json<Vec<String>>, AppCommandError> {
+    let result = read_legacy_memory_files_inner(&state, req.project_id).await?;
     Ok(Json(result))
 }
 
@@ -130,6 +143,7 @@ pub async fn update_autonomous_memory(
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/read_memory_layers", post(read_memory_layers))
+        .route("/read_legacy_memory_files", post(read_legacy_memory_files))
         .route("/read_memory_content", post(read_memory_content))
         .route("/open_memory_in_editor", post(open_memory_in_editor))
         .route("/list_autonomous_memories", post(list_autonomous_memories))

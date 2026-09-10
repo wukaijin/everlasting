@@ -1,9 +1,9 @@
 //! B5 Memory — User / Project two-layer loader (V2 first-tier, 2026-06-10).
 //!
-//! Loads Markdown memory files (CLAUDE.md / AGENTS.md) from two fixed
-//! layers — User (`~/.claude/CLAUDE.md` + `~/.config/everlasting/AGENTS.md`,
-//! split locked 2026-06-26 user-claude-md-home-dir) and Project
-//! (`<project.path>/`) — and injects their content into the LLM
+//! Loads Markdown memory files (EVERLASTING.md / AGENTS.md) from two fixed
+//! layers — User (`~/.config/everlasting/`, unified by the 2026-09-10
+//! hard switch) and Project (`<project.path>/`) — and injects their
+//! content into the LLM
 //! system prompt at the ⑤a context-construction stage (per
 //! `docs/ARCHITECTURE.md` §2.2 step ⑤a).
 //!
@@ -33,21 +33,24 @@
 //! Files in this module:
 //! - [`types`] — `MemoryKind`, `MemorySource`, `LayerStatus`,
 //!   `MemoryLayer`, `MemoryLayerInfo` (the wire / preview types).
-//! - [`file`] — 4 fixed path resolution (`user_claude_dir` / `user_dir` / `project_path`).
+//! - [`file`] — 4 fixed path resolution (`user_dir` / `project_path`).
 //! - [`tokens`] — `count_tokens` (cl100k_base via `tiktoken-rs`).
 //! - [`loader`] — `MemoryCache` + `load_for_session` (mtime-fenced
 //!   read-through).
+//! - [`flags`] — 4 槽位植入开关(`MemorySlotFlags` +
+//!   `apply_slot_flags`,2026-09-10 hard switch PR2)。
 //! - [`freeze`] — D2 session-scoped freeze of the instruction
 //!   layers (08-31-cache-head-volatility): first request of a
 //!   session wins, later requests reuse the snapshot so the
 //!   `messages[0..1]` head stays byte-stable on the
 //!   OpenAI-compatible byte-0 prefix cache.
-//! - [`commands`] — Tauri command surface (3 commands, lives in
+//! - [`commands`] — Tauri command surface (4 commands, lives in
 //!   `crate::commands::memory`).
 //! - [`tests`] — `#[cfg(test)]` integration tests (≥15 cases).
 
 pub mod digest;
 pub mod file;
+pub mod flags;
 pub mod freeze;
 pub mod loader;
 pub mod tokens;
@@ -65,5 +68,5 @@ pub use types::{LayerStatus, MemoryKind, MemoryLayer, MemoryLayerInfo, MemorySou
 /// Rationale: 4 files * 100KB = 400KB worst case ≈ 100K tokens,
 /// which is the entire context window of a 200K model. A single
 /// file larger than 100KB is almost certainly a content-store
-/// accidentally committed to a memory slot, not a real CLAUDE.md.
+/// accidentally committed to a memory slot, not a real EVERLASTING.md.
 pub const MAX_FILE_SIZE: u64 = 100 * 1024;

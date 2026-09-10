@@ -10,7 +10,7 @@
 //   对应主 turn 条目之前)。识别口径:摘要 send 的首条消息含
 //   "CONTEXT CHECKPOINT COMPACTION"(主 turn 不会)。
 // - 合成头随测试机环境的 user-scope memory/skill 层漂移(0..3,
-//   开发机实测 P=3:User CLAUDE.md 头对 + skill listing)—— 所有
+//   开发机实测 P=3:User EVERLASTING.md 头对 + skill listing)—— 所有
 //   断言位置无关(算法本就不依赖摘要消息的绝对位置,评审 P1-1)。
 
 use std::sync::Arc;

@@ -552,7 +552,7 @@ function onDeleteCancel() {
 // when the trigger wasn't at the viewport's right edge. The follow-up
 // task moved it here — a Brain icon button next to WorktreeChip opens
 // a reka-ui Dialog modal (`MemoryModal.vue`) showing the active
-// project's CLAUDE.md / AGENTS.md.
+// project's EVERLASTING.md / AGENTS.md.
 //
 // Implementation note: the button is only meaningful when a project is
 // active. We gate on `projectsStore.currentProjectId` (matching the
@@ -919,7 +919,7 @@ onUnmounted(() => reviewStateStore.stop());
           v-if="projectsStore.currentProjectId"
           class="chat-panel__memory-btn btn btn--muted"
           type="button"
-          title="查看项目指令文件 (CLAUDE.md / AGENTS.md)"
+          title="查看项目指令文件 (EVERLASTING.md / AGENTS.md)"
           aria-label="Memory"
           @click="memoryModalOpen = true"
         >

@@ -1023,7 +1023,7 @@ mod tests {
     //
     // The synthetic instructions user message carries
     // `cache_control: Some(Ephemeral)` on its first text block so
-    // Anthropic can cache the 4 instruction files (CLAUDE.md /
+    // Anthropic can cache the 4 instruction files (EVERLASTING.md /
     // AGENTS.md × user / project) on turn 1 and read them from
     // cache on turns 2..MAX_TURNS. These tests lock the wire
     // round-trip preserves the cache marker.
@@ -1042,7 +1042,7 @@ mod tests {
                     cache_control: Some(CacheControl::Ephemeral),
                 },
                 ContentBlock::Text {
-                    text: "<reference>CLAUDE.md body</reference>".to_string(),
+                    text: "<reference>EVERLASTING.md body</reference>".to_string(),
                     cache_control: None,
                 },
             ]),
@@ -1080,7 +1080,7 @@ mod tests {
                         text,
                         cache_control,
                     } => {
-                        assert_eq!(text, "<reference>CLAUDE.md body</reference>");
+                        assert_eq!(text, "<reference>EVERLASTING.md body</reference>");
                         assert_eq!(*cache_control, None);
                     }
                     other => panic!("expected Text, got {:?}", other),
@@ -1115,7 +1115,7 @@ mod tests {
                 text,
                 cache_control,
             } => {
-                assert_eq!(text, "<reference>CLAUDE.md body</reference>");
+                assert_eq!(text, "<reference>EVERLASTING.md body</reference>");
                 assert_eq!(*cache_control, None);
             }
             other => panic!("expected Text, got {:?}", other),

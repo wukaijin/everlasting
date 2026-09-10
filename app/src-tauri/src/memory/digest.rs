@@ -1,6 +1,6 @@
 //! memory 指令块 digest(分级注入,08-15-memory-block-governance WP2)。
 //!
-//! CLAUDE.md(`<reference>` 层)首轮只注入**章节目录**(fence-aware 切节,
+//! EVERLASTING.md(`<reference>` 层)首轮只注入**章节目录**(fence-aware 切节,
 //! 每节 = 标题 + 首句摘要),另由 drive.rs 侧挂 `load_memory_sections`
 //! 元工具,模型按需拉取全文节后粘性在场。AGENTS.md(`<primary>` 层)与
 //! tokens ≤ [`DIGEST_THRESHOLD_TOKENS`] 的小层保持全量。
@@ -29,7 +29,7 @@ use crate::llm::types::ToolDef;
 use crate::memory::types::{LayerStatus, MemoryLayer, MemorySource};
 
 /// digest 阈值:层 tokens ≤ 600 直接全量(小文件无收益,保 always-on
-/// 语义;实机 user CLAUDE.md 36B 自然落入)。design §3.1。
+/// 语义;实机 user EVERLASTING.md 36B 自然落入)。design §3.1。
 pub const DIGEST_THRESHOLD_TOKENS: u32 = 600;
 
 /// 摘要截断长度(字符,非字节 — CJK 安全)。design §3.2。
@@ -129,7 +129,7 @@ fn append_line(current: &mut Option<DocSection>, line: &str, preamble_title: &st
 }
 
 /// 节摘要:节内首个非空、非 header、非 fence 行,截断 ≤120 chars;
-/// 回退(整节就是一个 code block,如实测 CLAUDE.md 的 Common
+/// 回退(整节就是一个 code block,如实测 EVERLASTING.md 的 Common
 /// Commands):节内首个非空行(允许 fence 内)。design §3.2。
 fn section_summary(section: &DocSection) -> String {
     let mut in_fence = false;
@@ -171,22 +171,22 @@ fn truncate_chars(s: &str) -> String {
 // 层级判定 + 目录生成
 // ---------------------------------------------------------------------------
 
-/// 寻址用的层 key(无方括号):`Project CLAUDE.md` / `User CLAUDE.md`。
-/// banner label(`[Project CLAUDE.md]`)的去括号形态 — 工具参数里干净。
+/// 寻址用的层 key(无方括号):`Project EVERLASTING.md` / `User EVERLASTING.md`。
+/// banner label(`[Project EVERLASTING.md]`)的去括号形态 — 工具参数里干净。
 pub fn layer_key(layer: &MemoryLayer) -> String {
     format!("{} {}", layer.kind.label_prefix(), layer.source.label())
 }
 
-/// 节 key:`Project CLAUDE.md#Architecture`。registry 与 load 请求共用。
+/// 节 key:`Project EVERLASTING.md#Architecture`。registry 与 load 请求共用。
 pub fn section_key(layer_key: &str, title: &str) -> String {
     format!("{layer_key}#{title}")
 }
 
-/// 该层是否走 digest:仅 CLAUDE.md(`reference` 语义)、Loaded、且
+/// 该层是否走 digest:仅 EVERLASTING.md(`reference` 语义)、Loaded、且
 /// tokens 超阈值。AGENTS.md(primary)永不 digest — 按大小一刀切会误伤
 /// always-on 主指令(design §2 方案 E 的拒绝理由)。
 pub fn is_digest_layer(layer: &MemoryLayer) -> bool {
-    matches!(layer.source, MemorySource::Claude)
+    matches!(layer.source, MemorySource::Everlasting)
         && matches!(layer.status, LayerStatus::Loaded)
         && layer.tokens > DIGEST_THRESHOLD_TOKENS
 }
@@ -277,9 +277,9 @@ pub fn load_memory_sections_def() -> ToolDef {
     ToolDef {
         name: "load_memory_sections".to_string(),
         description: Some(
-            "Load the full text of memory instruction sections (CLAUDE.md layers are \
+            "Load the full text of memory instruction sections (EVERLASTING.md layers are \
              injected as a section digest only). Pass \"<Layer>\" (e.g. \"Project \
-             CLAUDE.md\") for the whole file, \"<Layer>#<section title>\" for one \
+             EVERLASTING.md\") for the whole file, \"<Layer>#<section title>\" for one \
              section (exact title, or an unambiguous prefix/substring), or \
              [\"all\"] for every digest layer; the full section text is returned \
              verbatim."
@@ -369,12 +369,19 @@ impl MemoryDigestRegistry {
 /// cache 现取层 → 定位节 → 返回原文文本。成功 side-effect:registry 记
 /// loaded key(粘性)。返回 `(content, is_error)` — 错误消息附可用层/节
 /// 清单(模型自愈,同 C7D 直呼自愈先例)。
+///
+/// 2026-09-10 hard switch PR2: callers pass the 4-slot `flags`; they are
+/// applied to the freshly-read layers **here** because this executor does
+/// NOT go through `load_for_session` (it reads the mtime-fence cache
+/// directly) — an exit-point filter elsewhere would leave this tool as a
+/// penetration channel pulling "disabled" layers' full text (review P0 #2).
 pub async fn execute_load_memory_sections(
     cache: &crate::memory::MemoryCache,
     project_id: &str,
     project_path: &str,
     session_id: &str,
     input: &serde_json::Value,
+    flags: &crate::memory::flags::MemorySlotFlags,
 ) -> (String, bool) {
     let specs: Vec<String> = match input.get("sections").and_then(|v| v.as_array()) {
         Some(arr) => arr
@@ -384,7 +391,7 @@ pub async fn execute_load_memory_sections(
         None => {
             return (
                 "Error: `sections` must be an array of layer/section specs, e.g. \
-                 [\"Project CLAUDE.md#Architecture\"] or [\"all\"]."
+                 [\"Project EVERLASTING.md#Architecture\"] or [\"all\"]."
                     .to_string(),
                 true,
             );
@@ -394,7 +401,10 @@ pub async fn execute_load_memory_sections(
         return ("Error: `sections` is empty.".to_string(), true);
     }
 
-    let layers = crate::memory::loader::load_for_session(cache, project_id, project_path).await;
+    let layers = crate::memory::flags::apply_slot_flags(
+        crate::memory::loader::load_for_session(cache, project_id, project_path).await,
+        flags,
+    );
     let digest_layers: Vec<&MemoryLayer> = layers.iter().filter(|l| is_digest_layer(l)).collect();
     if digest_layers.is_empty() {
         return (
@@ -494,8 +504,8 @@ mod tests {
     fn claude_layer(content: &str, tokens: u32) -> MemoryLayer {
         MemoryLayer {
             kind: MemoryKind::Project,
-            source: MemorySource::Claude,
-            path: "/proj/CLAUDE.md".into(),
+            source: MemorySource::Everlasting,
+            path: "/proj/EVERLASTING.md".into(),
             content: content.to_string(),
             tokens,
             status: LayerStatus::Loaded,
@@ -517,7 +527,7 @@ mod tests {
 
     #[test]
     fn fenced_hash_comments_do_not_split() {
-        // repo CLAUDE.md 的 Common Commands 形态:code block 内 `# 开发`
+        // repo EVERLASTING.md 的 Common Commands 形态:code block 内 `# 开发`
         // 是 shell 注释,不得成为节界。
         let content = "# T\n\n## A\n\ntext\n\n## B\n\n```bash\n# 开发\npnpm dev\n```\nafter";
         let sections = split_sections(content);
@@ -624,7 +634,7 @@ mod tests {
         let body = digest_body(&layer, &HashSet::new());
         assert!(body.contains("[digest — 2 sections"));
         assert!(body.contains("FIRST-LINE-ALPHA"));
-        assert!(body.contains("load_memory_sections([\"Project CLAUDE.md#<section title>\"])"));
+        assert!(body.contains("load_memory_sections([\"Project EVERLASTING.md#<section title>\"])"));
         assert!(!body.contains("SECRET-ALPHA-DEEP-CONTENT"));
         assert!(!body.contains("SECRET-BETA-DEEP"));
     }
@@ -636,7 +646,7 @@ mod tests {
             "## Alpha\nalpha summary line\nALPHA-DEEP-BODY\n\n## Beta\nbeta summary line\nBETA-DEEP-BODY",
             900,
         );
-        let loaded: HashSet<String> = [section_key("Project CLAUDE.md", "Alpha")]
+        let loaded: HashSet<String> = [section_key("Project EVERLASTING.md", "Alpha")]
             .into_iter()
             .collect();
         let body = digest_body(&layer, &loaded);
@@ -654,7 +664,7 @@ mod tests {
     #[test]
     fn digest_body_whole_layer_loaded_returns_full_content() {
         let layer = claude_layer("## Alpha\nalpha body", 900);
-        let loaded: HashSet<String> = ["Project CLAUDE.md".to_string()].into_iter().collect();
+        let loaded: HashSet<String> = ["Project EVERLASTING.md".to_string()].into_iter().collect();
         let body = digest_body(&layer, &loaded);
         assert!(body.contains("alpha body"));
         assert!(body.contains("[digest — 1 sections")); // 头部元信息仍在
@@ -698,11 +708,13 @@ mod tests {
     #[tokio::test]
     async fn registry_extend_get_clear_is_scoped_per_session() {
         let r = MemoryDigestRegistry::default();
-        r.extend("s1", ["Project CLAUDE.md#A".to_string()]).await;
-        r.extend("s2", ["Project CLAUDE.md#B".to_string()]).await;
+        r.extend("s1", ["Project EVERLASTING.md#A".to_string()])
+            .await;
+        r.extend("s2", ["Project EVERLASTING.md#B".to_string()])
+            .await;
         let s1 = r.get("s1").await;
-        assert!(s1.contains("Project CLAUDE.md#A"));
-        assert!(!s1.contains("Project CLAUDE.md#B"));
+        assert!(s1.contains("Project EVERLASTING.md#A"));
+        assert!(!s1.contains("Project EVERLASTING.md#B"));
         r.clear("s1").await;
         assert!(r.get("s1").await.is_empty());
         assert!(!r.get("s2").await.is_empty(), "s2 untouched");
@@ -712,7 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn digest_of_large_layer_stays_small() {
-        // 用放大版 repo 形态(7 节 + 每节约 4KB 正文,模拟 28KB CLAUDE.md)
+        // 用放大版 repo 形态(7 节 + 每节约 4KB 正文,模拟 28KB EVERLASTING.md)
         // 锁定目录体量级 — 全量 ~8k tok 时目录应 ≤ 1/8。
         let mut content = String::from("# T\n\nintro\n");
         for i in 0..7 {

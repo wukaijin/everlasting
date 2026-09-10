@@ -833,9 +833,9 @@ agent loop 结束(text-only response or max_turns reached):
 
 #### 2.5.12 ⑤ memory-gov 指令块窗口治理(2026-08-15 落地)
 
-- **问题**:关卡 ⑤ context 构造时,AGENTS.md / CLAUDE.md 加载段占 prompt token(实测 4 文件合计 60-100k token,长项目超过 0.30×window)
+- **问题**:关卡 ⑤ context 构造时,AGENTS.md / EVERLASTING.md 加载段占 prompt token(实测 4 文件合计 60-100k token,长项目超过 0.30×window)
 - **方案 WP1 度量**:`turn_trace.memory_token INTEGER` 列(08-15,backfill 同 C7)
-- **方案 WP2 切节注入**:`memory/digest.rs` fence-aware 切节目录(纯机械,标题 + 首句,无 LLM 调用);`AGENTS.md` primary 永不 digest(`mtime` 锁死),`CLAUDE.md` 且 tokens>600 才 digest
+- **方案 WP2 切节注入**:`memory/digest.rs` fence-aware 切节目录(纯机械,标题 + 首句,无 LLM 调用);`AGENTS.md` primary 永不 digest(`mtime` 锁死),`EVERLASTING.md` 且 tokens>600 才 digest
 - **方案 WP3 元工具**:`load_memory_sections` 元工具(append,精确寻址 banner label 切片,LLM 看到目录找不到的内容时显式拉全文)
 - **gate**:`MemoryDigestRegistry` OnceLock 单例 + `memory_digest_enabled` 缺省 on(fail-open,worker / 群聊豁免)
 - **完整设计**:见 [ROADMAP.md §1.2 memory-gov](./ROADMAP.md) 行(2026-08-15 落地)

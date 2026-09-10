@@ -112,6 +112,7 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   delete_autonomous_memory: "memory",
   list_autonomous_memories: "memory",
   open_memory_in_editor: "memory",
+  read_legacy_memory_files: "memory",
   read_memory_content: "memory",
   read_memory_layers: "memory",
   update_autonomous_memory: "memory",

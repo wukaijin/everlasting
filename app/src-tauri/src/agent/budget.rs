@@ -406,7 +406,7 @@ mod tests {
             ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![memory_block(
-                    "<memory-banner>CLAUDE.md instructions body ...",
+                    "<memory-banner>EVERLASTING.md instructions body ...",
                 )]),
                 speaker: None,
                 attachments: None,
@@ -444,7 +444,8 @@ mod tests {
         ];
 
         // 归因切片计数(messages 内部归因口径,与 init.rs 各计数点同式)。
-        let memory_slice = count_tokens("<memory-banner>CLAUDE.md instructions body ...").await;
+        let memory_slice =
+            count_tokens("<memory-banner>EVERLASTING.md instructions body ...").await;
         let skill_slice =
             count_tokens("<skills>available: budget-review, ui-review</skills>").await;
         let at_files_slice = count_tokens("<file path=\"big.rs\">\nfn main() {}\n</file>").await;

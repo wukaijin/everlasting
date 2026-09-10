@@ -140,6 +140,8 @@ pub fn all_command_names() -> Vec<&'static str> {
         "read_memory_layers",
         "read_memory_content",
         "open_memory_in_editor",
+        // 2026-09-10 hard switch: legacy CLAUDE.md detection
+        "read_legacy_memory_files",
         // B3 /command palette
         "list_commands",
         "get_command_body",

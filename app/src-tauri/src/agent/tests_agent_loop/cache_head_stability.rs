@@ -150,7 +150,7 @@ async fn workflow_state_transition_and_new_request_keep_wire_head_stable() {
 
     // ---- shared premises: instruction file V1 + workflow session ----
     write_with_mtime(
-        &h.project_path.join("CLAUDE.md"),
+        &h.project_path.join("EVERLASTING.md"),
         &format!("# project memory\n{INSTRUCTION_MARKER_V1}\n"),
         1_000,
     );
@@ -183,7 +183,7 @@ async fn workflow_state_transition_and_new_request_keep_wire_head_stable() {
                 id: "toolu_edit_instr".into(),
                 name: "write_file".into(),
                 input: serde_json::json!({
-                    "path": "CLAUDE.md",
+                    "path": "EVERLASTING.md",
                     "content": "# project memory\nINSTRUCTION-BODY-V2\n",
                 }),
             }),

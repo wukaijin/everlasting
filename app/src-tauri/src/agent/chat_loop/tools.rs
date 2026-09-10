@@ -851,6 +851,13 @@ pub(crate) async fn dispatch_tool_calls(
                                 &project_path,
                                 &session_id,
                                 input,
+                                // 2026-09-10 hard switch PR2: the digest
+                                // tool bypasses `load_for_session`, so the
+                                // slot flags are applied HERE — a disabled
+                                // layer's content is emptied before section
+                                // matching, closing the penetration channel
+                                // (review P0 #2; see `memory::flags`).
+                                &crate::memory::flags::MemorySlotFlags::read(&db).await,
                             )
                             .await;
                         let duration_ms = tool_exec_start.elapsed().as_millis();

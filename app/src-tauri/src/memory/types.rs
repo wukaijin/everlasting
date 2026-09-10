@@ -22,6 +22,13 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Filename of the retired pre-rename "main memory" slot
+/// (2026-09-10 hard switch, task 09-10-memory-everlasting-md-
+/// hard-switch). Single literal for the legacy-detection command
+/// (`commands::memory::read_legacy_memory_files`) — the loader
+/// must NOT use it; loading goes through `MemorySource::filename`.
+pub const LEGACY_CLAUDE_MD: &str = "CLAUDE.md";
+
 /// Which memory layer a file belongs to.
 ///
 /// Ordered from outermost (lowest priority) to innermost (highest
@@ -31,14 +38,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryKind {
-    /// `~/.claude/CLAUDE.md` (Claude Code interop) and
-    /// `~/.config/everlasting/AGENTS.md` (Everlasting-native).
-    /// The two files live in different directories — locked by
-    /// 2026-06-26 user-claude-md-home-dir. Global across all
-    /// projects.
+    /// `~/.config/everlasting/EVERLASTING.md` and
+    /// `~/.config/everlasting/AGENTS.md` (both Everlasting-native).
+    /// The two files share one directory since the 2026-09-10
+    /// hard switch retired the `~/.claude/` interop slot. Global
+    /// across all projects.
     User,
-    /// `<project.path>/CLAUDE.md` and `AGENTS.md`. Scoped to one
-    /// project.
+    /// `<project.path>/EVERLASTING.md` and `AGENTS.md`. Scoped to
+    /// one project.
     Project,
     /// Per-session instructions. V2 2 期: stored in a new
     /// `sessions.session_instructions` SQLite column. Reserved —
@@ -53,7 +60,7 @@ pub enum MemoryKind {
 }
 
 impl MemoryKind {
-    /// Human-readable label for the LLM banner ("[User CLAUDE.md]"
+    /// Human-readable label for the LLM banner ("[User EVERLASTING.md]"
     /// vs. "[Project AGENTS.md]"). Stable, used as a stable
     /// identifier in the prompt.
     pub fn label_prefix(self) -> &'static str {
@@ -73,9 +80,14 @@ impl MemoryKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemorySource {
-    /// `CLAUDE.md` (the "main" memory slot — Claude Code
-    /// convention).
-    Claude,
+    /// `EVERLASTING.md` (the "main" memory slot). Everlasting-
+    /// native since the 2026-09-10 hard switch; the wire value
+    /// keeps a deserialize-side alias for the pre-rename
+    /// `"claude"` so Rust-side consumers of old payloads don't
+    /// break (the TS read side has its own normalize — see
+    /// `app/src/stores/memory.ts`).
+    #[serde(rename = "everlasting", alias = "claude")]
+    Everlasting,
     /// `AGENTS.md` (the "agent instructions" slot — adopted from
     /// Aider / Codex convention).
     Agents,
@@ -85,7 +97,7 @@ impl MemorySource {
     /// Bare filename, including the `.md` extension.
     pub fn filename(self) -> &'static str {
         match self {
-            MemorySource::Claude => "CLAUDE.md",
+            MemorySource::Everlasting => "EVERLASTING.md",
             MemorySource::Agents => "AGENTS.md",
         }
     }
@@ -93,7 +105,7 @@ impl MemorySource {
     /// Human-readable label for the LLM banner.
     pub fn label(self) -> &'static str {
         match self {
-            MemorySource::Claude => "CLAUDE.md",
+            MemorySource::Everlasting => "EVERLASTING.md",
             MemorySource::Agents => "AGENTS.md",
         }
     }
@@ -115,6 +127,14 @@ pub enum LayerStatus {
     /// expected state for a fresh install / a project that has
     /// never set up memory.
     Missing,
+    /// The slot's injection is switched off by the 2026-09-10
+    /// 4-slot flags (`memory::flags`, PR2 of task
+    /// 09-10-memory-everlasting-md-hard-switch). `content` /
+    /// `tokens` are zeroed; `path` stays for the preview UI.
+    /// Distinct from `Missing` so the badge can say "已禁用"
+    /// rather than "未创建". Banner / instruction blocks filter
+    /// on `Loaded`, so a Disabled layer is skipped naturally.
+    Disabled,
     /// File exists but the loader could not read it (permission,
     /// non-UTF-8, > 100 KiB, symlink loop). The `reason` field
     /// carries a short human-readable explanation.
@@ -128,10 +148,10 @@ pub enum LayerStatus {
 pub struct MemoryLayer {
     /// Which layer (User / Project / Session / Runtime).
     pub kind: MemoryKind,
-    /// Which file in the layer (CLAUDE.md / AGENTS.md).
+    /// Which file in the layer (EVERLASTING.md / AGENTS.md).
     pub source: MemorySource,
     /// Absolute path on disk. Always populated, even for `Missing`
-    /// (so the frontend can show "create at /home/x/.../CLAUDE.md").
+    /// (so the frontend can show "create at /home/x/.../EVERLASTING.md").
     pub path: PathBuf,
     /// File body, decoded as UTF-8. Empty string for
     /// `Missing` / `Error`.
@@ -145,7 +165,7 @@ pub struct MemoryLayer {
 
 impl MemoryLayer {
     /// Stable label used in the LLM banner and the preview UI:
-    /// `"[User CLAUDE.md]"`, `"[Project AGENTS.md]"`, etc.
+    /// `"[User EVERLASTING.md]"`, `"[Project AGENTS.md]"`, etc.
     pub fn label(&self) -> String {
         format!("[{} {}]", self.kind.label_prefix(), self.source.label())
     }

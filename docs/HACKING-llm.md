@@ -82,7 +82,7 @@ B5 memory / 指令文件加载后,以及 V2 2 期 autonomous_memories 召回结�
 {
   "role": "user",
   "content": [
-    { "type": "text", "text": "<CLAUDE.md content>", "cache_control": { "type": "ephemeral" } }
+    { "type": "text", "text": "<EVERLASTING.md content>", "cache_control": { "type": "ephemeral" } }
   ]
 }
 ```

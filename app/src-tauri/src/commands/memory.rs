@@ -1,6 +1,6 @@
 //! Tauri command surface for the B5 memory preview.
 //!
-//! Three commands, registered in [`crate::lib::run`]:
+//! Four memory-file commands, registered in [`crate::lib::run`]:
 //!
 //! - [`read_memory_layers`] — returns a `Vec<MemoryLayerInfo>`
 //!   (the lightweight DTO) for the current session's project
@@ -10,6 +10,10 @@
 //! - [`read_memory_content`] — returns the raw UTF-8 body of a
 //!   single memory file at the given path. The frontend
 //!   passes back a path it got from `read_memory_layers`.
+//! - [`read_legacy_memory_files`] — lists pre-rename CLAUDE.md
+//!   files that still exist on disk but are no longer loaded
+//!   (2026-09-10 hard switch); backs the preview panel's
+//!   legacy banner.
 //! - [`open_memory_in_editor`] — spawns the user's `$EDITOR`
 //!   (or falls back to `xdg-open` on Linux / `open` on macOS /
 //!   `cmd /c start` on Windows) with the memory file's path.
@@ -50,7 +54,17 @@ pub async fn read_memory_layers_inner(
         }
     };
 
-    let layers = load_for_session(&state.memory_cache, &project_id, &project.path).await;
+    // 2026-09-10 hard switch PR2: apply the 4-slot flags at this
+    // read exit — the Disabled status is the preview badge's data
+    // channel (review P0 #2/#3). Content viewing
+    // (`read_memory_content`) is deliberately NOT gated: the
+    // toggle controls injection, not the user's ability to read
+    // their own file.
+    let flags = crate::memory::flags::MemorySlotFlags::read(&state.db).await;
+    let layers = crate::memory::flags::apply_slot_flags(
+        load_for_session(&state.memory_cache, &project_id, &project.path).await,
+        &flags,
+    );
     Ok(layers.iter().map(MemoryLayerInfo::from).collect())
 }
 
@@ -62,6 +76,69 @@ pub async fn read_memory_layers(
     read_memory_layers_inner(&state, project_id).await
 }
 
+/// Detect pre-rename CLAUDE.md files left behind by the
+/// 2026-09-10 hard switch (task
+/// 09-10-memory-everlasting-md-hard-switch). Returns the paths
+/// that still exist on disk for legacy slots the loader no
+/// longer reads: the user-level `~/.claude/CLAUDE.md` (the
+/// retired Claude-Code interop slot) and the project-level
+/// `<project>/CLAUDE.md`. The preview panel renders a static
+/// banner from this list so the silent invalidation stays
+/// visible (review P0 #6).
+///
+/// Additive standalone command rather than a field on the
+/// `read_memory_layers` response — changing that Vec envelope
+/// would break both old and new GUI/daemon pairings (see
+/// design.md D1.3). Old daemons don't know this command; the
+/// frontend treats the error as "no legacy info" (fail-open).
+pub async fn read_legacy_memory_files_inner(
+    state: &Arc<AppState>,
+    project_id: String,
+) -> Result<Vec<String>, AppCommandError> {
+    let project = match db::get_project(&state.db, &project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "read_legacy_memory_files: project '{}' not found",
+                    project_id
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err(
+                anyhow::anyhow!("read_legacy_memory_files: failed to load project: {}", e).into(),
+            )
+        }
+    };
+
+    let mut out = Vec::new();
+    // User-level legacy slot (retired interop path).
+    if let Some(home) = dirs::home_dir() {
+        let p = home
+            .join(".claude")
+            .join(crate::memory::types::LEGACY_CLAUDE_MD);
+        if p.is_file() {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
+    // Project-level legacy slot.
+    let p = std::path::Path::new(&project.path).join(crate::memory::types::LEGACY_CLAUDE_MD);
+    if p.is_file() {
+        out.push(p.to_string_lossy().into_owned());
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn read_legacy_memory_files(
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<String>, AppCommandError> {
+    read_legacy_memory_files_inner(&state, project_id).await
+}
+
 /// Read the body of a single memory file. `path` must be one of
 /// the 4 fixed file paths the loader knows about (i.e. it was
 /// returned by `read_memory_layers`). Arbitrary paths are
@@ -70,7 +147,7 @@ pub async fn read_memory_layers(
 ///
 /// For the user layer, `project_id` is irrelevant; for the
 /// project layer, the resolved path must match the project's
-/// `CLAUDE.md` / `AGENTS.md`. We resolve via `resolve_one`
+/// `EVERLASTING.md` / `AGENTS.md`. We resolve via `resolve_one`
 /// which uses the project path as the source of truth.
 pub async fn read_memory_content_inner(
     state: &Arc<AppState>,

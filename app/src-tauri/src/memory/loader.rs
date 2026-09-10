@@ -1,7 +1,7 @@
 /// MemoryCache + the public `load_for_session` entry point.
 ///
 /// The cache is structured as two halves:
-/// - **User layer** (1 set of 2 files, `CLAUDE.md` + `AGENTS.md`):
+/// - **User layer** (1 set of 2 files, `EVERLASTING.md` + `AGENTS.md`):
 ///   global across all projects. Read once on first access, then
 ///   cached.
 /// - **Project layer** (1 set of 2 files per project): keyed by
@@ -26,7 +26,7 @@ use std::time::SystemTime;
 use tokio::sync::RwLock;
 
 use crate::llm::types::{CacheControl, ContentBlock};
-use crate::memory::file::{load_layer, resolve_path, user_claude_dir, user_dir};
+use crate::memory::file::{load_layer, resolve_path, user_dir};
 use crate::memory::types::{LayerStatus, MemoryKind, MemoryLayer, MemorySource};
 
 /// A cached memory layer paired with the file's `mtime` at load
@@ -45,10 +45,10 @@ pub(crate) struct CachedLayer {
     mtime: Option<SystemTime>,
 }
 
-/// A single project's two-file memory slot: `[CLAUDE.md, AGENTS.md]`.
+/// A single project's two-file memory slot: `[EVERLASTING.md, AGENTS.md]`.
 ///
-/// `None` means "not yet loaded" — the loader must re-read on
-/// the next request. `Some([...])` is the cached pair; either
+/// `None` means "not yet loaded" — the loader must re-read on the
+/// next request. `Some([...])` is the cached pair; either
 /// element may be `Loaded` / `Missing` / `Error` per
 /// [`LayerStatus`].
 pub type ProjectSlot = [Option<CachedLayer>; 2];
@@ -56,12 +56,12 @@ pub type ProjectSlot = [Option<CachedLayer>; 2];
 /// User-layer two-file slot.
 pub type UserSlot = [Option<CachedLayer>; 2];
 
-/// Convert `(kind, source)` to the slot index (0 = Claude, 1 =
-/// Agents). Centralised so the cache and loader agree on the
+/// Convert `(kind, source)` to the slot index (0 = Everlasting,
+/// 1 = Agents). Centralised so the cache and loader agree on the
 /// mapping.
 fn slot_index(source: MemorySource) -> usize {
     match source {
-        MemorySource::Claude => 0,
+        MemorySource::Everlasting => 0,
         MemorySource::Agents => 1,
     }
 }
@@ -145,37 +145,26 @@ impl Default for MemoryCache {
 ///
 /// `project_root` is the project's `path` column; pass `None`
 /// for the user layer. Returns 4 `(kind, source, absolute_path)`
-/// triples in canonical order: User CLAUDE → User AGENTS →
-/// Project CLAUDE → Project AGENTS.
+/// triples in canonical order: User EVERLASTING → User AGENTS →
+/// Project EVERLASTING → Project AGENTS.
 ///
-/// The User layer is split across two directories (locked
-/// 2026-06-26 user-claude-md-home-dir): User CLAUDE.md uses
-/// `user_claude_dir()` (`~/.claude/`, Claude Code interop), User
-/// AGENTS.md uses `user_dir()` (`~/.config/everlasting/`,
-/// Everlasting-native). Either entry is omitted when its
-/// respective dir resolver returns `None` (platform-rare).
+/// Both User-layer files share `user_dir()`
+/// (`~/.config/everlasting/`) since the 2026-09-10 hard switch
+/// retired the `~/.claude/` interop slot. The entry is omitted
+/// when the dir resolver returns `None` (platform-rare).
 pub fn all_paths(project_root: Option<&str>) -> Vec<(MemoryKind, MemorySource, PathBuf)> {
     let mut out = Vec::with_capacity(4);
-    if let Some(claude_dir) = user_claude_dir() {
-        out.push((
-            MemoryKind::User,
-            MemorySource::Claude,
-            claude_dir.join(MemorySource::Claude.filename()),
-        ));
-    }
-    if let Some(agents_dir) = user_dir() {
-        out.push((
-            MemoryKind::User,
-            MemorySource::Agents,
-            agents_dir.join(MemorySource::Agents.filename()),
-        ));
+    if let Some(dir) = user_dir() {
+        for source in [MemorySource::Everlasting, MemorySource::Agents] {
+            out.push((MemoryKind::User, source, dir.join(source.filename())));
+        }
     }
     if let Some(root) = project_root {
         let p = PathBuf::from(root);
         out.push((
             MemoryKind::Project,
-            MemorySource::Claude,
-            p.join(MemorySource::Claude.filename()),
+            MemorySource::Everlasting,
+            p.join(MemorySource::Everlasting.filename()),
         ));
         out.push((
             MemoryKind::Project,
@@ -188,9 +177,9 @@ pub fn all_paths(project_root: Option<&str>) -> Vec<(MemoryKind, MemorySource, P
 
 /// Public entry point. Loads (or returns cached) memory layers
 /// for a given project, in canonical order:
-///   1. User CLAUDE.md
+///   1. User EVERLASTING.md
 ///   2. User AGENTS.md
-///   3. Project CLAUDE.md
+///   3. Project EVERLASTING.md
 ///   4. Project AGENTS.md
 ///
 /// Read-through: cache misses trigger `load_layer`; cache hits
@@ -208,12 +197,12 @@ pub async fn load_for_session(
 ) -> Vec<MemoryLayer> {
     let mut out = Vec::with_capacity(4);
     // 1+2. User layer.
-    for source in [MemorySource::Claude, MemorySource::Agents] {
+    for source in [MemorySource::Everlasting, MemorySource::Agents] {
         let layer = read_or_load_user(cache, source).await;
         out.push(layer);
     }
     // 3+4. Project layer.
-    for source in [MemorySource::Claude, MemorySource::Agents] {
+    for source in [MemorySource::Everlasting, MemorySource::Agents] {
         let layer = read_or_load_project(cache, project_id, project_path, source).await;
         out.push(layer);
     }
@@ -284,7 +273,7 @@ async fn read_or_load_project(
 ///
 /// Format:
 /// ```text
-/// <system>已加载 N 个 memory: [User CLAUDE.md] (X tokens) / [Project AGENTS.md] (Y tokens)</system>
+/// <system>已加载 N 个 memory: [User EVERLASTING.md] (X tokens) / [Project AGENTS.md] (Y tokens)</system>
 /// ```
 ///
 /// Returns the empty string when NO layer is `Loaded` (so the
@@ -328,13 +317,14 @@ pub fn build_banner(layers: &[MemoryLayer]) -> String {
 ///   breakpoint is at a stable position relative to the
 ///   instructions content that follows.
 /// - Subsequent blocks (one per loaded layer, in canonical
-///   order: User CLAUDE → User AGENTS → Project CLAUDE →
-///   Project AGENTS) carry the file body. AGENTS.md is wrapped
-///   in `<primary instructions>...</primary>` because it is
-///   written specifically for Everlasting; CLAUDE.md is wrapped
-///   in `<reference>...</reference>` because it is the
-///   Claude-Code interop file (see review §3 Q4). Neither
-///   carries `cache_control` — only the banner block is the
+///   order: User EVERLASTING → User AGENTS → Project
+///   EVERLASTING → Project AGENTS) carry the file body.
+///   AGENTS.md is wrapped in `<primary instructions>...</primary>`
+///   because it is written specifically for Everlasting;
+///   EVERLASTING.md is wrapped in `<reference>...</reference>`
+///   (the "main memory" reference slot — wrap semantics inherited
+///   verbatim from the pre-rename CLAUDE.md slot; see review
+///   §3 Q4). Neither carries `cache_control` — only the banner block is the
 ///   cache marker, per Anthropic's "last cache_control block is
 ///   the breakpoint" rule.
 ///
@@ -349,7 +339,7 @@ pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock> {
 }
 
 /// Digest 变体(08-15-memory-block-governance WP2):`digest_on` 时
-/// digest 层(仅 CLAUDE.md 且 tokens > 阈值,见 [`digest::is_digest_layer`])
+/// digest 层(仅 EVERLASTING.md 且 tokens > 阈值,见 [`digest::is_digest_layer`])
 /// 的 body 换为章节目录 + 已加载节全文;其余层与 banner / 块序 /
 /// `<primary>`/`<reference>` 包裹语义逐字节同 legacy — banner 仍是唯一
 /// cache 断点(不变量 I1/I3)。
@@ -379,7 +369,7 @@ pub fn build_instructions_blocks_with_digest(
         cache_control: Some(CacheControl::Ephemeral),
     });
 
-    // Blocks 1..N: per-layer file body, with AGENTS.md / CLAUDE.md
+    // Blocks 1..N: per-layer file body, with AGENTS.md / EVERLASTING.md
     // priority wrapping per the B5 review §3 Q4 decision.
     for layer in loaded_layers {
         let section = match layer.render_prompt_section() {
@@ -404,7 +394,7 @@ pub fn build_instructions_blocks_with_digest(
                     section
                 )
             }
-            MemorySource::Claude => {
+            MemorySource::Everlasting => {
                 format!("<reference>\n{}\n</reference>", section)
             }
         };

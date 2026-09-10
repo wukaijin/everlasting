@@ -110,8 +110,8 @@ describe("useMemoryStore — fetchMemories (P2 PR3)", () => {
         return [
           {
             kind: "user",
-            source: "claude",
-            path: "/home/x/.claude/CLAUDE.md",
+            source: "everlasting",
+            path: "/home/x/.config/everlasting/EVERLASTING.md",
             tokens: 0,
             status: { kind: "missing" },
             char_count: 0,

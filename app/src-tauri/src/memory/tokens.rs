@@ -13,7 +13,7 @@
 //! official tokenizer; the community has reverse-engineered
 //! approximations, but they are not part of any official API.
 //! The 1-2% drift from cl100k_base is invisible at this scale
-//! (the UI is `< 100` tokens for typical CLAUDE.md files).
+//! (the UI is `< 100` tokens for typical EVERLASTING.md files).
 //!
 //! **Caching the encoder**: `tiktoken-rs::cl100k_base()` returns a
 //! `CoreBPE` that is expensive to build (~200ms on first call).

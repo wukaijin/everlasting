@@ -52,14 +52,23 @@ pub fn assemble_subagent_prompt(def: &SubagentDef, _task: &str) -> String {
 /// When the project has no loaded memory layers, only the task
 /// message is emitted (the parent's behavior — skip the synthetic
 /// message entirely on a fresh install — is preserved).
+///
+/// 2026-09-10 hard switch PR2: `flags` applies the 4-slot
+/// injection toggles at this dispatch-time read (next-dispatch
+/// semantics — the worker reads fresh, unlike the parent's frozen
+/// snapshot; the transient parent/worker skew on a mid-session
+/// toggle was accepted by review session 55838776).
 pub async fn build_worker_messages(
     memory_cache: &Arc<MemoryCache>,
     project_id: &str,
     project_path: &str,
     task: &str,
+    flags: &crate::memory::flags::MemorySlotFlags,
 ) -> Vec<ChatMessage> {
-    let layers =
-        crate::memory::loader::load_for_session(memory_cache, project_id, project_path).await;
+    let layers = crate::memory::flags::apply_slot_flags(
+        crate::memory::loader::load_for_session(memory_cache, project_id, project_path).await,
+        flags,
+    );
     let instructions_blocks = crate::memory::loader::build_instructions_blocks(&layers);
     let mut messages: Vec<ChatMessage> = Vec::with_capacity(2);
     if !instructions_blocks.is_empty() {

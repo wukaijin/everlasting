@@ -9,7 +9,7 @@
 > **Per-turn context construction** (⑤a stage) includes TWO injected blocks in the
 > same `messages[0]` synthetic user message:
 > 1. **Instruction blocks** — `build_instructions_blocks(memory_cache)` returns
->    the 4 instruction files (User/Project × CLAUDE.md/AGENTS.md) with
+>    the 4 instruction files (User/Project × EVERLASTING.md/AGENTS.md) with
 >    `cache_control: Ephemeral` on the first block (the cache breakpoint).
 >    See [memory.md §Scenario: Two-Layer Memory Injection](./memory.md).
 > 2. **Recall block** — `memory_recall::build_recall_block(recall_text)` returns

@@ -6,7 +6,7 @@
 // host of `MemoryPreview` when the user clicks a runtime row (the
 // row emits `manage(id)`; the host resolves the row + binds this
 // modal's `:memory` prop). Distinct from `MemoryModal.vue`, which
-// is the project-instruction-file editor (the 4 fixed CLAUDE.md /
+// is the project-instruction-file editor (the 4 fixed EVERLASTING.md /
 // AGENTS.md files). This modal deals with the P2 autonomous rows
 // the agent wrote via `remember` / P4 auto-reflect — and lets the
 // user OBSERVE (stats), MANAGE (status transitions), and EDIT
