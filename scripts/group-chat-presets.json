@@ -14,7 +14,7 @@
       "participants": [
         { "name": "架构", "model": "glm-5.3", "persona": "arch" },
         { "name": "产品", "model": "GLM-5.3-Flash", "persona": "product" },
-        { "name": "后端", "model": "deepseek-v4-flash", "persona": "backend" }
+        { "name": "后端", "model": "deepseek-flash", "persona": "backend" }
       ]
     },
     "fe_review": {
@@ -23,7 +23,7 @@
       "participants": [
         { "name": "架构", "model": "glm-5.3", "persona": "arch" },
         { "name": "产品", "model": "GLM-5.3-Flash", "persona": "product" },
-        { "name": "前端", "model": "deepseek-v4-flash", "persona": "frontend" }
+        { "name": "前端", "model": "deepseek-flash", "persona": "frontend" }
       ]
     },
     "arch": {
@@ -31,7 +31,7 @@
       "moderator_model": "MiniMax-M3",
       "participants": [
         { "name": "架构", "model": "glm-5.3", "persona": "arch" },
-        { "name": "后端", "model": "deepseek-v4-flash", "persona": "backend" }
+        { "name": "后端", "model": "deepseek-flash", "persona": "backend" }
       ]
     },
     "retro": {

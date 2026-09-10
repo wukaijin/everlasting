@@ -19,7 +19,7 @@ import { PRESETS } from './group-chat-run.mjs';
 const MODELS = [
   { id: 'uuid-glm53', modelName: 'glm-5.3', displayName: 'glm-5.3' },
   { id: 'uuid-flash', modelName: 'glm-5.3-flash', displayName: 'GLM-5.3-Flash' },
-  { id: 'uuid-deepseek', modelName: 'deepseek-v4-flash', displayName: 'deepseek-v4-flash' },
+  { id: 'uuid-deepseek', modelName: 'deepseek-flash', displayName: 'deepseek-flash' },
   { id: 'uuid-m3', modelName: 'MiniMax-M3', displayName: 'MiniMax-M3' },
 ];
 

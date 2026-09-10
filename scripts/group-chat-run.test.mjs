@@ -221,11 +221,11 @@ test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用�
   assert.equal(PRESETS.review.moderator_model, 'MiniMax-M3');
   assert.deepEqual(
     PRESETS.review.participants.map((p) => [p.name, p.model]),
-    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['后端', 'deepseek-v4-flash']],
+    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['后端', 'deepseek-flash']],
   );
   assert.deepEqual(
     PRESETS.fe_review.participants.map((p) => [p.name, p.model]),
-    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['前端', 'deepseek-v4-flash']],
+    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['前端', 'deepseek-flash']],
   );
   assert.equal(PRESETS.fe_review.moderator_model, 'MiniMax-M3');
   assert.deepEqual(
