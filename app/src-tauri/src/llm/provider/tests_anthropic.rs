@@ -14,11 +14,12 @@ mod tests {
     use crate::llm::types::ChatRequest;
 
     #[test]
-    fn default_max_tokens_is_16384_not_1024() {
+    fn default_max_tokens_is_128000_not_1024() {
         // Extended thinking tokens count against max_tokens; 1024 was
         // bumped to 16384 in step 6 to cover a typical thinking + reply
-        // turn without truncation.
-        assert_eq!(DEFAULT_MAX_TOKENS, 16384);
+        // turn without truncation, then to 128000 to match the
+        // model-config form default for long-reply models.
+        assert_eq!(DEFAULT_MAX_TOKENS, 128_000);
     }
 
     #[test]

@@ -37,15 +37,16 @@ use crate::llm::error::LlmError;
 use crate::llm::sse::{utf8_chunk_text, SseParser};
 use crate::llm::types::{ChatEvent, ChatMessage, ChatRequest, ThinkingConfig, TokenUsage, ToolDef};
 
-/// Default `max_tokens` for LLM requests. Bumped from 1024 → 16384 in
+/// Default `max_tokens` for LLM requests. History: 1024 → 16384 in
 /// step 6 because extended thinking tokens count against the same budget
 /// as the actual answer — 1024 was too low and would have caused
-/// `stop_reason: "max_tokens"` on most non-trivial turns.
+/// `stop_reason: "max_tokens"` on most non-trivial turns; → 128000 to
+/// match the model-config form default for long-reply models.
 ///
 /// `pub(crate)` so the `build_provider` factory (`provider::mod`) reuses
 /// this single source of truth for the catalog default instead of
-/// duplicating the literal `16384`.
-pub(crate) const DEFAULT_MAX_TOKENS: u32 = 16384;
+/// duplicating the literal.
+pub(crate) const DEFAULT_MAX_TOKENS: u32 = 128_000;
 
 pub(crate) mod events;
 pub(crate) mod transport;

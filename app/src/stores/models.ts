@@ -12,7 +12,7 @@ export interface ModelWithProvider {
   providerId: string;
   modelName: string;
   displayName: string;
-  /** `null` means "fall back to the global default (16384)". */
+  /** `null` means "fall back to the global default (128000)". */
   maxTokens: number | null;
   /** `null` means "fall back to the global default (high)". */
   thinkingEffort: string | null;

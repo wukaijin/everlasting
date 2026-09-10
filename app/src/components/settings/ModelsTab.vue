@@ -42,11 +42,11 @@ const form = reactive<ModelFormState>({
   providerId: "",
   modelName: "",
   displayName: "",
-  maxTokens: "",
+  maxTokens: "128000",
   thinkingEffort: "none",
   supportsThinking: false,
   supportsImages: false,
-  contextWindow: 8192,
+  contextWindow: 1000000,
 });
 
 // --- Test state ----------------------------------------------------------
@@ -73,11 +73,11 @@ function resetForm() {
   form.providerId = providersStore.providers[0]?.id ?? "";
   form.modelName = "";
   form.displayName = "";
-  form.maxTokens = "";
+  form.maxTokens = "128000";
   form.thinkingEffort = "none";
   form.supportsThinking = false;
   form.supportsImages = false;
-  form.contextWindow = 8192;
+  form.contextWindow = 1000000;
   editId.value = null;
 }
 

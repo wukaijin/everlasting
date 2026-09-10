@@ -217,10 +217,10 @@ pub fn build_provider(
             Ok(Box::new(AnthropicProvider::new(config)))
         }
         "openai" => {
-            // PR3 OpenAI adapter. Defaults: `max_tokens = 16384`
-            // (matches the Anthropic default for symmetry; future
-            // PRs may lower this for o1 models where max_tokens
-            // is the budget for `reasoning_content` + visible
+            // PR3 OpenAI adapter. Defaults: `max_tokens =
+            // DEFAULT_MAX_TOKENS` (matches the Anthropic default for
+            // symmetry; future PRs may lower this for o1 models where
+            // max_tokens is the budget for `reasoning_content` + visible
             // answer combined).
             //
             // OpenAI's `reasoning_effort` is sourced from
@@ -230,7 +230,9 @@ pub fn build_provider(
             // `reasoning_effort` field on Chat Completions
             // requests; `None` means "omit the field" so
             // non-o1/o3 models are unaffected.
-            let max_tokens = model_row.max_tokens.unwrap_or(16384);
+            let max_tokens = model_row
+                .max_tokens
+                .unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
             let reasoning_effort = model_row.thinking_effort.clone();
             let config = openai::OpenAIConfig {
                 base_url: provider_row.base_url.clone(),
@@ -400,8 +402,9 @@ mod tests {
     }
 
     /// When the model row has no row-level overrides, the factory
-    /// falls back to the Anthropic defaults: `max_tokens = 16384`
-    /// and `thinking_effort = "high"`. These are the catalog-era
+    /// falls back to the Anthropic defaults:
+    /// `max_tokens = DEFAULT_MAX_TOKENS` and `thinking_effort = "high"`.
+    /// These are the catalog-era
     /// defaults (previously the `from_env` defaults; the env path
     /// has since been removed).
     #[test]

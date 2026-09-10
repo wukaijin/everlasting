@@ -149,7 +149,7 @@ const emit = defineEmits<{
                     v-model="form.maxTokens"
                     type="text"
                     class="model-form__input"
-                    placeholder="16384"
+                    placeholder="128000"
                 />
             </Label>
             <Label class="model-form__field">
