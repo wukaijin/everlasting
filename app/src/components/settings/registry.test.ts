@@ -45,6 +45,9 @@ describe("settings registry", () => {
     // F3(2026-09-03):磁盘分类的中英文关键词命中。
     expect(filterCategories("磁盘", "global").map((c) => c.id)).toContain("disk");
     expect(filterCategories("cleanup", "global").map((c) => c.id)).toContain("disk");
+    // GCE-P1(2026-09-12):群聊预设分类的中英文关键词命中。
+    expect(filterCategories("群聊预设", "global").map((c) => c.id)).toContain("gc-presets");
+    expect(filterCategories("preset", "global").map((c) => c.id)).toContain("gc-presets");
   });
 
   it("无匹配返回空数组", () => {
@@ -75,6 +78,9 @@ describe("settings registry", () => {
     // 模型组内顺序:Providers → Models → Default。
     const modelGroup = groups.find((g) => g.label === "模型");
     expect(modelGroup?.items.map((c) => c.id)).toEqual(["providers", "models", "default"]);
+    // 智能体组内顺序:Memory → Subagents → 群聊预设(GCE-P1,2026-09-12)。
+    const agentGroup = groups.find((g) => g.label === "智能体");
+    expect(agentGroup?.items.map((c) => c.id)).toEqual(["memory", "subagents", "gc-presets"]);
     // 存储组内:磁盘。
     const diskGroup = groups.find((g) => g.label === "存储");
     expect(diskGroup?.items.map((c) => c.id)).toEqual(["disk"]);

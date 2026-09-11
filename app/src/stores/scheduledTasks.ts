@@ -64,6 +64,11 @@ export interface GroupChatTaskConfig {
    *  `Option<u64>` + `skip_serializing_if` 对齐;fire 时 Some 才写
    *  `sessions.metadata.token_budget`)。 */
   token_budget?: number;
+  /** GCE-P1(09-12-gc-preset-settings):创建/更新任务时若选了预设,记录
+   *  出处(内置 key 或用户预设行 id)。fire 路径零读取 —— 快照语义,
+   *  预设后续编辑/删除不回溯生效;纯展示 / 未来 stale 提示留门。
+   *  未选预设不写键(与 Rust `skip_serializing_if` 对齐)。 */
+  preset_key?: string;
 }
 
 /** M4a:最近一次 fire 的结局快照(wire `last_fire_outcome`,镜像 Rust

@@ -74,11 +74,17 @@ import { transport } from "../../transport";
 import { cacheRatePercent, formatTokensWan } from "../../utils/tokenUsage";
 // gce-m4c(09-08,弹窗重设计):preset 单一事实源与展开逻辑与定时表单
 // 共享(utils/groupChatPresets.ts,persona 组装 / 模型解析逐字同形)。
+// GCE-P1(2026-09-12):用户预设(DB 行)经 groupChatPresets store 的
+// mergedPresets 叠加在内置四档之后 —— UUID 引用借 resolveModelRef
+// byId 首趟直配,展开 / 警告链路与内置档逐字同形。
 import {
-  GC_PRESETS,
   composePersonaMd,
   resolveModelRef,
 } from "../../utils/groupChatPresets";
+import {
+  useGroupChatPresetsStore,
+  type MergedGcPreset,
+} from "../../stores/groupChatPresets";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -111,6 +117,8 @@ const emit = defineEmits<{
 
 const chatStore = useChatStore();
 const modelsStore = useModelsStore();
+// GCE-P1:用户群聊预设(mergedPresets = 内置四档 + 用户行)。
+const gcPresetsStore = useGroupChatPresetsStore();
 
 // Participant list (local draft). Mirrors the deserialize
 // ParticipantConfig shape (snake_case per `chat.types.ts`).
@@ -197,8 +205,9 @@ function modelOptionsFor(currentId: string) {
 // gce-m4c (09-08): create 模式的 preset 单选卡 + 主持人 Select
 // ---------------------------------------------------------------------
 
-// preset 键序 = JSON 声明序(review / fe_review / arch / retro);卡的展示名是
-// 纯 UI 映射(描述文案取 JSON `description`)。
+// preset 键序:内置四档 = JSON 声明序(review / fe_review / arch / retro),
+// 用户预设按 name 序追加(GCE-P1);内置卡的展示名是纯 UI 映射(描述
+// 文案取 JSON `description`)。
 const GC_PRESET_LABELS: Record<string, string> = {
   review: "评审团",
   fe_review: "前端评审",
@@ -210,7 +219,14 @@ function presetLabel(key: string): string {
   return GC_PRESET_LABELS[key] ?? key;
 }
 
-const gcPresetEntries = computed(() => Object.entries(GC_PRESETS.presets));
+/** 卡片标题:内置走 LABELS 映射(现状),用户卡显示预设名。 */
+function presetCardTitle(def: MergedGcPreset): string {
+  return def.builtin ? presetLabel(def.key) : def.name;
+}
+
+const gcPresetEntries = computed(() =>
+  Object.values(gcPresetsStore.mergedPresets),
+);
 
 /** 「自定义」卡哨兵值(RadioGroupItem 需非空字符串 value;选中它 =
  *  回无预设态)。 */
@@ -248,10 +264,9 @@ const moderatorId = ref("");
  *  composePersonaMd 展开,与 script/定时表单逐字同形)。模型引用只对
  *  **启用目录**解析(09-09:全目录解析会把禁用模型静默预填进 create
  *  阵容,绕过 09-07 的选用层过滤);禁用/缺失的引用留空模型,由行内空
- *  Select + 提示条暴露,绝不静默造数。 */
-function applyPreset(key: string): void {
-  const def = GC_PRESETS.presets[key];
-  if (!def) return;
+ *  Select + 提示条暴露,绝不静默造数。用户档的 model 是 UUID:
+ *  resolveModelRef byId 首趟直配,与内置档同形。 */
+function applyPreset(def: MergedGcPreset): void {
   const enabled = modelsStore.enabledModels;
   participants.value = def.participants.map((p) => {
     const persona = composePersonaMd(p.persona);
@@ -271,9 +286,10 @@ function onPickPreset(v: unknown): void {
     resetToCustom();
     return;
   }
-  if (!k || !(k in GC_PRESETS.presets)) return;
+  const def = k ? gcPresetsStore.mergedPresets[k] : undefined;
+  if (!k || !def) return;
   selectedPreset.value = k;
-  applyPreset(k);
+  applyPreset(def);
 }
 
 function onPickModerator(v: unknown): void {
@@ -300,7 +316,8 @@ function presetRefDisabled(ref: string): boolean {
 const presetWarnings = computed<string[]>(() => {
   if (props.mode !== "create" || !selectedPreset.value) return [];
   const warnings: string[] = [];
-  const def = GC_PRESETS.presets[selectedPreset.value]!;
+  const def = gcPresetsStore.mergedPresets[selectedPreset.value];
+  if (!def) return warnings;
   if (!moderatorId.value) {
     warnings.push(
       presetRefDisabled(def.moderator_model)
@@ -460,6 +477,9 @@ watch(
   ([isOpen]) => {
     if (!isOpen) return;
     errorMessage.value = null;
+    // GCE-P1:用户群聊预设(未加载才拉,幂等;失败静默 —— 内置四档
+    // 来自 JSON 常量始终可用,只是用户档缺席)。
+    void gcPresetsStore.ensureLoaded().catch(() => {});
     if (props.mode === "edit" && props.initialParticipants) {
       // Deep-clone so cancel-discard works on the live draft.
       participants.value = props.initialParticipants.map((p) => ({
@@ -653,17 +673,27 @@ function modelLabel(id: string): string {
                 </span>
               </label>
               <label
-                v-for="[key, def] in gcPresetEntries"
-                :key="key"
+                v-for="def in gcPresetEntries"
+                :key="def.key"
                 class="gcfg-preset-card"
-                :class="{ 'gcfg-preset-card--active': selectedPreset === key }"
-                :data-testid="`gcfg-preset-${key}`"
+                :class="{ 'gcfg-preset-card--active': selectedPreset === def.key }"
+                :data-testid="`gcfg-preset-${def.key}`"
               >
-                <RadioGroupItem :value="key" class="gcfg-preset-radio">
+                <RadioGroupItem :value="def.key" class="gcfg-preset-radio">
                   <RadioGroupIndicator class="gcfg-preset-radio-indicator" />
                 </RadioGroupItem>
                 <span class="gcfg-preset-text">
-                  <span class="gcfg-preset-name">{{ presetLabel(key) }}</span>
+                  <span class="gcfg-preset-name">
+                    {{ presetCardTitle(def) }}
+                    <!-- GCE-P1:用户预设显式标注(内置四档零噪音)。 -->
+                    <span
+                      v-if="!def.builtin"
+                      class="gcfg-preset-user-tag"
+                      data-testid="gcfg-preset-user-tag"
+                    >
+                      自定义
+                    </span>
+                  </span>
                   <span class="gcfg-preset-desc" :title="def.description">
                     {{ def.description }}
                   </span>
@@ -1257,6 +1287,18 @@ function modelLabel(id: string): string {
 }
 
 .gcfg-preset-card--active .gcfg-preset-name {
+  color: var(--color-accent-text);
+}
+
+/* GCE-P1:用户预设卡的「自定义」小徽标(内置四档零噪音)。 */
+.gcfg-preset-user-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  border-radius: 999px;
+  border: 1px solid var(--color-accent);
   color: var(--color-accent-text);
 }
 

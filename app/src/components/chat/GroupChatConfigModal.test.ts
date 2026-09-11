@@ -22,6 +22,7 @@ import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { RadioGroupRoot, SelectRoot } from "reka-ui";
 import { useModelsStore } from "../../stores/models";
+import type { GcPresetRow } from "../../stores/groupChatPresets";
 import { useChatStore } from "../../stores/chat";
 import type { SessionSummary } from "../../stores/chat.types";
 import { GC_PRESETS } from "../../utils/groupChatPresets";
@@ -74,7 +75,7 @@ const MODEL_LIST = [
 ];
 
 /** gce-m4c preset 测试目录:preset JSON 里的名字(MiniMax-M3 / glm-5.3 /
- *  GLM-5.3-Flash / deepseek-v4-flash)可解析成 UUID。 */
+ *  GLM-5.3-Flash / deepseek-flash)可解析成 UUID。 */
 function modelEntry(
   id: string,
   modelName: string,
@@ -102,7 +103,7 @@ const GC_MODEL_LIST = [
   modelEntry("uuid-mini", "MiniMax-M3", "MiniMax-M3", "MiniMax"),
   modelEntry("uuid-glm", "glm-5.3", "GLM-5.3", "Zhipu"),
   modelEntry("uuid-flash", "GLM-5.3-Flash", "GLM-5.3-Flash", "Zhipu"),
-  modelEntry("uuid-ds", "deepseek-v4-flash", "DeepSeek V4", "DeepSeek"),
+  modelEntry("uuid-ds", "deepseek-flash", "DeepSeek V4", "DeepSeek"),
 ];
 
 /** 只有参与者模型、没有 preset 主持人(MiniMax-M3)的目录:锁定
@@ -111,7 +112,7 @@ const GC_MODEL_LIST_NO_MINI = [
   modelEntry("m1", "gpt-4", "GPT-4", "OpenAI"),
   modelEntry("uuid-glm", "glm-5.3", "GLM-5.3", "Zhipu"),
   modelEntry("uuid-flash", "GLM-5.3-Flash", "GLM-5.3-Flash", "Zhipu"),
-  modelEntry("uuid-ds", "deepseek-v4-flash", "DeepSeek V4", "DeepSeek"),
+  modelEntry("uuid-ds", "deepseek-flash", "DeepSeek V4", "DeepSeek"),
 ];
 
 function mountModal(
@@ -425,7 +426,17 @@ describe("GroupChatConfigModal — edit cost zone (gce-m4c)", () => {
     mountModal(); // mode = "create" (default)
     await flush();
 
-    expect(invokeMock).not.toHaveBeenCalled();
+    // GCE-P1(09-12):open 时的用户预设预热(list_group_chat_presets,
+    // ensureLoaded)是预期内的新增 IPC;成本区两命令在 create 模式仍必须
+    // 零调用(成本区只在 edit 模式挂载)。
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "group_chat_cache_rates",
+      expect.anything(),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "group_chat_token_usage",
+      expect.anything(),
+    );
     expect(byTestId("gcfg-cost-zone")).toBeNull();
     expect(byTestId("gcfg-moderator")).toBeNull();
   });
@@ -753,6 +764,50 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     ).toBe(false);
     expect(byTestId("gcfg-preset-error")).toBeNull();
     expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  // GCE-P1(09-12-gc-preset-settings):用户预设卡叠加在内置之后,name +
+  // 「自定义」标记;选中按 UUID 预填(resolveModelRef byId 首趟直配)。
+  const USER_PRESET_ROW: GcPresetRow = {
+    id: "uuid-user-preset",
+    name: "我的评审团",
+    description: "自定义阵容",
+    moderatorModelId: "uuid-flash",
+    participants: [
+      { name: "架构", modelId: "uuid-glm", persona: "arch" },
+      { name: "后端", modelId: "uuid-ds", persona: "backend" },
+    ],
+    createdAt: "2026-09-12T00:00:00Z",
+    updatedAt: "2026-09-12T00:00:00Z",
+  };
+
+  it("用户预设卡(name + 自定义徽标)在内置四档之后;选中按 UUID 预填阵容 + 主持人默认", async () => {
+    // production-shaped seed(gotcha:open 时的 ensureLoaded 是异步权威
+    // 拉,post-mount 直填 store 会被其回包覆盖 —— 必须经 invoke 应答)。
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "list_group_chat_presets" ? [USER_PRESET_ROW] : null,
+    );
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
+    await flush();
+
+    // 卡序:自定义 + 四内置 + 用户卡(last)。
+    const cards = Array.from(document.querySelectorAll<HTMLElement>(".gcfg-preset-card"));
+    expect(cards[cards.length - 1]?.dataset.testid).toBe("gcfg-preset-uuid-user-preset");
+    const userCard = byTestId("gcfg-preset-uuid-user-preset");
+    expect(userCard?.textContent).toContain("我的评审团");
+    expect(userCard?.textContent).toContain("自定义");
+    expect(userCard?.textContent).toContain("自定义阵容");
+
+    await pickPreset(wrapper, "uuid-user-preset");
+    // 阵容按 UUID 预填(participants 的 modelId 直配 GC_MODEL_LIST)。
+    const names = allByTestIdPrefix("gcfg-name-");
+    expect(names.map((n) => (n as HTMLInputElement).value)).toEqual(["架构", "后端"]);
+    // 主持人默认 = uuid-flash(最后一枚 SelectRoot)。
+    const roots = selectRootsOf(wrapper);
+    expect(roots[roots.length - 1].props("modelValue")).toBe("uuid-flash");
+    // 目录齐全 → 无提示条。
+    expect(byTestId("gcfg-preset-error")).toBeNull();
     wrapper.unmount();
   });
 

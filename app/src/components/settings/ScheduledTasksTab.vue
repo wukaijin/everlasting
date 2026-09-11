@@ -57,15 +57,19 @@ import ConfirmDialog from "../common/ConfirmDialog.vue";
 import AppDatePicker from "../common/AppDatePicker.vue";
 import AppTimeField from "../common/AppTimeField.vue";
 import Icon from "../Icon.vue";
-// M4a(R7 preset 单一事实源):与 scripts/group-chat-run.mjs 同读
+// M4a(R7 preset 单一事实源):内置四档与 scripts/group-chat-run.mjs 同读
 // scripts/group-chat-presets.json —— 展开发生在本表单(提交时),DB 与
 // daemon 全程不见 preset 名。加载 / persona 组装 / 模型引用解析在
 // gce-m4c Step 5 提取到共享模块(弹窗 preset 卡同源同形)。
+// GCE-P1(2026-09-12):用户预设(DB 表)经 groupChatPresets store 的
+// mergedPresets 叠加在内置四档之后,展开链路同形(UUID 引用借
+// resolveModelRef byId 首趟直配);提交 config 随带 preset_key 出处
+// (fire 路径零读取,快照语义)。
 import {
-  GC_PRESETS,
   composePersonaMd,
   resolveModelRef,
 } from "../../utils/groupChatPresets";
+import { useGroupChatPresetsStore } from "../../stores/groupChatPresets";
 import { useScheduledTasksStore } from "../../stores/scheduledTasks";
 import type {
   ScheduledTask,
@@ -101,13 +105,22 @@ const store = useScheduledTasksStore();
 const projects = useProjectsStore();
 const config = useConfigStore();
 const models = useModelsStore();
+// GCE-P1:用户群聊预设(mergedPresets = 内置四档 + 用户行)。
+const gcPresets = useGroupChatPresetsStore();
 
-// --- M4a 定时审议:preset 展开(scripts/group-chat-presets.json)-----------
-// (共享逻辑在 utils/groupChatPresets.ts:gce-m4c Step 5 纯搬家,行为零变化)
+// --- M4a 定时审议:preset 展开(内置 = JSON;用户 = DB 行)------------------
+// (共享逻辑在 utils/groupChatPresets.ts:gce-m4c Step 5 纯搬家;GCE-P1 起
+// 选项与展开统一走 store 的 mergedPresets 合并视图)
 
-/** preset 下拉选项(键序 = JSON 声明序:review / fe_review / arch / retro)。 */
-const GC_PRESET_OPTIONS = Object.entries(GC_PRESETS.presets).map(
-  ([value, p]) => ({ value, label: `${value} — ${p.description}` }),
+/** preset 下拉选项:内置四档在前(JSON 声明序,label = key),用户预设
+ *  按 name 序追加(label = 名称 + 「自定义」标记)。 */
+const gcPresetOptions = computed(() =>
+  Object.values(gcPresets.mergedPresets).map((p) => ({
+    value: p.key,
+    label: p.builtin
+      ? `${p.key} — ${p.description}`
+      : `${p.name}(自定义)— ${p.description}`,
+  })),
 );
 
 // --- 列表区 ---------------------------------------------------------------
@@ -363,13 +376,16 @@ function modelDisplayName(modelId: string): string {
 
 function onPickGcPreset(v: unknown): void {
   const k = normalizeSelectValue(v);
-  if (!k || !(k in GC_PRESETS.presets)) return;
+  const def = k ? gcPresets.mergedPresets[k] : undefined;
+  if (!k || !def) return;
   form.gcpreset = k;
   // 换 preset = 重置主持人跟随新 preset 默认(用户可再改选)。09-09:
   // 只对启用目录解析 —— 禁用模型不预填,提交时 expandGcConfig 给出
-  // 「已被禁用」错误引导启用(与建群弹窗同语义)。
+  // 「已被禁用」错误引导启用(与建群弹窗同语义)。用户档的
+  // moderator_model 是 UUID:resolveModelRef byId 首趟直配;禁用 UUID
+  // 在启用目录查不到 → 空串,同样走「手动改选」引导。
   form.gcModeratorId =
-    resolveModelRef(models.enabledModels, GC_PRESETS.presets[k]!.moderator_model) ?? "";
+    resolveModelRef(models.enabledModels, def.moderator_model) ?? "";
 }
 
 function onPickGcModerator(v: unknown): void {
@@ -384,7 +400,9 @@ function onPickGcModerator(v: unknown): void {
  *  禁用的 preset 默认主持人不落表单。 */
 const gcModeratorModelId = computed<string>(() => {
   if (form.gcModeratorId) return form.gcModeratorId;
-  const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
+  const preset = form.gcpreset
+    ? gcPresets.mergedPresets[form.gcpreset]
+    : undefined;
   return preset
     ? (resolveModelRef(models.enabledModels, preset.moderator_model) ?? "")
     : "";
@@ -395,7 +413,9 @@ const gcModeratorModelId = computed<string>(() => {
 const gcPresetRoster = computed<
   { name: string; model: string }[] | null
 >(() => {
-  const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
+  const preset = form.gcpreset
+    ? gcPresets.mergedPresets[form.gcpreset]
+    : undefined;
   if (!preset) return null;
   return preset.participants.map((p) => {
     const id = resolveModelRef(models.models ?? [], p.model);
@@ -469,14 +489,46 @@ const gcArchivedModerator = computed<string>(() =>
  *  (防「改 JSON / 换版本自动生效」误解);重选 = 覆盖警示。 */
 const gcSnapshotHint = computed<string | null>(() => {
   if (!editingId.value || form.targetMode !== "group_chat") return null;
+  // 文案零改动(GCE-P1);插值用展示名 —— 内置 = key(现状),用户档
+  // 是 UUID 键,直出会不可读,回退 merged 的 name。
   return form.gcpreset
-    ? `提交后将以预设「${form.gcpreset}」重新展开并覆盖存档配置`
+    ? `提交后将以预设「${gcPresets.mergedPresets[form.gcpreset]?.name ?? form.gcpreset}」重新展开并覆盖存档配置`
     : "未选择预设:提交后继续使用存档配置(仅在显式重选预设时应用最新 preset)";
+});
+
+/** GCE-P1(B9)编辑态 stale 提示:存档 config 记了 `preset_key` 且该预设
+ *  当前展开(moderator UUID + 参与者 name/UUID/persona_md 序列)≠ 存档
+ *  阵容 → 提示「预设已更新,重选可应用最新阵容」。纯内存比对,零 IPC;
+ *  预设已删 / 引用解析不出 → 无从比对,不打扰(快照语义照旧)。 */
+const gcPresetStale = computed<boolean>(() => {
+  if (!editingId.value || form.gcpreset || form.targetMode !== "group_chat") {
+    return false;
+  }
+  const task = store.tasks.find((t) => t.id === editingId.value);
+  const cfg = task?.target_mode === "group_chat" ? task.group_chat_config : null;
+  const key = cfg?.preset_key;
+  if (!cfg || !key) return false;
+  const def = gcPresets.mergedPresets[key];
+  if (!def) return false;
+  if (
+    resolveModelRef(models.models ?? [], def.moderator_model) !==
+    cfg.moderator_model_id
+  ) {
+    return true;
+  }
+  if (def.participants.length !== cfg.participants.length) return true;
+  return def.participants.some((p, i) => {
+    const arch = cfg.participants[i];
+    if (!arch) return true;
+    if (arch.name !== p.name) return true;
+    if (resolveModelRef(models.models ?? [], p.model) !== arch.model_id) return true;
+    return (composePersonaMd(p.persona) ?? null) !== (arch.persona_md ?? null);
+  });
 });
 
 /** preset 所选档的描述行(preset 下拉下方的一行说明)。 */
 const gcPresetDescription = computed<string>(
-  () => GC_PRESETS.presets[form.gcpreset]?.description ?? "",
+  () => gcPresets.mergedPresets[form.gcpreset]?.description ?? "",
 );
 
 /** 展开 preset → `group_chat_config`(提交时;design §3「展开时机 =
@@ -488,7 +540,9 @@ const gcPresetDescription = computed<string>(
 function expandGcConfig():
   | { config: GroupChatTaskConfig }
   | { error: string } {
-  const preset = form.gcpreset ? GC_PRESETS.presets[form.gcpreset] : null;
+  const preset = form.gcpreset
+    ? gcPresets.mergedPresets[form.gcpreset]
+    : undefined;
   if (!preset) return { error: "请选择审议预设" };
   const moderatorId = gcModeratorModelId.value;
   if (!moderatorId) {
@@ -856,7 +910,13 @@ async function submitForm(): Promise<void> {
         formError.value = expanded.error;
         return;
       }
-      groupChatConfig = expanded.config;
+      // GCE-P1:config 随带 preset 出处(内置 key 或用户预设行 id)。
+      // fire 路径零读取(快照语义)—— 仅编辑态回显 / 未来 stale 提示
+      // 留门;未选预设不带键(与后端 skip_serializing_if 对齐)。
+      groupChatConfig = {
+        ...expanded.config,
+        preset_key: form.gcpreset,
+      };
     } else if (!editingId.value) {
       formError.value = "请选择审议预设";
       return;
@@ -872,6 +932,10 @@ async function submitForm(): Promise<void> {
         ...(gcParsedBudget.value !== null
           ? { token_budget: gcParsedBudget.value }
           : {}),
+        // GCE-P1:预算 dirty 的整体重交也要保住出处(存档带 preset_key
+        // 时原样带回 —— 缺省不写键,与 skip_serializing_if 对齐);丢弃
+        // 会让 stale 提示门(R4)对该任务永久失明。
+        ...(archived.preset_key ? { preset_key: archived.preset_key } : {}),
       };
     }
   }
@@ -1037,6 +1101,9 @@ onMounted(async () => {
   if (pids.length > 0) void ensureSessionsFor(pids);
   // 模型下拉的数据源(新建专用 session 时选模型;失败静默,下拉显示空)。
   if (!models.loaded) void models.load().catch(() => {});
+  // GCE-P1:用户群聊预设(未加载才拉,幂等;失败静默 —— mergedPresets
+  // 里内置四档始终可用,只是用户档缺席)。
+  void gcPresets.ensureLoaded().catch(() => {});
 });
 </script>
 
@@ -1249,7 +1316,7 @@ onMounted(async () => {
                 >
                   <SelectViewport class="sched-tab__dropdown-viewport">
                     <SelectItem
-                      v-for="p in GC_PRESET_OPTIONS"
+                      v-for="p in gcPresetOptions"
                       :key="p.value"
                       :value="p.value"
                       class="sched-tab__option"
@@ -1271,6 +1338,15 @@ onMounted(async () => {
             role="status"
           >
             {{ gcSnapshotHint }}
+          </p>
+          <!-- GCE-P1(B9):preset_key 指向的预设当前展开 ≠ 存档阵容。 -->
+          <p
+            v-if="gcPresetStale"
+            class="sched-tab__softwarn"
+            data-testid="sched-gc-stale-hint"
+            role="status"
+          >
+            预设已更新,重选可应用最新阵容
           </p>
           <!-- 主持人下拉:有效主持人已解析,或 preset 已选但默认主持人
                被禁用/缺失(09-09:此时也要渲染,placeholder 引导手动改选

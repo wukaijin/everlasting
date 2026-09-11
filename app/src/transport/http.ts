@@ -108,6 +108,14 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // files
   list_files: "files",
   list_files_at: "files",
+  // GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):Settings
+  // 「群聊预设」用户预设 CRUD 四条。缺映射时浏览器/sidecar/remote 模式
+  // 打开该 tab 即报 `unknown cmd`(Tauri IPC 模式侥幸走 IPC,同
+  // save_attachment / F1 三条的老坑;http.routes-sync.test.ts 守卫)。
+  create_group_chat_preset: "group_chat_presets",
+  delete_group_chat_preset: "group_chat_presets",
+  list_group_chat_presets: "group_chat_presets",
+  update_group_chat_preset: "group_chat_presets",
   // memory
   delete_autonomous_memory: "memory",
   list_autonomous_memories: "memory",

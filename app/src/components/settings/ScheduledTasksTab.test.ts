@@ -43,6 +43,7 @@ vi.mock("../../stores/projects", () => ({
 
 import ScheduledTasksTab from "./ScheduledTasksTab.vue";
 import type { ScheduledTask } from "../../stores/scheduledTasks";
+import { GC_PRESETS } from "../../utils/groupChatPresets";
 
 function row(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
@@ -81,7 +82,7 @@ function gcConfig(): NonNullable<ScheduledTask["group_chat_config"]> {
 }
 
 /** M4a 模型目录 stub:preset JSON 里的名字(MiniMax-M3 / glm-5.3 /
- *  GLM-5.3-Flash / deepseek-v4-flash)可解析成 UUID。 */
+ *  GLM-5.3-Flash / deepseek-flash)可解析成 UUID。 */
 const GC_MODELS = [
   {
     id: "uuid-mini",
@@ -109,7 +110,7 @@ const GC_MODELS = [
     providerId: "prov-3",
     providerDisplayName: "DeepSeek",
     displayName: "DeepSeek V4",
-    modelName: "deepseek-v4-flash",
+    modelName: "deepseek-flash",
   },
 ];
 
@@ -1058,6 +1059,8 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
         { name: "架构", model_id: "uuid-glm", persona_md: expect.stringContaining("发言纪律") },
         { name: "后端", model_id: "uuid-ds", persona_md: expect.stringContaining("发言纪律") },
       ],
+      // GCE-P1:config 随带 preset 出处(内置 key);fire 路径零读取。
+      preset_key: "arch",
     });
   });
 
@@ -1157,8 +1160,15 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
     expect(call?.[1].groupChatConfig.token_budget).toBe(500000);
   });
 
-  it("编辑态只改预算未重选 preset:存档配置 + 新预算整体重交", async () => {
-    stubBackendGc([gcRowWithBudget(1000)]);
+  it("编辑态只改预算未重选 preset:存档配置 + 新预算整体重交(preset_key 出处随带)", async () => {
+    // GCE-P1:存档 config 带 preset_key(出处字段)—— 预算 dirty 的整体
+    // 重交必须原样带回,丢弃会让 stale 提示(R4 留门)对该任务永久失明。
+    stubBackendGc([
+      {
+        ...gcRow(),
+        group_chat_config: { ...gcConfig(), token_budget: 1000, preset_key: "arch" },
+      },
+    ]);
     const w = await mountTab();
     await w.get('[data-testid="sched-edit-gc-1"]').trigger("click");
     const form = openForm(w);
@@ -1178,11 +1188,13 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
     await w.get('[data-testid="sched-submit"]').trigger("click");
     await flushPromises();
     const call = invokeMock.mock.calls.find((c) => c[0] === "update_scheduled_task");
-    // 预算 dirty ⇒ 即使未重选 preset 也整体重交(存档阵容原样 + 新预算)。
+    // 预算 dirty ⇒ 即使未重选 preset 也整体重交(存档阵容原样 + 新预算
+    // + preset_key 出处保真)。
     expect(call?.[1].groupChatConfig).toEqual({
       moderator_model_id: "uuid-mini",
       participants: gcConfig().participants,
       token_budget: 9999,
+      preset_key: "arch",
     });
   });
 
@@ -1336,5 +1348,183 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
     await flushPromises();
     expect(moderatorRootOf(form)!.props("modelValue")).toBe("uuid-glm");
     expect(w.find(".sched-tab__error").exists()).toBe(false);
+  });
+});
+
+// =====================================================================
+// GCE-P1(09-12-gc-preset-settings):用户群聊预设叠加在内置四档之后。
+// 选项经 groupChatPresets store 的 mergedPresets(未加载先拉,IPC 应答
+// 即 production-shaped seed);用户档模型引用是 UUID —— resolveModelRef
+// byId 首趟直配,与内置档同形;提交 config 随带 preset_key(行 id)。
+// =====================================================================
+
+/** 用户预设行(wire 形状 = Rust GcPresetRow camelCase;模型 UUID 与
+ *  GC_MODELS 目录对应)。 */
+function userPresetRow() {
+  return {
+    id: "uuid-user-preset",
+    name: "我的评审团",
+    description: "自定义阵容",
+    moderatorModelId: "uuid-flash",
+    participants: [
+      { name: "架构", modelId: "uuid-glm", persona: "arch" },
+      { name: "后端", modelId: "uuid-ds", persona: "backend" },
+    ],
+    createdAt: "2026-09-12T00:00:00Z",
+    updatedAt: "2026-09-12T00:00:00Z",
+  };
+}
+
+describe("ScheduledTasksTab GCE-P1 用户群聊预设", () => {
+  function stubBackendGcWithUserPreset(tasks: ScheduledTask[]) {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_scheduled_tasks") return tasks;
+      if (cmd === "list_sessions") {
+        return [
+          {
+            id: "s1",
+            title: args?.projectId === "p1" ? "旧会话" : "beta 会话",
+            session_type: "chat",
+          },
+        ];
+      }
+      if (cmd === "list_models") return GC_MODELS;
+      if (cmd === "get_default_model") return null;
+      if (cmd === "list_group_chat_presets") return [userPresetRow()];
+      return null;
+    });
+  }
+
+  it("用户预设出现在 preset 下拉(内置之后,label 带名称 + 自定义标记)", async () => {
+    stubBackendGcWithUserPreset([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await pickTargetMode(form, "group_chat");
+    // 键盘打开 preset 弹层(Enter ∈ reka OPEN_KEYS;pointer capture 已
+    // stub),SelectContent teleport 到 body,全局查 [role=option]。
+    const trigger = form.get('[data-testid="sched-gc-preset"]');
+    trigger.element.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await flushPromises();
+    await flushPromises();
+    const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+      (el) => el.textContent ?? "",
+    );
+    // 内置四档在前(键序 = JSON 声明序),用户行追加在后。
+    const builtinIdx = options.findIndex((t) => t.includes("review —"));
+    const userIdx = options.findIndex((t) => t.includes("我的评审团"));
+    expect(builtinIdx).toBeGreaterThanOrEqual(0);
+    expect(userIdx).toBeGreaterThan(builtinIdx);
+    expect(options[userIdx]).toContain("自定义");
+    trigger.element.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await flushPromises();
+    w.unmount();
+  });
+
+  it("选中用户预设:阵容按 UUID 预填 + 主持人默认;提交 config 带 preset_key=行 id", async () => {
+    stubBackendGcWithUserPreset([]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("用户预设任务");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "group_chat");
+    // 选中用户预设(键 = 行 id UUID;gc 档 SelectRoot 序 1=preset)。
+    await pickSelect(form, 1, "uuid-user-preset");
+    // 阵容预览:UUID 直配解析出显示名。
+    const roster = form.find('[data-testid="sched-gc-participants"]');
+    expect(roster.text()).toContain("架构");
+    expect(roster.text()).toContain("Zhipu · GLM-5.3");
+    // 主持人默认 = 用户档 moderatorModelId(uuid-flash)。
+    expect(form.findAllComponents(SelectRoot)[2].props("modelValue")).toBe("uuid-flash");
+    // 提交:config 快照展开(UUID + persona_md)+ preset_key 出处。
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task")
+        return row({ id: "new-gc", target_mode: "group_chat", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].groupChatConfig).toEqual({
+      moderator_model_id: "uuid-flash",
+      participants: [
+        { name: "架构", model_id: "uuid-glm", persona_md: expect.stringContaining("发言纪律") },
+        { name: "后端", model_id: "uuid-ds", persona_md: expect.stringContaining("发言纪律") },
+      ],
+      preset_key: "uuid-user-preset",
+    });
+    w.unmount();
+  });
+
+  it("B9 stale 提示:preset_key 指向的预设当前展开 ≠ 存档 → 提示;一致 → 不提示", async () => {
+    const personaMd = (kind: string) =>
+      `${GC_PRESETS.personas[kind]}\n\n${GC_PRESETS.persona_common}`;
+    const base = row({
+      id: "gc-stale",
+      name: "每周评审",
+      target_mode: "group_chat",
+      target_session_id: null,
+      schedule: { kind: "weekly", weekday: "fri", at: "18:00" },
+    });
+    // arch 预设的当前展开(moderator uuid-mini + 架构/后端)。
+    const archExpansion = {
+      moderator_model_id: "uuid-mini",
+      participants: [
+        { name: "架构", model_id: "uuid-glm", persona_md: personaMd("arch") },
+        { name: "后端", model_id: "uuid-ds", persona_md: personaMd("backend") },
+      ],
+      preset_key: "arch",
+    };
+    // 存档主持人 ≠ 预设展开 → 编辑态出现 stale 提示(无需重选目标档:
+    // group_chat 行回显即该档)。
+    stubBackendGcWithUserPreset([
+      { ...base, group_chat_config: { ...archExpansion, moderator_model_id: "uuid-flash" } },
+    ]);
+    let w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-stale"]').trigger("click");
+    const staleForm = openForm(w);
+    expect(staleForm.find('[data-testid="sched-gc-stale-hint"]').exists()).toBe(true);
+    expect(staleForm.find('[data-testid="sched-gc-stale-hint"]').text()).toContain(
+      "预设已更新",
+    );
+    w.unmount();
+
+    // 存档 = 预设当前展开 → 不提示(快照语义零噪音)。
+    stubBackendGcWithUserPreset([{ ...base, group_chat_config: { ...archExpansion } }]);
+    w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-stale"]').trigger("click");
+    const freshForm = openForm(w);
+    expect(freshForm.find('[data-testid="sched-gc-stale-hint"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it("B9:无 preset_key 的存档(旧任务)不出 stale 提示", async () => {
+    stubBackendGcWithUserPreset([
+      row({
+        id: "gc-legacy",
+        target_mode: "group_chat",
+        target_session_id: null,
+        group_chat_config: {
+          moderator_model_id: "uuid-mini",
+          participants: [
+            { name: "架构", model_id: "uuid-glm", persona_md: "架构视角" },
+            { name: "后端", model_id: "uuid-ds", persona_md: "后端视角" },
+          ],
+        },
+      }),
+    ]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-legacy"]').trigger("click");
+    const form = openForm(w);
+    expect(form.find('[data-testid="sched-gc-stale-hint"]').exists()).toBe(false);
+    w.unmount();
   });
 });
