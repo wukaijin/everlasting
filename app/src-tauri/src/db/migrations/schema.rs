@@ -1447,5 +1447,37 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // --- Group-chat user presets (2026-09-12, GCE-P1 群聊预设 Settings
+    // 可管理,task 09-12-gc-preset-settings): one row per user-defined
+    // preset. 内置四档(review/fe_review/arch/retro)仍是
+    // `scripts/group-chat-presets.json` 单一事实源(只读,不入库)——
+    // 本表只存用户预设,名称与内置 key 大小写不敏感不撞(校验在
+    // commands 层,常量旁有同步义务注释)。
+    //
+    // `moderator_model_id` 是 models.id(UUID)的 **soft FK**(无约束,
+    // 沿 subagent_model_overrides / sessions.model_id 惯例):模型被删
+    // 不级联、不悬空报错 —— 保存时校验存在(commands 层 db::get_model,
+    // 允许 disabled),使用处 catalog 预检 / 反诊兜底。
+    // `participants` 用 JSON 列而非子表(scheduled_tasks.group_chat_config
+    // 同款形态):查询面没有「按参与者查预设」的需求,序列化
+    // (camelCase,与 wire 同形)在 db 层完成(见 db/group_chat_presets.rs)。
+    // 幂等重放:新库直接建,存量库 IF NOT EXISTS no-op;回滚 = 删表
+    // (用户数据可弃,design §5)。
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS group_chat_presets (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL UNIQUE,
+ description TEXT NOT NULL DEFAULT '',
+ moderator_model_id TEXT NOT NULL,
+ participants TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

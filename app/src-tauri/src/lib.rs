@@ -259,6 +259,14 @@ pub fn run() {
             commands::scheduled_tasks::create_scheduled_task,
             commands::scheduled_tasks::update_scheduled_task,
             commands::scheduled_tasks::delete_scheduled_task,
+            // GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):
+            // 用户群聊预设 CRUD 四件(Settings 可管理;内置四档只读,
+            // 仍是 scripts/group-chat-presets.json 单源)。daemon HTTP
+            // 镜像路由见 daemon/routes/group_chat_presets.rs。
+            commands::group_chat_presets::list_group_chat_presets,
+            commands::group_chat_presets::create_group_chat_preset,
+            commands::group_chat_presets::update_group_chat_preset,
+            commands::group_chat_presets::delete_group_chat_preset,
             // S2 配对码生成(经 tunnel WSS 调 remote 内部 RPC)
             commands::pairing::generate_pairing_code,
             // Providers / models / default model

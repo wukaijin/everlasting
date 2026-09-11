@@ -19,7 +19,7 @@
 //! → `fetch("/api/v1/" + domain + "/" + cmd, {method: "POST", body:
 //! JSON.stringify(args)})` translation.
 //!
-//! Domain → module map (79 handlers total):
+//! Domain → module map (83 handlers total):
 //! - `agent` (1): `chat`
 //! - `attachments`: attachment save
 //! - `background_shells` (2): `list_background_shells`, `kill_background_shell` (2026-09-02)
@@ -29,6 +29,8 @@
 //! - `disk` (2): `get_disk_usage`, `run_disk_cleanup` (F3 磁盘治理 PR3,
 //!   2026-09-03)
 //! - `files` (2): `list_files`, `list_files_at`
+//! - `group_chat_presets` (4): `list_group_chat_presets`,
+//!   `create_group_chat_preset`, ... (GCE-P1, 2026-09-12)
 //! - `health`: `GET /api/v1/health` (B3)
 //! - `memory` (8): `read_memory_layers`, `read_memory_content`, ...
 //! - `panel` (3): `list_panel_items`, `get_skill_body`, `list_subagents`
@@ -57,6 +59,9 @@ pub mod config;
 // 「存储」分类 IPC(占用概览 + 手动清理;mirror commands::disk,Q0 单源)。
 pub mod disk;
 pub mod files;
+// GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):用户群聊预设
+// CRUD 四条 route(mirror commands::group_chat_presets,Q0 单源)。
+pub mod group_chat_presets;
 pub mod health;
 pub mod memory;
 pub mod message_queue;
@@ -114,6 +119,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/config", config::router(state.clone()))
         .nest("/api/v1/disk", disk::router(state.clone()))
         .nest("/api/v1/files", files::router(state.clone()))
+        .nest(
+            "/api/v1/group_chat_presets",
+            group_chat_presets::router(state.clone()),
+        )
         .nest("/api/v1/memory", memory::router(state.clone()))
         .nest(
             "/api/v1/message_queue",

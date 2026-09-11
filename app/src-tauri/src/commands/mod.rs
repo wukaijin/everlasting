@@ -34,6 +34,11 @@ pub mod config;
 // run_disk_cleanup);回收本体在 `disk::governor` 的 `_inner` 族。
 pub mod disk;
 pub mod files;
+// GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):用户群聊预设
+// CRUD 四件(list/create/update/delete),`_inner` 单源供 Tauri +
+// daemon route 双注册;内置四档仍是 scripts/group-chat-presets.json
+// 单源(只读),撞名校验常量带同步义务注释。
+pub mod group_chat_presets;
 pub mod memory;
 pub mod message_queue;
 pub mod panel;
@@ -245,5 +250,13 @@ pub fn all_command_names() -> Vec<&'static str> {
         // `sessions` rows — no FTS, no new tables.
         "list_group_chat_sessions",
         "search_group_chat_discussions",
+        // GCE-P1 (2026-09-12, task `09-12-gc-preset-settings`): 用户群聊
+        // 预设 CRUD 四件(Settings 可管理;内置四档只读,仍是
+        // scripts/group-chat-presets.json 单源)。校验矩阵见
+        // commands/group_chat_presets.rs(design §3)。
+        "list_group_chat_presets",
+        "create_group_chat_preset",
+        "update_group_chat_preset",
+        "delete_group_chat_preset",
     ]
 }

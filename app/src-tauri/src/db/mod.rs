@@ -59,6 +59,11 @@
 
 pub mod backup;
 pub mod config;
+// GCE-P1 (2026-09-12, task `09-12-gc-preset-settings`): 用户群聊预设
+// CRUD(Settings 可管理;内置四档仍是 scripts/group-chat-presets.json
+// 单源,不入库)。
+pub mod group_chat_presets;
+pub mod group_chat_presets_tests;
 pub mod memories;
 pub mod memories_tests;
 pub mod messages_checkpoint_tests;

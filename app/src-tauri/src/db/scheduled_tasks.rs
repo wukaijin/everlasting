@@ -71,6 +71,14 @@ pub struct GroupChatTaskConfig {
     /// Some 才写 `sessions.metadata.token_budget`(见 `fire_group_chat`)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
+    /// GCE-P1(09-12-gc-preset-settings):创建/更新任务时若选了预设,
+    /// 记录出处(内置 key 或用户预设行 id)。**fire 路径零读取** ——
+    /// 快照语义定案:任务 config 是创建时展开的完整 UUID 阵容,预设
+    /// 后续编辑/删除不回溯生效;本字段纯展示 / 为未来「预设已更新,
+    /// 重选可应用」提示留门(design §1.2)。`#[serde(default)]` 兼容
+    /// 旧行(缺键 = None,与 token_budget 同款 additive)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_key: Option<String>,
 }
 
 /// 解析 + 结构校验 `group_chat_config` JSON(create/update 共用):serde
@@ -1350,6 +1358,39 @@ mod tests {
         assert!(
             parse_group_chat_task_config("not json").is_err(),
             "malformed JSON rejected"
+        );
+    }
+
+    /// GCE-P1(09-12-gc-preset-settings):`preset_key` additive 兼容 —
+    /// 旧行 JSON(无该键)反序列化 = None;带键行 round-trip 保真。
+    /// fire 路径不读该字段(快照语义),本用例只锁 serde 形状。
+    #[tokio::test]
+    async fn group_chat_task_config_preset_key_is_optional_and_additive() {
+        // 旧 JSON(09-12 之前的存量行形状):缺 preset_key → None。
+        let legacy: GroupChatTaskConfig = serde_json::from_str(
+            r#"{"moderator_model_id":"m","participants":[{"name":"a","model_id":"m"}]}"#,
+        )
+        .expect("legacy config without preset_key deserializes");
+        assert!(legacy.preset_key.is_none(), "missing key → None");
+        assert!(legacy.token_budget.is_none());
+
+        // 带键(选了预设建任务):反序列化保真 + 序列化回原文形状。
+        let with_key: GroupChatTaskConfig = serde_json::from_str(
+            r#"{"moderator_model_id":"m","participants":[{"name":"a","model_id":"m"}],"preset_key":"review"}"#,
+        )
+        .expect("config with preset_key deserializes");
+        assert_eq!(with_key.preset_key.as_deref(), Some("review"));
+        // parse(读侧同门)接受带键 config。
+        assert!(parse_group_chat_task_config(
+            r#"{"moderator_model_id":"m","participants":[{"name":"a","model_id":"m"}],"preset_key":"review"}"#
+        )
+        .is_ok());
+        // None 时键不出现(skip_serializing_if,与 token_budget 同款),
+        // 落库 JSON 保持紧凑规范形。
+        let canonical = serde_json::to_string(&legacy).expect("serialize canonical config");
+        assert!(
+            !canonical.contains("preset_key"),
+            "None must not emit the key: {canonical}"
         );
     }
 }
