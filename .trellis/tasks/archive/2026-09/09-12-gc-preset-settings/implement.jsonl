@@ -1,0 +1,12 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "soft-FK/CRUD/sqlx 约定,新表必须遵守"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由/命令薄壳/错误形状约定"}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "GroupChatTaskConfig 形状与 fire 语义,加 preset_key 不得扰动"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppCommandError InvalidRequest 用法(校验失败 → 400)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "pinia store 约定"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "CMD_TO_DOMAIN 添加规则与 routes-sync 守卫"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Select/键盘打开/teleport 断言模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Settings tab 组件结构约定"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "jsdom 限制与 pointer capture stub 先例"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "wire 类型与字面量收窄规则"}
+{"file": ".trellis/tasks/09-12-gc-preset-settings/research/crud-precedent-chain.md", "reason": "Settings 可管理实体全链路触点清单(models.rs 骨架/路由薄壳/tab 注册/测试模式)"}

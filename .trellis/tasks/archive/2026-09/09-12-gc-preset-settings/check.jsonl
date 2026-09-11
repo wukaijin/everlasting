@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量核查基线"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验新表符合 soft-FK/CRUD 约定"}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "核查 fire 路径零扰动 + preset_key serde 兼容"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量核查基线"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "wire 类型核查"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "组件测试环境核查"}
+{"file": ".trellis/tasks/09-12-gc-preset-settings/research/crud-precedent-chain.md", "reason": "触点清单逐项对照(含 routes-sync 守卫)"}
