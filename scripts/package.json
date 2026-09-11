@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Repo utility scripts (group-chat driver + MCP server). Deps stay local to scripts/.",
+  "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=20"
   },
