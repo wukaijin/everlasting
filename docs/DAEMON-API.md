@@ -306,7 +306,42 @@ Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
 
 **边界**:LLM `schedule_task` 工具**不能**建群聊任务(恒 fixed 语义——群聊一场数十万
 token,不开放给 agent 自主创建);preset 预设在 `scripts/group-chat-presets.json`,daemon
-无 preset 概念(前端展开后提交,API 调用方同理)。
+无 preset 概念(前端展开后提交,API 调用方同理)。GCE-P1(2026-09-12)起 `group_chat_config`
+新增可选 `preset_key`(创建/更新任务时选了预设则记录出处,内置 key 或用户预设行 id);
+**fire 路径零读取**(快照语义:config 是创建时展开的完整 UUID 阵容,预设后续编辑/删除
+不回溯生效),缺省不写键。
+
+### 6.4 用户群聊预设 CRUD(GCE-P1,2026-09-12 起)—— group_chat_presets 域
+
+Settings「群聊预设」页背后的四条 IPC(`POST /api/v1/group_chat_presets/<cmd>`,与 Tauri
+命令 1:1)。**响应行 camelCase**(`GcPresetRow` 带 `rename_all`);**请求 body 顶层
+snake_case**(IPC 形状铁律),嵌套 `participants` 元素例外 —— 按 `GcPresetParticipant`
+的 camelCase serde 反序列化:`{"name": "...", "modelId": "<uuid>", "persona": "arch"}`。
+
+```jsonc
+// GcPresetRow(响应, camelCase)
+{
+  "id": "<uuid>", "name": "我的评审团", "description": "",
+  "moderatorModelId": "<uuid>",                 // models.id UUID(soft ref,允许 disabled)
+  "participants": [{ "name": "架构", "modelId": "<uuid>", "persona": "arch" }],
+  "createdAt": "RFC3339", "updatedAt": "RFC3339"
+}
+```
+
+| cmd | 请求(顶层 snake) | 响应 |
+|---|---|---|
+| `list_group_chat_presets` | `{}` | `GcPresetRow[]`(ORDER BY name 稳定序) |
+| `create_group_chat_preset` | `{"name","description","moderator_model_id","participants"}` | `GcPresetRow`(id 服务端生成) |
+| `update_group_chat_preset` | 同 create + `"id"` | `GcPresetRow`(不存在 → 400) |
+| `delete_group_chat_preset` | `{"id"}` | `{"ok": true}`(幂等,不存在也 ok) |
+
+**校验**(commands 层单一事实源,违规 400 InvalidRequest,message 中文可读):名称 trim
+非空 ≤40 字符、与其它用户行**及内置 key**(review/fe_review/arch/retro)大小写不敏感
+不重名;描述 ≤200;participants 2..=3 条且名字非空 ≤20 预设内唯一;persona ∈ 五内置
+kind(arch/product/backend/frontend/outsider);moderator 与全部 participants 的模型 id
+必须存在(允许 disabled)。**只管用户预设** —— 内置四档是
+`scripts/group-chat-presets.json` 单一事实源(M1 CLI / MCP 消费),不在本域,本域 CRUD
+对它们零影响;M1/MCP 暂不消费用户预设(P2)。
 
 ## 7. 其他常用端点(路径约定)
 

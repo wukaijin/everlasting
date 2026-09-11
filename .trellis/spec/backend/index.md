@@ -24,6 +24,7 @@
 | [Workflow Plugin Builtin](./workflow-plugin-builtin.md) | builtin workflow plugin 内置化机制(dev 内容契约 / tasks 隔离) | ✅ 有实质内容 |
 | [Worktree Contract](./worktree-contract.md) | worktree attach/detach/delete + cancel + system prompt(子目录) | ✅ 有实质内容 |
 | [Subagent Runs Schema](./subagent-runs-schema.md) | `subagent_runs` 表 schema(B6 PR2,状态机 / 列 / 隔离) | ✅ 有实质内容 |
+| [Group Chat Presets](./group-chat-presets.md) | `group_chat_presets` 表 + 四 IPC 命令 + 前端 merged 消费(GCE-P1,快照语义 / UUID 引用 / 校验矩阵) | ✅ 有实质内容 |
 | [Token Usage Tracking](./token-usage-tracking.md) | A4 token 计量(turn_trace 各列 / cache 归因 / tools=0 判别) | ✅ 有实质内容 |
 | [Latency Tracking](./latency-tracking.md) | F5 latency 三列 + ttfb/thinking 计量 | ✅ 有实质内容 |
 | [Git Diff](./git-diff.md) | git diff workdir-vs-branch FileDiff 契约 | ✅ 有实质内容 |
