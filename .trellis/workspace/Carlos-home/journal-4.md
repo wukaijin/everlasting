@@ -1571,3 +1571,24 @@ RCA:群聊 caa5020a deepseek-flash 三振 [生成出错中断]——Anthropic ad
 ### Status
 
 [OK] **Completed**
+
+
+## Session 139: 群聊预设 Settings 可编辑可新增(GCE-P1)
+
+**Date**: 2026-09-12
+**Task**: 群聊预设 Settings 可编辑可新增(GCE-P1)
+**Branch**: `main`
+
+### Summary
+
+group_chat_presets 新表(UUID 引用)+四条 IPC 命令+daemon 路由;Settings 群聊预设页 CRUD;mergedPresets 叠加消费进定时表单与建群弹窗(UUID 借道 resolveModelRef byId 首趟,零新解析分支);GroupChatTaskConfig 增 preset_key 纯出处字段(fire 零读取,快照语义);B9 stale 提示。后端 2397 过/前端 1724 过/vue-tsc 零错;顺带修 7773b927 漏扫前端 mock 的 8 个主线红测(worktree 干净 HEAD 实证);check 抓修编辑态丢 preset_key 缺陷;沉淀 spec/backend/group-chat-presets.md。遗留:内置档不可覆盖修复(评估定案 override 层,拟 GCE-P1b)、MCP/M1 用户预设可见性(P2)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `090bf1d3` | (see git log) |
+
+### Status
+
+[OK] **Completed**

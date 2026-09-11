@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 138
-- **Last Active**: 2026-09-11
+- **Total Sessions**: 139
+- **Last Active**: 2026-09-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1573 | Active |
+| `journal-4.md` | ~1594 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 139 | 2026-09-12 | 群聊预设 Settings 可编辑可新增(GCE-P1) | `090bf1d3` | `main` |
 | 138 | 2026-09-11 | 修复 wire 层 tool_result 拆条致 deepseek 中继 400 生成中断 | `d05026c9` | `main` |
 | 137 | 2026-09-09 | 群聊禁用模型泄漏修复——preset 启用目录解析 + 行级回显 pinning | `f4e9242b` | `main` |
 | 136 | 2026-09-09 | GCE-M4c 成本治理消费面 + GUI 建群弹窗重设计 | `f3f2a9b1`, `72e8907e`, `3380479a`, `29b9fa3a`, `a9d3a718`, `025666a3` | `main` |
