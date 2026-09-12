@@ -1,8 +1,9 @@
-<!-- Schema + IPC spec for group_chat_presets (GCE-P1, 2026-09-12) -->
+<!-- Schema + IPC spec for group_chat_presets (GCE-P1, 2026-09-12; GCE-P1b override, 同日) -->
 
-# Group Chat Presets(GCE-P1, 2026-09-12)
+# Group Chat Presets(GCE-P1 + P1b, 2026-09-12)
 
-> **Source**: `.trellis/tasks/09-12-gc-preset-settings`(PRD/design/implement 全套);
+> **Source**: `.trellis/tasks/archive/2026-09/09-12-gc-preset-settings`(P1 全套)+
+> `.trellis/tasks/09-12-gc-preset-override`(P1b 覆盖层);
 > migration 在 `app/src-tauri/src/db/migrations/schema.rs` run_migrations 尾部,
 > CRUD 在 `app/src-tauri/src/db/group_chat_presets.rs`,校验单源在
 > `app/src-tauri/src/commands/group_chat_presets.rs::validate_preset_input`,
@@ -33,15 +34,23 @@ CREATE TABLE IF NOT EXISTS group_chat_presets (
   moderator_model_id TEXT NOT NULL,               -- soft FK → models.id(无约束)
   participants       TEXT NOT NULL,               -- JSON:[{"name","modelId","persona"}] camelCase 键
   created_at         TEXT NOT NULL,
-  updated_at         TEXT NOT NULL
-)
+  updated_at         TEXT NOT NULL,
+  builtin_key        TEXT                         -- P1b:NULL = 普通行;值 ∈ 四内置 key = 覆盖行
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
+  ON group_chat_presets(builtin_key);             -- SQLite UNIQUE 对 NULL 互不相撞
 ```
 
 - DB:`list_group_chat_presets(pool) -> Vec<GcPresetRow>`(ORDER BY name)/ `get_…` /
-  `create_…` / `update_…`(re-read 带回 created_at)/ `delete_… -> bool`(幂等)。骨架抄
+  `create_…`(P1b 起多一个 `builtin_key: Option<&str>` 参数;列迁移走 columns.rs
+  `add_group_chat_presets_column_if_missing` 幂等加列,CREATE TABLE 段带新列给新库,
+  scheduled_tasks F2b 双路径先例)/ `update_…`(re-read 带回 created_at;**SET 清单
+  不含 builtin_key——覆盖链接键创建时定死,update 不可改**)/ `delete_… -> bool`(幂等)。骨架抄
   `db/models.rs`(map_row 共用防列漂移);participants JSON↔Vec 封装在 db 层。
-- IPC 四命令(Tauri 命令 = daemon 路由 1:1,domain `group_chat_presets`):
-  `list_group_chat_presets` / `create_group_chat_presets` /
+- IPC 四命令(Tauri 命令 = daemon 路由 1:1,domain `group_chat_presets`;命令名零新增,
+  P1b 只给 create 加可选参数):
+  `list_group_chat_presets` / `create_group_chat_presets`(P1b:+`builtinKey?: string`,
+  顶层 camelCase → snake)/
   `update_group_chat_presets` / `delete_group_chat_presets`。
 - `GroupChatTaskConfig` 增量字段:`preset_key: Option<String>` +
   `#[serde(default, skip_serializing_if = "Option::is_none")]`(additive,旧行缺键 = None)。
@@ -64,6 +73,15 @@ CREATE TABLE IF NOT EXISTS group_chat_presets (
   `{arch, product, backend, frontend, outsider}` 在 Rust 侧硬编码
   (`BUILTIN_PRESET_KEYS` / `PERSONA_KINDS`),**同步义务指向 scripts/group-chat-presets.json**
   ——改 JSON 阵容/加 persona 时必须同步两处。
+- **覆盖层(P1b,2026-09-12)**:带 `builtin_key` 的行 = 内置档覆盖行,在
+  mergedPresets 里**原位顶替**对应内置槽——key/name 保持内置 key、阵容字段换行内容
+  (UUID 借道 byId 首趟,消费方零改动),附 `overriddenBy: 行id` 供 UI 标记;不追加
+  新键。每 key 至多一条(commands create 前置查重 400 + UNIQUE 索引兜底)。覆盖行
+  的 `name` 是纯管理面显示名,**仍不许撞内置 key**(display 名与链接键分离)。
+  Settings 内置区「覆盖编辑」预填 JSON def(模型名经 resolveModelRef 全目录解析,
+  缺失留空逼重选——正是修复场景);「恢复内置」= 删除覆盖行,回落 JSON 源码定义。
+  快照语义照旧:覆盖编辑/删除不回溯已建任务;旧任务 `preset_key: "arch"` 归位到
+  覆盖后定义(B9 stale 比对自动吃覆盖版)。M1/MCP 仍只认 JSON,看不到覆盖行(P2)。
 
 ## 4. Validation & Error Matrix
 
@@ -72,12 +90,14 @@ CREATE TABLE IF NOT EXISTS group_chat_presets (
 | 条件 | 错误 |
 |---|---|
 | name trim 空 / >40 chars | InvalidRequest(400) |
-| name 与用户行或内置 key 大小写不敏感撞名(update 排除自身) | InvalidRequest |
+| name 与用户行或内置 key 大小写不敏感撞名(update 排除自身;**覆盖行照常生效**) | InvalidRequest |
 | description >200 chars | InvalidRequest |
 | moderator / 任一 participant 的 modelId 查 models 表不存在 | InvalidRequest(disabled **放行**——禁用是使用处反诊问题) |
 | participants 不在 2..=3 | InvalidRequest |
 | participant name trim 空 / >20 / 预设内重名 | InvalidRequest |
 | persona ∉ 五 kind | InvalidRequest |
+| create 的 builtin_key ∉ 四内置 key(P1b;空串同拒,不静默降级 None) | InvalidRequest |
+| create 的 builtin_key 已有同 key 覆盖行(P1b) | InvalidRequest |
 | update 目标 id 不存在 | InvalidRequest |
 | delete 目标不存在 | Ok(幂等,沿 clear 先例) |
 
@@ -85,22 +105,35 @@ CREATE TABLE IF NOT EXISTS group_chat_presets (
 
 - Good:Settings 建「我的评审团」(主持人 glm-5.3 UUID + 2 参与者 UUID + persona kind),
   定时表单下拉出现该档,选中按 UUID 预填,提交 config = UUID 快照 + `preset_key = 行 id`。
+- Good(P1b):内置 review 的模型被删 → Settings 内置区「覆盖编辑」预填(缺失留空),
+  重选现有模型存成 builtin_key="review" 的行;此后定时表单/建群弹窗选 review 展开的
+  就是覆盖后阵容,旧任务 `preset_key: "review"` 的 stale 提示对覆盖后定义生效。
 - Base:编辑该预设换模型 → 已建任务阵容**不变**(快照),任务编辑页 stale 提示亮起
   (B9:当前展开 ≠ 存档 config 时一行提示)。
 - Bad:预设名取 `Arch`(撞内置 key,CI 拦);participants 只 1 人(拦);把用户预设的
-  model 字段填模型名而非 UUID(绕过 byId 首趟,退化为名字匹配——改名断链回归)。
+  model 字段填模型名而非 UUID(绕过 byId 首趟,退化为名字匹配——改名断链回归);
+  覆盖「arch」的行起名「arch」(display 名与链接键分离,仍拦)。
 
 ## 6. Tests Required
 
 - db 冒烟(`db/group_chat_presets_tests.rs`):create 往返 / list 有序 / update 未知 id /
-  delete 幂等 / UNIQUE 兜底。
-- commands 校验矩阵(`commands/tests_group_chat_presets.rs`):§4 逐条 + create→list→delete 闭环。
+  delete 幂等 / UNIQUE 兜底;P1b 三件——覆盖行 builtin_key 往返、两条 NULL 行共存
+  (UNIQUE NULL 互不相撞)、同 key 第二条覆盖被索引拒。
+- commands 校验矩阵(`commands/tests_group_chat_presets.rs`):§4 逐条 + create→list→delete 闭环;
+  P1b 五件——非法 key 400 / 同 key 重复覆盖 400 / 合法覆盖带回 / update 不改
+  builtin_key / 覆盖行 name 撞内置 key 仍 400。
 - 路由 wiring(`routes/group_chat_presets.rs` 尾部 oneshot):四路由 CRUD 闭环 + 撞内置 key 400
-  (同时锁顶层 snake_case 请求形状——写错收到 422 是第一嫌疑)。
-- serde 兼容:`GroupChatTaskConfig` 旧 JSON(无 preset_key)反序列化 = None。
+  (同时锁顶层 snake_case 请求形状——写错收到 422 是第一嫌疑);P1b 覆盖流
+  (snake `builtin_key` → 响应 camelCase `builtinKey`;同 key 二次 400)。
+- serde 兼容:`GroupChatTaskConfig` 旧 JSON(无 preset_key)反序列化 = None;
+  `GcPresetRow` None 不序列化(wire additive,P1b)。
 - 前端:store merged 单测(内置在前 / name 序 / UUID 借道 byId 直配——锁机制前提);
-  tab 组件测试(mock transport 按 cmd 分发);两消费方"用户预设出现在选项 + 提交带
-  preset_key";编辑态只改预算重交时 `preset_key` 保真(2026-09-12 check 抓过丢键缺陷)。
+  P1b——覆盖行原位顶替(key/name = 内置 key、overriddenBy、无追加键)、普通行照旧、
+  未知 builtinKey 跳过;tab 组件测试(mock transport 按 cmd 分发;P1b——覆盖编辑预填
+  / create 带 builtinKey / 恢复内置 / 覆盖行不双列);两消费方"用户预设出现在选项 + 提交带
+  preset_key";编辑态只改预算重交时 `preset_key` 保真(2026-09-12 check 抓过丢键缺陷);
+  P1b——消费方(源码零改动)选中覆盖档预填覆盖阵容 + preset_key 指内置 key 的 stale
+  提示对覆盖后定义生效。
 
 ## 7. Wrong vs Correct
 
@@ -130,6 +163,7 @@ GroupChatConfigModal.test.ts 的 MODELS fixture)——7773b927 漏扫导致主�
 
 ## 边界(P2 未做)
 
-MCP server / M1 CLI **暂只认内置四档**(standalone bin 烤 JSON);用户预设可见性是
+MCP server / M1 CLI **暂只认内置四档**(standalone bin 烤 JSON;P1b 覆盖行同样不可见,
+引擎侧要吃到需 P2 运行时拉取);用户预设与覆盖行的引擎可见性是
 P2(引擎运行时依赖 daemon HTTP,加运行时拉取即可,bin 免重部署)。自定义 persona
 文本(P3)、overwrite 语义(已评估否决)不在计划内。

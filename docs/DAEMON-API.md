@@ -311,7 +311,7 @@ token,不开放给 agent 自主创建);preset 预设在 `scripts/group-chat-pres
 **fire 路径零读取**(快照语义:config 是创建时展开的完整 UUID 阵容,预设后续编辑/删除
 不回溯生效),缺省不写键。
 
-### 6.4 用户群聊预设 CRUD(GCE-P1,2026-09-12 起)—— group_chat_presets 域
+### 6.4 用户群聊预设 CRUD(GCE-P1,2026-09-12 起;内置档覆盖行 GCE-P1b 同日)—— group_chat_presets 域
 
 Settings「群聊预设」页背后的四条 IPC(`POST /api/v1/group_chat_presets/<cmd>`,与 Tauri
 命令 1:1)。**响应行 camelCase**(`GcPresetRow` 带 `rename_all`);**请求 body 顶层
@@ -324,16 +324,28 @@ snake_case**(IPC 形状铁律),嵌套 `participants` 元素例外 —— 按 `Gc
   "id": "<uuid>", "name": "我的评审团", "description": "",
   "moderatorModelId": "<uuid>",                 // models.id UUID(soft ref,允许 disabled)
   "participants": [{ "name": "架构", "modelId": "<uuid>", "persona": "arch" }],
-  "createdAt": "RFC3339", "updatedAt": "RFC3339"
+  "createdAt": "RFC3339", "updatedAt": "RFC3339",
+  "builtinKey": "arch"                          // 可选(GCE-P1b):仅覆盖行携带,None 不序列化
 }
 ```
 
 | cmd | 请求(顶层 snake) | 响应 |
 |---|---|---|
 | `list_group_chat_presets` | `{}` | `GcPresetRow[]`(ORDER BY name 稳定序) |
-| `create_group_chat_preset` | `{"name","description","moderator_model_id","participants"}` | `GcPresetRow`(id 服务端生成) |
-| `update_group_chat_preset` | 同 create + `"id"` | `GcPresetRow`(不存在 → 400) |
+| `create_group_chat_preset` | `{"name","description","moderator_model_id","participants"` + 可选 `"builtin_key"}` | `GcPresetRow`(id 服务端生成) |
+| `update_group_chat_preset` | 同 create + `"id"`(无 builtin_key —— 该列不可变) | `GcPresetRow`(不存在 → 400) |
 | `delete_group_chat_preset` | `{"id"}` | `{"ok": true}`(幂等,不存在也 ok) |
+
+**内置档覆盖行**(GCE-P1b,2026-09-12 起):`create_group_chat_preset` 可带可选顶层
+`builtin_key`(请求侧 snake,值 ∈ 四内置 key review/fe_review/arch/retro)。带该键的行 =
+覆盖行,原位顶替对应内置预设(GUI 两消费方选中该档即用覆盖后阵容)。约束:
+
+- 每个内置 key 至多一条覆盖行 —— commands 层 create 前置查重给可读 400(「内置预设
+  「k」已有覆盖,请编辑现有覆盖行」),DB 层 `idx_group_chat_presets_builtin_key`
+  UNIQUE 索引兜底(SQLite UNIQUE 对 NULL 互不相撞,普通用户行不受影响)。
+- `builtin_key` **创建时定死**:update 不接受也不触碰该列;覆盖行不能转普通行。
+- 删除覆盖行 = 恢复内置(JSON 源码定义),走同一条 `delete_group_chat_preset`。
+- 覆盖仅 GUI 消费:M1 CLI / MCP 仍只认 `scripts/group-chat-presets.json`(P2 边界)。
 
 **校验**(commands 层单一事实源,违规 400 InvalidRequest,message 中文可读):名称 trim
 非空 ≤40 字符、与其它用户行**及内置 key**(review/fe_review/arch/retro)大小写不敏感
