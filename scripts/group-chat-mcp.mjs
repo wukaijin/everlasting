@@ -2,7 +2,8 @@
 // group-chat-mcp.mjs — GCE-M2 MCP 接口层(四工具:召集/轮询/取结论/止损;
 // M3 增打断/注入两工具,控制面三权齐:cancel 硬停 / interrupt 收束 / inject 注入;
 // 09-11 增 list_models 只读内省,宿主发起前可查可用模型;
-// GCE-P2(09-12)增 list_presets 只读内省 + start 消费用户预设/覆盖行)
+// GCE-P2(09-12)增 list_presets 只读内省 + start 消费用户预设/覆盖行;
+// 09-13 status 增 wait_seconds 有界长轮询 + detail 进度富化)
 //
 // 三层架构(M1 定形)中的薄包装:编排语义(建群契约/模型解析/终态判定/
 // 转录渲染)全部 import 自 group-chat-run.mjs(AC②,不是两套);本文件
@@ -11,7 +12,10 @@
 //
 // 语义约束(勿改):
 // - 工具调用绝不阻塞:start 立即返回 session_id,进度靠轮询;一场 5-15
-//   分钟、数十万 token——成本闸写死在工具描述里(R3)。
+//   分钟、数十万 token——成本闸写死在工具描述里(R3)。唯一有界例外 =
+//   discussion_status.wait_seconds ≤30s(09-13):内部 ~2s 拍 HTTP 轮询,
+//   变化即返——对模型呈现事件驱动,而非盲轮;仍不挂 SSE(GC3 无人值守
+//   8s 快拒性质不变,HTTP 轮询不触发 §5 的观察者语义)。
 // - 转录惰性导出:终态首次被 status/result 观测时落 <讨论 cwd>/out/
 //   (design §6 有意分叉:M1 CLI 落引擎仓库根);导出失败降级
 //   transcript_path:null + 警告,status 永不因导出报错(评审 P2-1)。
@@ -88,7 +92,8 @@ export function isTerminal(session) {
   return Boolean(session) && !session.busy && session.stop_reason != null;
 }
 
-/** 实际 daemon 依赖(测试注入 mock 替换;BASE 支持 EVERLASTING_BASE 同 M1)。 */
+/** 实际 daemon 依赖(测试注入 mock 替换;BASE 支持 EVERLASTING_BASE 同 M1)。
+ * sleep/waitTickMs 是 wait_seconds 长轮询的可注入时钟(09-13),非 daemon 面。 */
 export function realDeps(overrides = {}) {
   const base = process.env.EVERLASTING_BASE || DEFAULT_BASE;
   return {
@@ -103,6 +108,8 @@ export function realDeps(overrides = {}) {
     listTurnTraces: (sessionId) => listTurnTraces(base, sessionId),
     cancelChat: (requestId) => cancelChat(base, requestId),
     preemptGroupChat: (sessionId) => preemptGroupChat(base, sessionId),
+    waitTickMs: 2000,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ...overrides,
   };
 }
@@ -159,28 +166,30 @@ export async function coreStart(deps, ledger, { topic, cwd, preset = 'review', p
   ledger.set(session.id, {
     request_id: requestId, project_id: proj.id, cwd: path.resolve(cwd),
     topic, started_at_ms: Date.now(),
+    ...(tokenBudget !== undefined ? { token_budget: tokenBudget } : {}),
   });
   return {
     session_id: session.id,
     request_id: requestId,
-    hint: 'started — poll discussion_status(session_id); after stop_reason is set, read discussion_result. Expect 5-15 min.',
+    hint: 'started — discussion_status(session_id) polls cheaply; add wait_seconds=30 to return on progress, detail=true for messages/last_speaker/tokens. After stop_reason is set, read discussion_result. Expect 5-15 min.',
   };
 }
 
 /** status/result 共用的会话查找两级链(评审 P1-2):记账 → list_sessions;
  * 全 miss(手抄 session_id)→ load_session 取 project_id → 回查。
- * load_session 的 busy 恒 false(list_sessions_inner 才做富化),不可信。 */
+ * load_session 的 busy 恒 false(list_sessions_inner 才做富化),不可信。
+ * projectId 顺带带回(09-13):wait_seconds 等待循环免重走兜底链。 */
 async function findSession(deps, ledger, sessionId) {
   const entry = ledger.get(sessionId);
   if (entry?.project_id) {
     const s = await deps.pollSession(entry.project_id, sessionId);
-    if (s) return { entry, summary: s };
+    if (s) return { entry, summary: s, projectId: entry.project_id };
   }
   const loaded = await deps.loadSession(sessionId);
   if (!loaded) throw new Error(`session 不存在:${sessionId}`);
   const s = await deps.pollSession(loaded.session.project_id, sessionId);
   if (!s) throw new Error(`session 不存在:${sessionId}`);
-  return { entry, summary: s };
+  return { entry, summary: s, projectId: loaded.session.project_id };
 }
 
 /** 惰性转录导出(幂等;status/result 双入口)。失败降级不抛错(评审 P2-1)。 */
@@ -214,19 +223,63 @@ export async function ensureTranscript(deps, ledger, sessionId, { entry, summary
   return { transcript_path: target };
 }
 
-export async function coreStatus(deps, ledger, sessionId) {
-  const { entry, summary } = await findSession(deps, ledger, sessionId);
-  const elapsed_s = entry?.started_at_ms ? Math.round((Date.now() - entry.started_at_ms) / 1000) : null;
-  const out = {
-    busy: summary.busy,
-    stop_reason: summary.stop_reason ?? null,
-    elapsed_s,
-  };
-  if (isTerminal(summary)) {
-    // status 是廉价轮询(无轮次/消息字段,评审 P2-2);终态观测点触发惰性转录
-    Object.assign(out, await ensureTranscript(deps, ledger, sessionId, { entry, summary }));
-  }
+/** B2 进度字段:messages(消息数)/ last_speaker(末条带 speaker 的消息)/
+ * tokens(与 result 同口径 listTurnTraces→aggregateTokens,失败整键省略)。 */
+async function progressFields(deps, sessionId, messages) {
+  const out = { messages: messages.length };
+  const lastSpeaker = [...messages].reverse().find((m) => m.speaker);
+  if (lastSpeaker) out.last_speaker = lastSpeaker.speaker;
+  Object.assign(out, await computeTokens(deps, sessionId, messages));
   return out;
+}
+
+/** B1 长轮询信号:busy/stop_reason 翻转 + 消息数/末 seq(发言轮落地)。 */
+function statusSignal(summary, messages) {
+  const last = messages[messages.length - 1];
+  return `${summary.busy}|${summary.stop_reason ?? ''}|${messages.length}|${last?.seq ?? ''}`;
+}
+
+/** 长轮询上限(09-13):压在宿主 MCP 工具超时之下;内部拍频见 realDeps.waitTickMs。 */
+export const MAX_WAIT_SECONDS = 30;
+
+export async function coreStatus(deps, ledger, sessionId, { waitSeconds, detail } = {}) {
+  if (waitSeconds !== undefined
+      && (!Number.isInteger(waitSeconds) || waitSeconds < 1 || waitSeconds > MAX_WAIT_SECONDS)) {
+    throw new Error(`wait_seconds 必须是 1-${MAX_WAIT_SECONDS} 的整数(有界长轮询,避开宿主工具超时;不等请省略)`);
+  }
+  const { entry, summary: first, projectId } = await findSession(deps, ledger, sessionId);
+  const elapsed = () => (entry?.started_at_ms ? Math.round((Date.now() - entry.started_at_ms) / 1000) : null);
+  // wait 隐含 detail(等到了就该报变化);detail-only = 单次富快照不等待
+  const wantProgress = detail === true || (waitSeconds ?? 0) >= 1;
+  let pid = projectId ?? null;
+  let loaded = wantProgress ? await deps.loadSession(sessionId) : null;
+
+  const build = async (summary, extra = {}) => {
+    const out = { busy: summary.busy, stop_reason: summary.stop_reason ?? null, elapsed_s: elapsed(), ...extra };
+    if (wantProgress && loaded) Object.assign(out, await progressFields(deps, sessionId, loaded.messages));
+    if (wantProgress && entry?.token_budget !== undefined) out.token_budget = entry.token_budget;
+    if (isTerminal(summary)) {
+      // status 是廉价轮询(无 detail 时无轮次/消息字段,评审 P2-2);终态观测点触发惰性转录
+      Object.assign(out, await ensureTranscript(deps, ledger, sessionId, { entry, summary, loaded }));
+    }
+    return out;
+  };
+
+  if (!waitSeconds || isTerminal(first)) return build(first);
+  // B1:每拍 = pollSession(busy 面)+ loadSession(消息面);判定到点前必做
+  // 一次实查再报 wait_timed_out(变化恰好落在边界时不空报超时)
+  const baseline = statusSignal(first, loaded?.messages ?? []);
+  const deadline = Date.now() + waitSeconds * 1000;
+  let summary = first;
+  for (;;) {
+    await deps.sleep(deps.waitTickMs ?? 2000);
+    const l = await deps.loadSession(sessionId);
+    if (l) { loaded = l; pid = pid ?? l.session?.project_id ?? null; }
+    const s = pid ? await deps.pollSession(pid, sessionId) : null;
+    if (s) summary = s;
+    if (statusSignal(summary, loaded?.messages ?? []) !== baseline) return build(summary);
+    if (Date.now() >= deadline) return build(summary, { wait_timed_out: true });
+  }
 }
 
 /** gce-m4c:result 的 tokens 键(纯函数 aggregateTokens 的 IO 壳):
@@ -366,7 +419,7 @@ export async function coreInject(deps, ledger, { session_id: sessionId, text }) 
 // 就是 listTools 返回的 schema,这才是预算的地面真值)
 // ---------------------------------------------------------------------------
 
-export const TOOLS_BUDGET_CHARS = 3800; // AC4:八工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设后 3162(3200 锁,余 ~38),09-11 加 list_models 后实测 3403(升 3500),GCE-P2(09-12)加 list_presets + preset 放宽 string 后实测 3678——评审放行升到 3800(升锁须过评审,同步本注释 + AC4 断言 + smoke BUDGET + spec)
+export const TOOLS_BUDGET_CHARS = 4200; // AC4:八工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设后 3162(3200 锁,余 ~38),09-11 加 list_models 后实测 3403(升 3500),GCE-P2(09-12)加 list_presets + preset 放宽 string 后实测 3678(升 3800),09-13 加 status wait_seconds/detail 两参后实测 4093(升 4200,用户预批)——升锁须过评审,同步本注释 + AC4 断言 + smoke BUDGET + spec
 
 /** Zod shape(SDK 1.30 registerTool 只收 Zod;内部转 JSON Schema 上 wire)。
  * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。
@@ -386,7 +439,11 @@ export function buildToolShapes(z) {
       })).optional().describe('Full roster, replaces preset roster (moderator unchanged)'),
       token_budget: z.number().int().positive().optional().describe('Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget. Omit = unlimited'),
     },
-    discussion_status: { session_id: z.string() },
+    discussion_status: {
+      session_id: z.string(),
+      wait_seconds: z.number().int().min(1).max(MAX_WAIT_SECONDS).optional().describe('Long-poll up to N s: returns early on progress (new message / busy flip / stop_reason); else wait_timed_out:true'),
+      detail: z.boolean().optional().describe('Add progress fields: messages count, last_speaker, tokens so far (+ token_budget if declared)'),
+    },
     discussion_result: { session_id: z.string() },
     cancel_discussion: { session_id: z.string() },
     interrupt_discussion: { session_id: z.string() },
@@ -407,7 +464,7 @@ export const TOOLS = [
   },
   {
     name: 'discussion_status',
-    description: 'Check a discussion: busy=true running; busy=false + stop_reason (group_chat_end|max_rounds|cancelled|error) = finished.',
+    description: 'Check a discussion: busy=true running; busy=false + stop_reason (group_chat_end|max_rounds|cancelled|error) = finished. Optional wait_seconds long-polls for progress; detail adds messages/last_speaker/tokens.',
     shapeKey: 'discussion_status',
   },
   {
@@ -499,7 +556,7 @@ export async function createServer({ server, deps = realDeps(), ledger = createL
   const shapes = buildToolShapes(z);
   const handlers = {
     start_discussion: ({ topic, cwd, preset, participants, token_budget }) => coreStart(deps, ledger, { topic, cwd, preset, participants, tokenBudget: token_budget }),
-    discussion_status: ({ session_id }) => coreStatus(deps, ledger, session_id),
+    discussion_status: ({ session_id, wait_seconds, detail }) => coreStatus(deps, ledger, session_id, { waitSeconds: wait_seconds, detail }),
     discussion_result: ({ session_id }) => coreResult(deps, ledger, session_id),
     cancel_discussion: ({ session_id }) => coreCancel(deps, ledger, session_id),
     interrupt_discussion: ({ session_id }) => coreInterrupt(deps, ledger, session_id),

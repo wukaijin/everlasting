@@ -66,6 +66,12 @@ test('AC4(文案层):八工具面完整,成本闸/不阻塞语义在 start 描�
   assert.match(TOOLS[4].description, /preempted/);
   assert.match(TOOLS[5].description, /RUNNING/);
   assert.match(TOOLS[5].description, /start_discussion/);
+  // 09-13:status 长轮询/进度富化进描述与 shape(有界 1-30)
+  assert.match(TOOLS[1].description, /wait_seconds/);
+  const statusShape = buildToolShapes(z).discussion_status;
+  assert.ok(statusShape.wait_seconds.unwrap() instanceof z.ZodNumber, 'wait_seconds shape 应为 number');
+  assert.match(statusShape.wait_seconds.description, /Long-poll/);
+  assert.ok(statusShape.detail.unwrap() instanceof z.ZodBoolean, 'detail shape 应为 boolean');
   // GCE-P2:preset 放宽为 string(动态 schema 否决——枚举发现义务移交
   // list_presets,校验在 coreStart 运行时);describe 指向 list_presets。
   assert.ok(buildToolShapes(z).start_discussion.preset.unwrap() instanceof z.ZodString, 'preset shape 应为 string(原 enum 四档已退役)');
@@ -165,8 +171,10 @@ test('coreStart:tokenBudget 声明落建群 metadata;缺省不写键', async () 
   const { ledger } = tmpLedger();
   await coreStart(deps, ledger, { topic: '议题', cwd: '/w', tokenBudget: 400000 });
   assert.equal(calls.createSession[0].metadata.token_budget, 400000);
+  assert.equal(ledger.get('sess-1').token_budget, 400000, '09-13:记账同步存预算(status detail 消费)');
   await coreStart(deps, ledger, { topic: '议题2', cwd: '/w' });
   assert.equal('token_budget' in calls.createSession[1].metadata, false);
+  assert.equal(ledger.get('sess-1').token_budget, undefined, '未声明不写键');
 });
 
 // ---------------------------------------------------------------------------
@@ -337,6 +345,124 @@ test('coreStatus:导出失败降级不抛错(P2-1)——目录只读时仍返回
     fs.chmodSync(roDir, 0o700);
     fs.rmSync(roDir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 09-13:status 长轮询(wait_seconds)+ 进度富化(detail)
+// ---------------------------------------------------------------------------
+
+const RUNNING_SESSION = { busy: true, stop_reason: null, id: 'sess-1', project_id: 'proj-1' };
+const TRACE_ARCH = { seq: 2, runId: '', tokenUsageJson: '{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}' };
+
+test('coreStatus detail:running 富快照(messages/last_speaker/tokens/token_budget);listTurnTraces 失败省 tokens 键', async () => {
+  const loaded = {
+    session: { id: 'sess-1', project_id: 'proj-1', current_cwd: os.tmpdir(), model: 'uuid-m3', metadata: '{"participants":[]}' },
+    messages: [
+      { seq: 0, role: 'user', text: '议题', has_tool_calls: false, has_tool_results: false },
+      { seq: 1, role: 'assistant', speaker: 'moderator' },
+      { seq: 2, role: 'assistant', speaker: '架构' },
+    ],
+  };
+  {
+    const { deps } = makeMockDeps({ session: RUNNING_SESSION, loaded, traces: [TRACE_ARCH] });
+    const { ledger } = tmpLedger();
+    ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1', cwd: '/w', topic: 't', started_at_ms: 1, token_budget: 400000 });
+    const out = await coreStatus(deps, ledger, 'sess-1', { detail: true });
+    assert.deepEqual([out.busy, out.stop_reason], [true, null]);
+    assert.equal(out.messages, 3);
+    assert.equal(out.last_speaker, '架构');
+    assert.deepEqual(out.tokens, { total: 110, per_speaker: [{ speaker: '架构', tokens: 110 }] });
+    assert.equal(out.token_budget, 400000);
+    assert.equal('transcript_path' in out, false, 'running 态仍不导转录');
+    assert.equal('wait_timed_out' in out, false, '非等待调用无等待标记');
+  }
+  {
+    // 降级:trace 端点挂 → tokens 整键省略,其余进度字段不受影响(m4c 同款)
+    const { deps } = makeMockDeps({ session: RUNNING_SESSION, loaded, traces: [TRACE_ARCH] });
+    deps.listTurnTraces = async () => { throw new Error('daemon 调用失败'); };
+    const { ledger } = tmpLedger();
+    ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1', started_at_ms: 1 });
+    const out = await coreStatus(deps, ledger, 'sess-1', { detail: true });
+    assert.equal('tokens' in out, false);
+    assert.equal(out.messages, 3);
+    assert.equal('token_budget' in out, false, '记账未声明预算则不设键');
+  }
+});
+
+test('coreStatus wait_seconds:发言落地(消息面变化)提前唤醒 —— wait 隐含 detail,一次拍即返', async () => {
+  const loaded1 = { session: { id: 'sess-1', project_id: 'proj-1' }, messages: [{ seq: 0, role: 'user' }, { seq: 1, role: 'assistant', speaker: 'moderator' }] };
+  const loaded2 = { session: { id: 'sess-1', project_id: 'proj-1' }, messages: [...loaded1.messages, { seq: 2, role: 'assistant', speaker: '架构' }] };
+  const { deps, calls } = makeMockDeps({ session: RUNNING_SESSION, loaded: loaded1, traces: [TRACE_ARCH] });
+  const queue = [loaded1, loaded2];
+  let served = 0;
+  deps.loadSession = async () => { served += 1; return queue[Math.min(served - 1, queue.length - 1)]; };
+  let slept = 0;
+  deps.sleep = async () => { slept += 1; };
+  deps.waitTickMs = 1;
+  const { ledger } = tmpLedger();
+  ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1', started_at_ms: Date.now() - 1000 });
+  const out = await coreStatus(deps, ledger, 'sess-1', { waitSeconds: 30 });
+  assert.equal(out.messages, 3, '唤醒时快照 = 新消息面');
+  assert.equal(out.last_speaker, '架构');
+  assert.equal(slept, 1, '变化落在第一拍,不再多等');
+  assert.equal('wait_timed_out' in out, false);
+  assert.equal(calls.pollSession.length >= 2, true, '基线 + 唤醒拍各查一次 busy 面');
+});
+
+test('coreStatus wait_seconds:全场无变化 → wait_timed_out:true(到点前实查过,不空报)', async () => {
+  const loaded = { session: { id: 'sess-1', project_id: 'proj-1' }, messages: [{ seq: 0, role: 'user' }] };
+  const { deps } = makeMockDeps({ session: RUNNING_SESSION, loaded });
+  let slept = 0;
+  deps.sleep = async () => { slept += 1; };
+  deps.waitTickMs = 30; // 真睡 30ms × ~34 拍 ≈ 1s,真时钟验证到点路径
+  const { ledger } = tmpLedger();
+  ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1', started_at_ms: 1 });
+  const t0 = Date.now();
+  const out = await coreStatus(deps, ledger, 'sess-1', { waitSeconds: 1 });
+  assert.equal(out.wait_timed_out, true);
+  assert.deepEqual([out.busy, out.stop_reason], [true, null]);
+  assert.equal(out.messages, 1, '超时也带 detail(wait 隐含)');
+  assert.ok(Date.now() - t0 >= 950, '真等到点而非立即放弃');
+  assert.ok(slept >= 5, '多拍实查后才判超时');
+});
+
+test('coreStatus wait_seconds:等待中翻终态 → 唤醒并惰性导转录', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcmcp-wait-term-'));
+  const loaded = {
+    session: { id: 'sess-1', project_id: 'proj-1', current_cwd: dir, created_at: new Date().toISOString(), model: 'uuid-m3', metadata: '{"participants":[]}', discussion_summary: 'S', stop_reason: 'group_chat_end' },
+    messages: [{ seq: 0, role: 'user' }, { seq: 1, role: 'assistant', speaker: 'moderator' }],
+  };
+  const sessions = [RUNNING_SESSION, { busy: false, stop_reason: 'group_chat_end', id: 'sess-1', project_id: 'proj-1' }];
+  let polled = 0;
+  const { deps } = makeMockDeps({ session: sessions[0], loaded });
+  deps.pollSession = async () => { polled += 1; return sessions[Math.min(polled - 1, 1)]; };
+  deps.sleep = async () => {};
+  deps.waitTickMs = 1;
+  const { ledger } = tmpLedger();
+  ledger.set('sess-1', { request_id: 'r1', project_id: 'proj-1', cwd: dir, topic: 't', started_at_ms: 1 });
+  const out = await coreStatus(deps, ledger, 'sess-1', { waitSeconds: 30 });
+  assert.equal(out.busy, false);
+  assert.equal(out.stop_reason, 'group_chat_end');
+  assert.ok(out.transcript_path?.startsWith(path.join(dir, 'out')), '终态唤醒同样触发转录');
+  assert.equal('wait_timed_out' in out, false);
+});
+
+test('coreStatus wait_seconds 校验:0/超上限/非整数拒;终态基线即返不等待', async () => {
+  const { deps } = makeMockDeps({ session: RUNNING_SESSION });
+  const { ledger } = tmpLedger();
+  for (const bad of [0, 31, 2.5]) {
+    await assert.rejects(coreStatus(deps, ledger, 'sess-1', { waitSeconds: bad }), /wait_seconds/);
+  }
+  const terminal = { busy: false, stop_reason: 'cancelled', id: 'sess-1', project_id: 'proj-1' };
+  const term = makeMockDeps({
+    session: terminal,
+    loaded: { session: { id: 'sess-1', project_id: 'proj-1', current_cwd: os.tmpdir(), model: 'uuid-m3', metadata: '{"participants":[]}' }, messages: [] },
+  });
+  let slept = 0;
+  term.deps.sleep = async () => { slept += 1; };
+  const out = await coreStatus(term.deps, ledger, 'sess-1', { waitSeconds: 30 });
+  assert.equal(out.stop_reason, 'cancelled');
+  assert.equal(slept, 0, '基线即终态:不进等待循环');
 });
 
 test('coreResult:非终态明确报错;终态返回 summary/roster/stats/转录;summary 缺失警告', async () => {
@@ -533,6 +659,9 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 七工具 + callTool �
 
   const listed = await client.listTools();
   assert.equal(listed.tools.length, 8);
+  // 09-13:wire 上 status schema 带两可选参(宿主注入 context 的就是这份)
+  const statusWire = listed.tools.find((t) => t.name === 'discussion_status');
+  assert.deepEqual(Object.keys(statusWire.inputSchema.properties), ['session_id', 'wait_seconds', 'detail']);
 
   // AC4 预算地面真值:宿主注入 LLM context 的就是这份 wire schema
   const wireChars = JSON.stringify(listed.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;

@@ -22,7 +22,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(SCRIPTS, 'group-chat-mcp.mjs');
-const BUDGET = 3800; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;GCE-P2(09-12)加 list_presets 后实测 wire ≈3678 chars
+const BUDGET = 4200; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;09-13 加 status wait_seconds/detail 后实测 wire ≈4093 chars
 
 const live = process.argv.includes('--live');
 const binIdx = process.argv.indexOf('--bin');
@@ -60,6 +60,16 @@ try {
   if (!probe.isError) fail('discussion_status(不存在 id)应走 isError');
   if (!/session 不存在|daemon/.test(JSON.parse(probeText).error)) fail(`错误文案不可操作:${probeText}`);
   process.stderr.write(`[smoke] handler 链 ok;daemon ${daemonUp ? '在跑' : '没跑(非 live 冒烟允许)'}\n`);
+
+  // 2a) 09-13 wait_seconds/detail 探针:参数接线(不存在 id 在基线即报,
+  // 不进等待循环)+ 越界值 wire 校验(zod min/max 生效)。
+  const wp = await client.callTool({ name: 'discussion_status', arguments: { session_id: 'smoke-nonexistent', wait_seconds: 2, detail: true } });
+  if (!wp.isError || !/session 不存在|daemon/.test(JSON.parse(wp.content?.[0]?.text || '{}').error || '')) {
+    fail('wait_seconds 探针应与无参同错误(参数已接进 coreStatus 基线链)');
+  }
+  const bad = await client.callTool({ name: 'discussion_status', arguments: { session_id: 'smoke-nonexistent', wait_seconds: 0 } });
+  if (!bad.isError) fail('wait_seconds=0 应被 zod min(1) 拒');
+  process.stderr.write('[smoke] wait_seconds/detail 接线 + 越界校验 ok\n');
 
   // 2b) list_presets(GCE-P2):内置四 key 恒在 + degraded 与 daemon 两态一致。
   // 用户行数量随环境漂移,只断言确定性部分。
