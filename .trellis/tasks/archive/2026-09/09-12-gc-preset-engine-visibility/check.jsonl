@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/group-chat-presets.md", "reason": "验收对照:P1/P1b 契约不被 P2 破坏(覆盖行语义/快照/校验矩阵)"}
+{"file": ".trellis/spec/scripts/index.md", "reason": "scripts 层质量口径(node --test/冒烟/预算锁同步义务)"}
+{"file": ".trellis/tasks/09-12-gc-preset-engine-visibility/research/engine-visibility.md", "reason": "研究纪要:降级两层分工/预算四处同步/冒烟确定性口径,check 按此复核"}

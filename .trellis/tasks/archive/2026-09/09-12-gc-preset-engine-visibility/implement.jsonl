@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/group-chat-presets.md", "reason": "GCE-P1/P1b 全契约:表/wire/覆盖行语义/快照口径,P2 要镜像的合并规则与边界句"}
+{"file": ".trellis/spec/scripts/index.md", "reason": "scripts 层规范入口(MCP/deploy 纪律:预算锁/冒烟口径)"}
+{"file": ".trellis/spec/scripts/group-chat-mcp-deploy.md", "reason": "standalone bin 烤 JSON 语义与 argv[1] 哨兵约束——运行时拉取不得破坏部署面"}
+{"file": ".trellis/tasks/09-12-gc-preset-engine-visibility/research/engine-visibility.md", "reason": "本任务前期调研:现状消费点/HTTP 面/测试布局/风险(行号快照)"}
