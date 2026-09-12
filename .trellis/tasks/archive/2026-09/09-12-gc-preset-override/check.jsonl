@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/group-chat-presets.md", "reason": "验收对照:GCE-P1 契约不被 override 破坏(快照/校验单源/scripts 零改动)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查口径"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量检查口径"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "wire 形状漂移防护(builtinKey optional 字段)"}

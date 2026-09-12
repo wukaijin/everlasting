@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/group-chat-presets.md", "reason": "GCE-P1 全契约:表/wire/校验矩阵/快照语义/UUID 借道 byId 机制——本任务在此之上增补 override"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "soft-FK 与 CRUD/迁移约定;加列走 columns.rs 幂等先例的规范依据"}
+{"file": ".trellis/spec/backend/scheduled-tasks.md", "reason": "GroupChatTaskConfig 形状与 preset_key 快照语义(AC3 stale 联动)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "pinia store 约定(mergedPresets getter 改造)"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest 组件测试环境约定(mock transport 按 cmd 分发)"}
+{"file": ".trellis/tasks/archive/2026-09/09-12-gc-preset-settings/research/crud-precedent-chain.md", "reason": "GCE-P1 沉淀的触点清单与先例链(§9);本任务触点是其子集+columns.rs 迁移"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Settings tab 组件结构/命名约定(内置区三态改造)"}
