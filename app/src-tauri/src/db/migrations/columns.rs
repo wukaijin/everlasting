@@ -226,3 +226,30 @@ pub(crate) async fn add_scheduled_tasks_column_if_missing(
     }
     Ok(())
 }
+
+/// Add a column to `group_chat_presets` if it doesn't already exist.
+/// Mirrors [`add_scheduled_tasks_column_if_missing`]. Added for
+/// GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)— `builtin_key`:
+/// 内置档覆盖行的链接键。列语义:NULL = 普通用户行;非 NULL(值 ∈
+/// 内置四 key)= 覆盖行,顶替对应内置档槽位。新库 CREATE TABLE 已带
+/// 此列(probe no-op),本 helper 只服务存量库幂等加列。
+pub(crate) async fn add_group_chat_presets_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('group_chat_presets') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!(
+            "ALTER TABLE group_chat_presets ADD COLUMN {} {}",
+            column, decl
+        );
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}

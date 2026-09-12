@@ -8,11 +8,11 @@ use sqlx::SqlitePool;
 use crate::projects::DEFAULT_PROJECT_ID;
 
 use super::columns::{
-    add_autonomous_memories_column_if_missing, add_messages_column_if_missing,
-    add_models_column_if_missing, add_project_column_if_missing, add_provider_column_if_missing,
-    add_scheduled_tasks_column_if_missing, add_session_audit_events_column_if_missing,
-    add_session_column_if_missing, add_subagent_runs_column_if_missing,
-    add_turn_trace_column_if_missing,
+    add_autonomous_memories_column_if_missing, add_group_chat_presets_column_if_missing,
+    add_messages_column_if_missing, add_models_column_if_missing, add_project_column_if_missing,
+    add_provider_column_if_missing, add_scheduled_tasks_column_if_missing,
+    add_session_audit_events_column_if_missing, add_session_column_if_missing,
+    add_subagent_runs_column_if_missing, add_turn_trace_column_if_missing,
 };
 use super::schema_helpers::{
     add_turn_trace_provider_id_and_backfill, home_dir_or_dot,
@@ -1463,6 +1463,13 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // (camelCase,与 wire 同形)在 db 层完成(见 db/group_chat_presets.rs)。
     // 幂等重放:新库直接建,存量库 IF NOT EXISTS no-op;回滚 = 删表
     // (用户数据可弃,design §5)。
+    //
+    // GCE-P1b(2026-09-12, task 09-12-gc-preset-override)增补
+    // `builtin_key` 列(新库直建;存量库走下方幂等加列,scheduled_tasks
+    // F2b 的「CREATE TABLE 带新列 + 幂等加列兜底」双路径先例):NULL =
+    // 普通用户行;非 NULL(值 ∈ 内置四 key)= 覆盖行,顶替对应内置档
+    // 槽位。UNIQUE 索引对 NULL 互不相撞(SQLite 语义)→ 每个内置 key
+    // 至多一条覆盖行,普通用户行(全 NULL)不受影响。
     sqlx::query(
         r#"
  CREATE TABLE IF NOT EXISTS group_chat_presets (
@@ -1472,8 +1479,21 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  moderator_model_id TEXT NOT NULL,
  participants TEXT NOT NULL,
  created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL
+ updated_at TEXT NOT NULL,
+ builtin_key TEXT
  )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+    // GCE-P1b:存量库补 builtin_key 列(新库已带,probe no-op)。
+    add_group_chat_presets_column_if_missing(pool, "builtin_key", "TEXT").await?;
+    // 每个内置 key 至多一条覆盖行(DB 层铁律);commands 层 create 前置
+    // 查重给可读 400,本索引只作并发兜底(name UNIQUE 同款分工)。
+    sqlx::query(
+        r#"
+ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
+ ON group_chat_presets(builtin_key)
  "#,
     )
     .execute(pool)

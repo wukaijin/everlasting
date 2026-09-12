@@ -8,6 +8,15 @@
 //! 的单一事实源(M1 CLI / MCP / 前端三处消费),只读;本模块只管
 //! 用户预设,校验层负责与内置 key 不撞名。
 //!
+//! GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)新增**覆盖行**
+//! 语义:create 可带可选 `builtin_key`(∈ 内置四 key),带该键的行 =
+//! 顶替对应内置档槽位的覆盖行(每个 key 至多一条,DB 的 UNIQUE 索引
+//! `idx_group_chat_presets_builtin_key` 兜底,create 前置查重给可读
+//! 400)。覆盖行三定则:`builtin_key` 创建时定死(update 不触碰该列);
+//! 删除覆盖行 = 恢复内置(回落 JSON 源码定义);管理面 display 名与
+//! 链接键分离 —— name 撞内置 key 的校验对覆盖行照常生效(覆盖
+//! 「arch」的行也不能叫「arch」)。
+//!
 //! 校验(design §3,单一事实源在本文件 `validate_preset_input`):
 //! 名称 trim 非空 ≤40 字符、大小写不敏感唯一(与用户行 + 内置 key
 //! 双查)、描述 ≤200、主持人与全部参与者模型存在(允许 disabled)、
@@ -209,15 +218,18 @@ pub async fn list_group_chat_presets(
 // ---------------------------------------------------------------------------
 
 /// `create_group_chat_preset(name, description, moderatorModelId,
-/// participants)` — 校验(design §3)通过后落库,返回新行(id 服务端
-/// 生成)。名称唯一性大小写不敏感校验在 [`validate_preset_input`],
-/// DB 的 `UNIQUE` 列约束只作精确匹配兜底。
+/// participants, builtinKey?)` — 校验(design §3)通过后落库,返回新行
+/// (id 服务端生成)。名称唯一性大小写不敏感校验在
+/// [`validate_preset_input`],DB 的 `UNIQUE` 列约束只作精确匹配兜底。
+/// `builtin_key`:Some = 内置档覆盖行(两臂专属校验见下,design §3);
+/// None = 普通用户行。
 pub async fn create_group_chat_preset_inner(
     state: &Arc<AppState>,
     name: String,
     description: String,
     moderator_model_id: String,
     participants: Vec<GcPresetParticipant>,
+    builtin_key: Option<String>,
 ) -> Result<GcPresetRow, AppCommandError> {
     let name = validate_preset_input(
         &state.db,
@@ -228,12 +240,45 @@ pub async fn create_group_chat_preset_inner(
         None,
     )
     .await?;
+    // GCE-P1b 覆盖行校验(design §3,create 侧专属两臂;追加在
+    // validate_preset_input 之后 —— 其「name 不撞内置 key」臂对覆盖行
+    // 照常生效,display 名 ≠ 链接键)。trim 后空串走白名单臂被拒
+    // (脏值不给静默降级)。
+    let builtin_key = match builtin_key.as_deref().map(str::trim) {
+        None => None,
+        Some(k) => {
+            // 臂 1:key 必须在内置四 key 白名单内(防脏值把覆盖行悬空
+            // —— 前端 mergedPresets 对不在内置集合的 key 会静默跳过)。
+            if !BUILTIN_PRESET_KEYS.contains(&k) {
+                return Err(invalid(format!(
+                    "内置预设 key「{k}」无效(仅支持 {})",
+                    BUILTIN_PRESET_KEYS.join(" / ")
+                )));
+            }
+            // 臂 2:同 key 已有覆盖行 → 拒。每个内置 key 至多一条覆盖,
+            // 可读 400 在此给出;DB 的 UNIQUE 索引只作并发兜底(竞态
+            // 穿透 = sqlx 错 → 500,name UNIQUE 同款分工,接受)。
+            let existing: Option<(String,)> =
+                sqlx::query_as("SELECT id FROM group_chat_presets WHERE builtin_key = ?")
+                    .bind(k)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("create_group_chat_preset: builtin_key 查重失败: {}", e)
+                    })?;
+            if existing.is_some() {
+                return Err(invalid(format!("内置预设「{k}」已有覆盖,请编辑现有覆盖行")));
+            }
+            Some(k.to_string())
+        }
+    };
     let row = gc::create_group_chat_preset(
         &state.db,
         &name,
         &description,
         moderator_model_id.trim(),
         normalize_participants(participants),
+        builtin_key.as_deref(),
     )
     .await
     .map_err(|e| anyhow::anyhow!("create_group_chat_preset: insert failed: {}", e))?;
@@ -247,6 +292,7 @@ pub async fn create_group_chat_preset(
     description: String,
     moderator_model_id: String,
     participants: Vec<GcPresetParticipant>,
+    builtin_key: Option<String>,
 ) -> Result<GcPresetRow, AppCommandError> {
     create_group_chat_preset_inner(
         state.inner(),
@@ -254,6 +300,7 @@ pub async fn create_group_chat_preset(
         description,
         moderator_model_id,
         participants,
+        builtin_key,
     )
     .await
 }

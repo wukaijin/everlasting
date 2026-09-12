@@ -10,6 +10,11 @@
 //! (`db/group_chat_presets_tests.rs`),这里只补一条 create→list→delete
 //! 闭环锁命令编排。
 //!
+//! GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)增补覆盖行
+//! 校验矩阵:builtin_key 非法值 400 / 同 key 重复覆盖 400 / 合法覆盖
+//! create→list 带回 builtin_key / 覆盖行 update 不改 builtin_key /
+//! 覆盖行 name 撞内置 key 仍 400。
+//!
 //! 状态构造沿 `daemon/routes/projects.rs` 测试先例:
 //! `AppState::load_from_dir(tempdir)` 建真实池,再经
 //! `db::create_provider` + `db::create_model` 显式种模型行
@@ -118,11 +123,13 @@ async fn create_list_delete_round_trip() {
         "描述".into(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await
     .expect("create ok");
     assert_eq!(row.name, "我的评审团");
     assert_eq!(row.participants.len(), 2);
+    assert_eq!(row.builtin_key, None, "不带 builtin_key = 普通用户行");
 
     let list = list_group_chat_presets_inner(&env.state)
         .await
@@ -163,6 +170,7 @@ async fn create_rejects_builtin_key_case_insensitive() {
             String::new(),
             env.model_a.clone(),
             roster(&env.model_a, &env.model_b),
+            None,
         )
         .await;
         expect_invalid(res, &format!("撞内置 key:{name}"));
@@ -179,6 +187,7 @@ async fn create_rejects_duplicate_user_name_case_insensitive() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await
     .expect("first create ok");
@@ -188,6 +197,7 @@ async fn create_rejects_duplicate_user_name_case_insensitive() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await;
     expect_invalid(res, "用户重名(CI)");
@@ -203,6 +213,7 @@ async fn update_uniqueness_excludes_self() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await
     .expect("create A");
@@ -212,6 +223,7 @@ async fn update_uniqueness_excludes_self() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await
     .expect("create B");
@@ -270,6 +282,7 @@ async fn create_rejects_missing_models() {
         String::new(),
         "ghost-model".into(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await;
     let err = res.expect_err("moderator 模型缺必须被拒绝");
@@ -284,6 +297,7 @@ async fn create_rejects_missing_models() {
         String::new(),
         env.model_a.clone(),
         bad,
+        None,
     )
     .await;
     expect_invalid(res, "participants 模型不存在");
@@ -302,6 +316,7 @@ async fn create_allows_disabled_models() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await
     .expect("disabled model must be allowed at save time");
@@ -319,6 +334,7 @@ async fn create_rejects_participant_count_out_of_bounds() {
         String::new(),
         env.model_a.clone(),
         one,
+        None,
     )
     .await;
     expect_invalid(res, "participants 1 条");
@@ -351,6 +367,7 @@ async fn create_rejects_participant_count_out_of_bounds() {
         String::new(),
         env.model_a.clone(),
         four.clone(),
+        None,
     )
     .await;
     expect_invalid(res, "participants 4 条");
@@ -363,6 +380,7 @@ async fn create_rejects_participant_count_out_of_bounds() {
         String::new(),
         env.model_a.clone(),
         three,
+        None,
     )
     .await
     .expect("3 人(上限)必须通过");
@@ -427,6 +445,7 @@ async fn create_rejects_bad_participant_names() {
             String::new(),
             env.model_a.clone(),
             participants,
+            None,
         )
         .await;
         expect_invalid(res, why);
@@ -445,6 +464,7 @@ async fn create_rejects_invalid_persona_and_accepts_all_kinds() {
         String::new(),
         env.model_a.clone(),
         bad,
+        None,
     )
     .await;
     expect_invalid(res, "persona 非法");
@@ -469,6 +489,7 @@ async fn create_rejects_invalid_persona_and_accepts_all_kinds() {
             String::new(),
             env.model_a.clone(),
             participants,
+            None,
         )
         .await
         .unwrap_or_else(|e| panic!("内置 kind「{kind}」必须通过: {e:?}"));
@@ -488,6 +509,7 @@ async fn create_enforces_name_and_description_length_bounds() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await
     .expect("40 字符名称必须通过");
@@ -512,6 +534,7 @@ async fn create_enforces_name_and_description_length_bounds() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await;
     expect_invalid(res, "名称超长");
@@ -535,7 +558,143 @@ async fn create_enforces_name_and_description_length_bounds() {
         String::new(),
         env.model_a.clone(),
         roster(&env.model_a, &env.model_b),
+        None,
     )
     .await;
     expect_invalid(res, "名称空白");
+}
+
+// ---------------------------------------------------------------------------
+// GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)覆盖行校验矩阵
+// ---------------------------------------------------------------------------
+
+/// builtin_key 非法值(不在内置四 key 白名单)→ InvalidRequest。
+#[tokio::test(flavor = "multi_thread")]
+async fn create_rejects_unknown_builtin_key() {
+    let env = make_env().await;
+    let res = create_group_chat_preset_inner(
+        &env.state,
+        "覆盖行坏 key".into(),
+        String::new(),
+        env.model_a.clone(),
+        roster(&env.model_a, &env.model_b),
+        Some("nope".into()),
+    )
+    .await;
+    expect_invalid(res, "builtin_key 非法值");
+}
+
+/// 同 key 已有覆盖行 → InvalidRequest(每个内置 key 至多一条覆盖;
+/// create 前置查重给可读 400,DB UNIQUE 索引只作并发兜底)。
+#[tokio::test(flavor = "multi_thread")]
+async fn create_rejects_duplicate_override_for_same_key() {
+    let env = make_env().await;
+    create_group_chat_preset_inner(
+        &env.state,
+        "架构档重制版".into(),
+        String::new(),
+        env.model_a.clone(),
+        roster(&env.model_a, &env.model_b),
+        Some("arch".into()),
+    )
+    .await
+    .expect("first override ok");
+    let res = create_group_chat_preset_inner(
+        &env.state,
+        "架构档又改".into(),
+        String::new(),
+        env.model_a.clone(),
+        roster(&env.model_a, &env.model_b),
+        Some("arch".into()),
+    )
+    .await;
+    let err = res.expect_err("同 key 二次覆盖必须被拒");
+    assert_eq!(err.category, ErrorCategory::InvalidRequest);
+    assert!(
+        err.message.contains("已有覆盖"),
+        "message 应指向既有覆盖行, got: {}",
+        err.message
+    );
+}
+
+/// 合法覆盖 create → list 行带回 builtin_key(命令编排把链接键
+/// 原样透传到 wire 形状)。
+#[tokio::test(flavor = "multi_thread")]
+async fn create_override_round_trips_builtin_key_through_list() {
+    let env = make_env().await;
+    let row = create_group_chat_preset_inner(
+        &env.state,
+        "架构档重制版".into(),
+        "覆盖内置 arch".into(),
+        env.model_a.clone(),
+        roster(&env.model_a, &env.model_b),
+        Some("arch".into()),
+    )
+    .await
+    .expect("override create ok");
+    assert_eq!(row.builtin_key.as_deref(), Some("arch"));
+
+    let list = list_group_chat_presets_inner(&env.state)
+        .await
+        .expect("list ok");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].builtin_key.as_deref(), Some("arch"));
+}
+
+/// 覆盖行 update(改名 / 换模型)成功,但 builtin_key 保持创建时的值
+/// (链接键不可变,UPDATE 不触碰该列)。
+#[tokio::test(flavor = "multi_thread")]
+async fn update_override_keeps_builtin_key_immutable() {
+    let env = make_env().await;
+    let row = create_group_chat_preset_inner(
+        &env.state,
+        "架构档重制版".into(),
+        String::new(),
+        env.model_a.clone(),
+        roster(&env.model_a, &env.model_b),
+        Some("arch".into()),
+    )
+    .await
+    .expect("override create ok");
+
+    let updated = update_group_chat_preset_inner(
+        &env.state,
+        row.id,
+        "架构档改名".into(),
+        "换了主持".into(),
+        env.model_b.clone(),
+        roster(&env.model_b, &env.model_a),
+    )
+    .await
+    .expect("update ok");
+    assert_eq!(updated.name, "架构档改名");
+    assert_eq!(updated.moderator_model_id, env.model_b);
+    assert_eq!(
+        updated.builtin_key.as_deref(),
+        Some("arch"),
+        "update 不可改 builtin_key"
+    );
+}
+
+/// 覆盖行的 name 撞内置 key 仍 400(display 名与链接键分离:
+/// 覆盖「arch」的行管理面名字也不能叫「arch」)。
+#[tokio::test(flavor = "multi_thread")]
+async fn override_row_name_still_rejects_builtin_key() {
+    let env = make_env().await;
+    let res = create_group_chat_preset_inner(
+        &env.state,
+        "arch".into(),
+        String::new(),
+        env.model_a.clone(),
+        roster(&env.model_a, &env.model_b),
+        Some("arch".into()),
+    )
+    .await;
+    let err = res.expect_err("覆盖行 name 撞内置 key 必须被拒");
+    assert_eq!(err.category, ErrorCategory::InvalidRequest);
+    assert!(
+        err.message.contains("与内置预设冲突"),
+        "message 应来自 validate_preset_input 的撞名臂, got: {}",
+        err.message
+    );
 }

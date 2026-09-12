@@ -35,6 +35,11 @@ pub struct CreateGroupChatPresetRequest {
     pub description: String,
     pub moderator_model_id: String,
     pub participants: Vec<GcPresetParticipant>,
+    /// GCE-P1b(2026-09-12, task `09-12-gc-preset-override`):可选;
+    /// Some(∈ 内置四 key)= 内置档覆盖行。serde default = 旧请求体
+    /// 缺键仍反序列化(additive,None = 普通用户行)。
+    #[serde(default)]
+    pub builtin_key: Option<String>,
 }
 
 pub async fn create_group_chat_preset(
@@ -47,6 +52,7 @@ pub async fn create_group_chat_preset(
         req.description,
         req.moderator_model_id,
         req.participants,
+        req.builtin_key,
     )
     .await?;
     Ok(Json(result))
@@ -269,5 +275,63 @@ mod tests {
         let (code, v) = post_json(&app, "/list_group_chat_presets", "{}").await;
         assert_eq!(code, StatusCode::OK);
         assert!(v.as_array().unwrap().is_empty());
+
+        // --- GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)
+        // 覆盖流:create 带 snake 顶层 `builtin_key` → 响应 camelCase
+        // `builtinKey`;同 key 二次 create → 400;delete 覆盖行 =
+        // 恢复内置。name 用不撞内置 key 的名字(display 名 ≠ 链接键)。
+        let (code, v) = post_json(
+            &app,
+            "/create_group_chat_preset",
+            &serde_json::json!({
+                "name": "架构档覆盖",
+                "description": "覆盖内置 arch",
+                "moderator_model_id": m1.id,
+                "participants": participants,
+                "builtin_key": "arch",
+            })
+            .to_string(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "override create: {v}");
+        assert_eq!(v["builtinKey"], "arch", "wire camelCase: builtinKey");
+        let override_id = v["id"].as_str().expect("override id").to_string();
+
+        // 同 key 二次 create → 400(每内置 key 至多一条覆盖)。
+        let (code, v) = post_json(
+            &app,
+            "/create_group_chat_preset",
+            &serde_json::json!({
+                "name": "架构档覆盖二号",
+                "description": "",
+                "moderator_model_id": m1.id,
+                "participants": participants,
+                "builtin_key": "arch",
+            })
+            .to_string(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "同 key 二次覆盖: {v}");
+        assert_eq!(v["category"], "InvalidRequest");
+
+        // list 看得到覆盖行(带 builtinKey)。
+        let (code, v) = post_json(&app, "/list_group_chat_presets", "{}").await;
+        assert_eq!(code, StatusCode::OK, "list: {v}");
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["id"], override_id.as_str());
+        assert_eq!(v[0]["builtinKey"], "arch");
+
+        // delete 覆盖行 → 恢复内置(list 不再含覆盖行,删 id 不存在)。
+        let (code, v) = post_json(
+            &app,
+            "/delete_group_chat_preset",
+            &serde_json::json!({ "id": override_id }).to_string(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "delete override: {v}");
+        assert_eq!(v["ok"], true);
+        let (code, v) = post_json(&app, "/list_group_chat_presets", "{}").await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(v.as_array().unwrap().is_empty(), "删除覆盖行 = 恢复内置");
     }
 }

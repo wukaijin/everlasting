@@ -15,7 +15,9 @@
 //!   moderator_model_id TEXT NOT NULL,              -- soft FK → models.id(不建约束)
 //!   participants       TEXT NOT NULL,              -- JSON 数组(camelCase,与 wire 同形)
 //!   created_at         TEXT NOT NULL,
-//!   updated_at         TEXT NOT NULL
+//!   updated_at         TEXT NOT NULL,
+//!   builtin_key        TEXT                        -- GCE-P1b:NULL = 普通用户行;
+//!                                                  -- 值 ∈ 内置四 key = 覆盖行(UNIQUE 索引)
 //! )
 //! ```
 //!
@@ -61,6 +63,12 @@ pub struct GcPresetRow {
     pub created_at: String,
     /// RFC 3339。
     pub updated_at: String,
+    /// GCE-P1b:`None` = 普通用户行;`Some(key)`(key ∈ 内置四 key,
+    /// 白名单在 commands 层)= 内置档覆盖行,顶替对应内置档槽位。
+    /// 创建时定死(update 不触碰该列),删除覆盖行 = 恢复内置。
+    /// wire additive(None 不序列化,旧消费方字节不变)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_key: Option<String>,
 }
 
 /// 把一行 `group_chat_presets` 查询结果映射成 [`GcPresetRow`]
@@ -81,18 +89,23 @@ fn map_row(r: &sqlx::sqlite::SqliteRow) -> Result<GcPresetRow, sqlx::Error> {
         })?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
+        builtin_key: r.try_get("builtin_key")?,
     })
 }
 
 /// Insert a new preset. `id` 服务端生成(`Uuid::new_v4`);名称唯一性
 /// (大小写不敏感 + 不撞内置 key)由 commands 层校验,`UNIQUE` 列
-/// 约束只作精确匹配兜底。校验序见 `commands/group_chat_presets.rs`。
+/// 约束只作精确匹配兜底。`builtin_key`:`None` = 普通用户行;
+/// `Some(key)` = 内置档覆盖行(合法性 / 同 key 唯一性的可读校验在
+/// commands 层,DB 的 `idx_group_chat_presets_builtin_key` UNIQUE 索引
+/// 只作并发兜底)。校验序见 `commands/group_chat_presets.rs`。
 pub async fn create_group_chat_preset(
     pool: &SqlitePool,
     name: &str,
     description: &str,
     moderator_model_id: &str,
     participants: Vec<GcPresetParticipant>,
+    builtin_key: Option<&str>,
 ) -> Result<GcPresetRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
@@ -101,8 +114,9 @@ pub async fn create_group_chat_preset(
     sqlx::query(
         r#"
  INSERT INTO group_chat_presets
- (id, name, description, moderator_model_id, participants, created_at, updated_at)
- VALUES (?, ?, ?, ?, ?, ?, ?)
+ (id, name, description, moderator_model_id, participants, created_at, updated_at,
+  builtin_key)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
  "#,
     )
     .bind(&id)
@@ -112,6 +126,7 @@ pub async fn create_group_chat_preset(
     .bind(&participants_json)
     .bind(&now)
     .bind(&now)
+    .bind(builtin_key)
     .execute(pool)
     .await?;
     Ok(GcPresetRow {
@@ -122,16 +137,18 @@ pub async fn create_group_chat_preset(
         participants,
         created_at: now.clone(),
         updated_at: now,
+        builtin_key: builtin_key.map(|s| s.to_string()),
     })
 }
 
 /// List all user presets, `ORDER BY name`(稳定序:列表渲染不因重取
-/// 而重排;内置档由前端按 JSON 声明序另列,与本表无关)。
+/// 而重排;内置档由前端按 JSON 声明序另列,与本表无关)。覆盖行
+/// (builtin_key 非空)同在表内,由消费方按需区分。
 pub async fn list_group_chat_presets(pool: &SqlitePool) -> Result<Vec<GcPresetRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
  SELECT id, name, description, moderator_model_id, participants,
- created_at, updated_at
+ created_at, updated_at, builtin_key
  FROM group_chat_presets
  ORDER BY name
  "#,
@@ -150,7 +167,7 @@ pub async fn get_group_chat_preset(
     let row = sqlx::query(
         r#"
  SELECT id, name, description, moderator_model_id, participants,
- created_at, updated_at
+ created_at, updated_at, builtin_key
  FROM group_chat_presets
  WHERE id = ?
  "#,
@@ -167,7 +184,8 @@ pub async fn get_group_chat_preset(
 /// Patch a preset by `id`. Returns `None` if the row doesn't exist
 /// (commands 层转 `InvalidRequest`,防编辑竞态静默)。成功时回读整行
 /// (镜像 update_model 的 re-read 模式:UPDATE 不触碰 `created_at`,
-/// 回读才能带回真实值)。
+/// 回读才能带回真实值)。`builtin_key` 同样不在 SET 清单 —— 覆盖行
+/// 的链接键创建时定死,update 不可改(design §1.1)。
 pub async fn update_group_chat_preset(
     pool: &SqlitePool,
     id: &str,
