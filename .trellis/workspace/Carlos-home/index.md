@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 139
+- **Total Sessions**: 140
 - **Last Active**: 2026-09-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1594 | Active |
+| `journal-4.md` | ~1617 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 140 | 2026-09-12 | 群聊预设内置档覆盖层(GCE-P1b):builtin_key 覆盖行 + mergedPresets 原位顶替 + Settings 覆盖编辑/恢复内置 | `1c2e0445`, `53026203`, `2017ecfe` | `main` |
 | 139 | 2026-09-12 | 群聊预设 Settings 可编辑可新增(GCE-P1) | `090bf1d3` | `main` |
 | 138 | 2026-09-11 | 修复 wire 层 tool_result 拆条致 deepseek 中继 400 生成中断 | `d05026c9` | `main` |
 | 137 | 2026-09-09 | 群聊禁用模型泄漏修复——preset 启用目录解析 + 行级回显 pinning | `f4e9242b` | `main` |

@@ -1592,3 +1592,26 @@ group_chat_presets 新表(UUID 引用)+四条 IPC 命令+daemon 路由;Settings 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 140: 群聊预设内置档覆盖层(GCE-P1b):builtin_key 覆盖行 + mergedPresets 原位顶替 + Settings 覆盖编辑/恢复内置
+
+**Date**: 2026-09-12
+**Task**: 群聊预设内置档覆盖层(GCE-P1b):builtin_key 覆盖行 + mergedPresets 原位顶替 + Settings 覆盖编辑/恢复内置
+**Branch**: `main`
+
+### Summary
+
+GCE-P1b 落地:group_chat_presets 加可空 builtin_key 列 + UNIQUE 索引(NULL 互不相撞,每内置 key 至多一条覆盖行;columns.rs 幂等加列 + CREATE TABLE 双路径),create 命令加可选参数并校验两臂(非法 key/同 key 重复覆盖均 400),update 不触碰该列。前端 mergedPresets 覆盖行原位顶替内置槽(key/name 保持内置 key,消费方源码零改动),Settings 内置区三态(覆盖编辑预填 JSON def/已覆盖 chip/恢复内置=删行回落源码);快照语义与 preset_key 归位不变(B9 stale 自动吃覆盖后定义)。打磨项 4(消费方覆盖修复跳转)按预留砍掉:SettingsModal 打开态是 Sidebar 局部 ref,跨视图跳转需新全局机制,不值。验证:cargo --lib 2405 绿/pnpm 1735 绿/routes-sync 过/vue-tsc+clippy+fmt 过,scripts/ 零改动。spec group-chat-presets.md 增补 override 契约,DAEMON-API §6.4/DEBUG_DB/AGENTS 同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1c2e0445` | (see git log) |
+| `53026203` | (see git log) |
+| `2017ecfe` | (see git log) |
+
+### Status
+
+[OK] **Completed**
