@@ -811,6 +811,56 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     wrapper.unmount();
   });
 
+  // GCE-P1b(09-12-gc-preset-override):内置档覆盖行经 mergedPresets
+  // 原位顶替 —— 卡不新增键(arch 卡仍在内置位、title 不带用户 display
+  // 名),选中展开的就是覆盖后阵容(消费方零改动吃覆盖)。
+  it("覆盖档:arch 卡原位顶替(不新增卡),选中展开覆盖行阵容 + 主持人默认", async () => {
+    const ARCH_OVERRIDE: GcPresetRow = {
+      id: "uuid-ov-arch",
+      name: "arch 修复",
+      description: "本机修复阵容",
+      moderatorModelId: "uuid-ds",
+      participants: [
+        { name: "重构者", modelId: "uuid-flash", persona: "product" },
+        { name: "局外", modelId: "uuid-mini", persona: "outsider" },
+      ],
+      createdAt: "2026-09-12T00:00:00Z",
+      updatedAt: "2026-09-12T00:00:00Z",
+      builtinKey: "arch",
+    };
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "list_group_chat_presets" ? [ARCH_OVERRIDE] : null,
+    );
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
+    await flush();
+
+    // 卡集合不变:自定义 + 四内置(覆盖行不追加卡;无 uuid-ov-arch 卡)。
+    const cards = Array.from(document.querySelectorAll<HTMLElement>(".gcfg-preset-card"));
+    expect(cards.map((c) => c.dataset.testid)).toEqual([
+      "gcfg-preset-custom",
+      "gcfg-preset-review",
+      "gcfg-preset-fe_review",
+      "gcfg-preset-arch",
+      "gcfg-preset-retro",
+    ]);
+    // 原位顶替:arch 卡描述 = 覆盖行描述,key/name 仍是内置 arch
+    // (builtin 卡,无「自定义」标记)。
+    const archCard = byTestId("gcfg-preset-arch");
+    expect(archCard?.textContent).toContain("本机修复阵容");
+    expect(byTestId("gcfg-preset-uuid-ov-arch")).toBeNull();
+
+    await pickPreset(wrapper, "arch");
+    // 阵容 = 覆盖行内容(≠ JSON arch def 的 架构/后端),UUID 直配。
+    const names = allByTestIdPrefix("gcfg-name-");
+    expect(names.map((n) => (n as HTMLInputElement).value)).toEqual(["重构者", "局外"]);
+    // 主持人默认 = 覆盖行 moderator UUID(uuid-ds;最后一枚 SelectRoot)。
+    const roots = selectRootsOf(wrapper);
+    expect(roots[roots.length - 1].props("modelValue")).toBe("uuid-ds");
+    // 目录齐全 → 无提示条。
+    expect(byTestId("gcfg-preset-error")).toBeNull();
+    wrapper.unmount();
+  });
+
   it("主持人改选 → create_session 的 model 参数跟随;未改选(preset 默认)也随提交", async () => {
     stubCreateSession();
     const pinia = createPinia();

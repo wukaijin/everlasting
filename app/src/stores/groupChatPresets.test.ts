@@ -1,5 +1,6 @@
 // Tests for `stores/groupChatPresets.ts` — mergedPresets 合并视图
-// (GCE-P1, task `09-12-gc-preset-settings`,design §6 前端单测行)。
+// (GCE-P1, task `09-12-gc-preset-settings`,design §6 前端单测行;
+// 覆盖层 GCE-P1b, task `09-12-gc-preset-override`)。
 //
 // 契约:
 //   1. 内置四档在前,键序 = JSON 声明序(review / fe_review / arch /
@@ -9,7 +10,11 @@
 //      modelId)—— resolveModelRef byId 首趟直配的机制前提。
 //   3. key 不撞:内置 = JSON key,用户 = 行 id(UUID);同一 Record 无
 //      覆盖。
-//   4. load / ensureLoaded 幂等语义 + create/update/remove 重拉列表。
+//   4. 覆盖行(builtinKey 非空)原位顶替对应内置槽:key/name 保持内置
+//      key、overriddenBy = 行 id、阵容 = 行内容;不占用户档新键。未知
+//      builtinKey(未来 JSON 删 key 的存量脏行)跳过。
+//   5. load / ensureLoaded 幂等语义 + create/update/remove 重拉列表;
+//      create 载荷恒带 builtinKey(null = 普通行)。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -115,6 +120,97 @@ describe("groupChatPresets store — mergedPresets 合并视图", () => {
     expect(resolveModelRef(catalog, def.participants[0]!.model)).toBe("uuid-m2");
   });
 
+  // ---------------------------------------------------------------------
+  // GCE-P1b:覆盖行原位顶替内置槽(design §4.1 核心机制)。
+  // ---------------------------------------------------------------------
+
+  it("覆盖行原位顶替内置槽:阵容 = 行内容、key/name 保持内置 key、overriddenBy = 行 id、不追加用户档键", () => {
+    const store = useGroupChatPresetsStore();
+    const archDef = GC_PRESETS.presets["arch"]!;
+    store.rows = [
+      row({
+        id: "uuid-ov-1",
+        name: "arch 本机覆盖", // display 名与链接键分离;merged 不带出。
+        moderatorModelId: "uuid-x1",
+        participants: [
+          { name: "修复者", modelId: "uuid-x2", persona: "product" },
+          { name: "局外", modelId: "uuid-x3", persona: "outsider" },
+        ],
+        builtinKey: "arch",
+      }),
+    ];
+    const merged = store.mergedPresets;
+    // 键集合不变:内置四 key,覆盖行不追加新键(无 uuid-ov-1)。
+    expect(Object.keys(merged)).toEqual(["review", "fe_review", "arch", "retro"]);
+    expect(merged["uuid-ov-1"]).toBeUndefined();
+    const arch = merged["arch"]!;
+    expect(arch.builtin).toBe(true);
+    expect(arch.key).toBe("arch");
+    expect(arch.name).toBe("arch");
+    expect(arch.overriddenBy).toBe("uuid-ov-1");
+    // 阵容 = 行内容(UUID 借道 byId 首趟),≠ JSON def。
+    expect(arch.moderator_model).toBe("uuid-x1");
+    expect(arch.participants).toEqual([
+      { name: "修复者", model: "uuid-x2", persona: "product" },
+      { name: "局外", model: "uuid-x3", persona: "outsider" },
+    ]);
+    expect(arch.moderator_model).not.toBe(archDef.moderator_model);
+    // 未覆盖槽原样(JSON def)。
+    expect(merged["retro"]!.moderator_model).toBe(GC_PRESETS.presets["retro"]!.moderator_model);
+  });
+
+  it("覆盖行与普通行共存:普通行照旧追加,覆盖只动对应槽", () => {
+    const store = useGroupChatPresetsStore();
+    store.rows = [
+      row({ id: "uuid-plain", name: "普通档" }),
+      row({ id: "uuid-ov", name: "覆盖档", builtinKey: "retro" }),
+    ];
+    const keys = Object.keys(store.mergedPresets);
+    expect(keys).toEqual(["review", "fe_review", "arch", "retro", "uuid-plain"]);
+    expect(store.mergedPresets["retro"]!.overriddenBy).toBe("uuid-ov");
+    expect(store.mergedPresets["uuid-plain"]!.builtin).toBe(false);
+  });
+
+  it("未知 builtinKey(JSON 删 key 的存量脏行)→ 跳过,不当用户档追加", () => {
+    const store = useGroupChatPresetsStore();
+    store.rows = [row({ id: "uuid-dirty", name: "脏行", builtinKey: "nope" })];
+    const merged = store.mergedPresets;
+    expect(Object.keys(merged)).toEqual(["review", "fe_review", "arch", "retro"]);
+    expect(merged["nope"]).toBeUndefined();
+    expect(merged["uuid-dirty"]).toBeUndefined();
+    // 悬空脏行不顶替任何槽:四档全为 JSON 原样,无 overriddenBy。
+    for (const key of ["review", "fe_review", "arch", "retro"] as const) {
+      expect(merged[key]!.overriddenBy).toBeUndefined();
+      expect(merged[key]!.moderator_model).toBe(GC_PRESETS.presets[key]!.moderator_model);
+    }
+  });
+
+  it("覆盖行 create 载荷透传 builtinKey(builtinKey ?? null)", async () => {
+    const store = useGroupChatPresetsStore();
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "list_group_chat_presets"
+        ? [row({ id: "uuid-ov", name: "覆盖档", builtinKey: "arch" })]
+        : cmd === "create_group_chat_preset"
+          ? row({ id: "uuid-ov", name: "覆盖档", builtinKey: "arch" })
+          : null,
+    );
+    await store.create({
+      name: "覆盖档",
+      description: "",
+      moderatorModelId: "uuid-m1",
+      participants: [],
+      builtinKey: "arch",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_group_chat_preset", {
+      name: "覆盖档",
+      description: "",
+      moderatorModelId: "uuid-m1",
+      participants: [],
+      builtinKey: "arch",
+    });
+    expect(store.rows[0]!.builtinKey).toBe("arch");
+  });
+
   it("load 拉全量并置 loaded;ensureLoaded 未加载才拉(幂等)", async () => {
     const store = useGroupChatPresetsStore();
     invokeMock.mockResolvedValue([row()]);
@@ -160,6 +256,8 @@ describe("groupChatPresets store — mergedPresets 合并视图", () => {
         { name: "架构", modelId: "uuid-m2", persona: "arch" },
         { name: "后端", modelId: "uuid-m3", persona: "backend" },
       ],
+      // 普通行恒显式 null(Rust Option,None = 无 builtin_key 列)。
+      builtinKey: null,
     });
     expect(invokeMock).toHaveBeenCalledWith("list_group_chat_presets", {});
     expect(store.rows).toHaveLength(2);

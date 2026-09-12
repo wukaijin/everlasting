@@ -1376,7 +1376,10 @@ function userPresetRow() {
 }
 
 describe("ScheduledTasksTab GCE-P1 用户群聊预设", () => {
-  function stubBackendGcWithUserPreset(tasks: ScheduledTask[]) {
+  function stubBackendGcWithUserPreset(
+    tasks: ScheduledTask[],
+    presets: ReturnType<typeof userPresetRow>[] = [userPresetRow()],
+  ) {
     invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "list_scheduled_tasks") return tasks;
       if (cmd === "list_sessions") {
@@ -1390,7 +1393,7 @@ describe("ScheduledTasksTab GCE-P1 用户群聊预设", () => {
       }
       if (cmd === "list_models") return GC_MODELS;
       if (cmd === "get_default_model") return null;
-      if (cmd === "list_group_chat_presets") return [userPresetRow()];
+      if (cmd === "list_group_chat_presets") return presets;
       return null;
     });
   }
@@ -1525,6 +1528,135 @@ describe("ScheduledTasksTab GCE-P1 用户群聊预设", () => {
     await w.get('[data-testid="sched-edit-gc-legacy"]').trigger("click");
     const form = openForm(w);
     expect(form.find('[data-testid="sched-gc-stale-hint"]').exists()).toBe(false);
+    w.unmount();
+  });
+});
+
+// =====================================================================
+// GCE-P1b(09-12-gc-preset-override):内置档覆盖行原位顶替 —— 两消费方
+// 零源码改动,选中内置 key 拿到的就是覆盖后阵容;旧任务 preset_key 指
+// 向内置 key 时 stale 比对对覆盖后定义生效(AC3)。
+// =====================================================================
+
+describe("ScheduledTasksTab GCE-P1b 内置档覆盖", () => {
+  /** arch 覆盖行(builtinKey="arch";阵容 ≠ JSON arch def:主持人
+   *  uuid-glm + 重构者/uuid-flash + 局外/uuid-ds)。 */
+  function archOverrideRow() {
+    return {
+      id: "uuid-ov-arch",
+      name: "arch 修复",
+      description: "本机修复阵容",
+      moderatorModelId: "uuid-glm",
+      participants: [
+        { name: "重构者", modelId: "uuid-flash", persona: "product" },
+        { name: "局外", modelId: "uuid-ds", persona: "outsider" },
+      ],
+      createdAt: "2026-09-12T00:00:00Z",
+      updatedAt: "2026-09-12T00:00:00Z",
+      builtinKey: "arch",
+    };
+  }
+
+  /** 覆盖型 stub(目录 = GC_MODELS;presets 应答可注入覆盖行)。 */
+  function stubBackendGcOverride(tasks: ScheduledTask[], presets: unknown[]) {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_scheduled_tasks") return tasks;
+      if (cmd === "list_sessions") {
+        return [
+          {
+            id: "s1",
+            title: args?.projectId === "p1" ? "旧会话" : "beta 会话",
+            session_type: "chat",
+          },
+        ];
+      }
+      if (cmd === "list_models") return GC_MODELS;
+      if (cmd === "get_default_model") return null;
+      if (cmd === "list_group_chat_presets") return presets;
+      return null;
+    });
+  }
+
+  it("AC1 覆盖档选中:preset arch 槽预填覆盖行阵容(非 JSON def);提交 config 快照 + preset_key=arch", async () => {
+    stubBackendGcOverride([], [archOverrideRow()]);
+    const w = await mountTab();
+    await w.get('[data-testid="sched-create-btn"]').trigger("click");
+    const form = openForm(w);
+    await form.find("input[type='text']").setValue("覆盖档任务");
+    await pickSelect(form, 0, "p1");
+    await form.find("textarea").setValue("p");
+    await pickTargetMode(form, "group_chat");
+    // 选中内置 key "arch"(覆盖后)—— gc 档 SelectRoot 序 1=preset。
+    await pickSelect(form, 1, "arch");
+    // 阵容预览 = 覆盖行内容(≠ JSON def 的 架构/后端)。
+    const roster = form.find('[data-testid="sched-gc-participants"]');
+    expect(roster.text()).toContain("重构者");
+    expect(roster.text()).toContain("Zhipu · GLM-5.3-Flash");
+    // 主持人默认 = 覆盖行 moderator UUID(uuid-glm;gcModeratorId 走
+    // resolveModelRef byId 首趟直配)。SelectRoot 序:2=gc 主持人。
+    expect(form.findAllComponents(SelectRoot)[2].props("modelValue")).toBe("uuid-glm");
+    // 提交:config 快照展开 + preset_key 出处仍是内置 key。
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "create_scheduled_task")
+        return row({ id: "new-gc-ov", target_mode: "group_chat", target_session_id: null });
+      if (cmd === "list_scheduled_tasks") return [];
+      return null;
+    });
+    await w.get('[data-testid="sched-submit"]').trigger("click");
+    await flushPromises();
+    const call = invokeMock.mock.calls.find((c) => c[0] === "create_scheduled_task");
+    expect(call?.[1].groupChatConfig).toEqual({
+      moderator_model_id: "uuid-glm",
+      participants: [
+        { name: "重构者", model_id: "uuid-flash", persona_md: expect.stringContaining("发言纪律") },
+        { name: "局外", model_id: "uuid-ds", persona_md: expect.stringContaining("发言纪律") },
+      ],
+      preset_key: "arch",
+    });
+    w.unmount();
+  });
+
+  it("AC3 stale:preset_key=arch 的旧任务,存档(JSON def 阵容)≠ 覆盖后定义 → 提示;无覆盖行 → 不提示", async () => {
+    const personaMd = (kind: string) =>
+      `${GC_PRESETS.personas[kind]}\n\n${GC_PRESETS.persona_common}`;
+    const base = row({
+      id: "gc-ov-stale",
+      name: "覆盖前建的架构审议",
+      target_mode: "group_chat",
+      target_session_id: null,
+      schedule: { kind: "weekly", weekday: "fri", at: "18:00" },
+    });
+    // 存档 = JSON arch def 的展开(覆盖行落地前的快照)。
+    const archivedDefExpansion = {
+      moderator_model_id: "uuid-mini",
+      participants: [
+        { name: "架构", model_id: "uuid-glm", persona_md: personaMd("arch") },
+        { name: "后端", model_id: "uuid-ds", persona_md: personaMd("backend") },
+      ],
+      preset_key: "arch",
+    };
+    // 有覆盖行:merged["arch"] = 覆盖阵容 ≠ 存档 → stale 提示亮。
+    stubBackendGcOverride(
+      [{ ...base, group_chat_config: { ...archivedDefExpansion } }],
+      [archOverrideRow()],
+    );
+    let w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-ov-stale"]').trigger("click");
+    const staleForm = openForm(w);
+    expect(staleForm.find('[data-testid="sched-gc-stale-hint"]').exists()).toBe(true);
+    expect(staleForm.find('[data-testid="sched-gc-stale-hint"]').text()).toContain("预设已更新");
+    w.unmount();
+
+    // 无覆盖行(mock 不含覆盖):merged["arch"] = JSON def = 存档 → 不提示。
+    stubBackendGcOverride(
+      [{ ...base, group_chat_config: { ...archivedDefExpansion } }],
+      [],
+    );
+    w = await mountTab();
+    await w.get('[data-testid="sched-edit-gc-ov-stale"]').trigger("click");
+    const freshForm = openForm(w);
+    expect(freshForm.find('[data-testid="sched-gc-stale-hint"]').exists()).toBe(false);
     w.unmount();
   });
 });

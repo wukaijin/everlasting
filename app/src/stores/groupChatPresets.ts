@@ -18,6 +18,14 @@
 //      (review/fe_review/arch/retro)与用户 key(行 id UUID)域不相交,
 //      同一 Record 不会撞键。
 //
+//      覆盖行(GCE-P1b,task `09-12-gc-preset-override`):带
+//      `builtinKey` 的行是内置档的**覆盖行**,在 mergedPresets 里**原位
+//      顶替**对应内置槽(key/name 保持内置 key,消费方 UI 形态不变),
+//      阵容字段换成行内容(UUID 借道 resolveModelRef byId 首趟同上);
+//      `overriddenBy` 记覆盖行行 id(仅 UI 标记用)。删除覆盖行即恢复
+//      JSON 源码定义;key 不在四内置(未来 JSON 删 key 的存量脏行)则
+//      跳过,不当用户档追加。M1/MCP 仍只认 JSON 源码定义(P2 边界)。
+//
 // wire 形状:`GcPresetRow` camelCase(Rust `#[serde(rename_all =
 // "camelCase")]`,subagents 域同惯例)。**请求**:顶层 key camelCase
 // (transport 扳 snake),嵌套 participants 元素保持 camelCase
@@ -52,6 +60,10 @@ export interface GcPresetRow {
   createdAt: string;
   /** RFC 3339。 */
   updatedAt: string;
+  /** 内置覆盖行的链接键(GCE-P1b;∈ 四内置 key)。非空 = 覆盖行,
+   *  mergedPresets 原位顶替对应内置槽。Rust 侧 None 不序列化(wire
+   *  additive),普通用户行缺省 undefined。 */
+  builtinKey?: string;
 }
 
 /** `create` / `update` 的表单载荷。顶层 camelCase(transport 扳
@@ -61,6 +73,9 @@ export interface GcPresetInput {
   description: string;
   moderatorModelId: string;
   participants: GcPresetParticipantRow[];
+  /** 覆盖行的内置 key(GCE-P1b;仅 create 消费——update 不改该列,
+   *  后端也不接)。null/undefined = 普通用户行。 */
+  builtinKey?: string | null;
 }
 
 /** 合并视图条目:`GcPresetDef` + 出处标记。消费方(ScheduledTasksTab /
@@ -72,6 +87,9 @@ export interface MergedGcPreset extends GcPresetDef {
   builtin: boolean;
   /** 展示名:内置 = key(现状),用户 = 行 name(下拉 / 卡片标签)。 */
   name: string;
+  /** 覆盖行行 id(GCE-P1b):该内置槽被 builtinKey = key 的覆盖行顶替。
+   *  仅 Settings 管理面「已覆盖」标记消费;两消费方逻辑零依赖。 */
+  overriddenBy?: string;
 }
 
 export const useGroupChatPresetsStore = defineStore("groupChatPresets", () => {
@@ -96,7 +114,10 @@ export const useGroupChatPresetsStore = defineStore("groupChatPresets", () => {
   // -----------------------------------------------------------------------
 
   /** 内置在前(JSON 声明序)+ 用户按 name 序追加的合并视图。每次依赖
-   *  变更重建(行数个位数级,无需增量)。 */
+   *  变更重建(行数个位数级,无需增量)。带 `builtinKey` 的覆盖行
+   *  (GCE-P1b)**原位顶替**对应内置槽:key/name 保持内置 key(消费方
+   *  下拉 / 卡片形态不变),阵容字段换成行内容(见模块头注);不占
+   *  用户档新键。 */
   const mergedPresets = computed<Record<string, MergedGcPreset>>(() => {
     const out: Record<string, MergedGcPreset> = {};
     for (const [key, def] of Object.entries(GC_PRESETS.presets)) {
@@ -104,6 +125,30 @@ export const useGroupChatPresetsStore = defineStore("groupChatPresets", () => {
     }
     const sorted = [...rows.value].sort((a, b) => a.name.localeCompare(b.name));
     for (const row of sorted) {
+      if (row.builtinKey) {
+        // 覆盖行:原位顶替内置槽 —— key/name 保持内置 key(消费方 UI
+        // 形态不变),阵容字段换成行内容(UUID 借道 resolveModelRef
+        // byId 首趟直配,链路零新分支,同下方普通行)。key 不在内置
+        // 集合(未来 JSON 删 key 后的存量脏行)→ 跳过,不当用户档
+        // 追加(覆盖行的身份就是顶替,脱离内置槽即无意义)。
+        const slot = out[row.builtinKey];
+        if (slot) {
+          out[row.builtinKey] = {
+            description: row.description,
+            moderator_model: row.moderatorModelId,
+            participants: row.participants.map((p) => ({
+              name: p.name,
+              model: p.modelId,
+              persona: p.persona,
+            })),
+            key: row.builtinKey,
+            builtin: true,
+            name: row.builtinKey,
+            overriddenBy: row.id,
+          };
+        }
+        continue;
+      }
       out[row.id] = {
         description: row.description,
         // UUID 直进 model 字段:resolveModelRef 第一趟 byId 精确命中,
@@ -145,7 +190,9 @@ export const useGroupChatPresetsStore = defineStore("groupChatPresets", () => {
   }
 
   /** 新建用户预设,返回服务端生成的行(id UUID)。校验在服务端
-   *  (单一事实源);前端预校验只为即时反馈(tab 组件内)。 */
+   *  (单一事实源);前端预校验只为即时反馈(tab 组件内)。
+   *  `builtinKey`(GCE-P1b):内置覆盖行的链接键,`?? null` 恒显式
+   *  传 wire(Rust `Option<String>`,null = None = 普通行)。 */
   async function create(input: GcPresetInput): Promise<GcPresetRow> {
     try {
       const row = await transport.invoke<GcPresetRow>("create_group_chat_preset", {
@@ -153,6 +200,7 @@ export const useGroupChatPresetsStore = defineStore("groupChatPresets", () => {
         description: input.description,
         moderatorModelId: input.moderatorModelId,
         participants: input.participants,
+        builtinKey: input.builtinKey ?? null,
       });
       await load();
       return row;
