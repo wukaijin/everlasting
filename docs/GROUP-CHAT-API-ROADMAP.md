@@ -45,17 +45,17 @@
 
 ## 3. M2 MCP 接口层(✅ 2026-09-06)
 
-**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ 宿主挂载(2026-09-06 迁**用户级** `~/.zcode/cli/config.json` 的 `mcp.servers`——仓库级 `.agents/mcp.json` 已移除,workspace 作用域跨项目不可见)+ `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。**已知边界**:部署面绑定源码检出(挂载配置绝对路径指向仓库),无源码机器不可用——记 §5「MCP 部署面」follow-up;**该边界已于 2026-09-06 由 §5 路径②(standalone bin,`scripts/group-chat-mcp-deploy.mjs`)收口**。(注:本段工具数/预算/用例数为 M2 交付时快照——2026-09-09 现状:M3 起六工具、wire 预算锁 3200(09-08 gce-m4c 加 `token_budget` 参后 3115;09-09 加 `fe_review` 预设后 3162)、单测 18 用例,见 §4。) 
+**交付**:`scripts/group-chat-mcp.mjs`(stdio server,SDK 1.30;四工具与 M1 引擎共享实现层,纯逻辑区零 SDK import)+ 宿主挂载(2026-09-06 迁**用户级** `~/.zcode/cli/config.json` 的 `mcp.servers`——仓库级 `.agents/mcp.json` 已移除,workspace 作用域跨项目不可见)+ `scripts/group-chat-mcp-smoke.mjs`(非 live 零成本 / `--live` 全链)+ 单测 13 用例(含 AC4 wire 预算锁:实测 1945 字符 ≈486 token < 2300)。五决策收敛:Node+SDK 薄包装 / stdio(M4 前不加网络面)/ 四工具+context 预算约束(用户原话「llm 初始 context 占用不要太大」)/ v1 零鉴权(本机)/ `metadata.created_via` 三通道归因("mcp"/"script"/缺失=GUI)。关键设计:记账(session→request_id/project_id)XDG state 写穿兜底宿主会话生灭;惰性转录 status/result 双入口、导出失败降级不污染轮询;重启兜底链两级(busy 只在 list_sessions 富化)。验收 AC1-AC6 全过:live 全链(spawn→start→poll→result,session b4ce0a94,40s 收官,summary 带 file:line 证据,转录落仓库根 out/)+ created_via live 落库抽查 + daemon 零改动(git diff 空)。宿主挂载余项:ZCode 新会话见工具为一眼验证(挂载机制经真 spawn + 插件同款配置形状验证);Claude Code 宿主路径被用户侧代理模型故障阻断(非本项目问题)。评审(另一模型 planning 门)9 成采纳、3 处驳回有据(P3-1 行号判定误读/P3-5 jsonl gate 规则套错平台/P3-4 JSON 内注释不可行),见任务目录 review.md。**已知边界**:部署面绑定源码检出(挂载配置绝对路径指向仓库),无源码机器不可用——记 §5「MCP 部署面」follow-up;**该边界已于 2026-09-06 由 §5 路径②(standalone bin,`scripts/group-chat-mcp-deploy.mjs`)收口**。(注:本段工具数/预算/用例数为 M2 交付时快照——2026-09-13 现状:八工具(M3 控制面 + 09-11 `list_models` + GCE-P2 `list_presets`)、wire 预算锁 4200(09-13 status 加 `wait_seconds`/`detail` 后实测 4093;历代 3115→3162→3403→3678→4093)、单测 31 用例,见 §4 与任务 `09-13-gc-mcp-status-wait`。) 
 
 - **目标**:任何 MCP 宿主(ZCode / Claude Code / Cursor 等)里的单 agent 可召集跨模型审议——**这是单客户端无法自制的原语**:模型目录、persona 隔离(role_history)、转录持久化、生命周期语义全在 daemon。
 - **工具面**(草案即定稿):
   | 工具 | 语义 |
   |---|---|
   | `start_discussion` | topic + cwd + preset?/participants?(名单替换,moderator 恒取预设)→ **立即**返回 session_id |
-  | `discussion_status` | busy / stop_reason / elapsed_s(廉价轮询,无轮次字段),供调用方轮询 |
+  | `discussion_status` | busy / stop_reason / elapsed_s(廉价轮询,无轮次字段),供调用方轮询;09-13 起两可选参:`wait_seconds`(1-30 有界长轮询,内部 ~2s 拍 HTTP 轮询,信号 = busy/stop_reason 翻转或消息数/末 seq 变化,变化即返、到点 `wait_timed_out:true`)/ `detail`(messages/last_speaker/tokens/token_budget 进度富化;wait 隐含 detail) |
   | `discussion_result` | 终态读 summary + roster + stats + 转录路径(未终态时明确报错而非空值) |
   | `cancel_discussion` | 复用现有 cancel 端点(M3 preempt 落地前的唯一止损) |
-- **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。
+- **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场消耗数十万 token,调用方 agent 应慎用、议题要值得。*(09-13 唯一有界例外:`discussion_status.wait_seconds` ≤30s 长轮询——不挂 SSE,GC3 无人值守 8s 快拒性质不变;wire 预算锁同步上调 4200,见 §4)*
 - **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。*(M3 09-06 起工具面扩为六,wire 预算锁同步上调 3200,见 §4)*
 
 ## 4. M3 控制面:打断 / 注入 / 跟随(✅ 2026-09-06)
