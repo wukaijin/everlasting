@@ -16,7 +16,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 
 ## 两条入口,先分清你是谁(GCE-M2 起)
 
-- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 七工具**(M3 09-06 起控制面,09-11 起 `list_models` 内省)**——拿不准可用模型先 `list_models`(返回名字+UUID,两者皆可作引用);召集 `start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
+- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 八工具**(M3 09-06 起控制面,09-11 起 `list_models` 内省,GCE-P2 09-12 起 `list_presets` 内省)**——拿不准可用模型先 `list_models`(返回名字+UUID,两者皆可作引用);拿不准用哪档阵容先 `list_presets`(内置四档 + Settings 建的用户预设,用户档 key = 行 UUID,引用传 key 或名称皆可;`degraded:true` = daemon 不在,只剩内置);召集 `start_discussion(topic, cwd, preset?)` → 轮询 `discussion_status(session_id)` → `discussion_result(session_id)` 读结论;止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不跑脚本、不碰后台 shell。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
 - **everlasting 内部 agent**(daemon 单聊,非 MCP client):走下面的脚本路径。
 
 ## 建群三要素(全靠脚本内省,别背参数)
@@ -24,7 +24,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 ```bash
 node scripts/group-chat-run.mjs projects   # ① 目录:审议对象的项目(证据基地)
 node scripts/group-chat-run.mjs models     # ② 模型:当前可用清单(UUID/名字都收)
-node scripts/group-chat-run.mjs presets    # ③ 配方:review/fe_review/arch/retro + 覆盖语法
+node scripts/group-chat-run.mjs presets    # ③ 配方:内置四档 + 用户预设(daemon 合并视图)+ 覆盖语法
 ```
 
 **目录(--project)是第一要素**:参与者能查什么证据由它决定,默认当前目录。
@@ -35,7 +35,7 @@ node scripts/group-chat-run.mjs presets    # ③ 配方:review/fe_review/arch/re
 ```bash
 node scripts/group-chat-run.mjs run \
   --project /path/to/repo \
-  --preset review \                # 评审团(架构+产品+后端);前端改动用 fe_review;单决策点用 arch;复盘用 retro
+  --preset review \                # 内置四档:review 评审团 / fe_review 前端 / arch 单决策点 / retro 复盘;用户预设传行 UUID 或名称(presets 子命令查,Settings 管理)
   --topic-file /tmp/topic.md \     # 主推:长议题/含引号都走文件(短议题可 --topic 内联)
   --timeout 1800                   # 默认 30min;超时自动 cancel 并导部分转录
 ```

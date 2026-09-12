@@ -345,7 +345,13 @@ snake_case**(IPC 形状铁律),嵌套 `participants` 元素例外 —— 按 `Gc
   UNIQUE 索引兜底(SQLite UNIQUE 对 NULL 互不相撞,普通用户行不受影响)。
 - `builtin_key` **创建时定死**:update 不接受也不触碰该列;覆盖行不能转普通行。
 - 删除覆盖行 = 恢复内置(JSON 源码定义),走同一条 `delete_group_chat_preset`。
-- 覆盖仅 GUI 消费:M1 CLI / MCP 仍只认 `scripts/group-chat-presets.json`(P2 边界)。
+
+**引擎侧消费**(GCE-P2,2026-09-12 起):M1 CLI 与 MCP server 运行时调
+`list_group_chat_presets` 拉全部行,与内置 JSON 四档在客户端合并(规则镜像 GUI
+mergedPresets:用户行追加、覆盖行原位顶替)。preset 引用三趟解析:内置 key →
+用户行 id(UUID)→ 用户行名称(精确→忽略大小写)。拉取失败(daemon 不可达或
+旧版本路由 404/405)fail-open 降级内置四档,MCP 侧 `list_presets` 工具返回
+`degraded: true` + detail;standalone bin 内置 JSON 仍烤进产物,免重部署。
 
 **校验**(commands 层单一事实源,违规 400 InvalidRequest,message 中文可读):名称 trim
 非空 ≤40 字符、与其它用户行**及内置 key**(review/fe_review/arch/retro)大小写不敏感
@@ -353,7 +359,7 @@ snake_case**(IPC 形状铁律),嵌套 `participants` 元素例外 —— 按 `Gc
 kind(arch/product/backend/frontend/outsider);moderator 与全部 participants 的模型 id
 必须存在(允许 disabled)。**只管用户预设** —— 内置四档是
 `scripts/group-chat-presets.json` 单一事实源(M1 CLI / MCP 消费),不在本域,本域 CRUD
-对它们零影响;M1/MCP 暂不消费用户预设(P2)。
+对它们零影响。
 
 ## 7. 其他常用端点(路径约定)
 

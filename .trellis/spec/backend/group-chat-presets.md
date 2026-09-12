@@ -1,13 +1,16 @@
-<!-- Schema + IPC spec for group_chat_presets (GCE-P1, 2026-09-12; GCE-P1b override, 同日) -->
+<!-- Schema + IPC spec for group_chat_presets (GCE-P1, 2026-09-12; GCE-P1b override, 同日; GCE-P2 引擎合流, 同日) -->
 
-# Group Chat Presets(GCE-P1 + P1b, 2026-09-12)
+# Group Chat Presets(GCE-P1 + P1b + P2, 2026-09-12)
 
 > **Source**: `.trellis/tasks/archive/2026-09/09-12-gc-preset-settings`(P1 全套)+
-> `.trellis/tasks/09-12-gc-preset-override`(P1b 覆盖层);
+> `.trellis/tasks/archive/2026-09/09-12-gc-preset-override`(P1b 覆盖层)+
+> `09-12-gc-preset-engine-visibility`(P2 引擎侧合流);
 > migration 在 `app/src-tauri/src/db/migrations/schema.rs` run_migrations 尾部,
 > CRUD 在 `app/src-tauri/src/db/group_chat_presets.rs`,校验单源在
 > `app/src-tauri/src/commands/group_chat_presets.rs::validate_preset_input`,
-> 路由在 `app/src-tauri/src/daemon/routes/group_chat_presets.rs`。
+> 路由在 `app/src-tauri/src/daemon/routes/group_chat_presets.rs`;
+> 引擎侧合流在 `scripts/group-chat-run.mjs`(mergePresets / loadEffectivePresets /
+> lookupPreset,scripts 单测 `group-chat-run.test.mjs` + `group-chat-mcp.test.mjs`)。
 >
 > **Cross-references**: [database-guidelines.md](./database-guidelines.md)(soft-FK / CRUD 约定)、
 > [scheduled-tasks.md](./scheduled-tasks.md)(GroupChatTaskConfig / 快照语义)、
@@ -81,7 +84,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   Settings 内置区「覆盖编辑」预填 JSON def(模型名经 resolveModelRef 全目录解析,
   缺失留空逼重选——正是修复场景);「恢复内置」= 删除覆盖行,回落 JSON 源码定义。
   快照语义照旧:覆盖编辑/删除不回溯已建任务;旧任务 `preset_key: "arch"` 归位到
-  覆盖后定义(B9 stale 比对自动吃覆盖版)。M1/MCP 仍只认 JSON,看不到覆盖行(P2)。
+  覆盖后定义(B9 stale 比对自动吃覆盖版)。
+- **引擎合流(P2,2026-09-12,scripts/ 侧;Rust/前端零改动)**:M1 CLI 与 MCP
+  运行时调 `list_group_chat_presets` 拉全部行,与内置 JSON 四档**客户端合并**:
+  - `mergePresets(builtin, rows, file)` 纯函数**逐条镜像前端 mergedPresets 规则**
+    (用户行追加 key=id / 覆盖行原位顶替 key·name=内置 key / 未知 builtinKey 脏行
+    跳过);行的 persona **kind** 经 `composePersonaMd(file, kind)` 展开(数据源
+    仍是 JSON 的 personas + persona_common——DB 不存 persona 文本);行 model 直接
+    放 UUID(`normalizeModelRef` byId 首趟直收,零新分支)。值 = 内置条目超集,
+    附 `source('builtin'|'user'|'override')` / `display_name` / `overridden_by`
+    展示标记,消费方逻辑零依赖。
+  - **降级两层分工(勿混)**:`loadEffectivePresets(rowsProvider)` 吞**拉取失败**
+    (daemon 不可达 / 老版本路由 404·405)→ 返回内置 PRESETS + `degraded:true`
+    + detail(fail-open;旧 daemon 实证:2026-09-12 对 pre-P1 daemon 冒烟
+    degraded=true 四档兜底);`mergePresets` 对**行结构损坏**(缺字段/脏 persona
+    kind/重名)照 throw(fail-loud,拉取层吞不掉数据脏)。
+  - **preset 引用三趟解析** `lookupPreset(presets, ref)`(normalizeModelRef 同构):
+    key 直配(内置 key / 用户行 id)→ `display_name` 精确 → 忽略大小写;DB 校验
+    保证用户行 name UNIQUE 且不撞内置 key,歧义理论不可达(防御报错留)。miss 报
+    可用清单(用户档带 key 前 8 位);**降级态 preset miss 的报错必须追加「用户
+    预设不可用(daemon 拉取失败)」提示**——别让 daemon 不在伪装成预设不存在。
+  - MCP:`start_discussion.preset` schema = `z.string()`(动态 enum 否决——
+    buildToolShapes 是无 daemon 环境消费的同步纯函数;枚举发现义务移交
+    `list_presets` 工具);`coreStart` / M1 `run` 都经 `loadEffectivePresets` +
+    三趟解析取 roster 与 moderator;makeMockDeps 默认 `listPresets→[]`(既有
+    单测零扰动)。wire 预算八工具实测 3678 → 锁 3800(四处同步:常量注释 /
+    mcp.test / smoke BUDGET / deploy spec)。
+  - **standalone bin 免重部署**:内置 JSON 仍静态 import 烤进 bin(内置档唯一
+    来源不变),用户行/覆盖行运行时拉取——deploy 脚本与 entry 哨兵零改动。
 
 ## 4. Validation & Error Matrix
 
@@ -127,6 +157,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   (snake `builtin_key` → 响应 camelCase `builtinKey`;同 key 二次 400)。
 - serde 兼容:`GroupChatTaskConfig` 旧 JSON(无 preset_key)反序列化 = None;
   `GcPresetRow` None 不序列化(wire additive,P1b)。
+- 引擎合流(scripts/,node --test;P2):`group-chat-run.test.mjs` —— mergePresets
+  六臂(追加/顶替/脏行跳过/persona 展开/fail-loud 四投掷/空行集)、lookupPreset
+  三趟 + miss 清单、resolveParticipants(presets) 传参/缺省回落、
+  loadEffectivePresets 正常/降级两臂;`group-chat-mcp.test.mjs` —— coreStart 用户档
+  (by id/by name/覆盖档)、降级两臂(内置照常 / 用户档报错带提示)、corePresets
+  合并视图与 degraded、八工具 + preset schema string + 预算实测;smoke 非 live
+  八工具名 + list_presets 内置四 key 恒在(daemon 两态确定性)。
 - 前端:store merged 单测(内置在前 / name 序 / UUID 借道 byId 直配——锁机制前提);
   P1b——覆盖行原位顶替(key/name = 内置 key、overriddenBy、无追加键)、普通行照旧、
   未知 builtinKey 跳过;tab 组件测试(mock transport 按 cmd 分发;P1b——覆盖编辑预填
@@ -161,9 +198,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
 GroupChatConfigModal.test.ts 的 MODELS fixture)——7773b927 漏扫导致主线 8 用例
 红了两天才被 GCE-P1 顺带修复(2026-09-12 worktree 实证)。
 
-## 边界(P2 未做)
+### Wrong:MCP tools/list 动态拉 daemon 构建 preset enum
 
-MCP server / M1 CLI **暂只认内置四档**(standalone bin 烤 JSON;P1b 覆盖行同样不可见,
-引擎侧要吃到需 P2 运行时拉取);用户预设与覆盖行的引擎可见性是
-P2(引擎运行时依赖 daemon HTTP,加运行时拉取即可,bin 免重部署)。自定义 persona
-文本(P3)、overwrite 语义(已评估否决)不在计划内。
+```js
+const presets = await fetchPresets();          // listTools 时拉 daemon
+preset: z.enum(Object.keys(presets))           // 动态 schema
+```
+
+破 buildToolShapes 同步纯函数性质(无 daemon 单测/非 live 冒烟依赖)、daemon 两态
+结果漂移、宿主缓存 tools 快照会 stale。
+
+#### Correct:schema 放宽 `z.string()` + describe 指向 list_presets,校验在
+coreStart 运行时(未知预设报错本就存在);枚举发现义务移交 `list_presets` 工具
+(GCE-P2 定案,scripts/group-chat-mcp.mjs buildToolShapes)。
+
+### Wrong:把「拉取失败」和「数据损坏」塞进同一层降级
+
+```js
+catch (e) { return PRESETS; }   // 连行结构损坏也吞 → 脏数据静默变成「没有用户预设」
+```
+
+#### Correct:两层分工——`loadEffectivePresets` 只吞 fetch/HTTP 失败(fail-open
+降级内置 + degraded 标记);`mergePresets` 对行结构损坏照 throw(fail-loud,
+composePresets 防御同款)。降级态 preset miss 报错追加「用户预设不可用」提示。
+
+## 边界(P2 已收,2026-09-12)
+
+引擎侧(M1 CLI / MCP server / standalone bin)已运行时拉取消费用户预设与覆盖行
+(降级 fail-open;bin 免重部署)。剩余不做:自定义 persona 文本(P3)、overwrite
+回溯(已评估否决)不在计划内;daemon 侧把内置档入库仍不做(内置 JSON 单源)。
