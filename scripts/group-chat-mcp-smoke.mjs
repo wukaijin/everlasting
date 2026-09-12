@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // group-chat-mcp-smoke.mjs — MCP server 冒烟:真 spawn stdio 进程验收。
 //
-// 非 live(默认,daemon 可跑可不跑):spawn server → tools/list 断言 6 工具
+// 非 live(默认,daemon 可跑可不跑):spawn server → tools/list 断言 8 工具
 // + wire 预算 → callTool discussion_status(不存在 id)断言 handler 链给出
-// 可操作错误(daemon 在跑 = 「session 不存在」;没跑 = daemon 提示)。
+// 可操作错误(daemon 在跑 = 「session 不存在」;没跑 = daemon 提示)→
+// callTool list_presets 断言内置四 key 恒在(daemon 两态皆成立;用户行
+// 数量随环境漂移,不断言)。
 //
 // --live(烧真 token,按需):对真 daemon 走「start(arch 小阵容)→ 轮询
 // → result」全链。这是 AC1 的 headless 回归选项;正式门禁是 ZCode 宿主
@@ -20,7 +22,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(SCRIPTS, 'group-chat-mcp.mjs');
-const BUDGET = 3500; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;09-11 加 list_models 后实测 wire ≈3403 chars
+const BUDGET = 3800; // 与 group-chat-mcp.mjs TOOLS_BUDGET_CHARS 同值;GCE-P2(09-12)加 list_presets 后实测 wire ≈3678 chars
 
 const live = process.argv.includes('--live');
 const binIdx = process.argv.indexOf('--bin');
@@ -42,13 +44,13 @@ process.stderr.write(`[smoke] server spawned over stdio: ${binPath || `node ${SE
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
 
 try {
-  // 1) tools/list:七工具(M3 控制面 + 09-11 list_models)+ wire 预算(宿主注入 context 的地面真值)
+  // 1) tools/list:八工具(M3 控制面 + list_models + GCE-P2 list_presets)+ wire 预算(宿主注入 context 的地面真值)
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  const want = ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message', 'list_models'];
+  const want = ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message', 'list_models', 'list_presets'];
   if (JSON.stringify(names) !== JSON.stringify(want)) fail(`tools/list 期望 ${want} 实得 ${names}`);
   const chars = JSON.stringify(tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;
-  process.stderr.write(`[smoke] tools/list ok(7);wire schema ${chars} chars ≈ ${Math.round(chars / 4)} tokens(预算 ${BUDGET})\n`);
+  process.stderr.write(`[smoke] tools/list ok(8);wire schema ${chars} chars ≈ ${Math.round(chars / 4)} tokens(预算 ${BUDGET})\n`);
   if (chars > BUDGET) fail(`wire 预算超支:${chars} > ${BUDGET}`);
 
   // 2) handler 链:不存在的 session → 可操作错误(daemon 两态皆算过)
@@ -59,8 +61,22 @@ try {
   if (!/session 不存在|daemon/.test(JSON.parse(probeText).error)) fail(`错误文案不可操作:${probeText}`);
   process.stderr.write(`[smoke] handler 链 ok;daemon ${daemonUp ? '在跑' : '没跑(非 live 冒烟允许)'}\n`);
 
+  // 2b) list_presets(GCE-P2):内置四 key 恒在 + degraded 与 daemon 两态一致。
+  // 用户行数量随环境漂移,只断言确定性部分。
+  const lp = await client.callTool({ name: 'list_presets', arguments: {} });
+  if (lp.isError) fail(`list_presets 应成功(daemon 两态皆可降级):${lp.content?.[0]?.text}`);
+  else {
+    const payload = JSON.parse(lp.content[0].text);
+    const keys = payload.presets.map((p) => p.key);
+    for (const k of ['review', 'fe_review', 'arch', 'retro']) {
+      if (!keys.includes(k)) fail(`list_presets 缺内置 key "${k}"(degraded=${payload.degraded})`);
+    }
+    if (typeof payload.degraded !== 'boolean') fail('list_presets 缺 degraded 布尔标记');
+    process.stderr.write(`[smoke] list_presets ok(${payload.presets.length} 档;degraded=${payload.degraded})\n`);
+  }
+
   if (!live) {
-    console.log('SMOKE PASS (non-live):spawn + tools/list + 预算 + handler 错误链');
+    console.log('SMOKE PASS (non-live):spawn + tools/list + 预算 + handler 错误链 + list_presets');
   } else {
     if (!daemonUp) { fail('daemon 没跑,--live 需要:scripts/daemon.sh start'); }
     else {

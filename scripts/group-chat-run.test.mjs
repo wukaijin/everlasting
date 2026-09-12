@@ -5,10 +5,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
-  EXIT, PRESETS, composePresets, resolveParticipants, buildCreateSessionBody, buildChatBody,
+  EXIT, PRESETS, composePresets, composePersonaMd, resolveParticipants, buildCreateSessionBody, buildChatBody,
   aggregateTokens,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
   renderTranscript, renderConclusionsSection, injectGuardDecision, interpretAcceptance,
+  mergePresets, lookupPreset, loadEffectivePresets,
 } from './group-chat-run.mjs';
 import presetsFile from './group-chat-presets.json' with { type: 'json' };
 
@@ -242,6 +243,90 @@ test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用�
   // JSON 形状防御:缺 persona kind / 空 presets → 明确报错。
   assert.throws(() => composePresets({ ...presetsFile, personas: {} }), /缺 persona/);
   assert.throws(() => composePresets({ persona_common: 'x', personas: presetsFile.personas, presets: {} }), /presets 不能为空/);
+});
+
+// ---------------------------------------------------------------------------
+// GCE-P2:用户预设 / 覆盖行合流(mergePresets 镜像前端 mergedPresets;
+// 行形状 = daemon GcPresetRow wire camelCase)
+// ---------------------------------------------------------------------------
+
+const ROW = (over = {}) => ({
+  id: 'row-1', name: 'My Panel', description: '用户档',
+  moderatorModelId: 'uuid-m3',
+  participants: [
+    { name: '架构', modelId: 'uuid-glm53', persona: 'arch' },
+    { name: '产品', modelId: 'uuid-flash', persona: 'product' },
+  ],
+  createdAt: 't', updatedAt: 't',
+  ...over,
+});
+
+test('GCE-P2 mergePresets:用户行追加(key=id、UUID 直塞、persona 展开)+ 覆盖行原位顶替 + 脏行跳过', () => {
+  const merged = mergePresets(PRESETS, [
+    ROW(),
+    ROW({ id: 'ovr', builtinKey: 'review', name: '评审团改版' }),
+    ROW({ id: 'dirty', builtinKey: 'ghost', name: '脏行' }),
+  ], presetsFile);
+  assert.deepEqual(Object.keys(merged), ['review', 'fe_review', 'arch', 'retro', 'row-1'], '内置声明序在前,用户行追加,覆盖行不添键');
+  assert.equal('dirty' in merged, false, '未知 builtinKey 脏行跳过(不当用户档追加)');
+  // 覆盖行:原位顶替——key/name 保持内置 key,阵容换行内容
+  const review = merged.review;
+  assert.equal(review.source, 'override');
+  assert.equal(review.display_name, 'review');
+  assert.equal(review.overridden_by, 'ovr');
+  assert.equal(review.moderator_model, 'uuid-m3');
+  assert.deepEqual(review.participants.map((p) => [p.name, p.model]), [['架构', 'uuid-glm53'], ['产品', 'uuid-flash']]);
+  // 用户行:UUID 直塞(modelId→model)+ persona_md 与 composePersonaMd 同构
+  const user = merged['row-1'];
+  assert.equal(user.source, 'user');
+  assert.equal(user.display_name, 'My Panel');
+  assert.equal(user.overridden_by, undefined);
+  assert.equal(user.participants[0].persona_md, composePersonaMd(presetsFile, 'arch'));
+  // 内置档本体不被行污染(mergePresets 返回新 map)
+  assert.equal(PRESETS.review.moderator_model, 'MiniMax-M3');
+  // 空 rows = 四内置 + source 标记
+  const empty = mergePresets(PRESETS, [], presetsFile);
+  assert.deepEqual(Object.keys(empty), Object.keys(PRESETS));
+  assert.equal(empty.review.source, 'builtin');
+});
+
+test('GCE-P2 mergePresets:行结构损坏 fail-loud(拉取降级吞不掉数据脏,两层分工)', () => {
+  assert.throws(() => mergePresets(PRESETS, [ROW({ moderatorModelId: '' })], presetsFile), /缺 moderatorModelId/);
+  assert.throws(() => mergePresets(PRESETS, [ROW({ participants: [{ name: '架构', modelId: 'uuid-glm53' }] })], presetsFile), /缺 name\/modelId\/persona/);
+  assert.throws(() => mergePresets(PRESETS, [ROW({ participants: [{ name: '架构', modelId: 'x', persona: 'ghost-kind' }] })], presetsFile), /缺 persona/);
+  assert.throws(() => mergePresets(PRESETS, [ROW({ participants: [
+    { name: '架构', modelId: 'uuid-glm53', persona: 'arch' },
+    { name: '架构', modelId: 'uuid-glm53', persona: 'arch' },
+  ] })], presetsFile), /重名/);
+});
+
+test('GCE-P2 lookupPreset + resolveParticipants(presets):三趟解析;缺省回落模块 PRESETS', () => {
+  const merged = mergePresets(PRESETS, [ROW()], presetsFile);
+  // key 直配(内置 key / 用户行 id)
+  assert.equal(lookupPreset(merged, 'review').source, 'builtin');
+  assert.equal(lookupPreset(merged, 'row-1').source, 'user');
+  // display_name 精确 → 忽略大小写(normalizeModelRef 同构)
+  assert.equal(lookupPreset(merged, 'My Panel').source, 'user');
+  assert.equal(lookupPreset(merged, 'my panel').source, 'user');
+  // miss 报可用清单(用户档带 key 前 8 位提示)
+  assert.throws(() => lookupPreset(merged, 'nope'), /未知预设.*My Panel\(row-1\)/);
+  // resolveParticipants 传 presets:吃合并视图
+  const list = resolveParticipants({ preset: 'row-1', set: [], presets: merged });
+  assert.deepEqual(list.map((p) => p.model), ['uuid-glm53', 'uuid-flash']);
+  // 不传 presets 回落内置(既有调用面零改动;run/MCP 层负责传 eff.presets)
+  assert.throws(() => resolveParticipants({ preset: 'row-1', set: [] }), /未知预设/);
+});
+
+test('GCE-P2 loadEffectivePresets:provider 正常 → 合并;provider throw → 降级内置 + degraded 标记', async () => {
+  const ok = await loadEffectivePresets(async () => [ROW()]);
+  assert.equal(ok.degraded, false);
+  assert.ok(ok.presets['row-1']);
+  const bad = await loadEffectivePresets(async () => { throw new Error('daemon 不可达(mock)'); });
+  assert.equal(bad.degraded, true);
+  assert.match(bad.detail, /daemon 不可达/);
+  // 降级态 = 原始 PRESETS 引用(无 source 键,消费面形状兼容)
+  assert.deepEqual(Object.keys(bad.presets), Object.keys(PRESETS));
+  assert.equal(bad.presets.review.source, undefined);
 });
 
 // C2 证据链(09-09-gc-c2-evidence-summary):结构化结论节渲染。

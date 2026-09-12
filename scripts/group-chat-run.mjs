@@ -77,17 +77,20 @@ const EXIT_BY_STOP_REASON = {
 // 提示,绝不静默降级。
 // ---------------------------------------------------------------------------
 
+/** persona kind → 完整 persona_md(边界 + "\n\n" + 公共纪律)。
+ * GCE-P2 从 composePresets 抽出单源:内置 JSON 组装与 DB 用户行合流
+ * (mergePresets)共用同一展开,脏 kind 同文案 fail-loud。 */
+export function composePersonaMd(file, kind) {
+  const base = file?.personas?.[kind];
+  if (!base) throw new Error(`group-chat-presets.json: 缺 persona "${kind}"`);
+  return `${base}\n\n${String(file.persona_common || '')}`;
+}
+
 /** JSON → 运行时 PRESETS 形状(与旧内置常量同构):participants 的
  * persona kind 展开为完整 persona_md(边界 + "\n\n" + 公共纪律)。
  * 导出供单测锁「JSON 是唯一事实源 + 组装确定性」。 */
 export function composePresets(file) {
   if (!file || typeof file !== 'object') throw new Error('group-chat-presets.json: 顶层必须是 object');
-  const common = String(file.persona_common || '');
-  const persona = (kind) => {
-    const base = file.personas?.[kind];
-    if (!base) throw new Error(`group-chat-presets.json: 缺 persona "${kind}"`);
-    return `${base}\n\n${common}`;
-  };
   const entries = Object.entries(file.presets || {});
   if (!entries.length) throw new Error('group-chat-presets.json: presets 不能为空');
   const out = {};
@@ -98,13 +101,91 @@ export function composePresets(file) {
     out[name] = {
       description: preset.description,
       moderator_model: preset.moderator_model,
-      participants: preset.participants.map((p) => ({ name: p.name, model: p.model, persona_md: persona(p.persona) })),
+      participants: preset.participants.map((p) => ({ name: p.name, model: p.model, persona_md: composePersonaMd(file, p.persona) })),
     };
   }
   return out;
 }
 
 export const PRESETS = composePresets(presetsFile);
+
+// ---------------------------------------------------------------------------
+// GCE-P2:用户预设 + 内置覆盖行运行时合流(镜像前端 mergedPresets,
+// stores/groupChatPresets.ts;契约见 .trellis/spec/backend/group-chat-presets.md)。
+// 两层分工:拉取失败降级 fail-open(loadEffectivePresets 吞「daemon 不可达/
+// HTTP 错」);行结构损坏 fail-loud(presetFromRow throw)——别混。
+// ---------------------------------------------------------------------------
+
+/** DB 行(wire 形状 GcPresetRow camelCase)→ PRESETS 条目同构阵容。
+ * model 直接放行里的 UUID(moderatorModelId / participants[].modelId)——
+ * 消费端 normalizeModelRef 首趟 byId 直收,零新分支(P1 定案的 UUID 惯例)。 */
+function presetFromRow(row, file, ctx) {
+  if (!row || typeof row !== 'object') throw new Error(`${ctx}: 行必须是 object`);
+  if (!row.moderatorModelId) throw new Error(`${ctx}: 缺 moderatorModelId`);
+  if (!Array.isArray(row.participants) || row.participants.length === 0) throw new Error(`${ctx}: 缺 participants`);
+  const names = new Set();
+  const participants = row.participants.map((p, i) => {
+    if (!p || !p.name || !p.modelId || !p.persona) throw new Error(`${ctx}: participant ${i} 缺 name/modelId/persona`);
+    if (names.has(p.name)) throw new Error(`${ctx}: 参与者重名 "${p.name}"`);
+    names.add(p.name);
+    return { name: p.name, model: p.modelId, persona_md: composePersonaMd(file, p.persona) };
+  });
+  return { description: row.description || '', moderator_model: row.moderatorModelId, participants };
+}
+
+/** 内置 PRESETS ⊕ DB 行合并视图(纯函数,规则镜像前端 mergedPresets):
+ * - 普通行(builtinKey 空)追加为新档,key = 行 id;
+ * - 覆盖行(builtinKey ∈ 内置 key)原位顶替对应内置槽:key/name 保持
+ *   内置 key,阵容换行内容,附 overridden_by 供展示;
+ * - builtinKey 不在内置集合的脏行跳过,不当用户档追加(前端同款,防
+ *   未来 JSON 删 key 的存量行悬空成假用户档)。
+ * 值形状 = 内置条目超集:source('builtin'|'user'|'override')/display_name
+ * (内置=key、用户行=管理名)是展示标记,消费方逻辑零依赖。 */
+export function mergePresets(builtin, rows, file) {
+  const out = {};
+  for (const [key, preset] of Object.entries(builtin || {})) {
+    out[key] = { ...preset, participants: preset.participants.map((p) => ({ ...p })), source: 'builtin', display_name: key };
+  }
+  for (const row of rows || []) {
+    if (row && row.builtinKey && !out[row.builtinKey]) continue;
+    const preset = presetFromRow(row, file, `group_chat_presets 行 "${row?.name || row?.id || '?'}"`);
+    if (row.builtinKey) {
+      out[row.builtinKey] = { ...preset, source: 'override', display_name: row.builtinKey, overridden_by: row.id };
+      continue;
+    }
+    out[row.id] = { ...preset, source: 'user', display_name: row.name };
+  }
+  return out;
+}
+
+/** 有效预设视图 = 内置四档 ⊕ daemon 行。rowsProvider 注入取行方式
+ * (M1:() => listUserPresets(base);MCP:() => deps.listPresets(),mock 友好)。
+ * fetch 失败 fail-open:回内置 PRESETS + degraded 标记不抛错(daemon
+ * 不可达 / 老版本路由 404 同路径,无需版本探测)。 */
+export async function loadEffectivePresets(rowsProvider) {
+  try {
+    const rows = await rowsProvider();
+    return { presets: mergePresets(PRESETS, rows, presetsFile), degraded: false };
+  } catch (e) {
+    return { presets: PRESETS, degraded: true, detail: e && e.message ? e.message : String(e) };
+  }
+}
+
+/** 预设引用三趟解析(normalizeModelRef 同构):key 直配(内置 key / 用户
+ * 行 id)→ 用户行 display_name 精确 → 忽略大小写。DB 校验保证用户行 name
+ * UNIQUE 且不撞内置 key(P1 校验矩阵),故撞名歧义理论不可达,防御留。
+ * miss 报可用清单。 */
+export function lookupPreset(presets, ref) {
+  if (presets[ref]) return presets[ref];
+  const entries = Object.entries(presets);
+  const byDisplay = (pred) => entries.filter(([, p]) => typeof p.display_name === 'string' && pred(p.display_name));
+  for (const hit of [byDisplay((n) => n === ref), byDisplay((n) => n.toLowerCase() === String(ref).toLowerCase())]) {
+    if (hit.length === 1) return hit[0][1];
+    if (hit.length > 1) throw new Error(`预设名 "${ref}" 歧义(${hit.length} 档);请用 key(内置 key 或用户行 id)引用`);
+  }
+  const listing = entries.map(([key, p]) => (p.source === 'user' ? `${p.display_name}(${String(key).slice(0, 8)})` : key)).join(' / ');
+  throw new Error(`未知预设 "${ref}";可用:${listing}(查看细节:presets 子命令 / list_presets)`);
+}
 
 // ---------------------------------------------------------------------------
 // 纯函数区(M2 MCP 工具将直接 import 本区;CLI 与未来 MCP 都只是薄壳)
@@ -116,17 +197,16 @@ export const PRESETS = composePresets(presetsFile);
  * 高错误率旗标):`--participants` 整名单替换(增删语义的超集)+
  * `--set` 单人 model/persona 两级。预设名缺失 / 名单为空 / 重名 /
  * --set 目标不存在 → 明确报错。
+ * presets 参数(GCE-P2):有效预设视图(loadEffectivePresets 结果),
+ * 缺省回落模块 PRESETS——既有调用面/单测零改动。
  */
-export function resolveParticipants({ preset, participantsJson, set }) {
+export function resolveParticipants({ preset, participantsJson, set, presets }) {
   let list;
   if (participantsJson) {
     list = JSON.parse(participantsJson);
     if (!Array.isArray(list) || list.length === 0) throw new Error('--participants 必须是非空 JSON 数组 [{name, model, persona_md?}]');
   } else {
-    if (!PRESETS[preset]) {
-      throw new Error(`未知预设 "${preset}";可用:${Object.keys(PRESETS).join(' / ')}(查看细节:presets 子命令)`);
-    }
-    list = PRESETS[preset].participants.map((p) => ({ ...p }));
+    list = lookupPreset(presets || PRESETS, preset).participants.map((p) => ({ ...p }));
   }
   for (const p of list) {
     if (!p.name || !p.model) throw new Error(`参与者缺 name/model:${JSON.stringify(p)}`);
@@ -462,6 +542,13 @@ export function listModels(base) {
   return api(base, 'providers/list_models');
 }
 
+/** GCE-P2:daemon group_chat_presets 表只读(用户行 + 内置覆盖行,
+ * wire GcPresetRow camelCase;契约 DAEMON-API §6.4)。GUI Thin 模式与
+ * 本封装走同一条 HTTP 面。 */
+export function listUserPresets(base) {
+  return api(base, 'group_chat_presets/list_group_chat_presets');
+}
+
 export function createSession(base, body) {
   return api(base, 'sessions/create_session', { body });
 }
@@ -559,19 +646,35 @@ async function run(argv) {
   if (!opt.topic || !opt.topic.trim()) throw new Error('缺议题:--topic <text> 或 --topic-file <path>(议题质量直接决定产出质量,见 skill 指引)');
   opt.project = path.resolve(opt.project);
 
-  const participants = resolveParticipants({
-    preset: opt.preset,
-    participantsJson: opt.participants,
-    set: opt.set,
-  });
-  const moderatorModel = opt.moderatorModel || PRESETS[opt.preset]?.moderator_model;
+  // GCE-P2:有效预设 = 内置四档 ⊕ daemon 行(用户行 + 覆盖行);拉取失败
+  // 降级内置(警告不抛错)。dry-run 同样走这里——「零网络」语义已收窄为
+  // 「不建 session、不发 LLM」,本地 daemon 元数据拉取允许。
+  const eff = await loadEffectivePresets(() => listUserPresets(opt.base));
+  if (eff.degraded) process.stderr.write(`# 用户预设拉取失败(${eff.detail}),降级内置四档\n`);
+  let participants;
+  let moderatorModel;
+  try {
+    participants = resolveParticipants({
+      preset: opt.preset,
+      participantsJson: opt.participants,
+      set: opt.set,
+      presets: eff.presets,
+    });
+    moderatorModel = opt.moderatorModel || lookupPreset(eff.presets, opt.preset)?.moderator_model;
+  } catch (e) {
+    if (eff.degraded && /未知预设|歧义/.test(e.message)) {
+      throw new Error(`${e.message};用户预设不可用(daemon 拉取失败,仅内置四档可用)`);
+    }
+    throw e;
+  }
   if (!moderatorModel) throw new Error('缺主持人模型:--moderator-model <id>(models 子命令查目录)');
 
   const say = (...a) => { if (!opt.quiet) process.stderr.write(`${a.join(' ')}\n`); };
   // 关键行(session id / 转录路径 / 终态)不受 --quiet 影响 —— cron 静默进度但必须拿到路径
   const emit = (...a) => process.stderr.write(`${a.join(' ')}\n`);
 
-  // --dry-run:纯静态模板,零网络(评审团 verdict:双态简化)。参数
+  // --dry-run:静态请求模板,不建 session、不发 LLM(GCE-P2 起预设目录
+  // 经本地 daemon 拉取,失败降级内置;评审团 verdict:双态简化)。参数
   // 组装逻辑的回归保护在单测,不在 dry-run。
   if (opt.dryRun) {
     const createBody = buildCreateSessionBody({
@@ -581,7 +684,7 @@ async function run(argv) {
       participants,
       tokenBudget: opt.tokenBudget,
     });
-    process.stdout.write('=== dry-run:将发出的请求(纯静态模板,不连 daemon)===\n');
+    process.stdout.write('=== dry-run:将发出的请求(静态模板,不建 session、不发 LLM)===\n');
     process.stdout.write(`POST /api/v1/sessions/create_session\n${JSON.stringify(createBody, null, 2)}\n\n`);
     process.stdout.write(`POST /api/v1/agent/chat\n${JSON.stringify(buildChatBody({ requestId: '<rid>', sessionId: '<sid>', topic: opt.topic }), null, 2)}\n`);
     process.stdout.write(`(转录落点:${opt.out || defaultTranscriptPath(opt.topic)};模型/项目解析发生在真跑时)\n`);
@@ -747,12 +850,30 @@ async function cmdModels(base) {
 注意:providers 域返回 camelCase(DAEMON-API.md §2 同款实踩点)。\n`);
 }
 
-function cmdPresets() {
-  for (const [name, preset] of Object.entries(PRESETS)) {
-    process.stdout.write(`\n== ${name} — ${preset.description}\n`);
+async function cmdPresets(base) {
+  const eff = await loadEffectivePresets(() => listUserPresets(base));
+  if (eff.degraded) process.stderr.write(`# 用户预设拉取失败(${eff.detail}),仅列内置四档\n`);
+  const builtin = [];
+  const user = [];
+  for (const [key, preset] of Object.entries(eff.presets)) {
+    (preset.source === 'user' ? user : builtin).push([key, preset]);
+  }
+  for (const [name, preset] of builtin) {
+    const mark = preset.source === 'override' ? ` [已覆盖,行 ${String(preset.overridden_by).slice(0, 8)}]` : '';
+    process.stdout.write(`\n== ${name} — ${preset.description}${mark}\n`);
     process.stdout.write(`   moderator: ${preset.moderator_model}\n`);
     for (const x of preset.participants) {
       process.stdout.write(`   - ${x.name} / ${x.model} / persona ${x.persona_md.length} 字符\n`);
+    }
+  }
+  if (user.length) {
+    process.stdout.write('\n== 用户预设(--preset 传 key 或名称;Settings「群聊预设」页管理)==\n');
+    for (const [key, preset] of user) {
+      process.stdout.write(`\n-- ${preset.display_name} — ${preset.description}\n`);
+      process.stdout.write(`   key: ${key}\n   moderator: ${preset.moderator_model}\n`);
+      for (const x of preset.participants) {
+        process.stdout.write(`   - ${x.name} / ${x.model} / persona ${x.persona_md.length} 字符\n`);
+      }
     }
   }
   process.stdout.write(`
@@ -761,7 +882,8 @@ function cmdPresets() {
   --set <name>.model=<id>            单人换模型(可重复)
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --moderator-model <id>             换主持人
-预设单一事实源是 scripts/group-chat-presets.json(M4a R7,定时任务与脚本共享);个性化靠覆盖,不靠改脚本。\n`);
+内置预设单一事实源是 scripts/group-chat-presets.json(M4a R7,定时任务与脚本共享);用户预设存
+daemon DB(Settings 管理,模型引用 UUID),运行时拉取合并——daemon 不在则降级内置四档;个性化靠覆盖,不靠改脚本。\n`);
 }
 
 function printRunHelp() {
@@ -770,7 +892,7 @@ function printRunHelp() {
   --project <path>        审议对象的项目目录(证据基地;默认当前目录;miss 自动创建)
   --topic-file <path>     议题文件(主推;长议题/含引号转义都走文件)
   --topic <text>          议题内联(短议题用)
-  --preset <name>         review / fe_review / arch / retro(见 presets 子命令)
+  --preset <name>         内置 review / fe_review / arch / retro,或用户预设 key(UUID)/ 名称(presets 子命令查)
   --participants <json>   整名单替换(与 --preset 二选一;增删参与者也走它)
   --moderator-model <id>  主持人模型(默认取预设)
   --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget;省略 = 不限)
@@ -780,7 +902,7 @@ function printRunHelp() {
   --out <path>            转录落点(默认 <仓库根>/out/group-chat-<slug>-<ts>.md)
   --quiet                 静默进度(cron 用);session id/转录路径/终态仍打 stderr
   --cleanup               成功收官后删 session(中断现场永不删)
-  --dry-run               打印静态请求模板,零网络(参数组装回归在单测)
+  --dry-run               打印静态请求模板,不建 session、不发 LLM(用户预设目录经本地 daemon 拉取,失败降级内置四档)
   --base <url>            daemon 地址(默认 \${EVERLASTING_BASE:-http://127.0.0.1:7456})
 
 进度粒度:轮询 10s 一拍,时间戳精度 ±10s;发言级实时进度不做(需 SSE,会破坏
@@ -809,7 +931,7 @@ async function main() {
   switch (sub) {
     case 'projects': return cmdProjects(DEFAULT_BASE);
     case 'models': return cmdModels(DEFAULT_BASE);
-    case 'presets': return cmdPresets();
+    case 'presets': return cmdPresets(DEFAULT_BASE);
     case 'run': return run(rest);
     case '--help': case '-h': case undefined: return usage();
     default: throw new Error(`未知子命令 "${sub}"`);

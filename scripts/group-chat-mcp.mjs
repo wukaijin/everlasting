@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // group-chat-mcp.mjs — GCE-M2 MCP 接口层(四工具:召集/轮询/取结论/止损;
 // M3 增打断/注入两工具,控制面三权齐:cancel 硬停 / interrupt 收束 / inject 注入;
-// 09-11 增 list_models 只读内省,宿主发起前可查可用模型)
+// 09-11 增 list_models 只读内省,宿主发起前可查可用模型;
+// GCE-P2(09-12)增 list_presets 只读内省 + start 消费用户预设/覆盖行)
 //
 // 三层架构(M1 定形)中的薄包装:编排语义(建群契约/模型解析/终态判定/
 // 转录渲染)全部 import 自 group-chat-run.mjs(AC②,不是两套);本文件
@@ -30,10 +31,11 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import {
-  PRESETS, DEFAULT_BASE, fetchFailDetail,
+  DEFAULT_BASE, fetchFailDetail,
   resolveParticipants, validateModelRefs, buildCreateSessionBody, buildChatBody,
   defaultTranscriptPath, renderTranscript, injectGuardDecision, interpretAcceptance,
-  resolveProject, listModels, createSession, fireChat, pollSession, loadSession, cancelChat,
+  resolveProject, listModels, listUserPresets, loadEffectivePresets, lookupPreset,
+  createSession, fireChat, pollSession, loadSession, cancelChat,
   preemptGroupChat, listTurnTraces, aggregateTokens,
 } from './group-chat-run.mjs';
 
@@ -93,6 +95,7 @@ export function realDeps(overrides = {}) {
     base,
     resolveProject: (cwd) => resolveProject(base, cwd),
     listModels: () => listModels(base),
+    listPresets: () => listUserPresets(base),
     createSession: (body) => createSession(base, body),
     fireChat: (body) => fireChat(base, body),
     pollSession: (projectId, sessionId) => pollSession(base, projectId, sessionId),
@@ -110,7 +113,10 @@ export function daemonError(e) {
   return `daemon 调用失败:${detail}${/daemon 不可达|fetch failed|ECONNREFUSED/i.test(detail) ? `;原始网络错误:${fetchFailDetail(e.cause || e)};先确认 daemon 在跑(scripts/daemon.sh)` : ''}`;
 }
 
-/** start 编排链:M1 导出全组合;moderator 恒取 preset 预设值。 */
+/** start 编排链:M1 导出全组合;moderator 恒取 preset 预设值。
+ * GCE-P2:preset 解析吃 loadEffectivePresets 合并视图(内置四档 ⊕
+ * daemon 用户行/覆盖行);拉取失败降级内置——此时 preset miss 的报错
+ * 追加降级提示,别让「daemon 不在」伪装成「预设不存在」。 */
 export async function coreStart(deps, ledger, { topic, cwd, preset = 'review', participants, tokenBudget }) {
   if (!topic || !String(topic).trim()) throw new Error('缺议题:topic(议题质量直接决定产出质量,不要把答案写进问题)');
   if (!cwd) throw new Error('缺工作目录:cwd(讨论的证据基地)');
@@ -118,13 +124,24 @@ export async function coreStart(deps, ledger, { topic, cwd, preset = 'review', p
     throw new Error('token_budget 必须是正整数(不限请省略该参数)');
   }
 
-  const roster = resolveParticipants({
-    preset,
-    participantsJson: participants ? JSON.stringify(participants) : undefined,
-    set: [],
-  });
-  const moderatorModel = PRESETS[preset]?.moderator_model;
-  if (!moderatorModel) throw new Error(`未知预设 "${preset}";可用:${Object.keys(PRESETS).join(' / ')}`);
+  const eff = await loadEffectivePresets(() => deps.listPresets());
+  let roster;
+  let moderatorModel;
+  try {
+    roster = resolveParticipants({
+      preset,
+      participantsJson: participants ? JSON.stringify(participants) : undefined,
+      set: [],
+      presets: eff.presets,
+    });
+    moderatorModel = lookupPreset(eff.presets, preset)?.moderator_model;
+  } catch (e) {
+    if (eff.degraded && /未知预设|歧义/.test(e.message)) {
+      throw new Error(`${e.message};用户预设不可用(daemon 拉取失败,仅内置四档可用)`);
+    }
+    throw e;
+  }
+  if (!moderatorModel) throw new Error(`未知预设 "${preset}";可用:${Object.keys(eff.presets).join(' / ')}(list_presets 查)`);
 
   const models = await deps.listModels();
   const norm = validateModelRefs(models, { moderatorModel, participants: roster });
@@ -349,16 +366,19 @@ export async function coreInject(deps, ledger, { session_id: sessionId, text }) 
 // 就是 listTools 返回的 schema,这才是预算的地面真值)
 // ---------------------------------------------------------------------------
 
-export const TOOLS_BUDGET_CHARS = 3500; // AC4:七工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设后 3162(3200 锁,余 ~38),09-11 加 list_models 后实测 3403——评审放行升到 3500(升锁须过评审,同步本注释 + AC4 断言 + smoke BUDGET + spec)
+export const TOOLS_BUDGET_CHARS = 3800; // AC4:八工具 name+description+inputSchema(wire JSON Schema)合计字符上限;gce-m4c(09-08)加 token_budget 参后实测 3115,09-09 加 fe_review 预设后 3162(3200 锁,余 ~38),09-11 加 list_models 后实测 3403(升 3500),GCE-P2(09-12)加 list_presets + preset 放宽 string 后实测 3678——评审放行升到 3800(升锁须过评审,同步本注释 + AC4 断言 + smoke BUDGET + spec)
 
 /** Zod shape(SDK 1.30 registerTool 只收 Zod;内部转 JSON Schema 上 wire)。
- * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。 */
+ * description 克制:D3 约束 —— 只留「干什么/成本闸/不阻塞」三件事。
+ * preset 放宽为 string(GCE-P2,原 enum 四档):动态 schema 否决——
+ * buildToolShapes 是无 daemon 环境消费的同步纯函数,listTools 时拉 daemon
+ * 会破冒烟确定性;枚举发现义务移交 list_presets,校验在 coreStart 运行时。 */
 export function buildToolShapes(z) {
   return {
     start_discussion: {
       topic: z.string().describe('The question; evidence-backed, do not bake the answer in'),
       cwd: z.string().describe('Project dir as evidence base'),
-      preset: z.enum(['review', 'fe_review', 'arch', 'retro']).optional().describe('Participant preset'),
+      preset: z.string().optional().describe('Participant preset: builtin review/fe_review/arch/retro, or user preset key/name — see list_presets'),
       participants: z.array(z.object({
         name: z.string(),
         model: z.string().describe('Catalog name or UUID'),
@@ -375,13 +395,14 @@ export function buildToolShapes(z) {
       text: z.string().min(1).describe('User message text; lands as [用户插入] in the next moderator round'),
     },
     list_models: {},
+    list_presets: {},
   };
 }
 
 export const TOOLS = [
   {
     name: 'start_discussion',
-    description: 'Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min, hundreds of thousands of tokens. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: review (arch+product+backend), fe_review (arch+product+frontend), arch (2-person), retro (product+outsider).',
+    description: 'Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min, hundreds of thousands of tokens. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: builtin four + user presets — see list_presets.',
     shapeKey: 'start_discussion',
   },
   {
@@ -414,6 +435,11 @@ export const TOOLS = [
     description: 'List available models (name + UUID) for start_discussion participants/moderator. Cheap metadata call.',
     shapeKey: 'list_models',
   },
+  {
+    name: 'list_presets',
+    description: 'List participant presets: builtin four + user presets (key = row UUID) + overrides. Cheap metadata call; degraded=true means daemon unreachable (builtin only).',
+    shapeKey: 'list_presets',
+  },
 ];
 
 /** list_models(09-11):daemon 模型目录只读透传。名字或 UUID 皆可作
@@ -428,6 +454,28 @@ export async function coreModels(deps) {
       provider: m.providerDisplayName || null,
     })),
     hint: 'Reference by name or UUID in start_discussion (participants[].model / preset moderator). Resolved at start time.',
+  };
+}
+
+/** list_presets(GCE-P2):合并预设视图只读内省 = 内置四档 ⊕ daemon 行
+ * (用户行 + 覆盖行,loadEffectivePresets 同源)。内置四 key 恒在——
+ * degraded(daemon 不可达)时用户档缺席但不残缺。宿主发现用户预设
+ * key(UUID)的唯一 MCP 通道。 */
+export async function corePresets(deps) {
+  const eff = await loadEffectivePresets(() => deps.listPresets());
+  const presets = Object.entries(eff.presets).map(([key, p]) => ({
+    key,
+    name: p.display_name ?? key,
+    source: p.source ?? 'builtin',           // builtin | user | override
+    description: p.description ?? '',
+    moderator: p.moderator_model,             // 内置=目录名;用户/覆盖行=UUID(start 时统一解析)
+    participants: p.participants.map((x) => ({ name: x.name, model: x.model, persona_chars: x.persona_md.length })),
+  }));
+  return {
+    presets,
+    degraded: eff.degraded,
+    ...(eff.degraded ? { detail: eff.detail } : {}),
+    hint: 'Reference preset by key (builtin key or user row UUID) or user name in start_discussion. Resolved at start time.',
   };
 }
 
@@ -457,6 +505,7 @@ export async function createServer({ server, deps = realDeps(), ledger = createL
     interrupt_discussion: ({ session_id }) => coreInterrupt(deps, ledger, session_id),
     inject_message: ({ session_id, text }) => coreInject(deps, ledger, { session_id, text }),
     list_models: () => coreModels(deps),
+    list_presets: () => corePresets(deps),
   };
   for (const tool of TOOLS) {
     const handler = handlers[tool.name];

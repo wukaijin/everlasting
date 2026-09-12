@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import {
   TOOLS, TOOLS_BUDGET_CHARS, buildToolShapes, createLedger, isTerminal,
-  coreStart, coreStatus, coreResult, coreCancel, coreInterrupt, coreInject,
+  coreStart, coreStatus, coreResult, coreCancel, coreInterrupt, coreInject, corePresets,
   ensureTranscript, realDeps,
 } from './group-chat-mcp.mjs';
 import { PRESETS } from './group-chat-run.mjs';
@@ -24,13 +24,16 @@ const MODELS = [
 ];
 
 /** mock deps:按场景注入;记录调用供断言。session 形状 = list_sessions 行。
- * traces:list_turn_traces 行(缺省 [] —— gce-m4c 核算数据源)。 */
-function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: false }, traces = [] } = {}) {
-  const calls = { createSession: [], fireChat: [], cancelChat: [], pollSession: [], loadSession: [], listModels: 0, preemptGroupChat: [], listTurnTraces: [] };
+ * traces:list_turn_traces 行(缺省 [] —— gce-m4c 核算数据源)。
+ * presetRows:group_chat_presets 行(缺省 [] = 无用户预设,合并视图 =
+ * 内置四档;GCE-P2)。 */
+function makeMockDeps({ session, loaded, project = { id: 'proj-1', created: false }, traces = [], presetRows = [] } = {}) {
+  const calls = { createSession: [], fireChat: [], cancelChat: [], pollSession: [], loadSession: [], listModels: 0, preemptGroupChat: [], listTurnTraces: [], listPresets: 0 };
   const deps = {
     base: 'http://mock',
     resolveProject: async () => { calls.resolveProject = (calls.resolveProject || 0) + 1; return project; },
     listModels: async () => { calls.listModels++; return MODELS; },
+    listPresets: async () => { calls.listPresets++; return presetRows; },
     createSession: async (body) => { calls.createSession.push(body); return { id: 'sess-1', ...body }; },
     fireChat: async (body) => { calls.fireChat.push(body); return {}; },
     pollSession: async (projectId, sessionId) => { calls.pollSession.push([projectId, sessionId]); return session ? { ...session } : null; },
@@ -51,9 +54,9 @@ function tmpLedger() {
 // 工具面(AC4 预算 + AC2 完整性)
 // ---------------------------------------------------------------------------
 
-test('AC4(文案层):七工具面完整,成本闸/不阻塞语义在 start 描述里(R3)', () => {
+test('AC4(文案层):八工具面完整,成本闸/不阻塞语义在 start 描述里(R3)', () => {
   assert.deepEqual(TOOLS.map((t) => t.name),
-    ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message', 'list_models']);
+    ['start_discussion', 'discussion_status', 'discussion_result', 'cancel_discussion', 'interrupt_discussion', 'inject_message', 'list_models', 'list_presets']);
   const desc = TOOLS[0].description;
   assert.match(desc, /5-15 min/);
   assert.match(desc, /tokens/);
@@ -63,12 +66,15 @@ test('AC4(文案层):七工具面完整,成本闸/不阻塞语义在 start 描�
   assert.match(TOOLS[4].description, /preempted/);
   assert.match(TOOLS[5].description, /RUNNING/);
   assert.match(TOOLS[5].description, /start_discussion/);
-  // preset enum 是全链路唯一的硬编码预设清单(其余消费方都 import
-  // presets.json)——与引擎 PRESETS 对齐,防止加预设漏改 enum。
-  assert.deepEqual(buildToolShapes(z).start_discussion.preset.unwrap().options, Object.keys(PRESETS));
-  // 09-11 list_models:零参只读,描述说清用途(查目录再发起)
+  // GCE-P2:preset 放宽为 string(动态 schema 否决——枚举发现义务移交
+  // list_presets,校验在 coreStart 运行时);describe 指向 list_presets。
+  assert.ok(buildToolShapes(z).start_discussion.preset.unwrap() instanceof z.ZodString, 'preset shape 应为 string(原 enum 四档已退役)');
+  assert.match(buildToolShapes(z).start_discussion.preset.description, /list_presets/, 'describe 把引用口径指向 list_presets');
+  // 09-11 list_models / GCE-P2 list_presets:零参只读,描述说清用途
   assert.match(TOOLS[6].description, /List available models/);
   assert.deepEqual(buildToolShapes(z).list_models, {});
+  assert.match(TOOLS[7].description, /List participant presets/);
+  assert.deepEqual(buildToolShapes(z).list_presets, {});
   // 字符预算的地面真值在 SDK wire 测试里按 listTools 实测(见下)
 });
 
@@ -161,6 +167,100 @@ test('coreStart:tokenBudget 声明落建群 metadata;缺省不写键', async () 
   assert.equal(calls.createSession[0].metadata.token_budget, 400000);
   await coreStart(deps, ledger, { topic: '议题2', cwd: '/w' });
   assert.equal('token_budget' in calls.createSession[1].metadata, false);
+});
+
+// ---------------------------------------------------------------------------
+// GCE-P2:用户预设 / 覆盖行引擎可见性(合并消费 + 三趟解析 + 降级)
+// 行形状 = daemon GcPresetRow wire(camelCase;participants 嵌套元素
+// {name, modelId, persona kind};persona_md 由引擎按 JSON personas 展开)。
+// ---------------------------------------------------------------------------
+
+const PRESET_ROW = (over = {}) => ({
+  id: 'row-user-1',
+  name: 'My Panel',
+  description: '用户自建评审团',
+  moderatorModelId: 'uuid-m3',
+  participants: [
+    { name: '架构', modelId: 'uuid-glm53', persona: 'arch' },
+    { name: '产品', modelId: 'uuid-flash', persona: 'product' },
+  ],
+  createdAt: '2026-09-12T00:00:00Z',
+  updatedAt: '2026-09-12T00:00:00Z',
+  ...over,
+});
+
+test('GCE-P2 coreStart:用户预设按行 id 引用 —— roster/moderator 全取行内容(UUID 直收),created_via 不变', async () => {
+  const { deps, calls } = makeMockDeps({ presetRows: [PRESET_ROW()] });
+  const { ledger } = tmpLedger();
+  await coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'row-user-1' });
+  const body = calls.createSession[0];
+  assert.equal(body.model, 'uuid-m3', 'moderator = 行 moderatorModelId');
+  assert.deepEqual(body.metadata.participants.map((p) => [p.name, p.model]), [['架构', 'uuid-glm53'], ['产品', 'uuid-flash']], '行参与者 UUID 直收');
+  assert.equal(body.metadata.created_via, 'mcp');
+  assert.equal(calls.listPresets, 1);
+});
+
+test('GCE-P2 coreStart:用户预设按名称解析(精确 → 忽略大小写;normalizeModelRef 同构三趟)', async () => {
+  const { deps, calls } = makeMockDeps({ presetRows: [PRESET_ROW()] });
+  const { ledger } = tmpLedger();
+  await coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'My Panel' });
+  assert.equal(calls.createSession[0].model, 'uuid-m3', '名称精确命中');
+  await coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'my panel' });
+  assert.equal(calls.createSession[1].model, 'uuid-m3', '名称忽略大小写命中');
+  await assert.rejects(coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'nope' }), /未知预设.*My Panel/);
+});
+
+test('GCE-P2 coreStart:覆盖行原位顶替内置槽 —— preset=review 吃到覆盖后阵容', async () => {
+  const { deps, calls } = makeMockDeps({ presetRows: [PRESET_ROW({ id: 'row-ovr', builtinKey: 'review', name: '评审团改版' })] });
+  const { ledger } = tmpLedger();
+  await coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'review' });
+  const body = calls.createSession[0];
+  assert.equal(body.model, 'uuid-m3', 'moderator 换行值(覆盖后定义)');
+  assert.deepEqual(body.metadata.participants.map((p) => p.name), ['架构', '产品'], 'roster 换行名单');
+});
+
+test('GCE-P2 coreStart:拉取失败降级 —— 内置 preset 照常可用(fail-open)', async () => {
+  const { deps, calls } = makeMockDeps();
+  deps.listPresets = async () => { throw new Error('daemon 不可达(mock)'); };
+  const { ledger } = tmpLedger();
+  await coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'review' });
+  assert.equal(calls.createSession[0].model, 'uuid-m3', '内置四档不受 daemon 在否影响');
+});
+
+test('GCE-P2 coreStart:降级态引用用户预设 —— 报错带降级提示(不伪装成「预设不存在」)', async () => {
+  const { deps } = makeMockDeps();
+  deps.listPresets = async () => { throw new Error('daemon 不可达(mock)'); };
+  const { ledger } = tmpLedger();
+  await assert.rejects(coreStart(deps, ledger, { topic: 't', cwd: '/w', preset: 'row-user-1' }), /用户预设不可用/);
+});
+
+test('GCE-P2 corePresets:合并视图(内置声明序在前 + 用户行 + 覆盖行顶替 + 脏行跳过)', async () => {
+  const { deps } = makeMockDeps({
+    presetRows: [
+      PRESET_ROW(),
+      PRESET_ROW({ id: 'row-ovr', builtinKey: 'arch', name: '架构改版' }),
+      PRESET_ROW({ id: 'row-dirty', builtinKey: 'ghost', name: '脏行' }),
+    ],
+  });
+  const out = await corePresets(deps);
+  assert.equal(out.degraded, false);
+  const byKey = Object.fromEntries(out.presets.map((p) => [p.key, p]));
+  assert.deepEqual(Object.keys(byKey).slice(0, 4), ['review', 'fe_review', 'arch', 'retro'], '内置声明序在前');
+  assert.equal(byKey.arch.source, 'override', 'arch 被覆盖行顶替');
+  assert.equal(byKey.arch.moderator, 'uuid-m3', '覆盖后 moderator = 行值');
+  assert.equal(byKey['row-user-1'].source, 'user');
+  assert.equal(byKey['row-user-1'].name, 'My Panel', 'display_name = 行管理名');
+  assert.ok(!('row-dirty' in byKey), '未知 builtinKey 脏行跳过(不当用户档追加)');
+  assert.equal(out.presets.some((p) => p.key === 'ghost'), false);
+});
+
+test('GCE-P2 corePresets:daemon 不可达降级 —— 内置四档完整 + degraded/detail 标记', async () => {
+  const { deps } = makeMockDeps();
+  deps.listPresets = async () => { throw new Error('daemon 不可达(mock)'); };
+  const out = await corePresets(deps);
+  assert.equal(out.degraded, true);
+  assert.match(out.detail, /daemon 不可达/);
+  assert.deepEqual(out.presets.map((p) => p.key), ['review', 'fe_review', 'arch', 'retro']);
 });
 
 // ---------------------------------------------------------------------------
@@ -432,7 +532,7 @@ test('SDK 接线:InMemoryTransport 全链——tools/list 七工具 + callTool �
   await Promise.all([server.connect(ct), client.connect(st)]);
 
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 7);
+  assert.equal(listed.tools.length, 8);
 
   // AC4 预算地面真值:宿主注入 LLM context 的就是这份 wire schema
   const wireChars = JSON.stringify(listed.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length;
