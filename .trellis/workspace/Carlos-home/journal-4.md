@@ -1615,3 +1615,25 @@ GCE-P1b 落地:group_chat_presets 加可空 builtin_key 列 + UNIQUE 索引(NULL
 ### Status
 
 [OK] **Completed**
+
+
+## Session 141: GCE-P2: M1/MCP 引擎侧用户预设可见性(daemon 运行时拉取)
+
+**Date**: 2026-09-12
+**Task**: GCE-P2: M1/MCP 引擎侧用户预设可见性(daemon 运行时拉取)
+**Branch**: `main`
+
+### Summary
+
+收掉 GCE-P1/P1b 留下的引擎可见性边界:scripts/ 纯 JS 改造(Rust/前端/deploy 零改动)。引擎核心 group-chat-run.mjs:mergePresets 纯函数逐条镜像前端 mergedPresets(用户行追加 key=id/覆盖行原位顶替/未知 builtinKey 脏行跳过)、composePersonaMd 单源抽出(persona kind 展开,DB 不存文本)、loadEffectivePresets 降级层(拉取失败 fail-open 回内置四档+degraded 标记;数据损坏由 mergePresets fail-loud throw,两层分工)、lookupPreset 三趟解析(内置 key→行 UUID→行名称,normalizeModelRef 同构);M1 run/presets 子命令消费合并视图,dry-run 语义收窄为「不建 session 不发 LLM」。MCP:第八工具 list_presets(合并视图内省,宿主发现用户预设 key 的唯一通道)、start_discussion.preset 从 enum 放宽为 z.string()(动态 schema 否决记入 spec)、coreStart 全链合并消费。用户裁定项:wire 预算锁 3500→3800(八工具实测 3678,四处同步+实测值入注释)。验证:run.test 20/20、mcp.test 26/26、非 live 冒烟双态过;live 零 LLM 链全过(HTTP 建临时用户行+retro 覆盖行→presets 合并视图→dry-run 三臂 by id/by 名称/覆盖→MCP list_presets 返回行→清场);期间发现运行中 daemon 是 9/10 旧产物(无 P1 路由,405→降级路径被真实实证),按惯例 daemon.sh 重建重启后全链绿。spec:group-chat-presets.md 增引擎合流契约(含动态 schema 否决与两层降级分工的 Wrong/Correct 对)+DAEMON-API §6.4/AGENTS/skill/deploy spec 同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `44816583` | (see git log) |
+| `629c261b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
