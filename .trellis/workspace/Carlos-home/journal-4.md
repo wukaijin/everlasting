@@ -1673,3 +1673,24 @@ GCE-P1b 落地:group_chat_presets 加可空 builtin_key 列 + UNIQUE 索引(NULL
 ### Status
 
 [OK] **Completed**
+
+
+## Session 143: 非图片文件路径可点击查看 + 工具输出路径 linkify(09-13-file-path-viewer 全程)
+
+**Date**: 2026-09-13
+**Task**: 非图片文件路径可点击查看 + 工具输出路径 linkify(09-13-file-path-viewer 全程)
+**Branch**: `main`
+
+### Summary
+
+沿 09-13 图片路径预览延伸:markdown 识别正则泛化 50 文本扩展+pdf(段语法/排除项不动,图片零回归),daemon 新增 GET /files/raw(text/plain 闸门/2MiB 与 32MiB 分档/严格 UTF-8),FileViewerModal 按扩展分派(md 渲染/CodeBlockPrimitive 复用/pdf 新标签),ToolOutputBody 插值改 v-html 安全 linkify(escape→插锚→DOMPurify)使工具输出路径可点;check 阶段顺修 Icon expand 未注册静默空渲染(users 后第二例,沉淀 component-guidelines.md)。门禁:前端 1806(+26)/后端 2411(+3)/vue-tsc 零错/remote 89 零改动。流程:brainstorm 三工件+jsonl 策展→implement/check 子代理→spec 沉淀→feat 单提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e9b26825` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 142
+- **Total Sessions**: 143
 - **Last Active**: 2026-09-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1675 | Active |
+| `journal-4.md` | ~1696 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 143 | 2026-09-13 | 非图片文件路径可点击查看 + 工具输出路径 linkify(09-13-file-path-viewer 全程) | `e9b26825` | `main` |
 | 142 | 2026-09-13 | 图片路径可点击弹层预览 + 缩放平移(09-13) | `8a40de52` | `main` |
 | 141 | 2026-09-12 | GCE-P2: M1/MCP 引擎侧用户预设可见性(daemon 运行时拉取) | `44816583`, `629c261b` | `main` |
 | 140 | 2026-09-12 | 群聊预设内置档覆盖层(GCE-P1b):builtin_key 覆盖行 + mergedPresets 原位顶替 + Settings 覆盖编辑/恢复内置 | `1c2e0445`, `53026203`, `2017ecfe` | `main` |
