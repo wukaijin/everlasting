@@ -87,3 +87,20 @@ min-width 钳制)超过行宽 → 单卡即换行,grow 因子把它拉满整行�
 排查手法:VLM 截图评审会说「纵排」但给不出机制;**DOM 实测才是裁决**——
 `getBoundingClientRect()` 对比各卡 x/y,再读 `getComputedStyle` 的
 `flexBasis`/`minWidth` 定位钳制层。
+
+### `<Icon>` 引用未注册的 name 静默渲染空 span
+
+**Symptom**(两例:2026-08 `name="users"`、2026-09-13 `name="expand"`):按钮/角标
+该有图标的位置是空白,无任何报错、无 warning、测试全绿。
+
+**Cause**:`components/Icon.vue` 的 registry 是显式 import + 手工映射表
+(`"expand": Expand` 形态),模板里写 `name="xxx"` 用到未登记的 key 时组件走
+fallback 渲染空 span——不 throw,静态类型也管不到字符串 prop。
+
+**Fix**:去 `Icon.vue` registry 补 import + 映射行(注意图标是从
+`lucide-vue-next` 按名 import 的,先确认包内存在该导出)。
+
+**Prevention**:新组件首次用 `<Icon name="…">` 时,grep 一下
+`app/src/components/Icon.vue` 确认 key 已注册;code review 对新增 `name="…"`
+字符串多看一眼。图标类静默失效与 §2(v-html 容器忘绑 onMarkdownClick)同性质:
+**契约靠人工清单,不靠类型系统兜底**的资产,改动时 grep 消费点。

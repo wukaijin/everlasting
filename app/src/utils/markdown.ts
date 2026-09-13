@@ -140,12 +140,14 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
 // <a>'s href survives because href is on the default allow-list;
 // target/rel via ADD_ATTR above; data-image-path via the default
 // ALLOW_DATA_ATTR).
-// --- 09-13 图片路径预览:linkify 本地图片路径 --------------------------------
-// LLM 输出的本地图片路径(ui-review 截图、图表产物等)在正文/inline code
-// 里是纯文本,无法查看。这里把三种形态统一转成可点击的
-// `<a class="md-image-path" data-image-path="原始路径">`(点击经
+// --- 09-13 本地路径预览(图片+文件):linkify 本地路径 ------------------------
+// LLM 输出的本地路径(ui-review 截图、`out/报告.md`、`src/main.rs` 等)
+// 在正文/inline code 里是纯文本,无法查看。这里把三种形态统一转成可点击
+// 的 `<a class="md-image-path" data-image-path="原始路径">`(图片,点击经
 // useCodeBlockCopy 的委托开 ImageViewerModal 弹层,<img> 直连 daemon 的
-// `GET /api/v1/files/image`):
+// `GET /api/v1/files/image`)或 `<a class="md-file-path" data-file-path=
+// "原始路径">`(其余文件,点击开 FileViewerModal;pdf 由弹层 composable
+// 分派到新标签,不走弹层):
 //
 //   ① 裸文本路径(正文段落里 `out/ui-review/x/1.png`);
 //   ② inline `<code>` 内路径(LLM 习惯把路径写进反引号)——code 内保留
@@ -167,28 +169,54 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
 // 段字符)。纯文件名(x.png,无路径分隔符)有意不识别 —— 英文句子里
 // 误伤率高;`https://host/x.png` 由前边界(不含 `/`)自然排除。
 const IMAGE_EXT = String.raw`png|jpe?g|gif|webp|bmp|avif|ico`;
+// 09-13 同日文件通道:文本类 + pdf。与 daemon `/files/raw` 白名单
+// (commands/files.rs `RAW_TEXT_EXTS`)有意各持一份 —— 后端是唯一安全
+// 闸门,前端集偏大只会点开见 400;两份名单的对齐约定记录在
+// .trellis/spec/frontend/chat/message-list-and-markdown.md §5,改动任一
+// 侧须对照另一侧。
+const TEXT_EXT = String.raw`md|markdown|txt|log|json|jsonl|csv|tsv|yaml|yml|toml|ini|conf|cfg|xml|html|htm|css|js|mjs|cjs|jsx|ts|tsx|vue|svelte|py|rs|go|java|kt|kts|c|h|cpp|hpp|cc|cs|rb|php|sh|bash|zsh|fish|sql|proto|graphql|gql|diff|patch`;
+const PDF_EXT = String.raw`pdf`;
+/** 前端识别全集 = 图片 ∪ 文本 ∪ pdf(单正则统一识别,命中后按扩展分流)。 */
+const FILE_EXT = String.raw`${IMAGE_EXT}|${TEXT_EXT}|${PDF_EXT}`;
 /** 段字符:Unicode 字母/数字 + `.` `_` `-`(dotfile、kebab 文件名)。 */
 const IMAGE_PATH_SEG = String.raw`[\p{L}\p{N}._-]`;
 /** 路径本体(无边界组):带前缀(`/`、`~/`、`./`、`../`)任意段数;
- *  无前缀(裸相对)必须至少含一个 `/` 段,否则就是纯文件名。 */
-export const IMAGE_PATH_BODY = String.raw`(?:(?:/|~/|\.{1,2}/)${IMAGE_PATH_SEG}+(?:/${IMAGE_PATH_SEG}+)*|${IMAGE_PATH_SEG}+/${IMAGE_PATH_SEG}+(?:/${IMAGE_PATH_SEG}+)*)\.(?:${IMAGE_EXT})`;
+ *  无前缀(裸相对)必须至少含一个 `/` 段,否则就是纯文件名。扩展集
+ *  参数化(图片通道与文件通道共用同一套段/边界语法)。 */
+function pathBodyFor(extSet: string): string {
+  return String.raw`(?:(?:/|~/|\.{1,2}/)${IMAGE_PATH_SEG}+(?:/${IMAGE_PATH_SEG}+)*|${IMAGE_PATH_SEG}+/${IMAGE_PATH_SEG}+(?:/${IMAGE_PATH_SEG}+)*)\.(?:${extSet})`;
+}
+/** 图片本体(既有通道;spec §5 引用名保留)。 */
+export const IMAGE_PATH_BODY = pathBodyFor(IMAGE_EXT);
+/** 文件本体(全集;`linkifyPlainText` 的说明见函数注释)。 */
+export const FILE_PATH_BODY = pathBodyFor(FILE_EXT);
 /** 文本内的图片路径(带前后边界组;`m[2]` 是路径本体)。 */
 export const IMAGE_PATH_RE = new RegExp(
   `(^|[\\s(\\[{"'<（【「『“：，])(${IMAGE_PATH_BODY})(?=$|[\\s.,;:!?)\\]}>"'’」』】”。！？；…])`,
   "giu",
 );
+/** 文本内的本地路径(图片+文件全集;边界组逻辑与 IMAGE_PATH_RE 全同)。 */
+export const FILE_PATH_RE = new RegExp(
+  `(^|[\\s(\\[{"'<（【「『“：，])(${FILE_PATH_BODY})(?=$|[\\s.,;:!?)\\]}>"'’」』】”。！？；…])`,
+  "giu",
+);
 /** 属性值形态(href/src 整体就是一个路径,无需边界组)。 */
-const LOCAL_IMAGE_PATH_RE = new RegExp(`^(?:${IMAGE_PATH_BODY})$`, "iu");
-/** 便宜预检:文本里出现图片扩展名字样才进 DOMParser(多数消息不含,
- *  别为它们付 parse + walk 的钱)。宽松无妨,误报只是多跑一次 walk。 */
-const IMAGE_PATH_HINT = new RegExp(`\\.(?:${IMAGE_EXT})`, "i");
+const LOCAL_FILE_PATH_RE = new RegExp(`^(?:${FILE_PATH_BODY})$`, "iu");
+/** 命中路径按扩展分流:尾巴是图片扩展 → 既有图片通道,否则文件通道。
+ *  仅断尾部(非 global,无 lastIndex 状态),配合 match 结束于扩展名的
+ *  正则形态(`x.png.bak` 命中 `x.png` 尾 → 归图片通道,与识别一致)。 */
+const IMAGE_TAIL_RE = new RegExp(`\\.(?:${IMAGE_EXT})$`, "i");
+/** 便宜预检:文本里出现任一识别扩展名字样才进 DOMParser(多数消息
+ *  不含,别为它们付 parse + walk 的钱)。宽松无妨,误报只是多跑一次
+ *  walk。 */
+const FILE_PATH_HINT = new RegExp(`\\.(?:${FILE_EXT})`, "i");
 
-/** src/href 是否是"本地图片路径"形态。排除 http(s)/data/mailto/锚点,
- *  以及我们自己的 API 路径(`/api/v1/attachments/...` 的 uuid 文件名
- *  以 .png 结尾,会被裸形态误吞)。 */
-function isLocalImagePath(src: string): boolean {
+/** src/href 是否是"本地路径"形态(图片+文件全集)。排除 http(s)/data/
+ *  mailto/锚点,以及我们自己的 API 路径(`/api/v1/attachments/...` 的
+ *  uuid 文件名以 .png 结尾,会被裸形态误吞)。 */
+function isLocalFilePath(src: string): boolean {
   if (/^(?:https?:|data:|mailto:|#|\/api\/)/i.test(src)) return false;
-  return LOCAL_IMAGE_PATH_RE.test(src);
+  return LOCAL_FILE_PATH_RE.test(src);
 }
 
 /** marked 会把链接目标 percent-encode(空格 → %20);daemon 读的是解码
@@ -214,36 +242,50 @@ function isOwnAttachmentSrc(src: string): boolean {
 }
 
 /** Replace non-allow-listed `<img>` tags. Allow-listed tags (our
- *  attachments route) pass through untouched; LOCAL image paths become
- *  a preview link (see the linkify block above); everything else
+ *  attachments route) pass through untouched; LOCAL paths become a
+ *  preview link — 图片扩展 → `[图片]`(data-image-path,现状),其余
+ *  文件扩展 → `[文件]`(data-file-path,顺带修掉 `![](out/x.md)` 退化
+ *  成相对 href 新标签链接打穿 SPA 路由的存量 wart); everything else
  *  degrades to a new-tab opener link as before. */
 function downgradeExternalImages(html: string): string {
   return html.replace(IMG_TAG_RE, (tag) => {
     const m = SRC_ATTR_RE.exec(tag);
     const src = m ? m[1] ?? m[2] ?? "" : "";
     if (!src || isOwnAttachmentSrc(src)) return tag;
-    if (isLocalImagePath(src)) {
+    if (isLocalFilePath(src)) {
       const p = tryDecodeUri(src);
-      return `<a class="md-image-path" data-image-path="${escapeHtml(p)}">[图片]</a>`;
+      if (IMAGE_TAIL_RE.test(p)) {
+        return `<a class="md-image-path" data-image-path="${escapeHtml(p)}">[图片]</a>`;
+      }
+      return `<a class="md-file-path" data-file-path="${escapeHtml(p)}">[文件]</a>`;
     }
     return `<a href="${src}" target="_blank" rel="noreferrer">[图片]</a>`;
   });
 }
 
 /** DOM 后处理:见上方 linkify 块注释。pre(围栏)与 a(防嵌套)内
- *  的文本节点跳过;inline code 内的文本节点照常处理。 */
-function linkifyImagePaths(html: string): string {
-  if (!IMAGE_PATH_HINT.test(html)) return html;
+ *  的文本节点跳过;inline code 内的文本节点照常处理。命中按扩展分流:
+ *  图片 → md-image-path/data-image-path(现状不变),其余 →
+ *  md-file-path/data-file-path。 */
+function linkifyLocalPaths(html: string): string {
+  if (!FILE_PATH_HINT.test(html)) return html;
   const doc = new DOMParser().parseFromString(html, "text/html");
-  // ③ markdown 链接语法:给本地图片形态的 <a href> 补 data 属性
-  // (点击委托按 data-image-path 拦截,preventDefault 后不走 href 导航)。
+  // ③ markdown 链接语法:给本地路径形态的 <a href> 补 data 属性
+  // (点击委托按 data-* 拦截,preventDefault 后不走 href 导航 ——
+  // 相对路径 href 会打穿 SPA 路由)。
   for (const a of Array.from(
     doc.body.querySelectorAll<HTMLAnchorElement>("a[href]"),
   )) {
     const href = a.getAttribute("href") ?? "";
-    if (isLocalImagePath(href)) {
-      a.classList.add("md-image-path");
-      a.dataset.imagePath = tryDecodeUri(href);
+    if (isLocalFilePath(href)) {
+      const p = tryDecodeUri(href);
+      if (IMAGE_TAIL_RE.test(p)) {
+        a.classList.add("md-image-path");
+        a.dataset.imagePath = p;
+      } else {
+        a.classList.add("md-file-path");
+        a.dataset.filePath = p;
+      }
     }
   }
   // ①② 文本节点替换。
@@ -251,7 +293,7 @@ function linkifyImagePaths(html: string): string {
   const targets: Text[] = [];
   while (walker.nextNode()) {
     const t = walker.currentNode as Text;
-    if (!IMAGE_PATH_HINT.test(t.data)) continue;
+    if (!FILE_PATH_HINT.test(t.data)) continue;
     let el: Element | null = t.parentElement;
     let skip = false;
     while (el && el !== doc.body) {
@@ -269,14 +311,19 @@ function linkifyImagePaths(html: string): string {
     if (!owner) continue;
     const frag = owner.createDocumentFragment();
     let last = 0;
-    for (const m of text.matchAll(IMAGE_PATH_RE)) {
+    for (const m of text.matchAll(FILE_PATH_RE)) {
       const pathStart = (m.index ?? 0) + (m[1]?.length ?? 0);
       const path = m[2];
       if (pathStart < last) continue; // 防御:边界组理论不重叠,兜底
       frag.appendChild(owner.createTextNode(text.slice(last, pathStart)));
       const a = owner.createElement("a");
-      a.className = "md-image-path";
-      a.dataset.imagePath = path;
+      if (IMAGE_TAIL_RE.test(path)) {
+        a.className = "md-image-path";
+        a.dataset.imagePath = path;
+      } else {
+        a.className = "md-file-path";
+        a.dataset.filePath = path;
+      }
       a.textContent = path;
       frag.appendChild(a);
       last = pathStart + path.length;
@@ -286,6 +333,29 @@ function linkifyImagePaths(html: string): string {
     node.replaceWith(frag);
   }
   return doc.body.innerHTML;
+}
+
+/** 非 markdown 纯文本的 linkify(工具输出 `<pre>` 面用,2026-09-13):
+ *  整体 escapeHtml → FILE_PATH_RE 全局替换插锚(锚文本与 data 属性值
+ *  都用**已转义**切片 —— 引号已成 &quot;,属性边界天然安全)→
+ *  DOMPurify.sanitize(双保险,维持"所有 v-html 都过 DOMPurify"的仓库
+ *  不变量)。无命中时纯转义文本也照走 sanitize,约定单一好审计。
+ *  注意工具输出先经 truncateOutput 截断:被切断的路径缺扩展名尾,
+ *  正则不匹配,不会产生半截链接。 */
+export function linkifyPlainText(text: string): string {
+  const escaped = escapeHtml(text ?? "");
+  const html = escaped.replace(
+    FILE_PATH_RE,
+    (match: string, lead: string, path: string): string => {
+      // replacer 函数形态:(match, 边界组, 路径组);返回值不做 $ 模板
+      // 解释,路径/边界字符零歧义。
+      void match;
+      const attr = IMAGE_TAIL_RE.test(path) ? "data-image-path" : "data-file-path";
+      const cls = attr === "data-image-path" ? "md-image-path" : "md-file-path";
+      return `${lead}<a class="${cls}" ${attr}="${path}">${path}</a>`;
+    },
+  );
+  return DOMPurify.sanitize(html, PURIFY_CONFIG);
 }
 
 /**
@@ -306,7 +376,7 @@ export function renderMarkdown(text: string): string {
   // `string | Promise<string>` and forcing downstream casts.
   const rawHtml = marked.parse(trimmed) as string;
   return DOMPurify.sanitize(
-    linkifyImagePaths(downgradeExternalImages(rawHtml)),
+    linkifyLocalPaths(downgradeExternalImages(rawHtml)),
     PURIFY_CONFIG,
   );
 }

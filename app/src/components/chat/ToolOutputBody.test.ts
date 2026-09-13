@@ -136,4 +136,55 @@ describe("ToolOutputBody", () => {
     expect(pre.exists()).toBe(true);
     expect(pre.text()).toBe("");
   });
+
+  // --- 09-13 路径 linkify(AC5):<pre> 插值改 v-html(linkifyPlainText
+  // 产物),路径转锚点、HTML 只以转义文本存在、截断边界不产半截链接。 ---
+  describe("path linkify (09-13, AC5)", () => {
+    it("renders a file path in the output as a clickable anchor", () => {
+      const w = mountBody({ content: "wrote out/a.md", isError: false });
+      const a = w.find("a[data-file-path='out/a.md']");
+      expect(a.exists()).toBe(true);
+      expect(a.text()).toBe("out/a.md");
+      // 锚点在 pre 内部,周围文本保持原样。
+      expect(w.find(".tool-output-body__pre").text()).toContain("wrote");
+    });
+
+    it("routes image paths to the image channel (data-image-path)", () => {
+      const w = mountBody({ content: "saved out/shot/1.png", isError: false });
+      expect(w.find("a[data-image-path='out/shot/1.png']").exists()).toBe(true);
+      expect(w.find("a[data-file-path]").exists()).toBe(false);
+    });
+
+    it("escapes <script> payloads so they never become executable markup", () => {
+      const w = mountBody({
+        content: '<script>alert(1)</script>\nwrote out/a.md',
+        isError: false,
+      });
+      const pre = w.find(".tool-output-body__pre");
+      // 无可执行标记;载荷只能以文本形态存在。
+      expect(pre.html().toLowerCase()).not.toContain("<script");
+      expect(pre.find("script").exists()).toBe(false);
+      // 同段输出里的路径插锚不受相邻 HTML 文本影响。
+      expect(w.find("a[data-file-path='out/a.md']").exists()).toBe(true);
+    });
+
+    it("does not emit a half-cut link when the 500-char cut lands inside a path", () => {
+      // 496 x + 空格(497)= 497 字符,路径 "out/a.md" 从 497 号字符起,
+      // 500 字截断把它切成 "out" —— 无扩展名尾,正则不匹配,无锚点。
+      const content = "x".repeat(496) + " out/a.md tail";
+      expect(content.length).toBeGreaterThan(500);
+      const w = mountBody({ content, isError: false });
+      expect(w.find("a[data-file-path]").exists()).toBe(false);
+      expect(w.find("a[data-image-path]").exists()).toBe(false);
+      // 截断契约不变:后缀仍按 truncateOutput 追加。
+      expect(w.find(".tool-output-body__pre").text()).toMatch(/… \(\d+ more chars\)/);
+    });
+
+    it("still linkifies paths that fit fully inside the 500-char window", () => {
+      // 对照臂:截断开启但路径完整 → 正常插锚(截断没有杀掉 linkify)。
+      const content = "x".repeat(400) + " out/a.md";
+      const w = mountBody({ content, isError: false });
+      expect(w.find("a[data-file-path='out/a.md']").exists()).toBe(true);
+    });
+  });
 });

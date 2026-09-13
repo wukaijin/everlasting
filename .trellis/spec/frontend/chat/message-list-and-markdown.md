@@ -49,8 +49,8 @@
 ```css
 /* 镜像块(MessageItem.vue / DiscussionSummaryCard.vue /
    MarkdownDetailModal.vue / SubagentDrawer reply 区 /
-   MemoryLayerItem,五处同步) */
-:deep(p)      { margin: var(--space-3) 0; }   /* 12px */
+   MemoryLayerItem / FileViewerModal md 模式,六处同步) */
+:deep(p)      { margin: 0 0 var(--space-3) 0; }   /* 12px,顶 0 首段贴容器顶(2026-09-13 校准:六处实现一贯形态) */
 :deep(li)     { margin: var(--space-1) 0; }   /* 4px */
 :deep(ul, ol) { margin: var(--space-1) 0 var(--space-3); }  /* 4/12 */
 :deep(h1..h4) { margin: var(--space-4) 0 var(--space-1); }  /* 16/4 */
@@ -62,7 +62,7 @@ line-height: var(--leading-relaxed);           /* 1.6,长文容器统一 */
 :deep(ol)     { list-style: decimal; }
 ```
 
-改节奏时五处一起改(grep `.msg__markdown` 找全消费方)。
+改节奏时六处一起改(grep `.msg__markdown` 找全消费方)。
 
 ---
 
@@ -94,51 +94,87 @@ MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null �
 
 ---
 
-## 5. 图片路径预览链路(2026-09-13)
+## 5. 本地路径预览链路(2026-09-13;同日扩展到非图片文件 + 工具输出面)
 
-聊天 markdown 里的本地图片路径可点击 → 应用内弹层查看。全链四段,**改任一段
-先 grep `md-image-path` 找全消费方**:
+聊天 markdown 与工具输出里的本地路径可点击 → 应用内弹层查看。图片与文件是
+**同一条四段链路上的两个平行通道**,改任一段先 grep `md-image-path` /
+`md-file-path` 找全消费方:
 
 1. **识别**(`utils/markdown.ts` `renderMarkdown` 管线,downgrade 与 sanitize
-   之间插 `linkifyImagePaths` DOM 后处理):三种形态统一转
-   `<a class="md-image-path" data-image-path="原始路径">` —— 正文裸路径、
+   之间插 `linkifyLocalPaths` DOM 后处理——09-13 文件通道起由
+   `linkifyImagePaths` 更名):三种形态统一转锚点—— 正文裸路径、
    inline `<code>` 内路径(LLM 习惯写反引号里)、markdown 图片/链接语法
    (`![](本地)` 由 `downgradeExternalImages` 本地分支产出、`[x](本地)` 由
-   linkify 给已有 `<a href>` 补 data 属性)。**围栏代码块(pre 祖先)与 `<a>`
-   内文本不动**。实现必须走 DOMParser + TreeWalker(字符串后处理分不清代码
-   上下文;marked extension 优先于 codespan tokenizer 会吞 inline code)。
-   路径正则 `IMAGE_PATH_RE`(边界捕获组 + Unicode 段字符,同
-   chatInputTokens.ts FILE_RE 风格):纯文件名(无 `/`)与 http URL 有意
-   不识别;`/api/` 前缀排除(附件路由 uuid.png 会误吞)。
-2. **取数**(`utils/imageUrl.ts` + daemon `GET /api/v1/files/image?path=`):
-   `resolveImagePath(raw, cwd)` 把相对路径按**点击那一刻**的
-   `chatStore.currentCwd` 解析(渲染时刻 cwd 会随会话切换漂移,故解析
-   推迟到弹层 computed);`/`、`~/` 原样(daemon 端展开 home)。URL 三传输
-   模式与 attachmentUrl 同构(pwa-remote 走 proxy + `?access_token=`)。
-   daemon 侧契约:扩展白名单(png/jpg/jpeg/gif/webp/bmp/avif/ico,**svg
-   排除**——独立文档打开时脚本会跑)+ 32 MiB 上限 + 只收绝对/`~/` 路径,
-   400/404/413 分类(`commands/files.rs` `read_image_at_inner`)。
+   linkify 给已有 `<a href>` 补 data 属性)。**命中按扩展分流**:图片扩展 →
+   `<a class="md-image-path" data-image-path>`,其余文件扩展 →
+   `<a class="md-file-path" data-file-path>`。**围栏代码块(pre 祖先)与
+   `<a>` 内文本不动**。实现必须走 DOMParser + TreeWalker(字符串后处理分不
+   清代码上下文;marked extension 优先于 codespan tokenizer 会吞 inline code)。
+   路径正则 `FILE_PATH_RE`(边界捕获组 + Unicode 段字符,同
+   chatInputTokens.ts FILE_RE 风格;`IMAGE_PATH_BODY`/`FILE_PATH_BODY` 由
+   `pathBodyFor(extSet)` 参数化构造,段/边界语法单源):纯文件名(无 `/`)
+   与 http URL 有意不识别;`/api/` 前缀排除仅作用于 href/src 形态
+   (附件路由 uuid.png 会误吞)。
+   另有 `linkifyPlainText(text)` 导出:给**非 markdown** 文本(工具输出
+   `<pre>`)用——整体 escapeHtml → `FILE_PATH_RE` 全局替换插锚(锚文本与
+   data 属性值用已转义切片,引号安全)→ `DOMPurify.sanitize`(三层防线,
+   维持"所有 v-html 都过 DOMPurify"的仓库不变量)。
+2. **取数**(`utils/imageUrl.ts` + daemon `GET /api/v1/files/image?path=` /
+   `GET /api/v1/files/raw?path=`;契约表见 `docs/DAEMON-API.md` §7 files 域
+   小节):`resolveImagePath(raw, cwd)` 把相对路径按**点击那一刻**的
+   `chatStore.currentCwd` 解析(渲染时刻 cwd 会随会话切换漂移;名字沿图片
+   首版保留,语义是通用本地路径解析);`/`、`~/` 原样(daemon 端展开 home)。
+   `imageUrl` / `fileUrl` 三传输模式与 attachmentUrl 同构(pwa-remote 走
+   proxy + `?access_token=`)。daemon 侧契约(校验全在 `commands/files.rs`,
+   route 薄壳):`/files/image` 白名单 png/jpg/jpeg/gif/webp/bmp/avif/ico
+   (**svg 排除**——独立文档打开时脚本会跑)+ 32 MiB;`/files/raw` 白名单
+   文本类 + pdf,文本类 2 MiB(整串进 DOM 防卡死)/ pdf 32 MiB,文本类
+   **一律 `text/plain; charset=utf-8` 下发**(.html/.htm 也一样——MIME 即
+   闸门,不存在 text/html / image/svg+xml 下发路径)+ 严格 UTF-8 校验
+   (非法 400);白名单外统一 400 不给存在性旁信道;400/404/413 分类。
+   **前后端白名单有意各持一份**(跨语言共享机制成本高于收益):后端是唯一
+   安全闸门,前端集偏大只会点开见 400;改动任一侧(`FILE_EXT` /
+   `RAW_TEXT_EXTS`)须对照另一侧。
 3. **点击委托**(`composables/useCodeBlockCopy.ts` `onMarkdownClick`):
-   `closest("a[data-image-path]")` → preventDefault → `useImageViewer().open(原始路径)`。
-   该 composable 是 markdown v-html 容器的统一委托层(代码复制 + 图片预览),
+   `closest("a[data-image-path]")` → `useImageViewer().open(原始路径)`;
+   `closest("a[data-file-path]")` → `useFileViewer().open(原始路径)`
+   (先 image 后 file,两个 data 属性并存时图片优先)。
+   该 composable 是 markdown v-html 容器的统一委托层(代码复制 + 路径预览),
    新交互往这里加分支,容器只需根上绑 `@click="onMarkdownClick"`——**新增
    markdown 容器忘了绑 = 交互静默失效**(MessageItem 主气泡曾是唯一漏绑面,
    09-13 补上;现有绑定面:MessageItem 气泡/时间轴/摘要行、
-   DiscussionSummaryCard、SubagentDrawer、MarkdownDetailModal)。
-4. **弹层**(`composables/useImageViewer.ts` 模块级单例 + `components/common/
-   ImageViewerModal.vue` 全局唯一实例挂 App.vue):reka-ui Dialog 六件套
-   (MarkdownDetailModal 模式),img onerror 统一错误态(daemon 400/404/413
-   都长这样),「新标签打开」兜底走同一 `imageUrl`。缩放/平移(09-13 同日
-   增强):数学核心在 `composables/useImagePanZoom.ts`(锚点公式
-   `t' = a − (s'/s)·(a − t)`、clamp [1,8]、回 1 清平移——**坐标模型与
-   ImageViewerModal 的 stage CSS 成对**(img 绝对居中 + transform-origin:
-   center,改一处必须同步另一处);舞台 overflow:hidden,pan/zoom 全由
-   img transform 承载不走滚动条);交互 = wheel(光标锚点,`.prevent`)、
-   pointer 拖拽(canPan 门控 + setPointerCapture,jsdom 缺位 try/catch
-   降级)、双击 2.5×↔复位、header −/倍率/+/复位 控件;换图(src watch)
-   复位缩放态。触摸 pinch 有意不做(见 composable 尾注)。
+   DiscussionSummaryCard、SubagentDrawer、MarkdownDetailModal、
+   FileViewerModal md 模式、ToolOutputBody 的 pre)。
+4. **弹层**(`composables/useImageViewer.ts` + `useFileViewer.ts` 模块级单例,
+   `components/common/ImageViewerModal.vue` + `FileViewerModal.vue` 全局唯一
+   实例挂 App.vue):reka-ui Dialog 六件套(MarkdownDetailModal 模式)。
+   图片版:img onerror 统一错误态(daemon 400/404/413 都长这样),「新标签
+   打开」兜底走同一 `imageUrl`;缩放/平移(09-13 同日增强):数学核心在
+   `composables/useImagePanZoom.ts`(锚点公式 `t' = a − (s'/s)·(a − t)`、
+   clamp [1,8]、回 1 清平移——**坐标模型与 ImageViewerModal 的 stage CSS
+   成对**(img 绝对居中 + transform-origin: center,改一处必须同步另一处);
+   舞台 overflow:hidden,pan/zoom 全由 img transform 承载不走滚动条);
+   交互 = wheel(光标锚点,`.prevent`)、pointer 拖拽(canPan 门控 +
+   setPointerCapture,jsdom 缺位 try/catch 降级)、双击 2.5×↔复位、header
+   控件;换图(src watch)复位缩放态。触摸 pinch 有意不做(见 composable
+   尾注)。文件版:open() 里**点击时刻**解析 cwd(pdf 必须在 open 时刻拿到
+   绝对 URL 去新标签,故解析比图片版提前);`.md`/`.markdown` →
+   renderMarkdown 管线(根绑 onMarkdownClick,嵌套路径递归可点)+ §2 镜像块
+   第六处;其余文本类 → 构造 `{type:'code_block'}` 复用 CodeBlockPrimitive
+   (hljs 别名按扩展名,复制按钮免费);**pdf 不开弹层**,open() 直接
+   `window.open(fileUrl)` 浏览器原生 viewer(2026-09-13 用户决议 Q1);
+   文本类 fetch → loading/ok/error 单例状态,连续 open 以序号作废旧响应。
+5. **工具输出面**(`components/chat/ToolOutputBody.vue`,2026-09-13):工具
+   结果是路径最密集的面但**不走 markdown 管线**。`<pre>` 从文本插值改
+   `v-html="linkifyPlainText(truncated)"` + 根绑 `onMarkdownClick`——
+   截断契约不变(先 `truncateOutput(display, 500)` 后 linkify):被 500 字
+   边界切断的路径缺扩展名尾,正则不匹配,**不产生半截链接**;纯插值改
+   v-html 后 XSS 面由 linkifyPlainText 的转义→插锚→sanitize 三层承担
+   (AC5 夹具锁死)。组件引入的是 composable 单例、非 store,不违反
+   FT-F-001 D3。主面板 `ToolCallCard` 与 `SubagentDrawer`
+   `DrawerToolCallCard` 共用本组件,一处改动同时生效。
 
-**样式边界**:`.md-image-path` 的交互态样式(cursor:pointer——无 href 的 a
-UA 不给指针;word-break:break-all——长绝对路径防撑爆气泡)放**全局
-style.css**;颜色/下划线等排版仍由各容器的 `:deep(a)` 承载(不进 §2 的
-五处镜像块——那是排版节奏,这是横切交互态)。
+**样式边界**:`.md-image-path` / `.md-file-path` 的交互态样式(cursor:pointer
+——无 href 的 a UA 不给指针;word-break:break-all——长绝对路径防撑爆气泡)
+放**全局 style.css**(两类共持一份);颜色/下划线等排版仍由各容器的
+`:deep(a)` 承载(不进 §2 的镜像块——那是排版节奏,这是横切交互态)。

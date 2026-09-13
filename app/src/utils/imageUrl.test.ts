@@ -1,8 +1,8 @@
-// imageUrl — 09-13 图片路径预览的单测:
+// imageUrl — 09-13 本地路径预览(图片 + 同日文件通道)的单测:
 //   - resolveImagePath:相对路径按会话 cwd 解析;`/`、`~/` 原样透传
 //     (`~` 由 daemon 展开);cwd 未知时不猜。
-//   - imageUrl:三传输模式(URL 形态与 attachmentUrl.test.ts 同构,
-//     daemonBase/currentDeviceToken 模块级 mock 保确定性)。
+//   - imageUrl / fileUrl:三传输模式(URL 形态与 attachmentUrl.test.ts
+//     同构,daemonBase/currentDeviceToken 模块级 mock 保确定性)。
 
 import { describe, it, expect, vi } from "vitest";
 
@@ -14,7 +14,7 @@ vi.mock("../transport/auth", () => ({
 }));
 
 import { currentDeviceToken } from "../transport/auth";
-import { imageUrl, resolveImagePath } from "./imageUrl";
+import { imageUrl, fileUrl, resolveImagePath } from "./imageUrl";
 
 describe("resolveImagePath", () => {
   it("joins a relative path onto cwd", () => {
@@ -71,6 +71,30 @@ describe("imageUrl", () => {
   it("percent-encodes the path so query structure cannot be injected", () => {
     expect(imageUrl("/a b&c=d.png")).toBe(
       "http://localhost:7456/api/v1/files/image?path=%2Fa%20b%26c%3Dd.png",
+    );
+  });
+});
+
+// fileUrl — 文件通道(/files/raw)的三传输模式,镜像 imageUrl describe。
+describe("fileUrl", () => {
+  it("builds the direct daemon URL against /files/raw", () => {
+    expect(fileUrl("/proj/root/out/report.md")).toBe(
+      "http://localhost:7456/api/v1/files/raw?path=" +
+        encodeURIComponent("/proj/root/out/report.md"),
+    );
+  });
+
+  it("routes through the pwa-remote proxy with the query token (AC7)", () => {
+    vi.mocked(currentDeviceToken).mockReturnValueOnce("tok en&1");
+    expect(fileUrl("~/docs/spec.pdf")).toBe(
+      "http://localhost:7456/api/v1/proxy/api/v1/files/raw" +
+        "?path=~%2Fdocs%2Fspec.pdf&access_token=tok%20en%261",
+    );
+  });
+
+  it("percent-encodes the path so query structure cannot be injected", () => {
+    expect(fileUrl("/a b&c=d.md")).toBe(
+      "http://localhost:7456/api/v1/files/raw?path=%2Fa%20b%26c%3Dd.md",
     );
   });
 });

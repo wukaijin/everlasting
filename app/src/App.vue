@@ -29,6 +29,9 @@ import CloseGuardDialog from "./components/layout/CloseGuardDialog.vue";
 // 09-13 图片路径预览弹层:markdown linkify 的全局查看器(useImageViewer
 // 模块级状态驱动,所有 markdown 面的点击委托共用这一个实例)。
 import ImageViewerModal from "./components/common/ImageViewerModal.vue";
+// 09-13 文件路径预览弹层:非图片文件(md 渲染 / 代码高亮卡;pdf 在
+// open() 里直接新标签不进弹层)。useFileViewer 模块级状态驱动。
+import FileViewerModal from "./components/common/FileViewerModal.vue";
 
 onMounted(() => {
   setOnAuthFailed(() => {
@@ -64,4 +67,5 @@ onUnmounted(() => {
   </router-view>
   <CloseGuardDialog />
   <ImageViewerModal />
+  <FileViewerModal />
 </template>

@@ -28,15 +28,28 @@
 //     drop the binding.
 //   - isError adds red-tinted pre border
 //
+// 09-13 路径 linkify(2026-09-13):`<pre>` 从文本插值改为
+// `linkifyPlainText(truncated)` 的 v-html —— 转义 → 本地路径(图片+文件)
+// 插锚 → DOMPurify 三层防线(见 utils/markdown.ts 的函数注释),根上绑
+// onMarkdownClick 让锚点走既有委托(图片 → ImageViewerModal,文件 →
+// FileViewerModal)。一处改动同时生效主面板 ToolCallCard 与
+// SubagentDrawer DrawerToolCallCard(共用本组件)。引入的是 composable
+// 单例、非 store —— 不违反 FT-F-001 D3"无 store 依赖"。
+//
 // Pre-F5 rows / pre-F5 cards: summary just shows size, unchanged.
 
 import { computed } from "vue";
 import { extractToolResultDisplay, truncateOutput } from "../../utils/messageFormat";
+import { linkifyPlainText } from "../../utils/markdown";
+import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 
 const props = defineProps<{
   content: string;
   isError: boolean;
 }>();
+
+// v-html 容器的统一委托层(锚点点击 + 无锚点落点静默)。
+const { onMarkdownClick } = useCodeBlockCopy();
 
 /** Display-only view of the tool result content. Strips the cwd
  *  envelope (`{result, cwd}` — see REQ-16 in prd.md) so the body
@@ -49,6 +62,11 @@ const display = computed<string>(() =>
 /** Truncated view for the `<pre>`. The 500-char cap matches the
  *  old inline `truncateOutput(displayContent)` behavior. */
 const truncated = computed<string>(() => truncateOutput(display.value, 500));
+
+/** Linkified HTML for the `<pre>`: escape → 本地路径插锚 → DOMPurify。
+ *  截断契约不变(先 truncate 后 linkify):被 500 字边界切断的路径缺
+ *  扩展名尾,正则不匹配,不产生半截链接。 */
+const html = computed<string>(() => linkifyPlainText(truncated.value));
 
 /** Human-readable size label for the summary. Char count (not
  *  UTF-8 bytes) because tool results in this app are always text
@@ -71,7 +89,9 @@ const sizeLabel = computed<string>(() => {
     <pre
       class="tool-output-body__pre"
       :class="{ 'tool-output-body__pre--error': isError }"
-    >{{ truncated }}</pre>
+      @click="onMarkdownClick"
+      v-html="html"
+    ></pre>
   </details>
 </template>
 

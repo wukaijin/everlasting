@@ -118,6 +118,10 @@ const map = {
   // squares-2x2),restore 是向外箭头。
   "maximize": LayoutGrid,
   "restore": Expand,
+  // 09-13 本地路径预览弹层(ImageViewerModal / FileViewerModal)的
+  // 「新标签打开」按钮。此前两处调用 name="expand" 但未注册(restore
+  // key 是 TitleBar 语义),Icon 渲染成空 span——同 "users" 先例。
+  "expand": Expand,
   "folder": Folder,
   "minus": Minus,
   "cog": Cog,

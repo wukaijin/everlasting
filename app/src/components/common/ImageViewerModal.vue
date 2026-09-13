@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // ImageViewerModal — 图片路径预览弹层(2026-09-13)。
 //
-// markdown 里的本地图片路径(utils/markdown.ts linkifyImagePaths 产物)
+// markdown 里的本地图片路径(utils/markdown.ts linkifyLocalPaths 产物)
 // 经 useCodeBlockCopy 的点击委托 useImageViewer.open(原始路径) 打开
 // 这里。全局唯一实例挂 App.vue(与 CloseGuardDialog 同层),所有绑了
 // onMarkdownClick 的 markdown 面共用。

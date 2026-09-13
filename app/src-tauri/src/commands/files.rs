@@ -13,8 +13,9 @@
 //! trigger sends `Some(3)` so the panel opens instantly even on huge
 //! repos.
 //!
-//! `read_image_at_inner`(下方)是本模块唯一的非 IPC 逻辑:daemon 的
-//! `GET /api/v1/files/image` 路由专用(前端 `<img>` 直连,不走
+//! `read_image_at_inner` / `read_raw_at_inner`(下方)是本模块仅有的两块
+//! 非 IPC 逻辑:daemon 的 `GET /api/v1/files/image` 与
+//! `GET /api/v1/files/raw` 路由专用(前端 `<img>`/`fetch` 直连,不走
 //! `transport.invoke`),故无 `#[tauri::command]` 壳、不进 lib.rs /
 //! `CMD_TO_DOMAIN` 注册表(GET binary 路由与 attachments 的
 //! `get_attachment` 同一先例)。
@@ -229,6 +230,129 @@ pub async fn read_image_at_inner(path: String) -> Result<(&'static str, Vec<u8>)
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err(ReadImageError::TooLarge);
     }
+    Ok((content_type, bytes))
+}
+
+// --- 文件路径预览(2026-09-13,图片通道的平行扩展)---------------------------
+// daemon `GET /api/v1/files/raw?path=<abs|~前缀>` 的支撑逻辑:聊天/工具
+// 输出里的本地文本与 pdf 路径被渲染成可点击链接,点击后 FileViewerModal
+// fetch 本路由取内容(pdf 不进弹层,新标签走浏览器原生 viewer)。
+// 安全面三条硬约束:
+//   - 白名单统一 400,不给"存在性"旁信道(沿 image 先例);
+//   - 文本类**一律** `text/plain; charset=utf-8` 下发 —— .html/.htm 在
+//     白名单里也只作文本查看,MIME 即闸门,任何消费方(弹层 hljs /
+//     新标签)见到的都是源码;不存在 text/html 或 image/svg+xml 的下发
+//     路径(svg 连文本查看都不给,维持 image 通道的排除决策);
+//   - 文本类额外做严格 UTF-8 校验:弹层按字符串消费(markdown 渲染 /
+//     hljs 高亮),lossy 替换符会掩盖二进制误命名,直接 400。
+
+/// 文本类单文件大小上限 2 MiB:文本会被前端弹层整串读进 DOM(markdown
+/// 渲染 / hljs 高亮),32 MiB 文本足以卡死 UI;2 MiB ≈ 2M 字符远超正常
+/// 查看需求。pdf 档沿用 [`MAX_IMAGE_BYTES`] 量级(浏览器原生 viewer
+/// 流式消费,不经前端字符串化),不单设常量。
+pub const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
+
+/// `/files/raw` 的内容分档:文本类(强制 text/plain)与 pdf。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawClass {
+    Text,
+    Pdf,
+}
+
+/// 文本类白名单扩展名(小写)。与前端 `utils/markdown.ts` 的识别集
+/// 有意各持一份(后端是唯一安全闸门,前端集偏大只会点开见 400);
+/// 对齐约定记录在 `.trellis/spec/frontend/chat/message-list-and-markdown.md`
+/// §5,改动任一侧须对照另一侧。
+const RAW_TEXT_EXTS: &[&str] = &[
+    "md", "markdown", "txt", "log", "json", "jsonl", "csv", "tsv", "yaml", "yml", "toml", "ini",
+    "conf", "cfg", "xml", "html", "htm", "css", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue",
+    "svelte", "py", "rs", "go", "java", "kt", "kts", "c", "h", "cpp", "hpp", "cc", "cs", "rb",
+    "php", "sh", "bash", "zsh", "fish", "sql", "proto", "graphql", "gql", "diff", "patch",
+];
+
+/// 白名单扩展名(小写)→ (Content-Type, 分档)。不在表内 → `None`
+/// (调用方拒 400)。
+fn raw_content_type(ext: &str) -> Option<(&'static str, RawClass)> {
+    if ext == "pdf" {
+        Some(("application/pdf", RawClass::Pdf))
+    } else if RAW_TEXT_EXTS.contains(&ext) {
+        Some(("text/plain; charset=utf-8", RawClass::Text))
+    } else {
+        None
+    }
+}
+
+/// `read_raw_at_inner` 的错误分类。形状镜像 [`ReadImageError`],route 层
+/// (`daemon/routes/files.rs`)match 映射 HTTP 状态码。
+#[derive(Debug)]
+pub enum ReadRawError {
+    /// 路径非绝对形态、扩展不在白名单、文本内容非法 UTF-8 → 400。
+    InvalidRequest(String),
+    /// 文件不存在或不是普通文件 → 404。
+    NotFound,
+    /// 超过分档上限(文本 [`MAX_TEXT_BYTES`] / pdf [`MAX_IMAGE_BYTES`])→ 413。
+    TooLarge,
+    /// 文件系统 IO 失败(权限等)→ 500。
+    Io(String),
+}
+
+/// 读取一个本地文本/pdf 文件供 FileViewerModal fetch 消费。
+///
+/// 契约与 [`read_image_at_inner`] 同构:`path` 必须是绝对路径或 `~/`
+/// 前缀(相对路径 400)。返回 `(Content-Type, 字节)`;文本类保证是合法
+/// UTF-8(校验失败 400),错误分类见 [`ReadRawError`]。
+pub async fn read_raw_at_inner(path: String) -> Result<(&'static str, Vec<u8>), ReadRawError> {
+    let expanded = expand_home(&path);
+    if !expanded.is_absolute() {
+        return Err(ReadRawError::InvalidRequest(format!(
+            "path must be absolute or `~/`-prefixed, got {:?}",
+            path
+        )));
+    }
+    let ext = path_extension_lower(&expanded);
+    let (content_type, class) = match ext.as_deref().and_then(raw_content_type) {
+        Some(v) => v,
+        // 无扩展名/非白名单统一 400,不给"存在性"旁信道(路径探测面)。
+        None => {
+            return Err(ReadRawError::InvalidRequest(
+                "path must end in a whitelisted file extension".to_string(),
+            ))
+        }
+    };
+    let max = match class {
+        RawClass::Text => MAX_TEXT_BYTES,
+        RawClass::Pdf => MAX_IMAGE_BYTES,
+    };
+    let meta = tokio::fs::metadata(&expanded)
+        .await
+        .map_err(|_| ReadRawError::NotFound)?;
+    if !meta.is_file() {
+        return Err(ReadRawError::NotFound);
+    }
+    if meta.len() > max {
+        return Err(ReadRawError::TooLarge);
+    }
+    let bytes = tokio::fs::read(&expanded)
+        .await
+        .map_err(|e| ReadRawError::Io(e.to_string()))?;
+    // TOCTOU 兜底:metadata 与 read 之间文件可能被写大。
+    if bytes.len() as u64 > max {
+        return Err(ReadRawError::TooLarge);
+    }
+    // 文本类严格 UTF-8(见上方安全面注释)。from_utf8 成功后 into_bytes
+    // 原样取回(零拷贝往返),失败即 400。
+    let bytes = if class == RawClass::Text {
+        match String::from_utf8(bytes) {
+            Ok(s) => s.into_bytes(),
+            Err(_) => {
+                return Err(ReadRawError::InvalidRequest(
+                    "text file is not valid UTF-8".to_string(),
+                ))
+            }
+        }
+    } else {
+        bytes
+    };
     Ok((content_type, bytes))
 }
 

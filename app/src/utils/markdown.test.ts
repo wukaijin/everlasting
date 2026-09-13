@@ -10,7 +10,7 @@
 //   want protected — `pnpm test` gates the suite.
 
 import { describe, it, expect } from "vitest";
-import { renderMarkdown } from "./markdown";
+import { renderMarkdown, linkifyPlainText } from "./markdown";
 
 describe("renderMarkdown", () => {
   describe("empty / whitespace input", () => {
@@ -290,5 +290,142 @@ describe("renderMarkdown", () => {
       expect(html).not.toMatch(/<a[^>]*\sonclick/i);
       expect(html).not.toContain("<img");
     });
+  });
+
+  // 09-13 同日文件通道:识别全集泛化到文本类 + pdf,非图片命中产出
+  // `<a class="md-file-path" data-file-path>`(点击开 FileViewerModal;
+  // pdf 由弹层 composable 分派到新标签)。段语法/边界/排除项与图片
+  // 通道全同;命中按扩展分流 —— 图片扩展仍走 data-image-path 通道。
+  describe("file path linkify (09-13 文件通道)", () => {
+    it("linkifies a bare relative markdown path in prose", () => {
+      const html = renderMarkdown("see out/report.md here");
+      expect(html).toContain('data-file-path="out/report.md"');
+      expect(html).toContain('class="md-file-path"');
+      // 链接文本即路径本体。
+      expect(html).toContain(">out/report.md</a>");
+    });
+
+    it("linkifies the four source shapes (AC1): prose / inline code / link syntax / ~-prefix", () => {
+      // ① 正文裸路径。
+      expect(renderMarkdown("看 src/main.rs 就知道")).toContain(
+        'data-file-path="src/main.rs"',
+      );
+      // ② inline code 内路径(保留 code 包装)。
+      const codeHtml = renderMarkdown("入口在 `src/main.rs`");
+      expect(codeHtml).toMatch(
+        /<code>\s*<a[^>]*data-file-path="src\/main\.rs"[^>]*>/,
+      );
+      expect(codeHtml).toContain("</a></code>");
+      // ③ markdown 链接语法(补 data 属性,原 href 保留)。
+      const linkHtml = renderMarkdown("[日志](logs/x.log)");
+      expect(linkHtml).toContain('data-file-path="logs/x.log"');
+      expect(linkHtml).toContain('href="logs/x.log"');
+      // ④ `~/` 前缀。
+      expect(renderMarkdown("笔记在 ~/notes/TODO.md 里")).toContain(
+        'data-file-path="~/notes/TODO.md"',
+      );
+    });
+
+    it("linkifies absolute, ./ and ../ forms across text/pdf extensions", () => {
+      expect(renderMarkdown("build log at /tmp/build.log ok")).toContain(
+        'data-file-path="/tmp/build.log"',
+      );
+      expect(renderMarkdown("see ./scripts/check.ts ok")).toContain(
+        'data-file-path="./scripts/check.ts"',
+      );
+      expect(renderMarkdown("see ../docs/spec.pdf ok")).toContain(
+        'data-file-path="../docs/spec.pdf"',
+      );
+      expect(renderMarkdown("产物 out/data.jsonl 落盘")).toContain(
+        'data-file-path="out/data.jsonl"',
+      );
+    });
+
+    it("keeps image extensions on the image channel (dispatch by extension)", () => {
+      const html = renderMarkdown("see out/shot.png here");
+      expect(html).toContain('data-image-path="out/shot.png"');
+      expect(html).not.toContain("data-file-path");
+      expect(html).not.toContain("md-file-path");
+    });
+
+    it("ignores bare filenames, URLs, /api/ links and fenced blocks (AC1 exclusions)", () => {
+      // 纯文件名(无路径分隔符)不识别。
+      expect(renderMarkdown("generated index.ts today")).not.toContain(
+        "data-file-path",
+      );
+      // http(s) URL 不识别(裸文本经 autolink 成 <a>,walk 跳过 a;
+      // 链接语法 href 走 isLocalFilePath 的 URL 排除)。
+      expect(renderMarkdown("see https://host/x.md")).not.toContain(
+        "data-file-path",
+      );
+      expect(renderMarkdown("[x](https://host/x.md)")).not.toContain(
+        "data-file-path",
+      );
+      // 附件路由 /api/ 前缀不进预览(那是 <img> 直渲染的通道)。
+      expect(renderMarkdown("[x](/api/v1/attachments/s1/a1b2c3d4.md)")).not.toContain(
+        "data-file-path",
+      );
+      // 围栏代码块内不动。
+      const fenced = renderMarkdown("```\ncat out/report.md\n```");
+      expect(fenced).not.toContain("data-file-path");
+      expect(fenced).not.toContain("data-image-path");
+    });
+
+    it("rewrites a markdown image with a LOCAL non-image path to a [文件] preview link", () => {
+      // ![](本地文件) 无渲染意义;旧实现退化成相对 href 新标签链接
+      // (打穿 SPA 路由的存量 wart),现在产 [文件] 预览链接。
+      const html = renderMarkdown("![](out/notes.md)");
+      expect(html).not.toContain("<img");
+      expect(html).toContain('data-file-path="out/notes.md"');
+      expect(html).toContain("[文件]");
+      expect(html).not.toContain('target="_blank"');
+    });
+
+    it("keeps ![](local image) on the [图片] channel (zero regression)", () => {
+      const html = renderMarkdown("![](out/ui-review/x/1.png)");
+      expect(html).not.toContain("<img");
+      expect(html).toContain('data-image-path="out/ui-review/x/1.png"');
+      expect(html).toContain("[图片]");
+      expect(html).not.toContain("data-file-path");
+    });
+  });
+});
+
+// linkifyPlainText — 工具输出 `<pre>` 面的非 markdown linkify(2026-09-13):
+// 整体转义 → 路径插锚(已转义切片)→ DOMPurify。契约:
+//   1. 路径转锚点(图片扩展归 data-image-path,其余 data-file-path);
+//   2. 任何 HTML(含 <script>)只以转义文本存在,绝不产生可执行标记;
+//   3. 产出仍过 DOMPurify(仓库不变量,v-html 消费面)。
+describe("linkifyPlainText", () => {
+  it("turns a local file path into an anchor", () => {
+    const html = linkifyPlainText("wrote out/a.md");
+    expect(html).toContain('data-file-path="out/a.md"');
+    expect(html).toContain(">out/a.md</a>");
+  });
+
+  it("routes image extensions to the image channel", () => {
+    expect(linkifyPlainText("saved out/x/shot.png today")).toContain(
+      'data-image-path="out/x/shot.png"',
+    );
+  });
+
+  it("escapes raw HTML so <script> never becomes executable markup", () => {
+    const html = linkifyPlainText('<script>alert(1)</script> out/a.md');
+    expect(html.toLowerCase()).not.toContain("<script");
+    expect(html.toLowerCase()).not.toContain("onerror");
+    // 路径插锚不受相邻 HTML 文本影响。
+    expect(html).toContain('data-file-path="out/a.md"');
+  });
+
+  it("leaves plain text without paths as pure escaped text (no anchors)", () => {
+    const html = linkifyPlainText("plain exit 0");
+    expect(html).not.toContain("<a");
+    expect(html).toContain("plain exit 0");
+  });
+
+  it("handles paths at CJK punctuation boundaries", () => {
+    expect(linkifyPlainText("产物 out/报告.md。后续")).toContain(
+      'data-file-path="out/报告.md"',
+    );
   });
 });

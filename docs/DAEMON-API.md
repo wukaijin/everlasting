@@ -371,7 +371,36 @@ kind(arch/product/backend/frontend/outsider);moderator 与全部 participants �
 `disk/*`(get_disk_usage / run_disk_cleanup,09-03)、
 `providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。GET 端点:
 `/api/v1/health`、`/api/v1/stream`(SSE)、`/api/v1/sessions/{id}/snapshot`,以及
-二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16);其余全 POST。
+二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16)与 files 域两条
+本地路径直连(见下);其余全 POST。
+
+### files 域本地路径 GET 路由(09-13 起两条:图片 + 文件)
+
+聊天 markdown / 工具输出里识别出的本地路径,前端弹层直连 daemon 取字节,**不进
+`CMD_TO_DOMAIN`**(GET binary 与 attachments 同一先例;`path` query 传参,pwa-remote
+经 remote proxy catch-all 转发 + `?access_token=` query 鉴权)。
+
+- `GET /api/v1/files/image?path=<abs|~/前缀>` — 本地图片字节(`<img>` 直连)
+- `GET /api/v1/files/raw?path=<abs|~/前缀>` — 本地文本/pdf 字节(FileViewerModal
+  fetch;pdf 由前端 `window.open` 同 URL 新标签,走浏览器原生 viewer)
+
+共同契约:`path` 必须是绝对路径或 `~/` 前缀(相对路径 400 —— 会话 cwd 只有前端
+知道,由前端解析后调用);白名单外统一 400 不给存在性旁信道;校验全在
+`commands/files.rs` 的 `read_image_at_inner` / `read_raw_at_inner`,route 层只做
+错误码映射;`Cache-Control: private, max-age=60`。
+
+| | `/files/image` | `/files/raw` |
+|---|---|---|
+| 扩展白名单 | png / jpg / jpeg / gif / webp / bmp / avif / ico(svg 有意排除——独立文档打开时脚本会跑) | 文本类(md markdown txt log json jsonl csv tsv yaml yml toml ini conf cfg xml html htm css js mjs cjs jsx ts tsx vue svelte py rs go java kt kts c h cpp hpp cc cs rb php sh bash zsh fish sql proto graphql gql diff patch)+ pdf;svg 同样排除 |
+| Content-Type | 按扩展映射 `image/*` | 文本类**一律** `text/plain; charset=utf-8`(.html/.htm 也一样——MIME 即闸门,任何消费方只见源码);pdf `application/pdf` |
+| 大小上限 | 32 MiB | 文本 2 MiB(整串进 DOM,防卡死 UI)/ pdf 32 MiB |
+| 额外校验 | — | 文本类严格 UTF-8,非法 → 400(二进制误命名当拒) |
+| 大小检方式 | metadata + 读后复核双检(TOCTOU 兜底),两路由同 | 同左 |
+| 错误码 | 400 非白名单/相对路径 · 404 不存在/非普通文件 · 413 超限 · 500 IO | 同左 |
+
+前端识别集(`utils/markdown.ts` `FILE_EXT` = 图片 ∪ 文本 ∪ pdf 单正则)与后端
+白名单有意各持一份:后端是唯一安全闸门,前端集偏大只会点开见 400。对齐约定见
+`.trellis/spec/frontend/chat/message-list-and-markdown.md` §5。
 
 ## 8. 安全边界:绑定面与零鉴权前提(2026-09-06 评估)
 

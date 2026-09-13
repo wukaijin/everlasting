@@ -9,10 +9,26 @@
 // 09-13 图片路径预览分支:
 //   4. Click on a[data-image-path] → preventDefault + useImageViewer
 //      open(原始路径);普通 <a> 与其它落点不开弹层。
+// 09-13 文件路径预览分支:
+//   5. Click on a[data-file-path] → preventDefault + useFileViewer
+//      open(原始路径)(open 内部会 useChatStore/fetch,顶部按仓库
+//      惯例模块级 mock transport + store,fetch 挂全局桩防真网络)。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
+
+vi.mock("../transport/http", () => ({
+  daemonBase: vi.fn(() => "http://localhost:7456"),
+}));
+vi.mock("../transport/auth", () => ({
+  currentDeviceToken: vi.fn(() => null),
+}));
+vi.mock("../stores/chat", () => ({
+  useChatStore: () => ({ currentCwd: "/proj/root" }),
+}));
+
 import { useCodeBlockCopy } from "./useCodeBlockCopy";
 import { useImageViewer } from "./useImageViewer";
+import { useFileViewer } from "./useFileViewer";
 
 function buildBlock(): { root: HTMLElement; btn: HTMLElement } {
   const root = document.createElement("div");
@@ -53,6 +69,9 @@ afterEach(() => {
   document.body.innerHTML = "";
   // @ts-expect-error — test-only teardown of the stub
   delete navigator.clipboard;
+  vi.unstubAllGlobals();
+  useImageViewer().close();
+  useFileViewer().close();
 });
 
 describe("useCodeBlockCopy (CH4-5)", () => {
@@ -110,10 +129,6 @@ describe("useCodeBlockCopy — image path preview (09-13)", () => {
     return a;
   }
 
-  afterEach(() => {
-    useImageViewer().close();
-  });
-
   it("opens the viewer with the raw path and prevents navigation", async () => {
     const a = buildImageLink("out/ui-review/x/1.png");
     const { onMarkdownClick } = useCodeBlockCopy();
@@ -137,5 +152,47 @@ describe("useCodeBlockCopy — image path preview (09-13)", () => {
     await onMarkdownClick(clickEvent(plain));
     expect(useImageViewer().isOpen.value).toBe(false);
     expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("useCodeBlockCopy — file path preview (09-13)", () => {
+  function buildFileLink(path: string): HTMLAnchorElement {
+    const a = document.createElement("a");
+    a.className = "md-file-path";
+    a.setAttribute("data-file-path", path);
+    a.textContent = path;
+    document.body.appendChild(a);
+    return a;
+  }
+
+  it("opens the file viewer with the raw path and prevents navigation", async () => {
+    // open() 会发起 fetch —— 挂全局桩,防止 jsdom 里打出真网络请求。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, text: async () => "x" })),
+    );
+    const a = buildFileLink("out/a.md");
+    const { onMarkdownClick } = useCodeBlockCopy();
+    const e = clickEvent(a);
+    const preventSpy = vi.spyOn(e, "preventDefault");
+
+    await onMarkdownClick(e);
+
+    expect(preventSpy).toHaveBeenCalledTimes(1);
+    expect(useFileViewer().rawPath.value).toBe("out/a.md");
+    expect(useFileViewer().isOpen.value).toBe(true);
+  });
+
+  it("does not open the file viewer for image links (channel separation)", async () => {
+    const a = buildFileLink("out/x.png");
+    // 混淆面:把同一锚点同时塞两种 data 属性 —— 委托按优先级只认
+    // data-image-path,文件查看器不得被图片命中触发。
+    a.setAttribute("data-image-path", "out/x.png");
+    const { onMarkdownClick } = useCodeBlockCopy();
+
+    await onMarkdownClick(clickEvent(a));
+
+    expect(useImageViewer().isOpen.value).toBe(true);
+    expect(useFileViewer().isOpen.value).toBe(false);
   });
 });
