@@ -295,9 +295,12 @@ function endDrag(e: PointerEvent): void {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  /* 图片查看要吃满视口:90vw/80vh 上限,小屏往下限收。 */
+  /* 图片查看要吃满视口:90vw 宽 + 固定 86vh 高。height 必须给确定值,不能
+     只给 max-height —— stage(flex:1)的内容全是绝对定位(img/error 均脱离
+     文档流),auto 高度的 flex 容器里 stage 解析不出内容高度,会坍缩成一条
+     32px 的 padding(09-13 落地即带病,jsdom 测不出布局,翌日实视暴露)。 */
   width: min(90vw, 1100px);
-  max-height: 86vh;
+  height: 86vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-lg);

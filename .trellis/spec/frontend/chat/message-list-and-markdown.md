@@ -153,7 +153,11 @@ MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null �
    `composables/useImagePanZoom.ts`(锚点公式 `t' = a − (s'/s)·(a − t)`、
    clamp [1,8]、回 1 清平移——**坐标模型与 ImageViewerModal 的 stage CSS
    成对**(img 绝对居中 + transform-origin: center,改一处必须同步另一处);
-   舞台 overflow:hidden,pan/zoom 全由 img transform 承载不走滚动条);
+   舞台 overflow:hidden,pan/zoom 全由 img transform 承载不走滚动条)。
+   **stage 高度陷阱(09-14 实证)**:stage(flex:1)的内容全是绝对定位
+   (img/error 脱离文档流),auto 高度的 flex 容器解析不出它的内容高度 →
+   坍缩成 padding 一条;弹层根必须给**确定 height**(86vh),只给 max-height
+   不够。jsdom 测不出布局,此类弹层改动要真开一次眼看;
    交互 = wheel(光标锚点,`.prevent`)、pointer 拖拽(canPan 门控 +
    setPointerCapture,jsdom 缺位 try/catch 降级)、双击 2.5×↔复位、header
    控件;换图(src watch)复位缩放态。触摸 pinch 有意不做(见 composable
