@@ -91,3 +91,54 @@ MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null �
 - 配套:chatSendActions `send()` 在排队路径(queueingClassic)且当前 session 有
   pending 时 warn toast 澄清"消息已排队但 Agent 在等卡片提交"(CH8-2b)——
   mock `get_pending_interaction` 的测试坑见 `../test-environment.md` §8。
+
+---
+
+## 5. 图片路径预览链路(2026-09-13)
+
+聊天 markdown 里的本地图片路径可点击 → 应用内弹层查看。全链四段,**改任一段
+先 grep `md-image-path` 找全消费方**:
+
+1. **识别**(`utils/markdown.ts` `renderMarkdown` 管线,downgrade 与 sanitize
+   之间插 `linkifyImagePaths` DOM 后处理):三种形态统一转
+   `<a class="md-image-path" data-image-path="原始路径">` —— 正文裸路径、
+   inline `<code>` 内路径(LLM 习惯写反引号里)、markdown 图片/链接语法
+   (`![](本地)` 由 `downgradeExternalImages` 本地分支产出、`[x](本地)` 由
+   linkify 给已有 `<a href>` 补 data 属性)。**围栏代码块(pre 祖先)与 `<a>`
+   内文本不动**。实现必须走 DOMParser + TreeWalker(字符串后处理分不清代码
+   上下文;marked extension 优先于 codespan tokenizer 会吞 inline code)。
+   路径正则 `IMAGE_PATH_RE`(边界捕获组 + Unicode 段字符,同
+   chatInputTokens.ts FILE_RE 风格):纯文件名(无 `/`)与 http URL 有意
+   不识别;`/api/` 前缀排除(附件路由 uuid.png 会误吞)。
+2. **取数**(`utils/imageUrl.ts` + daemon `GET /api/v1/files/image?path=`):
+   `resolveImagePath(raw, cwd)` 把相对路径按**点击那一刻**的
+   `chatStore.currentCwd` 解析(渲染时刻 cwd 会随会话切换漂移,故解析
+   推迟到弹层 computed);`/`、`~/` 原样(daemon 端展开 home)。URL 三传输
+   模式与 attachmentUrl 同构(pwa-remote 走 proxy + `?access_token=`)。
+   daemon 侧契约:扩展白名单(png/jpg/jpeg/gif/webp/bmp/avif/ico,**svg
+   排除**——独立文档打开时脚本会跑)+ 32 MiB 上限 + 只收绝对/`~/` 路径,
+   400/404/413 分类(`commands/files.rs` `read_image_at_inner`)。
+3. **点击委托**(`composables/useCodeBlockCopy.ts` `onMarkdownClick`):
+   `closest("a[data-image-path]")` → preventDefault → `useImageViewer().open(原始路径)`。
+   该 composable 是 markdown v-html 容器的统一委托层(代码复制 + 图片预览),
+   新交互往这里加分支,容器只需根上绑 `@click="onMarkdownClick"`——**新增
+   markdown 容器忘了绑 = 交互静默失效**(MessageItem 主气泡曾是唯一漏绑面,
+   09-13 补上;现有绑定面:MessageItem 气泡/时间轴/摘要行、
+   DiscussionSummaryCard、SubagentDrawer、MarkdownDetailModal)。
+4. **弹层**(`composables/useImageViewer.ts` 模块级单例 + `components/common/
+   ImageViewerModal.vue` 全局唯一实例挂 App.vue):reka-ui Dialog 六件套
+   (MarkdownDetailModal 模式),img onerror 统一错误态(daemon 400/404/413
+   都长这样),「新标签打开」兜底走同一 `imageUrl`。缩放/平移(09-13 同日
+   增强):数学核心在 `composables/useImagePanZoom.ts`(锚点公式
+   `t' = a − (s'/s)·(a − t)`、clamp [1,8]、回 1 清平移——**坐标模型与
+   ImageViewerModal 的 stage CSS 成对**(img 绝对居中 + transform-origin:
+   center,改一处必须同步另一处);舞台 overflow:hidden,pan/zoom 全由
+   img transform 承载不走滚动条);交互 = wheel(光标锚点,`.prevent`)、
+   pointer 拖拽(canPan 门控 + setPointerCapture,jsdom 缺位 try/catch
+   降级)、双击 2.5×↔复位、header −/倍率/+/复位 控件;换图(src watch)
+   复位缩放态。触摸 pinch 有意不做(见 composable 尾注)。
+
+**样式边界**:`.md-image-path` 的交互态样式(cursor:pointer——无 href 的 a
+UA 不给指针;word-break:break-all——长绝对路径防撑爆气泡)放**全局
+style.css**;颜色/下划线等排版仍由各容器的 `:deep(a)` 承载(不进 §2 的
+五处镜像块——那是排版节奏,这是横切交互态)。

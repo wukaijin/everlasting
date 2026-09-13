@@ -1108,10 +1108,13 @@ const messageImages = computed<
 
     <div v-else-if="showBubble && !useTimeline" class="msg__bubble">
       <!-- 08-26-f5-verify-followups P2:user 行经 bubbleHtml(@token 包裹 +
-           file-ref class);其余角色与原 rendered 等价。 -->
+           file-ref class);其余角色与原 rendered 等价。
+           09-13 补 onMarkdownClick 委托(v-html 交互:代码复制 +
+           图片路径预览)—— 此前主气泡是唯一没绑的 markdown 面。 -->
       <span
         v-if="hasVisibleBubble || message.content"
         class="msg__markdown"
+        @click="onMarkdownClick"
         v-html="bubbleHtml"
       />
       <span v-if="message.streaming" class="msg__cursor" aria-hidden="true"

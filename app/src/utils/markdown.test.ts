@@ -203,4 +203,92 @@ describe("renderMarkdown", () => {
       expect(html).not.toContain("<script");
     });
   });
+
+  // 09-13 图片路径预览:三种形态统一 linkify 成
+  // `<a class="md-image-path" data-image-path>`(点击经 useCodeBlockCopy
+  // 委托开 ImageViewerModal)。围栏代码块内不动;纯文件名 / URL / 我们
+  // 自己的 API 路径不识别。
+  describe("image path linkify (09-13)", () => {
+    it("linkifies a bare relative path in prose", () => {
+      const html = renderMarkdown("see out/ui-review/123/1-desktop.png here");
+      expect(html).toContain('data-image-path="out/ui-review/123/1-desktop.png"');
+      expect(html).toContain('class="md-image-path"');
+      // 链接文本即路径本体。
+      expect(html).toContain(">out/ui-review/123/1-desktop.png</a>");
+    });
+
+    it("linkifies absolute and ~ paths", () => {
+      expect(renderMarkdown("at /tmp/shot.png ok")).toContain(
+        'data-image-path="/tmp/shot.png"',
+      );
+      expect(renderMarkdown("at ~/.local/share/app/x.png ok")).toContain(
+        'data-image-path="~/.local/share/app/x.png"',
+      );
+      expect(renderMarkdown("at ./out/x.png ok")).toContain(
+        'data-image-path="./out/x.png"',
+      );
+      expect(renderMarkdown("at ../out/x.png ok")).toContain(
+        'data-image-path="../out/x.png"',
+      );
+    });
+
+    it("linkifies a path inside inline code (keeps the code wrapper)", () => {
+      const html = renderMarkdown("截图在 `out/ui-review/x/1.png`");
+      // inline code 保留 mono 包装,内部文本换成同文本 <a>。
+      expect(html).toMatch(/<code>\s*<a[^>]*data-image-path="out\/ui-review\/x\/1\.png"[^>]*>/);
+      expect(html).toContain("</a></code>");
+    });
+
+    it("does NOT touch paths inside fenced code blocks", () => {
+      const html = renderMarkdown("```sh\ncat out/ui-review/x/1.png\n```");
+      expect(html).not.toContain("data-image-path");
+    });
+
+    it("stamps data-image-path onto a markdown link with a local image href", () => {
+      // LLM 常输出 [x.png](out/x.png) 链接形态:href 导航会被点击委托
+      // 拦下走弹层;这里断言 data 属性补齐 + 原 href 保留(委托失败时
+      // 不至于无路可走)。
+      const html = renderMarkdown("[1-desktop.png](out/ui-review/x/1.png)");
+      expect(html).toContain('data-image-path="out/ui-review/x/1.png"');
+      expect(html).toContain('href="out/ui-review/x/1.png"');
+    });
+
+    it("rewrites a markdown image with a LOCAL path to a preview link", () => {
+      // B1 R7 的本地分支:不再是打不开的新 tab 链接,而是预览链接。
+      const html = renderMarkdown("![](out/ui-review/x/1.png)");
+      expect(html).not.toContain("<img");
+      expect(html).toContain('data-image-path="out/ui-review/x/1.png"');
+      expect(html).toContain("[图片]");
+      expect(html).not.toContain('target="_blank"');
+    });
+
+    it("supports CJK segments and paths at CJK punctuation boundaries", () => {
+      expect(renderMarkdown("产物在 out/截图/首页.png。")).toContain(
+        'data-image-path="out/截图/首页.png"',
+      );
+    });
+
+    it("ignores bare filenames, URLs and our own api paths", () => {
+      // 纯文件名(无路径分隔符):句子误伤率高,有意不识别。
+      expect(renderMarkdown("generated foo.png today")).not.toContain("data-image-path");
+      // http(s) URL(裸文本经 gfm autolink 成 <a>,walk 跳过 a;
+      // 链接语法 href 走 isLocalImagePath 的 URL 排除)。
+      expect(renderMarkdown("see https://example.com/a.png")).not.toContain("data-image-path");
+      expect(renderMarkdown("[x](https://example.com/a.png)")).not.toContain("data-image-path");
+      // 附件路由(uuid.png 结尾)不进预览(那是 <img> 直渲染的通道)。
+      expect(renderMarkdown("[x](/api/v1/attachments/s1/a1b2c3d4.png)")).not.toContain(
+        "data-image-path",
+      );
+    });
+
+    it("escapes attribute values in the downgrade branch", () => {
+      // 属性注入载荷:marked 把 src 里的引号 percent-encode(`%22`),
+      // 属性边界不被打破 —— "onerror" 只能以 URL 文本形态存在,不能
+      // 成为 <a> 的属性。断言"无事件 handler 属性",而非无子串。
+      const html = renderMarkdown('![](out/x"onerror="alert(1).png)');
+      expect(html).not.toMatch(/<a[^>]*\sonerror/i);
+      expect(html).not.toMatch(/<a[^>]*\sonclick/i);
+      expect(html).not.toContain("<img");
+    });
+  });
 });

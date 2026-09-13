@@ -26,6 +26,9 @@ import { hasPairedNode } from "./transport/auth";
 // F6(2026-08-27):Tauri 壳窗口关闭确认(有在跑会话时拦截)。根组件
 // 挂载一次(组件内部 isTauriWebview 守卫,Web/PWA 为空操作)。
 import CloseGuardDialog from "./components/layout/CloseGuardDialog.vue";
+// 09-13 图片路径预览弹层:markdown linkify 的全局查看器(useImageViewer
+// 模块级状态驱动,所有 markdown 面的点击委托共用这一个实例)。
+import ImageViewerModal from "./components/common/ImageViewerModal.vue";
 
 onMounted(() => {
   setOnAuthFailed(() => {
@@ -60,4 +63,5 @@ onUnmounted(() => {
     </Transition>
   </router-view>
   <CloseGuardDialog />
+  <ImageViewerModal />
 </template>

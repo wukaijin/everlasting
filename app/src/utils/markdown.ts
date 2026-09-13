@@ -120,16 +120,16 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
 // request the moment the bubble renders — closing the pre-existing
 // leak channel (BACKLOG §3.3 "不渲染 LLM 之外的图" was aspirational
 // until this gate). Any <img> whose src is NOT one of our own
-// attachment-route forms is downgraded to a plain opener link
-// BEFORE the DOMPurify pass:
+// attachment-route forms is rewritten BEFORE the DOMPurify pass:
 //
 //   ① relative `/api/v1/attachments/…` (browser-local PROD — the
-//      SPA is same-origin with the daemon);
+//      SPA is same-origin with the daemon) passes through untouched;
 //   ② absolute `${daemonBase()}/api/v1/attachments/…` (DEV cross
-//      origin). Prefix match only, so the `?access_token=` query
-//      the pwa-remote `attachmentUrl()` appends passes, as does the
-//      pwa-remote proxy form
-//      `${daemonBase()}/api/v1/proxy/api/v1/attachments/…`.
+//      origin, incl. the pwa-remote proxy form) passes through;
+//   ③ LOCAL image path form (09-13) → preview link (`data-image-path`,
+//      click opens the in-app viewer; see the linkify block below);
+//   ④ everything else (external http/data URLs) → plain new-tab
+//      opener link `[图片]`.
 //
 // Implementation note: replacing the node inside a DOMPurify
 // `uponSanitizeAttribute` hook is awkward (hooks see attribute
@@ -138,7 +138,69 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
 // values, so matching `<img … src="…" …>` is reliable — and
 // DOMPurify still sanitizes everything afterward (the replacement
 // <a>'s href survives because href is on the default allow-list;
-// target/rel via ADD_ATTR above).
+// target/rel via ADD_ATTR above; data-image-path via the default
+// ALLOW_DATA_ATTR).
+// --- 09-13 图片路径预览:linkify 本地图片路径 --------------------------------
+// LLM 输出的本地图片路径(ui-review 截图、图表产物等)在正文/inline code
+// 里是纯文本,无法查看。这里把三种形态统一转成可点击的
+// `<a class="md-image-path" data-image-path="原始路径">`(点击经
+// useCodeBlockCopy 的委托开 ImageViewerModal 弹层,<img> 直连 daemon 的
+// `GET /api/v1/files/image`):
+//
+//   ① 裸文本路径(正文段落里 `out/ui-review/x/1.png`);
+//   ② inline `<code>` 内路径(LLM 习惯把路径写进反引号)——code 内保留
+//      mono 字体,文本替换为同文本的 <a>;**围栏代码块(pre 祖先)不动**
+//      (延续 wrapAtFileTokensOutsideCode 的"代码上下文不改写"理念,
+//      只是这里按用户决策放宽到 inline code 也识别);
+//   ③ markdown 图片语法 `![](本地路径)` 与链接语法 `[x](out/x.png)`:
+//      前者经下方 downgradeExternalImages 的本地分支,后者在此处给
+//      已有 <a href> 补 data 属性。
+//
+// 实现为 marked 输出之后的 **DOM 后处理**(DOMParser + TreeWalker):
+// 字符串级后处理分不清"是否在 code/pre 内"(marked 已把代码内容转义成
+// 文本),marked extension 则优先于 codespan tokenizer、会把 inline code
+// 内文本先吞掉;DOM walk 能精确按祖先元素跳过。安全性:插入的 <a> 全部
+// 经 DOM API 构造(textContent/setAttribute 自动转义),随后仍过
+// DOMPurify(data-* 默认放行,ALLOW_DATA_ATTR)。
+//
+// 路径正则与 chatInputTokens.ts 的 FILE_RE 同风格(边界捕获组 + Unicode
+// 段字符)。纯文件名(x.png,无路径分隔符)有意不识别 —— 英文句子里
+// 误伤率高;`https://host/x.png` 由前边界(不含 `/`)自然排除。
+const IMAGE_EXT = String.raw`png|jpe?g|gif|webp|bmp|avif|ico`;
+/** 段字符:Unicode 字母/数字 + `.` `_` `-`(dotfile、kebab 文件名)。 */
+const IMAGE_PATH_SEG = String.raw`[\p{L}\p{N}._-]`;
+/** 路径本体(无边界组):带前缀(`/`、`~/`、`./`、`../`)任意段数;
+ *  无前缀(裸相对)必须至少含一个 `/` 段,否则就是纯文件名。 */
+export const IMAGE_PATH_BODY = String.raw`(?:(?:/|~/|\.{1,2}/)${IMAGE_PATH_SEG}+(?:/${IMAGE_PATH_SEG}+)*|${IMAGE_PATH_SEG}+/${IMAGE_PATH_SEG}+(?:/${IMAGE_PATH_SEG}+)*)\.(?:${IMAGE_EXT})`;
+/** 文本内的图片路径(带前后边界组;`m[2]` 是路径本体)。 */
+export const IMAGE_PATH_RE = new RegExp(
+  `(^|[\\s(\\[{"'<（【「『“：，])(${IMAGE_PATH_BODY})(?=$|[\\s.,;:!?)\\]}>"'’」』】”。！？；…])`,
+  "giu",
+);
+/** 属性值形态(href/src 整体就是一个路径,无需边界组)。 */
+const LOCAL_IMAGE_PATH_RE = new RegExp(`^(?:${IMAGE_PATH_BODY})$`, "iu");
+/** 便宜预检:文本里出现图片扩展名字样才进 DOMParser(多数消息不含,
+ *  别为它们付 parse + walk 的钱)。宽松无妨,误报只是多跑一次 walk。 */
+const IMAGE_PATH_HINT = new RegExp(`\\.(?:${IMAGE_EXT})`, "i");
+
+/** src/href 是否是"本地图片路径"形态。排除 http(s)/data/mailto/锚点,
+ *  以及我们自己的 API 路径(`/api/v1/attachments/...` 的 uuid 文件名
+ *  以 .png 结尾,会被裸形态误吞)。 */
+function isLocalImagePath(src: string): boolean {
+  if (/^(?:https?:|data:|mailto:|#|\/api\/)/i.test(src)) return false;
+  return LOCAL_IMAGE_PATH_RE.test(src);
+}
+
+/** marked 会把链接目标 percent-encode(空格 → %20);daemon 读的是解码
+ *  后的文件路径,尽力解码,畸形序列(裸 `%`)原样返回。 */
+function tryDecodeUri(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 const IMG_TAG_RE = /<img\b[^>]*>/gi;
 const SRC_ATTR_RE = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 
@@ -151,16 +213,79 @@ function isOwnAttachmentSrc(src: string): boolean {
   );
 }
 
-/** Replace non-allow-listed `<img>` tags with a new-tab link.
- *  Allow-listed tags (our attachments route) pass through
- *  untouched. */
+/** Replace non-allow-listed `<img>` tags. Allow-listed tags (our
+ *  attachments route) pass through untouched; LOCAL image paths become
+ *  a preview link (see the linkify block above); everything else
+ *  degrades to a new-tab opener link as before. */
 function downgradeExternalImages(html: string): string {
   return html.replace(IMG_TAG_RE, (tag) => {
     const m = SRC_ATTR_RE.exec(tag);
     const src = m ? m[1] ?? m[2] ?? "" : "";
     if (!src || isOwnAttachmentSrc(src)) return tag;
+    if (isLocalImagePath(src)) {
+      const p = tryDecodeUri(src);
+      return `<a class="md-image-path" data-image-path="${escapeHtml(p)}">[图片]</a>`;
+    }
     return `<a href="${src}" target="_blank" rel="noreferrer">[图片]</a>`;
   });
+}
+
+/** DOM 后处理:见上方 linkify 块注释。pre(围栏)与 a(防嵌套)内
+ *  的文本节点跳过;inline code 内的文本节点照常处理。 */
+function linkifyImagePaths(html: string): string {
+  if (!IMAGE_PATH_HINT.test(html)) return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // ③ markdown 链接语法:给本地图片形态的 <a href> 补 data 属性
+  // (点击委托按 data-image-path 拦截,preventDefault 后不走 href 导航)。
+  for (const a of Array.from(
+    doc.body.querySelectorAll<HTMLAnchorElement>("a[href]"),
+  )) {
+    const href = a.getAttribute("href") ?? "";
+    if (isLocalImagePath(href)) {
+      a.classList.add("md-image-path");
+      a.dataset.imagePath = tryDecodeUri(href);
+    }
+  }
+  // ①② 文本节点替换。
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  while (walker.nextNode()) {
+    const t = walker.currentNode as Text;
+    if (!IMAGE_PATH_HINT.test(t.data)) continue;
+    let el: Element | null = t.parentElement;
+    let skip = false;
+    while (el && el !== doc.body) {
+      if (el.tagName === "PRE" || el.tagName === "A") {
+        skip = true;
+        break;
+      }
+      el = el.parentElement;
+    }
+    if (!skip) targets.push(t);
+  }
+  for (const node of targets) {
+    const text = node.data;
+    const owner = node.ownerDocument;
+    if (!owner) continue;
+    const frag = owner.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(IMAGE_PATH_RE)) {
+      const pathStart = (m.index ?? 0) + (m[1]?.length ?? 0);
+      const path = m[2];
+      if (pathStart < last) continue; // 防御:边界组理论不重叠,兜底
+      frag.appendChild(owner.createTextNode(text.slice(last, pathStart)));
+      const a = owner.createElement("a");
+      a.className = "md-image-path";
+      a.dataset.imagePath = path;
+      a.textContent = path;
+      frag.appendChild(a);
+      last = pathStart + path.length;
+    }
+    if (last === 0) continue;
+    frag.appendChild(owner.createTextNode(text.slice(last)));
+    node.replaceWith(frag);
+  }
+  return doc.body.innerHTML;
 }
 
 /**
@@ -180,7 +305,10 @@ export function renderMarkdown(text: string): string {
   // is always a string. The cast keeps TypeScript from widening to
   // `string | Promise<string>` and forcing downstream casts.
   const rawHtml = marked.parse(trimmed) as string;
-  return DOMPurify.sanitize(downgradeExternalImages(rawHtml), PURIFY_CONFIG);
+  return DOMPurify.sanitize(
+    linkifyImagePaths(downgradeExternalImages(rawHtml)),
+    PURIFY_CONFIG,
+  );
 }
 
 export interface DebouncedRenderer {

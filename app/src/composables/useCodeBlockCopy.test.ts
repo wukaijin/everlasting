@@ -6,9 +6,13 @@
 //   2. Clicks that don't land on the button are ignored.
 //   3. Missing clipboard API (jsdom default / non-secure context)
 //      degrades silently — no throw, no label change.
+// 09-13 图片路径预览分支:
+//   4. Click on a[data-image-path] → preventDefault + useImageViewer
+//      open(原始路径);普通 <a> 与其它落点不开弹层。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { useCodeBlockCopy } from "./useCodeBlockCopy";
+import { useImageViewer } from "./useImageViewer";
 
 function buildBlock(): { root: HTMLElement; btn: HTMLElement } {
   const root = document.createElement("div");
@@ -92,6 +96,46 @@ describe("useCodeBlockCopy (CH4-5)", () => {
     const e = new MouseEvent("click");
 
     await expect(onMarkdownClick(e)).resolves.toBeUndefined();
+    expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("useCodeBlockCopy — image path preview (09-13)", () => {
+  function buildImageLink(path: string): HTMLAnchorElement {
+    const a = document.createElement("a");
+    a.className = "md-image-path";
+    a.setAttribute("data-image-path", path);
+    a.textContent = path;
+    document.body.appendChild(a);
+    return a;
+  }
+
+  afterEach(() => {
+    useImageViewer().close();
+  });
+
+  it("opens the viewer with the raw path and prevents navigation", async () => {
+    const a = buildImageLink("out/ui-review/x/1.png");
+    const { onMarkdownClick } = useCodeBlockCopy();
+    const e = clickEvent(a);
+    const preventSpy = vi.spyOn(e, "preventDefault");
+
+    await onMarkdownClick(e);
+
+    expect(preventSpy).toHaveBeenCalledTimes(1);
+    expect(useImageViewer().path.value).toBe("out/ui-review/x/1.png");
+  });
+
+  it("does not open the viewer for plain links or stray clicks", async () => {
+    const writeText = stubClipboard();
+    const plain = document.createElement("a");
+    plain.setAttribute("href", "https://example.com");
+    plain.textContent = "x";
+    document.body.appendChild(plain);
+    const { onMarkdownClick } = useCodeBlockCopy();
+
+    await onMarkdownClick(clickEvent(plain));
+    expect(useImageViewer().isOpen.value).toBe(false);
     expect(writeText).not.toHaveBeenCalled();
   });
 });

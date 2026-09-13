@@ -12,8 +12,14 @@
 //! caps depth to `n` layers under the project root — the default `@`
 //! trigger sends `Some(3)` so the panel opens instantly even on huge
 //! repos.
+//!
+//! `read_image_at_inner`(下方)是本模块唯一的非 IPC 逻辑:daemon 的
+//! `GET /api/v1/files/image` 路由专用(前端 `<img>` 直连,不走
+//! `transport.invoke`),故无 `#[tauri::command]` 壳、不进 lib.rs /
+//! `CMD_TO_DOMAIN` 注册表(GET binary 路由与 attachments 的
+//! `get_attachment` 同一先例)。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::State;
@@ -130,4 +136,104 @@ pub async fn list_files_at(
     max_depth: Option<u32>,
 ) -> Result<Vec<String>, AppCommandError> {
     list_files_at_inner(root, max_depth).await
+}
+
+// --- 图片路径预览(2026-09-13)----------------------------------------------
+// daemon `GET /api/v1/files/image?path=<abs|~前缀>` 的支撑逻辑:聊天
+// markdown 里的本地图片路径被渲染成可点击链接,点击后弹层 `<img>` 直连
+// 本路由取字节。安全面:扩展名白名单 + 大小上限(见下方常量),svg 有意
+// 排除 —— `<img>` 内加载 svg 不执行脚本,但同一 URL 被"新标签打开"
+// 兜底按钮消费时是独立文档,脚本会跑;白名单里不给它位置就两态皆安。
+// 错误分类由 route 层映射 HTTP 状态码(400/404/413),不走
+// `AppCommandError`(其 ErrorCategory 无 NotFound/PayloadTooLarge 档)。
+
+/// 单文件大小上限 32 MiB:聊天预览场景足够(截图/图表),防止误点大文件
+/// 把 daemon 内存打爆。TOCTOU 兜底:metadata 检查后再读,读后复核。
+pub const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// 白名单扩展名(小写)→ Content-Type。不在表内 → `None`(调用方拒 400)。
+fn image_content_type(ext: &str) -> Option<&'static str> {
+    match ext {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "avif" => Some("image/avif"),
+        "ico" => Some("image/x-icon"),
+        _ => None,
+    }
+}
+
+/// `read_image_at_inner` 的错误分类。route 层(`daemon/routes/files.rs`)
+/// match 此枚举映射 HTTP 状态码;此处不携带 HTTP 语义。
+#[derive(Debug)]
+pub enum ReadImageError {
+    /// 路径非绝对形态、无扩展名或扩展不在白名单 → 400。
+    InvalidRequest(String),
+    /// 文件不存在或不是普通文件 → 404。
+    NotFound,
+    /// 超过 [`MAX_IMAGE_BYTES`] → 413。
+    TooLarge,
+    /// 文件系统 IO 失败(权限等)→ 500。
+    Io(String),
+}
+
+/// `~` 前缀展开为真实 home(与 `get_home_dir_inner` 同源,`dirs` crate)。
+fn expand_home(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// 读取一个本地图片文件供 `<img>` 直连消费。
+///
+/// 契约:`path` 必须是绝对路径或 `~/` 前缀(相对路径 400 —— 相对路径由
+/// 前端按会话 cwd 解析成绝对路径后才进本路由,daemon 侧的 cwd 语义
+/// 不明,不猜)。返回 `(Content-Type, 字节)`;错误分类见
+/// [`ReadImageError`]。
+pub async fn read_image_at_inner(path: String) -> Result<(&'static str, Vec<u8>), ReadImageError> {
+    let expanded = expand_home(&path);
+    if !expanded.is_absolute() {
+        return Err(ReadImageError::InvalidRequest(format!(
+            "path must be absolute or `~/`-prefixed, got {:?}",
+            path
+        )));
+    }
+    let ext = path_extension_lower(&expanded);
+    let content_type = match ext.as_deref().and_then(image_content_type) {
+        Some(ct) => ct,
+        // 无扩展名/非白名单统一 400,不给"存在性"旁信道(路径探测面)。
+        None => {
+            return Err(ReadImageError::InvalidRequest(
+                "path must end in a whitelisted image extension".to_string(),
+            ))
+        }
+    };
+    let meta = tokio::fs::metadata(&expanded)
+        .await
+        .map_err(|_| ReadImageError::NotFound)?;
+    if !meta.is_file() {
+        return Err(ReadImageError::NotFound);
+    }
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(ReadImageError::TooLarge);
+    }
+    let bytes = tokio::fs::read(&expanded)
+        .await
+        .map_err(|e| ReadImageError::Io(e.to_string()))?;
+    // TOCTOU 兜底:metadata 与 read 之间文件可能被写大。
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err(ReadImageError::TooLarge);
+    }
+    Ok((content_type, bytes))
+}
+
+fn path_extension_lower(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
 }

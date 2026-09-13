@@ -757,3 +757,23 @@ textarea {
 .route-fade-leave-to {
   opacity: 0;
 }
+
+/* ------------------------------------------------------------------------- *
+ * .md-image-path — markdown 图片路径预览链接(09-13)                          *
+ * ------------------------------------------------------------------------- *
+ * utils/markdown.ts linkifyImagePaths 的产物:聊天 markdown 里的本地图片
+ * 路径(正文/inline code/![](本地)/[x](本地))统一转成
+ * `<a class="md-image-path" data-image-path>`,点击经 useCodeBlockCopy
+ * 委托开 ImageViewerModal。
+ *
+ * 为何放全局而非五处镜像:这是**交互态**样式(指针/换行),不是
+ * message-list-and-markdown.md §2 的排版节奏块(段落 margin/行高)——
+ * 排版面仍由各容器的 :deep(a)(accent 色 + hover 下划线)承载,这里只
+ * 补两件排版块管不了的事:
+ *   - cursor:pointer:无 href 的 <a>(linkify 产物)UA 默认不加指针;
+ *   - word-break:break-all:长绝对路径(~/.local/share/…)不换行会把
+ *     气泡撑出横向滚动。 */
+.md-image-path {
+  cursor: pointer;
+  word-break: break-all;
+}
