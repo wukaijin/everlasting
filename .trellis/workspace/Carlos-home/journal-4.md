@@ -1637,3 +1637,39 @@ GCE-P1b 落地:group_chat_presets 加可空 builtin_key 列 + UNIQUE 索引(NULL
 ### Status
 
 [OK] **Completed**
+
+
+## Session 142: 图片路径可点击弹层预览 + 缩放平移(09-13)
+
+**Date**: 2026-09-13
+**Task**: 图片路径可点击弹层预览 + 缩放平移(09-13)
+**Branch**: `main`
+
+### Summary
+
+聊天 markdown 里的本地图片路径(out/ui-review/x.png、~/...、/tmp/... 形态)从纯文本变为一键查看:markdown.ts 渲染管线在 downgrade 与 sanitize 之间插 linkifyImagePaths(DOMParser+TreeWalker DOM 后处理,字符串后处理分不清代码上下文、marked extension 会抢 codespan tokenizer 都不行),正文裸路径/inline code 内/![](本地)/[x](本地) 四形态统一转 a.md-image-path(围栏代码块与已有 a 内不动;纯文件名与 http URL 不识别——前边界集不含 / 自然排除 URL 中途起点;/api/ 前缀排除防附件路由 uuid.png 误吞)。取数走 daemon files 域首个 binary GET 路由 /api/v1/files/image?path=(route 薄壳照 get_attachment 先例,GET 不进 CMD_TO_DOMAIN 守卫;扩展白名单七类不含 svg——新标签打开是独立文档会跑脚本;32MiB 上限+TOCTOU 读后复核;400/404/413 分类走自有枚举——ErrorCategory 无 NotFound/PayloadTooLarge 档;只收绝对/~前缀,~ 在 daemon 端展开)。相对路径解析推迟到点击那一刻按 chatStore.currentCwd 做(渲染时 cwd 会随会话切换漂移),imageUrl 三传输模式与 attachmentUrl 同构(pwa-remote proxy+access_token)。点击委托扩进 useCodeBlockCopy(职责从代码复制扩为 markdown v-html 交互层,5 个已绑面零改动自动受益),并补上 MessageItem 主气泡唯一漏绑的 @click。弹层 ImageViewerModal(reka-ui Dialog 六件套照 MarkdownDetailModal,App.vue 全局挂载+useImageViewer 模块级单例,非 pinia——一开一关一个字符串不值当)含错误态(400/404/413 统一 img onerror)与新标签兜底;同日增强缩放平移:数学核心抽 useImagePanZoom 纯逻辑 composable(锚点公式 t'=a-(s'/s)·(a-t)、clamp[1,8]、回1清平移,坐标模型与 stage CSS 成对——img 绝对居中+transform-origin:center+overflow:hidden 全 transform 承载不走滚动条),交互=wheel 光标锚点(.prevent)/pointer 拖拽(canPan 门控+setPointerCapture try/catch 兼 jsdom)/双击 2.5x↔复位/header -/倍率/+/复位控件/换图复位;触摸 pinch 有意不做。踩坑两条:vi.mock transport/http 缺 httpTransport 导出会炸经 chat.ts 链(mock stores/chat 更干净);模板顶层 ref 自动解包与嵌套对象 ref 不解包的差别(dragging vs zoom.scale.value)。XSS 断言教训:'URL 文本里含 onerror 子串'≠'属性注入',断言要 match /<a[^>]*\sonerror/ 而非 not.toContain 子串(引号被 marked percent-encode 后属性边界根本没破)。验证:前端 1776 过(新增 54)/后端 --lib 2408 过(新增 3 路由 oneshot:200+Content-Type/400 三臂/404/413 稀疏文件)/vue-tsc 零错/lefthook cargo-fmt 拦一轮(cargo check 不查格式)。spec message-list-and-markdown.md 新增 §5 全链四段约定,含'新增 markdown 容器忘绑 onMarkdownClick=交互静默失效'坑。无 trellis task(直接功能请求),无需归档。
+
+### Main Changes
+
+- markdown.ts linkifyImagePaths 四形态识别(IMAGE_PATH_RE 边界捕获组+Unicode 段字符,同 FILE_RE 风格)
+- daemon GET /api/v1/files/image(白名单+32MiB+400/404/413,~ daemon 端展开)
+- imageUrl.ts resolveImagePath(点击时刻 cwd 解析)+三模式 URL
+- useCodeBlockCopy 委托扩图片分支+MessageItem 气泡补绑
+- ImageViewerModal+useImageViewer+useImagePanZoom(缩放平移)
+- spec message-list-and-markdown.md §5
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8a40de52` | (see git log) |
+
+### Testing
+
+- [OK] pnpm test 1776 过(新增 54:markdown linkify 9/imageUrl 9/ImageViewerModal 14/useCodeBlockCopy +2/useImagePanZoom 7)
+- [OK] cargo test -p everlasting --lib 2408 过(files 路由 +3)
+- [OK] vue-tsc 零错
+
+### Status
+
+[OK] **Completed**
