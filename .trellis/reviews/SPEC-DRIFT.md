@@ -20,12 +20,12 @@
 ### DRIFT-001 — 二次取消语义未实现
 
 - **Type**: 有意偏离(MVP 简化)
-- **Spec**: `docs/ARCHITECTURE.md §2.5.1` 要求"取消不立即终止,把'取消'作为 tool_result 回传给 LLM 一次自我收敛机会;二次取消才真终止"
+- **Spec**: `docs/LIFECYCLE.md §2.5.1` 要求"取消不立即终止,把'取消'作为 tool_result 回传给 LLM 一次自我收敛机会;二次取消才真终止"
 - **Implementation**: `app/src-tauri/src/agent/chat.rs:934-978` 单次 cancel 即 emit Done("cancelled") 终止
 - **Impact**: 影响 LLM 自我收敛能力,但 MVP 简化可接受
 - **Resolution 候选**:
   - A. 实现二次取消语义(复杂,涉及 oneshot 改造)
-  - B. 更新 ARCHITECTURE.md §2.5.1 标"已偏离,见 DRIFT-001",MVP 不实现
+  - B. 更新 LIFECYCLE.md §2.5.1 标"已偏离,见 DRIFT-001",MVP 不实现
   - C. V3 路线图评估
 - **Decision**: 待 V3 评估
 - **Related DEBT**: RULE-A-010 (P3)

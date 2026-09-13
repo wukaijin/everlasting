@@ -53,4 +53,4 @@
   不变");权限分类(Tier 4 kill-list/前缀)只看 `command` 原文,permissions 模块
   零感知。给 shell 家族加任何新 input 字段时沿用此审计标准。
 - 消费面全在前端(header chip 兜底链 / 审批意图行),契约见
-  [frontend/chat/shell-card.md](../../frontend/chat/shell-card.md)。
+  [frontend/chat/shell-card.md](../frontend/chat/shell-card.md)。

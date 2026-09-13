@@ -17,7 +17,7 @@
 | [Permission Layer](./permission-layer.md) | per-session mode + ⑨ 关权限层(A2+B7;含 ask_no_timeout 全局开关) | ✅ 有实质内容 |
 | [Background Shell Observability](./background-shell-observability.md) | 后台 shell UI 可观测性(list/kill IPC + `background_shell:update` 事件 + 双模式接线) | ✅ 有实质内容 |
 | [Database Guidelines](./database-guidelines.md) | DB 模式(migrations / schema 纪律 / 审计落表 / 各表 CRUD) | ✅ 有实质内容(残留少量模板句可清) |
-| [Memory Contract](./memory.md) | 指令内存(B5 静态 loader)+ 自主运行时记忆(V2 2 期;子目录含 decisions) | ✅ 有实质内容 |
+| [Memory Contract](./memory.md) | 指令内存(B5 静态 loader)+ 自主运行时记忆(V2 2 期;子目录含 decisions + am-{p3,p4,p5,validation} 分篇) | ✅ 有实质内容 |
 | [Tool Contract](./tool-contract.md) | 工具定义 / ReadGuard / Bash spillover / 自主记忆写工具(子目录按工具族分篇) | ✅ 有实质内容 |
 | [LLM Contract](./llm-contract.md) | LLM 核心类型 / 思考契约 / provider 差异 / A5+ 重试 / token 计量(子目录) | ✅ 有实质内容 |
 | [Multi-Provider Contract](./multi-provider-contract.md) | Provider trait + catalog + Anthropic/OpenAI dispatch | ✅ 有实质内容 |
@@ -25,7 +25,7 @@
 | [Worktree Contract](./worktree-contract.md) | worktree attach/detach/delete + cancel + system prompt(子目录) | ✅ 有实质内容 |
 | [Subagent Runs Schema](./subagent-runs-schema.md) | `subagent_runs` 表 schema(B6 PR2,状态机 / 列 / 隔离) | ✅ 有实质内容 |
 | [Group Chat Presets](./group-chat-presets.md) | `group_chat_presets` 表 + 四 IPC 命令 + 前端 merged 消费(GCE-P1,快照语义 / UUID 引用 / 校验矩阵) | ✅ 有实质内容 |
-| [Token Usage Tracking](./token-usage-tracking.md) | A4 token 计量(turn_trace 各列 / cache 归因 / tools=0 判别) | ✅ 有实质内容 |
+| [Token Usage Tracking](./token-usage-tracking.md) | A4 token 计量核心契约 + 11 Scenario 分篇(turn_trace 各列 / cache 归因 / tools=0 判别;子目录 `token-usage-tracking/`) | ✅ 有实质内容 |
 | [Latency Tracking](./latency-tracking.md) | F5 latency 三列 + ttfb/thinking 计量 | ✅ 有实质内容 |
 | [Git Diff](./git-diff.md) | git diff workdir-vs-branch FileDiff 契约 | ✅ 有实质内容 |
 | [Project CWD Boundary](./project-cwd-boundary.md) | 项目 cwd 边界与路径越界防护 | ✅ 有实质内容 |

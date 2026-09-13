@@ -4,10 +4,9 @@
 >
 > 文档职责:
 > - ✅ 做什么 + 什么时候做(V2 4 档分类 + 已实施粗粒度归类)
-> - ❌ **不**讲具体实现细节(实现走 [IMPLEMENTATION.md §1](./IMPLEMENTATION.md) / [ARCHITECTURE.md](./ARCHITECTURE.md))
-> - ❌ **不**讲历史决策(决策走 [IMPLEMENTATION/decisions.md 决策日志](./IMPLEMENTATION/decisions.md))
+> - ❌ **不**讲具体实现细节(实现走 [ARCHITECTURE.md](./ARCHITECTURE.md))
 >
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),实现讲解 + 决策日志见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -31,7 +30,7 @@
 | v1      | 步骤 6a:多 Provider(Anthropic / OpenAI,自研 Provider trait) | ✅ |
 | 跨阶段  | 步骤 8:代码重构(5 PR — lib.rs / db.rs / 前端 sub-components / 文档 / STRUCTURE.md) | ✅ |
 
-> 步骤 3b-2(完整三栏 UI + rig-core 迁移)已废弃,详见 [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions.md)。
+> 步骤 3b-2(完整三栏 UI + rig-core 迁移)已废弃(rig-core 2026-06-09 弃用,详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait))。
 </details>
 
 ### 1.2 路线图外完成
@@ -40,7 +39,7 @@
 |------|------|--------------|
 | Anthropic extended thinking 块展示 + 持久化 | — | thinking 块落库 + 前端交错渲染(设计见 [INTERLEAVED-THINKING](./_history/2026-08-28-interleaved-thinking-design.md)) |
 | spike-005 follow-up 7 PR / 字体栈 / 6 UI bug 修复 / 工具集扩展批次 | 06 | 早期打磨批次:UI header / git_branch / backfill / pwd 简化 / write tracing / cancel / markdown 渲染 + HarmonyOS Sans 字体 + streamController 架构修复 + edit_file/grep/glob/list_dir/ReadGuard |
-| provider catalog hot-reload + session model_id binding | 06-10 | [决策 06-10](./IMPLEMENTATION/decisions-2026-06.md) |
+| provider catalog hot-reload + session model_id binding | 06-10 | |
 | 体验优化批次 F1-F4 | 06-11 | per-project session 记忆 / 跟底滚动 / 删除确认 / session 切换 loading |
 | **A4** Token 用量统计 | 06-10 | per-session 4 列累计 + ChatInput 阈值色条 |
 | **B5** Memory/指令文件系统 | 06-10/11 | 4 文件加载 + mtime fence + `cache_control: ephemeral`(spec [backend/memory.md](../.trellis/spec/backend/memory.md)) |
@@ -48,7 +47,7 @@
 | **D1** session 重命名 + 8 色标记 | 06-11 | |
 | **P0 工具打磨** / **P1 web_fetch** | 06-12 | read_file offset/limit + shell timeout;web_fetch(SSRF 拦截 + 5MiB cap + attribution,PRD [06-12-feat-tools-web-fetch](../.trellis/tasks/archive/2026-06/06-12-feat-tools-web-fetch-agent-api-p1/)) |
 | **C3** Context 压缩 + token 硬卡 | 06-12 | 已被 C3+ 替代(见下) |
-| **A2 + B7** 权限系统 + 多模式 | 06-12/13 | ⑨ 5-tier path 决策 + 3 档 Mode + 审计(spec [permission-layer.md](../.trellis/spec/backend/permission-layer.md),[决策 06-12/13](./IMPLEMENTATION/decisions-2026-06.md)) |
+| **A2 + B7** 权限系统 + 多模式 | 06-12/13 | ⑨ 5-tier path 决策 + 3 档 Mode + 审计(spec [permission-layer.md](../.trellis/spec/backend/permission-layer.md)) |
 | **Mode 3 档化** | 06-13 | Chat→Edit 改名 + Review 移除 |
 | **A7** RDP 双屏 position 修复 | 06-14 | Wayland 禁 setPosition → 全平台 `toggleMaximize()` |
 | **C4** 审计日志查询 UI | 06-14 | `list_session_audit_events` + AuditLogModal |
@@ -57,11 +56,11 @@
 | **B2** @文件补全 | 06-17 | @token 注入文件内容(调研 [at-file-injection](./_history/research/at-file-injection-coding-agents-survey.md)) |
 | **D3** session 内消息编辑/重发 | 06-17 | edit_user_message 单事务 + Resend + `(edited)` 标签 |
 | **B4** Skill 系统 | 06-18 | `use_skill` 三层渐进披露(调研 [skill-system](./_history/research/skill-system-survey.md),PRD [06-18-skill-system](../.trellis/tasks/archive/2026-06/06-18-skill-system/)) |
-| **B12** Checklist | 06-19 | `update_checklist` tool + 前端卡片([决策 06-18](./IMPLEMENTATION/decisions-2026-06.md)) |
-| **L2** 单 turn 多 tool 并发(只读 batch) | 06-19 | `is_parallel_eligible` + FuturesUnordered([ARCHITECTURE §2.5.9](./ARCHITECTURE.md#259-⑩-并行-tool-执行l2-mvp2026-06-19-落地已实施),PRD [06-19-l2](../.trellis/tasks/archive/2026-06/06-19-l2-parallel-readonly-tool-batch/)) |
+| **B12** Checklist | 06-19 | `update_checklist` tool + 前端卡片 |
+| **L2** 单 turn 多 tool 并发(只读 batch) | 06-19 | `is_parallel_eligible` + FuturesUnordered([LIFECYCLE §2.5.9](./LIFECYCLE.md#259-⑩-并行-tool-执行l2-mvp2026-06-19-落地已实施),PRD [06-19-l2](../.trellis/tasks/archive/2026-06/06-19-l2-parallel-readonly-tool-batch/)) |
 | **L1** 后台 shell + 完成通知 | 06-19 | 3 tool + session-scoped + APPEND 通知(spec [tool-contract L1a](../.trellis/spec/backend/tool-contract.md),PRD [06-19-l1-shell-pty](../.trellis/tasks/archive/2026-06/06-19-l1-shell-pty/)) |
 | **B6** Subagent + Drawer redesign | 06-20/21 | dispatch_subagent + subagent_runs 持久化 + SubagentDrawer(spec [frontend/chat.md](../.trellis/spec/frontend/chat.md)) |
-| **RULE-D-001** api_key 加密 | 06-24 | AES-256-GCM + HKDF(machine-id),`api_key_enc` 列([决策 06-24](./IMPLEMENTATION/decisions-2026-06.md)) |
+| **RULE-D-001** api_key 加密 | 06-24 | AES-256-GCM + HKDF(machine-id),`api_key_enc` 列 |
 | **C2** 循环检测 / **C2+** 主动干预 | 06-24 / 07-06 | 分级触发(L1 硬 N=3 + L2 软 0.85);主动干预 per-run 询问(spec [agent-loop C2](../.trellis/spec/backend/agent-loop-architecture.md)) |
 | **L3a** subagent 并发 / **L3c** worker 联网 | 06-24/25 | 并发只读 dispatch + worker web_fetch(spec [tool-contract concurrent](../.trellis/spec/backend/tool-contract.md)) |
 | **L3d** subagent frontmatter loader | 06-25/26 | 用户/项目 agents/*.md + mtime fence |
@@ -86,9 +85,9 @@
 | 交错思考渲染 | 07-23/24 | 真实流序落库 + 前端 run 分组(设计 [INTERLEAVED-THINKING](./_history/2026-08-28-interleaved-thinking-design.md)) |
 | **C2** review-state 矩阵视图 | 07-26 | ReviewMatrix + commands/review.rs |
 | lefthook pre-commit / ask_user_question 自由输入 / subagent resume(C1)+ plugin state(C0) | 07-26~28 | 工具链 + review epic 前置基建 |
-| **群聊 group chat** | 07-29~08-07 | group_chat_loop 编排 + speaker 列 + role_history 隔离([决策 07-29~08-07](./IMPLEMENTATION/decisions-2026-08.md)) |
+| **群聊 group chat** | 07-29~08-07 | group_chat_loop 编排 + speaker 列 + role_history 隔离 |
 | 前端 vendor 分包 manualChunks | 08-11 | 主 chunk 1.08MB → 344kB |
-| **C7** tools[] token 治理 | 08-14 | tools_token 度量 + 静态裁剪(spec [token-usage-tracking §C7](../.trellis/spec/backend/token-usage-tracking.md)) |
+| **C7** tools[] token 治理 | 08-14 | tools_token 度量 + 静态裁剪(spec [token-usage-tracking/02(C7)](../.trellis/spec/backend/token-usage-tracking/02-tools-token-static-pruning.md)) |
 | **C7D** tools stub 注册 | 08-14 | STUB_CANDIDATES 原地 stub + load_tool_schemas 元工具 |
 | **memory-gov** 指令块治理 | 08-15 | memory_token 度量 + digest 切节注入(spec [memory/decisions](../.trellis/spec/backend/memory/decisions.md)) |
 | **B1** 图片支持(multimodal) | 08-16/17 | ContentBlock Image/ImageRef + supports_images + attachments 路由(spec [llm-contract Image](../.trellis/spec/backend/llm-contract.md)) |
@@ -192,7 +191,6 @@
 ### 3.2 已废弃(历史决策,保留归档)
 
 - **3b-2 完整三栏 UI + rig-core 迁移** — rig-core 0.38.1 弃用(2026-06-09 决策,自研 `Provider` trait 已完整支持多 Provider),3b-2 同步废弃
-- 决策依据见 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION/decisions.md)对应日期条目
 
 ---
 
@@ -208,8 +206,8 @@
 ### 4.2 B7 = Mode 是 A2 权限系统的 UX 层
 
 - **正确语义**:B7(mode = `edit` / `plan` / `yolo`)**不是**独立功能,是 A2 权限系统的**前端 UX 层**;`Background` enum 留位但 UI 不暴露
-- **历史演进**:2026-06-12 落地 4 档(`Chat` / `Plan` / `Review` / `Yolo`),2026-06-13 grill-with-docs session 3 档化(`Chat → Edit` 改名 + `Review` 移除,行为跟 `Plan` 重复);详见 [IMPLEMENTATION §4 决策日志 2026-06-13 "Mode 3 档化"](./IMPLEMENTATION.md)
-- **联动链**:前端 mode 切换 → 后端 ARCHITECTURE §2.2 **⑧a Mode 检查**(plan 模式拒 tool_use / yolo 跳过 ⑨ Tier 4 弹窗但 Tier 2 硬墙仍生效) + ⑨ 权限检查 联动
+- **历史演进**:2026-06-12 落地 4 档(`Chat` / `Plan` / `Review` / `Yolo`),2026-06-13 grill-with-docs session 3 档化(`Chat → Edit` 改名 + `Review` 移除,行为跟 `Plan` 重复)
+- **联动链**:前端 mode 切换 → 后端 LIFECYCLE §2.2 **⑧a Mode 检查**(plan 模式拒 tool_use / yolo 跳过 ⑨ Tier 4 弹窗但 Tier 2 硬墙仍生效) + ⑨ 权限检查 联动
 - **工作组划分**:A2 + B7 合并做(基础设施 + UX 一组),已进 §1.2 已实施
 
 ### 4.3 A2 + B7 合并工作组(2026-06-12/13 完成,已进 §1.2)
@@ -223,11 +221,10 @@
 
 - **本文件改动时机**:
   - 完成 V2 任何一档任何一项 → 移到 §1 已实施(列"做了什么 + 时间",细节走链接,不写 commit hash)
-  - 重新审视 V2 档位(升档 / 降档 / 移除) → 直接编辑 §2 / §3 + 在 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION/decisions.md) 追加 ADR 条目
+  - 重新审视 V2 档位(升档 / 降档 / 移除) → 直接编辑 §2 / §3
   - V2 → V3 重排 → 整体替换本文件或归档到 `docs/_history/`
 - **不做的边界(新增 / 编辑本文件时的自查点,与头部维护承诺一致)**:
   - ❌ 不列具体 commit / PR 编号(具体 commit 走 `git log`,日期即索引)
   - ❌ 不写测试数 / token 数字 / 实现机制等技术细节(具体设计走 BACKLOG.md / 各 spec 文件 / 对应 PRD 归档)
-  - ❌ 不做决策追溯(走 IMPLEMENTATION §4 决策日志)
-  - ✅ 新行 = 一句"做了什么 + 时间 + 链接(到 spec / PRD / 决策日志)"
+  - ✅ 新行 = 一句"做了什么 + 时间 + 链接(到 spec / PRD)"
 - **其他文件引用本文件的统一形式**:`[docs/ROADMAP.md §X](./ROADMAP.md#X)`,不复制路线图内容到其他文件

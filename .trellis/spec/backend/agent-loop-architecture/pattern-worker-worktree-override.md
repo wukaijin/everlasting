@@ -63,7 +63,7 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 
 返回 `OpenOutcome::Stream(first_byte chained with rest)` 或 `Cancelled` — chat_loop 拿到 Stream 后用既有 per-event select loop 消费,**select loop 零改动**。两个 select(首字节 await / backoff sleep)都 `biased` 第一位 `token.cancelled()`,sleep 中取消立即响应。
 
-完整契约(retryable 分类 / Full Jitter 公式 / retry-after 解析 / `LlmError` headers 字段扩展 / 前端 Retrying 事件 / 测试矩阵)见 [llm-contract.md Scenario: LLM Retry / Backoff (A5+)](../llm-contract.md)。决策见 [IMPLEMENTATION §4 2026-07-05](../../../../docs/IMPLEMENTATION/decisions.md)。
+完整契约(retryable 分类 / Full Jitter 公式 / retry-after 解析 / `LlmError` headers 字段扩展 / 前端 Retrying 事件 / 测试矩阵)见 [llm-contract.md Scenario: LLM Retry / Backoff (A5+)](../llm-contract.md)。
 
 ---
 

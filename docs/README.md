@@ -13,10 +13,10 @@
 |------|------|------|--------|
 | [DESIGN.md](./DESIGN.md) | 需求设计 | 已决定的项目能力边界 + 硬约束 | 第一次接触项目,看"我到底在做什么 / 不做什么" |
 | [ROADMAP.md](./ROADMAP.md) | 技术路线图(单一 source of truth) | V2 4 档分类 + 已实施粗粒度归类 + 维护承诺 | 看当前在哪一步、下一步选项、什么不做 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构设计 | 系统怎么搭、请求怎么流 | 写代码前,看"模块怎么分、调用怎么走" |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构设计 | 系统怎么搭(进程拓扑 / 数据流 / 核心决策) | 写代码前,看"模块怎么分、调用怎么走" |
+| [LIFECYCLE.md](./LIFECYCLE.md) | 请求生命周期 | 16 道关卡 walkthrough + 18+ 横切关注点(2026-09-13 拆自 ARCHITECTURE §2) | 调试请求流转 / 追查某关卡行为时 |
 | [TECH.md](./TECH.md) | 技术栈 | 用什么库、为什么 | 选库/做依赖决策时 |
 | [CONTEXT.md](./CONTEXT.md) | 术语表 | 项目 glossary(Token 用量 / Checklist / Subagent / AuditKind / daemon 化进程模型 等) | 写/改跨模块共享概念前对齐术语时 |
-| [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + 决策日志(ADR 性质,只追加,按月分卷,见 [IMPLEMENTATION/decisions.md](./IMPLEMENTATION/decisions.md)) | 想看"为什么这么做"的历史 ADR |
 | [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) | daemon 化编排 | remote-access epic(transport 抽象 / axum daemon / sidecar / httpTransport / ServeDir)的 Phase 编排 + 状态 | 看 daemon 化怎么分阶段落地 / 当前到哪个 Phase |
 | [GROUP-CHAT-API-ROADMAP.md](./GROUP-CHAT-API-ROADMAP.md) | 群聊外部调用 | 审议原语(驱动脚本 / MCP / 控制面 / 运营治理)M0-M4 里程碑 + 待定决策清单 | 看群聊 headless 调用怎么分层推进、哪些技术方案还没定 |
 | [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) | remote 云服务器部署手册 | everlasting-remote 服务端部署(国内 2C2G 服务器 + nginx + remote.sh / deploy-remote.sh) | 部署 remote daemon / 排查部署问题时 |
@@ -34,7 +34,7 @@
 
 **按场景速查**:
 - **第一次接触**:CLAUDE.md → DESIGN.md → ROADMAP.md → ARCHITECTURE.md(看"做什么 / 不做 / 当前在哪步 / 怎么搭")
-- **写代码时反复查**:ARCHITECTURE.md §2 18+ 关卡 / TECH.md 选库 / IMPLEMENTATION/decisions.md ADR
+- **写代码时反复查**:LIFECYCLE.md 18+ 关卡 / TECH.md 选库
 - **评估新功能**:BACKLOG.md §0 五层架构 → 对应章节
 - **撞环境/API 怪事**:HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md / `.trellis/spec/frontend/state-management.md`
 

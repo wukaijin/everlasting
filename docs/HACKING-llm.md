@@ -195,7 +195,7 @@ message_stop
 - [spike-002](./_history/spikes/002-reqwest-anthropic-sse.md) — 这些差异的来源 spike
 - [HACKING-wsl.md](./HACKING-wsl.md) — WSL 环境坑(配对文档)
 - [TECH §2 rig-core](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) — 为什么 spike-002 决定手写 reqwest 不上 rig-core
-- [IMPLEMENTATION §1 自研决策](./IMPLEMENTATION.md#1-决策自己写-agent-core不用-sdk-包装) — LLM 客户端实施位置
+- [TECH §2 rig-core 弃用决策](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) — LLM 客户端实施位置
 
 ---
 
@@ -502,4 +502,4 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 - token 统计不重复(R9):retry_open 首字节前失败不消费 stream → 不 emit `Done` → `update_last_turn_usage` 只记最终成功 turn 一次(集成测试直查 SQL `sessions.last_input_tokens == <success_usage>` 验证)
 - Retry 不入审计(transient UX,不入 AuditKind;prd grill §4 锁定,避免 17 类 AuditKind 膨胀)
 
-**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/_history/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/` + ADR `IMPLEMENTATION/decisions.md 2026-07-05`。
+**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/_history/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/`。

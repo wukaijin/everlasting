@@ -10,9 +10,7 @@
 //! (platform convention: `~/.config/` on Linux, `~/Library/Application
 //! Support/` on macOS, `%APPDIR%` on Windows). The 2026-09-10 hard switch
 //! (task 09-10-memory-everlasting-md-hard-switch) retired the previous
-//! `~/.claude/CLAUDE.md` Claude-Code interop slot — see
-//! `docs/IMPLEMENTATION/decisions-2026-09.md`; the 2026-06-26 decision
-//! that introduced it is preserved verbatim in `decisions-2026-06.md`.
+//! `~/.claude/CLAUDE.md` Claude-Code interop slot.
 //!
 //! Project paths are the raw `projects.path` column from SQLite —
 //! the agent loop has already validated the path through

@@ -1,7 +1,7 @@
 # DESIGN — 需求设计
 
 > Everlasting 的"是什么、为什么、边界在哪"。这是文档的入口。
-> 架构设计见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 架构设计见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -13,7 +13,7 @@
 - 之后再回来能快速回到上下文
 - 讨论时有共同语言
 
-讨论过程中产生的关键决策会沉淀到 [IMPLEMENTATION/decisions-2026-{06,07,08,09}.md 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 `decisions.md`)。
+讨论过程中产生的关键决策按领域沉淀到 `.trellis/spec/` 对应 spec 文件。
 
 ---
 
@@ -54,7 +54,7 @@
 **已具备**(完整 commit 走 `git log`,粗粒度状态见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成)):
 
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
-- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~31 加 C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap / C6 截断统一 / sandbox 8 个新横切关注点)
+- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 18+ 关卡请求生命周期(详见 [LIFECYCLE.md §2](./LIFECYCLE.md#2-harness-设计从用户输入到文件变更的-16-道关卡);2026-08-14~31 加 C7 / C7D / memory-gov / C3+ / budget 硬卡 / softcap / C6 截断统一 / sandbox 8 个新横切关注点)
 - 多项目 / 多 session 管理(SQLite 持久化)
 - 工具集(2026-08-31 实测 30 个注册名 = 28 builtin(含 F4 `web_search` + 08-29 schedule_task 家族三件套)+ 1 stub 元工具 `load_tool_schemas` + 1 动态 dispatch `dispatch_subagent`,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤 + C7D stub + 群聊白名单):
   - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
@@ -67,10 +67,10 @@
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **29 类 AuditKind**(2026-08-31 实测,`SandboxedShellExecution` 为第 29 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)+ **A2+ P3b~P3d 执行期沙盒**(Landlock+seccomp;P3b 08-31 主体落地,P3c 09-01 三态 per-project 配置(`off/readwrite/readonly`,默认 readwrite 全命令进沙盒)/ Plan 只读面 / 前台升级闭环,P3d 09-01 后台升级闭环,详见 [ARCHITECTURE §2.5.16](./ARCHITECTURE.md))(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
-- **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发(2026-08-19 起触发口径统一切换为 system+tools+messages 三部件之和,见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md))→ LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO=0.95`,unified-context-budget 2026-08-19);撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)(详见 [ARCHITECTURE §2.5.5/§2.5.14](./ARCHITECTURE.md))
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 **29 类 AuditKind**(2026-08-31 实测,`SandboxedShellExecution` 为第 29 个,见 `app/src-tauri/src/agent/permissions/audit.rs`;按 Tool/Permission/Mode/Message/Loop/Worker/TaskStateTransition/Budget/UI/Scheduler 域分组)+ web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)+ **A2+ P3b~P3d 执行期沙盒**(Landlock+seccomp;P3b 08-31 主体落地,P3c 09-01 三态 per-project 配置(`off/readwrite/readonly`,默认 readwrite 全命令进沙盒)/ Plan 只读面 / 前台升级闭环,P3d 09-01 后台升级闭环,详见 [LIFECYCLE §2.5.16](./LIFECYCLE.md))(详见 [LIFECYCLE §2.2 ⑨ / §2.5.8](./LIFECYCLE.md))
+- **C3+ LLM 摘要式压缩**(2026-08-18 落地,**替代 C3 MVP 机械丢组 0.80→0.50**):`context_window * 0.85` 触发(2026-08-19 起触发口径统一切换为 system+tools+messages 三部件之和,见 [LIFECYCLE §2.5.5](./LIFECYCLE.md))→ LLM 9 段模板结构化摘要(`task/progress/facts/decisions/open/files/next`)+ `prior-summary` 增量合并 + 保留区存活(`clamp(15k, 10%窗, 25k)` 最近 turn 逐字不丢)+ `cutoff_seq` 水位精确折叠;连续 3 次 LLM 摘要失败熔断回退 C3 机械丢组;叠加关卡⑤统一预算硬卡(`BUDGET_LINE_RATIO=0.95`,unified-context-budget 2026-08-19);撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)(详见 [LIFECYCLE §2.5.5/§2.5.14](./LIFECYCLE.md))
 - C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,撞线兜底见下(2026-08-19 起 MAX_TURNS 软卡询问,非硬停)
-- **MAX_TURNS 软卡**(2026-08-19 落地,**替代硬终断**):单聊主 loop 撞线(缺省 200)改 QuestionStore 询问——继续(+200)/ 压缩后续跑 / 停止,10 分钟超时兜底;worker 与群聊 speaker 段保持硬卡直接 break(详见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md))
+- **MAX_TURNS 软卡**(2026-08-19 落地,**替代硬终断**):单聊主 loop 撞线(缺省 200)改 QuestionStore 询问——继续(+200)/ 压缩后续跑 / 停止,10 分钟超时兜底;worker 与群聊 speaker 段保持硬卡直接 break(详见 [LIFECYCLE §2.5.15](./LIFECYCLE.md) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md))
 - B5 Memory/指令文件系统:4 文件(User / Project × EVERLASTING.md / AGENTS.md)+ `cache_control: ephemeral` 注入 + 100 KiB 硬卡 + tiktoken cl100k_base 估算 + mtime fence 新鲜度校验(notify 已移除)
 - **memory-gov 指令块窗口治理**(2026-08-15 落地):`memory/digest.rs` fence-aware 切节目录(纯机械,标题+首句;`AGENTS.md` primary 永不 digest / `EVERLASTING.md` 且 tokens>600 才 digest)+ `load_memory_sections` 元工具(append,精确寻址 banner label)+ `turn_trace.memory_token INTEGER` 度量(实测指令块 -79.5%,context_window 72% → 28%);`MemoryDigestRegistry` OnceLock 单例 + `memory_digest_enabled` 缺省 on(fail-open,worker / 群聊豁免)
 - **V2 2 期** 自主记忆系统(2026-06-29 落地,5 child epic):agent 自主产生 + 跨 session 召回的经验库 — `autonomous_memories` 表(状态机 candidate→active→verified)+ 两层召回(per-turn FTS5 + 工具前 trigger_key 精确匹配)+ verified 软拦截重判 + 异步卫生 job
@@ -99,8 +99,8 @@
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
-- 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成,见 [decisions-2026-07.md](./IMPLEMENTATION/decisions-2026-07.md))/ ~~`B11` 远程遥控通道~~ **✅ 2026-08-11~13 已实施**(remote-control epic S1~S6b,合并 `94828cb`):中继方案变更为国内 2C2G 服务器 + 自研 Rust remote daemon,PC daemon 权威 + 云端仅中继;详见 [ROADMAP §1.2](./ROADMAP.md))
-- 安全:~~`A2+ P3c` 沙盒 UX 增强档~~ **✅ 2026-09-01 已实施**(P3c:三态 per-project 配置 + Plan 只读面 + 前台升级闭环;P3d:后台升级闭环,见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) A2+ P3c/P3d 行 + [ARCHITECTURE §2.5.16](./ARCHITECTURE.md))。余留 follow-up 仍归 ROADMAP §2:bwrap 可选增强(namespace 路线)+ 网络白名单/egress 代理
+- 触达层:`B10` 飞书 IM(消息收发;B10 曾预期「触发 daemon 化」,实际 daemon 化由远程访问需求先行落地,2026-07 完成)/ ~~`B11` 远程遥控通道~~ **✅ 2026-08-11~13 已实施**(remote-control epic S1~S6b,合并 `94828cb`):中继方案变更为国内 2C2G 服务器 + 自研 Rust remote daemon,PC daemon 权威 + 云端仅中继;详见 [ROADMAP §1.2](./ROADMAP.md))
+- 安全:~~`A2+ P3c` 沙盒 UX 增强档~~ **✅ 2026-09-01 已实施**(P3c:三态 per-project 配置 + Plan 只读面 + 前台升级闭环;P3d:后台升级闭环,见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) A2+ P3c/P3d 行 + [LIFECYCLE §2.5.16](./LIFECYCLE.md))。余留 follow-up 仍归 ROADMAP §2:bwrap 可选增强(namespace 路线)+ 网络白名单/egress 代理
 
 > **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项归 ROADMAP §2 第四档。
 > **2026-08-13 同步**:`B11` 远程遥控通道已由 remote-control epic(S1~S6b)实施,从"未做"移除。
@@ -111,7 +111,7 @@
 > 硬约束 ≠ 排期相关。**这些是项目长期原则,不会因为 V2 / V3 路线图调整而松动**。路线图只动"做什么 + 什么时候做",不动"什么不做"。
 
 **核心不做**(项目根基):
-- ❌ **不包装 Claude Code SDK / Codex SDK** — 违背学习目标(详见 [IMPLEMENTATION.md §1](./IMPLEMENTATION.md#1-决策自己写-agent-core不用-sdk-包装))
+- ❌ **不包装 Claude Code SDK / Codex SDK** — 违背学习目标
 - ❌ **不做通用 agent 框架** — Cline / OpenHands 已经在做
 - ❌ **不做 Windows 端优化** — WSL 跑得好就行(详见下文 §4 WSL 优先)
 - ❌ **不做云端部署 agent core** — 本地优先,agent 进程不出本机。**例外(2026-08 起)**:云端只跑轻量中继 `everlasting-remote`(remote daemon,不持文件、不存 agent 数据,仅转发;见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md))
@@ -134,7 +134,7 @@
 - ❌ **不做 MCP 暴露** — 个人工具,工具集对外开放杠杆不足
 - ❌ **不做 Provider 限流(令牌桶)** — 个人使用场景未撞到限流,后期按需再评估
 
-> 完整"移除"决策矩阵见 [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION/decisions-2026-06.md) + [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
+> 完整"移除"决策矩阵见 [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
 
 ---
 
@@ -168,17 +168,17 @@
 | Rig 0.x breaking change       | ✅ **已无** | rig-core 已弃用(2026-06-09),改自研 Provider trait;rig 升级不再适用 |
 | Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
-| Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#⑨-tool-权限检查) 实施的前提 |
-| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION/decisions-2026-07.md) |
+| Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./LIFECYCLE.md#⑨-tool-权限检查) 实施的前提 |
+| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md) |
 | 上下文爆炸                    | 高     | ✅ **C3+ LLM 摘要式压缩**(2026-08-18,替代 C3 MVP 0.80→0.50)+ 保留区存活(`clamp(15k, 10%窗, 25k)`)+ `cutoff_seq` 水位折叠 + 消息裁剪 + tool result 截断 |
-| 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,撞线走 MAX_TURNS 软卡询问(2026-08-19,见 [ARCHITECTURE §2.5.15](./ARCHITECTURE.md)) |
+| 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,撞线走 MAX_TURNS 软卡询问(2026-08-19,见 [LIFECYCLE §2.5.15](./LIFECYCLE.md)) |
 
 ### 5.2 工程权衡
 
 **复杂度 vs 学习价值**(历史决策,2026-06-04 起 + 2026-06-09 rig-core 弃用):
 - 选 rig:省掉 50% 样板代码,但少学 50% harness 细节
 - 选 reqwest:多学 50%,但每个字节都懂
-- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions-2026-06.md))
+- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait))
 
 **功能范围 vs 完成度**:
 - MVP 8 项都做,每项做到 70 分,胜过做 15 项每项 40 分

@@ -435,8 +435,8 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // audit trail — requires `PRAGMA foreign_keys = ON` which
     // `init_pool` sets on first connection (see line 46).
     //
-    // 2026-06-13 3 档化: drop Review, rename Chat→Edit (ADR in
-    // IMPLEMENTATION.md §4). The `'chat'` / `'review'` backfill
+    // 2026-06-13 3 档化: drop Review, rename Chat→Edit. The
+    // `'chat'` / `'review'` backfill
     // below the v5 migration rewrites historical rows; both
     // UPDATE statements are idempotent (re-running on already-
     // migrated rows is a no-op).

@@ -1,7 +1,7 @@
 # TECH — 技术栈
 
 > Everlasting 的"用什么库、为什么选这个库"。包括锁定项、候选但未定的、不用的、扩展功能新增的,以及选型决策。
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -15,7 +15,7 @@
 | 前端       | **Vue 3.4+** + Vite     | `<script setup>` 组合式 API + Pinia + reka-ui / shadcn-vue + **Tailwind CSS 4**(`^4.3.0`,原子样式层,见 `app/package.json`)+ **marked 18** + **DOMPurify 3.4**(markdown 渲染 + XSS 白名单,见 [HACKING-markdown.md](./HACKING-markdown.md)) |
 | 后端语言   | Rust 1.75+              | edition 2021                             |
 | 异步运行时 | tokio                   | Tauri 已经用 tokio                       |
-| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION/decisions-2026-06.md) |
+| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 |
 | MCP        | **(已移除)** ~~rmcp 0.16.0~~ | A3 MCP 外暴露 2026-06-10 V2 重排移除,rmcp 从 Cargo.toml 删除(详见 §3) |
 | Git 操作   | **git2-rs**             | libgit2 绑定,worktree / diff / commit   |
 | 数据库     | **sqlx** + SQLite       | 编译期 SQL 检查,async 友好;**现为 daemon / remote 两套独立 SQLite**(remote 存 nodes / devices / pairing_codes) |
@@ -106,12 +106,12 @@
 
 ## 2. 决策:rig-core 弃用(2026-06-09),改自研 Provider trait
 
-**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-04 段](./IMPLEMENTATION/decisions-2026-06.md))。理由:
+**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策)。理由:
 - 20+ provider 支持,后期切 OpenAI / 本地模型无痛
 - 自带 `Agent<M>` 抽象,省掉"消息 → tool call → 循环"样板
 - 自带 `MessageStore` trait,接 SQLite 顺
 
-**弃用原因**(2026-06-09 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-09 段](./IMPLEMENTATION/decisions-2026-06.md)):
+**弃用原因**(2026-06-09 决策):
 - 学习价值:自研 Provider trait 比用 rig 学到更多 harness 细节
 - 控制粒度:rig 帮你做了"消息流 → tool call → 循环",自研可以插自定义逻辑(权限、审计、统计)
 - 风险:rig 预 1.0,breaking change 风险,锁版本治标不治本

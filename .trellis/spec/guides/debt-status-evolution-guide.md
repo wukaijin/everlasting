@@ -206,7 +206,7 @@ moment, and quickly became misleading.
       status-description paragraphs
 - [ ] Docstrings rewritten in *behavior* terms, not *status* terms,
       so they survive future status changes
-- [ ] Cross-references in `docs/ARCHITECTURE.md` / `docs/IMPLEMENTATION.md`
+- [ ] Cross-references in `docs/ARCHITECTURE.md`
       / spec files updated to reflect closure (e.g., "(RULE-A-006
       闭环, 2026-06-15)")
 

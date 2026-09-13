@@ -234,7 +234,7 @@ state hint the LLM needs to ground its tool calls.
 ## Decision: CLAUDE.md 硬切换 EVERLASTING.md,`~/.claude/` 互操作槽退役(2026-09-10)
 
 **Context**: 品牌与槽位语义错位(见
-`docs/IMPLEMENTATION/decisions-2026-09.md` 2026-09-10 条;评审
+2026-09-10 硬切换决策;评审
 session `55838776`)。任务
 `09-10-memory-everlasting-md-hard-switch`。
 

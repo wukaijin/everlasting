@@ -423,5 +423,5 @@ turn_trace 自身的 `session_id` CASCADE 兜底(删 session 同时级联两者)
 前端 `useSubagentRunsStore.runTracesByRunId` 粘性缓存);`token_usage_json`
 (run 级累计)仍是 run 行自己的权威字段,per-turn 行是明细不是替代。
 完整切片语义与唯一键重建迁移见
-[token-usage-tracking §worker per-turn 行](./token-usage-tracking.md)
+[token-usage-tracking/08(worker per-turn 行)](./token-usage-tracking/08-worker-per-turn-trace.md)
 与 [database-guidelines §表约束加宽](./database-guidelines.md)。

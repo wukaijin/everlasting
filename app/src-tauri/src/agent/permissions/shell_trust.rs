@@ -72,8 +72,7 @@
 //! before lookup (see [`first_token`]).
 //!
 //! See `.trellis/spec/backend/tool-contract.md` §"Scenario:
-//! Path-based Permission" and `docs/IMPLEMENTATION.md §4` (ADR
-//! 2026-06-14) for the full contract.
+//! Path-based Permission" for the full contract.
 
 /// Outcome of classifying a shell command. Three tiers — the
 /// caller (`permissions::check` Tier 4 Shell branch) maps each to

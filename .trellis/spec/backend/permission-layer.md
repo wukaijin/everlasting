@@ -42,7 +42,7 @@ in the UI (PR2 decision).
 `Mode` serializes lowercase (`"edit"` / `"plan"` / `"yolo"`
 / `"background"`) on the IPC wire. (2026-06-13: `"chat"`
 renamed to `"edit"`, `"review"` removed; breaking wire
-change — see ADR in `docs/IMPLEMENTATION.md §4`.)
+change.)
 
 ### 3. ⑧a Triple Defense (Mode interception)
 

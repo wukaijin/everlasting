@@ -15,13 +15,13 @@
 > 2. **Recall block** — `memory_recall::build_recall_block(recall_text)` returns
 >    a FTS5-recalled autonomous-memory block with **no** `cache_control` (must
 >    NOT shift the breakpoint). Appended to the same `messages[0]` after
->    instruction blocks. See [memory.md §Scenario: Autonomous Memories](./memory.md#scenario-autonomous-memories-db-backed-runtime-memory-v2-2-期) for the full recall contract.
+>    instruction blocks. See [memory/scenario-autonomous-memories.md](./memory/scenario-autonomous-memories.md) for the full recall contract.
 >
 > **CRITICAL**: Recall must **append** to `messages[0]`; a new user message at
 > index 1 shifts the Anthropic cache breakpoint and invalidates the cache on
 > every turn (5-10× cost). Adding `cache_control` to the recall block shifts
 > the breakpoint to the recall block and demotes the instructions from cache
-> anchor. See [memory.md §7 Wrong vs Correct](./memory.md#7-wrong-vs-correct).
+> anchor. See [memory/scenario-am-validation.md §7 Wrong vs Correct](./memory/scenario-am-validation.md).
 >
 > **Per-tool pitfall recall seam (P3, 2026-06-29, 06-29-am-p3-tool-recall)**:
 > in addition to the two `messages[0]` blocks above, the loop has a
@@ -34,7 +34,7 @@
 > structured `Decision` from inside `check()`) is **P5 scope** — P3 is
 > active-only footnote, mounted at the seam, not inside the 5-tier decision
 > chain. See [permission-layer.md §4.2](./permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall) and
-> [memory.md §Pre-tool pitfall recall contract](./memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall).
+> [memory/scenario-am-p3-tool-recall.md](./memory/scenario-am-p3-tool-recall.md).
 >
 > **Per-tool auto-reflect seam (P4, 2026-06-29, 06-29-am-p4-event-reflect)**:
 > the loop has a **post-execute seam** in `chat_loop.rs` (parallel-batch L2
@@ -61,7 +61,7 @@
 > `reflected_pitfall_is_recallable_by_p3_helper`). P4 does NOT touch
 > the 5-tier decision chain, P3's pre-execute seam, or
 > `ToolResultPayload` shape. See
-> [memory.md §Event-driven bypass reflection contract (P4)](./memory.md#event-driven-bypass-reflection-contract-p4-write-side-of-the-loop--2026-06-29-06-29-am-p4-event-reflect).
+> [memory/scenario-am-p4-event-reflection.md](./memory/scenario-am-p4-event-reflection.md).
 
 ---
 

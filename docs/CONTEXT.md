@@ -1,7 +1,7 @@
 # CONTEXT.md
 
 > Everlasting 项目术语表(glossary)。
-> 本文件是 **glossary,只定义术语**;实现决策(schema / 写入时机 / 颜色阈值等)走 `docs/IMPLEMENTATION/decisions-2026-{06,07,08,09}.md` 决策日志(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md)),本文件不重复。
+> 本文件是 **glossary,只定义术语**;实现细节(schema / 写入时机 / 颜色阈值等)走 [ROADMAP.md](./ROADMAP.md) / [ARCHITECTURE.md](./ARCHITECTURE.md) / `.trellis/spec/`,本文件不重复。
 > 词条内的实现状态为**历史快照**(落地时记录),新进展/新特性只更新 [ROADMAP.md](./ROADMAP.md) 与决策日志,不在此追加;术语新增时才加词条。
 
 ---
@@ -51,7 +51,7 @@ Anthropic Messages API 的 token 用量在 SSE 流的 `message_delta` 事件中�
 OpenAI Chat Completions 的 token 用量在流末尾携带(`usage: { prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details: { cached_tokens } }`),**仅在请求体发送 `stream_options: { include_usage: true }` 时**返回。
 
 ### Checklist (agent 自跟踪清单)
-> **实现状态**:**B12 已落地(2026-06-19)**。实现细节(注入机制 / 前端组件 / DB 表)见 [ROADMAP §1.2 B12 行](./ROADMAP.md) + [决策日志 2026-06-18](./IMPLEMENTATION/decisions-2026-06.md),此处只留定义。
+> **实现状态**:**B12 已落地(2026-06-19)**。实现细节(注入机制 / 前端组件 / DB 表)见 [ROADMAP §1.2 B12 行](./ROADMAP.md),此处只留定义。
 
 LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自己写、改、标记完成,用于不丢失自己的计划与进度。对齐 Claude Code 的 `TaskCreate/TaskList`、opencode 的 `todowrite`、Cline 的 plan-act。
 
@@ -65,7 +65,7 @@ LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自
 ---
 
 ### Subagent / dispatch_subagent
-父 session 通过 `dispatch_subagent` tool 派 worker agent 跑独立任务。worker 拥有**独立 context + token 预算**,完成 / 取消 / 失败后回填 summary。实现细节见 [ROADMAP §1.2 B6/L3a-d 行](./ROADMAP.md#12-路线图外完成) + [决策日志 2026-06-18/20/21](./IMPLEMENTATION/decisions-2026-06.md);`app/src-tauri/src/agent/subagent/dispatch.rs` 实现 `run_subagent`。
+父 session 通过 `dispatch_subagent` tool 派 worker agent 跑独立任务。worker 拥有**独立 context + token 预算**,完成 / 取消 / 失败后回填 summary。实现细节见 [ROADMAP §1.2 B6/L3a-d 行](./ROADMAP.md#12-路线图外完成);`app/src-tauri/src/agent/subagent/dispatch.rs` 实现 `run_subagent`。
 
 ### SubagentRun
 `subagent_runs` 表一行(`db/migrations/schema.rs` 的 subagent_runs 段),完整 schema: `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` / `started_at` / `finished_at` / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation`(L3b PR1 起)。
@@ -76,16 +76,16 @@ LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自
 - **B1 关系(2026-08-16)**:SubagentRun 本身无新列,但 worker subagent 处理的图片 attachment 落 `messages.metadata.attachments[]` JSON 引用(父 session `parent_session_id` 共享,worker 与 parent 共用同一 `messages` 主表),通过 `parent_session_id` 反查可拿到 worker 期间产生的所有 messages / metadata / attachments
 
 ### Worker Worktree
-L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch 前缀 `worker/<run_id>` / `git worktree lock` 跑期间 / merge·discard·sweep 生命周期)。机制细节见 [ROADMAP §1.2 L3b 行](./ROADMAP.md#12-路线图外完成) + [决策日志 2026-06-27/28](./IMPLEMENTATION/decisions-2026-06.md)。
+L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch 前缀 `worker/<run_id>` / `git worktree lock` 跑期间 / merge·discard·sweep 生命周期)。机制细节见 [ROADMAP §1.2 L3b 行](./ROADMAP.md#12-路线图外完成)。
 
 ### BackgroundShell (L1a 后台 shell)
-`run_background_shell` 启动后台 shell(tokio Child,**不带 PTY**,L1b follow-up 接 `portable-pty`),`shell_status` 拉 exit_code,`shell_kill` 终止。实现细节(Registry trait / 三触发 `select!` / Q1-Q7 决策 / 生命周期钩子)见 [ROADMAP §1.2 L1 行](./ROADMAP.md#12-路线图外完成) + [决策日志 2026-06-19](./IMPLEMENTATION/decisions-2026-06.md)。
+`run_background_shell` 启动后台 shell(tokio Child,**不带 PTY**,L1b follow-up 接 `portable-pty`),`shell_status` 拉 exit_code,`shell_kill` 终止。实现细节(Registry trait / 三触发 `select!` / Q1-Q7 决策 / 生命周期钩子)见 [ROADMAP §1.2 L1 行](./ROADMAP.md#12-路线图外完成)。
 
 ### MAX_TURNS
 当前常量 `200`(`app/src-tauri/src/agent/mod.rs:99`)。Agent Loop 单 request 内最大 turn 数。实现状态见 [ROADMAP §1.2 softcap 行](./ROADMAP.md#12-路线图外完成) + [pattern-turn-limit-softcap](../.trellis/spec/backend/agent-loop-architecture/pattern-turn-limit-softcap.md);变更轨迹 `20 → 50 → 200`。
 
 ### Context Compression Thresholds (C3+ 替代 C3,2026-08-18)
-原 C3 阈值(`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,2026-06-12 落地)已被 **C3+ LLM 摘要式压缩(2026-08-18)** 替换。当前实现:0.85 触发 → LLM 9 段模板摘要 + 保留区存活 + `cutoff_seq` 水位折叠,摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`;连续 3 次失败熔断回退 C3 机械丢组;实现细节见 [ROADMAP §1.2 C3+ 行](./ROADMAP.md#12-路线图外完成) + [ARCHITECTURE §2.5.5/§2.5.13](./ARCHITECTURE.md)。
+原 C3 阈值(`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,2026-06-12 落地)已被 **C3+ LLM 摘要式压缩(2026-08-18)** 替换。当前实现:0.85 触发 → LLM 9 段模板摘要 + 保留区存活 + `cutoff_seq` 水位折叠,摘要行落 `messages` 表 `metadata.kind = "compaction_summary"`;连续 3 次失败熔断回退 C3 机械丢组;实现细节见 [ROADMAP §1.2 C3+ 行](./ROADMAP.md#12-路线图外完成) + [LIFECYCLE §2.5.5/§2.5.13](./LIFECYCLE.md)。
 
 ### Loop Detection (C2 循环检测)
 **分级触发**取代原文单一 0.9 阈值,因单一阈值无法适配短 / 长 input:
@@ -96,7 +96,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 撞线兜底见上节 MAX_TURNS(2026-08-19 起软卡询问,非硬停)。实现见 `app/src-tauri/src/agent/loop_detection.rs`;C2+ 主动干预(每 run `loop_hit_count` N=3 + 三分支询问)见 [ROADMAP §1.2 C2+ 行](./ROADMAP.md#12-路线图外完成)。
 
 ### AuditKind
-`session_audit_events.kind` 字符串枚举,**2026-08-31 实测 29 类**,按域分组(完整 29 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [ARCHITECTURE §2.5.8](./ARCHITECTURE.md)):
+`session_audit_events.kind` 字符串枚举,**2026-08-31 实测 29 类**,按域分组(完整 29 variant 列表见 `app/src-tauri/src/agent/permissions/audit.rs` + [LIFECYCLE §2.5.8](./LIFECYCLE.md)):
 
 - **Tool 域(6)**:ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / SandboxedShellExecution(P3b 08-31 起,沙盒档(sandbox_policy ≠ off,含 Plan 只读面)shell 命令沙盒执行完成,payload 带 command_sha256_12 前缀 + ruleset(含 face)+ tool_name)/ ToolDeniedYolo
 - **Permission 域(3)**:PermissionGranted / PermissionTimeout / RequestCancelled
@@ -153,7 +153,7 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
-agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语。详见 [ARCHITECTURE §1/§4](./ARCHITECTURE.md)。实现细节(phase 拆分 / transport 抽象 / SSE / sidecar 管理)见 [ROADMAP §1.2 "daemon 化" 行](./ROADMAP.md#12-路线图外完成) + [决策日志 2026-07-20~23](./IMPLEMENTATION/decisions-2026-07.md)。
+agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语。详见 [ARCHITECTURE §1/§4](./ARCHITECTURE.md)。实现细节(phase 拆分 / transport 抽象 / SSE / sidecar 管理)见 [ROADMAP §1.2 "daemon 化" 行](./ROADMAP.md#12-路线图外完成)。
 
 - **everlasting-daemon** — cargo bin target(`app/src-tauri/src/bin/everlasting-daemon.rs`),跑 agent core 的独立进程。axum HTTP server,监听 `0.0.0.0:7456`,持有 SQLite pool(WAL writer)。
 - **sidecar** — GUI 进程(Tauri)把 daemon 作为子进程 spawn 出来的模式(`sidecar.rs::spawn_and_manage`)。`RunEvent::Exit` 钩子 kill sidecar,无孤儿进程。spawn args:`--port` + `--data-dir`(对齐 GUI 的 `app_data_dir`,保证开同一个 SQLite)。
@@ -210,6 +210,6 @@ daemon 常驻调度器触发的本地定时任务。相关术语:
 
 ## 相关决策
 
-- 设计决策走 [`docs/IMPLEMENTATION/decisions-2026-{06,07,08,09}.md` 决策日志](./IMPLEMENTATION/)(按月分卷,入口索引在 [`decisions.md`](./IMPLEMENTATION/decisions.md);本月新建条目落 `decisions-YYYY-MM.md` + 更新 `[ARCHITECTURE.md](./ARCHITECTURE.md)` 对应章节)
+- 设计决策按领域沉淀到 `.trellis/spec/` 对应 spec 文件(2026-09-13 起决策日志 `docs/IMPLEMENTATION/` 退役)
 - A4 Token 相关术语、Checklist(agent 自跟踪清单)均已落地(详见上文 Checklist 条目,B12 2026-06-19),作为术语定义保留
 - 跨层契约走 `.trellis/spec/backend/llm-contract.md` "Scenario: Token Usage Tracking" 段

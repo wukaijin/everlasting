@@ -55,4 +55,4 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
 
 ---
 
-> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../../../docs/IMPLEMENTATION.md)
+> 历史 ADR:RULE-A-007(2026-06-17)/ RULE-A-015(2026-06-20)——原载决策日志,2026-09-13 随决策日志退役删除,git 历史可查

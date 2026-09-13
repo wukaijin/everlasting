@@ -254,7 +254,7 @@ WHERE session_id = 'YOUR_SESSION_ID'
 
 - **默认走项目 IPC,不要直连修改**:CRUD 逻辑在 `app/src-tauri/src/db/{table}.rs`,经过 type-safe 包装 + business rules;直连 UPDATE 可能绕过"tool_use/tool_result 配对保护"等不变量,导致 agent loop 状态错乱
 - **直连只读时也别用生产 DB**:复制到 `/tmp/everlasting-debug.db` 再操作(`sqlite3 ~/.local/.../everlasting.db ".backup /tmp/everlasting-debug.db"`)
-- **RULE-D-001(api_key 加密)**:不要 SELECT `providers` 表查 api_key — 已经不存明文(列从 `api_key` 改为 `api_key_enc` + `key_migrated_at` 哨兵,详见 [IMPLEMENTATION §4 2026-06-24](./IMPLEMENTATION/decisions-2026-06.md))
+- **RULE-D-001(api_key 加密)**:不要 SELECT `providers` 表查 api_key — 已经不存明文(列从 `api_key` 改为 `api_key_enc` + `key_migrated_at` 哨兵)
 - **DB 文件泄露威胁模型**:见 `app/src-tauri/src/crypto.rs:5` 注释,无 machine-id 解不开 `api_key_enc`;但 session 标题 / message 历史仍是明文,**DB 文件跟 OS 账号权限走**
 - **调试时停 daemon(daemon 化后 2026-07 同步)**:**持有 WAL writer 的是 daemon 进程**,不是 GUI。Thin 模式(默认)下 GUI 根本不开 `SqlitePool`(`sidecar.rs` 注释:Thin 模式 GUI does NOT load `AppState` / does NOT open a `SqlitePool`)。直连查询安全(`-readonly` 无写竞争),但**不要**在 daemon 运行时用写模式(`-cmd "UPDATE..."`)连接,会撞 `SQLITE_BUSY`。要安全地直连写:先 `./scripts/daemon.sh stop` 停 daemon(Thin 模式下 GUI 还开着也不影响,GUI 没开 pool)。Full 模式(`?transport=tauri`)例外 —— 那是 GUI 进程持有 writer,要停 GUI
 
@@ -280,7 +280,6 @@ WHERE session_id = 'YOUR_SESSION_ID'
 - [docs/ARCHITECTURE.md §1.2 数据流](./ARCHITECTURE.md) — session 切换 / message 持久化的架构意图
 - [docs/REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md) — remote 云端部署手册(systemd + nginx + 配对);§2.1 remote 侧 DB 的部署上下文
 - [docs/REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md) — remote E2E 验收手册(配对 / PWA 手机访问)
-- [docs/IMPLEMENTATION/decisions-2026-06.md 2026-06-17 D3 决策日志](./IMPLEMENTATION/decisions-2026-06.md) — session 内消息编辑/重发的 partial persist 逻辑
 - [docs/HACKING-llm.md](./HACKING-llm.md) — token 计数的 LLM provider 差异(Anthropic SSE vs OpenAI Stream)
 - `app/src-tauri/src/db/` — schema + CRUD 函数(权威)
 - `.trellis/spec/backend/llm-contract.md` — DB column → wire shape 对应

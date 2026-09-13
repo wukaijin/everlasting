@@ -4,7 +4,7 @@
 > **注**:飞书(§6 IM 通道)/ 云端同步(§7 云端状态同步)两节已于 2026-06-25 随附录 A 归档,见 [`docs/_history/backlog-appendix-A.md`](./_history/backlog-appendix-A.md);本文档正文不再包含这两节,下文相关引用均指向归档。
 > **优先级 / 排期归 [ROADMAP.md](./ROADMAP.md),本文档只做技术评估**。
 >
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),技术路线图见 [ROADMAP.md](./ROADMAP.md)。
 
 ---
 
@@ -142,7 +142,7 @@
 - 跨机器 worktree 路径冲突(用 session_id 隔离)
 - 源机器断网时目标机器不能接续 — 设计选择,不是 bug
 
-> 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION/decisions.md)。本节功能在 [ROADMAP §2 第四档(最远远期)](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),前期不展开实现细节。
+> 💡 本节功能在 [ROADMAP §2 第四档(最远远期)](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),前期不展开实现细节。
 
 ---
 

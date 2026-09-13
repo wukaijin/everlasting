@@ -261,7 +261,7 @@ signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
 磁盘治理起,`db/backup.rs::prune_backups` 原地改):**大小预算自适应** ——
 从新到旧保留,累计超 200 MiB(env `EVERLASTING_BACKUP_BUDGET_MB` 覆盖)
 即停,**至少 2 份**(超预算也保留)、最多仍 7 份。契约细节见
-[database-guidelines "DB 快照备份"](../database-guidelines.md) +
+[database-guidelines "DB 快照备份"](./database-guidelines.md) +
 [disk-governance](disk-governance.md)。
 **不要**把 spawn 挪进 bin 内联 —— lib 的 `db` 模块私有,沿用
 "wrapper so the bin never touches private modules" 先例。

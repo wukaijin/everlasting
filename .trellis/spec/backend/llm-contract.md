@@ -12,7 +12,7 @@
 >
 > **详细 scenario**(2026-06-21 doc-trim 拆出):
 > - [latency-tracking.md](./latency-tracking.md) — F5(2026-06-11)+ Per-Turn Tracking follow-up
-> - [token-usage-tracking.md](./token-usage-tracking.md) — A4(2026-06-10)
+> - [token-usage-tracking.md](./token-usage-tracking.md) — A4 核心 + 11 Scenario 分篇(2026-06-10~09-08)
 > - [permission-layer.md](./permission-layer.md) — A2 + B7(2026-06-13)⑨ 关 5-tier
 >
 > **何时读本文**:涉及 `ContentBlock` / `ChatMessage` / `ChatEvent` 核心类型 / tool_use 原子性反模式 / DeepSeek fix / Retry / E2 trace 时。Extended Thinking 持久化契约见 [extended-thinking.md](./llm-contract/extended-thinking.md)。
@@ -250,7 +250,7 @@ empty sig + UUID sig 混合 / 全 UUID 都可能 400；具体 threshold 不稳�
 
 ## Scenario: LLM Retry / Backoff (A5+, 2026-07-05)
 
-> 堵长会话 5xx / 429 / 网络断连整轮重来的体验缺口。Provider 层补网络重试 + Full Jitter 退避 + retry-after 解析,SSE 断连走"首字节前重试"安全边界。调研:`docs/research/llm-network-resilience-survey.md`;完整 PRD `.trellis/tasks/07-04-a5plus-llm-network-resilience/`;决策见 [IMPLEMENTATION §4 2026-07-05](../../../docs/IMPLEMENTATION/decisions.md)。
+> 堵长会话 5xx / 429 / 网络断连整轮重来的体验缺口。Provider 层补网络重试 + Full Jitter 退避 + retry-after 解析,SSE 断连走"首字节前重试"安全边界。调研:`docs/research/llm-network-resilience-survey.md`;完整 PRD `.trellis/tasks/07-04-a5plus-llm-network-resilience/`。
 
 ###1. Scope / Trigger
 

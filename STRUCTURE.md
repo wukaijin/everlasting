@@ -514,7 +514,7 @@ listen('tool:call', (e) => { /* ToolCallPayload */ });
 listen('tool:result', (e) => { /* ToolResultPayload */ });
 ```
 
-**设计决策**: 高频 token走 `chat-event`(避免 IPC调度开销);低频 tool call/result走独立事件名(前端可选择性 filter)。详见 `docs/IMPLEMENTATION/decisions.md`。
+**设计决策**: 高频 token走 `chat-event`(避免 IPC调度开销);低频 tool call/result走独立事件名(前端可选择性 filter)。
 
 ---
 
@@ -717,8 +717,8 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 ├── STRUCTURE.md # ← 本文件
 ├── docs/ # 设计文档(全中文)
 │ ├── README.md # docs索引
-│ ├── ARCHITECTURE.md #架构 +16阶段生命周期
-│ ├── IMPLEMENTATION.md #8步路线图 +决策日志
+│ ├── ARCHITECTURE.md #架构 +核心决策
+│ ├── LIFECYCLE.md #16 道关卡请求生命周期(09-13 拆自 ARCHITECTURE §2)
 │ ├── DESIGN.md / TECH.md / BACKLOG.md / ROADMAP.md # ★ 技术路线图(单一 source of truth)
 │ ├── CONTEXT.md # ★ 术语表 / BUGLIST.md # ★ 缺陷跟踪 / DEBUG_DB.md # ★ SQLite 直连调试
 │ ├── HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md
@@ -737,12 +737,11 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 ###13.2文档读取顺序(新 session)
 
 1. **CLAUDE.md**(必读)
-2. **IMPLEMENTATION.md**(必读)
-3. **ROADMAP.md**(看当前进度)
-4. **DESIGN.md**(必读)
-5. **ARCHITECTURE.md**(写代码时反复查)
-6. **STRUCTURE.md**(本文,代码结构)
-7. **HACKING-***(撞坑时查)
+2. **ROADMAP.md**(看当前进度)
+3. **DESIGN.md**(必读)
+4. **ARCHITECTURE.md**(写代码时反复查)
+5. **STRUCTURE.md**(本文,代码结构)
+6. **HACKING-***(撞坑时查)
 8. **.trellis/spec/***(改代码前必读)
 9. **.trellis/tasks/archive/2026-06/***(历史决策)
 
@@ -794,8 +793,8 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 | **CLAUDE.md** | 项目概览 +常用命令 + Architecture段(引用本文件) + Env + Tech Stack |
 | **README.md** | 项目一句话 +状态 +链接 |
 | **STRUCTURE.md** (本文) | 代码结构全景(13 节) |
-| **docs/ARCHITECTURE.md** | 系统架构 +16阶段生命周期 |
-| **docs/IMPLEMENTATION.md** |8步路线图 +决策日志 |
+| **docs/ARCHITECTURE.md** | 系统架构 +核心决策 |
+| **docs/LIFECYCLE.md** | 16 道关卡请求生命周期 |
 | **docs/HACKING-*** |踩坑记录(WSL / LLM / markdown) |
 
 ###维护边界
@@ -818,9 +817,8 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 | 环境变量增删 | 本文件 §10 + CLAUDE.md |
 |依赖增删 | 本文件 §12 + CLAUDE.md + docs/TECH.md |
 |架构概念变化 | docs/ARCHITECTURE.md |
-|路线图变更 | docs/IMPLEMENTATION.md |
+|路线图变更 | docs/ROADMAP.md |
 |撞新坑 | docs/HACKING-*.md |
-|实施后决策变更 | docs/IMPLEMENTATION/decisions.md |
 
 ---
 

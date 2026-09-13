@@ -242,8 +242,7 @@ Invariants unchanged: Tier 2 kill-list, Yolo bypass, Mode three-
 tier semantics, grant schema (`tool`/`prefix`/`path`), 17
 AuditKind, `shell.rs` execution hardening, "when in doubt, Ask".
 See `agent/permissions/shell_trust.rs` module docs for the
-classification algorithm; ADR in `docs/IMPLEMENTATION.md §4`
-(2026-07-04).
+classification algorithm (2026-07-04).
 
 #### Lifecycle hooks (3 trigger points)
 

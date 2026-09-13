@@ -65,5 +65,5 @@ User 改下拉
 
 ### 设计决策完整版
 
-见 `IMPLEMENTATION.md` §4 "2026-07-03 — B6+ C" D1-D6 决策日志 + `.trellis/spec/backend/subagent-runs-schema.md` "B6+ C additions" 段 + `.trellis/spec/backend/agent-loop-architecture.md` `run_chat_loop` 参数表 row 25(B6+ C 决策)。本节仅为前端 cross-ref 锚点。
+见 `.trellis/spec/backend/subagent-runs-schema.md` "B6+ C additions" 段 + `.trellis/spec/backend/agent-loop-architecture.md` `run_chat_loop` 参数表 row 25(B6+ C 决策)。本节仅为前端 cross-ref 锚点。
 

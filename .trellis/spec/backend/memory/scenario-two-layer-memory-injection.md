@@ -97,8 +97,7 @@ pub fn build_layers_block(layers: &[MemoryLayer]) -> String;
 > for that — it returns a `Vec<ContentBlock>` shaped for the
 > synthetic user message and carries `cache_control: Some(Ephemeral)`
 > on the first block so Anthropic can cache the 4 instruction
-> files across the 20-turn loop. See `docs/IMPLEMENTATION.md §4`
-> 2026-06-11 entry for the full rationale.
+> files across the 20-turn loop.
 
 ```rust
 // app/src-tauri/src/memory/loader.rs (added 2026-06-11)

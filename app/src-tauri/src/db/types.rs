@@ -205,7 +205,7 @@ impl WorktreeState {
 // future PR can add it without a schema change; the MVP UI does
 // not expose it.
 //
-// 3 档化决策 (2026-06-13 ADR-lite in IMPLEMENTATION.md §4):
+// 3 档化决策 (2026-06-13):
 // - Chat 改名 Edit (语义更清晰 — "I want edits to happen")
 // - Review 删除 (行为与 Plan 重复, system prompt 强调的"只读分析"价值不大)
 // - Yolo 保留

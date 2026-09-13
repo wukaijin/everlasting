@@ -66,9 +66,8 @@
 //! - [`dangerous`] / [`shell_trust`] — self-contained pure-fn
 //!   siblings (unchanged by the 2026-06-23 split)
 //!
-//! See `docs/_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md`
-//! for the 10 re-grill decisions; see
-//! `docs/IMPLEMENTATION.md §4` for the ADR.
+//! See `docs/_history/reviews/REVIEW-a2-b7-permission-mode-plan-2026-06-13.md`
+//! for the 10 re-grill decisions.
 
 pub mod ask;
 pub mod audit;

@@ -59,6 +59,10 @@ last load — so the next turn always sees the latest content.
 ## Part Index (08-07-large-file-splitting)
 
 - [scenario-two-layer-memory-injection](./memory/scenario-two-layer-memory-injection.md)
-- [scenario-autonomous-memories](./memory/scenario-autonomous-memories.md)
+- [scenario-autonomous-memories](./memory/scenario-autonomous-memories.md) — 核心(两系统边界 / DB schema / recall 注入 / remember tool / 权限 + 跨项目泄漏 Addendum)
+- [scenario-am-p3-tool-recall](./memory/scenario-am-p3-tool-recall.md) — P3 pre-tool pitfall recall
+- [scenario-am-p4-event-reflection](./memory/scenario-am-p4-event-reflection.md) — P4 事件驱动 bypass reflection
+- [scenario-am-p5-quality-layer](./memory/scenario-am-p5-quality-layer.md) — P5 质量层(verified 软拦截 / 状态机晋升 / 卫生任务)
+- [scenario-am-validation](./memory/scenario-am-validation.md) — §4-§7 验证体系(矩阵 / 用例 / 测试清单 / Wrong-vs-Correct)
 - [scenario-observability-management](./memory/scenario-observability-management.md)
 - [decisions](./memory/decisions.md)

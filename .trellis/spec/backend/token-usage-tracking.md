@@ -2,6 +2,8 @@
 
 # Token Usage Tracking (A4, 2026-06-10)
 
+> **分篇**(2026-09-13):本文保留 A4 核心契约 + OOS 边界;后续追加的 11 个 Scenario 已按 tool-contract 模式拆至 `token-usage-tracking/` 子目录(一 Scenario 一文件,原锚点以 stub 保留在本文对应位置)。
+
 > **Source**: extracted from `.trellis/spec/backend/llm-contract.md` §"Scenario: Token Usage Tracking" (2026-06-21 doc-trim task).
 >
 > **Cross-references**:
@@ -641,201 +643,11 @@ actually being called.
 
 ## Scenario: Group-Chat Per-Speaker Cache Rate (2026-08-10, task 08-10-group-chat-cache-rate)
 
-### 1. Scope / Trigger
-
-- Trigger: 群聊会话中每个参与者(含主持人)展示各自**最近一次 LLM 调用**的缓存率。
-- 为什么不能读 `sessions.last_*`:群聊每轮(主持人/参与者)都覆盖写同一 session 的 `last_*` 快照,最后一位发言者胜出——**group chat 的 `last_*` 是"最后一位发言者"的值,不是聚合也分不出说话人**。per-speaker 数据只能走 `turn_trace`。
-
-### 2. 数据模式:turn_trace × messages.speaker join(关键)
-
-`turn_trace(session_id, seq, token_usage_json)` 行**没有 speaker 列**,但群聊里 `messages` 的 assistant 行带 `speaker`(主持人 = `"moderator"`,参与者 = `participant.name`),且 **assistant 行 seq == 该轮 turn 的 seq**(`chat_loop/drive.rs` push 时用当前 seq 后 `seq += 1`)。seq 群聊内全局连续(`chat_loop/init.rs` 每次调用从 DB max(seq)+1 起)。因此:
-
-```sql
-SELECT m.speaker,
-       COALESCE(json_extract(t.token_usage_json, '$.cache_read_input_tokens'), 0) AS cache_read,
-       COALESCE(json_extract(t.token_usage_json, '$.context_input_tokens'), 0)   AS context_input
-FROM messages m
-JOIN turn_trace t ON t.session_id = m.session_id AND t.seq = m.seq
-WHERE m.session_id = ?1
-  AND m.role = 'assistant'
-  AND m.speaker IS NOT NULL          -- 普通聊天/worker 行 speaker 为 NULL,天然排除
-  AND t.token_usage_json IS NOT NULL -- 该轮无 usage(取消/出错/只写了其他维度)
-  AND m.seq = (                       -- 每 speaker 最近一次发言轮
-      SELECT MAX(m2.seq) FROM messages m2
-      WHERE m2.session_id = m.session_id AND m2.speaker = m.speaker
-        AND m2.role = 'assistant'
-  )
-```
-
-- rewrite 产物(user role 带 speaker)被 `role='assistant'` 过滤。
-- 同一轮重试:`turn_trace` 按 (session, seq) 覆盖(`trace.rs` upsert),天然取最后一次 usage。
-- **不回退语义**(locked):某 speaker 最新一轮无 usage(如取消)→ 该 speaker 整行不返回,前端显示 "—";**不**回退到更早的有 usage 轮次。理由:缓存率 = "最近一次调用"的单次语义,最近一次调用没有 usage 就没有可算的数。
-
-### 3. 缓存率口径(单次)
-
-- `cache_rate = cache_read_input_tokens / context_input_tokens`,单次调用语义,非多轮聚合。
-- 分母**必须**用 `context_input_tokens`(跨 provider 归一化总输入),不能用 `input_tokens`:Anthropic 的 `input_tokens` 不含 cache read/creation,OpenAI 的 `prompt_tokens` 已含 cached——用 `input_tokens` 会让两 provider 的命中率口径不一致。
-- `context_input <= 0`(legacy 4 字段行,`#[serde(default)]` 补 0)→ 前端显示 "—",不在 SQL 过滤(保留数据,前端决定展示)。
-
-### 4. 契约
-
-```rust
-// db/trace.rs
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SpeakerCacheUsage {
-    pub speaker: String,     // "moderator" 或 participant.name
-    pub cache_read: u32,     // 该 speaker 最近一次有 usage 轮次的 cache_read_input_tokens
-    pub context_input: u32,  // 同上轮的 context_input_tokens
-}
-pub async fn list_speaker_cache_usage(pool: &SqlitePool, session_id: &str)
-    -> Result<Vec<SpeakerCacheUsage>, sqlx::Error>
-```
-
-IPC: `group_chat_cache_rates(sessionId)` → `Vec<SpeakerCacheUsage>`,三处注册(tauri invoke_handler + daemon route + `http.ts` CMD_TO_DOMAIN)。
-
-### 5. 边界 / 测试要点
-
-| 边界 | 行为 |
-|------|------|
-| `clear_session_trace` 清空 turn_trace | 查询返回空 → 全部 "—"(与回看功能共用数据,预期) |
-| speaker 最新轮无 usage | 整行不返回(不回退,见 §2) |
-| legacy 4 字段 JSON 缺 context_input | `COALESCE(json_extract(...), 0)` → 0 → 前端 "—" |
-| 兼容代理 cache 字段全 0 | 缓存率 0%(真实数据,非错误) |
-| 主持人 | speaker 固定 `"moderator"`(`group_chat_loop.rs` emit 值),model = `sessions.model_id`(前端 `SessionSummary` 已有) |
-
-测试要点:每 speaker 只返回 max seq 轮的数字、无 usage 轮被跳过、最新轮无 usage 不回退(用"seq 9 有 usage + seq 10 无 usage"的 fixture 锁定,否则测试在两种 SQL 解释下都通过)、user/speaker-NULL 行排除。前端百分比计算是纯函数(放 `utils/tokenUsage.ts` 或同类),`context_input <= 0 → null` 可单测。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/01-group-chat-cache-rate.md`](./token-usage-tracking/01-group-chat-cache-rate.md)。
 
 ## Scenario: tools[] Token Measurement + Static Pruning (C7, 2026-08-14)
 
-> 配套 task `08-14-c7-tools-token-governance`。把 `tools[]` 数组当作与
-> messages 并列的**上下文治理对象**:R1 量(MVP)、R3 静态裁剪(MVP)、
-> R2 Anthropic cache 断点(Phase 2)、D Stub 注册(Phase 2)。本 scenario
-> 锁 MVP 两路径的可执行契约 + cache 率口径红线。
-
-### 1. Scope / Trigger
-
-- Trigger:多 turn 任务里 `tools[]` 每 turn 全量拼装下发(~7-8k tok/轮,
-  单对话首回合 context 的大头 —— 实测 session 50b91178 一句"早上好"
-  input=12838),挤占有效历史、提前触发 C3 压缩。C7 把它从"0 分的请求
-  前缀段"变成可量化 + 可裁剪的治理对象。
-- 为什么 code-spec depth:migration(新列)+ 跨层契约(tools_token 从
-  Rust 估算 → SQLite → Pinia → TracePanel,且与 cache 率口径交织)→
-  一处口径错(double-count)就污染所有占比展示。
-
-### 2. DB Schema(`turn_trace.tools_token`)
-
-```sql
--- CREATE TABLE 段(greenfield 已含)+ 幂等 ALTER(existing)。nullable:
--- NULL = pre-column 行 / worker(skip_persist)轮 / 估算被跳过。
-ALTER TABLE turn_trace ADD COLUMN tools_token INTEGER;
-```
-
-migration helper:`add_turn_trace_column_if_missing(pool, "tools_token",
-"INTEGER")`(`db/migrations/columns.rs`,镜像 `add_session_audit_events
-_column_if_missing` 的 PRAGMA-table_info probe 模式)。
-
-### 3. Signatures
-
-```rust
-// db/trace.rs —— tools_token 与 token_usage_json 同 upsert 写入
-//   (都源自 Done-event 写点;UNIQUE(session_id,seq) 冲突时两列一起重写)
-pub async fn upsert_turn_trace_token(
-    pool: &SqlitePool,
-    session_id: &str,
-    seq: i64,
-    usage: &TokenUsage,
-    tools_token: Option<u32>,   // C7: cl100k of serialized tools[] JSON
-) -> Result<(), sqlx::Error>
-
-#[serde(rename_all = "camelCase")]  // → wire "toolsToken"
-pub struct TurnTraceRow { /* ... */ pub tools_token: Option<i64> }
-
-// tools/mod.rs —— R3 静态裁剪(provider 之前的 schema 层)
-pub fn filter_tools_for_session_type(
-    tools: Vec<ToolDef>,
-    is_group_chat: bool,
-) -> Vec<ToolDef>   // 非 group_chat 砍 nominate_speaker + end_discussion
-```
-
-估算点:`agent/chat_loop/drive.rs` 在 `turn_tool_defs` freeze 后(完整
-过滤链 mode→workflow→session_type + dispatch_subagent append 之后)、move
-进 `retry_open` 之前,`serde_json::to_string(&turn_tool_defs)` →
-`memory::tokens::count_tokens`(cl100k,`tokio::sync::Mutex` 守护,µs–low-ms,
-inline 安全)。best-effort:序列化失败 → 空串 → 0,不阻塞 turn。
-
-### 4. Contracts — cache 率口径(关键,勿 double-count)
-
-`context_input_tokens` **已含 tools**(provider 侧进入 context window 的
-全部 prompt token;见 §2 Anthropic=input+cc+cr / OpenAI=prompt_tokens)。
-`tools_token` 是对其中 tools[] 这一**切片**的单独估算 —— 它是
-`context_input` 的**子集**,不是额外项。
-
-- TracePanel tools 占比公式 = `tools_token / context_input_tokens`。
-- ⚠️ **禁止** `tools_token / (context_input_tokens + tools_token)`
-  —— context_input 已含 tools,加回是 double-count,系统性压低占比。
-- ⚠️ **禁止**把 tools_token 加进 cache 率分母(`cache_read /
-  context_input`)—— cache 率现状已被 tools 稀释偏低(tools 无 cache 断点;
-  R2 Phase 2 后 cache_read 才含 tools);tools_token 只**单列**展示,
-  不混入 cache 率分子或分母。
-- wire:`tools_token` 经 `TurnTraceRow`(camelCase)→ 前端
-  `TurnTraceRow.toolsToken` → `TurnTrace.toolsToken?`(undefined =
-  pre-column / live 路径未带)。`list_turn_traces` IPC 自动透传,无需改
-  IPC handler。live 路径(无 reload)tools_token 暂为 undefined(design
-  决定:不为此加 ChatEvent 字段),reload 后(回看)落盘值出现。
-
-### 5. R3 静态裁剪(跨层影响 + 先例)
-
-过滤链 `drive.rs:504`:`filter_tools_for_session_type(filter_tools_for_
-workflow(filter_tools_for_mode(...)))`。三环都是纯 `Vec<ToolDef>` 集合
-减法,顺序无关。
-
-- **非 group_chat 砍 `nominate_speaker` + `end_discussion`**(落实
-  `tools/mod.rs:224` 的 "Phase 4 may filter" 注释)。省 ~465 tok/轮
-  (<7%);大头(`use_ui`/`ask_user_question`/`remember`/`shell`)通用,
-  静态裁不动 —— 省 window 的大动作是 D Stub(Phase 2)。R3 的 MVP 价值
-  主要是"卫生"(非群聊不暴露无意义工具),不是省 token。
-- **group_chat 是 no-op**:群聊走 `group_chat_tool_defs` 白名单(`group_
-  chat_prompts.rs`,主持人含仲裁工具、参与者不含),本过滤器不二次干预。
-- **cache 稳定性(prd R3.2)**:同一 session 的 `session_type` 固定 →
-  裁剪结果跨连续 turn 稳定 → OpenAI 自动前缀缓存 / 未来 R2 断点在一个
-  mode 段内命中。
-- `session_type` 从 `loaded_session.session.session_type` 读(零成本,
-  无 DB round-trip)。chat_loop 对 nominate/end 的运行时 no-op 拦截(按
-  tool_name)不依赖 tools[] 注册,裁掉工具注册不影响该拦截。
-
-### 6. Tests Required(断言点)
-
-- `tools_token_defaults_null_for_legacy_or_worker_rows` —— raw SQL 写入
-  (无 tools_token 列)读回 `None`;再 upsert 补 `Some(425)` 不丢
-  token_usage_json。
-- `upsert_overwrites_same_column_on_conflict` —— 两次 upsert 传
-  `Some(111)` / `Some(222)`,断言最终 `Some(222)`(冲突时 tools_token 与
-  token_usage_json 一起重写,锁定 C7 upsert 契约)。
-- `upsert_accumulates_columns_across_writes` —— 传 `Some(7000)`,断言
-  `rows[0].tools_token == Some(7000)`。
-- R3:`tools::tests_session_type_filter` —— classic_chat 裁两工具、
-  group_chat no-op。
-- 前端:`TurnCard` 渲染 `tools 7K` cell + title 含 `70%`
-  (`toolsToken=7000, context_input=10000`);toolsToken 缺失时不渲染。
-- 回归:`filter_tools_for_mode` * + `group_chat_tool_defs` * 不变。
-
-### 7. Wrong vs Correct
-
-#### Wrong:把 tools_token 加进分母(double-count)
-
-```ts
-// BAD —— context_input 已含 tools,加回是重复计算
-const toolsPct = toolsToken / (contextInput + toolsToken);
-// 结果系统性偏低(7000 / (10000+7000) ≈ 41% 而非真实 70%)
-```
-
-#### Correct:tools_token 是 context_input 的切片
-
-```ts
-// GOOD —— tools_token ÷ context_input(子集 / 全集)
-const toolsPct = contextInput > 0 ? toolsToken / contextInput : null;
-// 7000 / 10000 = 70%(与"tools[] 占本轮 context 七成"的直觉一致)
-```
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/02-tools-token-static-pruning.md`](./token-usage-tracking/02-tools-token-static-pruning.md)。
 
 ## 不做(Phase 2 / OOS,见 task prd.md)
 
@@ -850,228 +662,36 @@ const toolsPct = contextInput > 0 ? toolsToken / contextInput : null;
 
 ## Scenario:tools Stub 注册(D,2026-08-14)
 
-> 配套 task `08-14-c7d-tools-stub-registration`(C7 Phase 2 之 D,触发线
-> 已过:首轮 tools 占 context 38.5% > 15%)。完整契约(tool 形态 /
-> `load_tool_schemas` 拦截 / 粘性 registry / 开关 / 红线)见
-> [tool-contract/14-stub-registration.md](./tool-contract/14-stub-registration.md)。
-> 本文只记与本 scenario(C7 度量)的交点 + 落地验证数据。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/03-tools-stub-registration.md`](./token-usage-tracking/03-tools-stub-registration.md)。
 
-### 与 C7 度量的交点
-
-- `turn_trace.tools_token` 度量链路**不改**:stubify 是 drive.rs 过滤链
-  第 4 环(mode→workflow→session_type 之后、dispatch append 之后),
-  `tools_token` 估算点在完整过滤链 + 两个 append 之后 — stub 后
-  `tools[]` 体积自然缩小,tools_token 如实反映,AC1 用它验证。
-- tools_token 占比如实变小是预期(前端 TracePanel 无改动)。
-
-### 验证数据(2026-08-14)
-
-- 基线(前):tools_token=6773 / context_input=17602 = 38.5%。
-- 目标:开关开、经典 chat、首轮无 load 调用,tools_token ≤ 3700(2026-08-14 用户拍板;实测 3677,基线 6773 → 3677,省 3096,-45.7%)。
-- 回滚通道:app_config `tools_stub_enabled = "false"` → 第 4 环直通 +
-  不 append `load_tool_schemas`,tools_token 回 ~6773。
-
-### 预算校准(静态度量单测,用户拍板)
-
-静态线 ≤3700(= AC1,原设计 ≤3000 在 Edit 模式下数学不可达:核心 9
-工具全量 2261 + dispatch_subagent 真实 def 984(生产 5 模型 enum,实测;
-原预估 ~500 低估近半)= 3245,零 stub 已超 3000)。stub 描述走「极短
-摘要 + load 指引」方案(10 个含 JSON 包装 330),Edit 合计 3675、live
-实测 3677 — AC1 线随用户拍板定 3700。
 ## Scenario:memory 指令块度量 + digest(WP1/WP2,2026-08-15)
 
-> 来源:`08-15-memory-block-governance`(BACKLOG §3.1)。与 tools_token
-> 完全同构的「切片单列」口径;digest 是内容侧手段,不改度量链路。
-
-### memory_token 口径(与 tools_token 对称,逐条对齐)
-
-- `turn_trace.memory_token`:cl100k 估算**实际注入的** memory 指令块
-  (banner + wrappers + 层 body;digest 开启时即 digest 后体积 — WP1 的
-  计算点在 init.rs 注入处,`LoopInit` 穿到 drive.rs Done 写点)。
-- **per-request 常量**:memory 块每 request 组装一次,同一 request 的
-  所有 turn 行同值(区别于 tools_token 每 turn 重估 — dispatch enum 等
-  可能变)。
-- 占比 = `memory_token / context_input_tokens`,**不 double-count**
-  (context_input 已含 memory)。前端 `TurnCard.memoryPct` 同 toolsPct。
-- `None` 语义:pre-column 行 + worker turn(worker 注入走
-  `subagent/prompt.rs`,不在度量面 — design §3.5a)。
-- upsert 契约:与 tools_token 同一 `upsert_turn_trace_token` 写点、同
-  second-writer-wins(冲突双写)。
-
-### 验证数据(2026-08-15,本仓库 live)
-
-- 基线(digest off):memory_token=10124 / ctx=14079(72%)— 高于
-  08-14 估算 ~7-8k,cl100k 对 CJK 实际计数 + wrapper 开销。
-- digest on:memory_token=2080(28%),-79.5%;首轮 ctx -47%;tools
-  3664→3805(Δ141 = load_memory_sections def,净收益仍 -6.6k)。
-- 双轮 cache 率:on 99.8% vs off 99.7% — 不劣化(AC4)。
-- turn-smoke `--turns N`:AC4 类双轮对比的标准入口(08-15 加)。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/04-memory-digest-metering.md`](./token-usage-tracking/04-memory-digest-metering.md)。
 
 ## Scenario: images_token — request-total image slice (B1, 2026-08-17)
 
-`turn_trace.images_token`(PR4,B1 `08-16-b1-image-multimodal`)与 tools_token / memory_token 同语义的第三切片:**请求内全部图片块的 token 估算**,含历史重建(历史图每轮随请求重发、每请求计费——只算当轮新图会系统性低估,评审 P0-1)。
-
-- **口径**:`estimate_images_token(&turn_messages)` 在 `drive.rs` 的 per-turn 请求 clone 上、resolve 之后计算——Σ 每图 `tokens_est`(attach 时 `(w×h)/750`,前端 FileReader 读粘贴图、后端 `imagesize` crate 读 @图文件头),缺失回退 1600/图垫板。写入点与 tools/memory 同一 Done upsert(`!skip_persist` gate,worker 轮 None)。
-- **When this bites**:估算是"字段优先"——`attachments` 字段的精确值**替换**垫板贡献而非叠加;若某消息的 Image 块数与 attachments 数不一致(理论上 attach pass 保证 1:1),会以字段为准。live 实测(08-17):800×600 png → 640 tok 精确落值,无图轮 = 0。
-- TurnCard `img` cell 门是 `> 0`(tools/mem 是 `!= null`)——无图轮不渲染噪声 cell。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/05-images-token-b1.md`](./token-usage-tracking/05-images-token-b1.md)。
 
 ## Scenario: 摘要压缩旁路 usage(C3,2026-08-18)
 
-- **口径**:LLM 摘要调用是**旁路 completion**(无 tools、禁 thinking 采集、
-  4k 输出兜底)—— 其 `TokenUsage` **不混入**主 turn 的
-  `update_last_turn_usage`(`context_input`/per-turn 记账口径不变),只进
-  `compaction_json.summary_usage`(trace.rs 手工 json!,与 method 同写点)。
-- **When this bites**:主 turn 的 token 统计永远不包含压缩开销 —— 想算
-  真实成本要看 compaction_json;TracePanel 的 TurnCard token 字段因此
-  不因压缩而跳变(展示的是请求上下文,不是总消耗)。
-- 摘要求输入 = 模板 + prior-summary + transcript(预算 0.7×window,溢出
-  丢最旧 + `[older transcript omitted]` 记号),输出 `clamp_summary_output`
-  4k token 兜底。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/06-compaction-bypass-usage.md`](./token-usage-tracking/06-compaction-bypass-usage.md)。
 
 ## Scenario: 统一估算 + at_files/system/window 三新列 + 实发口径(unified-context-budget,2026-08-19)
 
-`turn_trace` 新增 `at_files_token`(全部 user message 的 @-token 注入正文 est 之和;@图走 images_token 不重复计)/ `system_token`(system prompt 本体 + skill listing 归因)/ `context_window`(请求时窗口快照,TurnCard 预算行分母,旧行 NULL 前端回退 200_000)。写点与既有切片同一 Done upsert(`!skip_persist` gate,worker 轮 None;零注入 → at_files NULL)。
-
-- **两类口径永不互相加计**(任务 prd D8,评审 F1 教训):总量 =
-  `budget::estimate_request_tokens(system, tools_json, messages)` 三部件
-  加法 —— memory 头对/skill listing/@文件/图片物理在 messages 里,公式
-  上再单独加计任何一项即重复计数;归因切片只做占比条,之和 ≤ 总量。
-- **压缩触发口径统一切换**:摘要触发(0.85)/ postcheck(0.95)/ 机械
-  `compact_messages`(经 `extra_tokens` 参,无 gate 群聊/worker 同受益)
-  从 messages-only 改统一总量 —— 修 tools+system 挤窗漏计洞(小窗口
-  模型下请求可整体超窗而压缩不触发)。
-- **实发口径**(prd D9):关卡⑤硬卡裁剪发生时,trace 各切片列记
-  `预裁 − freed`(臂 3 触发时 memory_token 改记目录态值)—— 与
-  provider `context_input` 可比;预裁值只进 audit payload。
-- turn-smoke 报告列加 at_files/system/ctx_win + at_pct。
-- 完整闸门语义见 [pattern-budget-gate](./agent-loop-architecture/pattern-budget-gate.md)。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/07-unified-context-budget.md`](./token-usage-tracking/07-unified-context-budget.md)。
 
 ## Scenario: worker per-turn 行 + run 维度唯一键(2026-08-20,task 08-20-worker-turn-trace-persist)
 
-`turn_trace` 加 `run_id TEXT NOT NULL DEFAULT ''` 列,唯一键重建为
-`UNIQUE(session_id, run_id, seq)`(`''` 哨兵 = 主 loop 行;worker 行 =
-`subagent_runs.id`)。worker(`skip_persist=true`)的 Done upsert 开闸写
-(父 sid, run UUID, seq)行;`update_last_turn_usage` 的 `!skip_persist` 门
-**不动**(snapshot 隔离,RULE-A-015 reversal)。
-
-- **seq 空间冲突是根因**(为什么必须动唯一键):worker loop 的 seq 从父
-  DB messages max+1 起(`init.rs`),与父后续轮次**共享同一区间** —— 旧
-  `UNIQUE(session_id, seq)` 下 worker 行会被父后续 Done upsert 撞行覆写
-  (并发 fan-out 的多个 worker 亦互撞)。run 维度并入锚点后三方共存。
-- **worker 行切片语义**(与列文档契约一致):usage_json + tools_token +
-  system_token + context_window 落值;memory_token **按契约记 NULL** ——
-  注意 worker 经共享 init 路径同样注入 memory banner(有层级时是真
-  Some),在写点显式归 NULL(度量面排除 worker,非"估算为零");
-  images/at_files worker 恒 NULL(无附件/无 @注入)。
-- **读侧路由**:`list_turn_traces` 只回主行(`WHERE run_id = ''`,前端
-  `Map<seq, TurnTrace>` 契约零变化);worker 行走
-  `list_worker_turn_traces(run_id)`(SubagentDrawer「Token 明细」)。
-  `list_speaker_cache_usage` 的 join 也要 `AND t.run_id = ''`(worker 行
-  与父 messages 共享 seq 区间,不排除会误配)。
-- **旁路写点归位**(本任务顺带修的既有跨归因 bug):机械压缩
-  `record_compaction` 与 C2 软提示 `record_loop_hint` 原本**无 worker 门**,
-  worker 撞线时以 (父 sid, worker seq) 写主行 —— 父后续同 seq 的 Done
-  upsert 合并进该行,父卡片显示从未发生的压缩/loop 提示。现两写点按
-  `run_key` 路由(worker 写 run 行,主路不变)。db 层 4 个 upsert 统一
-  加 `run_id: &str` 参。
-- **降级**:`insert_run` 失败 → `worker_run_id=None` → run_key='' →
-  worker 写点自然不写(不造孤儿命名空间)。
-- worker 行的 seq 是 loop 内游标,**勿当父 messages 全局 seq 消费**。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/08-worker-per-turn-trace.md`](./token-usage-tracking/08-worker-per-turn-trace.md)。
 
 ## Scenario: 工具图计费 — ToolResult.images 内联 tokens_est(08-21-b1-image-followups,2026-08-21)
 
-`read_file` 读图返回的 `AttachmentRef` 挂在 `ToolResult.images`(块级字段),不在消息级
-`attachments` 清单里 —— `estimate_images_token` 的块扫描对它按内联 `tokens_est` 精确累加
-(None 才垫 1600),与 user 文本图的「pad 先加、清单替换」路径互不 double-count(工具图不是
-独立 Image 块)。resolve pass 把 `images` 重建为成功加载子集,故 post-resolve 计费 = 实发。
-budget 裁剪臂 2 同步覆盖旧轮工具图(resolved+images 双清,`images_freed` 经 estimate 差值
-自然计入)。live 实测:1440×900 截图 tokens_est=1728(=(w×h)/750 精确),随 tool_result 进
-第二次请求时 `turn_trace.images_token=1728` 入账。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/09-toolresult-images-billing.md`](./token-usage-tracking/09-toolresult-images-billing.md)。
 
 ## Scenario:tools=0 辅助请求归因判别器 + cache miss 归因次序(09-01-aux-call-cache-interference,2026-09-01)
 
-OpenAI 兼容路径的请求行日志(`llm/provider/openai.rs` transport 层,`→ LLM request
-(openai) … tools_count=N has_system=B`)不挑调用方,**tools=0 嫌疑池封闭为三族**,
-`has_system` 一刀两断:
-
-| 调用点 | tools | system(has_system) | 输入 | 落库指纹 |
-|---|---|---|---|---|
-| auto 压缩摘要 `chat_loop/drive.rs` → `send_summary_completion` | 0 | **None(false)** | 大(待压区整段嵌单条 user) | messages `kind=compaction_summary` 行 + turn_trace.compaction_json |
-| 手动 /compact `compaction.rs`(含 focus/retry 变体) | 0 | **None(false)** | 大 | 同上(trigger=manual) |
-| auto_reflect `agent/auto_reflect.rs` `reflect_to_pitfall` | 0 | **Some(true)** | 小(单条 user) | autonomous_memories `kind=pitfall` 行 |
-
-(`agent/subagent/truncate_summary.rs` 是纯落盘 helper,不发请求 —— 勿被名字误导。)
-
-**cache miss 归因次序**(再见 cache_read 回退/清零时按此排序,别先立"缓存被挤占"
-调查任务):①本 session 自己的压缩折叠(待压区折成摘要行 → 前缀机械性变化 → miss
-by design;签名 = miss 轮邻近 compaction 事件,**部分回退到固定值** = 命中到保留区
-边界);②头部易变注入(breadcrumb/instruction/head_sha,08-31-cache-head-volatility
-已修);③**跨请求驱逐 —— 已实验排除**(2026-09-01:同栈 deepseek-v4-flash,S 条目
-124k + 旁路 266k(对齐事故 280k 量级)插入后 S 下轮 cache_read 逐字节不变;31k/161k
-档同),勿再循此假设消耗调查成本。实验方法与数字见任务
-`09-01-aux-call-cache-interference/research/r2-experiment-results.md`。
-
-**附注(脚本化 daemon API 的坑)**:`create_session` 的 `model` 参数是 legacy 标签,
-**不决定实际模型**;每轮解析链 = `sessions.model_id`(优先)→ `app_config
-.default_model_id`(`agent/chat.rs` lookup_provider_for_session)。按 session 指定模型
-走 `POST /api/v1/providers/update_session_model_id`。验证请求实际走了哪条路径用
-daemon.log 请求行(transport 名 + model + has_system)。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/10-tools-zero-attribution.md`](./token-usage-tracking/10-tools-zero-attribution.md)。
 
 ## Scenario: 群聊 per-discussion / per-speaker 计费核算(GCE M4c,2026-09-08,task 09-08-gce-m4c-cost-governance-modal-redesign)
 
-### 1. Scope / Trigger
-
-- 触碰任何一处计费聚合实现:db 查询 / 讨论库 subquery / 脚本客户端聚合 / 预算硬停口径。
-- 为什么需要 code-spec 深度:**同一口径有四个实现点**(见 §2),漂移任一处 = 两处 UI
-  数字对不上或预算语义分裂;且历史上已有一次误判记录(见 §7)。
-
-### 2. Signatures(四个实现点,必须钉同一口径)
-
-| 实现点 | 位置 | 消费方 |
-|---|---|---|
-| db 查询 | `db/trace.rs::group_chat_token_usage(pool, session_id)` → `GroupChatTokenUsage{total:u64, by_speaker:Vec<SpeakerTokens{speaker,tokens}>}`(tokens DESC) | Tauri cmd + `POST /api/v1/sessions/group_chat_token_usage`;GUI edit 弹窗成本区 |
-| 场级 subquery | `db/search_group_chat.rs` list/search 的 `total_tokens` 列(`Option<u64>`,NULL=无计费轮) | 讨论库 hit(前端「—」) |
-| 客户端聚合 | `scripts/group-chat-run.mjs::aggregateTokens(turnTraces, messages)` → `{total, per_speaker}` | M1 转录统计行 + MCP `discussion_result.stats.tokens` |
-| 预算硬停 | C1.2 轮头累计(`stop_reason=budget`,09-08-gc-c1-stoploss) | 声明面 = metadata `token_budget` 四通道 |
-
-### 3. Contracts(口径本体,逐字对齐)
-
-- **计费 = 四字段求和**:`input_tokens + output_tokens + cache_creation_input_tokens +
-  cache_read_input_tokens`。`context_input_tokens` 是观测口径(与 input 重叠),
-  **计入即双计**。
-- **行过滤(全实现点同集)**:`m.role='assistant'` + `m.speaker IS NOT NULL` +
-  `t.token_usage_json IS NOT NULL` + `t.run_id=''`(worker 行隔离,08-20 契约)。
-- **对齐**:trace × messages 按 `(session_id, seq)` JOIN;retry 经 UPSERT 覆盖同键,
-  SUM 不双计。
-- `COALESCE(json_extract(...), 0)`:legacy 4-field usage JSON(无 context_input)照常求和。
-
-### 4. Validation & Error Matrix
-
-- 调用不存在的 session → 空结果(total=0, by_speaker=[]),不报错(核算为读侧增强面)。
-- script/MCP 客户端聚合 `list_turn_traces` 失败 → M1 转录省略计费行 / MCP result 省略
-  `tokens` 键(降级不污染既有字段);GUI 两查询失败 → 成本区「—」,不阻塞编辑。
-
-### 5. Good/Base/Bad Cases
-
-- Good:多 speaker 多轮 + worker 行同 seq + retry 覆盖 + legacy JSON → 各 speaker 精确
-  四字段和(db fixture 总 2067;client fixture 总 450,均精确数字断言)。
-- Base:从未开场的群 → `total=0` / hit `total_tokens=NULL`(与「跑了但 0 成本」区分)。
-- Bad:`SUM` 只扫 turn_trace 不 JOIN messages(worker/无归属混入)→ 与 db 侧数字漂移;
-  加 `context_input` → 双计。
-
-### 6. Tests Required
-
-- db:`group_chat_token_usage_sums_four_billed_fields_per_speaker` /
-  `..._empty_session_returns_zero`(trace.rs);`browse_carries_total_tokens_...`
-  (search_group_chat_tests.rs)。
-- script:`aggregateTokens` 口径用例(worker/无归属/bad-JSON/降序;run.test.mjs);
-  MCP `coreResult` tokens + 失败省键(mcp.test.mjs)。
-- 生效链:fire 透传两态(scheduler tests_tick)+ C1.2 三破坏剧本(tests_group_chat.rs)。
-
-### 7. Wrong vs Correct
-
-- **Wrong(历史误判,M1 交付时记录)**:「per-speaker token 延后——turn_trace 行按 LLM
-  调用段落落库,与 speaker 对齐有歧义,需先在 trace 行打 speaker 标签」。
-- **Correct(2026-09-08 勘误)**:不需要任何 schema 变更——`messages.speaker` 按
-  `(session_id, seq)` JOIN 即可(08-10 cache-rate 查询同模式先例,M4c 三个实现点实证)。
-  再遇到「按段落归属」的聚合需求,先查 messages 侧已有维度,再谈加列。
+> **已拆出**(2026-09-13 doc-split):完整契约见 [`token-usage-tracking/11-group-chat-m4c-billing.md`](./token-usage-tracking/11-group-chat-m4c-billing.md)。
