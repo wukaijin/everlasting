@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/chat/message-list-and-markdown.md", "reason": "§5 本地路径预览四段链路契约(识别/取数/委托/弹层)+§2 排版镜像块约定,本任务是 §5 的直接延伸"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "FileViewerModal 用 reka-ui Dialog 六件套,版本锁定约束与 wrapper 类约定"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "fileUrl 三传输模式(同源/DEV 跨源/pwa-remote proxy+token)与 imageUrl 同构"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由分层约定:route 薄壳 + commands 层校验,GET binary 不进 CMD_TO_DOMAIN 的 files/image 先例"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest+jsdom 陷阱:v-html 委托测试、transport mock 规范(FileViewerModal/ToolOutputBody 测试直接适用)"}
