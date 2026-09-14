@@ -63,6 +63,7 @@ pub mod files;
 // CRUD 四条 route(mirror commands::group_chat_presets,Q0 单源)。
 pub mod group_chat_presets;
 pub mod health;
+pub mod mcp;
 pub mod memory;
 pub mod message_queue;
 pub mod panel;
@@ -149,5 +150,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/ui", ui::router(state.clone()))
         .nest("/api/v1/usage", usage::router(state.clone()))
         .merge(stream::router(state.clone()))
+        // GCE 收敛(09-14,任务 09-14-gce-mcp-daemon-converge):MCP
+        // streamable-HTTP endpoint,绝对路径 merge(stream 同款;不进
+        // CMD_TO_DOMAIN——daemon-only 面,files 域先例)。远程暴露须先过
+        // 安全评审(roadmap §5 前置)。
+        .merge(mcp::router(state.clone()))
         .nest("/api/v1/worktree", worktree::router(state))
 }

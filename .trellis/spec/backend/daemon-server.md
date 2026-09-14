@@ -410,6 +410,12 @@ DB 层恒 `busy:false`,**单点 enrich 在 `list_sessions_inner`**(`commands/ses
 | **前端 transport 映射** | `xxx: "<domain>"` 加进 `CMD_TO_DOMAIN` | `app/src/transport/http.ts` |
 | **前端 façade** | `async function xxx()` in store | `app/src/stores/<store>.ts` |
 
+> **例外(不走此表)**:`routes/mcp.rs` 的 `/mcp` MCP 端点(2026-09-14)—— 绝对路径
+> `merge` 装配(照抄 `stream.rs` 模式,非 `/api/v1/{domain}` nest)、无 Tauri command
+> 对应物(消费方是 MCP 宿主客户端,不是前端),天然不进 `CMD_TO_DOMAIN` /
+> routes-sync 守卫;JSON-RPC wire 契约与八工具语义见 docs/DAEMON-API.md §6.5,
+> 协议层 + 工具单测内联在 mcp.rs。
+
 ### 3. Contracts
 
 - **请求体**:snake_case(Rust 序列化)→ 经 `transformArgsTopLevel` 转 camelCase

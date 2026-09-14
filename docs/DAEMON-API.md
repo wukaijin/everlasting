@@ -182,6 +182,9 @@ node scripts/group-chat-run.mjs run --project <path> --preset review --topic "..
 
 ### 6.1 MCP 接口层(GCE-M2,2026-09-06 起)——宿主 agent 的首选入口
 
+> **09-14 起有第二载体**:daemon 原生 `/mcp` streamable-HTTP 端点(§6.5,零子进程、
+> 工具语义 1:1);本节 stdio 壳仍是当前主入口 —— P3 切换后转维护态,P4 退役。
+
 MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,不跑脚本**。
 六工具 = 生命周期四件套 `start_discussion` / `discussion_status` / `discussion_result` /
 `cancel_discussion`(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)+ **M3 控制面两件**:
@@ -361,6 +364,49 @@ kind(arch/product/backend/frontend/outsider);moderator 与全部 participants �
 `scripts/group-chat-presets.json` 单一事实源(M1 CLI / MCP 消费),不在本域,本域 CRUD
 对它们零影响。
 
+### 6.5 MCP 收敛端点 `/mcp`(2026-09-14 起)——daemon 原生 streamable-HTTP server
+
+§6.1 stdio 壳之外的第二载体:daemon **自带 MCP server**(实现 =
+`app/src-tauri/src/daemon/routes/mcp.rs`,任务 09-14-gce-mcp-daemon-converge,
+roadmap §5 路径③)。动机 = 内存:stdio 壳随宿主会话 spawn node(或 98 MB bun
+standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既有端口;实测
+冒烟全链后 daemon RSS 增量 ~1 MB(AC 闸 <10 MB)。
+
+- **极简无状态 profile**(wire 契约反向提取自 `@modelcontextprotocol/sdk` 1.30.0,
+  宿主 SDK 客户端开箱即连):
+  - `POST /mcp`:JSON-RPC 2.0 单条或批;请求 → 200 纯 JSON;纯通知 / 客户端响应 →
+    202 空 body;Accept 必须同时含 `application/json` 与 `text/event-stream`(缺 → 406);
+    Content-Type essence 必须 `application/json`(否则 415)。
+  - `GET /mcp` → 405(不开服务端主动流;SDK 客户端把 405 视为「无 GET 流」预期分支);
+    `DELETE /mcp` → 200 no-op。
+  - 不分配 `mcp-session-id`(无状态免 404 面);`mcp-protocol-version` 头 lenient 只记
+    日志;initialize 版本协商 = echo 策略(请求版本 ∈ 2024-10-07…2025-11-25 集合则原样
+    回,否则回缺省 2025-03-26)。
+  - **工具执行错误不走 JSON-RPC error**:200 + `isError:true` text result(§6.1 同款,
+    宿主把它呈现给模型而非判协议故障);未知工具 / 未知方法才是 JSON-RPC error
+    (-32602 / -32601)。
+- **八工具语义 1:1 平移 stdio 壳**(wire schema 与预算锁 4200 chars 同源):编排原语
+  全部走 daemon 内部 `*_inner`(不经 HTTP 自绕);preset 合并消费 DB 用户行 / 覆盖行
+  (§6.4 规则;`list_presets.degraded` 恒 `false` —— 数据源就是本进程,降级语义随收敛
+  消失,键保留兼容宿主习惯)。与 stdio 壳的差异两处:
+  - 转录落点 `{cwd}/out/group-chat-{slug}-{ts}.md`(惰性导出,status/result 终态首次
+    观测触发;与定时场 `{data}/discussions/` 落点分叉);
+  - XDG 记账文件(`mcp-discussions.json`)**退役** —— rid 从 `session_active_request`
+    内存表派生,daemon 即编排宿主,无跨进程记账需求。
+- **内置四档预设**:编译期 `include_str!` 嵌入 `scripts/group-chat-presets.json`
+  (单一事实源保持 —— 改 JSON 需重编译 daemon 才生效;M1 CLI 读文件路径不变)。
+- **冒烟**:`node scripts/group-chat-mcp-http-smoke.mjs`(前置 daemon 在跑;非 live =
+  SDK 握手 + ping + tools/list + 预算 + 错误链 + list_presets/models + GET 405 /
+  DELETE 200 / 406 / 415 传输探针;`--live` 烧真 token 走 start → wait_seconds 长轮询 →
+  result 全链)。stdio 壳冒烟 `group-chat-mcp-smoke.mjs` 不变。
+- **挂载切换(P3,未切)**:目标形态 = 用户级 MCP 配置写 HTTP 条目
+  `{"type":"http","url":"http://127.0.0.1:7456/mcp"}`;切换走两步 —— 先以别名
+  (如 `everlasting-group-chat-http`)双挂验证宿主兼容,烧机后再把主条目原名
+  `everlasting-group-chat` 换成 HTTP(保留名即保住 `mcp__everlasting-group-chat__*`
+  工具前缀);stdio 壳 / bun bin / deploy 脚本退役另立 P4。
+- ⚠️ **安全边界**:继承 daemon 全 API 零鉴权本机前提(§8);**remote tunnel 暴露
+  `/mcp` 须先过安全评审**(roadmap §5「远程暴露认证」立项前置,本端点不改变该结论)。
+
 ## 7. 其他常用端点(路径约定)
 
 全部为 `POST /api/v1/<domain>/<command>`,body snake_case,与 Tauri command 同名同参:
@@ -372,7 +418,8 @@ kind(arch/product/backend/frontend/outsider);moderator 与全部 participants �
 `providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。GET 端点:
 `/api/v1/health`、`/api/v1/stream`(SSE)、`/api/v1/sessions/{id}/snapshot`,以及
 二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16)与 files 域三条
-本地路径直连(两条取字节 + 一条存在性探针,见下);其余全 POST。
+本地路径直连(两条取字节 + 一条存在性探针,见下);`/api/v1` 域外另有 MCP 端点
+`/mcp`(POST/GET/DELETE 三态,§6.5);其余全 POST。
 
 ### files 域本地路径 GET 路由(09-13 起两条:图片 + 文件;09-14 加存在性探针)
 
