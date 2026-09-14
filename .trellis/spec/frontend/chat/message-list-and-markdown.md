@@ -177,6 +177,31 @@ MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null �
    (AC5 夹具锁死)。组件引入的是 composable 单例、非 store,不违反
    FT-F-001 D3。主面板 `ToolCallCard` 与 `SubagentDrawer`
    `DrawerToolCallCard` 共用本组件,一处改动同时生效。
+6. **存在性闸门**(`utils/pathExistence.ts` + daemon `GET /api/v1/files/stat`,
+   2026-09-14):LLM 会写不存在的路径(幻觉/未生成的产物),死链接长期
+   高亮误导点击。**乐观渲染,确认缺失才降级**——渲染是同步纯函数、存在性
+   是异步事实,乐观序让存在的文件(常态)永不闪烁,缺失路径只有一次
+   短暂高亮(stat 一个往返)后回纯文本;悲观序会让常态路径闪成链接,
+   弃。四个产锚点处(linkify 走查臂/href 补 data 臂/downgrade 本地臂/
+   linkifyPlainText)先 consult `pathKnownMissing` 再产锚,未知照产 +
+   `schedulePathCheck` 异步确认;href 臂确认缺失时**解包锚点回子节点**
+   (不留裸 href 打穿 SPA 路由)。SSE 零阻塞:渲染路径只做 Map 查询,
+   fetch 全在渲染外;`createDebouncedRenderer` 的 50ms 节流不变,结果经
+   `onPathsResolved` 订阅补偿重渲染(过滤:pending 节流帧让路 + raw 路径
+   子串不在文本里零开销跳过 + dispose 退订)。computed 消费方
+   (ToolOutputBody 等)靠 reactive Map 依赖追踪免费重算。缓存键 =
+   `resolveImagePath(raw, currentCwd)` 同源解析(与点击基准一致);
+   positive 永久缓存(文件消失点击走弹层错误态),negative 15s TTL 静默
+   重查自愈(重查期间 consult 仍按缺失,**不闪回链接**);只信 200/404,且 404 须
+   带**哨兵 body `stat: file not found`**(陈旧 daemon 路由 fallback 的 404 按
+   未知处理,防"旧 daemon + 新前端"静默杀光链接;字面量两侧成对,同白名单
+   配对约定);400/5xx/网络失败不写缓存保持乐观。测试隔离:vitest 默认禁网
+   (`import.meta.env.MODE`,防本机 daemon 真响应注入破坏确定性),
+   `pathExistence.test.ts` 用 `__enableNetworkForTests` + stubbed fetch
+   测真链路,其余测试用 `setExistenceForTests` 直播种缓存。
+   daemon 侧 `/files/stat`(白名单 = image ∪ raw 并集,与前端 `FILE_EXT`
+   对齐;metadata O(1) 不读内容无大小上限;`no-store`)契约表在
+   `docs/DAEMON-API.md` §7 files 域小节。
 
 **样式边界**:`.md-image-path` / `.md-file-path` 的交互态样式(cursor:pointer
 ——无 href 的 a UA 不给指针;word-break:break-all——长绝对路径防撑爆气泡)

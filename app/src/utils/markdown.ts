@@ -28,6 +28,11 @@ import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { ref, type Ref } from "vue";
 import { renderCodeHtml } from "./highlight";
 import { daemonBase } from "../transport/http";
+import {
+  onPathsResolved,
+  pathKnownMissing,
+  schedulePathCheck,
+} from "./pathExistence";
 
 // --- marked configuration ----------------------------------------------
 // Configure once at module load. `marked.setOptions` mutates the
@@ -165,6 +170,12 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
 // 经 DOM API 构造(textContent/setAttribute 自动转义),随后仍过
 // DOMPurify(data-* 默认放行,ALLOW_DATA_ATTR)。
 //
+// 存在性闸门(2026-09-14):每个产锚点处先 consult `pathKnownMissing`
+// —— 已确认不存在(异步 stat 404,见 utils/pathExistence.ts)的路径
+// 不产锚点,保留原文;未知路径照产(乐观)并 schedule 异步确认,结果
+// 落地经 onPathsResolved / reactive 追踪触发补偿重渲染。渲染路径零
+// 阻塞零 fetch,SSE 节流管线不变。
+//
 // 路径正则与 chatInputTokens.ts 的 FILE_RE 同风格(边界捕获组 + Unicode
 // 段字符)。纯文件名(x.png,无路径分隔符)有意不识别 —— 英文句子里
 // 误伤率高;`https://host/x.png` 由前边界(不含 `/`)自然排除。
@@ -254,10 +265,12 @@ function downgradeExternalImages(html: string): string {
     if (!src || isOwnAttachmentSrc(src)) return tag;
     if (isLocalFilePath(src)) {
       const p = tryDecodeUri(src);
-      if (IMAGE_TAIL_RE.test(p)) {
-        return `<a class="md-image-path" data-image-path="${escapeHtml(p)}">[图片]</a>`;
-      }
-      return `<a class="md-file-path" data-file-path="${escapeHtml(p)}">[文件]</a>`;
+      const label = IMAGE_TAIL_RE.test(p) ? "[图片]" : "[文件]";
+      if (pathKnownMissing(p)) return label; // 确认缺失:纯文本,不给死链接
+      schedulePathCheck(p);
+      const attr = label === "[图片]" ? "data-image-path" : "data-file-path";
+      const cls = label === "[图片]" ? "md-image-path" : "md-file-path";
+      return `<a class="${cls}" ${attr}="${escapeHtml(p)}">${label}</a>`;
     }
     return `<a href="${src}" target="_blank" rel="noreferrer">[图片]</a>`;
   });
@@ -272,13 +285,19 @@ function linkifyLocalPaths(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
   // ③ markdown 链接语法:给本地路径形态的 <a href> 补 data 属性
   // (点击委托按 data-* 拦截,preventDefault 后不走 href 导航 ——
-  // 相对路径 href 会打穿 SPA 路由)。
+  // 相对路径 href 会打穿 SPA 路由)。确认缺失的路径直接解包锚点
+  // 回子节点纯文本(死链接不给,又不留裸 href 导航)。
   for (const a of Array.from(
     doc.body.querySelectorAll<HTMLAnchorElement>("a[href]"),
   )) {
     const href = a.getAttribute("href") ?? "";
     if (isLocalFilePath(href)) {
       const p = tryDecodeUri(href);
+      if (pathKnownMissing(p)) {
+        a.replaceWith(...Array.from(a.childNodes));
+        continue;
+      }
+      schedulePathCheck(p);
       if (IMAGE_TAIL_RE.test(p)) {
         a.classList.add("md-image-path");
         a.dataset.imagePath = p;
@@ -315,6 +334,14 @@ function linkifyLocalPaths(html: string): string {
       const pathStart = (m.index ?? 0) + (m[1]?.length ?? 0);
       const path = m[2];
       if (pathStart < last) continue; // 防御:边界组理论不重叠,兜底
+      const pathEnd = pathStart + path.length;
+      if (pathKnownMissing(path)) {
+        // 确认缺失:路径段并入普通文本(含前导边界字符),不产锚点。
+        frag.appendChild(owner.createTextNode(text.slice(last, pathEnd)));
+        last = pathEnd;
+        continue;
+      }
+      schedulePathCheck(path);
       frag.appendChild(owner.createTextNode(text.slice(last, pathStart)));
       const a = owner.createElement("a");
       if (IMAGE_TAIL_RE.test(path)) {
@@ -326,7 +353,7 @@ function linkifyLocalPaths(html: string): string {
       }
       a.textContent = path;
       frag.appendChild(a);
-      last = pathStart + path.length;
+      last = pathEnd;
     }
     if (last === 0) continue;
     frag.appendChild(owner.createTextNode(text.slice(last)));
@@ -341,7 +368,10 @@ function linkifyLocalPaths(html: string): string {
  *  DOMPurify.sanitize(双保险,维持"所有 v-html 都过 DOMPurify"的仓库
  *  不变量)。无命中时纯转义文本也照走 sanitize,约定单一好审计。
  *  注意工具输出先经 truncateOutput 截断:被切断的路径缺扩展名尾,
- *  正则不匹配,不会产生半截链接。 */
+ *  正则不匹配,不会产生半截链接。
+ *  存在性(2026-09-14):已确认缺失的路径不产锚点(返回整段原文);
+ *  未知照产(乐观)+ schedule 异步确认。转义切片作 key 安全 —— 段字符
+ *  集不含 & < > " 等可转义字符,转义前后同串。 */
 export function linkifyPlainText(text: string): string {
   const escaped = escapeHtml(text ?? "");
   const html = escaped.replace(
@@ -349,7 +379,8 @@ export function linkifyPlainText(text: string): string {
     (match: string, lead: string, path: string): string => {
       // replacer 函数形态:(match, 边界组, 路径组);返回值不做 $ 模板
       // 解释,路径/边界字符零歧义。
-      void match;
+      if (pathKnownMissing(path)) return match;
+      schedulePathCheck(path);
       const attr = IMAGE_TAIL_RE.test(path) ? "data-image-path" : "data-file-path";
       const cls = attr === "data-image-path" ? "md-image-path" : "md-file-path";
       return `${lead}<a class="${cls}" ${attr}="${path}">${path}</a>`;
@@ -429,6 +460,18 @@ export function createDebouncedRenderer(
     pendingText = null;
   };
 
+  // 存在性结果补偿重渲染(2026-09-14):apply 跑在 setTimeout 里,无
+  // effect scope,pathExistence 的 reactive 缓存帮不上忙 —— 显式订阅。
+  // 过滤三连:(a) 有 pending 节流帧时让路(那一帧会自然带上新结果,
+  // 还能顺带合并文本变更);(b) raw 路径不在当前文本里(子串判定,
+  // 误命中只是多一次无害重渲染)时零开销跳过;(c) dispose 后
+  // lastScheduled 已清,天然 no-op(仍退订,见 dispose)。
+  const unsubscribe = onPathsResolved((rawPaths) => {
+    if (timer !== null || lastScheduled === null) return;
+    if (!rawPaths.some((r) => lastScheduled?.includes(r))) return;
+    apply(lastScheduled);
+  });
+
   const schedule = (text: string) => {
     pendingText = text;
     // Cheap no-op fast path: identical to the last scheduled text
@@ -452,6 +495,7 @@ export function createDebouncedRenderer(
   };
 
   const dispose = () => {
+    unsubscribe();
     if (timer !== null) {
       clearTimeout(timer);
       timer = null;

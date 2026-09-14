@@ -17,9 +17,14 @@
 //      the body renders an empty <pre> (parent decides whether
 //      to mount via v-if).
 
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
+import { nextTick } from "vue";
 import { mount } from "@vue/test-utils";
 import ToolOutputBody from "./ToolOutputBody.vue";
+import {
+  resetExistenceForTests,
+  setExistenceForTests,
+} from "../../utils/pathExistence";
 
 describe("ToolOutputBody", () => {
   function mountBody(props: { content: string; isError: boolean }) {
@@ -185,6 +190,36 @@ describe("ToolOutputBody", () => {
       const content = "x".repeat(400) + " out/a.md";
       const w = mountBody({ content, isError: false });
       expect(w.find("a[data-file-path='out/a.md']").exists()).toBe(true);
+    });
+  });
+
+  // --- 09-14 存在性闸门:确认缺失的路径不产锚点(乐观 → 异步降级)。
+  // 组件无 pinia 也能测:用绝对路径(resolveKey 不依赖 cwd);vitest 下
+  // pathExistence 默认禁网,未知路径零 fetch 副作用。 ---
+  describe("existence gating (09-14)", () => {
+    beforeEach(() => resetExistenceForTests());
+
+    it("keeps the optimistic anchor for an unknown path", () => {
+      const w = mountBody({ content: "wrote /tmp/maybe/a.md", isError: false });
+      expect(w.find("a[data-file-path='/tmp/maybe/a.md']").exists()).toBe(true);
+    });
+
+    it("omits the anchor for a confirmed-missing path (plain text stays)", () => {
+      setExistenceForTests("/tmp/gone/a.md", false);
+      const w = mountBody({ content: "wrote /tmp/gone/a.md", isError: false });
+      expect(w.find("a[data-file-path]").exists()).toBe(false);
+      expect(w.find(".tool-output-body__pre").text()).toContain("/tmp/gone/a.md");
+    });
+
+    it("re-renders reactively when a missing result lands after mount", async () => {
+      // computed 消费方经 reactive Map 依赖追踪免费获得重算:挂载时乐观
+      // 产锚,结果落地(nextTick 后)锚点消失、文本保留。
+      const w = mountBody({ content: "wrote /tmp/late/a.md", isError: false });
+      expect(w.find("a[data-file-path='/tmp/late/a.md']").exists()).toBe(true);
+      setExistenceForTests("/tmp/late/a.md", false);
+      await nextTick();
+      expect(w.find("a[data-file-path]").exists()).toBe(false);
+      expect(w.find(".tool-output-body__pre").text()).toContain("/tmp/late/a.md");
     });
   });
 });

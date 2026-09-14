@@ -14,7 +14,7 @@ vi.mock("../transport/auth", () => ({
 }));
 
 import { currentDeviceToken } from "../transport/auth";
-import { imageUrl, fileUrl, resolveImagePath } from "./imageUrl";
+import { fileUrl, imageUrl, resolveImagePath, statUrl } from "./imageUrl";
 
 describe("resolveImagePath", () => {
   it("joins a relative path onto cwd", () => {
@@ -95,6 +95,24 @@ describe("fileUrl", () => {
   it("percent-encodes the path so query structure cannot be injected", () => {
     expect(fileUrl("/a b&c=d.md")).toBe(
       "http://localhost:7456/api/v1/files/raw?path=%2Fa%20b%26c%3Dd.md",
+    );
+  });
+});
+
+// statUrl — 存在性探针(/files/stat,09-14 存在性闸门)的三传输模式,
+// 镜像 fileUrl describe;path 契约同 fileUrl(解析后的绝对/~ 形态)。
+describe("statUrl", () => {
+  it("builds the direct daemon URL against /files/stat", () => {
+    expect(statUrl("/tmp/maybe/shot.png")).toBe(
+      "http://localhost:7456/api/v1/files/stat?path=%2Ftmp%2Fmaybe%2Fshot.png",
+    );
+  });
+
+  it("routes through the pwa-remote proxy with the query token", () => {
+    vi.mocked(currentDeviceToken).mockReturnValueOnce("tok en&1");
+    expect(statUrl("~/docs/spec.md")).toBe(
+      "http://localhost:7456/api/v1/proxy/api/v1/files/stat" +
+        "?path=~%2Fdocs%2Fspec.md&access_token=tok%20en%261",
     );
   });
 });

@@ -9,8 +9,16 @@
 //   marked upgrades. Add a fixture here for every new XSS vector you
 //   want protected — `pnpm test` gates the suite.
 
-import { describe, it, expect } from "vitest";
-import { renderMarkdown, linkifyPlainText } from "./markdown";
+import { beforeEach, describe, it, expect } from "vitest";
+import {
+  createDebouncedRenderer,
+  linkifyPlainText,
+  renderMarkdown,
+} from "./markdown";
+import {
+  resetExistenceForTests,
+  setExistenceForTests,
+} from "./pathExistence";
 
 describe("renderMarkdown", () => {
   describe("empty / whitespace input", () => {
@@ -389,6 +397,102 @@ describe("renderMarkdown", () => {
       expect(html).not.toContain("data-file-path");
     });
   });
+
+  // 09-14 存在性闸门:确认缺失(stat 404 结果落缓存)的路径不产锚点,
+  // 保留原文;未知路径乐观产锚(渲染零阻塞)。测试用
+  // setExistenceForTests 直播种缓存 —— vitest 下 pathExistence 默认禁网
+  // (见该模块"测试隔离"注释),未知路径不会真发 fetch。
+  describe("existence gating (09-14)", () => {
+    beforeEach(() => resetExistenceForTests());
+
+    it("keeps the optimistic anchor for unknown paths (default state)", () => {
+      // 未知 = 乐观:这是 SSE 流式期间唯一可用的同步答案。
+      const html = renderMarkdown("see /tmp/maybe/shot.png here");
+      expect(html).toContain('data-image-path="/tmp/maybe/shot.png"');
+    });
+
+    it("downgrades a confirmed-missing bare-text path to plain text", () => {
+      setExistenceForTests("/tmp/gone/report.md", false);
+      const html = renderMarkdown("看 /tmp/gone/report.md 之前");
+      expect(html).not.toContain("data-file-path");
+      expect(html).not.toContain("<a");
+      expect(html).toContain("/tmp/gone/report.md");
+    });
+
+    it("downgrades inside inline code too (code wrapper kept, no anchor)", () => {
+      setExistenceForTests("/tmp/gone/main.rs", false);
+      const html = renderMarkdown("入口在 `/tmp/gone/main.rs`");
+      expect(html).toContain("<code>");
+      expect(html).not.toContain("data-file-path");
+      expect(html).toContain("/tmp/gone/main.rs");
+    });
+
+    it("unwraps a confirmed-missing markdown link to its label text", () => {
+      setExistenceForTests("/tmp/gone/x.log", false);
+      const html = renderMarkdown("[日志](/tmp/gone/x.log)");
+      expect(html).not.toContain("<a");
+      expect(html).not.toContain("data-file-path");
+      expect(html).toContain("日志");
+    });
+
+    it("downgrades ![](local) with a confirmed-missing path to plain [图片]", () => {
+      setExistenceForTests("/tmp/gone/1.png", false);
+      const html = renderMarkdown("![](/tmp/gone/1.png)");
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("<a");
+      expect(html).toContain("[图片]");
+    });
+
+    it("degrades only the missing path when existing and missing mix", () => {
+      setExistenceForTests("/tmp/keep/a.md", true);
+      setExistenceForTests("/tmp/gone/b.md", false);
+      const html = renderMarkdown("/tmp/keep/a.md 与 /tmp/gone/b.md");
+      expect(html).toContain('data-file-path="/tmp/keep/a.md"');
+      expect(html).not.toContain('data-file-path="/tmp/gone/b.md"');
+      expect(html).toContain("/tmp/gone/b.md");
+    });
+  });
+});
+
+// createDebouncedRenderer 的存在性补偿重渲染(09-14):渲染跑在
+// setTimeout 里无 effect scope,pathExistence 的 reactive 缓存帮不上忙,
+// 靠 onPathsResolved 订阅。setExistenceForTests 变更值时走同一条
+// notify 通道(微任务合并),借此驱动断言。
+describe("createDebouncedRenderer existence re-render (09-14)", () => {
+  beforeEach(() => resetExistenceForTests());
+
+  it("re-renders and downgrades the anchor when a missing result lands", async () => {
+    const r = createDebouncedRenderer(50);
+    r.schedule("see /tmp/gone2/a.md here");
+    r.flush();
+    expect(r.rendered.value).toContain('data-file-path="/tmp/gone2/a.md"');
+    setExistenceForTests("/tmp/gone2/a.md", false);
+    await Promise.resolve(); // 等微任务合并的一拍广播
+    expect(r.rendered.value).not.toContain("data-file-path");
+    expect(r.rendered.value).toContain("/tmp/gone2/a.md");
+    r.dispose();
+  });
+
+  it("skips re-render when the resolved path is absent from its text", async () => {
+    const r = createDebouncedRenderer(50);
+    r.schedule("no local paths in here");
+    r.flush();
+    const before = r.rendered.value;
+    setExistenceForTests("/tmp/unrelated/x.md", false);
+    await Promise.resolve();
+    expect(r.rendered.value).toBe(before);
+    r.dispose();
+  });
+
+  it("stops re-rendering after dispose", async () => {
+    const r = createDebouncedRenderer(50);
+    r.schedule("see /tmp/gone3/a.md here");
+    r.flush();
+    r.dispose();
+    setExistenceForTests("/tmp/gone3/a.md", false);
+    await Promise.resolve();
+    expect(r.rendered.value).toContain('data-file-path="/tmp/gone3/a.md"');
+  });
 });
 
 // linkifyPlainText — 工具输出 `<pre>` 面的非 markdown linkify(2026-09-13):
@@ -427,5 +531,24 @@ describe("linkifyPlainText", () => {
     expect(linkifyPlainText("产物 out/报告.md。后续")).toContain(
       'data-file-path="out/报告.md"',
     );
+  });
+
+  // 09-14 存在性闸门(同 renderMarkdown 的 existence gating describe,
+  // 契约一致:确认缺失不产锚,未知乐观产锚)。
+  describe("existence gating (09-14)", () => {
+    beforeEach(() => resetExistenceForTests());
+
+    it("keeps the optimistic anchor for an unknown path", () => {
+      expect(linkifyPlainText("wrote /tmp/maybe/a.md")).toContain(
+        'data-file-path="/tmp/maybe/a.md"',
+      );
+    });
+
+    it("returns the escaped original match for a confirmed-missing path", () => {
+      setExistenceForTests("/tmp/gone/a.md", false);
+      const html = linkifyPlainText("wrote /tmp/gone/a.md today");
+      expect(html).not.toContain("<a");
+      expect(html).toContain("/tmp/gone/a.md");
+    });
   });
 });

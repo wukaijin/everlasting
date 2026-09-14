@@ -13,12 +13,13 @@
 //! trigger sends `Some(3)` so the panel opens instantly even on huge
 //! repos.
 //!
-//! `read_image_at_inner` / `read_raw_at_inner`(下方)是本模块仅有的两块
-//! 非 IPC 逻辑:daemon 的 `GET /api/v1/files/image` 与
-//! `GET /api/v1/files/raw` 路由专用(前端 `<img>`/`fetch` 直连,不走
-//! `transport.invoke`),故无 `#[tauri::command]` 壳、不进 lib.rs /
-//! `CMD_TO_DOMAIN` 注册表(GET binary 路由与 attachments 的
-//! `get_attachment` 同一先例)。
+//! `read_image_at_inner` / `read_raw_at_inner` / `stat_local_file_inner`
+//! (下方)是本模块仅有的三块
+//! 非 IPC 逻辑:daemon 的 `GET /api/v1/files/image`、
+//! `GET /api/v1/files/raw` 与 `GET /api/v1/files/stat` 路由专用(前端
+//! `<img>`/`fetch` 直连,不走 `transport.invoke`),故无 `#[tauri::command]`
+//! 壳、不进 lib.rs / `CMD_TO_DOMAIN` 注册表(GET binary 路由与 attachments
+//! 的 `get_attachment` 同一先例)。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -354,6 +355,57 @@ pub async fn read_raw_at_inner(path: String) -> Result<(&'static str, Vec<u8>), 
         bytes
     };
     Ok((content_type, bytes))
+}
+
+// --- 路径存在性探针(2026-09-14,图片/文件通道的第三位成员)------------------
+// daemon `GET /api/v1/files/stat?path=<abs|~前缀>`:前端 linkify 对本地路径
+// **乐观渲染**链接后,用本路由异步确认存在性,确认缺失才把锚点降级回纯
+// 文本(抖动权衡见前端 `utils/pathExistence.ts` 模块注释)。与 image/raw
+// 的关系:白名单取两路由之**并**(前端识别集 `FILE_EXT` 同并集,可链接 ⇔
+// 可探);不读内容、无大小上限 —— `metadata` 一把 O(1),超限文件照样
+// "存在可点",点击后由 image/raw 的 413 错误态兜底。oracle 面与 image/raw
+// 严格持平:白名单外统一 400,存在性信息只对白名单扩展"泄露"(image/raw
+// 的 200/404 本就泄露同口径信息)。
+
+/// `stat_local_file_inner` 的错误分类。无 TooLarge(stat 不读内容)、无 Io
+/// (metadata 失败一律折叠进 NotFound,与 image/raw 的 `map_err(|_| NotFound)`
+/// 同口径:调用方不区分 ENOENT/EACCES)。
+#[derive(Debug)]
+pub enum StatError {
+    /// 路径非绝对形态、无扩展名或扩展不在并集白名单 → 400。
+    InvalidRequest(String),
+    /// 不存在或不是普通文件 → 404。
+    NotFound,
+}
+
+/// 扩展是否在 image ∪ raw 白名单内(供 [`stat_local_file_inner`])。
+fn is_previewable_ext(ext: &str) -> bool {
+    image_content_type(ext).is_some() || raw_content_type(ext).is_some()
+}
+
+/// 探测一个本地文件是否存在且是普通文件。契约与 [`read_image_at_inner`]
+/// 同构:`path` 必须是绝对路径或 `~/` 前缀(相对路径 400)。`Ok(())` =
+/// 存在(200);错误分类见 [`StatError`]。不读文件内容。
+pub async fn stat_local_file_inner(path: String) -> Result<(), StatError> {
+    let expanded = expand_home(&path);
+    if !expanded.is_absolute() {
+        return Err(StatError::InvalidRequest(format!(
+            "path must be absolute or `~/`-prefixed, got {:?}",
+            path
+        )));
+    }
+    let ext = path_extension_lower(&expanded);
+    if !ext.as_deref().map(is_previewable_ext).unwrap_or(false) {
+        return Err(StatError::InvalidRequest(
+            "path must end in a whitelisted image/text/pdf extension".to_string(),
+        ));
+    }
+    match tokio::fs::metadata(&expanded).await {
+        Ok(m) if m.is_file() => Ok(()),
+        // 不存在 / 目录误命名 / metadata 失败 → 统一 404,不给调用方
+        // 更细的区分(存在性探针只需要一个比特)。
+        _ => Err(StatError::NotFound),
+    }
 }
 
 fn path_extension_lower(path: &Path) -> Option<String> {

@@ -371,10 +371,10 @@ kind(arch/product/backend/frontend/outsider);moderator 与全部 participants �
 `disk/*`(get_disk_usage / run_disk_cleanup,09-03)、
 `providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。GET 端点:
 `/api/v1/health`、`/api/v1/stream`(SSE)、`/api/v1/sessions/{id}/snapshot`,以及
-二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16)与 files 域两条
-本地路径直连(见下);其余全 POST。
+二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16)与 files 域三条
+本地路径直连(两条取字节 + 一条存在性探针,见下);其余全 POST。
 
-### files 域本地路径 GET 路由(09-13 起两条:图片 + 文件)
+### files 域本地路径 GET 路由(09-13 起两条:图片 + 文件;09-14 加存在性探针)
 
 聊天 markdown / 工具输出里识别出的本地路径,前端弹层直连 daemon 取字节,**不进
 `CMD_TO_DOMAIN`**(GET binary 与 attachments 同一先例;`path` query 传参,pwa-remote
@@ -383,20 +383,29 @@ kind(arch/product/backend/frontend/outsider);moderator 与全部 participants �
 - `GET /api/v1/files/image?path=<abs|~/前缀>` — 本地图片字节(`<img>` 直连)
 - `GET /api/v1/files/raw?path=<abs|~/前缀>` — 本地文本/pdf 字节(FileViewerModal
   fetch;pdf 由前端 `window.open` 同 URL 新标签,走浏览器原生 viewer)
+- `GET /api/v1/files/stat?path=<abs|~/前缀>`(09-14)— 存在性探针:200 = 存在且
+  是普通文件(body 空),404 = 不存在/非普通文件,**body 哨兵 `stat: file not
+  found`**(前端区分"文件不存在"与陈旧 daemon 路由 fallback 的 404,字面量与
+  `utils/pathExistence.ts` 成对持有)。前端 linkify **乐观渲染**链接后
+  异步确认,确认缺失才把锚点降级回纯文本(`utils/pathExistence.ts`;抖动与缓存
+  权衡见其模块注释)。白名单取 image ∪ raw **并集**(可链接 ⇔ 可探,oracle 面与
+  两条读路由严格持平);`metadata` 一把 O(1),不读内容、无大小上限;`Cache-Control:
+  no-store`(存在性是即时事实,文件随时可能被创建/删除)。
 
 共同契约:`path` 必须是绝对路径或 `~/` 前缀(相对路径 400 —— 会话 cwd 只有前端
 知道,由前端解析后调用);白名单外统一 400 不给存在性旁信道;校验全在
-`commands/files.rs` 的 `read_image_at_inner` / `read_raw_at_inner`,route 层只做
-错误码映射;`Cache-Control: private, max-age=60`。
+`commands/files.rs` 的 `read_image_at_inner` / `read_raw_at_inner` /
+`stat_local_file_inner`,route 层只做错误码映射;`Cache-Control: private, max-age=60`
+(stat 除外,见上)。
 
-| | `/files/image` | `/files/raw` |
-|---|---|---|
-| 扩展白名单 | png / jpg / jpeg / gif / webp / bmp / avif / ico(svg 有意排除——独立文档打开时脚本会跑) | 文本类(md markdown txt log json jsonl csv tsv yaml yml toml ini conf cfg xml html htm css js mjs cjs jsx ts tsx vue svelte py rs go java kt kts c h cpp hpp cc cs rb php sh bash zsh fish sql proto graphql gql diff patch)+ pdf;svg 同样排除 |
-| Content-Type | 按扩展映射 `image/*` | 文本类**一律** `text/plain; charset=utf-8`(.html/.htm 也一样——MIME 即闸门,任何消费方只见源码);pdf `application/pdf` |
-| 大小上限 | 32 MiB | 文本 2 MiB(整串进 DOM,防卡死 UI)/ pdf 32 MiB |
-| 额外校验 | — | 文本类严格 UTF-8,非法 → 400(二进制误命名当拒) |
-| 大小检方式 | metadata + 读后复核双检(TOCTOU 兜底),两路由同 | 同左 |
-| 错误码 | 400 非白名单/相对路径 · 404 不存在/非普通文件 · 413 超限 · 500 IO | 同左 |
+| | `/files/image` | `/files/raw` | `/files/stat` |
+|---|---|---|---|
+| 扩展白名单 | png / jpg / jpeg / gif / webp / bmp / avif / ico(svg 有意排除——独立文档打开时脚本会跑) | 文本类(md markdown txt log json jsonl csv tsv yaml yml toml ini conf cfg xml html htm css js mjs cjs jsx ts tsx vue svelte py rs go java kt kts c h cpp hpp cc cs rb php sh bash zsh fish sql proto graphql gql diff patch)+ pdf;svg 同样排除 | image ∪ raw **并集** |
+| Content-Type | 按扩展映射 `image/*` | 文本类**一律** `text/plain; charset=utf-8`(.html/.htm 也一样——MIME 即闸门,任何消费方只见源码);pdf `application/pdf` | body 空 |
+| 大小上限 | 32 MiB | 文本 2 MiB(整串进 DOM,防卡死 UI)/ pdf 32 MiB | 无(不读内容,metadata O(1)) |
+| 额外校验 | — | 文本类严格 UTF-8,非法 → 400(二进制误命名当拒) | 非 `is_file`(目录误命名)→ 404 |
+| 大小检方式 | metadata + 读后复核双检(TOCTOU 兜底),两路由同 | 同左 | 不适用 |
+| 错误码 | 400 非白名单/相对路径 · 404 不存在/非普通文件 · 413 超限 · 500 IO | 同左 | 400 非白名单/相对路径 · 404 不存在/非普通文件 |
 
 前端识别集(`utils/markdown.ts` `FILE_EXT` = 图片 ∪ 文本 ∪ pdf 单正则)与后端
 白名单有意各持一份:后端是唯一安全闸门,前端集偏大只会点开见 400。对齐约定见

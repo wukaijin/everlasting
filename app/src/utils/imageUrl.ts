@@ -56,6 +56,13 @@ export function fileUrl(path: string): string {
   return localFileUrl("files/raw", path);
 }
 
+/** 存在性探针 URL(`/files/stat`:200 = 存在且是普通文件,404 = 不存在,
+ *  body 空)。linkify 乐观渲染后由 `utils/pathExistence.ts` 异步确认用,
+ *  渲染路径零阻塞,不挂任何弹层。`path` 契约同 `imageUrl`。 */
+export function statUrl(path: string): string {
+  return localFileUrl("files/stat", path);
+}
+
 /// 三传输模式共用的 URL 构造(imageUrl/fileUrl 仅路由段不同,刻意
 /// 单点实现防两份漂移;原 imageUrl 内联体 09-13 文件通道时收编)。
 function localFileUrl(route: string, path: string): string {

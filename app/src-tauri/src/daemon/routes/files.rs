@@ -27,8 +27,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::commands::files::{
-    list_files_at_inner, list_files_inner, read_image_at_inner, read_raw_at_inner, ReadImageError,
-    ReadRawError,
+    list_files_at_inner, list_files_inner, read_image_at_inner, read_raw_at_inner,
+    stat_local_file_inner, ReadImageError, ReadRawError, StatError,
 };
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -136,12 +136,42 @@ pub async fn read_raw(Query(q): Query<ReadRawQuery>) -> Response {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StatQuery {
+    pub path: String,
+}
+
+/// `GET /api/v1/files/stat?path=...` — 存在性探针(前端 linkify 乐观渲染
+/// 后异步确认,见 `utils/pathExistence.ts`)。200 = 存在且是普通文件
+/// (body 空);404 = 不存在/非普通文件;400 = 相对路径/扩展不在并集
+/// 白名单。薄壳同 [`read_image`]/[`read_raw`]:query 提取 + 转发
+/// [`stat_local_file_inner`] + 状态码映射。`no-store`:存在性是即时
+/// 事实(文件随时可能被创建/删除),image/raw 的短缓存语义不适用。
+///
+/// 404 body 哨兵 `"stat: file not found"`:陈旧 daemon(vite 热更了前端、
+/// daemon 进程还没重启)没有 /stat 路由,axum fallback 也回 404 —— 前端
+/// 用哨兵区分"文件不存在"与"路由不存在",后者按未知处理保持乐观链接。
+/// 字面量与前端 `utils/pathExistence.ts` 成对持有(同 image/raw 白名单
+/// 的跨语言配对约定,改动任一侧须对照另一侧)。
+pub async fn stat_file(Query(q): Query<StatQuery>) -> Response {
+    match stat_local_file_inner(q.path).await {
+        Ok(()) => (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+        )
+            .into_response(),
+        Err(StatError::InvalidRequest(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        Err(StatError::NotFound) => (StatusCode::NOT_FOUND, "stat: file not found").into_response(),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/list_files", post(list_files))
         .route("/list_files_at", post(list_files_at))
         .route("/image", get(read_image))
         .route("/raw", get(read_raw))
+        .route("/stat", get(stat_file))
         .with_state(state)
 }
 
@@ -384,5 +414,99 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // --- /stat(2026-09-14 存在性探针,镜像 image/raw 的 200/404/400 臂)---
+
+    /// 200 臂:白名单并集内(image 扩展 + 文本扩展 + pdf)已存在的普通
+    /// 文件;body 为空,前端只看状态码。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stat_route_answers_ok_for_existing_files_across_union_whitelist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let app = router(state);
+        for name in ["shot.png", "report.md", "doc.pdf"] {
+            let file = tmp.path().join(name);
+            tokio::fs::write(&file, b"x").await.unwrap();
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/stat?path={}", file.to_str().unwrap()))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{}", name);
+            assert_eq!(
+                resp.headers().get(header::CACHE_CONTROL).unwrap(),
+                "no-store"
+            );
+        }
+    }
+
+    /// 404/400 臂:白名单扩展但不存在 → 404;目录误命名(d.md)→ 404;
+    /// 相对路径 / 非白名单扩展 → 400(不给白名单外的存在性旁信道)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stat_route_rejects_missing_directory_relative_and_bad_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("d.md");
+        tokio::fs::create_dir(&dir).await.unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+        let app = router(state);
+        // 白名单扩展但不存在 → 404 + 哨兵 body(前端区分"文件不存在"
+        // 与陈旧 daemon 的路由 fallback 404)。
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/stat?path=/nonexistent/definitely-missing.png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"stat: file not found");
+        // 目录误命名(带白名单扩展)→ 404(不是普通文件)。
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/stat?path={}", dir.to_str().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        // 相对路径 → 400(契约同 image/raw:cwd 只有前端知道)。
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/stat?path=src/main.rs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // 非白名单扩展 → 400(oracle 面与 image/raw 持平)。
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/stat?path=/tmp/evil.exe")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
