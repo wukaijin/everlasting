@@ -12,8 +12,9 @@
 //! - 工具执行错误不走 JSON-RPC error:200 + `isError:true` text result
 //!   (JS 壳 errorResult 同款,宿主把它呈现给模型而非判定协议故障)。
 //!
-//! 八工具语义 1:1 平移自 `scripts/group-chat-mcp.mjs`(该文件随 stdio 壳
-//! 退役后本文即唯一实现;映射表见任务 research/daemon-converge.md §2)。
+//! 八工具语义 1:1 平移自已退役的 stdio 壳 `scripts/group-chat-mcp.mjs`
+//! (2026-09-15 P4 随挂载切 HTTP 删除源,本文即唯一实现;映射表见任务
+//! 09-14-gce-mcp-daemon-converge 的 research/daemon-converge.md §2)。
 //! 编排原语全部走 daemon 内部 `*_inner`(Q0 单源),不经 HTTP 自绕。
 //!
 //! 安全边界:继承 daemon 全 API 零鉴权本机前提(docs/DAEMON-API.md §8)。
@@ -290,8 +291,9 @@ fn negotiate_version(requested: &str) -> &'static str {
 // 工具定义(tools/list wire schema)
 // ---------------------------------------------------------------------------
 
-/// 八工具声明。description/inputSchema 逐字段平移 JS 壳 `buildToolShapes` +
-/// `TOOLS` 表(scripts/group-chat-mcp.mjs:429-500)——宿主注入 LLM context
+/// 八工具声明。description/inputSchema 逐字段平移自已退役 JS 壳的
+/// `buildToolShapes` + `TOOLS` 表(源文件 2026-09-15 P4 删除;字段映射表见
+/// 任务 09-14 research/daemon-converge.md §2)——宿主注入 LLM context
 /// 的就是这份 wire schema,文案即产品(成本闸/不阻塞),勿重写。
 fn tool_defs() -> Vec<Value> {
     vec![

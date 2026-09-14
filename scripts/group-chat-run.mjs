@@ -30,9 +30,9 @@ import { fileURLToPath } from 'node:url';
 
 // GCE-M4a(R7 preset 单一事实源):预设定义抽到本目录的
 // group-chat-presets.json(引擎 / 前端创建表单 / 未来消费方读同一份)。
-// 用 **静态 import** 而非 fs.readFileSync:bun --compile 的 standalone
-// bin 只内嵌模块图,readFileSync 的旁路文件不会被打包(deploy 面
-// group-chat-mcp-deploy.mjs 依赖此行为)。JSON 里 persona 按 kind 引用
+// 用 **静态 import** 而非 fs.readFileSync:静态 import 让依赖进模块图、
+// 跟随打包工具走(曾供 bun --compile standalone bin 内嵌,该 deploy 面
+// 2026-09-15 P4 已退役)。JSON 里 persona 按 kind 引用
 // (arch/product/backend/outsider)+ persona_common 单点存放公共纪律,
 // compose 出的 persona_md 与旧内置常量逐字节同形(单测锁)。
 import presetsFile from './group-chat-presets.json' with { type: 'json' };

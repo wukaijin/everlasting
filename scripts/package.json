@@ -2,13 +2,12 @@
   "name": "everlasting-scripts",
   "private": true,
   "type": "module",
-  "description": "Repo utility scripts (group-chat driver + MCP server). Deps stay local to scripts/.",
+  "description": "Repo utility scripts (group-chat driver). Deps stay local to scripts/; only remaining dep is the MCP SDK client used by group-chat-mcp-http-smoke.mjs (zod retired with the stdio shell, 2026-09-15 P4).",
   "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.5.4"
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }
