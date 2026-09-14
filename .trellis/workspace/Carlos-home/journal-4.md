@@ -1694,3 +1694,23 @@ GCE-P1b 落地:group_chat_presets 加可空 builtin_key 列 + UNIQUE 索引(NULL
 ### Status
 
 [OK] **Completed**
+
+## Session 144: GCE MCP 收敛端点 /mcp——daemon 原生 streamable-HTTP server(09-14-gce-mcp-daemon-converge 全程)
+
+**Date**: 2026-09-14
+**Task**: 09-14-gce-mcp-daemon-converge(MCP 能力收敛进 daemon,roadmap §5 路径③)
+**Branch**: `main`
+
+### Summary
+
+动机:stdio MCP 壳随宿主会话 spawn node/98MB bun bin(daemon 100MB vs MCP 200MB 的根因),收敛到 daemon 原生 HTTP endpoint 后零子进程。调研改向(用户指正):不逆向宿主二进制,反向读 @modelcontextprotocol/sdk 1.30.0 源码提 wire 契约,极简无状态 profile(JSON-only/GET 405/无 session id/版本 echo lenient)。实现 routes/mcp.rs(~2000 行,非 rmcp 手写协议层):八工具 1:1 平移 stdio 壳(4200 预算锁同源,实测 3600),编排全走 *_inner 单源,内置预设编译期 include_str!(单一事实源保持),XDG 记账退役(rid 由 session_active_request 派生),转录惰性导出落 {cwd}/out/。验证:27 单测+全量 2440 全绿、clippy 对 main 基线零新增;SDK 客户端冒烟 scripts/group-chat-mcp-http-smoke.mjs 非 live 12 断言全绿(含 GET 405/DELETE 200/406/415 传输探针)、live 全链过(arch 档 19 msgs/161s/group_chat_end,转录带时间戳落盘);AC5:冒烟后 daemon RSS 增量 1068KB<10MB 闸、children 恒空。文档四处回填(DAEMON-API §6.5/ROADMAP §5 路径③/spec Signatures 例外注记/AGENTS.md)。踩坑:pre-commit cargo-fmt 闸(本次漏跑 fmt 提交被拦,format 后 27 用例复绿);routes-sync 守卫只扫 nest+域文件 .route,merge 装配天然豁免(实测绿)。遗留:P3 挂载切换(别名双挂→原名 everlasting-group-chat 换 HTTP 条目,保 mcp__ 前缀)、P4 stdio 壳/bin/deploy 退役;转录头行「定时审议」字样为 D2 复用 render_scheduled_transcript 的外观瑕疵。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7de34a6e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
