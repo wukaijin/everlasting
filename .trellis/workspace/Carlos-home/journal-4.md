@@ -1714,3 +1714,25 @@ GCE-P1b 落地:group_chat_presets 加可空 builtin_key 列 + UNIQUE 索引(NULL
 ### Status
 
 [OK] **Completed**
+
+
+## Session 145: GCE MCP P3 挂载切换 + P4 stdio 壳退役收口
+
+**Date**: 2026-09-15
+**Task**: GCE MCP P3 挂载切换 + P4 stdio 壳退役收口
+**Branch**: `main`
+
+### Summary
+
+P3:验证 /mcp list_models 后把用户级 everlasting-group-chat 条目原位换 HTTP 并删 -http 别名(备份 config.json.p3-dual.bak,工具前缀保持)。P4(任务 09-15-gce-mcp-stdio-retire):删 stdio 壳/deploy/冒烟/单测六文件 + 机器 bun bin/sidecar;zod 依赖删、SDK 保留(http-smoke 客户端消费——初版『依赖清零』判断误,排除式 grep 吃掉同前缀文件,勘误记任务 research)、lockfile 收敛 pnpm 单源;mcp.rs/run.mjs 注释去悬空引用;DAEMON-API §6.1 挂载段换 HTTP+删部署面段+勘误八工具、§6.5 P3/P4 翻转;AGENTS 两块重写;roadmap §5 落账;删 scripts/group-chat-mcp-deploy.md spec 并重写 index。验证:引擎单测 20/20、http-smoke 全探针绿(预算 3609<4200)、残留 grep 仅历史表述。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `90f8ab22` | (see git log) |
+| `b975f83b` | (see git log) |
+
+### Status
+
+[OK] **Completed**

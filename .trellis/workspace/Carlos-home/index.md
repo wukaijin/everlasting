@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 144
-- **Last Active**: 2026-09-14
+- **Total Sessions**: 145
+- **Last Active**: 2026-09-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1696 | Active |
+| `journal-4.md` | ~1738 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 145 | 2026-09-15 | GCE MCP P3 挂载切换 + P4 stdio 壳退役收口 | `90f8ab22`, `b975f83b` | `main` |
 | 143 | 2026-09-13 | 非图片文件路径可点击查看 + 工具输出路径 linkify(09-13-file-path-viewer 全程) | `e9b26825` | `main` |
 | 142 | 2026-09-13 | 图片路径可点击弹层预览 + 缩放平移(09-13) | `8a40de52` | `main` |
 | 141 | 2026-09-12 | GCE-P2: M1/MCP 引擎侧用户预设可见性(daemon 运行时拉取) | `44816583`, `629c261b` | `main` |
