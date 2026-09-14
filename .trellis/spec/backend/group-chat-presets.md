@@ -10,7 +10,8 @@
 > `app/src-tauri/src/commands/group_chat_presets.rs::validate_preset_input`,
 > 路由在 `app/src-tauri/src/daemon/routes/group_chat_presets.rs`;
 > 引擎侧合流在 `scripts/group-chat-run.mjs`(mergePresets / loadEffectivePresets /
-> lookupPreset,scripts 单测 `group-chat-run.test.mjs` + `group-chat-mcp.test.mjs`)。
+> lookupPreset,scripts 单测 `group-chat-run.test.mjs`;MCP 层原单测 `group-chat-mcp.test.mjs`
+> 随 stdio 壳 2026-09-15 P4 退役删除,Rust 侧覆盖在 `daemon/routes/mcp.rs` 单测)。
 >
 > **Cross-references**: [database-guidelines.md](./database-guidelines.md)(soft-FK / CRUD 约定)、
 > [scheduled-tasks.md](./scheduled-tasks.md)(GroupChatTaskConfig / 快照语义)、
@@ -160,10 +161,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
 - 引擎合流(scripts/,node --test;P2):`group-chat-run.test.mjs` —— mergePresets
   六臂(追加/顶替/脏行跳过/persona 展开/fail-loud 四投掷/空行集)、lookupPreset
   三趟 + miss 清单、resolveParticipants(presets) 传参/缺省回落、
-  loadEffectivePresets 正常/降级两臂;`group-chat-mcp.test.mjs` —— coreStart 用户档
-  (by id/by name/覆盖档)、降级两臂(内置照常 / 用户档报错带提示)、corePresets
-  合并视图与 degraded、八工具 + preset schema string + 预算实测;smoke 非 live
-  八工具名 + list_presets 内置四 key 恒在(daemon 两态确定性)。
+  loadEffectivePresets 正常/降级两臂;MCP 面覆盖在 `app/src-tauri/src/daemon/routes/mcp.rs`
+  单测 + `scripts/group-chat-mcp-http-smoke.mjs`(非 live list_presets 内置四 key 恒在——
+  数据源即本进程,无两态)。JS 侧 `group-chat-mcp.test.mjs`(coreStart 用户档 by id/by
+  name/覆盖档、降级两臂、corePresets 合并视图与 degraded、wire 预算实测)随 stdio 壳
+  P4 删除(2026-09-15,任务 09-15-gce-mcp-stdio-retire)。
 - 前端:store merged 单测(内置在前 / name 序 / UUID 借道 byId 直配——锁机制前提);
   P1b——覆盖行原位顶替(key/name = 内置 key、overriddenBy、无追加键)、普通行照旧、
   未知 builtinKey 跳过;tab 组件测试(mock transport 按 cmd 分发;P1b——覆盖编辑预填
@@ -210,7 +212,8 @@ preset: z.enum(Object.keys(presets))           // 动态 schema
 
 #### Correct:schema 放宽 `z.string()` + describe 指向 list_presets,校验在
 coreStart 运行时(未知预设报错本就存在);枚举发现义务移交 `list_presets` 工具
-(GCE-P2 定案,scripts/group-chat-mcp.mjs buildToolShapes)。
+(GCE-P2 定案;buildToolShapes 原实现随 stdio 壳 P4 删除,现为
+`app/src-tauri/src/daemon/routes/mcp.rs` tool_defs)。
 
 ### Wrong:把「拉取失败」和「数据损坏」塞进同一层降级
 

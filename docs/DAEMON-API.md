@@ -182,38 +182,40 @@ node scripts/group-chat-run.mjs run --project <path> --preset review --topic "..
 
 ### 6.1 MCP 接口层(GCE-M2,2026-09-06 起)——宿主 agent 的首选入口
 
-> **09-14 起有第二载体**:daemon 原生 `/mcp` streamable-HTTP 端点(§6.5,零子进程、
-> 工具语义 1:1);本节 stdio 壳仍是当前主入口 —— P3 切换后转维护态,P4 退役。
+> **2026-09-15 起唯一载体**:daemon 原生 `/mcp` streamable-HTTP 端点(§6.5,零子进程、
+> 工具语义 1:1)。stdio 壳(2026-09-06~09-14 的主入口)与 standalone bin 部署面已随
+> P3 挂载切换 + P4 退役删除(任务 09-15-gce-mcp-stdio-retire);历史契约见 git 历史
+> 与 GCE-ROADMAP §5。
 
 MCP 宿主(ZCode / Claude Code / Cursor 等)里的 agent **优先用 MCP 工具,不跑脚本**。
-六工具 = 生命周期四件套 `start_discussion` / `discussion_status` / `discussion_result` /
+八工具 = 生命周期四件套 `start_discussion` / `discussion_status` / `discussion_result` /
 `cancel_discussion`(立即返回 + 轮询语义与 §6 一致;工具描述自带成本闸)+ **M3 控制面两件**:
 `interrupt_discussion`(session 域收束打断,preempt 端点 1:1,分工同 §4;返回轮询指引)与
 `inject_message`(往**进行中**的讨论注入用户消息,下一 moderator 轮可见)。后者带**前置
 busy guard**:非 busy / 已收官的群聊 session 直接报错不发起——误发会重启编排器并无条件
 清空上一场 stop_reason/summary(代价不可逆),guard 把它挡在客户端层;guard 通过后若
 acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 request_id 即时
-`cancel_chat` 止损再报错。
+`cancel_chat` 止损再报错。另有只读内省两件 `list_models` / `list_presets`(09-11/09-12 起,
+查建群可用模型与合并预设视图,宿主填 participants/preset 用)。
 
-**挂载(2026-09-06 起用户级)**:`~/.zcode/cli/config.json`(ZCode)/ Claude Code 各自的
-用户级配置,stdio spawn 本仓库 `scripts/group-chat-mcp.mjs` 绝对路径:
+**挂载(2026-09-15 起 HTTP,任务 09-15 P3)**:`~/.zcode/cli/config.json`(ZCode)用户级
+`mcp.servers`,server 名保持 `everlasting-group-chat`(即保 `mcp__everlasting-group-chat__*`
+工具前缀):
 
 ```json
 "mcp": { "servers": { "everlasting-group-chat": {
-  "command": "node",
-  "args": ["/usr/local/code/github/everlasting/scripts/group-chat-mcp.mjs"]
+  "type": "http",
+  "url": "http://127.0.0.1:7456/mcp"
 } } }
 ```
 
-- ⚠️ **挂载配置必须写绝对路径**——配置文件作用域的 MCP server **不展开
-  `${...}` 模板变量**(那是插件作用域专属特性;字面量路径会让 server 启动即
-  失败、工具注册为 0,Settings → MCP 显示 failed)。换机器时须按实际检出路径改
-  `args`(曾用仓库根 `.agents/mcp.json` 挂载,已移除:workspace 作用域只在
-  本仓库会话可见,跨项目不可用——2026-09-06 实测)。
-- 仓库级 `.agents/mcp.json` 挂载**已移除**(2026-09-06):workspace 作用域只在
-  本仓库会话可见,跨项目不可用;备选如需仓库级,放 `.agents/mcp.json` 顶层
-  `mcpServers` 键,它是 same-scope fallback,同 scope `.zcode` 定义了任何 MCP
-  server 时被整体忽略(非合并)。
+- 前置:daemon 在跑(`:7456`)——HTTP 挂载零子进程,宿主直连 daemon 既有端口;
+  daemon 停则工具不可用(与 GUI 同生命周期)。
+- 历史:2026-09-06~09-14 为 stdio spawn 本仓库 `scripts/group-chat-mcp.mjs`(绝对路径,
+  换机器须改 args);09-06~09-15 曾有 bun standalone bin 部署面(`group-chat-mcp-deploy.mjs`,
+  任务 09-06-gce-mcp-standalone)——两者均随 P4 退役删除。仓库级 `.agents/mcp.json`
+  挂载 2026-09-06 已移除(workspace 作用域跨项目不可见)。切换前双挂状态备份
+  `~/.zcode/cli/config.json.p3-dual.bak`。
 - 分工:**宿主 agent = MCP 工具**;**everlasting 内部 agent(daemon 单聊)= 脚本 + M1 纪律**
   (沙箱 errno 翻译 / prefix 授权 basename / 裸命令,见 SKILL.md 边界)——内部 agent 不是
   MCP client。
@@ -221,21 +223,10 @@ acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 
 - `discussion_result` 输出自 2026-09-09 起携带 **`detail`**(§4 `discussion_detail` 的解析
   对象;只发 summary 收官的场与旧场无此键)——外部 agent 消费结论时可按 `stance` 分层
   可信度、按锚点 `check` 判断证据是否断链;坏 JSON 降级 `detail_warning` 不炸。
-- server 记账(session→request_id/project_id)落 `~/.local/state/dev.everlasting.app/mcp-discussions.json`
-  (XDG state,原子写)——server 进程随宿主会话生灭,讨论跨进程存活靠它兜底。
-- 冒烟:`node scripts/group-chat-mcp-smoke.mjs`(`--live` 烧真 token 走全链;`--bin <path>` 对
-  standalone bin 冒烟,断言链同构)。
-
-**部署面(standalone bin,2026-09-06 落地,任务 09-06-gce-mcp-standalone)**:MCP server 可打成
-**bun compile 单文件可执行**(内嵌运行时 + SDK,免 node / 免 node_modules / 免源码检出;98 MB 量级)。
-`node scripts/group-chat-mcp-deploy.mjs` 一条命令 = 构建 → 装到
-`~/.local/share/dev.everlasting.app/bin/everlasting-group-chat-mcp` → 把上方 user-scope 配置**原位替换**为
-`{ command: <bin 绝对路径> }`(写前留单份备份 `config.json.mcp-deploy.bak`,全程幂等)。bin 同目录 sidecar
-`everlasting-group-chat-mcp.build-info`(git short rev + 构建时间戳)用于诊断 stale bin。`--revert` 把配置
-切回 node 挂载(node 挂载保留为**开发态默认**:改 .mjs 无需重编译),`--uninstall` 删配置项与 bin。引擎
-`group-chat-run.mjs` / `group-chat-mcp.mjs` 零改动——bun compile 下 isMain 守卫恒真的误判由部署入口的
-`process.argv[1]` 哨兵化解(根因见任务 research)。v1 只做宿主 linux-x64;跨平台编译矩阵(macOS/Windows)、
-Tauri app 分发与其他宿主配置写入记 follow-up(GCE-ROADMAP §5)。
+- 记账:stdio 壳时代的 XDG state 记账文件(`~/.local/state/dev.everlasting.app/mcp-discussions.json`)
+  已随收敛退役(§6.5——rid 由 `session_active_request` 派生);旧文件残留无消费方,可删。
+- 冒烟:`node scripts/group-chat-mcp-http-smoke.mjs`(§6.5;`--live` 烧真 token 走 start →
+  wait 长轮询 → result 全链)。
 
 ### 6.2 实时跟随(SSE follow,GCE-M3,2026-09-06 起)
 
@@ -398,12 +389,13 @@ standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既�
 - **冒烟**:`node scripts/group-chat-mcp-http-smoke.mjs`(前置 daemon 在跑;非 live =
   SDK 握手 + ping + tools/list + 预算 + 错误链 + list_presets/models + GET 405 /
   DELETE 200 / 406 / 415 传输探针;`--live` 烧真 token 走 start → wait_seconds 长轮询 →
-  result 全链)。stdio 壳冒烟 `group-chat-mcp-smoke.mjs` 不变。
-- **挂载切换(P3,未切)**:目标形态 = 用户级 MCP 配置写 HTTP 条目
-  `{"type":"http","url":"http://127.0.0.1:7456/mcp"}`;切换走两步 —— 先以别名
-  (如 `everlasting-group-chat-http`)双挂验证宿主兼容,烧机后再把主条目原名
-  `everlasting-group-chat` 换成 HTTP(保留名即保住 `mcp__everlasting-group-chat__*`
-  工具前缀);stdio 壳 / bun bin / deploy 脚本退役另立 P4。
+  result 全链)。
+- **挂载切换(P3 ✅ 2026-09-15;P4 退役同日)**:用户级配置 `everlasting-group-chat`
+  已按两步走完成切换——别名 `everlasting-group-chat-http` 双挂验证宿主兼容后,原名条目
+  原位换 `{"type":"http","url":"http://127.0.0.1:7456/mcp"}` 并删别名(保住
+  `mcp__everlasting-group-chat__*` 工具前缀;双挂态备份 `config.json.p3-dual.bak`)。
+  stdio 壳 / bun bin / deploy 脚本已随 P4 删除(任务 09-15-gce-mcp-stdio-retire),
+  本端点为唯一 MCP 实现。
 - ⚠️ **安全边界**:继承 daemon 全 API 零鉴权本机前提(§8);**remote tunnel 暴露
   `/mcp` 须先过安全评审**(roadmap §5「远程暴露认证」立项前置,本端点不改变该结论)。
 

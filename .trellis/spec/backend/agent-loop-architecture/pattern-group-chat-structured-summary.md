@@ -73,8 +73,9 @@
   (基础教学三 stance + wrap-up 同款)。
 - 前端:`DiscussionSummaryCard.test.ts` 7 用例(live input 渲染 / path+line 叠
   check / 坏 JSON / 无结构兜底)。
-- JS:`group-chat-run.test.mjs`(渲染节各臂)+ `group-chat-mcp.test.mjs`
-  (detail 透传 / 坏 JSON / 无键三臂)。
+- JS:`group-chat-run.test.mjs`(渲染节各臂;detail 透传 / 坏 JSON / 无键三臂原在
+  `group-chat-mcp.test.mjs`,随 stdio 壳 2026-09-15 P4 删除,Rust 侧见 `daemon/routes/mcp.rs`
+  单测)。
 
 ## 7. Wrong vs Correct
 
