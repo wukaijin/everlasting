@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/09-15-gce-mcp-stdio-retire/research/blast-radius.md", "reason": "验收对照表:引用清单逐行核对是否全部收口"}
+{"file": ".trellis/spec/backend/group-chat-presets.md", "reason": "预设域 spec 含被改测试引用,检查改动后覆盖表述与现存测试一致"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/09-15-gce-mcp-stdio-retire/research/blast-radius.md", "reason": "波及面实测清单:依赖方向/测试所有权/全部引用位置与动作,实施按此表执行"}
+{"file": ".trellis/spec/scripts/group-chat-mcp-deploy.md", "reason": "被退役契约的原文,删除前对照确认无遗漏职责(如 bin 落点/sidecar/配置形状)"}
