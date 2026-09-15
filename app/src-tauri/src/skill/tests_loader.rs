@@ -847,3 +847,132 @@ async fn builtin_plugin_beats_project_layer_skill() {
     );
     assert_ne!(r.body, "SHOULD_NOT_WIN");
 }
+
+// --- N1 onboarding: GlobalBuiltin skill layer ------------------------
+
+/// 空项目 + 空用户目录的普通(非 workflow)会话:三份全局内置 skill
+/// 在 L0 清单可见(list_skill_infos → `/` 面板同源),且 use_skill
+/// 路径(find_skill)可解析全文。
+#[tokio::test]
+async fn global_builtin_skills_visible_in_plain_session() {
+    let user_tmp = tempfile::TempDir::new().unwrap();
+    let proj_tmp = tempfile::TempDir::new().unwrap();
+    let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+    let cache = SkillCache::arc();
+    let pp = proj_tmp.path().to_string_lossy().to_string();
+
+    let infos = list_skill_infos(&cache, Some(&pp)).await;
+    set_user_dir_for_test(prev);
+
+    for slug in ["llm-setup", "doctor", "onboarding"] {
+        let info = infos.iter().find(|i| i.name == slug).unwrap_or_else(|| {
+            panic!(
+                "global builtin {slug} must be listed (got {:?})",
+                infos.iter().map(|i| i.name.as_str()).collect::<Vec<_>>()
+            )
+        });
+        assert_eq!(info.source, "global-builtin", "{slug} source");
+        assert!(
+            !info.description.is_empty(),
+            "{slug} needs an L0 description"
+        );
+    }
+
+    // L1 解析:find_skill(非 workflow 入口)取全文。
+    let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+    let r = find_skill(&cache, "llm-setup", Some(&pp)).await;
+    set_user_dir_for_test(prev);
+    let r = r.expect("global builtin llm-setup must resolve for use_skill");
+    assert_eq!(r.source, SkillSource::GlobalBuiltin);
+    assert!(!r.body.is_empty());
+    assert!(
+        r.path.to_string_lossy().contains("<builtin>"),
+        "builtin layer uses a virtual path marker"
+    );
+}
+
+#[tokio::test]
+async fn user_skill_overrides_global_builtin() {
+    // 同名用户 skill 覆盖全局内置(优先级垫底:User > GlobalBuiltin)。
+    let user_tmp = tempfile::TempDir::new().unwrap();
+    let user_skills = user_tmp.path().join(SKILLS_SUBDIR);
+    std::fs::create_dir_all(&user_skills).unwrap();
+    write_skill(
+        &user_skills,
+        "doctor",
+        "---\nname: doctor\ndescription: from-user\n---\nUSER_BODY",
+    );
+
+    let proj_tmp = tempfile::TempDir::new().unwrap();
+    let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+    let cache = SkillCache::arc();
+    let pp = proj_tmp.path().to_string_lossy().to_string();
+
+    let infos = list_skill_infos(&cache, Some(&pp)).await;
+    let resolved = find_skill(&cache, "doctor", Some(&pp)).await;
+    set_user_dir_for_test(prev);
+
+    let info = infos.iter().find(|i| i.name == "doctor").unwrap();
+    assert_eq!(info.source, "user", "user layer wins the listing slot");
+    assert_eq!(info.description, "from-user");
+    assert_eq!(
+        infos.iter().filter(|i| i.name == "doctor").count(),
+        1,
+        "override must dedup — no duplicate listing rows"
+    );
+    let resolved = resolved.expect("doctor must resolve");
+    assert_eq!(resolved.body, "USER_BODY");
+    assert_eq!(resolved.source, SkillSource::User);
+}
+
+#[tokio::test]
+async fn project_skill_overrides_global_builtin() {
+    // 同名项目 skill 同样覆盖(Project > GlobalBuiltin)。
+    let user_tmp = tempfile::TempDir::new().unwrap();
+    let proj_tmp = tempfile::TempDir::new().unwrap();
+    let proj_skills = proj_tmp.path().join(PROJECT_NAMESPACE).join(SKILLS_SUBDIR);
+    std::fs::create_dir_all(&proj_skills).unwrap();
+    write_skill(
+        &proj_skills,
+        "onboarding",
+        "---\nname: onboarding\ndescription: from-project\n---\nPROJECT_BODY",
+    );
+
+    let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+    let cache = SkillCache::arc();
+    let pp = proj_tmp.path().to_string_lossy().to_string();
+    let infos = list_skill_infos(&cache, Some(&pp)).await;
+    let resolved = find_skill(&cache, "onboarding", Some(&pp)).await;
+    set_user_dir_for_test(prev);
+
+    let info = infos.iter().find(|i| i.name == "onboarding").unwrap();
+    assert_eq!(info.source, "project");
+    let resolved = resolved.expect("onboarding must resolve");
+    assert_eq!(resolved.body, "PROJECT_BODY");
+    assert_eq!(resolved.source, SkillSource::Project);
+}
+
+#[tokio::test]
+async fn global_builtin_visible_alongside_workflow_layers() {
+    // workflow 会话同样看到全局内置层(plugin/builtin-plugin 仍在
+    // 其上,但本任务三名字与 wf-* 无冲突 → 清单 = wf-* ∪ 三件套)。
+    let user_tmp = tempfile::TempDir::new().unwrap();
+    let proj_tmp = tempfile::TempDir::new().unwrap();
+    let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+    let cache = SkillCache::arc();
+    let pp = proj_tmp.path().to_string_lossy().to_string();
+    let infos = list_skill_infos_with_workflow(&cache, Some(&pp), Some("dev")).await;
+    set_user_dir_for_test(prev);
+
+    for slug in ["wf-overview", "llm-setup", "doctor", "onboarding"] {
+        assert!(
+            infos.iter().any(|i| i.name == slug),
+            "workflow listing must contain {slug} (got {:?})",
+            infos.iter().map(|i| i.name.as_str()).collect::<Vec<_>>()
+        );
+    }
+    let wf = infos.iter().find(|i| i.name == "wf-overview").unwrap();
+    assert_eq!(wf.source, "builtin-plugin");
+    let g = infos.iter().find(|i| i.name == "doctor").unwrap();
+    assert_eq!(g.source, "global-builtin");
+}

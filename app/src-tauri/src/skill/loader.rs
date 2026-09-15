@@ -5,12 +5,16 @@
 //! structural delta: a skill is a **directory** containing `SKILL.md`
 //! (vs a command's single `*.md` file), so the scan walks subdirs.
 //!
-//! Precedence (high → low): **plugin > project > user**. The
-//! `plugin` layer is **only** consulted when the caller passes a
-//! `workflow_name` (Step 1.1 of `07-08-workflow-integration`) —
-//! non-workflow sessions go straight to project-overrides-user and
-//! never touch `<project>/.everlasting/workflow/<name>/skills/`.
-//! No builtins (unlike commands, which carry `/help` `/clear` `/new`).
+//! Precedence (high → low): **plugin > builtin-plugin > project >
+//! user > global-builtin**. The `plugin` layer is **only** consulted
+//! when the caller passes a `workflow_name` (Step 1.1 of
+//! `07-08-workflow-integration`) — non-workflow sessions go straight
+//! to project-overrides-user and never touch
+//! `<project>/.everlasting/workflow/<name>/skills/`. The
+//! `global-builtin` layer (N1 onboarding skills, 2026-09-15) is the
+//! priority floor: compile-time constants every session can see,
+//! overridable by same-name user / project skills (mirrors the agent
+//! chain's `… > User > Builtin` precedent).
 //! `user_dir` naming matches `resource_loader` so both layers share
 //! the same config root.
 
@@ -56,10 +60,13 @@ pub(crate) const SKILL_FILENAME: &str = "SKILL.md";
 pub(crate) const MAX_SKILL_FILE_SIZE: u64 = 64 * 1024; // 64 KiB
 
 /// Where a skill came from. On a name collision, the highest-priority
-/// layer wins: **plugin > builtin-plugin > project > user**. The `plugin`
-/// and `builtin-plugin` layers are workflow-scoped and only consulted
-/// when the caller passes a `workflow_name` — see
-/// `list_skill_infos_with_workflow` / `find_skill_with_workflow`.
+/// layer wins: **plugin > builtin-plugin > project > user >
+/// global-builtin**. The `plugin` and `builtin-plugin` layers are
+/// workflow-scoped and only consulted when the caller passes a
+/// `workflow_name` — see `list_skill_infos_with_workflow` /
+/// `find_skill_with_workflow`. `global-builtin` is visible to every
+/// session (workflow or not) and sits at the priority floor so a
+/// same-name user / project skill can override the app default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillSource {
@@ -75,6 +82,12 @@ pub enum SkillSource {
     /// 07-09-workflow-builtin-plugin: 编译期常量,优先级
     /// `Plugin > BuiltinPlugin > Project > User`。
     BuiltinPlugin,
+    /// app 全局内置 skill(N1 首次引导,2026-09-15):`include_str!`
+    /// 编译期常量,源 `resources/builtin-skills/`,所有会话可见。
+    /// 优先级垫底 —— 用户/项目同名 skill 原位覆盖(照 agent 链
+    /// `… > User > Builtin` 先例,spec tool-contract/12)。
+    #[serde(rename = "global-builtin")]
+    GlobalBuiltin,
 }
 
 /// A parsed skill directory: frontmatter + `SKILL.md` body. `body` is
@@ -315,6 +328,43 @@ fn builtin_plugin_skills(workflow_name: &str) -> Vec<SkillResource> {
         .collect()
 }
 
+/// (slug, SKILL.md body) —— app 全局内置 skills(N1 首次引导,2026-09-15)。
+/// 源文件 `resources/builtin-skills/<slug>/SKILL.md`,`include_str!`
+/// 编译期嵌入二进制 —— **唯一交付形态**:daemon-only 部署(独立
+/// daemon / PWA remote / 无源码机器)运行时零文件读取、零源码依赖
+/// (承 GCE stdio MCP「绑定源码检出」教训的收敛决策,同 09-14
+/// mcp.rs 内置预设先例)。slug 必须等于 SKILL.md 所在子目录名。
+const GLOBAL_BUILTIN_SKILLS: &[(&str, &str)] = &[
+    (
+        "llm-setup",
+        include_str!("../../resources/builtin-skills/llm-setup/SKILL.md"),
+    ),
+    (
+        "doctor",
+        include_str!("../../resources/builtin-skills/doctor/SKILL.md"),
+    ),
+    (
+        "onboarding",
+        include_str!("../../resources/builtin-skills/onboarding/SKILL.md"),
+    ),
+];
+
+/// 构造全局内置 skills(N1 首次引导)。不走磁盘扫描 —— 内置源是
+/// `include_str!` 内存常量,用 `parse_skill_content` 直接解析(与
+/// 磁盘层同一 frontmatter parser,解析行为 100% 一致,同
+/// `builtin_plugin_skills` 形制)。`path` 用虚拟标记
+/// `<builtin>/global/skills/<slug>/SKILL.md`。
+fn global_builtin_skills() -> Vec<SkillResource> {
+    GLOBAL_BUILTIN_SKILLS
+        .iter()
+        .filter_map(|(slug, body)| {
+            let mut res = parse_skill_content(body, slug, SkillSource::GlobalBuiltin)?;
+            res.path = PathBuf::from(format!("<builtin>/global/skills/{slug}/SKILL.md"));
+            Some(res)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // SkillCache — read-through with an mtime fence (copied from B3)
 // ---------------------------------------------------------------------------
@@ -435,6 +485,7 @@ fn resource_to_info(r: &SkillResource) -> SkillInfo {
             SkillSource::Project => "project",
             SkillSource::Plugin => "plugin",
             SkillSource::BuiltinPlugin => "builtin-plugin",
+            SkillSource::GlobalBuiltin => "global-builtin",
         }
         .to_string(),
         allowed_tools: r.allowed_tools.clone(),
@@ -444,8 +495,10 @@ fn resource_to_info(r: &SkillResource) -> SkillInfo {
 /// Merge user + project skills into a single listing (L0 discovery).
 ///
 /// Precedence: **project > user** (project inserted last into the
-/// by-name map so it wins on collision). Result is sorted by name for
-/// a stable listing. No builtins (unlike `resource_loader::list_all`).
+/// by-name map so it wins on collision), over the global-builtin
+/// floor (every session sees the compile-time builtin skills unless
+/// a same-name user / project skill overrides). Result is sorted by
+/// name for a stable listing.
 ///
 /// **Non-workflow entry point** — does NOT consult the plugin layer.
 /// This is the call site used by the UI (`commands::panel`); the UI
@@ -483,10 +536,11 @@ pub async fn list_skill_infos_with_workflow(
 }
 
 /// Shared merge core. Layer insert order is the inverse of priority
-/// — later inserts win — so the priority is plugin > project > user.
-/// Each layer is optional: `Some(pp)` enables project; `Some(wf)`
-/// enables plugin (and `None` / `""` disables it). Returns the
-/// deduplicated, name-sorted `SkillInfo` listing.
+/// — later inserts win — so the priority is plugin > builtin-plugin
+/// > project > user > global-builtin. Each layer is optional:
+/// `Some(pp)` enables project; `Some(wf)` enables plugin (and `None`
+/// / `""` disables it). Returns the deduplicated, name-sorted
+/// `SkillInfo` listing.
 async fn merge_skill_layers(
     cache: &SkillCache,
     project_path: Option<&str>,
@@ -494,6 +548,10 @@ async fn merge_skill_layers(
 ) -> Vec<SkillInfo> {
     let mut by_name: HashMap<String, SkillResource> = HashMap::new();
     // Lowest priority first; later inserts overwrite.
+    // 全局内置层垫底(N1):编译期常量,所有会话可见,同名高层覆盖。
+    for r in global_builtin_skills() {
+        by_name.insert(r.name.clone(), r);
+    }
     for r in cache.list_user().await {
         by_name.insert(r.name.clone(), r);
     }
@@ -559,7 +617,8 @@ pub async fn find_skill_with_workflow(
 }
 
 /// Shared resolution core: highest-priority layer first (plugin →
-/// builtin-plugin → project → user), so the first hit wins.
+/// builtin-plugin → project → user → global-builtin), so the first
+/// hit wins.
 async fn find_skill_in_layers(
     cache: &SkillCache,
     name: &str,
@@ -595,7 +654,12 @@ async fn find_skill_in_layers(
             return Some(r);
         }
     }
-    cache.list_user().await.into_iter().find(|r| r.name == name)
+    if let Some(r) = cache.list_user().await.into_iter().find(|r| r.name == name) {
+        return Some(r);
+    }
+    // 全局内置层垫底(N1):同名 user/project skill 已在上面返回,
+    // 走到这里才命中内置默认。
+    global_builtin_skills().into_iter().find(|r| r.name == name)
 }
 
 // ---------------------------------------------------------------------------
