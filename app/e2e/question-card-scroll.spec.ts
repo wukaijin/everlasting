@@ -189,6 +189,15 @@ test.describe("提问卡 × 滚动联动(CH8-2)", () => {
     await expect
       .poll(() => distanceFromBottom(page), { timeout: 10_000 })
       .toBeLessThan(80);
+    // 钉底 ≠ 稳定循环已退出:冷跑(全量首跑 vite 冷变换)时 boot 先于
+    // 列表渲染完成,上面的 poll 可在矮列表上提前通过(距底天然 <80)。
+    // 此时写 scrollTop=0 不翻 isAtBottom,稳定循环随后的挂载 churn 又
+    // 把视口全程钉回底部 → 回底按钮永不出现 → toBeVisible 超时(本 spec
+    // 全量冷跑 flaky 根因;MessageList.test.ts mountList 的 300ms settle
+    // 注释的是同一竞态)。data-stabilizing 由组件在循环退出后置
+    // "false",此刻起不再有钉底 tick 落地,上滚才确定性生效。
+    await expect(page.locator("ul.messages[data-stabilizing='false']"))
+      .toBeAttached({ timeout: 10_000 });
     // 钉底状态下回底按钮不出现。
     await expect(page.locator(".scroll-to-bottom")).toHaveCount(0);
 

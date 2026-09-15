@@ -37,9 +37,19 @@ function setListEl(instance: unknown) {
 
 // Whether the viewport is currently pinned to (near) the bottom.
 // Drives the scroll-to-bottom button's visibility. Updated on every
-// scroll event; the ref de-dupes so the button only re-renders when
-// the value actually flips.
+// scroll event; the ref de-dupes so high UI only re-renders when the
+// value actually flips.
 const isAtBottom = ref(true);
+
+// Test-visible signal for stickToBottomUntilStable: true while the
+// boot-stabilizer rAF loop is still pinning the viewport to the bottom
+// (mount churn / session switch / reload), false once it has exited —
+// i.e. no more pinning ticks can land. Starts true: onMounted always
+// kicks off a run, so "not yet stable" is the correct initial state.
+// E2e scrolls the list only after "false" — scrolling earlier races
+// the loop, which re-pins scrollTop every frame (same race
+// MessageList.test.ts's mountList rides out with its 300ms settle).
+const stabilizing = ref(true);
 
 const visibleMessages = computed(() =>
   store.messages.filter(
@@ -137,21 +147,34 @@ async function jumpToBottom() {
 // elapses. rAF callbacks run right before paint, so scrollHeight is the
 // post-layout value when we read it.
 function stickToBottomUntilStable(deadlineMs = 1000, quietMs = 150) {
+  stabilizing.value = true;
   void nextTick().then(() => {
     const start = performance.now();
     let lastH = -1;
     let lastChangeAt = start;
     const tick = () => {
       const el = messagesEl.value;
-      if (!el) return; // unmounted mid-loop — bail
+      if (!el) {
+        // unmounted mid-loop — bail (a fresh mount restarts its own run)
+        stabilizing.value = false;
+        return;
+      }
       el.scrollTop = el.scrollHeight;
       const now = performance.now();
       if (el.scrollHeight !== lastH) {
         lastH = el.scrollHeight;
         lastChangeAt = now;
       }
-      if (now - lastChangeAt >= quietMs) return;
-      if (now - start > deadlineMs) return;
+      // Both exits flip the test signal AFTER this tick's last pin,
+      // so observing "false" guarantees no further pinning ticks.
+      if (now - lastChangeAt >= quietMs) {
+        stabilizing.value = false;
+        return;
+      }
+      if (now - start > deadlineMs) {
+        stabilizing.value = false;
+        return;
+      }
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -259,7 +282,14 @@ onUnmounted(() => {
 
 <template>
   <div class="messages-wrap">
-    <TransitionGroup name="msg" tag="ul" :ref="setListEl" class="messages" appear>
+    <TransitionGroup
+      name="msg"
+      tag="ul"
+      :ref="setListEl"
+      class="messages"
+      :data-stabilizing="stabilizing"
+      appear
+    >
       <!--
         交错思考: 按 agent run 分组(见 renderGroups)。每个 run 用
         `<li class="run-group">` 容器包裹同 run 的多条 MessageItem,
