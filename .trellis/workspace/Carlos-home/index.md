@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 145
-- **Last Active**: 2026-09-15
+- **Total Sessions**: 146
+- **Last Active**: 2026-09-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1738 | Active |
+| `journal-4.md` | ~1764 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 146 | 2026-09-16 | N1 首次引导:轻页面引导 + 内置诊断/引导/配置 LLM skills(09-15 全程) | `1c9651aa`, `0f03cc09`, `0efd9575`, `ebcb91c4`, `7ed394f2`, `49c867f4` | `main` |
 | 145 | 2026-09-15 | GCE MCP P3 挂载切换 + P4 stdio 壳退役收口 | `90f8ab22`, `b975f83b` | `main` |
 | 143 | 2026-09-13 | 非图片文件路径可点击查看 + 工具输出路径 linkify(09-13-file-path-viewer 全程) | `e9b26825` | `main` |
 | 142 | 2026-09-13 | 图片路径可点击弹层预览 + 缩放平移(09-13) | `8a40de52` | `main` |

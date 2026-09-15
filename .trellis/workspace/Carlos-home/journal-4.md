@@ -1736,3 +1736,29 @@ P3:验证 /mcp list_models 后把用户级 everlasting-group-chat 条目原位�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 146: N1 首次引导:轻页面引导 + 内置诊断/引导/配置 LLM skills(09-15 全程)
+
+**Date**: 2026-09-16
+**Task**: N1 首次引导:轻页面引导 + 内置诊断/引导/配置 LLM skills(09-15 全程)
+**Branch**: `main`
+
+### Summary
+
+N1 方向调整(用户裁定:不做重向导):页面轻引导(空状态四分态检测卡 config.loaded 防闪变 + 错误行「测试连接」直调 test_model)+ skill 新增全局内置层 GlobalBuiltin(垫底可被用户/项目覆盖,编译期 include_str!,所有会话+斜杠面板可见,daemon-only 零源码依赖——GCE stdio 教训固化成硬约束+AC9 探针)承载 llm-setup/doctor/onboarding 三件套 + 只读诊断双工具 llm_diagnostics(脱敏铁律:ProviderRow 禁序列化,输出全文无 api_key 子串,live 实证)/test_llm_connection(复用 test_model 语义,签名收敛 db 参数三调用方)。流程:brainstorm 三问(页面形态/三件套/工具面只读+实测)→并行 implement 前后端子代理→check 全范围(修 3 处:TESTPOOL fixture/doctor 字段名错位)→AC9 daemon-only 三探针过→live /doctor 全闭环(use_skill→脱敏快照→默认模型 944ms→问诊)。用户追加 daemon 侧测试要求:Playwright 真实 Chromium 打 daemon 服的 dist(--data-dir 隔离第二实例 7457)8/8 全过,顺带抓出存量真 bug——error 终态 last.error 被 reloadAfterFinalize 的 DB 权威替换冲掉(错误行/retry/测试连接只闪现一瞬),修复=RequestState.terminalError 暂存+重载后挂回最后 assistant 行+单测+spec 沉淀。踩坑:pkill -f 模式串匹配自身命令行自杀(改 fuser -k 按端口);Chromium 输入框是 CM6 非 textarea;VLM 截图转录不可信(仓内早有实证,DOM 断言为准)。产品发现留裁定:首启幂等播种使真实新用户看不到卡A(齐配无 key 态),冷启动实际走 auth 错误行路径(已修好)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1c9651aa` | (see git log) |
+| `0f03cc09` | (see git log) |
+| `0efd9575` | (see git log) |
+| `ebcb91c4` | (see git log) |
+| `7ed394f2` | (see git log) |
+| `49c867f4` | (see git log) |
+
+### Status
+
+[OK] **Completed**
