@@ -24,6 +24,7 @@ pub mod end_discussion;
 pub mod glob;
 pub mod grep;
 pub mod list_dir;
+pub mod llm_diagnostics;
 pub mod merge_worker;
 pub mod nominate_speaker;
 pub mod read_file;
@@ -38,6 +39,7 @@ pub mod shell;
 pub mod shell_kill;
 pub mod shell_status;
 pub mod stub;
+pub mod test_llm_connection;
 pub mod tests_escalation;
 pub mod tests_merge_worker;
 pub mod tests_shell;
@@ -267,6 +269,20 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         scheduled_task_family::definition(),
         scheduled_task_family::status_definition(),
         scheduled_task_family::cancel_definition(),
+        // N1 (2026-09-15, onboarding skills R3): read-only diagnostics
+        // pair backing the builtin `doctor` / `llm-setup` skills.
+        // `llm_diagnostics` is a redacted config snapshot (hand-built
+        // view — ProviderRow is NEVER serialized, so no api_key
+        // material can reach the LLM context); `test_llm_connection`
+        // wraps the shared `test_model_inner` (1-token real probe,
+        // egress = the user's own configured base_url, same face as a
+        // chat turn). Both: Tier 5 silent Allow via `ToolKind::Other`
+        // (same as `search_history`), serial dispatch, NOT stub
+        // candidates (0-1 param schemas, search_history precedent).
+        // Group chat excludes them via the `group_chat_tool_defs`
+        // whitelist. Appended LAST (prefix cache).
+        llm_diagnostics::definition(),
+        test_llm_connection::definition(),
     ]
 }
 
@@ -613,6 +629,18 @@ async fn execute_tool_inner(
         }
         "schedule_cancel" => {
             let (out, is_err) = scheduled_task_family::cancel_execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default(), None, None)
+        }
+        // N1 (2026-09-15): read-only diagnostics pair, plain dispatch.
+        // `llm_diagnostics` ignores its input (zero-param schema);
+        // `test_llm_connection` needs nothing from the session — the
+        // probe target resolves from app_config / the catalog.
+        "llm_diagnostics" => {
+            let (out, is_err) = llm_diagnostics::execute(input, ctx, session_id).await;
+            (out, is_err, ToolContextUpdate::default(), None, None)
+        }
+        "test_llm_connection" => {
+            let (out, is_err) = test_llm_connection::execute(input, ctx, session_id).await;
             (out, is_err, ToolContextUpdate::default(), None, None)
         }
         "use_skill" => match skill_cache {

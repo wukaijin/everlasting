@@ -235,16 +235,21 @@ fn group_chat_toolsets_never_carry_schedule_family() {
     }
 }
 
-/// Registration order: the family is appended at the TAIL of
-/// `builtin_tools()` (provider prefix-cache contract — appending never
-/// shifts the existing prefix), family-adjacent, in task→status→cancel
-/// order.
+/// Registration order: the family lives at the TAIL region of
+/// `builtin_tools()` (provider prefix-cache contract — each new
+/// registration appends, never shifts the existing prefix),
+/// family-adjacent, in task→status→cancel order. 09-15 N1 appended
+/// `llm_diagnostics` + `test_llm_connection` after it, so the family
+/// is no longer the literal last three — assert the tail shape
+/// instead of hard-coded absolute indices.
 #[test]
 fn family_is_appended_last_in_order() {
     let names: Vec<String> = builtin_tools().into_iter().map(|t| t.name).collect();
     let n = names.len();
-    assert!(n >= 3);
-    assert_eq!(names[n - 3], "schedule_task");
-    assert_eq!(names[n - 2], "schedule_status");
-    assert_eq!(names[n - 1], "schedule_cancel");
+    assert!(n >= 5);
+    assert_eq!(names[n - 5], "schedule_task");
+    assert_eq!(names[n - 4], "schedule_status");
+    assert_eq!(names[n - 3], "schedule_cancel");
+    assert_eq!(names[n - 2], "llm_diagnostics");
+    assert_eq!(names[n - 1], "test_llm_connection");
 }

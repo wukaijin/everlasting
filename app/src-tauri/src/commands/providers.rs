@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::db;
@@ -402,11 +403,17 @@ pub async fn update_session_model_id(
 ///
 /// The per-model test is what the user actually cares about (can
 /// this model name be reached end-to-end?).
+///
+/// Takes the pool (not `AppState`): the body only ever touched
+/// `state.db`, and the narrow signature lets the agent-side
+/// `test_llm_connection` tool reuse the exact same semantics
+/// (contract: spec `backend/test-model-contract.md` — semantics and
+/// wire shape unchanged by the signature convergence).
 pub async fn test_model_inner(
-    state: &Arc<AppState>,
+    db: &SqlitePool,
     model_id: String,
 ) -> Result<serde_json::Value, AppCommandError> {
-    let model = match db::get_model(&state.db, &model_id).await {
+    let model = match db::get_model(db, &model_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             return Ok(serde_json::json!({
@@ -424,7 +431,7 @@ pub async fn test_model_inner(
         }
     };
 
-    let provider = match db::get_provider(&state.db, &model.provider_id).await {
+    let provider = match db::get_provider(db, &model.provider_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
             return Ok(serde_json::json!({
@@ -554,5 +561,5 @@ pub async fn test_model(
     state: State<'_, Arc<AppState>>,
     model_id: String,
 ) -> Result<serde_json::Value, AppCommandError> {
-    test_model_inner(&state, model_id).await
+    test_model_inner(&state.db, model_id).await
 }

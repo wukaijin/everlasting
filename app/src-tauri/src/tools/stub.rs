@@ -3,8 +3,9 @@
 //! 经典 chat 的 `tools[]` 初始只发**轻量 stub**(真名 + 极短摘要 +
 //! 宽松外壳 schema `{"type":"object"}`),另注册常驻 `load_tool_schemas`
 //! 元工具,模型按需拉取完整参数契约后真实调用。目标:首轮 tools token
-//! 从 6773 压到 ≤3700(AC1,2026-08-14 用户拍板;静态度量单测锁 ≤3700,
-//! 校准依据见测试注释)。
+//! 从 6773 压到 ≤3700(AC1,2026-08-14 用户拍板;当前线随历次注册
+//! 平移,实测值与校准史见 `static_token_budget_classic_chat_first_turn`
+//! 测试注释)。
 //!
 //! 三条结构不变量(单测固化):
 //! 1. `STUB_CANDIDATES` **不含** `use_skill`(评审 P2-1:schema 单字段,
@@ -343,6 +344,11 @@ mod tests {
     ///    意图行,PRD R1)——schema 字段描述 + 两处 tool description
     ///    末尾填写指引,~+60 tok → 实测 4160。线随既有工具描述增长
     ///    平移(同校准注 4 先例)。
+    /// 7. **4200 → 4500(2026-09-15,N1 onboarding-skills R3)**:注册
+    ///    `llm_diagnostics`(0 参)+ `test_llm_connection`(1 可选参)
+    ///    两只读工具(非 stub 候选:极小 schema + 诊断类首次直用,
+    ///    同校准注 3 政策)→ 实测 4410(+250)。线随新增注册工具
+    ///    基线整体平移。
     /// dispatch 校准:生产 `model_briefs = list_models`(实测 5 模型),
     /// 用真实 display_name 列表模拟(不是 2 模型的低估值)。
     #[tokio::test]
@@ -383,8 +389,8 @@ mod tests {
         let json = serde_json::to_string(&defs).unwrap_or_default();
         let tokens = crate::memory::tokens::count_tokens(&json).await;
         assert!(
-            tokens <= 4200,
-            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 4200(AC1 线,校准史见上)"
+            tokens <= 4500,
+            "classic-chat 首轮 stubified tools[] 估算 {tokens} tok > 4500(AC1 线,校准史见上)"
         );
     }
 

@@ -254,7 +254,7 @@ pub async fn test_model(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TestModelRequest>,
 ) -> Result<Json<serde_json::Value>, AppCommandError> {
-    let result = test_model_inner(&state, req.model_id).await?;
+    let result = test_model_inner(&state.db, req.model_id).await?;
     Ok(Json(result))
 }
 
