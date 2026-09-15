@@ -103,6 +103,13 @@ export interface RequestState {
   // consumed (and on `done`, so the chip doesn't linger on the wrong
   // speaker between turns).
   pendingSpeaker: string | null;
+  // 09-15-n1(daemon E2E 实证):`error` 终态写入 `last.error` 后,
+  // `finalizeRequest → reloadAfterFinalize` 会用 DB 权威形状整体替换
+  // 消息缓冲,而 DB 不持久化错误态 → 错误行(含 retry /「测试连接」
+  // 按钮)只闪现一瞬。终态错误在此暂存,`reloadAfterFinalize` 重载后
+  // 挂回最后一条 assistant 行,错误行得以存续。群聊内层 speaker 报错
+  // 非终态(编排器继续),不写此字段。
+  terminalError: { message: string; category: string } | null;
   // Captured at send time so the wire-format history matches
   // what `chat.ts` constructed (preserves thinking blocks,
   // tool_use blocks, and tool_result blocks verbatim — the
@@ -1186,6 +1193,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // original F5 single-value RequestState papered over
       // by always writing to the same slot).
       currentTurnIndex: -1,
+      terminalError: null,
       latencyByTurn: new Map(),
       pendingTimelineText: null,
       activeThinkingIdx: null,

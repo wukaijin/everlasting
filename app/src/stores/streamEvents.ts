@@ -119,6 +119,7 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
       firstDeltaAt: null,
       toolStartedAt: new Map(),
       currentTurnIndex: -1,
+      terminalError: null,
       latencyByTurn: new Map(),
       pendingTimelineText: null,
       activeThinkingIdx: null,
@@ -751,6 +752,13 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         // terminal `group_chat_end` / `cancelled` `done` finalizes.
         // Ordinary chat: error is terminal (existing behavior).
         if (!req.groupChat) {
+          // 09-15-n1: reloadAfterFinalize 会用 DB 形状整体替换缓冲,
+          // DB 不存错误态 —— 暂存到请求对象,重载后挂回(见
+          // reloadAfterFinalize 的 terminalError 段)。
+          req.terminalError = {
+            message: last.error?.message ?? "未知错误",
+            category: last.error?.category ?? "server",
+          };
           finalizeRequest(req.requestId, req.sessionId, true);
         }
         break;
@@ -1453,6 +1461,29 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     const messages = loaded
       ? rehydrateMessages(loaded.messages, blockedToolUseIds)
       : [];
+    // 09-15-n1:错误终态的错误信息是易失的(DB 只存「[生成出错中断]」
+    // 占位文本)—— 若本次 finalize 的请求带 terminalError,挂回重载后
+    // 的最后一条 assistant 行,让错误行(retry /「测试连接」)在 DB 权威
+    // 替换后存续。挂在 putMessages 之前,首帧即带错误态。
+    {
+      const terminalError = requestId
+        ? completedRequests.get(requestId)?.terminalError
+        : null;
+      if (terminalError) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i]!;
+          if (m.role === "assistant") {
+            m.error = {
+              message: terminalError.message,
+              category: terminalError.category as NonNullable<
+                ChatMessage["error"]
+              >["category"],
+            };
+            break;
+          }
+        }
+      }
+    }
     // putMessages does delete+set in same tick (LRU touch) — Vue
     // batches the update so there's no visible blank gap.
     putMessages(sessionId, messages, false);

@@ -101,6 +101,7 @@ function seedStreamingRequest(
     groupChat: false,
     groupChatStarted: false,
     pendingSpeaker: null,
+      terminalError: null,
     history: [],
     sendAt: Date.now(),
     firstDeltaAt: null,
