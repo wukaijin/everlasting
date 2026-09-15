@@ -380,8 +380,9 @@ standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既�
   全部走 daemon 内部 `*_inner`(不经 HTTP 自绕);preset 合并消费 DB 用户行 / 覆盖行
   (§6.4 规则;`list_presets.degraded` 恒 `false` —— 数据源就是本进程,降级语义随收敛
   消失,键保留兼容宿主习惯)。与 stdio 壳的差异两处:
-  - 转录落点 `{cwd}/out/group-chat-{slug}-{ts}.md`(惰性导出,status/result 终态首次
-    观测触发;与定时场 `{data}/discussions/` 落点分叉);
+  - 转录落点与定时场统一:`{app_data_dir}/discussions/{date}-{topic 白名单清洗}-{sid8}.md`
+    (惰性导出,status/result 终态首次观测触发;09-15 前落 `{cwd}/out/group-chat-{slug}-{ts}.md`
+    ——写进宿主正工作的仓库工作区,已收敛;同 session 重复导出覆盖同一文件);
   - XDG 记账文件(`mcp-discussions.json`)**退役** —— rid 从 `session_active_request`
     内存表派生,daemon 即编排宿主,无跨进程记账需求。
 - **内置四档预设**:编译期 `include_str!` 嵌入 `scripts/group-chat-presets.json`

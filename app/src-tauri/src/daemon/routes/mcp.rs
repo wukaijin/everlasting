@@ -38,7 +38,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::agent::chat::{chat_inner, ChatAcceptance, ChatEntry};
-use crate::agent::group_chat_transcript::{render_scheduled_transcript, TranscriptRenderArgs};
+use crate::agent::group_chat_transcript::{
+    render_scheduled_transcript, sanitize_task_name_for_path, TranscriptRenderArgs,
+};
 use crate::agent::subagent::SubagentEventSink;
 use crate::commands::cancel::{cancel_chat_inner, preempt_group_chat_inner};
 use crate::commands::projects::{create_project_inner, list_projects_inner, ListProjectsFilter};
@@ -1400,45 +1402,25 @@ async fn tool_list_presets(state: &Arc<AppState>) -> Result<Value, ToolError> {
 // MCP 惰性转录(D2)
 // ---------------------------------------------------------------------------
 
-/// topic slug(JS defaultTranscriptPath 同构):前 40 字符,非字母数字串
-/// 折叠为 `-`,首尾 `-` 剥除,小写;空回退 `discussion`。
-fn topic_slug(topic: &str) -> String {
-    let mut out = String::new();
-    let mut pending_dash = false;
-    for c in topic.chars().take(40) {
-        if c.is_alphanumeric() {
-            if pending_dash && !out.is_empty() {
-                out.push('-');
-            }
-            pending_dash = false;
-            out.extend(c.to_lowercase());
-        } else {
-            pending_dash = true;
-        }
-    }
-    let trimmed = out.trim_matches('-').to_string();
-    if trimmed.is_empty() {
-        "discussion".to_string()
-    } else {
-        trimmed
-    }
+/// MCP 转录落点:统一定时场惯例
+/// `{app_data_dir}/discussions/{YYYY-MM-DD}-{topic 白名单清洗}-{sid8}.md`
+/// (09-15 前落 `<cwd>/out/group-chat-{slug}-{ts}.md`——写进宿主正工作的
+/// 仓库工作区,收敛到数据目录;讨论转录一处可查)。
+fn transcript_target_path(
+    app_data_dir: &std::path::Path,
+    session_id: &str,
+    topic: &str,
+) -> std::path::PathBuf {
+    let date = chrono::Local::now().format("%Y-%m-%d");
+    let sid8: String = session_id.chars().take(8).collect();
+    app_data_dir.join("discussions").join(format!(
+        "{date}-{}-{sid8}.md",
+        sanitize_task_name_for_path(topic)
+    ))
 }
 
-/// MCP 转录落点:`{cwd}/out/group-chat-{slug}-{ts}.md`(转录留在证据基地,
-/// 与定时场 `{data}/discussions/` 落点分叉——设计 §6 既定)。
-fn transcript_target_path(session: &db::types::SessionRow, topic: &str) -> std::path::PathBuf {
-    let root = if session.current_cwd.is_empty() {
-        std::env::temp_dir()
-    } else {
-        std::path::PathBuf::from(&session.current_cwd)
-    };
-    let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
-    root.join("out")
-        .join(format!("group-chat-{}-{}.md", topic_slug(topic), ts))
-}
-
-/// 惰性导出(幂等性:落点含秒级 ts,重复导出 = 新文件;成本一个
-/// markdown 文件,接受——ledger 记账已随收敛退役)。失败降级不抛错。
+/// 惰性导出(幂等性:落点含 sid8,同 session 重复导出覆盖同一文件——
+/// 与定时场口径一致;跨天重复导出落新日期文件,接受)。失败降级不抛错。
 async fn export_mcp_transcript(state: &Arc<AppState>, loaded: &db::types::LoadedSession) -> Value {
     let session = &loaded.session;
     // topic = 首条 user 消息(截 40 字符口径与 slug 一致)。
@@ -1449,7 +1431,7 @@ async fn export_mcp_transcript(state: &Arc<AppState>, loaded: &db::types::Loaded
         .map(|m| m.text.chars().take(40).collect::<String>())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "discussion".to_string());
-    let target = transcript_target_path(session, &topic);
+    let target = transcript_target_path(&state.app_data_dir, &session.id, &topic);
 
     let names = model_display_map(state).await.unwrap_or_default();
     let disp = |id: &str| -> String { names.get(id).cloned().unwrap_or_else(|| id.to_string()) };
@@ -1967,18 +1949,6 @@ mod tests {
         assert_eq!(lexical_absolute("/repo/foo/./bar/../baz"), "/repo/foo/baz");
     }
 
-    #[test]
-    fn topic_slug_rules() {
-        assert_eq!(
-            topic_slug("怎么优化 LLM 内存?——一篇报告"),
-            "怎么优化-llm-内存-一篇报告"
-        );
-        assert_eq!(topic_slug("---___"), "discussion");
-        assert_eq!(topic_slug("ABC"), "abc");
-        let long: String = "字".repeat(60);
-        assert_eq!(topic_slug(&long).chars().count(), 40);
-    }
-
     // ---- 工具层(错误路径,不进 LLM) ----
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2103,7 +2073,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn transcript_export_writes_under_cwd_out() {
+    async fn transcript_export_writes_under_app_data_discussions() {
         let state = test_state().await;
         let cwd = tempfile::tempdir().unwrap();
         let proj = cwd.path().join("proj");
@@ -2161,11 +2131,27 @@ mod tests {
         };
         let out = export_mcp_transcript(&state, &loaded).await;
         let path = out["transcript_path"].as_str().unwrap();
+        // 落点 = `{app_data_dir}/discussions/{date}-{清洗 topic}-{sid8}.md`,
+        // 与 current_cwd 无关(不写进宿主工作仓库)。
+        let discussions = state.app_data_dir.join("discussions");
         assert!(
-            path.starts_with(proj.to_string_lossy().as_ref()),
+            std::path::Path::new(path).starts_with(&discussions),
             "got {path}"
         );
-        assert!(path.contains("/out/group-chat-"));
+        let file = std::path::Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert!(
+            file.starts_with(&format!("{date}-讨论一下内存优化-sid-t.md")),
+            "got {file}"
+        );
+        assert!(
+            !std::path::Path::new(path).starts_with(proj.to_string_lossy().as_ref()),
+            "must not write under cwd: {path}"
+        );
         let content = std::fs::read_to_string(path).unwrap();
         assert!(content.contains("sid-t"));
         assert!(content.contains("结论"));

@@ -41,7 +41,7 @@ node scripts/group-chat-run.mjs run \
 ```
 
 `run --help` 看全量参数。覆盖语法:`--set name.model=<id>` / `--set name.persona=@file`(单人两级)、`--participants '<json>'`(整名单替换——增删参与者的唯一方式)、`--moderator-model <id>`。
-**在别的 cwd 跑时用脚本绝对路径**;转录固定落 everlasting 仓库 `out/`,结束时会打印绝对路径。
+**在别的 cwd 跑时用脚本绝对路径**;转录固定落 `{app_data_dir}/discussions/`(Linux `~/.local/share/dev.everlasting.app/discussions/`,`EVERLASTING_DATA_DIR` 可改根;09-15 起与定时/MCP 场同源),结束时会打印绝对路径。
 长跑建议后台化(如 `&` + nohup),轮询脚本输出拿转录路径与退出码;进度粒度 10s 一拍(±10s),没有发言级实时进度。
 
 ### 议题写法(质量杠杆,两场 live 实证)

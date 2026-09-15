@@ -8,6 +8,7 @@ import {
   EXIT, PRESETS, composePresets, composePersonaMd, resolveParticipants, buildCreateSessionBody, buildChatBody,
   aggregateTokens,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
+  defaultAppDataDir, sanitizeTopicForPath,
   renderTranscript, renderConclusionsSection, injectGuardDecision, interpretAcceptance,
   mergePresets, lookupPreset, loadEffectivePresets,
 } from './group-chat-run.mjs';
@@ -146,13 +147,34 @@ test('aggregateTokens:四字段计费口径 + worker/无归属排除 + per_speak
   assert.deepEqual(aggregateTokens([], []), { total: 0, per_speaker: [] });
 });
 
-test('defaultTranscriptPath:落在 everlasting 仓库根 out/(非 CWD);显式 rootDir 分叉(MCP)', () => {
-  const p1 = defaultTranscriptPath('议题 ABC');
-  assert.equal(path.dirname(p1), path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'out'));
-  assert.match(path.basename(p1), /^group-chat-.+-\d{14}\.md$/);
-  // MCP 消费:转录落讨论 cwd 的 out/(design §6 有意分叉)
-  const p2 = defaultTranscriptPath('议题 ABC', '/work/vue3-cms');
-  assert.equal(path.dirname(p2), '/work/vue3-cms/out');
+test('defaultTranscriptPath:{app_data}/discussions/{date}-{topic 清洗}-{sid8}.md(三场同源)', () => {
+  const p = defaultTranscriptPath('议题 ABC', 'sid-1234567890', '/tmp/fake-data');
+  assert.equal(path.dirname(p), '/tmp/fake-data/discussions');
+  assert.match(path.basename(p), /^\d{4}-\d{2}-\d{2}-议题 ABC-sid-1234\.md$/);
+  // '?'(Windows 保留字符)剥除;CJK 与大小写保留
+  const p2 = defaultTranscriptPath('怎么优化 LLM 内存?——一篇报告', 'abcdefgh', '/tmp/fake-data');
+  assert.ok(path.basename(p2).endsWith('怎么优化 LLM 内存——一篇报告-abcdefgh.md'), path.basename(p2));
+  // sessionId 缺失兜底
+  assert.match(path.basename(defaultTranscriptPath('t', '', '/tmp/fake-data')), /-session\.md$/);
+});
+
+test('sanitizeTopicForPath:Rust sanitize_task_name_for_path 同规则', () => {
+  assert.equal(sanitizeTopicForPath('每周架构复盘'), '每周架构复盘');
+  assert.equal(sanitizeTopicForPath('a/b\\c:d*e?f"g<h>i|j'), 'abcdefghij');
+  assert.equal(sanitizeTopicForPath('含\u0000控制\u0007符'), '含控制符');
+  assert.equal(sanitizeTopicForPath('  多   空白\t压缩  '), '多 空白 压缩');
+  assert.equal(sanitizeTopicForPath('a..b...c'), 'a.b.c'); // 连续点号折叠(防 .. 逃逸)
+  const long = '字'.repeat(60);
+  assert.equal([...sanitizeTopicForPath(long)].length, 40);
+  assert.equal(sanitizeTopicForPath('///'), 'discussion');
+});
+
+test('defaultAppDataDir:EVERLASTING_DATA_DIR 覆盖 > 平台惯例', () => {
+  assert.equal(defaultAppDataDir({ EVERLASTING_DATA_DIR: '/x/y' }, 'linux'), '/x/y');
+  assert.equal(defaultAppDataDir({ HOME: '/h' }, 'linux'), '/h/.local/share/dev.everlasting.app');
+  assert.equal(defaultAppDataDir({ HOME: '/h', XDG_DATA_HOME: '/xdg' }, 'linux'), '/xdg/dev.everlasting.app');
+  assert.equal(defaultAppDataDir({ HOME: '/h' }, 'darwin'), '/h/Library/Application Support/dev.everlasting.app');
+  assert.equal(defaultAppDataDir({ HOME: '/h', APPDATA: 'C:\\AppData' }, 'win32'), 'C:\\AppData\\dev.everlasting.app');
 });
 
 test('renderTranscript:blockquote 隔离 / 工具轮证据链 / summary 缺失警告 / 阵容可读名', () => {

@@ -17,13 +17,14 @@
 //   list_sessions 的 busy/stop_reason(GC1/GC2 编排级粒度,轮间不回落)。
 // - 中断(超时/SIGINT)→ cancel_chat(request_id)停编排保 session;
 //   部分转录照常落盘(post-mortem 依据)。--cleanup 仅成功路径删 session。
-// - 转录默认落 everlasting 仓库根的 out/(按本脚本位置推导,非 CWD)
-//   —— 嵌套消费(daemon 单聊后台 shell 调用)时外层 cwd 是别的项目。
+// - 转录默认落 {app_data_dir}/discussions/(平台惯例解析,非仓库亦非
+//   CWD——嵌套消费时外层 cwd 是别的项目;09-15 起与定时/MCP 场同源)。
 // - daemon 不可达的错误文案必须带 OS 错误翻译(EPERM → "Operation not
 //   permitted"):沙箱升级分类器 sandbox::classify_block 按该字面串触发,
 //   嵌套消费时外层 shell 靠它脱沙箱重跑(2026-09-06 live 实证)。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +39,6 @@ import { fileURLToPath } from 'node:url';
 import presetsFile from './group-chat-presets.json' with { type: 'json' };
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), '..');
 export const DEFAULT_BASE = process.env.EVERLASTING_BASE || 'http://127.0.0.1:7456';
 const DEFAULT_TIMEOUT_S = 30 * 60; // 30min:两场 live 实测 9-16min,留余量
 const POLL_INTERVAL_S = 10;
@@ -372,17 +372,45 @@ export function summarizeToolUses(content) {
   }).join(' ');
 }
 
-/** 转录落点:everlasting 仓库根 out/(非 CWD —— 嵌套消费约束)。 */
-export function defaultTranscriptPath(topic, rootDir = REPO_ROOT) {
-  const slugBase = String(topic || 'discussion')
-    .slice(0, 40)
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .toLowerCase() || 'discussion';
-  const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-  // rootDir:MCP 消费时传讨论 cwd(转录留在证据基地,design §6 分叉声明);
-  // M1 CLI 不传,默认引擎仓库根(本文件 :20 语义约束,勿改默认)。
-  return path.join(rootDir, 'out', `group-chat-${slugBase}-${ts}.md`);
+// 转录统一落点(09-15):{app_data_dir}/discussions/ —— CLI / 定时
+// (Rust export_scheduled_transcript)/ MCP(daemon mcp.rs)三场同源,
+// 讨论转录一处可查。EVERLASTING_DATA_DIR 可覆盖(测试 / 非标准布局)。
+export function defaultAppDataDir(env = process.env, platform = process.platform) {
+  if (env.EVERLASTING_DATA_DIR) return env.EVERLASTING_DATA_DIR;
+  const home = env.HOME || os.homedir();
+  // 分支显式 posix/win32 join:行为不随宿主 OS 变(单测在 Linux 锁 win32 拼法)。
+  if (platform === 'darwin') return path.posix.join(home, 'Library', 'Application Support', 'dev.everlasting.app');
+  if (platform === 'win32') return path.win32.join(env.APPDATA || path.win32.join(home, 'AppData', 'Roaming'), 'dev.everlasting.app');
+  return path.posix.join(env.XDG_DATA_HOME || path.posix.join(home, '.local', 'share'), 'dev.everlasting.app');
+}
+
+// topic → 文件名白名单片段,Rust sanitize_task_name_for_path 的 JS 对齐
+// (同规则:CJK 保留、剥路径分隔符/Windows 保留字符/控制字符、空白折叠、
+// 连续点号折叠防目录逃逸、40 字符截断、首尾空白与连字符修剪;空回退
+// discussion)。
+export function sanitizeTopicForPath(name) {
+  let out = '';
+  for (const ch of String(name ?? '')) {
+    if (/\s/.test(ch)) out += ' ';
+    else if (/[\u0000-\u001f\u007f-\u009f]/.test(ch) || '/\\:*?"<>|'.includes(ch)) continue;
+    else if (ch === '.' && out.endsWith('.')) continue;
+    else out += ch;
+  }
+  const collapsed = out.replace(/\s+/g, ' ');
+  const truncated = [...collapsed].slice(0, 40).join('');
+  const trimmed = truncated.trim().replace(/^-+|-+$/g, '');
+  return trimmed || 'discussion';
+}
+
+/**
+ * 转录落点:{app_data_dir}/discussions/{date}-{topic 白名单清洗}-{sid8}.md
+ * (本地日期;sid8 = session id 前 8 字符,同 session 重复导出覆盖同一文件)。
+ */
+export function defaultTranscriptPath(topic, sessionId, dataDir = defaultAppDataDir()) {
+  const now = new Date();
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const sid8 = String(sessionId || '').slice(0, 8) || 'session';
+  return path.join(dataDir, 'discussions', `${date}-${sanitizeTopicForPath(topic)}-${sid8}.md`);
 }
 
 /**
@@ -687,7 +715,7 @@ async function run(argv) {
     process.stdout.write('=== dry-run:将发出的请求(静态模板,不建 session、不发 LLM)===\n');
     process.stdout.write(`POST /api/v1/sessions/create_session\n${JSON.stringify(createBody, null, 2)}\n\n`);
     process.stdout.write(`POST /api/v1/agent/chat\n${JSON.stringify(buildChatBody({ requestId: '<rid>', sessionId: '<sid>', topic: opt.topic }), null, 2)}\n`);
-    process.stdout.write(`(转录落点:${opt.out || defaultTranscriptPath(opt.topic)};模型/项目解析发生在真跑时)\n`);
+    process.stdout.write(`(转录落点示例:${opt.out || defaultTranscriptPath(opt.topic, 'dry-run')};真跑文件名含实际 sid8)\n`);
     return EXIT.groupChatEnd;
   }
 
@@ -776,7 +804,7 @@ async function run(argv) {
     if (!finalError) finalError = e; else say(`# 转录读取失败(叠加):${e.message}`);
   }
   if (loaded) {
-    const outPath = opt.out || defaultTranscriptPath(opt.topic);
+    const outPath = opt.out || defaultTranscriptPath(opt.topic, sessionId);
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     // 计费核算(gce-m4c):失败降级 —— 转录照导,只是少了计费行。
     let tokenUsage;
@@ -899,7 +927,7 @@ function printRunHelp() {
   --set <name>.model=<id>            单人换模型(可重复)
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --timeout <seconds>     默认 1800;超时 cancel 停编排、保 session、导部分转录
-  --out <path>            转录落点(默认 <仓库根>/out/group-chat-<slug>-<ts>.md)
+  --out <path>            转录落点(默认 <app_data>/discussions/<date>-<topic>-<sid8>.md,与定时/MCP 场同源;EVERLASTING_DATA_DIR 可改根)
   --quiet                 静默进度(cron 用);session id/转录路径/终态仍打 stderr
   --cleanup               成功收官后删 session(中断现场永不删)
   --dry-run               打印静态请求模板,不建 session、不发 LLM(用户预设目录经本地 daemon 拉取,失败降级内置四档)

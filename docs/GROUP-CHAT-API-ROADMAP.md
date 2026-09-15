@@ -40,7 +40,7 @@
 - **待定决策**:
   - 脚本形态:`scripts/group-chat-run.mjs`(Node,随 remote-e2e-smoke 先例)vs Rust 小 bin(进 crates/)vs daemon 内置子命令(如 `everlasting-daemon group-chat run`);
   - 预设存放:脚本内置常量 vs `~/.config` 用户文件 vs DB 表;
-  - 转录导出格式与落点(延续 `out/group-chat-*.md` 现状 vs 可配置);
+  - 转录导出格式与落点(已定 2026-09-15:三场统落 `{app_data_dir}/discussions/{date}-{名}-{sid8}.md`,CLI `--out` / `EVERLASTING_DATA_DIR` 显式可覆盖);
   - 讨论中立的进度呈现(轮询打印 vs 可选 SSE follow 透传)。
 
 ## 3. M2 MCP 接口层(✅ 2026-09-06)
