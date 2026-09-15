@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/09-15-n1-onboarding-skills/research/codebase-evidence.md", "reason": "对照证据核查实现是否偏离既有 file:line 结构"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门(含假注释毒数据 RULE)"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "核查签名收敛未改语义/wire 未动"}
+{"file": ".trellis/spec/backend/tool-contract/12-builtin-plugin-source-layer.md", "reason": "核查新层与既有优先级语义一致(用户可覆盖/解析行为同源)"}

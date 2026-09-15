@@ -1,0 +1,10 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/09-15-n1-onboarding-skills/research/codebase-evidence.md", "reason": "全部实现级证据:skill 分层/工具注册/权限/test_model 契约/前端改动点,file:line 直达"}
+{"file": ".trellis/spec/backend/tool-contract/12-builtin-plugin-source-layer.md", "reason": "内置层先例:优先级链形制/编译期 include_str!/parse_skill_content 复用/新层测试矩阵"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "test_model 全契约:签名收敛不许改语义/错误矩阵/无自动化 HTTP 测试是 intentional"}
+{"file": ".trellis/spec/backend/tool-contract/01-tool-set-extension.md", "reason": "新工具注册约定(definition/match/描述文案语言)"}
+{"file": ".trellis/spec/backend/tool-contract/14-stub-registration.md", "reason": "STUB_CANDIDATES 不变量与静态预算线平移规则"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "新 pinia store(settingsModal)约定"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "前端测试模式:mock store/transport,纯展示组件不启 pinia"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "transport.invoke 三模式,test_model 已通勿加新命令映射"}
+{"file": ".trellis/spec/backend/tool-contract/15-search-history.md", "reason": "只读免审批工具先例(ToolKind::Other Tier5 静默放行,db 直读 ctx.db,小 schema 不进 stub)"}
