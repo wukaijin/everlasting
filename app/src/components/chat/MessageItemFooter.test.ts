@@ -31,6 +31,11 @@
 //      show; Auth/InvalidRequest/未设不显示).
 //  12. Retry button text/disabled state when `retryLoading`.
 //  13. Retry click emits `retry(seq)` to parent.
+//  14. N1 (R1.2, 2026-09-15) test-connection button — visibility
+//      four-arm matrix (auth/network/server show; invalid_request /
+//      rate_limit / 未设 category 不显示;无 modelId 隐藏),
+//      `test-connection` emit wiring, and the inline running/ok/fail
+//      result rendering driven by the `testState` prop.
 //
 // Test gotcha: reka-ui `TooltipContent` portal to body —
 // reka-ui's tooltips don't get auto-cleaned on `unmount()`
@@ -50,6 +55,13 @@ const baseProps = () => ({
   error: undefined as undefined | { message: string; category?: string },
   messageSeq: undefined as number | undefined,
   retryLoading: false,
+  modelId: undefined as string | undefined,
+  testState: undefined as
+    | undefined
+    | null
+    | { kind: "running" }
+    | { kind: "ok"; latencyMs: number }
+    | { kind: "fail"; error: string },
 });
 
 function mountFooter(propsOverride: Partial<ReturnType<typeof baseProps>> = {}) {
@@ -344,6 +356,144 @@ describe("MessageItemFooter — A5 R2 retry button (loading + click)", () => {
     });
     await w.find("[data-testid='msg-retry-button']").trigger("click");
     expect(w.emitted("retry")).toBeFalsy();
+  });
+});
+
+describe("MessageItemFooter — N1 test-connection button (visibility)", () => {
+  it("auth 类错误 + modelId → 显示测试连接按钮", () => {
+    const w = mountFooter({
+      error: { message: "invalid api key", category: "auth" },
+      modelId: "m1",
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(true);
+  });
+
+  it("network 类错误 + modelId → 显示", () => {
+    const w = mountFooter({
+      error: { message: "断线", category: "network" },
+      modelId: "m1",
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(true);
+  });
+
+  it("server 类错误 + modelId → 显示", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      modelId: "m1",
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(true);
+  });
+
+  it("invalid_request 类错误 → 不显示(测连接给不了新信息)", () => {
+    const w = mountFooter({
+      error: { message: "bad request", category: "invalid_request" },
+      modelId: "m1",
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(false);
+  });
+
+  it("rate_limit 类错误 → 不显示(已有 retry)", () => {
+    const w = mountFooter({
+      error: { message: "too many", category: "rate_limit" },
+      modelId: "m1",
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(false);
+  });
+
+  it("无 category → 不显示", () => {
+    const w = mountFooter({
+      error: { message: "boom" },
+      modelId: "m1",
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(false);
+  });
+
+  it("无 modelId → 隐藏(父解析不到待测模型)", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      // modelId 不传
+    });
+    expect(w.find("[data-testid='msg-test-connection-button']").exists()).toBe(false);
+  });
+
+  it("PascalCase category 形态(Auth/Network/Server)同样命中白名单", () => {
+    for (const category of ["Auth", "Network", "Server"]) {
+      const w = mountFooter({
+        error: { message: "boom", category },
+        modelId: "m1",
+      });
+      expect(
+        w.find("[data-testid='msg-test-connection-button']").exists(),
+      ).toBe(true);
+    }
+  });
+});
+
+describe("MessageItemFooter — N1 test-connection button (emit + inline result)", () => {
+  it("点击按钮 emit test-connection(无 payload)", async () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      modelId: "m1",
+    });
+    await w.find("[data-testid='msg-test-connection-button']").trigger("click");
+    const events = w.emitted("test-connection");
+    expect(events).toBeTruthy();
+    expect(events).toHaveLength(1);
+    expect(events![0]).toEqual([]);
+  });
+
+  it("无 modelId 时按钮本就不渲染,不可能 emit", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+    });
+    expect(w.emitted("test-connection")).toBeFalsy();
+  });
+
+  it("running 态:按钮 disabled + 文本切「测试中...」", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      modelId: "m1",
+      testState: { kind: "running" },
+    });
+    const btn = w.get<HTMLElement>("[data-testid='msg-test-connection-button']");
+    expect(btn.attributes("disabled")).toBeDefined();
+    expect(btn.text()).toBe("测试中...");
+    expect(w.find("[data-testid='msg-test-connection-ok']").exists()).toBe(false);
+    expect(w.find("[data-testid='msg-test-connection-fail']").exists()).toBe(false);
+  });
+
+  it("ok 态:行内渲染「连接正常 · <latency> ms」", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      modelId: "m1",
+      testState: { kind: "ok", latencyMs: 412 },
+    });
+    const ok = w.get("[data-testid='msg-test-connection-ok']");
+    expect(ok.text()).toBe("连接正常 · 412 ms");
+    expect(w.find("[data-testid='msg-test-connection-fail']").exists()).toBe(false);
+  });
+
+  it("fail 态:行内渲染错误文案", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "network" },
+      modelId: "m1",
+      testState: { kind: "fail", error: "request failed: DNS 解析失败" },
+    });
+    const fail = w.get("[data-testid='msg-test-connection-fail']");
+    expect(fail.text()).toBe("request failed: DNS 解析失败");
+    expect(w.find("[data-testid='msg-test-connection-ok']").exists()).toBe(false);
+  });
+
+  it("按钮默认文案「测试连接」且未测试时无行内结果", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      modelId: "m1",
+    });
+    const btn = w.get("[data-testid='msg-test-connection-button']");
+    expect(btn.text()).toBe("测试连接");
+    expect(btn.attributes("disabled")).toBeUndefined();
+    expect(w.find("[data-testid='msg-test-connection-ok']").exists()).toBe(false);
+    expect(w.find("[data-testid='msg-test-connection-fail']").exists()).toBe(false);
   });
 });
 

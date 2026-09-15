@@ -40,6 +40,8 @@ import { useChatStore } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useStreamControllerStore } from "../../stores/streamController";
+import { transport } from "../../transport";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { abbreviateTokens } from "../../utils/tokenUsage";
 import { askCardPropsFor as askCardPropsResolved } from "./messageCards/askCard";
 import { modeChangeCardPropsFor as modeChangeCardPropsResolved } from "./messageCards/modeChangeCard";
@@ -65,6 +67,7 @@ import MessageImages from "./MessageImages.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
 import MessageItemEdit from "./MessageItemEdit.vue";
 import MessageItemFooter from "./MessageItemFooter.vue";
+import type { TestState } from "../settings/ModelRow.vue";
 import Icon from "../Icon.vue";
 
 import { USE_UI_TOOL_NAME } from "./uiCard.types";
@@ -240,6 +243,51 @@ const speakerModelLabel = computed<string | null>(() => {
   if (!modelId) return null;
   return modelsStore.byId(modelId)?.displayName ?? null;
 });
+
+// --- N1 错误行「测试连接」编排(R1.2, 2026-09-15) --------------------
+//
+// footer 保持零 store(纯展示),这里持有三态结果并调
+// transport.invoke("test_model")(三传输模式全通,零新命令映射);
+// 照 ModelsTab runTest 形制(running / ok(latencyMs) / fail(error)),
+// 经 prop 回传 footer 行内渲染。
+
+/** 待测模型解析链(先例 = 上方 speakerModelLabel 的 moderator /
+ *  participant 分支):群聊参与者的发言用其 roster 模型;moderator
+ *  与经典会话用 session.model_id;再退全局默认;全缺 → undefined
+ *  (按钮隐藏)。只在错误行上有效。 */
+const errorRowModelId = computed<string | undefined>(() => {
+  if (!props.message.error) return undefined;
+  const speaker = props.message.speaker;
+  let modelId: string | null = null;
+  if (speaker && speaker !== "moderator") {
+    modelId =
+      chatStore.currentSessionParticipants?.find((p) => p.name === speaker)?.model ?? null;
+  } else {
+    modelId = chatStore.currentSession?.model_id ?? null;
+  }
+  if (!modelId) modelId = modelsStore.defaultModelId;
+  return modelId ?? undefined;
+});
+
+const testState = ref<TestState | null>(null);
+
+async function onTestConnection(): Promise<void> {
+  const modelId = errorRowModelId.value;
+  if (!modelId || testState.value?.kind === "running") return;
+  testState.value = { kind: "running" };
+  try {
+    const result = await transport.invoke<{
+      success: boolean;
+      latencyMs: number;
+      error: string | null;
+    }>("test_model", { modelId });
+    testState.value = result.success
+      ? { kind: "ok", latencyMs: result.latencyMs }
+      : { kind: "fail", error: result.error ?? "连接失败" };
+  } catch (e) {
+    testState.value = { kind: "fail", error: extractErrorMessage(e) };
+  }
+}
 const askCardPropsFor = (tc: { id: string; name: string }) => askCardPropsResolved(props.message, tc);
 const modeChangeCardPropsFor = (tc: { id: string; name: string }) => modeChangeCardPropsResolved(props.message, tc);
 const taskStateTransitionCardPropsFor = (tc: { id: string; name: string }) => taskStateTransitionCardPropsResolved(props.message, tc);
@@ -1070,7 +1118,10 @@ const messageImages = computed<
         :error="message.error"
         :message-seq="message.seq"
         :retry-loading="retryLoading"
+        :model-id="errorRowModelId"
+        :test-state="testState"
         @retry="onRetry"
+        @test-connection="onTestConnection"
       />
     </div>
 
@@ -1258,7 +1309,10 @@ const messageImages = computed<
       :error="message.error"
       :message-seq="message.seq"
       :retry-loading="retryLoading"
+      :model-id="errorRowModelId"
+      :test-state="testState"
       @retry="onRetry"
+      @test-connection="onTestConnection"
     />
     </template>
   </li>

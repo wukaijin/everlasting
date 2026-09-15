@@ -53,6 +53,12 @@ import { useMemoryStore } from "../../stores/memory";
 import {
   useReviewStateStore,
 } from "../../stores/reviewState";
+// N1 首次引导(R1.1, 2026-09-15):空状态四分态的数据源(providers /
+// models 启动即载,stores/config.ts load)与 Settings 打开通道。
+import { useProvidersStore } from "../../stores/providers";
+import { useModelsStore } from "../../stores/models";
+import { useConfigStore } from "../../stores/config";
+import { useSettingsModalStore } from "../../stores/settingsModal";
 import { transport } from "../../transport";
 import type { CurrentTaskInfo } from "../../types/review-state";
 import { useTraceStore } from "../../stores/traceStore";
@@ -105,6 +111,48 @@ const emit = defineEmits<{
 }>();
 
 const hasMessages = computed(() => chatStore.messages.length > 0);
+
+// -----------------------------------------------------------------------
+// N1 首次引导(R1.1, 2026-09-15):空状态按配置现状四分态。
+// -----------------------------------------------------------------------
+//
+// 卡 A 无 provider → 3 步引导 + 一键开 Settings 落 Providers;卡 B
+// 有 provider 无模型 → 落 Models;卡 C 有模型未设默认 → 落 Models;
+// 配置齐 → 原「开始对话」空状态(内容零变化)。
+//
+// gate(config.loaded):providers / models 由 ChatWindow onMounted 的
+// config.load() 异步拉取(先例 ModelSelect.vue 的 config.loaded 门),
+// 未载时维持原空状态 —— 防止配置齐的用户先看到引导卡再闪变成原态。
+const providersStore = useProvidersStore();
+const modelsStore = useModelsStore();
+const configStore = useConfigStore();
+const settingsModalStore = useSettingsModalStore();
+
+type EmptyStateKind =
+  | "loading"
+  | "no-providers"
+  | "no-models"
+  | "no-default"
+  | "ready";
+
+const emptyStateKind = computed<EmptyStateKind>(() => {
+  if (!configStore.loaded) return "loading";
+  if (providersStore.providers.length === 0) return "no-providers";
+  if (modelsStore.models.length === 0) return "no-models";
+  if (!modelsStore.defaultModelId) return "no-default";
+  return "ready";
+});
+
+/** 原「开始对话」空状态的渲染门:未加载(gate 防闪变)或配置齐。 */
+const showDefaultEmpty = computed(
+  () => emptyStateKind.value === "loading" || emptyStateKind.value === "ready",
+);
+
+/** 引导卡 CTA:一键打开 Settings 并落在指定分类
+ *  ("providers" / "models",registry 分类 id)。 */
+function openOnboardingSettings(category: string) {
+  settingsModalStore.openSettings(category);
+}
 
 /** B1 follow-up (08-21-b1-image-followups) D1/D4:聊天区文件拖放。
  *  只收图片(image/*,白名单与张数闸由 addStagedImages 把关,压缩
@@ -1093,7 +1141,13 @@ onUnmounted(() => reviewStateStore.stop());
           <div class="chat-panel__skeleton-bubble chat-panel__skeleton-bubble--narrow" />
         </div>
       </div>
-      <div v-else-if="!hasMessages" class="chat-panel__empty">
+      <!--
+        N1 首次引导(R1.1):空状态四分态。showDefaultEmpty = 未加载
+        (config.loaded gate,防闪变)或配置齐 —— 两种情况都渲染原
+        「开始对话」空状态(内容零变化);其余三态渲染引导卡 A/B/C,
+        CTA 经 settingsModal store 一键打开 Settings 并落对应分类。
+      -->
+      <div v-else-if="!hasMessages && showDefaultEmpty" class="chat-panel__empty">
         <div class="chat-panel__empty-icon" aria-hidden="true">
           <Icon name="thinking" :size="28" />
         </div>
@@ -1116,6 +1170,73 @@ onUnmounted(() => reviewStateStore.stop());
             旧数据，自动归入
           </span>
         </p>
+      </div>
+      <!-- 卡 A:无 provider —— 3 步引导,一键落 Providers。 -->
+      <div
+        v-else-if="!hasMessages && emptyStateKind === 'no-providers'"
+        class="chat-panel__empty"
+        data-testid="chat-empty-no-providers"
+      >
+        <div class="chat-panel__empty-icon" aria-hidden="true">
+          <Icon name="server" :size="28" />
+        </div>
+        <p class="chat-panel__empty-title">还没有可用的模型</p>
+        <ol class="chat-panel__onboard-steps">
+          <li>添加 provider</li>
+          <li>粘贴 API key</li>
+          <li>添加模型并测试</li>
+        </ol>
+        <button
+          type="button"
+          class="chat-panel__onboard-cta btn btn--primary"
+          data-testid="chat-empty-open-settings"
+          @click="openOnboardingSettings('providers')"
+        >
+          打开设置 → Providers
+        </button>
+        <p class="chat-panel__onboard-note">
+          配好后可在对话里输入 /llm-setup 让 AI 帮你配置模型，出问题用 /doctor 排障
+        </p>
+      </div>
+      <!-- 卡 B:有 provider 无模型 —— 落 Models。 -->
+      <div
+        v-else-if="!hasMessages && emptyStateKind === 'no-models'"
+        class="chat-panel__empty"
+        data-testid="chat-empty-no-models"
+      >
+        <div class="chat-panel__empty-icon" aria-hidden="true">
+          <Icon name="bolt" :size="28" />
+        </div>
+        <p class="chat-panel__empty-title">provider 已就绪,去添加模型</p>
+        <p class="chat-panel__empty-hint">在 Models 里添加一个模型并测试连通</p>
+        <button
+          type="button"
+          class="chat-panel__onboard-cta btn btn--primary"
+          data-testid="chat-empty-open-settings"
+          @click="openOnboardingSettings('models')"
+        >
+          打开设置 → Models
+        </button>
+      </div>
+      <!-- 卡 C:有模型未设默认 —— 落 Models。 -->
+      <div
+        v-else-if="!hasMessages && emptyStateKind === 'no-default'"
+        class="chat-panel__empty"
+        data-testid="chat-empty-no-default"
+      >
+        <div class="chat-panel__empty-icon" aria-hidden="true">
+          <Icon name="circle-dot" :size="28" />
+        </div>
+        <p class="chat-panel__empty-title">选择默认模型</p>
+        <p class="chat-panel__empty-hint">新会话默认使用的模型还未指定,去挑一个设为默认</p>
+        <button
+          type="button"
+          class="chat-panel__onboard-cta btn btn--primary"
+          data-testid="chat-empty-open-settings"
+          @click="openOnboardingSettings('models')"
+        >
+          打开设置 → Models
+        </button>
       </div>
       <MessageList v-else />
     </main>
@@ -1696,6 +1817,62 @@ onUnmounted(() => reviewStateStore.stop());
   gap: var(--space-1);
   color: var(--color-tool-shell);
   font-size: var(--text-xs);
+}
+
+/* N1 首次引导(R1.1, 2026-09-15):引导卡 A/B/C 的步骤列表 / CTA /
+   尾注。形制照 EmptyProjectState 的 hero(BEM + design token,无新
+   依赖);容器复用 .chat-panel__empty 的居中列布局。 */
+.chat-panel__onboard-steps {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: left;
+  counter-reset: onboard-step;
+}
+
+.chat-panel__onboard-steps li {
+  counter-increment: onboard-step;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 步骤序号徽标(CSS counter,与 EmptyProjectState 的 icon 容器同
+   token 族:elevated 底 + 边框 + accent 字色)。 */
+.chat-panel__onboard-steps li::before {
+  content: counter(onboard-step);
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  color: var(--color-accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* CTA 本体由 primary 家族承载;本地只留引导卡内的节奏间距。 */
+.chat-panel__onboard-cta {
+  margin-top: var(--space-4);
+}
+
+/* 尾注纯文案(R1.1):不做成链接 —— /llm-setup、/doctor 是对话里
+   输入的斜杠命令,点了也无处可去,文案告知即可。 */
+.chat-panel__onboard-note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: var(--leading-relaxed);
 }
 
 /* 07-06 (am-observability-panel B4/R2b): real-time recall chip.

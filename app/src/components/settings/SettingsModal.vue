@@ -15,6 +15,10 @@
 //   当前 scope 无结果而另一 scope 有时,给一键切换提示。
 // - 上次停留的分类经 localStorage(everlasting.settingsNav)记忆,
 //   打开时恢复;失效 id 回退「通用」。
+// - N1 首次引导(2026-09-15):initialCategory prop 非空时(空状态
+//   引导卡经 settingsModal store 打开),本次跳过 localStorage 恢复
+//   直落该分类;消费后 emit 清空 store,一次性生效且不写入「上次
+//   停留」记忆 —— 普通打开(prop 空)行为不变。
 // - reka-ui DialogRoot/Portal/Overlay/Content 沿用原壳(overlay +
 //   focus trap + Esc),类名保持 `settings-modal` 以吃进 style.css
 //   的移动端全屏块与 44px 触摸目标块。
@@ -66,6 +70,22 @@ import ProjectSandboxTab from "./ProjectSandboxTab.vue";
 import ProjectSubagentsTab from "./ProjectSubagentsTab.vue";
 
 const open = defineModel<boolean>("open", { required: true });
+
+// N1 首次引导(2026-09-15):一次性初始分类落点(空状态引导卡经
+// settingsModal store 打开时非空)。值本身留在 store(经 Sidebar 下
+// 发),这里只读;消费后向上 emit,由调用方清空 store。
+const props = defineProps<{
+  /** 一次性初始分类 id(registry 的分类 id,如 "providers" /
+   *  "models")。非空时本次打开跳过 localStorage 恢复直落该分类;
+   *  无效 id 回退正常恢复。缺省 = 普通打开,行为不变。 */
+  initialCategory?: string | null;
+}>();
+
+const emit = defineEmits<{
+  /** initialCategory 已被打开 watcher 消费(无论 id 是否有效),
+   *  调用方据此清空 store 的一次性落点。 */
+  "initial-category-consumed": [];
+}>();
 
 const projectsStore = useProjectsStore();
 
@@ -132,13 +152,24 @@ const query = ref("");
 watch(open, (isOpen) => {
   if (!isOpen) return;
   query.value = "";
-  const saved = readSavedNav();
-  if (saved) {
-    scope.value = saved.scope;
-    activeId.value = saved.id;
+  // N1 一次性落点优先:initialCategory 非空 → 直落该分类,本次跳过
+  // localStorage 恢复且不写入「上次停留」记忆;消费即 emit 清空
+  // (一次性语义)。无效 id 不走直落,回退正常恢复。
+  const guidedId = props.initialCategory ?? null;
+  const guided = guidedId ? findCategory(guidedId) : undefined;
+  if (guidedId !== null) emit("initial-category-consumed");
+  if (guided) {
+    scope.value = guided.scope;
+    activeId.value = guided.id;
   } else {
-    scope.value = "global";
-    activeId.value = DEFAULT_CATEGORY_ID;
+    const saved = readSavedNav();
+    if (saved) {
+      scope.value = saved.scope;
+      activeId.value = saved.id;
+    } else {
+      scope.value = "global";
+      activeId.value = DEFAULT_CATEGORY_ID;
+    }
   }
   // 项目选择器:默认跟当前活跃项目,失效/缺失回退第一个可见项目。
   if (!visibleProjects.value.some((p) => p.id === selectedProjectId.value)) {

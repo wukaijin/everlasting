@@ -26,6 +26,7 @@
 
 import { ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
+import { useSettingsModalStore } from "../../stores/settingsModal";
 import SessionList from "../SessionList.vue";
 import SettingsModal from "../settings/SettingsModal.vue";
 import GroupChatConfigModal from "../chat/GroupChatConfigModal.vue";
@@ -71,10 +72,13 @@ function onNewGroupChat() {
 // 与「新建群聊」并排 —— 发新场前先查历史场(避免重复审议)。
 const { open: openDiscussionLibrary } = useDiscussionLibrary();
 
-const settingsOpen = ref(false);
+// N1 首次引导(2026-09-15):Settings 开关从本地 ref 升全局
+// settingsModal store —— 聊天区空状态引导卡经 openSettings(category)
+// 跨层打开并直落指定分类;footer 按钮只翻 open,行为不变。
+const settingsModalStore = useSettingsModalStore();
 
 function onSettingsClick() {
-  settingsOpen.value = !settingsOpen.value;
+  settingsModalStore.open = !settingsModalStore.open;
 }
 
 // 2026-06-27 sidebar 搜索入口 + 密度切换: search state lifted to
@@ -235,7 +239,17 @@ function onSearchClear() {
         <span class="sidebar__settings-label">设置</span>
       </button>
     </div>
-    <SettingsModal v-model:open="settingsOpen" />
+    <!--
+      N1 首次引导(2026-09-15):open 绑全局 store(initialCategory
+      一次性落点经 prop 下发、消费后由弹窗 emit 回来清空),让
+      聊天区引导卡也能打开设置并直落指定分类;localStorage「上次
+      停留」记忆行为保留在弹窗内部。
+    -->
+    <SettingsModal
+      v-model:open="settingsModalStore.open"
+      :initial-category="settingsModalStore.initialCategory"
+      @initial-category-consumed="settingsModalStore.consumeInitialCategory()"
+    />
     <!--
       Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E7/E6):
       modal for creating a new group_chat session. Same component

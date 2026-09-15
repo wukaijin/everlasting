@@ -38,6 +38,15 @@
 //     `retry-loading` prop), the button is disabled and shows
 //     "重试中...". The parent toggles the prop via its own
 //     watcher on the session's active stream.
+//
+// N1 首次引导(R1.2, 2026-09-15)错误行「测试连接」行动点:
+//   - auth / network / server 类错误值得实测一次连接(key 失效 /
+//     断网 / 服务端故障都可能,一测便知);invalid_request 是请求
+//     构造问题,连接层测试给不了新信息;rate_limit 已有 retry。
+//   - 仍然零 store:按钮只 emit("test-connection"),`test_model`
+//     IPC 由父(MessageItem.vue)编排,testState 三态(running /
+//     ok(latencyMs) / fail(error))经 prop 回传行内渲染 —— 与
+//     retry 同款「父编排、子渲染」分工(照 ModelsTab runTest 形制)。
 
 import { computed } from "vue";
 import {
@@ -50,6 +59,9 @@ import {
 } from "reka-ui";
 import { abbreviateDuration } from "../../utils/duration";
 import { categoryRetryable } from "../../utils/error";
+// 跨 settings/ 的 type-only 导入(单源:与 ModelsTab/ModelRow 的
+// 行内测试结果同形);运行时零依赖(类型擦除)。
+import type { TestState } from "../settings/ModelRow.vue";
 import Icon from "../Icon.vue";
 
 const props = withDefaults(
@@ -90,6 +102,17 @@ const props = withDefaults(
      *  disabled). The parent uses its own `currentSessionId`
      *  watcher to clear it on `done` / `error`. */
     retryLoading?: boolean;
+    /** N1 (R1.2, 2026-09-15): the model to test when the user
+     *  clicks 「测试连接」, resolved by the parent (session.model_id
+     *  → group-chat participant → default). Missing → the button
+     *  does not render (nothing to test against). */
+    modelId?: string;
+    /** N1 (R1.2): the inline test result owned by the parent
+     *  (same shape as ModelsTab's per-row TestState). Null /
+     *  undefined = never tested; `running` disables the button
+     *  and flips its label; `ok` / `fail` render the inline
+     *  result text next to the error row. */
+    testState?: TestState | null;
   }>(),
   {
     streaming: false,
@@ -97,6 +120,8 @@ const props = withDefaults(
     error: undefined,
     messageSeq: undefined,
     retryLoading: false,
+    modelId: undefined,
+    testState: undefined,
   },
 );
 
@@ -105,6 +130,10 @@ const emit = defineEmits<{
    *  Payload is the row's `messageSeq` so the parent can call
    *  `chatStore.retryChat(sessionId, messageSeq)` directly. */
   (e: "retry", messageSeq: number): void;
+  /** N1 (R1.2): fired when the user clicks the 「测试连接」
+   *  button. No payload — the parent already knows the
+   *  resolved `modelId` (it passed it down). */
+  (e: "test-connection"): void;
 }>();
 
 /** A5 R2: whether the retry button renders at all. True iff
@@ -119,6 +148,30 @@ const canRetry = computed<boolean>(
     !!props.error &&
     categoryRetryable(props.error.category) &&
     !props.streaming,
+);
+
+/** N1 (R1.2): 「测试连接」按钮的 category 白名单。auth(key 失效)/
+ *  network(断网 / base_url 错)/ server(服务商故障)实测一次连接
+ *  都有信息量;invalid_request 是请求构造问题,测连接给不了新信息;
+ *  rate_limit 已有 retry。大小写两形态都收(wire 是 snake_case,但
+ *  utils/error.ts 的双 case 约定保留统一处理)。 */
+const TESTABLE_CATEGORIES = new Set([
+  "auth",
+  "Auth",
+  "network",
+  "Network",
+  "server",
+  "Server",
+]);
+
+/** N1 (R1.2): whether the test-connection button renders at all.
+ *  True iff the row carries an error AND the parent resolved a
+ *  modelId AND the category is one of auth/network/server. */
+const canTestConnection = computed<boolean>(
+  () =>
+    !!props.error &&
+    !!props.modelId &&
+    TESTABLE_CATEGORIES.has(props.error.category ?? ""),
 );
 
 /** F5 chip visibility. Renders the bottom-right of the
@@ -221,6 +274,32 @@ function onRetryClick(): void {
     >
       {{ retryButtonLabel }}
     </button>
+    <!--
+      N1 (R1.2): 「测试连接」行动点。挂 retry 旁,复用 btn btn--sm
+      家族;点击只 emit(零 store),结果由父经 testState prop 回传
+      行内渲染(running → 按钮 disabled + 测试中...,ok / fail →
+      按钮后的行内结果文案)。
+    -->
+    <button
+      v-if="canTestConnection"
+      type="button"
+      class="msg__error-test btn btn--muted btn--sm"
+      :disabled="testState?.kind === 'running'"
+      data-testid="msg-test-connection-button"
+      @click="emit('test-connection')"
+    >
+      {{ testState?.kind === "running" ? "测试中..." : "测试连接" }}
+    </button>
+    <span
+      v-if="testState?.kind === 'ok'"
+      class="msg__test-result msg__test-result--ok"
+      data-testid="msg-test-connection-ok"
+    >连接正常 · {{ testState.latencyMs }} ms</span>
+    <span
+      v-else-if="testState?.kind === 'fail'"
+      class="msg__test-result msg__test-result--fail"
+      data-testid="msg-test-connection-fail"
+    >{{ testState.error }}</span>
   </div>
 
   <!--
@@ -289,6 +368,31 @@ function onRetryClick(): void {
 .msg__error-retry {
   margin-left: 6px;
   user-select: none;
+}
+
+/* N1 (R1.2): 「测试连接」按钮 —— 与 retry 同几何(muted·sm 家族
+   承载本体,区别于 retry 的 danger-soft:两个动作语义不同,配色
+   也应区分)。 */
+.msg__error-test {
+  margin-left: 6px;
+  user-select: none;
+}
+
+/* N1 (R1.2): 行内测试结果 —— ok 用 success 绿,fail 用与错误行同
+   源的 error 红加深一档字重;mono 小字,与 latency chip 同密度。 */
+.msg__test-result {
+  margin-left: 6px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  user-select: none;
+}
+
+.msg__test-result--ok {
+  color: var(--color-status-success);
+}
+
+.msg__test-result--fail {
+  color: var(--color-tool-error-text);
 }
 
 /* F5 (LLM Latency Tracking): per-message latency chip. Sits
