@@ -64,6 +64,13 @@ in `tauri::generate_handler!`'s new entries.
 
 ###3. Contracts
 
+> **签名收敛(2026-09-15,task 09-15-n1-onboarding-skills)**:inner 函数从
+> `(state: &Arc<AppState>, model_id)` 收敛为 `(db: &SqlitePool, model_id)`
+> ——该函数本就只用 `state.db`;三调用方 = Tauri command / daemon 路由(各传
+> `&state.db`)/**agent 工具 `test_llm_connection`(`ctx.db`,契约见
+> [tool-contract/18](./tool-contract/18-readonly-diagnostics-tools.md))**。
+> 语义/wire/错误矩阵零改动,本文以下全部保持原样。
+
 **Request to `test_model`**:
 - `model_id: String` — the `models.id` (UUID-ish primary key) from
  the catalog. NOT `model_name` (the API-facing name).

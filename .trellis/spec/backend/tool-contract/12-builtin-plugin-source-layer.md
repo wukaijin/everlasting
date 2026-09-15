@@ -52,3 +52,35 @@
 内置 plugin 热更新(编译期常量,要换改项目 `.everlasting/`)。
 
 ---
+
+## Scenario: GlobalBuiltin 全局内置 skill 层(09-15-n1-onboarding-skills)
+
+**Context**: BuiltinPlugin 层只对 workflow 会话可见;N1 需要随 app 分发、
+**所有会话可见**的内置 skill(llm-setup / doctor / onboarding 三件套)。
+照 agent 链 `… > Project > User > Builtin` 的「全局内置垫底」先例加第五层。
+
+- **优先级链(skill 完整版)**:`Plugin > BuiltinPlugin > Project > User > GlobalBuiltin`
+  ——merge 插入序 `global-builtin → user → project → builtin-plugin → plugin`
+  (后插覆盖),find 查找序严格反向。垫底 = 用户/项目同名可覆盖 app 默认
+  (定制逃生门),与 workflow 语义层的 BuiltinPlugin(刻意压过 project)不同向。
+- **源**:`app/src-tauri/resources/builtin-skills/<name>/SKILL.md`,
+  `include_str!` 编译期常量 + `global_builtin_skills()`(复用 `parse_skill_content`,
+  解析行为与磁盘层 100% 一致);`<builtin>` 虚拟路径仅用于 info 展示。
+- **可见性三口同源**:`build_skill_listing_block`(L0)/ `find_skill`(
+  use_skill + `get_skill_body`)/ `list_skill_infos`(`/` 面板)都经
+  merge/find 单源自动并入——**不要在三个口子分别特判**,改层只动 loader。
+  `/` 面板 dedup:同名高层覆盖底层(BuiltinPlugin/Plugin 的 skill 仍不出
+  面板,该不变量保持;GlobalBuiltin 出面板,这是它存在的意义之一)。
+- **部署边界(硬约束)**:include_str! 是唯一交付形态——daemon-only 部署
+  (无源码检出/无 node/无 scripts)天然可用;显式否决运行时读源码目录
+  或以仓库 `.agents/skills/`(Trellis 开发工具,另一机制)为载体。
+  验收探针 = 独立 daemon 上 `list_panel_items` 见名 + `get_skill_body`
+  得全文 + 二进制 grep 内容非零(09-15 三探针全过)。
+- **L0 token 面**:每 skill 一行(name + description),三件套 ≈ 百 token 级,
+  不进 tools[] 静态预算测试(那是 tools schema 口径)。
+
+**新测试覆盖**(tests_loader.rs):普通会话三 skill 可见/可解析、user 覆盖、
+project 覆盖(清单不重复)、workflow 会话 wf-* ∪ 三件套并存。
+
+---
+

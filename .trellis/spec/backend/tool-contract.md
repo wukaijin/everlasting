@@ -42,6 +42,7 @@
 - [15-search-history](./tool-contract/15-search-history.md) — `search_history`(D2② agent 驱动跨 session 全文搜索,复用 db::search 共享层 + Tier 5 silent Allow + agent 侧 limit 50 vs modal 200)
 - [16-web-search](./tool-contract/16-web-search.md) — `web_search`(F4 snippet-only 网页搜索,enum dispatch 双后端 Tavily/DDG + key 三态 AEAD 配置 + DDG 202 软封锁语义 + 全名单开闸含项目层 frontmatter)
 - [17-schedule-task-family](./tool-contract/17-schedule-task-family.md) — `schedule_task`/`schedule_status`/`schedule_cancel`(LLM 调度家族,F2 detached dispatch;作者面分离 created_by='agent' + tool 侧 kill switch/上限双 gate + Tier 5 钉住 + pool 级核心范式)
+- [18-readonly-diagnostics-tools](./tool-contract/18-readonly-diagnostics-tools.md) — `llm_diagnostics`/`test_llm_connection`(N1 诊断双工具,只读;**脱敏铁律:ProviderRow 禁序列化进工具输出**、`has_key` 字段命名服务断言口径、id 全形;test_model_inner 签名收敛 db 参数三调用方共享)
 
 ---
 

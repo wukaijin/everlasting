@@ -201,7 +201,7 @@
 
 | 编号 | 候选 | 群聊建议 | 主张视角 | 一句话依据(参与者的核码结论) |
 |------|------|---------|---------|-------------------------------|
-| N1 | 首次引导 3 步向导 + 报错分级提示 | **P0** | 产品+新用户 | 空状态仅一句「开始对话」,新手不知先配 provider;401/529 裸英文报错死胡同;形态:配 provider → 测试连接 → 开聊(per-row 测试按钮已存在可复用) |
+| ~~N1~~ | ~~首次引导 3 步向导 + 报错分级提示~~ | **✅ 2026-09-15 交付**(方向调整:不做重向导——轻页面引导(空状态四分态检测卡 + 错误行测试连接)+ 内置诊断/引导/配置 LLM 三件套 skills + 只读诊断双工具;task `09-15-n1-onboarding-skills`,见 [ROADMAP §1.2](./ROADMAP.md)) | 产品+新用户 | 空状态仅一句「开始对话」,新手不知先配 provider;401/529 裸英文报错死胡同;形态:配 provider → 测试连接 → 开聊(per-row 测试按钮已存在可复用) |
 | N2 | checkpoint / revert 闭环 | P1 上半(**非** P0) | 产品(后端/前端/安全/测试四方修正) | 真痛点但成本被证伪:diff 展示层现成(`git/diff.rs` session 分支),缺 per-turn 文件基线(新写入路径)+ 多 session 原子化;落地路径 = turn 边界 auto-commit + revert=reset;约束:revert 仅 UI 触发、不进 agent 工具、走 dangerous 通道 + audit 归因;前置 = N4 |
 | N3 | 新项目冷启动 `/init` + 轻量 repo map | P1 | 产品 | 4 个指令文件手写、每 session 靠 grep 摸地形;B5 memory digest 只优化注入成本,不解决首印象 |
 | N4 | 长会话渲染虚拟化 | P1(rewind 前置) | 前端 | `MessageList.vue` 裸 v-for 全量 DOM,无 IntersectionObserver/content-visibility;路线(content-visibility vs 真虚拟化)等 N9 基准后定 |
