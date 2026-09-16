@@ -923,7 +923,7 @@ function printRunHelp() {
   --preset <name>         内置 review / fe_review / arch / retro,或用户预设 key(UUID)/ 名称(presets 子命令查)
   --participants <json>   整名单替换(与 --preset 二选一;增删参与者也走它)
   --moderator-model <id>  主持人模型(默认取预设)
-  --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget;省略 = 不限)
+  --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget,无收束轮;建议不填,或 ≥200000——一场典型审议烧数十万 token,更低基本必中途触顶)
   --set <name>.model=<id>            单人换模型(可重复)
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --timeout <seconds>     默认 1800;超时 cancel 停编排、保 session、导部分转录

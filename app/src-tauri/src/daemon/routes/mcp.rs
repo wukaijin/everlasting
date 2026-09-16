@@ -321,7 +321,7 @@ fn tool_defs() -> Vec<Value> {
                         },
                         "description": "Full roster, replaces preset roster (moderator unchanged)"
                     },
-                    "token_budget": { "type": "integer", "minimum": 1, "description": "Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget. Omit = unlimited" }
+                    "token_budget": { "type": "integer", "minimum": 1, "description": "Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget, no wrap-up. Recommended: omit, or ≥200000 (a typical run burns hundreds of thousands). Omit = unlimited" }
                 },
                 "required": ["topic", "cwd"]
             }

@@ -61,9 +61,13 @@ pub struct GroupChatConfig {
     /// summed across every inner LLM turn). `None` (absent key) = unlimited
     /// — default-off keeps existing sessions byte-compatible. Exceeded →
     /// the orchestrator halts at the next round head with
-    /// `stop_reason = "budget"`. Declared per discussion in
-    /// `sessions.metadata`; the scheduled-task / MCP / CLI creation
-    /// channels don't carry it yet (M4 cost governance wires those).
+    /// `stop_reason = "budget"` (no wrap-up round). Declared per discussion
+    /// in `sessions.metadata`; all four creation channels carry it since
+    /// M4c (2026-09-08): GUI modal / M1 script `--token-budget` / MCP
+    /// `start_discussion` / scheduled `group_chat_config.token_budget`.
+    /// Recommendation surfaced in those UIs/help: omit, or ≥200000 — a
+    /// typical run burns hundreds of thousands of billed tokens, so a
+    /// lower ceiling usually truncates mid-discussion.
     /// Additive key: serde's default keeps old metadata deserializing.
     #[serde(default)]
     pub token_budget: Option<u64>,
