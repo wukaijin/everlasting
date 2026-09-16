@@ -637,7 +637,7 @@ fn lookup_preset(
                 format!(
                     "{}({})",
                     p.display_name,
-                    &key.chars().take(8).collect::<String>()
+                    key.chars().take(8).collect::<String>()
                 )
             } else {
                 key.to_string()
