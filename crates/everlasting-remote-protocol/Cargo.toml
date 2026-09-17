@@ -2,6 +2,7 @@
 name = "everlasting-remote-protocol"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-only"
 description = "Wire-frame types shared between everlasting-remote (edge daemon) and the everlasting-daemon tunnel client. Pure types, zero system-library deps."
 
 [dependencies]

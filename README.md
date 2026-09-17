@@ -119,3 +119,7 @@ pnpm tauri dev
 - **WSL 环境坑笔记** — [docs/HACKING-wsl.md](./docs/HACKING-wsl.md)
 
 全量设计文档索引见 [docs/README.md](./docs/README.md)。
+
+## 许可
+
+本项目代码以 [GPL-3.0-only](./LICENSE) 发布 © 2026 Carlos：衍生作品分发时必须以同协议开源并保留版权声明。随应用打包的第三方资产（如 HarmonyOS Sans SC 字体）保持各自原协议，见 [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md)。

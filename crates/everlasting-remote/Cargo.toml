@@ -2,6 +2,7 @@
 name = "everlasting-remote"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-only"
 description = "Edge daemon for the remote-control epic: WSS server + device table + reverse proxy to PC daemons over WSS tunnels."
 
 # Step 2 (task 08-11-remote-daemon-core): full dep set declared up front so
