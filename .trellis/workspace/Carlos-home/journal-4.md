@@ -1762,3 +1762,23 @@ N1 方向调整(用户裁定:不做重向导):页面轻引导(空状态四分态
 ### Status
 
 [OK] **Completed**
+
+## Session 147: N3 项目冷启动 /init——GlobalBuiltin 第四件 init(09-18-n3-project-init 全程)
+
+**Date**: 2026-09-18
+**Task**: 09-18-n3-project-init — N3 项目冷启动 /init:repo map + 路径/文件初始化
+**Branch**: `main`
+
+### Summary
+
+BACKLOG 群聊共识候选 N3 落地(用户立项扩展「不只 repo map 还初始化路径」,brainstorm 三问收敛后范围收窄)。三决策:①唯一交付物 = `<project>/AGENTS.md` 内嵌 repo map 章节(不建 .everlasting/ 骨架/项目级 EVERLASTING.md/不动 .gitignore——勘察实证 create_project 零文件初始化、资源目录「缺目录静默空」不需预建);②执行者 = GlobalBuiltin skill 命名 init(`/` 面板即字面 /init,N1 层零机制增量:SKILL.md 资产 + loader 单行 include_str!),当前 session LLM 驱动(机械 tree 不值一个新机制——LLM 自己 glob 免费);③幂等 = marker 区块增量(`<!-- everlasting:repo-map:start/end -->`,edit_file 换区块保区块外字节;纯手写无 marker → 不写文件报告退出)。live 四场(turn-smoke 驱动,共 ~15 万 token):AC2 fake repo 首跑(marker+模板+归纳质量高,第二轮场 memory_token=542 实证注入生效)/AC3 两场字节边界(diff 变化全在区块内,Python 断言区块外前后段字节一致;新增文件描述还准确标注「尚未接入」)/AC4 手写保护(文件零改动+路径 C 报告在场)/AC5 真实场(本仓库浅拷贝 67MB)人审:无编造(文件/命令全实证),但抓到指引盲区——LLM 把仓库根 Claude Code 遗留 CLAUDE.md(14.5KB)误断言为「并列注入槽」(文件真实存在+机制断言错误,原「禁止编造」约束不覆盖)→ SKILL.md 补第 5 条「不做机制性断言」(目录存在可见、被谁加载不可见;数字断言同禁)→ daemon 重建重启复跑:区块内断言清除+CLAUDE.md 改中性描述+「28 个工具」数字断言消失;区块外历史断言按设计保留(marker 外改动必须出自人)。资产锁单测钉 marker 对/项目根/worktree/禁止编造/不写文件五关键段(SKILL.md 是纯指引资产,误删关键段=静默退化,地面真值断言同 mcp.rs wire 预算锁思路)。发现留裁定:本仓库根 CLAUDE.md 与 everlasting agent 无关(loader 09-10 已退役该槽),是否删/改名由用户定。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (见 git log) | feat(skill): N3 项目冷启动 /init——GlobalBuiltin 第四件 init + 资产结构锁 + live 四场验证 |
+
+### Status
+
+[OK] **Completed**(follow-up:repo map 自动刷新不做,手动重跑 /init;CLAUDE.md 遗留文件处置待用户裁定)

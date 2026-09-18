@@ -864,7 +864,7 @@ async fn global_builtin_skills_visible_in_plain_session() {
     let infos = list_skill_infos(&cache, Some(&pp)).await;
     set_user_dir_for_test(prev);
 
-    for slug in ["llm-setup", "doctor", "onboarding"] {
+    for slug in ["llm-setup", "doctor", "onboarding", "init"] {
         let info = infos.iter().find(|i| i.name == slug).unwrap_or_else(|| {
             panic!(
                 "global builtin {slug} must be listed (got {:?})",
@@ -889,6 +889,34 @@ async fn global_builtin_skills_visible_in_plain_session() {
         r.path.to_string_lossy().contains("<builtin>"),
         "builtin layer uses a virtual path marker"
     );
+}
+
+/// N3 项目冷启动:init skill 的资产结构锁——SKILL.md 是纯指引资产
+/// (行为全靠 LLM 遵循),marker 格式 / 落点铁律 / 反编造约束是 PRD
+/// 契约,误删任一关键段会让 /init 静默退化,这里钉住地面真值。
+#[tokio::test]
+async fn global_builtin_init_skill_asset_contract() {
+    let user_tmp = tempfile::TempDir::new().unwrap();
+    let proj_tmp = tempfile::TempDir::new().unwrap();
+    let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+    let cache = SkillCache::arc();
+    let pp = proj_tmp.path().to_string_lossy().to_string();
+
+    let r = find_skill(&cache, "init", Some(&pp)).await;
+    set_user_dir_for_test(prev);
+    let r = r.expect("global builtin init must resolve for use_skill");
+    assert_eq!(r.source, SkillSource::GlobalBuiltin);
+
+    // 幂等契约:marker 对必须在场(路径 B 增量刷新的锚点)。
+    assert!(r.body.contains("everlasting:repo-map:start"));
+    assert!(r.body.contains("everlasting:repo-map:end"));
+    // 落点铁律:项目根 + worktree 场景处置。
+    assert!(r.body.contains("项目根"));
+    assert!(r.body.contains("worktree"));
+    // 质量铁律:反编造约束在场。
+    assert!(r.body.contains("禁止编造"));
+    // 幂等三路径:纯手写保护分支在场。
+    assert!(r.body.contains("不写文件"));
 }
 
 #[tokio::test]

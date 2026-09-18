@@ -347,6 +347,10 @@ const GLOBAL_BUILTIN_SKILLS: &[(&str, &str)] = &[
         "onboarding",
         include_str!("../../resources/builtin-skills/onboarding/SKILL.md"),
     ),
+    (
+        "init",
+        include_str!("../../resources/builtin-skills/init/SKILL.md"),
+    ),
 ];
 
 /// 构造全局内置 skills(N1 首次引导)。不走磁盘扫描 —— 内置源是

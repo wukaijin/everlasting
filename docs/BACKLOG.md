@@ -203,7 +203,7 @@
 |------|------|---------|---------|-------------------------------|
 | ~~N1~~ | ~~首次引导 3 步向导 + 报错分级提示~~ | **✅ 2026-09-15 交付**(方向调整:不做重向导——轻页面引导(空状态四分态检测卡 + 错误行测试连接)+ 内置诊断/引导/配置 LLM 三件套 skills + 只读诊断双工具;task `09-15-n1-onboarding-skills`,见 [ROADMAP §1.2](./ROADMAP.md)) | 产品+新用户 | 空状态仅一句「开始对话」,新手不知先配 provider;401/529 裸英文报错死胡同;形态:配 provider → 测试连接 → 开聊(per-row 测试按钮已存在可复用) |
 | N2 | checkpoint / revert 闭环 | P1 上半(**非** P0) | 产品(后端/前端/安全/测试四方修正) | 真痛点但成本被证伪:diff 展示层现成(`git/diff.rs` session 分支),缺 per-turn 文件基线(新写入路径)+ 多 session 原子化;落地路径 = turn 边界 auto-commit + revert=reset;约束:revert 仅 UI 触发、不进 agent 工具、走 dangerous 通道 + audit 归因;前置 = N4 |
-| N3 | 新项目冷启动 `/init` + 轻量 repo map | P1 | 产品 | 4 个指令文件手写、每 session 靠 grep 摸地形;B5 memory digest 只优化注入成本,不解决首印象 |
+| ~~N3~~ | ~~新项目冷启动 `/init` + 轻量 repo map~~ | **✅ 2026-09-18 交付**(范围用户裁定收窄:唯一交付物 = `<project>/AGENTS.md` 内嵌 repo map 章节,不建目录骨架/项目级 EVERLASTING.md/.gitignore;形态 = GlobalBuiltin 第四件 skill `init`,`/` 面板即字面 `/init`,当前 session LLM 驱动零机制新增;幂等 = marker 区块增量更新【`edit_file` 结构保障】+ 纯手写保护,task `09-18-n3-project-init`,见 [ROADMAP §1.2](./ROADMAP.md)) | 产品 | 4 个指令文件手写、每 session 靠 grep 摸地形;B5 memory digest 只优化注入成本,不解决首印象 |
 | N4 | 长会话渲染虚拟化 | P1(rewind 前置) | 前端 | `MessageList.vue` 裸 v-for 全量 DOM,无 IntersectionObserver/content-visibility;路线(content-visibility vs 真虚拟化)等 N9 基准后定 |
 | N5 | sandbox fail-open 审计可区分 | P1 | 安全+测试 | 审计不区分 sandboxed / failed-open 执行,事后归因混淆 |
 | N6 | 沙盒测试 CI 静默 SKIP 门禁 | P1 | 测试 | `sandbox/tests_sandbox.rs` 4 处 `eprintln!("SKIP")` 后照常通过——无 Landlock/seccomp 主机(macOS runner)沙盒覆盖率=0;修法:`#[cfg(target_os="linux")]` 强制门禁或 Linux docker-runner |

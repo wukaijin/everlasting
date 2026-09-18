@@ -56,7 +56,9 @@
 ## Scenario: GlobalBuiltin 全局内置 skill 层(09-15-n1-onboarding-skills)
 
 **Context**: BuiltinPlugin 层只对 workflow 会话可见;N1 需要随 app 分发、
-**所有会话可见**的内置 skill(llm-setup / doctor / onboarding 三件套)。
+**所有会话可见**的内置 skill(llm-setup / doctor / onboarding 三件套;09-18
+N3 加第四件 `init`——项目冷启动,LLM 指引生成/增量刷新 `<project>/AGENTS.md`
+的 repo map marker 区块,SKILL.md 资产由 tests_loader 的资产结构锁钉住关键段)。
 照 agent 链 `… > Project > User > Builtin` 的「全局内置垫底」先例加第五层。
 
 - **优先级链(skill 完整版)**:`Plugin > BuiltinPlugin > Project > User > GlobalBuiltin`
