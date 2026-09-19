@@ -580,7 +580,7 @@ describe("MessageItem — group chat transcript row classes", () => {
     message.seq = 21;
     const wrapper = mountItem(message, pinia);
     await flushPromises();
-    const row = wrapper.find("li.msg");
+    const row = wrapper.find(".msg");
     expect(row.classes()).toContain("msg--gc-participant");
     // palette index comes from colorTagForName("Alex") — assert the
     // class prefix rather than the exact bucket so a palette re-hash
@@ -601,7 +601,7 @@ describe("MessageItem — group chat transcript row classes", () => {
     message.seq = 22;
     const wrapper = mountItem(message, pinia);
     await flushPromises();
-    const row = wrapper.find("li.msg");
+    const row = wrapper.find(".msg");
     expect(row.classes()).toContain("msg--gc-moderator");
     expect(row.classes()).not.toContain("msg--gc-participant");
     const chip = wrapper.find('[data-testid="msg-speaker-chip-22"]');
@@ -615,7 +615,7 @@ describe("MessageItem — group chat transcript row classes", () => {
     message.seq = 23;
     const wrapper = mountItem(message, pinia);
     await flushPromises();
-    const row = wrapper.find("li.msg");
+    const row = wrapper.find(".msg");
     expect(row.classes()).not.toContain("msg--gc-participant");
     expect(row.classes()).not.toContain("msg--gc-moderator");
     expect(row.classes().some((c) => /^msg--gc-palette-\d$/.test(c))).toBe(false);

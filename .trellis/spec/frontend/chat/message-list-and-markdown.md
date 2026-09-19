@@ -7,6 +7,15 @@
 
 ## 1. TransitionGroup enter 动画的"直接子节点"契约
 
+> **N4 状态(09-19-n4-render-virtualization)**:TransitionGroup 已随虚拟化
+> **整体退役**——run 划入动画改由 `useVirtualizedMessages` 的 enterRow 相位机
+> 挂 `run-enter-from/-active` 类到虚拟项 wrapper、目标 `.msg` 子根
+> (opacity+translateX 白名单,禁 scale/height);session 切换/首挂载走
+> `.messages` 容器一次性 fade-in。本节保留作**历史决策记录**(enter 类落点
+> 必须与选择器同元素的教训仍然成立:新动画机制里 from/active 类同挂
+> wrapper、样式选择器 `> .msg` 承接,同元素契约以新形态延续)。
+> **不要在新改动里恢复 TransitionGroup**(虚拟项 wrapper 非真实子节点模型)。
+
 **契约**:`<TransitionGroup>` 的 enter/appear/leave 类落在**真实直接子节点**上。
 自 5b1fc81(07-30 run 分组重构)起直接子节点是 run-group `<li>`,
 不再是 `.msg--user` / `.msg--assistant` 消息元素本身。
@@ -81,7 +90,12 @@ line-height: var(--leading-relaxed);           /* 1.6,长文容器统一 */
 ## 4. pending interaction 强制回底契约(BUGLIST CH8-2a,2026-08-29)
 
 MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null → some
-跃迁**时强制回底(`isAtBottom = true` + 瞬时 scrollToBottom):
+跃迁**时强制回底:
+
+> **N4 机制注记(09-19-n4-render-virtualization)**:watch 现居
+> `composables/useVirtualizedMessages.ts`(集中装配点),回底动作 =
+> `isAtBottom = true` + `scrollToEnd({behavior:'auto'})`(程序化滚动必须走
+> 库 API,spike 约束 3)。**触发面与「仅 null→some」契约不变**。
 
 - 触发面覆盖全部 pending 种类(question / loop_intervention / turn_limit_softcap /
   mode_change / task_state_transition)—— 都是"agent 停下来等人"的阻塞态,值得
@@ -91,6 +105,32 @@ MessageList watch `questionCardsStore.getPending(currentSessionId)`,**仅 null �
 - 配套:chatSendActions `send()` 在排队路径(queueingClassic)且当前 session 有
   pending 时 warn toast 澄清"消息已排队但 Agent 在等卡片提交"(CH8-2b)——
   mock `get_pending_interaction` 的测试坑见 `../test-environment.md` §8。
+
+---
+
+## 4a. 虚拟化 composable 三约束(09-19-n4-render-virtualization,spike 实证)
+
+消息列表自 N4 起由 `composables/useVirtualizedMessages.ts` 集中装配
+`@tanstack/vue-virtual`。spike(`app/bench/spike-follow-options.html`,
+Playwright 驱动)实证三条库层硬约束,**改 composable 前必读**——violation
+都是静默行为缺陷,类型/测试不拦:
+
+1. **`followOnAppend: true` ≠ 强制跟滚**:core 3.17.11 把 `true` 映射为
+   behavior `'auto'`,与 `'auto'` 同受 isAtEnd 门控(滚离末端 append 一律
+   不跟)。force-follow(F2 语义:发送后无条件跟每个 delta)必须**手写**:
+   watch append + `forceFollowActive` → `scrollToEnd()`,不走 followOnAppend。
+2. **Vue 适配层缺 React-parity 的 per-render `_willUpdate`**:纯 resize
+   (流式末项 grow,无 append)的钉底调整写入被 clamp 后无重试入口,实测
+   卡死差 ~300px。composable 必须 `onUpdated` 每 render 补
+   `virtualizer._willUpdate()`。
+3. **程序化滚动一律走库 API**(scrollToIndex / scrollToEnd / scrollToOffset),
+   禁 `el.scrollTop` 直写——与库事件驱动 offset 同步竞态,isAtEnd 判定读
+   滞后值。onScroll **读** DOM 距底(与旧 isNearBottom 同式)不违本条。
+
+配套事实(同 spike/评审):动画属性白名单 = opacity + translateX,**禁
+scale/height**——动画中间帧的测量值经 measureElement 按 getItemKey 写入
+持久测量缓存,会把中间尺寸固化成 session 内永久空隙(background-color 无
+几何效应,不进测量缓存,不受限)。
 
 ---
 

@@ -407,7 +407,7 @@ function onRetryClick(): void {
      attention — the user sees it on glance but isn't
      pulled in.
    - Right-aligned via `align-self: flex-end` (the parent
-     `li.msg` is `display: flex; flex-direction: column`,
+     `.msg` is `display: flex; flex-direction: column`,
      so the chip is the rightmost element of the bubble
      column). */
 .msg__latency {

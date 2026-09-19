@@ -1,321 +1,104 @@
 <script setup lang="ts">
-// MessageList — the <ul> of visible messages. Watches the store's
-// `messages` ref for both length changes (new message arrives) and
-// content churn (text/thinking streaming) and auto-scrolls to keep
-// the latest line in view.
+// MessageList — the virtualized message stream (N4 PR1,
+// 09-19-n4-render-virtualization). Renders @tanstack/vue-virtual rows:
+// DOM count = visible window + overscan, decoupled from session length.
 //
-// F2: "force follow" mode — after sending, auto-scroll tracks every
-// delta regardless of user position. The user can opt out by
-// scrolling up >80px. The mode resets when the stream finishes
-// (streamController sets store.forceFollowActive = false on done/error).
+// ALL anchoring semantics live in `useVirtualizedMessages`
+// (composables/useVirtualizedMessages.ts — the single assembly point,
+// including the PR0-spike handwritten force-follow and the per-render
+// `_willUpdate` compensation). This component is deliberately thin:
+// scroll container + virtual rows + back-to-bottom button.
 //
-// Scroll-to-bottom button: when the user scrolls away from the bottom
-// (reading history, or after force-follow was cancelled), a floating
-// `↓` button appears. Clicking it jumps back to the bottom (smooth)
-// and re-engages force-follow if the stream is still active — fixing
-// the old "easy to leave the bottom, hard to return" asymmetry.
-
-import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
-import { useChatStore } from "../../stores/chat";
-import { useQuestionCardsStore } from "../../stores/questionCards";
-import type { ChatMessage } from "../../stores/chat.types";
-import { buildRunGroups } from "../../utils/messageFormat";
+// Retired with this rewrite (design §2 migration table):
+//   - TransitionGroup (ul/li → div; PR1 shipped WITHOUT enter animation —
+//     D4 rebuilt it in PR3 via the composable's enterRow phases + the
+//     container fade-in below);
+//   - setListEl $el hack (plain ref on a real div now);
+//   - stickToBottomUntilStable + `stabilizing`/`data-stabilizing`
+//     test signal (virtualization removes mount churn — a single
+//     scrollToEnd lands);
+//   - the O(n) fingerprint watch (library append/resize anchoring);
+//   - manual scrollToBottom / scrollTop writes (spike constraint 3:
+//     programmatic scrolls MUST go through library APIs).
+import { computed, ref } from "vue";
+import type { ComponentPublicInstance } from "vue";
 import MessageItem from "./MessageItem.vue";
 import Icon from "../Icon.vue";
+import { useVirtualizedMessages } from "../../composables/useVirtualizedMessages";
 
-const store = useChatStore();
 const messagesEl = ref<HTMLElement | null>(null);
-// TransitionGroup (tag="ul") exposes its rendered <ul> via the
-// component instance's $el, not via a plain ref (which would hand
-// back the instance). A function ref captures the DOM node so the
-// scroll logic below (scrollHeight / scrollTop / scrollTo) works
-// unchanged.
-function setListEl(instance: unknown) {
-  messagesEl.value =
-    (instance as { $el?: HTMLElement } | null)?.$el ?? null;
+
+const { flatItems, virtualItems, virtualizer, isAtBottom, flashKey, enterRow, onScroll, jumpToBottom } =
+  useVirtualizedMessages(messagesEl);
+
+const totalSize = computed(() => virtualizer.value.getTotalSize());
+
+// measureElement ref callback (spike constraint 3 adjacency: measurement
+// is library-owned). Wrapper is the measured element — its padding-top
+// (run spacing, D3) is inside the border box and therefore counted.
+function measureRef(el: Element | ComponentPublicInstance | null): void {
+  virtualizer.value?.measureElement(el as HTMLElement | null);
 }
 
-// Whether the viewport is currently pinned to (near) the bottom.
-// Drives the scroll-to-bottom button's visibility. Updated on every
-// scroll event; the ref de-dupes so high UI only re-renders when the
-// value actually flips.
-const isAtBottom = ref(true);
-
-// Test-visible signal for stickToBottomUntilStable: true while the
-// boot-stabilizer rAF loop is still pinning the viewport to the bottom
-// (mount churn / session switch / reload), false once it has exited —
-// i.e. no more pinning ticks can land. Starts true: onMounted always
-// kicks off a run, so "not yet stable" is the correct initial state.
-// E2e scrolls the list only after "false" — scrolling earlier races
-// the loop, which re-pins scrollTop every frame (same race
-// MessageList.test.ts's mountList rides out with its 300ms settle).
-const stabilizing = ref(true);
-
-const visibleMessages = computed(() =>
-  store.messages.filter(
-    (m) =>
-      m.content ||
-      m.toolCalls?.length ||
-      m.error ||
-      (m.thinkingBlocks && m.thinkingBlocks.length > 0) ||
-      (m.redactedThinkingData && m.redactedThinkingData.length > 0),
-  ),
-);
-
-// ---------------------------------------------------------------------------
-// 交错思考(interleaved thinking): 按 agent run 分组消息,把一次完整
-// run(用户提问 → assistant 多轮 think+tool + tool_result → 最终文本)
-// 在视觉上连成一条流,而非每 turn 一个独立气泡(Claude.ai/Cursor 形态)。
-//
-// 分组判据(设计文档 §3.4):
-//   - 真·用户输入 → 开启新 run。判据:role=user 且**不是** ghost user
-//     (即 m.toolResults 为空,因为 ghost user 带 tool_result;
-//      rehydrate 的 merge step 是复制非移动,ghost user 的 toolResults 仍在)
-//     且不是 orphan-repair synthetic(id 形如 `${m.id}-orphan-repair`)。
-//   - 其余消息(assistant turn / ghost user tool_result / orphan-repair) →
-//     归入当前 run。
-//
-// 边界:若 visibleMessages 第一条不是真·用户输入(理论上不会,但防御),
-// 开一个独立 run 兜底,避免消息丢失。
-//
-// 这是**纯渲染层分组**:底层 store.messages 数组完全不变,rehydrate 的
-// orphan-repair / merge step 都不受影响 → 2013 wire-history 不变量保住。
-// 误判最坏后果只是"多分几个 run 气泡",回退到现状观感,不丢数据。
-// ---------------------------------------------------------------------------
-interface RunGroup {
-  key: string;
-  items: ChatMessage[];
+// D3 spacing classes: inter-run 12px / intra-run 6px via item-internal
+// padding-top (measureElement reads border box — margin would overlap
+// neighboring rows). First rendered row is exempt by INDEX (item.index
+// === 0), not by the run-first flag — immune to flatten boundary drift
+// (评审 D3 补强①).
+function rowClass(index: number): Record<string, boolean> {
+  if (index === 0) return {};
+  return flatItems.value[index]?.runFirst
+    ? { "run-first": true }
+    : { "run-rest": true };
 }
 
-// 08-17 (D2 cross-session-search): grouping logic extracted to
-// `buildRunGroups` (utils/messageFormat.ts) so the SearchModal's
-// read-only preview renders identically. Behavior-equivalent
-// replacement of the previous inline loop (same predicate, same
-// boundary guard, same key).
-const renderGroups = computed<RunGroup[]>(() =>
-  buildRunGroups(visibleMessages.value),
-);
-
-function isNearBottom(el: HTMLElement, threshold = 80): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-}
-
-// `smooth` is used only for user-initiated jumps (the scroll-to-bottom
-// button) — streaming-delta follow stays instant, because smooth-scroll
-// on every high-frequency delta would queue overlapping animations and
-// stutter.
-async function scrollToBottom(smooth = false) {
-  await nextTick();
-  const el = messagesEl.value;
-  if (!el) return;
-  if (smooth) {
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  } else {
-    el.scrollTop = el.scrollHeight;
+// N4 PR3 动画/flash 类(wrapper 级;动画目标 = .msg 子根,见 CSS 注):
+// - search-hit:pendingScrollSeq 命中行高亮(flashKey 驱动,
+//   SEARCH_FLASH_MS 后自动摘除);
+// - run-enter-from/-active:D4 新 run 划入(composable 相位机驱动:
+//   from+active 同挂 → 双 rAF 后仅 active → 过渡窗结束全摘)。
+function stateClasses(key: string): Record<string, boolean> {
+  const cls: Record<string, boolean> = {};
+  if (flashKey.value === key) cls["search-hit"] = true;
+  if (enterRow.value?.key === key) {
+    cls["run-enter-active"] = true;
+    if (enterRow.value.phase === "from") cls["run-enter-from"] = true;
   }
+  return cls;
 }
-
-// Scroll-to-bottom button handler. Pre-emptively set isAtBottom so the
-// button hides immediately instead of waiting for the scroll to cross
-// the threshold. While streaming, snap instantly and re-engage
-// force-follow so the view keeps tracking live deltas — a smooth
-// animation would lag behind new output. When idle, a smooth jump back
-// to the bottom reads as less jarring.
-async function jumpToBottom() {
-  isAtBottom.value = true;
-  if (store.isCurrentSessionStreaming) {
-    store.forceFollowActive = true;
-    await scrollToBottom(false);
-  } else {
-    await scrollToBottom(true);
-  }
-}
-
-// F4 fix: after reloadAfterFinalize replaces the streaming buffer with
-// DB messages, rehydrate assigns fresh ids so Vue unmounts+remounts the
-// ENTIRE <MessageItem> list. N components mounting at once keeps the
-// layout churning across several frames — and Vue's patch of a long
-// list can itself take tens of ms, during which rAF reads a stale
-// scrollHeight. A single scrollToBottom, or a "N stable frames"
-// heuristic, nails scrollTop to that stale value mid-churn, so the
-// viewport springs back to ~the top of the last turn (the thinking
-// card). The two-frame version exited on a false positive while the
-// patch was still running.
-//
-// Fix: pin to bottom every frame and only stop once scrollHeight has
-// been QUIET for `quietMs` (render truly finished) or the hard deadline
-// elapses. rAF callbacks run right before paint, so scrollHeight is the
-// post-layout value when we read it.
-function stickToBottomUntilStable(deadlineMs = 1000, quietMs = 150) {
-  stabilizing.value = true;
-  void nextTick().then(() => {
-    const start = performance.now();
-    let lastH = -1;
-    let lastChangeAt = start;
-    const tick = () => {
-      const el = messagesEl.value;
-      if (!el) {
-        // unmounted mid-loop — bail (a fresh mount restarts its own run)
-        stabilizing.value = false;
-        return;
-      }
-      el.scrollTop = el.scrollHeight;
-      const now = performance.now();
-      if (el.scrollHeight !== lastH) {
-        lastH = el.scrollHeight;
-        lastChangeAt = now;
-      }
-      // Both exits flip the test signal AFTER this tick's last pin,
-      // so observing "false" guarantees no further pinning ticks.
-      if (now - lastChangeAt >= quietMs) {
-        stabilizing.value = false;
-        return;
-      }
-      if (now - start > deadlineMs) {
-        stabilizing.value = false;
-        return;
-      }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
-// F2: detect user manual scroll-up, and track isAtBottom for the
-// scroll-to-bottom button. Runs on every scroll event; isNearBottom is
-// cheap and the ref de-dupes, so high-frequency scroll only flips UI
-// state at the threshold crossing.
-function onScroll() {
-  const el = messagesEl.value;
-  if (!el) return;
-  const near = isNearBottom(el, 80);
-  isAtBottom.value = near;
-  if (store.forceFollowActive && !near) {
-    store.forceFollowActive = false;
-  }
-}
-
-// Auto-scroll on any content change. During force-follow mode, always
-// scroll; otherwise only scroll when user is near the bottom. The
-// fingerprint includes latency + thinkingDurationMs so the F5
-// post-stream latency IPC (which can change the last row's height via
-// the latency badge) is also caught here instead of leaving the view
-// one-badge-height above the bottom.
-watch(
-  () =>
-    store.messages
-      .map(
-        (m) =>
-          m.content +
-          (m.toolCalls?.length ?? 0) +
-          (m.toolResults?.length ?? 0) +
-          (m.thinkingBlocks?.reduce((n, b) => n + b.text.length, 0) ?? 0) +
-          (m.redactedThinkingData?.length ?? 0) +
-          (m.latency?.totalMs ?? "") +
-          (m.thinkingDurationMs ?? ""),
-      )
-      .join("|"),
-  () => {
-    if (!messagesEl.value) return;
-    const shouldFollow =
-      store.forceFollowActive || isNearBottom(messagesEl.value);
-    if (!shouldFollow) return;
-    void nextTick().then(() => scrollToBottom());
-  },
-  { flush: "pre" },
-);
-
-// When the user switches sessions, jump to the bottom of the new
-// session. Uses stickToBottomUntilStable so the post-switch DOM rebuild
-// (fresh message ids) settles across frames without the same jitter the
-// reload path used to have.
-watch(
-  () => store.currentSessionId,
-  (newId, oldId) => {
-    if (newId === oldId) return;
-    isAtBottom.value = true;
-    stickToBottomUntilStable();
-  },
-);
-
-// BUGLIST CH8-2a (2026-08-29): 阻塞式 pending interaction(ask_user_question
-// 家族 + loop intervention + softcap + mode/task 卡)在当前 session **从无到
-// 有**时强制回底。常规跟底只服务 near-bottom / force-follow:用户上滚读历史
-// 时卡片落在视口外,而 loop 正阻塞在 QuestionStore oneshot 上等回答 —— 这是
-// 全 UI 里唯一"agent 停下来等人"的状态,值得打断用户的滚动位置。some→some
-// (切换到本就有 pending 的 session)不触发:重载路径 scrollAfterReload 本就
-// 回底,重复只添抖动。
-const questionCardsStore = useQuestionCardsStore();
-const currentPendingInteraction = computed(() => {
-  const sid = store.currentSessionId;
-  return (sid && questionCardsStore.getPending(sid)) || null;
-});
-watch(currentPendingInteraction, (now, before) => {
-  if (!now || before) return;
-  isAtBottom.value = true;
-  void scrollToBottom(false);
-});
-
-// F4: after reloadAfterFinalize replaces the streaming buffer with
-// DB messages, re-scroll to bottom to avoid position jitter. See
-// stickToBottomUntilStable for why this can't be a single scrollToBottom.
-watch(() => store.scrollAfterReload, () => {
-  stickToBottomUntilStable();
-});
-
-onMounted(() => {
-  messagesEl.value?.addEventListener("scroll", onScroll, { passive: true });
-  // Session switches REBUILD this component: ChatPanel swaps in the
-  // loading spinner (v-if="sessionLoading") while switchSession's IPC
-  // runs, then remounts MessageList once it resolves. By mount time
-  // currentSessionId already matches, so watch(currentSessionId) on the
-  // new instance never fires — and the fresh <ul> defaults to
-  // scrollTop=0 (the top). Pin to bottom on mount so the user lands on
-  // the latest message. stickToBottomUntilStable rides out the v-for
-  // mount churn the same way it does for reload.
-  stickToBottomUntilStable();
-});
-onUnmounted(() => {
-  messagesEl.value?.removeEventListener("scroll", onScroll);
-});
 </script>
 
 <template>
   <div class="messages-wrap">
-    <TransitionGroup
-      name="msg"
-      tag="ul"
-      :ref="setListEl"
-      class="messages"
-      :data-stabilizing="stabilizing"
-      appear
-    >
-      <!--
-        交错思考: 按 agent run 分组(见 renderGroups)。每个 run 用
-        `<li class="run-group">` 容器包裹同 run 的多条 MessageItem,
-        视觉上连成一条流。run-group li 是 TransitionGroup 的直接子节点,
-        enter/leave 类落在它身上(不是内层 MessageItem)—— 下方
-        .msg-enter-* 样式即以它为动画目标(整 run 划入;08-14 修复,
-        详见该样式块注释)。
-      -->
-      <li
-        v-for="g in renderGroups"
-        :key="g.key"
-        class="run-group"
-      >
-        <MessageItem
-          v-for="m in g.items"
-          :key="m.id"
-          :message="m"
-          :data-seq="m.seq ?? undefined"
-        />
-        <!-- data-seq (BUGLIST CH12-1b): fallthrough attr lands on the
-             MessageItem root — the search modal's "在主窗口打开" uses
-             it to scroll+flash the hit message (same hook as
-             SearchPreviewBody). Queued placeholders have no seq and
-             render without the attribute. -->
-      </li>
-    </TransitionGroup>
+    <div ref="messagesEl" class="messages" @scroll.passive="onScroll">
+      <!-- Library-maintained spacer: height = getTotalSize(). Rows are
+           absolutely positioned inside it (translateY). The flex column
+           + gap of the old ul is GONE — padding-top on rows is the ONLY
+           spacing source (D3). -->
+      <div class="messages-spacer" :style="{ height: `${totalSize}px` }">
+        <div
+          v-for="vi in virtualItems"
+          :key="String(vi.key)"
+          :data-index="vi.index"
+          :ref="measureRef"
+          class="vrow"
+          :class="[rowClass(vi.index), stateClasses(String(vi.key))]"
+          :style="{ transform: `translateY(${vi.start}px)` }"
+        >
+          <MessageItem
+            :message="flatItems[vi.index]!.message"
+            :data-seq="flatItems[vi.index]!.message.seq ?? undefined"
+          />
+          <!-- data-seq (BUGLIST CH12-1b): fallthrough attr lands on the
+               MessageItem root — the search modal's "在主窗口打开"
+               hands its seq to the store command pendingScrollSeq
+               (N4 PR1); the attr remains the row's identity hook for
+               tests. The PR3 flash is class-driven (search-hit on the
+               wrapper above), not attr-driven. Queued placeholders
+               have no seq and render without the attribute. -->
+        </div>
+      </div>
+    </div>
     <button
       v-if="!isAtBottom"
       class="scroll-to-bottom btn btn--muted btn--circle"
@@ -332,9 +115,9 @@ onUnmounted(() => {
 <style scoped>
 /* Wrapper gives the floating button a non-scrolling positioning
    context: the button is absolute against .messages-wrap, so it stays
-   fixed in the corner while the <ul> scrolls underneath. The wrap
-   takes over the flex:1 + min-height:0 role the <ul> used to play as a
-   direct child of .chat-panel__main. */
+   fixed in the corner while the stream scrolls underneath. The wrap
+   takes over the flex:1 + min-height:0 role as a direct child of
+   .chat-panel__main. */
 .messages-wrap {
   position: relative;
   flex: 1;
@@ -344,92 +127,117 @@ onUnmounted(() => {
 }
 
 .messages {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   flex: 1;
   overflow-y: auto;
-  /* overflow-x: hidden — 消息气泡 enter 动画用 translateX 偏移到列表
-     外侧；overflow-y:auto 会让 overflow-x 隐式变 auto，动画期间气泡
-     出界会冒出水平滚动条（底部的"进度条"闪烁）。显式 hidden 让外侧
-     偏移被裁剪而不显示滚动条。 */
+  /* overflow-x: hidden — N4 PR1 保留(原注释):气泡位移类效果若回落,
+     外侧偏移被裁剪而不冒水平滚动条。 */
   overflow-x: hidden;
   /* PR4 (2026-06-27): reserve stable space for the (vertical) scrollbar
-     so message width doesn't jump when it appears/disappears, and so
-     .chat-panel__main can use symmetric L/R padding instead of a 4px
-     right-side gutter hack. */
+     so message width doesn't jump when it appears/disappears. */
   scrollbar-gutter: stable;
+  /* N4 PR1(D3):旧 `display:flex; flex-direction:column; gap:12px`
+     删净 —— 间距唯一来源 = 虚拟项 wrapper 的项内 padding-top;flex
+     容器会吞掉绝对定位子项的正常流,spacer 自身承担高度。 */
+  /* N4 PR3(D5 appear 降级):session 切换 / 首挂载的一次性容器
+     fade-in,挂载触发(ChatPanel 的 spinner v-if 使会话切换走重挂
+     路径)。仅 opacity —— 白名单合规;reduced-motion 由 style.css
+     顶层 @media 兜底(时长压 0.01ms → 即时呈现)。 */
+  animation: messages-fade-in var(--duration-slow) var(--ease-out);
 }
 
-/* 交错思考: run-group 是同一个 agent run 的多条 MessageItem 的视觉
-   容器。`list-style: none` 抵消 `<li>` 默认 marker;内部紧凑排列
-   (gap 小于 run 之间的 12px),让同一 run 的 think/tool/result/文本
-   在视觉上"连成一条流",而不同 run 之间有清晰间隔。
+@keyframes messages-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 
-   run-group li 同时是 TransitionGroup 的直接子节点 —— enter 动画挂
-   在它身上(整 run 划入,见下方 .msg-enter-* 块;08-14 修复)。
-   内部 MessageItem 的 align-self(msg--user 靠右 / msg--assistant
-   靠左)保持各自对齐。 */
-.run-group {
-  list-style: none;
+/* The library-owned spacer: full scrollable height = getTotalSize().
+   Rows position against it. */
+.messages-spacer {
+  position: relative;
+}
+
+/* One virtual row: absolutely positioned by translateY(vi.start), full
+   width, and a flex column so MessageItem's `.msg` align-self
+   (user → flex-end / assistant → flex-start) keeps the same alignment
+   context the old run-group li provided.
+   D3: spacing is padding-top INSIDE the row (border box → counted by
+   measureElement; margin would make neighboring rows visually overlap).
+     .run-first → 12px inter-run gap (old ul gap)
+     .run-rest  → 6px intra-run gap (old run-group gap)
+   The very first row (index 0) gets neither — no dead space above the
+   stream top. */
+.vrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
-/* PR3 (2026-06-27): new-message enter animation, restored 2026-08-14
-   (08-14 ux-polish-r1 WP4 4.2,评审 D2). Only fires when an element is
-   ADDED to the already-mounted list (a streaming new run) — plus the
-   `appear` on <TransitionGroup> covers the full-list remount on session
-   switch / first mount. Uses `transform: translateX` (not a layout
-   property) so it never perturbs scrollHeight and the stick-to-bottom
-   loop stays correct. `prefers-reduced-motion` collapses this to
-   ~instant via the top-level @media in style.css.
+.vrow.run-first {
+  padding-top: 12px;
+}
 
-   修复说明:5b1fc81(2026-07-30 交错思考 run 分组)把 TransitionGroup
-   的直接子节点从 MessageItem <li> 换成了 run-group <li> 后,
-   enter/leave 类落在 run-group 上,而旧选择器 `.msg--user/
-   .msg--assistant.msg-enter-from` 要求方向类与 enter 类在同一元素
-   —— 从此匹配不上,enter 动画静默失效(新消息无划入、切会话重挂载
-   无 appear 动画),这正是评审 D2 "切换硬切"的根因。本轮把 from 态
-   重定向到真实子节点(run-group li):每个 run 由真实用户消息开启,
-   整组从用户侧(+24px,沿用原 user 方向词汇)划入;流式中追加的
-   assistant turn 归入已有 run(key 不变),不重复触发 enter,符合
-   5b1fc81 "run 连成一条流"的分组语义。
+.vrow.run-rest {
+  padding-top: 6px;
+}
 
-   :deep() is required because the `msg-enter-*` classes are added by
-   TransitionGroup to its direct child (the run-group <li> inside this
-   component's slot); a scoped `.msg-enter-active` compiles to
-   `.msg-enter-active[data-v-ML]`, and the classes arrive at runtime
-   (post-compile) on elements Vue patches — :deep() drops the attribute
-   selector requirement so the transition reliably reaches the li.
-   `!important`(PR3 用来压 MessageItem `.msg` 的 background-color
-   transition)不再需要:当时争的是同一个元素;现在被动画的元素是
-   run-group li,其上没有其它 transition 声明与之竞争。 */
-:deep(.msg-enter-active) {
+/* ── N4 PR3 动画 D4 + data-seq flash ─────────────────────────────────
+   两类动画的**目标元素都是 .msg 子根**(MessageItem 根,携本组件 scope
+   id —— 子组件单根继承父 scope attr 的既有机制,spec §1 同款):wrapper
+   自身带 inline translateY 定位,transform 属性不可被动画占用。
+   白名单(design §4 评审补):只许 opacity + translateX,禁 scale /
+   height —— 动画中间帧的测量值经 measureElement 按 getItemKey 写入
+   持久缓存,几何属性会把中间尺寸固化成 session 内永久空隙。
+   reduced-motion:style.css 顶层 @media 把 animation/transition 时长压
+   到 0.01ms,两类动画即时呈现(契约保留,无需本组件处理)。 */
+
+/* run-enter 相位(from+active 同挂 → 双 rAF 后仅 active → RUN_ENTER_
+   ACTIVE_MS 后全摘,由 composable enterRow 驱动):active 态带过渡声明,
+   from 态释放(类摘除)时从 0 / 24px 过渡回自然态 —— 与 Vue
+   TransitionGroup 内部同式。参数沿用旧 TransitionGroup(--duration-slow
+   240ms / --ease-out / +24px 用户侧词汇)。active 选择器特异性高于
+   .msg 自身的 background-color hover 过渡,240ms 窗内覆盖之(旧实现
+   需 !important 争同元素,现动画元素一致故不需)。 */
+.vrow.run-enter-active > .msg {
   transition: opacity var(--duration-slow) var(--ease-out),
     transform var(--duration-slow) var(--ease-out);
 }
-/* 划入方向:整 run 从用户侧(+24px)划入。位移走外侧:.messages 的
-   overflow-y:auto 使 overflow-x 隐式 auto,外侧偏移的超出部分会被
-   overflow-x: hidden 裁剪(不冒水平滚动条),但 transition 期间气泡
-   主体的位移仍清晰可见。translateX 不参与布局,不扰动 scrollHeight /
-   stick-to-bottom;reduced-motion 由顶层 @media 兜底。 */
-:deep(.msg-enter-from) {
+
+.vrow.run-enter-from > .msg {
   opacity: 0;
   transform: translateX(24px);
 }
 
+/* data-seq flash(AC4 后半):主窗口形态复刻 CH12-1b 的 WAAPI 视觉
+   (accent 22% → transparent,1400ms ease-out 单次;SearchPreviewBody
+   的 14%×3 是弹层内形态,不采用)。类由 flashKey 驱动、SEARCH_FLASH_MS
+   (1500ms)后摘除;background-color 无几何效应,不进测量缓存,不在
+   D4 白名单管辖面。 */
+.vrow.search-hit > .msg {
+  animation: msg-hit-flash 1400ms var(--ease-out) 1;
+}
+
+@keyframes msg-hit-flash {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
 /* Floating "back to bottom" button — appears only when the user has
-   scrolled away from the bottom. Confined to .messages-wrap, so it
-   floats above the message list without touching the input box below.
-   08-24 btn-family:本体由 muted·circle 家族承载(hover 与原
-   accent-muted+accent 边一致);本地保留定位/32px 几何/FAB 阴影
-   (design-tokens 特例表)+ :active 按压(transition 含 transform,
-   家族未含)。 */
+   scrolled away from the bottom (isAtEnd threshold 80, library-side).
+   Confined to .messages-wrap, so it floats above the message list
+   without touching the input box below. 08-24 btn-family:本体由
+   muted·circle 家族承载;本地保留定位/32px 几何/FAB 阴影 + :active
+   按压。 */
 .scroll-to-bottom {
   position: absolute;
   right: 16px;
@@ -448,9 +256,8 @@ onUnmounted(() => {
 }
 
 /* S6a 悬浮 ↓ 移动端避让(08-13-mobile-chat-view)。prd C2:与滚动条区域重叠
-   易误触 → 右 8px / 下 64px 显式避让滚动条 + 输入区(design §3.4,保留
-   "跳到底部"能力,流式输出仍需要);顺手放大触摸目标到 44px(项目 HIG
-   约定,见 responsive-mobile.md §6)。桌面块零改动。 */
+   易误触 → 右 8px / 下 64px 显式避让滚动条 + 输入区;触摸目标 44px
+   (项目 HIG 约定,见 responsive-mobile.md §6)。桌面块零改动。 */
 @media (max-width: 767px) {
   .scroll-to-bottom {
     right: 8px;

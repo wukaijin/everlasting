@@ -557,6 +557,16 @@ export const useChatStore = defineStore("chat", () => {
   // boolean, to guarantee Vue detects the change.
   const scrollAfterReload = ref(0);
 
+  // N4 PR1 (AC4 前半, 2026-09-19): the message seq the list should
+  // scroll to — a one-shot command ref, same pattern as
+  // `scrollAfterReload`. Producer: SearchModal's「在主窗口打开」
+  // (locateMessage). Consumer: useVirtualizedMessages watches it,
+  // scrollToIndex(align:'center') onto the flattened row, then resets
+  // to null so re-issuing the SAME seq re-triggers. Virtualization made
+  // the old DOM querySelector path a silent no-op for offscreen
+  // messages (they are not in the DOM), hence the command indirection.
+  const pendingScrollSeq = ref<number | null>(null);
+
   // D3 PR2 (2026-06-17): the message seq currently in inline edit
   // mode (`null` = no row is being edited). Stored on the chat store
   // rather than as a local ref in MessageItem because (a) MessageList
@@ -1062,6 +1072,9 @@ export const useChatStore = defineStore("chat", () => {
     forceFollowActive,
     sessionLoading,
     scrollAfterReload,
+    // N4 PR1: data-seq scroll-to-hit command (producer SearchModal,
+    // consumer useVirtualizedMessages — see the field's doc comment).
+    pendingScrollSeq,
     // 08-18(handoff/compact):摘要长操作的整面板 loading 遮罩文案
     // (per-session computed: 只在发起会话上显示,切走即隐藏).
     summaryBusy,

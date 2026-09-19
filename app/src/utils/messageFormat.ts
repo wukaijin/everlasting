@@ -261,3 +261,47 @@ export function buildRunGroups<
   }
   return groups;
 }
+
+/** One flattened, virtualizable row (N4 PR1, design D1): a single
+ *  message plus the run-position metadata the virtual item wrapper
+ *  needs to reproduce the run-group visual spacing (D3: inter-run
+ *  12px via `.run-first { padding-top }`, intra-run 6px via
+ *  `.run-rest { padding-top }` — item-internal padding, never
+ *  margin, because measureElement reads getBoundingClientRect). */
+export interface FlatItem<T = ChatMessageLike> {
+  message: T;
+  /** True when this message opens its run group (the group's
+   *  `items[0]`) — i.e. there is a 12px inter-run gap above it. */
+  runFirst: boolean;
+}
+
+/** Message-id/role shape `flattenRunGroups` actually reads. Kept
+ *  structural (not the store's ChatMessage) so grouping + flattening
+ *  stay testable on plain literals, mirroring buildRunGroups. */
+export type ChatMessageLike = {
+  id: string;
+  role: "user" | "assistant";
+  toolResults?: unknown[];
+};
+
+/** N4 PR1 (design D1): flatten run groups into the message-level list
+ *  the virtualizer renders. The virtualizer needs a FLAT list (one row
+ *  per message), but the run-group visual contract (5b1fc81) lives at
+ *  group boundaries — `runFirst` carries that boundary down to the row.
+ *
+ *  Signature deliberately accepts ONLY `RunGroup[]`, never a bare
+ *  message array (评审 D1):a `ChatMessage[]` overload would invite a
+ *  second, divergent grouping path; the type is the first line of
+ *  defense, the flatten-vs-groups equivalence test (组首集合 =
+ *  groups[].items[0]) is the second. */
+export function flattenRunGroups<T extends ChatMessageLike>(
+  groups: RunGroup<T>[],
+): FlatItem<T>[] {
+  const out: FlatItem<T>[] = [];
+  for (const g of groups) {
+    for (let i = 0; i < g.items.length; i += 1) {
+      out.push({ message: g.items[i]!, runFirst: i === 0 });
+    }
+  }
+  return out;
+}

@@ -262,31 +262,19 @@ function nextPaint(): Promise<void> {
   ]);
 }
 
-/** Scroll the main window's message list to the hit message and
- *  flash it. MessageList stamps `data-seq` on each MessageItem root
- *  (the same hook SearchPreviewBody uses for in-modal positioning);
- *  the modal renders through a portal, so a document query is the
- *  simplest cross-tree lookup. */
+/** Scroll the main window's message list to the hit message. MessageList
+ *  stamps `data-seq` on each MessageItem root (the same hook
+ *  SearchPreviewBody uses for in-modal positioning) — but since N4
+ *  virtualization (PR1) offscreen messages are NOT in the DOM, so the
+ *  old `document.querySelector` + scrollIntoView path silently no-ops.
+ *  The hand-off now goes through a store command (`pendingScrollSeq`,
+ *  same pattern as `scrollAfterReload`): useVirtualizedMessages
+ *  consumes it, scrollToIndex(align:'center') onto the flattened row
+ *  and resets it. Flash highlight is PR3 scope. */
 async function locateMessage(seq: number): Promise<void> {
   await nextTick();
   await nextPaint();
-  const el = document.querySelector<HTMLElement>(
-    `.messages [data-seq="${seq}"]`,
-  );
-  if (!el) return;
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
-  // Soft accent flash to anchor the eye (Web Animations API — no CSS
-  // to scope; falls back to a plain jump where unsupported).
-  el.animate?.(
-    [
-      {
-        backgroundColor:
-          "color-mix(in srgb, var(--color-accent) 22%, transparent)",
-      },
-      { backgroundColor: "transparent" },
-    ],
-    { duration: 1400, easing: "ease-out" },
-  );
+  chatStore.pendingScrollSeq = seq;
 }
 
 /** Highlight the query inside a snippet. Returns [before, match,

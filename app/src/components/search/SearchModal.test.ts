@@ -289,11 +289,18 @@ describe("SearchModal", () => {
   // seq — the main window opened the session but never positioned on
   // the hit message. It must hand the seq to the main-window list.
   //
+  // N4 PR1 (2026-09-19): the hand-off is now a store COMMAND
+  // (`chatStore.pendingScrollSeq = seq`) — virtualization removed
+  // offscreen messages from the DOM, so the old querySelector +
+  // scrollIntoView path silently no-opped and was retired. The
+  // consumer side (useVirtualizedMessages: scrollToIndex + reset) is
+  // covered by the MessageList/composable tests and e2e.
+  //
   // Real timers: `locateMessage` waits nextTick + one real rAF before
-  // querying, so fake timers would freeze the wait and leak the
-  // pending continuation past unmount. The prefill open (no debounce)
-  // makes the search synchronous without fake timers.
-  it("preview '在主窗口打开' passes the seq through and scrolls to the hit message (CH12-1b)", async () => {
+  // issuing the command, so fake timers would freeze the wait and leak
+  // the pending continuation past unmount. The prefill open (no
+  // debounce) makes the search synchronous without fake timers.
+  it("preview '在主窗口打开' passes the seq through to the main window (CH12-1b)", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "search_messages") return [contentHit()];
       if (cmd === "load_session") {
@@ -318,23 +325,17 @@ describe("SearchModal", () => {
     });
     const wrapper = await reopenWith({ query: "权限" });
 
-    // Open the preview, then stub a main-window message list with the
-    // data-seq hook MessageList stamps on MessageItem roots.
+    // Open the preview, then click「在主窗口打开」.
     document.body.querySelector<HTMLButtonElement>(".search-modal__row--snippet")!.click();
     await flushPromises();
-    const list = document.createElement("div");
-    list.className = "messages";
-    const msgEl = document.createElement("div");
-    msgEl.setAttribute("data-seq", "3");
-    list.appendChild(msgEl);
-    document.body.appendChild(list);
-    const scrollSpy = vi.fn();
-    msgEl.scrollIntoView = scrollSpy;
 
     const chatStore = useChatStore();
     const openSpy = vi
       .spyOn(chatStore, "openSessionInProject")
       .mockResolvedValue(undefined);
+    // The command ref must start clean: the assertion below proves the
+    // click WROTE the seq (not a leftover from another test).
+    chatStore.pendingScrollSeq = null;
 
     document.body.querySelector<HTMLButtonElement>(".search-modal__open-btn")!.click();
     await flushPromises();
@@ -345,7 +346,9 @@ describe("SearchModal", () => {
     await flushPromises();
 
     expect(openSpy).toHaveBeenCalledWith("pa", "s1");
-    expect(scrollSpy).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    // The seq hand-off: command ref carries the hit message's seq to
+    // the main-window list (consumer = useVirtualizedMessages).
+    expect(chatStore.pendingScrollSeq).toBe(3);
     wrapper.unmount();
   });
 

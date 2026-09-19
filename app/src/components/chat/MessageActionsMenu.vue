@@ -287,8 +287,8 @@ async function onCopy() {
 
 <style scoped>
 /* The trigger is positioned absolutely at the top-right of the
-   parent .msg <li>; the parent sets `position: relative` on the
-   <li> via the existing layout. Opacity transitions make the
+   parent .msg row; the parent sets `position: relative` on the
+   row via the existing layout. Opacity transitions make the
    hover-in / hover-out feel natural; the button stays focusable
    even when invisible (keyboard users can tab to it). The parent
    `.msg:hover` (in MessageItem.vue) flips the opacity to 1, so
@@ -306,7 +306,7 @@ async function onCopy() {
   transition: opacity var(--duration-fast) var(--ease-out);
 }
 
-/* The parent .msg <li> drives the hover-in. We deliberately
+/* The parent .msg row drives the hover-in. We deliberately
    do NOT bind :hover on .msg-actions itself because the
    button is only 22px wide — a mouse user who moves from
    the row onto the button would briefly cross the gap and

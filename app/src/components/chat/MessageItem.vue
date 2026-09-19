@@ -23,7 +23,7 @@
 //
 // D3 PR2 (2026-06-17): inline message edit (user messages only).
 //   On hover, a small ⋯ button appears at the top-right of the
-//   <li> via `<MessageActionsMenu>`. Clicking it opens a
+//   root row via `<MessageActionsMenu>`. Clicking it opens a
 //   DropdownMenu with Edit / Resend / Copy; only Edit is wired
 //   (Resend is a PR3 placeholder, Copy just hits the clipboard).
 //   Edit replaces the bubble with a <textarea> + Save / Cancel
@@ -31,7 +31,7 @@
 //   cancels any in-flight stream, fires the backend IPC, then
 //   refreshes the in-memory buffer). Failure keeps the edit
 //   mode active so the user can retry. The streaming state on
-//   the parent <li> blocks the menu trigger entirely (defense
+//   the parent row blocks the menu trigger entirely (defense
 //   against mid-stream edits racing the LLM).
 
 import { computed, watch, onUnmounted, ref } from "vue";
@@ -213,7 +213,9 @@ const showSpeakerChip = computed(() => showSpeakerChipFor(props.message));
 // 群聊转录样式(2026-09-10 gc-panel-visual-identity):群聊里带 speaker
 // 的 assistant 行分两种形态 —— 参与者 = 身份头(彩色首字头像 + 彩色名
 // + 2px 色轨),主持人 = 中性 pill(chip 维持系统标签观感)。两种类都
-// 挂在根 <li> 上供 scoped CSS 消费;经典 chat(speaker 为空)零影响。
+// 挂在根行上供 scoped CSS 消费;经典 chat(speaker 为空)零影响。
+// (N4 PR1:根元素 li→div —— 虚拟项 wrapper 是 div,div 内嵌 li 不合法,
+// 聊天消息流放弃 list 语义,design D5;.msg 类与内部结构不动。)
 const isGroupModerator = computed(
   () => props.message.speaker === "moderator" && props.message.role === "assistant",
 );
@@ -665,7 +667,11 @@ const messageImages = computed<
 </script>
 
 <template>
-  <li
+  <!-- N4 PR1(design D5):根 li→div —— 虚拟项 wrapper 是 div,div 内
+       直接嵌 li 非法;聊天消息流放弃 list 语义(评审确认零补偿:无
+       读屏消费方,不搭车 aria-live)。`.msg` 类与内部结构不动,样式
+       选择器基本不受影响。 -->
+  <div
     :class="[
       'msg',
       `msg--${message.role}`,
@@ -745,7 +751,7 @@ const messageImages = computed<
       button at the top-right of the row (absolute-positioned
       via the .msg-actions class). Hidden when the message is
       being edited or the session is streaming. The hover
-      affordance is the parent <li>'s `:hover` so the menu
+      affordance is the parent row's `:hover` so the menu
       stays visible while the cursor moves onto it. See the
       `<MessageActionsMenu>` component for the dropdown shape
       and the disable rules.
@@ -1338,7 +1344,7 @@ const messageImages = computed<
       @test-connection="onTestConnection"
     />
     </template>
-  </li>
+  </div>
 </template>
 
 <style scoped>

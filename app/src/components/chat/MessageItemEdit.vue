@@ -210,7 +210,7 @@ function onSave() {
   border: 1px solid color-mix(in srgb, var(--color-accent) 60%, var(--color-bg-border));
   background: var(--color-bg-elevated);
   /* `max-width: 100%` so the editor never overflows the
-     parent <li> (which is itself `max-width: 75%`); the
+     parent row (which is itself `max-width: 75%`); the
      75% cap comes from the .msg rule. */
   max-width: 100%;
   margin-top: 4px;
