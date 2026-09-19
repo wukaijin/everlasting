@@ -89,9 +89,10 @@ pub mod subagent_overrides_tests;
 pub mod subagent_runs;
 pub mod subagent_runs_tests;
 // Shared in-memory `test_pool()` fixture for the `*_tests` hosts
-// (RULE-TESTPOOL-001 dedup). cfg(test)-gated like its consumers.
-#[cfg(test)]
-pub(crate) mod test_support;
+// (RULE-TESTPOOL-001 dedup). cfg(test)-gated like its consumers;
+// N9 bench feature 同门开放(`pub` 供 `bench_api` 再导出,design §1.1)。
+#[cfg(any(test, feature = "bench"))]
+pub mod test_support;
 pub mod trace;
 pub mod types;
 pub mod usage;

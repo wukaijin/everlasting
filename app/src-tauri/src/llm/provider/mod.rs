@@ -480,5 +480,5 @@ pub mod tests_responses;
 pub mod tests_wire;
 pub mod wire;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 pub mod mock;

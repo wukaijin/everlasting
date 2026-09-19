@@ -76,7 +76,7 @@
 //! stream model is the leanest design that gives the agent
 //! loop a real `Provider` to dispatch through.
 
-#![cfg(test)]
+#![cfg(any(test, feature = "bench"))]
 
 use std::collections::VecDeque;
 use std::pin::Pin;

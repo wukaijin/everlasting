@@ -491,7 +491,7 @@ pub type DefaultRegistry = Arc<in_memory::InMemoryBackgroundShellRegistry>;
 /// module path. C6: production constructs the registry via
 /// `InMemoryBackgroundShellRegistry::new_with_data_dir` (spill
 /// needs the app data dir); only tests use the bare form.
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 pub fn default_registry() -> DefaultRegistry {
     Arc::new(in_memory::InMemoryBackgroundShellRegistry::new())
 }

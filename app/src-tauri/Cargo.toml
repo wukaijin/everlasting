@@ -10,6 +10,9 @@ license = "GPL-3.0-only"
 # 底层跑 `cargo run`(不带 `--bin`),无 default-run 时会报
 # "could not determine which binary to run"。这里固定默认跑 GUI。
 default-run = "everlasting"
+# N9(2026-09-19):关闭 benches autodiscovery——benches/ 下的共享模块
+# (support.rs)不是 bench target,只有下方显式 [[bench]] 两目标。
+autobenches = false
 
 [lib]
 name = "everlasting_lib"
@@ -181,8 +184,19 @@ quick-xml = "0.42.0"
 # 零新增 crate)。
 calamine = { version = "0.36", features = ["chrono"] }
 
+# N9 性能基准(2026-09-19):tempfile 经 `bench` feature 进 lib 编译面
+# (agent/tests_common 的 TestHarness 持 TempDir;dev-deps 不参与 bench
+# feature 下 lib 单元的链接——探针坐实)。[dev-dependencies] 同名条目
+# 保留,保证裸 `cargo test`(无 feature)测试面恒可用。
+tempfile = { version = "3", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
+# N9 性能基准(2026-09-19,任务 09-19-n9-perf-benchmark):criterion 统计
+# 与 baseline 对比(change detection)。benches 经 `bench` feature 门开放
+# (required-features),默认构建/CI 测试面零触碰;编译门命令见
+# `.trellis/spec/backend/perf-baseline.md`。
+criterion = "0.5"
 # S3 e2e harness:true remote daemon in-process(dev-only,不进 release
 # 依赖图——S3 Step 2 验证:release lib build 保持 0 警告)。
 everlasting-remote = { path = "../../crates/everlasting-remote" }
@@ -195,3 +209,21 @@ httpmock = "0.7"
 # a valid gzip body on the mock side to exercise that path). Uses
 # the miniz_oxide backend — no C dependency.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[features]
+# N9:benches 是独立 crate,crate 内 cfg(test) 树的构造件
+# (agent/tests_common)与 db 迁移入口经 `bench_api` 再导出可达;
+# 无此 feature 时 bench_api 与其引用零编译。
+bench = ["dep:tempfile"]
+
+# N9 benches(任务 09-19-n9-perf-benchmark):criterion 统计 + baseline
+# 对比;required-features 保证默认 cargo build/test 零触碰。
+[[bench]]
+name = "harness"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "db_bench"
+harness = false
+required-features = ["bench"]

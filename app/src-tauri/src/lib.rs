@@ -60,6 +60,12 @@ pub mod daemon;
 // `log_rotation::RotatingFileWriter` 类型(tracing layer 的类型参数,
 // 无法像函数那样经 server.rs 包装)。
 pub mod disk;
+// N9 性能基准 (2026-09-19, task `09-19-n9-perf-benchmark`): benches(独立
+// crate)的唯一入口面,再导出 cfg(test) 树内的构造件与 DB 基建。默认构建
+// (无 bench feature)本模块零编译;CI 编译门命令
+// `cargo check -p everlasting --lib --features bench --benches`。
+#[cfg(feature = "bench")]
+pub mod bench_api;
 mod error;
 mod files;
 mod git;

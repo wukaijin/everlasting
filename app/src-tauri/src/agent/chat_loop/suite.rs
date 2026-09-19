@@ -46,7 +46,7 @@ use crate::tools::ToolContext;
 /// （[`ChatLoopDeps::from_parts`] / [`ChatLoopDeps::from_app_state`]）
 /// 组装，杜绝三处分头拼装漂移。
 #[derive(Clone)]
-pub(crate) struct ChatLoopDeps {
+pub struct ChatLoopDeps {
     /// SQLite 连接池（廉价 clone）。所有 DB 写点的 RULE-A-015 门语义
     /// 不变——写点自身在 loop 体内逐一保持原位。
     pub(crate) db: SqlitePool,
@@ -112,7 +112,7 @@ pub(crate) struct ChatLoopDeps {
 /// worker 嵌套）都经 `From<ChatLoopDepsParts>` 字段逐一具名拼装 ——
 /// 不设多参 fn 组装器（避免 `too_many_arguments` 豁免回潮），新增字段
 /// 时由编译器强制全部生产点对齐，等效防漂移。
-pub(crate) struct ChatLoopDepsParts {
+pub struct ChatLoopDepsParts {
     pub(crate) db: SqlitePool,
     pub(crate) cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pub(crate) session_active_request: Arc<Mutex<HashMap<String, String>>>,
@@ -172,7 +172,7 @@ impl ChatLoopDeps {
 
 /// 单次请求值（design §总体形态表）。入口（`chat_inner` / 队列驱动器 /
 /// 群聊编排 / worker 嵌套）逐值构建。
-pub(crate) struct ChatLoopRequest {
+pub struct ChatLoopRequest {
     // D3 PR3 (2026-06-17): resend context. When `Some(seq)`, the
     // user-message persist site writes a `resend_message` audit row
     // pointing at the original user message's seq. `None` for normal
@@ -239,7 +239,7 @@ pub(crate) struct ChatLoopRequest {
 
 /// 调用方角色旗标（design 表第三行；暂名 CallerRole）。由调用方身份决定
 /// 的单请求常量：worker 子代理旗标群 + skip 三兄弟 + 各 override。
-pub(crate) struct CallerRole {
+pub struct CallerRole {
     // B6 Subagent PR2b (2026-06-20, RULE-A-014): when `Some(true)`, the
     // `PermissionContext` built inside this loop carries `is_worker:
     // true`, which gates `ask_path` into the worker's interactive

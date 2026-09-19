@@ -12,7 +12,7 @@ use super::migrations::run_migrations;
 
 /// Build a fresh in-memory pool with foreign keys ON + migrations
 /// applied.
-pub(crate) async fn test_pool() -> SqlitePool {
+pub async fn test_pool() -> SqlitePool {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     // Mirror what `init_pool` does.
     sqlx::query("PRAGMA foreign_keys = ON")

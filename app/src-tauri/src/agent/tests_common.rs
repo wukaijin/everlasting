@@ -4,7 +4,10 @@
 //! `tests_agent_loop` / `tests_subagent`) reach these via
 //! `use super::tests_common::*`.
 
-#![cfg(test)]
+#![cfg(any(test, feature = "bench"))]
+// bench 面只消费本文件的一部分 helper(git 测试三件套等不进 bench),
+// 放宽 dead_code;cfg(test) 测试面保持严格检查。
+#![cfg_attr(feature = "bench", allow(dead_code))]
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,21 +40,20 @@ use crate::tools::read_guard::ReadGuard;
 /// `std::sync::Mutex` lets the test code call `.lock().unwrap()`
 /// synchronously without pulling in `.await` plumbing.
 #[derive(Default)]
-pub(crate) struct MockEmitter {
-    pub(crate) chat_events: Arc<StdMutex<Vec<ChatEventPayload>>>,
-    pub(crate) tool_calls: Arc<StdMutex<Vec<ToolCallPayload>>>,
-    pub(crate) tool_results: Arc<StdMutex<Vec<ToolResultPayload>>>,
-    pub(crate) permission_asks: Arc<StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>>,
+pub struct MockEmitter {
+    pub chat_events: Arc<StdMutex<Vec<ChatEventPayload>>>,
+    pub tool_calls: Arc<StdMutex<Vec<ToolCallPayload>>>,
+    pub tool_results: Arc<StdMutex<Vec<ToolResultPayload>>>,
+    pub permission_asks: Arc<StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>>,
     /// 2026-06-30 (`ask_user_question` task): captured
     /// `ToolQuestionPayload`s emitted to the `tool:question`
     /// channel. Tests assert against this to confirm the IPC
     /// emit happened (mirrors the `permission_asks` pattern).
-    pub(crate) tool_questions:
-        Arc<StdMutex<Vec<crate::agent::question_store::ToolQuestionPayload>>>,
+    pub tool_questions: Arc<StdMutex<Vec<crate::agent::question_store::ToolQuestionPayload>>>,
 }
 
 impl MockEmitter {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -63,25 +65,25 @@ impl MockEmitter {
     /// happy-path tests don't yet exercise it (Phase F's
     /// `agent_loop_ask_user_question_*` tests will).
     #[allow(dead_code)]
-    pub(crate) fn tool_questions_snapshot(
+    pub fn tool_questions_snapshot(
         &self,
     ) -> Vec<crate::agent::question_store::ToolQuestionPayload> {
         self.tool_questions.lock().unwrap().clone()
     }
 
     #[allow(dead_code)]
-    pub(crate) fn tool_question_count(&self) -> usize {
+    pub fn tool_question_count(&self) -> usize {
         self.tool_questions.lock().unwrap().len()
     }
 
     /// Snapshot all chat-event payloads recorded so far.
-    pub(crate) fn chat_events(&self) -> Vec<ChatEventPayload> {
+    pub fn chat_events(&self) -> Vec<ChatEventPayload> {
         self.chat_events.lock().unwrap().clone()
     }
 
     /// Count of `Done` events with `stop_reason = Some("cancelled")`
     /// — the contract the cancel path uses to signal end-of-stream.
-    pub(crate) fn cancel_done_count(&self) -> usize {
+    pub fn cancel_done_count(&self) -> usize {
         self.chat_events
             .lock()
             .unwrap()
@@ -94,7 +96,7 @@ impl MockEmitter {
     }
 
     /// Count of `Done` events with `stop_reason = Some("max_turns")`.
-    pub(crate) fn max_turns_done_count(&self) -> usize {
+    pub fn max_turns_done_count(&self) -> usize {
         self.chat_events
             .lock()
             .unwrap()
@@ -107,7 +109,7 @@ impl MockEmitter {
     }
 
     /// Count of `Error` chat-events.
-    pub(crate) fn error_event_count(&self) -> usize {
+    pub fn error_event_count(&self) -> usize {
         self.chat_events
             .lock()
             .unwrap()
@@ -117,19 +119,19 @@ impl MockEmitter {
     }
 
     /// Number of `tool:call` events recorded.
-    pub(crate) fn tool_call_count(&self) -> usize {
+    pub fn tool_call_count(&self) -> usize {
         self.tool_calls.lock().unwrap().len()
     }
 
     /// Number of `tool:result` events recorded.
-    pub(crate) fn tool_result_count(&self) -> usize {
+    pub fn tool_result_count(&self) -> usize {
         self.tool_results.lock().unwrap().len()
     }
 
     /// Snapshot all `tool:result` payloads (content + is_error) — for
     /// asserting what the agent loop fed back to the LLM (e.g. a
     /// resolved skill body, or an "is_error" self-correction nudge).
-    pub(crate) fn tool_results_snapshot(&self) -> Vec<ToolResultPayload> {
+    pub fn tool_results_snapshot(&self) -> Vec<ToolResultPayload> {
         self.tool_results.lock().unwrap().clone()
     }
 }
@@ -177,36 +179,36 @@ impl ChatEventSink for MockEmitter {
 /// `_tempdir` is intentional — the value is never read, only
 /// kept alive by being a struct field.
 #[allow(dead_code)]
-pub(crate) struct TestHarness {
-    pub(crate) db: SqlitePool,
-    pub(crate) project_id: String,
-    pub(crate) project_path: std::path::PathBuf,
-    pub(crate) session_id: String,
-    pub(crate) cancellations: Arc<AsyncMutex<HashMap<String, CancellationToken>>>,
-    pub(crate) session_active_request: Arc<AsyncMutex<HashMap<String, String>>>,
-    pub(crate) read_guard: ReadGuard,
-    pub(crate) memory_cache: Arc<MemoryCache>,
-    pub(crate) skill_cache: Arc<SkillCache>,
-    pub(crate) permission_asks: crate::agent::permissions::PermissionStore,
+pub struct TestHarness {
+    pub db: SqlitePool,
+    pub project_id: String,
+    pub project_path: std::path::PathBuf,
+    pub session_id: String,
+    pub cancellations: Arc<AsyncMutex<HashMap<String, CancellationToken>>>,
+    pub session_active_request: Arc<AsyncMutex<HashMap<String, String>>>,
+    pub read_guard: ReadGuard,
+    pub memory_cache: Arc<MemoryCache>,
+    pub skill_cache: Arc<SkillCache>,
+    pub permission_asks: crate::agent::permissions::PermissionStore,
     /// 2026-06-30 (`ask_user_question` task): fresh
     /// `QuestionStore` per test for isolation. Threads through
     /// `run_chat_loop`'s new `question_store` parameter so the
     /// `ask_user_question` blocking tool's
     /// `register` / `resolve` / `get_payload` calls operate on a
     /// per-test registry (no cross-test leak).
-    pub(crate) question_store: crate::agent::question_store::QuestionStore,
+    pub question_store: crate::agent::question_store::QuestionStore,
     /// L1a (2026-06-19): cross-request background-shell registry.
     /// Each test gets a fresh registry so concurrent tests can't
     /// see each other's shells. Threads through `run_chat_loop`'s
     /// new 15th parameter and is the same handle `ToolContext`
     /// hands to the 3 L1a tools.
-    pub(crate) background_shells: crate::background_shell::DefaultRegistry,
+    pub background_shells: crate::background_shell::DefaultRegistry,
     /// L3d (2026-06-25): subagent cache. Each test gets a fresh
     /// cache so the mtime fence + scan state can't leak across
     /// tests. Threads through `run_chat_loop`'s 25th parameter and
     /// is what `definition_with_cache` + `run_subagent` consult to
     /// resolve builtin + user + project subagents.
-    pub(crate) subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
+    pub subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
     /// L3b (2026-06-27): app data dir for worker worktree path
     /// computation. A fresh tempdir per test so isolated worker
     /// worktrees (when a test exercises isolation) don't collide
@@ -214,26 +216,26 @@ pub(crate) struct TestHarness {
     /// parameter (`app_data_dir`). Tests that don't exercise
     /// isolation (most) never read this — the tempdir just exists
     /// alongside the project tempdir and is cleaned up on drop.
-    pub(crate) app_data_dir: std::path::PathBuf,
+    pub app_data_dir: std::path::PathBuf,
     /// Guard for `app_data_dir` — kept alive for the whole test. The
     /// path field alone is not enough: when the guard was a dropped
     /// temporary, `app_data_dir` pointed at a deleted directory the
     /// moment `make_harness` returned (surfaced by the M4a
     /// transcript-export tests, which write under it).
-    pub(crate) _app_data_dir: tempfile::TempDir,
+    pub _app_data_dir: tempfile::TempDir,
     /// D (2026-08-14, `08-14-c7d-tools-stub-registration`): fresh
     /// stub loaded-set registry per test for isolation (no
     /// cross-test loaded-set leak). Threads through `run_chat_loop`'s
     /// trailing `stub_loaded` parameter; tests that exercise the
     /// stub interception reach into it to assert loaded-set writes.
-    pub(crate) stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
+    pub stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
     /// TempDir guard — kept alive for the duration of the test so
     /// the project_path directory remains on disk while the agent
     /// loop's pre-flight canonicalizes it. See struct docstring.
-    pub(crate) _tempdir: tempfile::TempDir,
+    pub _tempdir: tempfile::TempDir,
 }
 
-pub(crate) async fn make_harness() -> TestHarness {
+pub async fn make_harness() -> TestHarness {
     let pool = test_pool().await;
     // Create a project in the default "Legacy" bucket (the
     // migration's seed). We use a fresh path in the tempdir
@@ -349,7 +351,7 @@ pub(crate) async fn make_harness() -> TestHarness {
 /// off the project HEAD). The seed file is `seed.txt` (arbitrary
 /// non-empty content) so `commit_all_for_test` has something to
 /// track.
-pub(crate) async fn make_harness_with_git_repo() -> TestHarness {
+pub async fn make_harness_with_git_repo() -> TestHarness {
     let harness = make_harness().await;
     init_repo_for_test(&harness.project_path);
     // Seed a tracked file + initial commit so `create_worker`
@@ -359,7 +361,7 @@ pub(crate) async fn make_harness_with_git_repo() -> TestHarness {
     harness
 }
 
-pub(crate) fn test_messages() -> Vec<ChatMessage> {
+pub fn test_messages() -> Vec<ChatMessage> {
     vec![ChatMessage {
         role: Role::User,
         content: MessageContent::Text("hello".to_string()),
@@ -396,7 +398,7 @@ pub(crate) fn test_messages() -> Vec<ChatMessage> {
 /// 旧位参 #1–#7 → 单次请求值；#4 `provider_id` 测试恒传 `None`，由本
 /// 构造器代置。`rid` 收具体 `String`（不用 `impl Into` —— 调用点实参
 /// 已是 `.into()`/`format!` 产物，泛型会与 `"x".into()` 打成推理循环）。
-pub(crate) fn chat_loop_request(
+pub fn chat_loop_request(
     tool_defs: Vec<crate::llm::ToolDef>,
     provider: Arc<dyn crate::llm::Provider>,
     context_window: u32,
@@ -426,7 +428,7 @@ pub(crate) fn chat_loop_request(
 
 /// 旧位参 #9–#18/#26/#32/#33/#36 → AppState 派生长寿命套件的测试组装
 /// （比照 [`TestHarness`] 字段来源与生产 `from_app_state` 解包序）。
-pub(crate) fn chat_loop_deps(harness: &TestHarness) -> crate::agent::chat_loop::ChatLoopDeps {
+pub fn chat_loop_deps(harness: &TestHarness) -> crate::agent::chat_loop::ChatLoopDeps {
     use crate::agent::chat_loop::{ChatLoopDeps, ChatLoopDepsParts};
     ChatLoopDeps::from(ChatLoopDepsParts {
         db: harness.db.clone(),
@@ -448,7 +450,7 @@ pub(crate) fn chat_loop_deps(harness: &TestHarness) -> crate::agent::chat_loop::
 
 /// 旧位参 #19–#25/#27–#31/#37 → production-style caller 的角色全集
 /// （basic.rs 模板展开）。字段语义见 suite.rs `CallerRole` doc comments。
-pub(crate) fn parent_role(harness: &TestHarness) -> crate::agent::chat_loop::CallerRole {
+pub fn parent_role(harness: &TestHarness) -> crate::agent::chat_loop::CallerRole {
     crate::agent::chat_loop::CallerRole {
         is_worker: Some(false),
         skip_session_active: false,
@@ -484,7 +486,7 @@ pub(crate) fn parent_role(harness: &TestHarness) -> crate::agent::chat_loop::Cal
 /// `git init --initial-branch=main` + configure a test user so
 /// subsequent `git commit` calls succeed. Panics on any git error
 /// (test setup, never an assertion failure).
-pub(crate) fn init_repo_for_test(path: &Path) {
+pub fn init_repo_for_test(path: &Path) {
     std::fs::create_dir_all(path).unwrap();
     let init = StdCommand::new("git")
         .args(["init", "--initial-branch=main"])
@@ -508,7 +510,7 @@ pub(crate) fn init_repo_for_test(path: &Path) {
 
 /// `git add -A` + `git commit -m <msg> --no-gpg-sign` from `path`.
 /// Panics on any git error (test setup, never an assertion failure).
-pub(crate) fn commit_all_for_test(path: &Path, msg: &str) {
+pub fn commit_all_for_test(path: &Path, msg: &str) {
     let add = StdCommand::new("git")
         .args(["add", "-A"])
         .current_dir(path)

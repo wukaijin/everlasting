@@ -48,10 +48,10 @@ pub enum ProviderProtocol {
     /// `MockProvider` (in `llm/provider/mock.rs`, `#[cfg(test)]`
     /// only) reports this so the agent loop can dispatch through
     /// the catalog in integration tests without needing a real
-    /// network round-trip. `#[cfg(test)]` ensures the variant is
-    /// invisible to production serde — the wire format is
-    /// unaffected.
-    #[cfg(test)]
+    /// network round-trip. `#[cfg(any(test, feature = "bench"))]`
+    /// (N9 2026-09-19) keeps the variant invisible to production
+    /// serde — the wire format is unaffected.
+    #[cfg(any(test, feature = "bench"))]
     Mock,
 }
 
@@ -62,7 +62,7 @@ impl ProviderProtocol {
             Self::Anthropic => "anthropic",
             Self::Openai => "openai",
             Self::OpenaiResponses => "openai_responses",
-            #[cfg(test)]
+            #[cfg(any(test, feature = "bench"))]
             Self::Mock => "mock",
         }
     }
