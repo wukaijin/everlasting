@@ -321,19 +321,19 @@ fn tool_defs() -> Vec<Value> {
                         },
                         "description": "Full roster, replaces preset roster (moderator unchanged)"
                     },
-                    "token_budget": { "type": "integer", "minimum": 1, "description": "Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget, no wrap-up. Recommended: omit, or ≥200000. Omit = unlimited" }
+                    "token_budget": { "type": "integer", "minimum": 1, "description": "Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget, no wrap-up. Recommended: omit (unlimited) — a runaway fuse, not a cost saver: below a normal full run it truncates with no summary" }
                 },
                 "required": ["topic", "cwd"]
             }
         }),
         json!({
             "name": "discussion_status",
-            "description": "Check a discussion: busy=true running; busy=false + stop_reason (group_chat_end|max_rounds|cancelled|error) = finished. Optional wait_seconds long-polls for progress; detail adds messages/last_speaker/tokens.",
+            "description": "Check a discussion: busy=true running; busy=false + stop_reason (group_chat_end|max_rounds|cancelled|error|budget) = finished. wait_seconds long-polls for progress; detail adds messages/last_speaker/tokens. Each call costs a host LLM turn — poll sparsely, detail only when needed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string" },
-                    "wait_seconds": { "type": "integer", "minimum": 1, "maximum": 30, "description": "Long-poll up to N s: returns early on progress (new message / busy flip / stop_reason); else wait_timed_out:true" },
+                    "wait_seconds": { "type": "integer", "minimum": 1, "maximum": 25, "description": "Long-poll up to N s: returns early on progress (new message / busy flip / stop_reason); else wait_timed_out:true. Cap 25 < 30s host tool timeout" },
                     "detail": { "type": "boolean", "description": "Add progress fields: messages count, last_speaker, tokens so far (+ token_budget if declared)" }
                 },
                 "required": ["session_id"]
@@ -748,7 +748,7 @@ async fn resolve_project_by_path(state: &Arc<AppState>, path: &str) -> Result<St
 // 工具实现
 // ---------------------------------------------------------------------------
 
-const HINT_STARTED: &str = "started — discussion_status(session_id) polls cheaply; add wait_seconds=30 to return on progress, detail=true for messages/last_speaker/tokens. After stop_reason is set, read discussion_result. Expect 5-15 min.";
+const HINT_STARTED: &str = "started — discussion_status(session_id) polls cheaply; add wait_seconds=25 (30 gets killed by 30s host tool timeouts). Every poll is a host LLM turn: wait out wait_timed_out, don't spin; detail only occasionally. After stop_reason is set, read discussion_result. Expect 5-15 min.";
 const HINT_INTERRUPT: &str = "Wrap-up in progress: the in-flight speaker finishes, then the moderator rounds off (~1-3 min). Poll discussion_status; after it turns terminal (stop_reason=preempted, or group_chat_end if the discussion finished naturally in the same instant), read discussion_result.";
 const HINT_INJECTED: &str = "Injected — lands as [用户插入] in the next moderator round; the discussion continues. Poll discussion_status as usual.";
 const HINT_MODELS: &str = "Reference by name or UUID in start_discussion (participants[].model / preset moderator). Resolved at start time.";
@@ -756,7 +756,9 @@ const HINT_PRESETS: &str = "Reference preset by key (builtin key or user row UUI
 const NOTE_CANCELLED: &str = "编排已停,session 保留(部分转录照常可导出)";
 
 /// 长轮询上限与拍频(JS MAX_WAIT_SECONDS / waitTickMs 同源)。
-const MAX_WAIT_SECONDS: i64 = 30;
+/// 上限 25 非 30:宿主(ZCode 等)MCP 工具执行超时普遍 30s,wait=30 贴边竞态
+/// 必超时(09-18 live 实证,调用方被迫试错降到 25)。
+const MAX_WAIT_SECONDS: i64 = 25;
 const WAIT_TICK_MS: u64 = 2000;
 
 fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {

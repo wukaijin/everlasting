@@ -52,10 +52,10 @@
   | 工具 | 语义 |
   |---|---|
   | `start_discussion` | topic + cwd + preset?/participants?(名单替换,moderator 恒取预设)→ **立即**返回 session_id |
-  | `discussion_status` | busy / stop_reason / elapsed_s(廉价轮询,无轮次字段),供调用方轮询;09-13 起两可选参:`wait_seconds`(1-30 有界长轮询,内部 ~2s 拍 HTTP 轮询,信号 = busy/stop_reason 翻转或消息数/末 seq 变化,变化即返、到点 `wait_timed_out:true`)/ `detail`(messages/last_speaker/tokens/token_budget 进度富化;wait 隐含 detail) |
+  | `discussion_status` | busy / stop_reason / elapsed_s(廉价轮询,无轮次字段),供调用方轮询;09-13 起两可选参:`wait_seconds`(1-25 有界长轮询,09-19 起上限 30→25 避开宿主 30s 工具超时,内部 ~2s 拍 HTTP 轮询,信号 = busy/stop_reason 翻转或消息数/末 seq 变化,变化即返、到点 `wait_timed_out:true`)/ `detail`(messages/last_speaker/tokens/token_budget 进度富化;wait 隐含 detail) |
   | `discussion_result` | 终态读 summary + roster + stats + 转录路径(未终态时明确报错而非空值) |
   | `cancel_discussion` | 复用现有 cancel 端点(M3 preempt 落地前的唯一止损) |
-- **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场成本可观(token 预算建议不填,或 ≥200000),调用方 agent 应慎用、议题要值得。*(09-13 唯一有界例外:`discussion_status.wait_seconds` ≤30s 长轮询——不挂 SSE,GC3 无人值守 8s 快拒性质不变;wire 预算锁同步上调 4200,见 §4)*
+- **关键语义**(已写死在工具描述):讨论耗时 5-15 分钟,**工具调用绝不阻塞**——start 立即返回,状态靠轮询;一场成本可观(预算帽是保险丝非省钱手段,建议不填),调用方 agent 应慎用、议题要值得。*(09-13 唯一有界例外:`discussion_status.wait_seconds` ≤30s 长轮询——不挂 SSE,GC3 无人值守 8s 快拒性质不变;wire 预算锁同步上调 4200,见 §4)*
 - **五项「待定决策」全部定案**(2026-09-06 brainstorm,记录在任务 PRD):Node+SDK / stdio / 四工具+context 预算 ≲600 token / v1 零鉴权 / created_via 归因;后续项挂 M4(transport 扩 http、鉴权、宿主自报身份)。*(M3 09-06 起工具面扩为六,wire 预算锁同步上调 3200,见 §4)*
 
 ## 4. M3 控制面:打断 / 注入 / 跟随(✅ 2026-09-06)

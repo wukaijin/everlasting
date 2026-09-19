@@ -12,7 +12,7 @@
 // degraded=false——HTTP 场 daemon 必在,可严格断言)→ list_models → 传输级
 // 探针 raw fetch(GET 405 / DELETE 200 / 缺 Accept 406 / 错 Content-Type 415)。
 //
-// --live(烧真 token,按需):start(arch 小阵容)→ wait_seconds=30 长轮询 →
+// --live(烧真 token,按需):start(arch 小阵容)→ wait_seconds=25 长轮询 →
 // result 全链(AC1 的 headless 回归选项;正式门禁是 ZCode 宿主实跑)。
 //
 // 用法:node scripts/group-chat-mcp-http-smoke.mjs [--live]
@@ -78,7 +78,7 @@ try {
   if (!/session 不存在/.test(probeError)) fail(`错误文案不可操作:${probe.content?.[0]?.text}`);
   process.stderr.write('[smoke] handler 链 ok(session 不存在)\n');
 
-  // 2a) wait_seconds 越界:0 应被 1-30 有界校验拒(基线报错,不进等待循环)
+  // 2a) wait_seconds 越界:0 应被 1-25 有界校验拒(基线报错,不进等待循环)
   const bad = await client.callTool({ name: 'discussion_status', arguments: { session_id: 'smoke-nonexistent', wait_seconds: 0 } });
   const badError = JSON.parse(bad.content?.[0]?.text || '{}').error || '';
   if (!bad.isError || !/wait_seconds/.test(badError)) fail(`wait_seconds=0 应被有界校验拒:${bad.content?.[0]?.text}`);
@@ -123,7 +123,7 @@ try {
     console.log('SMOKE PASS (non-live):握手 + ping + tools/list + 预算 + 错误链 + list_presets/models + 传输探针');
   } else {
     // 4) 全链:小阵容真跑(arch = moderator + 2 人;5-15 分钟,烧真 token);
-    // 轮询用 wait_seconds=30 长轮询(有变化即返,无变化到点 wait_timed_out 再续)
+    // 轮询用 wait_seconds=25 长轮询(有变化即返,无变化到点 wait_timed_out 再续;上限 25 避宿主 30s 超时)
     const started = await client.callTool({
       name: 'start_discussion',
       arguments: {
@@ -134,11 +134,11 @@ try {
     });
     if (started.isError) fail(`start 失败:${started.content?.[0]?.text}`);
     const { session_id } = JSON.parse(started.content[0].text);
-    process.stderr.write(`[smoke] started ${session_id};wait_seconds=30 长轮询…\n`);
+    process.stderr.write(`[smoke] started ${session_id};wait_seconds=25 长轮询…\n`);
     let last;
     const t0 = Date.now();
     while (Date.now() - t0 < 15 * 60_000) {
-      const st = await client.callTool({ name: 'discussion_status', arguments: { session_id, wait_seconds: 30 } });
+      const st = await client.callTool({ name: 'discussion_status', arguments: { session_id, wait_seconds: 25 } });
       last = JSON.parse(st.content[0].text);
       process.stderr.write(`[smoke] poll: busy=${last.busy} stop_reason=${last.stop_reason ?? '-'} msgs=${last.messages ?? '-'} elapsed=${last.elapsed_s ?? '-'}s${last.wait_timed_out ? ' (wait 超时再续)' : ''}\n`);
       if (!last.busy && last.stop_reason) break;

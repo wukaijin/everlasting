@@ -55,13 +55,15 @@ export const EXIT = {
   cancelled: 3,
   error: 4,
   interrupted: 5,
+  budget: 6,
 };
-const EXIT_BY_STOP_REASON = {
+export const EXIT_BY_STOP_REASON = {
   group_chat_end: EXIT.groupChatEnd,
   max_rounds: EXIT.maxRounds,
   cancelled: EXIT.cancelled,
   error: EXIT.error,
   interrupted: EXIT.interrupted,
+  budget: EXIT.budget,
 };
 
 // ---------------------------------------------------------------------------
@@ -843,6 +845,10 @@ async function run(argv) {
     emit('# 讨论 daemon 进程级中断(崩溃/被杀);checkpoint 已落库,可续跑:');
     emit(`#   curl -X POST ${opt.base}/api/v1/agent/resume_group_chat -H 'content-type: application/json' -d '{"session_id":"${sessionId}"}'`);
   }
+  if (stopReason === 'budget') {
+    emit('# 预算触顶硬停(无收束轮,无 discussion_summary);转录已导出供人工收束。');
+    emit('# 预算帽是防失控保险丝,不是省钱手段——重跑请省略 --token-budget(不限)或给足余量。');
+  }
   const code = EXIT_BY_STOP_REASON[stopReason] ?? EXIT.scriptError;
   emit(`# stop_reason=${stopReason} → exit ${code}`);
   return code;
@@ -923,7 +929,7 @@ function printRunHelp() {
   --preset <name>         内置 review / fe_review / arch / retro,或用户预设 key(UUID)/ 名称(presets 子命令查)
   --participants <json>   整名单替换(与 --preset 二选一;增删参与者也走它)
   --moderator-model <id>  主持人模型(默认取预设)
-  --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget,无收束轮;建议不填,或 ≥200000——更低易中途触顶)
+  --token-budget <n>      token 预算上限(计费四字段求和;越线下一轮头停,stop_reason=budget,无收束轮;建议不填(不限)——帽是防失控保险丝而非省钱手段,低于一场正常收官的消耗必然中途截断且无 summary)
   --set <name>.model=<id>            单人换模型(可重复)
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --timeout <seconds>     默认 1800;超时 cancel 停编排、保 session、导部分转录

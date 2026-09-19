@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
-  EXIT, PRESETS, composePresets, composePersonaMd, resolveParticipants, buildCreateSessionBody, buildChatBody,
+  EXIT, EXIT_BY_STOP_REASON, PRESETS, composePresets, composePersonaMd, resolveParticipants, buildCreateSessionBody, buildChatBody,
   aggregateTokens,
   normalizeModelRef, validateModelRefs, summarizeToolUses, defaultTranscriptPath,
   defaultAppDataDir, sanitizeTopicForPath,
@@ -112,6 +112,16 @@ test('buildCreateSessionBody:tokenBudget 增量键(声明才写,缺省无键 = �
     projectId: 'p1', projectPath: '/repo', moderatorModel: 'uuid-m3', participants: [],
   });
   assert.equal('token_budget' in without.metadata, false);
+});
+
+// 09-19:stop_reason → exit 全覆盖(实证坑:budget 缺键曾静默落 scriptError=1)。
+test('EXIT_BY_STOP_REASON:五终态全覆盖,budget → 6(不落 scriptError)', () => {
+  assert.deepEqual(
+    Object.keys(EXIT_BY_STOP_REASON).sort(),
+    ['budget', 'cancelled', 'error', 'group_chat_end', 'interrupted', 'max_rounds'],
+  );
+  assert.equal(EXIT_BY_STOP_REASON.budget, 6);
+  assert.equal(EXIT_BY_STOP_REASON.budget, EXIT.budget);
 });
 
 // gce-m4c:客户端核算口径 —— 四计费字段求和、context_input 不计、

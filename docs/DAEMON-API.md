@@ -68,8 +68,9 @@ database-guidelines.md 的「IPC payload camelCase」新约定(对齐 `AuditEven
 群聊 metadata 可选键 `token_budget`(2026-09-08,C1.2 止损包,additive):声明该场讨论的
 token 预算上限(计费口径 = input + output + cache_creation + cache_read 四字段求和,每内层
 LLM 轮的 `TurnUsage` 累计)。超限 → 编排器在下一轮头终态停,`stop_reason="budget"`
-(无收束轮)。缺键 = 不限。**建议:不填,或 ≥200000**——更低的帽易中途触顶截断
-(MCP schema / CLI help 同文提示,2026-09-16)。
+(无收束轮)。缺键 = 不限。**建议:不填**——预算帽是防失控保险丝而非省钱
+手段:低于一场正常收官的消耗必然中途截断、无收束总结(MCP schema / CLI help
+同文提示,口径 2026-09-19)。
 **四通道声明面(2026-09-08,M4 成本治理)**:GUI 建群弹窗 /
 M1 脚本 `--token-budget <n>` / MCP `start_discussion` 的 `token_budget` 可选参 /
 定时任务 `group_chat_config.token_budget`(§6.3)——全部「显式声明才限,缺省无键」。
