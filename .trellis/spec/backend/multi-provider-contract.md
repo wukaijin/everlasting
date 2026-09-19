@@ -21,3 +21,4 @@
 - [scenario-multi-provider-abstraction](./multi-provider-contract/scenario-multi-provider-abstraction.md)
 - [scenario-provider-trait-anthropic](./multi-provider-contract/scenario-provider-trait-anthropic.md)
 - [scenario-openai-wire](./multi-provider-contract/scenario-openai-wire.md)
+- [scenario-responses-wire](./multi-provider-contract/scenario-responses-wire.md) — 第三协议 `openai_responses`(Responses API,stateless 全量回放;09-18-openai-responses-provider)

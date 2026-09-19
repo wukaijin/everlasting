@@ -39,7 +39,7 @@ pnpm 版本统一(2026-09-11):各包 `package.json` 的 `packageManager` 字段�
 ```bash
 cd app/src-tauri && \
   PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo test --lib             # ~1995 unit tests (2026-08-28 实测,较 08-13 的 1689 增 ~300,含 F1/F2/F2b/F4/F5/F6 新增);default is multi-threaded (= nproc)
+  cargo test --lib             # ~2484 unit tests (2026-09-18 实测,较 08-28 的 1995 增 ~490,含 openai_responses provider 新增);default is multi-threaded (= nproc)
 # 根 workspace 等价写法(推荐从根跑):
 cargo test -p everlasting --lib               # 结果同 cd app/src-tauri && cargo test --lib(PKG_CONFIG_PATH 仍需)
 cargo test -p everlasting-remote              # remote crate:零系统库依赖,无需 PKG_CONFIG_PATH,远快于 everlasting

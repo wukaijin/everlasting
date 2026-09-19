@@ -25,7 +25,7 @@
 
 Trigger any of:
 - Adding / changing the `test_model` IPC handler in `app/src-tauri/src/commands/providers.rs`
-- Switching the per-protocol minimal-message strategy (Anthropic `/v1/messages`, OpenAI `/chat/completions`)
+- Switching the per-protocol minimal-message strategy (Anthropic `/v1/messages`, OpenAI `/chat/completions`, OpenAI Responses `/responses`)
 - Restoring or removing the legacy `test_provider` IPC
 - Changing the response shape `{ success, latencyMs, error }`
 
@@ -122,7 +122,40 @@ result row.
 - Success: HTTP2xx. Failure: HTTP non-2xx → first200 chars of
  response body in `error`.
 
-**Both branches**:
+**OpenAI Responses branch** (protocol = `"openai_responses"`, task
+09-18-openai-responses-provider):
+- URL: `POST {provider.base_url}/responses` — the base_url INCLUDES
+ `/v1` (same convention as the `openai` branch; only `/responses` is
+ appended, never re-adding the version prefix).
+- Headers: `authorization: Bearer {provider.api_key}`,
+ `content-type: application/json`
+- Body:
+```json
+{
+ "model": "<model.model_name from catalog>",
+ "input": "Reply with exactly: ok",
+ "max_output_tokens":16,
+ "store": false
+}
+```
+Non-streaming (no `stream` field). `max_output_tokens` is 16, NOT 1 —
+on reasoning models Responses counts reasoning tokens against this
+cap and 1 would 400. `store:false` keeps the probe stateless.
+- Success: **bare HTTP2xx — the response body is NOT parsed**. Parsing
+ `output_text` would false-negative on reasoning models: the 16-token
+ budget can be consumed by reasoning alone, leaving zero visible
+ output on an otherwise-successful call. Same criterion as the two
+ branches above (review.md correction 4, 2026-09-18).
+- Failure: HTTP non-2xx → first200 chars of the body in `error`, with
+ a protocol-specific hint appended after a newline for two cases:
+ 404 (gateway has no `/responses` route — confirm Responses API
+ support) and 400 whose body mentions "effort" (effort vocabulary is
+ `minimal|low|medium|high` only). 401/403 need no extra hint — the
+ doctor's generic auth entry covers them
+ (`tools/test_llm_connection.rs::fix_hint`). Full contract:
+ [scenario-responses-wire §3.7](./multi-provider-contract/scenario-responses-wire.md).
+
+**All branches**:
 - `body.model` MUST be the real `model.model_name` from the catalog
  (e.g. `GLM-4.7` for a GLM proxy, or `gpt-4o-2024-08-06` for
  OpenAI). It MUST NOT be hardcoded.
@@ -142,7 +175,9 @@ result row.
 | Anthropic, HTTP2xx | `success: true, error: null` | |
 | OpenAI, HTTP non-2xx (e.g.400 `model_not_found`) | `success: false, error: "HTTP <code>: <body[:200]>"` | The user-visible failure point for a wrong `model_name` |
 | OpenAI, HTTP2xx | `success: true, error: null` | |
-| `protocol` is neither `anthropic` nor `openai` | `success: false, error: "unsupported protocol: <p>"` | Matches `test_provider` behaviour |
+| OpenAI Responses, HTTP non-2xx | `success: false, error: "HTTP <code>: <body[:200]>"` (+404 / effort-400 protocol hint on its own line) | 404 typically = gateway without Responses support, not a base_url typo |
+| OpenAI Responses, HTTP2xx | `success: true, error: null` | Bare 2xx — body not parsed; a reasoning model with zero visible output is still a success |
+| `protocol` is not one of the implemented protocols (`anthropic` / `openai` / `openai_responses`) | `success: false, error: "unsupported protocol: <p>"` | Matches `test_provider` behaviour |
 | `provider.api_key` empty | The request is still sent; provider returns401, surfaces as HTTP401 in `error` | Pre-flight check belongs to `chat` command, not `test_model` |
 
 The15-second timeout on `reqwest::Client` (built once per call)
