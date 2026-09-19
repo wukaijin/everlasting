@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/cli/index.md", "reason": "质检基准:cli 层纪律(零依赖/node --test 只测纯函数不打真 daemon/stdout-stderr 分工)"}
+{"file": ".trellis/tasks/09-19-evl-discuss/research/mcp-wire-evidence.md", "reason": "对照实现是否偏离 wire 实证(双 Accept 头、isError 语义错不走协议错、result 载荷无 session_id 键等)"}

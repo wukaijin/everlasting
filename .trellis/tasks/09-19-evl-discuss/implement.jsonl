@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/cli/index.md", "reason": "cli 层纪律:零依赖/单测 node --test/stdout 只出数据/编排-运输分层(discuss 必须 MCP client 路线,禁 import group-chat-run)"}
+{"file": ".trellis/tasks/09-19-evl-discuss/research/mcp-wire-evidence.md", "reason": "MCP wire 实读证据:传输探针(双 Accept 406/415)、tools/call 三态响应、八工具入参/返回形状、退出码先例(budget=6/SIGINT=cancel);权威源 docs/DAEMON-API.md(35KB 超注入上限,按需自读 §6.1/§6.5/§7)"}
