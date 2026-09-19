@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查清单;check 主对照"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "验证新协议分支未破坏既有两协议契约(strip/工厂/探测三面)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 ChatEvent 流与 stop_reason/usage 映射符合 agent loop 契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "PR2 前端改动(Settings 下拉/badge/effort 过滤)的检查清单"}
+{"file": ".trellis/tasks/09-18-openai-responses-provider/research.md", "reason": "协议事实源;check 时核对实现与调研锁定决策(stateless/strict:false/effort 词表)一致"}

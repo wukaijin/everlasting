@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/09-18-openai-responses-provider/research.md", "reason": "协议差异明细(§2 请求/事件/usage/错误)与已锁定设计决策(§4)——实现时的协议事实源"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "provider 抽象与协议分发契约;新协议接入必须对照的主文档"}
+{"file": ".trellis/spec/backend/multi-provider-contract/scenario-openai-wire.md", "reason": "wire 样例测试风格与新 scenario-responses-wire 的姊妹篇参照(PR1 测试 + PR2 spec)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent/stop_reason/usage 的 agent loop 契约;事件机映射不能违反"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "classify_error_response 与错误分类惯例;LlmError 路径平移要对照"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "TokenUsage schema 与跨 provider 归一化契约(A4 核心在文件头部;全文 35KB 注入会截尾,拿不准时 Read 原文件);parse_responses_usage 映射依据"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "test_model 探测契约;PR2 探测分支对照"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR2 Settings 表单/下拉改动(ProvidersTab/ModelForm)的组件规范"}
