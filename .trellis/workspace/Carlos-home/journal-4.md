@@ -1849,3 +1849,40 @@ evl CLI 二期落地:evl discuss 子命令族以 MCP client 直发 POST /mcp(零
 ### Status
 
 [OK] **Completed**
+
+
+## Session 150: read 族工具卡片紧凑化(glob/list_dir/read_file 1 行)
+
+**Date**: 2026-09-19
+**Task**: read 族工具卡片紧凑化(glob/list_dir/read_file 1 行)
+**Branch**: `main`
+
+### Summary
+
+web 聊天流里 glob / list_dir / read_file 的卡片从通用 ToolCallCard 的三行 85px 重做成专属紧凑卡:收起 1 行 26px、点击展开输出/输入,pattern 与命中数/行范围提到 headline。
+
+### Main Changes
+
+- 新增 ReadToolCard.vue(专属卡)+ utils/toolSummary.ts(chip=目标 / meta=规模 纯函数,含截断提示行剥离与 cat -n 行号解析)
+- ToolCallHeader 加可选 #title-meta slot;ToolOutputBody 加 collapsible=false 裸 pre 变体(复用解 envelope/截断/linkify 链路)
+- MessageItem 两个 resolver 分支接 isReadFamilyTool;toolAccentVar/toolIcon 给 glob/list_dir 补 read 族 accent 与 magnifying-glass/folder 图标
+- 审批面不缩水:pendingAsk 命中时审批区与收起态解耦(三工具均为权限层 Tier 4 path 工具)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] vitest 1914 全绿(新增 toolSummary 28 例 / ReadToolCard 16 例 / ToolOutputBody collapsible 3 例 / messageFormat accent-icon 4 例)
+- [OK] pnpm build(vue-tsc + vite)通过;pnpm test:e2e 13 例全绿(新增 tool-card-compact.spec.ts 4 例:高度门 ≤34px 实测 26px / 展开收起 / 报错展开)
+- [OK] 视觉:桌面 1280 + 900(2x)+ 移动 390 截图过目,classic 与 aggressive 两主题一致
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- grep / web_search / web_fetch 仍是通用卡,可按同一形态接(名单在 toolSummary.isReadFamilyTool 可扩)
+- SubagentDrawer 的 DrawerToolCallCard 未改(抽屉里 read 族仍是三行 + glob 无 chip)
