@@ -1827,3 +1827,25 @@ BACKLOG 群聊共识候选 N3 落地(用户立项扩展「不只 repo map 还初
 ### Status
 
 [OK] **Completed**
+
+
+## Session 149: evl CLI 二期:discuss 子命令(MCP client)+ 无参 help/健康检查
+
+**Date**: 2026-09-19
+**Task**: evl CLI 二期:discuss 子命令(MCP client)+ 无参 help/健康检查
+**Branch**: `main`
+
+### Summary
+
+evl CLI 二期落地:evl discuss 子命令族以 MCP client 直发 POST /mcp(零 daemon 改动,编排单源 daemon)——全链主入口(start→25s 长轮询循环→result)+ 七控制动词(start/status/result/cancel/interrupt/inject/presets);无参裸跑改 stdout 帮助+退出 0,顶层 help 尾部 daemon 健康行(1.5s 探测恒退 0)。群聊评审 10 项采纳:退出码开放集重排(preempted→0/interrupted→1/budget→6)、wait_timed_out 键仅 true 才写的判据修正、超时不 cancel+防重跑三处文案、-- 终止符。103/103 单测,4 场 live 实烧验收(全链退 0/超时退 7 讨论仍在跑/SIGINT 退 3/budget 退 6);cli spec 沉淀 MCP 运输面 gotcha。R2 剩余 evl tasks/chat detach 未做。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c7276679` | (see git log) |
+| `62657426` | (see git log) |
+
+### Status
+
+[OK] **Completed**
