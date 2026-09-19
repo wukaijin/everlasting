@@ -1,7 +1,9 @@
 //! OpenAI 流式 tool-call 装配辅助(拆分自 openai.rs, 08-07-large-file-splitting)。
 //!
 //! `ToolCallBuf` 按 delta.index 累积分片,`build_tool_call_event` 在
-//! 参数完整时产出 `ChatEvent`;`parse_openai_usage` 解析 usage 块。
+//! 参数完整时产出 `ChatEvent`;`parse_openai_usage` 解析 Chat
+//! Completions 的 usage 块,`parse_responses_usage` 解析 Responses API
+//! 的 usage 块(09-18-openai-responses-provider)。
 
 use std::collections::HashMap;
 
@@ -153,6 +155,66 @@ pub(crate) fn parse_openai_usage(v: &Value) -> Option<TokenUsage> {
         // `cached_tokens` (it's the full prompt length), so the
         // context footprint is just `input`. Do NOT add
         // `cache_read` here — that would double-count.
+        context_input_tokens: input.min(u32::MAX as u64) as u32,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// parse_responses_usage — Responses API flavor of the same
+// protocol-agnostic TokenUsage normalization (task
+// 09-18-openai-responses-provider PR1, design §2.6). Lives beside
+// `parse_openai_usage` so both OpenAI-flavored protocols share one
+// file for usage parsing.
+// ---------------------------------------------------------------------------
+
+/// Parse the OpenAI **Responses** API `usage` payload into a
+/// protocol-agnostic [`TokenUsage`]. Schema mapping (research §2.5 —
+/// Responses field names are near-identical to the internal schema):
+///
+/// - `input_tokens` → `input_tokens`
+/// - `output_tokens` → `output_tokens`
+/// - `input_tokens_details.cached_tokens` → `cache_read_input_tokens`
+/// - `cache_creation_input_tokens` → 0 (Responses has no cache-write
+///   concept on the wire; implicit upstream caching only)
+/// - `output_tokens_details.reasoning_tokens` → NOT mapped — it is a
+///   **subset** of `output_tokens`, adding it would double-count
+///   (same accounting stance as Anthropic's thinking tokens).
+///
+/// `v` is the whole SSE event payload (the `response.completed` data
+/// object): usage lives at `response.usage` on the official stream
+/// shape, with a defensive fallback to a top-level `usage` key (some
+/// gateways flatten it). Like [`parse_openai_usage`]: missing fields
+/// default to 0, all-zero returns `None` (the agent loop skips the
+/// SQL write when the terminal event carries `usage: None`).
+pub(crate) fn parse_responses_usage(v: &Value) -> Option<TokenUsage> {
+    let usage = v.pointer("/response/usage").or_else(|| v.get("usage"))?;
+    let input = usage
+        .get("input_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let output = usage
+        .get("output_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_read = usage
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    if input == 0 && output == 0 && cache_read == 0 {
+        // Same all-zero contract as parse_openai_usage: a real
+        // turn with 0 input + 0 output is not realistic, so an
+        // all-zero payload is treated as "no usage".
+        return None;
+    }
+    Some(TokenUsage {
+        input_tokens: input.min(u32::MAX as u64) as u32,
+        output_tokens: output.min(u32::MAX as u64) as u32,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cache_read.min(u32::MAX as u64) as u32,
+        // Responses `input_tokens` is the FULL prompt length and is
+        // already inclusive of `cached_tokens` (same semantics as
+        // Chat Completions `prompt_tokens`) — context footprint is
+        // just `input`; adding `cache_read` would double-count.
         context_input_tokens: input.min(u32::MAX as u64) as u32,
     })
 }

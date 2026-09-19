@@ -35,6 +35,15 @@ impl Serialize for WorktreeState {
 pub enum ProviderProtocol {
     Anthropic,
     Openai,
+    /// OpenAI Responses API (`POST /v1/responses`, task
+    /// 09-18-openai-responses-provider PR1): the third protocol,
+    /// alongside `Anthropic` / `Openai` (Chat Completions). The
+    /// explicit `rename` keeps the serde form identical to
+    /// `as_str()` / `from_str_opt` — `rename_all = "lowercase"`
+    /// alone would produce `"openairesponses"` (no separator) and
+    /// fork the three spellings.
+    #[serde(rename = "openai_responses")]
+    OpenaiResponses,
     /// P1 RULE-A-006 (2026-06-14): test-only protocol. The
     /// `MockProvider` (in `llm/provider/mock.rs`, `#[cfg(test)]`
     /// only) reports this so the agent loop can dispatch through
@@ -52,6 +61,7 @@ impl ProviderProtocol {
         match self {
             Self::Anthropic => "anthropic",
             Self::Openai => "openai",
+            Self::OpenaiResponses => "openai_responses",
             #[cfg(test)]
             Self::Mock => "mock",
         }
@@ -63,6 +73,7 @@ impl ProviderProtocol {
     pub fn from_str_opt(s: &str) -> Self {
         match s {
             "openai" => Self::Openai,
+            "openai_responses" => Self::OpenaiResponses,
             _ => Self::Anthropic,
         }
     }

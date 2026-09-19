@@ -47,6 +47,8 @@ pub use crate::db::ProviderProtocol;
 pub use anthropic::AnthropicProvider;
 #[allow(unused_imports)]
 pub use openai::OpenAIProvider;
+#[allow(unused_imports)]
+pub use responses::ResponsesProvider;
 
 // ---------------------------------------------------------------------------
 // Full-prefix cache-miss sentinel (D5, 08-31-cache-head-volatility)
@@ -243,6 +245,32 @@ pub fn build_provider(
                 supports_images: model_row.supports_images,
             };
             Ok(Box::new(OpenAIProvider::new(config)))
+        }
+        "openai_responses" => {
+            // PR1 (09-18-openai-responses-provider) Responses adapter.
+            // Defaults mirror the openai branch: `max_tokens` falls
+            // back to `DEFAULT_MAX_TOKENS` (on reasoning models the
+            // budget covers reasoning + visible answer combined), and
+            // `reasoning_effort` is threaded straight from
+            // `ModelRow.thinking_effort` as-is — NO default. Unlike
+            // the Anthropic branch (which defaults to "high"), an
+            // unset effort means "omit the `reasoning` object" so
+            // non-reasoning models stay unaffected; a set value is
+            // vocabulary-normalized at request time (see
+            // `responses::normalize_responses_effort`).
+            let max_tokens = model_row
+                .max_tokens
+                .unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
+            let reasoning_effort = model_row.thinking_effort.clone();
+            let config = responses::ResponsesConfig {
+                base_url: provider_row.base_url.clone(),
+                model: model_row.model_name.clone(),
+                api_key: provider_row.api_key.clone(),
+                max_tokens,
+                reasoning_effort,
+                supports_images: model_row.supports_images,
+            };
+            Ok(Box::new(ResponsesProvider::new(config)))
         }
         other => Err(ProviderBuildError::UnknownProtocol(other.to_string())),
     }
@@ -444,9 +472,11 @@ mod tests {
 
 pub mod anthropic;
 pub mod openai;
+pub mod responses;
 pub mod streaming;
 pub mod tests_anthropic;
 pub mod tests_openai;
+pub mod tests_responses;
 pub mod tests_wire;
 pub mod wire;
 
