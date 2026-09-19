@@ -1,0 +1,17 @@
+{
+  "name": "everlasting-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "evl — Everlasting daemon CLI (daemon HTTP API 薄壳,零运行时依赖)",
+  "bin": {
+    "evl": "./bin.mjs"
+  },
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
