@@ -1782,3 +1782,26 @@ BACKLOG 群聊共识候选 N3 落地(用户立项扩展「不只 repo map 还初
 ### Status
 
 [OK] **Completed**(follow-up:repo map 自动刷新不做,手动重跑 /init;CLAUDE.md 遗留文件处置待用户裁定)
+
+
+## Session 147: OpenAI Responses provider 接入:规划→群聊评审→实施→live 验证全链
+
+**Date**: 2026-09-19
+**Task**: OpenAI Responses provider 接入:规划→群聊评审→实施→live 验证全链
+**Branch**: `main`
+
+### Summary
+
+第三协议 openai_responses 落地(POST /v1/responses,stateless 全量回放)。流程:补齐 design/implement/jsonl 规划文档→群聊评审(session 5b7cd5f5,63万token,六项修正:strip OR 语义/@name: 前缀/探测裸 2xx/refusal/arguments 截断/build_http_body 断言对象)→PR1 后端(responses.rs 适配器+28 用例)→PR2 外围(探测分支+Settings 第三项+effort 过滤+spec scenario)→check 修 3 处(flush envelope 键/[DONE] 哨兵/test-model-contract)→提交三笔→live 验证全过(AC1 文本流/AC2 工具回路 cache_read 10112/AC3 探测 708ms/AC4 跨协议切换不 400;thinking 块裁剪半边由单测覆盖,wukaijin glm 不产 thinking 无法 live 诱导)。cargo 2484+pnpm 1863 全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c2563917` | (see git log) |
+| `3beb210a` | (see git log) |
+| `64591322` | (see git log) |
+
+### Status
+
+[OK] **Completed**
