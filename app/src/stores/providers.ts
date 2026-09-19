@@ -7,7 +7,8 @@ import { transport } from "../transport";
  *  via `#[serde(rename_all = "camelCase")]`). */
 export interface ProviderRow {
   id: string;
-  protocol: string; // "anthropic" | "openai"
+  /** "anthropic" | "openai" | "openai_responses" (task 09-18). */
+  protocol: string;
   displayName: string;
   baseUrl: string;
   /** RULE-D-001 (2026-06-24): 是否已设置 api_key. 后端不再回传明文 key

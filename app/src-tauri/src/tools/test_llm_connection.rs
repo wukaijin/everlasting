@@ -5,12 +5,16 @@
 //! (the exact code path behind the `test_model` IPC / daemon route —
 //! signature converged to `(db, model_id)` so the tool can reuse it).
 //! Semantics are frozen by spec `backend/test-model-contract.md`:
-//! per-model 1-token round-trip (`anthropic` → `/v1/messages`,
-//! `openai` → `/chat/completions`, `body.model` = the catalog's
-//! `model_name`), 15s timeout, `{success, latencyMs, error}` result,
-//! four failure paths never Rust-`Err`. This wrapper only translates
-//! that JSON into LLM-compact text and appends a per-category fix
-//! hint for the `doctor` skill to act on.
+//! per-model minimal round-trip (`anthropic` → `/v1/messages`,
+//! `openai` → `/chat/completions`, `openai_responses` → `/responses`,
+//! `body.model` = the catalog's `model_name`), 15s timeout,
+//! `{success, latencyMs, error}` result, four failure paths never
+//! Rust-`Err`. This wrapper only translates that JSON into
+//! LLM-compact text and appends a per-category fix hint for the
+//! `doctor` skill to act on. Protocol-specific hints for
+//! `openai_responses` (404 / effort vocabulary) are embedded in the
+//! `error` string by `test_model_inner` itself, so they flow through
+//! here unchanged.
 //!
 //! # Egress
 //!
@@ -161,8 +165,8 @@ fn fix_hint(error: &str) -> &'static str {
     } else if error.contains("failed to load") {
         "hint: local catalog read failed — retry once; a persistent failure is an app bug."
     } else if error.starts_with("unsupported protocol") {
-        "hint: provider protocol must be `anthropic` or `openai` — fix it in Settings → \
-         Providers (see llm-setup)."
+        "hint: provider protocol must be `anthropic`, `openai`, or `openai_responses` — \
+         fix it in Settings → Providers (see llm-setup)."
     } else if error.contains("HTTP 401") || error.contains("HTTP 403") {
         "hint (auth): API key invalid or missing — update the key in Settings → Providers \
          (never paste keys into this chat)."
@@ -324,7 +328,10 @@ mod tests {
         assert!(!is_err, "connectivity-class result is data: {out}");
         assert!(out.contains("FAILED"), "{out}");
         assert!(out.contains("unsupported protocol: grpc"), "{out}");
-        assert!(out.contains("anthropic` or `openai`"), "{out}");
+        assert!(
+            out.contains("`anthropic`, `openai`, or `openai_responses`"),
+            "{out}"
+        );
     }
 
     #[test]

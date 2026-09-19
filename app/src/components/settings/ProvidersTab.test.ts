@@ -109,3 +109,52 @@ describe("ProvidersTab — default model disable guard", () => {
     expect(btn.attributes("title")).toContain("启用");
   });
 });
+
+// Task 09-18 (openai_responses): 第三协议的下拉项与徽标色。
+describe("ProvidersTab — openai_responses protocol", () => {
+  let pinia: Pinia;
+
+  beforeEach(() => {
+    pinia = createPinia();
+    setActivePinia(pinia);
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue([]);
+  });
+
+  it("renders the responses badge class for openai_responses providers", async () => {
+    const { providersStore } = seed(pinia);
+    providersStore.providers.push(
+      makeProvider({ id: "p-3", displayName: "Resp", protocol: "openai_responses" }),
+    );
+    const wrapper = mount(ProvidersTab, { global: { plugins: [pinia] } });
+    await flushPromises();
+    const badge = wrapper
+      .findAll(".providers-tab__badge")
+      .find((b) => b.text() === "openai_responses");
+    expect(badge).toBeDefined();
+    expect(badge!.classes()).toContain("providers-tab__badge--responses");
+    wrapper.unmount();
+  });
+
+  it("offers 'OpenAI Responses' as the third protocol option", async () => {
+    seed(pinia);
+    const wrapper = mount(ProvidersTab, { global: { plugins: [pinia] } });
+    await flushPromises();
+    await wrapper.find(".providers-tab__btn--primary").trigger("click");
+    await flushPromises();
+    // jsdom 无 Pointer Capture,键盘 Enter ∈ reka OPEN_KEYS 打开下拉;
+    // SelectContent teleport 到 document.body(先例:ScheduledTasksTab)。
+    await wrapper.find('[aria-label="Protocol"]').trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(options).toEqual([
+      "Anthropic (Messages API)",
+      "OpenAI (Chat Completions)",
+      "OpenAI Responses",
+    ]);
+    // 卸载清掉 teleport 到 body 的弹层,避免污染后续用例的 DOM 查询。
+    wrapper.unmount();
+  });
+});

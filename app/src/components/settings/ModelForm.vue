@@ -6,7 +6,9 @@
 //   - modelName (native <input>, wrapped in reka-ui Label)
 //   - displayName (native <input>, wrapped in reka-ui Label)
 //   - maxTokens (optional, native <input>)
-//   - thinkingEffort (optional, SelectRoot via reka-ui)
+//   - thinkingEffort (optional, SelectRoot via reka-ui; options are
+//     filtered by the selected provider's protocol — task 09-18:
+//     `openai_responses` only offers minimal|low|medium|high)
 //   - supportsThinking (CheckboxRoot via reka-ui)
 //   - supportsImages (CheckboxRoot via reka-ui — B1 R1 vision flag)
 //   - contextWindow (native <input type="number">)
@@ -28,6 +30,7 @@
 // See `.trellis/spec/frontend/reka-ui-usage.md` for the full
 // explanation.
 
+import { computed } from "vue";
 import {
   SelectRoot,
   SelectTrigger,
@@ -59,7 +62,7 @@ export interface ModelFormState {
   contextWindow: number;
 }
 
-defineProps<{
+const props = defineProps<{
     /** Drives the form title ("Add Model" vs "Edit Model"). */
     mode: "add" | "edit";
     /** Reactive form state. The parent owns the actual `reactive`
@@ -81,6 +84,55 @@ const emit = defineEmits<{
      *  back to idle. */
     cancel: [];
 }>();
+
+// --- Thinking-effort options, filtered by provider protocol (task
+// 09-18) ---------------------------------------------------------------
+
+/** Protocol of the provider currently selected in the form.
+ *  `undefined` when nothing is selected yet (treated as the
+ *  unfiltered default list). */
+const selectedProtocol = computed<string | undefined>(
+    () => props.providers.find((p) => p.id === props.form.providerId)?.protocol,
+);
+
+interface EffortOption {
+    value: string;
+    label: string;
+}
+
+const NONE_OPTION: EffortOption = { value: "none", label: "(default: high)" };
+
+/** `openai_responses` wire vocabulary — the Responses API 400s on
+ *  anything outside minimal|low|medium|high. A pre-existing row with
+ *  Anthropic/DeepSeek vocabulary (`xhigh`/`max`) keeps its value
+ *  selectable, labeled with the adapter's normalization target
+ *  (responses.rs `normalize_responses_effort`: xhigh|max → high). */
+function responsesEffortOptions(current: string): EffortOption[] {
+    const options: EffortOption[] = [
+        { value: "minimal", label: "minimal" },
+        { value: "low", label: "low" },
+        { value: "medium", label: "medium" },
+        { value: "high", label: "high" },
+    ];
+    if (current === "xhigh" || current === "max") {
+        options.push({ value: current, label: `${current}（将按 high 发送）` });
+    }
+    return options;
+}
+
+const effortOptions = computed<EffortOption[]>(() => {
+    if (selectedProtocol.value === "openai_responses") {
+        return [NONE_OPTION, ...responsesEffortOptions(props.form.thinkingEffort)];
+    }
+    return [
+        NONE_OPTION,
+        { value: "low", label: "low" },
+        { value: "medium", label: "medium" },
+        { value: "high", label: "high" },
+        { value: "xhigh", label: "xhigh" },
+        { value: "max", label: "max" },
+    ];
+});
 </script>
 
 <template>
@@ -183,23 +235,13 @@ const emit = defineEmits<{
                             :side-offset="4"
                         >
                             <SelectViewport class="model-form__viewport">
-                                <SelectItem value="none" class="model-form__option">
-                                    <SelectItemText>(default: high)</SelectItemText>
-                                </SelectItem>
-                                <SelectItem value="low" class="model-form__option">
-                                    <SelectItemText>low</SelectItemText>
-                                </SelectItem>
-                                <SelectItem value="medium" class="model-form__option">
-                                    <SelectItemText>medium</SelectItemText>
-                                </SelectItem>
-                                <SelectItem value="high" class="model-form__option">
-                                    <SelectItemText>high</SelectItemText>
-                                </SelectItem>
-                                <SelectItem value="xhigh" class="model-form__option">
-                                    <SelectItemText>xhigh</SelectItemText>
-                                </SelectItem>
-                                <SelectItem value="max" class="model-form__option">
-                                    <SelectItemText>max</SelectItemText>
+                                <SelectItem
+                                    v-for="opt in effortOptions"
+                                    :key="opt.value"
+                                    :value="opt.value"
+                                    class="model-form__option"
+                                >
+                                    <SelectItemText>{{ opt.label }}</SelectItemText>
                                 </SelectItem>
                             </SelectViewport>
                         </SelectContent>

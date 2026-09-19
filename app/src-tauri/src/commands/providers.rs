@@ -542,6 +542,63 @@ pub async fn test_model_inner(
                 )
             }
         }
+        "openai_responses" => {
+            // Third protocol (task 09-18-openai-responses-provider).
+            // Same base_url convention as `openai` (base includes /v1);
+            // only `/responses` is appended — never re-add the version
+            // prefix (06-09 /v1/v1 fix).
+            let url = format!("{}/responses", provider.base_url.trim_end_matches('/'));
+            // Non-streaming minimal probe: `store: false` (stateless) and
+            // NO `stream` field. `max_output_tokens: 16` (not 1 — on
+            // reasoning models Responses counts reasoning tokens against
+            // this cap, so 1 would 400 on the official API).
+            let body = serde_json::json!({
+                "model": model.model_name,
+                "input": "Reply with exactly: ok",
+                "max_output_tokens": 16,
+                "store": false
+            });
+            let resp = match client
+                .post(&url)
+                .header("authorization", format!("Bearer {}", provider.api_key))
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "latencyMs": latency_ms,
+                        "error": format!("request failed: {}", e),
+                    }));
+                }
+            };
+
+            // Success criterion is the same bare-2xx as the
+            // anthropic/openai branches — the response body is NOT
+            // parsed. Parsing output text would false-negative on
+            // reasoning models (the 16-token budget can be consumed by
+            // reasoning alone, review.md correction 4).
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                let mut error = format!(
+                    "HTTP {}: {}",
+                    status,
+                    body_text.chars().take(200).collect::<String>()
+                );
+                if let Some(hint) = responses_probe_hint(status.as_u16(), &body_text) {
+                    error.push('\n');
+                    error.push_str(&hint);
+                }
+                (false, Some(error))
+            }
+        }
         _ => (
             false,
             Some(format!("unsupported protocol: {}", provider.protocol)),
@@ -554,6 +611,34 @@ pub async fn test_model_inner(
         "latencyMs": latency_ms,
         "error": error,
     }))
+}
+
+/// Protocol-specific fix hint for the `openai_responses` probe failure
+/// path. Appended to the `error` string, which both consumers surface
+/// verbatim (ModelsTab test row / `test_llm_connection` tool text).
+/// 401/403 need no entry here — the generic auth hint in
+/// `tools/test_llm_connection.rs::fix_hint` already covers them.
+fn responses_probe_hint(status: u16, body: &str) -> Option<String> {
+    match status {
+        // Typical cause: the gateway has no /responses route at all
+        // (vLLM/LiteLLM builds without Responses support). A base_url
+        // missing /v1 also lands here; the generic /v1 hint in
+        // `fix_hint` covers that side.
+        404 => Some(
+            "hint: this endpoint does not implement /responses — confirm the gateway \
+             supports the OpenAI Responses API (official OpenAI, vLLM, LiteLLM, etc.)"
+                .to_string(),
+        ),
+        // Defensive: the probe itself sends no `reasoning` object, but a
+        // gateway may echo the model's configured effort in a 400 body.
+        400 if body.to_lowercase().contains("effort") => Some(
+            "hint: the Responses API only accepts reasoning effort values \
+             minimal|low|medium|high — fix the model's thinking_effort in Settings → \
+             Models (xhigh/max are not valid on this protocol)"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 #[tauri::command]

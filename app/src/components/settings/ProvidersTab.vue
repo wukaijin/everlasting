@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // ProvidersTab — CRUD for LLM providers. Each provider has a protocol
-// (anthropic/openai), display name, base URL, and API key.
+// (anthropic/openai/openai_responses), display name, base URL, and API key.
 //
 // PR5 follow-up: the Test button that previously lived here has
 // been removed. The user-perceived "Test" flow now lives on the
@@ -200,9 +200,15 @@ function keyStatusLabel(hasKey: boolean): string {
 
 /** Protocol badge color. */
 function protocolBadgeClass(protocol: string): string {
-  return protocol === "openai"
-    ? "providers-tab__badge--openai"
-    : "providers-tab__badge--anthropic";
+  if (protocol === "openai") {
+    return "providers-tab__badge--openai";
+  }
+  // Task 09-18: third protocol — violet (the thinking-block hue),
+  // distinct from anthropic's accent blue and openai's green.
+  if (protocol === "openai_responses") {
+    return "providers-tab__badge--responses";
+  }
+  return "providers-tab__badge--anthropic";
 }
 </script>
 
@@ -328,6 +334,9 @@ function protocolBadgeClass(protocol: string): string {
                 </SelectItem>
                 <SelectItem value="openai" class="providers-tab__option">
                   <SelectItemText>OpenAI (Chat Completions)</SelectItemText>
+                </SelectItem>
+                <SelectItem value="openai_responses" class="providers-tab__option">
+                  <SelectItemText>OpenAI Responses</SelectItemText>
                 </SelectItem>
               </SelectViewport>
             </SelectContent>
@@ -491,6 +500,14 @@ function protocolBadgeClass(protocol: string): string {
 .providers-tab__badge--openai {
   background: #1a3a2a;
   color: #10b981;
+}
+
+/* Task 09-18 (openai_responses): 复用 thinking 块的 violet token
+   (color-mix 是既有模式,见 style.css 错误底色),与 anthropic 蓝 /
+   openai 绿形成第三色相。 */
+.providers-tab__badge--responses {
+  background: color-mix(in srgb, var(--color-tool-thinking) 18%, transparent);
+  color: var(--color-tool-thinking);
 }
 
 /* 2026-09-07 (provider-model-disable): 禁用徽标(muted 色相,区别于
