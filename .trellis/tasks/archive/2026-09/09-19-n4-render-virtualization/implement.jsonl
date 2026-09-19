@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest jsdom 与 e2e 分层边界(§8 mock 契约),测试策略分层依据"}
+{"file": ".trellis/spec/frontend/browser-regression.md", "reason": "Playwright 流水线规则(route-mock 驱动、CI 确定性门),新增虚拟化专项 spec 要守的规则"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 响应式边界(delta 原位 mutate 与 computed 依赖面)"}
+{"file": ".trellis/tasks/09-19-n4-render-virtualization/research/tanstack-virtual-capability.md", "reason": "库 API 能力矩阵与锚定映射依据(设计 D 决策的证据面)"}
+{"file": ".trellis/tasks/09-19-n4-render-virtualization/research/render-pipeline-facts.md", "reason": "现有渲染链/滚动机制清单/瓶颈归因(迁移表左列的事实源)"}
+{"file": ".trellis/spec/backend/perf-baseline.md", "reason": "F1 复跑纪律与 AC1 达标线口径(§3/§6)"}
+{"file": ".trellis/spec/frontend/chat/message-list-and-markdown.md", "reason": "MessageList 渲染链现有规范(分组/markdown/滚动注释的权威描述)"}

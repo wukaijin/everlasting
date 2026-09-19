@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量检查清单"}
+{"file": ".trellis/spec/frontend/browser-regression.md", "reason": "e2e 用例确定性门禁规则(检查新增 spec 是否合规)"}
+{"file": ".trellis/spec/backend/perf-baseline.md", "reason": "F1 复跑对比与基线更新纪律(check 阶段必跑项)"}
+{"file": ".trellis/tasks/09-19-n4-render-virtualization/research/tanstack-virtual-capability.md", "reason": "验收时对照能力矩阵核对库 API 用法"}
+{"file": ".trellis/spec/frontend/chat/message-list-and-markdown.md", "reason": "对照检查渲染链改动是否守既有契约"}
