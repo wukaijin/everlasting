@@ -59,6 +59,14 @@ export const COMMAND_FLAG_SPEC = {
   usage: {
     provider: { kind: 'value', dest: 'provider' },
   },
+  discuss: {
+    preset: { kind: 'value', dest: 'preset' },
+    cwd: { kind: 'value', dest: 'cwd' },
+    'token-budget': { kind: 'value', dest: 'tokenBudget' },
+    roster: { kind: 'value', dest: 'roster' },
+    wait: { kind: 'value', dest: 'wait' },
+    detail: { kind: 'bool', dest: 'detail' },
+  },
 };
 
 export const COMMANDS = Object.keys(COMMAND_FLAG_SPEC);
@@ -153,6 +161,9 @@ export function parseCli(argv, spec = { global: GLOBAL_FLAG_SPEC, commands: COMM
     throw new UsageError(`--output 非法值:${flags.output}(合法:text | json)`);
   }
   flags.timeout = parseTimeout(flags.timeout);
+  flags.tokenBudget = parseTokenBudget(flags.tokenBudget);
+  flags.roster = parseRoster(flags.roster);
+  flags.wait = parseWait(flags.wait);
 
   return { command, positionals, flags };
 }
@@ -169,6 +180,55 @@ export function parseTimeout(raw) {
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) {
     throw new UsageError(`--timeout 非法值:${raw}(需要正整数秒,默认 ${DEFAULT_TIMEOUT_S})`);
+  }
+  return n;
+}
+
+/** discuss `--wait` 外层窗口上限(秒;与全链 --timeout 默认同源,design §8
+ * 入口窗口不变量:每条 evl 阻塞调用 ≤ 宿主窗口)。 */
+export const DISCUSS_WAIT_MAX_S = 540;
+
+/** --token-budget:正整数 → number。预算帽是防失控保险丝而非省钱手段,
+ * 不限请省略(daemon 同校验;CLI 64 早失败优于 1 晚失败)。 */
+export function parseTokenBudget(raw) {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new UsageError(
+      `--token-budget 非法值:${raw}(需要正整数;预算帽是防失控保险丝而非省钱手段,不限请省略)`
+    );
+  }
+  return n;
+}
+
+/** --roster:只拦 JSON 语法(须数组);name/model 语义校验在 daemon——
+ * 与 preset 合并语义耦合,CLI 复制必漂移(design §8)。返回解析后的数组。 */
+export function parseRoster(raw) {
+  if (raw === undefined) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new UsageError(
+      `--roster 非法 JSON:${e.message}(需要 [{name, model, persona_md?}] 数组)`
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new UsageError(
+      `--roster 需要 JSON 数组([{name, model, persona_md?}]),实得 ${typeof parsed}`
+    );
+  }
+  return parsed;
+}
+
+/** --wait:整数 1..540 → number(status 动词外层等待窗口;越界 64)。 */
+export function parseWait(raw) {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > DISCUSS_WAIT_MAX_S) {
+    throw new UsageError(
+      `--wait 非法值:${raw}(需要 1..${DISCUSS_WAIT_MAX_S} 的整数秒;不等请省略)`
+    );
   }
   return n;
 }

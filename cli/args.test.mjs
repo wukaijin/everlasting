@@ -7,8 +7,12 @@ import {
   validateMode,
   defaultModeFor,
   parseTimeout,
+  parseTokenBudget,
+  parseRoster,
+  parseWait,
   DEFAULT_TIMEOUT_S,
   DEFAULT_BASE,
+  DISCUSS_WAIT_MAX_S,
   UsageError,
   COMMANDS,
 } from './lib/args.mjs';
@@ -145,6 +149,80 @@ test('defaultModeFor: TTY=edit,非 TTY=plan(fail-closed)', () => {
   assert.equal(defaultModeFor(false), 'plan');
 });
 
-test('COMMANDS: 六命令在册', () => {
-  assert.deepEqual(COMMANDS.sort(), ['chat', 'models', 'projects', 'sessions', 'status', 'usage']);
+test('COMMANDS: 七命令在册', () => {
+  assert.deepEqual(COMMANDS.sort(), ['chat', 'discuss', 'models', 'projects', 'sessions', 'status', 'usage']);
+});
+
+test('parseCli: discuss 专属 flags(value + bool)合法', () => {
+  const p = parseCli([
+    'discuss', 't', '--preset', 'arch', '--cwd', '/x',
+    '--token-budget', '100',
+    '--roster', '[{"name":"a","model":"m"}]',
+    '--wait', '30', '--detail',
+  ]);
+  assert.equal(p.flags.preset, 'arch');
+  assert.equal(p.flags.cwd, '/x');
+  assert.equal(p.flags.tokenBudget, 100); // 横切校验后已是 number
+  assert.deepEqual(p.flags.roster, [{ name: 'a', model: 'm' }]); // 已是解析后的数组
+  assert.equal(p.flags.wait, 30);
+  assert.equal(p.flags.detail, true);
+});
+
+test('parseCli: --token-budget 0/abc/-5/1.5 → 64(文案带保险丝语义)', () => {
+  for (const bad of ['0', 'abc', '-5', '1.5']) {
+    const e = usageErr(() => parseCli(['discuss', 't', '--token-budget', bad]));
+    assert.match(e.message, /正整数/);
+    assert.match(e.message, /保险丝/);
+  }
+});
+
+test('parseCli: --roster 语法错 / 非 JSON 数组 → 64(语义错留给 daemon)', () => {
+  usageErr(() => parseCli(['discuss', 't', '--roster', 'not json']));
+  usageErr(() => parseCli(['discuss', 't', '--roster', '"just a string"']));
+  usageErr(() => parseCli(['discuss', 't', '--roster', '{"name":"a"}']));
+  // 数组内元素缺 name/model 不拦(daemon 与 preset 合并语义耦合)
+  assert.deepEqual(parseCli(['discuss', 't', '--roster', '[{}]']).flags.roster, [{}]);
+});
+
+test('parseCli: --wait 越界(0 / 541 / abc / 1.5)→ 64;边界 1 与 540 合法', () => {
+  usageErr(() => parseCli(['discuss', 'status', 's', '--wait', '0']));
+  usageErr(() => parseCli(['discuss', 'status', 's', '--wait', String(DISCUSS_WAIT_MAX_S + 1)]));
+  usageErr(() => parseCli(['discuss', 'status', 's', '--wait', 'abc']));
+  usageErr(() => parseCli(['discuss', 'status', 's', '--wait', '1.5']));
+  assert.equal(parseCli(['discuss', 'status', 's', '--wait', '1']).flags.wait, 1);
+  assert.equal(parseCli(['discuss', 'status', 's', '--wait', '540']).flags.wait, 540);
+});
+
+test('parseCli: discuss 专属 flag 越用到别的命令 → 64(严出惯例)', () => {
+  usageErr(() => parseCli(['status', '--preset', 'arch']));
+  usageErr(() => parseCli(['chat', 'hi', '--wait', '5']));
+  usageErr(() => parseCli(['sessions', '--roster', '[]']));
+});
+
+test('parseCli: discuss -- 终止符 — 动词名开头的议题不被动词分发吞(AC8)', () => {
+  const p = parseCli(['discuss', '--', 'status 这个词当议题']);
+  assert.deepEqual(p.positionals, ['status 这个词当议题']);
+  const p2 = parseCli(['discuss', '--', 'status']);
+  assert.deepEqual(p2.positionals, ['status']); // 调用方语义:与动词同形,见 discuss.test
+});
+
+test('parseTokenBudget: undefined 透传;合法值转 number', () => {
+  assert.equal(parseTokenBudget(undefined), undefined);
+  assert.equal(parseTokenBudget('7'), 7);
+  assert.equal(parseTokenBudget(42), 42);
+  usageErr(() => parseTokenBudget('0'));
+});
+
+test('parseRoster: undefined 透传;JSON 数组解析;其余 64', () => {
+  assert.equal(parseRoster(undefined), undefined);
+  assert.deepEqual(parseRoster('[{"name":"a","model":"m"}]'), [{ name: 'a', model: 'm' }]);
+  usageErr(() => parseRoster('{'));
+  usageErr(() => parseRoster('3'));
+});
+
+test('parseWait: undefined 透传;1..540 合法;越界 64', () => {
+  assert.equal(parseWait(undefined), undefined);
+  assert.equal(parseWait('25'), 25);
+  usageErr(() => parseWait('0'));
+  usageErr(() => parseWait('541'));
 });

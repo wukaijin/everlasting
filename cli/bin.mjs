@@ -1,31 +1,36 @@
 #!/usr/bin/env node
 // evl — Everlasting daemon CLI(daemon HTTP API 薄壳;零运行时依赖,Node ≥20)。
 //
-// 设计/契约:.trellis/tasks/09-19-everlasting-cli/{prd,design}.md
+// 设计/契约:.trellis/tasks/09-19-everlasting-cli/{prd,design}.md(一期 chat 面)、
+// .trellis/tasks/09-19-evl-discuss/{prd,design}.md(二期 discuss + 无参 help)。
 // - stdout 只出数据(text 或单行 JSON);session id/工具行/权限交互/verbose 全 stderr。
-// - 退出码:0 done / 1 脚本错 / 2 chat kind=error / 3 SIGINT cancelled /
-//   7 timeout / 64 用法错。
-// - LLM 委派方一律 `evl chat "<任务>" --output json`。
+// - 退出码:0 done / 1 脚本错 / 2 chat kind=error、discuss 异常收场族 /
+//   3 SIGINT cancelled / 6 discuss budget / 7 timeout / 64 用法错。
+//   7 反义:chat 已发 cancel;discuss 未 cancel(讨论仍在跑,勿重跑)。
+// - LLM 委派方一律 `evl chat "<任务>" --output json` / `evl discuss "<议题>" --output json`。
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
 // package.json 用 fs 读而非 `import ... with { type: 'json' }`:import
 // attributes 的 `with` 语法 Node 20.10 才稳定,engines 承诺 >=20。
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 import { parseCli, resolveBaseUrl, UsageError, COMMANDS } from './lib/args.mjs';
-import { EXIT } from './lib/api.mjs';
+import { api, EXIT } from './lib/api.mjs';
 import { runStatus } from './lib/commands/status.mjs';
 import { runSessions, runProjects, runModels, runUsage } from './lib/commands/list.mjs';
 import { runChat } from './lib/chat.mjs';
+import { runDiscuss } from './lib/discuss.mjs';
 
 const HELP_TOP = `evl — Everlasting daemon CLI(daemon HTTP API 薄壳;零运行时依赖)
 
 用法:
   evl <command> [flags]
   evl <command> --help
+  evl(无参)= 本帮助 + daemon 健康行
 
 命令:
   status     daemon health + 版本
   chat       委派一轮 agent loop(LLM 委派主入口,配 --output json)
+  discuss    群聊审议(建群/观察/收结果;MCP 薄壳,一场 5-15min 烧真 token)
   sessions   列出 session(id/busy/stop_reason;默认跨全部 project,--project 收窄)
   projects   列出 project(含隐藏)
   models     列出 model(标注默认;模型引用只认 UUID)
@@ -36,7 +41,7 @@ const HELP_TOP = `evl — Everlasting daemon CLI(daemon HTTP API 薄壳;零运�
   --output text|json    输出格式;json = 单行 JSON(stdout 只出数据,人向信息在 stderr)
   --quiet               抑制 stderr 人向提示(错误仍出)
   --verbose             stderr 打 HTTP 请求/响应摘要与 SSE 事件名(调试)
-  --timeout <s>         chat 等终态超时秒数(默认 540;不变量:宿主 bash 超时 ≥ --timeout + 60)
+  --timeout <s>         chat/discuss 等终态超时秒数(默认 540;不变量:宿主 bash 超时 ≥ --timeout + 60)
   --no-color            预留(当前输出无色)
   --non-interactive     强制非交互语义(等价非 TTY:静默 + ask 自动 deny + 默认 mode=plan)
   -h, --help            用法;--version 版本
@@ -48,13 +53,25 @@ chat 专属 flags:
   --model <id>          新建 session 指定 model(UUID;续聊忽略)
   --project <path>      project 解析覆盖(默认按 CWD 匹配,无则创建)
 
+discuss 专属 flags(详见 evl discuss --help):
+  --preset <key|uuid|name>  预设(缺省 review;evl discuss presets 查目录)
+  --cwd <path>              讨论证据基地(默认当前目录)
+  --token-budget <n>        正整数;预算帽是防失控保险丝而非省钱手段,不限请省略
+  --roster '<json>'         participants 整名单([{name, model}];语法错退 64,语义错 daemon 判)
+  --wait <s>                status 动词外层等待窗口 1..540
+  --detail                  status 单次快照带进度字段
+
 退出码:
-  0 done | 1 脚本错(网络/不可达/SSE 流断) | 2 chat kind=error
-  3 SIGINT cancelled(cancel_chat 已发,session 保留) | 7 timeout(已发 cancel) | 64 用法错误
+  0 done | 1 脚本错(网络/不可达/SSE 流断;discuss 另含 interrupted/表外 stop_reason)
+  2 chat kind=error | discuss 异常收场(error 族) | 3 SIGINT cancelled(session 保留)
+  6 discuss budget(预算帽到顶) | 7 timeout | 64 用法错误
+  7 注意反义:chat 已发 cancel;discuss **未 cancel,讨论仍在跑,勿重跑**(续窗见 evl discuss --help)
 
 LLM 调用方速记:
   evl chat "<任务>" --output json   # stdout 单行 JSON 终态,退出码判定成败
   非交互默认 --mode plan(只读);写任务显式 --mode edit(ask 全拒继续)或 --mode yolo(自动批)
+  evl discuss "<议题>" --output json  # 一场 5-15min 烧真 token;退 7 = 仍在跑,勿重跑,
+  续窗 evl discuss status <sid> --wait 540 后 evl discuss result <sid>
 
 示例:
   evl status
@@ -110,6 +127,66 @@ SIGINT: 首次 cancel_chat 并等取消终态(退出 3,session 保留);二次立
   evl chat "继续" --session <id>
   evl chat "改一下 README 标题" --mode yolo          # 自动批写操作
 `,
+  discuss: `evl discuss — 群聊审议(MCP 薄壳:调 daemon POST /mcp,编排单源在 daemon)
+
+⚠ 成本:一场 5-15min、多模型烧真 token;--token-budget 是防失控保险丝而非
+  省钱手段,不限请省略。
+
+用法:
+  evl discuss "<topic>" [flags]        全链:建群 → 轮询 → 收结果(LLM 主入口)
+  evl discuss start "<topic>" [flags]  只建群不等待(stdout 出 session_id/request_id)
+  evl discuss status <sid> [--wait <s>] [--detail]
+                                       快照;--wait 1..540 外层窗口(内部 ≤25s 长轮询,
+                                       变化即返;已终态秒返;wait 隐含 detail);取到恒退 0
+  evl discuss result <sid>             终态结论(运行中 → 语义错退 1,先 status;成功恒退 0)
+  evl discuss cancel <sid>             停编排(session 保留;幂等,已收官报 already_finished)
+  evl discuss interrupt <sid>          收束打断(preempt:让主持人现在收尾,summary 落库)
+  evl discuss inject <sid> "<text>"    注入用户消息(只对进行中的讨论有效)
+  evl discuss presets                  合并预设目录(内置四档 + 用户档 + 覆盖标记)
+
+flags:
+  --preset <key|uuid|name>   预设(缺省 review;引用三趟:内置 key/行 UUID/行名称)
+  --cwd <path>               讨论证据基地(默认当前目录)
+  --token-budget <n>         正整数;预算帽=保险丝非省钱,不限请省略
+  --roster '<json>'          participants 整名单([{name, model, persona_md?}]);
+                             JSON 语法错=64,name/model 语义错=daemon 判退 1
+  --wait <s>                 status 外层窗口 1..540(越界 64)
+  --detail                   status 单次快照带进度字段
+  议题以动词名开头时用 -- 终止符:evl discuss -- "status 这个词当议题"
+
+超时(--timeout,默认 540s):到点【不 cancel】——超时是调用方窗口的正常交接
+而非故障,讨论在 daemon 侧继续跑。退出 7,json 载荷
+{session_id, stop_reason:null, error:'timeout', recovery:"evl discuss status <sid> --wait 540"}。
+【讨论仍在跑,勿重跑】——重跑会双花 token。超长场次:显式给 --timeout
+(宿主 bash 超时须 ≥ 值 + 60),或走 start + status --wait 续窗两段式。
+
+SIGINT:首次 cancel_discussion 并退 3(session 保留,可 status 续观察);二次硬退。
+恢复文案区分:preempted = interrupt 收束完成(summary 已落库,直接读 result);
+cancelled = 硬停(编排停在当轮,无收束轮,result 可读但 summary 可缺)。
+
+退出码(全链按 stop_reason 开放集映射;status/result/presets 等动词取数成功恒 0):
+  0  group_chat_end / max_rounds(text 末行带 stop_reason 标记,轮帽截断可分辨)/
+     cancelled / preempted;动词取数成功
+  1  不可达/协议错/工具语义错;interrupted(崩溃恢复可续跑态);表外未知
+     stop_reason(stderr 回显原值)
+  2  error / nominee_unknown / participant_unresolved(异常收场族)
+  3  SIGINT(cancel_discussion 已发,session 保留)
+  6  budget(预算帽到顶;无收束轮,summary 可缺)
+  7  --timeout 到点(不 cancel,讨论仍在跑,勿重跑)
+  64 用法错(token-budget/roster/wait 校验、缺参)
+
+输出(stdout 只出数据;session id/进度行全 stderr):
+  text  全链 = summary + roster/stats/tokens + transcript 落点 + 末行 stop_reason 标记
+  json  全链 = {session_id, ...result 载荷} 单行
+  转录自动落 {app_data_dir}/discussions/{date}-{slug}-{sid8}.md(终态首次观测时)
+
+示例:
+  evl discuss presets --output json | jq '.presets[].key'
+  evl discuss "评审这个设计的取舍" --output json
+  evl discuss start "长议题" --output json          # 两段式:先建群
+  evl discuss status <sid> --wait 540               # 续窗观察(变化即返)
+  evl discuss result <sid> --output json | jq .summary
+`,
   sessions: `evl sessions — 列出 session(id/标题/时间/busy/stop_reason)
 
 默认:遍历全部 project 合并(list_sessions 必填 project_id,纯运输层聚合),
@@ -160,25 +237,40 @@ function printHelp(command) {
   process.stdout.write(HELP[command] ?? HELP_TOP);
 }
 
+/** daemon 健康行(顶层 help 尾部;design §5)。探测恒 1.5s 上界;catch-all:
+ * 探测失败就是 unreachable 文案——恒不抛、恒不改退出码(help 恒 0)。 */
+async function healthLine(base) {
+  try {
+    const h = await api(base, 'health', { method: 'GET', timeoutMs: 1500 });
+    return `daemon: running ${h?.daemonVersion ?? '?'}(uptime ${h?.uptimeSeconds ?? '?'}s)@ ${base}\n`;
+  } catch {
+    return `daemon: unreachable — 先拉起:./scripts/daemon.sh bg(${base})\n`;
+  }
+}
+
 async function main(argv) {
   const parsed = parseCli(argv);
   const { command, positionals, flags } = parsed;
+  const base = resolveBaseUrl(flags.baseUrl, process.env.EVERLASTING_BASE);
 
   if (flags.version) {
     process.stdout.write(`${pkg.name} ${pkg.version}\n`);
     return EXIT.ok;
   }
   if (flags.help) {
+    // 顶层 help 与裸跑同路径(尾部带健康行);子命令 help 纯离线文档,不探测
     printHelp(command);
+    if (command == null) process.stdout.write(await healthLine(base));
     return EXIT.ok;
   }
   if (command == null) {
-    // 缺参:usage 打 stderr + 64(design §6)
-    process.stderr.write(HELP_TOP);
-    throw new UsageError('缺少命令');
+    // 无参:默认 help(stdout)+ daemon 健康行,恒 0(design §5;替原 stderr+64,
+    // "help 恒离线恒快"两不变量改为:退出码恒 0 + 子命令文档零网络)
+    printHelp(null);
+    process.stdout.write(await healthLine(base));
+    return EXIT.ok;
   }
 
-  const base = resolveBaseUrl(flags.baseUrl, process.env.EVERLASTING_BASE);
   const io = { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin };
 
   switch (command) {
@@ -199,6 +291,8 @@ async function main(argv) {
       }
       return runChat({ base, flags, message, io });
     }
+    case 'discuss':
+      return runDiscuss({ base, flags, positionals, io });
     default:
       throw new UsageError(`未知命令: ${command}(可用:${COMMANDS.join(' | ')})`);
   }
