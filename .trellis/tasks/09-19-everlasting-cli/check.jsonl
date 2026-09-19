@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/scripts/index.md", "reason": "检查 CLI 是否守 node 工具纪律:node --test 单测、零运行时依赖、不 vitest"}
+{"file": ".trellis/tasks/09-19-everlasting-cli/research/daemon-api-wire-notes.md", "reason": "对照检查 CLI 消费的端点/body/事件语义与契约一致(含 permission:ask camelCase 特例)"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/scripts/index.md", "reason": "node 工具脚本纪律:node 直跑零构建、单测走 node --test、依赖只进本目录 package.json——cli/ 沿用同款约定"}
+{"file": ".trellis/tasks/09-19-everlasting-cli/research/daemon-api-wire-notes.md", "reason": "CLI 消费面的 daemon wire 契约速查(端点表/SSE 事件面/permission camelCase 特例/单条 wire 续聊语义),全文 DAEMON-API.md 超注入上限以此替代"}
