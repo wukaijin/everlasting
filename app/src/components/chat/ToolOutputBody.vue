@@ -28,6 +28,12 @@
 //     drop the binding.
 //   - isError adds red-tinted pre border
 //
+// 09-19 (task `09-19-tool-card-compact-read`): optional
+// `collapsible` prop (default true). `false` renders the bare
+// `<pre>` only — the read-family compact card owns the expand
+// action on its header row, so a nested `<details>` would cost a
+// second click. Same pre, same pipeline, no second copy of the CSS.
+//
 // 09-13 路径 linkify(2026-09-13):`<pre>` 从文本插值改为
 // `linkifyPlainText(truncated)` 的 v-html —— 转义 → 本地路径(图片+文件)
 // 插锚 → DOMPurify 三层防线(见 utils/markdown.ts 的函数注释),根上绑
@@ -43,10 +49,19 @@ import { extractToolResultDisplay, truncateOutput } from "../../utils/messageFor
 import { linkifyPlainText } from "../../utils/markdown";
 import { useCodeBlockCopy } from "../../composables/useCodeBlockCopy";
 
-const props = defineProps<{
-  content: string;
-  isError: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    content: string;
+    isError: boolean;
+    /** 09-19-tool-card-compact-read:`false` = 只渲染 `<pre>` 本体,不包
+     *  `<details>`/`summary` 折叠壳。给 read 族紧凑卡用 —— 那张卡的展开
+     *  动作由外层行(`.rocard__row`)承担,再套一层 summary 会变成「点两次
+     *  才看到输出」。默认 `true` 保持既有三个调用方(主面板 ToolCallCard /
+     *  ShellCard / 抽屉 DrawerToolCallCard)0 变化。 */
+    collapsible?: boolean;
+  }>(),
+  { collapsible: true },
+);
 
 // v-html 容器的统一委托层(锚点点击 + 无锚点落点静默)。
 const { onMarkdownClick } = useCodeBlockCopy();
@@ -82,8 +97,14 @@ const sizeLabel = computed<string>(() => {
 </script>
 
 <template>
-  <details class="tool-output-body" :class="{ 'tool-output-body--error': isError }">
-    <summary>
+  <!-- collapsible=false 时根元素是 <div>:同样的 pre 本体,共享同一份
+       scoped 样式与「解 envelope → 截断 → linkify → 点击委托」链路。 -->
+  <component
+    :is="collapsible ? 'details' : 'div'"
+    class="tool-output-body"
+    :class="{ 'tool-output-body--error': isError, 'tool-output-body--bare': !collapsible }"
+  >
+    <summary v-if="collapsible">
       output · {{ sizeLabel }}
     </summary>
     <pre
@@ -92,12 +113,18 @@ const sizeLabel = computed<string>(() => {
       @click="onMarkdownClick"
       v-html="html"
     ></pre>
-  </details>
+  </component>
 </template>
 
 <style scoped>
 .tool-output-body {
   margin-top: 6px;
+}
+
+/* 裸输出(紧凑卡的展开区):容器已由卡片的 `.rocard__body` 提供间距,
+   这里不再自带上边距,避免双份 6px。 */
+.tool-output-body--bare {
+  margin-top: 0;
 }
 
 .tool-output-body summary {

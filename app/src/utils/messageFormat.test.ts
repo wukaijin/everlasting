@@ -14,7 +14,9 @@ import {
   extractToolResultDisplay,
   isRealUserTurnStart,
   isShellFamilyTool,
+  toolAccentVar,
   toolHeaderChip,
+  toolIcon,
 } from "./messageFormat";
 
 describe("extractToolResultDisplay", () => {
@@ -211,5 +213,36 @@ describe("toolHeaderChip (priority matrix)", () => {
   it("safe on undefined / malformed input", () => {
     expect(toolHeaderChip("shell", undefined)).toBeNull();
     expect(toolHeaderChip("read_file", undefined)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 09-19 (task `09-19-tool-card-compact-read`): read 族(glob / list_dir /
+// read_file)统一 accent 与专属 icon。此前 glob / list_dir 吃 toolAccentVar
+// 的 muted 兜底 + toolIcon 的扳手兜底 —— 在一排 tool 卡里读起来像"未知
+// 工具",而它们和 read_file 是同一族的只读检视。
+// ---------------------------------------------------------------------------
+describe("toolAccentVar / toolIcon — read 族(2026-09-19)", () => {
+  it("glob / list_dir / read_file 同一个 read accent", () => {
+    for (const name of ["glob", "list_dir", "read_file"]) {
+      expect(toolAccentVar(name)).toBe("var(--color-tool-read)");
+    }
+  });
+
+  it("write / shell 家族的 accent 不受影响", () => {
+    expect(toolAccentVar("write_file")).toBe("var(--color-tool-write)");
+    expect(toolAccentVar("edit_file")).toBe("var(--color-tool-write)");
+    expect(toolAccentVar("shell")).toBe("var(--color-tool-shell)");
+    expect(toolAccentVar("grep")).toBe("var(--color-text-muted)");
+  });
+
+  it("glob → 放大镜、list_dir → 文件夹(不再吃扳手兜底)", () => {
+    expect(toolIcon("glob")).toBe("magnifying-glass");
+    expect(toolIcon("list_dir")).toBe("folder");
+    expect(toolIcon("read_file")).toBe("document");
+  });
+
+  it("未知工具仍是扳手兜底", () => {
+    expect(toolIcon("brand_new_tool")).toBe("wrench");
   });
 });

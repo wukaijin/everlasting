@@ -186,7 +186,7 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
     expect(wrapperEl.contains(card.element)).toBe(true);
   });
 
-  it("renders ONLY ToolCallCard for non-ask_user_question tools", async () => {
+  it("renders the per-tool cards for non-ask_user_question tools", async () => {
     const message = makeAssistantMessage([
       {
         id: "tu-shell-1",
@@ -204,9 +204,12 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
     await flushPromises();
 
     // Two tool cards rendered (one per tool_use). shell renders the
-    // dedicated ShellCard (2026-08-30, PRD R3) — count both card roots.
-    const toolCards = wrapper.findAll(".tool-card, .shell-card");
+    // dedicated ShellCard (2026-08-30, PRD R3), read_file the compact
+    // ReadToolCard (09-19, tool-card-compact-read) — count all three
+    // card roots so a silent fallback to the generic card still fails.
+    const toolCards = wrapper.findAll(".tool-card, .shell-card, .rocard");
     expect(toolCards.length).toBe(2);
+    expect(wrapper.findAll(".rocard").length).toBe(1);
     // NO AskUserQuestionCard rendered.
     expect(wrapper.find("[data-testid='ask-card']").exists()).toBe(false);
   });
@@ -242,8 +245,9 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
     const wrapper = mountItem(message, pinia);
     await flushPromises();
 
-    // 3 tool cards rendered (shell → 专属 ShellCard,2026-08-30 R3).
-    expect(wrapper.findAll(".tool-card, .shell-card").length).toBe(3);
+    // 3 tool cards rendered (shell → ShellCard 2026-08-30 R3;
+    // read_file → ReadToolCard 09-19)。
+    expect(wrapper.findAll(".tool-card, .shell-card, .rocard").length).toBe(3);
     // 1 ask card rendered.
     expect(wrapper.findAll("[data-testid='ask-card']").length).toBe(1);
   });

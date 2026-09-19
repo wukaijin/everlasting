@@ -27,7 +27,11 @@ import {
 } from "../../utils/pathExistence";
 
 describe("ToolOutputBody", () => {
-  function mountBody(props: { content: string; isError: boolean }) {
+  function mountBody(props: {
+    content: string;
+    isError: boolean;
+    collapsible?: boolean;
+  }) {
     return mount(ToolOutputBody, { props });
   }
 
@@ -220,6 +224,38 @@ describe("ToolOutputBody", () => {
       await nextTick();
       expect(w.find("a[data-file-path]").exists()).toBe(false);
       expect(w.find(".tool-output-body__pre").text()).toContain("/tmp/late/a.md");
+    });
+  });
+
+// -----------------------------------------------------------------
+  // 09-19 (task `09-19-tool-card-compact-read`): collapsible=false 变体
+  // —— read 族紧凑卡自己承担展开动作,输出只渲染 <pre> 本体(不再套一层
+  // <details>,否则要连点两次)。默认 true 的既有三调用方 0 变化。
+  // -----------------------------------------------------------------
+  describe("collapsible=false (read 族紧凑卡展开区)", () => {
+    it("渲染裸 <pre>,没有 <details>/<summary>", () => {
+      const w = mountBody({ content: "hello", isError: false, collapsible: false });
+      expect(w.find("details").exists()).toBe(false);
+      expect(w.find("summary").exists()).toBe(false);
+      expect(w.get(".tool-output-body__pre").text()).toBe("hello");
+    });
+
+    it("保留 envelope 解包 + 截断 + 错误样式", () => {
+      const w = mountBody({
+        content: JSON.stringify({ result: "x".repeat(900), cwd: "/repo" }),
+        isError: true,
+        collapsible: false,
+      });
+      const pre = w.get(".tool-output-body__pre");
+      expect(pre.text()).not.toContain('{"result"');
+      expect(pre.text()).toContain("more chars");
+      expect(pre.classes()).toContain("tool-output-body__pre--error");
+    });
+
+    it("默认(true)仍是 <details> 折叠壳", () => {
+      const w = mountBody({ content: "hello", isError: false });
+      expect(w.find("details.tool-output-body").exists()).toBe(true);
+      expect(w.get("summary").text()).toContain("output");
     });
   });
 });

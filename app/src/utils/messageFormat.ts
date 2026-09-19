@@ -118,10 +118,18 @@ export function isRealUserTurnStart(m: {
 /** Map a tool name to the CSS custom property that holds its
  *  accent color (the 3px left bar on a ToolCallCard). The tool list
  *  is closed for MVP (read_file / write_file / shell) so a plain
- *  switch reads cleaner than a registry. */
+ *  switch reads cleaner than a registry.
+ *
+ *  09-19-tool-card-compact-read: `glob` / `list_dir` joined
+ *  `read_file` on `--color-tool-read` — the three are one read-only
+ *  inspection family (same compact card, same accent), and the
+ *  previous muted fallback made them read as "unknown tool" next to
+ *  the cyan read_file card. */
 export function toolAccentVar(toolName: string): string {
   switch (toolName) {
     case "read_file":
+    case "glob":
+    case "list_dir":
       return "var(--color-tool-read)";
     case "write_file":
     case "edit_file":
@@ -136,11 +144,21 @@ export function toolAccentVar(toolName: string): string {
 /** Map a tool name to an icon name (key in the Icon component's
  *  registry) shown in the card header. Defaults to a generic wrench
  *  for unknown tools so the UI never blanks out when a new tool lands
- *  before its icon is wired. */
+ *  before its icon is wired.
+ *
+ *  09-19-tool-card-compact-read: `glob` / `list_dir` used to fall
+ *  through to the wrench. `glob` is a path-pattern search
+ *  (magnifying-glass), `list_dir` lists a directory (folder); the
+ *  content search (`grep`) is deliberately NOT wired here — it still
+ *  renders through the generic card. */
 export function toolIcon(toolName: string): string {
   switch (toolName) {
     case "read_file":
       return "document";
+    case "glob":
+      return "magnifying-glass";
+    case "list_dir":
+      return "folder";
     case "write_file":
     case "edit_file":
       return "pencil";

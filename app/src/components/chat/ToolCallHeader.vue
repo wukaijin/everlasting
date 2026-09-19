@@ -30,6 +30,11 @@
 // 更名 `chip`（scoped class `__path` → `__chip` 同步）—— 该槽位现在不只
 // 装文件路径，还装 shell 家族的 description / 命令首行（数据源
 // `messageFormat.toolHeaderChip`），按内容更名以名实相符。
+//
+// 2026-09-19 (task `09-19-tool-card-compact-read`): 新增 `#title-meta`
+// 可选具名 slot（渲染在 chip 之后、suffix 之前）—— read 族紧凑卡把
+// 「42 matches / L1–120」这类规模信息放在同一行 title 内。选 slot 而非
+// 新 prop，是因为它带自己的样式与可能的图标；老调用方不传即零变化。
 
 import Icon from "../Icon.vue";
 
@@ -97,6 +102,12 @@ const props = withDefaults(
       >
         · {{ props.chip }}
       </span>
+      <!-- title-meta(09-19-tool-card-compact-read):chip 之后的附加信息
+           槽(如 read 族的 `42 matches` / `L1–120`)。收在 title 内而不是
+           status 里,是为了让它跟着 chip 一起 ellipsis 优先——空间不够时
+           先截 chip,再谈 meta。flex-shrink:0 —— meta 是短标记,不该被
+           压成省略号。默认不传即不渲染(drawer / permission 变体零影响)。 -->
+      <slot name="title-meta" />
       <span v-if="props.suffix" class="tool-call-header__suffix">
         {{ props.suffix }}
       </span>
