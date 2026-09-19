@@ -65,9 +65,8 @@ pub struct GroupChatConfig {
     /// in `sessions.metadata`; all four creation channels carry it since
     /// M4c (2026-09-08): GUI modal / M1 script `--token-budget` / MCP
     /// `start_discussion` / scheduled `group_chat_config.token_budget`.
-    /// Recommendation surfaced in those UIs/help: omit, or ≥200000 — a
-    /// typical run burns hundreds of thousands of billed tokens, so a
-    /// lower ceiling usually truncates mid-discussion.
+    /// Recommendation surfaced in those UIs/help: omit, or ≥200000 —
+    /// a lower ceiling usually truncates mid-discussion.
     /// Additive key: serde's default keeps old metadata deserializing.
     #[serde(default)]
     pub token_budget: Option<u64>,

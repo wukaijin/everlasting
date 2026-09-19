@@ -75,7 +75,7 @@ pub struct SpeakerTokens { pub speaker: String, pub tokens: u64 }
 1. **preset 单选卡**(三卡横排:评审团/架构/复盘;卡内名称 + 一句描述取 presets.json `description` 截断;选中态 accent 边框)。选中 → 立即展开预填阵容 + 主持人默认。无「自定义」卡——改任何阵容字段即自然偏离,不设显式状态。
 2. **阵容微调区**(现有行交互保留:name/model/persona_md、+/- 按钮、2-3 上限、重名/空名校验)。preset 预填的 persona_md = 边界 + "\n\n" + persona_common(与 composePresets/gcPersonaMd 逐字同形);用户可编辑。
 3. **主持人 Select**(create 可选):默认 = 当前 preset 的 moderator_model 解析;用户改选覆盖;解析失败显示 preset 原名并提示先去模型页添加(定时表单同款错误形态)。提交时 `createNewSession({..., modelId})` → `create_session` 的 model 参数(wire 已收)。
-4. **token_budget 输入 + 参考量级提示**(静态文案「留空 = 不限;一场讨论通常 20-60 万 token」,D4:不进 presets.json)。
+4. **token_budget 输入 + 静态提示文案**(D4:不进 presets.json)。
 
 ### 4.2 edit 模式结构
 

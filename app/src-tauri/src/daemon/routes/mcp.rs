@@ -301,7 +301,7 @@ fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": "start_discussion",
-            "description": "Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min, hundreds of thousands of tokens. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: builtin four + user presets — see list_presets.",
+            "description": "Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: builtin four + user presets — see list_presets.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -321,7 +321,7 @@ fn tool_defs() -> Vec<Value> {
                         },
                         "description": "Full roster, replaces preset roster (moderator unchanged)"
                     },
-                    "token_budget": { "type": "integer", "minimum": 1, "description": "Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget, no wrap-up. Recommended: omit, or ≥200000 (a typical run burns hundreds of thousands). Omit = unlimited" }
+                    "token_budget": { "type": "integer", "minimum": 1, "description": "Billed-token ceiling (input+output+cache_creation+cache_read); exceeded → halts at next round head with stop_reason=budget, no wrap-up. Recommended: omit, or ≥200000. Omit = unlimited" }
                 },
                 "required": ["topic", "cwd"]
             }

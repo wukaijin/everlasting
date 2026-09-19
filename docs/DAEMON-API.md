@@ -68,8 +68,8 @@ database-guidelines.md 的「IPC payload camelCase」新约定(对齐 `AuditEven
 群聊 metadata 可选键 `token_budget`(2026-09-08,C1.2 止损包,additive):声明该场讨论的
 token 预算上限(计费口径 = input + output + cache_creation + cache_read 四字段求和,每内层
 LLM 轮的 `TurnUsage` 累计)。超限 → 编排器在下一轮头终态停,`stop_reason="budget"`
-(无收束轮)。缺键 = 不限。**建议:不填,或 ≥200000**——一场典型审议烧数十万 billed
-token,更低的帽基本必然中途触顶截断(MCP schema / CLI help 同文提示,2026-09-16)。
+(无收束轮)。缺键 = 不限。**建议:不填,或 ≥200000**——更低的帽易中途触顶截断
+(MCP schema / CLI help 同文提示,2026-09-16)。
 **四通道声明面(2026-09-08,M4 成本治理)**:GUI 建群弹窗 /
 M1 脚本 `--token-budget <n>` / MCP `start_discussion` 的 `token_budget` 可选参 /
 定时任务 `group_chat_config.token_budget`(§6.3)——全部「显式声明才限,缺省无键」。
@@ -300,8 +300,8 @@ acceptance 非 `injected`(guard 判定与编排器落库间的竞态),以自有 
 不导出),头部含阵容 / 起止 / stop_reason / discussion_summary。GUI 收官单 toast(专用,
 抑制通用轮次通知)。
 
-**边界**:LLM `schedule_task` 工具**不能**建群聊任务(恒 fixed 语义——群聊一场数十万
-token,不开放给 agent 自主创建);preset 预设在 `scripts/group-chat-presets.json`,daemon
+**边界**:LLM `schedule_task` 工具**不能**建群聊任务(恒 fixed 语义——单场成本高,
+不开放给 agent 自主创建);preset 预设在 `scripts/group-chat-presets.json`,daemon
 无 preset 概念(前端展开后提交,API 调用方同理)。GCE-P1(2026-09-12)起 `group_chat_config`
 新增可选 `preset_key`(创建/更新任务时选了预设则记录出处,内置 key 或用户预设行 id);
 **fire 路径零读取**(快照语义:config 是创建时展开的完整 UUID 阵容,预设后续编辑/删除

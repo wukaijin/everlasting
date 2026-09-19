@@ -856,8 +856,7 @@ function modelLabel(id: string): string {
           <!-- C1.2 (09-08-gc-c1-stoploss): per-discussion token
                ceiling. Empty = unlimited (no metadata key). Exceeded →
                the discussion halts at the next round head with
-               stop_reason "budget". gce-m4c: 量级参考提示(D4,静态
-               文案不进 presets.json)。 -->
+               stop_reason "budget". -->
           <label class="gcfg-field">
             <span class="gcfg-field__label">Token 预算(可选)</span>
             <input
@@ -869,7 +868,7 @@ function modelLabel(id: string): string {
               placeholder="留空 = 不限"
               data-testid="gcfg-budget"
             />
-            <span class="gcfg-field__hint">留空 = 不限;一场讨论通常 20-60 万 token</span>
+            <span class="gcfg-field__hint">留空 = 不限</span>
           </label>
 
           <!--

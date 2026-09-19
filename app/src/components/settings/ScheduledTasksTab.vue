@@ -1433,7 +1433,7 @@ onMounted(async () => {
               placeholder="留空 = 不限"
               data-testid="sched-gc-budget"
             />
-            <span class="sched-tab__unit">留空 = 不限;一场讨论通常 20-60 万 token</span>
+            <span class="sched-tab__unit">留空 = 不限</span>
           </label>
         </template>
       </div>

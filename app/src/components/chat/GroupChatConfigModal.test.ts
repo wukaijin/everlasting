@@ -627,14 +627,13 @@ describe("GroupChatConfigModal — token budget (C1.2)", () => {
     wrapper.unmount();
   });
 
-  it("预算量级提示(D4 静态文案)渲染在预算输入下", async () => {
+  it("预算留空提示渲染在预算输入下", async () => {
     const wrapper = mountModal({ mode: "create" });
     await flush();
     const hints = Array.from(document.querySelectorAll(".gcfg-field__hint")).map(
       (h) => h.textContent ?? "",
     );
     expect(hints.some((t) => t.includes("留空 = 不限"))).toBe(true);
-    expect(hints.some((t) => t.includes("20-60 万 token"))).toBe(true);
     wrapper.unmount();
   });
 });

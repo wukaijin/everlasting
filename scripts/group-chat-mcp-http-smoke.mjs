@@ -122,7 +122,7 @@ try {
   if (!live) {
     console.log('SMOKE PASS (non-live):握手 + ping + tools/list + 预算 + 错误链 + list_presets/models + 传输探针');
   } else {
-    // 4) 全链:小阵容真跑(arch = moderator + 2 人;5-15 分钟,数十万 token);
+    // 4) 全链:小阵容真跑(arch = moderator + 2 人;5-15 分钟,烧真 token);
     // 轮询用 wait_seconds=30 长轮询(有变化即返,无变化到点 wait_timed_out 再续)
     const started = await client.callTool({
       name: 'start_discussion',

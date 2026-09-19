@@ -1,6 +1,6 @@
 ---
 name: group-chat
-description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条命令召集一场多 agent 讨论(评审/架构决策/复盘)拿回有据可查的共识结论。Use whenever 用户要召集群聊/审议/评审团/多模型讨论/复盘会,或说 group-chat / 审议 / 评审团 / 跨模型讨论,或在一个议题值得多视角交叉验证时。注意成本:一场 5-15 分钟、数十万 token,慎用。"
+description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条命令召集一场多 agent 讨论(评审/架构决策/复盘)拿回有据可查的共识结论。Use whenever 用户要召集群聊/审议/评审团/多模型讨论/复盘会,或说 group-chat / 审议 / 评审团 / 跨模型讨论,或在一个议题值得多视角交叉验证时。注意成本:一场 5-15 分钟,慎用。"
 ---
 
 # 群聊审议(group-chat)
@@ -10,7 +10,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 
 ## 先过成本闸(必读)
 
-一场审议 = 5-15 分钟 + 数十万 token。发起前自问:
+一场审议 = 5-15 分钟。发起前自问:
 - 这个议题值得吗?**单一事实问题不要审议**(直接查代码/文档);**有多视角权衡、结论影响后续走向**的才值得。
 - 议题里的未知能不能先自己消掉?把「X 是什么」消掉,只留「X 该怎么选」给审议。
 
@@ -41,6 +41,7 @@ node scripts/group-chat-run.mjs run \
 ```
 
 `run --help` 看全量参数。覆盖语法:`--set name.model=<id>` / `--set name.persona=@file`(单人两级)、`--participants '<json>'`(整名单替换——增删参与者的唯一方式)、`--moderator-model <id>`。
+token 预算(`--token-budget`):建议不填(不限),或 ≥200000——更低易中途触顶(`stop_reason=budget`,无收束轮)。
 **在别的 cwd 跑时用脚本绝对路径**;转录固定落 `{app_data_dir}/discussions/`(Linux `~/.local/share/dev.everlasting.app/discussions/`,`EVERLASTING_DATA_DIR` 可改根;09-15 起与定时/MCP 场同源),结束时会打印绝对路径。
 长跑建议后台化(如 `&` + nohup),轮询脚本输出拿转录路径与退出码;进度粒度 10s 一拍(±10s),没有发言级实时进度。
 
