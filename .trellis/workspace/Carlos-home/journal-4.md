@@ -1805,3 +1805,25 @@ BACKLOG 群聊共识候选 N3 落地(用户立项扩展「不只 repo map 还初
 ### Status
 
 [OK] **Completed**
+
+
+## Session 148: evl CLI 落地:daemon 能力开放为 bash 面(LLM 优先)
+
+**Date**: 2026-09-19
+**Task**: evl CLI 落地:daemon 能力开放为 bash 面(LLM 优先)
+**Branch**: `main`
+
+### Summary
+
+任务 09-19-everlasting-cli 全程:brainstorm 收敛(mmx 对标/新顶层 cli//bin=evl/零依赖 Node≥20)→ LLM-first 定位调整 → 群聊评审(session f7ebec19,14 项采纳 0 驳回:非 TTY 默认 mode=plan、timeout 540s+宿主余量不变量、json 恒定形状含 permission_denials/text_chars、discuss 二期走 MCP client、编排/运输分层规则)→ implement+check 子代理(54 用例全绿,check 修 4 处:stream_lost 归一/-h 短 flag/Node 20.0 json import 兼容/tool:result verbose 字段)→ 主会话 live 验收(AC6 denials=2 deny≠turn 失败、AC7 SIGINT exit3+session 保留、AC8 PTY 流式、AC10 ~/.local/bin symlink)→ spec/cli/index.md 新层。遗留:y/a/n 人工应答待用户 TTY 实按;宿主杀 evl 后 daemon loop 继续为已知限制。AC6 实测补知识:权限 Tier 4 within-root(project 内写放行,project 外才 ask)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7565625a` | (see git log) |
+| `95f4eff0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
