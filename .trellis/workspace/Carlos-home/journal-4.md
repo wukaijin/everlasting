@@ -1886,3 +1886,57 @@ web 聊天流里 glob / list_dir / read_file 的卡片从通用 ToolCallCard 的
 
 - grep / web_search / web_fetch 仍是通用卡,可按同一形态接(名单在 toolSummary.isReadFamilyTool 可扩)
 - SubagentDrawer 的 DrawerToolCallCard 未改(抽屉里 read 族仍是三行 + glob 无 chip)
+
+## Session 151: N9 性能基准立项→评审→三 PR 全链落地
+
+**Date**: 2026-09-19
+**Task**: N9 性能基准(criterion + Playwright 真浏览器)
+**Branch**: `main`
+
+### Summary
+
+BACKLOG 附录 B N9 候选正式立项(N9→N4→N2 依赖链链头,为 N4 虚拟化路线决策供数)。brainstorm 三问收敛(Playwright 真浏览器裁定——jsdom 无布局引擎 content-visibility 不生效;群聊评审跑;落档 spec/backend/perf-baseline.md)。评审 session 448f6601(review preset,163.5 万 token,四视角)12 条结论全采纳,三条重大修正:①原 pub(crate) feature 门方案编译不过→bench_api 再导出(benches 独立 crate 断祖先链);②内存库对 N2 测错维度(无 WAL 抹 fsync)→B2 双档分表;③B3「SSE 首字节」无定义(空 replay 量到 30s KeepAlive)→双路径重定义。OQ1 用户裁定 N2 bench 对象 = finalize_turn_persist。
+
+实施三 PR:PR1 后端基建(bench feature 门 + criterion;探针坐实 tempfile dev-dep 不进 bench 目标→optional 双段声明;七处 cfg(test) 门原位扩展;2484 全量回归零行为变化)。PR2 SSE bench(路径 B 探针坐实不可行:build_provider 字符串 dispatch 无 mock 臂→降级 b3a 握手 4.8µs/b3b replay TTFB 4.0µs 如实标注)+ 真实负载画像(94 session/1720 消息:thinking 43.5%/tool 对 40%/无万级 session 最大 156 条——profile 草稿偏差大只改数字)。PR3 F1 Playwright(种子同 profile 同源;结构教训:10k 档每档独立 test(),同 renderer reload 累积崩 WSL2 Chromium;@types/node 经 vitest/globals 污染 vue-tsc 面证伪后改 io.mjs 薄层;--list 本版实际执行不可作门)。
+
+**首批基线要点**(perf-baseline.md):B1 h1 冷启动 20.7ms/h3 10k 历史 155.6ms(h3−b1≈146ms=组装净开销);B2 disk load_session 132ms=内存档 17 倍,persist disk 1.4ms(N2 auto-commit 成本可忽略,删后缀 <2ms 与表大小无关);F1 mount 60/160/491ms、滚帧 17/20/185ms、**流式到上屏 137ms/1.2s/21.5s——10k 档滚帧 11 倍掉帧+流式 21.5s=N4 立项直接证据**(瓶颈在渲染侧非 daemon 侧);harness 开销占真实端到端 0.16%(F5 平均 13s 对照)。CI 编译门(Rust check --features bench --benches + 前端 bench tsc;数字不进门禁裁定不变)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fff1b792` | feat(bench): N9 PR1 后端性能基准基建 |
+| `81b904dd` | feat(bench): N9 PR2 SSE bench + 画像校准 + perf-baseline 落档 |
+| `71f66b3c` | feat(bench): N9 PR3 F1 前端渲染基准 + CI 编译门 |
+
+### Testing
+
+- [OK] cargo test --lib 2484 全绿(可见性/门改动零回归);clippy lib -D warnings 绿;CI 门命令 check --features bench --benches 绿
+- [OK] cargo bench 三目标全出数并 --save-baseline n9-first
+- [OK] pnpm test 1914 / test:e2e 13 / build 全绿;pnpm bench:fe 3 passed(10k 复现稳定)
+
+### Status
+
+[OK] **Completed**(N4 可直接立项:对比基线 = F1 表同参复跑;B3 live 首事件面留待 mock 注入机制需求出现时补)
+
+
+## Session 151: N4 长会话渲染虚拟化:可行性分析→群聊评审→PR0-3 全链落地
+
+**Date**: 2026-09-20
+**Task**: N4 长会话渲染虚拟化:可行性分析→群聊评审→PR0-3 全链落地
+**Branch**: `main`
+
+### Summary
+
+N4(真虚拟化,用户裁定 @tanstack/vue-virtual 3.13.39)全链交付。可行性两轮(三路线对比→B+tanstack 聚焦:七难点 4 库内建/1 净简化/2 自实现);用户三裁定(路线/库/AC1 线=回到 100 档体验 f4≤500/f2≤30/f1≤150@10k);群聊评审(session a46158e8,四视角 72.7 万 token,12 结论全 verified:新增 PR0 测试基建解换尺归因耦合、data-seq 拉进 PR1、动画白名单、回滚=可运行证明)。PR0:F1 判据换尺 scrollHeight(旧 childElementCount 虚拟化下失效)+ ready helper + spike——透传✅但三硬约束(true≠强制跟滚/Vue 适配缺 _willUpdate 需 onUpdated 补写/禁原生 scrollTop 直写);新判据揭旧实现 10k mount 真值 67.9s(旧判据 491ms 全盲渐进布局实体化)。PR1:useVirtualizedMessages 单文件装配(spike 三约束内嵌)+MessageList 重写(88%)+锚定全迁移(stickToBottom/fingerprint 退役)+flatten 打平(D1 类型约束)+div 化+data-seq store 命令化(评审抓的 querySelector 虚拟化后静默 no-op)。PR2:可见性单调缓存(流式 delta 零重算)→f4 859→293✅;estimateSize 实测回归式(Σest −0.9%);慢滚 10k 锚定漂移≤一行高 e2e;AC2 六项全绿。PR3:flash(CH12-1b 视觉)+run-enter 白名单动画+移动端 390+ui-review(截图检视+VLM 疑点代码级复核全排除:空会话 MessageList 不挂载)。check 抓 CI 断点(virtualized-list 依赖 bench fixtures 生成物,本机全绿掩盖)→ci.yml 加生成步;spec 漂移同步+4a 三约束沉淀。终态 F1@10k:f1 81.7✅/f4 283✅/f2 39.6(与 100 档 28.4 持平即长度解耦,语义达标,字面 30 未达已如实落档;常数压减=另立)。vitest 1947/e2e 23/build/bench 全绿。遗留人工:三场真人冒烟/动效观感/WebKitGTK(U1)/IME(U2);f2 判定留用户。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74d90599` | (see git log) |
+| `b4ce7a45` | (see git log) |
+
+### Status
+
+[OK] **Completed**

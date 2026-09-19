@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 150
-- **Last Active**: 2026-09-19
+- **Total Sessions**: 151
+- **Last Active**: 2026-09-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1888 | Active |
+| `journal-4.md` | ~1942 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 151 | 2026-09-20 | N4 长会话渲染虚拟化:可行性分析→群聊评审→PR0-3 全链落地 | `74d90599`, `b4ce7a45` | `main` |
 | 150 | 2026-09-19 | read 族工具卡片紧凑化(glob/list_dir/read_file 1 行) | - | `main` |
 | 149 | 2026-09-19 | evl CLI 二期:discuss 子命令(MCP client)+ 无参 help/健康检查 | `c7276679`, `62657426` | `main` |
 | 148 | 2026-09-19 | evl CLI 落地:daemon 能力开放为 bash 面(LLM 优先) | `7565625a`, `95f4eff0` | `main` |
