@@ -11,6 +11,7 @@ pub use crate::agent::tests_common::{
     chat_loop_deps, chat_loop_request, make_harness, parent_role, test_messages, MockEmitter,
     TestHarness,
 };
+pub use crate::daemon::server::{build_router, load_daemon_state};
 pub use crate::db::test_support::test_pool;
 pub use crate::db::{
     create_project, create_session, init_pool, list_projects, load_session, run_migrations,

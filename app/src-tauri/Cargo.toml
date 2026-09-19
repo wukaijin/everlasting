@@ -227,3 +227,8 @@ required-features = ["bench"]
 name = "db_bench"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "sse_bench"
+harness = false
+required-features = ["bench"]

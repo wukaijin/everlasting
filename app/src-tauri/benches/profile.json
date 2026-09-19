@@ -1,10 +1,10 @@
 {
-  "$comment": "N9 种子形态 profile——单一出处(benches/support.rs 的 seed_session 与 app/bench/gen-fixtures.mjs 同读本文件)。PR1 为手写草稿;PR2 真实负载画像后只改数字不改结构(任务 09-19-n9-perf-benchmark design §6/§3)。",
-  "text_share": 0.5,
-  "tool_pair_share": 0.35,
-  "thinking_share": 0.15,
-  "text_len_short": 120,
-  "text_len_long": 2400,
-  "long_text_share": 0.2,
-  "tool_result_len": 900
+  "$comment": "N9 种子形态 profile——单一出处(benches/support.rs 的 seed_session 与 app/bench/gen-fixtures.mjs 同读本文件)。2026-09-19 PR2 经真实负载画像校准(94 session / 1720 消息):thinking 43.5% / tool 对 40% / 纯 text 16.5%;text 均长 399 / 最大 4850;tool_result content 均长 2709。结构不变,只改数字。",
+  "text_share": 0.165,
+  "tool_pair_share": 0.40,
+  "thinking_share": 0.435,
+  "text_len_short": 400,
+  "text_len_long": 4800,
+  "long_text_share": 0.1,
+  "tool_result_len": 2700
 }
