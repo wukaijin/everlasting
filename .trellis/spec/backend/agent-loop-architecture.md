@@ -33,7 +33,7 @@
 > and `is_error` semantics stay intact. Verified soft-intercept (returning a
 > structured `Decision` from inside `check()`) is **P5 scope** — P3 is
 > active-only footnote, mounted at the seam, not inside the 5-tier decision
-> chain. See [permission-layer.md §4.2](./permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall) and
+> chain. See [permission-layer/five-tier-decision-order.md §4.2](./permission-layer/five-tier-decision-order.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall) and
 > [memory/scenario-am-p3-tool-recall.md](./memory/scenario-am-p3-tool-recall.md).
 >
 > **Per-tool auto-reflect seam (P4, 2026-06-29, 06-29-am-p4-event-reflect)**:

@@ -98,7 +98,7 @@ LLM either silently abstains (most common — predictive abstention) or interrup
 3. Tooling that mocks `check()` (e.g. `permissions::tests_check.rs`) now has to mock the pool too, blowing up the test surface.
 4. If recall fails, it now pollutes the `Decision` return — was previously a clean `Decision::Allow`, now it's `Result<Decision, ...>`.
 
-The recall is **information injection**, not a *decision*. It lives at the chat_loop seam (check → execute), not inside `check()`. See [permission-layer.md §4.2](../permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall).
+The recall is **information injection**, not a *decision*. It lives at the chat_loop seam (check → execute), not inside `check()`. See [permission-layer/five-tier-decision-order.md §4.2](../permission-layer/five-tier-decision-order.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall).
 
 #### Bad: implementing verified soft-intercept in P3
 

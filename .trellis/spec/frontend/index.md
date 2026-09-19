@@ -16,11 +16,11 @@ This directory contains guidelines for frontend development. Fill in each file w
 |-------|-------------|--------|
 | [Transport Modes & PWA Navigation](./transport-and-pwa-modes.md) | How the SPA distinguishes daemon/remote/tauri contexts; token vs health-probe signals; 401 handling; wire casing | ✅ Filled (S4) |
 | [Responsive & Mobile](./responsive-mobile.md) | Breakpoints (native @media, desktop-first overlay), drawer nav, iOS keyboard (visualViewport), safe-area, Dialog full-screen, touch targets | ✅ Filled (S5) |
-| [Design Tokens](./design-tokens.md) | CSS variable system (color/spacing/radius/motion tokens); never hardcode hex/px | ✅ Filled |
-| [Reka-UI Usage](./reka-ui-usage.md) | reka-ui 2.9.9 primitives, wrapper classes, version-pinned constraints | ✅ Filled |
-| [Popover Pattern](./popover-pattern.md) | Hand-rolled onDocumentClick + Esc close dropdowns/popovers | ✅ Filled |
+| [Design Tokens](./design-tokens.md) | CSS variable system (color/spacing/radius/motion tokens); never hardcode hex/px(7 个 token 族 + 决策记录已拆至子目录 `design-tokens/`) | ✅ Filled |
+| [Reka-UI Usage](./reka-ui-usage.md) | reka-ui 2.9.9 primitives, wrapper classes, version-pinned constraints(Gotcha / Convention / 组件专题已拆至子目录 `reka-ui-usage/`) | ✅ Filled |
+| [Popover Pattern](./popover-pattern.md) | Hand-rolled onDocumentClick + Esc close dropdowns/popovers(Skeleton / Don'ts / Animation / Tauri gotcha 已拆至子目录 `popover-pattern/`) | ✅ Filled |
 | [Chat Components](./chat.md) | Chat panel, message rendering, tool cards | ✅ Filled |
-| [Memory UI](./memory-ui.md) | Memory modal / preview components | ✅ Filled |
+| [Memory UI](./memory-ui.md) | Memory modal / preview components(B5 场景 / 决策 / V2-2+ 可观测性已拆至子目录 `memory-ui/`) | ✅ Filled |
 | [Test Environment Gotchas](./test-environment.md) | vitest + jsdom traps: fake-timers kill rAF (race-fallback pattern), missing scrollIntoView/animate, v-html delegation, canonical transport mock | ✅ Filled |
 | [Browser Regression](./browser-regression.md) | Playwright layer: layering criteria vs vitest/Rust e2e/turn-smoke/ui-review, fixture contract (route-mock fail-loud + fake EventSource), wire casing facts, new-case checklist, measured traps | ✅ Filled |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
