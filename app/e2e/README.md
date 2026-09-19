@@ -101,10 +101,24 @@ test("…", async ({ page, boot, mockCmd, stream, reqs, waitForCmd }) => {
 | `grant-revoke-confirm` | ConfirmDialog(PermissionGrantsModal 内) | 撤销确认弹窗定位;取消/确认按钮仍走 `.confirm-modal__btn--cancel/--danger` | CH7-4(2026-08-29,先于本流水线) |
 
 既有 class hook 常量(fixtures.ts 顶部):`EDITOR` / `EDITOR_LINE` /
-`SEND_BUTTON`;spec 内稳定 hook:`ul.messages`(滚动容器)、
-`.scroll-to-bottom`、`.ask-card`、`.chat-input__row--streaming`、
+`SEND_BUTTON` / `MESSAGES`;spec 内稳定 hook:`.messages`(滚动容器,
+**class 形态**——ul/li tag 选择器已随 N4 PR0 迁移,虚拟化 div 化后依旧
+成立)、`.scroll-to-bottom`、`.ask-card`、`.chat-input__row--streaming`、
 `.f1-queued-chip`、`.toast.toast--warn`、`.chat-panel__grants-btn`、
-`.grant-modal`、`.grant-item(--revoke/--tool)`、`.confirm-backdrop`。
+`.grant-modal`、`.grant-item(--revoke/--tool)`、`.confirm-backdrop`;
+N4 PR2(virtualized-list.spec.ts)新增消费:`.session-item(--active)`(会话
+切换)、`.msg__latency`(F5 latency badge)、`.msg__markdown`(流式文本
+上屏)、`[data-seq]`(哨兵身份,ghost user 行 .msg 高 0 不可作可见性
+哨兵)。N4 PR3 新增消费:`.vrow.search-hit`(data-seq flash 类,wrapper
+级,1.5s 驻留窗断言后自动摘除)、`.messages-wrap`(回底按钮避让位的
+坐标系 —— S6a 的 right/bottom 写在 wrap 上,不与视口重合)。
+
+**列表就绪等待**:`waitForListReady(page)`(fixtures.ts,N4 PR0 单点
+helper)—— `.messages` scrollHeight 静默(连续 3 帧 rAF 不变且 ≥250ms)
++ 超时 fail-loud。涉及消息列表渲染/滚动的用例一律用它,不要自造
+「子元素数稳定」类等待(虚拟化下首帧即常数,效度失效)。
+`data-stabilizing` 已随 N4 PR1 的 stickToBottomUntilStable 退役,产品侧
+不存在该 attr。
 
 ## 已知陷阱(踩过的)
 
@@ -129,3 +143,11 @@ test("…", async ({ page, boot, mockCmd, stream, reqs, waitForCmd }) => {
 EventSource 复用,防种子形状与真实 wire 漂移);testDir/testMatch/config
 完全隔离,`pnpm test:e2e` 永不收 bench 文件。种子 fixtures/ 为生成物
 不入库(`pnpm bench:fe:gen` 再生,读后端 benches/profile.json 单一出处)。
+**N4 起 e2e 反向依赖种子**:`virtualized-list.spec.ts` 经
+`bench/io.mjs readFixture(10000)` 播 10k 种子 —— 本地首跑前先
+`pnpm bench:fe:gen`(缺文件 readFileSync ENOENT,fail-loud);CI 在
+Playwright 步骤前跑同命令补这一步(ci.yml,确定性 LCG,秒级)。
+
+例外:`bench/spike-follow-options.html` 是 N4 PR0 spike 的**静态测试页**
+(非基准),由本目录 `spike-follow-options.spec.ts` 经 vite dev
+(`/bench/spike-follow-options.html`)驱动,在 e2e 门禁内。

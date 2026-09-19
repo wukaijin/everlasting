@@ -70,6 +70,91 @@ export const EDITOR = ".chat-input__field .cm-content";
 export const EDITOR_LINE = ".chat-input__field .cm-content .cm-line";
 /** 发送键(ChatInput.vue;流式空草稿时变形成 `.chat-input__stop`)。 */
 export const SEND_BUTTON = ".chat-input__send";
+/** 消息滚动容器(MessageList.vue)。**class 形态,tag 中立**(N4 PR0,
+ *  2026-09-19):ul/li tag 结构在虚拟化改造(PR1)后 div 化,测试一律
+ *  用 class 选择器,不绑 tag 与子元素结构。 */
+export const MESSAGES = ".messages";
+
+// ---------------------------------------------------------------------------
+// 列表就绪 helper(N4 PR0,虚拟化中立)
+// ---------------------------------------------------------------------------
+
+/**
+ * 等 `.messages` 渲染就绪:**scrollHeight 静默**判据 —— 连续
+ * `stableFrames` 个 rAF 帧读数不变(且 >0)且静默时长 ≥ `quietMs`。
+ *
+ * 为什么是 scrollHeight 而不是别的(N4 design §7 评审结论):
+ * - 子元素数(childElementCount)在虚拟化下首帧即常数,效度失效;
+ * - `data-stabilizing` 曾是旧实现 stickToBottomUntilStable 的测试信号,
+ *   已随 N4 PR1 退役 —— 测试从此不读它;
+ * - scrollHeight 只依赖"内容高度不再变",与列表实现/tag 结构无关,
+ *   裸 v-for 与虚拟化下语义一致 —— 同一用例跨实现有效。
+ *
+ * `quietMs` 默认 250ms:虚拟化实现下 scrollHeight 很快恒定,代价只是
+ * ~250ms 等待(该值历史上取自旧实现钉底循环 150ms 静默退出窗的盖过
+ * 语义,机制退役后保留为保守静默窗)。
+ *
+ * 超时 fail-loud:抛错并带超时瞬间的容器观测值,绝不无限等。
+ */
+export async function waitForListReady(
+  page: Page,
+  opts: { stableFrames?: number; quietMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  const { stableFrames = 3, quietMs = 250, timeoutMs = 15_000 } = opts;
+  const settled = await page.evaluate(
+    ({ sel, stableFrames, quietMs, timeoutMs }) => {
+      return new Promise<boolean>((resolve) => {
+        const startedAt = performance.now();
+        let lastH = -1;
+        let lastChangeAt = performance.now();
+        let stable = 0;
+        const tick = () => {
+          if (performance.now() - startedAt > timeoutMs) {
+            resolve(false);
+            return;
+          }
+          const el = document.querySelector(sel);
+          if (!el) {
+            stable = 0;
+            requestAnimationFrame(tick);
+            return;
+          }
+          const h = el.scrollHeight;
+          if (h > 0 && h === lastH) {
+            stable += 1;
+          } else {
+            stable = 0;
+            lastH = h;
+            lastChangeAt = performance.now();
+          }
+          if (
+            stable >= stableFrames &&
+            performance.now() - lastChangeAt >= quietMs
+          ) {
+            resolve(true);
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    },
+    { sel: MESSAGES, stableFrames, quietMs, timeoutMs },
+  );
+  if (!settled) {
+    const observed = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el
+        ? `scrollHeight=${el.scrollHeight} childElementCount=${el.childElementCount}`
+        : `${sel} not attached`;
+    }, MESSAGES);
+    throw new Error(
+      `waitForListReady: .messages scrollHeight never went quiet ` +
+        `(need ${stableFrames} stable rAF frames + ${quietMs}ms, gave up after ` +
+        `${timeoutMs}ms). Observed at timeout: ${observed}`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // fake EventSource(addInitScript 注入,先于任何页面脚本)

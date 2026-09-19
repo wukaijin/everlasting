@@ -118,6 +118,15 @@ export default defineConfig(async () => ({
   },
 
   clearScreen: false,
+
+  // N4 PR0 spike(app/bench/spike-follow-options.html,e2e 驱动)在 dev
+  // 冷启动时按需发现 @tanstack/vue-virtual 会触发 re-optimize + 整页
+  // reload,打断 e2e 首个 goto;include 预热让依赖随 server 启动就绪。
+  // PR1 产品代码正式 import 后进入默认扫描,本行无害(去重)。
+  optimizeDeps: {
+    include: ["@tanstack/vue-virtual"],
+  },
+
   server: {
     port: 1420,
     strictPort: true,

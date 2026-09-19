@@ -160,6 +160,13 @@ jobs:
       - name: Install Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
 
+      # N4 虚拟化 e2e(virtualized-list.spec.ts)复用 bench/fixtures 的
+      # 10k 种子(readFixture)。种子是 gitignore 生成物(N9 起不入库),
+      # CI 必须先再生:gen-fixtures.mjs 读已入库的 profile.json,种子化
+      # LCG 确定性输出,秒级完成。
+      - name: Generate bench fixtures (10k e2e seed)
+        run: pnpm bench:fe:gen
+
       # blocking merge gate(retries: CI 1 次,playwright.config.ts;
       # webServer 自起 vite dev :1422,无 continue-on-error)。
       - name: Playwright browser regression
@@ -168,6 +175,6 @@ jobs:
       # N9 前端 bench 编译门(09-19-n9-perf-benchmark):单文件 tsc 检查
       # bench/*.bench.ts 可解析(Node IO 隔离在 io.mjs,app 不装
       # @types/node——实测它经 vitest/globals 污染 vue-tsc 面);bench
-      # 数字不进门禁。种子 fixtures 为生成物不入库,gen 不在 CI 跑。
+      # 数字不进门禁。tsc 编译面不读种子 fixtures(生成物不入库)。
       - name: Bench files compile gate (tsc)
         run: pnpm exec tsc --noEmit --target es2022 --module esnext --moduleResolution bundler --skipLibCheck bench/render.bench.ts

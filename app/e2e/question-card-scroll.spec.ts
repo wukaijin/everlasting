@@ -24,7 +24,13 @@
 //   (get_pending_interaction,spec test-environment.md §8):mock 必须
 //   与 seed 一致地返回同一条 pending,否则拉平会把卡片清掉、toast 不来。
 import { expect, type Page } from "@playwright/test";
-import { EDITOR, test, type MockPayload } from "./fixtures";
+import {
+  EDITOR,
+  MESSAGES,
+  test,
+  waitForListReady,
+  type MockPayload,
+} from "./fixtures";
 
 /** 提问卡事件 payload(tool:question 通道,snake_case)。 */
 const QUESTION = {
@@ -164,14 +170,15 @@ function seedSessionMocks(
   mockCmd("sessions", "load_session", seededSession());
 }
 
-/** 滚动容器 `ul.messages` 的「距底距离」(与 isNearBottom 同式,
- *  MessageList 的阈值 80px)。容器未挂载时返回 +∞。 */
+/** 滚动容器 `.messages` 的「距底距离」(与 isNearBottom 同式,
+ *  MessageList 的阈值 80px)。选择器用 class 形态(tag 中立,N4 PR0;
+ *  容器未挂载时返回 +∞)。 */
 async function distanceFromBottom(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const el = document.querySelector("ul.messages");
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
     if (!el) return Number.POSITIVE_INFINITY;
     return el.scrollHeight - el.scrollTop - el.clientHeight;
-  });
+  }, MESSAGES);
 }
 
 test.describe("提问卡 × 滚动联动(CH8-2)", () => {
@@ -184,28 +191,23 @@ test.describe("提问卡 × 滚动联动(CH8-2)", () => {
     seedSessionMocks(mockCmd);
     await boot();
 
-    // 挂载 stickToBottomUntilStable 完成的行为信号:已钉在底部
-    // (距底 < 80px = MessageList 的 near-bottom 阈值)。
+    // 列表渲染就绪(N4 PR0 实现中立判据,单点 helper):scrollHeight
+    // 静默 ≥250ms。历史上这是为盖过 stickToBottomUntilStable 的 150ms
+    // 静默退出窗(data-stabilizing 竞态,该机制 N4 PR1 已退役);现实现
+    // (虚拟化)下它是纯静默窗。helper 超时自带 fail-loud,不会无限等。
+    await waitForListReady(page);
+    // 就绪且已钉在底部(距底 < 80px = MessageList 的 near-bottom 阈值)。
     await expect
       .poll(() => distanceFromBottom(page), { timeout: 10_000 })
       .toBeLessThan(80);
-    // 钉底 ≠ 稳定循环已退出:冷跑(全量首跑 vite 冷变换)时 boot 先于
-    // 列表渲染完成,上面的 poll 可在矮列表上提前通过(距底天然 <80)。
-    // 此时写 scrollTop=0 不翻 isAtBottom,稳定循环随后的挂载 churn 又
-    // 把视口全程钉回底部 → 回底按钮永不出现 → toBeVisible 超时(本 spec
-    // 全量冷跑 flaky 根因;MessageList.test.ts mountList 的 300ms settle
-    // 注释的是同一竞态)。data-stabilizing 由组件在循环退出后置
-    // "false",此刻起不再有钉底 tick 落地,上滚才确定性生效。
-    await expect(page.locator("ul.messages[data-stabilizing='false']"))
-      .toBeAttached({ timeout: 10_000 });
     // 钉底状态下回底按钮不出现。
     await expect(page.locator(".scroll-to-bottom")).toHaveCount(0);
 
     // 用户上滚到顶(直接写 scrollTop,scroll 事件照常触发 onScroll)。
-    await page.evaluate(() => {
-      const el = document.querySelector("ul.messages")!;
+    await page.evaluate((sel) => {
+      const el = document.querySelector(sel)!;
       el.scrollTop = 0;
-    });
+    }, MESSAGES);
     await expect(page.locator(".scroll-to-bottom")).toBeVisible();
 
     // 推提问卡 → pending null→some watch → 强制回底。

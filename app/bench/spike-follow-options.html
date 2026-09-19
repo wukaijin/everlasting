@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>N4 PR0 spike:followOnAppend / anchorTo setOptions 透传验证页</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <!--
+      N4 PR0 spike 页(任务 09-19-n4-render-virtualization,design §9-1)。
+      最小可运行 Vue 3 + useVirtualizer:唯一目的是运行时验证 Vue 适配层
+      对 options 的 setOptions 响应式透传 —— 运行中翻转 followOnAppend
+      三态,断言跟滚行为真的随之改变(静态配置跑通不构成验证)。
+      驱动方 = app/e2e/spike-follow-options.spec.ts;window.__spike 是唯一
+      驱动面。纯 JS 内联模块(无 SFC/TS):不进 vue-tsc / 产物构建面
+      (vite build 只收 index.html;vue-tsc include 仅 src/**)。
+      库版本以安装时为准:vue-virtual 3.13.39 / virtual-core 3.17.11。
+    -->
+    <script type="module">
+      import { computed, defineComponent, h, onMounted, onUpdated, ref, createApp } from "vue";
+      import { useVirtualizer } from "@tanstack/vue-virtual";
+
+      const ITEM_H = 60; // 每项固定高(est=实际,排除测量噪声干扰判读)
+      const VIEW_H = 400; // 视口高:40×60=2400 内容,保证可滚
+      const THRESHOLD = 80; // scrollEndThreshold(与产品迁移参数一致)
+
+      const items = ref([]); // { id, h };h 可变(growLast 触发 ResizeObserver)
+      const follow = ref(false); // followOnAppend 当前值:false | 'auto' | true
+      let nextId = 1;
+      let mounted = false;
+
+      for (let i = 0; i < 40; i += 1) {
+        items.value.push({ id: nextId++, h: ITEM_H });
+      }
+
+      // 供 spec 读库内侧写:virtualizer.options.followOnAppend —— 区分
+      // 「页面没接上响应式(库没收到新值)」与「库收到新值但行为不变」,
+      // 前者是 spike 页自身的缺陷,后者才是透传证伪。
+      let lib = null;
+
+      const Root = defineComponent({
+        setup() {
+          const scrollEl = ref(null);
+          const virtualizer = useVirtualizer(
+            computed(() => ({
+              count: items.value.length,
+              getScrollElement: () => scrollEl.value,
+              estimateSize: () => ITEM_H,
+              getItemKey: (i) => items.value[i].id,
+              overscan: 5,
+              anchorTo: "end",
+              followOnAppend: follow.value,
+              scrollEndThreshold: THRESHOLD,
+            })),
+          );
+          lib = virtualizer.value;
+          // 【PR0 spike 发现 → PR1 必须复刻的补偿】Vue 适配层与 React 适配层
+          // 的关键差异:React 每 render 调 virtualizer._willUpdate(),Vue 只在
+          // options / scrollElement 变化时调。后果:anchorTo:'end' 下纯
+          // resize(末项 grow,无 append)的钉底写入发生在 DOM 长高之前,
+          // 被 clamp 丢弃,补写入口 _retryClampedAdjustment 只在 _willUpdate
+          // 尾部触发 —— 无人再调就永远差一截(实测稳定差 300px)。
+          // 每 render 补一次 _willUpdate() 即完成钉底(下方 spec 腿④实证)。
+          // PR1 落点 = 集中装配 composable,不是本页。
+          onUpdated(() => {
+            lib._willUpdate();
+          });
+          onMounted(() => {
+            mounted = true;
+          });
+          return () =>
+            h(
+              "div",
+              {
+                ref: scrollEl,
+                style: `height:${VIEW_H}px;overflow-y:auto;position:relative;`,
+              },
+              [
+                h(
+                  "div",
+                  {
+                    style: `height:${virtualizer.value.getTotalSize()}px;position:relative;`,
+                  },
+                  virtualizer.value.getVirtualItems().map((vi) =>
+                    h(
+                      "div",
+                      {
+                        key: vi.key,
+                        "data-index": vi.index,
+                        ref: (el) => virtualizer.value.measureElement(el),
+                        style: `position:absolute;top:0;left:0;width:100%;height:${items.value[vi.index].h}px;`,
+                      },
+                      `item-${items.value[vi.index].id}`,
+                    ),
+                  ),
+                ),
+              ],
+            );
+        },
+      });
+
+      createApp(Root).mount("#app");
+      // 诊断句柄(spike 页专用,产品无关):库实例直查,探针/调试用。
+      window.__lib = lib;
+
+      const scrollElOf = () => document.querySelector("#app > div");
+
+      window.__spike = {
+        ready: () => mounted,
+        metrics: () => {
+          const el = scrollElOf();
+          return {
+            ready: mounted,
+            follow: follow.value,
+            // 库内侧写:setOptions 是否真的把新值送进了 virtualizer。
+            followSeenByLib: lib ? lib.options.followOnAppend : null,
+            count: items.value.length,
+            scrollTop: el.scrollTop,
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+            distBottom: el.scrollHeight - el.scrollTop - el.clientHeight,
+          };
+        },
+        append(n = 1) {
+          for (let i = 0; i < n; i += 1) {
+            items.value.push({ id: nextId++, h: ITEM_H });
+          }
+          return items.value.length;
+        },
+        growLast(px = 300) {
+          const last = items.value[items.value.length - 1];
+          last.h += px;
+          return items.value.length;
+        },
+        setFollow(mode) {
+          follow.value = mode;
+          return follow.value;
+        },
+        // 滚动钩子的共同尾:等库内部 offset 与 DOM 对齐(滚动事件已处理)。
+        // 库的 isAtEnd/wasAtEnd 判定读的是事件同步的内部 offset;若钩子在
+        // 同步前返回,随后的 append 判定会拿到旧值(spikespec 曾因此抖)。
+        async waitSynced() {
+          const lib = window.__lib;
+          const el = scrollElOf();
+          const t0 = performance.now();
+          while (performance.now() - t0 < 2000) {
+            if (Math.abs(lib.getScrollOffset() - el.scrollTop) < 2) return true;
+            await new Promise((r) => requestAnimationFrame(r));
+          }
+          return false;
+        },
+        async scrollToEnd() {
+          // 必须走库 API(scrollState + 内部 offset 同步),不能原生直写
+          // el.scrollTop —— PR0 实测:直写与库的事件驱动 offset 同步竞态,
+          // 随后的 append/resize 判定(isAtEnd / wasAtEnd)会读到滞后的
+          // 内部 offset 而失效。这条对 PR1 的程序化滚动是硬约束。
+          window.__lib.scrollToEnd({ behavior: "instant" });
+          return this.waitSynced();
+        },
+        async scrollUp(px) {
+          window.__lib.scrollBy(-px, { behavior: "instant" });
+          return this.waitSynced();
+        },
+      };
+    </script>
+  </body>
+</html>
