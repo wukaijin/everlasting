@@ -119,3 +119,13 @@ test("…", async ({ page, boot, mockCmd, stream, reqs, waitForCmd }) => {
 - **验收三件套**:`pnpm test:e2e && pnpm test && pnpm build` 全绿(vitest
   include 仅 `src/**`,e2e 目录天然隔离;vue-tsc 不查 e2e —— Playwright
   自带转译)。
+
+## 边界:基准不在本目录(N9,2026-09-19)
+
+`app/bench/`(gen-fixtures.mjs + render.bench.ts + playwright.bench.config.ts)
+是 N9 性能基准,不是回归门禁:`pnpm bench:fe` 本地/按需跑,数字不进 CI
+(编译面进:CI 对 bench/render.bench.ts 跑单文件 tsc 检查)。它与本目录的
+关系 = **只依赖 `e2e/fixtures.ts` 的 world**(route-mock + fake
+EventSource 复用,防种子形状与真实 wire 漂移);testDir/testMatch/config
+完全隔离,`pnpm test:e2e` 永不收 bench 文件。种子 fixtures/ 为生成物
+不入库(`pnpm bench:fe:gen` 再生,读后端 benches/profile.json 单一出处)。

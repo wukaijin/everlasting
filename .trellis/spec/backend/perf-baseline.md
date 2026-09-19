@@ -58,6 +58,18 @@ PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
 
 **边界(如实标注)**:路径 B(live 首事件)未测——探针坐实 `build_provider` 字符串 dispatch 无 mock 臂,scripted MockProvider 无法经 providers 表/catalog 注入;给生产开 mock 注入机制超出测量任务边界。真 TCP/TLS/网络传输开销不在本 bench 面(F5 生产观测覆盖端到端)。
 
+### F1 前端渲染(Playwright 真 Chromium,`pnpm bench:fe`,median;100/1k 档 8 run、10k 档 3 run)
+
+| 档 | f1 mount(ms) | f2 滚动帧中位(ms) | f4 流式到上屏(ms) |
+|---|---|---|---|
+| n100 | 59.6 | 17.2 | 137 |
+| n1000 | 160.2 | 19.6 | 1,178 |
+| n10000 | 491.4 | **184.8** | **21,508** |
+
+**N4 决策读数**:10k 档滚动帧 185ms(基线 17ms 的 11 倍,远超 16.7ms 流畅线)且**流式回放(20 delta)到上屏 21.5 秒**——裸 v-for 全量 DOM 在长会话下不仅打开慢,流式期间每 delta 的全列表 patch 使会话事实不可用。虚拟化路线(content-visibility vs 真虚拟化)对比即以本表为基线同参复跑。f4 与后端 h3(10k 整轮 155.6ms)构成前后端对子:流式上屏瓶颈在渲染侧(21.5s)而非 daemon 侧。
+
+(测量边界:fake EventSource 逐条 emit 含 Node→页面的 evaluate 往返,f4 是端到端上界;结构教训 = 10k 档必须每档独立 test()——同 renderer 内 reload 累积 8 run 会崩 WSL2 Chromium。复跑一致性:同日两跑 f4@10k 均 21.5s / 滚帧@10k 185-195ms 稳定;mount/f4@1k 抖动 ±40%——再次佐证数字不进门禁、判定走 change detection 的裁定。)
+
 ### F5 对照(harness 开销在真实端到端中的占比)
 
 真实负载画像(见 §4):assistant 轮平均 total_ms = 12,965(n=865)。h1(20.7ms)/ 12,965ms ≈ **0.16%** —— LLM 网络+生成占绝对大头,harness 开销在单轮体感中可忽略;N9 数字的价值在**回归可见性**与**长会话场景**(h3 155ms / b1_disk 132ms 会在用户体感内叠加)。

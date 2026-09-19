@@ -89,6 +89,12 @@ jobs:
       - name: cargo clippy --lib
         run: cargo clippy --lib -- -D warnings
 
+      # N9 bench 编译门(09-19-n9-perf-benchmark):bench 数字不进门禁
+      # (抖动),但 bench 代码的编译面必须进——无人跑的 bench 会悄悄腐烂
+      # 到编译不过。check 级(criterion 不执行),spec perf-baseline.md §1。
+      - name: cargo check benches (bench feature compile gate)
+        run: cargo check --lib --features bench --benches
+
       - name: cargo test --lib
         run: cargo test --lib
 
@@ -158,3 +164,10 @@ jobs:
       # webServer 自起 vite dev :1422,无 continue-on-error)。
       - name: Playwright browser regression
         run: pnpm test:e2e
+
+      # N9 前端 bench 编译门(09-19-n9-perf-benchmark):单文件 tsc 检查
+      # bench/*.bench.ts 可解析(Node IO 隔离在 io.mjs,app 不装
+      # @types/node——实测它经 vitest/globals 污染 vue-tsc 面);bench
+      # 数字不进门禁。种子 fixtures 为生成物不入库,gen 不在 CI 跑。
+      - name: Bench files compile gate (tsc)
+        run: pnpm exec tsc --noEmit --target es2022 --module esnext --moduleResolution bundler --skipLibCheck bench/render.bench.ts

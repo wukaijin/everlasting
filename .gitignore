@@ -80,3 +80,6 @@ reasonix.toml
 
 # daemon.sh 运行时 PID 文件(不入库)
 .everlasting-daemon.pid
+
+# N9 前端基准:种子生成物(gen-fixtures.mjs 可再生,10k 档 17MB 不入库)
+app/bench/fixtures/

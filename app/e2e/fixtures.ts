@@ -409,7 +409,7 @@ export const test = base.extend<TestFixtures>({
               window as unknown as {
                 __stream: StreamControlLike;
               }
-            ).__stream.emit(n, p),
+            ).__stream.emit(n as string, p),
           [name, payload],
         ),
     });
