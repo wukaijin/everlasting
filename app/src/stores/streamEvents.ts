@@ -126,6 +126,7 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
       latencyByTurn: new Map(),
       pendingTimelineText: null,
       activeThinkingIdx: null,
+      turnStartBlockIdx: 0,
     };
     activeRequests.set(requestId, state);
     pinnedSessions.add(sessionId);
@@ -241,7 +242,10 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
           break;
         }
       }
-      msgs.push({ id: genId(), role: "assistant", content: "" });
+      // 09-20(TTFB 空窗反馈): 占位即刻 streaming —— 后端 Start 要等 LLM
+      // 响应头到达才发,期间无它则空窗期连光标都不亮(先例:上方外来认领
+      // 占位的同款注释;经典 send/resend 的占位同此,见 chatSendActions)。
+      msgs.push({ id: genId(), role: "assistant", content: "", streaming: true });
       useMessageQueueStore().shiftFront(req.sessionId, count);
       return;
     }
@@ -287,6 +291,11 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         req.groupChatStarted = true;
         last.streaming = true;
         last.error = undefined;
+        // 09-20(块级思考时长): 记本轮在 contentBlocks 中的起点,供
+        // `turn_complete` 只对本轮区间内的 thinking 块打 thinkingMs
+        // (多 turn 共用占位时防前轮块的时长被本轮值覆盖)。群聊新
+        // push 的占位无 contentBlocks → 0。
+        req.turnStartBlockIdx = last.contentBlocks?.length ?? 0;
         // 08-04 follow-up (实时 speaker 标识): stamp the announced
         // speaker on this turn's placeholder so the MessageItem chip
         // renders the name live. Cleared here (consumed) so a later
@@ -473,6 +482,21 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
         }
         if (turnLatency.thinkingMs !== null) {
           last.thinkingDurationMs = turnLatency.thinkingMs;
+          // 09-20(块级思考时长): 消息级是覆盖写,多 turn 共用占位时会把
+          // 前面 turn 的块的 "Thought for" 全部刷成本轮值 —— 因此按本轮
+          // 区间 [turnStartBlockIdx, len) 给 thinking 块各挂各的 thinkingMs,
+          // 让实时态与 reload 后 per-turn 拆行的显示一致。区间外
+          // (前几轮)的块不动;本轮无 thinking 块(纯文本 turn)时自然空转。
+          const blocks = last.contentBlocks;
+          if (blocks) {
+            const from = Math.min(req.turnStartBlockIdx, blocks.length);
+            for (let i = from; i < blocks.length; i++) {
+              const b = blocks[i];
+              if (b.kind === "thinking") {
+                b.thinkingMs = turnLatency.thinkingMs;
+              }
+            }
+          }
         }
         // Per-session cumulative: each turn contributes
         // its own `totalMs`. Matches the A4

@@ -165,6 +165,13 @@ export interface RequestState {
   // thinking(think1→sig1→think2→sig2,无中间文本)合并成一个块,和后端
   // 落库/rehydrate 一致。OpenAI(无 signature)同理单块。
   activeThinkingIdx: number | null;
+  // 09-20(块级思考时长): 本轮 turn 在 contentBlocks 中的起始索引。
+  // `case "start"` 记录(= 当时 contentBlocks.length),`case
+  // "turn_complete"` 只给 [turnStartBlockIdx, len) 区间内的 thinking 块
+  // 打 thinkingMs。多 turn 共用同一占位时消息级 thinkingDurationMs 是
+  // 覆盖写,若不按区间打标,前面 turn 的块的 "Thought for" 会被最后一轮
+  // 的值全部刷掉(reload 后按行拆分才是正确形态,此处让实时态对齐)。
+  turnStartBlockIdx: number;
   // F5: per-request error flag. The cancel / network-drop
   // path also persists a partial turn (with `usage: None`),
   // so the seq-lookup is still meaningful — the errored
@@ -1197,6 +1204,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       latencyByTurn: new Map(),
       pendingTimelineText: null,
       activeThinkingIdx: null,
+      turnStartBlockIdx: 0,
     });
     // Pin the session while streaming — it cannot be evicted
     // even if the user visits 20+ other sessions.

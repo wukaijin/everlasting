@@ -236,6 +236,9 @@ export function createMessageActions(ctx: MessageActionsContext) {
       seq: nextSeq + 1,
       role: "assistant",
       content: "",
+      // 09-20(TTFB 空窗反馈): 同 send() 占位 —— Start 事件前就亮
+      // streaming 反馈,失败/回收路径同 send() 各自清理。
+      streaming: true,
     };
     msgs.push(userMsg, assistantMsg);
     const history: ChatMessagePayload[] = msgs

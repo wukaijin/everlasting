@@ -108,7 +108,19 @@ export interface ThinkingBlockInfo {
  *  (`thinkingBlocks`/`toolCalls`/`content`)的固定排序,视觉与现状一致。 */
 export type ContentBlockView =
   | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string; signature: string }
+  | {
+      kind: "thinking";
+      text: string;
+      signature: string;
+      /** 09-20(块级思考时长): 该 thinking 块所属 turn 的思考时长
+       * (`turn_complete.thinking_ms`)。流式期间多 turn 共用一个 assistant
+       * 占位,消息级 `thinkingDurationMs` 是覆盖写 —— 若 ThinkingBlock 只
+       * 读消息级,前面 turn 的 "Thought for" 会被最后一轮的值全部刷掉。
+       * `case "turn_complete"` 按本轮 `turnStartBlockIdx` 区间打标;
+       * reload 后不回填(行级 `thinkingDurationMs` 是该 turn 的正确值,
+       * 渲染层 `item.thinkingMs ?? message.thinkingDurationMs` 回退)。 */
+      thinkingMs?: number;
+    }
   | { kind: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | {
       kind: "tool_result";

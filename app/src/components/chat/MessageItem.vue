@@ -175,6 +175,19 @@ const showStreamingHint = computed<boolean>(
   () => !!props.message.streaming && !props.message.content,
 );
 
+/** 09-20(TTFB 空窗反馈): assistant 占位已 streaming 但还没有任何可见
+ *  内容 —— 即发送→首个 thinking_delta / delta 的 TTFB 空窗(后端
+ *  Start 要等 LLM HTTP 响应头到达才发)。此前该窗口气泡完全空白,
+ *  发送只有输入框流光 / Stop 键这类全局效果,消息区零反馈。渲染
+ *  "正在思考…"占位行;首个内容块到达后 hasVisibleBubble 翻真自然
+ *  消失。user 行不受限(role 门)。 */
+const isAwaitingFirstChunk = computed<boolean>(
+  () =>
+    props.message.role === "assistant" &&
+    !!props.message.streaming &&
+    !hasVisibleBubble.value,
+);
+
 // B12 Checklist (PR2 frontend, 2026-06-19): the
 // `update_checklist` tool is rendered as a floating
 // `<ChecklistCard>` overlay (mounted in ChatPanel), NOT as a
@@ -969,7 +982,7 @@ const messageImages = computed<
           :blocks="item.blocks"
           :streaming="message.streaming"
           :show-streaming-hint="showStreamingHint"
-          :thinking-duration-ms="message.thinkingDurationMs"
+          :thinking-duration-ms="item.thinkingMs ?? message.thinkingDurationMs"
         />
         <!--
           交错思考: tool_use 在 timeline 内按真实流序渲染(穿插在 thinking/
@@ -1328,9 +1341,24 @@ const messageImages = computed<
         @click="onMarkdownClick"
         v-html="bubbleHtml"
       />
-      <span v-if="message.streaming" class="msg__cursor" aria-hidden="true"
+      <!-- 空窗期(isAwaitingFirstChunk)隐藏光标:▍ 表示文本插入点,
+           空窗期还没有任何文本,与"正在思考…"并存会重复。 -->
+      <span
+        v-if="message.streaming && !isAwaitingFirstChunk"
+        class="msg__cursor"
+        aria-hidden="true"
         >▍</span
       >
+      <!-- 09-20(TTFB 空窗反馈): 发送→首个内容块的窗口期占位行。
+           streaming 从占位创建起为真(chatSendActions),首个
+           thinking_delta / delta 到达后 hasVisibleBubble 翻真自然消失。 -->
+      <span
+        v-if="isAwaitingFirstChunk"
+        class="msg__awaiting"
+        data-testid="msg-awaiting-hint"
+      >
+        正在思考…
+      </span>
       <!--
         D3 PR3 (2026-06-17): "(edited)" label. Renders
         inline at the bottom-right of the bubble when the
@@ -1948,6 +1976,26 @@ const messageImages = computed<
 @keyframes blink {
   50% {
     opacity: 0;
+  }
+}
+
+/* 09-20(TTFB 空窗反馈): 发送→首个内容块窗口期的"正在思考…"占位行。
+   accent-text + 慢呼吸(非 spin —— 等待的是模型首响应,不是进度);
+   prefers-reduced-motion 由 style.css 全局 @media 折叠动画时长。 */
+.msg__awaiting {
+  color: var(--color-accent-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  animation: msg-awaiting-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes msg-awaiting-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
   }
 }
 

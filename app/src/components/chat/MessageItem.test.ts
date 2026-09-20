@@ -1062,3 +1062,114 @@ describe("MessageItem — user bubble @token highlight (08-26-f5 P2)", () => {
     expect(wrapper.find(".msg__markdown code.file-ref").exists()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------
+// 09-20 流式反馈两修复:
+//   1. TTFB 空窗占位 —— assistant 占位 streaming 且无任何可见内容
+//      (发送→首个 thinking_delta / delta 的窗口)时渲染"正在思考…",
+//      此前该窗口气泡完全空白(占位不带 streaming,连 ▍ 都不亮)。
+//   2. 块级 thinkingMs —— timeline 里每个 thinking 块的
+//      "Thought for Xs" 优先读块级 thinkingMs(流式期间多 turn 共用
+//      占位,消息级是覆盖写,曾把所有块刷成最后一轮的值),无块级值
+//      时回退消息级 thinkingDurationMs(reload 后行级即正确值)。
+// ---------------------------------------------------------------------
+
+describe("MessageItem — 09-20 TTFB 空窗占位(正在思考…)", () => {
+  it("streaming 空占位渲染「正在思考…」且不渲染 ▍ 光标", async () => {
+    const wrapper = mountItem(
+      { id: "m-await-1", role: "assistant", content: "", streaming: true },
+      pinia,
+    );
+    await flushPromises();
+
+    const hint = wrapper.find('[data-testid="msg-awaiting-hint"]');
+    expect(hint.exists()).toBe(true);
+    expect(hint.text()).toBe("正在思考…");
+    // 空窗期光标让位(▍ 表示文本插入点,窗口期还没有任何文本)。
+    expect(wrapper.find(".msg__cursor").exists()).toBe(false);
+  });
+
+  it("content 到达后占位消失(delta 实时写 content → hasVisibleBubble 翻真)", async () => {
+    const wrapper = mountItem(
+      {
+        id: "m-await-2",
+        role: "assistant",
+        content: "first chunk arrived",
+        streaming: true,
+      },
+      pinia,
+    );
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="msg-awaiting-hint"]').exists()).toBe(false);
+    // 有内容后光标回归(通用流式反馈)。
+    expect(wrapper.find(".msg__cursor").exists()).toBe(true);
+  });
+
+  it("非 streaming 或 user 行不渲染占位", async () => {
+    const done = mountItem(
+      { id: "m-await-3", role: "assistant", content: "", streaming: false },
+      pinia,
+    );
+    await flushPromises();
+    expect(done.find('[data-testid="msg-awaiting-hint"]').exists()).toBe(false);
+
+    const user = mountItem(
+      { id: "m-await-4", role: "user", content: "", streaming: true },
+      pinia,
+    );
+    await flushPromises();
+    expect(user.find('[data-testid="msg-awaiting-hint"]').exists()).toBe(false);
+  });
+});
+
+describe("MessageItem — 09-20 块级 thinkingMs(Thought for header)", () => {
+  it("timeline 内各 thinking 块显示各自 thinkingMs,互不覆盖", async () => {
+    const wrapper = mountItem(
+      {
+        id: "m-block-ms",
+        role: "assistant",
+        content: "",
+        // 消息级残留值(最后一轮的覆盖写)—— 不得传染给带块级值的块。
+        thinkingDurationMs: 9_000,
+        contentBlocks: [
+          { kind: "thinking", text: "t0", signature: "", thinkingMs: 1_000 },
+          { kind: "tool_use", id: "c0", name: "shell", input: { command: "ls" } },
+          { kind: "thinking", text: "t1", signature: "", thinkingMs: 2_500 },
+        ],
+      },
+      pinia,
+    );
+    await flushPromises();
+
+    const summaries = wrapper.findAll("details.thinking summary");
+    expect(summaries.length).toBe(2);
+    expect(summaries[0].text()).toContain("Thought for 1.0s");
+    expect(summaries[1].text()).toContain("Thought for 2.5s");
+    // 消息级 9_000 不出现在任何块上(块级优先)。
+    expect(summaries[0].text()).not.toContain("9s");
+    expect(summaries[1].text()).not.toContain("9s");
+  });
+
+  it("无块级值的 thinking 块回退消息级 thinkingDurationMs", async () => {
+    // reload 后(rehydrate / 旧消息):contentBlocks 的 thinking 块不带
+    // thinkingMs,块级缺失 → 回退行级 thinkingDurationMs(该行所属 turn
+    // 的正确值,由 reloadAfterFinalize 按 seq 挂回)。
+    const wrapper = mountItem(
+      {
+        id: "m-block-fallback",
+        role: "assistant",
+        content: "",
+        thinkingDurationMs: 8_000,
+        contentBlocks: [{ kind: "thinking", text: "legacy", signature: "" }],
+      },
+      pinia,
+    );
+    await flushPromises();
+
+    const summaries = wrapper.findAll("details.thinking summary");
+    expect(summaries.length).toBe(1);
+    // 8_000ms < 10s → 格式化器带一位小数("8.0s")。
+    expect(summaries[0].text()).toContain("Thought for 8.0s");
+  });
+});

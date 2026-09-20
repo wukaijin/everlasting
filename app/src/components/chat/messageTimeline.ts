@@ -28,7 +28,15 @@ import { colorTagForName } from "../../utils/colorTag";
 // (工具区)在 useTimeline 时隐藏(避免重复)。回退路径下两者仍旧行为。
 // ---------------------------------------------------------------------------
 export type TimelineItem =
-  | { kind: "thinking"; blocks: ThinkingBlockInfo[] }
+  | {
+      kind: "thinking";
+      blocks: ThinkingBlockInfo[];
+      /** 09-20(块级思考时长): 该块所属 turn 的 thinking_ms,由
+       * `streamEvents` 的 `turn_complete` 区间打标写入;ThinkingBlock
+       * header 优先用它,回退消息级 `thinkingDurationMs`(reload 后
+       * 行级即正确值)。 */
+      thinkingMs?: number;
+    }
   | { kind: "text"; text: string; html: string }
   | { kind: "tool_use"; id: string; name: string; input: Record<string, unknown> };
 
@@ -42,9 +50,13 @@ export function buildTimeline(
     for (const b of m.contentBlocks) {
       if (b.kind === "thinking") {
         // ContentBlockView(thinking) → ThinkingBlockInfo(去 kind)。
+        // thinkingMs 块级透传(09-20):ThinkingBlock header 优先块级值。
         out.push({
           kind: "thinking",
           blocks: [{ text: b.text, signature: b.signature }],
+          ...(typeof b.thinkingMs === "number"
+            ? { thinkingMs: b.thinkingMs }
+            : {}),
         });
       } else if (b.kind === "text" && b.text) {
         out.push({ kind: "text", text: b.text, html: renderMarkdown(b.text) });

@@ -110,6 +110,7 @@ function seedStreamingRequest(
     latencyByTurn: new Map(),
     pendingTimelineText: null,
     activeThinkingIdx: null,
+    turnStartBlockIdx: 0,
   });
 }
 

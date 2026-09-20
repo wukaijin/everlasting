@@ -414,6 +414,11 @@ export function createSendActions(ctx: SendActionsContext) {
       seq: nextSeq + 1,
       role: "assistant",
       content: "",
+      // 09-20(TTFB 空窗反馈): 占位即刻 streaming —— 后端 Start 要等
+      // LLM HTTP 响应头到达才发,若无此标志,发送→首个 thinking_delta
+      // 的 TTFB 空窗里连 ▍ 光标/"正在思考…"占位都不亮。done/error /
+      // IPC 失败 / queued-injected 回收各路径都会把它清掉或整行移除。
+      streaming: true,
     };
     // The controller's event handlers look up `last` on this
     // array, so the assistant placeholder MUST be the final

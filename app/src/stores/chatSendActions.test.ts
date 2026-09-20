@@ -277,6 +277,7 @@ describe("chatSendActions — queued send with pending question card (CH8-2b)", 
       latencyByTurn: new Map(),
       pendingTimelineText: null,
       activeThinkingIdx: null,
+      turnStartBlockIdx: 0,
     });
   }
 

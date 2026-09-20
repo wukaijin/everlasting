@@ -1421,6 +1421,159 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
     expect(last.thinkingDurationMs).toBe(500);
   });
 
+  it("09-20 块级 thinkingMs: turn_complete 按本轮区间打标,前轮 thinking 块不被最后一轮覆盖", () => {
+    // 用户报告的 bug:流式期间(未 reload),消息里所有 thinking 块的
+    // "Thought for Xs" 会被最后一次 turn_complete 的 thinking_ms 全部
+    // 覆盖 —— 消息级 thinkingDurationMs 是覆盖写,而多 turn 共用一个
+    // assistant 占位。修复:turn_complete 只给 [turnStartBlockIdx, len)
+    // 区间内的 thinking 块打块级 thinkingMs,渲染层块级优先。
+    //
+    // 与上面 3-turn 用例的差异:req 注入完整 RequestState 字段
+    // (activeThinkingIdx / pendingTimelineText / turnStartBlockIdx)——
+    // 缺 activeThinkingIdx(undefined ≠ null)时 thinking_delta 不建块,
+    // contentBlocks 根本不会生长。
+    const stream = useStreamControllerStore();
+    const sid = "block-thinking-ms-sid";
+    const messages = rehydrateMessages([usrTyped(0, "go"), asst(1, "", [])]);
+    stream.putMessages(sid, messages, false);
+
+    const req = {
+      requestId: "rid-block-ms",
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: messages[1].id,
+      groupChat: false,
+      groupChatStarted: false,
+      pendingSpeaker: null,
+      terminalError: null,
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
+      turnStartBlockIdx: 0,
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(req.requestId, req);
+
+    const handleChatEvent = (
+      stream as unknown as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          text?: string;
+          seq?: number;
+          ttfb_ms?: number | null;
+          gen_ms?: number | null;
+          total_ms?: number | null;
+          thinking_ms?: number | null;
+        }) => void;
+      }
+    ).handleChatEvent;
+    const handleToolCall = (
+      stream as unknown as {
+        handleToolCall: (p: {
+          request_id: string;
+          id: string;
+          name: string;
+          input: unknown;
+        }) => void;
+      }
+    ).handleToolCall;
+
+    // Turn 0: thinking → tool → turn_complete(thinkingMs=200)
+    handleChatEvent({ request_id: "rid-block-ms", kind: "start" });
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "thinking_delta",
+      text: "t0 think",
+    });
+    handleToolCall({
+      request_id: "rid-block-ms",
+      id: "c0",
+      name: "shell",
+      input: { command: "ls" },
+    });
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "turn_complete",
+      seq: 1,
+      total_ms: 350,
+      thinking_ms: 200,
+    });
+
+    // Turn 1: thinking → tool → turn_complete(thinkingMs=300)
+    handleChatEvent({ request_id: "rid-block-ms", kind: "start" });
+    expect(req.turnStartBlockIdx).toBe(2); // [thinking, tool_use] 已在 blocks
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "thinking_delta",
+      text: "t1 think",
+    });
+    handleToolCall({
+      request_id: "rid-block-ms",
+      id: "c1",
+      name: "shell",
+      input: { command: "pwd" },
+    });
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "turn_complete",
+      seq: 3,
+      total_ms: 450,
+      thinking_ms: 300,
+    });
+
+    // Turn 2: thinking → text → turn_complete(thinkingMs=500)
+    handleChatEvent({ request_id: "rid-block-ms", kind: "start" });
+    expect(req.turnStartBlockIdx).toBe(4);
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "thinking_delta",
+      text: "t2 think",
+    });
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "delta",
+      text: "final answer",
+    });
+    handleChatEvent({
+      request_id: "rid-block-ms",
+      kind: "turn_complete",
+      seq: 5,
+      total_ms: 900,
+      thinking_ms: 500,
+    });
+
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+    // 流序结构:[t0 think][tool][t1 think][tool][t2 think]。turn 2 的
+    // text 只累积在 pendingTimelineText,边界(thinking/tool/done)才
+    // flush 成 text 块 —— turn_complete 不是边界,故无 text 块。
+    const blocks = last.contentBlocks ?? [];
+    expect(blocks.map((b) => b.kind)).toEqual([
+      "thinking",
+      "tool_use",
+      "thinking",
+      "tool_use",
+      "thinking",
+    ]);
+    // 核心断言:每个 thinking 块带各自 turn 的 thinkingMs,最后一轮的
+    // 500 不冲掉前两轮的 200 / 300(bug 形态是三块全变 500)。
+    const think0 = blocks[0];
+    const think1 = blocks[2];
+    const think2 = blocks[4];
+    expect(think0.kind === "thinking" && think0.thinkingMs === 200).toBe(true);
+    expect(think1.kind === "thinking" && think1.thinkingMs === 300).toBe(true);
+    expect(think2.kind === "thinking" && think2.thinkingMs === 500).toBe(true);
+    // 消息级单值保持 last-wins(现有消费者 / reload 回退语义不变)。
+    expect(last.thinkingDurationMs).toBe(500);
+  });
+
   it("re-attach contract: setting `target.thinkingDurationMs` on the reactive target fires the per-message chip", async () => {
     // The re-attach path is the most likely place for
     // the "Thought for —" regression. After
@@ -2413,6 +2566,7 @@ describe("streamController — R3 stream-resync interrupted finalize", () => {
       latencyByTurn: new Map(),
       pendingTimelineText: null,
       activeThinkingIdx: null,
+      turnStartBlockIdx: 0,
     };
   }
 
