@@ -1940,3 +1940,31 @@ N4(真虚拟化,用户裁定 @tanstack/vue-virtual 3.13.39)全链交付。可行
 ### Status
 
 [OK] **Completed**
+
+
+## Session 152: N2 checkpoint/revert 闭环:推荐立项→群聊评审→四 PR 全链落地
+
+**Date**: 2026-09-20
+**Task**: N2 checkpoint/revert 闭环:推荐立项→群聊评审→四 PR 全链落地
+**Branch**: `main`
+
+### Summary
+
+BACKLOG N2(N9→N4→N2 依赖链链头解封)全链交付。推荐立项后三问收敛(意义裁定/悬空快照路线 vs 分支 auto-commit/多 agent 协调),规划期两处自纠(shell 重定向写无路径属性→全集还原+归属标记;DB 实证 jjh-mono 8 轮纯查询→写触发门,成本与实际变更成正比)。群聊评审(session 7b9f3e0d,136 万 token,15 结论全 verified)回填:design §2 API 级致命伤(Index::new bare index 不可行→repo.index 句柄无 index.write)/基线 P0 移轮首/D3 级联删事务/OCTOU preview_token 双 oid/detached ref 恒回退主仓库/prev_seq 稀疏链;OQ 三裁定(不提级 include-ignored 实测 0/16/采纳 D3 级联/MVP 只拒本 session busy)。PR0 git/checkpoint 七原语+AC1 三不变+B6 bench(~3µs/文件线性);PR1 daemon 接线(turn_checkpoints 表+写信号门四路+fail-open 全链+Settings 开关+删会话清 ref+D3 级联,轮末钩落 hub finalize_turn 经 check 独立验证);PR2 读面(list/diff 双注册+TurnCard 四态门+DiffView 同构);PR3 revert 闭环(preview/execute+RevertConfirmModal 评审重排六项+CheckpointReverted 审计+e2e 4 用例)。每 PR 过 trellis-check 共修 5 处。live 冒烟真跑两轮写任务:基线+写轮落行/伞 ref 指链头/git log 零污染/list+diff 命令 1+/1-/AC6 删清全验。终态 2534 后端+89 remote+1979 前端+27 e2e+build+bench 门全绿;daemon 已重启带 N2。附带:group-chat skill MCP 宿主等待策略改后台 shell 循环判 busy 回调(废弃逐 25s 轮询,单窗≠终态 live 实证)。spec 沉淀 checkpoint-contract.md 七节+DAEMON-API/ROADMAP/BACKLOG 记账。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a880a85b` | (see git log) |
+| `35d3e494` | (see git log) |
+| `86014d8f` | (see git log) |
+| `4f41fafd` | (see git log) |
+| `e7b85aa4` | (see git log) |
+| `e81bda3c` | (see git log) |
+| `d49fb8fd` | (see git log) |
+| `4d6dd727` | (see git log) |
+
+### Status
+
+[OK] **Completed**

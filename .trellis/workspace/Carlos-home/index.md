@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 151
+- **Total Sessions**: 152
 - **Last Active**: 2026-09-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~1942 | Active |
+| `journal-4.md` | ~1970 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 152 | 2026-09-20 | N2 checkpoint/revert 闭环:推荐立项→群聊评审→四 PR 全链落地 | `a880a85b`, `35d3e494`, `86014d8f`, `4f41fafd`, `e7b85aa4`, `e81bda3c`, `d49fb8fd`, `4d6dd727` | `main` |
 | 151 | 2026-09-20 | N4 长会话渲染虚拟化:可行性分析→群聊评审→PR0-3 全链落地 | `74d90599`, `b4ce7a45` | `main` |
 | 150 | 2026-09-19 | read 族工具卡片紧凑化(glob/list_dir/read_file 1 行) | - | `main` |
 | 149 | 2026-09-19 | evl CLI 二期:discuss 子命令(MCP client)+ 无参 help/健康检查 | `c7276679`, `62657426` | `main` |
