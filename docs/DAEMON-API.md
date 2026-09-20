@@ -411,6 +411,10 @@ standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既�
 `cancel/*`(Stop)、`message_queue/*`、`config/*`、
 `background_shells/*`(list_background_shells / kill_background_shell,09-02)、
 `disk/*`(get_disk_usage / run_disk_cleanup,09-03)、
+`checkpoint/*`(N2 09-20 四条:list_turn_checkpoints / get_turn_checkpoint_diff /
+revert_to_checkpoint_preview / revert_to_checkpoint_execute;契约见
+`.trellis/spec/backend/checkpoint-contract.md`——prev_seq 稀疏链语义、
+preview_token 双 oid 拼接、Unavailable/Broken/StalePreview/SessionBusy 类型化降级)、
 `providers/*`、`usage/*`、`files/*`、`worktree/*`、`scheduled_tasks/*`。GET 端点:
 `/api/v1/health`、`/api/v1/stream`(SSE)、`/api/v1/sessions/{id}/snapshot`,以及
 二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16)与 files 域三条

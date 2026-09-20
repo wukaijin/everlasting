@@ -28,6 +28,7 @@
 | [Token Usage Tracking](./token-usage-tracking.md) | A4 token 计量契约索引(Scope/Tests 留本文)+ 14 Scenario 分篇(turn_trace 各列 / cache 归因 / tools=0 判别 / 签名契约 / 用例对照 / 决策记录;子目录 `token-usage-tracking/`) | ✅ 有实质内容 |
 | [Latency Tracking](./latency-tracking.md) | F5 latency 三列 + ttfb/thinking 计量(签名契约 / 用例 / 决策已拆至子目录 `latency-tracking/`) | ✅ 有实质内容 |
 | [Git Diff](./git-diff.md) | git diff workdir-vs-branch FileDiff 契约 | ✅ 有实质内容 |
+| [Checkpoint Contract](./checkpoint-contract.md) | N2 悬空快照链 + UI revert(四命令 / turn_checkpoints 表 / 写信号门 / TOCTOU token) | ✅ 有实质内容 |
 | [Project CWD Boundary](./project-cwd-boundary.md) | 项目 cwd 边界与路径越界防护 | ✅ 有实质内容 |
 | [Error Handling](./error-handling.md) | 错误类型与处理策略 | 有实质内容(残留少量模板句可清) |
 | [Quality Guidelines](./quality-guidelines.md) | 代码质量标准 / forbidden patterns | 有实质内容(残留少量模板句可清) |
