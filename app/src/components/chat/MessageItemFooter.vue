@@ -13,8 +13,8 @@
 // decision, the (edited) label stays in the parent — it sits
 // inside the bubble div, visually distinct from the error /
 // latency chips that hang below the bubble. The footer
-// therefore has three visual surfaces (error row, retry button,
-// latency chip).
+// therefore has four visual surfaces (error row, retry button,
+// checkpoint badge + latency chip row).
 //
 // Why pure presentation (no store import for retry):
 //   - Single source of truth: the parent (`MessageItem.vue`)
@@ -113,9 +113,17 @@ const props = withDefaults(
      *  and flips its label; `ok` / `fail` render the inline
      *  result text next to the error row. */
     testState?: TestState | null;
+    /** N2 follow-up (2026-09-20): checkpoint 徽标载荷 —— seq 命中
+     *  「有变更」快照行时父传 files_changed(≥1),否则不传 / null。
+     *  渲染在耗时 chip 左侧,点击 emit `turn-diff`(父开「本轮
+     *  diff」弹窗)。role / readonly / 行命中由父闸(store 的
+     *  filesChangedAt,与「本轮 diff」入口同闸),此处仅防
+     *  streaming 中渲染。 */
+    checkpointFiles?: number | null;
   }>(),
   {
     streaming: false,
+    checkpointFiles: null,
     latency: undefined,
     error: undefined,
     messageSeq: undefined,
@@ -134,6 +142,9 @@ const emit = defineEmits<{
    *  button. No payload — the parent already knows the
    *  resolved `modelId` (it passed it down). */
   (e: "test-connection"): void;
+  /** N2 follow-up (2026-09-20): checkpoint 徽标点击 —— 父据此打开
+   *  「本轮 diff」弹窗(与 MessageActionsMenu 的同名入口同路)。 */
+  (e: "turn-diff"): void;
 }>();
 
 /** A5 R2: whether the retry button renders at all. True iff
@@ -190,6 +201,17 @@ const showLatency = computed<boolean>(
     !props.streaming &&
     !!props.latency &&
     typeof props.latency.totalMs === "number",
+);
+
+/** checkpoint 徽标可见性(N2 follow-up,2026-09-20)。行命中 /
+ *  role / readonly 已由父经 checkpointFiles prop 闸掉(非 null 即
+ *  ≥1);此处只防 streaming 中渲染 + 数值防御。与 latency chip
+ *  不同,徽标不依赖 latency 对象 —— pre-F5 老行只要有 diff 也显示。 */
+const showCheckpointBadge = computed<boolean>(
+  () =>
+    !props.streaming &&
+    typeof props.checkpointFiles === "number" &&
+    props.checkpointFiles > 0,
 );
 
 /** The chip's visible label. Falls back to "—" when no
@@ -310,33 +332,60 @@ function onRetryClick(): void {
     trigger (matches the project-wide Tooltip convention
     documented in `.trellis/spec/frontend/reka-ui-usage.md`).
   -->
-  <TooltipProvider v-if="showLatency">
-    <TooltipRoot :delay-duration="150">
-      <TooltipTrigger as-child>
-        <span
-          class="msg__latency"
-          data-testid="msg-latency-chip"
-        >{{ latencyTotalLabel }}</span>
-      </TooltipTrigger>
-      <TooltipPortal>
-        <TooltipContent
-          class="msg__latency-tooltip"
-          :side-offset="4"
-        >
-          <div
-            v-for="row in latencyRows"
-            :key="row.label"
-            class="msg__latency-tooltip-row"
-            :data-testid="`msg-latency-tooltip-row-${row.label}`"
+  <!--
+    N2 follow-up (2026-09-20): meta row —— checkpoint 徽标 + 耗时
+    chip 并排右对齐。两者原本都是 .msg flex column 的独立子元素
+    (各 align-self: flex-end,不包一行会竖着叠);徽标在左、耗时
+    在右(耗时是最右侧的既有锚点,位置不动)。
+  -->
+  <div
+    v-if="showCheckpointBadge || showLatency"
+    class="msg__meta-row"
+  >
+    <button
+      v-if="showCheckpointBadge"
+      type="button"
+      class="msg__checkpoint"
+      data-testid="msg-checkpoint-chip"
+      :title="`本轮有 checkpoint(改动 ${checkpointFiles} 个文件),点击查看 diff`"
+      @click="emit('turn-diff')"
+    >
+      <Icon
+        name="history"
+        :size="11"
+        icon-class="msg__checkpoint-icon"
+      />
+      <span class="msg__checkpoint-label">checkpoint</span>
+      <span class="msg__checkpoint-count">{{ checkpointFiles }}</span>
+    </button>
+    <TooltipProvider v-if="showLatency">
+      <TooltipRoot :delay-duration="150">
+        <TooltipTrigger as-child>
+          <span
+            class="msg__latency"
+            data-testid="msg-latency-chip"
+          >{{ latencyTotalLabel }}</span>
+        </TooltipTrigger>
+        <TooltipPortal>
+          <TooltipContent
+            class="msg__latency-tooltip"
+            :side-offset="4"
           >
-            <span>{{ row.label }}</span>
-            <span>{{ row.value }}</span>
-          </div>
-          <TooltipArrow class="msg__latency-tooltip-arrow" :size="6" />
-        </TooltipContent>
-      </TooltipPortal>
-    </TooltipRoot>
-  </TooltipProvider>
+            <div
+              v-for="row in latencyRows"
+              :key="row.label"
+              class="msg__latency-tooltip-row"
+              :data-testid="`msg-latency-tooltip-row-${row.label}`"
+            >
+              <span>{{ row.label }}</span>
+              <span>{{ row.value }}</span>
+            </div>
+            <TooltipArrow class="msg__latency-tooltip-arrow" :size="6" />
+          </TooltipContent>
+        </TooltipPortal>
+      </TooltipRoot>
+    </TooltipProvider>
+  </div>
 </template>
 
 <style scoped>
@@ -410,13 +459,54 @@ function onRetryClick(): void {
      `.msg` is `display: flex; flex-direction: column`,
      so the chip is the rightmost element of the bubble
      column). */
+/* N2 follow-up (2026-09-20): checkpoint 徽标 + 耗时 chip 的共享
+   行 —— 接管原 latency chip 的右对齐与贴角 margin(2026-08-29
+   ui-visual-polish r2 的 2px 贴角语义原样上移到行容器)。 */
+.msg__meta-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-end;
+  margin-top: 2px;
+}
+
+/* checkpoint 徽标:accent-muted 底 + accent 字,mono 小字与耗时
+   chip 同密度;底色差让它从右侧的 muted 耗时字旁「跳出来」
+   (醒目 = 可发现的还原点/入口)。点击 = 开「本轮 diff」弹窗。 */
+.msg__checkpoint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+  color: var(--color-accent-text);
+  background: var(--color-accent-muted);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+.msg__checkpoint:hover {
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+
+.msg__checkpoint-icon {
+  display: inline-flex;
+  color: inherit;
+}
+
+/* 文件数上标:同色降不透明度,作徽标的数值尾注(0 不会出现,
+   filesChangedAt 闸掉净零轮)。 */
+.msg__checkpoint-count {
+  opacity: 0.72;
+}
+
 .msg__latency {
   display: inline-flex;
   align-items: center;
-  align-self: flex-end;
-  /* 2026-08-29 ui-visual-polish r2:4px→2px,贴住气泡右下角,
-     消除"悬空小字"观感(位置结构是 ADR-2 决定,不动)。 */
-  margin-top: 2px;
   padding: 0 6px;
   font-size: var(--text-xs);
   font-family: var(--font-mono);

@@ -62,6 +62,7 @@ const baseProps = () => ({
     | { kind: "running" }
     | { kind: "ok"; latencyMs: number }
     | { kind: "fail"; error: string },
+  checkpointFiles: null as number | null,
 });
 
 function mountFooter(propsOverride: Partial<ReturnType<typeof baseProps>> = {}) {
@@ -497,3 +498,49 @@ describe("MessageItemFooter — N1 test-connection button (emit + inline result)
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// N2 follow-up (2026-09-20) — checkpoint 徽标(latency chip 左侧的
+// 醒目标识;点击 emit turn-diff,父开「本轮 diff」弹窗)。
+// 行命中 / role / readonly 由父经 checkpointFiles 闸(store 的
+// filesChangedAt,非 null 即 ≥1),这里只测渲染与 streaming 闸。
+// ---------------------------------------------------------------------------
+
+describe("MessageItemFooter — checkpoint 徽标", () => {
+  it("checkpointFiles 设数:渲染徽标(history 图标 + label + 文件数),无 latency 也显示", () => {
+    const w = mountFooter({ checkpointFiles: 3 });
+    const chip = w.get("[data-testid='msg-checkpoint-chip']");
+    expect(chip.text()).toContain("checkpoint");
+    expect(chip.text()).toContain("3");
+    expect(chip.find("svg").exists()).toBe(true);
+    // 不依赖 latency:pre-F5 老行只要有 diff 也有徽标。
+    expect(w.find("[data-testid='msg-latency-chip']").exists()).toBe(false);
+  });
+
+  it("checkpointFiles null(净零轮 / 无行 / 非 assistant / readonly 由父闸)→ 不渲染", () => {
+    const w = mountFooter({ checkpointFiles: null });
+    expect(w.find("[data-testid='msg-checkpoint-chip']").exists()).toBe(false);
+  });
+
+  it("streaming 中不渲染(轮末快照还没落,徽标不能抢跑)", () => {
+    const w = mountFooter({ checkpointFiles: 2, streaming: true });
+    expect(w.find("[data-testid='msg-checkpoint-chip']").exists()).toBe(false);
+  });
+
+  it("与 latency chip 并排同一 meta row;点击 emit turn-diff", async () => {
+    const w = mountFooter({
+      checkpointFiles: 2,
+      latency: { ttfbMs: 200, genMs: 800, totalMs: 1000 },
+    });
+    const row = w.get(".msg__meta-row");
+    expect(row.find("[data-testid='msg-checkpoint-chip']").exists()).toBe(true);
+    expect(row.find("[data-testid='msg-latency-chip']").exists()).toBe(true);
+    // 徽标在左、耗时在右(DOM 顺序 = 视觉顺序,flex row)。
+    const chipEl = w.get("[data-testid='msg-checkpoint-chip']").element;
+    const latEl = w.get("[data-testid='msg-latency-chip']").element;
+    expect(chipEl.nextElementSibling).toBe(latEl);
+
+    await w.get("[data-testid='msg-checkpoint-chip']").trigger("click");
+    expect(w.emitted("turn-diff")).toHaveLength(1);
+  });
+});

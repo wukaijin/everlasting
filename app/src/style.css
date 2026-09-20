@@ -212,10 +212,10 @@
     --z-drawer: 110; /* 移动端抽屉本体(Sidebar) */
     --z-input-pop: 200; /* 输入区弹层:latency / token usage / TriggerMenu */
     --z-sheet-overlay: 999; /* 重覆盖面遮罩(SubagentDrawer) */
-    --z-sheet: 1000; /* 重覆盖面:SubagentDrawer、DiffModal */
-    --z-confirm: 1100; /* 确认弹窗:ConfirmDialog、DeleteWorktreeConfirm */
+    --z-sheet: 1000; /* 重覆盖面:SubagentDrawer(DiffModal 09-20 起归 modal 家族) */
+    --z-confirm: 1100; /* 确认弹窗:ConfirmDialog、DeleteWorktreeConfirm、RevertConfirmModal */
     --z-confirm-critical: 1200; /* 高危确认:YoloConfirmModal */
-    --z-modal-overlay: 2000; /* Modal 家族遮罩(8 modal) */
+    --z-modal-overlay: 2000; /* Modal 家族遮罩(9 modal,09-20 DiffModal 并入) */
     --z-modal: 2001; /* Modal 家族内容 */
     --z-over-modal: 3000; /* 必须压过 Modal 家族:modal 内 reka portal Select、msg 菜单/tooltip */
     --z-toast: 5500; /* ToastProvider */

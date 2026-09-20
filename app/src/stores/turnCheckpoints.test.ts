@@ -1,9 +1,12 @@
 // Tests for `stores/turnCheckpoints.ts` — N2 轮间 diff 读面的 store
 // 封装(2026-09-20, task `09-20-n2-checkpoint-revert` PR2)。
 //
-// 契约(implement PR2「vitest:store 层命令封装 + 入口条件渲染单测」):
-//   1. 入口四态 —— `hasTurnDiff` 是唯一判定面:
-//      有行(写轮 seq 命中且 prev_seq 非空)→ true;
+// 契约(implement PR2「vitest:store 层命令封装 + 入口条件渲染单测」;
+// 2026-09-20 追加净零轮闸):
+//   1. 入口判定 —— `hasTurnDiff` 是唯一判定面:
+//      有行有变更(写轮 seq 命中、prev_seq 非空、files_changed > 0)→ true;
+//      净零轮(行在但 files_changed === 0:gitignore 工作区编辑 /
+//      写了又改回)→ false —— 入口点了必然空,不给;
 //      无行(只读轮/旧 session,rows 空)→ false;
 //      基线行(prev_seq === null)→ false;
 //      破链(CheckpointBroken)与能力不可用(CheckpointsUnavailable)
@@ -61,8 +64,8 @@ beforeEach(() => {
   invokeMock.mockResolvedValue([]);
 });
 
-describe("turnCheckpoints store — hasTurnDiff 入口四态", () => {
-  it("有行:写轮 seq 命中且 prev_seq 非空 → true(仅 assistant 卡消费该判定)", async () => {
+describe("turnCheckpoints store — hasTurnDiff 入口判定", () => {
+  it("有行有变更:seq 命中、prev_seq 非空、files_changed > 0 → true(仅 assistant 卡消费该判定)", async () => {
     const store = useTurnCheckpointsStore();
     invokeMock.mockResolvedValue([
       row({ seq: 0, prev_seq: null, files_changed: 0 }),
@@ -72,6 +75,18 @@ describe("turnCheckpoints store — hasTurnDiff 入口四态", () => {
     expect(store.hasTurnDiff("s1", 1)).toBe(true);
     // 未命中行 seq(只读轮,后端无行)→ false。
     expect(store.hasTurnDiff("s1", 2)).toBe(false);
+  });
+
+  it("净零轮:行在且 prev_seq 非空但 files_changed === 0 → false(gitignore 工作区编辑点了必然空)", async () => {
+    const store = useTurnCheckpointsStore();
+    invokeMock.mockResolvedValue([
+      row({ seq: 0, prev_seq: null, files_changed: 0 }),
+      row({ seq: 1, prev_seq: 0, files_changed: 0 }),
+    ]);
+    await store.refresh("s-net-zero");
+    expect(store.hasTurnDiff("s-net-zero", 1)).toBe(false);
+    // 同一行 revert 入口不受影响(净零轮仍是合法还原 target)。
+    expect(store.hasRevertTarget("s-net-zero", 1)).toBe(true);
   });
 
   it("无行:list 为空数组(旧 session / 全只读)→ false", async () => {
@@ -105,6 +120,23 @@ describe("turnCheckpoints store — hasTurnDiff 入口四态", () => {
     invokeMock.mockResolvedValue([row()]);
     await store.refresh("s1");
     expect(store.hasTurnDiff("s1", undefined)).toBe(false);
+  });
+
+  it("filesChangedAt:命中 → files_changed 数值;净零/基线/未命中 → null(与 hasTurnDiff 同闸)", async () => {
+    const store = useTurnCheckpointsStore();
+    invokeMock.mockResolvedValue([
+      row({ seq: 0, prev_seq: null, files_changed: 0 }),
+      row({ seq: 1, prev_seq: 0, files_changed: 0 }),
+      row({ seq: 3, prev_seq: 1, files_changed: 4 }),
+    ]);
+    await store.refresh("s1");
+    expect(store.filesChangedAt("s1", 3)).toBe(4);
+    expect(store.filesChangedAt("s1", 1)).toBeNull(); // 净零轮
+    expect(store.filesChangedAt("s1", 0)).toBeNull(); // 基线行
+    expect(store.filesChangedAt("s1", 2)).toBeNull(); // 未命中
+    expect(store.filesChangedAt("s1", undefined)).toBeNull();
+    expect(store.hasTurnDiff("s1", 3)).toBe(true);
+    expect(store.hasTurnDiff("s1", 1)).toBe(false);
   });
 });
 

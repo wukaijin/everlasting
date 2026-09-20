@@ -13,7 +13,7 @@
 // 组件是纯呈现(数据在父),单测直接以 props 驱动各态。
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, DOMWrapper, type VueWrapper } from "@vue/test-utils";
 
 import RevertConfirmModal from "./RevertConfirmModal.vue";
 import type { RevertPreview } from "../../stores/turnCheckpoints";
@@ -60,10 +60,17 @@ function mountModal(
   });
 }
 
-const q = (w: ReturnType<typeof mountModal>, sel: string) =>
-  w.find(sel);
-const exists = (w: ReturnType<typeof mountModal>, sel: string) =>
-  w.find(sel).exists();
+// 2026-09-20 层级修复:弹窗 Teleport 到 body,wrapper.find 只扫组件
+// 锚点看不到 portal 内容 —— 查询统一走 document.body(与 attachTo
+// 挂载点同根,beforeEach 清 body 时一并清掉)。
+const q = (_w: VueWrapper, sel: string) =>
+  new DOMWrapper(document.body.querySelector(sel));
+const exists = (_w: VueWrapper, sel: string) =>
+  document.body.querySelector(sel) !== null;
+const all = (_w: VueWrapper, sel: string) =>
+  Array.from(document.body.querySelectorAll(sel)).map(
+    (el) => new DOMWrapper(el),
+  );
 
 beforeEach(() => {
   document.body.innerHTML = "";
@@ -72,7 +79,7 @@ beforeEach(() => {
 describe("RevertConfirmModal — 还原集清单与归属 badge", () => {
   it("逐文件渲染 action + path + 归属 badge(tool/shell/unknown)", () => {
     const w = mountModal();
-    const rows = w.findAll("[data-testid='revert-file-row']");
+    const rows = all(w, "[data-testid='revert-file-row']");
     expect(rows).toHaveLength(3);
 
     expect(rows[0]!.text()).toContain("还原");
@@ -97,7 +104,7 @@ describe("RevertConfirmModal — 还原集清单与归属 badge", () => {
 
   it("无逐文件勾选控件(整树还原语义)", () => {
     const w = mountModal();
-    expect(w.findAll("input[type='checkbox']")).toHaveLength(0);
+    expect(all(w, "input[type='checkbox']")).toHaveLength(0);
     w.unmount();
   });
 });

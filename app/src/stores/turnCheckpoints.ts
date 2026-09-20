@@ -6,8 +6,12 @@
 // 的「本轮 diff」入口消费(daemon + Tauri 双通道走 transport 抽象,
 // CMD_TO_DOMAIN 已挂 checkpoint 域)。
 //
-// 入口四态(评审修正的判定语义,`hasTurnDiff` 是唯一判定面):
-// - 有行:写轮的轮末 assistant 行,seq 命中一行且 prev_seq 非空 → true;
+// 入口判定(评审修正的判定语义,`hasTurnDiff` 是唯一判定面):
+// - 有行有变更:写轮的轮末 assistant 行,seq 命中一行、prev_seq 非空
+//   且 files_changed > 0 → true;
+// - 净零轮:行在但 files_changed === 0(写触发轮的树无净变化 ——
+//   gitignore 工作区内编辑、写了又改回等)→ false,入口点了必然空
+//   (2026-09-20 jjh-mono 实测:35/42 行是这类,全靠这道闸挡);
 // - 无行:只读轮(写触发门零行)或旧 session → false;
 // - 基线行:prev_seq === null(基线 = 会话开始前状态,无 diff 入口)→ false;
 // - 破链:后端 `CheckpointBroken`(DB 行在、git 对象不在)→ 整 session
@@ -176,13 +180,27 @@ export const useTurnCheckpointsStore = defineStore("turnCheckpoints", () => {
     }
   }
 
-  /** 「本轮 diff」入口判定(唯一判定面,四态语义见文件头):
-   *  seq 命中一行且该行有 prev(基线行 prev_seq === null 不给入口)。 */
-  function hasTurnDiff(sessionId: string, seq: number | undefined): boolean {
-    if (seq === undefined) return false;
+  /** 「本轮 diff」入口的数值版判定(闸门与 hasTurnDiff 完全同闸):
+   *  seq 命中有变更的快照行 → files_changed(≥1);净零轮 / 无行 /
+   *  基线 / unavailable → null。消费方:footer 的 checkpoint 徽标
+   *  (数值上标)与入口判定(非 null 即可用)。 */
+  function filesChangedAt(
+    sessionId: string,
+    seq: number | undefined,
+  ): number | null {
+    if (seq === undefined) return null;
     const state = bySession.value.get(sessionId);
-    if (!state || state.status !== "ready") return false;
-    return state.rows.some((r) => r.seq === seq && r.prev_seq !== null);
+    if (!state || state.status !== "ready") return null;
+    const row = state.rows.find(
+      (r) => r.seq === seq && r.prev_seq !== null && r.files_changed > 0,
+    );
+    return row ? row.files_changed : null;
+  }
+
+  /** 「本轮 diff」入口判定(唯一判定面,语义见文件头):
+   *  filesChangedAt 非 null 即可用(基线 / 净零轮不给,点了必然空)。 */
+  function hasTurnDiff(sessionId: string, seq: number | undefined): boolean {
+    return filesChangedAt(sessionId, seq) !== null;
   }
 
   /** 「回到此轮后」入口判定(N2 PR3):seq 命中任意快照行即可 ——
@@ -243,6 +261,7 @@ export const useTurnCheckpointsStore = defineStore("turnCheckpoints", () => {
     invalidate,
     hasTurnDiff,
     hasRevertTarget,
+    filesChangedAt,
     fetchTurnDiff,
     previewRevert,
     executeRevert,

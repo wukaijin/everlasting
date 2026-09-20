@@ -227,21 +227,29 @@ const isStreaming = computed<boolean>(() => {
 // --- N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`):
 // --- 「本轮 diff」入口(轮间 checkpoint diff) --------------------------
 //
-// 入口判定 = turnCheckpoints store 的 hasTurnDiff(seq 命中快照行且
-// prev_seq 非空)。checkpoint 链只挂在「轮末 assistant 行」的 seq 上
-// (写触发门下只读轮无行、基线行挂 user 行 seq),所以 user 卡 / 无行
-// 轮 / 基线 / 破链 / 非 git session 全部落到 false —— MessageList 对
+// 入口判定 = turnCheckpoints store 的 hasTurnDiff(seq 命中快照行、
+// prev_seq 非空且 files_changed > 0)。checkpoint 链只挂在「轮末
+// assistant 行」的 seq 上(写触发门下只读轮无行、基线行挂 user 行
+// seq),files_changed 闸把净零轮挡在入口外(gitignore 工作区编辑
+// 等树无净变化的轮,入口点了必然空)—— user 卡 / 无行轮 / 净零轮 /
+// 基线 / 破链 / 非 git session 全部落到 false —— MessageList 对
 // 所有行都盖 data-seq,role + 行命中是入口与 user 卡的区分线(评审
 // 修正)。readonly 预览(SearchModal)跟随菜单的挂载门一起隐藏。
 const turnCheckpointsStore = useTurnCheckpointsStore();
 const projectsStore = useProjectsStore();
 
-const turnDiffAvailable = computed<boolean>(() => {
-  if (props.readonly || props.message.role !== "assistant") return false;
+// checkpoint 徽标 / 「本轮 diff」入口共用的取数面:seq 命中「有变更」
+// 快照行 → files_changed(≥1),否则 null。数值喂给 footer 的徽标
+// (2026-09-20),非 null 即入口可用 —— 两处判定天然同闸,不会出现
+// 徽标在而菜单入口无。
+const turnDiffFiles = computed<number | null>(() => {
+  if (props.readonly || props.message.role !== "assistant") return null;
   const sid = chatStore.currentSessionId;
-  if (!sid) return false;
-  return turnCheckpointsStore.hasTurnDiff(sid, props.message.seq);
+  if (!sid) return null;
+  return turnCheckpointsStore.filesChangedAt(sid, props.message.seq);
 });
+
+const turnDiffAvailable = computed<boolean>(() => turnDiffFiles.value !== null);
 
 const turnDiffOpen = ref(false);
 const turnDiffLoading = ref(false);
@@ -1293,8 +1301,10 @@ const messageImages = computed<
         :retry-loading="retryLoading"
         :model-id="errorRowModelId"
         :test-state="testState"
+        :checkpoint-files="turnDiffFiles"
         @retry="onRetry"
         @test-connection="onTestConnection"
+        @turn-diff="onTurnDiff"
       />
     </div>
 
@@ -1484,13 +1494,22 @@ const messageImages = computed<
       2026-06-27 polish: when the message has tool calls but
       no text bubble, the footer is rendered INSIDE
       `msg__tools` above (so the latency chip attaches to
-      the last tool card). The outer footer here only
-      renders when there's NO tool-calls/no-bubble mismatch
-      (i.e., bubble-only or user-role / system rows). The
-      `v-if` gates both: no tools AND no bubble visible.
+      the last tool card). The outer footer here renders
+      when there's NO tool-calls/no-bubble mismatch (i.e.,
+      bubble-only or user-role / system rows).
+
+      2026-09-20 (checkpoint badge): timeline 行(useTimeline,交错
+     思考 contentBlocks)不走 `msg__tools` —— 纯 thinking+tool_use
+      的 timeline 行在此前**两个挂载点都死**(`msg__tools` 被
+      `!useTimeline` 压掉,这里又被 tools/no-bubble 压掉),footer
+      整个消失:耗时 chip 与 checkpoint 徽标一起不见(jjh-mono 实测,
+      连续 edit 轮只有带文本的首轮有徽标)。追加 `|| useTimeline`
+      分支:timeline 行统一由本挂载点渲染(meta-row 右对齐,贴在
+      时间轴末尾),与 `msg__tools` 内挂载点互斥(useTimeline 互斥
+      该容器),不会双渲染。
     -->
     <MessageItemFooter
-      v-if="!visibleToolCalls.length || showBubble"
+      v-if="!visibleToolCalls.length || showBubble || useTimeline"
       :role="message.role"
       :streaming="!!message.streaming"
       :latency="message.latency"
@@ -1499,8 +1518,10 @@ const messageImages = computed<
       :retry-loading="retryLoading"
       :model-id="errorRowModelId"
       :test-state="testState"
+      :checkpoint-files="turnDiffFiles"
       @retry="onRetry"
       @test-connection="onTestConnection"
+      @turn-diff="onTurnDiff"
     />
 
     <!--

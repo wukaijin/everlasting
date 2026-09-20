@@ -121,7 +121,12 @@ watch(
 </script>
 
 <template>
-  <Transition name="confirm-modal">
+  <!-- 2026-09-20:Teleport 到 body —— 与 DiffModal 同款层级修复。
+       MessageList 虚拟行的 inline transform 定位会把 fixed 弹层困进
+       行级 stacking context(z-index 出不了行);确认弹窗挂在
+       MessageItem 深处,必须传送到根上下文。z 仍守 --z-confirm 档。 -->
+  <Teleport to="body">
+    <Transition name="confirm-modal">
     <div
       v-if="open"
       class="confirm-backdrop"
@@ -271,7 +276,8 @@ watch(
         </footer>
       </div>
     </div>
-  </Transition>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>

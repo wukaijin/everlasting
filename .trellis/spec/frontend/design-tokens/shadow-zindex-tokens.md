@@ -63,10 +63,10 @@ invent a new raw value in a component.
 | `--z-drawer` | 110 | Mobile drawer body (Sidebar) |
 | `--z-input-pop` | 200 | Chat-input popovers (latency, token usage, TriggerMenu) |
 | `--z-sheet-overlay` | 999 | Heavy-surface overlay (SubagentDrawer) |
-| `--z-sheet` | 1000 | Heavy surfaces (SubagentDrawer, DiffModal) |
-| `--z-confirm` | 1100 | Confirm dialogs (ConfirmDialog, DeleteWorktreeConfirm) |
+| `--z-sheet` | 1000 | Heavy surfaces (SubagentDrawer; DiffModal moved to the modal family 2026-09-20) |
+| `--z-confirm` | 1100 | Confirm dialogs (ConfirmDialog, DeleteWorktreeConfirm, RevertConfirmModal) |
 | `--z-confirm-critical` | 1200 | Critical confirm (YoloConfirmModal) |
-| `--z-modal-overlay` | 2000 | Modal family backdrop (8 modals) |
+| `--z-modal-overlay` | 2000 | Modal family backdrop (9 modals — DiffModal joined 2026-09-20) |
 | `--z-modal` | 2001 | Modal family content |
 | `--z-over-modal` | 3000 | Must beat modal family: in-modal reka Select portals (6 sites, `!important`), msg actions menu / latency tooltip |
 | `--z-toast` | 5500 | ToastProvider |
@@ -77,6 +77,17 @@ documented intra-family band like the chat floating cards 50/60/70) may
 keep raw values, but each site MUST carry a comment stating what it
 covers and what covers it. Grep `z-index` for stragglers when adding a
 new layer.
+
+**Teleport rule (2026-09-20, jjh-mono 实测回归)**: any `position: fixed`
+overlay mounted inside MessageList rows (DiffModal / RevertConfirmModal
+in MessageItem) MUST `<Teleport to="body">`. The virtualized rows use
+inline `transform: translateY()` positioning (`MessageList.vue`), and a
+transform ancestor creates a stacking context that traps fixed
+descendants — the overlay's z-index then competes only within its row
+and sibling rows paint on top of it. Picking a higher ladder tier does
+NOT fix this; the teleport does. Test consequence: teleported content is
+invisible to `wrapper.find` — query `document.body` instead (see
+`RevertConfirmModal.test.ts`).
 
 ---
 
