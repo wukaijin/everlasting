@@ -26,3 +26,25 @@ jjh-mono 实测回归驱动的 checkpoint UI 收敛:(1) MessageItemFooter 新增
 ### Status
 
 [OK] **Completed**
+
+
+## Session 154: 错误链路收口:TransportError category 恢复 + 全局兜底分级
+
+**Date**: 2026-09-21
+**Task**: 错误链路收口:TransportError category 恢复 + 全局兜底分级
+**Branch**: `main`
+
+### Summary
+
+根治「服务端错误 ResizeObserver loop…」误报:审计出全局兜底与传输层两 P1 断点(裸 string 硬标 Server、Error 实例被静默丢弃;TransportError 丢 category/retryable)。经群聊评审(7 条裁决,抓到 status=0 兜 Server 分档缺陷 + requestId camelCase wire 前科)后实现:TransportError 携带四字段成为 AppCommandError 形状(body→canonical 逆映射→分档兜底)、useErrorBus.handle 四级分类(形状识别→良性噪音 debug→string warn→Error error)、main.ts 噪音过滤 + Vue errorHandler。2013 测试全绿,vue-tsc 零错。spec 补齐 error-handling.md 四层模型(此前是模板)。遗留:AC1 GUI 冒烟与 401 叠加验收待人工;P2(双 toast 合并、静默面横扫、诊断 UI)待开任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aefd929b` | (see git log) |
+| `1c2d80e0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
