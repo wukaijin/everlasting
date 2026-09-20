@@ -69,7 +69,7 @@ CREATE TABLE turn_checkpoints (
 
 ## 4. 快照数据流(每轮,写触发门)
 
-挂钩点:`drive.rs` `finalize_turn_persist` **成功返回后**(同函数错误路径不挂钩——错误轮本就无完整终态,checkpoint fail-open 语义见 PRD R1):
+挂钩点(**PR1 实现修正 + check 独立验证采纳,2026-09-20**):轮末钩 = hub `chat_loop.rs` 的 `finalize_turn`(tool_result 落库)**成功后**——原字面锚"drive.rs `finalize_turn_persist` 成功后"位于本轮工具执行**之前**(assistant 行先落库、工具后 dispatch),照字面会快照晚一轮、纯文本收尾轮的最后一个写轮永无快照、AC8 当轮收编不成立。错误/取消路径(drive_turn Err)不挂钩,部分写入靠 revert 的 foreign_delta 门兜底,非缺陷。基线钩仍为轮首(loop 入口、首轮 user 行落库后、早于任何 tool 执行):
 
 ```
 轮首(loop 入口,首轮 user 行已落库、早于任何 tool 执行)——基线门(评审 P0 修正):
