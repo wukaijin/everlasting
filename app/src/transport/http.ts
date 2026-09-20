@@ -41,6 +41,7 @@
 
 import type { Transport, UnlistenFn } from "./types";
 import { currentDeviceToken, dropCurrentNodeToken } from "./auth";
+import { categoryRetryable, type AppErrorCategory } from "../utils/error";
 
 // ---------------------------------------------------------------------------
 // cmd → domain 映射(81 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
@@ -273,14 +274,98 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
 /// daemon error body(`AppCommandError` wire shape,见
 /// `daemon::error::AppCommandError` 的 Serialize)。transport 不强类型
 /// 化错误体(C8 渐进),只透传 status + body。
+///
+/// 09-21-error-bus-category-recovery:补 `category` / `retryable` 声明
+/// (daemon HTTP body 本就带全字段,Rust 侧注释声称前端 parser
+/// "handles this shape unchanged" —— 此前实际没读)。索引签名保留:
+/// 未声明的 wire 字段原样透传不丢。
 export interface TransportErrorBody {
   kind?: string;
   message?: string;
-  request_id?: string;
+  /// camelCase:`AppCommandError` 带 `#[serde(rename_all = "camelCase")]`
+  /// (error.rs:742 断言 `"requestId":null`),daemon HTTP body 同构。
+  /// 09-21 任务曾误写 snake `request_id` —— 真实响应下永远读不到。
+  requestId?: string;
+  category?: string;
+  retryable?: boolean;
   [key: string]: unknown;
 }
 
+// ---------------------------------------------------------------------------
+// TransportError 分类恢复(09-21-error-bus-category-recovery,design D2)。
+//
+// daemon 侧 `daemon/error.rs` 把 category 1:1 映射到 HTTP status
+// (Auth→401 / RateLimit→429 / InvalidRequest→400 / Server→500 /
+// Network→502,`status_for_category` 有单测锁定),body 全字段
+// camelCase 序列化。此前 TransportError 只留 status+message,分类在
+// 传输边界蒸发 —— 主链路(http transport)catch 点拿不到
+// category/retryable,与 Tauri IPC 路径不等价。
+//
+// 恢复兜底链:**body(权威,过五值域校验)→ canonical status 逆映射
+// → 分档兜底**。分档(群聊评审 09-21 裁决,替代原「其余兜 Server」):
+// status=0(unknown-cmd 路径,本文件 invoke 首行,有 handoff_session /
+// list_queued_messages 两次生产前科)与非 canonical 4xx →
+// InvalidRequest;其余 ≥500(如代理 503/504)→ Server。「Server」仅作
+// 构造上不可达的防御默认 —— 原兜 Server 会把 status=0 前科路径从静默
+// 丢弃翻转为弹假「服务端错误」,复刻本任务要修的原病。
+//
+// 逆映射/分档放 transport 层而非 `utils/error.ts`:它是 daemon HTTP
+// 契约的一部分,与 `daemon/error.rs` 成对演化;error.ts 保持纯
+// category 助手定位。
+// ---------------------------------------------------------------------------
+
+/** body.category 五值域校验(PascalCase,与 Rust ErrorCategory variant
+ *  名一致)。不在域内的脏值按缺失处理 —— 防脏数据直通 toast 路由。 */
+const VALID_TRANSPORT_CATEGORIES: ReadonlySet<string> = new Set([
+  "Auth",
+  "RateLimit",
+  "InvalidRequest",
+  "Server",
+  "Network",
+]);
+
+/// `daemon/error.rs status_for_category` 的逆(canonical 1:1)。
+/// 非 canonical status 返回 undefined → 走分档兜底。
+function categoryFromStatus(status: number): AppErrorCategory | undefined {
+  switch (status) {
+    case 401:
+      return "Auth";
+    case 429:
+      return "RateLimit";
+    case 400:
+      return "InvalidRequest";
+    case 500:
+      return "Server";
+    case 502:
+      return "Network";
+    default:
+      return undefined;
+  }
+}
+
+/// 分档兜底:status=0(unknown-cmd)与非 canonical 4xx → InvalidRequest
+/// (本地/调用方错误,不打扰用户);其余(≥500 及防御面)→ Server。
+function fallbackCategory(status: number): AppErrorCategory {
+  if (status === 0 || (status >= 400 && status < 500)) {
+    return "InvalidRequest";
+  }
+  return "Server";
+}
+
 export class TransportError extends Error {
+  /// body.category(过值域校验)→ canonical 逆映射 → 分档兜底(见上
+  /// 方注释块)。类型从 `utils/error.ts` 导入(单一事实源,评审裁决)。
+  public readonly category: AppErrorCategory;
+  /// body.kind ?? "Transport"(unknown-cmd 等无 body 路径)。
+  public readonly kind: string;
+  /// body.retryable 透传;缺失按 category 派生(`categoryRetryable`,
+  /// 与 `error.ts` / Rust `AppError::retryable()` 同源)。
+  public readonly retryable: boolean;
+  /// body.requestId(诊断出口,不跨 wire;命名对齐
+  /// `AppCommandError.requestId` 语义位,wire 即 camelCase —— 见
+  /// TransportErrorBody 注释)。
+  public readonly requestId?: string;
+
   constructor(
     public readonly status: number,
     public readonly body: TransportErrorBody | string,
@@ -296,6 +381,28 @@ export class TransportError extends Error {
     // debugging via `name` + `status`.
     super(msg);
     this.name = "TransportError";
+    // body 可能是 string(非 JSON 路径,如 unknown-cmd / daemon 返
+    // 纯文本)—— 全部字段走「body 为对象才读」守卫;脏值类型一律
+    // 按缺失兜底,保证实例恒过 useErrorBus 的 AppCommandError 形状门
+    // (构造收窄不变量,http.test.ts 守门)。
+    const b: TransportErrorBody | null =
+      typeof body === "object" && body !== null ? body : null;
+    const rawCategory = b?.category;
+    this.category =
+      typeof rawCategory === "string" &&
+      VALID_TRANSPORT_CATEGORIES.has(rawCategory)
+        ? (rawCategory as AppErrorCategory)
+        : (categoryFromStatus(status) ?? fallbackCategory(status));
+    const rawKind = b?.kind;
+    this.kind = typeof rawKind === "string" ? rawKind : "Transport";
+    const rawRetryable = b?.retryable;
+    this.retryable =
+      typeof rawRetryable === "boolean"
+        ? rawRetryable
+        : categoryRetryable(this.category);
+    const rawRequestId = b?.requestId;
+    this.requestId =
+      typeof rawRequestId === "string" ? rawRequestId : undefined;
   }
 }
 

@@ -16,6 +16,8 @@
 // 避免跨 test 状态泄漏。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { isAppCommandError } from "../utils/useErrorBus";
+import type { TransportError } from "./http";
 
 // ---------------------------------------------------------------------------
 // mock 全局 fetch + EventSource
@@ -535,5 +537,166 @@ describe("httpTransport pwa-remote mode (device token)", () => {
     // next listen rebuilds a fresh EventSource (different instance)
     await t.listen("tool:call", () => {});
     expect(MockEventSource.last).not.toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TransportError 分类恢复(09-21-error-bus-category-recovery,design D2)。
+//
+// daemon `daemon/error.rs` 把 AppCommandError 全字段(camelCase JSON)+
+// category→status 1:1 映射(Auth→401 / RateLimit→429 / InvalidRequest→400 /
+// Server→500 / Network→502)写进错误响应;TransportError 构造时恢复四字段
+// (category/kind/retryable/requestId),兜底链 = body(过值域校验)→
+// canonical 逆映射 → 分档兜底(status=0 与非 canonical 4xx→InvalidRequest、
+// 其余 ≥500→Server)。四组用例:全字段恢复 / 逆映射 / 分档 / 构造收窄不变量。
+// ---------------------------------------------------------------------------
+describe("TransportError category recovery", () => {
+  /** drive invoke() into the `!resp.ok` branch and capture the thrown
+   *  TransportError. `rawBody` string → json() rejects → text() fallback
+   *  (daemon 返纯文本 / 非 JSON 的路径). */
+  async function invokeExpectingError(
+    status: number,
+    rawBody: unknown,
+  ): Promise<TransportError> {
+    const isText = typeof rawBody === "string";
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status,
+      json: isText
+        ? async () => {
+            throw new Error("invalid json");
+          }
+        : async () => rawBody,
+      text: async () => (isText ? rawBody : JSON.stringify(rawBody)),
+    } as Response);
+    const t = await loadTransport();
+    return (await t.invoke("list_sessions").catch((e) => e)) as TransportError;
+  }
+
+  it("recovers all four fields from a full daemon body (429 → RateLimit, retryable passthrough)", async () => {
+    const te = await invokeExpectingError(429, {
+      category: "RateLimit",
+      kind: "LlmError::RateLimit",
+      message: "请求过于频繁",
+      retryable: true,
+      requestId: "r-42", // wire 是 camelCase(daemon/error.rs serde rename_all)
+    });
+    expect(te.name).toBe("TransportError");
+    expect(te.category).toBe("RateLimit");
+    expect(te.kind).toBe("LlmError::RateLimit");
+    expect(te.retryable).toBe(true); // body 透传(权威),非派生
+    expect(te.requestId).toBe("r-42");
+    expect(te.message).toBe("请求过于频繁");
+  });
+
+  it("body.category is authoritative over the status inverse map", async () => {
+    // body(过值域校验)优先于 status —— wire 上两者 canonical 成对,
+    // 但兜底链的次序是 body → 逆映射 → 分档。
+    const te = await invokeExpectingError(500, {
+      category: "Network",
+      kind: "X",
+      message: "upstream",
+    });
+    expect(te.category).toBe("Network");
+    expect(te.retryable).toBe(true);
+  });
+
+  it("inverse-maps canonical statuses when body has no category (401/429/400/500/502)", async () => {
+    const cases: Array<[number, string, boolean]> = [
+      // [status, expected category, expected derived retryable]
+      [401, "Auth", false],
+      [429, "RateLimit", true],
+      [400, "InvalidRequest", false],
+      [500, "Server", true],
+      [502, "Network", true],
+    ];
+    for (const [status, category, retryable] of cases) {
+      const te = await invokeExpectingError(status, {
+        kind: "Anyhow",
+        message: `boom-${status}`,
+      });
+      expect(te.category, `status ${status}`).toBe(category);
+      expect(te.retryable, `status ${status}`).toBe(retryable); // categoryRetryable 派生
+    }
+  });
+
+  it("tiered fallback: status=0 → InvalidRequest, non-canonical 4xx → InvalidRequest, ≥500 → Server", async () => {
+    // status=0(unknown-cmd 路径,http.ts invoke 首行,有 handoff_session /
+    // list_queued_messages 两次生产前科)—— 评审裁决:兜 InvalidRequest
+    // (本地/调用方错误),不得翻转为假「服务端错误」toast。
+    const t = await loadTransport();
+    const unknownCmd = (await t
+      .invoke("totally_unknown_cmd")
+      .catch((e) => e)) as TransportError;
+    expect(unknownCmd.status).toBe(0);
+    expect(unknownCmd.category).toBe("InvalidRequest");
+    expect(unknownCmd.kind).toBe("Transport"); // string body → 无 kind
+    expect(unknownCmd.retryable).toBe(false);
+    expect(unknownCmd.requestId).toBeUndefined();
+
+    // 非 canonical 4xx(404 not found 等)→ InvalidRequest
+    const te404 = await invokeExpectingError(404, { message: "no route" });
+    expect(te404.category).toBe("InvalidRequest");
+    expect(te404.retryable).toBe(false);
+
+    // 其余 ≥500(代理 503/504 等)→ Server
+    const te503 = await invokeExpectingError(503, { message: "gateway" });
+    expect(te503.category).toBe("Server");
+    expect(te503.retryable).toBe(true);
+  });
+
+  it("dirty body.category fails the value-domain gate and falls through to status", async () => {
+    const te = await invokeExpectingError(429, {
+      category: "Foo", // 不在五值域 → 按缺失处理
+      kind: "X",
+      message: "m",
+      retryable: false,
+    });
+    expect(te.category).toBe("RateLimit"); // 按 status 逆映射
+    // retryable 是 body 显式 false(boolean)→ 透传,不因 category 覆写
+    expect(te.retryable).toBe(false);
+  });
+
+  it("constructor narrowing invariant: dirty bodies always yield an instance that passes the AppCommandError shape gate", async () => {
+    // PR1×PR2 接缝的前提:TransportError 恒过 useErrorBus.isAppCommandError
+    // 形状门(category ∈ 五值 + kind/message string + retryable boolean)。
+    // 脏 body(undefined / string / 空对象 / 字段脏值)不得打破该不变量,
+    // 否则未捕 transport rejection 会在 handle() 里落到 Error 分支重新被吞。
+    const mod = await import("./http");
+    const dirtyBodies: unknown[] = [
+      undefined,
+      "raw text body",
+      "",
+      {},
+      // 全字段脏值:category 不在域 / kind 非串 / message null / retryable
+      // 非布尔 / requestId 非串 —— 逐字段按缺失兜底。
+      { category: "Foo", kind: 42, message: null, retryable: "yes", requestId: 7 },
+    ];
+    const statuses = [0, 400, 404, 429, 500, 503, 502];
+    for (const status of statuses) {
+      for (const body of dirtyBodies) {
+        const te = new mod.TransportError(
+          status,
+          body as never,
+        ) as TransportError;
+        const label = `status=${status} body=${JSON.stringify(body) ?? String(body)}`;
+        expect(isAppCommandError(te), label).toBe(true);
+        expect(typeof te.message, label).toBe("string");
+        expect(te.category, label).not.toBe(undefined);
+      }
+    }
+    // 抽查脏 body 的具体兜底值(全字段脏值 + 500):
+    const te = new mod.TransportError(500, {
+      category: "Foo",
+      kind: 42,
+      message: null,
+      retryable: "yes",
+      requestId: 7,
+    } as never) as TransportError;
+    expect(te.category).toBe("Server"); // 脏 category → status 逆映射
+    expect(te.kind).toBe("Transport"); // 脏 kind → 默认
+    expect(te.retryable).toBe(true); // 脏 retryable → categoryRetryable 派生
+    expect(te.requestId).toBeUndefined(); // 脏 requestId → undefined
+    expect(te.message).toBe("HTTP 500"); // message null → status 兜底
   });
 });

@@ -3,7 +3,7 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import "./style.css";
 import { router } from "./router";
-import { useErrorBus } from "./utils/useErrorBus";
+import { useErrorBus, isBenignBrowserNoise } from "./utils/useErrorBus";
 import { transport } from "./transport";
 import { tauriTransport } from "./transport/tauri";
 import { awaitDaemonHealthy, type DaemonHealth } from "./transport/health";
@@ -20,16 +20,30 @@ useTheme();
 // 手机进 /chat 不跳 /pairing(S4 bug,E2E 暴露)。router 改到 bootstrap 内、health
 // 设后 mount 前注册,确保 initial navigation 读到 __DAEMON_HEALTH__。
 
-// A5(2026-07-02)全局未捕错误器:`invoke()` 未 `.catch` 的 rejection + 任意
-// 运行时 JS 错误,统一入错误总线。`parseAppCommandError` 容错 3 种输入
-// (AppCommandError 对象 / JSON 字符串 / 原始 string),所以无论后端返回
-// 结构化错误还是老链路 String rejection,都能被收纳 + 按 category 路由。
-// 防静默 —— 任何漏掉的 invoke .catch 或运行时错误都进 errorBus,不丢失。
+// A5(2026-07-02)全局未捕错误器;2026-09-21 分级收口(任务
+// 09-21-error-bus-category-recovery)。按错误来源分级,不再是
+// 「一律入总线」:
+//   - 结构化错误(AppCommandError 形状对象,含 TransportError)→ 入
+//     错误总线,按真实 category 路由(Auth/RateLimit/Server/Network
+//     toast,InvalidRequest console.warn);
+//   - 良性浏览器噪音(isBenignBrowserNoise:ResizeObserver loop 等已知
+//     前缀)→ 入口直接 console.debug 丢弃,不进总线不 toast(它们只有
+//     message 没有 error 对象,曾因此被误标「服务端错误」弹窗);
+//   - 裸 string / 其他 Error 实例(本地运行时错误)→ console
+//     三级留痕(warn / error),不入总线不 toast —— 不再借「服务端
+//     错误」之名误报,也不再静默丢失(详见 useErrorBus.ts handle 注释)。
 // 现有 fire-and-forget .catch(record_tool_duration / update_message_latency /
 // permissions 超时 deny)故意 swallow,不触发本监听(它们已 .catch)。
 if (typeof window !== "undefined") {
   const { handle } = useErrorBus();
   window.addEventListener("error", (event) => {
+    // 良性噪音(ResizeObserver loop)以 window.onerror 形态抛出:只有
+    // event.message、event.error 为空 —— 入口先过滤(handle 的 string
+    // 分支是同函数的第二道,防其他路径混入)。
+    if (!event.error && isBenignBrowserNoise(event.message)) {
+      console.debug("[errorBus:benign-noise]", event.message);
+      return;
+    }
     // event.error 是 Error 对象(或 undefined);fallback 到 event.message(string)。
     handle(event.error ?? event.message);
   });
@@ -38,6 +52,14 @@ if (typeof window !== "undefined") {
     handle(event.reason);
   });
 }
+
+// R1.2(09-21 收口):接管 Vue 默认错误 handler。组件生命周期/异步链里
+// 的错误经默认 handler 只 console.warn 且部分形态到不了 window.onerror
+// —— 显式 console.error 兜底防静默。不 toast:运行时错误几乎不可由用户
+// 行动修复,与 errorBus 的 Error 分支同一判据(可见但不打扰)。
+app.config.errorHandler = (err, _instance, info) => {
+  console.error("[vue:errorHandler]", info, err);
+};
 
 // P2.4 D3.4: 在 `app.mount` 前等 daemon 健康(Q5 分层校验)。
 // httpTransport 是默认(P2.4 D3.1),若 daemon 未就绪 GUI 完全无功能,

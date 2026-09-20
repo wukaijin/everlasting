@@ -12,13 +12,41 @@
 // variant 名),`message.error.category` 用 snake_case(对接 Rust 的
 // `#[serde(rename_all = "snake_case")]` wire format)。两个 helper
 // 都容忍两种输入;新增 category 时两层 case 都加。
+//
+// 09-21-error-bus-category-recovery:新增 `AppErrorCategory` ——
+// PascalCase 五值 union,作为 category **字段类型**的单一事实源:
+// `transport/http.ts` 的 `TransportError.category` 与 `useErrorBus`
+// 的 `AppCommandError.category` 只从此导入,不得本地平行定义
+// (评审裁决:防三处定义漂移)。下方双 case 的 `ErrorCategory`
+// 保留为两个 helper 的入参容忍类型(snake_case 脏值须能类型安全地
+// 传进来、但过不了值域形状门)。
+
+/** PascalCase 五值 category union —— category 字段类型的单一事实源
+ *  (09-21-error-bus-category-recovery 评审裁决)。与 Rust
+ *  `error.rs::ErrorCategory` 的 `#[serde(rename_all = "PascalCase")]`
+ *  variant 名 1:1(IPC `AppCommandError` wire 形态;daemon HTTP
+ *  body 的 `category` 字段同此)。消费方:
+ *  - `useErrorBus.AppCommandError.category`(`ErrorCategory` 别名)
+ *  - `transport/http.ts.TransportError.category`
+ *  两处只导入、不本地定义。新增 category 时此处 + 两个 helper 的
+ *  case + Rust 侧枚举四处同步。 */
+export type AppErrorCategory =
+  | "Auth"
+  | "RateLimit"
+  | "InvalidRequest"
+  | "Server"
+  | "Network";
 
 /** categoryRetryable / categoryToastKey 都接受的 category 字符串
  *  形态。两种共存的现状:PascalCase(`Auth` / `RateLimit` / ...)用于
  *  `useErrorBus` 的 `AppCommandError`,snake_case(`auth` / `rate_limit` /
  *  ...)用于 `ChatEvent::Error` / `ChatMessage.error.category`(wire
  *  format)。本文件两个 helper 都覆盖两种 case;新增 category 时记得
- *  两层都加。 */
+ *  两层都加。
+ *
+ *  09-21 起降级为 helper 入参容忍类型:字段类型一律用上面的
+ *  `AppErrorCategory`,本 union 只保证 snake_case 输入能类型安全地
+ *  传进 helper(脏值由值域形状门拦截)。 */
 export type ErrorCategory =
   | "auth"
   | "Auth"
