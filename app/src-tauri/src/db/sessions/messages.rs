@@ -745,8 +745,9 @@ pub async fn record_tool_duration(
 /// tool_use chain on row N+1+ no longer references the old prompt),
 /// and append an `edit_message` audit row.
 ///
-/// All three operations (UPDATE message + DELETE tail + INSERT audit)
-/// run inside a single `sqlx::Transaction` so a partial failure cannot
+/// All four operations (UPDATE message + DELETE message tail +
+/// DELETE checkpoint tail + INSERT audit) run inside a single
+/// `sqlx::Transaction` so a partial failure cannot
 /// leave the DB in a split-brain state (e.g. content updated but tail
 /// not deleted → assistant turn still references the old prompt).
 /// Matches the `emit_persist_failure` single-rollback invariant the
@@ -781,17 +782,19 @@ pub async fn record_tool_duration(
 /// every strictly-later message in the session — assistant turns,
 /// tool_result turns, the synthetic tool_result orphan-repair rows,
 /// etc. The `messages` table has no FKs to other tables (just an
-/// index on `(session_id, seq)`), so a single DELETE is enough — no
-/// other table holds a reference to a `messages.id`. Audit events
-/// (`session_audit_events`) are NOT touched: they record what the
-/// agent DID, not the live message buffer, so they survive the
+/// index on `(session_id, seq)`). The `turn_checkpoints` table shares
+/// the `messages.seq` numbering space, so the same-transaction
+/// `DELETE FROM turn_checkpoints ... AND seq > ?` follows it (N2,
+/// OQ-B ruling — see the inline comment at the delete site). Audit
+/// events (`session_audit_events`) are NOT touched: they record what
+/// the agent DID, not the live message buffer, so they survive the
 /// cascade delete (mirrors `delete_messages_by_session` semantics in
 /// `B3 /clear`, `sessions.rs:265-274`).
 ///
 /// ### Atomicity
 ///
 /// A single `sqlx::Transaction` wraps the entire flow. If any of
-/// the three SQL calls fails, the transaction is dropped (sqlx
+/// the SQL calls fails, the transaction is dropped (sqlx
 /// auto-rollback on Drop) and the function returns the underlying
 /// `sqlx::Error`. The caller wraps the error in
 /// `emit_persist_failure`-style error handling.
@@ -939,13 +942,29 @@ pub async fn edit_user_message(
     // chained off the old user prompt. The next resend starts
     // from a clean slate.
     //
-    // Single-table FK story: `messages` has no outgoing FKs to
-    // other tables (only an index on `(session_id, seq)`), so the
-    // DELETE doesn't cascade anywhere. Audit events
-    // (`session_audit_events`) are session-scoped and intentionally
-    // kept — they record what the agent DID, not the live
-    // message buffer.
+    // `turn_checkpoints`(N2, 2026-09-20)跟随级联删(用户裁定,原
+    // OQ-B):checkpoint `seq` 与 `messages.seq` 共享数值空间,重跑经
+    // init.rs 的 max+1 现算使 seq 回落复用 —— 不跟随删的话,幸存的
+    // 孤儿行是死谱系:被删轮的消息已不存在,孤儿行却仍占着该 seq
+    // 声称持有快照;重跑若只读(写信号门下无新快照行)它就一直留
+    // 在 latest/list 读面,diff/revert 目标与后续快照的链 parent 都
+    // 会指到重跑永不再现的状态。同一事务内跟随删
+    // `seq > message_seq` 的 checkpoint 行(与上方 messages 的 DELETE
+    // 同谓词,边界 seq 同为含弃 —— 被编辑行与其上挂的基线保留);
+    // 重跑同 seq 的新快照经 INSERT OR REPLACE 干净落行(无 PK 撞)。
+    // 被删行的 git 对象不回收:悬空链依旧可达(ref 指链头),DB 视图
+    // 收窄即 design §4 的「链 parent 跳接上一可用快照」。
+    //
+    // Audit events (`session_audit_events`) are still NOT touched:
+    // they record what the agent DID, not the live message buffer, so
+    // they survive the cascade delete (mirrors `delete_messages_by_
+    // session` semantics in `B3 /clear`, `sessions.rs:265-274`).
     sqlx::query("DELETE FROM messages WHERE session_id = ? AND seq > ?")
+        .bind(session_id)
+        .bind(message_seq)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM turn_checkpoints WHERE session_id = ? AND seq > ?")
         .bind(session_id)
         .bind(message_seq)
         .execute(&mut *tx)

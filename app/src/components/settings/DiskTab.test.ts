@@ -115,7 +115,7 @@ describe("DiskTab — 回收开关", () => {
     expect(config.diskGovernorEnabled).toBe(true);
 
     const switches = wrapper.findAll('button[role="switch"]');
-    expect(switches).toHaveLength(2);
+    expect(switches).toHaveLength(3);
     await switches[0].trigger("click");
     await flushPromises();
 
@@ -136,6 +136,23 @@ describe("DiskTab — 回收开关", () => {
       key: "outputs_age_cleanup_enabled",
       value: false,
     });
+  });
+
+  // N2 轮末文件快照(2026-09-20):第三个开关写 checkpoints_enabled
+  // (key 与后端 SETTABLE_APP_FLAGS 白名单一致)。
+  it("第三个开关写 checkpoints_enabled", async () => {
+    const wrapper = mountTab();
+    await flushPromises();
+    const config = useConfigStore();
+    expect(config.checkpointsEnabled).toBe(true);
+    const switches = wrapper.findAll('button[role="switch"]');
+    await switches[2].trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("set_app_config_flag", {
+      key: "checkpoints_enabled",
+      value: false,
+    });
+    expect(config.checkpointsEnabled).toBe(false);
   });
 });
 

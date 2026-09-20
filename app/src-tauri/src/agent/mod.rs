@@ -49,8 +49,14 @@ pub mod at_file;
 pub mod auto_reflect;
 pub mod behavior_prompt;
 pub mod budget;
+// N2 turn-boundary file checkpoints (2026-09-20, task
+// `09-20-n2-checkpoint-revert`): config gate + per-turn write-signal
+// gate + baseline/turn-end snapshot hooks + session-delete umbrella-ref
+// cleanup. The git primitives live in `git/checkpoint.rs`, the DB rows
+// in `db/checkpoint.rs`.
 pub mod chat;
 pub mod chat_loop;
+pub mod checkpoint;
 pub mod compaction;
 pub mod context;
 pub mod discussion_detail;

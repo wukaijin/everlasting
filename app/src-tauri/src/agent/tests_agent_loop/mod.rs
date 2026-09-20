@@ -9,6 +9,7 @@ mod basic;
 mod budget;
 mod cache_head_stability;
 mod checklist;
+mod checkpoint;
 mod compaction_summary;
 mod error_path;
 mod error_persist;

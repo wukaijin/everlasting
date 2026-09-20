@@ -58,6 +58,12 @@
 //! without any caller change.
 
 pub mod backup;
+// N2 turn-boundary checkpoint rows (2026-09-20, task
+// `09-20-n2-checkpoint-revert`): `turn_checkpoints` CRUD; the git-side
+// snapshot primitives live in `git/checkpoint.rs`, the loop wiring in
+// `agent/checkpoint.rs`.
+pub mod checkpoint;
+pub mod checkpoint_tests;
 pub mod config;
 // GCE-P1 (2026-09-12, task `09-12-gc-preset-settings`): 用户群聊预设
 // CRUD(Settings 可管理;内置四档仍是 scripts/group-chat-presets.json

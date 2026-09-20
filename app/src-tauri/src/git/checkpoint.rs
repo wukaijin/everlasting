@@ -37,11 +37,11 @@
 //! error as fail-open (warn log, no snapshot for the turn, chain
 //! resumes at the next successful snapshot).
 
-// PR0 是中立基建:七原语在 PR1 接线(drive.rs 挂钩 + DB CRUD + 命令
-// 面)落地前没有 crate 内消费者,dead_code 是本轮的既定形态(agent
-// permissions/audit.rs 的 AuditKind 同款处理)。接线合入后移除本 allow。
-#![allow(dead_code)]
-
+// PR1 起接线层(agent/checkpoint.rs + commands/sessions.rs)消费快照
+// 原语,模块级 allow 已移除;revert 三原语(`diff_snapshots` /
+// `compute_restore_set` / `restore_paths`)的读面消费者在 PR2/PR3
+// (三命令 + 确认弹窗),届时随命令落地摘除各自的 allow —— 同
+// permissions/audit.rs AuditKind 的按项处理先例。
 use std::path::Path;
 
 use serde::Serialize;
@@ -57,6 +57,7 @@ const CHECKPOINT_SIG_EMAIL: &str = "everlasting-daemon@localhost";
 
 /// One path in a revert restore set, as computed by
 /// [`compute_restore_set`] and consumed by [`restore_paths`].
+#[allow(dead_code)] // PR3 revert 确认弹窗消费(RestorePath 列表)
 #[derive(Debug, Clone, Serialize)]
 pub struct RestorePath {
     pub path: String,
@@ -64,6 +65,7 @@ pub struct RestorePath {
 }
 
 /// What to do with a path when reverting to the target snapshot.
+#[allow(dead_code)] // 随 RestorePath / restore_paths 进 PR3
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RestoreAction {
@@ -77,6 +79,7 @@ pub enum RestoreAction {
 
 /// Counts returned by [`restore_paths`] (feeds the PR3 revert
 /// result / toast).
+#[allow(dead_code)] // PR3 revert 命令消费(RevertResult)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RestoreOutcome {
     pub restored: usize,
@@ -202,6 +205,7 @@ pub fn delete_umbrella_ref(repo: &git2::Repository, session_id: &str) -> Result<
 /// Diff two snapshot trees and return the per-file result, reusing
 /// the session diff view's `FileDiff` / `DiffResult` shapes (the
 /// frontend consumes the same structure for turn-to-turn diffs).
+#[allow(dead_code)] // PR2 get_turn_checkpoint_diff 命令消费
 pub fn diff_snapshots(
     repo: &git2::Repository,
     a_tree: git2::Oid,
@@ -222,6 +226,7 @@ pub fn diff_snapshots(
 /// The current state is captured fresh (via [`build_state_tree`])
 /// so the set is consistent with the gate-tree recomputation the
 /// PR3 preview/execute flow performs.
+#[allow(dead_code)] // PR3 revert preview 命令消费
 pub fn compute_restore_set(
     repo: &git2::Repository,
     target_tree: git2::Oid,
@@ -262,6 +267,7 @@ pub fn compute_restore_set(
 /// blob was mode 100755. Delete prunes now-empty parent directories
 /// (best-effort, bounded by the workdir root) so the layout matches
 /// a plain checkout.
+#[allow(dead_code)] // PR3 revert execute 命令消费
 pub fn restore_paths(
     repo: &git2::Repository,
     target_tree: git2::Oid,

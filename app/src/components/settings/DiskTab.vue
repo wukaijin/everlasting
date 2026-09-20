@@ -108,6 +108,17 @@ const rows: FlagRow[] = [
     value: () => config.outputsAgeCleanupEnabled,
     set: (on) => config.setOutputsAgeCleanupEnabled(on),
   },
+  {
+    // N2 轮末文件快照(2026-09-20, task 09-20-n2-checkpoint-revert):
+    // 快照链总开关。关闭后轮首基线与轮末快照不再构建;既有链与
+    // refs/everlasting 留置无害(design §9),删会话时随清。
+    key: "checkpointsEnabled",
+    title: "轮次文件快照",
+    description:
+      "每轮结束把项目文件状态记为快照(git 悬空对象,不动你的分支与暂存区),支撑「本轮 diff」与「回到此轮后」。关闭后不再建快照;未跟踪且被 gitignore 的文件不入快照。",
+    value: () => config.checkpointsEnabled,
+    set: (on) => config.setCheckpointsEnabled(on),
+  },
 ];
 
 async function onToggle(row: FlagRow): Promise<void> {

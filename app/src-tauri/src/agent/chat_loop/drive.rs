@@ -72,6 +72,11 @@ pub(crate) struct DriveTurnOutcome {
     pub(crate) last_usage_terminal: Option<crate::llm::types::TokenUsage>,
     pub(crate) workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
     pub(crate) cancelled: bool,
+    /// N2 checkpoint 写信号之三:本 turn 轮顶 drain 到过后台 shell 完成
+    /// 事件(L1 异步写 —— 完成可能落在任意两 turn 之间,drive 轮顶的
+    /// drain 是唯一可观测点)。轮末快照钩(chat_loop.rs hub)按
+    /// design §4 写触发门消费;`false` = 本轮无后台完成事件。
+    pub(crate) background_writes: bool,
     /// C3 摘要压缩:
     /// 当前水位摘要锚点。进参是上一 turn 的 anchor(init 种子或上次
     /// 压缩产物),出参在本 turn 成功压缩后更新为新摘要 —— 同
@@ -2559,6 +2564,9 @@ pub(crate) async fn drive_turn(
         last_usage_terminal,
         workflow_ctx,
         cancelled,
+        // N2 写信号:本轮轮顶 drain 到的后台 shell 完成事件数非空即真
+        // (drain 本身已是破坏性消费,布尔即可;轮末钩见 chat_loop.rs hub)。
+        background_writes: !background_notifications.is_empty(),
         // C3 PR2:水位锚点穿出(未压缩的 turn 原样带回上一 turn 的值)。
         summary_anchor,
     })

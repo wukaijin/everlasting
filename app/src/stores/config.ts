@@ -150,13 +150,20 @@ export const useConfigStore = defineStore("config", () => {
 
   // 2026-09-10 hard switch PR2(任务 09-10-memory-everlasting-md-hard-switch):
   // 4 槽位记忆植入开关的展示值(fail-open 缺省开,仅字面 "false" 关,
-  // 与后端 `memory::flags` 单源读法一致)。关 = 对应槽位不注入会话
-  //(层降级 disabled,Preview 徽标可见)。生效语义:主循环下一会话
+  // 与后端 `memory::flags` 单源读法一致)。关 = 对应槽位不进 banner / 注入块 /
+  // `memory_token`(层降级 `LayerStatus::Disabled`,Preview 徽标可见)。生效语义:主循环下一会话
   //(D2 freeze 强制)、worker 下一 dispatch。
   const memoryUserEverlastingEnabled = ref(true);
   const memoryUserAgentsEnabled = ref(true);
   const memoryProjectEverlastingEnabled = ref(true);
   const memoryProjectAgentsEnabled = ref(true);
+
+  // N2 轮末文件快照(2026-09-20, task 09-20-n2-checkpoint-revert):
+  // 总开关展示值(fail-open 缺省开,仅字面 "false" 关,与后端
+  // `agent::checkpoint::checkpoints_enabled` 单源读法一致)。关 =
+  // 轮首基线与轮末快照钩整体旁路;既有链与 ref 留置无害。存储面板
+  // (DiskTab)消费。
+  const checkpointsEnabled = ref(true);
 
   async function load() {
     // Load providers + models from the catalog (replaces the old
@@ -200,6 +207,7 @@ export const useConfigStore = defineStore("config", () => {
         memoryUserAgentsEnabled?: boolean;
         memoryProjectEverlastingEnabled?: boolean;
         memoryProjectAgentsEnabled?: boolean;
+        checkpointsEnabled?: boolean;
       }>("get_app_config");
       turnCompleteNotify.value = appConfig.turnCompleteNotifyEnabled !== false;
       // F2:additive 字段(旧 daemon 缺省 true)。
@@ -222,6 +230,8 @@ export const useConfigStore = defineStore("config", () => {
       memoryUserAgentsEnabled.value = appConfig.memoryUserAgentsEnabled !== false;
       memoryProjectEverlastingEnabled.value = appConfig.memoryProjectEverlastingEnabled !== false;
       memoryProjectAgentsEnabled.value = appConfig.memoryProjectAgentsEnabled !== false;
+      // N2 快照总开关(additive,旧 daemon 缺省 true)。
+      checkpointsEnabled.value = appConfig.checkpointsEnabled !== false;
     } catch (e) {
       console.warn("get_app_config unavailable, keep toast default on:", e);
     }
@@ -337,6 +347,16 @@ export const useConfigStore = defineStore("config", () => {
     memoryProjectAgentsEnabled.value = on;
   }
 
+  // N2 轮末文件快照总开关写入口(key 与后端
+  // `SETTABLE_APP_FLAGS` 白名单一一对应)。
+  async function setCheckpointsEnabled(on: boolean): Promise<void> {
+    await transport.invoke("set_app_config_flag", {
+      key: "checkpoints_enabled",
+      value: on,
+    });
+    checkpointsEnabled.value = on;
+  }
+
   /** Persist the RAW extra-writable list (RULE-SBX-002, P3c): the
    *  editable list is exactly what lands in app_config — the `~/.cargo`
    *  default is NOT part of it (the backend merges it in at read
@@ -369,6 +389,7 @@ export const useConfigStore = defineStore("config", () => {
     memoryUserAgentsEnabled,
     memoryProjectEverlastingEnabled,
     memoryProjectAgentsEnabled,
+    checkpointsEnabled,
     lastActiveProjectId,
     readLastSession,
     writeLastSession,
@@ -382,6 +403,7 @@ export const useConfigStore = defineStore("config", () => {
     setMemoryUserAgentsEnabled,
     setMemoryProjectEverlastingEnabled,
     setMemoryProjectAgentsEnabled,
+    setCheckpointsEnabled,
     setSandboxExtraWritableRaw,
     load,
   };

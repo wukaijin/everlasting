@@ -548,6 +548,12 @@ pub struct AppConfigPayload {
     pub memory_user_agents_enabled: bool,
     pub memory_project_everlasting_enabled: bool,
     pub memory_project_agents_enabled: bool,
+    /// N2 轮末文件快照(2026-09-20, task `09-20-n2-checkpoint-revert`)
+    /// 的总开关读出口。app_config 键 `checkpoints_enabled`(常量单源
+    /// `agent::checkpoint::CHECKPOINTS_ENABLED_KEY`),fail-open 缺省开
+    /// (仅字面 `"false"` 关)。关 = 轮首基线与轮末快照钩整体旁路;
+    /// 既有链与 ref 留置无害(design §9)。Settings「存储」面板消费。
+    pub checkpoints_enabled: bool,
 }
 
 pub async fn get_app_config_inner(
@@ -602,6 +608,8 @@ pub async fn get_app_config_inner(
     // 2026-09-10 hard switch PR2:4 槽位记忆植入开关(单源读法
     // `MemorySlotFlags::read`,fail-open 缺省开)。
     let slot_flags = crate::memory::flags::MemorySlotFlags::read(&state.db).await;
+    // N2 轮末文件快照总开关(单源读法,fail-open 缺省开)。
+    let checkpoints_enabled = crate::agent::checkpoint::checkpoints_enabled(&state.db).await;
     Ok(AppConfigPayload {
         turn_complete_notify_enabled: on,
         scheduled_tasks_enabled: scheduled_on,
@@ -616,6 +624,7 @@ pub async fn get_app_config_inner(
         memory_user_agents_enabled: slot_flags.user_agents,
         memory_project_everlasting_enabled: slot_flags.project_everlasting,
         memory_project_agents_enabled: slot_flags.project_agents,
+        checkpoints_enabled,
     })
 }
 
@@ -657,6 +666,9 @@ const SETTABLE_APP_FLAGS: &[&str] = &[
     crate::memory::flags::KEY_USER_AGENTS,
     crate::memory::flags::KEY_PROJECT_EVERLASTING,
     crate::memory::flags::KEY_PROJECT_AGENTS,
+    // N2 轮末文件快照(2026-09-20):常量单源在
+    // `agent::checkpoint::CHECKPOINTS_ENABLED_KEY`(fail-open 缺省开)。
+    crate::agent::checkpoint::CHECKPOINTS_ENABLED_KEY,
 ];
 
 /// 写 app_config 布尔开关(白名单内)。key 不在白名单 → `InvalidRequest`
@@ -769,6 +781,11 @@ mod tests {
                 && cfg.memory_project_agents_enabled,
             "4 槽位记忆开关缺省应为 true(fail-open)"
         );
+        // N2 轮末文件快照:缺省开(fail-open)。
+        assert!(
+            cfg.checkpoints_enabled,
+            "checkpoints_enabled 缺省应为 true(fail-open)"
+        );
         assert!(
             cfg.sandbox_extra_writable
                 .iter()
@@ -796,6 +813,7 @@ mod tests {
                     cfg.memory_project_everlasting_enabled
                 }
                 crate::memory::flags::KEY_PROJECT_AGENTS => cfg.memory_project_agents_enabled,
+                crate::agent::checkpoint::CHECKPOINTS_ENABLED_KEY => cfg.checkpoints_enabled,
                 _ => unreachable!(),
             };
             assert!(!off, "{key} 写 false 后应读回 false");
@@ -811,6 +829,7 @@ mod tests {
                 && cfg.sandbox_enabled
                 && cfg.disk_governor_enabled
                 && cfg.outputs_age_cleanup_enabled
+                && cfg.checkpoints_enabled
         );
         // 循环末尾把所有白名单 key 写回 true,ask_no_timeout 也在其中
         // (enable 语义:写 true 读回 true,见下方单独断言)。

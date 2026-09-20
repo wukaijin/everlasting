@@ -66,6 +66,19 @@ describe("configStore — F3 磁盘治理开关 + ask_no_timeout", () => {
     });
   });
 
+  // N2 轮末文件快照(2026-09-20):setCheckpointsEnabled 同款接线
+  // (fail-open 缺省 true,key checkpoints_enabled)。
+  it("setCheckpointsEnabled:key checkpoints_enabled 与后端白名单一致,写成功才更新 ref", async () => {
+    const cfg = useConfigStore();
+    expect(cfg.checkpointsEnabled).toBe(true);
+    await cfg.setCheckpointsEnabled(false);
+    expect(cfg.checkpointsEnabled).toBe(false);
+    expect(invokeMock).toHaveBeenCalledWith("set_app_config_flag", {
+      key: "checkpoints_enabled",
+      value: false,
+    });
+  });
+
   it("写失败 → 抛错给调用方,本地 ref 保持不变", async () => {
     invokeMock.mockRejectedValue(new Error("transport boom"));
     const cfg = useConfigStore();

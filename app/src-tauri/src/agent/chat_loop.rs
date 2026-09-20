@@ -439,6 +439,37 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
     } = init;
 
     // -----------------------------------------------------------------
+    // N2 轮末文件快照(2026-09-20,task 09-20-n2-checkpoint-revert)。
+    //
+    // 总门(fail-open 缺省开,四个条件合成一个 bool,轮末钩复用):
+    // config kill switch(`checkpoints_enabled`,仅字面 "false" 关,
+    // 单源 `agent::checkpoint::checkpoints_enabled`)
+    // && 非 worker(`!skip_persist` —— worker 复用父 session,不建链)
+    // && 非群聊(写冲突本低、语义另行评估,PRD R5)
+    // && git 项目(非 git 无快照对象,PRD R5;DB 旗标与 loop 自身的
+    // git 门同源)。
+    //
+    // 基线钩(群聊评审 P0 修正):loop 入口、首轮 user 行已落库
+    // (prepare_loop_state 内 persist)、早于任何 tool 执行 —— session
+    // 无基线行则建基线,checkpoint seq = 首轮 user 行 seq(当前游标
+    // 前一位;fresh session 通常 0)。基线必须挂在轮首,首轮写入才不
+    // 会被吃进基线,「revert 回会话前」可达(AC10)。
+    //
+    // repo 路径 = loop 的 session root(worktree 绑定则 worktree 路径,
+    // 否则 project.path —— 即工具实际写入的目录)。best-effort:任一步
+    // 失败仅 warn,轮收尾照常(design §4 fail-open)。
+    // -----------------------------------------------------------------
+    let is_group_chat = loaded_session.session.session_type == crate::db::SessionType::GroupChat;
+    let checkpoints_on = !skip_persist
+        && !is_group_chat
+        && project.is_git_repo
+        && crate::agent::checkpoint::checkpoints_enabled(&db).await;
+    if checkpoints_on {
+        crate::agent::checkpoint::ensure_turn_baseline(&db, &session_id, &worktree_path, seq - 1)
+            .await;
+    }
+
+    // -----------------------------------------------------------------
     // explicit-agent-dispatch (2026-06-30): forced dispatch prefix.
     //
     // When the user typed `@@<agent> <task>`, the frontend parsed it
@@ -819,6 +850,13 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
         let tool_calls = drive_outcome.tool_calls;
         let loop_hint = drive_outcome.loop_hint;
         let mut cancelled = drive_outcome.cancelled;
+        // N2 写信号(写触发门,design §4):本轮 dispatch 的工具派生
+        // 三路(write 家族 tool / A2+ 判写前台 shell / merge_worker)+
+        // drive 轮顶 drain 到的后台 shell 完成事件,合成一个 bundle。
+        // 门与快照本体见 finalize_turn 之后的轮末钩。
+        let turn_write_signals =
+            crate::agent::checkpoint::WriteSignals::for_tool_calls(&tool_calls)
+                .with_background(drive_outcome.background_writes);
 
         let dispatch_outcome = dispatch_tool_calls(
             &request,
@@ -865,6 +903,27 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
         .is_err()
         {
             return;
+        }
+        // N2 轮末快照钩(写触发门;总门与基线钩见函数顶部)。
+        //
+        // 落位说明:design §4 把钩点锚在「`finalize_turn_persist` 成功
+        // 返回后」,但那一点(drive_turn 内 assistant 行落库)在本轮
+        // 工具执行**之前** —— 快照会整体晚一轮(AC2/AC3 归因漂移),
+        // 且 loop 以纯文本 turn 收尾时最后一个写轮永远没有快照(那个
+        // turn 之后不再有 assistant 落库;取消/错误路径本就不挂钩)。
+        // 本钩挂在工具已执行完、tool_result 已落库的**同轮真实轮末**
+        // (hub 的 finalize_turn 成功后),「写轮恒有行」与 AC8「当轮
+        // merge 当轮收编」在此才成立。checkpoint seq = 轮末 assistant
+        // 行 seq = 当前游标 − 1(游标此刻指向 tool_result 行)。
+        if checkpoints_on {
+            crate::agent::checkpoint::snapshot_turn_if_written(
+                &db,
+                &session_id,
+                &worktree_path,
+                seq - 1,
+                turn_write_signals,
+            )
+            .await;
         }
         seq += 1;
     }

@@ -467,6 +467,41 @@ pub async fn delete_session_inner(
         }
     }
 
+    // N2 checkpoint(2026-09-20, task 09-20-n2-checkpoint-revert):
+    // delete the session's checkpoint umbrella ref
+    // (`refs/everlasting/<session_id>`) so the dangling snapshot chain
+    // becomes garbage-collectable (AC6). Tries the session-bound repo
+    // path first and ALWAYS falls back to the project main repo —
+    // worktree refs physically land in the shared common-refs store,
+    // so a detached/deleted worktree path must not silently skip the
+    // cleanup (评审修正的 ref 泄漏洞). Best-effort: both paths failing
+    // skips with a warn; the DB rows are cleaned by the FK CASCADE in
+    // the `delete_session` call below regardless.
+    if let Some(ref loaded) = session_for_cleanup {
+        match db::get_project(&state.db, &loaded.session.project_id).await {
+            Ok(Some(project)) => {
+                crate::agent::checkpoint::cleanup_umbrella_refs_best_effort(
+                    &loaded.session,
+                    &project.path,
+                    &session_id,
+                );
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "checkpoint: project row missing, umbrella ref may leak (non-fatal)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id = %session_id,
+                    "checkpoint: project lookup failed, umbrella ref may leak (non-fatal)"
+                );
+            }
+        }
+    }
+
     db::delete_session(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("delete_session failed: {}", e).into())

@@ -93,8 +93,10 @@ fn delta_status_str(status: Delta) -> &'static str {
 /// git-missing cases only, and only for non-bare repos (a bare
 /// repo has no cwd to run git in; its diffs report best-effort
 /// libgit2 counts).
-// PR0:唯一消费者是 checkpoint 模块(其自身为 PR1 接线前的中立基建,
-// 见 git/checkpoint.rs 头注),故本函数暂带 dead_code allow。
+// PR1 起 `git::checkpoint` 的接线层(agent/checkpoint.rs)是快照原语
+// 的生产消费者,但 `diff_tree_to_tree` 的唯二调用方(`diff_snapshots` /
+// `compute_restore_set`)仍属 PR2/PR3 命令面 —— 三命令落地后随
+// checkpoint.rs 的按项 allow 一并摘除。
 #[allow(dead_code)]
 pub(crate) fn diff_tree_to_tree(
     repo: &Repository,

@@ -1499,5 +1499,40 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // --- N2 轮末文件快照链(2026-09-20,task 09-20-n2-checkpoint-revert):
+    // one row per turn-boundary snapshot of the session's working state.
+    // `tree_sha` / `commit_sha` point at DANGLING git objects (the
+    // snapshot commit moves no branch; GC reachability comes from the
+    // umbrella ref `refs/everlasting/<session_id>`, which lives in the
+    // repo, not here — see `git/checkpoint.rs` for the zero-touch
+    // contract and `agent/checkpoint.rs` for the wiring layer).
+    //
+    // `seq` = 轮末 assistant 行的 `messages.seq`(两表共享数值空间但
+    // 不撞 PK);基线行挂**首轮 user 行 seq**(通常 0)—— 基线钩在轮首,
+    // 「回到会话前」才可达(评审 P0 修正)。`created_at` unix ms
+    // (scheduled_tasks 同风格 INTEGER 毫秒)。
+    //
+    // PK (session_id, seq) 兼作按 session 的查询索引(latest / list /
+    // has-baseline 全是 session 前缀探针,SQLite 自动索引已覆盖,无
+    // 额外二级索引)。FK CASCADE:删 session 级联清行(伞 ref 清理另挂
+    // `delete_session_inner`,依赖 init_pool 的 FK pragma)。写语义 =
+    // INSERT OR REPLACE(同 seq 重试幂等,design §2.6)。全量保留,无
+    // 剪枝无 TTL(用户裁定)。幂等重放:新库直建,存量库 IF NOT EXISTS
+    // no-op;回滚 = revert 后表残留无副作用(design §9)。
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS turn_checkpoints (
+ session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+ seq        INTEGER NOT NULL,
+ tree_sha   TEXT NOT NULL,
+ commit_sha TEXT NOT NULL,
+ created_at INTEGER NOT NULL,
+ PRIMARY KEY (session_id, seq)
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
