@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/09-21-error-bus-category-recovery/research/error-pipeline-audit.md", "reason": "验收对照:AC1-AC5 的证据锚点与不回归清单(流式链路/后端不动)"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量基线(lint/typecheck/test 命令与门槛)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "后端错误契约 spec(含 RULE-ERR-SURFACE-001),check 时确认未违反吞错可见性规则"}
+{"file": ".trellis/tasks/09-21-error-bus-category-recovery/research/group-chat-review-0921.md", "reason": "check 对照评审裁决逐条验收(分档/接缝用例/401 叠加冒烟)"}

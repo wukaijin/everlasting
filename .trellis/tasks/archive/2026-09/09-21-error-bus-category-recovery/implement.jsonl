@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/09-21-error-bus-category-recovery/research/error-pipeline-audit.md", "reason": "全链路审计证据:断点 file:line、daemon 契约、展示面清点,实现的全部依据"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "前端 store/模块单例约定(useErrorBus/useToast 是模块单例,改动须保持该形态)"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "transport 层契约与双模式(http/tauri)约束,TransportError 改动的兼容面"}
+{"file": ".trellis/tasks/09-21-error-bus-category-recovery/research/group-chat-review-0921.md", "reason": "群聊评审 7 条裁决(分档兜底/接缝用例/类型单一事实源等),实现必须遵守"}
