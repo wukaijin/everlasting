@@ -18,6 +18,9 @@ pub use crate::db::{
     set_config_value,
 };
 pub use crate::db::{finalize_turn_persist, persist_turn, MessageLatency, MessageRow};
+// B6(N2 checkpoint,任务 09-20-n2-checkpoint-revert):轮末快照的
+// 树构建成本。git 模块 crate 私有,经本模块再导出供 bench 面可达。
+pub use crate::git::checkpoint::build_state_tree;
 pub use crate::llm::provider::mock::{MockProvider, MockResponse};
 pub use crate::llm::types::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Role, ToolDef};
 pub use crate::tools::builtin_tools;

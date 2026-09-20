@@ -1,7 +1,7 @@
 # Perf Baseline — N9 性能基准基线与口径
 
 > 任务 `09-19-n9-perf-benchmark`(2026-09-19)。本文件 = 首批基线 + 复跑口径 + 更新纪律。
-> bench 源码:`app/src-tauri/benches/`(harness / db_bench / sse_bench + support + profile.json)。
+> bench 源码:`app/src-tauri/benches/`(harness / db_bench / sse_bench / checkpoint_bench + support + profile.json)。
 
 ## 1. 口径(不变量)
 
@@ -19,7 +19,7 @@
 cd app/src-tauri
 PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
   cargo bench --features bench --bench harness -- --save-baseline <名>
-# 同款 --bench db_bench / --bench sse_bench
+# 同款 --bench db_bench / --bench sse_bench / --bench checkpoint_bench
 # 首批基线名:n9-first(2026-09-19);后续复跑不传 --save-baseline 即与既有 baseline 自动对比
 ```
 
@@ -48,6 +48,18 @@ PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
 | b5_delete_suffix(50 行,1k/10k 表) | — | 1.79 / 1.68 ms |
 
 **关键事实**:disk 档 `load_session` 是内存档的 **17 倍**(WAL 读);表 1k→10k 读成本只 +5%(固定开销主导)。**N2 成本模型**:turn 边界 auto-commit ≈ disk b2/b3 的 1.4ms/轮(每 turn 1-2 行)——完全可接受;revert 的后缀删除 <2ms 且与表大小无关。
+
+### B6 轮末快照树构建(任务 09-20-n2-checkpoint-revert PR0,2026-09-20)
+
+`build_state_tree` criterion(`--bench checkpoint_bench`,组 `b6_build_state_tree_{n}/snapshot_full_scan`):合成仓库 N 个 tracked+clean 文件(10 目录散布、内容逐文件唯一),测全仓 stat 扫描 + 内存 index 重建(read_tree(HEAD) + add_all,零 `index.write()`)+ tree 对象写。首跑预热后测量段内对象已存在,数字 = 轮末快照的稳定态成本。
+
+| 档 | median | 折算 |
+|---|---|---|
+| n=100 | 360.8 µs | ~3.6 µs/文件 |
+| n=1k | 3.05 ms | ~3.0 µs/文件 |
+| n=10k | 28.3 ms | ~2.8 µs/文件(30 样本) |
+
+**读数**:成本与文件数线性(~3 µs/文件),印证 design「树构建 ≈ git status 量级」预判;10k 文件仓库 28.3ms,对 B2 disk 档 `finalize_turn_persist`(1.36ms)是 ~21 倍,但绝对值仍在轮末可忽略带内(设计前提:写触发门 + content addressing 去重,纯改轮零新对象;真实项目脏文件远小于全仓)。10k 档 outliers 13%(high mild)为 WSL2 调度抖动,criterion 区间收窄正常。
 
 ### B3 SSE(降级形态:oneshot 内存面,无 TCP/网络栈,数字是下界)
 
@@ -159,6 +171,7 @@ PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
 |---|---|
 | `agent/chat_loop*` / `agent/context.rs` / `agent/chat.rs`(context 组装、turn 结构) | harness |
 | `db/sessions/messages.rs` / migrations(消息读写路径) | db_bench |
+| `git/checkpoint.rs`(N2 轮末快照路径) | checkpoint_bench |
 | `daemon/sse.rs` / `daemon/routes/stream.rs`(SSE 通道) | sse_bench |
 | `llm/provider` 构造/dispatch | harness + sse_bench |
 | `MessageList.vue` / 消息渲染链 | F1(Playwright,PR3 落地后) |

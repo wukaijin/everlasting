@@ -301,6 +301,49 @@ rev-spec argument), update this spec in the same commit.
 
 ---
 
+## Extension: Tree-to-Tree Diffs Share the numstat Workaround (2026-09-20)
+
+**What**: N2 checkpoint turn diffs (task `09-20-n2-checkpoint-revert`)
+added two private helpers to `git/diff.rs`, leaving the frozen surfaces
+above untouched:
+
+- `delta_status_str(Delta) -> &'static str` — the status-match block
+  extracted verbatim out of `diff_against_branch` (same arms, same
+  comments) so both diff families speak one status vocabulary.
+- `fn diff_tree_to_tree(repo, a_tree, b_tree) -> Result<DiffResult, GitError>`
+  — the tree-to-tree half `diff_against_branch` doesn't cover: no
+  workdir component, no untracked layering, result is exactly the
+  delta list between the two trees. `pub(crate)`; sole consumer is
+  `git::checkpoint::diff_snapshots`.
+- `fn git_numstat_trees(worktree, a_oid, b_oid, path)` — the tree-to-tree
+  sibling of `git_numstat`: `git diff --no-color --numstat <shaA> <shaB> -- <path>`.
+  Same parsing, same `Err`-on-subprocess-failure contract for the
+  caller's `line_stats()` fallback, same `(0, 0)` on empty stdout.
+
+**Why the sibling exists**: the libgit2 `line_stats()` under-count is
+NOT workdir-specific — it reproduces on tree-to-tree patches too
+(`"v1\n" → "v2\n"` between two snapshot trees reported 0+/1- before
+the numstat switch). Both families therefore route counts through the
+git CLI. One delta from the workdir path: a **bare repo** has no cwd
+to spawn `git` in, so `diff_tree_to_tree` skips numstat there and
+reports best-effort libgit2 counts (the frozen workdir path always
+has a workdir by construction).
+
+**Frozen surfaces unchanged** (verified in the same change):
+`diff_worktree` / `diff_against_branch` / `git_numstat` bodies are
+byte-identical apart from the status match now calling
+`delta_status_str` — pure extraction, zero behavior change. The four
+frozen `diff_worktree_*` tests are the regression guard.
+
+**Tests**: the tree-to-tree required patterns are pinned by
+`git::checkpoint::tests::diff_snapshots_reports_changes_across_turns`
+(PR0): pure-replacement 1+/1-, pure-creation added=N/removed=0,
+exact 4-file AC2 cross-turn set, reversed-direction status flip. The
+binary-file pattern is not duplicated for tree-to-tree (shared parser,
+"-" → 0, pinned on the workdir family).
+
+---
+
 ## Out of Scope
 
 - Routing the unified `diff_text` (the `+` / `-` body the UI renders

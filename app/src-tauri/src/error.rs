@@ -153,13 +153,16 @@ impl AppError for LlmError {
 impl AppError for GitError {
     fn category(&self) -> ErrorCategory {
         match self {
-            GitError::NotARepo { .. } | GitError::Dirty { .. } => ErrorCategory::InvalidRequest,
+            GitError::NotARepo { .. } | GitError::NoWorktree { .. } | GitError::Dirty { .. } => {
+                ErrorCategory::InvalidRequest
+            }
             GitError::Io { .. } | GitError::Git2(_) => ErrorCategory::Server,
         }
     }
     fn user_message(&self) -> String {
         match self {
             GitError::NotARepo { path } => format!("项目不是 git 仓库: {}", path),
+            GitError::NoWorktree { path } => format!("仓库没有可用工作区: {}", path),
             GitError::Io { path, .. } => format!("git IO 错误: {}", path),
             GitError::Git2(e) => format!("git 错误: {}", e),
             GitError::Dirty { path, .. } => {

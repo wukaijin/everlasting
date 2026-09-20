@@ -39,6 +39,13 @@ pub enum GitError {
     /// an actionable user-facing message.
     #[error("working tree at {path} has uncommitted changes{}", paths_formatted(.paths))]
     Dirty { path: String, paths: Vec<String> },
+
+    /// The repository has no working directory (bare). Checkpoint
+    /// snapshots and reverts both operate on a working tree — a
+    /// bare repository cannot host either. N2 checkpoint use;
+    /// surfaced by `git::checkpoint::restore_paths`.
+    #[error("repository has no working tree: {path}")]
+    NoWorktree { path: String },
 }
 
 fn paths_formatted(paths: &[String]) -> String {

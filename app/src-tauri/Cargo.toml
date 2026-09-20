@@ -232,3 +232,10 @@ required-features = ["bench"]
 name = "sse_bench"
 harness = false
 required-features = ["bench"]
+
+# B6(N2 checkpoint,任务 09-20-n2-checkpoint-revert):build_state_tree
+# 全仓扫描 + 树构建成本,合成仓库 100/1k/10k 三档。同 bench feature 门。
+[[bench]]
+name = "checkpoint_bench"
+harness = false
+required-features = ["bench"]

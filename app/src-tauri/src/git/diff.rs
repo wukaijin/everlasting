@@ -54,6 +54,120 @@ pub struct DiffResult {
     pub files: Vec<FileDiff>,
 }
 
+/// Map a libgit2 delta status to the `FileDiff.status` string the
+/// UI consumes. Shared by the workdir diff and the tree-to-tree
+/// snapshot diff (checkpoint turn diffs) so both surfaces speak the
+/// same vocabulary.
+fn delta_status_str(status: Delta) -> &'static str {
+    match status {
+        Delta::Added => "added",
+        Delta::Deleted => "deleted",
+        Delta::Modified => "modified",
+        Delta::Renamed => "renamed",
+        Delta::Copied => "copied",
+        Delta::Typechange => "typechange",
+        Delta::Untracked => "untracked",
+        Delta::Ignored => "ignored",
+        Delta::Conflicted => "conflicted",
+        // Unmodified deltas don't show up in `diff.deltas()`
+        // (they're filtered by the diff engine), but cover
+        // them anyway for the non-exhaustive case. Unreadable
+        // deltas indicate an I/O error; surface as "unreadable"
+        // so the UI can flag it instead of crashing.
+        Delta::Unmodified | Delta::Unreadable => "unreadable",
+    }
+}
+
+/// Compute the diff between two committed trees and return it in
+/// the session diff shapes. This is the tree-to-tree half that
+/// `diff_against_branch` doesn't cover: both sides are trees, so
+/// there is no workdir component and no untracked layering — the
+/// result is exactly the delta list between the two trees.
+///
+/// Line counts route through `git diff --numstat <a> <b>` like the
+/// workdir diff does: the libgit2 `Patch::line_stats()` under-count
+/// bug is NOT workdir-specific — it reproduces on tree-to-tree
+/// patches too (the `git::checkpoint` tests pinned `"v1\n" →
+/// "v2\n"` reporting 0+/1- before the numstat switch). The fallback
+/// to `line_stats()` mirrors `diff_against_branch`: catastrophic
+/// git-missing cases only, and only for non-bare repos (a bare
+/// repo has no cwd to run git in; its diffs report best-effort
+/// libgit2 counts).
+// PR0:唯一消费者是 checkpoint 模块(其自身为 PR1 接线前的中立基建,
+// 见 git/checkpoint.rs 头注),故本函数暂带 dead_code allow。
+#[allow(dead_code)]
+pub(crate) fn diff_tree_to_tree(
+    repo: &Repository,
+    a_tree: &git2::Tree<'_>,
+    b_tree: &git2::Tree<'_>,
+) -> Result<DiffResult, GitError> {
+    let diff = repo.diff_tree_to_tree(Some(a_tree), Some(b_tree), None)?;
+
+    let mut files: Vec<FileDiff> = Vec::new();
+    for (idx, delta) in diff.deltas().enumerate() {
+        let status = delta_status_str(delta.status());
+
+        // Prefer the new file's path (handles renames where the
+        // old path is "before" and the new path is "after"). For
+        // pure deletions, fall back to the old path.
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Binary files / submodules have no patchable diff —
+        // report them with empty body and 0/0 stats, same as the
+        // workdir diff's contract.
+        let (added, removed, diff_text) = match git2::Patch::from_diff(&diff, idx) {
+            Ok(Some(mut patch)) => {
+                let counts = || patch.line_stats().map(|(a, d, _)| (a, d)).unwrap_or((0, 0));
+                let (a, d) = match repo.workdir() {
+                    Some(workdir) if !path.is_empty() => {
+                        match git_numstat_trees(workdir, a_tree.id(), b_tree.id(), &path) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!(
+                                    path = %path,
+                                    error = %e,
+                                    "tree diff: git --numstat failed, falling back to libgit2 line_stats"
+                                );
+                                counts()
+                            }
+                        }
+                    }
+                    _ => counts(),
+                };
+                let text = patch
+                    .to_buf()
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
+                (a, d, text)
+            }
+            Ok(None) => (0, 0, String::new()),
+            Err(e) => {
+                tracing::warn!(
+                    path = %path,
+                    error = %e,
+                    "patch generation failed for tree diff delta; reporting empty diff"
+                );
+                (0, 0, String::new())
+            }
+        };
+
+        files.push(FileDiff {
+            path,
+            status: status.to_string(),
+            added,
+            removed,
+            diff_text,
+        });
+    }
+
+    Ok(DiffResult { files })
+}
+
 /// Compute the diff between `worktree_path`'s current working dir
 /// (including index) and the commit the `session/<session_id>`
 /// branch points to.
@@ -86,23 +200,7 @@ fn diff_against_branch(worktree_path: &Path, branch_full: &str) -> Result<DiffRe
 
     let mut files: Vec<FileDiff> = Vec::new();
     for (idx, delta) in diff.deltas().enumerate() {
-        let status = match delta.status() {
-            Delta::Added => "added",
-            Delta::Deleted => "deleted",
-            Delta::Modified => "modified",
-            Delta::Renamed => "renamed",
-            Delta::Copied => "copied",
-            Delta::Typechange => "typechange",
-            Delta::Untracked => "untracked",
-            Delta::Ignored => "ignored",
-            Delta::Conflicted => "conflicted",
-            // Unmodified deltas don't show up in `diff.deltas()`
-            // (they're filtered by the diff engine), but cover
-            // them anyway for the non-exhaustive case. Unreadable
-            // deltas indicate an I/O error; surface as "unreadable"
-            // so the UI can flag it instead of crashing.
-            Delta::Unmodified | Delta::Unreadable => "unreadable",
-        };
+        let status = delta_status_str(delta.status());
 
         // Prefer the new file's path (handles renames where the
         // old path is "before" and the new path is "after"). For
@@ -394,6 +492,58 @@ fn git_numstat(worktree: &Path, path: &str) -> Result<(usize, usize), std::io::E
     // a safe no-op if it does). `if let` instead of `for` keeps
     // clippy's `never_loop` lint happy — we never iterate past
     // the first line.
+    if let Some(line) = stdout.lines().next() {
+        let mut cols = line.split('\t');
+        let a_raw = cols.next().unwrap_or("0");
+        let r_raw = cols.next().unwrap_or("0");
+        let added = if a_raw == "-" {
+            0
+        } else {
+            a_raw.parse::<usize>().unwrap_or(0)
+        };
+        let removed = if r_raw == "-" {
+            0
+        } else {
+            r_raw.parse::<usize>().unwrap_or(0)
+        };
+        return Ok((added, removed));
+    }
+    Ok((0, 0))
+}
+
+/// Tree-to-tree sibling of [`git_numstat`], used by the N2
+/// checkpoint turn diffs (`git::checkpoint::diff_snapshots`):
+/// `git diff --no-color --numstat <shaA> <shaB> -- <path>`. The
+/// libgit2 `line_stats` under-count is not workdir-specific — it
+/// reproduces on tree-to-tree patches too — so the numstat
+/// workaround applies to both diff families. Same error contract:
+/// subprocess failure returns `Err` for the caller's line_stats
+/// fallback; no diff yields `(0, 0)`.
+fn git_numstat_trees(
+    worktree: &Path,
+    a_tree: git2::Oid,
+    b_tree: git2::Oid,
+    path: &str,
+) -> Result<(usize, usize), std::io::Error> {
+    let output = StdCommand::new("git")
+        .args([
+            "diff",
+            "--no-color",
+            "--numstat",
+            &a_tree.to_string(),
+            &b_tree.to_string(),
+            "--",
+            path,
+        ])
+        .current_dir(worktree)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git --numstat (trees) exited with {:?}",
+            output.status
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
     if let Some(line) = stdout.lines().next() {
         let mut cols = line.split('\t');
         let a_raw = cols.next().unwrap_or("0");
