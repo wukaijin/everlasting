@@ -3,6 +3,7 @@
 > 任务:P3b `.trellis/tasks/08-31-a2-p3b-sandbox-executor/`(三件套 + review 处置记录);
 > P3c `.trellis/tasks/09-01-a2-p3c-sandbox-ux/`(三态 / Plan / 升级闭环,四 PR);
 > P3d `.trellis/tasks/09-01-a2-p3d-background-escalation/`(后台 shell 升级闭环)。
+> 2026-09-21 listen 识别缺口临时修复 + 长期方案 roadmap(§12,会话内直改,未立任务)。
 > 上游依据:P3a spike `08-31-a2-p3a-sandbox-spike/research/`(wsl2-feasibility-landlock
 > 五条陷阱 / p3b-design-notes / generalization fail-open 阶梯)+ prior-art(CVE-2025-59532)。
 > 模块:`app/src-tauri/src/sandbox/`(mod / landlock / seccomp / policy / tests_sandbox)、
@@ -190,7 +191,8 @@ socket。v1 **不封**且无法用现有机制封:seccomp BPF 只能检查标量
 ## 10. P3c — 升级闭环(前台 shell,design §5)
 
 - **触发**(§5.1):`sandbox_applied ∧ exit≠0 ∧ mode≠Plan ∧ classify_block`
-  命中(写串先行,`Operation not permitted` = 断网)。**每 tool call 至多
+  命中(写串先行,`Operation not permitted` = 断网;2026-09-21 起识别输入
+  扩到 stdout,见 §12)。**每 tool call 至多
   一次**(重跑在结构上不再进升级分支);Plan 排除 = D3 确定性只读身份。
 - **流程**(§5.2):prefix-grant 先查(`escalation::prefix_grant_hit`,
   `has_structural_metachar` 复合闸同 Tier 4)→ 命中直接不沙盒重跑零弹卡;
@@ -212,7 +214,8 @@ socket。v1 **不封**且无法用现有机制封:seccomp BPF 只能检查标量
 
 - **载荷生成**(registry 等待任务,拥有全量 stderr):`trigger == Normal ∧
   outcome == Failed ∧ 沙盒启动 ∧ origin_tool_use_id 有 ∧ classify_block`
-  命中 → 通知带 `EscalationOffer { tool_use_id, block, stderr_evidence }`。
+  命中(2026-09-21 起识别输入扩到 stdout,证据行 stderr 优先、stdout
+  兜底,见 §12)→ 通知带 `EscalationOffer { tool_use_id, block, stderr_evidence }`。
   Killed / TimedOut / SpawnFailed / Skip / 成功恒 `None`(超时 kill 的部分
   stderr 不可信,与前台 `!timed_out` 同门)。**start() 折叠**:`sandboxed`
   与 origin 在 start 时折叠成单一 `escalation_origin`——非沙盒 shell 的
@@ -250,3 +253,74 @@ socket。v1 **不封**且无法用现有机制封:seccomp BPF 只能检查标量
 - **环境边界(本仓库首例)**:`tests_escalation::escalation_approve_*`
   的探针前提是"OS 拒 `/proc/1/mem`",root 下不成立(rerun exit 0)——
   `geteuid()==0` 大声 SKIP,循内核探测 SKIP 同款纪律。
+
+## 12. listen 场景识别缺口 — 临时修复(2026-09-21)与长期方案(未实施)
+
+### 12.1 缺口实证(为什么修)
+
+jjh-mono 项目 session `23a8184b`(2026-09-20,edit 模式):`vite` dev server
+报 `Error: listen EPERM: operation not permitted 0.0.0.0:3001` —— 全文在
+**stdout**,`stderr` 为空;python `socket.socket()` 创建被拒、Chrome CDP
+端口被拒同样只在 stdout。而 §10/§11 的升级触发与 guidance 全部只喂
+`classify_block(&stderr)` → 前后台识别整体哑火:该 session 29 次
+`sandboxed_shell_execution`、**零 escalation offer**。模型被迫自行诊断
+("怀疑 listen 被沙箱按进程上下文拦"),花了多轮 node/python/chrome 三路
+探测后才绕行(CDP pipe 方案)。根因两层:
+
+1. **检测面**:dev server 工具链(vite/webpack/go/python)把启动失败报
+   stdout 是普遍行为,stderr 单源必然漏;
+2. **文案面**:Network guidance 原文只讲 "outbound / no egress",即使
+   触发也会诱导模型改绑 127.0.0.1(seccomp 拦的是 `socket(AF_INET)`
+   创建,比 bind 更早,绑哪都死)——session 里实际发生的无效尝试。
+
+### 12.2 已实施(临时修复)
+
+- `classify_block(stderr, stdout)` 两参化:stderr 特征不变(Write 两串
+  优先、Network 一串);stdout **只认三条强特征**(`stdout_smells_net_block`
+  ,与 classify 同文件同真源):node `listen EPERM` / go `listen tcp`+ONP /
+  python `PermissionError`+`socket`。宁缺勿滥锚:stdout 里裸
+  `Operation not permitted` / `Permission denied` 不认(grep、cat 日志的
+  常见内容);**Write 识别保持 stderr-only**。
+- `failure_guidance(stderr, stdout, mode)` 跟随两参;Network 文案改写为
+  "no INET sockets: no outbound AND no listen — dev servers cannot
+  start",点破 listen 语义,消除改绑 loopback 的误导。
+- 证据行:`escalation::stdout_net_evidence_line`(与 stderr 版同 200 截
+  断);前台 ask 实参 stderr 空时回退 stdout 行(shell.rs,`Cow` 组合);
+  后台 offer 烘焙同款兜底(in_memory.rs);`guidance_suffix` 双槽同行喂入。
+- 测试锚:`tests_sandbox::classify_block_reads_stdout_for_listen_denials`
+  (三实证形态命中 + 两个宁缺勿滥锚 + stderr-Write 优先)、
+  `guidance_network_variant_names_listen`。全量 `--lib` 2536 绿。
+
+### 12.3 长期方案(roadmap,未实施;按优先级)
+
+**A. 项目级「网络放行」档 `readwrite_net`(首选)** — `sandbox_policy`
+加第四值:landlock 文件锁照旧,seccomp INET filter 不装。动机:escalation
+「批准一次重跑」对长驻 dev server 不友好(重启再批;后台重跑结构性
+one-shot;AllowAlways 粒度 = 首 token,`pnpm dev` → 整个 `pnpm` 免沙箱)。
+信任语义必须在 GUI 文案明示:文件写入仍受控,**网络 = 任意外联(数据
+外发面)**,与 `off`(文件+网络全开)是两个不同的放行面。改动面:policy
+枚举 + DB CHECK 迁移 + `resolve_policy` 分支 + `prepare()` 条件装 filter +
+Settings 一档 + daemon routes。
+
+**B. prefix-grant 项目级持久化(细粒度补充)** — 批准卡加「本项目记住」,
+存 projects 维度。**前置**:grant 语义先从首 token 升级到多 token 前缀,
+否则持久化 `pnpm` = 项目内所有 pnpm 命令(含 install 脚本)永久免沙箱;
+免沙箱重跑连 landlock 一起免,信任面比 A 宽,只作 A 的补充。
+
+**C. landlock ABI v4 端口白名单(kernel 6.7+,长期)** — 
+`LANDLOCK_ACCESS_NET_BIND_TCP` 按端口放 bind、connect 仍拦,是唯一能做
+「只放 listen 不放出网」的机制。**技术红线(勿绕)**:seccomp 永远做不了
+端口级 —— 端口藏在 `sockaddr*` 指针里,BPF 不能解引用用户内存;现行
+seccomp 拦的是 `socket()` 创建,连 bind 都没到。若上 C,网络执法点应整体
+从 seccomp 迁到 landlock(socket 创建放行、bind/connect 按端口执法),
+capability probe 渐进启用;当前 WSL 5.15 不满足,不做主路径(§4 "不赌
+内核版本" 不变)。
+
+**D. 独立模型意图判断(远期)** — 引入独立(小)模型对失败命令做意图
+分类:是否需要 listen/connect、是否构建工具 vs 数据外发,用于(a)特征
+未命中/边界命中时的二次识别(静态字符串启发式的天花板就是 §12.2 的
+宁缺勿滥——误报与漏报只能二选一),(b)批准卡上的推荐档位(如建议切
+A 档)。**硬约束**:模型判断**不可作为安全边界** —— 命令文本与输出都是
+可注入面(prompt injection),只能作为 UX 分层减少打扰;硬边界永远是
+landlock/seccomp。接入点 = 升级触发前、特征 gray-zone 才调用(控成本);
+判断结果入 `session_audit_events` 留痕。

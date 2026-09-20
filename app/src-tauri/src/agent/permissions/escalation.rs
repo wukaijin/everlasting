@@ -247,3 +247,21 @@ pub(crate) fn stderr_evidence_line(stderr: &str) -> String {
         .unwrap_or("");
     line.chars().take(200).collect()
 }
+
+/// stdout counterpart of [`stderr_evidence_line`] for listen-class
+/// network denials (2026-09-21): dev-server toolchains print the EPERM
+/// to stdout with an empty stderr, so the card's evidence line must be
+/// extracted from stdout. First line carrying a listen/socket marker
+/// (same shapes as `sandbox::stdout_smells_net_block`), truncated to
+/// the same 200 chars. Empty when nothing matches.
+pub(crate) fn stdout_net_evidence_line(stdout: &str) -> String {
+    let line = stdout
+        .lines()
+        .find(|l| {
+            l.contains("listen EPERM")
+                || l.contains("listen tcp")
+                || (l.contains("PermissionError") && l.contains("socket"))
+        })
+        .unwrap_or("");
+    line.chars().take(200).collect()
+}

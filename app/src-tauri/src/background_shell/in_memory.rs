@@ -988,22 +988,33 @@ async fn run_background_task(
     let (outcome, reported_exit_code) = BackgroundShellOutcome::classify(trigger, exit_code);
 
     // P3d escalation offer (design §1.3): only a sandbox-originated
-    // shell that ran to completion, failed, and whose stderr smells
+    // shell that ran to completion, failed, and whose output smells
     // like a sandbox denial gets an offer. Killed / timed-out /
     // spawn-failed / unsandboxed shells keep `None` — a timeout kill
     // reports partial stderr (same exclusion as the foreground
     // `!timed_out` gate) and a kill is the user acting, not the
-    // sandbox blocking.
+    // sandbox blocking. 2026-09-21: listen-class denials (dev
+    // servers) report via stdout with empty stderr — classify both
+    // streams, and let the card's evidence line fall back to the
+    // extracted stdout line (sandbox-executor.md §11a).
     let escalation =
         if trigger == ShellExitTrigger::Normal && outcome == BackgroundShellOutcome::Failed {
             escalation_origin.and_then(|tool_use_id| {
                 let stderr_str = String::from_utf8_lossy(&stderr).into_owned();
-                crate::sandbox::classify_block(&stderr_str).map(|kind| EscalationOffer {
-                    tool_use_id,
-                    block: EscalationBlock::from_sandbox(kind),
-                    stderr_evidence: crate::agent::permissions::escalation::stderr_evidence_line(
-                        &stderr_str,
-                    ),
+                let stdout_str = String::from_utf8_lossy(&stdout).into_owned();
+                crate::sandbox::classify_block(&stderr_str, &stdout_str).map(|kind| {
+                    let evidence =
+                        crate::agent::permissions::escalation::stderr_evidence_line(&stderr_str);
+                    let evidence = if evidence.is_empty() {
+                        crate::agent::permissions::escalation::stdout_net_evidence_line(&stdout_str)
+                    } else {
+                        evidence
+                    };
+                    EscalationOffer {
+                        tool_use_id,
+                        block: EscalationBlock::from_sandbox(kind),
+                        stderr_evidence: evidence,
+                    }
                 })
             })
         } else {

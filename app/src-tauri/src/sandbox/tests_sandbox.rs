@@ -627,19 +627,19 @@ fn command_sha_prefix_is_stable_12_hex() {
 
 #[test]
 fn guidance_edit_write_variant_pins_copy_points() {
-    let text =
-        super::failure_guidance("touch /etc/foo\nPermission denied", Mode::Edit).expect("fires");
+    let text = super::failure_guidance("touch /etc/foo\nPermission denied", "", Mode::Edit)
+        .expect("fires");
     // Pinned copy points (design §5.3): what happened + escalation
     // card + both config escape hatches.
     assert!(text.contains("[sandbox]"));
     assert!(text.contains("sandbox_extra_writable"));
     assert!(text.contains("escalation"));
     assert!(text.contains("worktree"));
-    assert!(super::failure_guidance("Read-only file system", Mode::Edit).is_some());
+    assert!(super::failure_guidance("Read-only file system", "", Mode::Edit).is_some());
     // Heuristic must stay quiet on unrelated failures (宁缺勿滥).
-    assert!(super::failure_guidance("command not found", Mode::Edit).is_none());
-    assert!(super::failure_guidance("fatal: not a git repository", Mode::Edit).is_none());
-    assert!(super::failure_guidance("", Mode::Edit).is_none());
+    assert!(super::failure_guidance("command not found", "", Mode::Edit).is_none());
+    assert!(super::failure_guidance("fatal: not a git repository", "", Mode::Edit).is_none());
+    assert!(super::failure_guidance("", "", Mode::Edit).is_none());
 }
 
 /// P3c design §5.3 (D3): the Plan variant is mode-aware — by-design
@@ -647,7 +647,7 @@ fn guidance_edit_write_variant_pins_copy_points() {
 /// no-card statement (Plan has no escalation exit).
 #[test]
 fn guidance_plan_write_variant_is_mode_aware() {
-    let text = super::failure_guidance("Permission denied", Mode::Plan).expect("fires");
+    let text = super::failure_guidance("Permission denied", "", Mode::Plan).expect("fires");
     assert!(text.contains("Plan"));
     assert!(text.contains("by design"));
     assert!(text.contains("diff"));
@@ -663,18 +663,67 @@ fn guidance_plan_write_variant_is_mode_aware() {
 /// the design intent.
 #[test]
 fn guidance_network_variant_separate_from_write() {
-    let edit = super::failure_guidance("bash: /dev/tcp: Operation not permitted", Mode::Edit)
+    let edit = super::failure_guidance("bash: /dev/tcp: Operation not permitted", "", Mode::Edit)
         .expect("network fires");
     assert!(edit.contains("network"));
     assert!(edit.contains("escalation"));
-    let plan =
-        super::failure_guidance("Operation not permitted", Mode::Plan).expect("plan network fires");
+    let plan = super::failure_guidance("Operation not permitted", "", Mode::Plan)
+        .expect("plan network fires");
     assert!(plan.contains("Plan"));
     assert!(plan.contains("by design"));
     // Write strings must NOT route to the network text and vice versa.
-    let write = super::failure_guidance("Permission denied", Mode::Edit).unwrap();
+    let write = super::failure_guidance("Permission denied", "", Mode::Edit).unwrap();
     assert!(!write.contains("network"));
     assert!(!edit.contains("Permission denied"));
+}
+
+/// 2026-09-21 临时修复:listen 类网络拦截报在 stdout(stderr 全空)。
+/// 三个实证形态必须命中 Network;宁缺勿滥锚:stdout 里的裸
+/// "Operation not permitted" / "Permission denied"(grep、cat 日志的
+/// 常见内容)不触发;stderr 的 Write 特征仍优先于 stdout 特征。
+#[test]
+fn classify_block_reads_stdout_for_listen_denials() {
+    use super::SandboxBlockKind;
+    let net = |kind: Option<SandboxBlockKind>| matches!(kind, Some(SandboxBlockKind::Network));
+    // vite / node family (DB 实证 jjh-mono 23a8184b):
+    let vite = "error when starting dev server:\nError: listen EPERM: operation not permitted 0.0.0.0:3001";
+    assert!(net(super::classify_block("", vite)));
+    // go family:
+    assert!(net(super::classify_block(
+        "",
+        "listen tcp :8080: socket: operation not permitted"
+    )));
+    // python: socket() creation denied (traceback carries socket.py):
+    let py = "  File \"/usr/lib/python3.10/socket.py\", line 232\nPermissionError: [Errno 1] Operation not permitted";
+    assert!(net(super::classify_block("", py)));
+
+    // 宁缺勿滥: stdout 里裸的拒绝字符串不认 —— 它们太常作为
+    // 普通输出出现(日志、grep 结果)。Write 识别保持 stderr-only。
+    assert!(super::classify_block("", "grep: Operation not permitted").is_none());
+    assert!(super::classify_block("", "cat: Permission denied").is_none());
+    // stderr 特征优先: stderr 是写拒绝时,即使 stdout 带 listen
+    // 噪声也归 Write。
+    let kind = super::classify_block("mv: Permission denied", vite);
+    assert!(matches!(kind, Some(SandboxBlockKind::Write)));
+}
+
+/// 2026-09-21:listen 场景的 guidance 变体要点破「无 listen,dev
+/// server 起不来」——原文案只讲 outbound,会诱导模型去改绑
+/// 127.0.0.1(jjh-mono session 实证过的无效尝试)。
+#[test]
+fn guidance_network_variant_names_listen() {
+    let edit = super::failure_guidance(
+        "",
+        "Error: listen EPERM: operation not permitted 0.0.0.0:3001",
+        Mode::Edit,
+    )
+    .expect("stdout listen fires");
+    assert!(edit.contains("listen"));
+    assert!(edit.contains("escalation"));
+    let plan = super::failure_guidance("", "Error: listen EPERM", Mode::Plan)
+        .expect("plan stdout listen fires");
+    assert!(plan.contains("Plan"));
+    assert!(plan.contains("listen"));
 }
 
 // ---------------------------------------------------------------------------

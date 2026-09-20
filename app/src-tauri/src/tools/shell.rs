@@ -582,7 +582,11 @@ pub async fn execute(
         // would fire a card whose rerun just times out again. The
         // timeout marker is the user-visible signal for that path.
         let stderr_str = String::from_utf8_lossy(&result.stderr);
-        if let Some(kind) = crate::sandbox::classify_block(&stderr_str) {
+        // 2026-09-21: listen-class denials (dev servers) print their
+        // EPERM to stdout with an empty stderr — classify needs both
+        // streams (sandbox-executor.md §10a).
+        let stdout_str = String::from_utf8_lossy(&result.stdout);
+        if let Some(kind) = crate::sandbox::classify_block(&stderr_str, &stdout_str) {
             // (a) prefix-grant hit (AC6) → rerun directly, no card.
             //     Same compound-command gate as Tier 4 (the grant only
             //     ever covers a single-segment command).
@@ -607,11 +611,22 @@ pub async fn execute(
                 true
             } else {
                 // (b) Ask card: command text + interception cause +
-                //     stderr evidence line. AllowOnce / AllowAlways
-                //     (grant persisted by ask_path) → rerun.
+                //     evidence line. AllowOnce / AllowAlways (grant
+                //     persisted by ask_path) → rerun. Evidence: stderr
+                //     as-is; when stderr is empty (listen failures live
+                //     in stdout) fall back to the extracted stdout line.
+                let evidence_str: std::borrow::Cow<'_, str> = if stderr_str.trim().is_empty() {
+                    std::borrow::Cow::Owned(
+                        crate::agent::permissions::escalation::stdout_net_evidence_line(
+                            &stdout_str,
+                        ),
+                    )
+                } else {
+                    std::borrow::Cow::Borrowed(&stderr_str)
+                };
                 matches!(
                     ctx.escalation
-                        .ask("shell", input, command, kind, &stderr_str)
+                        .ask("shell", input, command, kind, &evidence_str)
                         .await,
                     crate::agent::permissions::escalation::EscalationOutcome::Approved
                 )
@@ -699,7 +714,9 @@ pub async fn execute(
     let sandbox_applied = prepared.is_some();
     if sandbox_applied && !reran_unsandboxed && !result.cancelled && exit_code != 0 {
         let stderr_str = String::from_utf8_lossy(&result.stderr);
-        if let Some(guidance) = crate::sandbox::failure_guidance(&stderr_str, ctx.mode) {
+        let stdout_str = String::from_utf8_lossy(&result.stdout);
+        if let Some(guidance) = crate::sandbox::failure_guidance(&stderr_str, &stdout_str, ctx.mode)
+        {
             combined.push('\n');
             combined.push_str(guidance);
         }

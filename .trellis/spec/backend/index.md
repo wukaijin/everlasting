@@ -13,7 +13,7 @@
 | [Daemon Server](./daemon-server.md) | daemon HTTP server 契约(axum 路由 / SSE / 进程模型;8 分篇已拆至子目录 `daemon-server/`) | ✅ 有实质内容 |
 | [Scheduled Tasks](./scheduled-tasks.md) | F2 定时任务执行契约(30s tick / due 落账 / 三档 target_mode,08-31 per_run + 09-07 group_chat) | ✅ 有实质内容 |
 | [Disk Governance](./disk-governance.md) | F3 磁盘治理(governor 每日节拍 / 孤儿回收 / 备份预算 / 日志进程内轮转) | ✅ 有实质内容 |
-| [Sandbox Executor](./sandbox-executor.md) | 执行期沙盒(P3b Landlock+seccomp / P3c 三态 + Plan 只读面 / P3d 后台升级闭环) | ✅ 有实质内容 |
+| [Sandbox Executor](./sandbox-executor.md) | 执行期沙盒(P3b Landlock+seccomp / P3c 三态 + Plan 只读面 / P3d 后台升级闭环 / 2026-09-21 listen 识别缺口修复 + 长期方案 §12) | ✅ 有实质内容 |
 | [Permission Layer](./permission-layer.md) | per-session mode + ⑨ 关权限层(A2+B7;含 ask_no_timeout 全局开关;§4-§6 已拆至子目录 `permission-layer/`) | ✅ 有实质内容 |
 | [Background Shell Observability](./background-shell-observability.md) | 后台 shell UI 可观测性(list/kill IPC + `background_shell:update` 事件 + 双模式接线) | ✅ 有实质内容 |
 | [Database Guidelines](./database-guidelines.md) | DB 模式(migrations / schema 纪律 / 审计落表 / 各表 CRUD) | ✅ 有实质内容(残留少量模板句可清) |

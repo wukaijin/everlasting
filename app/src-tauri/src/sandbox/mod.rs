@@ -529,24 +529,48 @@ pub(crate) enum SandboxBlockKind {
     Network,
 }
 
-/// Classify a failed sandboxed command's stderr. Order matters: the
-/// write strings are checked first (a stderr carrying both is a
-/// write failure with noise). Used by the guidance text (§5.3) and
-/// by the escalation trigger (§5.1) so both share one heuristic.
-pub(crate) fn classify_block(stderr: &str) -> Option<SandboxBlockKind> {
+/// Classify a failed sandboxed command's denial (2026-09-21: stderr +
+/// stdout). Order matters: the write strings are checked first (a stderr
+/// carrying both is a write failure with noise). Used by the guidance text
+/// (§5.3) and by the escalation trigger (§5.1) so both share one heuristic.
+///
+/// stdout participates ONLY through the strong listen/socket markers in
+/// [`stdout_smells_net_block`]: dev-server toolchains (vite/webpack/go/
+/// python) print their `listen` failure to stdout with an EMPTY stderr,
+/// which used to silence both the card and the guidance entirely (DB
+/// evidence: jjh-mono session 23a8184b, 2026-09-20 — 29 sandboxed
+/// executions, zero escalation offers). Write detection stays
+/// stderr-only: `Permission denied` occurs far too often in ordinary
+/// stdout (grep / cat of logs) to be trusted there (宁缺勿滥).
+pub(crate) fn classify_block(stderr: &str, stdout: &str) -> Option<SandboxBlockKind> {
     if stderr.contains("Permission denied") || stderr.contains("Read-only file system") {
         Some(SandboxBlockKind::Write)
-    } else if stderr.contains("Operation not permitted") {
+    } else if stderr.contains("Operation not permitted") || stdout_smells_net_block(stdout) {
         Some(SandboxBlockKind::Network)
     } else {
         None
     }
 }
 
+/// Strong network-block markers for the stdout side of [`classify_block`].
+/// A bare `Operation not permitted` in stdout is NOT trusted — it shows up
+/// whenever a command merely echoes such text (grep, cat of a log); only
+/// the listen/socket creation shapes fire:
+/// - node family: `Error: listen EPERM: operation not permitted 0.0.0.0:3001`
+/// - go family: `listen tcp :8080: socket: operation not permitted`
+/// - python: `socket.socket()` creation → `PermissionError` with a
+///   `socket.py` traceback frame
+pub(crate) fn stdout_smells_net_block(stdout: &str) -> bool {
+    stdout.contains("listen EPERM")
+        || (stdout.contains("listen tcp") && stdout.contains("operation not permitted"))
+        || (stdout.contains("PermissionError") && stdout.contains("socket"))
+}
+
 /// Post-hoc failure guidance, mode-aware (P3c design §5.3 — replaces
 /// the P3b single write-block line). When a sandboxed command failed
-/// and its stderr smells like a sandbox denial, the tool appends one
-/// line so the model knows WHY and what to do. Heuristic,
+/// and its stderr (or, for listen failures, stdout — see
+/// [`classify_block`]) smells like a sandbox denial, the tool appends
+/// one line so the model knows WHY and what to do. Heuristic,
 /// append-only — the command's own output is never rewritten.
 /// `None` = no append (宁缺勿滥: only the canonical denial strings
 /// trigger it).
@@ -556,10 +580,11 @@ pub(crate) fn classify_block(stderr: &str) -> Option<SandboxBlockKind> {
 ///   otherwise adjust `sandbox_extra_writable` / the project tier.
 /// - Plan + write (D3): blocked BY DESIGN — propose a diff, ask the
 ///   user to switch to Edit, or use /tmp (no escalation exists).
-/// - Network (both modes): the sandbox has no egress; Edit names the
-///   escalation card, Plan states the design intent.
-pub(crate) fn failure_guidance(stderr: &str, mode: Mode) -> Option<&'static str> {
-    match classify_block(stderr) {
+/// - Network (both modes): no INET sockets at all (outbound AND
+///   listen); Edit names the escalation card, Plan states the design
+///   intent.
+pub(crate) fn failure_guidance(stderr: &str, stdout: &str, mode: Mode) -> Option<&'static str> {
+    match classify_block(stderr, stdout) {
         Some(SandboxBlockKind::Write) => Some(match mode {
             Mode::Plan => {
                 "[sandbox] The write above was blocked by the Plan-mode read-only sandbox — \
@@ -576,14 +601,15 @@ pub(crate) fn failure_guidance(stderr: &str, mode: Mode) -> Option<&'static str>
         }),
         Some(SandboxBlockKind::Network) => Some(match mode {
             Mode::Plan => {
-                "[sandbox] Outbound network is blocked inside the Plan-mode read-only sandbox — \
-                 this is by design. Ask the user to run the networked command, or switch to \
-                 Edit mode."
+                "[sandbox] Network is blocked inside the Plan-mode read-only sandbox — no \
+                 outbound connections AND no listen (dev servers cannot start); this is by \
+                 design. Ask the user to run the networked command, or switch to Edit mode."
             }
             _ => {
-                "[sandbox] The failure above looks like the sandbox blocking outbound network \
-                 (no egress inside the sandbox). Approve the escalation card for this command \
-                 if one appears, or ask the user to change the project's sandbox policy."
+                "[sandbox] The failure above looks like the sandbox blocking network (no INET \
+                 sockets inside the sandbox: no outbound, and no listen — dev servers cannot \
+                 start). Approve the escalation card for this command if one appears, or ask \
+                 the user to change the project's sandbox policy."
             }
         }),
         None => None,

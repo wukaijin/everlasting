@@ -204,8 +204,13 @@ async fn resolve_one(note: &BackgroundShellNotification, env: &EscalationEnv<'_>
 
 /// Mode-aware sandbox guidance appended after a `\n` (same
 /// append-only discipline as the foreground tool output).
+///
+/// The input is the offer's pre-extracted single evidence line (which
+/// may come from stdout for listen-class denials, 2026-09-21); both
+/// classify slots receive it so whichever side's marker it carries,
+/// stderr's or stdout's, still routes to the right variant.
 fn guidance_suffix(stderr_evidence: &str, mode: Mode) -> String {
-    match crate::sandbox::failure_guidance(stderr_evidence, mode) {
+    match crate::sandbox::failure_guidance(stderr_evidence, stderr_evidence, mode) {
         Some(g) => format!("\n{g}"),
         None => String::new(),
     }
