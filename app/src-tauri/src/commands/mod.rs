@@ -267,5 +267,11 @@ pub fn all_command_names() -> Vec<&'static str> {
         // checkpoint 读面 —— TurnCard「本轮 diff」入口的两条 IPC。
         "list_turn_checkpoints",
         "get_turn_checkpoint_diff",
+        // N2 PR3 (same task): revert 两步 —— preview(还原集 + 归属
+        // badge + foreign 门禁 + preview_token)与 execute(busy 拒 +
+        // token 重验 + restore + audit);dangerous 语义对齐
+        // delete_worktree(前端确认弹窗 + 后端执行 + 审计)。
+        "revert_to_checkpoint_preview",
+        "revert_to_checkpoint_execute",
     ]
 }

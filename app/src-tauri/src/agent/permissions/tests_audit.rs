@@ -44,6 +44,9 @@ fn audit_kind_round_trip() {
         // writes `AuditKind::SandboxedShellExecution.as_str()`
         // verbatim; both ends of the contract must agree.
         AuditKind::SandboxedShellExecution,
+        // N2 PR3 (2026-09-20): the user-triggered checkpoint revert
+        // kind. Wire string locked below.
+        AuditKind::CheckpointReverted,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
@@ -85,5 +88,13 @@ fn audit_kind_round_trip() {
     assert_eq!(
         AuditKind::SandboxedShellExecution.as_str(),
         "sandboxed_shell_execution"
+    );
+    // N2 PR3 (2026-09-20, task `09-20-n2-checkpoint-revert`): pin the
+    // revert wire string. The DB layer's
+    // `record_checkpoint_reverted_audit` helper writes it verbatim —
+    // both ends of the contract must agree.
+    assert_eq!(
+        AuditKind::CheckpointReverted.as_str(),
+        "checkpoint_reverted"
     );
 }

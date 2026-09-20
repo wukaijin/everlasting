@@ -38,11 +38,9 @@
 //! resumes at the next successful snapshot).
 
 // PR1 起接线层(agent/checkpoint.rs)消费快照原语,模块级 allow 已移除;
-// PR2(09-20-n2-checkpoint-revert)读面命令消费 `diff_snapshots` /
-// `count_snapshot_deltas`,对应 allow 已摘。仍归 PR3 的 revert 三件
-// (`compute_restore_set` / `restore_paths` 及其 RestorePath/Action/
-// Outcome 类型)保留按项 allow,随 revert 命令落地摘除 —— 同
-// permissions/audit.rs AuditKind 的按项处理先例。
+// PR2 读面命令消费 `diff_snapshots` / `count_snapshot_deltas`,PR3
+// (2026-09-20-n2-checkpoint-revert)revert 命令消费 `compute_restore_set(_from)`
+// / `restore_paths` —— revert 三件的按项 allow 已随落地全部摘除。
 use std::path::Path;
 
 use serde::Serialize;
@@ -57,8 +55,7 @@ const CHECKPOINT_SIG_NAME: &str = "everlasting-daemon";
 const CHECKPOINT_SIG_EMAIL: &str = "everlasting-daemon@localhost";
 
 /// One path in a revert restore set, as computed by
-/// [`compute_restore_set`] and consumed by [`restore_paths`].
-#[allow(dead_code)] // PR3 revert 确认弹窗消费(RestorePath 列表)
+/// [`compute_restore_set_from`] and consumed by [`restore_paths`].
 #[derive(Debug, Clone, Serialize)]
 pub struct RestorePath {
     pub path: String,
@@ -66,7 +63,6 @@ pub struct RestorePath {
 }
 
 /// What to do with a path when reverting to the target snapshot.
-#[allow(dead_code)] // 随 RestorePath / restore_paths 进 PR3
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RestoreAction {
@@ -80,7 +76,6 @@ pub enum RestoreAction {
 
 /// Counts returned by [`restore_paths`] (feeds the PR3 revert
 /// result / toast).
-#[allow(dead_code)] // PR3 revert 命令消费(RevertResult)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RestoreOutcome {
     pub restored: usize,
@@ -235,27 +230,27 @@ pub fn count_snapshot_deltas(
 }
 
 /// Compute the revert restore set for going back to `target_tree`:
-/// the full path set where the current working state differs from
-/// the target. Files the target tree has (added / modified relative
-/// to now) get [`RestoreAction::Checkout`]; files it lacks get
+/// the full path set where `current_tree` differs from the target.
+/// Files the target tree has (added / modified relative to now) get
+/// [`RestoreAction::Checkout`]; files it lacks get
 /// [`RestoreAction::Delete`]. Unchanged paths are absent from the
 /// set and will not be touched by [`restore_paths`].
 ///
-/// The current state is captured fresh (via [`build_state_tree`])
-/// so the set is consistent with the gate-tree recomputation the
-/// PR3 preview/execute flow performs.
-#[allow(dead_code)] // PR3 revert preview 命令消费
-pub fn compute_restore_set(
+/// `current_tree` comes from the caller's [`build_state_tree`] pass —
+/// the PR3 preview/execute commands compute that gate tree for their
+/// TOCTOU token anyway, so the set is derived from the same state
+/// snapshot the token validated (one workdir walk, no double scan).
+pub fn compute_restore_set_from(
     repo: &git2::Repository,
+    current_tree: git2::Oid,
     target_tree: git2::Oid,
 ) -> Result<Vec<RestorePath>, GitError> {
-    let current = build_state_tree(repo)?;
-    if current == target_tree {
+    if current_tree == target_tree {
         return Ok(Vec::new());
     }
-    let current_tree = repo.find_tree(current)?;
+    let current = repo.find_tree(current_tree)?;
     let target = repo.find_tree(target_tree)?;
-    let diff = diff_tree_to_tree(repo, &current_tree, &target)?;
+    let diff = diff_tree_to_tree(repo, &current, &target)?;
 
     let mut set: Vec<RestorePath> = diff
         .files
@@ -285,7 +280,6 @@ pub fn compute_restore_set(
 /// blob was mode 100755. Delete prunes now-empty parent directories
 /// (best-effort, bounded by the workdir root) so the layout matches
 /// a plain checkout.
-#[allow(dead_code)] // PR3 revert execute 命令消费
 pub fn restore_paths(
     repo: &git2::Repository,
     target_tree: git2::Oid,
@@ -477,6 +471,14 @@ mod tests {
         append_snapshot(repo, Some(parent), tree, sid, seq).expect("append_snapshot")
     }
 
+    /// Restore set for the current workdir state vs `target` (the
+    /// `compute_restore_set` convenience shape: gate tree fresh from
+    /// `build_state_tree`, then the split primitive).
+    fn restore_set(repo: &git2::Repository, target: git2::Oid) -> Vec<RestorePath> {
+        let current = build_state_tree(repo).expect("gate tree");
+        compute_restore_set_from(repo, current, target).expect("compute_restore_set_from")
+    }
+
     /// On-disk identity of `.git/index`: byte content + mtime
     /// (whole seconds + subsec nanos) + inode. AC1's three-part
     /// invariant. (inode is `MetadataExt` — unix-only, which covers
@@ -592,7 +594,14 @@ mod tests {
         let t2 = build_state_tree(&repo).unwrap();
         assert_eq!(t1, t2, "unchanged state must dedupe to the same tree");
 
-        fs::write(project.join("a.txt"), "v2\n").unwrap();
+        // The replacement deliberately differs in SIZE: a same-size
+        // rewrite ("v1\n" → "v2\n") that lands within one coarse mtime
+        // tick (kernel coarse-grained timestamps, ~4ms gran) can slip
+        // through libgit2's stat shortcut under heavy parallel test
+        // load and be missed as "unchanged" — observed as a rare flake
+        // once the PR3 tests raised the binary's parallelism. Size
+        // difference removes the shortcut's precondition (PR3 note).
+        fs::write(project.join("a.txt"), "v2 is longer\n").unwrap();
         let t3 = build_state_tree(&repo).unwrap();
         assert_ne!(t1, t3, "a content change must produce a new tree");
 
@@ -1023,7 +1032,7 @@ mod tests {
         assert_ne!(t0, t1);
 
         // Restore set for going back to round 0.
-        let set = compute_restore_set(&repo, t0).expect("compute_restore_set");
+        let set = restore_set(&repo, t0);
         let fmt: Vec<String> = set
             .iter()
             .map(|p| format!("{}:{:?}", p.path, p.action))
@@ -1102,7 +1111,7 @@ mod tests {
 
         let repo = open(&project);
         let (t0, _c0) = snapshot(&repo, "noop-test", 0);
-        let set = compute_restore_set(&repo, t0).expect("compute_restore_set");
+        let set = restore_set(&repo, t0);
         assert!(set.is_empty(), "matching state must yield an empty set");
         let outcome = restore_paths(&repo, t0, &set).expect("no-op restore");
         assert_eq!(outcome.restored, 0);
@@ -1131,7 +1140,7 @@ mod tests {
         // Strip the exec bit, then revert it back via the restore
         // set.
         fs::set_permissions(project.join("run.sh"), fs::Permissions::from_mode(0o644)).unwrap();
-        let set = compute_restore_set(&repo, t0).expect("restore set");
+        let set = restore_set(&repo, t0);
         assert_eq!(set.len(), 1, "mode-only change is a diff delta");
         restore_paths(&repo, t0, &set).expect("restore");
         let mode = fs::metadata(project.join("run.sh"))

@@ -157,7 +157,9 @@ async fn baseline_at_loop_entry_keeps_pre_session_state_reachable() {
     // AC10:revert 到基线 = 回到会话开始前(tracked.txt 回 v1)。
     let repo = git2::Repository::open(&h.project_path).unwrap();
     let base_tree = git2::Oid::from_str(&rows[0].tree_sha).unwrap();
-    let set = crate::git::checkpoint::compute_restore_set(&repo, base_tree).unwrap();
+    let gate_tree = crate::git::checkpoint::build_state_tree(&repo).unwrap();
+    let set =
+        crate::git::checkpoint::compute_restore_set_from(&repo, gate_tree, base_tree).unwrap();
     let outcome = crate::git::checkpoint::restore_paths(&repo, base_tree, &set).unwrap();
     assert_eq!(outcome.restored, 1, "还原集 = tracked.txt 一项");
     assert_eq!(

@@ -16,6 +16,11 @@
 // 缓存刷新:session 切换(ChatPanel watcher)+ 轮终
 // (streamEvents.finalizeRequest → refresh)双触发;unavailable 态
 // 不重试(能力性缺失,重试只会空转)。
+//
+// N2 PR3(2026-09-20,同任务)追加 revert 半区:`hasRevertTarget`
+// 入口判定(基线行是合法 target,与 hasTurnDiff 的唯一差异)+
+// `previewRevert` / `executeRevert` 两步封装 —— 语义与 wire 形状见
+// 各接口注释;错误全部向调用方传播(确认弹窗内联渲染)。
 
 import { ref } from "vue";
 import { defineStore } from "pinia";
@@ -43,6 +48,41 @@ export interface TurnDiffResult {
     removed: number;
     diff_text: string;
   }>;
+}
+
+// --- N2 PR3(2026-09-20,同任务):revert 两步的 store 封装 ------------
+
+/** 归属标记(wire:snake_case,`PathAttribution` 同名 serde 通道):
+ * - `tool_written`:写家族 tool 审计路径命中(证据最硬);
+ * - `shell_write`:目标 seq 之后存在 A2+ 判写 shell 轮(路径不可得,
+ *   轮级标记,「大概率是 agent 的 shell 写的」提示);
+ * - `unknown`:无审计证据 —— 共享 cwd 下是常态,badge 用中性色。 */
+export type RevertAttribution = "tool_written" | "shell_write" | "unknown";
+
+/** 还原集内一个 path:action = checkout(回写目标内容)| delete(目标树
+ * 无此文件,删除)。 */
+export interface RevertPreviewFile {
+  path: string;
+  action: "checkout" | "delete";
+  attribution: RevertAttribution;
+}
+
+/** `revert_to_checkpoint_preview` 载荷。`preview_token` 绑定
+ * (target_tree, gate_tree) 二元组,execute 原样带回(旧确认不得授权
+ * 新还原集);`foreign_delta` 非空 = 门禁发现「非本会话快照内变更」,
+ * 确认弹窗渲染专属警告区。 */
+export interface RevertPreview {
+  files: RevertPreviewFile[];
+  foreign_delta: TurnDiffResult["files"] | null;
+  target_seq: number;
+  target_created_at: number;
+  preview_token: string;
+}
+
+/** `revert_to_checkpoint_execute` 载荷(toast 计数)。 */
+export interface RevertResult {
+  restored: number;
+  deleted: number;
 }
 
 /** per-session 缓存态:ready(行集,可为空数组)或 unavailable
@@ -145,6 +185,19 @@ export const useTurnCheckpointsStore = defineStore("turnCheckpoints", () => {
     return state.rows.some((r) => r.seq === seq && r.prev_seq !== null);
   }
 
+  /** 「回到此轮后」入口判定(N2 PR3):seq 命中任意快照行即可 ——
+   *  与 hasTurnDiff 的差异在基线行:基线是合法 target(回到会话前,
+   *  AC10)。role(user/assistant 卡区分)由父组件闸,同 turnDiff。 */
+  function hasRevertTarget(
+    sessionId: string,
+    seq: number | undefined,
+  ): boolean {
+    if (seq === undefined) return false;
+    const state = bySession.value.get(sessionId);
+    if (!state || state.status !== "ready") return false;
+    return state.rows.some((r) => r.seq === seq);
+  }
+
   /** 入口点击的 diff 载荷。错误向调用方传播(modal 内联渲染)。 */
   async function fetchTurnDiff(
     sessionId: string,
@@ -156,12 +209,42 @@ export const useTurnCheckpointsStore = defineStore("turnCheckpoints", () => {
     });
   }
 
+  /** revert 第一步:preview(还原集 + 归属 + foreign 门禁 +
+   * preview_token)。错误向调用方传播(弹窗内联;StalePreview /
+   * SessionBusy 等 kind 由调用方用 checkpointErrorKind 提取)。 */
+  async function previewRevert(
+    sessionId: string,
+    targetSeq: number,
+  ): Promise<RevertPreview> {
+    return transport.invoke<RevertPreview>("revert_to_checkpoint_preview", {
+      sessionId,
+      targetSeq,
+    });
+  }
+
+  /** revert 第二步:execute(dangerous;前端确认后调用)。token 由
+   * 后端重验,不符 → kind=StalePreview(重新 preview 恢复)。 */
+  async function executeRevert(
+    sessionId: string,
+    targetSeq: number,
+    previewToken: string,
+  ): Promise<RevertResult> {
+    return transport.invoke<RevertResult>("revert_to_checkpoint_execute", {
+      sessionId,
+      targetSeq,
+      previewToken,
+    });
+  }
+
   return {
     bySession,
     ensureLoaded,
     refresh,
     invalidate,
     hasTurnDiff,
+    hasRevertTarget,
     fetchTurnDiff,
+    previewRevert,
+    executeRevert,
   };
 });

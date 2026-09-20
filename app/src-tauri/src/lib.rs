@@ -437,6 +437,12 @@ pub fn run() {
             // 镜像路由见 daemon/routes/checkpoint.rs。
             commands::checkpoint::list_turn_checkpoints,
             commands::checkpoint::get_turn_checkpoint_diff,
+            // N2 PR3 (same task): revert 两步 —— preview(还原集 + 归属
+            // badge + foreign 门禁 + preview_token)与 execute(busy 拒 +
+            // token 重验 + restore + audit)。dangerous 语义:前端确认弹窗
+            // 把关,后端审计归因(对齐 delete_worktree 模式,不走 ⑨ 权限流)。
+            commands::checkpoint::revert_to_checkpoint_preview,
+            commands::checkpoint::revert_to_checkpoint_execute,
             // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
             // 阶段 3): Settings-UI IPCs for per-subagent model
             // configuration (DB override + frontmatter write-back).

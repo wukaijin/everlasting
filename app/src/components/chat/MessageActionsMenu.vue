@@ -71,6 +71,14 @@
 // the diff modal (DiffView reuse). 文案语义 = prev_seq:「自上一快照
 // 以来的变更」(写触发门稀疏链下,漏判轮的改动会归位到后续写轮的
 // diff 里 —— 这是如实表述,评审修正)。
+//
+// N2 PR3 (2026-09-20, same task): the 「回到此轮后」item — the revert
+// entry. Same entry block as 「本轮 diff」, gated by `revertAvailable`
+// (seq hits ANY checkpoint row — the BASELINE is a valid target
+// 「回到会话前」, unlike the diff entry; assistant-role gate stays in
+// the parent). Dangerous semantics: clicking only opens the parent's
+// confirm dialog (preview → 确认 → execute); the item itself never
+// restores anything.
 
 import {
   DropdownMenuRoot,
@@ -115,11 +123,15 @@ const props = withDefaults(
      *  store 判定(seq 命中快照行且 prev_seq 非空)。默认 false:
      *  user 行 / 无行轮 / 基线 / 破链 / 非 git session 全部不渲染。 */
     turnDiffAvailable?: boolean;
+    /** N2 PR3: 「回到此轮后」入口的可用性 —— seq 命中任意快照行
+     *  (基线行是合法 target)。默认 false:同上全部不渲染。 */
+    revertAvailable?: boolean;
   }>(),
   {
     isEditing: false,
     isStreaming: false,
     turnDiffAvailable: false,
+    revertAvailable: false,
   },
 );
 
@@ -140,6 +152,11 @@ const emit = defineEmits<{
    *  the diff modal. The parent owns the fetch + modal state; this
    *  component only fires the intent (visibility is the prop's job). */
   turnDiff: [];
+  /** N2 PR3: parent should fetch the revert preview and open the
+   *  confirm dialog. Dangerous semantics live in the parent + backend
+   *  (preview token / busy gate / audit); this component only fires
+   *  the intent. */
+  revert: [];
 }>();
 
 const projectsStore = useProjectsStore();
@@ -185,6 +202,13 @@ function onResend() {
 function onTurnDiff() {
   if (!props.turnDiffAvailable) return;
   emit("turnDiff");
+}
+
+/** N2 PR3: 「回到此轮后」—— 同 turnDiff 抛意图模式;真正的还原在
+ *  父组件确认弹窗 + 后端 execute(dangerous 通道,不走这里)。 */
+function onRevert() {
+  if (!props.revertAvailable) return;
+  emit("revert");
 }
 
 async function onCopy() {
@@ -309,6 +333,25 @@ async function onCopy() {
             />
             <span>本轮 diff</span>
             <span class="msg-actions__item-hint">自上一快照以来</span>
+          </DropdownMenuItem>
+
+          <!-- N2 PR3 (2026-09-20, same task): 「回到此轮后」—— revert
+               入口,与「本轮 diff」同入口区;仅 revertAvailable 时渲染
+               (轮末 assistant 卡 seq 命中任意快照行,基线可回会话前)。
+               点击只开确认弹窗,还原动作在后端 execute(dangerous)。 -->
+          <DropdownMenuItem
+            v-if="revertAvailable"
+            class="msg-actions__item"
+            data-testid="msg-actions-revert"
+            @select="onRevert"
+          >
+            <Icon
+              name="history"
+              :size="14"
+              icon-class="msg-actions__item-icon"
+            />
+            <span>回到此轮后</span>
+            <span class="msg-actions__item-hint">还原此后变更</span>
           </DropdownMenuItem>
 
           <DropdownMenuSeparator class="msg-actions__separator" />

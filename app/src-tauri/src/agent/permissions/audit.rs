@@ -198,6 +198,20 @@ pub enum AuditKind {
     /// `session_id` 共享,C4 audit log UI 据此 disambiguate
     /// "用户主动写" vs "LLM 工具调用"。
     UiDiffApplied,
+    // === UI 域 (N2 PR3 revert, 2026-09-20, task `09-20-n2-checkpoint-revert`) ===
+    /// user 在轮末 assistant 卡菜单点「回到此轮后」→ 确认弹窗确认,
+    /// 后端 `revert_to_checkpoint_execute` 还原成功后落本行。与
+    /// `UiDiffApplied` 同模式:user 发起的 dangerous UI 写操作
+    /// (非 LLM tool、不走 ⑨ tool 权限流)。payload 携带
+    /// `target_seq`(回退目标快照轮)/ `restored` / `deleted`(计数)/
+    /// `paths`(还原集路径摘要,32 条封顶)+ `total_paths` /
+    /// `foreign_delta`(门禁所见外来写入路径摘要,封顶同)+ `total_foreign` /
+    /// `gate_tree_oid`(门禁重算树 oid —— 事后可对账当时的门禁判定)/
+    /// `source: "ui"`。**失败路径不落本行**(StalePreview / busy 拒 /
+    /// restore io 失败都算失败,前端内联反馈即可)。落表点在
+    /// `commands::checkpoint::revert_to_checkpoint_execute_inner`
+    /// `restore_paths` 成功后(best-effort,同 UiDiffApplied 惯例)。
+    CheckpointReverted,
     // === Scheduler 域 (F2 定时任务, 2026-08-28, `08-28-f2-scheduled-tasks`) ===
     /// 定时任务调度事件。daemon 调度循环的每个判定分支都落本行
     /// (挂**目标 session**),payload 统一携带 `task_id` / `task_name` /
@@ -262,6 +276,13 @@ impl AuditKind {
             // instead of `tool_name`/`tool_input`/`duration_ms`/
             // `exit_code`).
             Self::UiDiffApplied => "ui_diff_applied",
+            // N2 PR3 (2026-09-20): user-triggered checkpoint revert.
+            // Wire shape: snake_case lowercase, mirrors UiDiffApplied.
+            // Payload carries `target_seq` / `restored` / `deleted` /
+            // `paths` + `total_paths` / `foreign_delta` + `total_foreign`
+            // / `gate_tree_oid` / `source`, see the variant doc +
+            // `record_checkpoint_reverted_audit`.
+            Self::CheckpointReverted => "checkpoint_reverted",
             // F2 定时任务 (2026-08-28): scheduler lifecycle events.
             // Wire shape: snake_case lowercase; payload carries
             // `task_id`/`task_name`/`action` (+ optional `reason`),
@@ -653,6 +674,71 @@ pub async fn record_ui_diff_applied_audit(
         AuditKind::UiDiffApplied.as_str(),
         Some(&payload_str),
         turn_seq,
+    )
+    .await
+}
+
+/// Execute-time facts of one successful revert — the audit payload's
+/// source. Grouped in a struct (not flat args) to keep the helper's
+/// arity within the clippy budget and the call site readable.
+pub struct CheckpointRevertAudit<'a> {
+    /// The revert target snapshot's `seq`.
+    pub target_seq: i64,
+    /// `restore_paths` counts (checkout / delete).
+    pub restored: usize,
+    pub deleted: usize,
+    /// Executed restore-set paths (plain path strings).
+    pub paths: &'a [String],
+    /// Foreign-delta paths the gate saw at execute time (empty when
+    /// the state was fully explained by the chain).
+    pub foreign_paths: &'a [String],
+    /// The validated gate tree oid (40-hex).
+    pub gate_tree_oid: &'a str,
+}
+
+/// N2 PR3 (2026-09-20, task `09-20-n2-checkpoint-revert`): record a
+/// `checkpoint_reverted` audit row after a user-confirmed revert to a
+/// turn checkpoint succeeded. Mirrors [`record_ui_diff_applied_audit`]
+/// (user-initiated dangerous UI write, best-effort at the call site).
+///
+/// `paths` is the executed restore set (`compute_restore_set_from`'s
+/// output, path + action flattened to strings by the caller);
+/// `foreign_paths` is the gate's foreign-delta path summary (empty
+/// when the preview saw no out-of-chain changes). Both lists are
+/// capped at 32 entries in the row (same UI row-size budget), with
+/// the true counts in `total_paths` / `total_foreign`.
+///
+/// `gate_tree_oid` is the gate tree the token was validated against —
+/// the after-the-fact anchor for "what state did the gate approve".
+///
+/// `turn_seq` is `None`: the revert runs on the IPC-handler path
+/// outside any turn loop (same convention as UiDiffApplied).
+pub async fn record_checkpoint_reverted_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    outcome: CheckpointRevertAudit<'_>,
+) -> Result<(), sqlx::Error> {
+    const AUDIT_PATH_CAP: usize = 32;
+    let paths_summary: Vec<&String> = outcome.paths.iter().take(AUDIT_PATH_CAP).collect();
+    let foreign_summary: Vec<&String> = outcome.foreign_paths.iter().take(AUDIT_PATH_CAP).collect();
+    let payload = serde_json::json!({
+        "target_seq": outcome.target_seq,
+        "restored": outcome.restored,
+        "deleted": outcome.deleted,
+        "paths": paths_summary,
+        "total_paths": outcome.paths.len(),
+        "foreign_delta": foreign_summary,
+        "total_foreign": outcome.foreign_paths.len(),
+        "gate_tree_oid": outcome.gate_tree_oid,
+        "source": "ui",
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::CheckpointReverted.as_str(),
+        Some(&payload_str),
+        None,
     )
     .await
 }

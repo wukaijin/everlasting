@@ -94,11 +94,13 @@ test("…", async ({ page, boot, mockCmd, stream, reqs, waitForCmd }) => {
 稳定钩子时才加 `data-testid`,且必须在本表登记(用途 + 引入任务)。
 生产代码 diff 约束:除登记过的 `data-testid` 外 `app/src` 零改动。
 
-当前登记(全部为**既有**生产 testid,本流水线未新增):
+当前登记(2026-09-20 N2 PR3 起含新增生产 testid,见行尾「引入」列):
 
 | data-testid | 组件 | 用途 | 引入 |
 |---|---|---|---|
 | `grant-revoke-confirm` | ConfirmDialog(PermissionGrantsModal 内) | 撤销确认弹窗定位;取消/确认按钮仍走 `.confirm-modal__btn--cancel/--danger` | CH7-4(2026-08-29,先于本流水线) |
+| `msg-actions-revert` | MessageActionsMenu | 「回到此轮后」菜单入口定位(revertAvailable 门) | N2 PR3(2026-09-20) |
+| `revert-confirm-modal` / `revert-file-row` / `revert-badge-{tool_written,shell_write,unknown}` / `revert-foreign-warning` / `revert-gitignore-note` / `revert-confirm-btn` / `revert-cancel-btn` / `revert-repreview-btn` / `revert-error` / `revert-file-list` | RevertConfirmModal | 确认弹窗定位 + 评审重排清单断言(文件列表 / 归属 badge / foreign 仅非空 / 常驻脚注 / StalePreview 恢复钮) | N2 PR3(2026-09-20) |
 
 既有 class hook 常量(fixtures.ts 顶部):`EDITOR` / `EDITOR_LINE` /
 `SEND_BUTTON` / `MESSAGES`;spec 内稳定 hook:`.messages`(滚动容器,

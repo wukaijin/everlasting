@@ -191,3 +191,92 @@ describe("checkpointErrorKind — 双通道错误 kind 提取", () => {
     expect(checkpointErrorKind(null)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// N2 PR3(2026-09-20,同任务)— revert 半区
+// ---------------------------------------------------------------------------
+
+describe("turnCheckpoints store — hasRevertTarget 入口判定", () => {
+  it("seq 命中任意快照行 → true(含基线行:回到会话前是合法 target)", async () => {
+    const store = useTurnCheckpointsStore();
+    invokeMock.mockResolvedValue([
+      row({ seq: 0, prev_seq: null, files_changed: 0 }),
+      row({ seq: 1, prev_seq: 0, files_changed: 2 }),
+    ]);
+    await store.refresh("s1");
+    // 基线行可回会话前(与 hasTurnDiff 的差异点)。
+    expect(store.hasRevertTarget("s1", 0)).toBe(true);
+    expect(store.hasRevertTarget("s1", 1)).toBe(true);
+  });
+
+  it("未命中 / 无行 / unavailable / seq undefined → false", async () => {
+    const store = useTurnCheckpointsStore();
+    invokeMock.mockResolvedValue([row({ seq: 1 })]);
+    await store.refresh("s1");
+    expect(store.hasRevertTarget("s1", 2)).toBe(false);
+
+    invokeMock.mockResolvedValue([]);
+    await store.refresh("s-empty");
+    expect(store.hasRevertTarget("s-empty", 1)).toBe(false);
+
+    invokeMock.mockRejectedValue(ipcError("CheckpointBroken"));
+    await store.refresh("s-broken");
+    expect(store.hasRevertTarget("s-broken", 1)).toBe(false);
+
+    expect(store.hasRevertTarget("s1", undefined)).toBe(false);
+  });
+
+  it("与 hasTurnDiff 的差异恰在基线行(diff 关、revert 开)", async () => {
+    const store = useTurnCheckpointsStore();
+    invokeMock.mockResolvedValue([
+      row({ seq: 0, prev_seq: null, files_changed: 0 }),
+    ]);
+    await store.refresh("s-base");
+    expect(store.hasTurnDiff("s-base", 0)).toBe(false);
+    expect(store.hasRevertTarget("s-base", 0)).toBe(true);
+  });
+});
+
+describe("turnCheckpoints store — previewRevert / executeRevert 封装", () => {
+  it("previewRevert 直传 revert_to_checkpoint_preview(snake_case 载荷透传)", async () => {
+    const store = useTurnCheckpointsStore();
+    const wire = {
+      files: [
+        { path: "a.txt", action: "checkout", attribution: "tool_written" },
+        { path: "b.txt", action: "delete", attribution: "unknown" },
+      ],
+      foreign_delta: null,
+      target_seq: 0,
+      target_created_at: 1_700_000_000_000,
+      preview_token: "aa:bb",
+    };
+    invokeMock.mockResolvedValue(wire);
+    const p = await store.previewRevert("s1", 0);
+    expect(invokeMock).toHaveBeenCalledWith("revert_to_checkpoint_preview", {
+      sessionId: "s1",
+      targetSeq: 0,
+    });
+    expect(p.preview_token).toBe("aa:bb");
+    expect(p.files[0]!.attribution).toBe("tool_written");
+
+    // 错误向调用方传播(弹窗内联渲染)。
+    invokeMock.mockRejectedValue(ipcError("StalePreview"));
+    await expect(store.previewRevert("s1", 0)).rejects.toBeTruthy();
+  });
+
+  it("executeRevert 原样带回 preview_token;错误传播", async () => {
+    const store = useTurnCheckpointsStore();
+    invokeMock.mockResolvedValue({ restored: 2, deleted: 1 });
+    const r = await store.executeRevert("s1", 0, "tok-1");
+    expect(invokeMock).toHaveBeenCalledWith("revert_to_checkpoint_execute", {
+      sessionId: "s1",
+      targetSeq: 0,
+      previewToken: "tok-1",
+    });
+    expect(r.restored).toBe(2);
+    expect(r.deleted).toBe(1);
+
+    invokeMock.mockRejectedValue(ipcError("SessionBusy"));
+    await expect(store.executeRevert("s1", 0, "tok-1")).rejects.toBeTruthy();
+  });
+});

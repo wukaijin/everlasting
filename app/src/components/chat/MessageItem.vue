@@ -38,11 +38,14 @@ import { computed, watch, onUnmounted, ref } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
+import { useProjectsStore } from "../../stores/projects";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useStreamControllerStore } from "../../stores/streamController";
 import {
   useTurnCheckpointsStore,
+  checkpointErrorKind,
   type TurnDiffResult,
+  type RevertPreview,
 } from "../../stores/turnCheckpoints";
 import { transport } from "../../transport";
 import { extractErrorMessage } from "../../utils/useErrorBus";
@@ -72,6 +75,7 @@ import FileInjectionsHint from "./FileInjectionsHint.vue";
 import MessageImages from "./MessageImages.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
 import DiffModal from "./DiffModal.vue";
+import RevertConfirmModal from "./RevertConfirmModal.vue";
 import MessageItemEdit from "./MessageItemEdit.vue";
 import MessageItemFooter from "./MessageItemFooter.vue";
 import type { TestState } from "../settings/ModelRow.vue";
@@ -217,6 +221,7 @@ const isStreaming = computed<boolean>(() => {
 // 所有行都盖 data-seq,role + 行命中是入口与 user 卡的区分线(评审
 // 修正)。readonly 预览(SearchModal)跟随菜单的挂载门一起隐藏。
 const turnCheckpointsStore = useTurnCheckpointsStore();
+const projectsStore = useProjectsStore();
 
 const turnDiffAvailable = computed<boolean>(() => {
   if (props.readonly || props.message.role !== "assistant") return false;
@@ -244,6 +249,83 @@ async function onTurnDiff(): Promise<void> {
     turnDiffError.value = extractErrorMessage(e);
   } finally {
     turnDiffLoading.value = false;
+  }
+}
+
+// --- N2 PR3 (2026-09-20, same task): 「回到此轮后」(revert 两步) ----
+//
+// 入口判定 = hasRevertTarget(seq 命中任意快照行;基线是合法 target
+// 「回到会话前」)—— 与 turnDiffAvailable 的唯一差异在基线行。
+// dangerous 流程:preview → 本确认弹窗(评审重排清单,见组件头注释)
+// → execute → toast(restored/deleted)。错误内联在弹窗:StalePreview
+// 给「重新预览」恢复按钮,SessionBusy 给明确文案。
+
+const revertAvailable = computed<boolean>(() => {
+  if (props.readonly || props.message.role !== "assistant") return false;
+  const sid = chatStore.currentSessionId;
+  if (!sid) return false;
+  return turnCheckpointsStore.hasRevertTarget(sid, props.message.seq);
+});
+
+const revertModalOpen = ref(false);
+const revertLoading = ref(false);
+const revertExecuting = ref(false);
+const revertPreview = ref<RevertPreview | null>(null);
+const revertError = ref<string | null>(null);
+const revertErrorKind = ref<string | null>(null);
+
+async function fetchRevertPreview(): Promise<void> {
+  const sid = chatStore.currentSessionId;
+  const seq = props.message.seq;
+  if (!sid || seq === undefined) return;
+  revertLoading.value = true;
+  revertError.value = null;
+  revertErrorKind.value = null;
+  revertPreview.value = null;
+  try {
+    revertPreview.value = await turnCheckpointsStore.previewRevert(sid, seq);
+  } catch (e) {
+    revertError.value = extractErrorMessage(e);
+    revertErrorKind.value = checkpointErrorKind(e);
+  } finally {
+    revertLoading.value = false;
+  }
+}
+
+function onRevert(): Promise<void> {
+  revertModalOpen.value = true;
+  return fetchRevertPreview();
+}
+
+/** StalePreview 恢复:留在弹窗内重跑 preview(新 gate 树 → 新 token)。 */
+function onRevertRepreview(): Promise<void> {
+  return fetchRevertPreview();
+}
+
+async function onRevertConfirm(): Promise<void> {
+  const sid = chatStore.currentSessionId;
+  const seq = props.message.seq;
+  const preview = revertPreview.value;
+  if (!sid || seq === undefined || !preview || revertExecuting.value) return;
+  revertExecuting.value = true;
+  revertError.value = null;
+  revertErrorKind.value = null;
+  try {
+    const result = await turnCheckpointsStore.executeRevert(
+      sid,
+      seq,
+      preview.preview_token,
+    );
+    revertModalOpen.value = false;
+    projectsStore.showToast(
+      `已回到第 ${seq} 轮后:还原 ${result.restored} 个文件、删除 ${result.deleted} 个`,
+      "info",
+    );
+  } catch (e) {
+    revertError.value = extractErrorMessage(e);
+    revertErrorKind.value = checkpointErrorKind(e);
+  } finally {
+    revertExecuting.value = false;
   }
 }
 
@@ -810,9 +892,11 @@ const messageImages = computed<
       :is-editing="isEditingThisMessage"
       :is-streaming="isStreaming"
       :turn-diff-available="turnDiffAvailable"
+      :revert-available="revertAvailable"
       @edit="onEdit"
       @resend="onResend"
       @turn-diff="onTurnDiff"
+      @revert="onRevert"
     />
 
     <!--
@@ -1404,6 +1488,25 @@ const messageImages = computed<
       :result="turnDiffResult"
       title="本轮 diff"
       @close="turnDiffOpen = false"
+    />
+
+    <!--
+      N2 PR3 (2026-09-20, task `09-20-n2-checkpoint-revert`): 「回到
+      此轮后」确认弹窗 —— preview → 确认 → execute 的 dangerous 闸。
+      评审重排清单(foreign 区仅非空 / 按钮带还原文件数 / Unknown
+      中性 badge / gitignore 常驻脚注 / 无逐文件勾选)与 StalePreview
+      内联恢复见 RevertConfirmModal 组件头注释。
+    -->
+    <RevertConfirmModal
+      :open="revertModalOpen"
+      :preview="revertPreview"
+      :loading="revertLoading"
+      :executing="revertExecuting"
+      :error="revertError"
+      :error-kind="revertErrorKind"
+      @cancel="revertModalOpen = false"
+      @confirm="onRevertConfirm"
+      @repreview="onRevertRepreview"
     />
     </template>
   </div>

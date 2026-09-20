@@ -46,6 +46,7 @@ import {
   Folder,
   GitMerge,
   Globe,
+  History,
   Info,
   KeyRound,
   LayoutGrid,
@@ -181,6 +182,9 @@ const map = {
   // N2 PR2 (2026-09-20): MessageActionsMenu「本轮 diff」入口图标
   // (checkpoint 轮间 diff,与 file-check 同族线重)。
   "file-diff": FileDiff,
+  // N2 PR3 (2026-09-20): MessageActionsMenu「回到此轮后」入口图标
+  // (checkpoint revert,history = 回到过去时点的通用语义)。
+  "history": History,
   // E2 (harness trace pipeline, 2026-07-14): trace timeline
   // icon family. `chart-line` is the drawer toggle (TracePanel icon
   // in ChatPanel header); `repeat` is the loop-detection

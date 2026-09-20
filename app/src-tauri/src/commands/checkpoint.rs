@@ -13,6 +13,20 @@
 //!   (`DiffResult` / `FileDiff`) so the existing `DiffView` renders
 //!   it unchanged.
 //!
+//! N2 PR3 (2026-09-20, same task) adds the revert half — the two-step
+//! dangerous pair (design §5):
+//!
+//! - [`revert_to_checkpoint_preview`] — restore set
+//!   (`compute_restore_set_from`) + per-path attribution badges
+//!   (mined from the session's write audit) + the foreign-delta gate
+//!   (recomputed gate tree vs chain-head tree) + a `preview_token`
+//!   binding `(target_tree, gate_tree)`.
+//! - [`revert_to_checkpoint_execute`] — own-session busy rejection
+//!   (OQ-C: MVP scope), token re-validation (`StalePreview` on any
+//!   write between preview and confirm), `restore_paths`, audit row
+//!   (`AuditKind::CheckpointReverted`), chain untouched (no rollback,
+//!   no truncation).
+//!
 //! ## Degradation contract (design §5, review-corrected)
 //!
 //! Every failure that is NOT a bug collapses into one of two typed
@@ -290,6 +304,371 @@ pub async fn get_turn_checkpoint_diff(
     seq: i64,
 ) -> Result<crate::git::diff::DiffResult, AppCommandError> {
     get_turn_checkpoint_diff_inner(&state, session_id, seq).await
+}
+
+// ---------------------------------------------------------------------------
+// revert_to_checkpoint_preview / revert_to_checkpoint_execute (N2 PR3)
+// ---------------------------------------------------------------------------
+
+/// Per-path attribution badge for the revert confirm dialog (design §5
+/// "归属标记,增强非过滤"). Three values, from the session's write
+/// audit (`session_audit_events` `tool_executed` rows):
+///
+/// - `tool_written` — a write-family tool (`write_file` / `edit_file`)
+///   recorded this exact input path during the session;
+/// - `shell_write` — a shell command the A2+ trust layer classified as
+///   writing ran in a turn AFTER the target seq (shell targets are
+///   unknowable — `echo x > f` has no path attribute — so the marker
+///   is turn-level: unattributed paths get the "probably the agent's
+///   shell" hint when such a turn exists between target and now);
+/// - `unknown` — no audit evidence; under a shared cwd this is the
+///   normal state for user hand-edits (the badge is deliberately
+///   neutral-colored in the UI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathAttribution {
+    ToolWritten,
+    ShellWrite,
+    Unknown,
+}
+
+/// One file of [`RevertPreview`].
+#[derive(Debug, Clone, Serialize)]
+pub struct RevertPreviewFile {
+    pub path: String,
+    /// What the revert will do to this path (checkout = restore target
+    /// content, delete = remove — the file postdates the target).
+    pub action: git_ckpt::RestoreAction,
+    pub attribution: PathAttribution,
+}
+
+/// `revert_to_checkpoint_preview`'s payload. `preview_token` binds the
+/// target tree and the gate tree (the TOCTOU fence — see
+/// [`preview_token`]); `foreign_delta` is non-empty ONLY at preview
+/// time (the gate's verdict on "is the current state explained by this
+/// session's chain"), the confirm dialog renders a dedicated warning
+/// area for it.
+#[derive(Debug, Clone, Serialize)]
+pub struct RevertPreview {
+    pub files: Vec<RevertPreviewFile>,
+    pub foreign_delta: Option<Vec<crate::git::diff::FileDiff>>,
+    pub target_seq: i64,
+    pub target_created_at: i64,
+    pub preview_token: String,
+}
+
+/// `revert_to_checkpoint_execute`'s payload — the toast's counts.
+#[derive(Debug, Clone, Serialize)]
+pub struct RevertResult {
+    pub restored: usize,
+    pub deleted: usize,
+}
+
+/// Stale preview: the gate tree recomputed at execute time no longer
+/// matches the previewed token (a write landed between preview and
+/// confirm). The old confirmation must NOT authorize a new restore
+/// set — the frontend offers a re-preview button (retryable).
+fn stale_preview() -> AppCommandError {
+    AppCommandError {
+        category: ErrorCategory::InvalidRequest,
+        kind: "StalePreview".to_string(),
+        message: "预览后文件已再次变化,还原集已过期;请重新预览".to_string(),
+        retryable: true,
+        request_id: None,
+    }
+}
+
+/// Own-session busy rejection (OQ-C ruling: MVP rejects ONLY the
+/// target session's own in-flight turn — reverting files under a
+/// running agent = pulling the floor from under its feet; other
+/// sessions sharing the cwd are left to observation).
+fn session_busy() -> AppCommandError {
+    AppCommandError {
+        category: ErrorCategory::InvalidRequest,
+        kind: "SessionBusy".to_string(),
+        message: "会话正在运行中,请先停止当前轮次再回退".to_string(),
+        retryable: false,
+        request_id: None,
+    }
+}
+
+/// The preview token: binds `(target_tree, gate_tree)` as
+/// `"<target>:<gate>"` (both lowercase 40-hex). Deliberately NOT a
+/// separate hash function — the oid pair already IS content-addressed
+/// (git's own hash); the concatenation is stable, self-describing in
+/// logs, and the execute side recomputes and string-compares it.
+fn preview_token(target_tree: git2::Oid, gate_tree: git2::Oid) -> String {
+    format!("{target_tree}:{gate_tree}")
+}
+
+/// Session-level write-audit facts for [`PathAttribution`], mined from
+/// the session's `tool_executed` audit rows (the internal
+/// `list_audit_events` full-pull path per design §5 — not the paged UI
+/// version).
+struct WriteAuditFacts {
+    /// Input paths recorded by write-family tools (`write_file` /
+    /// `edit_file` — the same family as the loop's write-signal gate).
+    tool_paths: std::collections::HashSet<String>,
+    /// `turn_seq`s of rows whose shell command the A2+ trust layer
+    /// classified as writing (`shell_trust::classify_prefix` ≠
+    /// ReadOnly — same predicate as the loop's write-signal gate).
+    /// Foreground `shell` + `run_background_shell` both count.
+    shell_write_turns: Vec<i64>,
+    /// A judged-write shell row with `turn_seq IS NULL` (outside the
+    /// turn loop — defensive; counted conservatively as "may have
+    /// written after any target").
+    shell_write_unknown_turn: bool,
+}
+
+impl WriteAuditFacts {
+    fn from_audit_rows(rows: &[db::AuditEventRow]) -> WriteAuditFacts {
+        let mut facts = WriteAuditFacts {
+            tool_paths: std::collections::HashSet::new(),
+            shell_write_turns: Vec::new(),
+            shell_write_unknown_turn: false,
+        };
+        for row in rows {
+            if row.kind != crate::agent::permissions::AuditKind::ToolExecuted.as_str() {
+                continue;
+            }
+            let Ok(payload) = serde_json::from_str::<serde_json::Value>(
+                row.payload_json.as_deref().unwrap_or_default(),
+            ) else {
+                continue;
+            };
+            let tool = payload.get("tool_name").and_then(|v| v.as_str());
+            let input = payload.get("tool_input");
+            match tool {
+                Some("write_file") | Some("edit_file") => {
+                    if let Some(path) = input.and_then(|i| i.get("path")).and_then(|v| v.as_str()) {
+                        facts.tool_paths.insert(path.to_string());
+                    }
+                }
+                Some("shell") | Some("run_background_shell") => {
+                    let cmd = input
+                        .and_then(|i| i.get("command"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if crate::agent::permissions::shell_trust::classify_prefix(cmd)
+                        != crate::agent::permissions::shell_trust::ShellTrust::ReadOnly
+                    {
+                        match row.turn_seq {
+                            Some(seq) => facts.shell_write_turns.push(seq),
+                            None => facts.shell_write_unknown_turn = true,
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        facts
+    }
+
+    /// Attribute one restore-set path relative to the revert target:
+    /// tool evidence wins; otherwise a judged-write shell turn AFTER
+    /// the target (or of unknown turn) earns the shell hint; the rest
+    /// is Unknown.
+    fn attribute(&self, path: &str, target_seq: i64) -> PathAttribution {
+        if self.tool_paths.contains(path) {
+            return PathAttribution::ToolWritten;
+        }
+        if self.shell_write_unknown_turn || self.shell_write_turns.iter().any(|t| *t > target_seq) {
+            return PathAttribution::ShellWrite;
+        }
+        PathAttribution::Unknown
+    }
+}
+
+/// Load the checkpoint rows and locate `target_seq`. Shared by
+/// preview + execute; the baseline row IS a valid target here
+/// (「回到会话前」, AC10) — unlike the diff command there is no
+/// baseline exclusion.
+async fn load_target_row(
+    state: &Arc<AppState>,
+    session_id: &str,
+    target_seq: i64,
+) -> Result<Vec<db::checkpoint::CheckpointRow>, AppCommandError> {
+    let rows = db::checkpoint::list_checkpoints(&state.db, session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("revert: db failed: {}", e))?;
+    if rows.is_empty() {
+        return Err(checkpoints_unavailable(
+            "checkpoint: session has no checkpoint rows",
+        ));
+    }
+    if !rows.iter().any(|r| r.seq == target_seq) {
+        return Err(checkpoints_unavailable(format!(
+            "checkpoint: no snapshot row for seq {target_seq}"
+        )));
+    }
+    Ok(rows)
+}
+
+pub async fn revert_to_checkpoint_preview_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    target_seq: i64,
+) -> Result<RevertPreview, AppCommandError> {
+    let ctx = resolve_ctx(state, &session_id).await?;
+    let rows = load_target_row(state, &session_id, target_seq).await?;
+    let target_row = rows
+        .iter()
+        .find(|r| r.seq == target_seq)
+        .expect("checked above");
+    // 归属证据(异步 DB 侧)先取,再进同步 git 相(repo 句柄不过 .await)。
+    let audit_rows = db::list_audit_events(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("revert preview: audit query failed: {}", e))?;
+    let facts = WriteAuditFacts::from_audit_rows(&audit_rows);
+
+    let (set, foreign_delta, token) = {
+        let repo = open_repo(&ctx.repo_path)?;
+        let target_tree = resolve_row_tree(&repo, target_row)?;
+        // 门禁重算:当前工作态树(gate)。失败(含 EUNMERGED 冲突态)
+        // 按 Broken 降级 —— 门禁跑不了就不该发起还原。
+        let gate_tree = git_ckpt::build_state_tree(&repo)
+            .map_err(|e| checkpoint_broken(format!("checkpoint: gate tree failed: {}", e)))?;
+        let set = git_ckpt::compute_restore_set_from(&repo, gate_tree, target_tree)
+            .map_err(|e| checkpoint_broken(format!("checkpoint: restore set failed: {}", e)))?;
+        // 外来写入门:gate 树 ≠ 链头快照树 → 有非本会话快照内的变更
+        // (轮间隙用户手改等)。diff 方向 = 链头 → gate(「多出来的部分」)。
+        let head_row = rows.last().expect("non-empty checked");
+        let head_tree = resolve_row_tree(&repo, head_row)?;
+        let foreign = if head_tree != gate_tree {
+            let d = git_ckpt::diff_snapshots(&repo, head_tree, gate_tree).map_err(|e| {
+                checkpoint_broken(format!("checkpoint: foreign delta failed: {}", e))
+            })?;
+            Some(d.files)
+        } else {
+            None
+        };
+        (set, foreign, preview_token(target_tree, gate_tree))
+    };
+
+    let files: Vec<RevertPreviewFile> = set
+        .into_iter()
+        .map(|p| RevertPreviewFile {
+            attribution: facts.attribute(&p.path, target_seq),
+            path: p.path,
+            action: p.action,
+        })
+        .collect();
+    Ok(RevertPreview {
+        files,
+        foreign_delta,
+        target_seq,
+        target_created_at: target_row.created_at,
+        preview_token: token,
+    })
+}
+
+#[tauri::command]
+pub async fn revert_to_checkpoint_preview(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    target_seq: i64,
+) -> Result<RevertPreview, AppCommandError> {
+    revert_to_checkpoint_preview_inner(&state, session_id, target_seq).await
+}
+
+pub async fn revert_to_checkpoint_execute_inner(
+    state: &Arc<AppState>,
+    session_id: String,
+    target_seq: i64,
+    preview_token_param: String,
+) -> Result<RevertResult, AppCommandError> {
+    let ctx = resolve_ctx(state, &session_id).await?;
+    // busy 拒绝(OQ-C:MVP 只拒本 session)。真源 = loop 的
+    // `session_active_request` 注册面(与 chat 路由的 busy 判定同源)。
+    if state
+        .session_active_request
+        .lock()
+        .await
+        .contains_key(&session_id)
+    {
+        return Err(session_busy());
+    }
+    let rows = load_target_row(state, &session_id, target_seq).await?;
+    let target_row = rows
+        .iter()
+        .find(|r| r.seq == target_seq)
+        .expect("checked above");
+
+    let (outcome, gate_tree_str, foreign_paths, executed_paths) = {
+        let repo = open_repo(&ctx.repo_path)?;
+        let target_tree = resolve_row_tree(&repo, target_row)?;
+        let gate_tree = git_ckpt::build_state_tree(&repo)
+            .map_err(|e| checkpoint_broken(format!("checkpoint: gate tree failed: {}", e)))?;
+        // TOCTOU 重验:preview→confirm 之间任何落盘都会换 gate 树,
+        // 旧 token 不得授权新还原集(评审修正)。
+        if preview_token(target_tree, gate_tree) != preview_token_param {
+            return Err(stale_preview());
+        }
+        let set = git_ckpt::compute_restore_set_from(&repo, gate_tree, target_tree)
+            .map_err(|e| checkpoint_broken(format!("checkpoint: restore set failed: {}", e)))?;
+        // audit 摘要输入在 restore 前收集(restore 消费 &set,不 move)。
+        let executed_paths: Vec<String> = set.iter().map(|p| p.path.clone()).collect();
+        let head_row = rows.last().expect("non-empty checked");
+        let head_tree = resolve_row_tree(&repo, head_row)?;
+        let foreign_paths: Vec<String> = if head_tree != gate_tree {
+            let d = git_ckpt::diff_snapshots(&repo, head_tree, gate_tree).map_err(|e| {
+                checkpoint_broken(format!("checkpoint: foreign delta failed: {}", e))
+            })?;
+            d.files.into_iter().map(|f| f.path).collect()
+        } else {
+            Vec::new()
+        };
+        let outcome = git_ckpt::restore_paths(&repo, target_tree, &set).map_err(|e| {
+            AppCommandError::new(
+                ErrorCategory::Server,
+                format!("checkpoint: restore failed: {e}"),
+            )
+        })?;
+        (
+            outcome,
+            gate_tree.to_string(),
+            foreign_paths,
+            executed_paths,
+        )
+    };
+
+    // audit 落账(best-effort,UiDiffApplied 惯例:失败 warn 不回滚
+    // 已执行的还原 —— 还原成功是事实,audit 缺行可由 turn diff 对账)。
+    if let Err(e) = crate::agent::permissions::audit::record_checkpoint_reverted_audit(
+        &state.db,
+        &session_id,
+        crate::agent::permissions::audit::CheckpointRevertAudit {
+            target_seq,
+            restored: outcome.restored,
+            deleted: outcome.deleted,
+            paths: &executed_paths,
+            foreign_paths: &foreign_paths,
+            gate_tree_oid: &gate_tree_str,
+        },
+    )
+    .await
+    {
+        tracing::warn!(
+            session_id = %session_id,
+            error = %e,
+            "revert_to_checkpoint: audit write failed (non-fatal)"
+        );
+    }
+
+    Ok(RevertResult {
+        restored: outcome.restored,
+        deleted: outcome.deleted,
+    })
+}
+
+#[tauri::command]
+pub async fn revert_to_checkpoint_execute(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    target_seq: i64,
+    preview_token: String,
+) -> Result<RevertResult, AppCommandError> {
+    revert_to_checkpoint_execute_inner(&state, session_id, target_seq, preview_token).await
 }
 
 // ---------------------------------------------------------------------------

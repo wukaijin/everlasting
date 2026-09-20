@@ -115,3 +115,59 @@ describe("MessageActionsMenu — 「本轮 diff」入口渲染门", () => {
     w.unmount();
   });
 });
+
+// ---------------------------------------------------------------------------
+// N2 PR3(2026-09-20,同任务)— 「回到此轮后」入口渲染门
+// ---------------------------------------------------------------------------
+
+describe("MessageActionsMenu — 「回到此轮后」入口渲染门", () => {
+  function mountMenu2(opts: {
+    role?: "user" | "assistant";
+    revertAvailable?: boolean;
+  }) {
+    return mount(MessageActionsMenu, {
+      props: {
+        messageSeq: 3,
+        sessionId: "s1",
+        content: "回答正文",
+        role: opts.role ?? ("assistant" as const),
+        isEditing: false,
+        isStreaming: false,
+        turnDiffAvailable: true,
+        revertAvailable: opts.revertAvailable,
+      },
+      attachTo: document.body,
+      global: { stubs: { Icon: true } },
+    });
+  }
+
+  it("revertAvailable=true:菜单渲染「回到此轮后」,与「本轮 diff」同区,点击发 revert", async () => {
+    const w = mountMenu2({ revertAvailable: true });
+    await openMenu(w);
+
+    const item = document.body.querySelector<HTMLElement>(
+      "[data-testid='msg-actions-revert']",
+    );
+    expect(item).not.toBeNull();
+    expect(item?.textContent).toContain("回到此轮后");
+    // 与「本轮 diff」同入口区(diff 项也在场)。
+    expect(
+      document.body.querySelector("[data-testid='msg-actions-turn-diff']"),
+    ).not.toBeNull();
+
+    item?.click();
+    await flushPromises();
+    await w.vm.$nextTick();
+    expect(w.emitted("revert")).toHaveLength(1);
+    w.unmount();
+  });
+
+  it("revertAvailable 缺省/false:不渲染该项(默认关)", async () => {
+    const w = mountMenu2({});
+    await openMenu(w);
+    expect(
+      document.body.querySelector("[data-testid='msg-actions-revert']"),
+    ).toBeNull();
+    w.unmount();
+  });
+});

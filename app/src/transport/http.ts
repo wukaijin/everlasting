@@ -74,6 +74,10 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // http.routes-sync.test.ts 守卫)。
   get_turn_checkpoint_diff: "checkpoint",
   list_turn_checkpoints: "checkpoint",
+  // N2 PR3(同任务): revert 两步(dangerous;preview_token 由前端从
+  // preview 响应原样带回 execute)。缺映射时 routes-sync 守卫会拦。
+  revert_to_checkpoint_execute: "checkpoint",
+  revert_to_checkpoint_preview: "checkpoint",
   // command_palette
   get_command_body: "command_palette",
   list_commands: "command_palette",
