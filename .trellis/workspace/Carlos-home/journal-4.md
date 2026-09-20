@@ -1968,3 +1968,24 @@ BACKLOG N2(N9→N4→N2 依赖链链头解封)全链交付。推荐立项后三�
 ### Status
 
 [OK] **Completed**
+
+## Session 153: 流式反馈两修复:TTFB 空窗思考占位 + thinkingMs 块级化
+
+**Date**: 2026-09-20
+**Task**: 09-20-ttfb-hint-block-thinking-ms(用户报告两 bug,纯前端修复)
+**Branch**: `main`
+
+### Summary
+
+用户报两流式反馈 bug,根因分析后一次修复。①发送→首 token(TTFB)空窗消息区零反馈:后端 ChatEvent::Start 绑定"LLM HTTP 响应头到达"(anthropic.rs:128-140 等),空窗期零事件;占位此前不带 streaming(send/resend/turn_continuation push 均无,连 ▍ 都不亮),showStreamingHint 挂在 ThinkingBlock 内依赖首个 thinking_delta。修:三类占位即刻 streaming: true(先例 adoptForeignRequest)+ MessageItem isAwaitingFirstChunk(assistant+streaming+!hasVisibleBubble)渲染「正在思考…」呼吸占位,空窗期光标让位(▍=文本插入点,无文本时语义空),delta 实时写 content 首块即达即消失(text-only 流无误显示)。②流式期所有 thinking 块 "Thought for" 被最后一次 turn_complete 覆盖:多 turn 共用占位 + 消息级单值覆盖写 + 每 ThinkingBlock 同绑 message.thinkingDurationMs;reload 后按 seq 挂回才对。修:ContentBlockView thinking 块加 thinkingMs(块级),RequestState 加 turnStartBlockIdx(start 记 contentBlocks.length,turn_complete 只给本轮区间打标),timeline 渲染 item.thinkingMs ?? message.thinkingDurationMs(块级优先/行级回退,reload 天然兼容零回填)。消息级 last-wins 保留不破坏现有消费者。测试 +5(streamController 三 turn 三值不串写;MessageItem 空窗三态+块级 header 互不覆盖+回退),4 文件注入补新字段。vitest 1985 全绿+vue-tsc 干净+e2e 无受影响断言。教训:流式实时态"多 turn 共用一个占位"下,任何消息级单值字段都是覆盖写陷阱——新增瞬态字段优先考虑块级/按 turn 锚定。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `947108c0` | chore(task): archive 09-20-ttfb-hint-block-thinking-ms |
+| `b8680277` | feat(ui): 流式反馈两修复——TTFB 空窗「正在思考…」占位 + thinkingMs 块级化 |
+
+### Status
+
+[OK] **Completed**
