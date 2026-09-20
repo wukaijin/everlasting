@@ -30,7 +30,7 @@
 | [Git Diff](./git-diff.md) | git diff workdir-vs-branch FileDiff 契约 | ✅ 有实质内容 |
 | [Checkpoint Contract](./checkpoint-contract.md) | N2 悬空快照链 + UI revert(四命令 / turn_checkpoints 表 / 写信号门 / TOCTOU token) | ✅ 有实质内容 |
 | [Project CWD Boundary](./project-cwd-boundary.md) | 项目 cwd 边界与路径越界防护 | ✅ 有实质内容 |
-| [Error Handling](./error-handling.md) | 错误类型与处理策略 | 有实质内容(残留少量模板句可清) |
+| [Error Handling](./error-handling.md) | 四层错误模型 / category 契约 / TransportError 恢复链 / 兜底禁则 | ✅ 有实质内容 |
 | [Quality Guidelines](./quality-guidelines.md) | 代码质量标准 / forbidden patterns | 有实质内容(残留少量模板句可清) |
 | [Logging Guidelines](./logging-guidelines.md) | 结构化日志 / log 级别 | 有实质内容(残留少量模板句可清) |
 | [Test Model Contract](./test-model-contract.md) | per-model 连通性探测契约 | ✅ 有实质内容 |
