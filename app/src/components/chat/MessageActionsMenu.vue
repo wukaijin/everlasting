@@ -59,6 +59,18 @@
 //     `chatStore.resendMessage(sessionId, messageSeq, content)`.
 //   - `copy` is handled in-place (clipboard API + toast); no bubble
 //     needed for the common case.
+//
+// N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): the
+// 「本轮 diff」item. Gated by the `turnDiffAvailable` prop, which the
+// parent computes from the turnCheckpoints store (seq 命中一行且
+// prev_seq 非空) — the checkpoint chain only carries turn-final
+// assistant seqs, so the item renders on the turn's LAST assistant
+// card only (MessageList stamps data-seq on user rows too — role /
+// row-hit is the discriminator, review-corrected). Clicking emits
+// `turnDiff`; the parent fetches `get_turn_checkpoint_diff` and opens
+// the diff modal (DiffView reuse). 文案语义 = prev_seq:「自上一快照
+// 以来的变更」(写触发门稀疏链下,漏判轮的改动会归位到后续写轮的
+// diff 里 —— 这是如实表述,评审修正)。
 
 import {
   DropdownMenuRoot,
@@ -99,10 +111,15 @@ const props = withDefaults(
      *  during streaming is Stop (which is in the chat input, not
      *  the message row). */
     isStreaming: boolean;
+    /** N2 PR2: 「本轮 diff」入口的可用性 —— 父组件从 turnCheckpoints
+     *  store 判定(seq 命中快照行且 prev_seq 非空)。默认 false:
+     *  user 行 / 无行轮 / 基线 / 破链 / 非 git session 全部不渲染。 */
+    turnDiffAvailable?: boolean;
   }>(),
   {
     isEditing: false,
     isStreaming: false,
+    turnDiffAvailable: false,
   },
 );
 
@@ -119,6 +136,10 @@ const emit = defineEmits<{
    *  call; this component only fires the intent with the seq
    *  so the parent can look up the content. */
   resend: [messageSeq: number];
+  /** N2 PR2: parent should fetch the turn checkpoint diff and open
+   *  the diff modal. The parent owns the fetch + modal state; this
+   *  component only fires the intent (visibility is the prop's job). */
+  turnDiff: [];
 }>();
 
 const projectsStore = useProjectsStore();
@@ -156,6 +177,14 @@ function onEdit() {
 function onResend() {
   if (!canResend()) return;
   emit("resend", props.messageSeq);
+}
+
+/** N2 PR2: 「本轮 diff」—— 点击即抛意图;可见性由 turnDiffAvailable
+ *  prop 承担(v-if 不渲染 vs disabled 灰态:能力隐藏用前者,动作
+ *  暂不可用用后者,与 Edit/Resend 的灰态语义区分)。 */
+function onTurnDiff() {
+  if (!props.turnDiffAvailable) return;
+  emit("turnDiff");
 }
 
 async function onCopy() {
@@ -262,6 +291,24 @@ async function onCopy() {
               v-if="role !== 'user'"
               class="msg-actions__item-hint"
             >仅 user 消息</span>
+          </DropdownMenuItem>
+
+          <!-- N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`):
+               「本轮 diff」—— 仅 turnDiffAvailable 时渲染(写轮的轮末
+               assistant 卡);语义 = 自上一快照以来的变更。 -->
+          <DropdownMenuItem
+            v-if="turnDiffAvailable"
+            class="msg-actions__item"
+            data-testid="msg-actions-turn-diff"
+            @select="onTurnDiff"
+          >
+            <Icon
+              name="file-diff"
+              :size="14"
+              icon-class="msg-actions__item-icon"
+            />
+            <span>本轮 diff</span>
+            <span class="msg-actions__item-hint">自上一快照以来</span>
           </DropdownMenuItem>
 
           <DropdownMenuSeparator class="msg-actions__separator" />

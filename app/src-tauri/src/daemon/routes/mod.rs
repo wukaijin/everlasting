@@ -53,6 +53,10 @@ pub mod attachments;
 // observability routes (mirror commands::background_shells, Q0 单源).
 pub mod background_shells;
 pub mod cancel;
+// N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): checkpoint
+// 读面两条 route(mirror commands::checkpoint,Q0 单源)。revert 双条
+// 归 PR3 同域追加。
+pub mod checkpoint;
 pub mod command_palette;
 pub mod config;
 // F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance` PR3):设置面
@@ -113,6 +117,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             background_shells::router(state.clone()),
         )
         .nest("/api/v1/cancel", cancel::router(state.clone()))
+        .nest("/api/v1/checkpoint", checkpoint::router(state.clone()))
         .nest(
             "/api/v1/command_palette",
             command_palette::router(state.clone()),

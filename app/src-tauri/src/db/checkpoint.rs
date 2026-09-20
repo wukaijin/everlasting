@@ -90,7 +90,6 @@ pub async fn latest_checkpoint(
 
 /// All checkpoint rows for a session, oldest first. The PR2 read
 /// surface's source (`prev_seq` derives from this ordering).
-#[allow(dead_code)] // PR2 list_turn_checkpoints 命令消费(AC 排期同 git/checkpoint.rs 的按项 allow)
 pub async fn list_checkpoints(
     pool: &SqlitePool,
     session_id: &str,

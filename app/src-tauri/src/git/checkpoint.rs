@@ -37,10 +37,11 @@
 //! error as fail-open (warn log, no snapshot for the turn, chain
 //! resumes at the next successful snapshot).
 
-// PR1 起接线层(agent/checkpoint.rs + commands/sessions.rs)消费快照
-// 原语,模块级 allow 已移除;revert 三原语(`diff_snapshots` /
-// `compute_restore_set` / `restore_paths`)的读面消费者在 PR2/PR3
-// (三命令 + 确认弹窗),届时随命令落地摘除各自的 allow —— 同
+// PR1 起接线层(agent/checkpoint.rs)消费快照原语,模块级 allow 已移除;
+// PR2(09-20-n2-checkpoint-revert)读面命令消费 `diff_snapshots` /
+// `count_snapshot_deltas`,对应 allow 已摘。仍归 PR3 的 revert 三件
+// (`compute_restore_set` / `restore_paths` 及其 RestorePath/Action/
+// Outcome 类型)保留按项 allow,随 revert 命令落地摘除 —— 同
 // permissions/audit.rs AuditKind 的按项处理先例。
 use std::path::Path;
 
@@ -205,7 +206,6 @@ pub fn delete_umbrella_ref(repo: &git2::Repository, session_id: &str) -> Result<
 /// Diff two snapshot trees and return the per-file result, reusing
 /// the session diff view's `FileDiff` / `DiffResult` shapes (the
 /// frontend consumes the same structure for turn-to-turn diffs).
-#[allow(dead_code)] // PR2 get_turn_checkpoint_diff 命令消费
 pub fn diff_snapshots(
     repo: &git2::Repository,
     a_tree: git2::Oid,
@@ -214,6 +214,24 @@ pub fn diff_snapshots(
     let a = repo.find_tree(a_tree)?;
     let b = repo.find_tree(b_tree)?;
     diff_tree_to_tree(repo, &a, &b)
+}
+
+/// Count the changed paths between two snapshot trees — the
+/// `list_turn_checkpoints` badge's `files_changed`. Count-only on
+/// purpose: no patch text, no `git --numstat` subprocess (the badge
+/// needs the number of changed paths, not their bodies or line
+/// counts; the full body flows through [`diff_snapshots`] when the
+/// user actually opens the turn diff). Zero for identical trees
+/// (baseline rows and net-zero write turns).
+pub fn count_snapshot_deltas(
+    repo: &git2::Repository,
+    a_tree: git2::Oid,
+    b_tree: git2::Oid,
+) -> Result<usize, GitError> {
+    let a = repo.find_tree(a_tree)?;
+    let b = repo.find_tree(b_tree)?;
+    let diff = repo.diff_tree_to_tree(Some(&a), Some(&b), None)?;
+    Ok(diff.deltas().count())
 }
 
 /// Compute the revert restore set for going back to `target_tree`:

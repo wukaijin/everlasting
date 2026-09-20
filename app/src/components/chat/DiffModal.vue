@@ -26,6 +26,10 @@ defineProps<{
     /** Cached diff result. When null and not loading, the body
      *  is empty (parent hasn't fetched yet). */
     result: { files: import("./DiffView.vue").FileDiff[] } | null;
+    /** N2 PR2 (2026-09-20): header title. The session worktree diff
+     *  keeps "Session diff"; the turn checkpoint diff mounts this
+     *  modal with「本轮 diff」. Optional — defaults to the original. */
+    title?: string;
 }>();
 
 const emit = defineEmits<{
@@ -44,11 +48,11 @@ const emit = defineEmits<{
                 class="diff-modal"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Session diff"
+                :aria-label="title ?? 'Session diff'"
             >
                 <header class="diff-modal__header">
                     <h2 class="diff-modal__title">
-                        Session diff
+                        {{ title ?? "Session diff" }}
                         <span v-if="result" class="diff-modal__count">
                             ({{ result.files.length }}
                             {{ result.files.length === 1 ? "file" : "files" }})

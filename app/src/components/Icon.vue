@@ -41,6 +41,7 @@ import {
   Eye,
   EyeOff,
   FileCheck,
+  FileDiff,
   FileText,
   Folder,
   GitMerge,
@@ -177,6 +178,9 @@ const map = {
   // B9+ D4 (2026-07-13): AuditLogItem renders a "file-check" icon
   // for `ui_diff_applied` rows.
   "file-check": FileCheck,
+  // N2 PR2 (2026-09-20): MessageActionsMenu「本轮 diff」入口图标
+  // (checkpoint 轮间 diff,与 file-check 同族线重)。
+  "file-diff": FileDiff,
   // E2 (harness trace pipeline, 2026-07-14): trace timeline
   // icon family. `chart-line` is the drawer toggle (TracePanel icon
   // in ChatPanel header); `repeat` is the loop-detection

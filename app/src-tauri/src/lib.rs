@@ -430,6 +430,13 @@ pub fn run() {
             // merge / discard buttons.
             commands::subagent_runs::merge_worker_run,
             commands::subagent_runs::discard_worker_run,
+            // N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`):
+            // checkpoint 读面 —— TurnCard「本轮 diff」入口的数据源。
+            // list 回传 prev_seq(前一个存在行,稀疏链语义)+ files_changed
+            // 徽标;diff 复用 DiffResult 同构走既有 DiffView。daemon HTTP
+            // 镜像路由见 daemon/routes/checkpoint.rs。
+            commands::checkpoint::list_turn_checkpoints,
+            commands::checkpoint::get_turn_checkpoint_diff,
             // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
             // 阶段 3): Settings-UI IPCs for per-subagent model
             // configuration (DB override + frontmatter write-back).

@@ -68,6 +68,12 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // 09-06-gc-p0:群聊体面打断(session 域;与 cancel_chat 同 cancel
   // 路由域 —— daemon routes/cancel.rs 的 router 挂两条)。
   preempt_group_chat: "cancel",
+  // N2 PR2(2026-09-20, task `09-20-n2-checkpoint-revert`):checkpoint
+  // 读面 —— TurnCard「本轮 diff」入口的数据源。缺映射时浏览器/sidecar/
+  // remote 模式报 `unknown cmd`(Tauri IPC 模式侥幸不经过本表;
+  // http.routes-sync.test.ts 守卫)。
+  get_turn_checkpoint_diff: "checkpoint",
+  list_turn_checkpoints: "checkpoint",
   // command_palette
   get_command_body: "command_palette",
   list_commands: "command_palette",

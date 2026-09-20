@@ -27,6 +27,11 @@ pub mod attachments;
 // only — shell lifecycle itself stays in the registry + tools.
 pub mod background_shells;
 pub mod cancel;
+// N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): checkpoint
+// 读面双命令(list_turn_checkpoints / get_turn_checkpoint_diff),
+// `_inner` 单源供 Tauri + daemon route 双注册;写面(快照挂钩)在
+// `agent::checkpoint`,revert 双命令归 PR3。
+pub mod checkpoint;
 pub mod command_palette;
 pub mod config;
 // F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance` PR3):设置面
@@ -258,5 +263,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         "create_group_chat_preset",
         "update_group_chat_preset",
         "delete_group_chat_preset",
+        // N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`):
+        // checkpoint 读面 —— TurnCard「本轮 diff」入口的两条 IPC。
+        "list_turn_checkpoints",
+        "get_turn_checkpoint_diff",
     ]
 }

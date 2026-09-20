@@ -40,6 +40,10 @@ import { useChatStore } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useStreamControllerStore } from "../../stores/streamController";
+import {
+  useTurnCheckpointsStore,
+  type TurnDiffResult,
+} from "../../stores/turnCheckpoints";
 import { transport } from "../../transport";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import { abbreviateTokens } from "../../utils/tokenUsage";
@@ -67,6 +71,7 @@ import UiCard from "./UiCard.vue";
 import FileInjectionsHint from "./FileInjectionsHint.vue";
 import MessageImages from "./MessageImages.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
+import DiffModal from "./DiffModal.vue";
 import MessageItemEdit from "./MessageItemEdit.vue";
 import MessageItemFooter from "./MessageItemFooter.vue";
 import type { TestState } from "../settings/ModelRow.vue";
@@ -201,6 +206,46 @@ const isStreaming = computed<boolean>(() => {
   if (!sid) return false;
   return controller.streamingSessionIds.has(sid);
 });
+
+// --- N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`):
+// --- 「本轮 diff」入口(轮间 checkpoint diff) --------------------------
+//
+// 入口判定 = turnCheckpoints store 的 hasTurnDiff(seq 命中快照行且
+// prev_seq 非空)。checkpoint 链只挂在「轮末 assistant 行」的 seq 上
+// (写触发门下只读轮无行、基线行挂 user 行 seq),所以 user 卡 / 无行
+// 轮 / 基线 / 破链 / 非 git session 全部落到 false —— MessageList 对
+// 所有行都盖 data-seq,role + 行命中是入口与 user 卡的区分线(评审
+// 修正)。readonly 预览(SearchModal)跟随菜单的挂载门一起隐藏。
+const turnCheckpointsStore = useTurnCheckpointsStore();
+
+const turnDiffAvailable = computed<boolean>(() => {
+  if (props.readonly || props.message.role !== "assistant") return false;
+  const sid = chatStore.currentSessionId;
+  if (!sid) return false;
+  return turnCheckpointsStore.hasTurnDiff(sid, props.message.seq);
+});
+
+const turnDiffOpen = ref(false);
+const turnDiffLoading = ref(false);
+const turnDiffError = ref<string | null>(null);
+const turnDiffResult = ref<TurnDiffResult | null>(null);
+
+async function onTurnDiff(): Promise<void> {
+  const sid = chatStore.currentSessionId;
+  const seq = props.message.seq;
+  if (!sid || seq === undefined) return;
+  turnDiffOpen.value = true;
+  turnDiffError.value = null;
+  turnDiffResult.value = null;
+  turnDiffLoading.value = true;
+  try {
+    turnDiffResult.value = await turnCheckpointsStore.fetchTurnDiff(sid, seq);
+  } catch (e) {
+    turnDiffError.value = extractErrorMessage(e);
+  } finally {
+    turnDiffLoading.value = false;
+  }
+}
 
 
 // --- 提取模块的组件侧包装(08-07-large-file-splitting) ---
@@ -764,8 +809,10 @@ const messageImages = computed<
       :role="message.role"
       :is-editing="isEditingThisMessage"
       :is-streaming="isStreaming"
+      :turn-diff-available="turnDiffAvailable"
       @edit="onEdit"
       @resend="onResend"
+      @turn-diff="onTurnDiff"
     />
 
     <!--
@@ -1342,6 +1389,21 @@ const messageImages = computed<
       :test-state="testState"
       @retry="onRetry"
       @test-connection="onTestConnection"
+    />
+
+    <!--
+      N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): 轮间
+      checkpoint diff 弹窗 —— 复用 DiffModal(DiffView 渲染,DiffResult
+      与 diff_worktree 链同构,评审 verified 前端链零改动)。常态关闭
+      (v-if 走 Transition 内部),仅 onTurnDiff 拉到载荷后打开。
+    -->
+    <DiffModal
+      :is-open="turnDiffOpen"
+      :is-loading="turnDiffLoading"
+      :error="turnDiffError"
+      :result="turnDiffResult"
+      title="本轮 diff"
+      @close="turnDiffOpen = false"
     />
     </template>
   </div>

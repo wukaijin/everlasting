@@ -15,6 +15,9 @@ import {
 import { matchesReviewStatePath, useReviewStateStore } from "./reviewState";
 import { useQuotaStore } from "./quota";
 import { useTraceStore } from "./traceStore";
+// N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): 轮终刷新
+// 轮间 diff 入口的缓存(finalizeRequest 内,与 invalidateDiff 同点)。
+import { useTurnCheckpointsStore } from "./turnCheckpoints";
 import type { ChatMessage, ContentBlockView } from "./chat.types";
 import type {
   ModeChangePayload,
@@ -1401,6 +1404,11 @@ export function createStreamEventHandlers(ctx: StreamEventsContext) {
     pinnedSessions.delete(sessionId);
     const chatStore = useChatStore();
     chatStore.invalidateDiff(sessionId);
+    // N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): 轮终
+    // 重拉 checkpoint 链 —— 刚结束的写轮(若产生快照行)立即可见
+    // 「本轮 diff」入口,不必切走再切回。fire-and-forget:失败静默
+    // (store 记 unavailable/保留旧态,入口守卫读的是缓存)。
+    void useTurnCheckpointsStore().refresh(sessionId);
     // F6 (2026-08-27): serverBusy 消解的公共出口——轮次终结,侧栏
     // busy 翻回 false。不依赖 adoptForeignRequest 认领分支:finalize
     // 的全部四条路径(未加载守卫 / 尾部非 assistant / done / error)

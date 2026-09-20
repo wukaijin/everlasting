@@ -62,6 +62,11 @@ import { useSettingsModalStore } from "../../stores/settingsModal";
 import { transport } from "../../transport";
 import type { CurrentTaskInfo } from "../../types/review-state";
 import { useTraceStore } from "../../stores/traceStore";
+// N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): 轮间 diff
+// 入口判定的数据源(session 切换时预热缓存,见下方 watcher)。
+import {
+  useTurnCheckpointsStore,
+} from "../../stores/turnCheckpoints";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
@@ -421,6 +426,22 @@ async function openDiffModal() {
 function closeDiffModal() {
   diffModalOpen.value = false;
 }
+
+// -----------------------------------------------------------------------
+// N2 PR2 (2026-09-20, task `09-20-n2-checkpoint-revert`): 「本轮 diff」
+// 入口的缓存预热 —— session 切换即拉 list_turn_checkpoints(fire-and-
+// forget;unavailable/破链 session 由 store 记态,入口全部隐藏)。轮终
+// 刷新由 streamEvents.finalizeRequest 驱动。
+// -----------------------------------------------------------------------
+
+const turnCheckpointsStore = useTurnCheckpointsStore();
+watch(
+  () => chatStore.currentSessionId,
+  (sid) => {
+    if (sid) turnCheckpointsStore.ensureLoaded(sid);
+  },
+  { immediate: true },
+);
 
 // -----------------------------------------------------------------------
 // Step 4 follow-up: tri-state worktree chip + dropdown
