@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "worktree 三态语义/attach-detach 契约——快照 repo 路径解析(none=project.path,active=worktree)与 worker merge 交互的依据"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "diff 模块契约——FileDiff/DiffResult 复用与 diff_tree_to_tree helper 扩展点"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "建表/迁移/清库惯例——turn_checkpoints 表与 FK CASCADE 设计依据"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 分层与轮收尾语义——drive.rs finalize_turn_persist 挂钩点的上下游约束"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "AuditKind 体系与写审计——CheckpointReverted 新 kind 与归属标记查询依据"}
+{"file": ".trellis/spec/backend/perf-baseline.md", "reason": "B2 既有基线与 bench 基建——B6 build_state_tree bench 挂接点与数字记录格式"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "TurnCard/DiffView 前端契约——本轮 diff 入口与 DiffResult 同构渲染"}

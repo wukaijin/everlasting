@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查清单"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量检查清单(PR2/PR3 UI 面)"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "核查快照路径解析与 worktree 语义一致性"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核查迁移与表设计合规"}
+{"file": ".trellis/spec/frontend/browser-regression.md", "reason": "e2e 准入规则——PR3 Playwright 用例确定性要求"}
