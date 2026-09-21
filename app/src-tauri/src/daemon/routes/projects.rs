@@ -12,10 +12,12 @@ use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
 use crate::commands::projects::{
-    browse_dir_inner, create_project_inner, hide_project_inner, list_hidden_projects_inner,
-    list_projects_inner, unhide_project_inner, update_project_name_inner,
+    browse_dir_inner, confirm_net_snapshot_inner, create_project_inner,
+    get_project_net_state_inner, hide_project_inner, list_hidden_projects_inner,
+    list_projects_inner, propose_net_ports_inner, reject_net_proposal_inner,
+    set_project_sandbox_net_inner, unhide_project_inner, update_project_name_inner,
     update_project_path_inner, update_project_sandbox_policy_inner, BrowseDirPayload,
-    ListProjectsFilter,
+    ListProjectsFilter, ProjectNetState,
 };
 use crate::error::AppCommandError;
 use crate::projects;
@@ -144,6 +146,93 @@ pub async fn browse_dir(
     Ok(Json(result))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetProjectSandboxNetRequest {
+    pub id: String,
+    pub net: String,
+}
+
+/// 09-21-sandbox-net-bindonly(R4/R8):net 档写(`block` /
+/// `bind_only:<ports>`;`allow_all` 无写入口)。IPC 白名单校验在
+/// `_inner`。
+pub async fn set_project_sandbox_net(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetProjectSandboxNetRequest>,
+) -> Result<Json<projects::ProjectRow>, AppCommandError> {
+    let result = set_project_sandbox_net_inner(&state, req.id, req.net).await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProposeNetPortsRequest {
+    pub id: String,
+    pub worktree_key: String,
+    pub ports: Vec<u16>,
+    #[serde(default)]
+    pub source: String,
+}
+
+/// R4:LLM/manifest 端口建议(pending 态,永不直接生效)。
+pub async fn propose_net_ports(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProposeNetPortsRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    propose_net_ports_inner(&state, req.id, req.worktree_key, req.ports, req.source).await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfirmNetSnapshotRequest {
+    pub id: String,
+    pub worktree_key: String,
+    pub ports: Vec<u16>,
+    pub confirmed_by: Option<String>,
+}
+
+/// R4:operator 确认 bind 快照 —— 唯一 durable 授权出口;daemon
+/// 监听口钳位在此拒绝(回显冲突口)。
+pub async fn confirm_net_snapshot(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ConfirmNetSnapshotRequest>,
+) -> Result<Json<ProjectNetState>, AppCommandError> {
+    let result = confirm_net_snapshot_inner(
+        &state,
+        req.id,
+        req.worktree_key,
+        req.ports,
+        req.confirmed_by,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RejectNetProposalRequest {
+    pub id: String,
+    pub worktree_key: String,
+}
+
+pub async fn reject_net_proposal(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RejectNetProposalRequest>,
+) -> Result<Json<ProjectNetState>, AppCommandError> {
+    let result = reject_net_proposal_inner(&state, req.id, req.worktree_key).await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetProjectNetStateRequest {
+    pub id: String,
+}
+
+pub async fn get_project_net_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GetProjectNetStateRequest>,
+) -> Result<Json<ProjectNetState>, AppCommandError> {
+    let result = get_project_net_state_inner(&state, req.id).await?;
+    Ok(Json(result))
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/list_projects", post(list_projects))
@@ -155,6 +244,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/update_project_sandbox_policy",
             post(update_project_sandbox_policy),
         )
+        .route("/set_project_sandbox_net", post(set_project_sandbox_net))
+        .route("/propose_net_ports", post(propose_net_ports))
+        .route("/confirm_net_snapshot", post(confirm_net_snapshot))
+        .route("/reject_net_proposal", post(reject_net_proposal))
+        .route("/get_project_net_state", post(get_project_net_state))
         .route("/hide_project", post(hide_project))
         .route("/unhide_project", post(unhide_project))
         .route("/browse_dir", post(browse_dir))
@@ -255,4 +349,137 @@ mod tests {
         .await;
         assert_ne!(code, StatusCode::OK, "不存在的路径必须 4xx");
     }
+}
+
+/// 09-21-sandbox-net-bindonly 写通道 roundtrip(AC7/R4):
+/// 档写白名单(allow_all 拒)/ 建议入队 / 确认落快照+列 /
+/// daemon 口钳位拒绝且回显冲突口 / 拒绝建议 / 读回全态。
+#[tokio::test(flavor = "multi_thread")]
+async fn net_write_channel_roundtrip() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // oneshot
+
+    let tmp = tempfile::tempdir().unwrap();
+    let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+    let app = router(state.clone());
+
+    async fn post_json(
+        app: &axum::Router,
+        uri: &str,
+        body: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    // Seed a project (store::create_project seeds path/name).
+    let dir = tmp.path().join("wt-proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (code, v) = post_json(
+        &app,
+        "/create_project",
+        &serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+
+    // 1. Invalid tier → 4xx; allow_all → 4xx (no write surface).
+    let (code, v) = post_json(
+        &app,
+        "/set_project_sandbox_net",
+        &serde_json::json!({ "id": id, "net": "bogus" }).to_string(),
+    )
+    .await;
+    assert_ne!(code, StatusCode::OK, "{v}");
+    let (code, v) = post_json(
+        &app,
+        "/set_project_sandbox_net",
+        &serde_json::json!({ "id": id, "net": "allow_all" }).to_string(),
+    )
+    .await;
+    assert_ne!(code, StatusCode::OK, "allow_all must be refused: {v}");
+
+    // 2. Propose ports (7456 must be refused with the conflict echo;
+    //    valid ports queue as pending).
+    let (code, v) = post_json(
+        &app,
+        "/propose_net_ports",
+        &serde_json::json!({ "id": id, "worktree_key": dir.to_string_lossy(), "ports": [3001, 7456], "source": "llm" })
+            .to_string(),
+    )
+    .await;
+    assert_ne!(code, StatusCode::OK, "daemon-port clamp must reject: {v}");
+    assert!(v.to_string().contains("7456"), "conflict port echoed: {v}");
+    let (code, _) = post_json(
+        &app,
+        "/propose_net_ports",
+        &serde_json::json!({ "id": id, "worktree_key": dir.to_string_lossy(), "ports": [3000, 3001], "source": "llm" })
+            .to_string(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    // 3. Confirm the snapshot → tier column flips, snapshot row lands,
+    //    proposal marks confirmed (read-back via get_project_net_state).
+    let (code, v) = post_json(
+        &app,
+        "/confirm_net_snapshot",
+        &serde_json::json!({ "id": id, "worktree_key": dir.to_string_lossy(), "ports": [3000, 3001] })
+            .to_string(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["tier"].as_str().unwrap(), "bind_only:3000,3001");
+    assert_eq!(v["snapshots"].as_array().unwrap().len(), 1);
+    assert_eq!(v["snapshots"][0]["ports"].as_str().unwrap(), "3000,3001");
+    assert_eq!(v["proposals"][0]["status"].as_str().unwrap(), "confirmed");
+
+    // 4. Clamp rejection on the confirm side too (belt + braces with
+    //    the read-side defensive clamp).
+    let (code, v) = post_json(
+        &app,
+        "/confirm_net_snapshot",
+        &serde_json::json!({ "id": id, "worktree_key": dir.to_string_lossy(), "ports": [7456] })
+            .to_string(),
+    )
+    .await;
+    assert_ne!(code, StatusCode::OK, "{v}");
+    assert!(v.to_string().contains("7456"));
+
+    // 5. Reject a fresh proposal → status flips, tier untouched.
+    let (code, _) = post_json(
+        &app,
+        "/propose_net_ports",
+        &serde_json::json!({ "id": id, "worktree_key": dir.to_string_lossy(), "ports": [5173], "source": "llm" })
+            .to_string(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let (code, v) = post_json(
+        &app,
+        "/reject_net_proposal",
+        &serde_json::json!({ "id": id, "worktree_key": dir.to_string_lossy() }).to_string(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["proposals"][0]["status"].as_str().unwrap(), "rejected");
+    assert_eq!(v["tier"].as_str().unwrap(), "bind_only:3000,3001");
 }

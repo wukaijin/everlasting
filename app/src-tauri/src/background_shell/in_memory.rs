@@ -29,8 +29,8 @@ use uuid::Uuid;
 use super::{
     now_ms, BackgroundShellError, BackgroundShellNotification, BackgroundShellOutcome,
     BackgroundShellRegistry, BackgroundShellStatus, BackgroundShellSummary, EscalationBlock,
-    EscalationOffer, MonotonicMs, ShellEventEmitter, ShellEventPayload, ShellExitTrigger,
-    EVENT_NAME,
+    EscalationOffer, MonotonicMs, ReadyState, ShellEventEmitter, ShellEventPayload,
+    ShellExitTrigger, EVENT_NAME,
 };
 
 /// Maximum number of pending completion notifications per chat
@@ -62,6 +62,21 @@ pub(crate) const SHELL_RETENTION_MS: u64 = 3_600_000;
 /// timestamp comparison over a small map (cost ≈ 0), and ±5min
 /// drift is imperceptible against the 1h retention.
 pub(crate) const SWEEP_INTERVAL_MS: u64 = 300_000;
+
+/// R5 (09-21-sandbox-net-bindonly): default readiness-probe window.
+/// 30s covers the slowest dev-server boot families (vite/next/
+/// spring-boot) short of pathological cold installs; decoupled from
+/// `max_runtime_ms` (a 24h dev server gets a 30s readiness verdict,
+/// not a 24h one). Expiry is a FAILURE signal (`TimedOut`) — never
+/// folded into success.
+pub(crate) const READY_PROBE_WINDOW_MS: u64 = 30_000;
+/// Probe cadence. 250ms balances attribution latency against
+/// `/proc` walk cost (the walk only runs after a successful
+/// connect, so idle polling is one TCP dial per tick).
+const READY_PROBE_POLL_MS: u64 = 250;
+/// Per-dial connect timeout — a blackholed address must not eat
+/// the poll cadence.
+const READY_PROBE_CONNECT_TIMEOUT_MS: u64 = 500;
 
 // C6 (08-30-c6-output-truncation): the spill threshold / preview
 // size / spill location now live in `tools::tool_output` — this
@@ -131,6 +146,13 @@ struct ShellEntry {
     /// gets its own copy as a parameter (captured before the spec is
     /// consumed by prepare/apply).
     origin_tool_use_id: Option<String>,
+    /// R5: the port being probed for readiness, bound ONCE at
+    /// `start()` — no setter, never re-read from tool input after
+    /// the entry exists (iron rule 3: bound to the spawn).
+    ready_port: Option<u16>,
+    /// R5: probe result state, written only by this entry's own
+    /// probe task (iron rule 4: only self-registered entries).
+    ready: ReadyState,
     state: ShellState,
     /// `Some` while the shell is running (the spawned task still
     /// owns the matching `Receiver`). Set to `None` by `kill()` /
@@ -369,6 +391,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         max_runtime_ms: Option<u64>,
         sandbox: Option<crate::sandbox::SandboxSpec>,
         origin_tool_use_id: Option<String>,
+        ready_port: Option<u16>,
     ) -> Result<String, BackgroundShellError> {
         // 1. Generate the shell id BEFORE spawning so the registry
         //    can record the entry even if spawn fails (the LLM still
@@ -444,6 +467,8 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                             started_at,
                             max_runtime_ms: runtime_ms,
                             origin_tool_use_id: origin_tool_use_id.clone(),
+                            ready_port: None,
+                            ready: ReadyState::Pending,
                             state: ShellState::Done {
                                 notification: notification.clone(),
                                 stdout: Vec::new(),
@@ -491,6 +516,14 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         } else {
             None
         };
+        // R9: same capture discipline for the net-enforcement fact —
+        // the spec is consumed above; the wait task's classify call
+        // needs the server-side conjunction input, not a re-derivation
+        // from the (forgeable) command output.
+        let net_enf = sandbox
+            .as_ref()
+            .map(|sp| sp.net_enforcement())
+            .unwrap_or(crate::sandbox::NetEnforcement::None);
 
         // 4. Insert the Running entry before spawning the task so
         //    a racing `status()` / `kill()` call sees a consistent
@@ -507,6 +540,8 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
                     started_at,
                     max_runtime_ms: runtime_ms,
                     origin_tool_use_id: origin_tool_use_id.clone(),
+                    ready_port,
+                    ready: ReadyState::Pending,
                     state: ShellState::Running { pid },
                     kill_tx: Some(kill_tx),
                 },
@@ -547,7 +582,25 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
             kill_rx,
             runtime_ms,
             escalation_origin,
+            net_enf,
         ));
+
+        // R5 readiness probe (opt-in): daemon-side observer, outside
+        // the sandbox by construction. The expected PGID is the
+        // child's own pid — RULE-E-002 made it the process-group
+        // leader, so any listener it spawned shares that PGID.
+        if let Some(port) = ready_port {
+            if let Some(pgid) = pid {
+                tokio::spawn(ready_probe_task(
+                    self.inner.clone(),
+                    session_id.to_string(),
+                    shell_id.clone(),
+                    port,
+                    pgid,
+                    READY_PROBE_WINDOW_MS,
+                ));
+            }
+        }
 
         Ok(shell_id)
     }
@@ -731,12 +784,14 @@ fn build_status_from_entry(entry: &ShellEntry) -> BackgroundShellStatus {
         ShellState::Running { .. } => {
             // Compute elapsed via monotonic now_ms() minus the
             // entry's started_at (both u64, no Instant arithmetic
-            // inside the registry lock).
+            // inside the registry lock). `ready` is Some ONLY for
+            // probe-configured entries (ready_port bound at start).
             let now = now_ms();
             let elapsed_ms = now.saturating_sub(entry.started_at);
             BackgroundShellStatus::Running {
                 started_at: entry.started_at,
                 elapsed_ms,
+                ready: entry.ready_port.map(|_| entry.ready.clone()),
             }
         }
         ShellState::Done {
@@ -928,7 +983,7 @@ fn push_notification_bounded(
 /// On any branch we read whatever stdout/stderr was buffered,
 /// capture the exit code, then write a single `ShellState::Done`
 /// entry + push a notification.
-#[allow(clippy::too_many_arguments)] // 8th arg = UI emitter snapshot (09-02-chat-task-panel); grouping would obscure the wait-task contract — same rationale as DEBT.md RULE-ARGS-001 sites
+#[allow(clippy::too_many_arguments)] // 8th arg = UI emitter snapshot (09-02-chat-task-panel), 10th = R9 net-enforcement fact (09-21-sandbox-net-bindonly); grouping would obscure the wait-task contract — same rationale as DEBT.md RULE-ARGS-001 sites
 async fn run_background_task(
     inner: Arc<Mutex<Inner>>,
     // UI event emitter snapshot (2026-09-02, task 09-02-chat-task-
@@ -945,6 +1000,10 @@ async fn run_background_task(
     // deliberate: an unsandboxed shell can never produce a sandbox
     // denial, so its origin would be dead weight here).
     escalation_origin: Option<String>,
+    // R9: which net enforcer the sandboxed spawn installed (captured
+    // at start from the spec). Network attribution is only legal
+    // under InetBlock — command output is never sufficient.
+    net_enf: crate::sandbox::NetEnforcement,
 ) {
     let sleep = tokio::time::sleep(std::time::Duration::from_millis(max_runtime_ms));
     tokio::pin!(sleep);
@@ -997,12 +1056,14 @@ async fn run_background_task(
     // servers) report via stdout with empty stderr — classify both
     // streams, and let the card's evidence line fall back to the
     // extracted stdout line (sandbox-executor.md §11a).
-    let escalation =
-        if trigger == ShellExitTrigger::Normal && outcome == BackgroundShellOutcome::Failed {
-            escalation_origin.and_then(|tool_use_id| {
-                let stderr_str = String::from_utf8_lossy(&stderr).into_owned();
-                let stdout_str = String::from_utf8_lossy(&stdout).into_owned();
-                crate::sandbox::classify_block(&stderr_str, &stdout_str).map(|kind| {
+    let escalation = if trigger == ShellExitTrigger::Normal
+        && outcome == BackgroundShellOutcome::Failed
+    {
+        escalation_origin.and_then(|tool_use_id| {
+            let stderr_str = String::from_utf8_lossy(&stderr).into_owned();
+            let stdout_str = String::from_utf8_lossy(&stdout).into_owned();
+            crate::sandbox::classify_block(&stderr_str, &stdout_str, exit_code, net_enf).map(
+                |kind| {
                     let evidence =
                         crate::agent::permissions::escalation::stderr_evidence_line(&stderr_str);
                     let evidence = if evidence.is_empty() {
@@ -1015,11 +1076,12 @@ async fn run_background_task(
                         block: EscalationBlock::from_sandbox(kind),
                         stderr_evidence: evidence,
                     }
-                })
-            })
-        } else {
-            None
-        };
+                },
+            )
+        })
+    } else {
+        None
+    };
 
     // Disk-spill for large outputs before we move into the lock.
     // C6: the registry's data_dir (production-only) keys the
@@ -1120,6 +1182,129 @@ async fn started_at_lookup(
         .get(&(session_id.to_string(), shell_id.to_string()))
         .map(|e| e.started_at)
         .unwrap_or_else(now_ms)
+}
+
+/// Iron rule 2 anchor: the probe target is ALWAYS the loopback
+/// literal — built from raw `IpAddr` bytes (never a string target,
+/// which would consult a resolver; never config / tool input).
+fn probe_addr(port: u16) -> std::net::SocketAddr {
+    std::net::SocketAddr::from((std::net::IpAddr::from([127u8, 0, 0, 1]), port))
+}
+
+/// R5 (09-21-sandbox-net-bindonly): the readiness probe task — one
+/// per `start()` call that passed `ready_port`. Four iron rules
+/// (design §4), enforced here:
+/// 1. **TCP connect-only**: the probe is a bare `TcpStream::connect`
+///    to a literal loopback `SocketAddr` — no HTTP, no DNS, no other
+///    protocol surface. The address is built from `IpAddr` bytes so
+///    no resolver is ever consulted (string targets would go through
+///    getaddrinfo).
+/// 2. **loopback literal**: `[127,0,0,1]` hardcoded — no config, no
+///    tool input.
+/// 3. **bound to the spawn**: `port`/`expected_pgid` are captured
+///    from the entry's own start; there is no re-read of any tool
+///    input, and the entry's `ready_port` has no setter.
+/// 4. **self-registered entries only**: the task writes exactly the
+///    `(session_id, shell_id)` entry it was spawned for.
+///
+/// Attribution: a successful connect is necessary but not
+/// sufficient — `/proc` must attribute the listener to
+/// `expected_pgid` (the shell's process group). A listener owned by
+/// another process group is a PORT COLLISION: state stays `Pending`
+/// (logged), never a false Ready. Expiry flips Pending → TimedOut
+/// (a failure signal; never success). Entry terminal/exited → stop
+/// probing, leave Pending (the exit itself is the story the LLM
+/// reads from the completion notification).
+///
+/// The ready result feeds UX only — it never enters sandbox spec /
+/// authorization decisions (probe ≠ authorization).
+async fn ready_probe_task(
+    inner: Arc<Mutex<Inner>>,
+    session_id: String,
+    shell_id: String,
+    port: u16,
+    expected_pgid: u32,
+    window_ms: u64,
+) {
+    // Iron rule 1+2: literal loopback SocketAddr — no resolver path.
+    let addr = probe_addr(port);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(window_ms);
+    loop {
+        // Terminal/absent entry → stop (Pending is the honest state;
+        // the completion notification tells the real story).
+        {
+            let g = inner.lock().await;
+            match g.shells.get(&(session_id.clone(), shell_id.clone())) {
+                None => return,
+                Some(e) => {
+                    if !matches!(e.state, ShellState::Running { .. }) {
+                        return;
+                    }
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let mut g = inner.lock().await;
+            if let Some(e) = g.shells.get_mut(&(session_id.clone(), shell_id.clone())) {
+                if e.ready == ReadyState::Pending {
+                    e.ready = ReadyState::TimedOut;
+                    tracing::info!(
+                        session_id = %session_id,
+                        shell_id = %shell_id,
+                        port,
+                        "ready probe: window expired without an attributed listener (timed_out)"
+                    );
+                }
+            }
+            return;
+        }
+        // Iron rule 1: connect-only dial, bounded.
+        let connected = tokio::time::timeout(
+            tokio::time::Duration::from_millis(READY_PROBE_CONNECT_TIMEOUT_MS),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false);
+        if connected {
+            // Attribution (blocking /proc reads — a handful of small
+            // files; the walk only runs after a successful connect).
+            let listeners = crate::procnet::find_listeners(port);
+            if let Some(info) = listeners.iter().find(|l| l.pgid == expected_pgid) {
+                let mut g = inner.lock().await;
+                if let Some(e) = g.shells.get_mut(&(session_id.clone(), shell_id.clone())) {
+                    if e.ready == ReadyState::Pending {
+                        e.ready = ReadyState::Ready {
+                            port,
+                            listener_pid: info.pid,
+                            comm: info.comm.clone(),
+                            at_ms: now_ms(),
+                        };
+                        tracing::info!(
+                            session_id = %session_id,
+                            shell_id = %shell_id,
+                            port,
+                            listener_pid = info.pid,
+                            comm = %info.comm,
+                            "ready probe: listener attributed to this shell's process group"
+                        );
+                    }
+                }
+                return;
+            } else if !listeners.is_empty() {
+                // Port collision: someone else's listener. Stay
+                // Pending — a false Ready would send the LLM probing
+                // a server that is not the one it started.
+                tracing::info!(
+                    session_id = %session_id,
+                    shell_id = %shell_id,
+                    port,
+                    "ready probe: port held by another process group (collision); staying pending"
+                );
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(READY_PROBE_POLL_MS)).await;
+    }
 }
 
 /// Subset of `tools::shell::kill_and_collect`'s return shape —
@@ -1224,6 +1409,7 @@ mod tests {
                 Some(10_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1281,6 +1467,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let spec = crate::sandbox::SandboxSpec {
             face: crate::sandbox::Face::ReadWrite,
+            net: crate::sandbox::policy::NetPolicy::Block,
             writable_roots: vec![wt.clone(), "/tmp".into()],
             exec_allow_roots: vec![
                 "/usr".into(),
@@ -1321,6 +1508,7 @@ mod tests {
                 Some(10_000),
                 Some(spec.clone()),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1340,6 +1528,7 @@ mod tests {
                 wt.clone(),
                 Some(10_000),
                 Some(spec.clone()),
+                None,
                 None,
             )
             .await
@@ -1375,6 +1564,7 @@ mod tests {
                 Some(10_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1406,6 +1596,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let spec = crate::sandbox::SandboxSpec {
             face: crate::sandbox::Face::ReadWrite,
+            net: crate::sandbox::policy::NetPolicy::Block,
             writable_roots: vec![wt.clone(), "/tmp".into()],
             exec_allow_roots: vec![
                 "/usr".into(),
@@ -1428,6 +1619,7 @@ mod tests {
                 Some(10_000),
                 Some(spec),
                 Some("tu-orig-x".to_string()),
+                None,
             )
             .await
             .unwrap();
@@ -1476,6 +1668,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let spec = crate::sandbox::SandboxSpec {
             face: crate::sandbox::Face::ReadWrite,
+            net: crate::sandbox::policy::NetPolicy::Block,
             writable_roots: vec![wt.clone(), "/tmp".into()],
             exec_allow_roots: vec![
                 "/usr".into(),
@@ -1499,6 +1692,7 @@ mod tests {
                 Some(10_000),
                 None,
                 Some("tu-plain".to_string()),
+                None,
             )
             .await
             .unwrap();
@@ -1511,6 +1705,7 @@ mod tests {
                 wt.clone(),
                 Some(10_000),
                 Some(spec),
+                None,
                 None,
             )
             .await
@@ -1610,6 +1805,7 @@ mod tests {
                 Some(5000),
                 None,
                 None,
+                None,
             )
             .await
             .expect("start ok");
@@ -1645,6 +1841,7 @@ mod tests {
                 Some(30_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1677,6 +1874,7 @@ mod tests {
                 "echo hello-from-bg && echo stderr-msg >&2".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
                 None,
                 None,
             )
@@ -1721,6 +1919,7 @@ mod tests {
                 Some(120_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1748,6 +1947,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
                 None,
                 None,
             )
@@ -1790,6 +1990,7 @@ mod tests {
                 Some(30_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1813,6 +2014,7 @@ mod tests {
                 Some(60_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1824,6 +2026,7 @@ mod tests {
                 Some(60_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1833,6 +2036,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
                 None,
                 None,
             )
@@ -1881,6 +2085,7 @@ mod tests {
                     "true".to_string(),
                     tmp.path().to_path_buf(),
                     Some(5000),
+                    None,
                     None,
                     None,
                 )
@@ -1942,6 +2147,7 @@ mod tests {
                 "true".to_string(),
                 tmp.path().to_path_buf(),
                 Some(5000),
+                None,
                 None,
                 None,
             )
@@ -2014,6 +2220,7 @@ mod tests {
                 Some(60_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -2066,6 +2273,7 @@ mod tests {
                 Some(60_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -2076,6 +2284,7 @@ mod tests {
                 "echo hi".to_string(),
                 tmp.path().to_path_buf(),
                 Some(10_000),
+                None,
                 None,
                 None,
             )
@@ -2099,6 +2308,7 @@ mod tests {
                 Some(10_000),
                 None,
                 None,
+                None,
             )
             .await;
         assert!(
@@ -2112,6 +2322,7 @@ mod tests {
                 "sleep 30".to_string(),
                 tmp.path().to_path_buf(),
                 Some(60_000),
+                None,
                 None,
                 None,
             )
@@ -2177,6 +2388,7 @@ mod tests {
                 "echo hi-from-events".to_string(),
                 tmp.path().to_path_buf(),
                 Some(10_000),
+                None,
                 None,
                 None,
             )
@@ -2274,6 +2486,7 @@ mod tests {
                 Some(10_000),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -2299,5 +2512,274 @@ mod tests {
             log_b.lock().unwrap().is_empty(),
             "second emitter must be ignored"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R5 readiness probe tests (09-21-sandbox-net-bindonly, AC4)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests_ready {
+    use super::*;
+    use std::time::Duration;
+
+    /// Iron rule 2 anchor: the probe target is the loopback literal,
+    /// built without any resolver path (an `IpAddr`-based SocketAddr
+    /// can never consult DNS).
+    #[test]
+    fn probe_addr_is_loopback_literal() {
+        let a = probe_addr(3001);
+        assert_eq!(a.ip(), std::net::IpAddr::from([127u8, 0, 0, 1]));
+        assert_eq!(a.port(), 3001);
+        assert!(a.is_ipv4());
+    }
+
+    fn pick_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| {
+                let p = l.local_addr()?.port();
+                drop(l);
+                Ok(p)
+            })
+            .unwrap_or(45711)
+    }
+
+    fn has_python3() -> bool {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("command -v python3")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// AC4 row 1: a real listener in the shell's own process group →
+    /// `Ready` with the attributed listener pid + comm. End-to-end
+    /// through `start()` (iron rule 3: the port is bound at spawn —
+    /// the Running status exposes the probe state, proving the
+    /// binding).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ready_probe_reports_ready_with_attribution() {
+        if !has_python3() {
+            eprintln!("SKIP: python3 unavailable");
+            return;
+        }
+        let port = pick_port();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let shell_id = reg
+            .start(
+                "sess-ready",
+                format!("python3 -m http.server {port} --bind 127.0.0.1"),
+                std::env::temp_dir(),
+                Some(10_000),
+                None,
+                None,
+                Some(port),
+            )
+            .await
+            .unwrap();
+        // Poll for Ready (python boots in well under the 30s window).
+        let mut verdict = None;
+        for _ in 0..120 {
+            if let Ok(BackgroundShellStatus::Running { ready: Some(r), .. }) =
+                reg.status("sess-ready", &shell_id).await
+            {
+                if r != ReadyState::Pending {
+                    verdict = Some(r);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let _ = reg.kill("sess-ready", &shell_id).await;
+        match verdict.expect("probe must reach a terminal state") {
+            ReadyState::Ready {
+                port: p,
+                listener_pid,
+                comm,
+                ..
+            } => {
+                assert_eq!(p, port);
+                assert!(listener_pid > 0);
+                assert!(comm.contains("python"), "comm: {comm}");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+    }
+
+    /// AC4 row 2: a listener owned by ANOTHER process group (port
+    /// collision) must never report Ready — the probe stays Pending
+    /// and expires TimedOut. Direct task-level test with a short
+    /// window (the const 30s default is exercised in row 1's path).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ready_probe_collision_never_ready() {
+        if !has_python3() {
+            eprintln!("SKIP: python3 unavailable");
+            return;
+        }
+        let port = pick_port();
+        // An external listener OUTSIDE any registry entry — spawned
+        // by the test process as its own group leader (pgid = its
+        // pid), so attribution against the fake shell pgid below
+        // must fail.
+        let mut squatter = std::process::Command::new("python3")
+            .args([
+                "-m",
+                "http.server",
+                &port.to_string(),
+                "--bind",
+                "127.0.0.1",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // Wait until the squatter actually listens.
+        for _ in 0..80 {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let reg = InMemoryBackgroundShellRegistry::new();
+        // A Running entry with a pgid that can never own the port.
+        // Insert manually: the probe task contract is entry-keyed.
+        let inner = reg.inner.clone();
+        {
+            let mut g = inner.lock().await;
+            g.shells.insert(
+                ("sess-coll".to_string(), "bsh_coll".to_string()),
+                ShellEntry {
+                    command: "fake".to_string(),
+                    cwd: std::env::temp_dir(),
+                    started_at: now_ms(),
+                    max_runtime_ms: 60_000,
+                    origin_tool_use_id: None,
+                    ready_port: Some(port),
+                    ready: ReadyState::Pending,
+                    state: ShellState::Running { pid: Some(999_999) },
+                    kill_tx: None,
+                },
+            );
+            // Iron rule 4 anchor: a second, unrelated entry that must
+            // stay untouched by the first entry's probe.
+            g.shells.insert(
+                ("sess-coll".to_string(), "bsh_other".to_string()),
+                ShellEntry {
+                    command: "other".to_string(),
+                    cwd: std::env::temp_dir(),
+                    started_at: now_ms(),
+                    max_runtime_ms: 60_000,
+                    origin_tool_use_id: None,
+                    ready_port: None,
+                    ready: ReadyState::Pending,
+                    state: ShellState::Running { pid: Some(999_998) },
+                    kill_tx: None,
+                },
+            );
+        }
+        ready_probe_task(
+            inner.clone(),
+            "sess-coll".to_string(),
+            "bsh_coll".to_string(),
+            port,
+            999_999,
+            600,
+        )
+        .await;
+        let _ = squatter.kill();
+        let _ = squatter.wait();
+
+        let ready_coll = {
+            let g = inner.lock().await;
+            g.shells
+                .get(&("sess-coll".to_string(), "bsh_coll".to_string()))
+                .map(|e| e.ready.clone())
+        };
+        let ready_other = {
+            let g = inner.lock().await;
+            g.shells
+                .get(&("sess-coll".to_string(), "bsh_other".to_string()))
+                .map(|e| e.ready.clone())
+        };
+        // Collision: never Ready; window expiry → TimedOut.
+        assert_eq!(
+            ready_coll,
+            Some(ReadyState::TimedOut),
+            "collision must not be Ready"
+        );
+        // Iron rule 4: the unrelated entry was never written.
+        assert_eq!(ready_other, Some(ReadyState::Pending));
+    }
+
+    /// AC4 row 3: no listener at all → Pending through the window,
+    /// then TimedOut (a FAILURE signal — the shell may still run).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ready_probe_timeout_without_listener() {
+        let port = pick_port();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let inner = reg.inner.clone();
+        {
+            let mut g = inner.lock().await;
+            g.shells.insert(
+                ("sess-to".to_string(), "bsh_to".to_string()),
+                ShellEntry {
+                    command: "sleep".to_string(),
+                    cwd: std::env::temp_dir(),
+                    started_at: now_ms(),
+                    max_runtime_ms: 60_000,
+                    origin_tool_use_id: None,
+                    ready_port: Some(port),
+                    ready: ReadyState::Pending,
+                    state: ShellState::Running { pid: Some(424_242) },
+                    kill_tx: None,
+                },
+            );
+        }
+        ready_probe_task(
+            inner.clone(),
+            "sess-to".to_string(),
+            "bsh_to".to_string(),
+            port,
+            424_242,
+            400,
+        )
+        .await;
+        let ready = {
+            let g = inner.lock().await;
+            g.shells
+                .get(&("sess-to".to_string(), "bsh_to".to_string()))
+                .map(|e| e.ready.clone())
+        };
+        assert_eq!(ready, Some(ReadyState::TimedOut));
+    }
+
+    /// Iron rule 3 anchor: `ready_port` is bound at `start()` — a
+    /// Running status exposes the probe state (Some) only for the
+    /// entry that opted in; a legacy start exposes `None`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ready_state_bound_at_spawn() {
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let id_plain = reg
+            .start(
+                "sess-bind",
+                "sleep 2".to_string(),
+                std::env::temp_dir(),
+                Some(10_000),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        match reg.status("sess-bind", &id_plain).await.unwrap() {
+            BackgroundShellStatus::Running { ready, .. } => {
+                assert!(ready.is_none(), "no probe configured → ready None")
+            }
+            other => panic!("expected Running, got {other:?}"),
+        }
+        let _ = reg.kill("sess-bind", &id_plain).await;
     }
 }

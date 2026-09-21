@@ -72,6 +72,10 @@ mod git;
 mod llm;
 mod memory;
 mod projects;
+// /proc TCP listener 归因 (2026-09-21, task `09-21-sandbox-net-bindonly`
+// R5): 就绪探测的 PGID 归因机器;后续 AllowAll capability token 的血统
+// 拒授复用同一实现,故独立成模块。
+mod procnet;
 mod resource_loader;
 // P3b 执行期沙盒 (2026-08-31, task `08-31-a2-p3b-sandbox-executor`):
 // Landlock + seccomp 执行器,ReadOnly 档 shell 命令的限损层。crate 私有:
@@ -465,6 +469,11 @@ pub fn run() {
             commands::projects::update_project_path,
             commands::projects::update_project_name,
             commands::projects::update_project_sandbox_policy,
+            commands::projects::set_project_sandbox_net,
+            commands::projects::propose_net_ports,
+            commands::projects::confirm_net_snapshot,
+            commands::projects::reject_net_proposal,
+            commands::projects::get_project_net_state,
             commands::projects::hide_project,
             commands::projects::unhide_project,
             // 2026-09-02 目录浏览模态框:「添加项目」全模式统一的

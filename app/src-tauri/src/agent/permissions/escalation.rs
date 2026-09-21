@@ -220,6 +220,9 @@ fn escalation_reason(kind: SandboxBlockKind, command: &str, stderr: &str) -> Str
     let cause = match kind {
         SandboxBlockKind::Write => "an out-of-face write was blocked by the sandbox",
         SandboxBlockKind::Network => "outbound network was blocked by the sandbox",
+        SandboxBlockKind::ExecFace => {
+            "the sandbox exec face missed the program's real location (exec denied)"
+        }
     };
     format!(
         "The command was stopped because {cause}. Approving re-runs this exact command \

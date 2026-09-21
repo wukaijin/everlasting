@@ -94,7 +94,7 @@ async fn resolve_one(note: &BackgroundShellNotification, env: &EscalationEnv<'_>
     // perm_ctx.mode is THE turn mode (same init-time source the
     // foreground escalation gate reads via ToolContext.mode).
     if env.perm_ctx.mode == Mode::Plan {
-        return plain_text(note) + &guidance_suffix(&offer.stderr_evidence, env.perm_ctx.mode);
+        return plain_text(note) + &guidance_suffix(offer.block, env.perm_ctx.mode);
     }
 
     // Gate b: the entry was swept between drain and lookup (1h
@@ -158,7 +158,7 @@ async fn resolve_one(note: &BackgroundShellNotification, env: &EscalationEnv<'_>
     if !approved {
         let mut text = plain_text(note);
         text.push_str("\n[escalation] 已向用户请求不沙盒重跑,未获批准(拒绝/超时)。");
-        text.push_str(&guidance_suffix(&offer.stderr_evidence, env.perm_ctx.mode));
+        text.push_str(&guidance_suffix(offer.block, env.perm_ctx.mode));
         return text;
     }
 
@@ -173,6 +173,9 @@ async fn resolve_one(note: &BackgroundShellNotification, env: &EscalationEnv<'_>
             source.cwd,
             Some(source.max_runtime_ms),
             None,
+            None,
+            // Reruns never probe readiness (one-shot already-running
+            // commands; the original call's ready_port does not carry).
             None,
         )
         .await
@@ -205,21 +208,24 @@ async fn resolve_one(note: &BackgroundShellNotification, env: &EscalationEnv<'_>
 /// Mode-aware sandbox guidance appended after a `\n` (same
 /// append-only discipline as the foreground tool output).
 ///
-/// The input is the offer's pre-extracted single evidence line (which
-/// may come from stdout for listen-class denials, 2026-09-21); both
-/// classify slots receive it so whichever side's marker it carries,
-/// stderr's or stdout's, still routes to the right variant.
-fn guidance_suffix(stderr_evidence: &str, mode: Mode) -> String {
-    match crate::sandbox::failure_guidance(stderr_evidence, stderr_evidence, mode) {
-        Some(g) => format!("\n{g}"),
-        None => String::new(),
-    }
+/// 2026-09-21 (R7/R9): the offer already carries the CLASSIFIED kind
+/// (baked with the exit code + net-enforcement conjunction at
+/// completion time) — deriving guidance from the kind directly is
+/// both correct (no re-classification from a single evidence line,
+/// which lost the exit-code input) and unfakeable (the kind is a
+/// server-side fact, the evidence line is command output).
+fn guidance_suffix(block: EscalationBlock, mode: Mode) -> String {
+    format!(
+        "\n{}",
+        crate::sandbox::failure_guidance_for_kind(block.to_sandbox(), mode)
+    )
 }
 
 fn block_label(block: EscalationBlock) -> &'static str {
     match block {
         EscalationBlock::Write => "写面外",
         EscalationBlock::Network => "断网",
+        EscalationBlock::ExecFace => "exec 面缺口",
     }
 }
 
@@ -310,6 +316,7 @@ mod tests {
             None,
             None,
             origin.map(str::to_string),
+            None,
         )
         .await
         .unwrap()
@@ -627,8 +634,7 @@ mod tests {
         let old_id = seed_shell(&h.registry, session, "echo p3d-plan", Some("tu-orig-5")).await;
         let n = note(&old_id, 1, Some(offer("tu-orig-5", EscalationBlock::Write)));
         let expected_base = plain_text(&n);
-        let expected_guidance =
-            guidance_suffix(&n.escalation.as_ref().unwrap().stderr_evidence, Mode::Plan);
+        let expected_guidance = guidance_suffix(n.escalation.as_ref().unwrap().block, Mode::Plan);
 
         let texts = resolve_all(&[n], &env(&h, session, Mode::Plan)).await;
 
@@ -680,6 +686,7 @@ mod tests {
                 None,
                 None,
                 Some("tu-orig-6".to_string()),
+                None,
             )
             .await
             .unwrap();

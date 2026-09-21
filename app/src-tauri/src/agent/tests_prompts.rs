@@ -72,6 +72,7 @@ fn make_project_row(is_git_repo: bool) -> projects::ProjectRow {
         hidden: false,
         metadata: None,
         sandbox_policy: "readwrite".to_string(),
+        sandbox_net: None,
     }
 }
 

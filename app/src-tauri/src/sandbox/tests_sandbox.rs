@@ -97,15 +97,19 @@ fn abi_libc_syscall_numbers_match_arch_uapi() {
 #[test]
 fn abi_struct_layouts() {
     // landlock_path_beneath_attr is packed in C (12 bytes, fields @0/@8);
-    // landlock_ruleset_attr is one u64. Field OFFSETS are what the
-    // kernel reads — assert them via pointer math.
+    // landlock_ruleset_attr is two u64 (fs @0, net @8 — ABI v4 shape).
+    // Field OFFSETS are what the kernel reads — assert them via pointer
+    // math.
     let ra = super::landlock::RulesetAttr {
         handled_access_fs: 0xdead_beef,
+        handled_access_net: 0x0bad_f00d,
     };
     let ra_ptr = &ra as *const _ as *const u8;
     unsafe {
         assert_eq!(ra_ptr.add(0).cast::<u64>().read(), 0xdead_beef);
-        assert_eq!(std::mem::size_of::<super::landlock::RulesetAttr>(), 8);
+        assert_eq!(ra_ptr.add(8).cast::<u64>().read(), 0x0bad_f00d);
+        assert_eq!(std::mem::size_of::<super::landlock::RulesetAttr>(), 16);
+        assert_eq!(super::landlock::RulesetAttr::FS_ONLY_SIZE, 8);
     }
     let pa = super::landlock::PathBeneathAttr {
         allowed_access: 0x1122_3344_5566_7788,
@@ -281,7 +285,13 @@ fn policy_ctx(tmp: &tempfile::TempDir) -> crate::tools::ToolContext {
 async fn spec_roots_follow_server_side_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
-    let spec = super::policy::build_spec(&ctx, Some("sess-1"), vec![], Face::ReadWrite);
+    let spec = super::policy::build_spec(
+        &ctx,
+        Some("sess-1"),
+        vec![],
+        Face::ReadWrite,
+        super::policy::NetPolicy::Block,
+    );
     // Writable: worktree (NOT the session cwd subdir — the worktree
     // is the damage-limitation boundary) + /tmp + spill dir.
     assert_eq!(spec.writable_roots.len(), 3);
@@ -319,7 +329,13 @@ async fn spec_roots_follow_server_side_sources() {
 async fn spec_readonly_face_excludes_worktree_write_keeps_exec() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
-    let spec = super::policy::build_spec(&ctx, Some("sess-1"), vec![], Face::ReadOnly);
+    let spec = super::policy::build_spec(
+        &ctx,
+        Some("sess-1"),
+        vec![],
+        Face::ReadOnly,
+        super::policy::NetPolicy::Block,
+    );
     // Writable: /tmp + spill only — no worktree.
     assert_eq!(spec.writable_roots.len(), 2);
     assert!(!spec.writable_roots.contains(&ctx.worktree_path));
@@ -336,18 +352,35 @@ async fn spec_readonly_face_excludes_worktree_write_keeps_exec() {
         spec.exec_allow_roots.contains(&ctx.worktree_path),
         "readonly face must keep worktree EXECUTE"
     );
-    // Face rides the spec for the audit summary.
-    assert_eq!(
-        spec.summary(),
-        format!(
-            "landlock:face=ro exec_roots={} writable_roots=2 extra=0 devices={}; seccomp:inet_block",
+    // Face rides the spec for the audit summary. 2026-09-21: the
+    // additive `net=` segment (R8) precedes the enforcer segment —
+    // for the Block tier the seccomp marker is unchanged; F1 appends
+    // the canonical exec-root list (variable-length → prefix-pinned
+    // rather than full-equality).
+    let summary = spec.summary();
+    assert!(
+        summary.starts_with(&format!(
+            "landlock:face=ro exec_roots={} writable_roots=2 extra=0 devices={}; net=block; seccomp:inet_block; exec_roots_canonical=[",
             spec.exec_allow_roots.len(),
             DEVICE_WRITE_PATHS.len()
-        )
+        )),
+        "{summary}"
+    );
+    // The canonical list carries real directories (F1/AC5) — the
+    // worktree is in the face and appears canonically.
+    assert!(
+        summary.contains(&ctx.worktree_path.display().to_string()),
+        "worktree must appear in the canonical exec list: {summary}"
     );
     // The ReadWrite face summary says rw (both spawn paths audit the
     // same shape — AC8 face observability).
-    let rw = super::policy::build_spec(&ctx, Some("sess-1"), vec![], Face::ReadWrite);
+    let rw = super::policy::build_spec(
+        &ctx,
+        Some("sess-1"),
+        vec![],
+        Face::ReadWrite,
+        super::policy::NetPolicy::Block,
+    );
     assert!(rw.summary().contains("face=rw"));
     assert!(rw.summary().contains("writable_roots=3"));
 }
@@ -357,7 +390,13 @@ async fn spec_merges_extra_writable_without_duplicates() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
     let extra = vec![PathBuf::from("/opt/data"), PathBuf::from("/tmp")];
-    let spec = super::policy::build_spec(&ctx, Some("s"), extra, Face::ReadWrite);
+    let spec = super::policy::build_spec(
+        &ctx,
+        Some("s"),
+        extra,
+        Face::ReadWrite,
+        super::policy::NetPolicy::Block,
+    );
     assert!(spec.writable_roots.contains(&PathBuf::from("/opt/data")));
     // /tmp already a writable root → not duplicated.
     assert_eq!(
@@ -378,8 +417,20 @@ async fn spec_ignores_command_content_by_construction() {
     // only on windows; compare directly).
     let tmp = tempfile::tempdir().unwrap();
     let ctx = policy_ctx(&tmp);
-    let a = super::policy::build_spec(&ctx, Some("s"), vec![], Face::ReadWrite);
-    let b = super::policy::build_spec(&ctx, Some("s"), vec![], Face::ReadWrite);
+    let a = super::policy::build_spec(
+        &ctx,
+        Some("s"),
+        vec![],
+        Face::ReadWrite,
+        super::policy::NetPolicy::Block,
+    );
+    let b = super::policy::build_spec(
+        &ctx,
+        Some("s"),
+        vec![],
+        Face::ReadWrite,
+        super::policy::NetPolicy::Block,
+    );
     assert_eq!(a, b);
 }
 
@@ -406,6 +457,7 @@ fn device_write_paths_match_spike_recipe() {
 fn cap_ok() -> Capability {
     Capability {
         landlock: true,
+        landlock_net: true,
         seccomp: true,
     }
 }
@@ -426,6 +478,7 @@ fn resolve_policy_full_matrix() {
             // Row 1: capability fail → Off everywhere (fail-open).
             let broken = Capability {
                 landlock: true,
+                landlock_net: false,
                 seccomp: false,
             };
             assert_eq!(super::resolve_policy(mode, tier, true, broken), Policy::Off);
@@ -470,6 +523,343 @@ fn resolve_policy_full_matrix() {
                 "mode={mode:?} tier={tier:?}"
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NetPolicy (09-21-sandbox-net-bindonly, R1/R4 — parse / derivation /
+// snapshot-keyed effective read)
+// ---------------------------------------------------------------------------
+
+use super::policy::{BindSet, NetPolicy};
+
+/// AC2: the three serialized shapes parse and roundtrip through
+/// `as_str` (bind_only emits ports sorted — BTreeSet order).
+#[test]
+fn net_policy_parse_three_shapes_roundtrip() {
+    assert_eq!(NetPolicy::parse("block"), Some(NetPolicy::Block));
+    assert_eq!(NetPolicy::parse("allow_all"), Some(NetPolicy::AllowAll));
+    let bind = NetPolicy::parse("bind_only:3001,3000").unwrap();
+    match &bind {
+        NetPolicy::BindOnly(set) => {
+            assert_eq!(
+                set.ports().iter().copied().collect::<Vec<_>>(),
+                vec![3000, 3001]
+            );
+        }
+        other => panic!("expected BindOnly, got {other:?}"),
+    }
+    assert_eq!(bind.as_str(), "bind_only:3000,3001");
+    assert_eq!(NetPolicy::Block.as_str(), "block");
+    assert_eq!(NetPolicy::AllowAll.as_str(), "allow_all");
+}
+
+/// AC2 / R1 fail-closed: every malformed shape → None (callers
+/// degrade to Block + warn). Bare `bind_only` without ports is
+/// deliberately invalid — an empty snapshot authorizes nothing.
+#[test]
+fn net_policy_parse_fail_closed() {
+    let bad = [
+        "",
+        "block ",
+        "BLOCK",
+        "bind_only",       // no ports segment
+        "bind_only:",      // empty ports
+        "bind_only:0",     // port 0
+        "bind_only:65536", // out of u16
+        "bind_only:-1",
+        "bind_only:80,,443",
+        "bind_only:80, 443",
+        "bind_only:80;443",
+        "Bind_Only:80",
+        "readwrite", // file-tier value must not parse as net tier
+        "off",
+    ];
+    for s in bad {
+        assert_eq!(NetPolicy::parse(s), None, "must fail closed: {s:?}");
+    }
+}
+
+/// Sanity cap: > MAX_BIND_PORTS ports → None (runaway list guard).
+#[test]
+fn net_policy_port_count_cap() {
+    let over: Vec<String> = (1..=33).map(|p| p.to_string()).collect();
+    assert_eq!(
+        NetPolicy::parse(&format!("bind_only:{}", over.join(","))),
+        None
+    );
+    let at: Vec<String> = (1..=32).map(|p| p.to_string()).collect();
+    assert!(NetPolicy::parse(&format!("bind_only:{}", at.join(","))).is_some());
+}
+
+/// AC2: connect derived set = {80,443} ∪ bind minus daemon ports;
+/// bind clamps the same way. 7456 must never be reachable.
+#[test]
+fn net_connect_derived_set_and_daemon_clamp() {
+    let set = BindSet::from_iter_ports([7456, 3000, 3001]);
+    let connect = NetPolicy::connect_ports(&set);
+    assert!(connect.contains(&80) && connect.contains(&443));
+    assert!(connect.contains(&3000) && connect.contains(&3001));
+    assert!(!connect.contains(&7456), "daemon port must be clamped out");
+    let bind = NetPolicy::bind_ports_clamped(&set);
+    assert_eq!(bind.iter().copied().collect::<Vec<_>>(), vec![3000, 3001]);
+}
+
+/// R4 snapshot-keyed effective read (AC2: 快照键含 worktree 路径,
+/// snapshot ports WIN over the column, missing/malformed → Block):
+/// 1. column=bind_only + no snapshot row → Block;
+/// 2. snapshot row keyed at a DIFFERENT worktree → Block (branch /
+///    re-checkout isolation);
+/// 3. snapshot row at THIS worktree with different ports →
+///    BindOnly(snapshot ports), snapshot is the authorization truth;
+/// 4. malformed snapshot ports → Block;
+/// 5. column=allow_all passes through without any snapshot;
+/// 6. NULL column → Block; missing session → Block.
+#[tokio::test]
+async fn net_effective_policy_snapshot_keyed() {
+    let pool = policy_pool("proj-net", PSP::ReadWrite, "sess-net").await;
+    let tmp = tempfile::tempdir().unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir_all(&wt).unwrap();
+
+    sqlx::query("UPDATE projects SET sandbox_net = 'bind_only:3001' WHERE id = 'proj-net'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // 1. No snapshot → Block.
+    assert_eq!(
+        super::policy::read_effective_net_policy(&pool, "sess-net", &wt).await,
+        NetPolicy::Block
+    );
+
+    // 2. Snapshot for a different worktree key → still Block.
+    sqlx::query(
+        "INSERT INTO project_net_snapshots (project_id, worktree_key, ports, confirmed_by, confirmed_at)          VALUES ('proj-net', '/other/worktree', '9999', 'op', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        super::policy::read_effective_net_policy(&pool, "sess-net", &wt).await,
+        NetPolicy::Block
+    );
+
+    // 3. Snapshot at THIS worktree (canonicalized key), ports differ
+    //    from the column → snapshot wins.
+    let key = super::policy::worktree_key(&wt);
+    sqlx::query(
+        "INSERT INTO project_net_snapshots (project_id, worktree_key, ports, confirmed_by, confirmed_at)          VALUES ('proj-net', ?, '3000,3001', 'op', 0)",
+    )
+    .bind(&key)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let eff = super::policy::read_effective_net_policy(&pool, "sess-net", &wt).await;
+    match &eff {
+        NetPolicy::BindOnly(set) => {
+            assert_eq!(
+                set.ports().iter().copied().collect::<Vec<_>>(),
+                vec![3000, 3001]
+            );
+        }
+        other => panic!("expected BindOnly from snapshot, got {other:?}"),
+    }
+
+    // 4. Malformed snapshot ports → Block (fail-closed, no partial).
+    sqlx::query("UPDATE project_net_snapshots SET ports = 'oops' WHERE project_id = 'proj-net' AND worktree_key = ?")
+        .bind(&key)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        super::policy::read_effective_net_policy(&pool, "sess-net", &wt).await,
+        NetPolicy::Block
+    );
+
+    // 5. allow_all passes through without consulting snapshots.
+    sqlx::query("UPDATE projects SET sandbox_net = 'allow_all' WHERE id = 'proj-net'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        super::policy::read_effective_net_policy(&pool, "sess-net", &wt).await,
+        NetPolicy::AllowAll
+    );
+
+    // 6. NULL column → Block; unknown session → Block.
+    sqlx::query("UPDATE projects SET sandbox_net = NULL WHERE id = 'proj-net'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        super::policy::read_effective_net_policy(&pool, "sess-net", &wt).await,
+        NetPolicy::Block
+    );
+    assert_eq!(
+        super::policy::read_effective_net_policy(&pool, "no-such-session", &wt).await,
+        NetPolicy::Block
+    );
+}
+
+/// AC1: the default spec (no session net column) carries Block — the
+/// incumbent semantics — so the spec plumbing itself cannot change
+/// Block-tier behavior.
+#[tokio::test]
+async fn net_default_spec_carries_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = policy_ctx(&tmp);
+    let spec = super::policy::build_spec(
+        &ctx,
+        Some("sess-net-default"),
+        vec![],
+        Face::ReadWrite,
+        NetPolicy::Block,
+    );
+    assert_eq!(spec.net, NetPolicy::Block);
+}
+
+// ---------------------------------------------------------------------------
+// NetPolicy enforcement (09-21-sandbox-net-bindonly, R2/R3 — ABI v4
+// constants, three-state assembly, summary, degrade path)
+// ---------------------------------------------------------------------------
+
+/// Trap 1 discipline for the ABI v4 net constants: pinned against
+/// the kernel UAPI (`linux/landlock.h`): rule type 2, bits 1<<13 /
+/// 1<<14, struct layouts by size/offset.
+#[test]
+fn abi_net_constants() {
+    use super::landlock::{
+        net_bits, NetPortAttr, RulesetAttr, HANDLED_ACCESS_NET, LANDLOCK_RULE_NET_PORT,
+    };
+    assert_eq!(LANDLOCK_RULE_NET_PORT, 2);
+    assert_eq!(net_bits::BIND_TCP, 1 << 13);
+    assert_eq!(net_bits::CONNECT_TCP, 1 << 14);
+    assert_eq!(HANDLED_ACCESS_NET, (1 << 13) | (1 << 14));
+    // RulesetAttr: 16 bytes (u64 fs + u64 net), FS_ONLY_SIZE = 8.
+    assert_eq!(std::mem::size_of::<RulesetAttr>(), 16);
+    assert_eq!(RulesetAttr::FS_ONLY_SIZE, 8);
+    // NetPortAttr: u64 allowed_access + u16 port, padded to 16, port
+    // at offset 8 (repr(C) matches the C layout the kernel reads).
+    assert_eq!(std::mem::size_of::<NetPortAttr>(), 16);
+    let attr = NetPortAttr {
+        allowed_access: 5,
+        port: 3001,
+    };
+    let bytes = unsafe { std::slice::from_raw_parts(&attr as *const NetPortAttr as *const u8, 16) };
+    assert_eq!(u64::from_le_bytes(bytes[0..8].try_into().unwrap()), 5);
+    assert_eq!(u16::from_le_bytes(bytes[8..10].try_into().unwrap()), 3001);
+}
+
+/// Trap 2 discipline, net side: both NetAccessSet constants are
+/// strict subsets of HANDLED_ACCESS_NET (no raw constructor exists).
+#[test]
+fn net_access_set_subsets_of_handled() {
+    use super::landlock::{NetAccessSet, HANDLED_ACCESS_NET};
+    assert_eq!(NetAccessSet::BIND_TCP.bits(), 1 << 13);
+    assert_eq!(NetAccessSet::CONNECT_TCP.bits(), 1 << 14);
+    assert_eq!(HANDLED_ACCESS_NET & NetAccessSet::BIND_TCP.bits(), 1 << 13);
+    assert_eq!(
+        HANDLED_ACCESS_NET & NetAccessSet::CONNECT_TCP.bits(),
+        1 << 14
+    );
+}
+
+/// R2/AC2: prepare() assembles exactly one net enforcer per tier —
+/// and only ONE kind of net artifact ever coexists with the file
+/// rules. On kernels without ABI v4 (this WSL2 6.6 = ABI 3) the
+/// BindOnly tier degrades to the Block variant at prepare() entry
+/// (R3) — asserted live here; on ABI ≥4 kernels the real attr arrays
+/// are asserted instead. Both branches deterministic per machine.
+#[cfg(target_os = "linux")]
+#[test]
+fn prepared_net_three_states_and_degrade() {
+    let cap = Capability::probe();
+    if !cap.ok() {
+        eprintln!("SKIP: Landlock/seccomp unavailable on this kernel");
+        return;
+    }
+    let wt = std::env::temp_dir();
+    let spec_for = |net: super::policy::NetPolicy| super::SandboxSpec {
+        face: super::Face::ReadWrite,
+        net,
+        writable_roots: vec![wt.clone()],
+        exec_allow_roots: vec!["/usr".into(), "/bin".into(), "/lib".into(), "/lib64".into()],
+        extra_writable: vec![],
+    };
+
+    // Block: the incumbent 8-instruction program inside the variant.
+    let p = super::prepare(&spec_for(super::policy::NetPolicy::Block)).unwrap();
+    match &p.data.net {
+        super::PreparedNet::Block(bpf) => assert_eq!(bpf.len(), 8, "incumbent filter shape"),
+        other => panic!("Block tier must carry the seccomp variant, got {other:?}"),
+    }
+
+    // AllowAll: unit variant, no enforcer.
+    let p = super::prepare(&spec_for(super::policy::NetPolicy::AllowAll)).unwrap();
+    assert!(matches!(p.data.net, super::PreparedNet::AllowAll));
+
+    // BindOnly: degrade or real attrs, per kernel capability.
+    let set = super::policy::BindSet::from_iter_ports([3000, 3001, 7456]);
+    let p = super::prepare(&spec_for(super::policy::NetPolicy::BindOnly(set))).unwrap();
+    if cap.landlock_net {
+        match &p.data.net {
+            super::PreparedNet::BindOnly { bind, connect } => {
+                let bind_ports: Vec<u16> = bind.iter().map(|a| a.port).collect();
+                assert_eq!(bind_ports, vec![3000, 3001], "7456 clamped out of bind");
+                let connect_ports: Vec<u16> = connect.iter().map(|a| a.port).collect();
+                assert_eq!(
+                    connect_ports,
+                    vec![80, 443, 3000, 3001],
+                    "derived {{80,443}}∪bind minus daemon ports"
+                );
+                for a in bind.iter() {
+                    assert_eq!(a.allowed_access, 1 << 13);
+                }
+                for a in connect.iter() {
+                    assert_eq!(a.allowed_access, 1 << 14);
+                }
+            }
+            other => panic!("BindOnly on ABI≥4 must carry net attrs, got {other:?}"),
+        }
+    } else {
+        match &p.data.net {
+            super::PreparedNet::Block(bpf) => assert_eq!(bpf.len(), 8, "degraded to Block filter"),
+            other => panic!("kernel without ABI v4 must degrade to Block, got {other:?}"),
+        }
+    }
+}
+
+/// R8/AC7: summary() net segment — three tiers + the degrade suffix.
+/// The degraded form is asserted on kernels without ABI v4, the
+/// plain form on kernels with it (both deterministic per machine).
+#[test]
+fn summary_net_segment_three_states() {
+    let spec_for = |net: super::policy::NetPolicy| super::SandboxSpec {
+        face: super::Face::ReadWrite,
+        net,
+        writable_roots: vec![],
+        exec_allow_roots: vec![],
+        extra_writable: vec![],
+    };
+    let block = spec_for(super::policy::NetPolicy::Block).summary();
+    assert!(block.contains("net=block"), "{block}");
+    assert!(block.contains("seccomp:inet_block"), "{block}");
+    let allow = spec_for(super::policy::NetPolicy::AllowAll).summary();
+    assert!(allow.contains("net=allow_all"), "{allow}");
+    assert!(!allow.contains("seccomp:inet_block"), "{allow}");
+
+    let set = super::policy::BindSet::from_iter_ports([3000, 3001]);
+    let bind = spec_for(super::policy::NetPolicy::BindOnly(set)).summary();
+    if cfg!(target_os = "linux") && !Capability::probe().landlock_net {
+        assert!(
+            bind.contains("net=bind_only(3000,3001)->block(degraded)"),
+            "{bind}"
+        );
+        assert!(bind.contains("seccomp:inet_block"), "{bind}");
+    } else {
+        assert!(bind.contains("net=bind_only(3000,3001)"), "{bind}");
+        assert!(bind.contains("landlock_net:bind_connect"), "{bind}");
     }
 }
 
@@ -600,11 +990,13 @@ fn capability_ok_requires_both() {
     assert!(cap_ok().ok());
     assert!(!Capability {
         landlock: true,
+        landlock_net: false,
         seccomp: false
     }
     .ok());
     assert!(!Capability {
         landlock: false,
+        landlock_net: false,
         seccomp: true
     }
     .ok());
@@ -625,21 +1017,30 @@ fn command_sha_prefix_is_stable_12_hex() {
     assert!(a.chars().all(|ch| ch.is_ascii_hexdigit()));
 }
 
+// New-signature shorthands for guidance/classify tests: the Block
+// tier's default conjunction inputs (exit None + INET filter).
+fn fg(stderr: &str, stdout: &str, mode: Mode) -> Option<&'static str> {
+    super::failure_guidance(stderr, stdout, None, super::NetEnforcement::InetBlock, mode)
+}
+
+fn cb(stderr: &str, stdout: &str) -> Option<super::SandboxBlockKind> {
+    super::classify_block(stderr, stdout, None, super::NetEnforcement::InetBlock)
+}
+
 #[test]
 fn guidance_edit_write_variant_pins_copy_points() {
-    let text = super::failure_guidance("touch /etc/foo\nPermission denied", "", Mode::Edit)
-        .expect("fires");
+    let text = fg("touch /etc/foo\nPermission denied", "", Mode::Edit).expect("fires");
     // Pinned copy points (design §5.3): what happened + escalation
     // card + both config escape hatches.
     assert!(text.contains("[sandbox]"));
     assert!(text.contains("sandbox_extra_writable"));
     assert!(text.contains("escalation"));
     assert!(text.contains("worktree"));
-    assert!(super::failure_guidance("Read-only file system", "", Mode::Edit).is_some());
+    assert!(fg("Read-only file system", "", Mode::Edit).is_some());
     // Heuristic must stay quiet on unrelated failures (宁缺勿滥).
-    assert!(super::failure_guidance("command not found", "", Mode::Edit).is_none());
-    assert!(super::failure_guidance("fatal: not a git repository", "", Mode::Edit).is_none());
-    assert!(super::failure_guidance("", "", Mode::Edit).is_none());
+    assert!(fg("command not found", "", Mode::Edit).is_none());
+    assert!(fg("fatal: not a git repository", "", Mode::Edit).is_none());
+    assert!(fg("", "", Mode::Edit).is_none());
 }
 
 /// P3c design §5.3 (D3): the Plan variant is mode-aware — by-design
@@ -647,7 +1048,7 @@ fn guidance_edit_write_variant_pins_copy_points() {
 /// no-card statement (Plan has no escalation exit).
 #[test]
 fn guidance_plan_write_variant_is_mode_aware() {
-    let text = super::failure_guidance("Permission denied", "", Mode::Plan).expect("fires");
+    let text = fg("Permission denied", "", Mode::Plan).expect("fires");
     assert!(text.contains("Plan"));
     assert!(text.contains("by design"));
     assert!(text.contains("diff"));
@@ -663,16 +1064,19 @@ fn guidance_plan_write_variant_is_mode_aware() {
 /// the design intent.
 #[test]
 fn guidance_network_variant_separate_from_write() {
-    let edit = super::failure_guidance("bash: /dev/tcp: Operation not permitted", "", Mode::Edit)
-        .expect("network fires");
+    let edit =
+        fg("bash: /dev/tcp: Operation not permitted", "", Mode::Edit).expect("network fires");
     assert!(edit.contains("network"));
-    assert!(edit.contains("escalation"));
-    let plan = super::failure_guidance("Operation not permitted", "", Mode::Plan)
-        .expect("plan network fires");
+    // 2026-09-21 R7: the network variant no longer points at the
+    // escalation-rerun path — the remediation is converge-then-stop.
+    assert!(edit.contains("ONE"));
+    assert!(edit.contains("operator instruction"));
+    assert!(edit.contains("then stop"));
+    let plan = fg("Operation not permitted", "", Mode::Plan).expect("plan network fires");
     assert!(plan.contains("Plan"));
     assert!(plan.contains("by design"));
     // Write strings must NOT route to the network text and vice versa.
-    let write = super::failure_guidance("Permission denied", "", Mode::Edit).unwrap();
+    let write = fg("Permission denied", "", Mode::Edit).unwrap();
     assert!(!write.contains("network"));
     assert!(!edit.contains("Permission denied"));
 }
@@ -687,23 +1091,23 @@ fn classify_block_reads_stdout_for_listen_denials() {
     let net = |kind: Option<SandboxBlockKind>| matches!(kind, Some(SandboxBlockKind::Network));
     // vite / node family (DB 实证 jjh-mono 23a8184b):
     let vite = "error when starting dev server:\nError: listen EPERM: operation not permitted 0.0.0.0:3001";
-    assert!(net(super::classify_block("", vite)));
+    assert!(net(cb("", vite)));
     // go family:
-    assert!(net(super::classify_block(
+    assert!(net(cb(
         "",
         "listen tcp :8080: socket: operation not permitted"
     )));
     // python: socket() creation denied (traceback carries socket.py):
     let py = "  File \"/usr/lib/python3.10/socket.py\", line 232\nPermissionError: [Errno 1] Operation not permitted";
-    assert!(net(super::classify_block("", py)));
+    assert!(net(cb("", py)));
 
     // 宁缺勿滥: stdout 里裸的拒绝字符串不认 —— 它们太常作为
     // 普通输出出现(日志、grep 结果)。Write 识别保持 stderr-only。
-    assert!(super::classify_block("", "grep: Operation not permitted").is_none());
-    assert!(super::classify_block("", "cat: Permission denied").is_none());
+    assert!(cb("", "grep: Operation not permitted").is_none());
+    assert!(cb("", "cat: Permission denied").is_none());
     // stderr 特征优先: stderr 是写拒绝时,即使 stdout 带 listen
     // 噪声也归 Write。
-    let kind = super::classify_block("mv: Permission denied", vite);
+    let kind = cb("mv: Permission denied", vite);
     assert!(matches!(kind, Some(SandboxBlockKind::Write)));
 }
 
@@ -712,21 +1116,193 @@ fn classify_block_reads_stdout_for_listen_denials() {
 /// 127.0.0.1(jjh-mono session 实证过的无效尝试)。
 #[test]
 fn guidance_network_variant_names_listen() {
-    let edit = super::failure_guidance(
+    let edit = fg(
         "",
         "Error: listen EPERM: operation not permitted 0.0.0.0:3001",
         Mode::Edit,
     )
     .expect("stdout listen fires");
     assert!(edit.contains("listen"));
-    assert!(edit.contains("escalation"));
-    let plan = super::failure_guidance("", "Error: listen EPERM", Mode::Plan)
-        .expect("plan stdout listen fires");
+    // R7: converge-then-stop remediation (rerun pointers removed).
+    assert!(edit.contains("operator instruction"));
+    let plan = fg("", "Error: listen EPERM", Mode::Plan).expect("plan stdout listen fires");
     assert!(plan.contains("Plan"));
     assert!(plan.contains("listen"));
 }
 
+/// F3 (AC6, 2026-09-21): exit 126 ∧ stderr "Permission denied" →
+/// ExecFace (the exec-face-miss class). The exit code is the strong
+/// signal — non-126 Permission denied stays a Write classification,
+/// and stdout-only strings never fire the exec class (宁缺勿滥).
+#[test]
+fn classify_exec_face_exit_126() {
+    use super::SandboxBlockKind;
+    let pnpm126 = "/root/.local/share/pnpm/bin/pnpm: 39: exec: /root/.local/share/pnpm/bin/../global/v11/x/@pnpm/exe/pnpm: Permission denied";
+    assert!(matches!(
+        cb_stderr_exit(pnpm126, "", Some(126)),
+        Some(SandboxBlockKind::ExecFace)
+    ));
+    // Non-126 with the same stderr = fs-write denial, not exec.
+    assert!(matches!(
+        cb_stderr_exit(pnpm126, "", Some(1)),
+        Some(SandboxBlockKind::Write)
+    ));
+    // 126 without the Permission denied string is nothing.
+    assert!(cb_stderr_exit("command not found", "", Some(126)).is_none());
+    // stdout-only Permission denied + 126 does NOT fire (write/exec
+    // classification stays stderr-only).
+    assert!(cb_stderr_exit("", "cat: Permission denied", Some(126)).is_none());
+}
+
+fn cb_stderr_exit(
+    stderr: &str,
+    stdout: &str,
+    exit: Option<i32>,
+) -> Option<super::SandboxBlockKind> {
+    super::classify_block(stderr, stdout, exit, super::NetEnforcement::InetBlock)
+}
+
+/// R9 (AC6): network attribution requires the INET filter to have
+/// actually been installed (server-side conjunction). Under
+/// LandlockNet (BindOnly) a `listen EPERM` string is NOT a sandbox
+/// INET block — it must have another cause, so no classification.
+#[test]
+fn classify_network_requires_inet_block_enforcement() {
+    let vite = "Error: listen EPERM: operation not permitted 0.0.0.0:3001";
+    // Block tier: fires (incumbent semantics).
+    assert!(matches!(
+        cb("", vite),
+        Some(super::SandboxBlockKind::Network)
+    ));
+    // BindOnly tier (Landlock installed, no seccomp): never Network.
+    assert!(super::classify_block("", vite, None, super::NetEnforcement::LandlockNet).is_none());
+    assert!(super::classify_block(
+        "curl: (7) Operation not permitted",
+        "",
+        None,
+        super::NetEnforcement::LandlockNet
+    )
+    .is_none());
+    // AllowAll: nothing is enforced → nothing is attributable.
+    assert!(super::classify_block("", vite, None, super::NetEnforcement::None).is_none());
+    // Write/exec classes are Landlock-file facts — they fire under
+    // every net tier (the conjunction scopes the NETWORK kind only).
+    assert!(matches!(
+        super::classify_block(
+            "Permission denied",
+            "",
+            None,
+            super::NetEnforcement::LandlockNet
+        ),
+        Some(super::SandboxBlockKind::Write)
+    ));
+    assert!(matches!(
+        super::classify_block(
+            "exec: x: Permission denied",
+            "",
+            Some(126),
+            super::NetEnforcement::LandlockNet
+        ),
+        Some(super::SandboxBlockKind::ExecFace)
+    ));
+}
+
+/// R7 (AC6): the ExecFace guidance names the class, forbids
+/// retry-spending, and converges to ONE operator instruction.
+#[test]
+fn guidance_exec_face_converges_to_operator() {
+    let text = super::failure_guidance_for_kind(super::SandboxBlockKind::ExecFace, Mode::Edit);
+    assert!(text.contains("EXEC face"));
+    assert!(text.contains("exit 126"));
+    assert!(text.contains("ONE"));
+    assert!(text.contains("operator instruction"));
+    assert!(text.contains("then stop"));
+}
+
+/// net_enforcement(): Block → InetBlock; BindOnly → LandlockNet on
+/// capable kernels / InetBlock (degraded) otherwise; AllowAll →
+/// None. Mirrors prepare()'s decision and summary()'s print (one
+/// truth, three readers).
+#[test]
+fn net_enforcement_matches_prepare_decision() {
+    let spec_for = |net: super::policy::NetPolicy| super::SandboxSpec {
+        face: super::Face::ReadWrite,
+        net,
+        writable_roots: vec![],
+        exec_allow_roots: vec![],
+        extra_writable: vec![],
+    };
+    assert_eq!(
+        spec_for(super::policy::NetPolicy::Block).net_enforcement(),
+        super::NetEnforcement::InetBlock
+    );
+    assert_eq!(
+        spec_for(super::policy::NetPolicy::AllowAll).net_enforcement(),
+        super::NetEnforcement::None
+    );
+    let bind = spec_for(super::policy::NetPolicy::BindOnly(
+        super::policy::BindSet::from_iter_ports([3001]),
+    ));
+    let cap = Capability::probe();
+    if cap.landlock_net {
+        assert_eq!(bind.net_enforcement(), super::NetEnforcement::LandlockNet);
+    } else {
+        assert_eq!(bind.net_enforcement(), super::NetEnforcement::InetBlock);
+    }
+}
+
 // ---------------------------------------------------------------------------
+/// F1 (AC5, 2026-09-21): exec roots are canonicalized — a symlinked
+/// PATH dir enters the spec as its REAL target; an alias pair
+/// (symlink + real dir) dedups to ONE entry; a missing dir stays
+/// literal (trap 5 tolerance). [F0 record: canonicalize does NOT
+/// bring the pnpm wrapper's exec target into the face — the target
+/// lives outside every PATH dir; the fix for that class is F2,
+/// which stays 挂账.]
+#[cfg(unix)]
+#[test]
+fn exec_roots_canonicalized_and_alias_deduped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real-bin");
+    std::fs::create_dir_all(&real).unwrap();
+    let alias = tmp.path().join("alias-bin");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let missing = tmp.path().join("not-there");
+
+    // Drive the canonicalize step the same way build_spec does.
+    let mut roots = vec![alias.clone(), real.clone(), missing.clone()];
+    roots = roots
+        .into_iter()
+        .map(|r| std::fs::canonicalize(&r).unwrap_or(r))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|p| seen.insert(p.clone()));
+    // The alias resolved to the real dir and the two collapsed.
+    assert_eq!(roots, vec![real.canonicalize().unwrap(), missing]);
+}
+
+/// AC5: the summary exec segment lists canonical roots (dirs only).
+#[test]
+fn summary_exec_segment_lists_canonical_roots() {
+    let wt = if let Ok(c) = std::fs::canonicalize("/tmp") {
+        c
+    } else {
+        PathBuf::from("/tmp")
+    };
+    let spec = super::SandboxSpec {
+        face: super::Face::ReadWrite,
+        net: super::policy::NetPolicy::Block,
+        writable_roots: vec![wt.clone()],
+        exec_allow_roots: vec![wt.clone(), PathBuf::from("/usr")],
+        extra_writable: vec![],
+    };
+    let s = spec.summary();
+    assert!(s.contains("exec_roots_canonical=["), "{s}");
+    assert!(s.contains("/usr"), "{s}");
+    // Count and list agree on membership: /tmp appears in the list.
+    assert!(s.contains(&wt.display().to_string()), "{s}");
+}
+
 // Integration: real spawns under the real ruleset (Linux only)
 // ---------------------------------------------------------------------------
 
@@ -747,6 +1323,7 @@ macro_rules! require_sandbox {
 fn integration_spec(worktree: &Path) -> SandboxSpec {
     SandboxSpec {
         face: super::Face::ReadWrite,
+        net: super::policy::NetPolicy::Block,
         writable_roots: vec![worktree.to_path_buf(), PathBuf::from("/tmp")],
         exec_allow_roots: vec![
             PathBuf::from("/usr"),
@@ -766,7 +1343,13 @@ fn integration_spec(worktree: &Path) -> SandboxSpec {
 /// the real constructor, not a hand-rolled copy.
 #[cfg(target_os = "linux")]
 fn integration_readonly_spec(ctx: &crate::tools::ToolContext) -> SandboxSpec {
-    super::policy::build_spec(ctx, Some("integ-ro"), vec![], super::Face::ReadOnly)
+    super::policy::build_spec(
+        ctx,
+        Some("integ-ro"),
+        vec![],
+        super::Face::ReadOnly,
+        super::policy::NetPolicy::Block,
+    )
 }
 
 /// Spawn `sh -c script` under the sandbox, return (exit, stderr).
@@ -1018,4 +1601,124 @@ async fn integration_plain_git_works_in_worktree() {
     }
     let (code, err) = run_sandboxed(&spec, "git init -q . && git status --porcelain", &wt).await;
     assert_eq!(code, 0, "git in worktree must work: {err}");
+}
+
+/// AC3 (09-21-sandbox-net-bindonly): true-kernel BindOnly matrix —
+/// declared-port bind succeeds, undeclared bind denied, connect
+/// outside `{80,443}∪bind` denied, the daemon port 7456 unreachable
+/// even though socket creation itself is unrestricted (no seccomp).
+/// LOUD SKIP on kernels without Landlock ABI v4 net rules (this
+/// WSL2 6.6 = ABI 3): the matrix is only meaningful where the
+/// enforcer exists.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn integration_bind_only_net_matrix() {
+    require_sandbox!();
+    if !Capability::probe().landlock_net {
+        eprintln!(
+            "SKIP: Landlock ABI v4 net rules unavailable (probe landlock_net=false); \
+             BindOnly live behavior needs kernel >= 6.7"
+        );
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    let has_py = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v python3")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_py {
+        eprintln!("SKIP-row: python3 unavailable for the socket probe");
+        return;
+    }
+    let spec = super::SandboxSpec {
+        face: super::Face::ReadWrite,
+        net: super::policy::NetPolicy::BindOnly(super::policy::BindSet::from_iter_ports([43123])),
+        writable_roots: vec![wt.clone(), PathBuf::from("/tmp")],
+        exec_allow_roots: vec![
+            PathBuf::from("/usr"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/lib"),
+            PathBuf::from("/lib64"),
+            PathBuf::from("/dev"),
+            PathBuf::from("/tmp"),
+            wt.clone(),
+        ],
+        extra_writable: vec![],
+    };
+    // One python process per row keeps verdicts independent. All
+    // verdicts land on STDERR (run_sandboxed captures stderr only):
+    // `python3 -c "<one-liner>"` on success prints VERDICT, on
+    // failure its traceback lands on stderr too; `echo exit=$? >&2`
+    // reports the shell-visible exit code.
+    fn py(code: &str) -> String {
+        format!("python3 -c \"{code}\"; echo \"exit=$?\" >&2")
+    }
+    async fn probe(spec: &SandboxSpec, script: &str, wt: &Path) -> String {
+        let (code, err) = run_sandboxed(spec, script, wt).await;
+        assert_eq!(code, 0, "sh wrapper must run: {err}");
+        err
+    }
+    // 1. Declared port bind: LISTEN succeeds (exit=0 + VERDICT).
+    let out = probe(
+        &spec,
+        &py("import socket; s=socket.socket(); \\\n\
+         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); \\\n\
+         s.bind(('127.0.0.1', 43123)); s.listen(1); print('VERDICT bind-declared ok')"),
+        &wt,
+    )
+    .await;
+    assert!(out.contains("VERDICT bind-declared ok"), "{out}");
+    // 2. Undeclared port bind: denied before TCP (no listener was
+    //    ever created, so a "Connection refused" would be impossible
+    //    anyway — the guard documents the deny-before-TCP shape).
+    let out = probe(
+        &spec,
+        &py("import socket; s=socket.socket(); \\\n\
+         s.bind(('127.0.0.1', 43199))"),
+        &wt,
+    )
+    .await;
+    assert!(out.contains("exit=1"), "{out}");
+    assert!(
+        !out.contains("Connection refused"),
+        "undeclared bind must be denied before TCP, got: {out}"
+    );
+    // 3. Connect to the daemon port 7456: denied (not in derived
+    //    set {80,443,43123}). A "Connection refused" here would mean
+    //    Landlock ALLOWED the connect (it reached the TCP stack).
+    let out = probe(
+        &spec,
+        &py("import socket; s=socket.socket(); \\\n\
+         s.connect(('127.0.0.1', 7456))"),
+        &wt,
+    )
+    .await;
+    assert!(
+        out.contains("exit=1"),
+        "connect to daemon port must fail, got: {out}"
+    );
+    assert!(
+        !out.contains("Connection refused"),
+        "a refusal means Landlock ALLOWED the connect (reached TCP); must be denied earlier: {out}"
+    );
+    // 4. Connect to a port IN the derived set (43123 ∈ bind snapshot)
+    //    with nothing listening: ECONNREFUSED proves Landlock
+    //    permitted the connect itself (deny would exit 1 without a
+    //    TCP-level refusal).
+    let out = probe(
+        &spec,
+        &py("import socket; s=socket.socket(); \\\n\
+         s.connect(('127.0.0.1', 43123))"),
+        &wt,
+    )
+    .await;
+    assert!(
+        out.contains("Connection refused"),
+        "connect to whitelisted port should be permitted (ECONNREFUSED expected), got: {out}"
+    );
 }

@@ -54,6 +54,7 @@ pub async fn create_project(
             hidden: false,
             metadata: None,
             sandbox_policy: ProjectSandboxPolicy::ReadWrite.as_str().to_string(),
+            sandbox_net: None,
         }),
         Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(sqlx::Error::Protocol(
             format!("a project with path '{}' already exists", path),
@@ -73,7 +74,7 @@ pub async fn list_projects(
     let rows = if include_hidden {
         sqlx::query(
             r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy, sandbox_net
  FROM projects
  ORDER BY created_at ASC
  "#,
@@ -83,7 +84,7 @@ pub async fn list_projects(
     } else {
         sqlx::query(
             r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy, sandbox_net
  FROM projects
  WHERE hidden = 0
  ORDER BY created_at ASC
@@ -101,7 +102,7 @@ pub async fn list_projects(
 pub async fn list_hidden_projects(pool: &SqlitePool) -> Result<Vec<ProjectRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy, sandbox_net
  FROM projects
  WHERE hidden = 1
  ORDER BY updated_at DESC
@@ -119,7 +120,7 @@ pub async fn get_project(
 ) -> Result<Option<ProjectRow>, sqlx::Error> {
     let row = sqlx::query(
         r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy, sandbox_net
  FROM projects
  WHERE id = ?
  "#,
@@ -188,7 +189,7 @@ pub async fn list_projects_with_stale_git_probe(
 ) -> Result<Vec<ProjectRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
- SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy
+ SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata, sandbox_policy, sandbox_net
  FROM projects
  WHERE is_git_repo = 0 AND hidden = 0
  ORDER BY created_at ASC
@@ -317,5 +318,182 @@ pub(crate) fn row_to_project(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow, s
         hidden: r.try_get::<i64, _>("hidden")? != 0,
         metadata: r.try_get("metadata")?,
         sandbox_policy: r.try_get("sandbox_policy")?,
+        sandbox_net: r.try_get("sandbox_net")?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// 09-21-sandbox-net-bindonly: net snapshot / proposal persistence (R4)
+// ---------------------------------------------------------------------------
+
+/// One confirmed bind-port snapshot row (operator-authorized).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetSnapshotRow {
+    pub project_id: String,
+    /// Canonicalized worktree absolute path — the authorization key
+    /// (a branch switch / re-checkout produces a different key).
+    pub worktree_key: String,
+    /// Comma-separated u16 list (parse via `BindSet::parse_ports`).
+    pub ports: String,
+    pub confirmed_by: String,
+    /// Unix ms.
+    pub confirmed_at: i64,
+}
+
+/// One port proposal (LLM/manifest suggestion — never effective
+/// until an operator confirms it into a snapshot).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetProposalRow {
+    pub project_id: String,
+    pub worktree_key: String,
+    pub ports: String,
+    /// Where the suggestion came from (`llm` / `manifest` / …).
+    pub source: String,
+    /// `pending` / `confirmed` / `rejected`.
+    pub status: String,
+    pub proposed_at: i64,
+}
+
+/// Set the NET tier column verbatim (`block` / `bind_only:<ports>`;
+/// validated by the command layer — no `allow_all` write surface
+/// exists this task).
+pub async fn set_project_sandbox_net(
+    pool: &SqlitePool,
+    project_id: &str,
+    net: Option<&str>,
+) -> Result<ProjectRow, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query("UPDATE projects SET sandbox_net = ?, updated_at = ? WHERE id = ?")
+        .bind(net)
+        .bind(&now)
+        .bind(project_id)
+        .execute(pool)
+        .await;
+    match res {
+        Ok(r) if r.rows_affected() == 0 => Err(sqlx::Error::RowNotFound),
+        Ok(_) => get_project(pool, project_id)
+            .await
+            .and_then(|opt| opt.ok_or(sqlx::Error::RowNotFound)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Upsert the confirmed snapshot for (project, worktree) — the
+/// authorization truth for the BindOnly tier.
+pub async fn upsert_net_snapshot(
+    pool: &SqlitePool,
+    project_id: &str,
+    worktree_key: &str,
+    ports: &str,
+    confirmed_by: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO project_net_snapshots (project_id, worktree_key, ports, confirmed_by, confirmed_at) \
+         VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT (project_id, worktree_key) \
+         DO UPDATE SET ports = excluded.ports, confirmed_by = excluded.confirmed_by, confirmed_at = excluded.confirmed_at",
+    )
+    .bind(project_id)
+    .bind(worktree_key)
+    .bind(ports)
+    .bind(confirmed_by)
+    .bind(chrono::Utc::now().timestamp_millis())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_net_snapshots(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> Result<Vec<NetSnapshotRow>, sqlx::Error> {
+    let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
+        "SELECT project_id, worktree_key, ports, confirmed_by, confirmed_at \
+         FROM project_net_snapshots WHERE project_id = ? ORDER BY confirmed_at DESC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(project_id, worktree_key, ports, confirmed_by, confirmed_at)| NetSnapshotRow {
+                project_id,
+                worktree_key,
+                ports,
+                confirmed_by,
+                confirmed_at,
+            },
+        )
+        .collect())
+}
+
+/// Upsert a proposal (pending) — the latest suggestion per worktree
+/// wins (REPLACE on the PK).
+pub async fn upsert_net_proposal(
+    pool: &SqlitePool,
+    project_id: &str,
+    worktree_key: &str,
+    ports: &str,
+    source: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO project_net_proposals (project_id, worktree_key, ports, source, status, proposed_at) \
+         VALUES (?, ?, ?, ?, 'pending', ?) \
+         ON CONFLICT (project_id, worktree_key) \
+         DO UPDATE SET ports = excluded.ports, source = excluded.source, status = 'pending', proposed_at = excluded.proposed_at",
+    )
+    .bind(project_id)
+    .bind(worktree_key)
+    .bind(ports)
+    .bind(source)
+    .bind(chrono::Utc::now().timestamp_millis())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Mark the latest proposal for a worktree confirmed/rejected (row
+/// kept for UI echo).
+pub async fn set_net_proposal_status(
+    pool: &SqlitePool,
+    project_id: &str,
+    worktree_key: &str,
+    status: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE project_net_proposals SET status = ? WHERE project_id = ? AND worktree_key = ?",
+    )
+    .bind(status)
+    .bind(project_id)
+    .bind(worktree_key)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_net_proposals(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> Result<Vec<NetProposalRow>, sqlx::Error> {
+    let rows: Vec<(String, String, String, String, String, i64)> = sqlx::query_as(
+        "SELECT project_id, worktree_key, ports, source, status, proposed_at \
+         FROM project_net_proposals WHERE project_id = ? ORDER BY proposed_at DESC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(project_id, worktree_key, ports, source, status, proposed_at)| NetProposalRow {
+                project_id,
+                worktree_key,
+                ports,
+                source,
+                status,
+                proposed_at,
+            },
+        )
+        .collect())
 }

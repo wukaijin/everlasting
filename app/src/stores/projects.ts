@@ -44,6 +44,34 @@ export interface ProjectInfo {
    *  `readwrite` by the backend DEFAULT, so the UI defaults its
    *  selection there when absent. */
   sandbox_policy?: "off" | "readwrite" | "readonly";
+  /** 09-21-sandbox-net-bindonly: 网络档(缺省/空 = block)。 */
+  sandbox_net?: string | null;
+}
+
+/** 09-21-sandbox-net-bindonly:get_project_net_state 读回形。 */
+export interface NetSnapshotInfo {
+  project_id: string;
+  worktree_key: string;
+  ports: string;
+  confirmed_by: string;
+  confirmed_at: number;
+}
+
+export interface NetProposalInfo {
+  project_id: string;
+  worktree_key: string;
+  ports: string;
+  source: string;
+  status: "pending" | "confirmed" | "rejected";
+  proposed_at: number;
+}
+
+export interface NetStateInfo {
+  tier: string | null;
+  snapshots: NetSnapshotInfo[];
+  proposals: NetProposalInfo[];
+  /** 本平台是否真能执法 BindOnly(Landlock ABI ≥4 probe)。 */
+  bind_only_supported: boolean;
 }
 
 export type ToastKind = "info" | "warn" | "error";
@@ -331,6 +359,63 @@ export const useProjectsStore = defineStore("projects", () => {
     await loadProjects();
   }
 
+  /** 09-21-sandbox-net-bindonly(R4/R8):网络档写(block /
+   *  bind_only:<ports>;allow_all 本期无写入口,后端拒绝)。 */
+  async function setProjectSandboxNet(id: string, net: string): Promise<void> {
+    await transport.invoke<ProjectInfo>("set_project_sandbox_net", { id, net });
+    await loadProjects();
+  }
+
+  /** R4:LLM/manifest 端口建议(pending 态,永不直接生效)。 */
+  async function proposeNetPorts(
+    id: string,
+    worktreeKey: string,
+    ports: number[],
+    source: string,
+  ): Promise<void> {
+    await transport.invoke<void>("propose_net_ports", {
+      id,
+      worktree_key: worktreeKey,
+      ports,
+      source,
+    });
+  }
+
+  /** R4:operator 确认快照 —— 唯一 durable 授权出口(daemon 口
+   *  钳位在后端拒绝并回显冲突口)。 */
+  async function confirmNetSnapshot(
+    id: string,
+    worktreeKey: string,
+    ports: number[],
+  ): Promise<NetStateInfo> {
+    const state = await transport.invoke<NetStateInfo>(
+      "confirm_net_snapshot",
+      {
+        id,
+        worktree_key: worktreeKey,
+        ports,
+      },
+    );
+    await loadProjects();
+    return state;
+  }
+
+  async function rejectNetProposal(
+    id: string,
+    worktreeKey: string,
+  ): Promise<NetStateInfo> {
+    return await transport.invoke<NetStateInfo>("reject_net_proposal", {
+      id,
+      worktree_key: worktreeKey,
+    });
+  }
+
+  async function getProjectNetState(id: string): Promise<NetStateInfo> {
+    return await transport.invoke<NetStateInfo>("get_project_net_state", {
+      id,
+    });
+  }
+
   function projectById(id: string | null): ProjectInfo | undefined {
     if (!id) return undefined;
     return projects.value.find((p) => p.id === id);
@@ -361,6 +446,11 @@ export const useProjectsStore = defineStore("projects", () => {
     unhideProject,
     renameProject,
     setProjectSandboxPolicy,
+    setProjectSandboxNet,
+    proposeNetPorts,
+    confirmNetSnapshot,
+    rejectNetProposal,
+    getProjectNetState,
     projectById,
     basenameOf,
   };

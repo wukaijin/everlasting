@@ -15,7 +15,7 @@
 // 下 session 级只读面覆盖项目档位。
 
 import { computed, ref, watch } from "vue";
-import { useProjectsStore } from "../../stores/projects";
+import { useProjectsStore, type NetStateInfo } from "../../stores/projects";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 
 const props = defineProps<{
@@ -72,6 +72,170 @@ watch(
 
 const currentProject = computed(() => projects.projectById(props.projectId));
 
+// -- 网络档(09-21-sandbox-net-bindonly,R4/R8)---------------------------
+
+const netState = ref<NetStateInfo | null>(null);
+const netLoading = ref(false);
+const netPortsInput = ref("");
+const netWorktreeInput = ref("");
+
+async function loadNetState(): Promise<void> {
+  if (!props.projectId) {
+    netState.value = null;
+    return;
+  }
+  netLoading.value = true;
+  try {
+    netState.value = await projects.getProjectNetState(props.projectId);
+  } catch (e) {
+    projects.showToast(`读取网络档失败：${extractErrorMessage(e)}`, "error");
+    netState.value = null;
+  } finally {
+    netLoading.value = false;
+  }
+}
+
+watch(
+  () => props.projectId,
+  (id) => {
+    netWorktreeInput.value =
+      projects.projectById(id)?.path ?? "";
+    netPortsInput.value = "";
+    void loadNetState();
+  },
+  { immediate: true },
+);
+
+/** 网络档显示值:block(含缺省)/ bind_only / allow_all(只读展示)。 */
+const netTier = computed<"block" | "bind_only" | "allow_all">(() => {
+  const t = netState.value?.tier ?? currentProject.value?.sandbox_net ?? null;
+  if (!t) return "block";
+  if (t === "allow_all") return "allow_all";
+  if (t.startsWith("bind_only")) return "bind_only";
+  return "block";
+});
+
+/** 最新已确认快照(项目级默认显示/切档时引用)。 */
+const latestSnapshot = computed(
+  () => netState.value?.snapshots[0] ?? null,
+);
+const pendingProposals = computed(() =>
+  (netState.value?.proposals ?? []).filter((p) => p.status === "pending"),
+);
+/** 文案③:平台不支持(BindOnly 执法需 Landlock ABI ≥4)→ 禁写。 */
+const netSupported = computed(() => netState.value?.bind_only_supported ?? false);
+
+async function onNetSelect(value: "block" | "bind_only"): Promise<void> {
+  if (!props.projectId || netLoading.value || value === netTier.value) return;
+  if (value === "bind_only" && !netSupported.value) return;
+  netLoading.value = true;
+  try {
+    if (value === "block") {
+      await projects.setProjectSandboxNet(props.projectId, "block");
+    } else {
+      // 切到 BindOnly 需要有已确认快照(授权真源);无快照时提示走
+      // 下方确认流(confirm 成功后自动落 bind_only 档)。
+      if (!latestSnapshot.value) {
+        projects.showToast(
+          "请先在下方确认端口快照,确认后自动切换到「仅放行监听」档。",
+          "error",
+        );
+        return;
+      }
+      await projects.setProjectSandboxNet(
+        props.projectId,
+        `bind_only:${latestSnapshot.value.ports}`,
+      );
+    }
+    await loadNetState();
+  } catch (e) {
+    projects.showToast(`设置失败：${extractErrorMessage(e)}`, "error");
+    await loadNetState();
+  } finally {
+    netLoading.value = false;
+  }
+}
+
+function parsePortsInput(raw: string): number[] | null {
+  const ports = raw
+    .split(/[,，\s]+/)
+    .filter(Boolean)
+    .map((t) => Number(t));
+  if (
+    ports.length === 0 ||
+    ports.some((p) => !Number.isInteger(p) || p < 1 || p > 65535)
+  ) {
+    return null;
+  }
+  return Array.from(new Set(ports));
+}
+
+async function onConfirmSnapshot(): Promise<void> {
+  if (!props.projectId) return;
+  const ports = parsePortsInput(netPortsInput.value);
+  if (!ports) {
+    projects.showToast("端口格式:1-65535,逗号分隔(如 3000,3001)", "error");
+    return;
+  }
+  const worktree = netWorktreeInput.value.trim() ||
+    currentProject.value?.path ||
+    "";
+  if (!worktree) {
+    projects.showToast("需要 worktree 路径(默认项目根目录)", "error");
+    return;
+  }
+  netLoading.value = true;
+  try {
+    netState.value = await projects.confirmNetSnapshot(
+      props.projectId,
+      worktree,
+      ports,
+    );
+    netPortsInput.value = "";
+    await projects.loadProjects();
+  } catch (e) {
+    projects.showToast(`确认失败：${extractErrorMessage(e)}`, "error");
+  } finally {
+    netLoading.value = false;
+  }
+}
+
+async function onRejectProposal(worktreeKey: string): Promise<void> {
+  if (!props.projectId) return;
+  netLoading.value = true;
+  try {
+    netState.value = await projects.rejectNetProposal(
+      props.projectId,
+      worktreeKey,
+    );
+  } catch (e) {
+    projects.showToast(`操作失败：${extractErrorMessage(e)}`, "error");
+  } finally {
+    netLoading.value = false;
+  }
+}
+
+async function onAcceptProposal(ports: string, worktreeKey: string): Promise<void> {
+  const parsed = parsePortsInput(ports);
+  if (!parsed) {
+    projects.showToast("建议端口无法解析", "error");
+    return;
+  }
+  netLoading.value = true;
+  try {
+    netState.value = await projects.confirmNetSnapshot(
+      props.projectId!,
+      worktreeKey,
+      parsed,
+    );
+    await projects.loadProjects();
+  } catch (e) {
+    projects.showToast(`确认失败：${extractErrorMessage(e)}`, "error");
+  } finally {
+    netLoading.value = false;
+  }
+}
+
 /** v-model 先行(乐观):radio 点击即改本地选中;写失败回拨到
  *  项目当前档位并 toast(与开关行「乐观 + 失败回拨」同款策略)。 */
 async function onSelect(value: Policy): Promise<void> {
@@ -118,6 +282,133 @@ async function onSelect(value: Policy): Promise<void> {
           <span class="project-sandbox-tab__option-title">{{ opt.title }}</span>
           <span class="project-sandbox-tab__option-desc">{{ opt.description }}</span>
         </label>
+      </div>
+
+      <!-- 网络档(09-21-sandbox-net-bindonly) -->
+      <h4 class="project-sandbox-tab__net-title">网络策略</h4>
+      <p
+        v-if="!netSupported"
+        class="project-sandbox-tab__net-unsupported"
+        data-testid="net-unsupported"
+      >
+        本平台不生效:BindOnly 需要 Landlock ABI ≥4(内核 ≥6.7)的
+        TCP 端口规则;当前内核不支持,选择后运行时将自动降级为「全部断网」。
+      </p>
+      <div
+        role="radiogroup"
+        aria-label="项目网络策略"
+        class="project-sandbox-tab__group"
+      >
+        <label class="project-sandbox-tab__option" :class="{ 'project-sandbox-tab__option--active': netTier === 'block' }">
+          <input
+            type="radio"
+            name="project-sandbox-net"
+            value="block"
+            :checked="netTier === 'block'"
+            :disabled="netLoading"
+            class="project-sandbox-tab__radio"
+            @change="onNetSelect('block')"
+          />
+          <span class="project-sandbox-tab__option-title">全部断网(默认)</span>
+          <span class="project-sandbox-tab__option-desc">
+            禁止创建 INET socket:无出网、无监听(dev server 起不来)。
+            这是现状语义。
+          </span>
+        </label>
+        <label
+          class="project-sandbox-tab__option"
+          :class="{ 'project-sandbox-tab__option--active': netTier === 'bind_only' }"
+        >
+          <input
+            type="radio"
+            name="project-sandbox-net"
+            value="bind_only"
+            :checked="netTier === 'bind_only'"
+            :disabled="netLoading || !netSupported"
+            class="project-sandbox-tab__radio"
+            @change="onNetSelect('bind_only')"
+          />
+          <span class="project-sandbox-tab__option-title">仅放行监听(BindOnly)</span>
+          <span class="project-sandbox-tab__option-desc" data-testid="net-bindonly-desc">
+            只放行已确认快照端口上的 TCP 监听,出网仅限 80/443 与快照端口。
+            注意:放行端口=数据可外发面,保密性保护不适用;UDP/DNS 在本档
+            不受控(仅 TCP 受管);文件写入仍按上方文件档约束。
+          </span>
+        </label>
+        <label class="project-sandbox-tab__option project-sandbox-tab__option--disabled" title="暂未开放">
+          <input type="radio" name="project-sandbox-net" value="allow_all" disabled class="project-sandbox-tab__radio" />
+          <span class="project-sandbox-tab__option-title">全部放行(挂账)</span>
+          <span class="project-sandbox-tab__option-desc">
+            本期不提供(等同 off 级信任;待 capability token 机制前置后开放)。
+          </span>
+        </label>
+      </div>
+
+      <!-- 快照管理 -->
+      <div class="project-sandbox-tab__snapshots">
+        <h5 class="project-sandbox-tab__snapshots-title">端口快照(授权真源)</h5>
+        <p class="project-sandbox-tab__hint">
+          生效端口集 = 你确认后的快照(按 worktree 路径键控,换分支需重新
+          确认)。模型/清单提议仅为建议,经你确认才生效。
+        </p>
+        <ul v-if="netState?.snapshots.length" class="project-sandbox-tab__snapshot-list" data-testid="net-snapshot-list">
+          <li v-for="snap in netState.snapshots" :key="snap.worktree_key">
+            <code>{{ snap.ports }}</code> @ {{ snap.worktree_key }}
+            <span class="project-sandbox-tab__muted">({{ snap.confirmed_by }})</span>
+          </li>
+        </ul>
+        <p v-else class="project-sandbox-tab__muted">暂无快照。</p>
+
+        <div
+          v-if="pendingProposals.length"
+          class="project-sandbox-tab__proposals"
+          data-testid="net-proposal-list"
+        >
+          <h6>待确认的端口建议</h6>
+          <div v-for="pr in pendingProposals" :key="pr.worktree_key" class="project-sandbox-tab__proposal-row">
+            <span>
+              建议 <code>{{ pr.ports }}</code> @ {{ pr.worktree_key }}
+              <span class="project-sandbox-tab__muted">({{ pr.source }})</span>
+            </span>
+            <span class="project-sandbox-tab__proposal-actions">
+              <button
+                type="button"
+                :disabled="netLoading"
+                data-testid="net-accept-proposal"
+                @click="onAcceptProposal(pr.ports, pr.worktree_key)"
+              >确认</button>
+              <button
+                type="button"
+                :disabled="netLoading"
+                data-testid="net-reject-proposal"
+                @click="onRejectProposal(pr.worktree_key)"
+              >拒绝</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="project-sandbox-tab__confirm-row">
+          <input
+            v-model="netWorktreeInput"
+            type="text"
+            placeholder="worktree 路径(默认项目根目录)"
+            class="project-sandbox-tab__input"
+            data-testid="net-worktree-input"
+          />
+          <input
+            v-model="netPortsInput"
+            type="text"
+            placeholder="端口,如 3000,3001"
+            class="project-sandbox-tab__input"
+            data-testid="net-ports-input"
+          />
+          <button
+            type="button"
+            :disabled="netLoading || !netSupported"
+            data-testid="net-confirm"
+            @click="onConfirmSnapshot"
+          >确认快照</button>
+        </div>
       </div>
     </template>
     <p v-else class="project-sandbox-tab__empty">没有可选项目。</p>
@@ -185,6 +476,59 @@ async function onSelect(value: Policy): Promise<void> {
   font-size: var(--text-sm);
   color: var(--color-text-muted);
   text-align: center;
+}
+
+.project-sandbox-tab__net-title,
+.project-sandbox-tab__snapshots-title {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.project-sandbox-tab__net-unsupported {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning, #c7902b);
+  border-radius: var(--radius-md, 8px);
+  font-size: var(--text-sm);
+  color: var(--color-warning, #c7902b);
+}
+
+.project-sandbox-tab__option--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.project-sandbox-tab__snapshot-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.project-sandbox-tab__muted {
+  color: var(--color-text-muted);
+}
+
+.project-sandbox-tab__proposal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2) 0;
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--color-bg-border);
+}
+
+.project-sandbox-tab__confirm-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.project-sandbox-tab__input {
+  flex: 1 1 12rem;
+  min-width: 0;
 }
 
 /* 移动端:设置弹窗的 44px 最小触控高度对 radio 无意义,压回自然尺寸。 */

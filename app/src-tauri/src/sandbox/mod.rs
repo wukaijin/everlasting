@@ -130,6 +130,11 @@ pub struct SandboxSpec {
     /// Which writable face the spec implements (`face=` audit
     /// segment; P3c design §3).
     pub face: Face,
+    /// Network policy dimension (09-21-sandbox-net-bindonly): which
+    /// network enforcer `prepare()` installs. Orthogonal to `face`
+    /// (file face × net face); default/NULL/unknown → [`NetPolicy::Block`]
+    /// = the incumbent seccomp INET filter, byte-identical (AC1).
+    pub net: policy::NetPolicy,
     /// Writable subtree roots: session worktree (ReadWrite face
     /// only) + `/tmp` + the session spill dir + config
     /// `sandbox_extra_writable` entries.
@@ -161,6 +166,13 @@ pub enum Decision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capability {
     pub landlock: bool,
+    /// Landlock ABI ≥4 TCP-port rules (kernel 6.7+): the only
+    /// mechanism that can allow listen without allowing arbitrary
+    /// egress (spec §12.3 C). Probed by actually creating a
+    /// net-handling ruleset (EINVAL on older kernels); the BindOnly
+    /// tier degrades to Block when this is false (R3) — never to
+    /// AllowAll.
+    pub landlock_net: bool,
     pub seccomp: bool,
 }
 
@@ -210,14 +222,44 @@ fn probe_once() -> Capability {
                 landlock::LANDLOCK_CREATE_RULESET_VERSION,
             )
         } >= 1;
+        // Net-rule probe (ABI ≥4): create a ruleset that handles
+        // exactly the two net access bits. Success → the kernel
+        // knows them (we could add NET_PORT rules); EINVAL on older
+        // kernels. Read-only side effect: the scratch fd is closed
+        // immediately and restrict is never applied.
+        let landlock_net = landlock && {
+            let attr = landlock::RulesetAttr {
+                handled_access_fs: 0,
+                handled_access_net: landlock::HANDLED_ACCESS_NET,
+            };
+            let fd = unsafe {
+                libc::syscall(
+                    libc::SYS_landlock_create_ruleset,
+                    &attr as *const landlock::RulesetAttr,
+                    std::mem::size_of::<landlock::RulesetAttr>(),
+                    0 as libc::c_uint,
+                )
+            };
+            if fd >= 0 {
+                unsafe { libc::close(fd as std::os::fd::RawFd) };
+                true
+            } else {
+                false
+            }
+        };
         let seccomp = unsafe { landlock::prctl(landlock::PR_GET_SECCOMP, 0, 0, 0, 0) } >= 0;
-        Capability { landlock, seccomp }
+        Capability {
+            landlock,
+            landlock_net,
+            seccomp,
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
         // macOS / Windows: no Landlock, no seccomp → fail-open (C4).
         Capability {
             landlock: false,
+            landlock_net: false,
             seccomp: false,
         }
     }
@@ -330,15 +372,55 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
         }
         Policy::Face(face) => {
             let extra = policy::read_extra_writable(&ctx.db).await;
-            Decision::Sandbox(policy::build_spec(ctx, session_id, extra, face))
+            // Net dimension accompanies the project-face read (design
+            // §1: read where sandbox_policy is read, NOT a new gate —
+            // resolve_policy/5-Tier semantics untouched). Only the
+            // Sandbox path pays this query; Skip/Off never does.
+            let net = match session_id {
+                Some(sid) => {
+                    policy::read_effective_net_policy(&ctx.db, sid, &ctx.worktree_path).await
+                }
+                None => policy::NetPolicy::Block,
+            };
+            Decision::Sandbox(policy::build_spec(ctx, session_id, extra, face, net))
         }
     }
 }
 
+/// The mutually-exclusive network enforcer for one spawn (R2). The
+/// type makes "seccomp and Landlock-net both installed" unrepresentable:
+/// exactly one variant is carried, and `pre_exec_apply` matches on it.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub(crate) enum PreparedNet {
+    /// seccomp INET filter — the incumbent Block semantics, byte-
+    /// identical program (`seccomp::build_inet_block_filter`).
+    Block(Vec<libc::sock_filter>),
+    /// Landlock ABI v4 TCP-port rules: BIND on the (clamped) snapshot
+    /// ports, CONNECT on the derived `{80,443} ∪ bind` set; seccomp
+    /// is NOT installed (socket creation unrestricted, UDP/DNS still
+    /// open — documented residual, R8 copy).
+    BindOnly {
+        bind: Vec<landlock::NetPortAttr>,
+        connect: Vec<landlock::NetPortAttr>,
+    },
+    /// No net enforcement. Unreachable from configuration this task
+    /// (AllowAll has no write surface); exists so the enum roundtrips.
+    AllowAll,
+}
+
 /// Parent-process preparation (design §2.3 "safe zone"): creates the
 /// Landlock ruleset fd, opens one `O_PATH` fd per rule path, builds
-/// the BPF program. All of this is allowed to allocate / open / take
-/// locks — it never touches the pre_exec edge.
+/// the net/seccomp enforcer artifacts. All of this is allowed to
+/// allocate / open / take locks — it never touches the pre_exec edge.
+///
+/// Net-tier assembly (R2/R3):
+/// - Block → incumbent seccomp program, nothing else;
+/// - BindOnly → net-handling ruleset + parent-built NET_PORT attr
+///   arrays (bind = clamped snapshot, connect = derived set with the
+///   second daemon-port clamp); capability-gated: probe without ABI
+///   v4 net rules → **degrade to Block** (warn, never AllowAll);
+/// - AllowAll → neither enforcer (type/parse support only).
 ///
 /// Fails only on kernel-side ruleset creation (e.g. handled mask
 /// rejected) — a missing path is NOT an error (spike trap 5: the
@@ -346,7 +428,44 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
 pub fn prepare(spec: &SandboxSpec) -> std::io::Result<PreparedSandbox> {
     #[cfg(target_os = "linux")]
     {
+        let cap = Capability::probe();
+        let net = match &spec.net {
+            policy::NetPolicy::Block => PreparedNet::Block(seccomp::build_inet_block_filter()),
+            policy::NetPolicy::AllowAll => PreparedNet::AllowAll,
+            policy::NetPolicy::BindOnly(set) => {
+                if !cap.landlock_net {
+                    // R3: containment leans into containment. A BindOnly
+                    // tier on a kernel without ABI v4 net rules cannot
+                    // be enforced → the incumbent Block filter (NOT
+                    // AllowAll: an unenforceable promise must degrade
+                    // to the stricter incumbent, and the summary
+                    // reports the degrade).
+                    tracing::warn!(
+                        bind_ports = ?set.ports(),
+                        "sandbox: kernel lacks Landlock ABI v4 net rules; \
+                         net=bind_only degrading to block"
+                    );
+                    PreparedNet::Block(seccomp::build_inet_block_filter())
+                } else {
+                    let bind_ports = policy::NetPolicy::bind_ports_clamped(set);
+                    let connect_ports = policy::NetPolicy::connect_ports(set);
+                    PreparedNet::BindOnly {
+                        bind: landlock::net_port_attrs(
+                            landlock::NetAccessSet::BIND_TCP,
+                            &bind_ports,
+                        ),
+                        connect: landlock::net_port_attrs(
+                            landlock::NetAccessSet::CONNECT_TCP,
+                            &connect_ports,
+                        ),
+                    }
+                }
+            }
+        };
         let mut builder = landlock::RulesetBuilder::new();
+        if matches!(net, PreparedNet::BindOnly { .. }) {
+            builder.handle_net_access(landlock::HANDLED_ACCESS_NET);
+        }
         for root in &spec.exec_allow_roots {
             builder.allow(root, landlock::AccessSet::EXECUTE);
         }
@@ -357,12 +476,11 @@ pub fn prepare(spec: &SandboxSpec) -> std::io::Result<PreparedSandbox> {
             builder.allow(std::path::Path::new(dev), landlock::AccessSet::WRITE_FILE);
         }
         let ruleset = builder.build()?;
-        let bpf = seccomp::build_inet_block_filter();
         Ok(PreparedSandbox {
             data: Arc::new(PreparedData {
                 ruleset_fd: ruleset.ruleset_fd,
                 rules: ruleset.rules,
-                bpf,
+                net,
             }),
         })
     }
@@ -401,10 +519,13 @@ pub fn apply(cmd: &mut Command, prepared: &PreparedSandbox) -> std::io::Result<(
 /// The syscall-only pre_exec body (Linux). Order is load-bearing:
 /// NoNewPrivs FIRST (spike trap 4 — restrict_self returns EACCES
 /// without it; it also kills the suid escalation surface), then all
-/// add_rule calls (each failure aborts the whole spawn, aligned with
-/// the spike probe's `_exit(99)` semantics), then restrict_self, then
-/// the seccomp filter LAST so the filter never interferes with the
-/// landlock syscalls above it.
+/// add_rule calls (file rules always; NET_PORT rules on the BindOnly
+/// tier — each failure aborts the whole spawn, aligned with the
+/// spike probe's `_exit(99)` semantics), then restrict_self, then —
+/// on the Block tier ONLY — the seccomp filter LAST so the filter
+/// never interferes with the landlock syscalls above it. The two net
+/// enforcers are mutually exclusive by the match on `PreparedNet`
+/// (R2): there is no code path that installs both.
 #[cfg(target_os = "linux")]
 fn pre_exec_apply(data: &PreparedData) -> std::io::Result<()> {
     // 1. PR_SET_NO_NEW_PRIVS — required before restrict_self; also
@@ -433,6 +554,26 @@ fn pre_exec_apply(data: &PreparedData) -> std::io::Result<()> {
             return Err(std::io::Error::last_os_error());
         }
     }
+    // 2b. Net tier rules (BindOnly only): one NET_PORT rule per
+    //     (access, port) attr, same abort-on-failure semantics as
+    //     the file rules. Attr structs live in parent-constructed
+    //     Vecs read through the Arc (W2) — no allocation here.
+    if let PreparedNet::BindOnly { bind, connect } = &data.net {
+        for attr in bind.iter().chain(connect.iter()) {
+            let ret = unsafe {
+                libc::syscall(
+                    libc::SYS_landlock_add_rule,
+                    data.ruleset_fd,
+                    landlock::LANDLOCK_RULE_NET_PORT,
+                    attr as *const landlock::NetPortAttr,
+                    0 as libc::c_uint,
+                )
+            };
+            if ret != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+    }
     // 3. Restrict: from here the child can never regain the dropped
     //    rights (irreversible for the process tree — spike §1).
     if unsafe {
@@ -445,11 +586,15 @@ fn pre_exec_apply(data: &PreparedData) -> std::io::Result<()> {
     {
         return Err(std::io::Error::last_os_error());
     }
-    // 4. Seccomp: the kernel copies the filter program out of
-    //    `data.bpf` during this one prctl (W2: referencing
-    //    parent-constructed memory is safe — no malloc in the
-    //    closure; the sock_fprog header is stack-built).
-    seccomp::install_in_preexec(&data.bpf)?;
+    // 4. Seccomp — Block tier ONLY (R2 mutual exclusion): the kernel
+    //    copies the filter program out of the parent-constructed Vec
+    //    during this one prctl (W2: no malloc in the closure; the
+    //    sock_fprog header is stack-built). BindOnly installs no
+    //    seccomp (socket creation unrestricted; Landlock owns ports),
+    //    AllowAll installs nothing.
+    if let PreparedNet::Block(bpf) = &data.net {
+        seccomp::install_in_preexec(bpf)?;
+    }
     Ok(())
 }
 
@@ -463,6 +608,40 @@ pub struct PreparedSandbox {
     data: Arc<PreparedData>,
 }
 
+/// Which net enforcer a spawn actually installs — the SERVER-SIDE
+/// fact behind the R9 attribution conjunction. Derived from
+/// `spec.net` + `Capability::probe()` (a BindOnly tier on a kernel
+/// without ABI v4 degrades to the INET filter — this enum reports
+/// what RUNS, the same truth `summary()` prints and `prepare()`
+/// installs; one truth, three readers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetEnforcement {
+    /// seccomp INET filter (Block tier, or degraded BindOnly).
+    InetBlock,
+    /// Landlock ABI v4 TCP rules (BindOnly on a capable kernel).
+    LandlockNet,
+    /// No net enforcement (AllowAll tier).
+    None,
+}
+
+impl SandboxSpec {
+    /// The R9 attribution conjunction input: which net enforcer the
+    /// spawn for THIS spec actually installs.
+    pub(crate) fn net_enforcement(&self) -> NetEnforcement {
+        match &self.net {
+            policy::NetPolicy::Block => NetEnforcement::InetBlock,
+            policy::NetPolicy::AllowAll => NetEnforcement::None,
+            policy::NetPolicy::BindOnly(_) => {
+                if cfg!(target_os = "linux") && Capability::probe().landlock_net {
+                    NetEnforcement::LandlockNet
+                } else {
+                    NetEnforcement::InetBlock
+                }
+            }
+        }
+    }
+}
+
 impl SandboxSpec {
     /// One-line ruleset summary for the audit payload (design §2.6:
     /// the audit row records the shape of the ruleset, never the
@@ -471,15 +650,63 @@ impl SandboxSpec {
     /// same-path access rights, so this stays stable without opening
     /// any fd — both spawn paths (foreground `shell` + background
     /// registry consumer) audit with the SAME shape.
+    ///
+    /// 2026-09-21 (R8/R9): a `net=` segment is appended. It is the
+    /// SERVER-SIDE fact the listen-denial attribution requires (R9):
+    /// `net=block` proves the INET filter tier was actually
+    /// configured, so a `listen EPERM` string under it may be
+    /// classified as a sandbox block; `net=bind_only(...)` proves it
+    /// was NOT (such a string must have another cause). A BindOnly
+    /// tier on a kernel without ABI v4 net rules reports the degrade
+    /// (`net=bind_only->block(degraded)`) — the summary never claims
+    /// an enforcement the spawn did not install.
     pub(crate) fn summary(&self) -> String {
-        format!(
-            "landlock:face={} exec_roots={} writable_roots={} extra={} devices={}; seccomp:inet_block",
+        let base = format!(
+            "landlock:face={} exec_roots={} writable_roots={} extra={} devices={}",
             self.face.as_str(),
             self.exec_allow_roots.len(),
             self.writable_roots.len(),
             self.extra_writable.len(),
             DEVICE_WRITE_PATHS.len()
-        )
+        );
+        let (net_segment, enforcer_segment) = match &self.net {
+            policy::NetPolicy::Block => ("net=block".to_string(), "; seccomp:inet_block"),
+            policy::NetPolicy::AllowAll => ("net=allow_all".to_string(), ""),
+            policy::NetPolicy::BindOnly(set) => {
+                let ports = set
+                    .ports()
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if cfg!(target_os = "linux") && !Capability::probe().landlock_net {
+                    // Degraded at prepare(): the summary reports what
+                    // the spawn actually installs, never the promise.
+                    (
+                        format!("net=bind_only({ports})->block(degraded)"),
+                        "; seccomp:inet_block",
+                    )
+                } else {
+                    (
+                        format!("net=bind_only({ports})"),
+                        "; landlock_net:bind_connect",
+                    )
+                }
+            }
+        };
+        // F1 (2026-09-21, R6/AC5): the canonical exec-root list.
+        // Dirs only (the face is directories by construction — no
+        // file paths ever enter this list); audit-local surface, the
+        // point is operator visibility of the REAL face (F0: the
+        // pnpm wrapper's target dir being absent was invisible while
+        // the summary carried only a count).
+        let exec_list = self
+            .exec_allow_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{base}; {net_segment}{enforcer_segment}; exec_roots_canonical=[{exec_list}]")
     }
 }
 
@@ -487,7 +714,7 @@ impl SandboxSpec {
 struct PreparedData {
     ruleset_fd: std::os::fd::RawFd,
     rules: Vec<(std::os::fd::RawFd, u64)>,
-    bpf: Vec<libc::sock_filter>,
+    net: PreparedNet,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -516,10 +743,10 @@ pub(crate) fn command_sha_prefix(command: &str) -> String {
     out.iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-/// What a sandboxed command's failure stderr smells like (P3c design
-/// §5.1). Conservative substring match on the canonical denial
-/// strings — a miss degrades to no guidance, never to a false
-/// escalation.
+/// What a sandboxed command's failure smells like (P3c design
+/// §5.1 + F3 2026-09-21). Conservative substring match on canonical
+/// denial strings — a miss degrades to no guidance, never to a
+/// false escalation.
 pub(crate) enum SandboxBlockKind {
     /// Landlock write denial (`Permission denied` /
     /// `Read-only file system`).
@@ -527,25 +754,48 @@ pub(crate) enum SandboxBlockKind {
     /// seccomp egress block (`Operation not permitted` — EPERM at
     /// `socket()`, before any connect attempt).
     Network,
+    /// Landlock EXEC-face miss (F3): `exit_code == 126` ∧ stderr
+    /// `Permission denied` — the shell found a program but execve
+    /// was denied (wrapper script exec'ing a binary outside the
+    /// exec roots, e.g. pnpm's `@pnpm/exe`). 126 is the strong
+    /// signal that separates this from fs-write denials.
+    ExecFace,
 }
 
 /// Classify a failed sandboxed command's denial (2026-09-21: stderr +
-/// stdout). Order matters: the write strings are checked first (a stderr
-/// carrying both is a write failure with noise). Used by the guidance text
-/// (§5.3) and by the escalation trigger (§5.1) so both share one heuristic.
+/// stdout + exit code + the R9 server-side conjunction). Order:
 ///
-/// stdout participates ONLY through the strong listen/socket markers in
-/// [`stdout_smells_net_block`]: dev-server toolchains (vite/webpack/go/
-/// python) print their `listen` failure to stdout with an EMPTY stderr,
-/// which used to silence both the card and the guidance entirely (DB
-/// evidence: jjh-mono session 23a8184b, 2026-09-20 — 29 sandboxed
-/// executions, zero escalation offers). Write detection stays
-/// stderr-only: `Permission denied` occurs far too often in ordinary
-/// stdout (grep / cat of logs) to be trusted there (宁缺勿滥).
-pub(crate) fn classify_block(stderr: &str, stdout: &str) -> Option<SandboxBlockKind> {
+/// 1. `exit 126 ∧ stderr Permission denied` → ExecFace (most
+///    specific: execve denial is fatal regardless of what else the
+///    streams carry);
+/// 2. write strings (stderr) → Write;
+/// 3. network strings → Network, ONLY under `net == InetBlock` (R9:
+///    the classification asserts a cause the spawn actually enforced
+///    — an INET filter. On a BindOnly spawn (LandlockNet) the INET
+///    filter was NOT installed, so a `listen EPERM` string must have
+///    another cause and gets NO network attribution. Strings feed
+///    UX only; this conjunction is the server-side fact that makes
+///    the attribution non-forgivable by command output).
+///
+/// stdout participates ONLY through the strong listen/socket markers
+/// in [`stdout_smells_net_block`] (宁缺勿滥: a bare `Operation not
+/// permitted` / `Permission denied` in stdout is never trusted).
+pub(crate) fn classify_block(
+    stderr: &str,
+    stdout: &str,
+    exit_code: Option<i32>,
+    net: NetEnforcement,
+) -> Option<SandboxBlockKind> {
+    if exit_code == Some(126) && stderr.contains("Permission denied") {
+        return Some(SandboxBlockKind::ExecFace);
+    }
     if stderr.contains("Permission denied") || stderr.contains("Read-only file system") {
-        Some(SandboxBlockKind::Write)
-    } else if stderr.contains("Operation not permitted") || stdout_smells_net_block(stdout) {
+        return Some(SandboxBlockKind::Write);
+    }
+    if net != NetEnforcement::InetBlock {
+        return None;
+    }
+    if stderr.contains("Operation not permitted") || stdout_smells_net_block(stdout) {
         Some(SandboxBlockKind::Network)
     } else {
         None
@@ -568,24 +818,34 @@ pub(crate) fn stdout_smells_net_block(stdout: &str) -> bool {
 
 /// Post-hoc failure guidance, mode-aware (P3c design §5.3 — replaces
 /// the P3b single write-block line). When a sandboxed command failed
-/// and its stderr (or, for listen failures, stdout — see
-/// [`classify_block`]) smells like a sandbox denial, the tool appends
-/// one line so the model knows WHY and what to do. Heuristic,
-/// append-only — the command's own output is never rewritten.
-/// `None` = no append (宁缺勿滥: only the canonical denial strings
-/// trigger it).
+/// and its streams/exit code smell like a sandbox denial (see
+/// [`classify_block`]), the tool appends one line so the model knows
+/// WHY and what to do. Heuristic, append-only — the command's own
+/// output is never rewritten. `None` = no append (宁缺勿滥).
 ///
-/// Variants:
-/// - Edit + write: an escalation card may appear for this command;
-///   otherwise adjust `sandbox_extra_writable` / the project tier.
-/// - Plan + write (D3): blocked BY DESIGN — propose a diff, ask the
-///   user to switch to Edit, or use /tmp (no escalation exists).
-/// - Network (both modes): no INET sockets at all (outbound AND
-///   listen); Edit names the escalation card, Plan states the design
-///   intent.
-pub(crate) fn failure_guidance(stderr: &str, stdout: &str, mode: Mode) -> Option<&'static str> {
-    match classify_block(stderr, stdout) {
-        Some(SandboxBlockKind::Write) => Some(match mode {
+/// 2026-09-21 (R7): the network/exec-face-gap variants no longer
+/// point at escalation reruns — a byte-identical unsandboxed rerun
+/// is structurally useless for long-running processes (dev servers)
+/// and for exec-face misses (the rerun hits the same face). The
+/// remediation is now「收敛到一条 operator 指令然后停」: one ask,
+/// then stop — no multi-round self-diagnosis.
+pub(crate) fn failure_guidance(
+    stderr: &str,
+    stdout: &str,
+    exit_code: Option<i32>,
+    net: NetEnforcement,
+    mode: Mode,
+) -> Option<&'static str> {
+    let kind = classify_block(stderr, stdout, exit_code, net)?;
+    Some(failure_guidance_for_kind(kind, mode))
+}
+
+/// Guidance for an ALREADY-classified denial kind (the P3d
+/// background-escalation path: the offer carries the kind, so the
+/// drain side must not re-classify from the evidence line alone).
+pub(crate) fn failure_guidance_for_kind(kind: SandboxBlockKind, mode: Mode) -> &'static str {
+    match kind {
+        SandboxBlockKind::Write => match mode {
             Mode::Plan => {
                 "[sandbox] The write above was blocked by the Plan-mode read-only sandbox — \
                  this is by design. Propose the change as a diff and ask the user to switch \
@@ -598,8 +858,8 @@ pub(crate) fn failure_guidance(stderr: &str, stdout: &str, mode: Mode) -> Option
                  card for this command if one appears; otherwise ask the user to add the path \
                  to `sandbox_extra_writable` in Settings or change the project's sandbox policy."
             }
-        }),
-        Some(SandboxBlockKind::Network) => Some(match mode {
+        },
+        SandboxBlockKind::Network => match mode {
             Mode::Plan => {
                 "[sandbox] Network is blocked inside the Plan-mode read-only sandbox — no \
                  outbound connections AND no listen (dev servers cannot start); this is by \
@@ -608,11 +868,20 @@ pub(crate) fn failure_guidance(stderr: &str, stdout: &str, mode: Mode) -> Option
             _ => {
                 "[sandbox] The failure above looks like the sandbox blocking network (no INET \
                  sockets inside the sandbox: no outbound, and no listen — dev servers cannot \
-                 start). Approve the escalation card for this command if one appears, or ask \
-                 the user to change the project's sandbox policy."
+                 start). Do NOT burn turns retrying or self-diagnosing: converge to ONE \
+                 operator instruction — ask the user to either switch the project's sandbox \
+                 network policy (Settings → project → network, e.g. a BindOnly port snapshot \
+                 for dev servers) or run the networked command themselves — then stop."
             }
-        }),
-        None => None,
+        },
+        SandboxBlockKind::ExecFace => {
+            "[sandbox] The failure above looks like the sandbox EXEC face missing the \
+             program's real location (exit 126 + Permission denied on exec — typically a \
+             wrapper script exec'ing a binary outside the allowed exec roots). Retrying or \
+             re-routing cannot fix this: converge to ONE operator instruction — ask the user \
+             to add the tool's install directory to the sandbox exec allowlist (Settings) or \
+             run the command themselves — then stop."
+        }
     }
 }
 

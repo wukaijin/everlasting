@@ -445,6 +445,40 @@ Settings「CLI (evl)」分类两条(镜像 `commands::evl_cli`,Q0 单源;**检�
   创建(拒绝覆盖,消息带现有路径)/ Node 缺失或 < 20 / 非 unix 平台。
   幂等:重复安装 = 更新语义(重写托管目录 + 重建 symlink)。
 
+### projects 域网络档写通道(09-21 起,sandbox-net-bindonly)
+
+五条(镜像 `commands::projects`,Q0 单源;snake_case 扁平顶层字段)。
+授权模型:**bind 端口快照 = 唯一 durable 授权出口**,键
+`(project_id, worktree_key)`(worktree 绝对路径,canonicalize 后;换分支/
+重检出 = 新键,旧快照不随行)。建议(propose)永不直接生效:
+
+- `POST /api/v1/projects/set_project_sandbox_net` `{id, net}` — 网络档写,
+  `net` 仅认 `block` / `bind_only:<p>,<p>`(parse 层 fail-closed);
+  **`allow_all` 本期无写入口**(capability token 前置,挂账)→ 400。
+  注意:直接设 `bind_only:*` 不铸造授权——读侧按 (project, worktree)
+  点查快照行,无行即降级 block。
+- `POST /api/v1/projects/propose_net_ports`
+  `{id, worktree_key, ports: number[], source}` — LLM/manifest 端口建议,
+  落 `project_net_proposals` pending 态(同 worktree 建议覆盖旧建议)。
+  端口校验(空/超上限 32/超范围/命中 daemon 监听口)→ 400,冲突口回显。
+- `POST /api/v1/projects/confirm_net_snapshot`
+  `{id, worktree_key, ports, confirmed_by?}` — operator 确认快照:**钳位
+  在此拒绝**(`快照 ∩ {daemon 监听口} = ∅`,默认 7456 + env
+  `EVERLASTING_DAEMON_PORT`;命中整单 400 并回显冲突口)。成功 = 写
+  `project_net_snapshots`(REPLACE 同键)+ `projects.sandbox_net` 置
+  `bind_only:<ports>` + 对应建议标 confirmed;返回全量 net state。
+- `POST /api/v1/projects/reject_net_proposal` `{id, worktree_key}` — 建议
+  标 rejected(行保留供回显);返回全量 net state。
+- `POST /api/v1/projects/get_project_net_state` `{id}` — 读回
+  `{tier, snapshots[], proposals[], bind_only_supported}`;
+  `bind_only_supported` = 服务端 `Capability::probe().landlock_net`
+  (Landlock ABI ≥4),false 时 UI 显示「本平台不生效」并禁写。
+
+运行时语义(消费侧,非本域端点):BindOnly 档沙箱 spawn 装 Landlock
+ABI v4 TCP 规则(bind=快照口,connect=`{80,443}∪快照` 派生,双道钳位
+减除 daemon 口),不装 seccomp INET filter;内核不支持时 prepare 入口
+降级 block(warn + 审计 summary 记 `net=bind_only(...)->block(degraded)`)。
+
 ### files 域本地路径 GET 路由(09-13 起两条:图片 + 文件;09-14 加存在性探针)
 
 聊天 markdown / 工具输出里识别出的本地路径,前端弹层直连 daemon 取字节,**不进

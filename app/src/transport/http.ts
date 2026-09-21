@@ -177,6 +177,11 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   unhide_project: "projects",
   update_project_name: "projects",
   update_project_sandbox_policy: "projects",
+  set_project_sandbox_net: "projects",
+  propose_net_ports: "projects",
+  confirm_net_snapshot: "projects",
+  reject_net_proposal: "projects",
+  get_project_net_state: "projects",
   update_project_path: "projects",
   // providers
   add_model: "providers",

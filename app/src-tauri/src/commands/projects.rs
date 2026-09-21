@@ -157,6 +157,240 @@ pub async fn update_project_sandbox_policy(
     update_project_sandbox_policy_inner(&state, id, policy).await
 }
 
+// ---------------------------------------------------------------------------
+// 09-21-sandbox-net-bindonly: net-tier write channel (R4/R8). The
+// authorization truth is the operator-confirmed SNAPSHOT; proposals
+// (LLM/manifest) are suggestions that only enter the confirm flow.
+// ---------------------------------------------------------------------------
+
+/// The UI read shape for one project's net state.
+#[derive(serde::Serialize)]
+pub struct ProjectNetState {
+    /// Verbatim `projects.sandbox_net` (None = block default).
+    pub tier: Option<String>,
+    pub snapshots: Vec<crate::db::projects::NetSnapshotRow>,
+    pub proposals: Vec<crate::db::projects::NetProposalRow>,
+    /// Server-side capability conjunction input: whether BindOnly
+    /// can actually be enforced on this kernel (`landlock_net`).
+    pub bind_only_supported: bool,
+}
+
+/// Validate a net-tier write: exactly `block` or `bind_only:<ports>`
+/// (parse shares the effective-read grammar). `allow_all` has NO
+/// write surface this task (capability-token precondition — 挂账).
+fn validate_settable_net(net: &str) -> Result<crate::sandbox::policy::NetPolicy, AppCommandError> {
+    let parsed = crate::sandbox::policy::NetPolicy::parse(net).ok_or_else(|| {
+        AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("unknown sandbox net tier: {net} (expected 'block' or 'bind_only:<ports>')"),
+        )
+    })?;
+    if parsed == crate::sandbox::policy::NetPolicy::AllowAll {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "allow_all has no configuration entry in this version (capability-token precondition)",
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Validate + clamp-check a port list: 1..=65535, ≤ MAX_BIND_PORTS,
+/// and the daemon-port clamp (R4: `snapshot ∩ daemon_listen_ports =
+/// ∅` — the authoritative gate at write time; `prepare()` re-clamps
+/// defensively).
+fn validate_ports(ports: &[u16]) -> Result<Vec<u16>, AppCommandError> {
+    if ports.is_empty() || ports.len() > crate::sandbox::policy::MAX_BIND_PORTS {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "port list must have 1..={} entries, got {}",
+                crate::sandbox::policy::MAX_BIND_PORTS,
+                ports.len()
+            ),
+        ));
+    }
+    if ports.contains(&0) {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "port 0 is invalid".to_string(),
+        ));
+    }
+    let reserved = crate::sandbox::policy::daemon_listen_ports();
+    let conflicts: Vec<u16> = ports
+        .iter()
+        .copied()
+        .filter(|p| reserved.contains(p))
+        .collect();
+    if !conflicts.is_empty() {
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "ports {:?} are daemon control-plane ports and can never be in a bind snapshot",
+                conflicts
+            ),
+        ));
+    }
+    Ok(ports.to_vec())
+}
+
+fn ports_to_string(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub async fn get_project_net_state_inner(
+    state: &Arc<AppState>,
+    id: String,
+) -> Result<ProjectNetState, AppCommandError> {
+    let snapshots = crate::db::projects::list_net_snapshots(&state.db, &id)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))?;
+    let proposals = crate::db::projects::list_net_proposals(&state.db, &id)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))?;
+    let tier = crate::db::projects::get_project(&state.db, &id)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))?
+        .and_then(|p| p.sandbox_net);
+    Ok(ProjectNetState {
+        tier,
+        snapshots,
+        proposals,
+        bind_only_supported: crate::sandbox::Capability::probe().landlock_net,
+    })
+}
+
+pub async fn set_project_sandbox_net_inner(
+    state: &Arc<AppState>,
+    id: String,
+    net: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    let parsed = validate_settable_net(&net)?;
+    // Setting the tier directly does NOT mint an authorization: a
+    // bind_only tier without a snapshot row for the session's
+    // worktree degrades to block at read time (by design).
+    crate::db::projects::set_project_sandbox_net(&state.db, &id, Some(parsed.as_str().as_str()))
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))
+}
+
+pub async fn propose_net_ports_inner(
+    state: &Arc<AppState>,
+    id: String,
+    worktree_key: String,
+    ports: Vec<u16>,
+    source: String,
+) -> Result<(), AppCommandError> {
+    let ports = validate_ports(&ports)?;
+    // Clamp-rejected suggestions are rejected AT PROPOSAL time too —
+    // a port that can never be confirmed should not queue.
+    crate::db::projects::upsert_net_proposal(
+        &state.db,
+        &id,
+        &worktree_key,
+        &ports_to_string(&ports),
+        &source,
+    )
+    .await
+    .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))
+}
+
+pub async fn confirm_net_snapshot_inner(
+    state: &Arc<AppState>,
+    id: String,
+    worktree_key: String,
+    ports: Vec<u16>,
+    confirmed_by: Option<String>,
+) -> Result<ProjectNetState, AppCommandError> {
+    let ports = validate_ports(&ports)?;
+    let ports_str = ports_to_string(&ports);
+    let confirmed_by = confirmed_by.unwrap_or_else(|| "operator".to_string());
+    crate::db::projects::upsert_net_snapshot(
+        &state.db,
+        &id,
+        &worktree_key,
+        &ports_str,
+        &confirmed_by,
+    )
+    .await
+    .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))?;
+    // The tier column mirrors the latest confirmation (display /
+    // roundtrip); the authorization truth remains the snapshot row.
+    crate::db::projects::set_project_sandbox_net(
+        &state.db,
+        &id,
+        Some(&format!("bind_only:{ports_str}")),
+    )
+    .await
+    .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))?;
+    let _ =
+        crate::db::projects::set_net_proposal_status(&state.db, &id, &worktree_key, "confirmed")
+            .await;
+    get_project_net_state_inner(state, id).await
+}
+
+pub async fn reject_net_proposal_inner(
+    state: &Arc<AppState>,
+    id: String,
+    worktree_key: String,
+) -> Result<ProjectNetState, AppCommandError> {
+    crate::db::projects::set_net_proposal_status(&state.db, &id, &worktree_key, "rejected")
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))?;
+    get_project_net_state_inner(state, id).await
+}
+
+#[tauri::command]
+pub async fn get_project_net_state(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<ProjectNetState, AppCommandError> {
+    get_project_net_state_inner(&state, id).await
+}
+
+#[tauri::command]
+pub async fn set_project_sandbox_net(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    net: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    set_project_sandbox_net_inner(&state, id, net).await
+}
+
+#[tauri::command]
+pub async fn propose_net_ports(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    worktree_key: String,
+    ports: Vec<u16>,
+    source: String,
+) -> Result<(), AppCommandError> {
+    propose_net_ports_inner(&state, id, worktree_key, ports, source).await
+}
+
+#[tauri::command]
+pub async fn confirm_net_snapshot(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    worktree_key: String,
+    ports: Vec<u16>,
+    confirmed_by: Option<String>,
+) -> Result<ProjectNetState, AppCommandError> {
+    confirm_net_snapshot_inner(&state, id, worktree_key, ports, confirmed_by).await
+}
+
+#[tauri::command]
+pub async fn reject_net_proposal(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    worktree_key: String,
+) -> Result<ProjectNetState, AppCommandError> {
+    reject_net_proposal_inner(&state, id, worktree_key).await
+}
+
 pub async fn hide_project_inner(state: &Arc<AppState>, id: String) -> Result<(), AppCommandError> {
     projects::store::hide_project(&state.db, &id)
         .await

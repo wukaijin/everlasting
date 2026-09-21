@@ -479,6 +479,12 @@ pub async fn execute(
     // failure (R5); fail-closed on prepare/pre-exec failure
     // (`[sandbox]`-prefixed spawn error, design §2.3).
     let sandbox_decision = crate::sandbox::decide(ctx, command, session_id).await;
+    // R9 conjunction input: which net enforcer the (potential) spawn
+    // installs — computed once from the same decision (W3 spirit).
+    let net_enf = match &sandbox_decision {
+        crate::sandbox::Decision::Sandbox(spec) => spec.net_enforcement(),
+        crate::sandbox::Decision::Skip { .. } => crate::sandbox::NetEnforcement::None,
+    };
     let mut prepared: Option<crate::sandbox::PreparedSandbox> = None;
     if let crate::sandbox::Decision::Sandbox(spec) = &sandbox_decision {
         match crate::sandbox::prepare(spec) {
@@ -586,7 +592,12 @@ pub async fn execute(
         // EPERM to stdout with an empty stderr — classify needs both
         // streams (sandbox-executor.md §10a).
         let stdout_str = String::from_utf8_lossy(&result.stdout);
-        if let Some(kind) = crate::sandbox::classify_block(&stderr_str, &stdout_str) {
+        if let Some(kind) = crate::sandbox::classify_block(
+            &stderr_str,
+            &stdout_str,
+            Some(result.exit_code),
+            net_enf,
+        ) {
             // (a) prefix-grant hit (AC6) → rerun directly, no card.
             //     Same compound-command gate as Tier 4 (the grant only
             //     ever covers a single-segment command).
@@ -715,8 +726,13 @@ pub async fn execute(
     if sandbox_applied && !reran_unsandboxed && !result.cancelled && exit_code != 0 {
         let stderr_str = String::from_utf8_lossy(&result.stderr);
         let stdout_str = String::from_utf8_lossy(&result.stdout);
-        if let Some(guidance) = crate::sandbox::failure_guidance(&stderr_str, &stdout_str, ctx.mode)
-        {
+        if let Some(guidance) = crate::sandbox::failure_guidance(
+            &stderr_str,
+            &stdout_str,
+            Some(exit_code),
+            net_enf,
+            ctx.mode,
+        ) {
             combined.push('\n');
             combined.push_str(guidance);
         }

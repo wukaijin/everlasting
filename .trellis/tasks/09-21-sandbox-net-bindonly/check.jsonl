@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/sandbox-executor.md", "reason": "验收对照：Block 档逐字节不变（AC1）、陷阱清单未复现（§6）、测试锚点齐（§8）、§12.3 C 红线未绕"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "backend 质量检查基准（lint/测试/审计锚要求）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AC6/R9：classify/guidance 改动的错误契约符合性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Step 6 Settings UI 的前端质量检查基准（含 vitest 文案断言）"}
+{"file": ".trellis/tasks/09-21-sandbox-net-bindonly/research/deliberations-2026-09-21.md", "reason": "对照改动清单 7 条与安全边界 7 条逐条核验是否落实/如实挂账"}
+{"file": ".trellis/tasks/09-21-sandbox-net-bindonly/research/live-probe-2026-09-21.md", "reason": "AC5/AC8 验收口径：本机无 Landlock 的 SKIP/WARN 语义与 blocked-on-kernel 记录要求"}

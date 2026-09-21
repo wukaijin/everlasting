@@ -38,8 +38,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  updated_at TEXT NOT NULL,
  hidden INTEGER NOT NULL DEFAULT 0,
  metadata TEXT,
- sandbox_policy TEXT NOT NULL DEFAULT 'readwrite'
-   CHECK (sandbox_policy IN ('off', 'readwrite', 'readonly'))
+        sandbox_policy TEXT NOT NULL DEFAULT 'readwrite'
+   CHECK (sandbox_policy IN ('off', 'readwrite', 'readonly')),
+ -- 网络维度正交列(09-21-sandbox-net-bindonly):NULL = Block = 现状。
+ -- 无 CHECK(parse 层 fail-closed);AllowAll 本期无写入口。
+ sandbox_net TEXT
  )
  "#,
     )
@@ -1528,6 +1531,60 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  commit_sha TEXT NOT NULL,
  created_at INTEGER NOT NULL,
  PRIMARY KEY (session_id, seq)
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // --- 09-21-sandbox-net-bindonly: 网络维度正交列 + bind 快照表 ---
+    //
+    // `projects.sandbox_net`(nullable TEXT,NULL = Block = 现状语义,
+    // 不进 CHECK —— 正交维度无域校验需求,parse 层 fail-closed 已够;
+    // 存量 CHECK 不可扩域是改走新列的动因,见 spec §12.3 A→C)。新库
+    // CREATE TABLE 已带列(见上),存量库走 probe + ALTER 零重建。
+    add_project_column_if_missing(pool, "sandbox_net", "TEXT").await?;
+
+    // bind 快照 = BindOnly 档的唯一授权真源(R4):operator 确认后落行,
+    // 键 = (project_id, worktree_key) —— worktree 绝对路径键防换分支
+    // 旧快照在新代码生效(先例 preset_key 快照语义)。写通道 =
+    // `confirm_net_snapshot`(daemon route + Tauri command,Step 6),
+    // 写入时执行 daemon 监听口钳位(命中整单拒绝);`propose_net_ports`
+    // 只产 pending 建议,不落本表。ports 文法 = 逗号分隔 u16 列表
+    // (`BindSet::parse_ports` 同一真源)。confirmed_at unix ms。
+    // FK CASCADE:删项目级联清快照。幂等:新库直建,存量库 no-op。
+    // bind 端口建议队列(R4):LLM/manifest 的端口提议只进这里
+    // (pending 态),operator 确认后才落 project_net_snapshots 并把
+    // projects.sandbox_net 升为 bind_only:<ports>。建议永不直接生效
+    // (声明伪造面消解);PK (project_id, worktree_key) = 同 worktree
+    // 最新建议覆盖旧建议。status ∈ pending/confirmed/rejected(留行
+    // 供 UI 回显「已忽略」;确认/拒绝后新建议 REPLACE 回 pending)。
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS project_net_proposals (
+ project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ worktree_key TEXT NOT NULL,
+ ports        TEXT NOT NULL,
+ source       TEXT NOT NULL,
+ status       TEXT NOT NULL DEFAULT 'pending'
+   CHECK (status IN ('pending', 'confirmed', 'rejected')),
+ proposed_at  INTEGER NOT NULL,
+ PRIMARY KEY (project_id, worktree_key)
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS project_net_snapshots (
+ project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ worktree_key TEXT NOT NULL,
+ ports        TEXT NOT NULL,
+ confirmed_by TEXT NOT NULL,
+ confirmed_at INTEGER NOT NULL,
+ PRIMARY KEY (project_id, worktree_key)
  )
  "#,
     )

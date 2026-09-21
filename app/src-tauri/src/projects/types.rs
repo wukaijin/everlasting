@@ -29,6 +29,13 @@ pub struct ProjectRow {
     /// `readonly`). DEFAULT `readwrite` — serialized verbatim; the
     /// TS side maps it to its union type at the store boundary.
     pub sandbox_policy: String,
+    /// 09-21-sandbox-net-bindonly: orthogonal NET tier
+    /// (`block` / `bind_only:<ports>` / `allow_all`; NULL = block =
+    /// incumbent semantics). Serialized verbatim; effective ports
+    /// for bind_only live in `project_net_snapshots` (worktree-keyed
+    /// authorization truth) — this column is the tier + last
+    /// confirmed port list.
+    pub sandbox_net: Option<String>,
 }
 
 impl ProjectRow {

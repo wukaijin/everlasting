@@ -133,12 +133,38 @@ fn format_status(status: &BackgroundShellStatus, shell_id: &str) -> String {
         BackgroundShellStatus::Running {
             started_at,
             elapsed_ms,
+            ready,
         } => {
-            format!(
+            let mut s = format!(
                 "Background shell {shell_id}: running\n\
                  started_at: {started_at} ms (process boot)\n\
                  elapsed_ms: {elapsed_ms}"
-            )
+            );
+            // R5 readiness line — only present when the shell opted
+            // into the probe (`ready_port` at start). TimedOut is a
+            // FAILURE signal, stated as such (never folded).
+            if let Some(r) = ready {
+                match r {
+                    crate::background_shell::ReadyState::Pending => {
+                        s.push_str("\nready: pending (probing; no listener attributed yet)")
+                    }
+                    crate::background_shell::ReadyState::Ready {
+                        port,
+                        listener_pid,
+                        comm,
+                        at_ms,
+                    } => s.push_str(&format!(
+                        "\nready: ready — listener on 127.0.0.1:{port} (pid {listener_pid}, \
+                         comm {comm}, at {at_ms} ms) attributed to this shell's process group"
+                    )),
+                    crate::background_shell::ReadyState::TimedOut => s.push_str(
+                        "\nready: timed_out — no listener attributed within the probe window \
+                         (30s). Treat as NOT ready: inspect the shell's output via the \
+                         completion notification or rerun with diagnostics.",
+                    ),
+                }
+            }
+            s
         }
         BackgroundShellStatus::Completed {
             exit_code,
@@ -265,6 +291,7 @@ mod tests {
                 Some(5000),
                 None,
                 None,
+                None,
             )
             .await
             .expect("start");
@@ -298,6 +325,7 @@ mod tests {
                 Some(60_000),
                 None,
                 None,
+                None,
             )
             .await
             .expect("start");
@@ -323,12 +351,47 @@ mod tests {
             &BackgroundShellStatus::Running {
                 started_at: 1000,
                 elapsed_ms: 2500,
+                ready: None,
             },
             "bsh_abc",
         );
         assert!(s.contains("bsh_abc"));
         assert!(s.contains("running"));
         assert!(s.contains("2500"));
+        // No probe → no ready line (legacy entries stay lean).
+        assert!(!s.contains("ready:"));
+    }
+
+    /// R5: the three ready states render as distinct, honest lines —
+    /// TimedOut states FAILURE explicitly (never folded into a
+    /// success-looking shape).
+    #[test]
+    fn format_running_status_renders_ready_states() {
+        let mk = |ready| {
+            format_status(
+                &BackgroundShellStatus::Running {
+                    started_at: 1000,
+                    elapsed_ms: 2500,
+                    ready: Some(ready),
+                },
+                "bsh_abc",
+            )
+        };
+        let pending = mk(crate::background_shell::ReadyState::Pending);
+        assert!(pending.contains("ready: pending"), "{pending}");
+        let ready = mk(crate::background_shell::ReadyState::Ready {
+            port: 3001,
+            listener_pid: 4242,
+            comm: "node".to_string(),
+            at_ms: 9_000,
+        });
+        assert!(ready.contains("ready: ready"), "{ready}");
+        assert!(ready.contains("3001"), "{ready}");
+        assert!(ready.contains("4242"), "{ready}");
+        assert!(ready.contains("node"), "{ready}");
+        let to = mk(crate::background_shell::ReadyState::TimedOut);
+        assert!(to.contains("ready: timed_out"), "{to}");
+        assert!(to.contains("NOT ready"), "{to}");
     }
 
     #[test]

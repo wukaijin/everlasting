@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/sandbox-executor.md", "reason": "本任务直接改动的沙箱契约：求值序/规则集/pre_exec 纪律/断网契约/陷阱清单/§12 listen 缺口 roadmap（本任务=§12.3 C 落地），改动必须与其术语和不变量对齐"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 层入口：Pre-Development Checklist + Quality Check"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "四层错误模型 + 恢复链——R9 归因合取项与 remediation 文案改动的错误契约依据"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Tier 4 短路/升级闭环所在层——NetPolicy 不得触碰判定层语义（design §1 不变量）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "R1 迁移（add_project_column_if_missing 加列 + 新表 project_net_snapshots）的 DB 规范"}
+{"file": ".trellis/spec/backend/background-shell-observability.md", "reason": "Step 3 改 background_shell/in_memory.rs（ShellEntry/注入文本），后台壳可观测契约"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Step 3/4 给 run_background_shell 加参数、改 classify_block 签名的工具面契约"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Step 6 Settings 前端改动的前端层入口"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Step 6 Settings 网络档位/快照 UI 的类型规范"}
+{"file": ".trellis/tasks/09-21-sandbox-net-bindonly/research/deliberations-2026-09-21.md", "reason": "两场审议结论：改动清单 7 条/安全边界 7 条/挂账/未决——设计的直接来源"}
+{"file": ".trellis/tasks/09-21-sandbox-net-bindonly/research/live-probe-2026-09-21.md", "reason": "实测记录：listen 全拦/pnpm 126/本机无 Landlock（验收口径依据）+ Step 0 待验证的归因假设"}

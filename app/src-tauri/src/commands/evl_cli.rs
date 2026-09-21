@@ -144,7 +144,7 @@ fn parse_node_major(s: &str) -> Option<u32> {
 
 /// `everlasting-cli 0.1.0` → `0.1.0`(bin.mjs `--version` 的输出格式)。
 fn parse_evl_version(s: &str) -> Option<String> {
-    s.trim().split_whitespace().nth(1).map(str::to_string)
+    s.split_whitespace().nth(1).map(str::to_string)
 }
 
 /// package.json 文本 → `version` 字段。

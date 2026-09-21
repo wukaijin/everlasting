@@ -141,6 +141,9 @@ pub enum EscalationBlock {
     Write,
     /// Outbound network was denied (seccomp `socket(AF_INET*)` EPERM).
     Network,
+    /// The EXEC face missed the program's real location (exit 126 +
+    /// Permission denied on execve; F3, 2026-09-21).
+    ExecFace,
 }
 
 impl EscalationBlock {
@@ -149,6 +152,7 @@ impl EscalationBlock {
         match kind {
             crate::sandbox::SandboxBlockKind::Write => EscalationBlock::Write,
             crate::sandbox::SandboxBlockKind::Network => EscalationBlock::Network,
+            crate::sandbox::SandboxBlockKind::ExecFace => EscalationBlock::ExecFace,
         }
     }
 
@@ -158,6 +162,7 @@ impl EscalationBlock {
         match self {
             EscalationBlock::Write => crate::sandbox::SandboxBlockKind::Write,
             EscalationBlock::Network => crate::sandbox::SandboxBlockKind::Network,
+            EscalationBlock::ExecFace => crate::sandbox::SandboxBlockKind::ExecFace,
         }
     }
 }
@@ -312,6 +317,35 @@ pub struct ShellEventPayload {
     pub shell: Option<BackgroundShellSummary>,
 }
 
+/// Readiness state for a background shell started with `ready_port`
+/// (2026-09-21, task `09-21-sandbox-net-bindonly` R5). The probe
+/// runs OUTSIDE the sandbox in the daemon/GUI process; a state is
+/// only `Ready` when the listener on the port was attributed via
+/// `/proc` to THIS shell's process group — a port someone else owns
+/// stays `Pending` (collision), and an expired window is `TimedOut`,
+/// NEVER folded into success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ReadyState {
+    /// Probe running, no attributed listener yet (also the resting
+    /// state when a collision was detected — the log records it,
+    /// the state stays honest).
+    Pending,
+    /// The port has a listener owned by this shell's process group.
+    Ready {
+        port: u16,
+        /// `/proc`-attributed listener pid.
+        listener_pid: u32,
+        /// Listener `/proc/<pid>/comm`.
+        comm: String,
+        /// When readiness was observed (ms since process boot).
+        at_ms: MonotonicMs,
+    },
+    /// The ready window elapsed without an attributed listener.
+    /// A failure signal — the process may still be running.
+    TimedOut,
+}
+
 /// Snapshot of a background shell's current state. Returned by
 /// the registry's `status()` for `shell_status` tool responses.
 #[derive(Debug, Clone, Serialize)]
@@ -321,6 +355,10 @@ pub enum BackgroundShellStatus {
     Running {
         started_at: MonotonicMs,
         elapsed_ms: u64,
+        /// Readiness snapshot when the shell was started with
+        /// `ready_port` (`None` = no probe configured for this
+        /// shell — wire-additive, legacy entries stay lean).
+        ready: Option<ReadyState>,
     },
     /// Process exited normally (exit_code may be non-zero).
     Completed {
@@ -427,6 +465,14 @@ pub trait BackgroundShellRegistry: Send + Sync {
     /// entry so a later face-out failure can offer the escalation
     /// with the card attached back to the original call. `None` (test
     /// paths, escalation reruns) simply disables the offer path.
+    ///
+    /// R5 (2026-09-21): `ready_port` opts the shell into the
+    /// daemon-side readiness probe (TCP connect to 127.0.0.1:port +
+    /// `/proc` PGID attribution, see [`ReadyState`]). It feeds the
+    /// probe ONLY — never sandbox/authorization surfaces — and is
+    /// bound to the entry once at spawn (immutable after). `None` =
+    /// no probe, byte-identical legacy behavior.
+    #[allow(clippy::too_many_arguments)] // 8th arg = ready_port (09-21-sandbox-net-bindonly R5); grouping would obscure the start contract — same rationale as DEBT.md RULE-ARGS-001 sites
     async fn start(
         &self,
         session_id: &str,
@@ -435,6 +481,7 @@ pub trait BackgroundShellRegistry: Send + Sync {
         max_runtime_ms: Option<u64>,
         sandbox: Option<crate::sandbox::SandboxSpec>,
         origin_tool_use_id: Option<String>,
+        ready_port: Option<u16>,
     ) -> Result<String, BackgroundShellError>;
 
     /// Query a background shell's status. Returns

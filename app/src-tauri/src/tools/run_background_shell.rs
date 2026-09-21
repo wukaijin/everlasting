@@ -121,6 +121,15 @@ pub fn definition() -> ToolDef {
                                     summary of what this command does and why — e.g. \"Run unit \
                                     tests for the shell tool\". Shown to the user in the tool call \
                                     header and permission prompt. Do not restate the command itself."
+                },
+                "ready_port": {
+                    "type": "integer",
+                    "description": "Optional (dev servers etc.). A TCP port the command is expected \
+                                    to LISTEN on. The tool probes 127.0.0.1:<ready_port> from \
+                                    outside the sandbox and reports readiness in `shell_status` \
+                                    (`ready: ready(port, listener pid, comm)` / `timed_out` after \
+                                    30s). Use it to get a deterministic ready/failed signal instead \
+                                    of guessing from logs; it never affects sandbox or permissions."
                 }
             },
             "required": ["command"]
@@ -182,6 +191,27 @@ pub async fn execute(
         }
     };
 
+    // 2b. R5 (09-21-sandbox-net-bindonly): optional readiness port.
+    //     Validated to 1..=65535 — anything else is a caller error
+    //     (is_error, the LLM self-corrects); it feeds the probe ONLY,
+    //     never any authorization surface.
+    let ready_port: Option<u16> = match input.get("ready_port") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => match v.as_u64() {
+            Some(p) if (1..=65535).contains(&p) => Some(p as u16),
+            _ => {
+                return (
+                    format!(
+                        "Invalid ready_port {:?}: must be an integer in 1..=65535 (a TCP port the command is expected to listen on)",
+                        v
+                    ),
+                    true,
+                    ToolContextUpdate::default(),
+                );
+            }
+        },
+    };
+
     // 2. Parse max_runtime_ms. Zero or negative → default; no
     //    upper clamp (PRD Q6 decision: "no upper cap").
     let max_runtime_ms: Option<u64> =
@@ -240,6 +270,7 @@ pub async fn execute(
             // a later face-out failure can attach the escalation card
             // back to THIS call's card in the transcript.
             ctx.tool_use_id.clone(),
+            ready_port,
         )
         .await;
 
@@ -273,8 +304,18 @@ pub async fn execute(
                     "Started background shell {shell_session_id} (cwd: {}). Use \
                      `shell_status` to query progress, or `shell_kill` to terminate. \
                      When it finishes, you will see a `[system] 后台 shell ... 已完成...` \
-                     message at the start of your next turn.",
-                    validated_cwd.display()
+                     message at the start of your next turn.{}",
+                    validated_cwd.display(),
+                    match ready_port {
+                        Some(p) => format!(
+                            " Readiness is being probed on 127.0.0.1:{p} (attributed via \
+                             /proc to this shell's process group; timeout {}s → \
+                             `ready: timed_out` in `shell_status`, never a guess): poll \
+                             `shell_status` for `ready: ready(...)` before using the port.",
+                            crate::background_shell::in_memory::READY_PROBE_WINDOW_MS / 1000
+                        ),
+                        None => String::new(),
+                    }
                 ),
                 false,
                 ToolContextUpdate {

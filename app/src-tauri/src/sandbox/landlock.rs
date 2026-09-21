@@ -49,14 +49,53 @@ pub(crate) const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
 pub(crate) const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1 << 0;
 /// `LANDLOCK_RULE_PATH_BENEATH` — the only rule type in ABI v1.
 pub(crate) const LANDLOCK_RULE_PATH_BENEATH: libc::c_int = 1;
+/// `LANDLOCK_RULE_NET_PORT` — TCP port rule type, ABI v4 (kernel
+/// 6.7+). Pinned by test like every other constant here (trap 1).
+pub(crate) const LANDLOCK_RULE_NET_PORT: libc::c_int = 2;
 
-/// Kernel UAPI `struct landlock_ruleset_attr` (ABI v1: exactly one
-/// field). Offsets/size match the C layout; the kernel copies the
-/// struct by pointer during `landlock_create_ruleset`.
+/// Kernel UAPI `struct landlock_ruleset_attr` (ABI v1: one field;
+/// ABI v4 appends `handled_access_net`). Offsets/size match the C
+/// layout; the kernel copies the struct by pointer during
+/// `landlock_create_ruleset`. The size PASSED to the syscall decides
+/// how much of it the kernel reads: 8 bytes = v1 shape (net
+/// unrestricted), 16 = v4 shape (net per the second field).
 #[repr(C)]
 pub(crate) struct RulesetAttr {
     pub handled_access_fs: u64,
+    pub handled_access_net: u64,
 }
+
+impl RulesetAttr {
+    /// Byte length of the ABI v1 shape (fs only) — what
+    /// `landlock_create_ruleset` must be given when no net access is
+    /// handled (kernels without ABI v4 reject the 16-byte shape).
+    pub(crate) const FS_ONLY_SIZE: usize = 8;
+}
+
+/// Kernel UAPI `struct landlock_net_port_attr` (ABI v4): u64
+/// allowed_access + u16 port, padded to 16 under `repr(C)` — field
+/// offsets (allowed_access @0, port @8) identical to the packed C
+/// layout; the kernel reads by offset.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct NetPortAttr {
+    pub allowed_access: u64,
+    pub port: u16,
+}
+
+/// `LANDLOCK_ACCESS_NET_*` bits (ABI v4; the FS bits above end at
+/// 1<<12 — net bits continue at 1<<13, kernel UAPI order). Pinned
+/// by test (`abi_net_*`).
+pub(crate) mod net_bits {
+    pub const BIND_TCP: u64 = 1 << 13;
+    pub const CONNECT_TCP: u64 = 1 << 14;
+}
+
+/// Handled net access set for a BindOnly ruleset: both bits. A net
+/// access NOT in the handled set is unrestricted by Landlock — so
+/// BindOnly must handle BOTH bind and connect (restricting only one
+/// would fail-open the other).
+pub(crate) const HANDLED_ACCESS_NET: u64 = net_bits::BIND_TCP | net_bits::CONNECT_TCP;
 
 /// Kernel UAPI `struct landlock_path_beneath_attr`
 /// (`__attribute__((packed))` in the C header: u64 + s32 = 12 bytes).
@@ -148,6 +187,44 @@ impl AccessSet {
 }
 
 // ---------------------------------------------------------------------------
+// NetAccessSet — the net-side twin of AccessSet (trap 2 / C5): no
+// constructor from raw bits, both constants are strict subsets of
+// HANDLED_ACCESS_NET, so a NET_PORT rule can never request an
+// unhandled access bit (kernel EINVAL) by construction.
+// ---------------------------------------------------------------------------
+
+/// Net access rights a TCP-port rule may request (ABI v4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NetAccessSet(u64);
+
+impl NetAccessSet {
+    /// Allow BIND_TCP on the port (dev-server listen face).
+    pub const BIND_TCP: NetAccessSet = NetAccessSet(net_bits::BIND_TCP);
+    /// Allow CONNECT_TCP to the port (outbound face).
+    pub const CONNECT_TCP: NetAccessSet = NetAccessSet(net_bits::CONNECT_TCP);
+
+    pub(crate) fn bits(self) -> u64 {
+        self.0
+    }
+}
+
+/// Build the pre_exec-ready attr array for one access × port list.
+/// Allocation happens in the parent safe zone; the closure only
+/// reads the Vec through the Arc.
+pub(crate) fn net_port_attrs(
+    access: NetAccessSet,
+    ports: &std::collections::BTreeSet<u16>,
+) -> Vec<NetPortAttr> {
+    ports
+        .iter()
+        .map(|&port| NetPortAttr {
+            allowed_access: access.bits(),
+            port,
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // RulesetBuilder
 // ---------------------------------------------------------------------------
 
@@ -170,6 +247,12 @@ pub(crate) struct PreparedRuleset {
 pub(crate) struct RulesetBuilder {
     rules: HashMap<PathBuf, u64>,
     order: Vec<PathBuf>,
+    /// Handled net access bits (0 = ABI v1 shape: net unrestricted,
+    /// the Block/AllowAll tiers). Only the BindOnly tier sets
+    /// [`HANDLED_ACCESS_NET`] — and the attr size handed to the
+    /// kernel follows (16 vs 8 bytes), because pre-v4 kernels reject
+    /// the 16-byte shape with EINVAL.
+    handled_net: u64,
 }
 
 impl RulesetBuilder {
@@ -177,7 +260,17 @@ impl RulesetBuilder {
         Self {
             rules: HashMap::new(),
             order: Vec::new(),
+            handled_net: 0,
         }
+    }
+
+    /// Make the ruleset handle (and thus restrict) net accesses.
+    /// MUST be called before [`Self::build`]; setting a nonzero mask
+    /// on a kernel without ABI v4 fails `build()` with EINVAL — the
+    /// caller (mod.rs `prepare`) probes first and degrades to Block.
+    pub fn handle_net_access(&mut self, handled: u64) -> &mut Self {
+        self.handled_net = handled;
+        self
     }
 
     /// Grant `access` beneath `path`. Missing paths are tolerated at
@@ -203,12 +296,21 @@ impl RulesetBuilder {
     pub fn build(self) -> io::Result<PreparedRuleset> {
         let attr = RulesetAttr {
             handled_access_fs: HANDLED_ACCESS_FS,
+            handled_access_net: self.handled_net,
+        };
+        // Size follows the handled set: 8 bytes (v1 shape) when no
+        // net access is handled — byte-identical to the pre-net
+        // ruleset creation on every kernel; 16 only for net tiers.
+        let attr_size = if self.handled_net == 0 {
+            RulesetAttr::FS_ONLY_SIZE
+        } else {
+            std::mem::size_of::<RulesetAttr>()
         };
         let ruleset_fd = unsafe {
             libc::syscall(
                 libc::SYS_landlock_create_ruleset,
                 &attr as *const RulesetAttr,
-                std::mem::size_of::<RulesetAttr>(),
+                attr_size,
                 0 as libc::c_uint,
             )
         };

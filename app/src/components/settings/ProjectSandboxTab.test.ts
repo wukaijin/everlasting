@@ -15,12 +15,23 @@ import { mount, flushPromises } from "@vue/test-utils";
 const showToastMock = vi.fn();
 const setPolicyMock = vi.fn();
 const projectByIdMock = vi.fn();
+const getNetStateMock = vi.fn();
+const setNetMock = vi.fn();
+const confirmNetMock = vi.fn();
+const rejectNetMock = vi.fn();
+const loadProjectsMock = vi.fn();
 
 vi.mock("../../stores/projects", () => ({
   useProjectsStore: () => ({
     showToast: showToastMock,
     setProjectSandboxPolicy: setPolicyMock,
     projectById: projectByIdMock,
+    // 09-21-sandbox-net-bindonly: 网络档依赖(详见 .net.test.ts)。
+    getProjectNetState: getNetStateMock,
+    setProjectSandboxNet: setNetMock,
+    confirmNetSnapshot: confirmNetMock,
+    rejectNetProposal: rejectNetMock,
+    loadProjects: loadProjectsMock,
   }),
 }));
 
@@ -35,8 +46,15 @@ beforeEach(() => {
   projectByIdMock.mockReturnValue({
     id: "p1",
     sandbox_policy: "readwrite",
+    path: "/proj/root",
   });
   setPolicyMock.mockResolvedValue(undefined);
+  getNetStateMock.mockResolvedValue({
+    tier: null,
+    snapshots: [],
+    proposals: [],
+    bind_only_supported: true,
+  });
 });
 
 describe("ProjectSandboxTab", () => {
@@ -45,7 +63,7 @@ describe("ProjectSandboxTab", () => {
     await flushPromises();
     const group = w.find("[role='radiogroup']");
     expect(group.exists()).toBe(true);
-    const radios = w.findAll("input[type='radio']");
+    const radios = w.findAll("input[name='project-sandbox-policy']");
     expect(radios).toHaveLength(3);
     expect((radios[0]!.element as HTMLInputElement).value).toBe("off");
     expect((radios[1]!.element as HTMLInputElement).value).toBe("readwrite");
@@ -54,10 +72,10 @@ describe("ProjectSandboxTab", () => {
   });
 
   it("sandbox_policy 缺省(旧 daemon)→ 选中 readwrite", async () => {
-    projectByIdMock.mockReturnValue({ id: "p1" });
+    projectByIdMock.mockReturnValue({ id: "p1", path: "/proj/root" });
     const w = mountTab("p1");
     await flushPromises();
-    const checked = w.findAll("input[type='radio']")[1]!
+    const checked = w.findAll("input[name='project-sandbox-policy']")[1]!
       .element as HTMLInputElement;
     expect(checked.checked).toBe(true);
   });
@@ -65,10 +83,10 @@ describe("ProjectSandboxTab", () => {
   it("点选其它档 → invoke 携带 id+policy,成功后选中跟随", async () => {
     const w = mountTab("p1");
     await flushPromises();
-    await w.findAll("input[type='radio']")[0]!.setValue();
+    await w.findAll("input[name='project-sandbox-policy']")[0]!.setValue();
     await flushPromises();
     expect(setPolicyMock).toHaveBeenCalledWith("p1", "off");
-    const checked = w.findAll("input[type='radio']")[0]!
+    const checked = w.findAll("input[name='project-sandbox-policy']")[0]!
       .element as HTMLInputElement;
     expect(checked.checked).toBe(true);
   });
@@ -77,11 +95,12 @@ describe("ProjectSandboxTab", () => {
     setPolicyMock.mockRejectedValue(new Error("daemon unreachable"));
     const w = mountTab("p1");
     await flushPromises();
-    await w.findAll("input[type='radio']")[2]!.setValue();
+    showToastMock.mockClear();
+    await w.findAll("input[name='project-sandbox-policy']")[2]!.setValue();
     await flushPromises();
     expect(showToastMock).toHaveBeenCalledTimes(1);
     expect(showToastMock.mock.calls[0]?.[0]).toContain("设置失败");
-    const checked = w.findAll("input[type='radio']")[1]!
+    const checked = w.findAll("input[name='project-sandbox-policy']")[1]!
       .element as HTMLInputElement;
     expect(checked.checked).toBe(true);
   });

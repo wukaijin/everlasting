@@ -454,3 +454,77 @@ async fn rebuild_scheduled_tasks_group_chat_preserves_rows_and_updates_checks() 
         .expect("count");
     assert_eq!(count, 3, "t1 + t2 + g1 survive the idempotent re-run");
 }
+
+/// 09-21-sandbox-net-bindonly: `projects.sandbox_net` 正交列 + bind
+/// 快照表 `project_net_snapshots`。存量库(旧形 projects 无该列)经
+/// probe+ALTER 零重建补列;新库 CREATE TABLE 直带;重跑幂等;快照表
+/// 存在与 PK 形状(project_id, worktree_key)可探。
+#[tokio::test]
+async fn migrations_add_sandbox_net_column_and_snapshots_table() {
+    use sqlx::Row;
+    let (pool, _path) = fresh_pool().await;
+
+    // 旧形 projects 表(无 sandbox_net)—— 先建占位,逼 ALTER 路径。
+    sqlx::query(
+        r#"CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        is_git_repo INTEGER NOT NULL DEFAULT 0,
+        is_legacy INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        hidden INTEGER NOT NULL DEFAULT 0,
+        metadata TEXT,
+        sandbox_policy TEXT NOT NULL DEFAULT 'readwrite'
+          CHECK (sandbox_policy IN ('off', 'readwrite', 'readonly'))
+        )"#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create old-shape projects");
+
+    run_migrations(&pool).await.expect("run migrations");
+
+    let has_col: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'sandbox_net'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .try_get(0)
+    .unwrap();
+    assert_eq!(has_col, 1, "sandbox_net must be added to legacy projects");
+
+    // 快照表存在 + 可写一行(PK 两键);级联 FK 由 init_pool pragma 生效。
+    sqlx::query(
+        "INSERT INTO projects (id, name, path, created_at, updated_at) \
+         VALUES ('p1', 'p', '/tmp/p1', datetime('now'), datetime('now'))",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed project row");
+    sqlx::query(
+        "INSERT INTO project_net_snapshots (project_id, worktree_key, ports, confirmed_by, confirmed_at) \
+         VALUES ('p1', '/wt/a', '3000,3001', 'op', 123)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert snapshot row");
+    // 同键 REPLACE 幂等语义由写通道使用,此处只探唯一约束方向。
+    let dupe = sqlx::query(
+        "INSERT INTO project_net_snapshots (project_id, worktree_key, ports, confirmed_by, confirmed_at) \
+         VALUES ('p1', '/wt/a', '9', 'op', 124)",
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        dupe.is_err(),
+        "PK (project_id, worktree_key) must be unique"
+    );
+
+    // 幂等:重跑迁移 no-op。
+    run_migrations(&pool)
+        .await
+        .expect("rerun migrations idempotent");
+}

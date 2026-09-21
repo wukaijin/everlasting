@@ -211,6 +211,7 @@ mod tests {
                 Some(120_000),
                 None,
                 None,
+                None,
             )
             .await
             .expect("start");
@@ -251,6 +252,7 @@ mod tests {
                 Some(5000),
                 None,
                 None,
+                None,
             )
             .await
             .expect("start");
@@ -288,6 +290,7 @@ mod tests {
                 "sleep 60".to_string(),
                 tmp.path().to_path_buf(),
                 Some(120_000),
+                None,
                 None,
                 None,
             )
