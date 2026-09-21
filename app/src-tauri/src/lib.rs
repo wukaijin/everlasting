@@ -258,6 +258,11 @@ pub fn run() {
             // (daemon HTTP 镜像路由见 daemon/routes/disk.rs)。
             commands::disk::get_disk_usage,
             commands::disk::run_disk_cleanup,
+            // Settings「CLI (evl)」分类:宿主机 evl CLI 检测 + 一键安装
+            // (daemon 内嵌文件源,安装落点 = daemon 宿主机;HTTP 镜像
+            // 路由见 daemon/routes/evl_cli.rs)。
+            commands::evl_cli::detect_evl,
+            commands::evl_cli::install_evl,
             // F2 定时任务(2026-08-28, task `08-28-f2-scheduled-tasks`):
             // 管理面 CRUD 四件;调度循环只在 daemon bin 装配(GUI 零
             // timer),这些命令只读写 scheduled_tasks 表 + 校验。

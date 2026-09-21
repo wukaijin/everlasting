@@ -65,6 +65,8 @@ import ScheduledTasksTab from "./ScheduledTasksTab.vue";
 import GeneralTab from "./GeneralTab.vue";
 // F3 磁盘治理(2026-09-03):「存储」分组 —— 占用概览 + 回收开关 + 手动清理。
 import DiskTab from "./DiskTab.vue";
+// CLI (evl):「集成」分组 —— 宿主机 evl CLI 检测 + 一键安装(daemon 内嵌源)。
+import CliTab from "./CliTab.vue";
 import ProjectMemoryTab from "./ProjectMemoryTab.vue";
 import ProjectSandboxTab from "./ProjectSandboxTab.vue";
 import ProjectSubagentsTab from "./ProjectSubagentsTab.vue";
@@ -102,6 +104,7 @@ const CATEGORY_COMPONENTS: Record<string, Component> = {
   "gc-presets": GroupChatPresetsTab,
   search: SearchTab,
   scheduled: ScheduledTasksTab,
+  cli: CliTab,
   disk: DiskTab,
   remote: RemoteTab,
   "project-memory": ProjectMemoryTab,

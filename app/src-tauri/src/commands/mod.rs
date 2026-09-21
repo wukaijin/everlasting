@@ -38,6 +38,9 @@ pub mod config;
 // 「存储」分类两条 IPC(占用概览 get_disk_usage + 手动清理
 // run_disk_cleanup);回收本体在 `disk::governor` 的 `_inner` 族。
 pub mod disk;
+// Settings「CLI (evl)」分类两条 IPC(宿主机检测 detect_evl + 一键安装
+// install_evl);CLI 文件编译期内嵌,安装落点 = daemon 宿主机。
+pub mod evl_cli;
 pub mod files;
 // GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):用户群聊预设
 // CRUD 四件(list/create/update/delete),`_inner` 单源供 Tauri +
@@ -200,6 +203,10 @@ pub fn all_command_names() -> Vec<&'static str> {
         // 在 `disk::governor` 的 `_inner` 族,节拍与按钮共享)。
         "get_disk_usage",
         "run_disk_cleanup",
+        // Settings「CLI (evl)」分类:宿主机 evl CLI 检测 / 一键安装
+        // (daemon 内嵌文件源;安装动作在 daemon 进程执行)。
+        "detect_evl",
+        "install_evl",
         // L3b PR3 (2026-06-27): merge / discard worker IPCs.
         // The LLM-side path is the `merge_worker` /
         // `discard_worker` tools (tool layer); these commands

@@ -114,6 +114,12 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   // 走 IPC,同 set_app_config_flag 的老坑;http.routes-sync.test.ts 守卫)。
   get_disk_usage: "disk",
   run_disk_cleanup: "disk",
+  // evl_cli(Settings「CLI (evl)」分类):宿主机 evl CLI 检测 + 一键安装
+  // (daemon 内嵌文件源,安装落点 = daemon 宿主机)。缺映射时浏览器/
+  // sidecar/remote 模式打开该 tab 即报 `unknown cmd`(http.routes-sync
+  // 守卫;Tauri IPC 模式侥幸不经过本表)。
+  detect_evl: "evl_cli",
+  install_evl: "evl_cli",
   // S2 配对码生成(新 domain pairing)
   generate_pairing_code: "pairing",
   // files

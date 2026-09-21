@@ -411,6 +411,7 @@ standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既�
 `cancel/*`(Stop)、`message_queue/*`、`config/*`、
 `background_shells/*`(list_background_shells / kill_background_shell,09-02)、
 `disk/*`(get_disk_usage / run_disk_cleanup,09-03)、
+`evl_cli/*`(detect_evl / install_evl,09-21,见下节)、
 `checkpoint/*`(N2 09-20 四条:list_turn_checkpoints / get_turn_checkpoint_diff /
 revert_to_checkpoint_preview / revert_to_checkpoint_execute;契约见
 `.trellis/spec/backend/checkpoint-contract.md`——prev_seq 稀疏链语义、
@@ -420,6 +421,29 @@ preview_token 双 oid 拼接、Unavailable/Broken/StalePreview/SessionBusy 类�
 二进制下载 `/api/v1/attachments/{session_id}/{file}`(B1 08-16)与 files 域三条
 本地路径直连(两条取字节 + 一条存在性探针,见下);`/api/v1` 域外另有 MCP 端点
 `/mcp`(POST/GET/DELETE 三态,§6.5);其余全 POST。
+
+### evl_cli 域(09-21 起):宿主机 evl CLI 检测 / 一键安装
+
+Settings「CLI (evl)」分类两条(镜像 `commands::evl_cli`,Q0 单源;**检测与
+安装动作都在 daemon 进程执行**——「给 daemon 的宿主机安装」的语义由执行
+位置保证,remote 场景即远端机器):
+
+- `POST /api/v1/evl_cli/detect_evl`(无 body)— 检测宿主机环境,返回
+  `{bundledVersion, node:{found,version,ok,reason}, evl:{state,path,version,onPath},
+  localBinDir, localBinOnPath}`(全 camelCase)。`state` 三值:`notInstalled` /
+  `managed`(`~/.local/bin/evl` 是本功能创建的 symlink,指向
+  `{app_data_dir}/cli/bin.mjs`)/ `external`(用户自装,如 `pnpm link` /
+  手动放置——不覆盖)。探测:spawn `node --version` / `evl --version`(各
+  3s 超时,NotFound 视为未装而非错误)+ 文件系统 symlink 判定;managed 的
+  版本从写出的 package.json 读,不依赖 PATH。
+- `POST /api/v1/evl_cli/install_evl`(无 body)— 安装 / 更新:写出
+  **daemon 编译期内嵌**的 cli/ 运行时三件套(`bin.mjs` + `lib/**` +
+  `package.json`,`include_str!` 快照;cli/ 新增文件漏嵌由防漂移单测拦截)
+  到 `{app_data_dir}/cli/`(bin.mjs 0755)+ symlink `~/.local/bin/evl`;
+  返回安装后的同一 detect payload(前端一次拿全状态)。
+  错误面(均 400 InvalidRequest):`~/.local/bin/evl` 已存在且非本功能
+  创建(拒绝覆盖,消息带现有路径)/ Node 缺失或 < 20 / 非 unix 平台。
+  幂等:重复安装 = 更新语义(重写托管目录 + 重建 symlink)。
 
 ### files 域本地路径 GET 路由(09-13 起两条:图片 + 文件;09-14 加存在性探针)
 

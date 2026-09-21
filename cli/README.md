@@ -12,6 +12,12 @@ node cli/bin.mjs --help          # 直跑(仓库内)
 pnpm link --dir cli              # 或挂全局:任意目录裸 `evl`
 ```
 
+第三种(**无需仓库 / pnpm**):GUI Settings →「CLI (evl)」一键安装——
+daemon 编译期内嵌 cli/ 三件套,写出 `{app_data_dir}/cli/` 并 symlink
+`~/.local/bin/evl`(不覆盖已存在的外部文件;重复安装即更新)。等价的
+HTTP 入口:`POST /api/v1/evl_cli/{detect_evl,install_evl}`(契约见
+docs/DAEMON-API.md §7 evl_cli 域)。
+
 daemon 拉起:`./scripts/daemon.sh bg`(默认 `http://127.0.0.1:7456`,
 env `EVERLASTING_BASE` / `--base-url` 覆盖)。
 

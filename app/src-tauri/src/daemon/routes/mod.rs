@@ -19,7 +19,7 @@
 //! → `fetch("/api/v1/" + domain + "/" + cmd, {method: "POST", body:
 //! JSON.stringify(args)})` translation.
 //!
-//! Domain → module map (83 handlers total):
+//! Domain → module map (85 handlers total):
 //! - `agent` (1): `chat`
 //! - `attachments`: attachment save
 //! - `background_shells` (2): `list_background_shells`, `kill_background_shell` (2026-09-02)
@@ -28,6 +28,7 @@
 //! - `config` (2): `get_llm_config`, `get_home_dir`
 //! - `disk` (2): `get_disk_usage`, `run_disk_cleanup` (F3 磁盘治理 PR3,
 //!   2026-09-03)
+//! - `evl_cli` (2): `detect_evl`, `install_evl` (Settings CLI 分类)
 //! - `files` (2): `list_files`, `list_files_at`
 //! - `group_chat_presets` (4): `list_group_chat_presets`,
 //!   `create_group_chat_preset`, ... (GCE-P1, 2026-09-12)
@@ -62,6 +63,10 @@ pub mod config;
 // F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance` PR3):设置面
 // 「存储」分类 IPC(占用概览 + 手动清理;mirror commands::disk,Q0 单源)。
 pub mod disk;
+// Settings「CLI (evl)」分类:宿主机 evl CLI 检测 / 一键安装(镜像
+// commands::evl_cli,Q0 单源;安装动作在 daemon 进程执行 —— 「给
+// daemon 的宿主机安装」语义)。
+pub mod evl_cli;
 pub mod files;
 // GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):用户群聊预设
 // CRUD 四条 route(mirror commands::group_chat_presets,Q0 单源)。
@@ -124,6 +129,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .nest("/api/v1/config", config::router(state.clone()))
         .nest("/api/v1/disk", disk::router(state.clone()))
+        .nest("/api/v1/evl_cli", evl_cli::router(state.clone()))
         .nest("/api/v1/files", files::router(state.clone()))
         .nest(
             "/api/v1/group_chat_presets",
