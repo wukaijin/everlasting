@@ -36,3 +36,23 @@
 - **F2 exec 白名单**:pnpm/JDK(global 目录型安装)的真正解法;operator 供应链风险先写进 spec(§13.6)再评审。
 - **AllowAll**:capability token + 「daemon TCP 回路是控制面唯一路径」不变量测试化(§13.6)。
 - 并行任务 `09-21-durable-prefix-grant`(prefix-grant 持久化)与本任务正交;本任务 F3/remediation 文案是其触发入口。
+
+## 2026-09-22 补充:ABI 1 最低档 live 复验(第二台机)
+
+**环境**:另一台机(Ubuntu 22.04 / WSL 2.2.4 / 内核 5.15.153.1-microsoft-standard-WSL2),裸 syscall 探针 `landlock_create_ruleset(NULL,0,VERSION)` 实返 **1** —— 文件面按 ABI v1 子集活跃(`mod.rs` 探针 ≥1 即 ok 的设计下限),`landlock_net=false`、seccomp 可用;daemon API `get_project_net_state` 报 `bind_only_supported:false`。验证矩阵较开发机(ABI 3)再降一档,补齐最低文件面档位。
+
+**降级路径三支 live 证实**(turn-smoke `--sandbox-probe` 真 LLM 轮 + `session_audit_events` 审计行;项目 tier=`bind_only:3000`):
+
+| 场景 | 审计 net 段 | 误杀 |
+|---|---|---|
+| Block 档 | `net=block; seccomp:inet_block` | 无 |
+| `bind_only:3000` 无快照 | `net=block`(policy 层降级,无授权支) | 无 |
+| `bind_only:3000` + 已确认快照 | `net=bind_only(3000)->block(degraded); seccomp:inet_block`(prepare 能力降级支) | 无 |
+
+第三行与 `sandbox/mod.rs` summary 生成的 degraded 字符串(mod.rs:686 / tests_sandbox.rs:856 断言)逐字节一致 —— summary 如实报告降级、不虚报 landlock_net 执法,在最低文件面 ABI 下同样成立。
+
+**测试套件**(同机):`--lib` **2572 过 / 1 败**(evl_cli 已知环境败,同因本机 PATH 已装 evl;另首次全量跑 `daemon::tunnel::tests::remote_cancel_stops_stream_forwarding` 偶发时序 flake,单跑 0.1s 绿 + 复跑全量绿,非本任务回归,留意复现频次);remote 89 绿;前端 149 文件 / 2029 绿。
+
+**结论**:BindOnly 降级设计(Block 执法 + summary degraded 报告 + 无误杀)在 **ABI 1~3 全档位 live 成立**;真内核 BindOnly 矩阵仍需 ABI ≥4(blocked-on-kernel 挂账不变)。
+
+验证物(供复查后清理):probe 项目 `net-probe-test`(id `f0557c46-…`,bind_only:3000 + 快照行)、kept session `84534aeb-…` / `e388d1d0-…`(两支降级的审计证据)、`/tmp/net-probe-test/`。
