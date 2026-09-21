@@ -999,3 +999,24 @@ GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M
 ### Status
 
 [OK] **Completed**
+
+
+## Session 59: 沙箱 NetPolicy 三态落地完成 + 重启后实测回归
+
+**Date**: 2026-09-22
+**Task**: 沙箱 NetPolicy 三态落地完成 + 重启后实测回归
+**Branch**: `main`
+
+### Summary
+
+完成并归档 09-21-sandbox-net-bindonly：NetPolicy 三态(Block/BindOnly/AllowAll挂账)——projects.sandbox_net 列+bind 快照确认流，BindOnly 用 Landlock ABI v4 net 执法(能力探测降级 Block+warn)，ready_port 就绪探测(/proc PGID 归因)，F1 exec 根 canonicalize + F3 exit126 识别，Settings 网络档 UI+文案三硬要求 vitest 锚。验证：cargo -p everlasting --lib 2572 绿(1 既有环境败 evl_cli PATH)、remote 89 绿、前端 2029 绿、turn-smoke --sandbox-probe 通过。两研究修正：F0 归因不成立(pnpm global 在 exec 面外，F2 提前挂账)、本机实为 ABI 3 非无 Landlock。收尾实测(daemon 重启后)：propose_net_ports 端点 422 证明新二进制在跑、Block 档沙箱审计行 1 条零回归、真 LLM 轮 end_turn 正常。BindOnly 真内核矩阵仍 blocked-on-kernel(内核 6.6<6.7)，换内核后以 jjh-mono web:3001 验。sibling 任务 09-21-durable-prefix-grant 留 planning 待规划。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `03770a6a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
