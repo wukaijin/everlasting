@@ -1,0 +1,116 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+**/*.pdb
+
+# Tauri
+**/tauri/target
+**/tauri.conf.json.bak
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+.vite/
+
+# 依赖 lock(允许提交 pnpm-lock.yaml / Cargo.lock,这两个是项目稳定性的关键,保留)
+# 但本地临时 lock 备份忽略
+*.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境 / 临时
+*.log
+*.tmp
+.env.local
+.env.*.local
+.envrc.local
+
+# deploy-remote.sh 本地配置(真实 ssh host/URL,不入库;模板见 .deploy-remote.env.example)
+scripts/.deploy-remote.env
+
+# 本地开发临时目录(早期 pip install fonttools 测试残留,现改用 Node 工具链)
+.venv/
+scripts-tmp-node_modules/
+
+# 字体源文件(可从上游仓库重新下载,不需要纳入版本控制;subset 产物 woff2 已提交)
+app/src/assets/fonts/source/
+
+# 数据库 / 缓存(项目运行后会产生,不入库)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+.cache/
+
+# App runtime spillover only (shell tool outputs at `<cwd>/.everlasting/outputs/`).
+# Project-level config under `.everlasting/agents/` (L3d subagents), `commands/` (B3),
+# and `skills/` (B4) is **committed and shared** — see loader.rs docs.
+.everlasting/outputs/
+.everlasting/tasks/
+
+
+reasonix.toml
+.codegraph/
+
+# Claude Code 工具产物(EnterWorktree 临时 worktree 目录,不入库)
+.claude/worktrees/
+
+# ZCode 工具产物(plan/临时文件,不入库)
+.zcode/
+
+
+# daemon.sh 运行时 PID 文件(不入库)
+.everlasting-daemon.pid
+
+# N9 前端基准:种子生成物(gen-fixtures.mjs 可再生,10k 档 17MB 不入库)
+app/bench/fixtures/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
