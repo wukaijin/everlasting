@@ -83,7 +83,7 @@ session 级」升级为「多 token 前缀 + 项目级持久化」,批准语义 
   grant-hit + off 档审批豁免各写一行,ToolAllowed + reason 形态或新
   kind,design 定)/ 撤销(GUI 撤销动作写行)三事件可查。
 
-## Acceptance Criteria(2026-09-22 实现完成;✅ = 测试锚绿,⏳ = 待 live)
+## Acceptance Criteria(2026-09-22 实现完成 + live E2E 全绿;✅ = 测试锚 / live 证据)
 
 - [x] 批准 `pnpm --filter @jjh/web dev` 后:同前缀命令(`pnpm --filter
   @jjh/web dev --port 3000`)在新 session 直接免沙箱启动(无弹卡、无先
@@ -114,10 +114,19 @@ session 级」升级为「多 token 前缀 + 项目级持久化」,批准语义 
   `prefix_tokens_hit_quoting_edge_shapes_stay_literal`
 - [x] off 档:新 session 同前缀免弹卡;session 级存量首 token 行仍生效。
   ✅ `tier4_off_tier_*` 两测试
-- [ ] ⏳ 无 Landlock 内核环境端到端 live:dev server 被拦 → remediation
-  指引 → 批准 → 免沙箱启动成功;重启命令后不再拦。**(待用户在真实
-  daemon 会话手验:本机即 WSL2 6.6 无 Landlock net,跑一次 dev server
-  场景;或 `scripts/turn-smoke.sh` live 冒烟)**
+- [x] 无 Landlock 内核环境端到端 live:dev server 被拦 → remediation
+  指引 → 批准 → 免沙箱启动成功;重启命令后不再拦。
+  ✅ 2026-09-22 live E2E(本机 WSL2 5.15,landlock 有 / landlock_net 无
+  / seccomp 有,net=block):Phase1 沙箱拦裸 `node dev.js`(seccomp
+  inet_block,exit 1 `listen EPERM`)→ 升级卡(信任面文案 + `grant_
+  pattern` 回显)→ allow_always → durable 行 + 三审计 → 免沙箱重跑
+  listening;Phase2 新 session 同前缀**零弹卡直接免沙箱启动**
+  (`tool_allowed` + `durable prefix grant hit`,无 sandboxed 行),
+  不同前缀 `cat` 仍进沙箱;Phase3 list 可见 / revoke 删行 + `grant_
+  revoked` 审计。**顺带发现并修复既有缺陷**:`classify_block` 对
+  裸 node 的 stderr 小写 `operation not permitted` + listen 强特征
+  只喂 stdout 哑火(升级链零触发)——修复见 spec §12.2 补修段,
+  锚 `classify_block_reads_stderr_for_listen_denials`。
 
 ## 评审结论摘要(2026-09-22 群聊,session 0a1122b4)
 
