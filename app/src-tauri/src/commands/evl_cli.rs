@@ -373,15 +373,17 @@ pub async fn install_evl_inner(
         ));
     }
     let local_bin = default_local_bin_dir()?;
-    install_to(&state.app_data_dir, &local_bin, "node").await
+    install_to(&state.app_data_dir, &local_bin, "node", "evl").await
 }
 
 /// 安装落盘本体。步骤:node 前置 → 冲突检查 → 写出文件 → 重建
-/// symlink → 复跑 detect。
+/// symlink → 复跑 detect。`node_bin` / `evl_bin` 参数化(单测注入假
+/// 命令,evl_bin 缺席时 on_path=false,不受宿主机已装 evl 影响)。
 async fn install_to(
     data_dir: &Path,
     local_bin_dir: &Path,
     node_bin: &str,
+    evl_bin: &str,
 ) -> Result<EvlCliStatusPayload, AppCommandError> {
     // 1. Node 前置:装出来跑不起来就没有意义,fail loud。
     let node = probe_node_status(node_bin).await;
@@ -468,7 +470,7 @@ async fn install_to(
         )
     })?;
 
-    Ok(detect_with(data_dir, local_bin_dir, node_bin, "evl").await)
+    Ok(detect_with(data_dir, local_bin_dir, node_bin, evl_bin).await)
 }
 
 #[cfg(unix)]
@@ -638,8 +640,11 @@ mod tests {
         let data_dir = tempfile::tempdir().unwrap();
         let local_bin = tempfile::tempdir().unwrap();
         let node_bin = write_fake_node(data_dir.path());
+        // evl_bin 缺席:PATH 探测必 NotFound,on_path 断言不受宿主
+        // 机已装 evl(如 pnpm link 的 dev symlink)影响。
+        let absent_evl = "evl-probe-absent-xyz";
 
-        let payload = install_to(data_dir.path(), local_bin.path(), &node_bin)
+        let payload = install_to(data_dir.path(), local_bin.path(), &node_bin, absent_evl)
             .await
             .unwrap();
         let cli_dir = data_dir.path().join("cli");
@@ -657,15 +662,15 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o111, 0o111, "bin.mjs 必须可执行");
 
-        // payload:Managed + 版本来自写出的 package.json(测试机 PATH 无
-        // evl 也应给出版本)。
+        // payload:Managed + 版本来自写出的 package.json(PATH 探测
+        // 缺席时也应给出版本)。
         assert_eq!(payload.evl.state, EvlInstallState::Managed);
         assert_eq!(payload.evl.version.as_deref(), Some("0.1.0"));
         assert_eq!(payload.bundled_version, "0.1.0");
-        assert!(!payload.evl.on_path, "测试环境 PATH 上不应有 evl");
+        assert!(!payload.evl.on_path, "缺席 evl_bin 探测应得 on_path=false");
 
         // 幂等:重复安装(更新语义)仍 Ok,状态不变。
-        let again = install_to(data_dir.path(), local_bin.path(), &node_bin)
+        let again = install_to(data_dir.path(), local_bin.path(), &node_bin, absent_evl)
             .await
             .unwrap();
         assert_eq!(again.evl.state, EvlInstallState::Managed);
@@ -682,7 +687,7 @@ mod tests {
         // 预放用户自己的 evl(普通文件)→ 拒绝,且尚未写出任何托管文件。
         let link = local_bin.path().join("evl");
         std::fs::write(&link, "#!/bin/sh\n").unwrap();
-        let err = install_to(data_dir.path(), local_bin.path(), &node_bin)
+        let err = install_to(data_dir.path(), local_bin.path(), &node_bin, "evl")
             .await
             .unwrap_err();
         assert_eq!(err.category, ErrorCategory::InvalidRequest);
@@ -699,7 +704,7 @@ mod tests {
     async fn install_requires_eligible_node() {
         let data_dir = tempfile::tempdir().unwrap();
         let local_bin = tempfile::tempdir().unwrap();
-        let err = install_to(data_dir.path(), local_bin.path(), "no-such-node-xyz")
+        let err = install_to(data_dir.path(), local_bin.path(), "no-such-node-xyz", "evl")
             .await
             .unwrap_err();
         assert_eq!(err.category, ErrorCategory::InvalidRequest);
