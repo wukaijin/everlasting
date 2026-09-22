@@ -48,3 +48,25 @@ jjh-mono 实测回归驱动的 checkpoint UI 收敛:(1) MessageItemFooter 新增
 ### Status
 
 [OK] **Completed**
+
+
+## Session 155: durable prefix grant live E2E 全绿 + classify_block stderr 识别缺陷修复
+
+**Date**: 2026-09-22
+**Task**: durable prefix grant live E2E 全绿 + classify_block stderr 识别缺陷修复
+**Branch**: `main`
+
+### Summary
+
+补上 09-21-durable-prefix-grant 最后一条 AC:本机 WSL2 5.15(landlock 有/landlock_net 无/seccomp 有,net=block)三段 live E2E 全绿——Phase1 沙箱拦裸 node dev server→升级卡(信任面文案+grantPattern 回显)→allow_always→durable 行+审计→免沙箱重跑成功;Phase2 新 session 同前缀零弹卡直接免沙箱启动(tool_allowed durable prefix grant hit),不同前缀仍进沙箱;Phase3 管理面 list/revoke+grant_revoked 审计。驱动面:daemon HTTP API+SSE 拦截 permission:ask(脚本 /tmp/durable-grant-e2e/)。E2E 首轮暴露既有缺陷:裸 node 崩溃把 listen EPERM 打在 stderr 且 libuv errno 小写,classify_block 只认 stderr 大写 O 字面量+强特征只喂 stdout→升级链整条哑火;修复=errno 大小写不敏感+stream_smells_net_block 双流+证据行 listen 锚(live 形态逐字节测试锚,全量 --lib 2592 绿,spec §12.2 补修+§14.5 更新),daemon 已重建重启验证。任务随 AC 12/12 全勾收档(archive 53848065)。遗留备注:spec sandbox-executor.md 37KB 已超 context 注入 32KB 截断阈值(validate 警告),后续可拆分。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f2f7776b` | (see git log) |
+| `de08f499` | (see git log) |
+
+### Status
+
+[OK] **Completed**
