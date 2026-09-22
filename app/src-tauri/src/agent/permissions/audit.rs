@@ -232,6 +232,16 @@ pub enum AuditKind {
     /// - `recovered` — M4a:僵尸场(round≥30)/ 停摆场补 finalize(error)
     ///   后回收(随后开新场)
     ScheduledTaskFired,
+    // === Permission 域(09-21-durable-prefix-grant,R5)===
+    /// user 在 GUI 撤销一条 durable shell 前缀授权
+    /// (`project_shell_grants` 行删除)后落本行。挂**撤销动作发生的
+    /// session**(管理面入口拿不到发起 session 时挂 DEFAULT,
+    /// payload 携带 `project_id` / `worktree_key` / `grant_pattern`)。
+    /// 建立事件 = 既有 `permission_granted`(reason 带
+    /// `durable shell prefix grant: <pattern>`),命中事件 =
+    /// `tool_allowed` + reason `durable prefix grant hit` —— 三事件
+    /// (建立/命中/撤销)闭环。
+    GrantRevoked,
 }
 
 impl AuditKind {
@@ -283,6 +293,7 @@ impl AuditKind {
             // / `gate_tree_oid` / `source`, see the variant doc +
             // `record_checkpoint_reverted_audit`.
             Self::CheckpointReverted => "checkpoint_reverted",
+            Self::GrantRevoked => "grant_revoked",
             // F2 定时任务 (2026-08-28): scheduler lifecycle events.
             // Wire shape: snake_case lowercase; payload carries
             // `task_id`/`task_name`/`action` (+ optional `reason`),
@@ -469,6 +480,39 @@ pub async fn record_sandboxed_shell_audit(
         db,
         session_id,
         AuditKind::SandboxedShellExecution.as_str(),
+        Some(&payload_str),
+        turn_seq,
+    )
+    .await
+}
+
+/// Durable prefix-grant hit (09-21-durable-prefix-grant, R5): a
+/// `tool_allowed` row with an explicit reason, so an unsandboxed
+/// grant-exempt start (sandbox tier) or approval-free execution (off
+/// tier) is distinguishable in the audit trail from a plain allowed
+/// tool call. Written by the tool layer when `sandbox::decide`
+/// returns `Skip { reason: DURABLE_GRANT_SKIP_REASON }` (the sandbox
+/// module itself stays audit-free by contract). `command_sha256_12`
+/// only — the full text already lives in the sibling `tool_executed`
+/// row, and the matched pattern is recoverable from the grant table
+/// (same not-full-text convention as `record_sandboxed_shell_audit`).
+pub async fn record_durable_grant_hit_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    tool_name: &str,
+    command_sha256_12: &str,
+    turn_seq: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "tool_name": tool_name,
+        "command_sha256_12": command_sha256_12,
+        "reason": "durable prefix grant hit",
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::ToolAllowed.as_str(),
         Some(&payload_str),
         turn_seq,
     )

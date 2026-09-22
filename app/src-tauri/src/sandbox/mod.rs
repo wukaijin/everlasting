@@ -371,6 +371,34 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
             }
         }
         Policy::Face(face) => {
+            // Durable prefix-grant exemption (09-21-durable-prefix-grant,
+            // consumer A / R3): the operator has previously approved this
+            // command pattern for this project+worktree → the command
+            // starts WITHOUT the sandbox (the whole point for long-lived
+            // dev servers: no failed first attempt, no rerun). Checked
+            // BEFORE the extra-writable / net reads so a hit skips those
+            // queries too. Plan NEVER exempts (D3 alignment: Plan's value
+            // is the deterministic read-only face — same gate as the
+            // escalation trigger's `mode != Plan`). The audit row for a
+            // grant-hit Skip is written by the tool layer (it matches
+            // [`DURABLE_GRANT_SKIP_REASON`]) — this module stays
+            // permissions-import-clean (see policy.rs's module contract).
+            if ctx.mode != crate::db::Mode::Plan {
+                if let Some(sid) = session_id {
+                    if policy::durable_shell_grant_hit(&ctx.db, sid, &ctx.worktree_path, command)
+                        .await
+                        .is_some()
+                    {
+                        tracing::info!(
+                            command_sha = %command_sha_prefix(command),
+                            "sandbox: skip (durable prefix grant hit)"
+                        );
+                        return Decision::Skip {
+                            reason: DURABLE_GRANT_SKIP_REASON,
+                        };
+                    }
+                }
+            }
             let extra = policy::read_extra_writable(&ctx.db).await;
             // Net dimension accompanies the project-face read (design
             // §1: read where sandbox_policy is read, NOT a new gate —
@@ -386,6 +414,12 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
         }
     }
 }
+
+/// `Decision::Skip` reason for a durable prefix-grant hit. The tool
+/// layer matches this constant to write the grant-hit audit row (the
+/// sandbox module itself never writes audits — tool-side contract,
+/// same split as `SandboxedShellExecution`).
+pub const DURABLE_GRANT_SKIP_REASON: &str = "durable prefix grant";
 
 /// The mutually-exclusive network enforcer for one spawn (R2). The
 /// type makes "seccomp and Landlock-net both installed" unrepresentable:

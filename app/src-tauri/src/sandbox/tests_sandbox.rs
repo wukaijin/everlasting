@@ -985,6 +985,106 @@ async fn decide_sandboxes_all_tiers_under_readwrite() {
     assert!(matches!(d, Decision::Skip { .. }), "got: {d:?}");
 }
 
+/// Durable prefix-grant exemption (09-21-durable-prefix-grant,
+/// consumer A): a Face tier + a matching `project_shell_grants` row
+/// → `Skip` with the durable reason = unsandboxed START (no failed
+/// first attempt); a different prefix / a foreign worktree key stays
+/// sandboxed; Plan NEVER exempts; Face(ReadOnly) under Edit mode is
+/// deliberately bypassed by an operator approval (PRD AC anchor —
+/// approval outranks the project face default).
+#[tokio::test]
+async fn decide_durable_grant_hit_skips_sandbox() {
+    use crate::sandbox::Decision;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ctx = policy_ctx(&tmp);
+    let pool = policy_pool("proj-grant", PSP::ReadWrite, "sess-grant").await;
+    let key = super::policy::worktree_key(&ctx.worktree_path);
+    sqlx::query(
+        "INSERT INTO project_shell_grants (project_id, worktree_key, prefix_tokens, tool_name) \
+         VALUES ('proj-grant', ?, 'pnpm --filter @jjh/web dev', 'shell')",
+    )
+    .bind(&key)
+    .execute(&pool)
+    .await
+    .unwrap();
+    ctx.db = pool;
+
+    // Flag-extending invocation still hits the prefix → unsandboxed.
+    let d = super::decide(
+        &ctx,
+        "pnpm --filter @jjh/web dev --port 3000",
+        Some("sess-grant"),
+    )
+    .await;
+    assert!(
+        matches!(
+            d,
+            Decision::Skip {
+                reason: super::DURABLE_GRANT_SKIP_REASON
+            }
+        ),
+        "got: {d:?}"
+    );
+    // Compound (newline form) NEVER hits, even with a matching prefix.
+    let d = super::decide(
+        &ctx,
+        "pnpm --filter @jjh/web dev\ndevil",
+        Some("sess-grant"),
+    )
+    .await;
+    assert!(matches!(d, Decision::Sandbox(_)), "got: {d:?}");
+    // Different prefix → sandboxed (that is the whole point: `pnpm
+    // install` stays under the sandbox).
+    let d = super::decide(&ctx, "pnpm install", Some("sess-grant")).await;
+    assert!(matches!(d, Decision::Sandbox(_)), "got: {d:?}");
+
+    // Plan NEVER exempts (D3: Plan's value is the deterministic
+    // read-only face) — same command that just skipped.
+    ctx.mode = Mode::Plan;
+    let d = super::decide(&ctx, "pnpm --filter @jjh/web dev", Some("sess-grant")).await;
+    assert!(matches!(d, Decision::Sandbox(_)), "got: {d:?}");
+    ctx.mode = Mode::Edit;
+
+    // Foreign worktree key (isolated-worker semantics) → miss.
+    let pool_iso = policy_pool("proj-iso", PSP::ReadWrite, "sess-iso").await;
+    sqlx::query(
+        "INSERT INTO project_shell_grants (project_id, worktree_key, prefix_tokens, tool_name) \
+         VALUES ('proj-iso', '/elsewhere-entirely', 'pnpm --filter @jjh/web dev', 'shell')",
+    )
+    .execute(&pool_iso)
+    .await
+    .unwrap();
+    ctx.db = pool_iso;
+    let d = super::decide(&ctx, "pnpm --filter @jjh/web dev", Some("sess-iso")).await;
+    assert!(matches!(d, Decision::Sandbox(_)), "got: {d:?}");
+
+    // Face(ReadOnly) + Edit: an explicit operator approval bypasses
+    // the readonly face — INTENTIONAL semantics (approval outranks
+    // the project face default), pinned here against accidental
+    // "fixes".
+    let pool_ro = policy_pool("proj-grant-ro", PSP::ReadOnly, "sess-grant-ro").await;
+    let key_ro = super::policy::worktree_key(&ctx.worktree_path);
+    sqlx::query(
+        "INSERT INTO project_shell_grants (project_id, worktree_key, prefix_tokens, tool_name) \
+         VALUES ('proj-grant-ro', ?, 'pnpm --filter @jjh/web dev', 'shell')",
+    )
+    .bind(&key_ro)
+    .execute(&pool_ro)
+    .await
+    .unwrap();
+    ctx.db = pool_ro;
+    let d = super::decide(&ctx, "pnpm --filter @jjh/web dev", Some("sess-grant-ro")).await;
+    assert!(
+        matches!(
+            d,
+            Decision::Skip {
+                reason: super::DURABLE_GRANT_SKIP_REASON
+            }
+        ),
+        "got: {d:?}"
+    );
+}
+
 #[test]
 fn capability_ok_requires_both() {
     assert!(cap_ok().ok());

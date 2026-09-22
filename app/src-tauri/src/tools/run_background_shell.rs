@@ -249,6 +249,28 @@ pub async fn execute(
     let sandbox_spec = match crate::sandbox::decide(ctx, &command, session_id).await {
         crate::sandbox::Decision::Sandbox(spec) => Some(spec),
         crate::sandbox::Decision::Skip { reason } => {
+            // Durable prefix-grant hit (09-21-durable-prefix-grant R5):
+            // same tool-side audit contract as the foreground path.
+            if reason == crate::sandbox::DURABLE_GRANT_SKIP_REASON {
+                if let Some(sid) = session_id {
+                    let sha = crate::sandbox::command_sha_prefix(&command);
+                    if let Err(e) =
+                        crate::agent::permissions::audit::record_durable_grant_hit_audit(
+                            &ctx.db,
+                            sid,
+                            "run_background_shell",
+                            &sha,
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "run_background_shell: durable grant-hit audit write failed"
+                        );
+                    }
+                }
+            }
             tracing::debug!(reason, "run_background_shell: sandbox skip");
             None
         }

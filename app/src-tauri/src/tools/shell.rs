@@ -479,6 +479,24 @@ pub async fn execute(
     // failure (R5); fail-closed on prepare/pre-exec failure
     // (`[sandbox]`-prefixed spawn error, design §2.3).
     let sandbox_decision = crate::sandbox::decide(ctx, command, session_id).await;
+    // Durable prefix-grant hit (09-21-durable-prefix-grant R5): the
+    // Skip carries an explicit reason constant — write the audit row
+    // here in the tool layer (the sandbox module stays audit-free by
+    // contract). Best-effort, like every audit write around spawn.
+    if let crate::sandbox::Decision::Skip { reason } = &sandbox_decision {
+        if *reason == crate::sandbox::DURABLE_GRANT_SKIP_REASON {
+            if let Some(sid) = session_id {
+                let sha = crate::sandbox::command_sha_prefix(command);
+                if let Err(e) = crate::agent::permissions::audit::record_durable_grant_hit_audit(
+                    &ctx.db, sid, "shell", &sha, None,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "shell: durable grant-hit audit write failed");
+                }
+            }
+        }
+    }
     // R9 conjunction input: which net enforcer the (potential) spawn
     // installs — computed once from the same decision (W3 spirit).
     let net_enf = match &sandbox_decision {
@@ -603,8 +621,13 @@ pub async fn execute(
             //     ever covers a single-segment command).
             let grant_hit = match session_id {
                 Some(sid) => {
-                    crate::agent::permissions::escalation::prefix_grant_hit(&ctx.db, sid, command)
-                        .await
+                    crate::agent::permissions::escalation::prefix_grant_hit(
+                        &ctx.db,
+                        sid,
+                        &ctx.worktree_path,
+                        command,
+                    )
+                    .await
                 }
                 None => false,
             };

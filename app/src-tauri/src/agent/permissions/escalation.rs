@@ -45,7 +45,7 @@ use crate::state::ChatEventSink;
 
 use super::ask::ask_path;
 use super::audit::{record_audit, AuditKind};
-use super::shell_trust::{first_token_for_allow_always, has_structural_metachar};
+use super::shell_trust::{first_token_for_allow_always, grant_gate};
 use super::types::PermissionContext;
 use super::PermissionStore;
 
@@ -186,11 +186,36 @@ pub enum EscalationOutcome {
 /// already covers the rerun (design §5.2 top branch / AC6). Same gate
 /// as Tier 4: a compound command (structural metacharacters) never
 /// enjoys the grant — the prefix would only cover the first segment.
+/// 2026-09-22 (PR0): the gate is `grant_gate` (newline / single `&` /
+/// command substitution also defeat the grant hit — see its doc).
 /// The check mirrors `check::permission::check_prefix_grant`
 /// (read-side `tool_name IN ('shell','run_background_shell')`).
-pub async fn prefix_grant_hit(db: &SqlitePool, session_id: &str, command: &str) -> bool {
-    if has_structural_metachar(command) {
+///
+/// Durable first (09-21-durable-prefix-grant, consumer B): the
+/// project-level `project_shell_grants` row is consulted BEFORE the
+/// legacy session row. **Write-surface invariant, not a production
+/// path**: `sandbox::decide` (consumer A) queries the same domain on
+/// every sandboxed spawn — a durable hit means `decide` already
+/// returned `Skip`, so the command never entered the sandbox, never
+/// failed, and this escalation branch is unreachable for it (the
+/// only exception is another session writing a grant between the
+/// `decide` call and the failure — a vanishingly narrow race). Kept
+/// as defense in depth: if consumer A's query domain ever drifts,
+/// this check still prevents a spurious card for an approved prefix.
+pub async fn prefix_grant_hit(
+    db: &SqlitePool,
+    session_id: &str,
+    worktree: &std::path::Path,
+    command: &str,
+) -> bool {
+    if grant_gate(command) {
         return false;
+    }
+    if crate::sandbox::policy::durable_shell_grant_hit(db, session_id, worktree, command)
+        .await
+        .is_some()
+    {
+        return true;
     }
     let first_token = first_token_for_allow_always(command);
     if first_token.is_empty() {
@@ -216,6 +241,11 @@ pub async fn prefix_grant_hit(db: &SqlitePool, session_id: &str, command: &str) 
 
 /// Card reason text (design §5.2 payload): interception cause +
 /// original command + the stderr line that triggered the card.
+/// 09-21-durable-prefix-grant (R4): the "始终允许" wording now also
+/// states what an always-approval persists — a project-level,
+/// cross-session durable prefix grant whose commands start without
+/// the sandbox (trust face: full file + network access, wider than
+/// BindOnly — stated explicitly).
 fn escalation_reason(kind: SandboxBlockKind, command: &str, stderr: &str) -> String {
     let cause = match kind {
         SandboxBlockKind::Write => "an out-of-face write was blocked by the sandbox",
@@ -226,7 +256,10 @@ fn escalation_reason(kind: SandboxBlockKind, command: &str, stderr: &str) -> Str
     };
     format!(
         "The command was stopped because {cause}. Approving re-runs this exact command \
-         ONCE without the sandbox.\nCommand: {command}\nstderr: {}",
+         ONCE without the sandbox.\nCommand: {command}\nstderr: {}\n\
+         「始终允许」additionally remembers this command's prefix for this project: \
+         future commands with that prefix START without the sandbox (full file + \
+         network access for that process), across sessions and daemon restarts.",
         stderr_evidence_line(stderr),
     )
 }

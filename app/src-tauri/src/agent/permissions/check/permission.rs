@@ -379,13 +379,51 @@ pub async fn check(
             // compound command (containing `|` / `&&` / `;`) does NOT
             // enjoy the prefix-grant short-circuit. Otherwise a user's
             // grant on `ls` would auto-allow `ls; rm -rf ~/notes` —
-            // the structural classifier would never run. We use a
-            // deliberately NOT-quote-aware `has_structural_metachar`
-            // here (false positive is safe: grant skipped → falls
-            // through to classify_prefix, which re-splits accurately
-            // and produces the right tier). The user's grant still
-            // applies to single-segment `ls`.
-            if !super::super::shell_trust::has_structural_metachar(cmd) {
+            // the structural classifier would never run. The gate is
+            // the deliberately NOT-quote-aware `grant_gate`
+            // (false positive is safe: grant skipped → falls through
+            // to classify_prefix, which re-splits accurately and
+            // produces the right tier). The user's grant still applies
+            // to single-segment `ls`. 2026-09-22 (PR0): widened from
+            // `has_structural_metachar` to `grant_gate` — newline,
+            // single `&`, and command substitution now also defeat
+            // the short-circuit (`split_whitespace` eats `\n`, so
+            // `npm run\nrm -rf ~` used to prefix-match an `npm run`
+            // grant). Same gate guards the worker run-grant below.
+            if !super::super::shell_trust::grant_gate(cmd) {
+                // Durable prefix-grant first (09-21-durable-prefix-grant,
+                // consumer C / R6): a project-level approval covers this
+                // command pattern → Allow with an explicit audit reason.
+                // The off tier has no sandbox, so the durable grant's
+                // meaning here is "skip the approval modal" (the user
+                // knowingly merged the two faces, PRD OQ-B). Only reached
+                // when the sandbox policy is Off — the sandboxed tier
+                // never gets here (face short-circuit above).
+                if crate::sandbox::policy::durable_shell_grant_hit(
+                    db,
+                    &ctx.session_id,
+                    &ctx.worktree_path,
+                    cmd,
+                )
+                .await
+                .is_some()
+                {
+                    tracing::info!(
+                        session_id = %ctx.session_id,
+                        tool = tool_name,
+                        "permission::check: Tier 4 durable prefix grant hit"
+                    );
+                    let _ = record_audit(
+                        db,
+                        ctx,
+                        AuditKind::ToolAllowed,
+                        tool_name,
+                        tool_input,
+                        Some("durable prefix grant hit"),
+                    )
+                    .await;
+                    return Decision::Allow;
+                }
                 if let Ok(true) = check_prefix_grant(
                     db,
                     &ctx.session_id,

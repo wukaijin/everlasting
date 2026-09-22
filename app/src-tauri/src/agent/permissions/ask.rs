@@ -351,6 +351,9 @@ pub(super) async fn ask_path(
         let reason = reason_override
             .map(str::to_string)
             .unwrap_or_else(|| build_ask_reason(tool_name, path_or_cmd, risk));
+        // 09-21 R4: show the durable prefix the "始终允许" would
+        // persist (worker card included — same trust face).
+        let grant_pattern = durable_grant_pattern_for_ask(tool_name, path_or_cmd);
         let payload = PermissionAskPayload {
             rid: rid.clone(),
             // Parent session id — the banner groups worker asks by
@@ -367,6 +370,7 @@ pub(super) async fn ask_path(
             reason: Some(reason.clone()),
             path: path_for_modal.map(|p| p.to_string()),
             worker_run_id: Some(worker_run_id.clone()),
+            grant_pattern,
         };
         // Register the ask against the worker-owned session_id so the
         // store's pending map separates worker asks from parent asks.
@@ -608,6 +612,17 @@ pub(super) async fn ask_path(
         let reason = reason_override
             .map(str::to_string)
             .unwrap_or_else(|| build_ask_reason(tool_name, path_or_cmd, risk));
+        // 09-21 R4 (review must-fix six): the off-tier card (no
+        // override text) must state the trust face of an
+        // always-approval when it would persist a durable grant —
+        // unsandboxed (sandbox tier) / approval-free (off tier),
+        // project-scoped, persistent. The escalation card carries
+        // its own wording (escalation_reason) — no double suffix.
+        let grant_pattern = durable_grant_pattern_for_ask(tool_name, path_or_cmd);
+        let reason = match (&grant_pattern, reason_override.is_some()) {
+            (Some(pattern), false) => format!("{reason}{}", durable_trust_face_suffix(pattern)),
+            _ => reason,
+        };
         let payload = PermissionAskPayload {
             rid: rid.clone(),
             session_id: ctx.session_id.clone(),
@@ -628,6 +643,7 @@ pub(super) async fn ask_path(
             // the ask to the parent session's `<PermissionModal>`
             // (the pre-PR1 behavior).
             worker_run_id: None,
+            grant_pattern,
         };
         // Register BEFORE emit (rationale on the worker branch's
         // register_ask) — here the window was widest: record_audit
@@ -709,26 +725,47 @@ pub(super) async fn ask_path(
                 Decision::Allow
             }
             Ok(PermissionResponse::AllowAlways) => {
-                // Persist the "always allow" row with the
-                // tool-specific match_kind. The match_value is
-                // computed by `match_value_for_allow_always`
-                // (path → parent/* glob; shell → first token;
-                // web_fetch → tool/NULL).
-                let (kind, value) =
-                    match_value_for_allow_always(tool_name, tool_input, path_or_cmd);
-                if let Err(e) = crate::db::grant_tool_permission(
-                    db,
-                    &ctx.session_id,
-                    tool_name,
-                    kind,
-                    value.as_deref(),
-                )
-                .await
-                {
-                    tracing::warn!(
-                        error = %e,
-                        "permission::check: grant_tool_permission failed (non-fatal)"
-                    );
+                // Persist the "always allow". 09-21-durable-prefix-grant
+                // (PR3): a shell-family AllowAlways first tries the
+                // PROJECT-level durable multi-token prefix grant — the
+                // eligibility is intrinsic (internalized, zero new
+                // parameters: no caller can forget to opt in). Falls
+                // back to the legacy session-level row for non-shell
+                // tools, over-cap / compound commands, and sessions
+                // without a project (test pools).
+                let durable = try_grant_durable_shell_prefix(db, ctx, tool_name, path_or_cmd).await;
+                let grant_reason = match &durable {
+                    Some(pattern) => {
+                        tracing::info!(
+                            session_id = %ctx.session_id,
+                            tool = tool_name,
+                            grant_pattern = %pattern,
+                            "permission::check: durable shell prefix grant written"
+                        );
+                        Some(format!("durable shell prefix grant: {pattern}"))
+                    }
+                    None => None,
+                };
+                if durable.is_none() {
+                    // Legacy session-level row (match_value_for_
+                    // allow_always: path → parent/* glob; shell →
+                    // first token; web_fetch → tool/NULL).
+                    let (kind, value) =
+                        match_value_for_allow_always(tool_name, tool_input, path_or_cmd);
+                    if let Err(e) = crate::db::grant_tool_permission(
+                        db,
+                        &ctx.session_id,
+                        tool_name,
+                        kind,
+                        value.as_deref(),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "permission::check: grant_tool_permission failed (non-fatal)"
+                        );
+                    }
                 }
                 let _ = record_audit(
                     db,
@@ -736,7 +773,7 @@ pub(super) async fn ask_path(
                     AuditKind::PermissionGranted,
                     tool_name,
                     tool_input,
-                    None,
+                    grant_reason.as_deref(),
                 )
                 .await;
                 Decision::Allow
@@ -780,6 +817,69 @@ pub(super) async fn ask_path(
 /// PermissionModal header. Re-grill Q1 path-based: the
 /// reason explicitly mentions the path / command / URL so
 /// the user can decide without inspecting `toolInput` JSON.
+/// Grant pattern for an ask card (09-21-durable-prefix-grant, R4):
+/// the normalized multi-token prefix a "始终允许" would persist —
+/// shell family + a qualifying command shape only (over-cap or
+/// compound commands return None and the card shows no pattern).
+/// Pure, no DB — also reused for the payload's `grant_pattern`.
+pub(super) fn durable_grant_pattern_for_ask(tool_name: &str, path_or_cmd: &str) -> Option<String> {
+    if !matches!(
+        super::check::classify_tool(tool_name),
+        super::check::ToolKind::Shell
+    ) {
+        return None;
+    }
+    super::shell_trust::prefix_tokens_for_allow_always(path_or_cmd)
+}
+
+/// Trust-face suffix appended to the off-tier card reason when the
+/// "始终允许" would persist a durable grant (09-21 R4 / review
+/// must-fix six: BOTH cards must state what an always-approval
+/// means — the off-tier card's semantics are the heavier ones).
+pub(super) fn durable_trust_face_suffix(pattern: &str) -> String {
+    format!(
+        "\n「始终允许」will remember the command prefix \"{pattern}\" for this project \
+         (across sessions and daemon restarts): future commands starting with that \
+         prefix run WITHOUT the sandbox (full file + network access for that process) \
+         or without this confirmation."
+    )
+}
+
+/// Durable-landing eligibility for a shell-family AllowAlways
+/// (09-21-durable-prefix-grant, PR3): INTERNALIZED into ask_path's
+/// parent AllowAlways arm — zero new parameters, so no caller can
+/// opt out (a caller-forgettable scope was rejected in review as an
+/// escape hatch). `Some(pattern)` = the durable row is WRITTEN (the
+/// normalized pattern is returned for the audit payload); `None` =
+/// not eligible, the caller falls back to the legacy session-level
+/// first-token row (non-shell tools, over-cap / compound commands,
+/// sessions without a project row — test pools).
+///
+/// The worker branch never reaches here (workers keep the per-run
+/// in-memory cache only — a worker "always allow" must not become a
+/// project-wide durable grant across the privilege boundary).
+pub(super) async fn try_grant_durable_shell_prefix(
+    db: &sqlx::SqlitePool,
+    ctx: &super::types::PermissionContext,
+    tool_name: &str,
+    path_or_cmd: &str,
+) -> Option<String> {
+    let pattern = durable_grant_pattern_for_ask(tool_name, path_or_cmd)?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT project_id FROM sessions WHERE id = ? AND project_id IS NOT NULL")
+            .bind(&ctx.session_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+    let (project_id,) = row?;
+    let key = crate::sandbox::policy::worktree_key(&ctx.worktree_path);
+    crate::db::grant_project_shell_grant(db, &project_id, &key, &pattern, tool_name)
+        .await
+        .ok()?;
+    Some(pattern)
+}
+
 pub(super) fn build_ask_reason(tool_name: &str, path_or_cmd: &str, risk: Risk) -> String {
     if tool_name == "shell" {
         format!(

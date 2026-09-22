@@ -50,4 +50,13 @@ pub struct PermissionAskPayload {
     /// on `null`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worker_run_id: Option<String>,
+    /// 09-21-durable-prefix-grant (R4): for a shell-family ask whose
+    /// command qualifies for a durable grant, the NORMALIZED prefix
+    /// the "始终允许" button would persist (e.g. `pnpm --filter
+    /// @jjh/web dev`) — the card shows exactly what a project-level
+    /// approval covers. Frontend renders the field verbatim; absent
+    /// for non-shell asks and non-qualifying commands (over-cap /
+    /// compound). Wire-additive, old frontends ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_pattern: Option<String>,
 }

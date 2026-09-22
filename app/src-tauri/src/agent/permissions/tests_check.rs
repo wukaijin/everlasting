@@ -1633,3 +1633,178 @@ async fn tier4_plan_sideeffect_still_asks_under_off_tier() {
         "Plan + off tier must keep the classic SideEffect ask emission"
     );
 }
+
+// =====================================================================
+// 09-21-durable-prefix-grant (consumer C): off tier, durable first.
+//
+// The off tier has no sandbox, so a durable grant's meaning here is
+// "skip the approval modal" (PRD OQ-B: the user knowingly merged
+// the two faces). Durable rows are keyed (project_id, worktree_key,
+// prefix_tokens); the shared pool pins the backstop project off and
+// the session's default project_id targets it.
+// =====================================================================
+
+/// Helper: seed a durable grant row for the backstop project keyed
+/// to `worktree` (same normalization as the write side).
+async fn seed_durable_grant(pool: &sqlx::SqlitePool, worktree: &std::path::Path, prefix: &str) {
+    let key = crate::sandbox::policy::worktree_key(worktree);
+    sqlx::query(
+        r#"
+        INSERT INTO project_shell_grants (project_id, worktree_key, prefix_tokens, tool_name)
+        VALUES (?, ?, ?, 'shell')
+        "#,
+    )
+    .bind(crate::projects::DEFAULT_PROJECT_ID)
+    .bind(&key)
+    .bind(prefix)
+    .execute(pool)
+    .await
+    .expect("seed durable grant");
+}
+
+#[tokio::test]
+async fn tier4_off_tier_durable_grant_skips_modal() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    seed_durable_grant(&pool, &root, "pnpm --filter @jjh/web dev").await;
+
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        group_chat_ask_free: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "pnpm --filter @jjh/web dev --port 3000"}),
+            "tu-durable-off",
+            &token,
+        ),
+    )
+    .await
+    .expect("durable hit resolves without the ask round-trip");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "durable grant hit → Allow without modal"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "durable grant hit must NOT emit permission:ask"
+    );
+
+    // Newline-compound with the same prefix → durable miss (grant
+    // gate) → falls through to classify_prefix. `pnpm` is a
+    // SideEffect whitelist token, so Edit mode silently Allows — the
+    // point is NOT the modal here, it is that the decision came from
+    // the classifier, not the durable grant: no "durable prefix
+    // grant hit" audit row may exist.
+    sink.asks.lock().unwrap().clear();
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "pnpm --filter @jjh/web dev\ndevil"}),
+            "tu-durable-compound",
+            &token,
+        ),
+    )
+    .await
+    .expect("check resolves via classify");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "SideEffect whitelist resolves Allow via classify (not via durable)"
+    );
+    let events = crate::db::list_audit_events(&pool, "parent-sess")
+        .await
+        .expect("audit read");
+    let durable_rows = events
+        .iter()
+        .filter(|e| {
+            e.kind == "tool_allowed"
+                && e.payload_json
+                    .as_deref()
+                    .is_some_and(|p| p.contains("durable prefix grant hit"))
+        })
+        .count();
+    assert_eq!(
+        durable_rows, 1,
+        "exactly ONE durable-hit audit row (the first command), never the compound"
+    );
+}
+
+/// Legacy fallback: with NO durable row, the session-level
+/// first-token row still short-circuits (RULE-PERM-002 back-compat
+/// anchor — existing grants keep working unchanged).
+#[tokio::test]
+async fn tier4_off_tier_without_durable_row_session_grant_still_hits() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    // Durable row keyed to a DIFFERENT worktree → miss; session row
+    // on the bare first token `ls` → hit.
+    seed_durable_grant(&pool, std::path::Path::new("/elsewhere"), "pnpm dev").await;
+    seed_shell_prefix_grant(&pool, "parent-sess", "ls").await;
+
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        group_chat_ask_free: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "ls -la"}),
+            "tu-legacy-session-grant",
+            &token,
+        ),
+    )
+    .await
+    .expect("session grant resolves without the ask round-trip");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "legacy session-level row must keep short-circuiting"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "legacy session grant hit must NOT emit permission:ask"
+    );
+}

@@ -462,6 +462,7 @@ mod tests {
             reason: Some("dangerous".into()),
             path: None,
             worker_run_id: None,
+            grant_pattern: None,
         });
 
         let transcript = sink.transcript_snapshot();
@@ -704,6 +705,7 @@ mod tests {
             reason: Some("requires confirmation".into()),
             path: Some("/repo/outside/foo.rs".into()),
             worker_run_id: Some("worker-run-1".into()),
+            grant_pattern: None,
         });
         let transcript = sink.transcript_snapshot();
         assert_eq!(

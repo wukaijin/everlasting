@@ -365,9 +365,13 @@ async fn escalation_compound_command_never_grant_hits() {
     .execute(&pool)
     .await
     .unwrap();
+    // The worktree arg only feeds the durable-grant lookup — this
+    // session has no project row, so the durable side is always a
+    // miss and the legacy session row decides.
+    let wt = std::path::Path::new("/nonexistent-worktree");
     // Single-segment `echo hi` → hit.
     assert!(
-        crate::agent::permissions::escalation::prefix_grant_hit(&pool, "esc-sess-4", "echo hi")
+        crate::agent::permissions::escalation::prefix_grant_hit(&pool, "esc-sess-4", wt, "echo hi")
             .await
     );
     // Compound: the `echo` grant must NOT cover `echo a; rm b`.
@@ -375,14 +379,20 @@ async fn escalation_compound_command_never_grant_hits() {
         !crate::agent::permissions::escalation::prefix_grant_hit(
             &pool,
             "esc-sess-4",
+            wt,
             "echo a; rm b"
         )
         .await
     );
     // Different prefix: no hit.
     assert!(
-        !crate::agent::permissions::escalation::prefix_grant_hit(&pool, "esc-sess-4", "cargo test")
-            .await
+        !crate::agent::permissions::escalation::prefix_grant_hit(
+            &pool,
+            "esc-sess-4",
+            wt,
+            "cargo test"
+        )
+        .await
     );
 }
 

@@ -124,7 +124,13 @@ async fn resolve_one(note: &BackgroundShellNotification, env: &EscalationEnv<'_>
     //     top branch; the grant namespace is shared across the shell
     //     family by design — a "cargo" AllowAlways granted during a
     //     foreground escalation covers a background `cargo build`).
-    let grant_hit = prefix_grant_hit(&env.db, env.session_id, &source.command).await;
+    let grant_hit = prefix_grant_hit(
+        &env.db,
+        env.session_id,
+        &env.perm_ctx.worktree_path,
+        &source.command,
+    )
+    .await;
     let approved = if grant_hit {
         tracing::info!(
             session_id = %env.session_id,

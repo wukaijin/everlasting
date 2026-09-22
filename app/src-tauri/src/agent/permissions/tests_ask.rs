@@ -770,6 +770,18 @@ async fn worker_ask_allow_always_writes_run_grant_cache_not_db() {
          session_tool_permissions (zero leakage); got {} rows",
         after
     );
+
+    // 09-21-durable-prefix-grant (PR3, review must-fix five): worker
+    // approvals must not produce durable project rows either — the
+    // durable write lives ONLY in ask_path's parent AllowAlways arm.
+    let durable: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM project_shell_grants")
+        .fetch_one(&pool)
+        .await
+        .expect("count project_shell_grants");
+    assert_eq!(
+        durable.0, 0,
+        "worker AllowAlways must NOT write a durable project grant row"
+    );
 }
 
 /// Worker ask AllowOnce does NOT write the per-run cache. Only the
@@ -1176,4 +1188,178 @@ async fn unattended_worker_ask_denies_fast_and_discriminates() {
         },
     )
     .await;
+}
+
+// =====================================================================
+// 09-21-durable-prefix-grant (PR3): parent shell AllowAlways lands
+// as a durable project grant; over-cap commands fall back to the
+// legacy session-level row.
+// =====================================================================
+
+/// Parent shell AllowAlways writes EXACTLY ONE
+/// `project_shell_grants` row keyed (backstop project, worktree,
+/// normalized multi-token prefix) — and does NOT double-write the
+/// legacy `session_tool_permissions` row (durable is a superset of
+/// the session grant for the same session).
+#[tokio::test]
+async fn parent_shell_allow_always_writes_durable_grant() {
+    let (pool, store, sink, _ctx, token) = worker_ctx_with_db().await;
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = crate::agent::permissions::PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        group_chat_ask_free: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+
+    // Resolve the first ask with AllowAlways (same retry-to-register
+    // pattern as the worker tests above — register_ask runs after
+    // the emit's yield points).
+    let store_for_resolve = store.clone();
+    let _resolve_task = tokio::spawn(async move {
+        for _ in 0..1000 {
+            let map = store_for_resolve.lock().await;
+            if let Some((rid, _)) = map.iter().next() {
+                let rid = rid.clone();
+                drop(map);
+                let _ =
+                    resolve_ask(&store_for_resolve, &rid, PermissionResponse::AllowAlways).await;
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        panic!("parent ask did not register within 2s");
+    });
+
+    let decision = ask_path(
+        &sink_arc,
+        &pool,
+        &store,
+        &ctx,
+        "shell",
+        &serde_json::json!({"command": "pnpm --filter @jjh/web dev"}),
+        "pnpm --filter @jjh/web dev",
+        None,
+        "tu-durable-write",
+        &token,
+        None,
+    )
+    .await;
+    assert!(matches!(decision, Decision::Allow), "got {decision:?}");
+
+    // Exactly one durable row, keyed to the backstop project + the
+    // ctx worktree, carrying the normalized prefix.
+    let key = crate::sandbox::policy::worktree_key(&root);
+    let rows = crate::db::list_project_shell_grants(&pool, crate::projects::DEFAULT_PROJECT_ID)
+        .await
+        .expect("list durable grants");
+    assert_eq!(rows.len(), 1, "one durable row, got {rows:?}");
+    assert_eq!(rows[0].worktree_key, key);
+    assert_eq!(rows[0].prefix_tokens, "pnpm --filter @jjh/web dev");
+    assert_eq!(rows[0].tool_name, "shell");
+
+    // No double-write: the legacy session row is NOT written when
+    // the durable row landed.
+    let legacy = count_session_tool_permissions(&pool, "parent-sess").await;
+    assert_eq!(
+        legacy, 0,
+        "durable landing must not double-write the session row"
+    );
+
+    // The ask card carried the grant_pattern + the trust-face suffix
+    // in the reason (off-tier card wording).
+    let asks = sink.asks.lock().unwrap();
+    let ask = asks.first().expect("ask emitted");
+    assert_eq!(
+        ask.grant_pattern.as_deref(),
+        Some("pnpm --filter @jjh/web dev")
+    );
+    drop(asks);
+}
+
+/// Over-cap command (>8 tokens) is not durable-eligible: AllowAlways
+/// falls back to the legacy session-level first-token row, and the
+/// card shows NO grant_pattern.
+#[tokio::test]
+async fn parent_shell_allow_always_over_cap_falls_back_to_session_row() {
+    let (pool, store, sink, _ctx, token) = worker_ctx_with_db().await;
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = crate::agent::permissions::PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        group_chat_ask_free: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+
+    let store_for_resolve = store.clone();
+    let _resolve_task = tokio::spawn(async move {
+        for _ in 0..1000 {
+            let map = store_for_resolve.lock().await;
+            if let Some((rid, _)) = map.iter().next() {
+                let rid = rid.clone();
+                drop(map);
+                let _ =
+                    resolve_ask(&store_for_resolve, &rid, PermissionResponse::AllowAlways).await;
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        panic!("parent ask did not register within 2s");
+    });
+
+    // 9 tokens > the 8-token cap.
+    let long_cmd = "a b c d e f g h i";
+    let decision = ask_path(
+        &sink_arc,
+        &pool,
+        &store,
+        &ctx,
+        "shell",
+        &serde_json::json!({"command": long_cmd}),
+        long_cmd,
+        None,
+        "tu-over-cap",
+        &token,
+        None,
+    )
+    .await;
+    assert!(matches!(decision, Decision::Allow), "got {decision:?}");
+
+    // No durable row; the legacy session-level first-token row landed.
+    let rows = crate::db::list_project_shell_grants(&pool, crate::projects::DEFAULT_PROJECT_ID)
+        .await
+        .expect("list durable grants");
+    assert!(
+        rows.is_empty(),
+        "over-cap command must not land durable, got {rows:?}"
+    );
+    let legacy = count_session_tool_permissions(&pool, "parent-sess").await;
+    assert_eq!(legacy, 1, "legacy session row landed as fallback");
+
+    // No grant_pattern on the card (nothing durable to show).
+    let asks = sink.asks.lock().unwrap();
+    let ask = asks.first().expect("ask emitted");
+    assert!(
+        ask.grant_pattern.is_none(),
+        "over-cap card carries no grant_pattern"
+    );
+    drop(asks);
 }

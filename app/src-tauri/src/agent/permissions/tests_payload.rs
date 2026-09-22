@@ -16,6 +16,7 @@ fn permission_ask_payload_wire_shape_includes_path() {
         reason: Some("test".to_string()),
         path: Some("/x".to_string()),
         worker_run_id: None,
+        grant_pattern: None,
     };
     let s = serde_json::to_string(&p).unwrap();
     // The wire field is `path` (camelCase == snake_case for a
@@ -38,6 +39,7 @@ fn permission_ask_payload_omits_path_when_none() {
         reason: Some("test".to_string()),
         path: None,
         worker_run_id: None,
+        grant_pattern: None,
     };
     let s = serde_json::to_string(&p).unwrap();
     assert!(!s.contains("\"path\""), "path should be skipped: {}", s);
@@ -83,6 +85,7 @@ fn permission_ask_payload_omits_path_for_shell() {
         path: None,
         // Parent path ask (no worker context).
         worker_run_id: None,
+        grant_pattern: None,
     };
     let s = serde_json::to_string(&p).unwrap();
     assert!(
@@ -123,6 +126,7 @@ fn permission_ask_payload_omits_path_for_web_fetch() {
         path: None,
         // Parent path ask (no worker context).
         worker_run_id: None,
+        grant_pattern: None,
     };
     let s = serde_json::to_string(&p).unwrap();
     assert!(
@@ -161,6 +165,7 @@ fn permission_ask_payload_includes_path_for_path_tool() {
         path: Some("/Users/me/repo/src/foo.rs".to_string()),
         // Parent path ask (no worker context).
         worker_run_id: None,
+        grant_pattern: None,
     };
     let s = serde_json::to_string(&p).unwrap();
     assert!(
@@ -186,6 +191,7 @@ fn permission_ask_payload_carries_session_and_tool_use_id() {
         reason: None,
         path: Some("/x".to_string()),
         worker_run_id: None,
+        grant_pattern: None,
     };
     let s = serde_json::to_string(&p).unwrap();
     assert!(
