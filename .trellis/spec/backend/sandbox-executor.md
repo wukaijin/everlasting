@@ -290,6 +290,16 @@ jjh-mono 项目 session `23a8184b`(2026-09-20,edit 模式):`vite` dev server
 - 测试锚:`tests_sandbox::classify_block_reads_stdout_for_listen_denials`
   (三实证形态命中 + 两个宁缺勿滥锚 + stderr-Write 优先)、
   `guidance_network_variant_names_listen`。全量 `--lib` 2536 绿。
+- **2026-09-22 补修(09-21-durable-prefix-grant live E2E 实证)**:裸
+  node 脚本 dev server 的 listen EPERM 打在 **stderr**(libuv errno 文案
+  小写 `operation not permitted`),旧分类 stderr 只认大写 O 字面量 +
+  强特征只喂 stdout → 整条升级链哑火(无卡无指引)。修复三件:stderr
+  errno 字面量大小写不敏感;三条 listen 强特征改 `stream_smells_net_
+  block` **两流都喂**(dev 工具链报哪条流是任意的);`stderr_evidence_
+  line` MARKERS 大小写不敏感 + 补 listen 锚(否则卡上证据行取到
+  "Node.js v24.15.0" 尾行)。宁缺勿滥方向不变:stdout 裸字面量(无论
+  大小写)依旧不认。锚:`classify_block_reads_stderr_for_listen_
+  denials`(live 形态逐字节入锚)。
 
 ### 12.3 长期方案(roadmap,未实施;按优先级)
 
@@ -533,8 +543,9 @@ landlock/seccomp。接入点 = 升级触发前、特征 gray-zone 才调用(控�
 
 ### 14.5 已知边界 / 挂账(如实)
 
-- 升级触发的 stdout 识别仍仅 node/go/python 三条强特征(§12.2)——
-  非 node 栈 dev server 可能零 escalation offer(off 档 Tier 4 弹卡路径
-  仍可批准,但 UX 少一层引导);stdout 识别锚扩集挂账归属未定。
+- 升级触发的识别锚(node/go/python 三条强特征)2026-09-22 起已覆盖
+  stderr + stdout 双流 + 大小写不敏感 errno 字面量(§12.2 补修,live
+  E2E 实证裸 node stderr 崩溃形态);其余栈(rust/浏览器引擎等)仍依赖
+  stderr 的通用 errno 字面量——覆盖面可后补,不阻塞主线。
 - 引号剥离只做「配对同种引号一层」;嵌套引号 / 转义形态保持字面
   (miss → 沙箱,fail-safe 方向,不再收窄)。

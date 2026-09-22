@@ -812,7 +812,7 @@ pub(crate) enum SandboxBlockKind {
 ///    the attribution non-forgivable by command output).
 ///
 /// stdout participates ONLY through the strong listen/socket markers
-/// in [`stdout_smells_net_block`] (宁缺勿滥: a bare `Operation not
+/// in [`stream_smells_net_block`] (宁缺勿滥: a bare `Operation not
 /// permitted` / `Permission denied` in stdout is never trusted).
 pub(crate) fn classify_block(
     stderr: &str,
@@ -829,25 +829,37 @@ pub(crate) fn classify_block(
     if net != NetEnforcement::InetBlock {
         return None;
     }
-    if stderr.contains("Operation not permitted") || stdout_smells_net_block(stdout) {
+    // 2026-09-22 (live E2E, task 09-21-durable-prefix-grant): raw node /
+    // go dev servers crash with the listen EPERM on STDERR — libuv and
+    // go print errno strings lowercase ("operation not permitted"), so
+    // the historical capital-O literal missed them entirely (no card, no
+    // guidance). The errno literal is now casing-robust on stderr, and
+    // the three strong listen shapes run against BOTH streams — dev
+    // toolchains split the report across streams arbitrarily (§12.2).
+    let stderr_net_denial = stderr
+        .to_ascii_lowercase()
+        .contains("operation not permitted");
+    if stderr_net_denial || stream_smells_net_block(stdout) || stream_smells_net_block(stderr) {
         Some(SandboxBlockKind::Network)
     } else {
         None
     }
 }
 
-/// Strong network-block markers for the stdout side of [`classify_block`].
-/// A bare `Operation not permitted` in stdout is NOT trusted — it shows up
+/// Strong network-block markers for the listen-denial shapes, run
+/// against BOTH streams by [`classify_block`] (2026-09-22: raw node
+/// crashes report to stderr; vite-style wrappers to stdout). A bare
+/// `Operation not permitted` in **stdout** is NOT trusted — it shows up
 /// whenever a command merely echoes such text (grep, cat of a log); only
 /// the listen/socket creation shapes fire:
 /// - node family: `Error: listen EPERM: operation not permitted 0.0.0.0:3001`
 /// - go family: `listen tcp :8080: socket: operation not permitted`
 /// - python: `socket.socket()` creation → `PermissionError` with a
 ///   `socket.py` traceback frame
-pub(crate) fn stdout_smells_net_block(stdout: &str) -> bool {
-    stdout.contains("listen EPERM")
-        || (stdout.contains("listen tcp") && stdout.contains("operation not permitted"))
-        || (stdout.contains("PermissionError") && stdout.contains("socket"))
+pub(crate) fn stream_smells_net_block(stream: &str) -> bool {
+    stream.contains("listen EPERM")
+        || (stream.contains("listen tcp") && stream.contains("operation not permitted"))
+        || (stream.contains("PermissionError") && stream.contains("socket"))
 }
 
 /// Post-hoc failure guidance, mode-aware (P3c design §5.3 — replaces

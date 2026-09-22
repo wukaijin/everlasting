@@ -1211,6 +1211,32 @@ fn classify_block_reads_stdout_for_listen_denials() {
     assert!(matches!(kind, Some(SandboxBlockKind::Write)));
 }
 
+/// 2026-09-22(09-21-durable-prefix-grant live E2E 实证):裸 node 脚本
+/// dev server 的 listen EPERM 打在 **stderr** 且 libuv 的 errno 文案是
+/// 小写(`operation not permitted`)——旧分类只认 stderr 大写 O 字面量
+/// + 只喂 stdout 强特征,整条升级链哑火(无卡、无指引)。三条修复锚:
+/// stderr errno 字面量大小写不敏感 / listen 强特征两流都喂 / 宁缺勿滥
+/// 方向不变(stdout 裸字面量依旧不认)。
+#[test]
+fn classify_block_reads_stderr_for_listen_denials() {
+    use super::SandboxBlockKind;
+    let net = |kind: Option<SandboxBlockKind>| matches!(kind, Some(SandboxBlockKind::Network));
+    // 裸 node 崩溃形态(live E2E session 9883f423 逐字节实证,含
+    // 小写 "operation not permitted" + "listen EPERM" 双锚):
+    let node_crash = "node:events:487\n      throw er; // Unhandled 'error' event\n      ^\n\nError: listen EPERM: operation not permitted 0.0.0.0:3987\n    at Server.setupListenHandle [as _listen2] (node:net:1986:21)\n\nNode.js v24.15.0";
+    assert!(
+        net(cb(node_crash, "")),
+        "raw-node stderr crash must classify Network"
+    );
+    // 无 listen 形状、仅小写 errno 字面量的 stderr(libuv/go strerror
+    // 形态,如 curl/openssl 外联被拒)同样命中:
+    assert!(net(cb("curl: (7) operation not permitted", "")));
+    // 大写 O(libc strerror)形态回归锚 —— 修复不得丢:
+    assert!(net(cb("some-tool: Operation not permitted", "")));
+    // 宁缺勿滥方向不变:stdout 里裸的小写字面量依旧不认:
+    assert!(cb("", "grep: operation not permitted").is_none());
+}
+
 /// 2026-09-21:listen 场景的 guidance 变体要点破「无 listen,dev
 /// server 起不来」——原文案只讲 outbound,会诱导模型去改绑
 /// 127.0.0.1(jjh-mono session 实证过的无效尝试)。

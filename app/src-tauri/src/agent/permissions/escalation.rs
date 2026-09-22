@@ -271,14 +271,25 @@ fn escalation_reason(kind: SandboxBlockKind, command: &str, stderr: &str) -> Str
 /// escalation offer (P3d), so the card at drain time shows the same
 /// line that triggered the offer.
 pub(crate) fn stderr_evidence_line(stderr: &str) -> String {
-    const MARKERS: [&str; 3] = [
-        "Permission denied",
-        "Read-only file system",
-        "Operation not permitted",
+    // 2026-09-22: matching is case-insensitive + includes the listen
+    // markers — libuv/go print errno strings lowercase ("operation not
+    // permitted"), so the capital-O-only literals picked the wrong line
+    // ("Node.js v24.15.0") as evidence for raw-node listen crashes.
+    // Display-only surface (which line the card shows), zero gate
+    // semantics — classification itself is sandbox::classify_block.
+    const MARKERS: [&str; 5] = [
+        "permission denied",
+        "read-only file system",
+        "operation not permitted",
+        "listen EPERM",
+        "listen tcp",
     ];
     let line = stderr
         .lines()
-        .find(|l| MARKERS.iter().any(|m| l.contains(m)))
+        .find(|l| {
+            let lower = l.to_ascii_lowercase();
+            MARKERS.iter().any(|m| lower.contains(m) || l.contains(m))
+        })
         .or_else(|| stderr.lines().rev().find(|l| !l.trim().is_empty()))
         .unwrap_or("");
     line.chars().take(200).collect()
@@ -288,7 +299,7 @@ pub(crate) fn stderr_evidence_line(stderr: &str) -> String {
 /// network denials (2026-09-21): dev-server toolchains print the EPERM
 /// to stdout with an empty stderr, so the card's evidence line must be
 /// extracted from stdout. First line carrying a listen/socket marker
-/// (same shapes as `sandbox::stdout_smells_net_block`), truncated to
+/// (same shapes as `sandbox::stream_smells_net_block`), truncated to
 /// the same 200 chars. Empty when nothing matches.
 pub(crate) fn stdout_net_evidence_line(stdout: &str) -> String {
     let line = stdout
