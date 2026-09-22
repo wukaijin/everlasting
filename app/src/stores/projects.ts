@@ -74,6 +74,16 @@ export interface NetStateInfo {
   bind_only_supported: boolean;
 }
 
+/** 免沙箱命令授权行(09-21-durable-prefix-grant,镜像 Rust
+ *  `db::ProjectShellGrantRow` 的 camelCase wire 形态)。 */
+export interface ShellGrantInfo {
+  projectId: string;
+  worktreeKey: string;
+  prefixTokens: string;
+  toolName: string;
+  grantedAt: string;
+}
+
 export type ToastKind = "info" | "warn" | "error";
 
 export interface ToastMessage {
@@ -416,6 +426,28 @@ export const useProjectsStore = defineStore("projects", () => {
     });
   }
 
+  /** 09-21-durable-prefix-grant(R2):项目级免沙箱前缀授权列表
+   *  (Settings 项目沙箱页「免沙箱命令授权」区块)。 */
+  async function listProjectShellGrants(id: string): Promise<ShellGrantInfo[]> {
+    return await transport.invoke<ShellGrantInfo[]>("list_project_shell_grants", {
+      projectId: id,
+    });
+  }
+
+  /** 按三段 key 撤销一条授权(后端连带写 grant_revoked 审计行,
+   *  session 上下文由后端 best-effort 处理)。 */
+  async function revokeProjectShellGrant(
+    id: string,
+    worktreeKey: string,
+    prefixTokens: string,
+  ): Promise<void> {
+    await transport.invoke("revoke_project_shell_grant", {
+      projectId: id,
+      worktreeKey,
+      prefixTokens,
+    });
+  }
+
   function projectById(id: string | null): ProjectInfo | undefined {
     if (!id) return undefined;
     return projects.value.find((p) => p.id === id);
@@ -451,6 +483,8 @@ export const useProjectsStore = defineStore("projects", () => {
     confirmNetSnapshot,
     rejectNetProposal,
     getProjectNetState,
+    listProjectShellGrants,
+    revokeProjectShellGrant,
     projectById,
     basenameOf,
   };

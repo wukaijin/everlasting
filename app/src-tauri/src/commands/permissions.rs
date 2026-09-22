@@ -404,6 +404,89 @@ pub async fn revoke_tool_permission(
 }
 
 // ---------------------------------------------------------------------------
+// Durable shell-prefix grant management (09-21-durable-prefix-grant, R2)
+// ---------------------------------------------------------------------------
+
+/// List every durable shell-prefix grant for a project, newest first
+/// (the「免沙箱命令授权」management list). `worktree_key` /
+/// `prefix_tokens` / `tool_name` (provenance) / `granted_at` on each
+/// row; empty / unknown project returns an empty `Vec`, NOT an error.
+pub async fn list_project_shell_grants_inner(
+    state: &Arc<AppState>,
+    project_id: String,
+) -> Result<Vec<db::ProjectShellGrantRow>, AppCommandError> {
+    db::list_project_shell_grants(&state.db, &project_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("list_project_shell_grants failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn list_project_shell_grants(
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<db::ProjectShellGrantRow>, AppCommandError> {
+    list_project_shell_grants_inner(&state, project_id).await
+}
+
+/// Revoke ONE durable shell-prefix grant by its exact three-part key
+/// `(project_id, worktree_key, prefix_tokens)`. `session_id` is
+/// optional audit context: when the UI can attribute the revoke to a
+/// session (e.g. invoked from a session-bearing surface) a
+/// `grant_revoked` audit row lands on it (R5); without context the
+/// revoke still happens, the audit is skipped with a warn
+/// (best-effort, same convention as the other audit writes).
+pub async fn revoke_project_shell_grant_inner(
+    state: &Arc<AppState>,
+    project_id: String,
+    worktree_key: String,
+    prefix_tokens: String,
+    session_id: Option<String>,
+) -> Result<(), AppCommandError> {
+    db::revoke_project_shell_grant(&state.db, &project_id, &worktree_key, &prefix_tokens)
+        .await
+        .map_err(|e| {
+            AppCommandError::from(anyhow::anyhow!("revoke_project_shell_grant failed: {}", e))
+        })?;
+    if let Some(sid) = session_id {
+        let payload = serde_json::json!({
+            "project_id": project_id,
+            "worktree_key": worktree_key,
+            "grant_pattern": prefix_tokens,
+        });
+        let payload_str = payload.to_string();
+        if let Err(e) = db::record_audit_event(
+            &state.db,
+            &sid,
+            crate::agent::permissions::AuditKind::GrantRevoked.as_str(),
+            Some(&payload_str),
+            None,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "revoke_project_shell_grant: audit write failed (non-fatal)");
+        }
+    } else {
+        tracing::warn!(
+            project_id = %project_id,
+            "revoke_project_shell_grant: no session context, grant_revoked audit row skipped"
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn revoke_project_shell_grant(
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+    worktree_key: String,
+    prefix_tokens: String,
+    session_id: Option<String>,
+) -> Result<(), AppCommandError> {
+    revoke_project_shell_grant_inner(&state, project_id, worktree_key, prefix_tokens, session_id)
+        .await
+}
+
+// ---------------------------------------------------------------------------
 // C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events
 // ---------------------------------------------------------------------------
 

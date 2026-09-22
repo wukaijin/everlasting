@@ -15,7 +15,7 @@
 // 下 session 级只读面覆盖项目档位。
 
 import { computed, ref, watch } from "vue";
-import { useProjectsStore, type NetStateInfo } from "../../stores/projects";
+import { useProjectsStore, type NetStateInfo, type ShellGrantInfo } from "../../stores/projects";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 
 const props = defineProps<{
@@ -236,10 +236,58 @@ async function onAcceptProposal(ports: string, worktreeKey: string): Promise<voi
   }
 }
 
+// -- 免沙箱命令授权(09-21-durable-prefix-grant,R2/R4)-------------------
+
+/** 项目级 durable 前缀授权列表。批准语义:该前缀命令在本项目
+ *  可免沙箱启动(沙箱档)/ 免审批弹卡(off 档),跨 session 与
+ *  daemon 重启;按 worktree 键控(隔离 worker 不继承)。 */
+const shellGrants = ref<ShellGrantInfo[]>([]);
+const grantsLoading = ref(false);
+
+async function loadShellGrants(): Promise<void> {
+  if (!props.projectId) {
+    shellGrants.value = [];
+    return;
+  }
+  grantsLoading.value = true;
+  try {
+    shellGrants.value = await projects.listProjectShellGrants(props.projectId);
+  } catch (e) {
+    projects.showToast(`读取授权列表失败：${extractErrorMessage(e)}`, "error");
+    shellGrants.value = [];
+  } finally {
+    grantsLoading.value = false;
+  }
+}
+
+async function onRevokeGrant(worktreeKey: string, prefixTokens: string): Promise<void> {
+  if (!props.projectId) return;
+  grantsLoading.value = true;
+  try {
+    await projects.revokeProjectShellGrant(props.projectId, worktreeKey, prefixTokens);
+    projects.showToast(`已撤销「${prefixTokens}」的免沙箱授权`, "info");
+    await loadShellGrants();
+  } catch (e) {
+    projects.showToast(`撤销失败：${extractErrorMessage(e)}`, "error");
+  } finally {
+    grantsLoading.value = false;
+  }
+}
+
+// 项目切换即重拉授权列表(immediate 与 netState 的 watch 分离:
+// 本段的 ref 声明晚于那个 watch,挂在一起会在 immediate 执行时
+// 触发 TDZ —— `Cannot access 'grantsLoading' before initialization`)。
+watch(
+  () => props.projectId,
+  () => {
+    void loadShellGrants();
+  },
+  { immediate: true },
+);
+
 /** v-model 先行(乐观):radio 点击即改本地选中;写失败回拨到
  *  项目当前档位并 toast(与开关行「乐观 + 失败回拨」同款策略)。 */
-async function onSelect(value: Policy): Promise<void> {
-  const current = projects.projectById(props.projectId)?.sandbox_policy ?? "readwrite";
+async function onSelect(value: Policy): Promise<void> {  const current = projects.projectById(props.projectId)?.sandbox_policy ?? "readwrite";
   if (!props.projectId || pending.value || value === current) {
     selected.value = current;
     return;
@@ -410,6 +458,29 @@ async function onSelect(value: Policy): Promise<void> {
           >确认快照</button>
         </div>
       </div>
+      <!-- 免沙箱命令授权(09-21-durable-prefix-grant) -->
+      <div class="project-sandbox-tab__snapshots">
+        <h5 class="project-sandbox-tab__snapshots-title">免沙箱命令授权</h5>
+        <p class="project-sandbox-tab__hint">
+          命令被沙盒拦截后审批卡上点「始终允许」会记住该命令前缀(按
+          worktree 键控):此后同前缀命令直接免沙箱启动(文件+网络全开)
+          / 免审批弹卡,跨会话与守护进程重启有效。撤销后恢复沙盒。
+        </p>
+        <ul v-if="shellGrants.length" class="project-sandbox-tab__snapshot-list" data-testid="shell-grant-list">
+          <li v-for="g in shellGrants" :key="`${g.worktreeKey}|${g.prefixTokens}`">
+            <code>{{ g.prefixTokens }}</code> @ {{ g.worktreeKey }}
+            <span class="project-sandbox-tab__muted">({{ g.toolName }})</span>
+            <button
+              type="button"
+              class="project-sandbox-tab__grant-revoke"
+              :disabled="grantsLoading"
+              data-testid="shell-grant-revoke"
+              @click="onRevokeGrant(g.worktreeKey, g.prefixTokens)"
+            >撤销</button>
+          </li>
+        </ul>
+        <p v-else class="project-sandbox-tab__muted" data-testid="shell-grant-empty">暂无授权。</p>
+      </div>
     </template>
     <p v-else class="project-sandbox-tab__empty">没有可选项目。</p>
   </div>
@@ -508,6 +579,12 @@ async function onSelect(value: Policy): Promise<void> {
 
 .project-sandbox-tab__muted {
   color: var(--color-text-muted);
+}
+
+.project-sandbox-tab__grant-revoke {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 
 .project-sandbox-tab__proposal-row {

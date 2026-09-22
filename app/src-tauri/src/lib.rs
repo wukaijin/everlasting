@@ -388,6 +388,11 @@ pub fn run() {
             // list + per-PK revoke of "always allow" rows.
             commands::permissions::list_session_tool_permissions,
             commands::permissions::revoke_tool_permission,
+            // Durable shell-prefix grant management
+            // (09-21-durable-prefix-grant R2): list + three-part-key
+            // revoke of project-level prefix grants.
+            commands::permissions::list_project_shell_grants,
+            commands::permissions::revoke_project_shell_grant,
             // C4 (Audit-log query UI, 2026-06-14) — read-side
             // command for the AuditLogModal. The write side (⑩
             // `tool_executed`) lands in the agent loop.

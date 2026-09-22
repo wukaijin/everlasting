@@ -156,6 +156,11 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   clear_session_trace: "permissions",
   grant_tool_permission: "permissions",
   list_session_audit_events: "permissions",
+  // 09-21-durable-prefix-grant(R2):项目级免沙箱前缀授权管理面
+  // (Settings 项目沙箱页「免沙箱命令授权」)。缺映射时浏览器/
+  // sidecar 模式报 `unknown cmd`(http.routes-sync.test.ts 守卫)。
+  list_project_shell_grants: "permissions",
+  revoke_project_shell_grant: "permissions",
   // RULE-PERM-001 (2026-08-30): keyset 分页审计读(AuditLogModal「加载
   // 更多」)。缺这行时浏览器/sidecar 模式报 `unknown cmd`(Tauri IPC
   // 模式侥幸不经过本表;http.routes-sync.test.ts 守卫)。

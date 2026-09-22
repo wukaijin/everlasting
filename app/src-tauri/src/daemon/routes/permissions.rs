@@ -12,10 +12,11 @@ use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
 use crate::commands::permissions::{
-    clear_session_trace_inner, grant_tool_permission_inner, list_session_audit_events_inner,
-    list_session_audit_events_page_inner, list_session_tool_permissions_inner,
-    list_turn_traces_inner, list_worker_turn_traces_inner, permission_response_inner,
-    revoke_tool_permission_inner, set_session_mode_inner,
+    clear_session_trace_inner, grant_tool_permission_inner, list_project_shell_grants_inner,
+    list_session_audit_events_inner, list_session_audit_events_page_inner,
+    list_session_tool_permissions_inner, list_turn_traces_inner, list_worker_turn_traces_inner,
+    permission_response_inner, revoke_project_shell_grant_inner, revoke_tool_permission_inner,
+    set_session_mode_inner,
 };
 use crate::db;
 use crate::error::AppCommandError;
@@ -89,6 +90,47 @@ pub async fn revoke_tool_permission(
         req.tool_name,
         req.match_kind,
         req.match_value,
+    )
+    .await?;
+    Ok(Json(()))
+}
+
+// --- Durable shell-prefix grant management (09-21-durable-prefix-grant R2) ---
+
+#[derive(Debug, Deserialize)]
+pub struct ListProjectShellGrantsRequest {
+    pub project_id: String,
+}
+
+pub async fn list_project_shell_grants(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ListProjectShellGrantsRequest>,
+) -> Result<Json<Vec<db::ProjectShellGrantRow>>, AppCommandError> {
+    let result = list_project_shell_grants_inner(&state, req.project_id).await?;
+    Ok(Json(result))
+}
+
+/// Body is snake_case like every route in this file. `session_id`
+/// is optional audit context (a `grant_revoked` row lands on it
+/// when present; the revoke itself always runs).
+#[derive(Debug, Deserialize)]
+pub struct RevokeProjectShellGrantRequest {
+    pub project_id: String,
+    pub worktree_key: String,
+    pub prefix_tokens: String,
+    pub session_id: Option<String>,
+}
+
+pub async fn revoke_project_shell_grant(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RevokeProjectShellGrantRequest>,
+) -> Result<Json<()>, AppCommandError> {
+    revoke_project_shell_grant_inner(
+        &state,
+        req.project_id,
+        req.worktree_key,
+        req.prefix_tokens,
+        req.session_id,
     )
     .await?;
     Ok(Json(()))
@@ -220,6 +262,14 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(list_session_tool_permissions),
         )
         .route("/revoke_tool_permission", post(revoke_tool_permission))
+        .route(
+            "/list_project_shell_grants",
+            post(list_project_shell_grants),
+        )
+        .route(
+            "/revoke_project_shell_grant",
+            post(revoke_project_shell_grant),
+        )
         .route(
             "/list_session_audit_events",
             post(list_session_audit_events),
@@ -360,6 +410,95 @@ mod tests {
         assert!(
             body.contains("before_id"),
             "error names the missing cursor half: {body}"
+        );
+    }
+
+    /// 09-21-durable-prefix-grant (PR4): list/revoke route round
+    /// trip — snake_case body in, camelCase rows out, three-part-key
+    /// revoke deletes exactly the row, and a session-attributed
+    /// revoke lands a `grant_revoked` audit row (R5).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn project_shell_grant_routes_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::load_from_dir(tmp.path().to_path_buf()).await);
+
+        // Project + session (the revoke's audit anchor).
+        let project = db::create_project(&state.db, "p-route", "/tmp/p-route", false, None)
+            .await
+            .unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        db::create_session(
+            &state.db,
+            &session_id,
+            &project.id,
+            "/tmp/p-route",
+            "GLM-4.7",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db::grant_project_shell_grant(
+            &state.db,
+            &project.id,
+            "/wt/route",
+            "pnpm --filter @jjh/web dev",
+            "shell",
+        )
+        .await
+        .unwrap();
+
+        // list: camelCase rows.
+        let (status, body) = post_json(
+            &state,
+            "list_project_shell_grants",
+            &format!(r#"{{"project_id":"{}"}}"#, project.id),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rows: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let arr = rows.as_array().expect("list returns an array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["prefixTokens"], "pnpm --filter @jjh/web dev");
+        assert_eq!(arr[0]["worktreeKey"], "/wt/route");
+        assert_eq!(arr[0]["toolName"], "shell");
+
+        // revoke with session context → row gone + grant_revoked audit.
+        let (status, body) = post_json(
+            &state,
+            "revoke_project_shell_grant",
+            &format!(
+                r#"{{"project_id":"{}","worktree_key":"/wt/route","prefix_tokens":"pnpm --filter @jjh/web dev","session_id":"{}"}}"#,
+                project.id, session_id
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = post_json(
+            &state,
+            "list_project_shell_grants",
+            &format!(r#"{{"project_id":"{}"}}"#, project.id),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let events = db::list_audit_events(&state.db, &session_id).await.unwrap();
+        assert!(
+            events.iter().any(|e| e.kind == "grant_revoked"
+                && e.payload_json
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("pnpm --filter @jjh/web dev")),
+            "grant_revoked audit row with the pattern must land, got: {:?}",
+            events.iter().map(|e| e.kind.clone()).collect::<Vec<_>>()
         );
     }
 }

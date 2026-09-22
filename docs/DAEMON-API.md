@@ -406,7 +406,13 @@ standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既�
 ## 7. 其他常用端点(路径约定)
 
 全部为 `POST /api/v1/<domain>/<command>`,body snake_case,与 Tauri command 同名同参:
-`sessions/*`(见 §3)、`permissions/*`(模式切换 / 审批回填 / trace 三条)、
+`sessions/*`(见 §3)、`permissions/*`(模式切换 / 审批回填 / trace 三条;09-21 起
+另有免沙箱前缀授权管理两条:`list_project_shell_grants`(入参
+`{"project_id"}` → `ProjectShellGrantRow[]`,camelCase 行)与
+`revoke_project_shell_grant`(入参 `{project_id, worktree_key,
+prefix_tokens, session_id?}`,三段 key 删行 + best-effort
+`grant_revoked` 审计,契约见 `.trellis/spec/backend/sandbox-executor.md`
+§14)、
 `agent/chat`(发起轮次)、`agent/resume_group_chat`(群聊断点续跑,§4)、
 `cancel/*`(Stop)、`message_queue/*`、`config/*`、
 `background_shells/*`(list_background_shells / kill_background_shell,09-02)、

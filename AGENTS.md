@@ -51,6 +51,7 @@ Notes:
 - To profile slow tests, prefer [`cargo-nextest`](https://nexte.st) (`cargo nextest run --lib`, per-test timings); otherwise see the timestamp fallback in [HACKING-wsl.md §测试性能](./docs/HACKING-wsl.md#测试性能wsl-后端-cargo-test).
 - Cold compile `--no-run` ≈ 1m37s; incremental ≈ 11s.
 - Remote 链路 E2E 冒烟:`node scripts/remote-e2e-smoke.mjs`(需本地 remote 服务端在跑,见 [docs/REMOTE-ACCESS-E2E.md](./docs/REMOTE-ACCESS-E2E.md))。
+- **免沙箱前缀授权(durable prefix grant,09-22)**:命令被沙箱拦后弹卡「始终允许」= 记住该命令前缀(≤8 token,配对引号归一)到 `project_shell_grants`(键控 project+worktree,跨 session/daemon 重启)——沙箱档=同前缀免沙箱**启动**、off 档=免弹卡;Plan 不豁免,复合命令(含换行/单`&`/命令替换,`grant_gate` 闸)永不命中。管理面 Settings→项目沙箱→「免沙箱命令授权」(list/revoke 双端 `/api/v1/permissions/*`);回滚=清空该表。契约:spec `sandbox-executor.md` §14。
 
 ## DB / 单轮烟测速查
 
