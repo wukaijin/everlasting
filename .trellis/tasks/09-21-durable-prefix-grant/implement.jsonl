@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/sandbox-executor.md", "reason": "沙箱执行器契约全文:§10/§11 升级闭环、§12.3 B 本任务动机、§13 sibling NetPolicy 契约与写通道先例"}
+{"file": ".trellis/tasks/09-21-durable-prefix-grant/research/spec-survey.md", "reason": "本任务勘察(2026-09-22):grant 读写面地图、表结构限制、decide 注入点、OQ 收敛依据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新表 project_shell_grants 建表规范与 IPC Row camelCase 约定"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon route 双端写通道模式(list/revoke 消费 sibling 同款结构)"}
+{"file": ".trellis/tasks/archive/2026-09/09-21-sandbox-net-bindonly/design.md", "reason": "sibling 任务设计:worktree_key canonicalize 快照语义、F3 remediation 文案(本任务触发入口)"}
