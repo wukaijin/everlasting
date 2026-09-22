@@ -1344,3 +1344,126 @@ async fn audit_event_page_row_serializes_to_camel_case_wire_shape() {
     assert_eq!(obj.get("totalCritical").and_then(|v| v.as_i64()), Some(3));
     assert_eq!(obj["events"][0]["sessionId"], "sess-abc");
 }
+
+// ---------------------------------------------------------------------------
+// 09-21-durable-prefix-grant: project_shell_grants CRUD
+// ---------------------------------------------------------------------------
+
+/// Roundtrip: grant → list (newest first) → re-grant same PK bumps
+/// `granted_at` (UPSERT, no duplicate row) → revoke by the exact
+/// three-part key deletes only that row → list reflects it. The
+/// UPSERT no-duplicate assertion doubles as the PK-shape probe (the
+/// `ON CONFLICT(project_id, worktree_key, prefix_tokens)` clause
+/// would error if the PK differed).
+#[tokio::test]
+async fn project_shell_grant_round_trip_upsert_and_revoke() {
+    let pool = make_pool().await;
+    let project = crate::db::create_project(&pool, "p-durable", "/tmp/p-durable", false, None)
+        .await
+        .expect("create project");
+
+    super::permissions::grant_project_shell_grant(
+        &pool,
+        &project.id,
+        "/wt/main",
+        "pnpm --filter @jjh/web dev",
+        "shell",
+    )
+    .await
+    .expect("grant");
+    super::permissions::grant_project_shell_grant(
+        &pool,
+        &project.id,
+        "/wt/main",
+        "cargo build",
+        "run_background_shell",
+    )
+    .await
+    .expect("grant second");
+
+    let rows = super::permissions::list_project_shell_grants(&pool, &project.id)
+        .await
+        .expect("list");
+    assert_eq!(rows.len(), 2, "two distinct prefixes → two rows");
+
+    // Same PK again → UPSERT bumps, never duplicates.
+    super::permissions::grant_project_shell_grant(
+        &pool,
+        &project.id,
+        "/wt/main",
+        "pnpm --filter @jjh/web dev",
+        "shell",
+    )
+    .await
+    .expect("re-grant");
+    let rows = super::permissions::list_project_shell_grants(&pool, &project.id)
+        .await
+        .expect("list after re-grant");
+    assert_eq!(rows.len(), 2, "UPSERT must not duplicate");
+    assert!(
+        rows.iter()
+            .any(|r| r.prefix_tokens == "pnpm --filter @jjh/web dev"),
+        "re-granted prefix still present"
+    );
+
+    // Revoke the exact three-part key → only that row goes.
+    super::permissions::revoke_project_shell_grant(
+        &pool,
+        &project.id,
+        "/wt/main",
+        "pnpm --filter @jjh/web dev",
+    )
+    .await
+    .expect("revoke");
+    let rows = super::permissions::list_project_shell_grants(&pool, &project.id)
+        .await
+        .expect("list after revoke");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].prefix_tokens, "cargo build");
+    assert_eq!(
+        rows[0].tool_name, "run_background_shell",
+        "tool_name is provenance and round-trips"
+    );
+}
+
+/// Deleting the project cascades the grants away (FK ON DELETE
+/// CASCADE — the grant is project-scoped state, not global).
+#[tokio::test]
+async fn project_shell_grant_cascades_on_project_delete() {
+    let pool = make_pool().await;
+    let project = crate::db::create_project(&pool, "p-cascade", "/tmp/p-cascade", false, None)
+        .await
+        .expect("create project");
+    super::permissions::grant_project_shell_grant(
+        &pool,
+        &project.id,
+        "/wt/main",
+        "pnpm dev",
+        "shell",
+    )
+    .await
+    .expect("grant");
+
+    sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(&project.id)
+        .execute(&pool)
+        .await
+        .expect("delete project");
+
+    let rows = super::permissions::list_project_shell_grants(&pool, &project.id)
+        .await
+        .expect("list after project delete");
+    assert!(rows.is_empty(), "grants must cascade away with the project");
+}
+
+/// Empty / unknown project returns an empty Vec, NOT an error
+/// (mirrors `list_tool_permissions`'s convention — the management UI
+/// renders its empty-state placeholder).
+#[tokio::test]
+async fn list_project_shell_grants_unknown_project_returns_empty() {
+    let pool = make_pool().await;
+    let rows = super::permissions::list_project_shell_grants(&pool, "no-such-project")
+        .await
+        .expect("list must not error");
+    assert!(rows.is_empty());
+}

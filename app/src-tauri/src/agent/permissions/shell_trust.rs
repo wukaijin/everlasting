@@ -447,6 +447,27 @@ pub(crate) fn has_command_substitution(cmd: &str) -> bool {
     cmd.contains("$(") || cmd.contains('`')
 }
 
+/// Grant-path gate (task 09-21-durable-prefix-grant PR0, 2026-09-22):
+/// `true` = the command may NOT enjoy ANY prefix-grant short-circuit
+/// (session-level or durable). `has_structural_metachar` alone misses
+/// newline, single `&`, and command substitution — and the grant-side
+/// token split (`split_whitespace`) eats `\n` as plain whitespace, so
+/// `npm run\nrm -rf ~` would prefix-match an `npm run` grant and run
+/// the whole compound approval-free. Strict on purpose: a false
+/// positive only costs the short-circuit (the command falls through
+/// to `classify_prefix` / the sandbox, which re-splits accurately),
+/// never safety.
+pub(crate) fn grant_gate(cmd: &str) -> bool {
+    has_structural_metachar(cmd)
+        || cmd.contains('\n')
+        || cmd.contains('\r')
+        // Any `&` (single background `&` or `&&`, already covered by
+        // has_structural_metachar — the bare contains is simpler than
+        // excluding the double form and errs wide).
+        || cmd.contains('&')
+        || has_command_substitution(cmd)
+}
+
 /// Classify a single segment (no top-level `;` / `&&` / `||` / `|`).
 ///
 /// Reuses the existing first-token algorithm (git subcommand
@@ -790,4 +811,95 @@ pub(crate) fn first_token(cmd: &str) -> &str {
 /// compute the `match_value` for a shell-prefix grant.
 pub(crate) fn first_token_for_allow_always(cmd: &str) -> String {
     first_token(cmd).to_string()
+}
+
+// ---------------------------------------------------------------------
+// Durable multi-token prefix grants (09-21-durable-prefix-grant, PR1)
+//
+// Pure leaf functions — the ONLY permissions items `sandbox` may
+// import (hard constraint in `sandbox/policy.rs`'s module doc: the
+// real dependency edge is permissions → sandbox via escalation.rs,
+// so everything `sandbox` pulls from permissions must be a pure
+// leaf to keep the nominal cycle from deepening).
+// ---------------------------------------------------------------------
+
+/// Token-count cap for a durable prefix grant. NOT a safety bound —
+/// a longer prefix matches FEWER commands (a narrower trust face) —
+/// but a usability guard against approving/echoing absurdly long
+/// command lines.
+pub(crate) const MAX_PREFIX_TOKENS: usize = 8;
+
+/// Strip ONE layer of matched surrounding quotes from a token:
+/// `"@jjh/web"` → `@jjh/web`, `'x y'` → `x y`. Fires only when the
+/// token both starts AND ends with the SAME quote char and is at
+/// least 2 chars. Everything else (inner quotes, escapes, mismatched
+/// pairs) stays literal — a mismatch stays un-normalized, fails to
+/// match, and the command falls to the sandbox: conservative
+/// direction. (W2 decision 2026-09-22: symmetric normalization on
+/// BOTH the write and read sides, so `--filter "@jjh/web"` and
+/// `--filter @jjh/web` are the same stored form.)
+fn strip_paired_quotes(tok: &str) -> &str {
+    let bytes = tok.as_bytes();
+    if bytes.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if (first == b'"' || first == b'\'') && first == last {
+            return &tok[1..tok.len() - 1];
+        }
+    }
+    tok
+}
+
+/// Split a command into normalized grant tokens: naive
+/// `split_whitespace`, each token paired-quote-stripped, the FIRST
+/// token additionally basename-normalized (`first_token`'s existing
+/// algorithm, so `/usr/bin/git status` and `git status` agree).
+fn normalized_prefix_tokens(cmd: &str) -> Vec<String> {
+    let mut out: Vec<String> = cmd
+        .split_whitespace()
+        .map(|t| strip_paired_quotes(t).to_string())
+        .collect();
+    if let Some(first) = out.first_mut() {
+        *first = first_token(first).to_string();
+    }
+    out
+}
+
+/// The normalized multi-token prefix to store on an AllowAlways
+/// approval (write side). `None` = this command must NOT produce a
+/// durable grant: empty/blank commands, compound commands (the
+/// [`grant_gate`] must hold — defense in depth on the write side;
+/// the read side gates independently), or more than
+/// [`MAX_PREFIX_TOKENS`] tokens. Callers fall back to the legacy
+/// session-level first-token row on `None`.
+pub(crate) fn prefix_tokens_for_allow_always(cmd: &str) -> Option<String> {
+    if grant_gate(cmd) {
+        return None;
+    }
+    let tokens = normalized_prefix_tokens(cmd);
+    if tokens.is_empty() || tokens.len() > MAX_PREFIX_TOKENS {
+        return None;
+    }
+    Some(tokens.join(" "))
+}
+
+/// True when the stored prefix (from [`prefix_tokens_for_allow_always`])
+/// covers `command` (read side): the stored token sequence is a
+/// token-by-token prefix of the command's normalized tokens.
+/// `pnpm --filter @jjh/web dev` covers `pnpm --filter @jjh/web dev
+/// --port 3000` but not `pnpm install`. The caller holds the
+/// [`grant_gate`] gate on `command` (compound commands never match);
+/// this function re-checks it anyway so it is safe standalone.
+pub(crate) fn prefix_tokens_hit(stored: &str, command: &str) -> bool {
+    if grant_gate(command) {
+        return false;
+    }
+    let stored = normalized_prefix_tokens(stored);
+    if stored.is_empty() || stored.len() > MAX_PREFIX_TOKENS {
+        return false;
+    }
+    let cmd = normalized_prefix_tokens(command);
+    if stored.len() > cmd.len() {
+        return false;
+    }
+    stored.iter().zip(cmd.iter()).all(|(s, c)| s == c)
 }

@@ -1591,5 +1591,34 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // --- 09-21-durable-prefix-grant: 项目级多 token 前缀 grant 表 ---
+    //
+    // 批准语义(沙箱档)= 该前缀命令模式可免沙箱「启动」(结构性适配
+    // 长驻 dev server,替代逐字节重跑的 one-shot);off 档 = 免审批
+    // 弹卡。键 = (project_id, worktree_key, prefix_tokens) ——
+    // worktree_key 同 project_net_snapshots(canonicalize 后绝对路径,
+    // 换分支/重检出 = 新键;隔离 worker worktree 独立 key 不继承主树
+    // 批准,W1 裁定非隔离 worker 同 key 继承)。prefix_tokens = 空格
+    // join 的归一 token 序列(配对引号读写对称剥离 + 首 token basename
+    // 归一,上限 8 token = 可用性护栏);读侧跨 shell 族共享(命中
+    // 不按 tool_name 匹配,RULE-PERM-002 语义),tool_name 仅为溯源列。
+    // granted_at 与 session_tool_permissions 同款 TEXT datetime('now')
+    // (list UI 的 granted_at DESC 排序同形)。FK CASCADE:删项目级联
+    // 清 grant。幂等:新库直建,存量库 no-op。
+    sqlx::query(
+        r#"
+ CREATE TABLE IF NOT EXISTS project_shell_grants (
+ project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ worktree_key  TEXT NOT NULL,
+ prefix_tokens TEXT NOT NULL,
+ tool_name     TEXT NOT NULL,
+ granted_at    TEXT NOT NULL DEFAULT (datetime('now')),
+ PRIMARY KEY (project_id, worktree_key, prefix_tokens)
+ )
+ "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

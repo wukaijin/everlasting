@@ -387,6 +387,81 @@ pub(crate) fn worktree_key(worktree: &std::path::Path) -> String {
         .to_string_lossy()
         .into_owned()
 }
+
+/// Read side of the durable shell-prefix grants
+/// (`project_shell_grants`, 09-21-durable-prefix-grant): `Some(pattern)`
+/// when the operator has previously approved this command pattern for
+/// this project+worktree (the matched normalized prefix — reused for
+/// the grant-hit audit row), meaning the command may start WITHOUT
+/// the sandbox (sandbox tier) or without the approval modal (off
+/// tier). `None` = miss.
+///
+/// Lives HERE (not in `permissions`) because the real dependency
+/// edge between the modules is permissions → sandbox
+/// (`escalation.rs` imports `sandbox::SandboxBlockKind`); pulling
+/// permissions from `sandbox::decide` would deepen that nominal
+/// cycle. The ONLY permissions items this module may use are the
+/// pure `shell_trust` leaf functions (`grant_gate` /
+/// `prefix_tokens_hit` — no state, no DB) — keep it that way.
+///
+/// Miss semantics are fail-safe in every direction: compound command
+/// (`grant_gate`), no session row / NULL project_id (test pools,
+/// orphans), or any sqlx error → `None` (warn, never bubble up —
+/// a grant miss only costs the sandbox exemption, never safety).
+pub(crate) async fn durable_shell_grant_hit(
+    db: &SqlitePool,
+    session_id: &str,
+    worktree: &std::path::Path,
+    command: &str,
+) -> Option<String> {
+    if crate::agent::permissions::shell_trust::grant_gate(command) {
+        return None;
+    }
+    let row: Result<Option<(String,)>, sqlx::Error> = sqlx::query_as(
+        r#"
+        SELECT project_id FROM sessions WHERE id = ?
+        "#,
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await;
+    let project_id = match row {
+        Ok(Some((pid,))) => pid,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "sandbox: durable grant project lookup failed, treating as miss"
+            );
+            return None;
+        }
+    };
+    let key = worktree_key(worktree);
+    let rows: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as(
+        r#"
+        SELECT prefix_tokens FROM project_shell_grants
+        WHERE project_id = ? AND worktree_key = ?
+        "#,
+    )
+    .bind(&project_id)
+    .bind(&key)
+    .fetch_all(db)
+    .await;
+    let prefixes = match rows {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "sandbox: durable grant read failed, treating as miss"
+            );
+            return None;
+        }
+    };
+    prefixes.into_iter().find_map(|(stored,)| {
+        crate::agent::permissions::shell_trust::prefix_tokens_hit(&stored, command)
+            .then_some(stored)
+    })
+}
 /// `"false"` literals by `set_app_config_flag`; read fail-open:
 /// anything but the literal `"false"` (including a missing row)
 /// means enabled (D1 default-on).

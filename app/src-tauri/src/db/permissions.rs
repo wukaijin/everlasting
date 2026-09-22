@@ -591,3 +591,116 @@ pub struct PermissionGrantRow {
     pub match_value: Option<String>,
     pub granted_at: String,
 }
+
+// ---------------------------------------------------------------------------
+// Project-level durable shell-prefix grants (09-21-durable-prefix-grant)
+// ---------------------------------------------------------------------------
+
+/// Grant a durable shell-prefix grant for `(project_id, worktree_key,
+/// prefix_tokens)`. UPSERT semantics mirroring
+/// [`grant_tool_permission`]: re-granting the same PK bumps
+/// `granted_at` instead of inserting a duplicate. `tool_name` is
+/// provenance only (the raw name of the tool whose card was approved)
+/// — the read side matches across the shell family and never filters
+/// on it (RULE-PERM-002 semantics). `prefix_tokens` is the
+/// space-joined normalized token sequence produced by
+/// `shell_trust::prefix_tokens_for_allow_always` (paired-quote
+/// stripped, first token basename-normalized, ≤8 tokens).
+pub async fn grant_project_shell_grant(
+    pool: &SqlitePool,
+    project_id: &str,
+    worktree_key: &str,
+    prefix_tokens: &str,
+    tool_name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+ INSERT INTO project_shell_grants
+ (project_id, worktree_key, prefix_tokens, tool_name, granted_at)
+ VALUES (?, ?, ?, ?, datetime('now'))
+ ON CONFLICT(project_id, worktree_key, prefix_tokens)
+ DO UPDATE SET granted_at = datetime('now'), tool_name = excluded.tool_name
+ "#,
+    )
+    .bind(project_id)
+    .bind(worktree_key)
+    .bind(prefix_tokens)
+    .bind(tool_name)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Read every durable shell-prefix grant for `project_id`, newest
+/// first (same stable sort as [`list_tool_permissions`]:
+/// `granted_at DESC, rowid DESC` — one-second `datetime('now')`
+/// resolution needs the rowid tie-break). Wired to the grant
+/// management UI (list on open) and the daemon route. Empty /
+/// missing project returns an empty `Vec`, NOT an error.
+pub async fn list_project_shell_grants(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> Result<Vec<ProjectShellGrantRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+ SELECT project_id, worktree_key, prefix_tokens, tool_name, granted_at
+ FROM project_shell_grants
+ WHERE project_id = ?
+ ORDER BY granted_at DESC, rowid DESC
+ "#,
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(ProjectShellGrantRow {
+                project_id: r.try_get("project_id")?,
+                worktree_key: r.try_get("worktree_key")?,
+                prefix_tokens: r.try_get("prefix_tokens")?,
+                tool_name: r.try_get("tool_name")?,
+                granted_at: r.try_get("granted_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Remove ONE durable shell-prefix grant by its exact three-part key
+/// `(project_id, worktree_key, prefix_tokens)`. Wired to the grant
+/// management UI's per-row "撤销" button. All three key columns are
+/// NOT NULL (unlike `session_tool_permissions`'s nullable
+/// `match_value`), so no NULL-branch is needed here — the
+/// `revoke_tool_permission` NULL trap does not apply. Only the exact
+/// row is deleted; sibling grants under other prefixes persist.
+pub async fn revoke_project_shell_grant(
+    pool: &SqlitePool,
+    project_id: &str,
+    worktree_key: &str,
+    prefix_tokens: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+ DELETE FROM project_shell_grants
+ WHERE project_id = ? AND worktree_key = ? AND prefix_tokens = ?
+ "#,
+    )
+    .bind(project_id)
+    .bind(worktree_key)
+    .bind(prefix_tokens)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Row shape for [`list_project_shell_grants`] and the grant
+/// management IPC (09-21-durable-prefix-grant). camelCase wire
+/// convention per the house rule (see [`AuditEventRow`]'s doc).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectShellGrantRow {
+    pub project_id: String,
+    pub worktree_key: String,
+    pub prefix_tokens: String,
+    pub tool_name: String,
+    pub granted_at: String,
+}

@@ -467,6 +467,61 @@ fn has_structural_metachar_negative_cases() {
 }
 
 // -----------------------------------------------------------------
+// grant_gate (widened grant short-circuit gate, PR0 2026-09-22)
+// -----------------------------------------------------------------
+
+#[test]
+fn grant_gate_superset_of_structural_metachar() {
+    // Everything the old gate catches, the new gate still catches.
+    for cmd in [
+        "ls | grep foo",
+        "a || b",
+        "a && b",
+        "a ; b",
+        "echo \"a;b\"", // not-quote-aware by design (false positive safe)
+    ] {
+        assert!(grant_gate(cmd), "must gate: {cmd}");
+    }
+}
+
+#[test]
+fn grant_gate_detects_newline_compound() {
+    // THE motivating case: `split_whitespace` eats `\n`, so this
+    // prefix-matched an `npm run` grant under the old gate and ran
+    // the whole compound approval-free.
+    assert!(grant_gate("npm run\ndevil"));
+    assert!(grant_gate("npm run\r\ndevil"));
+    assert!(grant_gate("a\nb"));
+    assert!(grant_gate("a\rb"));
+}
+
+#[test]
+fn grant_gate_detects_single_ampersand_and_substitution() {
+    // Single `&` (background) — `&&` was already covered, bare `&`
+    // was not.
+    assert!(grant_gate("npm run & watch"));
+    // Command substitution, both syntaxes.
+    assert!(grant_gate("echo $(date)"));
+    assert!(grant_gate("echo `date`"));
+}
+
+#[test]
+fn grant_gate_passes_single_flat_commands() {
+    // The gate must NOT block ordinary flat commands — a false
+    // positive here only costs the short-circuit, but the common
+    // dev-server / build shapes should keep it.
+    for cmd in [
+        "pnpm --filter @jjh/web dev",
+        "cargo build --release",
+        "vite dev --port 3000",
+        "git status",
+        "ls -la /tmp",
+    ] {
+        assert!(!grant_gate(cmd), "must not gate: {cmd}");
+    }
+}
+
+// -----------------------------------------------------------------
 // detect_write_redirect
 // -----------------------------------------------------------------
 
@@ -494,6 +549,110 @@ fn detect_write_redirect_input_not_a_write() {
     // heredoc and here-string are reads.
     assert!(!detect_write_redirect("cat << EOF"));
     assert!(!detect_write_redirect("cat <<< word"));
+}
+
+// -----------------------------------------------------------------
+// Durable multi-token prefix leaves (09-21-durable-prefix-grant PR1)
+// -----------------------------------------------------------------
+
+#[test]
+fn prefix_tokens_for_allow_always_normalizes_command() {
+    // Baseline: full token sequence, joined by single spaces.
+    assert_eq!(
+        prefix_tokens_for_allow_always("pnpm --filter @jjh/web dev").as_deref(),
+        Some("pnpm --filter @jjh/web dev")
+    );
+    // Paired quotes stripped symmetrically (W2): stored form has no
+    // quotes, so a later unquoted invocation matches.
+    assert_eq!(
+        prefix_tokens_for_allow_always("pnpm --filter \"@jjh/web\" dev").as_deref(),
+        Some("pnpm --filter @jjh/web dev")
+    );
+    // First token basename normalization: absolute-path invocation
+    // agrees with the bare name.
+    assert_eq!(
+        prefix_tokens_for_allow_always("/usr/bin/git status").as_deref(),
+        Some("git status")
+    );
+    // Extra whitespace collapses.
+    assert_eq!(
+        prefix_tokens_for_allow_always("  cargo   build  ").as_deref(),
+        Some("cargo build")
+    );
+}
+
+#[test]
+fn prefix_tokens_for_allow_always_rejects_unsafe_shapes() {
+    // Compound commands never produce a durable grant (write-side
+    // defense in depth; the read side gates independently).
+    assert_eq!(prefix_tokens_for_allow_always("a; b"), None);
+    assert_eq!(prefix_tokens_for_allow_always("a | b"), None);
+    assert_eq!(prefix_tokens_for_allow_always("npm run\ndevil"), None);
+    assert_eq!(prefix_tokens_for_allow_always("a & b"), None);
+    assert_eq!(prefix_tokens_for_allow_always("echo $(date)"), None);
+    // Empty / blank commands.
+    assert_eq!(prefix_tokens_for_allow_always(""), None);
+    assert_eq!(prefix_tokens_for_allow_always("   "), None);
+    // Over the token cap (usability guard, 8 max).
+    assert_eq!(prefix_tokens_for_allow_always("a b c d e f g h i"), None);
+    // Exactly at the cap is fine.
+    assert_eq!(
+        prefix_tokens_for_allow_always("a b c d e f g h").as_deref(),
+        Some("a b c d e f g h")
+    );
+}
+
+#[test]
+fn prefix_tokens_hit_matches_extending_commands_only() {
+    let stored = "pnpm --filter @jjh/web dev";
+    // Exact match and flag-extending invocations hit.
+    assert!(prefix_tokens_hit(stored, "pnpm --filter @jjh/web dev"));
+    assert!(prefix_tokens_hit(
+        stored,
+        "pnpm --filter @jjh/web dev --port 3000"
+    ));
+    // Quoted variant of the SAME command hits (W2 symmetric strip on
+    // both sides).
+    assert!(prefix_tokens_hit(stored, "pnpm --filter \"@jjh/web\" dev"));
+    // Different prefix / different subcommand: no hit.
+    assert!(!prefix_tokens_hit(stored, "pnpm install"));
+    assert!(!prefix_tokens_hit(stored, "pnpm --filter @jjh/web build"));
+    // Shorter command than the stored prefix: no hit.
+    assert!(!prefix_tokens_hit(stored, "pnpm --filter"));
+    // Compound commands never hit (standalone-safe gate).
+    assert!(!prefix_tokens_hit(
+        stored,
+        "pnpm --filter @jjh/web dev\ndevil"
+    ));
+    assert!(!prefix_tokens_hit(
+        stored,
+        "pnpm --filter @jjh/web dev ; rm x"
+    ));
+}
+
+#[test]
+fn prefix_tokens_hit_first_token_basename_agreement() {
+    // The stored form was basename-normalized on write; the command
+    // side normalizes too, so absolute-path invocations agree.
+    assert!(prefix_tokens_hit("git status", "/usr/bin/git status"));
+    assert!(prefix_tokens_hit("cargo build", "./cargo build --release"));
+}
+
+#[test]
+fn prefix_tokens_hit_quoting_edge_shapes_stay_literal() {
+    // An UNPAIRED quote stays literal — a stored form captured with
+    // the dangling quote never matches the clean form (conservative:
+    // miss → sandbox). Note the inverse IS a hit: a single-token
+    // `echo` grant covers `echo "unbalanced` because the quoted
+    // token sits outside the stored prefix — that is correct
+    // prefix semantics, not a quote bug.
+    assert!(!prefix_tokens_hit("echo \"unbalanced", "echo unbalanced"));
+    // A quoted-first-token command normalizes to the unquoted form,
+    // so a stored unquoted prefix still matches (strip is symmetric).
+    assert!(prefix_tokens_hit("git status", "\"git\" status"));
+    // Empty stored prefix never matches anything.
+    assert!(!prefix_tokens_hit("", "git status"));
+    assert!(!prefix_tokens_hit("  ", "git status"));
 }
 
 #[test]
