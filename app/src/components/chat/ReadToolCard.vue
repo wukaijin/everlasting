@@ -1,8 +1,10 @@
 <script setup lang="ts">
-// ReadToolCard — `glob` / `list_dir` / `read_file` 的紧凑卡
-// (2026-09-19,task `09-19-tool-card-compact-read`)。
+// ReadToolCard — `glob` / `list_dir` / `read_file` / `grep` 的紧凑卡
+// (2026-09-19,task `09-19-tool-card-compact-read`;grep 2026-09-25 并入
+// ——它是那次 PRD Non-Goals 明确「另议」的口子,审计 280 次全工具第二
+// 高频,漏在 85px 三行通用卡上最疼)。
 //
-// 背景:这三个只读检视工具此前都吃通用 `ToolCallCard`,形态是
+// 背景:这几个只读检视工具此前都吃通用 `ToolCallCard`,形态是
 // 「header 行 + `▸ input` 行 + `▸ output · N chars` 行」—— 实测每张
 // 85px(e2e 种子六形态)。一个回合连着七八次查找就吃掉半屏,而其中
 // 占高度的两行 summary 里几乎没有用户当下要的信息。
@@ -22,7 +24,7 @@
 //
 // 出口径不缩水(PRD R3):
 //   - 审批:命中 `pendingAsk` 时审批区**无条件渲染**,与收起/展开无关
-//     (三个工具都是权限层 Tier 4 的 path 工具,项目外读取靠它拦);
+//     (read 族全是权限层 Tier 4 的 path 工具,项目外读取靠它拦);
 //   - 读图:ToolResultImages 常驻(缩略图就是结果本身);
 //   - 错误:红左条 + ✗ error,展开看原文。
 //
@@ -75,9 +77,10 @@ const chip = computed<string | null>(() =>
 );
 
 /** headline 右侧:这次拿了多少(命中数 / 条目数 / 行范围)。流式中与
- *  报错态为 null(没有"规模"可言),槽位自然留空。 */
+ *  报错态为 null(没有"规模"可言),槽位自然留空。input 只有 grep 消费
+ *  (三档 output_mode 决定计数单位,09-25)。 */
 const meta = computed<string | null>(() =>
-  readToolMeta(props.call.name, props.result ?? null),
+  readToolMeta(props.call.name, props.result ?? null, props.call.input),
 );
 
 const statusText = computed<string>(() => {

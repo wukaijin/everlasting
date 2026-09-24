@@ -19,13 +19,15 @@
 import { extractToolResultDisplay } from "./messageFormat";
 
 /** read 族工具名(封闭名单,switch 写法对齐 messageFormat 的家族判定)。
- *  只列本次紧凑化的三个只读检视工具:`grep` / `web_search` 仍走通用卡
- *  (PRD Non-Goals)。 */
+ *  只列紧凑化的只读检视工具:09-19 三件(glob / list_dir / read_file)+
+ *  09-25 补的 `grep`(09-19 PRD Non-Goals 明确留的口子——它是全工具第二
+ *  高频,审计 280 次,仅次于 read_file)。`web_search` 仍走通用卡。 */
 export function isReadFamilyTool(name: string): boolean {
   switch (name) {
     case "read_file":
     case "glob":
     case "list_dir":
+    case "grep":
       return true;
     default:
       return false;
@@ -41,10 +43,10 @@ export interface ReadToolResultLike {
 /** headline 的 chip 槽:这次调用**读的是哪儿**。
  *
  *  优先级:
- *    - `glob`:`input.pattern`(匹配式;这是 glob 唯一的检索语义来源,
- *      通用卡的 `toolHeaderChip` 只认 `input.path`,所以 glob 此前在卡上
- *      完全看不出搜了什么)。`input.path` 非空且不是 `.` 时补
- *      `pattern in path`(搜索根非 cwd 时是重要差异)。
+ *    - `glob` / `grep`:`input.pattern`(匹配式;这是它们唯一的检索语义
+ *      来源,通用卡的 `toolHeaderChip` 只认 `input.path`,所以 glob 此前
+ *      在卡上完全看不出搜了什么,grep 则只显示搜索根)。`input.path`
+ *      非空且不是 `.` 时补 `pattern in path`(搜索根非 cwd 时是重要差异)。
  *    - `list_dir`:`input.path`;缺省时字面量 `cwd`(工具语义:省略即列
  *      当前工作目录 —— 显示占位比留空诚实)。
  *    - `read_file`:`input.path`。
@@ -56,15 +58,20 @@ export function readToolChip(
   input?: Record<string, unknown>,
 ): string | null {
   const path = strInput(input, "path");
-  if (name === "glob") {
-    const pattern = strInput(input, "pattern");
-    if (!pattern) return null;
-    if (path && path !== ".") return `${pattern} in ${path}`;
-    return pattern;
+  if (name === "glob" || name === "grep") {
+    return patternChip(strInput(input, "pattern"), path);
   }
   if (name === "list_dir") return path ?? "cwd";
   if (name === "read_file") return path;
   return null;
+}
+
+/** glob / grep 共用的 chip:`pattern`(搜索根非 cwd 时补 ` in path`)。
+ *  pattern 缺失(畸形 input)→ null。 */
+function patternChip(pattern: string | null, path: string | null): string | null {
+  if (!pattern) return null;
+  if (path && path !== ".") return `${pattern} in ${path}`;
+  return pattern;
 }
 
 /** headline 的 meta 槽:这次调用**拿了多少**(计数 / 行范围)。
@@ -72,10 +79,14 @@ export function readToolChip(
  *  按工具解析各自的输出文本形态(见各分支注释)。共同约定:
  *    - 先经 `extractToolResultDisplay` 剥掉 `{result, cwd}` 信封;
  *    - `isError` → `null`(失败没有「规模」可言;错误原文由 ✗ + 展开区承载);
- *    - 结果缺失(流式中)→ `null`。 */
+ *    - 结果缺失(流式中)→ `null`。
+ *
+ *  `input` 仅 grep 消费(09-25 并入:三档 `output_mode` 输出形态不同,
+ *  单位取决于模式而非文本可辨);其余工具不读,两参调用不破。 */
 export function readToolMeta(
   name: string,
   result?: ReadToolResultLike | null,
+  input?: Record<string, unknown>,
 ): string | null {
   if (!result || result.isError) return null;
   const text = trimOuterWhitespace(extractToolResultDisplay(result.content ?? ""));
@@ -87,6 +98,8 @@ export function readToolMeta(
       return listDirMeta(text);
     case "read_file":
       return readFileMeta(text);
+    case "grep":
+      return grepMeta(text, input);
     default:
       return null;
   }
@@ -151,6 +164,46 @@ function imageMeta(text: string): string {
   return dims ? `image ${dims[1]}×${dims[2]}` : "image";
 }
 
+/** grep 结果(09-25 并入 read 族紧凑卡)。三档 `output_mode` 的输出形态
+ *  不同(`tools/grep.rs`):
+ *    - `files_with_matches`(工具默认):一行一个文件路径;
+ *    - `content`:`path:line:content` 一行一个命中 —— `context` 参数带出的
+ *      上下文行是 `path-line-content` 连字符形态、组间 `--` 分隔,都不是
+ *      命中,不计入;
+ *    - `count`:`path:count` 一行一个文件,尾部数字是该文件的命中数
+ *      (求和才是总命中)。
+ *
+ *  尾部截断标记是独立行 `<truncated: hit head_limit of N matches | …>`
+ *  (`tool_output::hit_limit_marker`),不计入,计数加 `+`;0 命中是单句
+ *  `No matches found for pattern 'X' in Y.`(非错误)。mode 缺失按工具
+ *  契约取默认 `files_with_matches`;出现不认识的档(未来扩展 / 畸形值)
+ *  → 兜底 `N lines`,不猜单位。 */
+function grepMeta(text: string, input?: Record<string, unknown>): string | null {
+  if (/^No matches found for pattern/.test(text)) return "no matches";
+  const mode = strInput(input, "output_mode") ?? "files_with_matches";
+  const { lines, capped } = splitGrepLines(text);
+  if (lines.length === 0) return null;
+  const plus = capped ? "+" : "";
+  if (mode === "content") {
+    const hits = lines.filter((l) => /^.+:\d+:/.test(l));
+    const n = hits.length > 0 ? hits.length : lines.length;
+    return `${n}${plus} ${plural(n, "match", "matches")}`;
+  }
+  if (mode === "count") {
+    const counts = lines.map((l) => /:(\d+)\s*$/.exec(l)?.[1]);
+    if (counts.every((c) => c !== undefined)) {
+      const sum = counts.reduce((s, c) => s + Number(c), 0);
+      return `${sum}${plus} ${plural(sum, "match", "matches")}`;
+    }
+    // 解析不出 per-file 计数(畸形行)→ 退到文件数,仍比 null 诚实。
+    return `${lines.length}${plus} ${plural(lines.length, "file", "files")}`;
+  }
+  if (mode === "files_with_matches") {
+    return `${lines.length}${plus} ${plural(lines.length, "file", "files")}`;
+  }
+  return `${lines.length}${plus} lines`;
+}
+
 // ---------------------------------------------------------------------------
 // 共享小工具
 // ---------------------------------------------------------------------------
@@ -170,6 +223,25 @@ function strInput(
 ): string | null {
   const v = input?.[key];
   return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/** 拆分 grep 的「结果行」与「尾部截断标记行」:标记行以 `<truncated:`
+ *  开头(`hit_limit_marker` 的固定前缀),被截断时返回 `capped`;空行
+ *  不计。与 glob / list_dir 的 `splitItems` 分开 —— 那边的提示行前缀是
+ *  `(`,这边是尖括号标记,混在一起反而说不清。 */
+function splitGrepLines(text: string): { lines: string[]; capped: boolean } {
+  const lines: string[] = [];
+  let capped = false;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (t.length === 0) continue;
+    if (t.startsWith("<truncated:")) {
+      capped = true;
+      continue;
+    }
+    lines.push(t);
+  }
+  return { lines, capped };
 }
 
 /** 拆分「条目行」与「尾部提示行」:提示行前缀 `(`,被截断时返回 `capped`。

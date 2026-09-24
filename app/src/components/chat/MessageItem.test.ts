@@ -844,9 +844,11 @@ describe("MessageItem — search_history tool dispatch", () => {
     expect(wrapper.find(".tool-card").exists()).toBe(false);
   });
 
-  it("still renders the generic ToolCallCard for other read tools", async () => {
+  it("still renders the generic ToolCallCard for other tools", async () => {
+    // grep 曾是这里的示例,09-25 并入 read 族紧凑卡后改用 web_fetch
+    // (它仍走通用卡,09-19 PRD Non-Goals 的另一半口子)。
     const message = makeAssistantMessage([
-      { id: "tu-grep-1", name: "grep", input: { pattern: "x", path: "." } },
+      { id: "tu-wf-1", name: "web_fetch", input: { url: "https://example.com" } },
     ]);
     const wrapper = mountItem(message, pinia);
     await flushPromises();

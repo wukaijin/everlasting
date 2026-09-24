@@ -25,14 +25,15 @@ function numbered(lines: string[], offset = 1): string {
 }
 
 describe("isReadFamilyTool", () => {
-  it("认 glob / list_dir / read_file", () => {
+  it("认 glob / list_dir / read_file / grep(grep 09-25 并入)", () => {
     expect(isReadFamilyTool("glob")).toBe(true);
     expect(isReadFamilyTool("list_dir")).toBe(true);
     expect(isReadFamilyTool("read_file")).toBe(true);
+    expect(isReadFamilyTool("grep")).toBe(true);
   });
 
   it("不认兄弟工具(它们仍走通用卡)", () => {
-    for (const n of ["grep", "write_file", "edit_file", "shell", "web_search"]) {
+    for (const n of ["write_file", "edit_file", "shell", "web_search"]) {
       expect(isReadFamilyTool(n)).toBe(false);
     }
   });
@@ -63,6 +64,15 @@ describe("readToolChip", () => {
     expect(readToolChip("read_file", { path: "app/src/App.vue" })).toBe(
       "app/src/App.vue",
     );
+  });
+
+  it("grep 与 glob 同形:pattern,搜索根非 cwd 补 ` in path`,`.` 不补", () => {
+    expect(readToolChip("grep", { pattern: "readToolMeta" })).toBe("readToolMeta");
+    expect(
+      readToolChip("grep", { pattern: "rocard", path: "app/src/components/chat" }),
+    ).toBe("rocard in app/src/components/chat");
+    expect(readToolChip("grep", { pattern: "x", path: "." })).toBe("x");
+    expect(readToolChip("grep", { path: "app/src" })).toBeNull();
   });
 
   it("畸形 input(非 string / 空串 / 缺字段)→ null 或 cwd,不抛错", () => {
@@ -194,6 +204,86 @@ describe("readToolMeta — read_file", () => {
   });
 });
 
+describe("readToolMeta — grep(09-25 并入)", () => {
+  it("files_with_matches(默认档):数文件行", () => {
+    const out = ["app/src/a.rs", "app/src/b.rs"].join("\n");
+    expect(
+      readToolMeta("grep", { content: env(out), isError: false }, { pattern: "x" }),
+    ).toBe("2 files");
+  });
+
+  it("单数用 file;output_mode 省略按工具默认 files_with_matches", () => {
+    expect(
+      readToolMeta("grep", { content: env("app/src/a.rs"), isError: false }, {}),
+    ).toBe("1 file");
+  });
+
+  it("content 档:数命中行,context 行(`path-N-` 连字符)与 `--` 分隔不计", () => {
+    const out = [
+      "app/src/a.rs:42:const x = 1;",
+      "app/src/a.rs-43-// context",
+      "--",
+      "app/src/b.rs:7:const y = 2;",
+    ].join("\n");
+    expect(
+      readToolMeta(
+        "grep",
+        { content: env(out), isError: false },
+        { pattern: "const", output_mode: "content" },
+      ),
+    ).toBe("2 matches");
+  });
+
+  it("count 档:per-file 计数求和为总命中", () => {
+    const out = ["app/src/a.rs:12", "app/src/b.rs:5"].join("\n");
+    expect(
+      readToolMeta(
+        "grep",
+        { content: env(out), isError: false },
+        { pattern: "x", output_mode: "count" },
+      ),
+    ).toBe("17 matches");
+  });
+
+  it("count 档解析不出尾数 → 退文件数", () => {
+    expect(
+      readToolMeta(
+        "grep",
+        { content: env("app/src/a.rs\nweird line"), isError: false },
+        { pattern: "x", output_mode: "count" },
+      ),
+    ).toBe("2 files");
+  });
+
+  it("head_limit 截断标记行不计入,计数加 `+`", () => {
+    const out = [
+      "app/src/a.rs",
+      "app/src/b.rs",
+      "<truncated: hit head_limit of 50 matches | recover: narrow the pattern or raise head_limit>",
+    ].join("\n");
+    expect(
+      readToolMeta("grep", { content: env(out), isError: false }, { pattern: "x" }),
+    ).toBe("2+ files");
+  });
+
+  it("0 命中(非错误)→ no matches", () => {
+    const out = "No matches found for pattern 'zzz' in /repo.";
+    expect(
+      readToolMeta("grep", { content: env(out), isError: false }, { pattern: "zzz" }),
+    ).toBe("no matches");
+  });
+
+  it("不认识的 output_mode → 兜底行数,不猜单位", () => {
+    expect(
+      readToolMeta(
+        "grep",
+        { content: env("a\nb"), isError: false },
+        { pattern: "x", output_mode: "future_mode" },
+      ),
+    ).toBe("2 lines");
+  });
+});
+
 describe("readToolMeta — 共性守卫", () => {
   it("报错 → null(错误由 ✗ + 展开区承载,不报规模)", () => {
     expect(
@@ -215,7 +305,7 @@ describe("readToolMeta — 共性守卫", () => {
   });
 
   it("不认识的工具 → null(不猜)", () => {
-    expect(readToolMeta("grep", { content: env("a\nb"), isError: false })).toBeNull();
+    expect(readToolMeta("web_search", { content: env("a\nb"), isError: false })).toBeNull();
   });
 
   it("裸文本(无 {result,cwd} 信封)照常解析(向后兼容历史行)", () => {

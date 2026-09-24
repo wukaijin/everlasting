@@ -1,5 +1,6 @@
 // read 族工具卡片紧凑化(09-19-tool-card-compact-read)浏览器回归:
-// glob / list_dir / read_file 三工具的卡片高度门 + 展开/收起交互。
+// glob / list_dir / read_file 三工具的卡片高度门 + 展开/收起交互;
+// grep 09-25 并入(同卡同门)。
 //
 // # 被测面(为什么在浏览器层)
 // 「卡片占几行」由真实字体度量 + flex 换行决定,jsdom 无布局引擎
@@ -11,7 +12,7 @@
 //   streamRehydrate.ts 消费),与 question-card-scroll.spec.ts 同法。
 // - 覆盖形态:glob 成功(带路径列表)/ glob 截断提示 / list_dir 目录
 //   / read_file 全文 / read_file 带 offset+limit 的 range / read_file
-//   报错。
+//   报错 / grep content 档 / grep files 档截断。
 import { expect, type Page } from "@playwright/test";
 import { test, type MockPayload } from "./fixtures";
 
@@ -90,6 +91,20 @@ const READ_OUT = [
 
 const GLOB_TRUNCATED_OUT = `${GLOB_OUT}\n\n(...and 37 more matches; narrow your pattern to see them)`;
 
+/** grep content 档:`path:line:content` 一行一个命中。 */
+const GREP_CONTENT_OUT = [
+  "app/src/stores/chat.ts:42:export const useChatStore = defineStore",
+  "app/src/utils/toolSummary.ts:24:export function isReadFamilyTool",
+  "app/src/utils/toolSummary.ts:76:export function readToolMeta",
+].join("\n");
+
+/** grep files 档 + head_limit 截断标记行(hit_limit_marker 固定形态)。 */
+const GREP_FILES_TRUNCATED_OUT = [
+  "app/src/stores/chat.ts",
+  "app/src/utils/toolSummary.ts",
+  "<truncated: hit head_limit of 50 matches | recover: narrow the pattern or raise head_limit>",
+].join("\n");
+
 function seededSession(): MockPayload {
   const rows: Array<Record<string, unknown>> = [];
   let seq = 0;
@@ -125,6 +140,15 @@ function seededSession(): MockPayload {
       result("tu-read-range", READ_OUT, false, 12),
       { type: "tool_use", id: "tu-glob-cap", name: "glob", input: { pattern: "**/*.ts" } },
       result("tu-glob-cap", GLOB_TRUNCATED_OUT, false, 402),
+      {
+        type: "tool_use",
+        id: "tu-grep-content",
+        name: "grep",
+        input: { pattern: "readTool", path: "app/src", output_mode: "content" },
+      },
+      result("tu-grep-content", GREP_CONTENT_OUT, false, 96),
+      { type: "tool_use", id: "tu-grep-files", name: "grep", input: { pattern: "rocard" } },
+      result("tu-grep-files", GREP_FILES_TRUNCATED_OUT, false, 88),
       {
         type: "tool_use",
         id: "tu-read-err",
@@ -209,12 +233,21 @@ test.describe("read 族工具卡片紧凑化", () => {
     await page.waitForSelector(CARD);
   });
 
-  test("六个形态全部收成 1 行", async ({ page }) => {
+  test("八个形态全部收成 1 行", async ({ page }) => {
     const boxes = await cardBoxes(page);
-    expect(boxes.length).toBe(6);
+    expect(boxes.length).toBe(8);
     expect(boxes.map((b) => b.h).every((h) => h <= ONE_LINE_MAX)).toBe(true);
     // 通用卡片不该再出现(种子全是 read 族)。
     expect(await page.locator(".tool-card").count()).toBe(0);
+  });
+
+  test("grep 的 pattern 与计数上到 headline(收起态可读)", async ({ page }) => {
+    const grepContent = page.locator(CARD).nth(5);
+    await expect(grepContent.locator(".rocard__row")).toContainText("readTool in app/src");
+    await expect(grepContent.locator(".rocard__row")).toContainText("3 matches");
+    const grepFiles = page.locator(CARD).nth(6);
+    await expect(grepFiles.locator(".rocard__row")).toContainText("rocard");
+    await expect(grepFiles.locator(".rocard__row")).toContainText("2+ files");
   });
 
   test("默认收起:输出不在 DOM 里;点击行展开后才出现", async ({ page }) => {
@@ -234,7 +267,7 @@ test.describe("read 族工具卡片紧凑化", () => {
   });
 
   test("报错卡片仍 1 行,展开后是错误文案", async ({ page }) => {
-    const err = page.locator(CARD).nth(5);
+    const err = page.locator(CARD).nth(7);
     await expect(err.locator(".rocard__row")).toContainText("error");
     const h = await err.evaluate((el) => Math.round(el.getBoundingClientRect().height));
     expect(h).toBeLessThanOrEqual(ONE_LINE_MAX);

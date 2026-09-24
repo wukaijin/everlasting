@@ -124,12 +124,16 @@ export function isRealUserTurnStart(m: {
  *  `read_file` on `--color-tool-read` — the three are one read-only
  *  inspection family (same compact card, same accent), and the
  *  previous muted fallback made them read as "unknown tool" next to
- *  the cyan read_file card. */
+ *  the cyan read_file card.
+ *
+ *  09-25: `grep` joined the same family (the "另议" leftover from the
+ *  09-19 Non-Goals; it is the #2 most-called tool in audit history). */
 export function toolAccentVar(toolName: string): string {
   switch (toolName) {
     case "read_file":
     case "glob":
     case "list_dir":
+    case "grep":
       return "var(--color-tool-read)";
     case "write_file":
     case "edit_file":
@@ -149,13 +153,14 @@ export function toolAccentVar(toolName: string): string {
  *  09-19-tool-card-compact-read: `glob` / `list_dir` used to fall
  *  through to the wrench. `glob` is a path-pattern search
  *  (magnifying-glass), `list_dir` lists a directory (folder); the
- *  content search (`grep`) is deliberately NOT wired here — it still
- *  renders through the generic card. */
+ *  content search (`grep`) followed on 09-25 when it joined the read
+ *  family's compact card. */
 export function toolIcon(toolName: string): string {
   switch (toolName) {
     case "read_file":
       return "document";
     case "glob":
+    case "grep":
       return "magnifying-glass";
     case "list_dir":
       return "folder";

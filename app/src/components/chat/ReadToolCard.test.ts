@@ -122,6 +122,23 @@ describe("ReadToolCard", () => {
       expect(w.get(".rocard__meta").text()).toBe("3 entries");
     });
 
+    it("grep(09-25 并入)的 chip 是 pattern,meta 按 output_mode 取单位", () => {
+      const w = mountCard({
+        call: makeCall({
+          name: "grep",
+          input: { pattern: "rocard", path: "app/src", output_mode: "content" },
+        }),
+        result: makeResult({
+          content: JSON.stringify({
+            result: "app/src/a.vue:1:x\napp/src/b.vue:2:y",
+            cwd: "/repo",
+          }),
+        }),
+      });
+      expect(w.get(".tool-call-header__chip").text()).toContain("rocard in app/src");
+      expect(w.get(".rocard__meta").text()).toBe("2 matches");
+    });
+
     it("报错态:meta 留空、卡着 error、status 是 error", () => {
       const w = mountCard({
         call: makeCall(),

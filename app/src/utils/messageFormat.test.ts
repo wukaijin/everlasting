@@ -222,9 +222,9 @@ describe("toolHeaderChip (priority matrix)", () => {
 // 的 muted 兜底 + toolIcon 的扳手兜底 —— 在一排 tool 卡里读起来像"未知
 // 工具",而它们和 read_file 是同一族的只读检视。
 // ---------------------------------------------------------------------------
-describe("toolAccentVar / toolIcon — read 族(2026-09-19)", () => {
-  it("glob / list_dir / read_file 同一个 read accent", () => {
-    for (const name of ["glob", "list_dir", "read_file"]) {
+describe("toolAccentVar / toolIcon — read 族(2026-09-19;grep 09-25 并入)", () => {
+  it("glob / list_dir / read_file / grep 同一个 read accent", () => {
+    for (const name of ["glob", "list_dir", "read_file", "grep"]) {
       expect(toolAccentVar(name)).toBe("var(--color-tool-read)");
     }
   });
@@ -233,11 +233,12 @@ describe("toolAccentVar / toolIcon — read 族(2026-09-19)", () => {
     expect(toolAccentVar("write_file")).toBe("var(--color-tool-write)");
     expect(toolAccentVar("edit_file")).toBe("var(--color-tool-write)");
     expect(toolAccentVar("shell")).toBe("var(--color-tool-shell)");
-    expect(toolAccentVar("grep")).toBe("var(--color-text-muted)");
+    expect(toolAccentVar("web_search")).toBe("var(--color-text-muted)");
   });
 
-  it("glob → 放大镜、list_dir → 文件夹(不再吃扳手兜底)", () => {
+  it("glob / grep → 放大镜、list_dir → 文件夹(不再吃扳手兜底)", () => {
     expect(toolIcon("glob")).toBe("magnifying-glass");
+    expect(toolIcon("grep")).toBe("magnifying-glass");
     expect(toolIcon("list_dir")).toBe("folder");
     expect(toolIcon("read_file")).toBe("document");
   });

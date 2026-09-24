@@ -146,10 +146,11 @@ const EDIT_FILE_TOOL_NAME = "edit_file";
  * ShellCard(命令块常驻 + 一体化审批,替换通用 ToolCallCard)。 */
 const SHELL_TOOL_NAME = "shell";
 const RUN_BACKGROUND_SHELL_TOOL_NAME = "run_background_shell";
-/** 09-19 (tool-card-compact-read):只读检视三工具(glob / list_dir /
- * read_file)渲染 1 行紧凑卡 ReadToolCard —— 通用卡的三行形态实测
- * 85px/张,而这两行 summary 里没有用户当下要的信息。家族判定单源
- * `utils/toolSummary.ts` 的 isReadFamilyTool(卡片内部读同一份名单)。 */
+/** 09-19 (tool-card-compact-read):只读检视工具(glob / list_dir /
+ * read_file;grep 09-25 并入)渲染 1 行紧凑卡 ReadToolCard —— 通用卡的
+ * 三行形态实测 85px/张,而这两行 summary 里没有用户当下要的信息。家族
+ * 判定单源 `utils/toolSummary.ts` 的 isReadFamilyTool(卡片内部读同一份
+ * 名单)。 */
 
 const hasVisibleBubble = computed<boolean>(() => {
   const m = props.message;
