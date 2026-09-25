@@ -412,6 +412,10 @@ pub(crate) async fn dispatch_tool_calls(
                             duration_ms,
                             exit_code,
                             Some(seq),
+                            // N5: L2 read-only parallel batch — shell is
+                            // excluded by construction, so the sandbox
+                            // attribution is structurally absent here.
+                            None,
                         )
                         .await
                         {
@@ -778,6 +782,10 @@ pub(crate) async fn dispatch_tool_calls(
                                     duration_ms,
                                     exit_code,
                                 Some(seq),
+                                    // N5: L3a concurrent dispatch is
+                                    // read-only (shell excluded) — no
+                                    // sandbox attribution on this path.
+                                    None,
                                 )
                                 .await
                                 {
@@ -872,6 +880,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 duration_ms,
                                 None,
                                 Some(seq),
+                                None, // N5: non-shell tool path — no sandbox attribution
                             )
                             .await
                             {
@@ -937,6 +946,7 @@ pub(crate) async fn dispatch_tool_calls(
                                     duration_ms,
                                     None,
                                     Some(seq),
+                                    None, // N5: non-shell tool path — no sandbox attribution
                                 )
                                 .await
                                 {
@@ -1008,6 +1018,7 @@ pub(crate) async fn dispatch_tool_calls(
                                         duration_ms,
                                         None,
                                         Some(seq),
+                                        None, // N5: non-shell tool path — no sandbox attribution
                                     )
                                     .await
                                     {
@@ -1145,6 +1156,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 duration_ms,
                                 exit_code,
                                 Some(seq),
+                                None, // N5: non-shell tool path — no sandbox attribution
                             )
                             .await
                             {
@@ -1310,6 +1322,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 duration_ms,
                                 exit_code,
                                 Some(seq),
+                                None, // N5: non-shell tool path — no sandbox attribution
                             )
                             .await
                             {
@@ -1441,6 +1454,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 duration_ms,
                                 exit_code,
                                 Some(seq),
+                                None, // N5: non-shell tool path — no sandbox attribution
                             )
                             .await
                             {
@@ -1574,6 +1588,7 @@ pub(crate) async fn dispatch_tool_calls(
                                 duration_ms,
                                 exit_code,
                                 Some(seq),
+                                None, // N5: non-shell tool path — no sandbox attribution
                             )
                             .await
                             {
@@ -1779,10 +1794,21 @@ pub(crate) async fn dispatch_tool_calls(
                     // them, so the token state is identical across both.
                     if token.is_cancelled() {
                         cancelled = true;
-                    } else if !skip_persist {
-                        // B6 PR1b: skip the tool_executed audit write in
-                        // worker mode (SubagentBufferSink transcript is
-                        // the worker's record; PR2 persists it).
+                    } else if !skip_persist
+                        || (
+                            // N5 worker carve-out (09-26, review 5(a)): in
+                            // worker mode the transcript is the execution
+                            // record (B6 PR1b) — but a BARE-RUNNING shell is
+                            // a security fact, not an execution detail. The
+                            // tool-layer sandbox rows already bypass this
+                            // gate; this restores symmetry: worker sandboxed
+                            // → tool-layer row only; worker bare → this
+                            // exception row carrying the attribution.
+                            update
+                                .sandbox_attribution
+                                .is_some_and(|a| a != crate::sandbox::SandboxAttribution::Sandboxed)
+                        )
+                    {
                         if let Err(e) = permissions::record_tool_executed_audit(
                             &db,
                             &session_id,
@@ -1791,6 +1817,7 @@ pub(crate) async fn dispatch_tool_calls(
                             duration_ms,
                             exit_code,
                             Some(seq),
+                            update.sandbox_attribution.map(|a| a.as_str()),
                         )
                         .await
                         {

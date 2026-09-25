@@ -485,6 +485,17 @@ pub async fn set_web_search_config(
 
 /// `get_app_config` 响应(wire: camelCase,同 `WebSearchConfigPayload`
 /// 先例)。当前只暴露前端需要消费的开关;后续新开关在此 struct 加字段
+/// N5 (09-26):三维沙箱能力明细(只读派生,不落盘)。wire 字段
+/// camelCase 与 `AppConfigPayload` 同款(`sandboxCapabilityDetail`
+/// 嵌套对象 `{ landlock, landlockNet, seccomp }`)。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxCapabilityDetail {
+    pub landlock: bool,
+    pub landlock_net: bool,
+    pub seccomp: bool,
+}
+
 /// (additive)即可,不再为新标志位单开命令。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -520,6 +531,11 @@ pub struct AppConfigPayload {
     /// (`Capability::probe()` OnceLock 缓存)结果,**不落盘**、
     /// 无写通道。设置面据此显示「沙盒生效 / 已回退(fail-open)」。
     pub sandbox_capability: bool,
+    /// N5 (09-26):三维明细,与 `sandbox_capability`(= `ok()` =
+    /// `landlock && seccomp`)同源同派生。`landlock_net` 是隐藏降级
+    /// 维度:为 false 时 BindOnly 档在 prepare 入口降级 Block
+    /// (spec §13.2 R3)——设置面徽标据此显示黄色降级态。
+    pub sandbox_capability_detail: SandboxCapabilityDetail,
     /// F3 磁盘治理(2026-09-03, task `09-03-f3-disk-governance`):
     /// 每日磁盘回收节拍 kill switch 的读出口。app_config 键
     /// `disk_governor_enabled`(常量单源 `disk::governor::
@@ -582,6 +598,14 @@ pub async fn get_app_config_inner(
     let sandbox_extra_writable_raw =
         crate::sandbox::policy::read_extra_writable_raw(&state.db).await;
     let sandbox_capability = crate::sandbox::Capability::probe().ok();
+    let sandbox_capability_detail = {
+        let cap = crate::sandbox::Capability::probe();
+        SandboxCapabilityDetail {
+            landlock: cap.landlock,
+            landlock_net: cap.landlock_net,
+            seccomp: cap.seccomp,
+        }
+    };
     // F3 磁盘治理:两开关 fail-open 读(键常量与 governor 节拍 / outputs
     // sweep 单源,防两处字面漂移;读法同上——仅字面 "false" 关)。
     let disk_governor_enabled = match crate::db::config::get_config_value(
@@ -617,6 +641,7 @@ pub async fn get_app_config_inner(
         sandbox_extra_writable: sandbox_extra,
         sandbox_extra_writable_raw,
         sandbox_capability,
+        sandbox_capability_detail,
         disk_governor_enabled,
         outputs_age_cleanup_enabled,
         ask_no_timeout,
@@ -745,6 +770,25 @@ pub async fn set_app_config_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N5 (09-26):三维 detail 与旧一维 bool 同源派生 —— bool 恒等于
+    /// `landlock && seccomp`(`Capability::ok()`),`landlock_net` 独立
+    /// (BindOnly 降级维度)。与探测的 OnceLock 单源,不另起探测。
+    #[test]
+    fn sandbox_capability_detail_matches_probe() {
+        let cap = crate::sandbox::Capability::probe();
+        assert_eq!(cap.ok(), cap.landlock && cap.seccomp);
+        // The payload derivation is a field-for-field copy of the
+        // probe; the invariant under test is the bool's definition.
+        let detail = SandboxCapabilityDetail {
+            landlock: cap.landlock,
+            landlock_net: cap.landlock_net,
+            seccomp: cap.seccomp,
+        };
+        assert_eq!(detail.landlock, cap.landlock);
+        assert_eq!(detail.landlock_net, cap.landlock_net);
+        assert_eq!(detail.seccomp, cap.seccomp);
+    }
 
     /// 白名单内 key:写 `"false"` → `get_app_config_inner` 读回 false;
     /// 写 `"true"` 回 true。与读路径(fail-open 仅字面 `"false"` 关)闭环。

@@ -112,11 +112,40 @@ fail-closed(spawn 失败,tool 输出 `[sandbox] Failed to …`,绝不半沙盒�
   追加变体零迁移),两条 spawn 路径的 **tool 侧**写(registry 无 DB 句柄),
   payload = `command_sha256_12`(哈希前缀,**不存全命令** — 全文已在
   `tool_executed`)+ `ruleset` 摘要(`SandboxSpec::summary()`,两路同形)+ tool_name。
+- **N5 终态归因(2026-09-26,task `09-26-sandbox-failopen-audit`)**:shell 族
+  `tool_executed` 行 payload 增**必写**字段 `sandbox`(经串行落表点
+  `chat_loop/tools.rs` 消费 `ToolContextUpdate.sandbox_attribution` 透传;
+  L2/L3a 并发批 shell excluded 恒缺席)。wire 词表(无前缀,字段存在已表
+  裸跑):`sandboxed | failopen | yolo | kill_switch | project_off |
+  no_session | grant | escalation`。**双层类型化**:`OffCause`(failopen/
+  yolo/kill_switch/project_off/no_session,`Policy::Off { cause }` 各求值臂
+  自带)与 `SandboxAttribution`(扁平 8 值,`From<OffCause>` 覆盖共享五)
+  不同型 — grant/escalation 不经 `Policy::Off`。**两行分工**:
+  `sandboxed_shell_execution` = per-attempt 行(含升级重跑前的失败首跑),
+  `tool_executed.sandbox` = 终态;escalation(§4b 批准后 unsandboxed 重跑
+  为最终执行)在批准点单处覆写 — 构造点只播种乐观值,fail-closed 早退
+  路径(prepare/apply/spawn 失败)带 `sandboxed`(决策是沙箱面,未裸跑)。
+  例外:decide 前的参数校验失败行字段缺席(未执行,无可归因);旧行缺
+  席 = 历史语义,读侧永不把缺席当 sandboxed。**worker 例外(5(a) 反转)**:
+  worker 模式 `skip_persist` 门加一条 — shell 族归因为裸跑类(非
+  `sandboxed`)时破例写行(裸跑是安全事实,与工具层行不受门控的现状
+  对称);worker 沙箱执行仍无 `tool_executed` 行(B6 主裁剪不变)。
+  `run_background_shell` 注册即返路径同通道;**后台升级重跑发生在
+  registry 完成时、无 `tool_executed` 行可挂归因** — provenance 走通知
+  侧 ask 审计(与前台 §4b 语义平行,如实边界)。
 - **设置面**:`get_app_config` additive 三字段 `sandboxEnabled` /
   `sandboxExtraWritable`(生效清单,含后端并入的 `~/.cargo` 默认项)/
-  `sandboxCapability`(只读派生,不落盘)。写:`sandbox_enabled` 走
+  `sandboxCapability`(只读派生,不落盘;N5 起另有 `sandboxCapabilityDetail`
+  三维 `{landlock, landlockNet, seccomp}` 同源派生 — `landlockNet=false`
+  即 §13.2 的 BindOnly→Block 降级维,徽标黄态「BindOnly 档将降级断网」;
+  旧 daemon 无 detail 时前端回落一维 bool)。写:`sandbox_enabled` 走
   `set_app_config_flag` 白名单;数组走新命令 `set_app_config_list`
   (`SETTABLE_APP_LISTS` 白名单同款防呆,daemon route + Tauri 双端)。
+- **N6 CI 门禁(同任务)**:能力类测试 SKIP 收敛 `require_sandbox_cap()`
+  单源(panic 带三维明细);env `EVERLASTING_SANDBOX_TESTS_REQUIRED=1`
+  (ci.yml **rust job** 设)时 probe 失败 = 硬 fail,本地 dev 照旧大声
+  SKIP。**运营条款:runner 镜像变更后复查 SKIP 输出计数 = 0**。主机形状
+  SKIP(`/init`、`/mnt/c`、`$HOME`、root euid)非能力缺口,保持手写。
 - **拦截指引**(R7/§2.5;P3c §5.3 参数化):已沙盒命令 exit≠0 且 stderr 命中
   特征 → tool 输出尾部追加一行 `sandbox::failure_guidance(stderr, mode)`
   (append-only,宁缺勿滥)。特征与文案分三路(`classify_block` 共享给升级
@@ -556,8 +585,9 @@ landlock/seccomp。接入点 = 升级触发前、特征 gray-zone 才调用(控�
   `grantPattern`(wire-additive,旧前端忽略)。
 - **审计三事件闭环**(R5):建立 = `permission_granted` + reason
   `durable shell prefix grant: <pattern>`;命中 = `tool_allowed` + reason
-  `durable prefix grant hit`(**工具层**按 `DURABLE_GRANT_SKIP_REASON`
-  匹配写——sandbox 模块保持 audit-free,`record_durable_grant_hit_audit`);
+  `durable prefix grant hit`(**工具层**按 `SkipReason::DurableGrant`
+  匹配写——sandbox 模块保持 audit-free,`record_durable_grant_hit_audit`;
+  N5 起原 `DURABLE_GRANT_SKIP_REASON` 字符串常量由结构化枚举取代);
   撤销 = `GrantRevoked`(wire additive;管理面带 session 上下文时落行,
   无则 best-effort 跳过)。
 

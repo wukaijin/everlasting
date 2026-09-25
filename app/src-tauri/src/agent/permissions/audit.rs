@@ -372,20 +372,29 @@ pub(super) async fn record_audit(
 /// audit-log UI uses `Some(0)` vs `Some(non-zero)` to color the
 /// icon, and `None` for "N/A" — don't hardcode 0 to represent
 /// "no exit code", that would conflate "succeeded" with "N/A".
+#[allow(clippy::too_many_arguments)] // N5 added the 8th (sandbox attribution); mirrors retry.rs et al.
 pub async fn record_tool_executed_audit(
-    db: &SqlitePool,
+    db: &sqlx::SqlitePool,
     session_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     duration_ms: u128,
     exit_code: Option<i32>,
     turn_seq: Option<i64>,
+    // N5 (09-26): terminal sandbox attribution for shell-family
+    // tools (wire value of `SandboxAttribution`). REQUIRED for shell
+    // rows that got as far as a `decide()`; `None` = non-shell tool
+    // or a pre-decision parameter failure (nothing ran, nothing to
+    // attribute). Rows written before this field existed simply lack
+    // it — readers treat absence as "old row", never as "sandboxed".
+    sandbox: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let payload = serde_json::json!({
         "tool_name": tool_name,
         "tool_input": tool_input,
         "duration_ms": duration_ms,
         "exit_code": exit_code,
+        "sandbox": sandbox,
     });
     let payload_str = payload.to_string();
     crate::db::record_audit_event(

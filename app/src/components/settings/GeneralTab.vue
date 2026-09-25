@@ -22,12 +22,40 @@
 // 失败回拨到旧值并 toast。switch 样式复用 ScheduledTasksTab 的
 // role="switch" 手搓药丸(36×20 + 滑块),该形态已是项目内开关惯例。
 
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useConfigStore } from "../../stores/config";
 import { useProjectsStore } from "../../stores/projects";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 
 const config = useConfigStore();
+
+/** N5 (09-26):沙盒能力徽标升三维 —— ok(全绿)/ warn(landlock_net 缺,
+ * BindOnly 档将降级断网)/ off(fail-open 回退,红)。旧 daemon 无
+ * detail 时回落一维 bool 形态(warn 不可知,不显)。 */
+const sandboxCapBadge = computed<"ok" | "warn" | "off" | null>(() => {
+  const detail = config.sandboxCapabilityDetail;
+  if (detail) {
+    if (!detail.landlock || !detail.seccomp) return "off";
+    if (!detail.landlockNet) return "warn";
+    return "ok";
+  }
+  // Legacy daemon: one-dim bool only (warn unknowable, never shown).
+  if (config.sandboxCapability === null) return null;
+  return config.sandboxCapability ? "ok" : "off";
+});
+
+const sandboxCapBadgeLabel = computed(() => {
+  switch (sandboxCapBadge.value) {
+    case "ok":
+      return "沙盒生效";
+    case "warn":
+      return "BindOnly 档将降级断网";
+    case "off":
+      return "已回退(不沙盒)";
+    default:
+      return "";
+  }
+});
 const projects = useProjectsStore();
 
 /** Per-switch in-flight state(keyed like the flag names below);
@@ -139,14 +167,15 @@ function addExtraWritable(): void {
           <span class="general-tab__title">
             {{ row.title }}
             <span
-              v-if="row.key === 'sandboxEnabled' && config.sandboxCapability !== null"
+              v-if="row.key === 'sandboxEnabled' && sandboxCapBadge !== null"
               class="general-tab__cap"
               :class="{
-                'general-tab__cap--ok': config.sandboxCapability,
-                'general-tab__cap--off': !config.sandboxCapability,
+                'general-tab__cap--ok': sandboxCapBadge === 'ok',
+                'general-tab__cap--warn': sandboxCapBadge === 'warn',
+                'general-tab__cap--off': sandboxCapBadge === 'off',
               }"
             >
-              {{ config.sandboxCapability ? "沙盒生效" : "已回退(不沙盒)" }}
+              {{ sandboxCapBadgeLabel }}
             </span>
           </span>
           <span class="general-tab__desc">{{ row.description }}</span>
@@ -319,9 +348,14 @@ function addExtraWritable(): void {
   color: var(--color-text-secondary);
 }
 
-.general-tab__cap--off {
+.general-tab__cap--warn {
   background: var(--color-warning-bg, var(--color-bg-inset));
   color: var(--color-warning-text, var(--color-text-secondary));
+}
+
+.general-tab__cap--off {
+  background: color-mix(in srgb, var(--color-tool-error) 12%, var(--color-bg-inset));
+  color: var(--color-tool-error-text, var(--color-text-secondary));
 }
 
 .general-tab__extra {

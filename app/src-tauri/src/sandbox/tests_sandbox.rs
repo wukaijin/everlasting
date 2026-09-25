@@ -481,12 +481,19 @@ fn resolve_policy_full_matrix() {
                 landlock_net: false,
                 seccomp: false,
             };
-            assert_eq!(super::resolve_policy(mode, tier, true, broken), Policy::Off);
+            assert_eq!(
+                super::resolve_policy(mode, tier, true, broken),
+                Policy::Off {
+                    cause: super::OffCause::FailOpen
+                }
+            );
             // Row 2: Yolo → Off everywhere (恒不沙盒).
             if mode == Mode::Yolo {
                 assert_eq!(
                     super::resolve_policy(mode, tier, true, cap_ok()),
-                    Policy::Off
+                    Policy::Off {
+                        cause: super::OffCause::Yolo
+                    }
                 );
                 continue;
             }
@@ -494,18 +501,30 @@ fn resolve_policy_full_matrix() {
             if tier == PSP::Off {
                 assert_eq!(
                     super::resolve_policy(mode, tier, true, cap_ok()),
-                    Policy::Off
+                    Policy::Off {
+                        cause: super::OffCause::ProjectOff
+                    }
                 );
+                // In the PURE function the kill-switch arm runs before
+                // the project tiers (body order; see resolve_policy's
+                // doc). The staged-DB wrapper (resolve_session_policy)
+                // is where the project-off read short-circuits BEFORE
+                // the kill-switch read — cause attribution follows the
+                // arm that actually fired.
                 assert_eq!(
                     super::resolve_policy(mode, tier, false, cap_ok()),
-                    Policy::Off
+                    Policy::Off {
+                        cause: super::OffCause::KillSwitch
+                    }
                 );
                 continue;
             }
             // Row 4: kill-switch off → Off (global master beats the face).
             assert_eq!(
                 super::resolve_policy(mode, tier, false, cap_ok()),
-                Policy::Off
+                Policy::Off {
+                    cause: super::OffCause::KillSwitch
+                }
             );
             // Rows 5/6: face resolution. Plan overrides the project
             // face with the session-level read-only face (D3);
@@ -774,11 +793,10 @@ fn net_access_set_subsets_of_handled() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prepared_net_three_states_and_degrade() {
-    let cap = Capability::probe();
-    if !cap.ok() {
-        eprintln!("SKIP: Landlock/seccomp unavailable on this kernel");
+    if !super::require_sandbox_cap("prepared_net_three_states_and_degrade") {
         return;
     }
+    let cap = Capability::probe();
     let wt = std::env::temp_dir();
     let spec_for = |net: super::policy::NetPolicy| super::SandboxSpec {
         face: super::Face::ReadWrite,
@@ -925,7 +943,9 @@ async fn resolve_session_policy_off_and_kill_switch() {
     let pool = policy_pool("proj-off", PSP::Off, "sess-off").await;
     assert_eq!(
         super::resolve_session_policy(&pool, "sess-off", Mode::Edit).await,
-        Policy::Off
+        Policy::Off {
+            cause: super::OffCause::ProjectOff
+        }
     );
 
     // Kill-switch: only the literal "false" disables (fail-open read).
@@ -936,22 +956,32 @@ async fn resolve_session_policy_off_and_kill_switch() {
         .unwrap();
     assert_eq!(
         super::resolve_session_policy(&pool, "sess-ks", Mode::Edit).await,
-        Policy::Off
+        Policy::Off {
+            cause: super::OffCause::KillSwitch
+        }
     );
 }
 
 /// DB resolution fallbacks: unknown session id (no join row) and
-/// Yolo both resolve Off without touching anything.
+/// Yolo both resolve Off without touching anything. N5: the missing
+/// session row degrades through the project-off arm (`Ok(None) →
+/// PSP::Off` in `read_project_sandbox_policy`), so its cause reads
+/// `ProjectOff` — the closest vocabulary slot for "no project face
+/// to resolve"; Yolo carries its own cause.
 #[tokio::test]
 async fn resolve_session_policy_missing_session_and_yolo() {
     let pool = policy_pool("proj-x", PSP::ReadWrite, "sess-x").await;
     assert_eq!(
         super::resolve_session_policy(&pool, "no-such-session", Mode::Edit).await,
-        Policy::Off
+        Policy::Off {
+            cause: super::OffCause::ProjectOff
+        }
     );
     assert_eq!(
         super::resolve_session_policy(&pool, "sess-x", Mode::Yolo).await,
-        Policy::Off
+        Policy::Off {
+            cause: super::OffCause::Yolo
+        }
     );
 }
 
@@ -1020,7 +1050,7 @@ async fn decide_durable_grant_hit_skips_sandbox() {
         matches!(
             d,
             Decision::Skip {
-                reason: super::DURABLE_GRANT_SKIP_REASON
+                reason: super::SkipReason::DurableGrant
             }
         ),
         "got: {d:?}"
@@ -1078,7 +1108,7 @@ async fn decide_durable_grant_hit_skips_sandbox() {
         matches!(
             d,
             Decision::Skip {
-                reason: super::DURABLE_GRANT_SKIP_REASON
+                reason: super::SkipReason::DurableGrant
             }
         ),
         "got: {d:?}"
@@ -1924,5 +1954,53 @@ async fn integration_bind_only_net_matrix() {
     assert!(
         out.contains("Connection refused"),
         "connect to whitelisted port should be permitted (ECONNREFUSED expected), got: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// N5 attribution vocabulary (09-26-sandbox-failopen-audit)
+// ---------------------------------------------------------------------------
+
+/// The wire vocabulary is the audit contract — pin every value so a
+/// rename cannot silently drift the `tool_executed.sandbox` field
+/// (readers, the frontend label map and the spec §5 all match on
+/// these strings). No `off:` prefix: the field's presence already
+/// says "ran bare".
+#[test]
+fn sandbox_attribution_wire_vocabulary() {
+    use super::{OffCause, SandboxAttribution, SkipReason};
+    let cases = [
+        (SandboxAttribution::Sandboxed, "sandboxed"),
+        (SandboxAttribution::FailOpen, "failopen"),
+        (SandboxAttribution::Yolo, "yolo"),
+        (SandboxAttribution::KillSwitch, "kill_switch"),
+        (SandboxAttribution::ProjectOff, "project_off"),
+        (SandboxAttribution::NoSession, "no_session"),
+        (SandboxAttribution::Grant, "grant"),
+        (SandboxAttribution::Escalation, "escalation"),
+    ];
+    for (value, wire) in cases {
+        assert_eq!(value.as_str(), wire);
+    }
+    // Two-layer mapping: OffCause covers the shared five...
+    for cause in [
+        OffCause::FailOpen,
+        OffCause::Yolo,
+        OffCause::KillSwitch,
+        OffCause::ProjectOff,
+        OffCause::NoSession,
+    ] {
+        let via_attribution: SandboxAttribution = cause.into();
+        assert_eq!(via_attribution.as_str(), cause.as_str());
+    }
+    // ...SkipReason adds the grant arm (the exemption that never
+    // passes through Policy::Off).
+    assert_eq!(
+        SandboxAttribution::from(&SkipReason::DurableGrant),
+        SandboxAttribution::Grant
+    );
+    assert_eq!(
+        SandboxAttribution::from(&SkipReason::PolicyOff(OffCause::FailOpen)),
+        SandboxAttribution::FailOpen
     );
 }

@@ -246,35 +246,43 @@ pub async fn execute(
     //    HERE (tool layer has ctx.mode + config access) and handed to
     //    the registry, which only CONSUMES it at its spawn point
     //    (design §2.2).
-    let sandbox_spec = match crate::sandbox::decide(ctx, &command, session_id).await {
-        crate::sandbox::Decision::Sandbox(spec) => Some(spec),
-        crate::sandbox::Decision::Skip { reason } => {
-            // Durable prefix-grant hit (09-21-durable-prefix-grant R5):
-            // same tool-side audit contract as the foreground path.
-            if reason == crate::sandbox::DURABLE_GRANT_SKIP_REASON {
-                if let Some(sid) = session_id {
-                    let sha = crate::sandbox::command_sha_prefix(&command);
-                    if let Err(e) =
-                        crate::agent::permissions::audit::record_durable_grant_hit_audit(
-                            &ctx.db,
-                            sid,
-                            "run_background_shell",
-                            &sha,
-                            None,
-                        )
-                        .await
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            "run_background_shell: durable grant-hit audit write failed"
-                        );
+    // N5: terminal sandbox attribution for the registration call. The
+    // background escalation rerun happens at registry-completion time
+    // (P3d, next-turn injection) and has NO `tool_executed` row to
+    // hang an attribution on — its provenance stays on the ask-side
+    // rows, parallel to the foreground §4b (documented boundary).
+    let (sandbox_spec, sandbox_attribution) =
+        match crate::sandbox::decide(ctx, &command, session_id).await {
+            crate::sandbox::Decision::Sandbox(spec) => {
+                (Some(spec), crate::sandbox::SandboxAttribution::Sandboxed)
+            }
+            crate::sandbox::Decision::Skip { reason } => {
+                // Durable prefix-grant hit (09-21-durable-prefix-grant R5):
+                // same tool-side audit contract as the foreground path.
+                if matches!(reason, crate::sandbox::SkipReason::DurableGrant) {
+                    if let Some(sid) = session_id {
+                        let sha = crate::sandbox::command_sha_prefix(&command);
+                        if let Err(e) =
+                            crate::agent::permissions::audit::record_durable_grant_hit_audit(
+                                &ctx.db,
+                                sid,
+                                "run_background_shell",
+                                &sha,
+                                None,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                "run_background_shell: durable grant-hit audit write failed"
+                            );
+                        }
                     }
                 }
+                tracing::debug!(reason = ?reason, "run_background_shell: sandbox skip");
+                (None, crate::sandbox::SandboxAttribution::from(&reason))
             }
-            tracing::debug!(reason, "run_background_shell: sandbox skip");
-            None
-        }
-    };
+        };
 
     // 5. Start the background shell. The spec is cloned into the
     //    registry (it consumes it at spawn); the tool-side copy is
@@ -344,23 +352,33 @@ pub async fn execute(
                     // Mirror `shell::execute`: surface the validated cwd so
                     // the agent loop persists it on turn end.
                     new_cwd: Some(validated_cwd),
+                    sandbox_attribution: Some(sandbox_attribution),
                 },
             )
         }
         Err(crate::background_shell::BackgroundShellError::Spawn(e)) => (
             format!("Failed to spawn background shell: {}", e),
             true,
-            ToolContextUpdate::default(),
+            ToolContextUpdate {
+                new_cwd: None,
+                sandbox_attribution: Some(sandbox_attribution),
+            },
         ),
         Err(crate::background_shell::BackgroundShellError::InvalidCwd { path, reason }) => (
             format!("Invalid working_directory '{}': {}", path, reason),
             true,
-            ToolContextUpdate::default(),
+            ToolContextUpdate {
+                new_cwd: None,
+                sandbox_attribution: Some(sandbox_attribution),
+            },
         ),
         Err(e) => (
             format!("Failed to start background shell: {}", e),
             true,
-            ToolContextUpdate::default(),
+            ToolContextUpdate {
+                new_cwd: None,
+                sandbox_attribution: Some(sandbox_attribution),
+            },
         ),
     }
 }

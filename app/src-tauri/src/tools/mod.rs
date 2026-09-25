@@ -477,9 +477,21 @@ pub struct ToolContext {
 /// `sessions.current_cwd` once at the end of the turn (see
 /// `docs/PROPOSAL-project-binding-and-top-tabs.md` §4.4 "turn 结束
 /// 一次性写").
+///
+/// N5 (09-26): the shell family also rides this struct to report the
+/// terminal [`crate::sandbox::SandboxAttribution`] — it is the only
+/// structured vehicle from the tool layer to the serial
+/// `tool_executed` write site (`chat_loop/tools.rs`, where `new_cwd`
+/// is consumed at the same point). The assignment happens at ONE
+/// place in each shell tool — after the §4b escalation rerun has
+/// settled — never at the construction site.
 #[derive(Debug, Clone, Default)]
 pub struct ToolContextUpdate {
     pub new_cwd: Option<PathBuf>,
+    /// Terminal sandbox attribution for shell-family tools; `None` =
+    /// not a shell-family tool (the `tool_executed` audit field is
+    /// shell-only by contract).
+    pub sandbox_attribution: Option<crate::sandbox::SandboxAttribution>,
 }
 
 /// Execute a tool by name. Returns `(content_string, is_error,

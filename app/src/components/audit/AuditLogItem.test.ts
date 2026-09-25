@@ -161,3 +161,60 @@ describe("AuditLogItem — loop_intervention (C2+)", () => {
     expect(loopEl.exists()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// N5 (09-26-sandbox-failopen-audit): the `sandbox` attribution chip on
+// shell-family `tool_executed` rows. Tone contract: anomaly
+// (failopen / escalation / unknown) renders with the warn class;
+// routine (sandboxed / yolo / …) renders muted; absence renders
+// nothing (legacy row / non-shell tool / pre-decision failure).
+// ---------------------------------------------------------------------------
+
+describe("AuditLogItem — sandbox attribution chip (N5)", () => {
+  const shellRow = (sandbox?: string) =>
+    buildRow(
+      "tool_executed",
+      JSON.stringify({
+        tool_name: "shell",
+        duration_ms: 812,
+        exit_code: 0,
+        ...(sandbox === undefined ? {} : { sandbox }),
+      }),
+    );
+
+  it("failopen renders the anomaly chip with the warn class", () => {
+    const w = mount(AuditLogItem, { props: { row: shellRow("failopen") } });
+    const chip = w.find(".audit-item__sandbox");
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("沙箱能力缺失,裸跑");
+    expect(chip.classes()).toContain("audit-item__sandbox--anomaly");
+  });
+
+  it("escalation renders the anomaly chip", () => {
+    const w = mount(AuditLogItem, { props: { row: shellRow("escalation") } });
+    const chip = w.find(".audit-item__sandbox");
+    expect(chip.text()).toContain("批准后不沙箱重跑");
+    expect(chip.classes()).toContain("audit-item__sandbox--anomaly");
+  });
+
+  it("sandboxed / yolo render the routine chip WITHOUT the warn class", () => {
+    for (const value of ["sandboxed", "yolo", "grant"]) {
+      const w = mount(AuditLogItem, { props: { row: shellRow(value) } });
+      const chip = w.find(".audit-item__sandbox");
+      expect(chip.exists(), value).toBe(true);
+      expect(chip.classes(), value).not.toContain("audit-item__sandbox--anomaly");
+    }
+  });
+
+  it("missing field renders NO chip (legacy / non-shell row)", () => {
+    const w = mount(AuditLogItem, { props: { row: shellRow() } });
+    expect(w.find(".audit-item__sandbox").exists()).toBe(false);
+  });
+
+  it("unknown wire value degrades to anomaly-toned raw echo", () => {
+    const w = mount(AuditLogItem, { props: { row: shellRow("quantum_tunnel") } });
+    const chip = w.find(".audit-item__sandbox");
+    expect(chip.text()).toBe("quantum_tunnel");
+    expect(chip.classes()).toContain("audit-item__sandbox--anomaly");
+  });
+});

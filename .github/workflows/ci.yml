@@ -96,7 +96,12 @@ jobs:
         run: cargo check --lib --features bench --benches
 
       - name: cargo test --lib
+        # N6 (09-26): 沙盒能力类测试在 runner 上必须真跑 —— probe 失败
+        # 直接 fail(panic 带三维 capability 明细,runner 镜像变更可归因),
+        # 不再静默 SKIP 吞掉覆盖率。本地 dev 不设此 env 照旧 SKIP。
         run: cargo test --lib
+        env:
+          EVERLASTING_SANDBOX_TESTS_REQUIRED: "1"
 
       # e2e 进回归基线(RULE-TEST-003, 08-30-e2e-red-fix):tests/e2e.rs 是
       # 进程内 axum router + httpmock 临时端口,无真 daemon/无端口冲突,复用

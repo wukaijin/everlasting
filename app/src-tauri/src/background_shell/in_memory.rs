@@ -1458,8 +1458,7 @@ mod tests {
     /// Skipped (loudly) when the runtime kernel lacks Landlock+seccomp.
     #[tokio::test]
     async fn sandboxed_background_shell_enforces_write_face() {
-        if !crate::sandbox::Capability::probe().ok() {
-            eprintln!("SKIP: Landlock/seccomp unavailable on this kernel (fail-open runtime)");
+        if !crate::sandbox::require_sandbox_cap("background_shell") {
             return;
         }
         let tmp = tempdir().unwrap();
@@ -1587,8 +1586,7 @@ mod tests {
     /// line — and `escalation_source` hands back the rerun inputs.
     #[tokio::test]
     async fn escalation_offer_baked_on_face_out_failure() {
-        if !crate::sandbox::Capability::probe().ok() {
-            eprintln!("SKIP: Landlock/seccomp unavailable on this kernel (fail-open runtime)");
+        if !crate::sandbox::require_sandbox_cap("background_shell") {
             return;
         }
         let tmp = tempdir().unwrap();
@@ -1659,8 +1657,7 @@ mod tests {
     /// even when the command fails the same way.
     #[tokio::test]
     async fn no_offer_without_sandbox_or_origin() {
-        if !crate::sandbox::Capability::probe().ok() {
-            eprintln!("SKIP: Landlock/seccomp unavailable on this kernel (fail-open runtime)");
+        if !crate::sandbox::require_sandbox_cap("background_shell") {
             return;
         }
         let tmp = tempdir().unwrap();

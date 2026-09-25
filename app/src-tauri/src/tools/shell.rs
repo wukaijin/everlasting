@@ -480,11 +480,11 @@ pub async fn execute(
     // (`[sandbox]`-prefixed spawn error, design §2.3).
     let sandbox_decision = crate::sandbox::decide(ctx, command, session_id).await;
     // Durable prefix-grant hit (09-21-durable-prefix-grant R5): the
-    // Skip carries an explicit reason constant — write the audit row
-    // here in the tool layer (the sandbox module stays audit-free by
+    // Skip carries a structured reason — write the audit row here in
+    // the tool layer (the sandbox module stays audit-free by
     // contract). Best-effort, like every audit write around spawn.
     if let crate::sandbox::Decision::Skip { reason } = &sandbox_decision {
-        if *reason == crate::sandbox::DURABLE_GRANT_SKIP_REASON {
+        if matches!(reason, crate::sandbox::SkipReason::DurableGrant) {
             if let Some(sid) = session_id {
                 let sha = crate::sandbox::command_sha_prefix(command);
                 if let Err(e) = crate::agent::permissions::audit::record_durable_grant_hit_audit(
@@ -497,6 +497,22 @@ pub async fn execute(
             }
         }
     }
+    // N5 (09-26): terminal sandbox attribution, seeded HERE (right
+    // after the decision) so every exit path — including the
+    // fail-closed prepare/apply/spawn errors below — carries a
+    // truthful value into the `tool_executed` payload. Seeded value
+    // = what the call WOULD run under; the §4b escalation approval
+    // below overwrites it to `Escalation` at the one point where the
+    // terminal state actually flips (unsandboxed rerun approved).
+    // A fail-closed `[sandbox]` error path keeps `Sandboxed`: the
+    // decision was a sandbox face and nothing ran bare.
+    let mut update = ToolContextUpdate {
+        new_cwd: Some(validated_cwd.clone()),
+        sandbox_attribution: Some(match &sandbox_decision {
+            crate::sandbox::Decision::Skip { reason } => reason.into(),
+            crate::sandbox::Decision::Sandbox(_) => crate::sandbox::SandboxAttribution::Sandboxed,
+        }),
+    };
     // R9 conjunction input: which net enforcer the (potential) spawn
     // installs — computed once from the same decision (W3 spirit).
     let net_enf = match &sandbox_decision {
@@ -511,7 +527,7 @@ pub async fn execute(
                     return (
                         format!("[sandbox] Failed to apply sandbox: {}", e),
                         true,
-                        ToolContextUpdate::default(),
+                        update.clone(),
                         None,
                     );
                 }
@@ -521,7 +537,7 @@ pub async fn execute(
                 return (
                     format!("[sandbox] Failed to prepare sandbox: {}", e),
                     true,
-                    ToolContextUpdate::default(),
+                    update.clone(),
                     None,
                 );
             }
@@ -545,7 +561,7 @@ pub async fn execute(
             return (
                 format!("{prefix}Failed to spawn command: {}", e),
                 true,
-                ToolContextUpdate::default(),
+                update.clone(),
                 None,
             );
         }
@@ -576,10 +592,6 @@ pub async fn execute(
             }
         }
     }
-
-    let update = ToolContextUpdate {
-        new_cwd: Some(validated_cwd.clone()),
-    };
 
     // 4b. P3c escalation loop (design §5): at most ONE unsandboxed
     //     rerun per tool call. Fires only when the sandboxed first
@@ -666,6 +678,13 @@ pub async fn execute(
                 )
             };
             if approved {
+                // N5: the terminal execution flips to unsandboxed HERE
+                // — the one overwrite point (the seed above assumed the
+                // sandboxed path). The rerun's spawn-error return below
+                // also carries `Escalation`: the approval happened, the
+                // terminal state is the approved rerun regardless of
+                // how that rerun ended.
+                update.sandbox_attribution = Some(crate::sandbox::SandboxAttribution::Escalation);
                 let mut retry = Command::new("sh");
                 retry
                     .arg("-c")

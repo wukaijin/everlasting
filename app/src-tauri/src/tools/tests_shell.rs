@@ -1012,3 +1012,47 @@ fn apply_safe_env_clears_and_reinjects() {
     // table was emptied by mistake).
     assert!(!SAFE_ENV_VARS.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// N5 sandbox attribution (09-26-sandbox-failopen-audit)
+// ---------------------------------------------------------------------------
+
+/// No session id → `decide` resolves `Off { NoSession }` → the update
+/// carries the attribution the serial `tool_executed` write site will
+/// put in the audit payload. The REQUIRED-for-shell contract: any
+/// shell call that got as far as `decide()` reports an attribution.
+#[tokio::test]
+async fn execute_reports_no_session_attribution() {
+    let tmp = tempdir().unwrap();
+    let (_, is_error, update, _) = execute(
+        &serde_json::json!({"command": "echo hello"}),
+        &test_ctx(&tmp),
+        None,
+        &fresh_token(),
+    )
+    .await;
+    assert!(!is_error);
+    assert_eq!(
+        update.sandbox_attribution,
+        Some(crate::sandbox::SandboxAttribution::NoSession)
+    );
+}
+
+/// A pre-decision parameter failure (missing command) never reached
+/// `decide()` — nothing ran, nothing to attribute. The audit payload
+/// field is structurally absent for this row; the contract wording is
+/// "REQUIRED for shell rows that got as far as a decide()", and this
+/// test pins the deliberate exception.
+#[tokio::test]
+async fn execute_missing_command_param_has_no_attribution() {
+    let tmp = tempdir().unwrap();
+    let (_, is_error, update, _) = execute(
+        &serde_json::json!({}),
+        &test_ctx(&tmp),
+        None,
+        &fresh_token(),
+    )
+    .await;
+    assert!(is_error);
+    assert_eq!(update.sandbox_attribution, None);
+}

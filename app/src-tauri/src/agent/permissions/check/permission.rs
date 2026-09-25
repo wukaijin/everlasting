@@ -354,9 +354,10 @@ pub async fn check(
             // invariant). `Off` (project off / kill-switch /
             // capability fail / no session row) falls through
             // byte-identical to the P3b path.
-            if crate::sandbox::resolve_session_policy(db, &ctx.session_id, ctx.mode).await
-                != crate::sandbox::Policy::Off
-            {
+            if !matches!(
+                crate::sandbox::resolve_session_policy(db, &ctx.session_id, ctx.mode).await,
+                crate::sandbox::Policy::Off { .. }
+            ) {
                 tracing::info!(
                     session_id = %ctx.session_id,
                     tool = %tool_name,

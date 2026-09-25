@@ -253,3 +253,49 @@ describe("GeneralTab — P3b sandbox", () => {
     expect(w.findAll(".general-tab__extra-item")).toHaveLength(1);
   });
 });
+
+// N5 (09-26):三维能力徽标 —— detail 优先三态;旧 daemon 无 detail
+// 回落一维 bool(warn 不可知,不显黄)。
+describe("GeneralTab — sandbox capability badge 三态 (N5)", () => {
+  it("detail 全维 → 「沙盒生效」", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+    pinia.sandboxCapabilityDetail = { landlock: true, landlockNet: true, seccomp: true };
+    await flushPromises();
+    const badge = w.find(".general-tab__cap");
+    expect(badge.text()).toContain("沙盒生效");
+    expect(badge.classes()).toContain("general-tab__cap--ok");
+  });
+
+  it("landlock_net 缺 → 黄色「BindOnly 档将降级断网」", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+    pinia.sandboxCapabilityDetail = { landlock: true, landlockNet: false, seccomp: true };
+    await flushPromises();
+    const badge = w.find(".general-tab__cap");
+    expect(badge.text()).toContain("BindOnly 档将降级断网");
+    expect(badge.classes()).toContain("general-tab__cap--warn");
+  });
+
+  it("landlock 缺 → 红色「已回退(不沙盒)」", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+    pinia.sandboxCapabilityDetail = { landlock: false, landlockNet: false, seccomp: true };
+    await flushPromises();
+    const badge = w.find(".general-tab__cap");
+    expect(badge.text()).toContain("已回退");
+    expect(badge.classes()).toContain("general-tab__cap--off");
+  });
+
+  it("detail=null(旧 daemon)回落一维 bool 形态", async () => {
+    const w = await mountTab();
+    const pinia = useConfigStore();
+    pinia.sandboxCapabilityDetail = null;
+    pinia.sandboxCapability = true;
+    await flushPromises();
+    expect(w.find(".general-tab__cap").text()).toContain("沙盒生效");
+    pinia.sandboxCapability = false;
+    await flushPromises();
+    expect(w.find(".general-tab__cap").text()).toContain("已回退");
+  });
+});

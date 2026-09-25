@@ -85,6 +85,47 @@ export interface ToolExecutedPayload {
    *  success. Non-zero = the tool failed. `-1` = the child was
    *  killed (timeout or cancel). */
   exit_code?: number | null;
+  /** N5 (09-26): terminal sandbox attribution, shell family only.
+   *  Wire vocabulary: `sandboxed | failopen | yolo | kill_switch |
+   *  project_off | no_session | grant | escalation`. Absent = a row
+   *  written before the field existed, or a non-shell tool, or a
+   *  shell call that failed parameter validation before `decide()`
+   *  (nothing ran, nothing to attribute) — never read absence as
+   *  "sandboxed". */
+  sandbox?: string;
+}
+
+/** N5 (09-26): display metadata for the `sandbox` attribution field.
+ *  Tone splits the eight values in two: ANOMALY (the machine
+ *  degraded to bare / the final run was an approved unsandboxed
+ *  rerun — surfaces highlighted) vs ROUTINE (operator-chosen or
+ *  expected states — low-contrast text, so a Yolo session showing
+ *  the chip on every row stays visually quiet). */
+export interface SandboxAttributionDisplay {
+  label: string;
+  tone: "anomaly" | "routine";
+}
+
+const SANDBOX_ATTRIBUTION_LABELS: Record<string, SandboxAttributionDisplay> = {
+  sandboxed: { label: "沙箱执行", tone: "routine" },
+  failopen: { label: "沙箱能力缺失,裸跑", tone: "anomaly" },
+  yolo: { label: "Yolo 信任,裸跑", tone: "routine" },
+  kill_switch: { label: "全局开关关,裸跑", tone: "routine" },
+  project_off: { label: "项目档 off,裸跑", tone: "routine" },
+  no_session: { label: "无会话上下文,裸跑", tone: "routine" },
+  grant: { label: "持久授权放行,裸跑", tone: "routine" },
+  escalation: { label: "批准后不沙箱重跑", tone: "anomaly" },
+};
+
+/** Resolve display metadata for a `sandbox` wire value. Unknown
+ *  values (forward compat: a newer daemon may add one) degrade to
+ *  an anomaly-toned raw echo — unknown attribution states deserve
+ *  attention, not silence. */
+export function sandboxAttributionDisplay(
+  value: string | undefined | null,
+): SandboxAttributionDisplay | null {
+  if (!value) return null;
+  return SANDBOX_ATTRIBUTION_LABELS[value] ?? { label: value, tone: "anomaly" };
 }
 
 /** Payload for `mode_changed` / `yolo_entered` / `yolo_exited`.

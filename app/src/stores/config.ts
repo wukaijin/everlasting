@@ -133,6 +133,13 @@ export const useConfigStore = defineStore("config", () => {
   const sandboxExtraWritable = ref<string[]>([]);
   const sandboxExtraWritableRaw = ref<string[]>([]);
   const sandboxCapability = ref<boolean | null>(null);
+  /** N5 (09-26):三维能力明细(只读派生)。null = 旧 daemon 无此字段,
+   * 徽标回落一维 bool 形态。 */
+  const sandboxCapabilityDetail = ref<{
+    landlock: boolean;
+    landlockNet: boolean;
+    seccomp: boolean;
+  } | null>(null);
 
   // F3 磁盘治理(2026-09-03, task 09-03-f3-disk-governance):每日磁盘
   // 回收节拍 kill switch 与有主 outputs 按龄回收开关的展示值(读法与
@@ -200,6 +207,11 @@ export const useConfigStore = defineStore("config", () => {
         sandboxExtraWritable?: string[];
         sandboxExtraWritableRaw?: string[];
         sandboxCapability?: boolean;
+        sandboxCapabilityDetail?: {
+          landlock: boolean;
+          landlockNet: boolean;
+          seccomp: boolean;
+        };
         diskGovernorEnabled?: boolean;
         outputsAgeCleanupEnabled?: boolean;
         askNoTimeout?: boolean;
@@ -218,6 +230,8 @@ export const useConfigStore = defineStore("config", () => {
       // P3c(RULE-SBX-002):raw 编辑清单,旧 daemon 缺省 []。
       sandboxExtraWritableRaw.value = appConfig.sandboxExtraWritableRaw ?? [];
       sandboxCapability.value = appConfig.sandboxCapability ?? null;
+      // N5:additive 三维明细(旧 daemon 缺省 null)。
+      sandboxCapabilityDetail.value = appConfig.sandboxCapabilityDetail ?? null;
       // F3:additive 两字段(旧 daemon 缺省 true)。
       diskGovernorEnabled.value = appConfig.diskGovernorEnabled !== false;
       outputsAgeCleanupEnabled.value = appConfig.outputsAgeCleanupEnabled !== false;
@@ -382,6 +396,7 @@ export const useConfigStore = defineStore("config", () => {
     sandboxExtraWritable,
     sandboxExtraWritableRaw,
     sandboxCapability,
+    sandboxCapabilityDetail,
     diskGovernorEnabled,
     outputsAgeCleanupEnabled,
     askNoTimeout,

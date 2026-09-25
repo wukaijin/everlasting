@@ -572,6 +572,7 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
                 duration_ms,
                 exit_code,
                 Some(seq),
+                None, // N5: non-shell tool path — no sandbox attribution
             )
             .await
             {

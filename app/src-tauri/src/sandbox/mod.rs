@@ -110,12 +110,130 @@ impl Face {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
     /// No sandbox — classic pre-execution approval path (Tier 4:
-    /// prefix-grant / three-tier classify / ask).
-    Off,
+    /// prefix-grant / three-tier classify / ask). The cause makes
+    /// "machine can't" (fail-open) structurally distinct from
+    /// "operator chose to" (Yolo / kill-switch / project off) —
+    /// consumed by [`SkipReason`] → `SandboxAttribution` for the
+    /// `tool_executed` audit row.
+    Off { cause: OffCause },
     /// Every shell command runs under the sandbox with the given
     /// face; out-of-face failures escalate at execution time
     /// (foreground shell) instead of pre-execution approval.
     Face(Face),
+}
+
+/// Why a shell command resolved to [`Policy::Off`] (N5, 09-26 audit
+/// attribution). One variant per arm of the evaluation order — the
+/// probe fail-open degrade and the three intentional opt-outs must
+/// not share a skip reason (they were indistinguishable as a bare
+/// `Off` + a single skip string before).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffCause {
+    /// `Capability::probe().ok()` failed → fail-open, commands run
+    /// unsandboxed (old kernel / WSL1 / non-Linux). The one cause
+    /// that is NOT an operator choice.
+    FailOpen,
+    /// Yolo mode: user already granted full trust (R4).
+    Yolo,
+    /// Global kill-switch `sandbox_enabled == false` (master).
+    KillSwitch,
+    /// Per-project `sandbox_policy == 'off'` opt-out.
+    ProjectOff,
+    /// No session context (test paths) — nothing to resolve a
+    /// project policy from.
+    NoSession,
+}
+
+impl OffCause {
+    /// Wire value for the `tool_executed` audit payload's `sandbox`
+    /// attribution field (no `off:` prefix — the field's presence
+    /// already says "ran bare").
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OffCause::FailOpen => "failopen",
+            OffCause::Yolo => "yolo",
+            OffCause::KillSwitch => "kill_switch",
+            OffCause::ProjectOff => "project_off",
+            OffCause::NoSession => "no_session",
+        }
+    }
+}
+
+/// Terminal sandbox attribution for one shell-family tool call (N5,
+/// 09-26): what the FINAL execution actually ran under. Carried to
+/// the agent loop via `ToolContextUpdate` and written into the
+/// `tool_executed` audit payload as the `sandbox` field (wire =
+/// [`SandboxAttribution::as_str`]; the field is REQUIRED for shell
+/// family rows — a missing field on a new row would read as
+/// "sandboxed", the default-unsafe trap the review flagged).
+///
+/// Two-layer vocabulary, deliberately NOT the same type as
+/// [`OffCause`]: `Grant` and `Escalation` never pass through
+/// `Policy::Off` (the durable grant skips from inside the `Face`
+/// arm; the §4b escalation rerun happens after a `Sandbox` decision
+/// failed out-of-face), so they cannot live on `OffCause`.
+/// `From<OffCause>` covers the shared five.
+///
+/// Row-level division of labor: `sandboxed_shell_execution` is the
+/// per-attempt row (every sandboxed spawn, including the failed
+/// first attempt of an escalation); this attribution on
+/// `tool_executed` is the terminal state of the tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxAttribution {
+    /// Ran under the sandbox (terminal state, no escalation rerun).
+    Sandboxed,
+    /// Capability probe failed → ran bare (fail-open degrade).
+    FailOpen,
+    /// Yolo mode — ran bare by operator trust.
+    Yolo,
+    /// Kill-switch off — ran bare globally.
+    KillSwitch,
+    /// Project opt-out — ran bare for this project.
+    ProjectOff,
+    /// No session context (test paths).
+    NoSession,
+    /// Durable prefix-grant hit → started without the sandbox.
+    Grant,
+    /// P3c §4b escalation rerun: first attempt failed out-of-face,
+    /// user approved, the FINAL execution was the unsandboxed rerun.
+    Escalation,
+}
+
+impl SandboxAttribution {
+    /// Wire value for the `tool_executed` payload's `sandbox` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SandboxAttribution::Sandboxed => "sandboxed",
+            SandboxAttribution::FailOpen => OffCause::FailOpen.as_str(),
+            SandboxAttribution::Yolo => OffCause::Yolo.as_str(),
+            SandboxAttribution::KillSwitch => OffCause::KillSwitch.as_str(),
+            SandboxAttribution::ProjectOff => OffCause::ProjectOff.as_str(),
+            SandboxAttribution::NoSession => OffCause::NoSession.as_str(),
+            SandboxAttribution::Grant => "grant",
+            SandboxAttribution::Escalation => "escalation",
+        }
+    }
+}
+
+impl From<OffCause> for SandboxAttribution {
+    fn from(cause: OffCause) -> Self {
+        match cause {
+            OffCause::FailOpen => SandboxAttribution::FailOpen,
+            OffCause::Yolo => SandboxAttribution::Yolo,
+            OffCause::KillSwitch => SandboxAttribution::KillSwitch,
+            OffCause::ProjectOff => SandboxAttribution::ProjectOff,
+            OffCause::NoSession => SandboxAttribution::NoSession,
+        }
+    }
+}
+
+impl From<&SkipReason> for SandboxAttribution {
+    fn from(reason: &SkipReason) -> Self {
+        match reason {
+            SkipReason::PolicyOff(cause) => (*cause).into(),
+            SkipReason::DurableGrant => SandboxAttribution::Grant,
+        }
+    }
 }
 
 /// Pure data describing what a sandboxed command may do. Built by
@@ -155,9 +273,23 @@ pub struct SandboxSpec {
 pub enum Decision {
     /// Run the command under the given spec.
     Sandbox(SandboxSpec),
-    /// Do not sandbox. `reason` goes to tracing (debug) — never to
-    /// the audit log (design §2.2: skips are not security events).
-    Skip { reason: &'static str },
+    /// Do not sandbox. The structured reason feeds the
+    /// `tool_executed` attribution (via [`SandboxAttribution`]) and
+    /// tracing (debug) — still never a dedicated audit ROW (design
+    /// §2.2: skips are not security events; N5 adds the attribution
+    /// FIELD to the existing `tool_executed` row, not a new kind).
+    Skip { reason: SkipReason },
+}
+
+/// Structured skip reason (N5): distinguishes the fail-open degrade
+/// from the intentional opt-outs, and the durable-grant exemption
+/// from both. The `DURABLE_GRANT_SKIP_REASON` string constant this
+/// replaces was matched by the tool layer to write the grant-hit
+/// audit row — that match is now `matches!(reason, SkipReason::DurableGrant)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    PolicyOff(OffCause),
+    DurableGrant,
 }
 
 /// Cached kernel capability probe (R5). `OnceLock`-cached: the
@@ -204,6 +336,46 @@ impl Capability {
             cap
         })
     }
+}
+
+/// N6 (09-26, BACKLOG 附录 B): capability-gated sandbox tests used to
+/// `eprintln!("SKIP")` and pass on any host whose probe fails — macOS
+/// runners, old kernels, hardened containers — silently zeroing the
+/// sandbox coverage with no gate. This helper turns that SKIP into a
+/// HARD FAIL when `EVERLASTING_SANDBOX_TESTS_REQUIRED=1` is set (the
+/// CI rust job sets it). The panic message carries the full
+/// three-dimension probe detail so a runner-image change that kills
+/// Landlock is attributable from the failure output alone. Local dev
+/// without the env keeps the loud-SKIP behavior (a WSL1 host must not
+/// be blocked from running the suite).
+///
+/// Usage: `if !require_sandbox_cap("<test name>") { return; }` — call
+/// it instead of hand-rolling the probe + eprintln pair. Host-shape
+/// SKIPs (`/init`, `/mnt/c`, `$HOME`) are NOT capability gaps and stay
+/// hand-rolled.
+#[cfg(test)]
+pub(crate) fn require_sandbox_cap(context: &str) -> bool {
+    let cap = Capability::probe();
+    if cap.ok() {
+        return true;
+    }
+    let detail = format!(
+        "landlock={} landlock_net={} seccomp={}",
+        cap.landlock, cap.landlock_net, cap.seccomp
+    );
+    if std::env::var("EVERLASTING_SANDBOX_TESTS_REQUIRED")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        panic!(
+            "sandbox tests REQUIRED on this runner but capability probe failed [{context}]: \
+             {detail} — runner image changed? (spec sandbox-executor.md §5: re-check \
+             SKIP count == 0 after runner image changes)"
+        );
+    }
+    eprintln!("SKIP: Landlock/seccomp unavailable [{context}]: {detail}");
+    false
 }
 
 /// Non-cached probe body. Landlock: `landlock_create_ruleset(NULL, 0,
@@ -277,10 +449,10 @@ fn probe_once() -> Capability {
 /// readability, the staged I/O wrapper preserves the documented
 /// read order:
 ///
-/// 1. capability probe failed → `Off` (fail-open, unchanged);
-/// 2. mode == Yolo → `Off` (恒不沙盒, unchanged);
-/// 3. kill-switch == false → `Off` (global master, beats every face);
-/// 4. project policy == Off → `Off` (per-project opt-out);
+/// 1. capability probe failed → `Off { FailOpen }` (fail-open, unchanged);
+/// 2. mode == Yolo → `Off { Yolo }` (恒不沙盒, unchanged);
+/// 3. kill-switch == false → `Off { KillSwitch }` (global master, beats every face);
+/// 4. project policy == Off → `Off { ProjectOff }` (per-project opt-out);
 /// 5. mode == Plan → `Face(ReadOnly)` (session-level read-only face
 ///    overrides the project face — D3);
 /// 6. project policy → `Face(its tier)`.
@@ -288,7 +460,8 @@ fn probe_once() -> Capability {
 /// `classify_prefix` no longer participates in the trigger (P3c:
 /// every command sandboxes under a face); the classification layer
 /// semantics are untouched and still serve the Tier 4 path when the
-/// policy resolves `Off`.
+/// policy resolves `Off`. N5 (09-26): every `Off` arm carries its
+/// cause — evaluation order itself is untouched.
 pub fn resolve_policy(
     mode: Mode,
     project_policy: policy::ProjectSandboxPolicy,
@@ -296,19 +469,27 @@ pub fn resolve_policy(
     cap: Capability,
 ) -> Policy {
     if !cap.ok() {
-        return Policy::Off;
+        return Policy::Off {
+            cause: OffCause::FailOpen,
+        };
     }
     if mode == Mode::Yolo {
         // R4: Yolo already granted full trust by the user.
-        return Policy::Off;
+        return Policy::Off {
+            cause: OffCause::Yolo,
+        };
     }
     if !kill_switch {
         // Global master switch: off = no sandbox anywhere, including
         // readonly-face projects.
-        return Policy::Off;
+        return Policy::Off {
+            cause: OffCause::KillSwitch,
+        };
     }
     match (project_policy, mode) {
-        (policy::ProjectSandboxPolicy::Off, _) => Policy::Off,
+        (policy::ProjectSandboxPolicy::Off, _) => Policy::Off {
+            cause: OffCause::ProjectOff,
+        },
         // Plan's value is the deterministic read-only face (D3): the
         // project face is overridden for the session, but a project
         // opt-out (checked above) still turns the whole chain off —
@@ -333,14 +514,20 @@ pub fn resolve_policy(
 pub async fn resolve_session_policy(db: &sqlx::SqlitePool, session_id: &str, mode: Mode) -> Policy {
     let cap = Capability::probe();
     if !cap.ok() {
-        return Policy::Off;
+        return Policy::Off {
+            cause: OffCause::FailOpen,
+        };
     }
     if mode == Mode::Yolo {
-        return Policy::Off;
+        return Policy::Off {
+            cause: OffCause::Yolo,
+        };
     }
     let project_policy = policy::read_project_sandbox_policy(db, session_id).await;
     if project_policy == policy::ProjectSandboxPolicy::Off {
-        return Policy::Off;
+        return Policy::Off {
+            cause: OffCause::ProjectOff,
+        };
     }
     let enabled = policy::sandbox_enabled(db).await;
     resolve_policy(mode, project_policy, enabled, cap)
@@ -357,17 +544,20 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
         None => {
             // No session context (test paths): nothing to resolve a
             // project policy from → classic unsandboxed behavior.
-            Policy::Off
+            Policy::Off {
+                cause: OffCause::NoSession,
+            }
         }
     };
     match policy {
-        Policy::Off => {
+        Policy::Off { cause } => {
             tracing::debug!(
                 command_sha = %command_sha_prefix(command),
+                cause = %cause.as_str(),
                 "sandbox: skip (policy Off)"
             );
             Decision::Skip {
-                reason: "policy resolved Off",
+                reason: SkipReason::PolicyOff(cause),
             }
         }
         Policy::Face(face) => {
@@ -381,7 +571,7 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
             // is the deterministic read-only face — same gate as the
             // escalation trigger's `mode != Plan`). The audit row for a
             // grant-hit Skip is written by the tool layer (it matches
-            // [`DURABLE_GRANT_SKIP_REASON`]) — this module stays
+            // [`SkipReason::DurableGrant`]) — this module stays
             // permissions-import-clean (see policy.rs's module contract).
             if ctx.mode != crate::db::Mode::Plan {
                 if let Some(sid) = session_id {
@@ -394,7 +584,7 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
                             "sandbox: skip (durable prefix grant hit)"
                         );
                         return Decision::Skip {
-                            reason: DURABLE_GRANT_SKIP_REASON,
+                            reason: SkipReason::DurableGrant,
                         };
                     }
                 }
@@ -414,12 +604,6 @@ pub async fn decide(ctx: &ToolContext, command: &str, session_id: Option<&str>) 
         }
     }
 }
-
-/// `Decision::Skip` reason for a durable prefix-grant hit. The tool
-/// layer matches this constant to write the grant-hit audit row (the
-/// sandbox module itself never writes audits — tool-side contract,
-/// same split as `SandboxedShellExecution`).
-pub const DURABLE_GRANT_SKIP_REASON: &str = "durable prefix grant";
 
 /// The mutually-exclusive network enforcer for one spawn (R2). The
 /// type makes "seccomp and Landlock-net both installed" unrepresentable:

@@ -134,8 +134,7 @@ fn count_denial_lines(content: &str) -> usize {
 /// rerun "按普通失败返回"), and exactly ONE card for the call.
 #[tokio::test(flavor = "multi_thread")]
 async fn escalation_approve_reruns_once_without_second_card() {
-    if !crate::sandbox::Capability::probe().ok() {
-        eprintln!("SKIP: Landlock/seccomp unavailable (fail-open runtime, no escalation)");
+    if !crate::sandbox::require_sandbox_cap("escalation") {
         return;
     }
     if unsafe { libc::geteuid() } == 0 {
@@ -175,7 +174,7 @@ async fn escalation_approve_reruns_once_without_second_card() {
     let ctx = esc_ctx(&tmp, pool, handle);
     spawn_resolver(capture.clone(), store, PermissionResponse::AllowOnce);
 
-    let (content, is_error, _, exit) = execute(
+    let (content, is_error, update, exit) = execute(
         &serde_json::json!({ "command": ALWAYS_DENIED }),
         &ctx,
         Some("esc-sess-1"),
@@ -187,6 +186,14 @@ async fn escalation_approve_reruns_once_without_second_card() {
     // non-zero exit, not a tool error — exit + content are the signal.
     assert!(!is_error);
     assert_eq!(exit, Some(1));
+    // N5 (09-26): the terminal attribution flips to Escalation once
+    // the approved rerun is the final execution — NOT `sandboxed`,
+    // even though the first attempt ran under the sandbox and its
+    // per-attempt `sandboxed_shell_execution` row exists.
+    assert_eq!(
+        update.sandbox_attribution,
+        Some(crate::sandbox::SandboxAttribution::Escalation)
+    );
     // Exactly one card for the whole call (§5.1 once-per-call gate).
     let cards = capture.asks.lock().unwrap().len();
     assert_eq!(cards, 1, "exactly one escalation card, got {cards}");
@@ -213,8 +220,7 @@ async fn escalation_approve_reruns_once_without_second_card() {
 /// is returned with the mode-aware guidance appended; no rerun.
 #[tokio::test(flavor = "multi_thread")]
 async fn escalation_deny_returns_failure_with_guidance() {
-    if !crate::sandbox::Capability::probe().ok() {
-        eprintln!("SKIP: Landlock/seccomp unavailable (fail-open runtime, no escalation)");
+    if !crate::sandbox::require_sandbox_cap("escalation") {
         return;
     }
     let tmp = tempdir().unwrap();
@@ -258,7 +264,7 @@ async fn escalation_deny_returns_failure_with_guidance() {
         },
     );
 
-    let (content, is_error, _, _) = execute(
+    let (content, is_error, update, _) = execute(
         &serde_json::json!({ "command": command }),
         &ctx,
         Some("esc-sess-2"),
@@ -271,6 +277,12 @@ async fn escalation_deny_returns_failure_with_guidance() {
     // the content is the signal (assertions below).
     assert!(!is_error);
     assert_eq!(capture.asks.lock().unwrap().len(), 1, "one card");
+    // N5: denial keeps the sandboxed first attempt as the terminal
+    // execution — attribution stays Sandboxed (no rerun happened).
+    assert_eq!(
+        update.sandbox_attribution,
+        Some(crate::sandbox::SandboxAttribution::Sandboxed)
+    );
     // Failure + guidance (the deny branch keeps the sandbox framing).
     assert!(
         content.contains("Permission denied"),
@@ -294,8 +306,7 @@ async fn escalation_deny_returns_failure_with_guidance() {
 /// the rerun happens with NO card at all (direct unsandboxed rerun).
 #[tokio::test(flavor = "multi_thread")]
 async fn escalation_prefix_grant_reruns_without_card() {
-    if !crate::sandbox::Capability::probe().ok() {
-        eprintln!("SKIP: Landlock/seccomp unavailable (fail-open runtime, no escalation)");
+    if !crate::sandbox::require_sandbox_cap("escalation") {
         return;
     }
     let tmp = tempdir().unwrap();
@@ -400,8 +411,7 @@ async fn escalation_compound_command_never_grant_hits() {
 /// only (the degradation contract).
 #[tokio::test(flavor = "multi_thread")]
 async fn escalation_without_handle_degrades_to_guidance() {
-    if !crate::sandbox::Capability::probe().ok() {
-        eprintln!("SKIP: Landlock/seccomp unavailable (fail-open runtime, no escalation)");
+    if !crate::sandbox::require_sandbox_cap("escalation") {
         return;
     }
     let tmp = tempdir().unwrap();

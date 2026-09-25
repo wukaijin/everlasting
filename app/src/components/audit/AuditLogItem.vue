@@ -39,6 +39,7 @@ import {
   iconFamilyForKind,
   labelForKind,
   parseAuditPayload,
+  sandboxAttributionDisplay,
   summarizeToolInput,
   type AuditEventRow,
 } from "../../utils/audit";
@@ -208,6 +209,16 @@ const exitCodeLabel = computed<string>(() => {
 });
 
 const kindLabel = computed<string>(() => labelForKind(props.row.kind));
+
+/** N5 (09-26): the `sandbox` attribution chip for shell-family
+ *  `tool_executed` rows. Anomaly tones (failopen / escalation /
+ *  unknown) render in the warn color; routine tones (sandboxed /
+ *  yolo / …) stay low-contrast text — a Yolo session shows this on
+ *  every row and must not turn the log amber. */
+const sandboxAttr = computed(() => {
+  if (parsed.value.kind !== "tool_executed") return null;
+  return sandboxAttributionDisplay(parsed.value.payload.sandbox);
+});
 const timeLabel = computed<string>(() => formatTimeOfDay(props.row.ts));
 
 /** Tool name from any payload kind that carries one. */
@@ -434,6 +445,15 @@ const isCritical = computed<boolean>(() => {
         >
           {{ exitCodeLabel }}
         </span>
+        <span
+          v-if="sandboxAttr"
+          class="audit-item__sandbox"
+          :class="{
+            'audit-item__sandbox--anomaly': sandboxAttr.tone === 'anomaly',
+          }"
+        >
+          {{ sandboxAttr.label }}
+        </span>
       </div>
 
       <div v-if="reasonText" class="audit-item__reason">
@@ -601,6 +621,24 @@ const isCritical = computed<boolean>(() => {
 .audit-item__exit--fail {
   color: var(--color-tool-error-text);
   border-color: color-mix(in srgb, var(--color-tool-error) 35%, transparent);
+}
+
+/* N5 (09-26): sandbox attribution chip — mirrors the exit chip's
+ * shape. Routine tones stay muted (text-secondary, no border tint);
+ * anomaly tones (failopen / escalation / unknown) take the amber
+ * warn family so a degraded machine reads at a glance. */
+.audit-item__sandbox {
+  font-size: var(--text-xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-bg-border);
+  background: var(--color-bg-app);
+  color: var(--color-text-secondary);
+}
+
+.audit-item__sandbox--anomaly {
+  color: var(--color-tool-shell);
+  border-color: color-mix(in srgb, var(--color-tool-shell) 35%, transparent);
 }
 
 .audit-item__reason {
