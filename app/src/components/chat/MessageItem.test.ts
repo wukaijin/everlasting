@@ -1108,6 +1108,26 @@ describe("MessageItem — 09-20 TTFB 空窗占位(正在思考…)", () => {
     expect(wrapper.find(".msg__cursor").exists()).toBe(true);
   });
 
+  it("thinking-only contentBlocks 到达后占位消失(09-25 回归:实时态思考只写 contentBlocks,hasVisibleBubble 曾漏认)", async () => {
+    const wrapper = mountItem(
+      {
+        id: "m-await-2b",
+        role: "assistant",
+        content: "",
+        streaming: true,
+        contentBlocks: [{ kind: "thinking", text: "让我想想…", signature: "" }],
+      },
+      pinia,
+    );
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="msg-awaiting-hint"]').exists()).toBe(false);
+    // 时间轴路径接管:思考卡从首个思考 token 起渲染(折叠头)。
+    const thinking = wrapper.findComponent({ name: "ThinkingBlock" });
+    expect(thinking.exists()).toBe(true);
+    expect(thinking.text()).toContain("Thought for");
+  });
+
   it("非 streaming 或 user 行不渲染占位", async () => {
     const done = mountItem(
       { id: "m-await-3", role: "assistant", content: "", streaming: false },

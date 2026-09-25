@@ -134,6 +134,35 @@ scale/height**——动画中间帧的测量值经 measureElement 按 getItemKey
 
 ---
 
+## 4b. 可见性谓词必须覆盖全部实时态内容承载字段(09-25 回归)
+
+消息进渲染列表要过 `useVirtualizedMessages` 的可见性闸门
+(`isCoreVisible` 单调核心 + `tailSig` 尾行签名,streaming/error 非单调
+现读)。**新增任何"承载流式内容"的消息字段时,以下三处谓词必须同步**,
+漏任何一处都是静默丢行(类型/编译不拦):
+
+1. `isCoreVisible` —— 漏认 = 字段成为唯一内容时整行被滤;
+2. `tailSig` —— 漏认 = 首块到达不触发缓存链重判(行即使可见也不出现);
+3. `estimateMessageHeight` —— 漏认 = 估高塌到兜底 6px,行可见后首帧跳动;
+4. 同族:`MessageItem.hasVisibleBubble`(TTFB「正在思考…」占位的熄灭
+   条件)语义须一致。
+
+09-25 实证:`thinking_delta` 自 08-08 起只写 `contentBlocks` 不双写
+`thinkingBlocks`(streamEvents 去双写),四谓词没跟上 → 思考期间占位行
+整行被滤:思考卡、「正在思考…」TTFB 占位、流式光标全部不可见,首个
+文本 delta(content 非空)到达才连思考卡一起蹦出——用户感知为"THOUGHT
+结束才出现回复"。b8680277 的「正在思考…」占位同理从未真正生效(空占
+位也被滤),因其测试只到 MessageItem 组件级、没过列表过滤。
+
+**守门位**:
+- 回归测试必须在 **MessageList 列表级**(seed `messagesBySession` 后数
+  `.vrow`)——组件级挂载绿不等于列表渲染绿,本次两个死功能都是组件级
+  测试盖出来的假绿;
+- `retryChat` 原位清空是可见性"单调核心"的唯一非单调先例,清空清单与
+  谓词字段清单同责(09-25 补 `contentBlocks = []`)。
+
+---
+
 ## 5. 本地路径预览链路(2026-09-13;同日扩展到非图片文件 + 工具输出面)
 
 聊天 markdown 与工具输出里的本地路径可点击 → 应用内弹层查看。图片与文件是

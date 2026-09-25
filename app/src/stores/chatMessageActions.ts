@@ -369,14 +369,18 @@ export function createMessageActions(ctx: MessageActionsContext) {
     //    - strip the trailing ERROR_MARKER (and any blank-line
     //      separator) so the first delta reads cleanly
     //    - mark streaming so the UI re-renders with cursor
-    //    - clear toolCalls / toolResults / thinkingBlocks so
-    //      the bubble + cards re-render empty
+    //    - clear toolCalls / toolResults / thinkingBlocks /
+    //      contentBlocks so the bubble + cards re-render empty
+    //      (contentBlocks 与分桶同源单调 —— useVirtualizedMessages 的
+    //      可见性缓存以「retry 清空」为唯一非单调先例,漏清会让重试
+    //      流把新块 append 到旧块后面)
     errored.error = undefined;
     errored.streaming = true;
     errored.toolCalls = [];
     errored.toolResults = [];
     errored.thinkingBlocks = [];
     errored.redactedThinkingData = [];
+    errored.contentBlocks = [];
     errored.latency = undefined;
     // Strip trailing ERROR_MARKER (`<text>\n\n[生成出错中断]`)
     // and any blank-line separator preceding it. The marker is

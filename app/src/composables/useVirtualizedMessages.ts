@@ -127,31 +127,51 @@ export function estimateMessageHeight(m: ChatMessage): number {
   if (m.role === "user" && (m.toolResults?.length ?? 0) > 0) {
     h += EST_GHOST_USER;
   }
-  h += (m.thinkingBlocks?.length ?? 0) * EST_THINKING_BLOCK;
-  h += (m.redactedThinkingData?.length ?? 0) * EST_THINKING_BLOCK;
+  // 折叠思考块:contentBlocks 优先计数 —— 实时流式态 thinking 只写
+  // contentBlocks(streamEvents 08-08 起不双写 thinkingBlocks),漏计会
+  // 让 thinking-only 行估高塌到兜底 6px(行可见后窗口按 6px 排,思考卡
+  // 实测后由 measureElement 收敛,但首帧跳动);reload 态分桶 +
+  // contentBlocks 双写,取 contentBlocks 单侧计数避免双计。旧行(无
+  // contentBlocks,interleaved-thinking 之前落库)回退分桶。
+  const thinkingBlockCount = m.contentBlocks
+    ? m.contentBlocks.filter(
+        (b) => b.kind === "thinking" || b.kind === "redacted_thinking",
+      ).length
+    : (m.thinkingBlocks?.length ?? 0) + (m.redactedThinkingData?.length ?? 0);
+  h += thinkingBlockCount * EST_THINKING_BLOCK;
   return Math.max(h, EST_MIN_ROW);
 }
 
-/** 可见性谓词的「单调核心」(PR2 拆分):除 `error` 外的全部可见性
- *  字段。这些字段只增不减(content 只追加、四个结构数组只 push),
- *  所以一条消息一旦核心可见就永远可见 —— 单调性是下方缓存的前提。
- *  (唯一已知的非单调路径:retryChat 原位清空结构数组并剥 ERROR_MARKER
- *  —— 此时该消息是尾行,tailSig 翻转触发重判,见下。) */
+/** 可见性谓词的「单调核心」(PR2 拆分):除 `error` / `streaming` 外的
+ * 全部可见性字段。这些字段只增不减(content 只追加、五个结构数组只
+ * push),所以一条消息一旦核心可见就永远可见 —— 单调性是下方缓存的
+ * 前提。(唯一已知的非单调路径:retryChat 原位清空结构数组并剥
+ * ERROR_MARKER —— 此时该消息是尾行,tailSig 翻转触发重判,见下。)
+ *
+ * contentBlocks 必须在列(09-25 回归):实时流式态的 thinking_delta
+ * 只写 contentBlocks 不双写 thinkingBlocks(streamEvents 08-08 起去双
+ * 写),谓词漏认它会让 thinking-only 占位行整行被滤——思考期间消息区
+ * 零反馈,首个文本 delta 到达才连同思考卡一起蹦出。 */
 function isCoreVisible(m: ChatMessage): boolean {
   return !!(
     m.content ||
     m.toolCalls?.length ||
     m.toolResults?.length ||
     (m.thinkingBlocks && m.thinkingBlocks.length > 0) ||
-    (m.redactedThinkingData && m.redactedThinkingData.length > 0)
+    (m.redactedThinkingData && m.redactedThinkingData.length > 0) ||
+    (m.contentBlocks && m.contentBlocks.length > 0)
   );
 }
 
-/** 完整可见性 = 单调核心 ∨ error(error 非单调:retry start 会原位
- *  清除;A5+ 语义 = 重试恢复后错误行消失)。导出仅供测试对照缓存链
- *  与原谓词语义一致。 */
+/** 完整可见性 = 单调核心 ∨ error ∨ streaming。
+ * - error 非单调(retry start 会原位清除;A5+ 语义 = 重试恢复后错误行
+ *   消失);
+ * - streaming 同非单调(done 置 false):空占位(TTFB 窗口,send → 首个
+ *   内容块)靠它可见,MessageItem 的「正在思考…」占位行才有挂载面;
+ *   空轮终结(如取消早于首 token)时翻回不可见,不留幽灵空行。
+ * 导出仅供测试对照缓存链与原谓词语义一致。 */
 export function isVisible(m: ChatMessage): boolean {
-  return isCoreVisible(m) || !!m.error;
+  return isCoreVisible(m) || !!m.error || !!m.streaming;
 }
 
 /** 单调核心可见性缓存(PR2,f4 降本主刀):
@@ -163,18 +183,19 @@ export function isVisible(m: ChatMessage): boolean {
  *  f4@10k 859ms 的主要构成;design §9-6 U4 预判坐实)。
  *
  *  拆法:可见性输入分两类 ——
- *  - **单调核心**(上:content 非空 + 四个结构数组长度):一条消息
+ *  - **单调核心**(上:content 非空 + 五个结构数组长度):一条消息
  *    一旦为真永不为真。按消息对象缓进 WeakMap 后,filter 主循环对
  *    已可见行**零字段读取**(WeakMap.get 不进依赖),流式增长不再
  *    订阅 content。
- *  - **非单调的 error + 新尾行的核心字段翻转**:全部收敛进 tailSig
- *    (下方)——尾行是流式期唯一会翻转可见性的行(占位行 push 时
- *    不可见,首 delta 后可见;tool/thinking/error 事件也都落在尾行)。
+ *  - **非单调的 error / streaming + 新尾行的核心字段翻转**:全部收敛进
+ *    tailSig(下方)——尾行是流式期唯一会翻转可见性的行(占位行 push
+ *    时靠 streaming 位可见,首内容块后核心可见;tool/thinking/error
+ *    事件也都落在尾行)。
  *
- *  tailSig 只读尾行的六个可见性输入(content 仅取空/非空位),取值
+ *  tailSig 只读尾行的八个可见性输入(content 仅取空/非空位),取值
  *  在纯文本 delta 期间恒定 —— Vue computed 的值稳定语义(core 3.4+,
  *  本 app vue 3.5)使 delta 不再向下游传播;翻转事件(首 delta /
- *  tool:call / thinking 块 / error)照常触发重判。 */
+ *  tool:call / thinking 块 / error / streaming)照常触发重判。 */
 const coreVisibleCache = new WeakMap<ChatMessage, boolean>();
 
 /** Composable 公开面:MessageList.vue 只做模板(虚拟项 wrapper + 回底
@@ -214,10 +235,12 @@ export function useVirtualizedMessages(
   const questionCardsStore = useQuestionCardsStore();
 
   // ---- 尾行结构签名(可见性翻转的 reactive 闸门,见上方注记)---------
-  // 六个可见性输入(content 只取空/非空位,长度取数值,error 取布尔)
-  // 拼成短字符串:纯文本 delta 期间 content 位不变、长度不变 → 取值
-  // 恒定 → computed 值稳定 → 不向 visibleMessages 传播。翻转事件
-  // (首 delta / tool:call push / thinking 块 / error 置清)改值即传播。
+  // 八个可见性输入(content 只取空/非空位,长度取数值,error / streaming
+  // 取布尔)拼成短字符串:纯文本 delta 期间 content 位不变、长度不变 →
+  // 取值恒定 → computed 值稳定 → 不向 visibleMessages 传播。翻转事件
+  // (首 delta / tool:call push / thinking 块 / error 置清 / streaming
+  // 置清)改值即传播。contentBlocks 位 = thinking-only 流式行可见性的
+  // 唯一翻转源;streaming 位 = 空占位挂载 / 空轮终结收回。
   const tailSig = computed(() => {
     const msgs = store.messages;
     const m = msgs[msgs.length - 1];
@@ -225,8 +248,8 @@ export function useVirtualizedMessages(
     return `${m.content ? 1 : 0}|${m.toolCalls?.length ?? 0}|${
       m.toolResults?.length ?? 0
     }|${m.thinkingBlocks?.length ?? 0}|${m.redactedThinkingData?.length ?? 0}|${
-      m.error ? 1 : 0
-    }`;
+      m.contentBlocks?.length ?? 0
+    }|${m.error ? 1 : 0}|${m.streaming ? 1 : 0}`;
   });
 
   // 缓存链的运行态(每 composable 实例一份;重判只在结构变化时发生,
@@ -263,9 +286,11 @@ export function useVirtualizedMessages(
         v = isCoreVisible(m);
         coreVisibleCache.set(m, v);
       }
-      // error 非单调(可能被 retry start 清除):非核心可见行每次重判
-      // 都现读一次,依赖保持活跃 —— 清除事件能触发重判(A5+ 行消失)。
+      // error / streaming 非单调(error 可能被 retry start 清除,
+      // streaming 在 done 置 false):非核心可见行每次重判都现读一次,
+      // 依赖保持活跃 —— 清除事件能触发重判(错误行消失 / 空占位收回)。
       if (!v && m.error) v = true;
+      if (!v && m.streaming) v = true;
       if (v) out.push(m);
     }
     lastVisible = out;

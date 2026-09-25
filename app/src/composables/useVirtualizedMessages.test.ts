@@ -39,6 +39,21 @@ describe("isVisible(完整可见性 = 单调核心 ∨ error;缓存链语义对�
     expect(isVisible(msg({ error: { message: "x" } as never }))).toBe(true);
     expect(isVisible(msg({}))).toBe(false);
   });
+
+  it("contentBlocks thinking-only 行可见(09-25 回归:实时态思考只写 contentBlocks,曾整行被滤)", () => {
+    expect(
+      isVisible(
+        msg({
+          contentBlocks: [{ kind: "thinking", text: "t", signature: "" }],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("streaming 空占位可见(TTFB 窗口「正在思考…」的挂载面);streaming 结束且无内容则不可见", () => {
+    expect(isVisible(msg({ streaming: true }))).toBe(true);
+    expect(isVisible(msg({ streaming: false }))).toBe(false);
+  });
 });
 
 describe("followModeOf(design §2 锚定决策,PR0 勘误后形态)", () => {
@@ -128,6 +143,24 @@ describe("estimateMessageHeight(PR2 实测回归式:22/行(88 字符/行)+ 座 2
       redactedThinkingData: ["x"],
     });
     expect(estimateMessageHeight(m)).toBe(4 * 28);
+  });
+
+  it("contentBlocks 思考块计 28(09-25 回归:实时态 thinking-only 行曾塌到兜底 6px)", () => {
+    const m = msg({
+      contentBlocks: [
+        { kind: "thinking", text: "a", signature: "" },
+        { kind: "redacted_thinking", data: "x" },
+      ],
+    });
+    expect(estimateMessageHeight(m)).toBe(2 * 28);
+  });
+
+  it("reload 双写行(thinkingBlocks + contentBlocks 同块)单侧计数不双计", () => {
+    const m = msg({
+      thinkingBlocks: [{ text: "a" } as never],
+      contentBlocks: [{ kind: "thinking", text: "a", signature: "" }],
+    });
+    expect(estimateMessageHeight(m)).toBe(28);
   });
 
   it("空消息兜底下限(估 0 会让 spacer 塌掉)", () => {

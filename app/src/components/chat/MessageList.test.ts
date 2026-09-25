@@ -159,7 +159,10 @@ async function mountList() {
   return w;
 }
 
-function seedSessionWithMessages(sessionId: string) {
+function seedSessionWithMessages(
+  sessionId: string,
+  msgs?: Array<Record<string, unknown>>,
+) {
   const store = useChatStore();
   store.sessions = [
     {
@@ -192,12 +195,15 @@ function seedSessionWithMessages(sessionId: string) {
   // `store.messages` is a computed over the controller's LRU map —
   // seed the map, not the computed. Two runs (u1 opens run 1, u2
   // opens run 2): exercises both spacing classes.
-  useStreamControllerStore().messagesBySession.set(sessionId, [
-    { id: "u1", role: "user", content: "第一条", seq: 1 } as never,
-    { id: "a1", role: "assistant", content: "回答一", seq: 2 } as never,
-    { id: "u2", role: "user", content: "第二条", seq: 3 } as never,
-    { id: "a2", role: "assistant", content: "回答二", seq: 4 } as never,
-  ]);
+  useStreamControllerStore().messagesBySession.set(
+    sessionId,
+    (msgs ?? [
+      { id: "u1", role: "user", content: "第一条", seq: 1 },
+      { id: "a1", role: "assistant", content: "回答一", seq: 2 },
+      { id: "u2", role: "user", content: "第二条", seq: 3 },
+      { id: "a2", role: "assistant", content: "回答二", seq: 4 },
+    ]) as never,
+  );
   return store;
 }
 
@@ -448,6 +454,61 @@ describe("MessageList — pendingScrollSeq command (AC4 前半, N4 PR1)", () => 
 // 构成)。PR2 缓存链成立的行为证据 = spy 重算计数:纯增长零重算,翻转
 // 事件(可见性 false→true / 结构数组增长)恰好一次。
 // ---------------------------------------------------------------------------
+describe("MessageList — 流式占位可见性(09-25 回归:思考期整行被滤)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockClear();
+    document.body.innerHTML = "";
+    calls.scrollToEnd.length = 0;
+    calls.scrollToIndex.length = 0;
+    calls.willUpdate = 0;
+    calls.measure = 0;
+  });
+
+  it("thinking-only 占位(thinking_delta 只写 contentBlocks)渲染为行", async () => {
+    // 09-25 修复前:isCoreVisible 不认 contentBlocks,占位整行被滤,
+    // 思考期间消息区零反馈,首个文本 delta 到达才连同思考卡蹦出。
+    seedSessionWithMessages("s1", [
+      { id: "u1", role: "user", content: "第一条", seq: 1 },
+      {
+        id: "a1",
+        role: "assistant",
+        seq: 2,
+        content: "",
+        streaming: true,
+        contentBlocks: [{ kind: "thinking", text: "让我想想…", signature: "" }],
+      },
+    ]);
+    const w = await mountList();
+    // user 行 + thinking-only 占位行 = 2(fake virtualizer 全窗可见)。
+    expect(w.findAll(".vrow")).toHaveLength(2);
+    w.unmount();
+  });
+
+  it("TTFB 空占位(streaming、无任何内容)也渲染——「正在思考…」的挂载面", async () => {
+    // b8680277 的占位行此前从未真正显示:空占位同样被可见性过滤,
+    // MessageItem 根本不挂载。streaming 位进谓词后才有挂载面。
+    seedSessionWithMessages("s1", [
+      { id: "u1", role: "user", content: "第一条", seq: 1 },
+      { id: "a1", role: "assistant", seq: 2, content: "", streaming: true },
+    ]);
+    const w = await mountList();
+    expect(w.findAll(".vrow")).toHaveLength(2);
+    expect(w.find('[data-testid="msg-awaiting-hint"]').exists()).toBe(true);
+    w.unmount();
+  });
+
+  it("非 streaming 且无内容的空行仍被过滤(空轮终结不留幽灵行)", async () => {
+    seedSessionWithMessages("s1", [
+      { id: "u1", role: "user", content: "第一条", seq: 1 },
+      { id: "a1", role: "assistant", seq: 2, content: "", streaming: false },
+    ]);
+    const w = await mountList();
+    expect(w.findAll(".vrow")).toHaveLength(1);
+    w.unmount();
+  });
+});
+
 describe("MessageList — 流式 delta 不触发 flatten 重算(PR2)", () => {
   beforeEach(() => {
     setActivePinia(createPinia());

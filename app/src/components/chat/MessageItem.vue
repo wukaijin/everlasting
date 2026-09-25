@@ -159,7 +159,12 @@ const hasVisibleBubble = computed<boolean>(() => {
     !!(m.toolCalls && m.toolCalls.length) ||
     !!(m.toolResults && m.toolResults.length) ||
     !!(m.thinkingBlocks && m.thinkingBlocks.length) ||
-    !!(m.redactedThinkingData && m.redactedThinkingData.length)
+    !!(m.redactedThinkingData && m.redactedThinkingData.length) ||
+    // 实时流式态 thinking 只写 contentBlocks(不双写 thinkingBlocks)
+    // —— 漏认会让 isAwaitingFirstChunk 在思考期间恒真。与
+    // useVirtualizedMessages.isCoreVisible 同族谓词,新增承载字段两处
+    // 同步(09-25 回归:思考行整列被滤即漏在此类谓词上)。
+    !!(m.contentBlocks && m.contentBlocks.length)
   );
 });
 
