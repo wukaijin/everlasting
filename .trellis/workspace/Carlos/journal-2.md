@@ -1020,3 +1020,31 @@ GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M
 ### Status
 
 [OK] **Completed**
+
+## Session 60: N5+N6 沙箱 fail-open 审计可区分 + CI 门禁
+
+**Date**: 2026-09-26
+**Task**: 09-26-sandbox-failopen-audit — N5 sandbox fail-open 审计可区分(N6 并包)
+**Branch**: `main`
+
+### Summary
+
+群聊共识候选 N5(P1)落地,群聊评审(session `150e853d`,12 结论全 verified)回填后实施。核心:shell 族 `tool_executed` 行必写终态归因字段 `sandbox`(wire 词表 8 值无前缀:`sandboxed/failopen/yolo/kill_switch/project_off/no_session/grant/escalation`),零新审计行零新 kind 不翻 §2.2。双层类型化:`OffCause`(Policy::Off{cause} 六求值臂自带)与 `SandboxAttribution`(扁平 8 值,From<OffCause> 覆盖共享五)不同型——grant/escalation 不经 Policy::Off。通道 = ToolContextUpdate.sandbox_attribution(构造点播种乐观值,§4b 批准点单处覆写 Escalation;fail-closed 早退路径带 sandboxed);消费点 = 串行 tools.rs:1786(评审第 0 位勘误:原稿 :407/:773 是只读并发批 shell excluded,照改会单测全绿真链路恒 None)。评审两实锤缺陷收口:①升级重跑归因反转——per-attempt 行(sandboxed_shell_execution)与终态行(tool_executed.sandbox)分工,escalation 批准即覆写;②worker 裸跑零痕迹——5(a) 反转例外(裸跑归因时破例写行,与工具层行不受 skip_persist 门控对称)。capability 升维:sandboxCapabilityDetail 三维(landlock/landlockNet/seccomp,daemon HTTP 面 live 可见),GeneralTab 徽标三态(本机 ABI 3 → landlockNet:false → 黄态「BindOnly 档将降级断网」)。审计面板归因 chip:异常类(failopen/escalation/unknown)高亮、常态类低亮度(Yolo 下每行显示不吵),unknown 值降级 anomaly 回显。N6:require_sandbox_cap() 单源(panic 带三维明细)替换 9 处能力类 SKIP(tests_sandbox/tests_escalation/in_memory),ci.yml rust job 设 EVERLASTING_SANDBOX_TESTS_REQUIRED=1 硬门禁;panic 分支本机不可达(probe ok),CI 真实守门,如实记录。勘察修正:R3 net 降级标记已由 09-21 任务交付(summary degraded 段 + 856 锚),本任务零代码。
+
+### Git Commits
+
+(见 git log)
+
+### Testing
+
+- [OK] cargo -p everlasting --lib 2600 绿(新增:词表/归因矩阵/Escalation 覆写×2/NoSession/参数失败缺席/capability detail);clippy 0 警;fmt 净
+- [OK] pnpm test 2056 绿(归因 chip 5 用例 + 徽标三态 4 用例);vue-tsc 净
+- [OK] live 三轮(daemon rebuild 后):turn-smoke 默认 end_turn;--sandbox-probe(1 attempt 行 + tool_executed `"sandbox":"sandboxed"` sqlite 抽查);kill-switch 配方(零沙箱行 + `"sandbox":"kill_switch"` 抽查,配置已恢复 true,烟测 session 已清)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 无(评审 5 未决项全数定稿:worker 5(a) 用户裁定、显式 sandboxed/escalation 命名/UI 噪音标准/AC1 措辞)
