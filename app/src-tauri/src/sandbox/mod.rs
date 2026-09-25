@@ -811,9 +811,11 @@ pub(crate) enum SandboxBlockKind {
 ///    UX only; this conjunction is the server-side fact that makes
 ///    the attribution non-forgivable by command output).
 ///
-/// stdout participates ONLY through the strong listen/socket markers
-/// in [`stream_smells_net_block`] (宁缺勿滥: a bare `Operation not
-/// permitted` / `Permission denied` in stdout is never trusted).
+/// stdout participates ONLY through the strong markers in
+/// [`stream_smells_net_block`] (listen/socket shapes) and
+/// [`dns_smells_net_block`] (DNS-resolution shapes) — 宁缺勿滥: a bare
+/// `Operation not permitted` / `Permission denied` in stdout is never
+/// trusted.
 pub(crate) fn classify_block(
     stderr: &str,
     stdout: &str,
@@ -839,7 +841,18 @@ pub(crate) fn classify_block(
     let stderr_net_denial = stderr
         .to_ascii_lowercase()
         .contains("operation not permitted");
-    if stderr_net_denial || stream_smells_net_block(stdout) || stream_smells_net_block(stderr) {
+    if stderr_net_denial
+        || stream_smells_net_block(stdout)
+        || stream_smells_net_block(stderr)
+        // 2026-09-25 (jjh-mono session ce51a3ba): short-lived outbound
+        // commands (git pull/fetch, curl) fail with DNS-resolution text —
+        // the resolver's own UDP socket is denied before any query, and
+        // getaddrinfo swallows the EPERM. Same both-stream discipline
+        // (`2>&1` redirects the report to stdout — the live session's
+        // shape).
+        || dns_smells_net_block(stdout)
+        || dns_smells_net_block(stderr)
+    {
         Some(SandboxBlockKind::Network)
     } else {
         None
@@ -860,6 +873,28 @@ pub(crate) fn stream_smells_net_block(stream: &str) -> bool {
     stream.contains("listen EPERM")
         || (stream.contains("listen tcp") && stream.contains("operation not permitted"))
         || (stream.contains("PermissionError") && stream.contains("socket"))
+}
+
+/// Strong network-block markers for the DNS-resolution shape (2026-09-25,
+/// jjh-mono session `ce51a3ba`), the connect/resolve sibling of
+/// [`stream_smells_net_block`]'s listen shapes. Under the seccomp INET
+/// filter the resolver cannot open its own UDP socket (`socket(AF_INET)`
+/// → EPERM); getaddrinfo swallows the EPERM and the failure surfaces as:
+/// - curl/git/wget family: `Could not resolve host: <host>` (git prefixes
+///   it with `fatal: unable to access '...'`)
+/// - glibc getaddrinfo family: `Temporary failure in name resolution`
+///   (EAI_AGAIN)
+/// Case-insensitive (git capitalizes mid-line; glibc lowercase); run
+/// against BOTH streams by [`classify_block`] — `2>&1` redirects the
+/// report to stdout (the live session's shape). 宁缺勿滥:
+/// `Name or service not known` (EAI_NONAME) is deliberately NOT a
+/// marker — a healthy host's genuine NXDOMAIN prints the exact same
+/// string, and under Block the resolver outage always surfaces as one
+/// of the two markers above, so the narrowed set loses no coverage.
+pub(crate) fn dns_smells_net_block(stream: &str) -> bool {
+    let lower = stream.to_ascii_lowercase();
+    lower.contains("could not resolve host")
+        || lower.contains("temporary failure in name resolution")
 }
 
 /// Post-hoc failure guidance, mode-aware (P3c design §5.3 — replaces
@@ -912,12 +947,25 @@ pub(crate) fn failure_guidance_for_kind(kind: SandboxBlockKind, mode: Mode) -> &
                  design. Ask the user to run the networked command, or switch to Edit mode."
             }
             _ => {
+                // 2026-09-25 (jjh-mono ce51a3ba): the durable prefix grant
+                // (spec §14) is the designed exit for short-lived networked
+                // commands — added alongside the policy-switch / user-runs-it
+                // options. Single-command form is load-bearing: grant_gate
+                // never matches a compound command. Still R7: ONE operator
+                // instruction, then stop — the card's 始终允许 IS the
+                // instruction, not an invitation to retry-loop.
                 "[sandbox] The failure above looks like the sandbox blocking network (no INET \
-                 sockets inside the sandbox: no outbound, and no listen — dev servers cannot \
-                 start). Do NOT burn turns retrying or self-diagnosing: converge to ONE \
-                 operator instruction — ask the user to either switch the project's sandbox \
-                 network policy (Settings → project → network, e.g. a BindOnly port snapshot \
-                 for dev servers) or run the networked command themselves — then stop."
+                 sockets inside the sandbox: no outbound, no listen, DNS resolution fails — \
+                 dev servers cannot start, networked commands cannot resolve hosts). Do NOT \
+                 burn turns retrying or self-diagnosing: converge to ONE operator instruction \
+                 — for a short-lived networked command (git pull / git fetch) re-issue it \
+                 ONCE as a SINGLE command (no `;` / `&&` chains: a prefix grant never covers \
+                 compound commands) and ask the user to pick 「始终允许」 on the escalation \
+                 card — that approval persists a project-level prefix grant, and future \
+                 commands with that prefix start without the sandbox; otherwise ask the user \
+                 to either switch the project's sandbox network policy (Settings → project → \
+                 network, e.g. a BindOnly port snapshot for dev servers) or run the networked \
+                 command themselves — then stop."
             }
         },
         SandboxBlockKind::ExecFace => {

@@ -275,14 +275,20 @@ pub(crate) fn stderr_evidence_line(stderr: &str) -> String {
     // markers — libuv/go print errno strings lowercase ("operation not
     // permitted"), so the capital-O-only literals picked the wrong line
     // ("Node.js v24.15.0") as evidence for raw-node listen crashes.
+    // 2026-09-25: DNS-resolution markers added (the connect/resolve
+    // shape of the seccomp INET block — git/curl failures); lowercase
+    // literals + the `lower.contains` predicate make them casing-robust
+    // (git capitalizes "Could not resolve host" mid-line).
     // Display-only surface (which line the card shows), zero gate
     // semantics — classification itself is sandbox::classify_block.
-    const MARKERS: [&str; 5] = [
+    const MARKERS: [&str; 7] = [
         "permission denied",
         "read-only file system",
         "operation not permitted",
         "listen EPERM",
         "listen tcp",
+        "could not resolve host",
+        "temporary failure in name resolution",
     ];
     let line = stderr
         .lines()
@@ -295,11 +301,15 @@ pub(crate) fn stderr_evidence_line(stderr: &str) -> String {
     line.chars().take(200).collect()
 }
 
-/// stdout counterpart of [`stderr_evidence_line`] for listen-class
-/// network denials (2026-09-21): dev-server toolchains print the EPERM
-/// to stdout with an empty stderr, so the card's evidence line must be
-/// extracted from stdout. First line carrying a listen/socket marker
-/// (same shapes as `sandbox::stream_smells_net_block`), truncated to
+/// stdout counterpart of [`stderr_evidence_line`] for network-class
+/// denials (2026-09-21): dev-server toolchains print the EPERM to stdout
+/// with an empty stderr, and DNS-resolution failures reach stdout via
+/// `2>&1` redirection (2026-09-25, jjh-mono session `ce51a3ba`), so the
+/// card's evidence line must be extractable from stdout either way.
+/// First line carrying a listen/socket marker (same shapes as
+/// `sandbox::stream_smells_net_block`) or a DNS-resolution marker (same
+/// shapes as `sandbox::dns_smells_net_block`, matched case-insensitively
+/// — git capitalizes "Could not resolve host" mid-line), truncated to
 /// the same 200 chars. Empty when nothing matches.
 pub(crate) fn stdout_net_evidence_line(stdout: &str) -> String {
     let line = stdout
@@ -308,7 +318,56 @@ pub(crate) fn stdout_net_evidence_line(stdout: &str) -> String {
             l.contains("listen EPERM")
                 || l.contains("listen tcp")
                 || (l.contains("PermissionError") && l.contains("socket"))
+                || {
+                    let lower = l.to_ascii_lowercase();
+                    lower.contains("could not resolve host")
+                        || lower.contains("temporary failure in name resolution")
+                }
         })
         .unwrap_or("");
     line.chars().take(200).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2026-09-25: DNS-resolution denials are card-evidence lines — the
+    /// MARKERS list must pick the `fatal: unable to access ...` line
+    /// (jjh-mono session `ce51a3ba`) instead of falling back to the last
+    /// non-empty line (the 09-22 "Node.js v24.15.0" failure mode).
+    #[test]
+    fn stderr_evidence_line_picks_dns_denial() {
+        // git pull 形态,夹在噪声行之间(行中段大写 "Could not resolve
+        // host" —— lower.contains 谓词使其大小写不敏感):
+        let git = "hint: the output below is noise v1.2.3\nfatal: unable to access 'http://www.lj2.top:3000/jinjihu/jjh-mono.git/': Could not resolve host: www.lj2.top\nSome trailing noise line";
+        assert_eq!(
+            stderr_evidence_line(git),
+            "fatal: unable to access 'http://www.lj2.top:3000/jinjihu/jjh-mono.git/': Could not resolve host: www.lj2.top"
+        );
+        // glibc getaddrinfo 族(全小写形态):
+        assert_eq!(
+            stderr_evidence_line("res_query: temporary failure in name resolution"),
+            "res_query: temporary failure in name resolution"
+        );
+    }
+
+    /// stdout 侧(`2>&1` 把 DNS 失败打进 stdout,stderr 全空 → 前台 shell
+    /// 回退 `stdout_net_evidence_line`,后台 offer 烘焙同款兜底):
+    /// jjh-mono 实证行逐字节可取;无匹配仍返回空。
+    #[test]
+    fn stdout_net_evidence_line_picks_dns_denial() {
+        let live = "fatal: unable to access 'http://www.lj2.top:3000/jinjihu/jjh-mono.git/': Could not resolve host: www.lj2.top";
+        assert_eq!(stdout_net_evidence_line(live), live);
+        // 夹在噪声行中间也取 DNS 行:
+        let mixed = format!("hint: blah\n{live}\n");
+        assert_eq!(stdout_net_evidence_line(&mixed), live);
+        // glibc 形态(首字母大写,ci 匹配):
+        assert_eq!(
+            stdout_net_evidence_line("ping: example.com: Temporary failure in name resolution"),
+            "ping: example.com: Temporary failure in name resolution"
+        );
+        // 宁缺勿滥:无强特征的普通输出不取行(返回空):
+        assert_eq!(stdout_net_evidence_line("all normal output"), "");
+    }
 }

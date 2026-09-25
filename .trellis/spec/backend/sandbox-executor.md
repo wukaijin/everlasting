@@ -301,6 +301,35 @@ jjh-mono 项目 session `23a8184b`(2026-09-20,edit 模式):`vite` dev server
   大小写)依旧不认。锚:`classify_block_reads_stderr_for_listen_
   denials`(live 形态逐字节入锚)。
 
+- **2026-09-25 补修(DNS 失败特征族,task `09-25-sandbox-dns-block-detect`)**
+  :listen 族(bind 方向)收口后的姊妹缺口——connect/resolve 方向(git
+  pull/fetch、curl 等短命出网命令)。实证 jjh-mono session `ce51a3ba`
+  (`git pull --no-rebase 2>&1`,复合命令):seccomp INET filter 拦的是
+  `socket(AF_INET/AF_INET6)` 创建(含 resolver 自身 UDP socket),EPERM
+  被 getaddrinfo 吞掉,表面化为 DNS 失败文案——listen/EPERM 特征一个不
+  匹配,升级链整体哑火。修复四件:
+  - **特征**:`dns_smells_net_block` 两族、大小写不敏感、双流都喂(与
+    listen 族同纪律;`2>&1` 把报告重定向到 stdout,实证 session 即此形
+    态):curl/git/wget 族 `could not resolve host`、glibc getaddrinfo
+    族 `temporary failure in name resolution`(EAI_AGAIN)。
+  - **宁缺勿滥**:`Name or service not known`(EAI_NONAME)刻意不收——
+    健康宿主真 NXDOMAIN 同文案,误归因面大;Block 档下 resolver 不可达
+    必然表现为上两族,收窄无损覆盖。stdout 裸 `Operation not permitted`
+    / `Permission denied` 依旧不认;**Write 识别保持 stderr-only**。
+    残余误报面(grep/cat 日志自引用 + 命令自身失败)由调用侧
+    `exit_code != 0` 闸消掉大半,代价 = 一张可拒的卡 + 一行引导。
+  - **R9 合取不变**:DNS 双流调用点在 `net != InetBlock → None` 早退
+    **之后**(BindOnly spawn 上 UDP/DNS 根本不受控,DNS 文案必属他因,
+    不归网络)。锚:`classify_network_requires_inet_block_enforcement`。
+  - **卡证据行 + 文案**:`stderr_evidence_line` MARKERS 与
+    `stdout_net_evidence_line` 补两族锚(否则卡上取任意尾行);Network
+    Edit 档 guidance 补 durable prefix grant 出路(§14):单命令形态
+    (grant_gate 永不命中复合命令)+ 卡上「始终允许」;Plan 档不动。
+  锚:`classify_block_reads_dns_failure_families`(jjh 实证行逐字节入
+  锚 + 宁缺勿滥)、`guidance_network_edit_names_prefix_grant_exit`、
+  escalation 侧 `stderr_evidence_line_picks_dns_denial` /
+  `stdout_net_evidence_line_picks_dns_denial`。
+
 ### 12.3 长期方案(roadmap,未实施;按优先级)
 
 **A. 项目级「网络放行」档 `readwrite_net`(首选)** — `sandbox_policy`

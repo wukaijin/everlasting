@@ -1237,6 +1237,43 @@ fn classify_block_reads_stderr_for_listen_denials() {
     assert!(cb("", "grep: operation not permitted").is_none());
 }
 
+/// 2026-09-25(jjh-mono session ce51a3ba 实证):seccomp INET filter 拦的
+/// 是 `socket(AF_INET/AF_INET6)` 创建,DNS resolver 自身的 UDP socket 同被
+/// 拦,EPERM 被 getaddrinfo 吞掉,表面化为 DNS 失败文案——listen/EPERM
+/// 特征一个不匹配,升级链整体哑火(无指引、无卡、无 grant)。DNS 族与
+/// listen 族同纪律:双流都喂(`2>&1` 把报告重定向到 stdout,实证 session
+/// 即此形态)、大小写不敏感(git 行中段大写、glibc 小写)、宁缺勿滥
+/// (`Name or service not known` = 健康宿主真 NXDOMAIN 同文案,不收)。
+#[test]
+fn classify_block_reads_dns_failure_families() {
+    use super::SandboxBlockKind;
+    let net = |kind: Option<SandboxBlockKind>| matches!(kind, Some(SandboxBlockKind::Network));
+    // jjh-mono 实证行逐字节(stdout 侧,`git pull ... 2>&1` 复合形态):
+    let jjh = "fatal: unable to access 'http://www.lj2.top:3000/jinjihu/jjh-mono.git/': Could not resolve host: www.lj2.top";
+    assert!(
+        net(cb("", jjh)),
+        "live git-pull 2>&1 stdout shape must classify Network"
+    );
+    // stderr 侧同族无前缀形态(裸 curl DNS 失败):
+    assert!(net(cb("curl: (6) Could not resolve host: example.com", "")));
+    // glibc getaddrinfo 族(EAI_AGAIN):
+    assert!(net(cb(
+        "ping: example.com: Temporary failure in name resolution",
+        ""
+    )));
+    // 大小写不敏感回归锚(全小写形态同样命中):
+    assert!(net(cb("could not resolve host: example.com", "")));
+    assert!(net(cb(
+        "ssh: connect to host example.com: temporary failure in name resolution",
+        ""
+    )));
+
+    // 宁缺勿滥:`Name or service not known`(EAI_NONAME)= 健康宿主真
+    // NXDOMAIN 同文案,误归因面大 → 双流都不触发 Network 分类:
+    assert!(cb("", "ping: bad-host: Name or service not known").is_none());
+    assert!(cb("getaddrinfo failed: Name or service not known", "").is_none());
+}
+
 /// 2026-09-21:listen 场景的 guidance 变体要点破「无 listen,dev
 /// server 起不来」——原文案只讲 outbound,会诱导模型去改绑
 /// 127.0.0.1(jjh-mono session 实证过的无效尝试)。
@@ -1254,6 +1291,32 @@ fn guidance_network_variant_names_listen() {
     let plan = fg("", "Error: listen EPERM", Mode::Plan).expect("plan stdout listen fires");
     assert!(plan.contains("Plan"));
     assert!(plan.contains("listen"));
+}
+
+/// 2026-09-25(R4):Network Edit 档文案补 durable prefix grant 出路(spec
+/// §14)——短命网络命令(git pull/fetch)以单命令形态重试 + 卡上「始终允许」
+/// = 项目级前缀授权,之后同前缀免沙箱启动;复合命令永不命中 grant_gate。
+/// R7 纪律不变:仍是收敛到一条 operator 指令然后停。Plan 档文案不动
+/// (Plan 不弹卡不豁免,§14 语义)。
+#[test]
+fn guidance_network_edit_names_prefix_grant_exit() {
+    let dns_line = "fatal: unable to access 'http://www.lj2.top:3000/jinjihu/jjh-mono.git/': Could not resolve host: www.lj2.top";
+    let text = fg("", dns_line, Mode::Edit).expect("dns failure fires guidance");
+    // grant 出路关键短语(pin 死,防文案漂移):
+    assert!(text.contains("prefix grant"), "{text}");
+    assert!(text.contains("SINGLE command"), "{text}");
+    assert!(text.contains("compound"), "{text}");
+    // 既有出路保留(网络策略切档 / 用户自己跑)+ R7 收敛纪律:
+    assert!(text.contains("network policy"), "{text}");
+    assert!(text.contains("ONE"), "{text}");
+    assert!(text.contains("operator instruction"), "{text}");
+    assert!(text.contains("then stop"), "{text}");
+    // DNS 诊断点破(resolver 不可达,与 listen 形态区分):
+    assert!(text.contains("DNS"), "{text}");
+    // Plan 档文案不动:无 grant 出路(Plan 不弹卡不豁免)。
+    let plan = fg("", dns_line, Mode::Plan).expect("plan dns fires");
+    assert!(plan.contains("by design"), "{plan}");
+    assert!(!plan.contains("prefix grant"), "{plan}");
 }
 
 /// F3 (AC6, 2026-09-21): exit 126 ∧ stderr "Permission denied" →
@@ -1311,6 +1374,21 @@ fn classify_network_requires_inet_block_enforcement() {
     .is_none());
     // AllowAll: nothing is enforced → nothing is attributable.
     assert!(super::classify_block("", vite, None, super::NetEnforcement::None).is_none());
+    // 2026-09-25: DNS 族同合取 —— 非 InetBlock spawn(LandlockNet 下
+    // UDP/DNS 根本不受控、AllowAll 无执法)上的 DNS 失败文案不归因沙箱:
+    let git_dns = "fatal: unable to access 'http://www.lj2.top:3000/jinjihu/jjh-mono.git/': Could not resolve host: www.lj2.top";
+    assert!(
+        super::classify_block("", git_dns, None, super::NetEnforcement::LandlockNet).is_none(),
+        "DNS text on a BindOnly spawn must NOT classify Network (R9)"
+    );
+    assert!(super::classify_block("", git_dns, None, super::NetEnforcement::None).is_none());
+    assert!(super::classify_block(
+        "curl: (6) Could not resolve host: example.com",
+        "",
+        None,
+        super::NetEnforcement::LandlockNet
+    )
+    .is_none());
     // Write/exec classes are Landlock-file facts — they fire under
     // every net tier (the conjunction scopes the NETWORK kind only).
     assert!(matches!(
