@@ -70,3 +70,24 @@ jjh-mono 实测回归驱动的 checkpoint UI 收敛:(1) MessageItemFooter 新增
 ### Status
 
 [OK] **Completed**
+
+
+## Session 156: 沙箱 DNS 失败识别缺口收口——classify_block 补 connect/resolve 特征族
+
+**Date**: 2026-09-25
+**Task**: 沙箱 DNS 失败识别缺口收口——classify_block 补 connect/resolve 特征族
+**Branch**: `main`
+
+### Summary
+
+从 DB 最新会话排查「拉不到远程」：jjh-mono session ce51a3ba 的 git pull 被 seccomp 断网拦（socket AF_INET EPERM→DNS 失败文案），classify_block 只认 listen 形态致升级卡/grant/引导全链哑火。轻量修立项 09-25-sandbox-dns-block-detect：dns_smells_net_block 两族双流 ci（不收 Name or service not known）、R9 合取结构保证、卡证据行 MARKERS 补锚、Network Edit 档文案补 prefix grant 出路（点名 git pull 单命令）；测试锚含逐字节实证形态，spec §12.2 补 DNS 族段。全量 cargo test -p everlasting --lib 2596 绿。效果：git pull 被拦→卡「始终允许」→前缀 grant→之后免沙箱直连。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b2ed9969` | (see git log) |
+
+### Status
+
+[OK] **Completed**
