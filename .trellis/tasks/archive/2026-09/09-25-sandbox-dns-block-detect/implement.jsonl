@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/sandbox-executor.md", "reason": "沙箱执法/识别/升级闭环/grant 契约单源——§10 升级闭环、§12 识别缺口纪律（宁缺勿滥/两流/R9 合取/live 锚）、§14 grant 语义。注意：文件超注入上限会截断，务必自行 Read 全文重点 §10/§12/§13/§14"}
+{"file": ".trellis/tasks/09-25-sandbox-dns-block-detect/research/dns-block-evidence.md", "reason": "实证 session 逐字节输出、根因三层、特征选择与误报面分析、全部文件锚"}
