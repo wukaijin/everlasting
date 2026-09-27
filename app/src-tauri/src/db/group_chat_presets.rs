@@ -1,7 +1,7 @@
 //! Group-chat preset CRUD (GCE-P1, task `09-12-gc-preset-settings`).
 //!
-//! 用户群聊预设(Settings 可管理),一行一个预设。**内置四档**
-//! (review / fe_review / arch / retro)不在此表 —— 它们仍是
+//! 用户群聊预设(Settings 可管理),一行一个预设。**内置五档**
+//! (review / fe_review / arch / retro / team)不在此表 —— 它们仍是
 //! `scripts/group-chat-presets.json` 的单一事实源(M1 CLI / MCP /
 //! 前端三处消费 + 跨机器可移植性依赖 JSON 原样),用户预设叠加其上;
 //! 与内置 key 的撞名校验在 commands 层(常量旁注明同步义务)。
@@ -17,7 +17,7 @@
 //!   created_at         TEXT NOT NULL,
 //!   updated_at         TEXT NOT NULL,
 //!   builtin_key        TEXT                        -- GCE-P1b:NULL = 普通用户行;
-//!                                                  -- 值 ∈ 内置四 key = 覆盖行(UNIQUE 索引)
+//!                                                  -- 值 ∈ 内置五 key = 覆盖行(UNIQUE 索引)
 //! )
 //! ```
 //!
@@ -63,7 +63,7 @@ pub struct GcPresetRow {
     pub created_at: String,
     /// RFC 3339。
     pub updated_at: String,
-    /// GCE-P1b:`None` = 普通用户行;`Some(key)`(key ∈ 内置四 key,
+    /// GCE-P1b:`None` = 普通用户行;`Some(key)`(key ∈ 内置五 key,
     /// 白名单在 commands 层)= 内置档覆盖行,顶替对应内置档槽位。
     /// 创建时定死(update 不触碰该列),删除覆盖行 = 恢复内置。
     /// wire additive(None 不序列化,旧消费方字节不变)。

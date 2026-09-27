@@ -1452,7 +1452,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // --- Group-chat user presets (2026-09-12, GCE-P1 群聊预设 Settings
     // 可管理,task 09-12-gc-preset-settings): one row per user-defined
-    // preset. 内置四档(review/fe_review/arch/retro)仍是
+    // preset. 内置五档(review/fe_review/arch/retro/team)仍是
     // `scripts/group-chat-presets.json` 单一事实源(只读,不入库)——
     // 本表只存用户预设,名称与内置 key 大小写不敏感不撞(校验在
     // commands 层,常量旁有同步义务注释)。
@@ -1470,7 +1470,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // GCE-P1b(2026-09-12, task 09-12-gc-preset-override)增补
     // `builtin_key` 列(新库直建;存量库走下方幂等加列,scheduled_tasks
     // F2b 的「CREATE TABLE 带新列 + 幂等加列兜底」双路径先例):NULL =
-    // 普通用户行;非 NULL(值 ∈ 内置四 key)= 覆盖行,顶替对应内置档
+    // 普通用户行;非 NULL(值 ∈ 内置五 key)= 覆盖行,顶替对应内置档
     // 槽位。UNIQUE 索引对 NULL 互不相撞(SQLite 语义)→ 每个内置 key
     // 至多一条覆盖行,普通用户行(全 NULL)不受影响。
     sqlx::query(

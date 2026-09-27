@@ -9,13 +9,13 @@
 //   2. `create` / `update` / `remove` — 写操作包装:update / remove 挂行级
 //      spinner(finally 必删,防"点击后忘关"卡死;subagents.spinnerByName
 //      同款),成功后重拉列表保持 name 序(canonical 序在服务端)。
-//   3. `mergedPresets` — 合并视图(design §4.1):内置四档
+//   3. `mergedPresets` — 合并视图(design §4.1):内置五档
 //      (scripts/group-chat-presets.json,只读,键序 = JSON 声明序)在前,
 //      用户行按 name 字典序追加。**关键机制**:用户行的模型引用是
 //      models.id UUID,直接塞进 `GcPresetDef` 的 model 字段 ——
 //      `resolveModelRef` 第一趟就是 byId 精确匹配,既有解析 / 预填 /
 //      禁用警告链路对内置档和用户档逐字同形,零新分支。内置 key
-//      (review/fe_review/arch/retro)与用户 key(行 id UUID)域不相交,
+//      (review/fe_review/arch/retro/team)与用户 key(行 id UUID)域不相交,
 //      同一 Record 不会撞键。
 //
 //      覆盖行(GCE-P1b,task `09-12-gc-preset-override`):带

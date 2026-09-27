@@ -3,13 +3,13 @@
 //!
 //! 双形态三层先例(scheduled_tasks 同款):`_inner` 业务(Q0 单源)+
 //! `#[tauri::command]` 包装 + daemon route(`daemon/routes/
-//! group_chat_presets.rs`)。**内置四档预设(review / fe_review / arch /
+//! group_chat_presets.rs`)。**内置五档预设(review / fe_review / arch /
 //! retro)不经过本模块** —— 它们是 `scripts/group-chat-presets.json`
 //! 的单一事实源(M1 CLI / MCP / 前端三处消费),只读;本模块只管
 //! 用户预设,校验层负责与内置 key 不撞名。
 //!
 //! GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)新增**覆盖行**
-//! 语义:create 可带可选 `builtin_key`(∈ 内置四 key),带该键的行 =
+//! 语义:create 可带可选 `builtin_key`(∈ 内置五 key),带该键的行 =
 //! 顶替对应内置档槽位的覆盖行(每个 key 至多一条,DB 的 UNIQUE 索引
 //! `idx_group_chat_presets_builtin_key` 兜底,create 前置查重给可读
 //! 400)。覆盖行三定则:`builtin_key` 创建时定死(update 不触碰该列);
@@ -20,7 +20,7 @@
 //! 校验(design §3,单一事实源在本文件 `validate_preset_input`):
 //! 名称 trim 非空 ≤40 字符、大小写不敏感唯一(与用户行 + 内置 key
 //! 双查)、描述 ≤200、主持人与全部参与者模型存在(允许 disabled)、
-//! 参与者 2..=3 人且名字非空 ≤20 字符预设内唯一、persona 五 kind
+//! 参与者 2..=4 人且名字非空 ≤20 字符预设内唯一、persona 五 kind
 //! 白名单。错误一律 `InvalidRequest`(→ HTTP 400),message 中文可读。
 //!
 //! wire:行形状 camelCase(`GcPresetRow`);命令参数扁平标量(IPC 形状
@@ -40,10 +40,10 @@ use crate::state::AppState;
 // 硬编码白名单(与 scripts/group-chat-presets.json 的同步义务)
 // ---------------------------------------------------------------------------
 
-/// 内置预设 key(`scripts/group-chat-presets.json` 的 `presets` 四键)。
+/// 内置预设 key(`scripts/group-chat-presets.json` 的 `presets` 五键)。
 /// **同步义务**:改 JSON 的 key 集合必须同步这里 —— 撞名校验用,
 /// 漏改会出现「用户预设与内置档同名」的歧义选择区。
-pub const BUILTIN_PRESET_KEYS: [&str; 4] = ["review", "fe_review", "arch", "retro"];
+pub const BUILTIN_PRESET_KEYS: [&str; 5] = ["review", "fe_review", "arch", "retro", "team"];
 
 /// persona kind 白名单(`scripts/group-chat-presets.json` 的
 /// `persona_md` 由 `composePersonaMd(kind)` 从这五种 kind 生成)。
@@ -58,9 +58,10 @@ const NAME_MAX_CHARS: usize = 40;
 const DESCRIPTION_MAX_CHARS: usize = 200;
 /// 参与者名字长度上限。
 const PARTICIPANT_NAME_MAX_CHARS: usize = 20;
-/// 参与者人数边界(沿 GroupChatConfigModal MVP 边界):2..=3。
+/// 参与者人数边界(沿 GroupChatConfigModal 边界;2026-09-28 随内置
+/// team 四人档从 3 上调到 4):2..=4。
 const PARTICIPANTS_MIN: usize = 2;
-const PARTICIPANTS_MAX: usize = 3;
+const PARTICIPANTS_MAX: usize = 4;
 
 fn invalid(msg: impl Into<String>) -> AppCommandError {
     AppCommandError::new(ErrorCategory::InvalidRequest, msg)
@@ -133,7 +134,7 @@ async fn validate_preset_input(
         )));
     }
 
-    // 5. 参与者 2..=3 人;每条名字 trim 非空、≤20 字符、预设内唯一;
+    // 5. 参与者 2..=4 人;每条名字 trim 非空、≤20 字符、预设内唯一;
     //    persona ∈ 五 kind 白名单。
     if participants.len() < PARTICIPANTS_MIN || participants.len() > PARTICIPANTS_MAX {
         return Err(invalid(format!(
@@ -247,7 +248,7 @@ pub async fn create_group_chat_preset_inner(
     let builtin_key = match builtin_key.as_deref().map(str::trim) {
         None => None,
         Some(k) => {
-            // 臂 1:key 必须在内置四 key 白名单内(防脏值把覆盖行悬空
+            // 臂 1:key 必须在内置五 key 白名单内(防脏值把覆盖行悬空
             // —— 前端 mergedPresets 对不在内置集合的 key 会静默跳过)。
             if !BUILTIN_PRESET_KEYS.contains(&k) {
                 return Err(invalid(format!(

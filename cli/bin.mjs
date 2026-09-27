@@ -142,7 +142,7 @@ SIGINT: 首次 cancel_chat 并等取消终态(退出 3,session 保留);二次立
   evl discuss cancel <sid>             停编排(session 保留;幂等,已收官报 already_finished)
   evl discuss interrupt <sid>          收束打断(preempt:让主持人现在收尾,summary 落库)
   evl discuss inject <sid> "<text>"    注入用户消息(只对进行中的讨论有效)
-  evl discuss presets                  合并预设目录(内置四档 + 用户档 + 覆盖标记)
+  evl discuss presets                  合并预设目录(内置五档 + 用户档 + 覆盖标记)
 
 flags:
   --preset <key|uuid|name>   预设(缺省 review;引用三趟:内置 key/行 UUID/行名称)

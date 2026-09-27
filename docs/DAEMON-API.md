@@ -334,7 +334,7 @@ snake_case**(IPC 形状铁律),嵌套 `participants` 元素例外 —— 按 `Gc
 | `delete_group_chat_preset` | `{"id"}` | `{"ok": true}`(幂等,不存在也 ok) |
 
 **内置档覆盖行**(GCE-P1b,2026-09-12 起):`create_group_chat_preset` 可带可选顶层
-`builtin_key`(请求侧 snake,值 ∈ 四内置 key review/fe_review/arch/retro)。带该键的行 =
+`builtin_key`(请求侧 snake,值 ∈ 五内置 key review/fe_review/arch/retro/team)。带该键的行 =
 覆盖行,原位顶替对应内置预设(GUI 两消费方选中该档即用覆盖后阵容)。约束:
 
 - 每个内置 key 至多一条覆盖行 —— commands 层 create 前置查重给可读 400(「内置预设
@@ -344,17 +344,17 @@ snake_case**(IPC 形状铁律),嵌套 `participants` 元素例外 —— 按 `Gc
 - 删除覆盖行 = 恢复内置(JSON 源码定义),走同一条 `delete_group_chat_preset`。
 
 **引擎侧消费**(GCE-P2,2026-09-12 起):M1 CLI 与 MCP server 运行时调
-`list_group_chat_presets` 拉全部行,与内置 JSON 四档在客户端合并(规则镜像 GUI
+`list_group_chat_presets` 拉全部行,与内置 JSON 五档在客户端合并(规则镜像 GUI
 mergedPresets:用户行追加、覆盖行原位顶替)。preset 引用三趟解析:内置 key →
 用户行 id(UUID)→ 用户行名称(精确→忽略大小写)。拉取失败(daemon 不可达或
-旧版本路由 404/405)fail-open 降级内置四档,MCP 侧 `list_presets` 工具返回
+旧版本路由 404/405)fail-open 降级内置五档,MCP 侧 `list_presets` 工具返回
 `degraded: true` + detail;standalone bin 内置 JSON 仍烤进产物,免重部署。
 
 **校验**(commands 层单一事实源,违规 400 InvalidRequest,message 中文可读):名称 trim
 非空 ≤40 字符、与其它用户行**及内置 key**(review/fe_review/arch/retro)大小写不敏感
-不重名;描述 ≤200;participants 2..=3 条且名字非空 ≤20 预设内唯一;persona ∈ 五内置
+不重名;描述 ≤200;participants 2..=4 条且名字非空 ≤20 预设内唯一;persona ∈ 五内置
 kind(arch/product/backend/frontend/outsider);moderator 与全部 participants 的模型 id
-必须存在(允许 disabled)。**只管用户预设** —— 内置四档是
+必须存在(允许 disabled)。**只管用户预设** —— 内置五档是
 `scripts/group-chat-presets.json` 单一事实源(M1 CLI / MCP 消费),不在本域,本域 CRUD
 对它们零影响。
 
@@ -388,7 +388,7 @@ standalone bin),HTTP transport **零子进程** —— 宿主直连 daemon 既�
     ——写进宿主正工作的仓库工作区,已收敛;同 session 重复导出覆盖同一文件);
   - XDG 记账文件(`mcp-discussions.json`)**退役** —— rid 从 `session_active_request`
     内存表派生,daemon 即编排宿主,无跨进程记账需求。
-- **内置四档预设**:编译期 `include_str!` 嵌入 `scripts/group-chat-presets.json`
+- **内置五档预设**:编译期 `include_str!` 嵌入 `scripts/group-chat-presets.json`
   (单一事实源保持 —— 改 JSON 需重编译 daemon 才生效;M1 CLI 读文件路径不变)。
 - **冒烟**:`node scripts/group-chat-mcp-http-smoke.mjs`(前置 daemon 在跑;非 live =
   SDK 握手 + ping + tools/list + 预算 + 错误链 + list_presets/models + GET 405 /

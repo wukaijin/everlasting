@@ -3,7 +3,7 @@
 // `09-12-gc-preset-settings`;覆盖层 GCE-P1b, task `09-12-gc-preset-override`)。
 //
 // 一面三区(SubagentsTab 行结构 + ScheduledTasksTab 表单结构拼装):
-//   1. 内置四档列表 —— 名称 + 描述 + 徽标 + 覆盖管理:内置预设是
+//   1. 内置五档列表 —— 名称 + 描述 + 徽标 + 覆盖管理:内置预设是
 //      scripts/group-chat-presets.json 单一事实源(M1 CLI / MCP 消费 +
 //      跨机器可移植性依赖 JSON 原样),但允许本机**覆盖行**原位顶替
 //      (GCE-P1b):「覆盖编辑」预填 JSON 定义(模型名经 resolveModelRef
@@ -14,7 +14,7 @@
 //   2. 用户预设列表 —— 名称 / 描述 / 主持人 + 参与者摘要,编辑 / 删除
 //      (ConfirmDialog 确认),行级 spinner + 行级错误。
 //   3. 新增 / 编辑 / 覆盖表单 —— 名称、描述、主持人 Select、参与者
-//      2-3 行(名字 input + 模型 Select + persona Select 五档),加减
+//      2-4 行(名字 input + 模型 Select + persona Select 五档),加减
 //      按钮(2 下限禁删 / 3 上限隐藏加,GroupChatConfigModal D5 边界)。
 //
 // 模型引用:用户预设存 models.id UUID(改名不断链);表单 Select 选项
@@ -61,7 +61,7 @@ const store = useGroupChatPresetsStore();
 const models = useModelsStore();
 const projects = useProjectsStore();
 
-/** 内置四档(JSON 声明序:review / fe_review / arch / retro)。静态
+/** 内置五档(JSON 声明序:review / fe_review / arch / retro / team)。静态
  *  JSON 直读 —— 只读展示不经过 store(store 只管用户行)。 */
 const builtinEntries = Object.entries(GC_PRESETS.presets);
 
@@ -76,7 +76,7 @@ const PERSONA_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 
 /** 参与者边界(GroupChatConfigModal D5 同源)。 */
 const MIN_PARTICIPANTS = 2;
-const MAX_PARTICIPANTS = 3;
+const MAX_PARTICIPANTS = 4;
 
 /** 内置覆盖行索引(内置 key → 行,GCE-P1b)。内置区三态展示、
  *  「编辑覆盖」与「恢复内置」动作的数据源。 */
@@ -442,13 +442,13 @@ onMounted(async () => {
   <div class="gcp-tab">
     <p class="gcp-tab__intro">
       用户群聊预设存本机数据库,模型引用按 UUID 记录(模型改名不断链)。
-      定时任务与建群弹窗的「审议预设」会叠加在内置四档之后。内置四档仍是
+      定时任务与建群弹窗的「审议预设」会叠加在内置五档之后。内置五档仍是
       scripts/group-chat-presets.json 单一事实源,但可被本机覆盖行原位覆盖
       (「覆盖编辑」修阵容;删除覆盖行即恢复源码定义);群聊脚本(M1/MCP)
       仍只认源码 JSON,不消费覆盖行与用户预设。
     </p>
 
-    <!-- 内置四档:源码定义 + 本机覆盖管理(GCE-P1b)。 -->
+    <!-- 内置五档:源码定义 + 本机覆盖管理(GCE-P1b)。 -->
     <section class="gcp-tab__builtin" data-testid="gcp-builtin-list">
       <h3 class="gcp-tab__section-title">内置预设(源码定义 · 可覆盖)</h3>
       <ul class="gcp-tab__builtin-list">
@@ -667,7 +667,7 @@ onMounted(async () => {
 
       <div class="gcp-tab__field">
         <span class="gcp-tab__label">
-          参与者(2-3 人,不含主持人)
+          参与者(2-4 人,不含主持人)
         </span>
         <div
           v-for="(_, idx) in form.participants"

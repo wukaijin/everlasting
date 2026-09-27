@@ -44,7 +44,7 @@ pub mod evl_cli;
 pub mod files;
 // GCE-P1(2026-09-12, task `09-12-gc-preset-settings`):用户群聊预设
 // CRUD 四件(list/create/update/delete),`_inner` 单源供 Tauri +
-// daemon route 双注册;内置四档仍是 scripts/group-chat-presets.json
+// daemon route 双注册;内置五档仍是 scripts/group-chat-presets.json
 // 单源(只读),撞名校验常量带同步义务注释。
 pub mod group_chat_presets;
 pub mod memory;
@@ -263,7 +263,7 @@ pub fn all_command_names() -> Vec<&'static str> {
         "list_group_chat_sessions",
         "search_group_chat_discussions",
         // GCE-P1 (2026-09-12, task `09-12-gc-preset-settings`): 用户群聊
-        // 预设 CRUD 四件(Settings 可管理;内置四档只读,仍是
+        // 预设 CRUD 四件(Settings 可管理;内置五档只读,仍是
         // scripts/group-chat-presets.json 单源)。校验矩阵见
         // commands/group_chat_presets.rs(design §3)。
         "list_group_chat_presets",

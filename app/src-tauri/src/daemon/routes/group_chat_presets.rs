@@ -36,7 +36,7 @@ pub struct CreateGroupChatPresetRequest {
     pub moderator_model_id: String,
     pub participants: Vec<GcPresetParticipant>,
     /// GCE-P1b(2026-09-12, task `09-12-gc-preset-override`):可选;
-    /// Some(∈ 内置四 key)= 内置档覆盖行。serde default = 旧请求体
+    /// Some(∈ 内置五 key)= 内置档覆盖行。serde default = 旧请求体
     /// 缺键仍反序列化(additive,None = 普通用户行)。
     #[serde(default)]
     pub builtin_key: Option<String>,

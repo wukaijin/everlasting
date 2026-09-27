@@ -247,10 +247,10 @@ test('interpretAcceptance:injected 唯一成功态;started/queued/未知 = misfi
 test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用名字,persona 组装含公共纪律', () => {
   // PRESETS 就是 JSON 组装的结果(同输入同输出,锁组装确定性)。
   assert.deepEqual(PRESETS, composePresets(presetsFile));
-  // 四预设齐 + 名单/主持人模型与历史阵容一致(名字形态,不是 UUID ——
+  // 五预设齐 + 名单/主持人模型与历史阵容一致(名字形态,不是 UUID ——
   // 名字→UUID 解析发生在 run 时 normalizeModelRef)。fe_review = review 的
-  // 前端变体(backend→frontend),阵容镜像断言在下方。
-  assert.deepEqual(Object.keys(PRESETS), ['review', 'fe_review', 'arch', 'retro']);
+  // 前端变体(backend→frontend);team = review ∪ fe_review 全席(四人)。
+  assert.deepEqual(Object.keys(PRESETS), ['review', 'fe_review', 'arch', 'retro', 'team']);
   assert.equal(PRESETS.review.moderator_model, 'MiniMax-M3');
   assert.deepEqual(
     PRESETS.review.participants.map((p) => [p.name, p.model]),
@@ -265,6 +265,11 @@ test('PRESETS 单一事实源(M4a R7):来自 group-chat-presets.json,模型用�
     PRESETS.retro.participants.map((p) => [p.name, p.model]),
     [['产品', 'GLM-5.3-Flash'], ['局外', 'glm-5.3']],
   );
+  assert.deepEqual(
+    PRESETS.team.participants.map((p) => [p.name, p.model]),
+    [['架构', 'glm-5.3'], ['产品', 'GLM-5.3-Flash'], ['前端', 'deepseek-flash'], ['后端', 'deepseek-flash']],
+  );
+  assert.equal(PRESETS.team.moderator_model, 'MiniMax-M3');
   // persona = 视角边界 + "\n\n" + 公共纪律(与旧内置常量同形)。
   for (const preset of Object.values(PRESETS)) {
     for (const p of preset.participants) {
@@ -299,7 +304,7 @@ test('GCE-P2 mergePresets:用户行追加(key=id、UUID 直塞、persona 展开)
     ROW({ id: 'ovr', builtinKey: 'review', name: '评审团改版' }),
     ROW({ id: 'dirty', builtinKey: 'ghost', name: '脏行' }),
   ], presetsFile);
-  assert.deepEqual(Object.keys(merged), ['review', 'fe_review', 'arch', 'retro', 'row-1'], '内置声明序在前,用户行追加,覆盖行不添键');
+  assert.deepEqual(Object.keys(merged), ['review', 'fe_review', 'arch', 'retro', 'team', 'row-1'], '内置声明序在前,用户行追加,覆盖行不添键');
   assert.equal('dirty' in merged, false, '未知 builtinKey 脏行跳过(不当用户档追加)');
   // 覆盖行:原位顶替——key/name 保持内置 key,阵容换行内容
   const review = merged.review;

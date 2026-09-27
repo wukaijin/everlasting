@@ -231,7 +231,7 @@ pub(crate) async fn add_scheduled_tasks_column_if_missing(
 /// Mirrors [`add_scheduled_tasks_column_if_missing`]. Added for
 /// GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)— `builtin_key`:
 /// 内置档覆盖行的链接键。列语义:NULL = 普通用户行;非 NULL(值 ∈
-/// 内置四 key)= 覆盖行,顶替对应内置档槽位。新库 CREATE TABLE 已带
+/// 内置五 key)= 覆盖行,顶替对应内置档槽位。新库 CREATE TABLE 已带
 /// 此列(probe no-op),本 helper 只服务存量库幂等加列。
 pub(crate) async fn add_group_chat_presets_column_if_missing(
     pool: &SqlitePool,

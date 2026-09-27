@@ -57,7 +57,7 @@ import ModelsTab from "./ModelsTab.vue";
 import DefaultTab from "./DefaultTab.vue";
 import MemoryTab from "./MemoryTab.vue";
 import SubagentsTab from "./SubagentsTab.vue";
-// GCE-P1(2026-09-12):「群聊预设」—— 用户审议预设 CRUD,内置四档只读。
+// GCE-P1(2026-09-12):「群聊预设」—— 用户审议预设 CRUD,内置档只读。
 import GroupChatPresetsTab from "./GroupChatPresetsTab.vue";
 import RemoteTab from "./RemoteTab.vue";
 import SearchTab from "./SearchTab.vue";

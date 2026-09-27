@@ -160,7 +160,7 @@ export function mergePresets(builtin, rows, file) {
   return out;
 }
 
-/** 有效预设视图 = 内置四档 ⊕ daemon 行。rowsProvider 注入取行方式
+/** 有效预设视图 = 内置档 ⊕ daemon 行。rowsProvider 注入取行方式
  * (M1:() => listUserPresets(base);MCP:() => deps.listPresets(),mock 友好)。
  * fetch 失败 fail-open:回内置 PRESETS + degraded 标记不抛错(daemon
  * 不可达 / 老版本路由 404 同路径,无需版本探测)。 */
@@ -676,11 +676,11 @@ async function run(argv) {
   if (!opt.topic || !opt.topic.trim()) throw new Error('缺议题:--topic <text> 或 --topic-file <path>(议题质量直接决定产出质量,见 skill 指引)');
   opt.project = path.resolve(opt.project);
 
-  // GCE-P2:有效预设 = 内置四档 ⊕ daemon 行(用户行 + 覆盖行);拉取失败
+  // GCE-P2:有效预设 = 内置档 ⊕ daemon 行(用户行 + 覆盖行);拉取失败
   // 降级内置(警告不抛错)。dry-run 同样走这里——「零网络」语义已收窄为
   // 「不建 session、不发 LLM」,本地 daemon 元数据拉取允许。
   const eff = await loadEffectivePresets(() => listUserPresets(opt.base));
-  if (eff.degraded) process.stderr.write(`# 用户预设拉取失败(${eff.detail}),降级内置四档\n`);
+  if (eff.degraded) process.stderr.write(`# 用户预设拉取失败(${eff.detail}),降级内置档\n`);
   let participants;
   let moderatorModel;
   try {
@@ -693,7 +693,7 @@ async function run(argv) {
     moderatorModel = opt.moderatorModel || lookupPreset(eff.presets, opt.preset)?.moderator_model;
   } catch (e) {
     if (eff.degraded && /未知预设|歧义/.test(e.message)) {
-      throw new Error(`${e.message};用户预设不可用(daemon 拉取失败,仅内置四档可用)`);
+      throw new Error(`${e.message};用户预设不可用(daemon 拉取失败,仅内置档可用)`);
     }
     throw e;
   }
@@ -886,7 +886,7 @@ async function cmdModels(base) {
 
 async function cmdPresets(base) {
   const eff = await loadEffectivePresets(() => listUserPresets(base));
-  if (eff.degraded) process.stderr.write(`# 用户预设拉取失败(${eff.detail}),仅列内置四档\n`);
+  if (eff.degraded) process.stderr.write(`# 用户预设拉取失败(${eff.detail}),仅列内置档\n`);
   const builtin = [];
   const user = [];
   for (const [key, preset] of Object.entries(eff.presets)) {
@@ -917,7 +917,7 @@ async function cmdPresets(base) {
   --set <name>.persona=@file|文本     单人换 persona(可重复)
   --moderator-model <id>             换主持人
 内置预设单一事实源是 scripts/group-chat-presets.json(M4a R7,定时任务与脚本共享);用户预设存
-daemon DB(Settings 管理,模型引用 UUID),运行时拉取合并——daemon 不在则降级内置四档;个性化靠覆盖,不靠改脚本。\n`);
+daemon DB(Settings 管理,模型引用 UUID),运行时拉取合并——daemon 不在则降级内置档;个性化靠覆盖,不靠改脚本。\n`);
 }
 
 function printRunHelp() {
@@ -936,7 +936,7 @@ function printRunHelp() {
   --out <path>            转录落点(默认 <app_data>/discussions/<date>-<topic>-<sid8>.md,与定时/MCP 场同源;EVERLASTING_DATA_DIR 可改根)
   --quiet                 静默进度(cron 用);session id/转录路径/终态仍打 stderr
   --cleanup               成功收官后删 session(中断现场永不删)
-  --dry-run               打印静态请求模板,不建 session、不发 LLM(用户预设目录经本地 daemon 拉取,失败降级内置四档)
+  --dry-run               打印静态请求模板,不建 session、不发 LLM(用户预设目录经本地 daemon 拉取,失败降级内置档)
   --base <url>            daemon 地址(默认 \${EVERLASTING_BASE:-http://127.0.0.1:7456})
 
 进度粒度:轮询 10s 一拍,时间戳精度 ±10s;发言级实时进度不做(需 SSE,会破坏

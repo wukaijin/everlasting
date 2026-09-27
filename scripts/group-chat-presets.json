@@ -41,6 +41,16 @@
         { "name": "产品", "model": "GLM-5.3-Flash", "persona": "product" },
         { "name": "局外", "model": "glm-5.3", "persona": "outsider" }
       ]
+    },
+    "team": {
+      "description": "完整团队(四人分工:架构/产品/前端/后端)= review ∪ fe_review 全席,适合跨前后端的整功能议题",
+      "moderator_model": "MiniMax-M3",
+      "participants": [
+        { "name": "架构", "model": "glm-5.3", "persona": "arch" },
+        { "name": "产品", "model": "GLM-5.3-Flash", "persona": "product" },
+        { "name": "前端", "model": "deepseek-flash", "persona": "frontend" },
+        { "name": "后端", "model": "deepseek-flash", "persona": "backend" }
+      ]
     }
   }
 }

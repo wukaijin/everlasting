@@ -96,7 +96,7 @@ export const SETTINGS_CATEGORIES: ReadonlyArray<SettingsCategory> = [
     scope: "global",
     group: "智能体",
     title: "群聊预设",
-    description: "管理群聊审议预设:新增 / 编辑自定义阵容,内置四档只读。",
+    description: "管理群聊审议预设:新增 / 编辑自定义阵容,内置五档只读。",
     keywords: [
       "group chat",
       "群聊",

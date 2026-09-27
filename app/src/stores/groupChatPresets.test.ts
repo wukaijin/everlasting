@@ -3,7 +3,7 @@
 // 覆盖层 GCE-P1b, task `09-12-gc-preset-override`)。
 //
 // 契约:
-//   1. 内置四档在前,键序 = JSON 声明序(review / fe_review / arch /
+//   1. 内置五档在前,键序 = JSON 声明序(review / fe_review / arch /
 //      retro),`builtin: true`,model 字段保持名字(内置档现状不动)。
 //   2. 用户行按 name 字典序追加,`builtin: false`,UUID 直进 model 字段
 //      (moderator_model = moderatorModelId;participants[].model =
@@ -53,12 +53,12 @@ beforeEach(() => {
 });
 
 describe("groupChatPresets store — mergedPresets 合并视图", () => {
-  it("内置四档在前:builtin=true、键序 = JSON 声明序、model 字段保持名字", () => {
+  it("内置五档在前:builtin=true、键序 = JSON 声明序、model 字段保持名字", () => {
     const store = useGroupChatPresetsStore();
     const merged = store.mergedPresets;
     const keys = Object.keys(merged);
     expect(keys).toEqual(Object.keys(GC_PRESETS.presets));
-    expect(keys).toEqual(["review", "fe_review", "arch", "retro"]);
+    expect(keys).toEqual(["review", "fe_review", "arch", "retro", "team"]);
     for (const key of keys) {
       expect(merged[key]).toMatchObject({
         key,
@@ -94,6 +94,7 @@ describe("groupChatPresets store — mergedPresets 合并视图", () => {
       "fe_review",
       "arch",
       "retro",
+      "team",
       "uuid-a",
       "uuid-b",
     ]);
@@ -140,8 +141,8 @@ describe("groupChatPresets store — mergedPresets 合并视图", () => {
       }),
     ];
     const merged = store.mergedPresets;
-    // 键集合不变:内置四 key,覆盖行不追加新键(无 uuid-ov-1)。
-    expect(Object.keys(merged)).toEqual(["review", "fe_review", "arch", "retro"]);
+    // 键集合不变:内置五 key,覆盖行不追加新键(无 uuid-ov-1)。
+    expect(Object.keys(merged)).toEqual(["review", "fe_review", "arch", "retro", "team"]);
     expect(merged["uuid-ov-1"]).toBeUndefined();
     const arch = merged["arch"]!;
     expect(arch.builtin).toBe(true);
@@ -166,7 +167,7 @@ describe("groupChatPresets store — mergedPresets 合并视图", () => {
       row({ id: "uuid-ov", name: "覆盖档", builtinKey: "retro" }),
     ];
     const keys = Object.keys(store.mergedPresets);
-    expect(keys).toEqual(["review", "fe_review", "arch", "retro", "uuid-plain"]);
+    expect(keys).toEqual(["review", "fe_review", "arch", "retro", "team", "uuid-plain"]);
     expect(store.mergedPresets["retro"]!.overriddenBy).toBe("uuid-ov");
     expect(store.mergedPresets["uuid-plain"]!.builtin).toBe(false);
   });
@@ -175,11 +176,11 @@ describe("groupChatPresets store — mergedPresets 合并视图", () => {
     const store = useGroupChatPresetsStore();
     store.rows = [row({ id: "uuid-dirty", name: "脏行", builtinKey: "nope" })];
     const merged = store.mergedPresets;
-    expect(Object.keys(merged)).toEqual(["review", "fe_review", "arch", "retro"]);
+    expect(Object.keys(merged)).toEqual(["review", "fe_review", "arch", "retro", "team"]);
     expect(merged["nope"]).toBeUndefined();
     expect(merged["uuid-dirty"]).toBeUndefined();
     // 悬空脏行不顶替任何槽:四档全为 JSON 原样,无 overriddenBy。
-    for (const key of ["review", "fe_review", "arch", "retro"] as const) {
+    for (const key of ["review", "fe_review", "arch", "retro", "team"] as const) {
       expect(merged[key]!.overriddenBy).toBeUndefined();
       expect(merged[key]!.moderator_model).toBe(GC_PRESETS.presets[key]!.moderator_model);
     }

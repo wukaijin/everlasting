@@ -1,6 +1,6 @@
 // GroupChatConfigModal — coverage for the modal's core invariants.
 // Sections:
-//   1. validation (D5: 2-3 participants, unique + non-empty names,
+//   1. validation (2-4 participants, unique + non-empty names,
 //      model selected, submit mirror);
 //   2. edit 成本区(gce-m4c 09-08):`group_chat_token_usage` +
 //      `group_chat_cache_rates` 两命令 → per-speaker「tokens · 缓存率」
@@ -159,16 +159,17 @@ describe("GroupChatConfigModal — validation", () => {
     expect(submit!.disabled).toBe(true);
   });
 
-  it("hides '+' button when 3 participants reached (D5 max)", async () => {
+  it("hides '+' button when 4 participants reached (max; 2026-09-28 随 team 档 3→4)", async () => {
     mountModal();
     await flush();
     const addBtn = byTestId("gcfg-add") as HTMLButtonElement | null;
     expect(addBtn).toBeTruthy();
     addBtn!.click();
     addBtn!.click();
+    addBtn!.click();
     await flush();
     const rows = document.querySelectorAll<HTMLElement>(".gcfg-row");
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(4);
     expect(byTestId("gcfg-add")).toBeNull();
   });
 
@@ -689,11 +690,11 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     }>;
   }
 
-  it("preset 卡渲染:自定义卡 + JSON 声明序四预设;默认自定义选中", async () => {
+  it("preset 卡渲染:自定义卡 + JSON 声明序五预设;默认自定义选中", async () => {
     const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
     await flush();
     const keys = Object.keys(GC_PRESETS.presets);
-    expect(keys).toEqual(["review", "fe_review", "arch", "retro"]);
+    expect(keys).toEqual(["review", "fe_review", "arch", "retro", "team"]);
     // 09-09:首卡「自定义」= 无预设初始态的显式入口(RadioGroup 选了
     // 退不回的补路),默认选中;preset 卡不预选(用户点卡才展开预填)。
     expect(byTestId("gcfg-preset-custom")).toBeTruthy();
@@ -734,6 +735,24 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     expect(selectRoots[3].props("modelValue")).toBe("uuid-mini");
     // 目录齐全 → 无模型缺失提示条,提交可用。
     expect(byTestId("gcfg-preset-error")).toBeNull();
+    expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("选中 team → 预填四行阵容且提交可用(2026-09-28 四人档,上限 3→4)", async () => {
+    const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
+    await flush();
+    await pickPreset(wrapper, "team");
+
+    const def = GC_PRESETS.presets.team!;
+    expect(def.participants.length).toBe(4);
+    const names = allByTestIdPrefix("gcfg-name-");
+    expect(names.length).toBe(4);
+    expect(
+      names.map((n) => (n as HTMLInputElement).value),
+    ).toEqual(def.participants.map((p) => p.name));
+    // 四行 + 主持人 = 5 个 SelectRoot;旧上限 3 会令 canSubmit 禁用。
+    expect(selectRootsOf(wrapper).length).toBe(5);
     expect((byTestId("gcfg-submit") as HTMLButtonElement).disabled).toBe(false);
     wrapper.unmount();
   });
@@ -781,7 +800,7 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     updatedAt: "2026-09-12T00:00:00Z",
   };
 
-  it("用户预设卡(name + 自定义徽标)在内置四档之后;选中按 UUID 预填阵容 + 主持人默认", async () => {
+  it("用户预设卡(name + 自定义徽标)在内置五档之后;选中按 UUID 预填阵容 + 主持人默认", async () => {
     // production-shaped seed(gotcha:open 时的 ensureLoaded 是异步权威
     // 拉,post-mount 直填 store 会被其回包覆盖 —— 必须经 invoke 应答)。
     invokeMock.mockImplementation(async (cmd: string) =>
@@ -833,7 +852,7 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
     const wrapper = mountModal({ mode: "create" }, GC_MODEL_LIST);
     await flush();
 
-    // 卡集合不变:自定义 + 四内置(覆盖行不追加卡;无 uuid-ov-arch 卡)。
+    // 卡集合不变:自定义 + 五内置(覆盖行不追加卡;无 uuid-ov-arch 卡)。
     const cards = Array.from(document.querySelectorAll<HTMLElement>(".gcfg-preset-card"));
     expect(cards.map((c) => c.dataset.testid)).toEqual([
       "gcfg-preset-custom",
@@ -841,6 +860,7 @@ describe("GroupChatConfigModal — preset cards + moderator (create, gce-m4c)", 
       "gcfg-preset-fe_review",
       "gcfg-preset-arch",
       "gcfg-preset-retro",
+      "gcfg-preset-team",
     ]);
     // 原位顶替:arch 卡描述 = 覆盖行描述,key/name 仍是内置 arch
     // (builtin 卡,无「自定义」标记)。

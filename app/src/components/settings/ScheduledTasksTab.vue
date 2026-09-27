@@ -57,12 +57,12 @@ import ConfirmDialog from "../common/ConfirmDialog.vue";
 import AppDatePicker from "../common/AppDatePicker.vue";
 import AppTimeField from "../common/AppTimeField.vue";
 import Icon from "../Icon.vue";
-// M4a(R7 preset 单一事实源):内置四档与 scripts/group-chat-run.mjs 同读
+// M4a(R7 preset 单一事实源):内置五档与 scripts/group-chat-run.mjs 同读
 // scripts/group-chat-presets.json —— 展开发生在本表单(提交时),DB 与
 // daemon 全程不见 preset 名。加载 / persona 组装 / 模型引用解析在
 // gce-m4c Step 5 提取到共享模块(弹窗 preset 卡同源同形)。
 // GCE-P1(2026-09-12):用户预设(DB 表)经 groupChatPresets store 的
-// mergedPresets 叠加在内置四档之后,展开链路同形(UUID 引用借
+// mergedPresets 叠加在内置五档之后,展开链路同形(UUID 引用借
 // resolveModelRef byId 首趟直配);提交 config 随带 preset_key 出处
 // (fire 路径零读取,快照语义)。
 import {
@@ -105,14 +105,14 @@ const store = useScheduledTasksStore();
 const projects = useProjectsStore();
 const config = useConfigStore();
 const models = useModelsStore();
-// GCE-P1:用户群聊预设(mergedPresets = 内置四档 + 用户行)。
+// GCE-P1:用户群聊预设(mergedPresets = 内置五档 + 用户行)。
 const gcPresets = useGroupChatPresetsStore();
 
 // --- M4a 定时审议:preset 展开(内置 = JSON;用户 = DB 行)------------------
 // (共享逻辑在 utils/groupChatPresets.ts:gce-m4c Step 5 纯搬家;GCE-P1 起
 // 选项与展开统一走 store 的 mergedPresets 合并视图)
 
-/** preset 下拉选项:内置四档在前(JSON 声明序,label = key),用户预设
+/** preset 下拉选项:内置五档在前(JSON 声明序,label = key),用户预设
  *  按 name 序追加(label = 名称 + 「自定义」标记)。 */
 const gcPresetOptions = computed(() =>
   Object.values(gcPresets.mergedPresets).map((p) => ({
@@ -1102,7 +1102,7 @@ onMounted(async () => {
   // 模型下拉的数据源(新建专用 session 时选模型;失败静默,下拉显示空)。
   if (!models.loaded) void models.load().catch(() => {});
   // GCE-P1:用户群聊预设(未加载才拉,幂等;失败静默 —— mergedPresets
-  // 里内置四档始终可用,只是用户档缺席)。
+  // 里内置五档始终可用,只是用户档缺席)。
   void gcPresets.ensureLoaded().catch(() => {});
 });
 </script>

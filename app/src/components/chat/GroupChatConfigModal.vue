@@ -13,7 +13,7 @@
 // gce-m4c (09-08, 预设优先单弹窗重设计, design §4):
 //   - create: preset 单选卡区(review/fe_review/arch/retro,共享
 //     scripts/group-chat-presets.json,选中即预填阵容 + 主持人默认)→
-//     阵容微调(2-3 上限,交互保留)→ 主持人 Select(preset 默认可改
+//     阵容微调(2-4 上限,交互保留)→ 主持人 Select(preset 默认可改
 //     选,提交写 `create_session` 的 model 参数)→ token_budget 输入 +
 //     量级提示。议题不进弹窗(D2)。
 //   - 09-09(用户反馈两则):① 补显式「自定义」卡——原 RadioGroup 选中
@@ -28,8 +28,9 @@
 //     `group_chat_token_usage` + `group_chat_cache_rates` 两次查询,
 //     失败降级「—」不阻塞编辑)。
 //
-// MVP boundary (D5): 2-3 participants. "+" button hidden at 3
-// participants; delete button disabled when only 2 remain.
+// Participant boundary: 2-4. "+" button hidden at 4 participants;
+// delete button disabled when only 2 remain. (2026-09-28: 3→4,随内置
+// team 四人档放开;引擎本就无人数上限,D5 的 3 是纯 UI 边界。)
 //
 // Each participant row has:
 //   - name (text input, must be unique within the session)
@@ -75,7 +76,7 @@ import { cacheRatePercent, formatTokensWan } from "../../utils/tokenUsage";
 // gce-m4c(09-08,弹窗重设计):preset 单一事实源与展开逻辑与定时表单
 // 共享(utils/groupChatPresets.ts,persona 组装 / 模型解析逐字同形)。
 // GCE-P1(2026-09-12):用户预设(DB 行)经 groupChatPresets store 的
-// mergedPresets 叠加在内置四档之后 —— UUID 引用借 resolveModelRef
+// mergedPresets 叠加在内置五档之后 —— UUID 引用借 resolveModelRef
 // byId 首趟直配,展开 / 警告链路与内置档逐字同形。
 import {
   composePersonaMd,
@@ -117,14 +118,14 @@ const emit = defineEmits<{
 
 const chatStore = useChatStore();
 const modelsStore = useModelsStore();
-// GCE-P1:用户群聊预设(mergedPresets = 内置四档 + 用户行)。
+// GCE-P1:用户群聊预设(mergedPresets = 内置五档 + 用户行)。
 const gcPresetsStore = useGroupChatPresetsStore();
 
 // Participant list (local draft). Mirrors the deserialize
 // ParticipantConfig shape (snake_case per `chat.types.ts`).
 const participants = ref<ParticipantConfig[]>([]);
 
-const MAX_PARTICIPANTS = 3;
+const MAX_PARTICIPANTS = 4;
 const MIN_PARTICIPANTS = 2;
 
 // Form error state (single banner — no per-field error UI to keep
@@ -205,7 +206,7 @@ function modelOptionsFor(currentId: string) {
 // gce-m4c (09-08): create 模式的 preset 单选卡 + 主持人 Select
 // ---------------------------------------------------------------------
 
-// preset 键序:内置四档 = JSON 声明序(review / fe_review / arch / retro),
+// preset 键序:内置五档 = JSON 声明序(review / fe_review / arch / retro / team),
 // 用户预设按 name 序追加(GCE-P1);内置卡的展示名是纯 UI 映射(描述
 // 文案取 JSON `description`)。
 const GC_PRESET_LABELS: Record<string, string> = {
@@ -477,7 +478,7 @@ watch(
   ([isOpen]) => {
     if (!isOpen) return;
     errorMessage.value = null;
-    // GCE-P1:用户群聊预设(未加载才拉,幂等;失败静默 —— 内置四档
+    // GCE-P1:用户群聊预设(未加载才拉,幂等;失败静默 —— 内置五档
     // 来自 JSON 常量始终可用,只是用户档缺席)。
     void gcPresetsStore.ensureLoaded().catch(() => {});
     if (props.mode === "edit" && props.initialParticipants) {
@@ -632,7 +633,7 @@ function modelLabel(id: string): string {
             </DialogTitle>
             <DialogDescription class="gcfg-subtitle">
               {{ mode === "create"
-                ? "配置 2-3 个参与者(不含主持人)。"
+                ? "配置 2-4 个参与者(不含主持人)。"
                 : "修改当前群聊的参与者配置。" }}
             </DialogDescription>
           </div>
@@ -685,7 +686,7 @@ function modelLabel(id: string): string {
                 <span class="gcfg-preset-text">
                   <span class="gcfg-preset-name">
                     {{ presetCardTitle(def) }}
-                    <!-- GCE-P1:用户预设显式标注(内置四档零噪音)。 -->
+                    <!-- GCE-P1:用户预设显式标注(内置五档零噪音)。 -->
                     <span
                       v-if="!def.builtin"
                       class="gcfg-preset-user-tag"
@@ -1289,7 +1290,7 @@ function modelLabel(id: string): string {
   color: var(--color-accent-text);
 }
 
-/* GCE-P1:用户预设卡的「自定义」小徽标(内置四档零噪音)。 */
+/* GCE-P1:用户预设卡的「自定义」小徽标(内置五档零噪音)。 */
 .gcfg-preset-user-tag {
   display: inline-block;
   margin-left: 6px;

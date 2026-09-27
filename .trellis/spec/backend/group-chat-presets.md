@@ -19,7 +19,8 @@
 
 ## 1. Scope / Trigger
 
-GCE-P1(2026-09-12)落地「用户群聊预设」:内置四档(review / fe_review / arch / retro)仍是
+GCE-P1(2026-09-12)落地「用户群聊预设」:内置档(2026-09-28 起五档:
+review / fe_review / arch / retro / team,team = 四人完整团队 架构/产品/前端/后端)仍是
 `scripts/group-chat-presets.json` 单源(scripts 侧消费,只读),用户预设存 DB、Settings
 「群聊预设」页 CRUD、前端两消费方(ScheduledTasksTab + GroupChatConfigModal)合并展示。
 触发 code-spec 深度的原因:新表 + 新 IPC 命令 + 跨层 wire 契约。
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS group_chat_presets (
   participants       TEXT NOT NULL,               -- JSON:[{"name","modelId","persona"}] camelCase 键
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
-  builtin_key        TEXT                         -- P1b:NULL = 普通行;值 ∈ 四内置 key = 覆盖行
+  builtin_key        TEXT                         -- P1b:NULL = 普通行;值 ∈ 五内置 key = 覆盖行
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   ON group_chat_presets(builtin_key);             -- SQLite UNIQUE 对 NULL 互不相撞
@@ -73,7 +74,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   {key, name, builtin}>`;内置 JSON 声明序在前,用户行按 name 字典序;**用户行的
   moderator_model / model 字段直接放 UUID** —— `utils/groupChatPresets.ts::
   resolveModelRef` 首趟即 byId 精确匹配,UUID 借道既有解析/预填/警告链路,**不写新分支**。
-- 内置 key 集合 `{review, fe_review, arch, retro}` 与 persona 五 kind
+- 内置 key 集合 `{review, fe_review, arch, retro, team}`(2026-09-28 加 team,
+  同日参与者上限 3→4)与 persona 五 kind
   `{arch, product, backend, frontend, outsider}` 在 Rust 侧硬编码
   (`BUILTIN_PRESET_KEYS` / `PERSONA_KINDS`),**同步义务指向 scripts/group-chat-presets.json**
   ——改 JSON 阵容/加 persona 时必须同步两处。
@@ -87,7 +89,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   快照语义照旧:覆盖编辑/删除不回溯已建任务;旧任务 `preset_key: "arch"` 归位到
   覆盖后定义(B9 stale 比对自动吃覆盖版)。
 - **引擎合流(P2,2026-09-12,scripts/ 侧;Rust/前端零改动)**:M1 CLI 与 MCP
-  运行时调 `list_group_chat_presets` 拉全部行,与内置 JSON 四档**客户端合并**:
+  运行时调 `list_group_chat_presets` 拉全部行,与内置 JSON 五档**客户端合并**:
   - `mergePresets(builtin, rows, file)` 纯函数**逐条镜像前端 mergedPresets 规则**
     (用户行追加 key=id / 覆盖行原位顶替 key·name=内置 key / 未知 builtinKey 脏行
     跳过);行的 persona **kind** 经 `composePersonaMd(file, kind)` 展开(数据源
@@ -98,7 +100,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   - **降级两层分工(勿混)**:`loadEffectivePresets(rowsProvider)` 吞**拉取失败**
     (daemon 不可达 / 老版本路由 404·405)→ 返回内置 PRESETS + `degraded:true`
     + detail(fail-open;旧 daemon 实证:2026-09-12 对 pre-P1 daemon 冒烟
-    degraded=true 四档兜底);`mergePresets` 对**行结构损坏**(缺字段/脏 persona
+    degraded=true 五档兜底);`mergePresets` 对**行结构损坏**(缺字段/脏 persona
     kind/重名)照 throw(fail-loud,拉取层吞不掉数据脏)。
   - **preset 引用三趟解析** `lookupPreset(presets, ref)`(normalizeModelRef 同构):
     key 直配(内置 key / 用户行 id)→ `display_name` 精确 → 忽略大小写;DB 校验
@@ -124,10 +126,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
 | name 与用户行或内置 key 大小写不敏感撞名(update 排除自身;**覆盖行照常生效**) | InvalidRequest |
 | description >200 chars | InvalidRequest |
 | moderator / 任一 participant 的 modelId 查 models 表不存在 | InvalidRequest(disabled **放行**——禁用是使用处反诊问题) |
-| participants 不在 2..=3 | InvalidRequest |
+| participants 不在 2..=4(2026-09-28 随内置 team 四人档从 3 放宽) | InvalidRequest |
 | participant name trim 空 / >20 / 预设内重名 | InvalidRequest |
 | persona ∉ 五 kind | InvalidRequest |
-| create 的 builtin_key ∉ 四内置 key(P1b;空串同拒,不静默降级 None) | InvalidRequest |
+| create 的 builtin_key ∉ 五内置 key(P1b;空串同拒,不静默降级 None) | InvalidRequest |
 | create 的 builtin_key 已有同 key 覆盖行(P1b) | InvalidRequest |
 | update 目标 id 不存在 | InvalidRequest |
 | delete 目标不存在 | Ok(幂等,沿 clear 先例) |
@@ -162,7 +164,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_group_chat_presets_builtin_key
   六臂(追加/顶替/脏行跳过/persona 展开/fail-loud 四投掷/空行集)、lookupPreset
   三趟 + miss 清单、resolveParticipants(presets) 传参/缺省回落、
   loadEffectivePresets 正常/降级两臂;MCP 面覆盖在 `app/src-tauri/src/daemon/routes/mcp.rs`
-  单测 + `scripts/group-chat-mcp-http-smoke.mjs`(非 live list_presets 内置四 key 恒在——
+  单测 + `scripts/group-chat-mcp-http-smoke.mjs`(非 live list_presets 内置五 key 恒在——
   数据源即本进程,无两态)。JS 侧 `group-chat-mcp.test.mjs`(coreStart 用户档 by id/by
   name/覆盖档、降级两臂、corePresets 合并视图与 degraded、wire 预算实测)随 stdio 壳
   P4 删除(2026-09-15,任务 09-15-gce-mcp-stdio-retire)。

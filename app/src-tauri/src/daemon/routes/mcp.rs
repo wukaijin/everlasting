@@ -21,7 +21,7 @@
 //! **远程暴露(remote tunnel 转发本路由)须先过安全评审**——roadmap §5
 //! 的立项前置,本期明确不做。
 //!
-//! 内置四档预设:编译期 `include_str!` 嵌入 `scripts/group-chat-presets.json`
+//! 内置预设(五档):编译期 `include_str!` 嵌入 `scripts/group-chat-presets.json`
 //! (单一事实源保持——改 JSON 需重编译 daemon 才生效,M1 CLI 读文件路径
 //! 不变;两消费方共享同一文件)。
 
@@ -301,13 +301,13 @@ fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": "start_discussion",
-            "description": "Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: builtin four + user presets — see list_presets.",
+            "description": "Convene a multi-LLM group deliberation on a topic. Costly: 5-15 min. Returns immediately with session_id — poll discussion_status, read conclusions via discussion_result. Presets: builtin five + user presets — see list_presets.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "topic": { "type": "string", "description": "The question; evidence-backed, do not bake the answer in" },
                     "cwd": { "type": "string", "description": "Project dir as evidence base" },
-                    "preset": { "type": "string", "description": "Participant preset: builtin review/fe_review/arch/retro, or user preset key/name — see list_presets" },
+                    "preset": { "type": "string", "description": "Participant preset: builtin review/fe_review/arch/retro/team, or user preset key/name — see list_presets" },
                     "participants": {
                         "type": "array",
                         "items": {
@@ -385,7 +385,7 @@ fn tool_defs() -> Vec<Value> {
         }),
         json!({
             "name": "list_presets",
-            "description": "List participant presets: builtin four + user presets (key = row UUID) + overrides. Cheap metadata call; degraded=true means daemon unreachable (builtin only).",
+            "description": "List participant presets: builtin five + user presets (key = row UUID) + overrides. Cheap metadata call; degraded=true means daemon unreachable (builtin only).",
             "inputSchema": { "type": "object" }
         }),
     ]
@@ -520,7 +520,7 @@ fn compose_persona_md(file: &PresetsFileDef, kind: &str) -> Result<String, Strin
     Ok(format!("{}\n\n{}", base, file.persona_common))
 }
 
-/// 内置四档展开(JS composePresets 同构;确定性——单测锁)。
+/// 内置档展开(JS composePresets 同构;确定性——单测锁)。
 fn builtin_presets() -> Result<HashMap<String, EffectivePreset>, ToolError> {
     let file = presets_file().map_err(ToolError::infra)?;
     let mut out = HashMap::new();
@@ -552,7 +552,7 @@ fn builtin_presets() -> Result<HashMap<String, EffectivePreset>, ToolError> {
     Ok(out)
 }
 
-/// 有效预设视图 = 内置四档 ⊕ group_chat_presets 表(merge 规则镜像 JS
+/// 有效预设视图 = 内置档 ⊕ group_chat_presets 表(merge 规则镜像 JS
 /// mergePresets/前端 mergedPresets:覆盖行原位顶替内置槽(key/display_name
 /// 保持内置)、用户行追加 key=row.id、脏 builtinKey(不在内置集合)跳过)。
 async fn effective_presets(
@@ -1844,11 +1844,14 @@ mod tests {
         let presets = builtin_presets().unwrap();
         let mut keys: Vec<&str> = presets.keys().map(|s| s.as_str()).collect();
         keys.sort_unstable();
-        assert_eq!(keys, vec!["arch", "fe_review", "retro", "review"]);
+        assert_eq!(keys, vec!["arch", "fe_review", "retro", "review", "team"]);
         let review = &presets["review"];
         assert_eq!(review.source, "builtin");
         assert_eq!(review.display_name, "review");
         assert_eq!(review.participants.len(), 3);
+        // team = review ∪ fe_review 全席(2026-09-28):四人档。
+        let team = &presets["team"];
+        assert_eq!(team.participants.len(), 4);
         // persona 展开 = 边界 + 空行 + 公共纪律(JS composePersonaMd 同构)。
         let file = presets_file().unwrap();
         let first = &review.participants[0];
@@ -2067,7 +2070,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&tool_text(&body)).unwrap();
         assert_eq!(parsed["degraded"], false);
         let presets = parsed["presets"].as_array().unwrap();
-        assert_eq!(presets.len(), 4); // 内置四档(无用户行)
+        assert_eq!(presets.len(), 5); // 内置五档(无用户行)
         assert!(presets.iter().all(|p| p["source"] == "builtin"));
         assert!(presets
             .iter()

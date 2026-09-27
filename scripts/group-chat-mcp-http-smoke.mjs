@@ -8,7 +8,7 @@
 // 前置:daemon 在跑(本脚本就是 daemon 的 HTTP 客户端,连不上直接 FAIL 退场)。
 // 非 live(默认):initialize 握手(版本协商 + serverInfo)→ ping 环回 →
 // tools/list(8 工具 + wire 预算)→ 未知工具 -32602 → discussion_status
-// (不存在 id)语义错误链 → wait_seconds=0 越界拒 → list_presets(内置四 key +
+// (不存在 id)语义错误链 → wait_seconds=0 越界拒 → list_presets(内置五 key +
 // degraded=false——HTTP 场 daemon 必在,可严格断言)→ list_models → 传输级
 // 探针 raw fetch(GET 405 / DELETE 200 / 缺 Accept 406 / 错 Content-Type 415)。
 //
@@ -84,14 +84,14 @@ try {
   if (!bad.isError || !/wait_seconds/.test(badError)) fail(`wait_seconds=0 应被有界校验拒:${bad.content?.[0]?.text}`);
   else process.stderr.write('[smoke] wait_seconds 越界拒 ok\n');
 
-  // 2b) list_presets:内置四 key 恒在 + degraded 严格 false(数据源就是本
+  // 2b) list_presets:内置五 key 恒在 + degraded 严格 false(数据源就是本
   // daemon,无降级态可言)。用户行数量随环境漂移,不断言。
   const lp = await client.callTool({ name: 'list_presets', arguments: {} });
   if (lp.isError) fail(`list_presets 应成功:${lp.content?.[0]?.text}`);
   else {
     const payload = JSON.parse(lp.content[0].text);
     const keys = payload.presets.map((p) => p.key);
-    for (const k of ['review', 'fe_review', 'arch', 'retro']) {
+    for (const k of ['review', 'fe_review', 'arch', 'retro', 'team']) {
       if (!keys.includes(k)) fail(`list_presets 缺内置 key "${k}"`);
     }
     if (payload.degraded !== false) fail(`degraded 期望严格 false 实得 ${payload.degraded}`);

@@ -8,7 +8,7 @@
 //      嵌套不经 transport 转换)→ 列表重拉 → 表单关闭。
 //   2. 校验提示:空名 / 撞内置 key → 内联错误,不发起 IPC(服务端仍是
 //      事实源,这里只锁前端预校验闸口)。
-//   3. 内置四档:「内置」徽标 + 「覆盖编辑」入口;已覆盖时「已覆盖」
+//   3. 内置五档:「内置」徽标 + 「覆盖编辑」入口;已覆盖时「已覆盖」
 //      chip + 覆盖行阵容摘要 + 「编辑覆盖」/「恢复内置」(确认 → 同一
 //      delete 命令)。
 //   4. 用户列表:渲染摘要;编辑回填;删除走 ConfirmDialog 确认后才调
@@ -167,11 +167,11 @@ afterEach(() => {
 });
 
 describe("GroupChatPresetsTab 内置区", () => {
-  it("内置四档渲染 + 「内置」徽标;未覆盖时仅「覆盖编辑」按钮,无恢复/已覆盖标记", async () => {
+  it("内置五档渲染 + 「内置」徽标;未覆盖时仅「覆盖编辑」按钮,无恢复/已覆盖标记", async () => {
     stubBackend();
     const w = await mountTab();
     const section = w.get('[data-testid="gcp-builtin-list"]');
-    for (const key of ["review", "fe_review", "arch", "retro"]) {
+    for (const key of ["review", "fe_review", "arch", "retro", "team"]) {
       const row = section.get(`[data-testid="gcp-builtin-${key}"]`);
       expect(row.text()).toContain("内置");
       expect(row.text()).toContain(key);
@@ -270,7 +270,7 @@ describe("GroupChatPresetsTab 建预设流", () => {
     w.unmount();
   });
 
-  it("加减参与者:2 下限无删除按钮,3 上限隐藏加号", async () => {
+  it("加减参与者:2 下限无删除按钮,4 上限隐藏加号", async () => {
     stubBackend();
     const w = await mountTab();
     await w.get('[data-testid="gcp-create-btn"]').trigger("click");
@@ -278,10 +278,15 @@ describe("GroupChatPresetsTab 建预设流", () => {
     await w.get('[data-testid="gcp-add-participant"]').trigger("click");
     await flushPromises();
     expect(w.find('[data-testid="gcp-participant-2"]').exists()).toBe(true);
-    expect(w.find('[data-testid="gcp-add-participant"]').exists()).toBe(false);
-    await w.get('[data-testid="gcp-p-remove-2"]').trigger("click");
+    // 上限 4(2026-09-28 随内置 team 四人档 3→4):第 4 行后才隐藏加号。
+    expect(w.find('[data-testid="gcp-add-participant"]').exists()).toBe(true);
+    await w.get('[data-testid="gcp-add-participant"]').trigger("click");
     await flushPromises();
-    expect(w.find('[data-testid="gcp-participant-2"]').exists()).toBe(false);
+    expect(w.find('[data-testid="gcp-participant-3"]').exists()).toBe(true);
+    expect(w.find('[data-testid="gcp-add-participant"]').exists()).toBe(false);
+    await w.get('[data-testid="gcp-p-remove-3"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-testid="gcp-participant-3"]').exists()).toBe(false);
     w.unmount();
   });
 });

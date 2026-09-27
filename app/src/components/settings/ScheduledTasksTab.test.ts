@@ -1352,7 +1352,7 @@ describe("ScheduledTasksTab M4a 定时审议(group_chat 档)", () => {
 });
 
 // =====================================================================
-// GCE-P1(09-12-gc-preset-settings):用户群聊预设叠加在内置四档之后。
+// GCE-P1(09-12-gc-preset-settings):用户群聊预设叠加在内置档之后。
 // 选项经 groupChatPresets store 的 mergedPresets(未加载先拉,IPC 应答
 // 即 production-shaped seed);用户档模型引用是 UUID —— resolveModelRef
 // byId 首趟直配,与内置档同形;提交 config 随带 preset_key(行 id)。
@@ -1415,7 +1415,7 @@ describe("ScheduledTasksTab GCE-P1 用户群聊预设", () => {
     const options = Array.from(document.querySelectorAll('[role="option"]')).map(
       (el) => el.textContent ?? "",
     );
-    // 内置四档在前(键序 = JSON 声明序),用户行追加在后。
+    // 内置档在前(键序 = JSON 声明序),用户行追加在后。
     const builtinIdx = options.findIndex((t) => t.includes("review —"));
     const userIdx = options.findIndex((t) => t.includes("我的评审团"));
     expect(builtinIdx).toBeGreaterThanOrEqual(0);

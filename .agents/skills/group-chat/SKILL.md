@@ -16,7 +16,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 
 ## 两条入口,先分清你是谁(GCE-M2 起)
 
-- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 八工具**(M3 09-06 起控制面,09-11 起 `list_models` 内省,GCE-P2 09-12 起 `list_presets` 内省;09-13 起 status 长轮询)**——拿不准可用模型先 `list_models`(返回名字+UUID,两者皆可作引用);拿不准用哪档阵容先 `list_presets`(内置四档 + Settings 建的用户预设,用户档 key = 行 UUID,引用传 key 或名称皆可;`degraded:true` = daemon 不在,只剩内置);召集 `start_discussion(topic, cwd, preset?)` → **等终态:后台 shell 循环回调,勿用 MCP 轮询等**(09-20 修正,live 实证 15min 审议逐 25s 轮询烧掉 30+ 轮宿主 LLM turn 被用户叫停):拿到 session_id 后发一个宿主后台任务**循环长轮询判 busy 到终态**,如 `while :; do out=$(node cli/bin.mjs discuss status <sid> --wait 90 --output json </dev/null 2>&1); printf '%s' "$out" | grep -q '"busy":true' || { printf '%s\n' "$out"; break; }; done`(repo 根;注意 `--wait` 是**首个变化即返**的单次长轮询——发言落地/busy 翻转就返,**单窗 ≠ 终态,必须循环判 busy**;退 7 = 窗口尽无变化,循环自然续;重开的是观察窗不是新讨论)。任务完成通知唤醒后 `discussion_result(session_id)` 读结论;后台任务若被宿主超时上限截断,重发同一循环即可(幂等观察无副作用)。MCP `discussion_status(session_id, wait_seconds=25, detail 省略)` 只保留两个用途:用户主动问进度、起跑确认(前一两次,`detail=true`)。止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不自己手搓 curl。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
+- **MCP 宿主 agent**(ZCode/Claude Code/Cursor 等挂了 `everlasting-group-chat` server 的):**直接用 MCP 八工具**(M3 09-06 起控制面,09-11 起 `list_models` 内省,GCE-P2 09-12 起 `list_presets` 内省;09-13 起 status 长轮询)**——拿不准可用模型先 `list_models`(返回名字+UUID,两者皆可作引用);拿不准用哪档阵容先 `list_presets`(内置五档 + Settings 建的用户预设,用户档 key = 行 UUID,引用传 key 或名称皆可;`degraded:true` = daemon 不在,只剩内置);召集 `start_discussion(topic, cwd, preset?)` → **等终态:后台 shell 循环回调,勿用 MCP 轮询等**(09-20 修正,live 实证 15min 审议逐 25s 轮询烧掉 30+ 轮宿主 LLM turn 被用户叫停):拿到 session_id 后发一个宿主后台任务**循环长轮询判 busy 到终态**,如 `while :; do out=$(node cli/bin.mjs discuss status <sid> --wait 90 --output json </dev/null 2>&1); printf '%s' "$out" | grep -q '"busy":true' || { printf '%s\n' "$out"; break; }; done`(repo 根;注意 `--wait` 是**首个变化即返**的单次长轮询——发言落地/busy 翻转就返,**单窗 ≠ 终态,必须循环判 busy**;退 7 = 窗口尽无变化,循环自然续;重开的是观察窗不是新讨论)。任务完成通知唤醒后 `discussion_result(session_id)` 读结论;后台任务若被宿主超时上限截断,重发同一循环即可(幂等观察无副作用)。MCP `discussion_status(session_id, wait_seconds=25, detail 省略)` 只保留两个用途:用户主动问进度、起跑确认(前一两次,`detail=true`)。止损 `cancel_discussion`;讨论进行中可 `interrupt_discussion`(收束打断,取代硬止损,给收束轮 + summary)或 `inject_message`(补充输入,如要求改议题)。不自己手搓 curl。工具描述自带成本闸;议题写法照下面「议题写法」节,同样适用。
 - **everlasting 内部 agent**(daemon 单聊,非 MCP client):走下面的脚本路径。
 
 ## 建群三要素(全靠脚本内省,别背参数)
@@ -24,7 +24,7 @@ description: "跨模型群聊审议驱动:用 scripts/group-chat-run.mjs 一条�
 ```bash
 node scripts/group-chat-run.mjs projects   # ① 目录:审议对象的项目(证据基地)
 node scripts/group-chat-run.mjs models     # ② 模型:当前可用清单(UUID/名字都收)
-node scripts/group-chat-run.mjs presets    # ③ 配方:内置四档 + 用户预设(daemon 合并视图)+ 覆盖语法
+node scripts/group-chat-run.mjs presets    # ③ 配方:内置五档 + 用户预设(daemon 合并视图)+ 覆盖语法
 ```
 
 **目录(--project)是第一要素**:参与者能查什么证据由它决定,默认当前目录。
@@ -35,7 +35,7 @@ node scripts/group-chat-run.mjs presets    # ③ 配方:内置四档 + 用户预
 ```bash
 node scripts/group-chat-run.mjs run \
   --project /path/to/repo \
-  --preset review \                # 内置四档:review 评审团 / fe_review 前端 / arch 单决策点 / retro 复盘;用户预设传行 UUID 或名称(presets 子命令查,Settings 管理)
+  --preset review \                # 内置五档:review 评审团 / fe_review 前端 / team 完整团队 / arch 单决策点 / retro 复盘;用户预设传行 UUID 或名称(presets 子命令查,Settings 管理)
   --topic-file /tmp/topic.md \     # 主推:长议题/含引号都走文件(短议题可 --topic 内联)
   --timeout 1800                   # 默认 30min;超时自动 cancel 并导部分转录
 ```

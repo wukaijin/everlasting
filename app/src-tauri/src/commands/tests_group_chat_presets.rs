@@ -323,7 +323,8 @@ async fn create_allows_disabled_models() {
     assert_eq!(row.participants[1].model_id, env.model_b);
 }
 
-/// 参与者 1 条(低于下限)与 4 条(高于上限)均拒绝;3 条(上限)通过。
+/// 参与者 1 条(低于下限)与 5 条(高于上限)均拒绝;4 条(上限,
+/// 与内置 team 四人档同宽)通过。
 #[tokio::test(flavor = "multi_thread")]
 async fn create_rejects_participant_count_out_of_bounds() {
     let env = make_env().await;
@@ -339,7 +340,7 @@ async fn create_rejects_participant_count_out_of_bounds() {
     .await;
     expect_invalid(res, "participants 1 条");
 
-    let four = vec![
+    let five = vec![
         GcPresetParticipant {
             name: "甲".into(),
             model_id: env.model_a.clone(),
@@ -360,31 +361,36 @@ async fn create_rejects_participant_count_out_of_bounds() {
             model_id: env.model_a.clone(),
             persona: "frontend".into(),
         },
+        GcPresetParticipant {
+            name: "戊".into(),
+            model_id: env.model_a.clone(),
+            persona: "outsider".into(),
+        },
     ];
     let res = create_group_chat_preset_inner(
         &env.state,
         "大团".into(),
         String::new(),
         env.model_a.clone(),
-        four.clone(),
+        five.clone(),
         None,
     )
     .await;
-    expect_invalid(res, "participants 4 条");
+    expect_invalid(res, "participants 5 条");
 
-    // 3 条(上限)通过。
-    let three: Vec<GcPresetParticipant> = four.into_iter().take(3).collect();
+    // 4 条(上限)通过。
+    let four: Vec<GcPresetParticipant> = five.into_iter().take(4).collect();
     let row = create_group_chat_preset_inner(
         &env.state,
-        "三人团".into(),
+        "四人团".into(),
         String::new(),
         env.model_a.clone(),
-        three,
+        four,
         None,
     )
     .await
-    .expect("3 人(上限)必须通过");
-    assert_eq!(row.participants.len(), 3);
+    .expect("4 人(上限)必须通过");
+    assert_eq!(row.participants.len(), 4);
 }
 
 /// 参与者名字:空白 / 超 20 字符 / 预设内重名(trim 形态)均拒绝。
@@ -568,7 +574,7 @@ async fn create_enforces_name_and_description_length_bounds() {
 // GCE-P1b(2026-09-12, task `09-12-gc-preset-override`)覆盖行校验矩阵
 // ---------------------------------------------------------------------------
 
-/// builtin_key 非法值(不在内置四 key 白名单)→ InvalidRequest。
+/// builtin_key 非法值(不在内置 key 白名单)→ InvalidRequest。
 #[tokio::test(flavor = "multi_thread")]
 async fn create_rejects_unknown_builtin_key() {
     let env = make_env().await;
