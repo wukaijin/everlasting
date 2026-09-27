@@ -475,6 +475,14 @@ pub(crate) async fn drive_turn(
     // 机械兜底"产生(摘要本身不丢消息,巨尾消息才兜不下来)。
     {
         let breaker = crate::agent::compaction::compaction_registry();
+        // N12:no-progress 维度的解除检查先于 gate 读取。prior 水位
+        // (循环内 anchor:init 种入或上一 turn 产出)严格越过记录
+        // 基线 —— 典型来源是熔断期间用户手动 `/compact` 落的新摘要行
+        // (auto 摘要被罩住,不可能自己推进水位)—— 即清零恢复摘要
+        // 路径;count 未积累时是零写入空查。
+        breaker
+            .release_if_watermark_advanced(&session_id, summary_anchor.as_ref().map(|a| a.cutoff))
+            .await;
         // gate 先行:关闭(worker / 群聊 / 开关 off / 熔断)时**不付**
         // 摘要路径的全历史估算成本 —— `tokens_pre` 是摘要触发检查的
         // 额外一次 cl100k 编码,机械路径 `compact_messages` 自己还会
@@ -482,7 +490,15 @@ pub(crate) async fn drive_turn(
         // 口径切换 —— messages-only
         // → `estimate_request_tokens` 统一总量(补上 tools+system 挤窗
         // 时漏计的洞;`request_overhead` 已在 C3 块之前算好)。
-        let summary_gate = compaction_on && !skip_persist && !breaker.is_tripped(&session_id).await;
+        //
+        // N12:gate 加第二维度 —— 失败熔断(`is_tripped`,连续 3 次
+        // 摘要机制失败)与无进展熔断(`is_no_progress_tripped`,连续
+        // 2 次 Applied 但压缩无进展)任一触发都跳过摘要直达机械;
+        // 两维度在 registry 内分 map 正交,互不清零对方。
+        let summary_gate = compaction_on
+            && !skip_persist
+            && !breaker.is_tripped(&session_id).await
+            && !breaker.is_no_progress_tripped(&session_id).await;
         let tokens_pre = if summary_gate {
             crate::agent::budget::estimate_request_tokens(&system_prompt, &tools_json, &messages)
                 .await
@@ -493,6 +509,13 @@ pub(crate) async fn drive_turn(
 
         // ---- 摘要尝试(gate 全开 + 超触发线 / softcap force)----
         let mut summary_result: Option<crate::agent::context::CompactResult> = None;
+        // N12:进展判定的两个基线量。`prior_cutoff` = 本 turn 进入摘要
+        // 路径前的水位(Applied 臂内 summary_anchor 会被覆盖/置 None,
+        // 必须先取);`applied_summary` = (本 turn 摘要产出的新 cutoff,
+        // 折叠后 tokens_after —— 落库形态的持久视角,非机械兜底后的
+        // 瞬时 wire),仅 Applied 臂写入,供下方摘要尝试结束后的判定。
+        let prior_cutoff = summary_anchor.as_ref().map(|a| a.cutoff);
+        let mut applied_summary: Option<(i64, u32)> = None;
         if summary_gate && (force_compaction || (tokens_pre as u64) >= (trigger as u64)) {
             let cut = crate::agent::compaction::compute_preservation_region(
                 &messages,
@@ -549,6 +572,9 @@ pub(crate) async fn drive_turn(
                     } => {
                         // 落库 + 回填双成功:熔断清零(prd R5),
                         // anchor 更新(同 loop 二次压缩的 prior 种子)。
+                        // N12:先取判定基线(anchor 随后被 move 进
+                        // summary_anchor)。
+                        applied_summary = Some((anchor.cutoff, tokens_after));
                         breaker.record_success(&session_id).await;
                         summary_anchor = Some(anchor);
                         seq = next_seq;
@@ -647,6 +673,50 @@ pub(crate) async fn drive_turn(
                         // 用户取消:不计熔断、不 warn(非摘要机制失败);
                         // 主 turn 的取消 select 会立刻接管,机械兜底空转。
                     }
+                }
+            }
+
+            // ---- N12 无进展熔断判定(件③,PRD R1)----
+            // 本 turn 进了摘要路径且 Applied 时收判定:
+            // - 全进展(水位推进 && 折叠后总量下降)→ 清零 no-progress
+            //   连续计数(「连续 2 次」的连续性被真实进展打断);
+            // - 否则记一次 no-progress,解除基线 = 本 turn 新水位。连续
+            //   2 次 → 下一 turn 起 gate 跳过摘要直达机械(粘性,水位
+            //   推进才解除)。
+            // 判定量只用已有信号,零新估算。两个刻意的口径决定:
+            // 1. tokens_after 取**折叠后**(落库 metadata 同款)而非
+            //    机械兜底后的 `summary_result.tokens_after` —— 机械丢组
+            //    只裁内存 wire、不落库,下一 turn 从 DB reload 后 context
+            //    回到折叠形态;跨 turn 是否还烧摘要由持久状态决定。
+            // 2. 「总量未降」按同形比较:折叠后 tokens_after 是
+            //    messages-only 估算,tokens_pre 含 system+tools overhead
+            //    (`estimate_request_tokens` 加法口径)—— 左边补上
+            //    overhead 才是 apples-to-apples,慢增长(增量 < overhead)
+            //    不至于漏判。PRD 判定式「tokens_after ≥ tokens_before」
+            //    的本意即消息总量未降。
+            // Failed / Cancelled 不进判定:前者由失败维度计数,后者
+            // 不计任何熔断维度(既有契约)。
+            if let Some((new_cutoff, folded_tokens_after)) = applied_summary {
+                let watermark_advanced = prior_cutoff.is_none_or(|p| new_cutoff > p);
+                let tokens_shrank =
+                    (folded_tokens_after as u64 + request_overhead as u64) < (tokens_pre as u64);
+                if watermark_advanced && tokens_shrank {
+                    breaker.record_progress(&session_id).await;
+                } else {
+                    breaker.record_no_progress(&session_id, new_cutoff).await;
+                    // 先读后记:tracing 字段里内联 .await 会让 future 变
+                    // 非 Send(chat.rs 的 tokio::spawn 边界)。
+                    let no_progress = breaker.no_progress_count(&session_id).await;
+                    tracing::warn!(
+                        request_id = %rid,
+                        session_id = %session_id,
+                        turn,
+                        watermark_advanced,
+                        tokens_before = tokens_pre,
+                        tokens_after = folded_tokens_after,
+                        no_progress,
+                        "agent loop: summary compaction made no progress (C3/N12)"
+                    );
                 }
             }
         }
@@ -2735,6 +2805,16 @@ async fn attempt_summary_compaction(
         "prior_summary_seq": prior.as_ref().map(|a| a.seq),
         "summary_usage": usage,
     });
+
+    // N12 件②(取消×摘要交错收口):落库前取消检查。摘要 LLM 成功
+    // 返回后、insert 前的毫秒级窗口内用户取消 → 丢弃已生成摘要、返回
+    // `Cancelled`(摘要行不落库、水位不推进,turn 以取消收场)。取消
+    // 不计任何熔断维度(既有 Cancelled 契约);代价 = 白付一次旁路
+    // completion,窗口毫秒级、命中概率极低,接受(prd R2/调研件②
+    // 选项 A —— 取消语义纯化优先)。
+    if token.is_cancelled() {
+        return SummaryOutcome::Cancelled;
+    }
 
     // seq 游标契约(复核 P1):吃 loop 当前游标插入、返回推进值,
     // 绝不走独立 MAX(seq)+1(messages 主键 (session_id, seq) 会与

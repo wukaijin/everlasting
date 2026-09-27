@@ -519,6 +519,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_open_retries_reuse_assembly_zero_rebuild() {
+        // N12 件①测试锚(09-27,prd R3):重试循环内克隆重发**同一装配
+        // 产物** —— N 次 send 收到的 messages / system / tools 逐次全等
+        // (装配 = context 构造 / memory / @文件 / C3 压缩 / budget gate,
+        // 全部发生在调用方进入 retry_open 之前)。若未来把重试上移到
+        // chat_loop 层(每 attempt 重跑装配),messages 会漂移,本测试
+        // 无声退化为响亮失败。
+        let msgs = vec![
+            ChatMessage {
+                role: crate::llm::types::Role::User,
+                content: crate::llm::types::MessageContent::Text("assembled history one".into()),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: crate::llm::types::Role::Assistant,
+                content: crate::llm::types::MessageContent::Text("assembled reply".into()),
+                speaker: None,
+                attachments: None,
+            },
+            ChatMessage {
+                role: crate::llm::types::Role::User,
+                content: crate::llm::types::MessageContent::Text("assembled current input".into()),
+                speaker: None,
+                attachments: None,
+            },
+        ];
+        let tools = vec![ToolDef {
+            name: "assembled_tool".into(),
+            description: Some("assembly fixture".into()),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+        let network_err = || LlmError::Network("connection reset".into());
+        let mock = MockProvider::new(vec![
+            MockResponse::ErrThenEnd(network_err()),
+            MockResponse::ErrThenEnd(network_err()),
+            MockResponse::ErrThenEnd(network_err()),
+            ok_turn(),
+        ]);
+        let sink = MockSink::default();
+        let mut rng = fastrand::Rng::with_seed(0);
+        let token = CancellationToken::new();
+        let outcome = retry_open(
+            &mock,
+            Some("ASSEMBLED SYSTEM".into()),
+            msgs.clone(),
+            tools.clone(),
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
+        assert!(matches!(outcome, OpenOutcome::Stream(_)), "第 4 次成功");
+        assert_eq!(mock.call_count(), 4, "1 次首发 + 3 次重试");
+
+        // 零重装配不变量:每次 send 收到的 messages 与首发逐字节全等
+        // (ChatMessage: PartialEq 深比较,比 hash 更强)。
+        let sent = mock.sent_messages();
+        assert_eq!(sent.len(), 4);
+        for (i, m) in sent.iter().enumerate() {
+            assert_eq!(m, &msgs, "第 {} 次 send 的 messages 与首发全等", i + 1);
+        }
+        // system / tools 同样零漂移(MockProvider 快照三件套)。
+        assert!(
+            mock.sent_systems()
+                .iter()
+                .all(|s| s.as_deref() == Some("ASSEMBLED SYSTEM")),
+            "system 逐次全等"
+        );
+        assert!(
+            mock.sent_tools().iter().all(|t| *t == tools),
+            "tools 逐次全等"
+        );
+    }
+
+    #[tokio::test]
     async fn retry_open_first_byte_after_no_retry() {
         // Stream emits Ok(Start) then Err — first byte is OK, so retry_open
         // returns Ok and never re-issues. The mid-stream Err is left in `rest`

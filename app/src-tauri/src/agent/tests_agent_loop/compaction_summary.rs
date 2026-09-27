@@ -1128,3 +1128,444 @@ async fn group_chat_session_skips_summary_path() {
 
     compaction_registry().clear(&gc_sid).await;
 }
+
+// ---------------------------------------------------------------------------
+// N12(09-27):无进展熔断 + 摘要取消收口。
+//
+// 几何 fixture 按 **token 精确**构造(运行时 `count_tokens` 二分校准):
+// 保留区预算(15k)与触发线(17k)的跨行关系全在 token 域,字符近似
+// 会随语料比率漂移翻掉边界。布局(seed seq 连续:t₀ @0..=9 /
+// F @10 / t₁ @11..=22):
+//
+//   [t₀×10(100 tok each)= 1k] [F(6k tok)] [t₁×12(1k tok each)= 12k]
+//
+// - walk₁(从尾累积到 15k 预算):input + t₁ = 12k < 15k,加 F = 18k
+//   ≥ 15k → 保留区边界恰落在 F(跨预算组 = F 计入保留区),待压区 =
+//   [t₀×10] = 1k;
+// - 摘要正文(clamp 上限 16_384 chars ≈ ≥ 2.7k tok,同一 count_tokens
+//   口径)> 1k → 折叠后**净增长** → no-progress #1(tokens 维;水位
+//   None→C1=9 本身是推进的);
+// - turn 2:context = [摘要行] + [F] + [t₁](水位替换吞 t₀ 区):
+//   walk₂ = small + t₁ 12k < 15k ≤ +F 18k → 边界再落 F,待压区 =
+//   [摘要行] → `compressible_cutoff_seq` 走退化臂 regular == 0 →
+//   cutoff 滞留 C1(水位**未推进**)→ no-progress #2(水位维)→
+//   连续 2 次 → 熔断;
+// - turn 3(AC1):gate 关 → 直达机械,零摘要调用。
+// ---------------------------------------------------------------------------
+
+/// ≈ `n_tokens` 的 pad 行(二分 `count_tokens` 收敛到最小 char 数)。
+/// label 前缀计入测量,几何不受字符/token 比率漂移影响。
+async fn row_of_tokens(label: &str, n_tokens: u32) -> ChatMessage {
+    let make = |chars: usize| format!("{label} {}", pad(chars));
+    let target = n_tokens.max(1) as usize;
+    let mut lo = target.saturating_mul(2);
+    let mut hi = target.saturating_mul(10);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let t = crate::memory::tokens::count_tokens(&make(mid)).await as usize;
+        if t < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    user(make(lo))
+}
+
+/// 指定 seq 预落一行。
+async fn seed_row_at(h: &TestHarness, m: &ChatMessage, seq: i64) {
+    crate::db::persist_turn(&h.db, &h.session_id, m.role, &m.content, seq, None, None)
+        .await
+        .expect("seed row at seq");
+}
+
+/// N12 几何 seed(见上方模块注释的布局与 seq 表)+ 返回预落行集
+/// (调用方拼 wire 时尾部加当前输入,同既有铺法)。
+async fn n12_seed(h: &TestHarness) -> Vec<ChatMessage> {
+    crate::memory::tokens::ensure_initialized().await;
+    let mut rows = Vec::new();
+    for i in 0..10 {
+        let m = row_of_tokens(&format!("T0_{i}"), 100).await;
+        seed_row_at(h, &m, i).await;
+        rows.push(m);
+    }
+    let f = row_of_tokens("N12_FAT_F", 6_000).await;
+    seed_row_at(h, &f, 10).await;
+    rows.push(f);
+    for i in 0..12 {
+        let m = row_of_tokens(&format!("T1_{i}"), 1_000).await;
+        seed_row_at(h, &m, 11 + i as i64).await;
+        rows.push(m);
+    }
+    rows
+}
+
+/// turn 1+2 的共享驱动:两次「摘要 Applied 但无进展」把 no-progress
+/// 计数推到 2(熔断),逐 turn 断言计数/正交性/水位。
+async fn n12_trip_no_progress_breaker(h: &TestHarness) {
+    let reg = compaction_registry();
+    let seed_rows = n12_seed(h).await;
+    let mut wire = seed_rows;
+    wire.push(user("current question"));
+
+    // turn 1:摘要 Applied,折叠后净增长(正文 ≥ 2.7k tok > 待压区 1k)
+    // → no-progress #1(tokens 维;水位 None → 9 是推进的)。
+    let mock1 = Arc::new(MockProvider::new(vec![
+        summary_response(&format!("N12_GROW {}", pad(16_000))),
+        end_turn_response("done one"),
+    ]));
+    run_loop(
+        h,
+        mock1.clone(),
+        "rid-n12-1",
+        wire,
+        Arc::new(MockEmitter::new()),
+        false,
+        h.session_id.clone(),
+    )
+    .await;
+    assert_eq!(mock1.call_count(), 2, "turn 1:1 摘要 + 1 主 turn");
+    assert_eq!(
+        reg.no_progress_count(&h.session_id).await,
+        1,
+        "no-progress #1(净增长)"
+    );
+    assert_eq!(reg.failures(&h.session_id).await, 0, "失败维度零干扰");
+    assert!(
+        !reg.is_no_progress_tripped(&h.session_id).await,
+        "1 次不触发"
+    );
+    // 水位 = 待压区末行 t₀_9 的 seq 9(几何固定值)。
+    let loaded = crate::db::load_session(&h.db, &h.session_id)
+        .await
+        .unwrap()
+        .expect("session loaded");
+    let c1 = loaded
+        .messages
+        .iter()
+        .rev()
+        .find(|r| {
+            crate::agent::compaction::message_metadata_kind(r.metadata.as_ref())
+                == Some(COMPACTION_SUMMARY_KIND)
+        })
+        .and_then(|r| r.metadata.as_ref())
+        .and_then(|m| m.get("cutoff_seq"))
+        .and_then(|v| v.as_i64())
+        .expect("turn 1 摘要行携带 cutoff_seq");
+    assert_eq!(c1, 9, "保留区边界落在 F:待压区末行 = seq 9");
+
+    // turn 2:待压区 = [摘要行](边界再落 F)→ regular == 0 → cutoff
+    // 滞留 C1 → no-progress #2(水位维)→ 连续 2 次,熔断。
+    // 回答行做成 6k pad(AC2 依赖):该行只出现在下一 turn 的 wire
+    // (turn-2 压缩时它尚不存在),把下一 turn 的 walk₃ 边界推进 t₁ 区
+    // —— 手动摘要吸收 F 后其余行不足 15k,边界会落在 manual 行自身
+    // (待压区恒空、摘要尝试不可达),需要这行新增量打破对称。
+    let fat_answer = row_of_tokens("N12_DONE_TWO", 6_000).await;
+    let mut wire2 = reload_wire(&loaded);
+    wire2.push(user("follow-up one"));
+    let mock2 = Arc::new(MockProvider::new(vec![
+        summary_response(&format!("N12_GROW2 {}", pad(16_000))),
+        end_turn_response(&fat_answer.content.to_text()),
+    ]));
+    run_loop(
+        h,
+        mock2.clone(),
+        "rid-n12-2",
+        wire2,
+        Arc::new(MockEmitter::new()),
+        false,
+        h.session_id.clone(),
+    )
+    .await;
+    assert_eq!(mock2.call_count(), 2, "turn 2 仍烧摘要(计数 1 < 2)");
+    assert_eq!(
+        reg.no_progress_count(&h.session_id).await,
+        2,
+        "no-progress #2(水位滞留)"
+    );
+    assert!(
+        reg.is_no_progress_tripped(&h.session_id).await,
+        "连续 2 次触发"
+    );
+    // AC3(loop 级正交半边):no-progress 触发全程失败维度未动。
+    assert_eq!(reg.failures(&h.session_id).await, 0);
+    assert!(!reg.is_tripped(&h.session_id).await, "失败维度未触发");
+}
+
+// ---------------------------------------------------------------------------
+// N12 AC1:不收敛场景连续 2 turn 后,第 3 turn 不再调用摘要 LLM
+// (gate 直达机械;失败维度全程为 0 —— 两维度正交)。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn n12_no_progress_breaker_stops_summary_burn() {
+    let h = make_harness().await;
+    enable_compaction(&h).await;
+    n12_trip_no_progress_breaker(&h).await;
+    let reg = compaction_registry();
+
+    // turn 3:gate 关闭 → 零摘要调用,机械丢组后主 turn 正常完成。
+    let loaded = crate::db::load_session(&h.db, &h.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut wire3 = reload_wire(&loaded);
+    wire3.push(user("follow-up two"));
+    let emitter3 = Arc::new(MockEmitter::new());
+    let mock3 = Arc::new(MockProvider::new(vec![end_turn_response("breaker held")]));
+    run_loop(
+        &h,
+        mock3.clone(),
+        "rid-n12-3",
+        wire3,
+        emitter3.clone(),
+        false,
+        h.session_id.clone(),
+    )
+    .await;
+    assert_eq!(mock3.call_count(), 1, "第 3 turn 只有主 turn send");
+    assert!(
+        mock3.sent_messages().iter().all(|m| !is_summary_send(m)),
+        "熔断后零摘要调用"
+    );
+    let dones: Vec<_> = emitter3
+        .chat_events()
+        .into_iter()
+        .filter_map(|p| match p.event {
+            ChatEvent::Done { stop_reason, .. } => stop_reason,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dones,
+        vec!["end_turn".to_string()],
+        "机械直达后 turn 正常完成"
+    );
+    assert_eq!(
+        reg.no_progress_count(&h.session_id).await,
+        2,
+        "熔断期间计数冻结"
+    );
+    assert_eq!(reg.failures(&h.session_id).await, 0, "失败维度仍为 0");
+
+    compaction_registry().clear(&h.session_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// N12 AC2:熔断期间水位推进(手动 /compact 落新摘要行,cutoff 越过
+// 记录基线)后,摘要路径恢复。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn n12_watermark_advance_releases_no_progress_breaker() {
+    let h = make_harness().await;
+    enable_compaction(&h).await;
+    n12_trip_no_progress_breaker(&h).await;
+    let reg = compaction_registry();
+
+    // 手动水位推进:seq = MAX+1 落 manual 摘要行。cutoff = 10(F 的
+    // seq —— 水位替换的对齐锚要求 cutoff 指向**现存行**),吸收 t₀ 区
+    // + F;正文适度 pad,保证解除后 context 仍在触发线之上。prior(10)
+    // 严格越过基线(9)。注意插行后**重新 load 再拼 wire**:水位替换
+    // 的对齐前提是 wire 含摘要行(评审 P1-3),陈旧 wire 会
+    // AlignmentFailed fail-open、anchor 种不进来,解除检查拿不到推进
+    // 后的水位。
+    let loaded_pre = crate::db::load_session(&h.db, &h.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let max_seq = loaded_pre
+        .messages
+        .iter()
+        .map(|r| r.seq)
+        .max()
+        .expect("rows");
+    let manual_body = row_of_tokens("N12_MANUAL_RELEASE", 3_000).await;
+    let manual_meta = serde_json::json!({
+        "kind": COMPACTION_SUMMARY_KIND,
+        "cutoff_seq": 10,
+        "preserve_from_seq": 11,
+        "trigger": "manual",
+    });
+    crate::db::sessions::insert_compaction_summary(
+        &h.db,
+        &h.session_id,
+        &manual_body.content.to_text(),
+        max_seq + 1,
+        &manual_meta,
+    )
+    .await
+    .expect("manual summary row");
+    let loaded = crate::db::load_session(&h.db, &h.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // turn 3:gate 处解除检查命中 → 摘要路径恢复(重新烧一次摘要)。
+    // 解除后 context = [manual 3k] + [t₁ 12k] + [answer₂ 6k] ≈ 21k ≥
+    // 触发线;walk₃ 从尾累积(answer₂ 6k + t₁ 12k ≥ 15k)→ 边界落进
+    // t₁ 区,待压区 = [manual + 头部几条 t₁] 非空 → 摘要尝试可达。
+    let mut wire4 = reload_wire(&loaded);
+    wire4.push(user("after manual compact"));
+    let mock4 = Arc::new(MockProvider::new(vec![
+        summary_response("N12_TURN3_SUMMARY"),
+        end_turn_response("restored"),
+    ]));
+    run_loop(
+        &h,
+        mock4.clone(),
+        "rid-n12-4",
+        wire4,
+        Arc::new(MockEmitter::new()),
+        false,
+        h.session_id.clone(),
+    )
+    .await;
+    assert_eq!(
+        mock4.call_count(),
+        2,
+        "解除后摘要路径恢复:1 摘要 + 1 主 turn"
+    );
+    assert_eq!(
+        mock4
+            .sent_messages()
+            .iter()
+            .filter(|m| is_summary_send(m))
+            .count(),
+        1,
+        "摘要调用恰好 1 次"
+    );
+    // 解除后本 turn 摘要真实进展(水位越过 10 且新摘要远小于被吸收的
+    // [manual + t₁ 头部])→ record_progress 清零,计数归零。
+    assert!(
+        !reg.is_no_progress_tripped(&h.session_id).await,
+        "解除后不再处于熔断态"
+    );
+    assert_eq!(reg.no_progress_count(&h.session_id).await, 0);
+    assert_eq!(reg.failures(&h.session_id).await, 0);
+
+    compaction_registry().clear(&h.session_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// N12 件②(AC4):摘要 LLM 成功返回后、落库前的取消交错 → 摘要行
+// 不落库、turn 以取消收场、不计任何熔断维度。
+//
+// 交错窗的确定性复现:包装 Provider 在底层流 yield 完毕后(摘要
+// completion 刚被消费完、insert 前)同步取消共享 token —— 不靠时序
+// 竞争。主 turn 不会再发请求:retry_open 入口的 is_cancelled 短路
+// 在 provider.send 之前命中。
+// ---------------------------------------------------------------------------
+
+/// 流结束即取消的 Provider 包装(N12 件②专用)。
+struct CancelAtStreamEnd {
+    inner: Arc<MockProvider>,
+    token: tokio_util::sync::CancellationToken,
+}
+
+impl crate::llm::Provider for CancelAtStreamEnd {
+    fn send(
+        &self,
+        system: Option<String>,
+        messages: Vec<ChatMessage>,
+        tools: Vec<crate::llm::ToolDef>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn futures_util::Stream<Item = Result<ChatEvent, crate::llm::error::LlmError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        use futures_util::StreamExt;
+        let token = self.token.clone();
+        let mut inner_stream = self.inner.send(system, messages, tools);
+        Box::pin(async_stream::stream! {
+            while let Some(item) = inner_stream.next().await {
+                yield item;
+            }
+            // 底层流耗尽 = 摘要 completion 消费完毕 → 落库前的取消。
+            token.cancel();
+        })
+    }
+
+    fn capabilities(&self) -> crate::llm::provider::ProviderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn protocol(&self) -> crate::db::ProviderProtocol {
+        self.inner.protocol()
+    }
+}
+
+#[tokio::test]
+async fn n12_cancel_before_summary_persist_discards_summary_line() {
+    let h = make_harness().await;
+    enable_compaction(&h).await;
+
+    let history = overline_history();
+    let (seed_rows, tail) = split_history(&history);
+    seed_history(&h, &seed_rows).await;
+    let mut first_wire = seed_rows.clone();
+    first_wire.push(tail);
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let inner = Arc::new(MockProvider::new(vec![summary_response(
+        "N12_CANCELLED_SUMMARY",
+    )]));
+    let provider = Arc::new(CancelAtStreamEnd {
+        inner: inner.clone(),
+        token: token.clone(),
+    });
+    let emitter = Arc::new(MockEmitter::new());
+    let mut deps = chat_loop_deps(&h);
+    deps.token = token;
+
+    run_chat_loop(
+        chat_loop_request(
+            vec![],
+            provider,
+            WINDOW,
+            "rid-n12-cancel".into(),
+            h.session_id.clone(),
+            first_wire,
+            emitter.clone(),
+        ),
+        deps,
+        {
+            let mut role = parent_role(&h);
+            role.skip_persist = false;
+            role.is_worker = Some(false);
+            role
+        },
+    )
+    .await;
+
+    // 交错窗前半:摘要 LLM 已付且成功返回(completion 消费完毕)。
+    assert_eq!(inner.call_count(), 1, "只有摘要 send;主 turn 被取消短路");
+    assert!(
+        inner.sent_messages().iter().any(|m| is_summary_send(m)),
+        "该 send 是摘要旁路调用"
+    );
+    // 交错窗后半:摘要行不落库(丢弃已生成摘要)。
+    let loaded = crate::db::load_session(&h.db, &h.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        loaded.messages.iter().all(|r| {
+            crate::agent::compaction::message_metadata_kind(r.metadata.as_ref())
+                != Some(COMPACTION_SUMMARY_KIND)
+        }),
+        "取消后摘要行不落库"
+    );
+    // turn 以取消收场。
+    assert_eq!(emitter.cancel_done_count(), 1, "turn 取消收场");
+    // 取消不计任何熔断维度(两维度皆 0)。
+    assert_eq!(compaction_registry().failures(&h.session_id).await, 0);
+    assert_eq!(
+        compaction_registry().no_progress_count(&h.session_id).await,
+        0
+    );
+
+    compaction_registry().clear(&h.session_id).await;
+}

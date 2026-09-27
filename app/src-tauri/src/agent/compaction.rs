@@ -49,8 +49,10 @@
 //! - [`build_compaction_prompt`]:摘要 prompt 组装(design §6 模板 +
 //!   transcript 渲染截断 + prior-summary 注入)。anchor 消息不进
 //!   transcript(不重复喂,评审 P1-2)。
-//! - [`CompactionRegistry`]:熔断计数(session → 连续失败次数)。
-//!   进程级 `OnceLock` 单例——同 `memory::digest::registry()` 先例
+//! - [`CompactionRegistry`]:熔断计数(session → 连续失败次数;
+//!   N12 09-27 起加第二维度「无进展」计数 + 水位解除基线,两维度
+//!   分 map 正交)。进程级 `OnceLock` 单例——同
+//!   `memory::digest::registry()` 先例
 //!   (08-15):`run_chat_loop` 的 24+ 参签名是硬约束不许动,AppState
 //!   句柄穿不进去,故走全局单例 + `delete_session_inner` 清理(同
 //!   digest 的接线点)。
@@ -682,14 +684,42 @@ pub fn clamp_summary_output(text: String) -> String {
 /// 直达机械丢组(prd R5;粘性 —— 直到一次成功或 session 删除)。
 pub const COMPACTION_BREAKER_THRESHOLD: u8 = 3;
 
-/// Session → 连续摘要失败次数。进程级 `OnceLock` 单例 —— 选型理由:
-/// `run_chat_loop` 的 24+ 参签名是本任务硬约束不许动,AppState 句柄
-/// 无法穿入 loop(与 `memory::digest::registry()` 08-15 先例同款处境,
-/// 同款解法);`delete_session_inner` 挂清理(commands/sessions.rs,
-/// 同 digest/stub 的接线点),daemon 重启自然清空。
+/// N12(09-27)无进展熔断阈值:同 session 连续 2 次「摘要 Applied 但
+/// 压缩无进展」(水位未推进 ‖ 折叠后总量未降)→ 粘性跳过摘要直达
+/// 机械丢组,水位推进即解除。与既有失败熔断
+/// [`COMPACTION_BREAKER_THRESHOLD`]**正交**:两维度独立计数、互不清零
+/// 对方(成功清零只管失败维度,进展清零只管 no-progress 维度),任一
+/// 维度触发都足以单独关掉摘要路径。
+pub const COMPACTION_NO_PROGRESS_THRESHOLD: u8 = 2;
+
+/// N12:no-progress 维度的每 session 状态。count 之外存「记录时的
+/// 本 turn 新 cutoff」作为解除基线 —— 粘性跳过期间 auto 摘要被罩住、
+/// 水位不可能经 auto 推进,唯一推进来源是熔断范围外的手动 `/compact`
+/// (不查熔断、照落摘要行):gate 处观察到 prior cutoff 严格越过
+/// 基线即解除(见 [`CompactionRegistry::release_if_watermark_advanced`])。
+#[derive(Debug, Clone, Copy)]
+struct NoProgressState {
+    /// 连续 no-progress 次数(saturating)。
+    count: u8,
+    /// 最近一次 no-progress 记录的本 turn 新 cutoff(解除判定基线)。
+    cutoff: i64,
+}
+
+/// Session → 连续摘要失败次数 + no-progress 状态。进程级 `OnceLock`
+/// 单例 —— 选型理由:`run_chat_loop` 的 24+ 参签名是本任务硬约束
+/// 不许动,AppState 句柄无法穿入 loop(与 `memory::digest::registry()`
+/// 08-15 先例同款处境,同款解法);`delete_session_inner` 挂清理
+/// (commands/sessions.rs,同 digest/stub 的接线点),daemon 重启自然
+/// 清空。
+///
+/// 两维度分 map 存储(N12):正交 by construction —— `record_success`
+/// 只触失败 map,`record_progress` / `release_if_watermark_advanced`
+/// 只触 no-progress map,任何一方的清零路径都碰不到另一方的计数。
 #[derive(Default)]
 pub struct CompactionRegistry {
     inner: tokio::sync::RwLock<HashMap<String, u8>>,
+    /// N12:无进展维度(独立 map,见 struct 文档的正交论证)。
+    no_progress: tokio::sync::RwLock<HashMap<String, NoProgressState>>,
 }
 
 static COMPACTION_REGISTRY: OnceLock<CompactionRegistry> = OnceLock::new();
@@ -724,14 +754,72 @@ impl CompactionRegistry {
     }
 
     /// 成功清零(prd R5:一次成功即恢复摘要路径)。
+    ///
+    /// N12:只清**失败维度** —— 与 no-progress 维度正交,摘要机制本身
+    /// 成功不代表压缩有进展(净增长分支恰恰每次都 Applied),互不清零
+    /// 是 PRD R1 的显式要求。
     pub async fn record_success(&self, session_id: &str) {
         self.inner.write().await.remove(session_id);
     }
 
+    /// session 当前 no-progress 连续次数(N12;测试/诊断读数)。
+    pub async fn no_progress_count(&self, session_id: &str) -> u8 {
+        self.no_progress
+            .read()
+            .await
+            .get(session_id)
+            .map(|s| s.count)
+            .unwrap_or(0)
+    }
+
+    /// no-progress 熔断是否触发(连续 ≥
+    /// [`COMPACTION_NO_PROGRESS_THRESHOLD`])。gate 信号之一 —— 触发后
+    /// 本 session 后续请求跳过摘要直达机械,直到水位推进解除。
+    pub async fn is_no_progress_tripped(&self, session_id: &str) -> bool {
+        self.no_progress_count(session_id).await >= COMPACTION_NO_PROGRESS_THRESHOLD
+    }
+
+    /// 记一次 no-progress(N12):`cutoff` = 本 turn 摘要产出的新水位。
+    /// 连续计数 +1(saturating),解除基线刷新为本次 cutoff —— 解除
+    /// 判定永远对照最新基线(多次 no-progress 期间水位可能被手动
+    /// `/compact` 推进过,旧基线已失效)。
+    pub async fn record_no_progress(&self, session_id: &str, cutoff: i64) {
+        let mut guard = self.no_progress.write().await;
+        let entry = guard
+            .entry(session_id.to_string())
+            .or_insert(NoProgressState { count: 0, cutoff });
+        entry.count = entry.count.saturating_add(1);
+        entry.cutoff = cutoff;
+    }
+
+    /// 全进展清零(N12):本 turn 摘要水位推进且折叠后总量下降 ——
+    /// 「连续 2 次」的连续性被真实进展打断。只触 no-progress map
+    /// (与 [`CompactionRegistry::record_success`] 对偶)。
+    pub async fn record_progress(&self, session_id: &str) {
+        self.no_progress.write().await.remove(session_id);
+    }
+
+    /// 解除检查(N12,gate 处每 turn 调用):已积累 no-progress 计数时,
+    /// 观察到的 prior cutoff 严格大于记录基线(水位推进 —— auto 路径
+    /// 被熔断罩住不可能推进,典型来源是手动 `/compact` 的新摘要行)→
+    /// 清零恢复摘要路径。`prior_cutoff = None`(尚无水位)或未越过
+    /// 基线时无操作;count 为 0 时是零写入空查。
+    pub async fn release_if_watermark_advanced(&self, session_id: &str, prior_cutoff: Option<i64>) {
+        let Some(prior) = prior_cutoff else {
+            return;
+        };
+        let mut guard = self.no_progress.write().await;
+        let release = guard.get(session_id).is_some_and(|s| prior > s.cutoff);
+        if release {
+            guard.remove(session_id);
+        }
+    }
+
     /// 清理(`delete_session_inner` 接线点 —— session_id 复用不得拿到
-    /// 残留的熔断状态)。
+    /// 残留的熔断状态)。N12:两维度一并清理。
     pub async fn clear(&self, session_id: &str) {
         self.inner.write().await.remove(session_id);
+        self.no_progress.write().await.remove(session_id);
     }
 }
 
@@ -2353,5 +2441,77 @@ mod tests {
         assert!(!r.is_tripped("s-other").await, "跨 session 不串");
         r.clear(sid).await;
         assert_eq!(r.failures(sid).await, 0, "clear 后归零");
+    }
+
+    /// N12(AC3):no-progress 维度与失败维度**正交** —— 各自独立
+    /// 计数、互不清零;阈值 2;record_progress 清零只动本维度;
+    /// release_if_watermark_advanced 只在 prior 严格越过基线时解除;
+    /// clear 一并清两维度。
+    #[tokio::test]
+    async fn no_progress_breaker_orthogonal_to_failure_breaker() {
+        let r = CompactionRegistry::default();
+        let sid = "s-n12-ortho";
+        assert!(!r.is_no_progress_tripped(sid).await, "初始未触发");
+        assert_eq!(r.no_progress_count(sid).await, 0);
+
+        // 连续 2 次 no-progress(基线随记录刷新)→ 触发;失败维度
+        // 恒为 0、不熔断。
+        r.record_no_progress(sid, 100).await;
+        assert_eq!(r.no_progress_count(sid).await, 1);
+        assert!(!r.is_no_progress_tripped(sid).await, "1 次不触发");
+        r.record_no_progress(sid, 110).await;
+        assert!(r.is_no_progress_tripped(sid).await, "2 次触发");
+        assert_eq!(r.failures(sid).await, 0, "失败维度未被 no-progress 干扰");
+        assert!(!r.is_tripped(sid).await, "失败维度未触发");
+
+        // 失败维度计数照常累积,不反过来清 no-progress。
+        r.record_failure(sid).await;
+        r.record_failure(sid).await;
+        assert_eq!(r.failures(sid).await, 2);
+        assert_eq!(
+            r.no_progress_count(sid).await,
+            2,
+            "no-progress 未被失败干扰"
+        );
+        assert!(r.is_no_progress_tripped(sid).await);
+
+        // record_success(失败维度清零)不碰 no-progress。
+        r.record_success(sid).await;
+        assert_eq!(r.failures(sid).await, 0);
+        assert_eq!(
+            r.no_progress_count(sid).await,
+            2,
+            "成功清零不越界到 no-progress"
+        );
+        assert!(r.is_no_progress_tripped(sid).await);
+
+        // 解除判定:基线 = 最近记录的 cutoff(110)。prior 未越过 →
+        // 保持;prior 严格越过(111)→ 解除。
+        r.release_if_watermark_advanced(sid, Some(110)).await;
+        assert!(r.is_no_progress_tripped(sid).await, "prior == 基线不解熔");
+        r.release_if_watermark_advanced(sid, None).await;
+        assert!(r.is_no_progress_tripped(sid).await, "无水位不解熔");
+        r.release_if_watermark_advanced(sid, Some(111)).await;
+        assert!(!r.is_no_progress_tripped(sid).await, "水位推进即解除");
+        assert_eq!(r.no_progress_count(sid).await, 0);
+        // 解除只动 no-progress 维度。
+        r.record_failure(sid).await;
+        assert_eq!(r.failures(sid).await, 1);
+
+        // record_progress(全进展清零)同样只动本维度。
+        r.record_no_progress(sid, 200).await;
+        r.record_no_progress(sid, 210).await;
+        assert!(r.is_no_progress_tripped(sid).await);
+        r.record_progress(sid).await;
+        assert_eq!(r.no_progress_count(sid).await, 0);
+        assert!(!r.is_no_progress_tripped(sid).await);
+        assert_eq!(r.failures(sid).await, 1, "progress 清零不越界到失败维度");
+
+        // clear 两维度一并清理。
+        r.record_no_progress(sid, 300).await;
+        r.record_failure(sid).await;
+        r.clear(sid).await;
+        assert_eq!(r.no_progress_count(sid).await, 0);
+        assert_eq!(r.failures(sid).await, 0);
     }
 }

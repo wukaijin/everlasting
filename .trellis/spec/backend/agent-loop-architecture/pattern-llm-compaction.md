@@ -62,7 +62,38 @@ C3 压缩从"机械丢组"升级为**两层结构 + 兜底链**:超触发线(0.8
 4. 熔断:`CompactionRegistry`(进程级 OnceLock 单例,同
    `memory::digest::registry()` 先例 —— `run_chat_loop` 24+ 参签名是
    硬约束,AppState 穿不进 loop),连续 3 次失败跳过摘要直达机械,成功
-   清零,`delete_session_inner` 清理。
+   清零,`delete_session_inner` 清理;
+5. **无进展熔断(N12,09-27)**:与 4 正交的第二维度 —— 摘要
+   `Applied` 但压缩**无进展**连续 2 次
+   (`COMPACTION_NO_PROGRESS_THRESHOLD`)→ 粘性跳过摘要直达机械。
+   背景:熔断 4 只测「摘要机制是否坏了」,不收敛分支(待压区极小时
+   摘要正文比被压内容更胖 → context 净增长)下 `Applied` 每轮
+   `record_success` 清零,用户每次重发都白烧一次旁路 completion,
+   永不收敛。
+   - **判定式**(C3 块摘要尝试结束处,仅 `Applied` 臂):全进展 ⟺
+     `anchor.cutoff > prior.cutoff`(prior 无 = 从无到有算推进)
+     **且** `tokens_after + request_overhead < tokens_pre`;任一不满足
+     即记一次 no-progress(`record_no_progress`,基线 = 本 turn 新
+     cutoff),全进展则 `record_progress` 清零(「连续」被打断)。
+     判定量只用已有信号,零新估算。
+   - **口径**:tokens_after 取**折叠后**值(落库 metadata 同款),不取
+     机械兜底后的 `summary_result.tokens_after` —— 机械丢组只裁内存
+     wire、不落库,跨 turn 是否还烧摘要由持久状态决定;「总量未降」
+     按同形比较(折叠后 tokens_after 是 messages-only,tokens_pre 含
+     system+tools,`estimate_request_tokens` 加法口径,左边补
+     overhead),慢增长(增量 < overhead)不漏判。
+   - **粘性与解除**:gate 处每 turn 先跑
+     `release_if_watermark_advanced` —— prior cutoff 严格越过最近
+     记录基线即清零恢复摘要路径。auto 摘要被熔断罩住不可能自己推进
+     水位,实际解除来源 = 手动 `/compact`(不查熔断、照落摘要行)的
+     新水位;不用时间窗。
+   - **正交**:registry 两维度分 map 存储正交 by construction,
+     `record_success`(失败清零)与 `record_progress` 互不越界;任一
+     维度触发都单独关掉摘要路径(摘要 gate = 开关 && !skip_persist
+     && !失败熔断 && !无进展熔断);`Cancelled` 两维度都不计(既有
+     契约);`Failed` 只进失败维度;`clear` 两维度一并清理。
+   - 熔断范围只罩摘要路径:机械丢组无 LLM 成本照跑,`StillOver`
+     fail-fast 形态(Error turn + abort 不发请求)不变。
 
 ## 观测
 
@@ -77,7 +108,17 @@ TS 三处)带 method/summary_usage;摘要 usage **不混入**
 - 摘要后机械兜底真丢了消息 → anchor 置 None(防同 loop 二次压缩误把
   摘要消息当 anchor 跳过 transcript 输入);
 - 图片:被压区退出 context(transcript 渲染 `[image attached: <file>]`
-  占位);保留区照常;`images_token` 口径自动跟随请求内容。
+  占位);保留区照常;`images_token` 口径自动跟随请求内容;
+- **取消×摘要交错(N12 件②,09-27)**:摘要 LLM 成功返回后、
+  `insert_compaction_summary` 落库前的毫秒级窗口内取消 → 落库前的
+  `is_cancelled` 检查命中,丢弃已生成摘要、返回
+  `SummaryOutcome::Cancelled`(摘要行不落库、水位不推进,turn 以
+  取消收场)。落库前的
+  这个检查是**有意行为**(取消语义纯化;代价 = 白付一次旁路
+  completion,窗口毫秒级、命中概率极低);`Cancelled` 不计任何熔断
+  维度既有契约不变。summary 行此前唯一取消可达点是旁路 completion
+  中途(`send_summary_completion` 的 biased select),本检查收掉
+  「completion 成功后 × insert 前」的残余窗口。
 
 ## 手动 /compact 入口(08-18-manual-compact-command)
 
