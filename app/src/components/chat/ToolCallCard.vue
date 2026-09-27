@@ -687,6 +687,7 @@ watch(
       <DiffView
         v-else-if="fileDiff"
         :files="[fileDiff]"
+        :allow-split="false"
       />
       <div
         v-else

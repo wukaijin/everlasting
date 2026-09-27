@@ -13,9 +13,10 @@
 // `<pre>`-rendered diff for files where the parser bails (rare —
 // only happens for malformed patch text).
 
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { parsePatch } from "diff";
 import Icon from "../Icon.vue";
+import { pairRunSegments, type WordSeg } from "../../utils/intraLineDiff";
 
 export interface FileDiff {
     path: string;
@@ -25,9 +26,16 @@ export interface FileDiff {
     diff_text: string;
 }
 
-const props = defineProps<{
-    files: FileDiff[];
-}>();
+const props = withDefaults(
+    defineProps<{
+        files: FileDiff[];
+        /** inline 窄容器(ToolCallCard ~250px)显式关双栏 + 藏工具行
+         *  (design §3.4a:视口级降级保护不到窄容器);缺省 true 行为
+         *  不变。 */
+        allowSplit?: boolean;
+    }>(),
+    { allowSplit: true },
+);
 
 interface HunkLine {
     /** `+` for added, `-` for removed, ` ` for context, `@` for hunk header. */
@@ -35,6 +43,10 @@ interface HunkLine {
     text: string;
     oldLine: number | null;
     newLine: number | null;
+    /** 行内 word-diff 片段(09-26-diffview-enhance)。null = 整行染色
+     *  (ctx / 未配对纯增删 / 配对失败的原子 null 退化);仅 add/del 且
+     *  配对成功非 null。渲染时 segments 的 text 拼接 == line.text。 */
+    segments: WordSeg[] | null;
 }
 
 interface ParsedFile {
@@ -45,6 +57,52 @@ interface ParsedFile {
 }
 
 const COLLAPSED_STATUSES = new Set(["modified"]);
+
+// Run 数预算帽(view 级保险丝,design §2 性能护栏补充):单个文件的
+// 配对 run 对数超过此值后,余下 run 一律跳过行内计算(整行染色)。
+// 防病态大 diff 逐 run 全算卡死渲染;数值 ≈200 即评审 OQ2 采纳值,
+// design §2 承诺的落定位置就是这条常量注释。
+const MAX_PAIR_RUNS = 200;
+
+/**
+ * 行内配对 pass(09-26-diffview-enhance,design §3.1):对每个 hunk 扫
+ * 「极大连续 del-run 紧跟极大连续 add-run」并调 pairRunSegments 回填两
+ * 侧行 segments。纯删除 run 后无 add-run / 纯新增 run 前无 del-run 不配
+ * 对(保持整行染色);ctx / hunk / noeol 行不参与;超预算帽的 run 跳过。
+ * 行文本已在 hunk 行构建点做过 CRLF 归一(见下),直接进 util。
+ */
+function applyIntraLinePairs(hunks: HunkLine[][]): void {
+    let runBudget = MAX_PAIR_RUNS;
+    for (const lines of hunks) {
+        let i = 0;
+        while (i < lines.length) {
+            if (lines[i].kind !== "del") {
+                i += 1;
+                continue;
+            }
+            const delStart = i;
+            while (i < lines.length && lines[i].kind === "del") i += 1;
+            const delEnd = i;
+            const addStart = i;
+            while (i < lines.length && lines[i].kind === "add") i += 1;
+            if (i === addStart) continue; // 纯 del-run:无配对,整行染色
+            const addEnd = i;
+            if (runBudget <= 0) continue; // 预算帽:跳过(整行染色)
+            runBudget -= 1;
+            const paired = pairRunSegments(
+                lines.slice(delStart, delEnd).map((l) => l.text),
+                lines.slice(addStart, addEnd).map((l) => l.text),
+            );
+            if (!paired) continue; // 原子 null:整 run 退化整行染色
+            for (let j = delStart; j < delEnd; j += 1) {
+                lines[j].segments = paired.del[j - delStart];
+            }
+            for (let j = addStart; j < addEnd; j += 1) {
+                lines[j].segments = paired.add[j - addStart];
+            }
+        }
+    }
+}
 
 const parsedFiles = computed<ParsedFile[]>(() => {
     return props.files.map((f) => {
@@ -68,18 +126,24 @@ const parsedFiles = computed<ParsedFile[]>(() => {
                     text: `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
                     oldLine: null,
                     newLine: null,
+                    segments: null,
                 });
                 let oldLine = hunk.oldStart;
                 let newLine = hunk.newStart;
                 for (const line of hunk.lines) {
                     const prefix = line[0];
-                    const text = line.slice(1);
+                    // CRLF 归一(消费点,design §3.1 结论 6):CRLF diff 的
+                    // `\r` 挂在行内容尾部,在此剥成 LF 口径——行内配对与
+                    // 渲染共用这份文本,保证「segments 拼接 == 行文本」。
+                    // raw fallback 分支不经过这里,逐字节不动。
+                    const text = line.slice(1).replace(/\r$/, "");
                     if (prefix === "+") {
                         lines.push({
                             kind: "add",
                             text,
                             oldLine: null,
                             newLine: newLine,
+                            segments: null,
                         });
                         newLine += 1;
                     } else if (prefix === "-") {
@@ -88,6 +152,7 @@ const parsedFiles = computed<ParsedFile[]>(() => {
                             text,
                             oldLine: oldLine,
                             newLine: null,
+                            segments: null,
                         });
                         oldLine += 1;
                     } else if (prefix === " ") {
@@ -96,6 +161,7 @@ const parsedFiles = computed<ParsedFile[]>(() => {
                             text,
                             oldLine: oldLine,
                             newLine: newLine,
+                            segments: null,
                         });
                         oldLine += 1;
                         newLine += 1;
@@ -107,6 +173,7 @@ const parsedFiles = computed<ParsedFile[]>(() => {
                             text: text,
                             oldLine: null,
                             newLine: null,
+                            segments: null,
                         });
                     }
                 }
@@ -119,6 +186,9 @@ const parsedFiles = computed<ParsedFile[]>(() => {
             // render an empty body (DiffPrimitive's raw fallback would
             // be bypassed). See DiffPrimitive "allHunksEmpty" branch.
             out.parsed = out.hunks.length > 0;
+            if (out.parsed) {
+                applyIntraLinePairs(out.hunks);
+            }
         } catch (e) {
             // parsePatch throws on truly malformed input. We
             // treat this as a render-with-raw-text fallback and
@@ -144,6 +214,161 @@ function statusLabel(status: string): string {
             return status;
     }
 }
+
+// --------------------------------------------------------------------
+// side-by-side(split)行模型(09-26-diffview-enhance,design §3.2)
+// --------------------------------------------------------------------
+
+/** split 单元格:一侧的内容(或 null = 空占位格,保持网格对齐)。 */
+interface SplitCell {
+    lineNo: number | null;
+    text: string;
+    segments: WordSeg[] | null;
+}
+
+/** split 行:pair = 并排行(ctx 是两侧同文的对齐行);hunk / noeol =
+ *  通栏行(文本放左格,right 恒 null,渲染跨全宽)。tintLeft/tintRight
+ *  = 该侧铺 run tint(内容格与空占位格同染,占位格是行对齐线索)。 */
+interface SplitRow {
+    left: SplitCell | null;
+    right: SplitCell | null;
+    kind: "pair" | "ctx" | "hunk" | "noeol";
+    tintLeft: boolean;
+    tintRight: boolean;
+}
+
+function splitCellOf(line: HunkLine, side: "old" | "new"): SplitCell {
+    return {
+        lineNo: side === "old" ? line.oldLine : line.newLine,
+        text: line.text,
+        segments: line.segments,
+    };
+}
+
+/** 从同一份 flat HunkLine[] 派生 split 行(与 unified 共用一次 parse):
+ *  ctx 两侧同行号对齐;del-run + add-run zip 逐行并排、短侧补 null 占位
+ *  (del3/add2 形态天然表达);纯 del/add 单侧、对侧占位;hunk 头/noeol
+ *  通栏。 */
+function splitRows(lines: HunkLine[]): SplitRow[] {
+    const rows: SplitRow[] = [];
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i]!;
+        if (line.kind === "hunk" || line.kind === "noeol") {
+            rows.push({
+                kind: line.kind,
+                left: { lineNo: null, text: line.text, segments: null },
+                right: null,
+                tintLeft: false,
+                tintRight: false,
+            });
+            i += 1;
+            continue;
+        }
+        if (line.kind === "ctx") {
+            rows.push({
+                kind: "ctx",
+                left: splitCellOf(line, "old"),
+                right: splitCellOf(line, "new"),
+                tintLeft: false,
+                tintRight: false,
+            });
+            i += 1;
+            continue;
+        }
+        const dels: HunkLine[] = [];
+        while (i < lines.length && lines[i]!.kind === "del") {
+            dels.push(lines[i]!);
+            i += 1;
+        }
+        const adds: HunkLine[] = [];
+        while (i < lines.length && lines[i]!.kind === "add") {
+            adds.push(lines[i]!);
+            i += 1;
+        }
+        const rowCount = Math.max(dels.length, adds.length);
+        for (let j = 0; j < rowCount; j += 1) {
+            rows.push({
+                kind: "pair",
+                left: dels[j] ? splitCellOf(dels[j]!, "old") : null,
+                right: adds[j] ? splitCellOf(adds[j]!, "new") : null,
+                tintLeft: dels.length > 0,
+                tintRight: adds.length > 0,
+            });
+        }
+    }
+    return rows;
+}
+
+// --------------------------------------------------------------------
+// 档位切换 + 持久化 + 窄屏降级(design §3.4 / §3.4a)
+// --------------------------------------------------------------------
+
+/** localStorage key(结论 9:前缀 `everlasting:`,useTheme/config 先例)。 */
+const MODE_KEY = "everlasting:diffview.mode";
+
+function readStoredMode(): "unified" | "split" {
+    try {
+        const raw = window.localStorage.getItem(MODE_KEY);
+        return raw === "split" ? "split" : "unified";
+    } catch {
+        // localStorage 不可用(私隐模式等)→ 默认 unified。
+        return "unified";
+    }
+}
+
+function writeStoredMode(mode: "unified" | "split"): void {
+    try {
+        window.localStorage.setItem(MODE_KEY, mode);
+    } catch {
+        // 写失败静默:内存值仍正确(config.ts writeLastActive 同款)。
+    }
+}
+
+/** 用户档位。三纪律(结论 9):仅点击写;读路径永不写回;各实例挂载时
+ *  读一次 —— 同屏多实例不联动是最终裁定,后续仅自身点击可变。 */
+const userMode = ref<"unified" | "split">(readStoredMode());
+
+function setMode(mode: "unified" | "split") {
+    userMode.value = mode;
+    writeStoredMode(mode);
+}
+
+/** 窄屏(<768px 单断点)选树:matchMedia + change 监听(responsive spec
+ *  备案例外「仅用于选树,不用于显隐」;工具行本身的显隐走 CSS)。
+ *  ModeSelect.vue 的 jsdom 守卫先例:无 matchMedia 的环境跳过,恒 false
+ *  (桌面语义),真窄屏语义交 Playwright setViewportSize。 */
+const isNarrow = ref(false);
+let narrowMq: MediaQueryList | null = null;
+function onNarrowChange(e: MediaQueryListEvent): void {
+    isNarrow.value = e.matches;
+}
+onMounted(() => {
+    if (typeof window.matchMedia !== "function") return;
+    narrowMq = window.matchMedia("(max-width: 767px)");
+    isNarrow.value = narrowMq.matches;
+    narrowMq.addEventListener("change", onNarrowChange);
+});
+onUnmounted(() => {
+    narrowMq?.removeEventListener("change", onNarrowChange);
+    narrowMq = null;
+});
+
+/** 实际渲染档位:split 需同时满足 用户选了 split + allowSplit + 非窄屏。 */
+const effectiveMode = computed<"unified" | "split">(() =>
+    userMode.value === "split" && props.allowSplit && !isNarrow.value
+        ? "split"
+        : "unified",
+);
+
+/** 有任一 parsed 文件才给工具行(raw-only 不渲染,缺席条件①)。 */
+const hasParsedFile = computed(() => parsedFiles.value.some((pf) => pf.parsed));
+
+/** 工具行渲染条件:有文件 + 有 parsed + allowSplit(缺席条件③;窄屏
+ *  缺席条件②走 CSS 藏整行,见样式区 mobile-hide-toolbar)。 */
+const showToolbar = computed(
+    () => props.files.length > 0 && hasParsedFile.value && props.allowSplit,
+);
 
 /** Whether a file should be initially open. Added/deleted are
  *  small-ish and high-signal; modifications are usually noisy. */
@@ -209,6 +434,27 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
         <div v-if="files.length === 0" class="diff-view__empty">
             No file changes in this session yet.
         </div>
+        <!-- 档位工具行(每实例一次,非 per-file)。三缺席条件:
+             ①raw-only(v-if 的 hasParsedFile)②窄屏 CSS 藏整行
+             (mobile-hide-toolbar 惯例类)③allowSplit=false。 -->
+        <div v-if="showToolbar" class="diff-view__toolbar mobile-hide-toolbar">
+            <button
+                type="button"
+                class="btn btn--ghost btn--sm"
+                :aria-pressed="effectiveMode === 'unified'"
+                @click="setMode('unified')"
+            >
+                单栏
+            </button>
+            <button
+                type="button"
+                class="btn btn--ghost btn--sm"
+                :aria-pressed="effectiveMode === 'split'"
+                @click="setMode('split')"
+            >
+                双栏
+            </button>
+        </div>
         <div
             v-for="pf in parsedFiles"
             :key="pf.file.path"
@@ -243,7 +489,7 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
                 v-if="!isCollapsed(pf.file.path, pf.file.status)"
                 class="diff-file__body"
             >
-                <div v-if="pf.parsed" class="diff-file__hunks">
+                <div v-if="pf.parsed && effectiveMode === 'unified'" class="diff-file__hunks">
                     <div
                         v-for="(hunk, hi) in pf.hunks"
                         :key="hi"
@@ -266,8 +512,38 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
                                 <template v-else-if="line.kind === 'ctx'">&nbsp;</template>
                                 <template v-else>&nbsp;</template>
                             </span>
-                            <span class="diff-line__text">{{ line.text }}</span>
+                            <span class="diff-line__text"><template v-if="line.segments"><span v-for="(seg, si) in line.segments" :key="si" :class="seg.changed ? ['diff-mark', `diff-mark--${line.kind}`] : undefined">{{ seg.text }}</span></template><template v-else>{{ line.text }}</template></span>
                         </div>
+                    </div>
+                </div>
+                <!-- split 双栏(左旧右新,无 +/- 前缀列,色即语义)。 -->
+                <div v-else-if="pf.parsed" class="diff-file__hunks">
+                    <div
+                        v-for="(hunk, hi) in pf.hunks"
+                        :key="hi"
+                        class="diff-hunk"
+                    >
+                        <template
+                            v-for="(row, ri) in splitRows(hunk)"
+                            :key="ri"
+                        >
+                            <div
+                                v-if="row.kind === 'hunk' || row.kind === 'noeol'"
+                                :class="['diff-sfull', `diff-sfull--${row.kind}`]"
+                            >
+                                {{ row.left?.text }}
+                            </div>
+                            <div v-else class="diff-srow">
+                                <span class="diff-srow__gutter">
+                                    {{ row.left?.lineNo ?? "" }}
+                                </span>
+                                <span :class="['diff-srow__cell', { 'diff-srow__cell--del': row.tintLeft }]"><template v-if="row.left"><template v-if="row.left.segments"><span v-for="(seg, si) in row.left.segments" :key="si" :class="seg.changed ? 'diff-mark diff-mark--del' : undefined">{{ seg.text }}</span></template><template v-else>{{ row.left.text }}</template></template></span>
+                                <span class="diff-srow__gutter">
+                                    {{ row.right?.lineNo ?? "" }}
+                                </span>
+                                <span :class="['diff-srow__cell', { 'diff-srow__cell--add': row.tintRight }]"><template v-if="row.right"><template v-if="row.right.segments"><span v-for="(seg, si) in row.right.segments" :key="si" :class="seg.changed ? 'diff-mark diff-mark--add' : undefined">{{ seg.text }}</span></template><template v-else>{{ row.right.text }}</template></template></span>
+                            </div>
+                        </template>
                     </div>
                 </div>
                 <div v-else class="diff-file__raw">
@@ -303,6 +579,75 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     text-align: center;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+}
+
+/* 档位工具行:根部右对齐,每实例一次(非 per-file)。窄屏整行 CSS 藏
+ * (缺席条件②,mobile-hide 惯例,responsive spec §1.4)——显隐不走路
+ * 径,matchMedia 只选树。 */
+.diff-view__toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+/* --------------------------------------------------------------------
+ * split 双栏(PR2,design §3.3):4 列 = 左行号 / 旧文 / 右行号 / 新文。
+ * align-items: start 必改(结论 4)—— 现状 .diff-line 的 baseline 在
+ * 单侧长行 wrap 后会把行号 gutter 拉错位;栏内 pre-wrap + anywhere,
+ * 长行 wrap 不裁切不横滚(与 unified 的 pre + 行级横滚两档各自策略)。
+ * ------------------------------------------------------------------ */
+.diff-srow {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
+    align-items: start;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    min-width: 0;
+}
+
+.diff-srow__gutter {
+    text-align: right;
+    padding: 0 8px;
+    color: var(--color-text-muted);
+    user-select: none;
+    border-right: 1px solid var(--color-bg-border);
+}
+
+.diff-srow__cell {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    min-width: 0;
+    padding: 0 8px;
+}
+
+/* 行底 tint(行底 0.12 族,与 unified 的 --add/--del 行同色):
+ * 内容格与空占位格同染(tintLeft/tintRight),短侧补位是行对齐线索。 */
+.diff-srow__cell--del {
+    background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
+}
+
+.diff-srow__cell--add {
+    background: rgba(16, 185, 129, 0.12);
+}
+
+/* 通栏行(hunk 头 / noeol):跨全宽,样式沿用 unified 对应行语义。 */
+.diff-sfull {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    white-space: pre;
+    padding: 0 8px;
+}
+
+.diff-sfull--hunk {
+    background: var(--color-bg-surface);
+    color: var(--color-text-muted);
+}
+
+.diff-sfull--noeol {
+    color: var(--color-text-muted);
+    font-style: italic;
 }
 
 .diff-file {
@@ -448,6 +793,17 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     padding: 0 8px;
 }
 
+/* 行内变更片段 tint(09-26-diffview-enhance,design §5):沿既有行底
+ * 色族同 hue 加深(行底 0.12 → 片段 0.28),scoped 内联不入全局 token
+ * 表(generative-ui spec「diff 染色同色族不立新 token」先例)。 */
+.diff-mark--add {
+    background: rgba(16, 185, 129, 0.28);
+}
+
+.diff-mark--del {
+    background: color-mix(in srgb, var(--color-tool-error) 28%, transparent);
+}
+
 .diff-file__raw {
     display: flex;
     flex-direction: column;
@@ -487,5 +843,13 @@ function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
     color: var(--color-text-muted);
     text-align: center;
     padding: 16px;
+}
+
+@media (max-width: 767px) {
+    /* 窄屏降级(缺席条件②):split 渲染树选树归 unified 之后,工具行
+     * 也藏掉整行——窄屏没有可切的意义。走 mobile-hide-<what> 惯例类。 */
+    .mobile-hide-toolbar {
+        display: none;
+    }
 }
 </style>

@@ -16,6 +16,7 @@
 
 import { computed, ref } from "vue";
 import { diffLines } from "diff";
+import { pairRunSegments, type WordSeg } from "../../utils/intraLineDiff";
 import { useChatStore } from "../../stores/chat";
 import {
   usePermissionsStore,
@@ -109,8 +110,10 @@ const diffRows = computed<DiffRow[] | null>(() => {
     for (const part of parts) {
       const raw = part.value;
       // split, dropping artifact trailing "" when value ends with \n
-      let lines = raw.split("\n");
-      if (raw.endsWith("\n") && lines[lines.length - 1] === "") lines.pop();
+      // (CRLF 归一消费点,09-26-diffview-enhance:`\r?\n` 拆行,行文本
+      // 不再携带尾部 \r;拆分点集合与裸 \n 完全一致,只剥 \r)。
+      let lines = raw.split(/\r?\n/);
+      if (/\r?\n$/.test(raw) && lines[lines.length - 1] === "") lines.pop();
       // diffLines can emit a single "" for empty input — render as one empty line
       if (lines.length === 1 && lines[0] === "" && raw === "") {
         // empty file side: keep one empty row so prefix still visible
@@ -130,10 +133,53 @@ const diffRows = computed<DiffRow[] | null>(() => {
 
 const truncated = computed<boolean>(() => {
   if (!diffRows.value) return false;
-  // Heuristic: if either string has >MAX_ROWS lines, we truncated
-  const aLines = (oldStr.value ?? "").split("\n").length;
-  const bLines = (newStr.value ?? "").split("\n").length;
+  // Heuristic: if either string has >MAX_ROWS lines, we truncated.
+  // 计行口径与上方归一一致(split(/\r?\n/),评审 OQ3:归一与截断
+  // 启发式同口径;两种 split 的拆分点集合相同,行数恒等,这里统一
+  // 写法防未来单侧漂移)。
+  const aLines = (oldStr.value ?? "").split(/\r?\n/).length;
+  const bLines = (newStr.value ?? "").split(/\r?\n/).length;
   return aLines + bLines > MAX_ROWS || diffRows.value.length >= MAX_ROWS;
+});
+
+// ------------------------------------------------------------------
+// 行内 word-diff(09-26-diffview-enhance,design §4):配对 pass 跑在
+// **截断后**的 rows 上(截走 add-run 的 del-run 自然整行染色),扫
+// 「极大 del-run 紧跟 add-run」调 pairRunSegments。无独立 run 预算帽
+// (MAX_ROWS 400 + MAX_PAIR_LEN 4000 已兜住)。空数组行 = 整行染色。
+// ------------------------------------------------------------------
+type RowWithSegments = { kind: DiffRow["kind"]; text: string; segments: WordSeg[] | null };
+
+const rowsWithSegments = computed<RowWithSegments[] | null>(() => {
+  const rows = diffRows.value;
+  if (!rows) return null;
+  const out: RowWithSegments[] = rows.map((row) => ({ ...row, segments: null }));
+  let i = 0;
+  while (i < out.length) {
+    if (out[i].kind !== "del") {
+      i += 1;
+      continue;
+    }
+    const delStart = i;
+    while (i < out.length && out[i].kind === "del") i += 1;
+    const delEnd = i;
+    const addStart = i;
+    while (i < out.length && out[i].kind === "add") i += 1;
+    if (i === addStart) continue; // 纯 del-run:整行染色
+    const addEnd = i;
+    const paired = pairRunSegments(
+      out.slice(delStart, delEnd).map((r) => r.text),
+      out.slice(addStart, addEnd).map((r) => r.text),
+    );
+    if (!paired) continue; // 原子 null:整 run 退化整行染色
+    for (let j = delStart; j < delEnd; j += 1) {
+      out[j].segments = paired.del[j - delStart];
+    }
+    for (let j = addStart; j < addEnd; j += 1) {
+      out[j].segments = paired.add[j - addStart];
+    }
+  }
+  return out;
 });
 
 const addedCount = computed(() => diffRows.value?.filter((r) => r.kind === "add").length ?? 0);
@@ -250,16 +296,16 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
     <!-- git-style diff (默认收起,开关展开) -->
     <div v-if="hasInputStrings && diffRows && diffExpanded" class="edit-card__diff" :class="{ 'edit-card__diff--error': isError }">
       <div
-        v-for="(row, i) in diffRows"
+        v-for="(r, i) in rowsWithSegments"
         :key="i"
-        :class="['edit-diff-line', `edit-diff-line--${row.kind}`]"
+        :class="['edit-diff-line', `edit-diff-line--${r.kind}`]"
       >
         <span class="edit-diff-line__prefix" aria-hidden="true">
-          <template v-if="row.kind === 'add'">+</template>
-          <template v-else-if="row.kind === 'del'">−</template>
+          <template v-if="r.kind === 'add'">+</template>
+          <template v-else-if="r.kind === 'del'">−</template>
           <template v-else>&nbsp;</template>
         </span>
-        <span class="edit-diff-line__text">{{ row.text }}</span>
+        <span class="edit-diff-line__text"><template v-if="r.segments"><span v-for="(seg, si) in r.segments" :key="si" :class="seg.changed ? ['edit-diff-mark', `edit-diff-mark--${r.kind}`] : undefined">{{ seg.text }}</span></template><template v-else>{{ r.text }}</template></span>
       </div>
       <div v-if="truncated" class="edit-card__truncated">
         … 变更过长,已截断至前 {{ MAX_ROWS }} 行。展开 input 可查看完整 old/new 文本。
@@ -466,6 +512,17 @@ async function respondApproval(decision: PermissionDecision, reason?: string) {
 
 .edit-diff-line__text {
   padding: 0 8px;
+}
+
+/* 行内变更片段 tint(09-26-diffview-enhance):与 DiffView 的
+ * .diff-mark--* 同色值同色族(行底 0.12 → 片段 0.28 加深),scoped
+ * 内联不入全局 token 表(design §5;类名独立防 :deep 穿透耦合)。 */
+.edit-diff-mark--add {
+  background: rgba(16, 185, 129, 0.28);
+}
+
+.edit-diff-mark--del {
+  background: color-mix(in srgb, var(--color-tool-error) 28%, transparent);
 }
 
 .edit-card__truncated {
