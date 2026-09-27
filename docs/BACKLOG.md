@@ -204,12 +204,12 @@
 | ~~N1~~ | ~~首次引导 3 步向导 + 报错分级提示~~ | **✅ 2026-09-15 交付**(方向调整:不做重向导——轻页面引导(空状态四分态检测卡 + 错误行测试连接)+ 内置诊断/引导/配置 LLM 三件套 skills + 只读诊断双工具;task `09-15-n1-onboarding-skills`,见 [ROADMAP §1.2](./ROADMAP.md)) | 产品+新用户 | 空状态仅一句「开始对话」,新手不知先配 provider;401/529 裸英文报错死胡同;形态:配 provider → 测试连接 → 开聊(per-row 测试按钮已存在可复用) |
 | ~~N2~~ | ~~checkpoint / revert 闭环~~ | **✅ 2026-09-20 交付**(悬空快照路线落地,含群聊评审 15 结论回填:API 级致命伤修正/基线轮首/D3 级联/TOCTOU 双窗口/ref 泄漏全修;task `09-20-n2-checkpoint-revert`,见 [ROADMAP §1.2](./ROADMAP.md)) | 产品(后端/前端/安全/测试四方修正) | 真痛点但成本被证伪:diff 展示层现成(`git/diff.rs` session 分支),缺 per-turn 文件基线(新写入路径)+ 多 session 原子化;落地路径 = turn 边界 auto-commit + revert=reset;约束:revert 仅 UI 触发、不进 agent 工具、走 dangerous 通道 + audit 归因;前置 = N4 |
 | ~~N3~~ | ~~新项目冷启动 `/init` + 轻量 repo map~~ | **✅ 2026-09-18 交付**(范围用户裁定收窄:唯一交付物 = `<project>/AGENTS.md` 内嵌 repo map 章节,不建目录骨架/项目级 EVERLASTING.md/.gitignore;形态 = GlobalBuiltin 第四件 skill `init`,`/` 面板即字面 `/init`,当前 session LLM 驱动零机制新增;幂等 = marker 区块增量更新【`edit_file` 结构保障】+ 纯手写保护,task `09-18-n3-project-init`,见 [ROADMAP §1.2](./ROADMAP.md)) | 产品 | 4 个指令文件手写、每 session 靠 grep 摸地形;B5 memory digest 只优化注入成本,不解决首印象 |
-| N4 | 长会话渲染虚拟化 | P1(rewind 前置) | 前端 | `MessageList.vue` 裸 v-for 全量 DOM,无 IntersectionObserver/content-visibility;路线(content-visibility vs 真虚拟化)等 N9 基准后定 |
+| ~~N4~~ | ~~长会话渲染虚拟化~~ | **✅ 2026-09-20 交付**(路线裁定 = 自渲染真虚拟化 `useVirtualizedMessages`(弃 content-visibility / vue-virtual-scroller);PR0 判据换尺中立测试基建先行保回归;锚定语义全迁移 + flatten 打平 + data-seq 命令化 + flash/run-enter 动效;群聊评审 12 结论回填;task `09-19-n4-render-virtualization`,见 [ROADMAP §1.2](./ROADMAP.md)) | 前端 | `MessageList.vue` 裸 v-for 全量 DOM,无 IntersectionObserver/content-visibility;路线(content-visibility vs 真虚拟化)等 N9 基准后定 |
 | ~~N5~~ | ~~sandbox fail-open 审计可区分~~ | **✅ 2026-09-26 交付**(并入 N6 同任务;tool_executed 终态归因字段 + 词表双层类型化 + escalation/worker 两实锤缺陷收口 + capability 三维,task `09-26-sandbox-failopen-audit`,见 [ROADMAP §1.2](./ROADMAP.md)) | 安全+测试 | 审计不区分 sandboxed / failed-open 执行,事后归因混淆 |
 | ~~N6~~ | ~~沙盒测试 CI 静默 SKIP 门禁~~ | **✅ 2026-09-26 交付**(`require_sandbox_cap()` 单源 + env `EVERLASTING_SANDBOX_TESTS_REQUIRED=1` ci.yml rust job 硬门禁,同任务) | 测试 | `sandbox/tests_sandbox.rs` 4 处 `eprintln!("SKIP")` 后照常通过——无 Landlock/seccomp 主机(macOS runner)沙盒覆盖率=0;修法:`#[cfg(target_os="linux")]` 强制门禁或 Linux docker-runner |
 | ~~N7~~ | ~~DiffView 增强(行级高亮 / side-by-side / 按文件折叠)~~ | **✅ 2026-09-27 交付**(勘察修正:按文件折叠已存在;实做 = 行内 word-diff 高亮 + side-by-side 双栏 + 工具行切换/localStorage/窄屏降级 + `allowSplit` prop + EditFileCard 随批升级;群聊评审 14 结论回填;task `09-26-diffview-enhance`,见 [ROADMAP §1.2](./ROADMAP.md)) | 前端 | 变更信任闭环的审阅质量面;`DiffPrimitive` 已证明可被任意入口挂载 |
 | N8 | 混沌 / 故障注入冒烟(`chaos-smoke.sh`) | P2 | 测试 | SIGKILL daemon / SSE 中断 / DB 锁 / disk full;RULE-PERSIST-001 是被动恢复,无主动注入 |
-| N9 | 性能基准(cargo criterion + vitest bench) | P2(与 N4/N7 联动) | 测试 | agent loop 启动 P99 / SSE 首字节 / 10k message DB 查询均无基准 |
+| ~~N9~~ | ~~性能基准(cargo criterion + vitest bench)~~ | **✅ 2026-09-19 交付**(bench feature 门 + criterion 三 bench【harness 开销 / DB 内存与 disk 分档 / SSE 降级双路径】+ Playwright 真浏览器 F1 前端基准 + 真实负载画像 profile JSON 单一出处 + CI 编译门(数字不进门禁,用户裁定);规划评审 12 结论采纳;基线与复跑口径落 spec [perf-baseline](../.trellis/spec/backend/perf-baseline.md),task `09-19-n9-perf-benchmark`,见 [ROADMAP §1.2](./ROADMAP.md)) | 测试 | agent loop 启动 P99 / SSE 首字节 / 10k message DB 查询均无基准 |
 | N10 | 本地性一键导出 / 清除(DB + outputs spill + 日志) | P2 | 安全 | 本地优先是卖点但缺出口;跨设备同步(BACKLOG §4)上线前备好 |
 | N11 | 可控灰度 / 回滚 + 崩溃收集(minidump / 符号化) | P2 | 测试 | `daemon.sh restart` 硬切、无版本门 / kill switch;崩溃现场全丢 |
 
@@ -227,7 +227,7 @@
 
 - **P0 资源排序**(若 N1 / B.3 / N2 立项撞期):群聊建议 首次引导 > 隧道降级 > checkpoint——留存漏斗 > 安全裸奔 > power feature。
 - **「session 不 auto-commit」旧决策**:N2 的前置 ADR(跨设备 §4 亦有「迁移时强制 commit」关联语义),翻案与否单独决策。
-- **虚拟化路线**:content-visibility vs 真虚拟化(vue-virtual-scroller / 自渲染),等 N9 基准数据后定。
+- ~~**虚拟化路线**:content-visibility vs 真虚拟化(vue-virtual-scroller / 自渲染),等 N9 基准数据后定。~~ → ✅ 已决(2026-09-20,N4 交付):自渲染真虚拟化 `useVirtualizedMessages`,content-visibility / vue-virtual-scroller 两案弃。
 
 ---
 
