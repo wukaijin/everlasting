@@ -112,3 +112,25 @@ BACKLOG 附录 B N7 立项(推荐采纳后用户 OK)。brainstorm 三问裁定(�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 158: N12 专项调研:agent-loop 三小件语义差距核验
+
+**Date**: 2026-09-27
+**Task**: N12 专项调研:agent-loop 三小件语义差距核验
+**Branch**: `main`
+
+### Summary
+
+按 BACKLOG 附录 C.2 调研要求核验 dsh 衍生三条 agent-loop 语义,产出三段式结论(research/n12-semantics-gap-analysis.md,代码行号级证据)并回填附录 C。结论:件①重试复用装配已满足——retry_open 循环内 clone 参数重发零重装配(llm/retry.rs:186),dsh 语义错误重试维度被事前 0.95 硬卡+跨 turn 重装配设计替代,降级为 1 条不变量测试锚;件②装配期取消无严重形态——user 消息 pre-flight 落库是持久架构有意设计,唯一交错窗口=取消×摘要落库(drive.rs:2742 落库先于取消检查,良性,一行 is_cancelled 可收口);件③压缩防死循环实锤缺口——CompactionRegistry 熔断只有「摘要 LLM 成败」维度(Applied 即 record_success 清零 drive.rs:552,StillOver 分支不记任何失败信号 drive.rs:705),不收敛分支(摘要净增长)下每次重发烧摘要 LLM 且熔断失明;世代等价物=cutoff_seq 水位,推荐「水位推进&&总量下降才允许下一 turn 再进摘要路径」无进展熔断(~30-60 行)。立项建议:件③主体+件②一行+件①测试锚,单 PR。勘误:C.2 原文 send_with_retry 实为 retry_open。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `07e000ca` | (see git log) |
+| `07ac8387` | (see git log) |
+
+### Status
+
+[OK] **Completed**
