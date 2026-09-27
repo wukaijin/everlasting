@@ -134,3 +134,26 @@ BACKLOG 附录 B N7 立项(推荐采纳后用户 OK)。brainstorm 三问裁定(�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 159: N12 压缩无进展熔断交付(单 PR 三件:无进展熔断 + 摘要取消收口 + retry 测试锚)
+
+**Date**: 2026-09-27
+**Task**: N12 压缩无进展熔断交付(单 PR 三件:无进展熔断 + 摘要取消收口 + retry 测试锚)
+**Branch**: `main`
+
+### Summary
+
+按前日调研收窄范围立项实施:件③ CompactionRegistry 第二维度(连续 2 次摘要 Applied 但水位未推进或折叠总量未降 → 粘性跳过摘要直达机械,水位推进即解除,与既有失败熔断正交)——不收敛分支不再每 turn 烧摘要旁路 LLM;件② insert_compaction_summary 落库前取消检查(Cancelled 不计任何熔断维度);件① retry_open 零重装配不变量测试锚。实施中两处口径修正经 check 复核成立并写入 spec pattern-llm-compaction §5(tokens_after 取折叠后持久值;同形比较补 request_overhead)。AC1-AC7 全过,全量 2605 测试绿,clippy 零新告警;BACKLOG 附录 C 标 ✅ + ROADMAP §1.2 记账。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d9b584fc` | (see git log) |
+| `3c4c80aa` | (see git log) |
+| `469e508c` | (see git log) |
+
+### Status
+
+[OK] **Completed**
