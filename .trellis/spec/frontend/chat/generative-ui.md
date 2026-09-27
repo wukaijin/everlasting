@@ -107,6 +107,37 @@ out.parsed = out.hunks.length > 0;  // ❌→✅ 防御 parsed-but-empty
 - `DiffPrimitive.test.ts`:"does not crash on non-diff text" 保留(`parsePatch returns []` 单字串分支,断言 wrapper 存在)。
 - 防回归锚点:session `1b469d93-84d3-49b0-a4c5-eefc34b1bf58` — prompt "调 use_ui 输出一个 code_block(rust 代码)和一个 diff(两段对比)",该次 LLM 输出是 LLM-style `+/-` 片段,该 prompt 下必须不再出现"打开 diff 卡片是空白"。
 
+### DiffView 行内高亮 + side-by-side 渲染契约(N7,2026-09-27)
+
+> 任务 `09-26-diffview-enhance`(群聊评审 session `c5460c4b` 14 结论回填版)。util = `app/src/utils/intraLineDiff.ts`,消费点 = `DiffView.vue`(hunk 行构建点)+ `EditFileCard.vue`(`split(/\r?\n/)` 行拆分点)。raw fallback 分支(RULE-FrontDiff-001)不受本节任何条款影响。
+
+**util 契约(`pairRunSegments`,jsdiff `diffWordsWithSpace` 驱动)**:
+
+1. **原子 null 三路径**——整 run 返回 null(全部行退化为整行染色),不做「尾部 null」部分退化:①join 后任侧长度 > `MAX_PAIR_LEN=4000`;②`diffWordsWithSpace` 抛错(catch);③重分布一致性校验失败(防御分支)。**Why**:重分布必然重建全部行,部分退化会让「行内高亮有无」在同一 run 内不一致,审阅歧义。
+2. **重分布 = `\n` 切分推进**(seg 含 `\n` 就切开派发到下一行),不是累计字符数——后者在多字节/空行边界易漂。
+3. **util 级不变量钉断言**(改算法必须保持):①两侧输出数组长度 == 入参数组长度;②每行 segments 的 text 拼接 == 归一(`\r` 剥除)后的行文本。语料必含空行对/行尾空白/CRLF/del3+add2。
+4. **CRLF 归一只在消费点做**,不进 util(保契约纯净);消费点各自钉「无 `\r`」断言。EditFileCard 的 `truncated` 计行口径必须与归一同(`split(/\r?\n/)`)。
+
+**DiffView 契约**:
+
+- **run 数预算帽 `MAX_PAIR_RUNS=200`**(view 级保险丝,常量注释即数值落定处):超帽 run 跳过配对,走同一整行染色退化。
+- **split 行网格必须 `align-items: start`**(unified 的 `baseline` 会让 pre-wrap 多行后行号 gutter 错位);栏内 `pre-wrap + overflow-wrap: anywhere`,不横滚不裁切。
+- **`allowSplit` prop(默认 true)**:窄容器挂载点(如 `ToolCallCard` inline,~250px)必须显式 `:allow-split="false"` 恒 unified——**视口级 768px 降级保护不到「宽视口里的窄容器」**,全局 localStorage 单键会让 split 灌进 inline 窄栏(评审实锤的穿透视口缺口)。
+- **工具行三缺席条件**(各配独立组件测试,防相互遮蔽):raw-only(无 parsed 文件)/ 窄屏 CSS 藏整行(`mobile-hide-*` 惯例)/ `allowSplit=false`。
+- **localStorage 纪律**:key `everlasting:diffview.mode`(带 `everlasting:` 前缀,useTheme/config 同族);**仅用户点击写,读路径永不写回**;同屏多实例不联动(挂载时读一次);测试间清键 + remount 断言用新建挂载。
+- **行内强调色 = 行底同族加深**(add `rgba(16,185,129,0.28)` / del `color-mix 28%`),scoped 内联不入全局 token 表(沿 RULE-FrontDiff-001 染色先例);**AC 断言只做 DOM 层**(mark span 存在 + 数量 + 拼接还原),色可辨性走 screenshots-only 人眼对照——VLM 对 13px 级小色块的「看不见」判定不可信(2026-09-27 实证:computed style 0.28 vs 0.12 + Δ绿 ≈16% 数值复核推翻 VLM)。
+
+**Wrong vs Correct(配对 pass 位置)**:
+
+```ts
+// Wrong:先配对再截断 —— 截走 add-run 的 del-run 会拿 dangling segments
+const rows = withSegments(allRows).slice(0, MAX_ROWS);
+// Correct:截断后配对 —— 被截走的对侧自然整行染色(EditFileCard 钉死用例)
+const rows = allRows.slice(0, MAX_ROWS); return withSegments(rows);
+```
+
+**e2e 陷阱锁**:diff 面 fixture **不得用空 `diff_text`**(照抄 checkpoint-revert.spec.ts 的 `""` 会走 `parsed=false` raw 分支,结构性断言恒绿无判废力);fixture 必含 ctx 行 + 不等长 del/add run;新 spec 落地先做空 fixture 负控(先红后绿)。
+
 ### B9+ D3/D4 — `use_ui` 可交互升级(button primitive + diff 应用) (2026-07-13)
 
 > 完整任务 PRD 走 `.trellis/tasks/07-13-b9plus-generative-ui-followup/`;后端 IPC 契约见 [tool-contract/13-use-ui-button-apply-ui-diff.md §Scenario: `use_ui` `button` + `apply_ui_diff`](../../backend/tool-contract/13-use-ui-button-apply-ui-diff.md)。本节锁定前端契约 + cross-ref 锚点。

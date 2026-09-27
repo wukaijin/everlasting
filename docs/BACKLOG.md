@@ -207,7 +207,7 @@
 | N4 | 长会话渲染虚拟化 | P1(rewind 前置) | 前端 | `MessageList.vue` 裸 v-for 全量 DOM,无 IntersectionObserver/content-visibility;路线(content-visibility vs 真虚拟化)等 N9 基准后定 |
 | ~~N5~~ | ~~sandbox fail-open 审计可区分~~ | **✅ 2026-09-26 交付**(并入 N6 同任务;tool_executed 终态归因字段 + 词表双层类型化 + escalation/worker 两实锤缺陷收口 + capability 三维,task `09-26-sandbox-failopen-audit`,见 [ROADMAP §1.2](./ROADMAP.md)) | 安全+测试 | 审计不区分 sandboxed / failed-open 执行,事后归因混淆 |
 | ~~N6~~ | ~~沙盒测试 CI 静默 SKIP 门禁~~ | **✅ 2026-09-26 交付**(`require_sandbox_cap()` 单源 + env `EVERLASTING_SANDBOX_TESTS_REQUIRED=1` ci.yml rust job 硬门禁,同任务) | 测试 | `sandbox/tests_sandbox.rs` 4 处 `eprintln!("SKIP")` 后照常通过——无 Landlock/seccomp 主机(macOS runner)沙盒覆盖率=0;修法:`#[cfg(target_os="linux")]` 强制门禁或 Linux docker-runner |
-| N7 | DiffView 增强(行级高亮 / side-by-side / 按文件折叠) | P2 | 前端 | 变更信任闭环的审阅质量面;`DiffPrimitive` 已证明可被任意入口挂载 |
+| ~~N7~~ | ~~DiffView 增强(行级高亮 / side-by-side / 按文件折叠)~~ | **✅ 2026-09-27 交付**(勘察修正:按文件折叠已存在;实做 = 行内 word-diff 高亮 + side-by-side 双栏 + 工具行切换/localStorage/窄屏降级 + `allowSplit` prop + EditFileCard 随批升级;群聊评审 14 结论回填;task `09-26-diffview-enhance`,见 [ROADMAP §1.2](./ROADMAP.md)) | 前端 | 变更信任闭环的审阅质量面;`DiffPrimitive` 已证明可被任意入口挂载 |
 | N8 | 混沌 / 故障注入冒烟(`chaos-smoke.sh`) | P2 | 测试 | SIGKILL daemon / SSE 中断 / DB 锁 / disk full;RULE-PERSIST-001 是被动恢复,无主动注入 |
 | N9 | 性能基准(cargo criterion + vitest bench) | P2(与 N4/N7 联动) | 测试 | agent loop 启动 P99 / SSE 首字节 / 10k message DB 查询均无基准 |
 | N10 | 本地性一键导出 / 清除(DB + outputs spill + 日志) | P2 | 安全 | 本地优先是卖点但缺出口;跨设备同步(BACKLOG §4)上线前备好 |

@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/chat/generative-ui.md", "reason": "RULE-FrontDiff-001 raw fallback 契约 + DiffPrimitive/DiffView 染色先例,raw 分支不能翻"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "色约束:不硬编码全局 hex,scoped rgba 色族先例"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "单一断点 768px,split 窄屏降级依据"}
+{"file": ".trellis/spec/frontend/browser-regression.md", "reason": "e2e 准入:route-mock 确定性用例,无 daemon/LLM/网络"}

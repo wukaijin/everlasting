@@ -92,6 +92,17 @@ logic (`v-if` driven by viewport detection is forbidden — see the
 Forbidden patterns below). Naming: `mobile-hide-<what>` single class,
 scoped to the component that renders the element.
 
+> **Exception — matchMedia for tree selection only (2026-09-27, N7)**:
+> `matchMedia("(max-width: 767px)")` + `change` listener IS allowed when
+> it selects **which rendering branch to mount** (e.g. DiffView unified
+> vs split trees — rendering both and hiding one via CSS doubles the
+> DOM for large diff trees). Precedents: `ModeSelect.vue` (~L134) and
+> `DiffView.vue`. Requirements: jsdom guard (no `matchMedia` → stub in
+> tests), listener removed on unmount (asserted), real-viewport
+> semantics verified via Playwright `setViewportSize`. Show/hide of
+> small elements stays on the CSS-only rule above — the exception is
+> strictly for tree/branch selection.
+
 - Elements in the component's own template get a plain scoped class:
   `<span class="chat-panel__chip chat-panel__chip--cwd mobile-hide-cwd">`
   → `@media (max-width: 767px) { .mobile-hide-cwd { display: none } }`
