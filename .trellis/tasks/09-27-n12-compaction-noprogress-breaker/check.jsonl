@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/archive/2026-09/09-27-n12-agent-loop-semantics-research/research/n12-semantics-gap-analysis.md", "reason": "对照验收:方案 B 要点(进展判定/粘性/解除/正交)逐条核实现"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "降级链契约未被破坏 + 新增无进展熔断节与实现一致(AC7)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/tests-required.md", "reason": "测试覆盖要求:AC1-AC6 单测面是否达标"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门:lint/全量回归口径"}

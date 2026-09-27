@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-llm-compaction.md", "reason": "C3+ 压缩契约本体:降级链/熔断 registry/cutoff 水位语义,R1 R2 R4 都改这份 spec 对应的实现"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-n12-agent-loop-semantics-research/research/n12-semantics-gap-analysis.md", "reason": "专项调研报告:三件现状判定 + 方案 B 细节 + drive.rs 行号证据(实施前复核漂移)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-budget-gate.md", "reason": "件③与关卡⑤硬卡(StillOver)的组合场景;无进展熔断不能改变 fail-fast 形态"}
+{"file": ".trellis/spec/backend/llm-contract/scenario-retry-backoff.md", "reason": "件① retry_open 契约:可重试分类/首字节不变量,测试锚要钉的边界"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-cancellation-guard.md", "reason": "件② 取消检查的既有 pattern 形态,落库前检查需风格一致"}
