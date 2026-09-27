@@ -228,3 +228,37 @@
 - **P0 资源排序**(若 N1 / B.3 / N2 立项撞期):群聊建议 首次引导 > 隧道降级 > checkpoint——留存漏斗 > 安全裸奔 > power feature。
 - **「session 不 auto-commit」旧决策**:N2 的前置 ADR(跨设备 §4 亦有「迁移时强制 commit」关联语义),翻案与否单独决策。
 - **虚拟化路线**:content-visibility vs 真虚拟化(vue-virtual-scroller / 自渲染),等 N9 基准数据后定。
+
+---
+
+## 附录 C: 调研衍生候选(2026-09-27)
+
+> 来源:DeepSeek Harness(dsh)对比调研([`docs/_history/research/deepseek-harness-survey.md`](./_history/research/deepseek-harness-survey.md))。与附录 B 同规则:N-x 为候选临时编号(续 B 编号),**立项进 ROADMAP §2 时换正式编号**;排期归 [ROADMAP](./ROADMAP.md),本文档只记评估。
+> 收录立场:dsh 处于 dev preview,只借鉴设计不引入依赖(TS 生态亦无法直接复用);**所有条目立项前须先做专项调研**(C.2 逐项列出),本附录只记一句话价值与调研范围,不预支结论。
+
+### C.1 新增候选
+
+| 编号 | 候选 | 建议优先级 | 视角 | 一句话依据 |
+|------|------|-----------|------|-----------|
+| N12 | agent-loop 语义吸收三小件(重试复用装配 / 装配期取消不落半准入 / 压缩恢复防死循环世代判定) | P1 | 后端 | dsh 验证过的收口语义,前两条对照 A5+/C1 补不变量,第三条正对 C3+ 压缩 + 关卡⑤硬卡「压缩后仍超预算」的组合场景 |
+| N13 | 工具结果 post-execute 横切钩子(可观测 / 改写 / 附加上下文) | P2 | 后端 | 16 关卡里没有「结果落地前」的最后一道横切面;泄漏脱敏、C2+ 循环检测注入都可挂这里 |
+| N14 | DB schema 版本纪律补强(定稿/发布分离 + 单一真源常量 + 相邻迁移链 + 无凭据 spec 测试) | P2 | 测试 | 现迁移纪律靠 `database-guidelines` 约束,缺 finalized ≠ released 的显式记录与机械校验 |
+| N15 | LSP 工具(代码导航 / 引用 / 诊断) | P1-P2 | 后端 | dsh 有而本项目没有的最大能力实 gap,对 coding agent 质量影响直接;但依赖与进程模型复杂,调研后定档 |
+| N16 | 会话 fork(带种子从任意点分叉) | P2-P3 | 产品 | 对 D3 edit/resend + handoff 是自然延伸;需先厘清与 N2 checkpoint 的重叠度 |
+| N17 | Claude Code / Codex 作子 agent 宿主(hooks 桥) | P3 | 拓扑 | 与 dispatch_subagent 自定义 worker 路线互补的生态位思路,依赖外部 CLI,优先级最低 |
+
+### C.2 立项前专项调研要求
+
+> 每条 = 一个独立调研任务(可走 Trellis research),产出「现状缺口 + 改动面 + 取舍」三段,结论回填本附录后再立项。
+
+- **N12**:逐条对照 16 关卡与 `agent-loop-architecture` 系列 pattern spec,核验现有实现(A5+ `send_with_retry` 的整轮重发粒度、C1 取消在装配期的落库行为、C3+ 压缩失败后的重试路径)与三条语义的差距及改动面;明确「表面替换世代」在本仓库的等价物(cutoff_seq 水位?)。
+- **N13**:盘点现有横切点(权限闸 / C2 循环检测 / memory-gov / C6 输出截断)与钩子位置选型(落在关卡⑩ tool 执行后、消息落库前的哪一缝);评估对 `tool-contract` spec 的契约影响与拒绝语义(deny 是否仍流向下游,dsh 的 projectContent 可见拒因设计)。
+- **N14**:盘点现有 migration 机制(sqlx migrate?手写?),设计「定稿/发布双记录」在 SQLite schema 语境的映射(版本常量放哪、发布证据 tag 怎么记)、无凭据 spec 测试的落点(对照 dsh `doc-standard.spec.ts`)。
+- **N15**:Rust LSP client 生态调研(crate 选型 vs 起外部 binary:rust-analyzer / gopls / typescript-language-server 等)、工具面设计(暴露哪些能力:定义跳转 / 引用查找 / 诊断,与 read_file / grep / glob 的分工)、多 project 进程生命周期与资源上限、token 成本与 C7 tools[] 治理的接入。
+- **N16**:fork 语义定义(种子 = 截止 seq + 记忆状态?)与 D3 / handoff / N2 checkpoint 的关系矩阵;存储面(新 session 行 + 事件前缀复制 vs 引用)。
+- **N17**:外部 CLI 的授权 / 进程 / 计费模型,与现有 subagent 契约(`subagent-runs-schema`)的融合方式;仅在 N15 落地且 subagent 面稳定后再评。
+
+### C.3 未立项记注(不单开候选行)
+
+- **「模型可见即已记录」不变量**:dsh 的验收表述(模型请求可从持久日志完整重建)——不单独立项,作为 N8 混沌冒烟 / E2 TracePanel 回放扩展 / N14 纪律的验收标准引用。
+- **沙盒 seam 化**(`SandboxExecutor` trait 边界):现有 spec 已接近薄 trait;不立项,仅在 bwrap / 网络白名单(BACKLOG 余留)动工时保持边界、不为远程形态预做抽象。
