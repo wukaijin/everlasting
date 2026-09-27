@@ -240,7 +240,7 @@
 
 | 编号 | 候选 | 建议优先级 | 视角 | 一句话依据 |
 |------|------|-----------|------|-----------|
-| N12 | agent-loop 语义吸收三小件(重试复用装配 / 装配期取消不落半准入 / 压缩恢复防死循环世代判定) | P1 | 后端 | dsh 验证过的收口语义,前两条对照 A5+/C1 补不变量,第三条正对 C3+ 压缩 + 关卡⑤硬卡「压缩后仍超预算」的组合场景 |
+| N12 | agent-loop 语义吸收三小件(重试复用装配 / 装配期取消不落半准入 / 压缩恢复防死循环世代判定) | P1 | 后端 | dsh 验证过的收口语义,前两条对照 A5+/C1 补不变量,第三条正对 C3+ 压缩 + 关卡⑤硬卡「压缩后仍超预算」的组合场景。**✅ 专项调研完成(2026-09-27,task [09-27-n12-agent-loop-semantics-research](../.trellis/tasks/09-27-n12-agent-loop-semantics-research/))**:件①已满足(`retry_open` 克隆参数重发零重装配,降级为测试锚)/ 件②仅良性交错窗口(取消×摘要落库,一行收口)/ **件③实锤缺口**——熔断只有「摘要 LLM 成败」维度、缺「压缩无进展」维度,不收敛分支(摘要净增长)下每次重发烧摘要 LLM;世代等价物 = cutoff_seq 水位,推荐「水位推进 && 总量下降才允许下一 turn 再进摘要路径」的无进展熔断(~30-60 行)。立项范围收窄:件③主体 + 件②一行 + 件①测试锚,单 PR |
 | N13 | 工具结果 post-execute 横切钩子(可观测 / 改写 / 附加上下文) | P2 | 后端 | 16 关卡里没有「结果落地前」的最后一道横切面;泄漏脱敏、C2+ 循环检测注入都可挂这里 |
 | N14 | DB schema 版本纪律补强(定稿/发布分离 + 单一真源常量 + 相邻迁移链 + 无凭据 spec 测试) | P2 | 测试 | 现迁移纪律靠 `database-guidelines` 约束,缺 finalized ≠ released 的显式记录与机械校验 |
 | N15 | LSP 工具(代码导航 / 引用 / 诊断) | P1-P2 | 后端 | dsh 有而本项目没有的最大能力实 gap,对 coding agent 质量影响直接;但依赖与进程模型复杂,调研后定档 |
@@ -251,7 +251,7 @@
 
 > 每条 = 一个独立调研任务(可走 Trellis research),产出「现状缺口 + 改动面 + 取舍」三段,结论回填本附录后再立项。
 
-- **N12**:逐条对照 16 关卡与 `agent-loop-architecture` 系列 pattern spec,核验现有实现(A5+ `send_with_retry` 的整轮重发粒度、C1 取消在装配期的落库行为、C3+ 压缩失败后的重试路径)与三条语义的差距及改动面;明确「表面替换世代」在本仓库的等价物(cutoff_seq 水位?)。
+- ~~**N12**:逐条对照 16 关卡与 `agent-loop-architecture` 系列 pattern spec,核验现有实现(A5+ `send_with_retry` 的整轮重发粒度、C1 取消在装配期的落库行为、C3+ 压缩失败后的重试路径)与三条语义的差距及改动面;明确「表面替换世代」在本仓库的等价物(cutoff_seq 水位?)。~~ → ✅ 调研完成(2026-09-27):结论见 task `09-27-n12-agent-loop-semantics-research` 的 `research/n12-semantics-gap-analysis.md`(三段式 + 代码行号证据;注:A5+ 实现名为 `retry_open` 非 `send_with_retry`)。
 - **N13**:盘点现有横切点(权限闸 / C2 循环检测 / memory-gov / C6 输出截断)与钩子位置选型(落在关卡⑩ tool 执行后、消息落库前的哪一缝);评估对 `tool-contract` spec 的契约影响与拒绝语义(deny 是否仍流向下游,dsh 的 projectContent 可见拒因设计)。
 - **N14**:盘点现有 migration 机制(sqlx migrate?手写?),设计「定稿/发布双记录」在 SQLite schema 语境的映射(版本常量放哪、发布证据 tag 怎么记)、无凭据 spec 测试的落点(对照 dsh `doc-standard.spec.ts`)。
 - **N15**:Rust LSP client 生态调研(crate 选型 vs 起外部 binary:rust-analyzer / gopls / typescript-language-server 等)、工具面设计(暴露哪些能力:定义跳转 / 引用查找 / 诊断,与 read_file / grep / glob 的分工)、多 project 进程生命周期与资源上限、token 成本与 C7 tools[] 治理的接入。
