@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-5.md`
-- **Total Sessions**: 156
-- **Last Active**: 2026-09-25
+- **Total Sessions**: 157
+- **Last Active**: 2026-09-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-5.md` | ~93 | Active |
+| `journal-5.md` | ~114 | Active |
 | `journal-4.md` | ~1991 | Archived |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
@@ -33,6 +33,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 157 | 2026-09-27 | N7 DiffView 增强:行内高亮 + side-by-side 全链交付 | `073c7f5a` | `main` |
 | 156 | 2026-09-25 | 沙箱 DNS 失败识别缺口收口——classify_block 补 connect/resolve 特征族 | `b2ed9969` | `main` |
 | 155 | 2026-09-22 | durable prefix grant live E2E 全绿 + classify_block stderr 识别缺陷修复 | `f2f7776b`, `de08f499` | `main` |
 | 154 | 2026-09-21 | 错误链路收口:TransportError category 恢复 + 全局兜底分级 | `aefd929b`, `1c2d80e0` | `main` |

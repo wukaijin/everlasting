@@ -91,3 +91,24 @@ jjh-mono 实测回归驱动的 checkpoint UI 收敛:(1) MessageItemFooter 新增
 ### Status
 
 [OK] **Completed**
+
+
+## Session 157: N7 DiffView 增强:行内高亮 + side-by-side 全链交付
+
+**Date**: 2026-09-27
+**Task**: N7 DiffView 增强:行内高亮 + side-by-side 全链交付
+**Branch**: `main`
+
+### Summary
+
+BACKLOG 附录 B N7 立项(推荐采纳后用户 OK)。brainstorm 三问裁定(同批交付/默认 unified+localStorage 记忆/EditFileCard 升级不重构)+ Q4 色路径 Q5 bench 自裁;勘察修正共识表「按文件折叠」已存在,实缺口=行内 word-diff+双栏。群聊评审(review preset,session c5460c4b,112.7 万 token,14 结论全 verified)回填:重分布改 \n 切分推进+不变量钉 util 断言、原子 null 三路径(超长4000/抛错/校验败)+view 级 run 帽200、split 必配 align-items:start、CRLF 消费点归一(util 纯净)、工具行三缺席条件、matchMedia 选树+jsdom stub+unmount 断言、localStorage 三纪律(key everlasting:diffview.mode)、e2e 空 fixture 恒真陷阱(负控先红后绿)、EditFileCard 截断点钉测、AC1 只做 DOM 断言。评审实锤「全局单键穿透视口降级」(桌面宽视口 inline ~250px 窄容器不受 768px 视口降级保护)→ allowSplit prop(默认 true)+ ToolCallCard 一行 opt-out,PRD R7/AC6 修正案任务侧采纳(依据=用户 Q2 前提,一行可回退)。实施 trellis-implement 子代理交付:intraLineDiff.ts util+13 测试、DiffView 行内/split/工具行/持久化、EditFileCard 行内+口径统一、e2e 2 用例。trellis-check 全 AC ✅(修一处 e2e 名实不符:空载荷≠raw-only)。视觉抽查:VLM 判「行内高亮看不见」被确定性数值复核推翻(computed 0.28 vs 0.12、Δ绿≈16% GitHub 同量级)——VLM 对 13px 小色块判定不可信实证入 spec。终态 vitest 2095 绿(基线2056,+39)/vue-tsc 零错/e2e 30/30 真实 Chromium。spec 备案:generative-ui.md N7 渲染契约节、responsive-mobile.md matchMedia 选树例外、ROADMAP/BACKLOG 记账。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `073c7f5a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
