@@ -11,7 +11,7 @@
 从新到旧保留,累计超 200 MiB(env `EVERLASTING_BACKUP_BUDGET_MB` 覆盖)
 即停,**至少 2 份**(超预算也保留)、最多仍 7 份。契约细节见
 [database-guidelines "DB 快照备份"](../database-guidelines.md) +
-[disk-governance](disk-governance.md)。
+[disk-governance](../disk-governance.md)。
 **不要**把 spawn 挪进 bin 内联 —— lib 的 `db` 模块私有,沿用
 "wrapper so the bin never touches private modules" 先例。
 
@@ -31,7 +31,7 @@
 `08-28-f2-scheduled-tasks`):第 4 个 spawn,bin 在 sweeper 旁调
 `server::spawn_task_scheduler(&state)`,30s tick 扫 `scheduled_tasks`
 到期任务经 `chat_inner` 注入(契约细节见
-[scheduled-tasks](scheduled-tasks.md))。**停机变体**:backup/sweeper
+[scheduled-tasks](../scheduled-tasks.md))。**停机变体**:backup/sweeper
 是纯 detached(进程退出即亡),scheduler 因 fire 有副作用、需要即时停
 —— `AppState.scheduler_cancel: CancellationToken` 字段(load_inner 纯
 分配,不违 RULE-DAEMON-001;`CancellationToken::new()` 无 spawn 语义),
@@ -49,7 +49,7 @@ token 挂 AppState 字段**(无 OnceLock 必要——纯分配直接构造);不�
 `shutdown_signal` 同段 cancel)。GUI Full 逃生模式只跑一次性启动 pass
 (`run_governor_pass_once`,**有意的** Full 分支装配,Thin 场景由本节拍
 兜底);WebKitCache 清理是唯一必须装在 setup 公共区(mode resolve 后、
-Thin 早退 return 前)的,见 [disk-governance](disk-governance.md) 陷阱段。
+Thin 早退 return 前)的,见 [disk-governance](../disk-governance.md) 陷阱段。
 
 **日志文件**(2026-09-03 F3 P0-b 起改为**进程内 appender**,
 `daemon.sh` 脚本重定向与轮转退役):

@@ -11,9 +11,9 @@
 | [Directory Structure](./directory-structure.md) | 后端目录结构 + 模块组织 | 占位待补(仅 Large-File Splitting 对照表) |
 | [Agent Loop Architecture](./agent-loop-architecture.md) | agent loop / 关卡 / turn 模式(含子目录 pattern-*) | ✅ 有实质内容 |
 | [Daemon Server](./daemon-server.md) | daemon HTTP server 契约(axum 路由 / SSE / 进程模型;8 分篇已拆至子目录 `daemon-server/`) | ✅ 有实质内容 |
-| [Scheduled Tasks](./scheduled-tasks.md) | F2 定时任务执行契约(30s tick / due 落账 / 三档 target_mode,08-31 per_run + 09-07 group_chat) | ✅ 有实质内容 |
+| [Scheduled Tasks](./scheduled-tasks.md) | F2 定时任务执行契约(30s tick / due 落账 / 三档 target_mode,08-31 per_run + 09-07 group_chat;origin 链 / LLM 家族 / group_chat fire 分篇已拆至子目录 `scheduled-tasks/`) | ✅ 有实质内容 |
 | [Disk Governance](./disk-governance.md) | F3 磁盘治理(governor 每日节拍 / 孤儿回收 / 备份预算 / 日志进程内轮转) | ✅ 有实质内容 |
-| [Sandbox Executor](./sandbox-executor.md) | 执行期沙盒(P3b Landlock+seccomp / P3c 三态 + Plan 只读面 / P3d 后台升级闭环 / 2026-09-21 listen 识别缺口修复 + 长期方案 §12) | ✅ 有实质内容 |
+| [Sandbox Executor](./sandbox-executor.md) | 执行期沙盒(P3b Landlock+seccomp / P3c 三态 + Plan 只读面 / P3d 后台升级闭环 / 2026-09-21 listen 识别缺口修复 + 长期方案;§10-§14 分篇已拆至子目录 `sandbox-executor/`) | ✅ 有实质内容 |
 | [Permission Layer](./permission-layer.md) | per-session mode + ⑨ 关权限层(A2+B7;含 ask_no_timeout 全局开关;§4-§6 已拆至子目录 `permission-layer/`) | ✅ 有实质内容 |
 | [Background Shell Observability](./background-shell-observability.md) | 后台 shell UI 可观测性(list/kill IPC + `background_shell:update` 事件 + 双模式接线) | ✅ 有实质内容 |
 | [Database Guidelines](./database-guidelines.md) | DB 模式(migrations / schema 纪律 / 审计落表 / 各表 CRUD) | ✅ 有实质内容(残留少量模板句可清) |
@@ -23,7 +23,7 @@
 | [Multi-Provider Contract](./multi-provider-contract.md) | Provider trait + catalog + Anthropic/OpenAI dispatch | ✅ 有实质内容 |
 | [Workflow Plugin Builtin](./workflow-plugin-builtin.md) | builtin workflow plugin 内置化机制(dev 内容契约 / tasks 隔离) | ✅ 有实质内容 |
 | [Worktree Contract](./worktree-contract.md) | worktree attach/detach/delete + cancel + system prompt(子目录) | ✅ 有实质内容 |
-| [Subagent Runs Schema](./subagent-runs-schema.md) | `subagent_runs` 表 schema(B6 PR2,状态机 / 列 / 隔离) | ✅ 有实质内容 |
+| [Subagent Runs Schema](./subagent-runs-schema.md) | `subagent_runs` 表 schema(B6 PR2,状态机 / 列 / 隔离;列增量 + 模式泛化已拆至子目录 `subagent-runs-schema/`) | ✅ 有实质内容 |
 | [Group Chat Presets](./group-chat-presets.md) | `group_chat_presets` 表 + 四 IPC 命令 + 前端 merged 消费(GCE-P1,快照语义 / UUID 引用 / 校验矩阵) | ✅ 有实质内容 |
 | [Token Usage Tracking](./token-usage-tracking.md) | A4 token 计量契约索引(Scope/Tests 留本文)+ 14 Scenario 分篇(turn_trace 各列 / cache 归因 / tools=0 判别 / 签名契约 / 用例对照 / 决策记录;子目录 `token-usage-tracking/`) | ✅ 有实质内容 |
 | [Latency Tracking](./latency-tracking.md) | F5 latency 三列 + ttfb/thinking 计量(签名契约 / 用例 / 决策已拆至子目录 `latency-tracking/`) | ✅ 有实质内容 |

@@ -4,7 +4,7 @@
 
 ## B6+ C — per-agent model UI + worker model 可观测性 (2026-07-03)
 
-`subagent_runs.model_display TEXT NULL` 列由后端 `dispatch.rs::run_subagent` 写 `resolve_worker_provider` 返回的 `Option<String>`(catalog hit = Some(display);parent 继承 / catalog miss = None → NULL,见 `subagent-runs-schema.md` "B6+ C additions" 段)。前端两个 chip 与一个 Settings 分类(「智能体」组 Subagents)依赖该列。
+`subagent_runs.model_display TEXT NULL` 列由后端 `dispatch.rs::run_subagent` 写 `resolve_worker_provider` 返回的 `Option<String>`(catalog hit = Some(display);parent 继承 / catalog miss = None → NULL,见 `backend/subagent-runs-schema/column-additions.md` "B6+ C additions" 段)。前端两个 chip 与一个 Settings 分类(「智能体」组 Subagents)依赖该列。
 
 ### ToolCallCard dispatch 分支 — `workerModelText` chip
 
@@ -65,5 +65,5 @@ User 改下拉
 
 ### 设计决策完整版
 
-见 `.trellis/spec/backend/subagent-runs-schema.md` "B6+ C additions" 段 + `.trellis/spec/backend/agent-loop-architecture.md` `run_chat_loop` 参数表 row 25(B6+ C 决策)。本节仅为前端 cross-ref 锚点。
+见 `.trellis/spec/backend/subagent-runs-schema/column-additions.md` "B6+ C additions" 段 + `.trellis/spec/backend/agent-loop-architecture.md` `run_chat_loop` 参数表 row 25(B6+ C 决策)。本节仅为前端 cross-ref 锚点。
 

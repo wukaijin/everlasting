@@ -13,7 +13,7 @@ daemon 都必须自动退出,绝不留孤儿占端口。
 
 **实现**(`bin/everlasting-daemon.rs::main`,Linux):
 `prctl(PR_SET_PDEATHSIG, SIGTERM)` —— 内核在父进程终止时自动给 daemon 发
-SIGTERM,走 [`shutdown_signal`](#) 的优雅退出路径。两个 race 防护:
+SIGTERM,走 [`shutdown_signal`](./scenario-graceful-shutdown-sse.md) 的优雅退出路径。两个 race 防护:
 1. `getppid() == 1`(父进程已死被 init 收养)→ 立即 exit 1,不 bind 端口。
 2. prctl 只在调用一刻设置;daemon 不会 reparent,故无需重设。
 

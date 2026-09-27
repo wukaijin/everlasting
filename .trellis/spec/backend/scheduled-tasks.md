@@ -5,6 +5,12 @@
 > 本文件是 F2 的 code-spec:调度判定语义、origin 载体链、wire 契约、错误矩阵。
 > 实现在 `app/src-tauri/src/scheduler/` + `db/scheduled_tasks.rs` + `commands/scheduled_tasks.rs`。
 
+## Part Index(2026-09-28 doc-split)
+
+- [origin-carrier-chain](./scheduled-tasks/origin-carrier-chain.md) — origin 载体链跨层契约(ChatEntry → QueuedMessage → ChatLoopRequest)
+- [llm-tool-family](./scheduled-tasks/llm-tool-family.md) — LLM 调度家族(agent 作者面,created_by 分离 + tool 侧双 gate)
+- [group-chat-fire](./scheduled-tasks/group-chat-fire.md) — group_chat 档 fire(定时审议 GCE-M4a,四态路由 + 计数矩阵)
+
 ---
 
 ## Scenario: F2 调度判定与 fire
@@ -184,138 +190,12 @@ mark_task_fired(task.id, due, next_fire_display(&spec, due));
 
 ---
 
-## Scenario: origin 载体链(跨层契约)
+> **已拆出**(2026-09-28 doc-split):origin 载体链跨层契约(Why 推理 / 链路 /
+> Wrong-vs-Correct / 对照组断言要求)见 [`scheduled-tasks/origin-carrier-chain.md`](./scheduled-tasks/origin-carrier-chain.md)。
 
-### 1. Scope / Trigger
+> **已拆出**(2026-09-28 doc-split):LLM 调度家族(agent 作者面,`created_by`
+> 分离 / tool 侧双 gate 不进核心 / worker 与群聊隔离)见 [`scheduled-tasks/llm-tool-family.md`](./scheduled-tasks/llm-tool-family.md)。
 
-- 触发:任何「给用户消息附加来源/上下文标记」的新需求(F2+ `schedule_task` tool、未来其他自动注入方)。
-- 为什么:标记必须穿越「路由临界区 → 内存队列 → 另一个请求的驱动器 → persist」,载体选错(只加在 `ChatEntry`)在忙时路径**必然失效**。
-
-### 2. Why(关键推理,勿回退)
-
-忙时 fire 的条目由*另一个*请求的驱动器在 round>0 消费;驱动器对 round>0
-一律丢弃请求级上下文(resend_seq/forced_dispatch 同款,`chat.rs` round 分支)
-——所以载体必须在 `QueuedMessage`(队列条目自有字段),不能只在
-`ChatEntry`。闲时路径 round 0 也从 drained 尾条取 origin,两条路统一。
-
-### 3. Contracts
-
-- 链路:`ChatEntry.origin` →(路由临界区内 `push_with_origin` 纯赋值拷入)→ `QueuedMessage.origin` →(驱动器每轮 move 全量 drained)→ `ChatLoopRequest.drained: Vec<QueuedMessage>` → init.rs:尾条 origin 派生 `drained.last()` 供 persist 门控 + `metadata.scheduled` 信封;非尾条由 persist 循环(RULE-QUEUE-001 根治,2026-08-29)逐条补写并各带各的 `scheduled` 信封。
-- `TaskOrigin` 是 internally-tagged enum(`#[serde(tag="kind")]`),**会随 `QueuedMessage: Serialize` 进入 `list_queued_messages` wire**(前端排队占位「定时」徽标的依据)——这是有意定案,不是泄漏;但**不进 chat 事件主链**。
-- `drained` 恒空的路径(用户发送/群聊/worker/legacy)行为逐字节不变;多 drain 时每行 origin 各随各行落 metadata(persist 循环 + 尾条 persist 点双写),不再有「只有尾条 origin 生效」的缺口(该缺口即 DEBT §RULE-QUEUE-001,已根治)。
-
-### 4. Wrong vs Correct
-
-#### Wrong
-
-```rust
-// 只在 ChatEntry 加字段
-pub struct ChatEntry { ..., pub origin: Option<TaskOrigin> }
-// 期望忙时入队后仍能取回 → round>0 驱动器重建请求,字段丢失,标记静默消失
-```
-
-#### Correct
-
-```rust
-// ChatEntry(入口)+ QueuedMessage(载体)+ ChatLoopRequest(传递)三点齐加,
-// 临界区内纯赋值拷入;init.rs 侧尾条派生 + 非尾条 persist 循环各带各的 origin
-let task_origin = request.drained.last().and_then(|qm| qm.origin.clone());
-```
-
-### 5. Tests Required
-
-见上节 origin 全链测试;新增携带来源的场景**必须**同时有对照组断言
-(无 origin 路径 metadata 恒 None),防 additive 字段向既有路径漂移。
-
----
-
-## Scenario: LLM 调度家族(agent 作者面,08-29-schedule-task-tool)
-
-### 1. Scope / Trigger
-
-- 触碰「agent 创建/查询/删除定时任务」的任何逻辑(`tools/scheduled_task_family.rs`
-  三件 + `create_scheduled_task_in_pool` 链);改动 `created_by` 语义或 tool 侧 gate。
-- fire 侧(本文件上部全部契约)**零改动且与 created_by 无关** —— agent 建的任务
-  走同一 origin 链/去重/catch-up/审计。
-
-### 2. Contracts
-
-- **作者面分离**:`created_by ∈ {'user','agent'}`。tool 路径(`schedule_task`/
-  `schedule_status`/`schedule_cancel`,见 [tool-contract 17](./tool-contract/17-schedule-task-family.md))
-  写/查/删全部限 `'agent'` 行;两个 transport 包装(Tauri command + daemon route)
-  恒传 `'user'` —— `create_scheduled_task_in_pool` 是 pool 级核心,`_inner` 薄包装
-  (Q0 单源不变,`ToolContext` 无 AppState 故抽池级)。
-- **tool 侧双 gate 不进核心**:kill switch(同键 `SCHEDULED_TASKS_ENABLED_KEY`,
-  仅拦 create)与 per-project 活跃 agent 任务上限(`MAX_ACTIVE_AGENT_TASKS=20`,
-  `count_enabled_by_creator`;TOCTOU 有意接受)都只存在于 tool 层 —— 用户 UI/IPC
-  创建路径行为零变化,这是「gate 放 tool 不放 `_in_pool`」的定案理由。
-- `ScheduledTaskPayload.created_by` 暴露到 wire(additive);前端 Settings 任务卡
-  `created_by==='agent'` 渲染「agent」来源徽标,user 不渲染(缺省态零噪音)。
-- 隔离:worker `STRUCTURALLY_DISABLED` 三员;群聊 `group_chat_tool_defs` 白名单
-  天然排除(零改动);**禁止**反向动 `filter_tools_for_session_type`(方向相反,
-  review P1 实证)。
-
-### 3. Tests Required
-
-见 [tool-contract 17 §3](./tool-contract/17-schedule-task-family.md);本域涟漪:
-db 层 `created_by_agent_persists_and_filters_by_creator`(作者过滤正负向 +
-None 不过滤)。
-
----
-
-## Scenario: group_chat 档 fire(定时审议,GCE-M4a,09-07-gce-m4a-scheduled-deliberation)
-
-### 1. Scope / Trigger
-
-- 触碰 `fire_group_chat` / `route_prior_session` / `GroupChatTaskConfig` 校验 /
-  `last_fire_outcome` / 定时场转录导出(`group_chat_transcript.rs`)的任何逻辑。
-- 为什么需要 code-spec 深度:容错路由有四臂且有两条「反直觉不动作」臂;计数
-  矩阵与 F2b 契约有交叉;凭直觉写会烧 token(评审 5 P1 实证)。
-
-### 2. Contracts
-
-- **四态路由显式判定**(不做「终态/无」笼统兜底):busy(内存
-  `session_active_request` 命中)→ skip;interrupted + checkpoint(round<30)
-  → resume(P1a 五闸全套);interrupted 无 checkpoint → 审计 error **本期不动**
-  (resume 闸③必拒,降级开新场 = 双活场风险);僵尸(round≥30)与停摆
-  (stop_reason NULL 且无 checkpoint)→ 补 `finalize_group_chat_lifecycle(error)`
-  + 审计 `recovered` → 开新场;终态/无 → 开新场。防御臂:旧场已删 / 非群聊行
-  / DB 读失败 → OpenNew(且先排 busy,无在跑场被并开)。
-- **计数矩阵**(F2b「只计真正送入 chat_inner 的 fire」的 group_chat 对齐):
-  全臂消费 due(`last_fired_at` 记 due);`run_count` 只计 started / resumed /
-  开新场 Err(含建场失败,per_run 先例);skip / resume 拒绝 / precheck 不过
-  **不计**——否则 weekly+max_runs 撞 N 次 busy 提前烧完预算。
-- **catalog 预检先于建场**:moderator + 全部 participants 查 models 表,缺失
-  → audit error(`model_missing`)不建场(否则 model 被删后每周期落空壳
-  session 循环)。TOCTOU 窗口接受(chat_inner Err 有审计兜底)。
-- **半透传 sink**(不是 NullSink):`ScheduledGroupChatSink` 只透传
-  `ChatEvent::Done`(收官 toast 唯一事件源)+ `permission:ask` +
-  `has_live_observer()` 透传 registry —— 恒 false 会废掉 GC3 8s 快拒并掐死
-  盯场观察者的弹窗。
-- **转录导出守卫挂 `GroupChatCtx.created_via`**(additive 载体,metadata
-  `created_via=="scheduled"` 读入):终态块全通道共享,守卫缺失会把 GUI/MCP/
-  script 场也导出。导出挂 checkpoint keep-or-delete **之前**(读 started_at);
-  失败仅 warn 不影响终态落库。文件名 sanitize:whitelist(控制符与路径分隔
-  剥离、连续点折叠防 `..`、空白折一、CJK 保留、截 40)。
-- **CHECK 不变式**:`target_mode='group_chat' ⇒ target_session_id IS NULL AND
-  group_chat_config IS NOT NULL`(table rebuild 沿 per_run 五步舞;幂等断言)。
-  `validate_target_session` 对 group_chat 目标的 400 拒绝**保持不动**(fire 进
-  空闲群聊会抹旧场 summary——M3 实证)。
-- 主题原样发题(F2 注脚不进群聊议题);归因走建群 metadata 三键
-  (`created_via="scheduled"` + `scheduled_task_id` + `scheduled_task_name`)。
-
-### 3. Wrong vs Correct
-
-- ❌ busy 跳过计 `run_count` → max_runs 预算被空转烧完;✅ skip 消费 due 不计数。
-- ❌ resume 拒绝时「兜底开新场」→ 与僵死旧场双活双烧;✅ 本期不动,下周期重路由。
-- ❌ NullSink 省事 → GC3 快拒失效 + toast 无事件源;✅ 半透传。
-- ❌ 在编排器终态块里按 session_type 挂导出 → GUI 群聊全部被导出;✅ created_via 守卫。
-
-### 4. Tests Required
-
-五组(`scheduler/tests_tick.rs` + `agent/tests_group_chat.rs` +
-`group_chat_transcript.rs` + `db/migrations_tests.rs`):tick 四臂路由 /
-计数矩阵(嵌入各臂断言)/ resume 兜底(dispatch seam 注入拒绝 + 无 checkpoint
-构造;**直调 fire 的用例 attach 后必须 `task_row` 重载**——fixture 裸 SQL 改行,
-内存结构体是陈旧的)/ 迁移 rebuild 幂等 + CHECK / 对照组(fixed/per_run 既有
-用例零改动 + kill-switch 同效 + 非 scheduled 场不导出)。
+> **已拆出**(2026-09-28 doc-split):group_chat 档 fire(定时审议 GCE-M4a,
+> 四态容错路由 / 计数矩阵 / catalog 预检 / 半透传 sink / 转录导出守卫)见
+> [`scheduled-tasks/group-chat-fire.md`](./scheduled-tasks/group-chat-fire.md)。

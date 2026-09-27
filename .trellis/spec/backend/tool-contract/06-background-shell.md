@@ -186,7 +186,7 @@ let turn_messages = {
   origin=None)`) and renders exactly ONE terminal text per
   notification. Notifications without an offer render the legacy
   format byte-identically. Plan-mode turns never escalate. Full
-  contract: `.trellis/spec/backend/sandbox-executor.md` §11.
+  contract: `.trellis/spec/backend/sandbox-executor/10-escalation-loops.md` §11.
 
 #### Permission routing (⑨ 关 Tier 4)
 
