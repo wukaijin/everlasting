@@ -1048,3 +1048,25 @@ GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M
 ### Next Steps
 
 - 无(评审 5 未决项全数定稿:worker 5(a) 用户裁定、显式 sandboxed/escalation 命名/UI 噪音标准/AC1 措辞)
+
+
+## Session 60: N19 mcode 语义吸收:调研五件核验+实施三件收口
+
+**Date**: 2026-09-29
+**Task**: N19 mcode 语义吸收:调研五件核验+实施三件收口
+**Branch**: `main`
+
+### Summary
+
+调研(2e9b06d6):五件核验——件①CJK 缺陷形态不存在(无 fuzzy/零归一化)、件②diff 限界三层天然规避(记注)、件③SIGTERM 宽限真实缺口、件④daemon shutdown 链漏 kill_all(优雅路径也孤儿化,缺口A/缺口B分层)、件⑤取消配对 wire 自愈兜住但层次不对齐;BACKLOG C.2 回填+C.3 两条记注。实施(5ca66678):shutdown 链补 kill_all(Immediate 档,SIGTERM 集成测试)+kill_and_collect 两段式(单杀 3s 宽限/批量恒 0,kill_tx 改 u64 档位,前台4测+后台2测)+finalize_turn 取消臂差集补齐(FinalizeFrame.tool_calls,配对完整性落库层对齐,wire 自愈回归本职)+CJK 测试锚;spec 三处回填;全量 2616 passed ×2,nextest 158s 无新慢测试。教训:check 子代理 env 覆盖测试的并行竞态用进程级 mutex 收口(GRACE_ENV_TEST_MUTEX);子代理 600s 无活动超时但交付完整,主会话接管跑测试即可
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2e9b06d6` | (see git log) |
+| `5ca66678` | (see git log) |
+
+### Status
+
+[OK] **Completed**
