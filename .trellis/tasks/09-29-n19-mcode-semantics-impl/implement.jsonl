@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/archive/2026-09/09-29-n19-mcode-semantics-research/research/n19-semantics-gap-analysis.md", "reason": "调研依据:五件现状判定+行号证据+改动面方案,本任务实施范围的单一出处"}
+{"file": ".trellis/spec/backend/daemon-server/pattern-shutdown-checklist.md", "reason": "D1 落点:shutdown 链顺序图/不变量/测试样板(SIGTERM 集成测试+SIGNAL_TEST_MUTEX 串行),kill_all 步要加进此契约"}
+{"file": ".trellis/spec/backend/daemon-server/scenario-graceful-shutdown-sse.md", "reason": "修改 shutdown 路径的触发条件与既有教训(with_graceful_shutdown 语义),改 shutdown_signal 前必读"}
+{"file": ".trellis/spec/backend/tool-contract/06-background-shell.md", "reason": "D2 落点:RULE-E-002 进程组 SIGKILL 契约所在,两段式升级注记回填此处;registry kill 通道契约"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-cancellation-guard.md", "reason": "D3 取消语义:取消检查点分布与 guard 模式,差集补齐要嵌进既有取消语义"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/pattern-turn-boundary-persist.md", "reason": "D3 落库语义:轮边界 persist 契约(partial results 落库现状),synthetic 差集补齐的落点语义"}

@@ -1887,12 +1887,48 @@ pub(crate) async fn finalize_turn(
         seq,
         messages,
         last_cwd,
+        tool_calls,
     } = fx;
     let skip_persist = role.skip_persist;
     let db = &deps.db;
     let sink = &request.sink;
     let rid = &request.rid;
     let session_id = &request.session_id;
+    // N19 (2026-09-29, task `09-29-n19-mcode-semantics-impl`): on the
+    // cancel path, close the tool_use/tool_result pair gap. The serial
+    // dispatch loop `break`s out on cancel, so tool_uses that never
+    // started (or were interrupted before their result block landed)
+    // have NO ToolResult here — the DB tail would carry
+    // assistant(tool_use×N) followed by a user message with fewer
+    // than N results, and only the wire layer's per-request orphan
+    // injection kept the next send() from 400ing. Aligning with the
+    // send-stage cancel (drive.rs persists one synthetic is_error
+    // tool_result per tool_use), we append the DIFFERENCE SET: every
+    // (id, name) lacking a real result gets a synthetic block in the
+    // SAME user message as the partial real results. Idempotent by
+    // construction — an empty difference (L2 parallel slots always
+    // pair; a no-cancel turn) appends nothing, so non-cancel behavior
+    // is byte-identical. Block source is single-sourced with
+    // drive.rs via `helpers::synthetic_tool_result_block`.
+    //
+    // Must run BEFORE the loop-hint append below: wire order is
+    // real×N → synthetic×M → hint Text (hint stays terminal — see
+    // the OpenAI tool-message adjacency comment).
+    if cancelled {
+        let paired: HashSet<&str> = result_blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let synthetic: Vec<ContentBlock> = tool_calls
+            .iter()
+            .filter(|(id, _, _)| !paired.contains(id.as_str()))
+            .map(|(id, name, _)| crate::agent::helpers::synthetic_tool_result_block(id, name))
+            .collect();
+        result_blocks.extend(synthetic);
+    }
     // ⑬ loop detection (C2): if this turn tripped the detector,
     // append the hint as a Text block AT THE END of the
     // tool_results. Soft nudge only — execution was NOT skipped

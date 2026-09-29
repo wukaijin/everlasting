@@ -159,7 +159,16 @@ struct ShellEntry {
     /// `kill_all_for_session()` / on normal completion (the
     /// sender is dropped so the spawned task's `kill_rx` returns
     /// `Err(Recv)` and falls through to its normal path).
-    kill_tx: Option<oneshot::Sender<()>>,
+    ///
+    /// N19 (2026-09-29): the payload is the kill **grace tier** in
+    /// ms — single-kill paths (`kill()`, i.e. the `shell_kill`
+    /// tool) send [`crate::tools::shell::shell_kill_grace_ms`]
+    /// (SIGTERM → grace → SIGKILL); batch paths
+    /// (`kill_all_for_session` / `kill_all`) send `0` (Immediate,
+    /// direct SIGKILL — they run under the daemon shutdown budget
+    /// and must stay deterministic). See `run_background_task`'s
+    /// `kill_rx` arm.
+    kill_tx: Option<oneshot::Sender<u64>>,
 }
 
 #[allow(dead_code)] // see variant-level comments; reserved field
@@ -505,7 +514,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         };
 
         let pid = child.id();
-        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        let (kill_tx, kill_rx) = oneshot::channel::<u64>();
 
         // P3d: offers only exist for sandbox-originated shells, so the
         // sandboxed flag and the origin id fold into the single value
@@ -661,10 +670,13 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
             ShellState::Done { .. } => Ok(()),
             ShellState::Running { .. } => {
                 if let Some(tx) = entry.kill_tx.take() {
-                    // Ignore send error: receiver dropped means the
-                    // task already finished; the entry's state
-                    // will reflect that on the next status() call.
-                    let _ = tx.send(());
+                    // N19: single-kill tier — the LLM (or user) is
+                    // killing ONE shell; give its traps the grace
+                    // window. Ignore send error: receiver dropped
+                    // means the task already finished; the entry's
+                    // state will reflect that on the next status()
+                    // call.
+                    let _ = tx.send(crate::tools::shell::shell_kill_grace_ms());
                 }
                 Ok(())
             }
@@ -685,7 +697,9 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
             if let Some(entry) = g.shells.get_mut(&(session_id.to_string(), sid)) {
                 if let ShellState::Running { .. } = &entry.state {
                     if let Some(tx) = entry.kill_tx.take() {
-                        let _ = tx.send(());
+                        // N19: batch tier — session delete wants
+                        // deterministic teardown, no grace.
+                        let _ = tx.send(0);
                     }
                 }
             }
@@ -760,14 +774,19 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         let mut g = self.inner.lock().await;
         // Snapshot senders first to avoid holding the lock
         // across the sends (a woken task could try to re-lock).
-        let senders: Vec<oneshot::Sender<()>> = g
+        // N19: batch tier — 0 = Immediate (direct SIGKILL). The two
+        // callers run under hard budgets: daemon shutdown (SIGTERM→
+        // SIGKILL window 15s, drain 8s + axum grace already consume
+        // most of it) and GUI `RunEvent::Exit` (must not stall the
+        // exit by 3s per tier).
+        let senders: Vec<oneshot::Sender<u64>> = g
             .shells
             .values_mut()
             .filter_map(|e| e.kill_tx.take())
             .collect();
         drop(g);
         for tx in senders {
-            let _ = tx.send(());
+            let _ = tx.send(0);
         }
         Ok(())
     }
@@ -976,9 +995,14 @@ fn push_notification_bounded(
 /// 1. The child exits normally → normal exit_code path.
 /// 2. `kill_rx` fires (someone called `kill()` /
 ///    `kill_all_for_session()` / `kill_all()`) → kill_and_collect
-///    process group, treat as Killed.
-/// 3. `tokio::time::sleep(max_runtime_ms)` fires → kill_and_collect,
-///    treat as TimedOut.
+///    process group, treat as Killed. N19 (2026-09-29): the channel
+///    payload is the grace tier — `kill()` sends the single-kill
+///    grace (SIGTERM → window → SIGKILL), the batch paths send `0`
+///    (Immediate SIGKILL). A dropped sender (RecvError — no live
+///    path today, defensive) keeps the single-kill grace so the
+///    shell still dies within the old worst-case bound.
+/// 3. `tokio::time::sleep(max_runtime_ms)` fires → kill_and_collect
+///    (single-kill grace tier), treat as TimedOut.
 ///
 /// On any branch we read whatever stdout/stderr was buffered,
 /// capture the exit code, then write a single `ShellState::Done`
@@ -993,7 +1017,7 @@ async fn run_background_task(
     session_id: String,
     shell_id: String,
     mut child: tokio::process::Child,
-    mut kill_rx: oneshot::Receiver<()>,
+    mut kill_rx: oneshot::Receiver<u64>,
     max_runtime_ms: u64,
     // P3d: the originating tool_use id, `Some` only when the shell
     // was started under a sandbox spec (see `start()` — the fold is
@@ -1018,16 +1042,23 @@ async fn run_background_task(
 
     let (trigger, exit_code, stdout, stderr) = tokio::select! {
         biased;
-        _ = &mut kill_rx => {
+        res = &mut kill_rx => {
             // External kill (kill() / kill_all_for_session / kill_all).
-            let r = kill_and_collect(&mut child).await;
+            // Payload = grace tier (see fn doc); RecvError (sender
+            // dropped without a send) resolves the future the same
+            // way the old `&mut kill_rx` arm did — treat as a kill
+            // at the single-kill grace.
+            let grace = res.unwrap_or_else(|_| crate::tools::shell::shell_kill_grace_ms());
+            let r = kill_and_collect(&mut child, grace).await;
             let stdout = crate::tools::shell::collect_drain(stdout_task).await;
             let stderr = crate::tools::shell::collect_drain(stderr_task).await;
             (ShellExitTrigger::Killed, Some(r.exit_code), stdout, stderr)
         }
         _ = &mut sleep => {
-            // Max runtime elapsed.
-            let r = kill_and_collect(&mut child).await;
+            // Max runtime elapsed — single-kill grace tier (the
+            // user's own timeout policy already decided the death;
+            // the window only lets traps clean up first).
+            let r = kill_and_collect(&mut child, crate::tools::shell::shell_kill_grace_ms()).await;
             let stdout = crate::tools::shell::collect_drain(stdout_task).await;
             let stderr = crate::tools::shell::collect_drain(stderr_task).await;
             (ShellExitTrigger::TimedOut, Some(r.exit_code), stdout, stderr)
@@ -1314,34 +1345,86 @@ struct KillAndCollectResult {
     exit_code: i32,
 }
 
-/// SIGKILL the entire process group + reap. Output collection is
+/// Kill the process group + reap — the background twin of
+/// `tools::shell::kill_and_collect`'s two-stage (N19, 2026-09-29):
+/// `grace_ms > 0` → `kill(-pid, SIGTERM)`, wait once inside the
+/// window, escalate to SIGKILL on expiry; `grace_ms == 0` → direct
+/// SIGKILL (byte-identical to the pre-N19 behavior; the batch
+/// paths' tier). Kept as an independent same-shape impl rather
+/// than shared with the foreground: the two return shapes differ
+/// (exit-code-only vs full ShellResult) and each site's signature
+/// evolves with its caller — same rationale as the historical
+/// duplication. Grace tier per trigger: `kill()` sends
+/// `shell_kill_grace_ms()`, batch sends 0, the max-runtime arm
+/// passes `shell_kill_grace_ms()` directly. Output collection is
 /// the caller's job (pipes are taken and drained on spawned tasks
-/// before the select — see `run_background_task`).
-async fn kill_and_collect(child: &mut tokio::process::Child) -> KillAndCollectResult {
+/// before the select — see `run_background_task`). ESRCH is
+/// tolerated on both stages (see `kill_group`).
+async fn kill_and_collect(
+    child: &mut tokio::process::Child,
+    grace_ms: u64,
+) -> KillAndCollectResult {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
             let pid_raw = pid as i32;
-            let ret = unsafe { libc::kill(-pid_raw, libc::SIGKILL) };
-            if ret != 0 {
-                let errno = std::io::Error::last_os_error();
-                if errno.raw_os_error() != Some(libc::ESRCH) {
-                    tracing::warn!(
-                        error = %errno,
-                        pid = pid_raw,
-                        "background_shell: killpg failed (non-ESRCH); descendant may linger"
-                    );
+            if grace_ms > 0 {
+                // Grace stage: TERM the group so trap handlers can
+                // clean up; a group that exits inside the window is
+                // done (its own exit code is the answer).
+                let ret = unsafe { libc::kill(-pid_raw, libc::SIGTERM) };
+                warn_non_esrch(ret, pid_raw, "SIGTERM");
+                match tokio::time::timeout(std::time::Duration::from_millis(grace_ms), child.wait())
+                    .await
+                {
+                    Ok(status) => {
+                        return KillAndCollectResult {
+                            exit_code: status.ok().and_then(|s| s.code()).unwrap_or(-1),
+                        };
+                    }
+                    Err(_) => {
+                        tracing::info!(
+                            pid = pid_raw,
+                            grace_ms,
+                            "background_shell: SIGTERM grace expired, escalating to SIGKILL"
+                        );
+                    }
                 }
             }
+            // Hard stage: direct (grace 0) or post-escalation.
+            let ret = unsafe { libc::kill(-pid_raw, libc::SIGKILL) };
+            warn_non_esrch(ret, pid_raw, "SIGKILL");
         }
     }
     #[cfg(not(unix))]
     {
+        // Windows: tokio's kill is an unconditional TerminateProcess
+        // on the direct child — no group TERM stage exists to run
+        // first, so `grace_ms` is ignored (same as the foreground).
+        let _ = grace_ms;
         let _ = child.kill().await;
     }
 
     let exit_code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
     KillAndCollectResult { exit_code }
+}
+
+/// Shared ESRCH-tolerant warn for both kill stages: ESRCH (group
+/// already gone) is success; anything else logs at `warn!` but
+/// never propagates — the eventual `child.wait()` catches the rest.
+#[cfg(unix)]
+fn warn_non_esrch(ret: i32, pid: i32, stage: &str) {
+    if ret != 0 {
+        let errno = std::io::Error::last_os_error();
+        if errno.raw_os_error() != Some(libc::ESRCH) {
+            tracing::warn!(
+                error = %errno,
+                pid,
+                stage,
+                "background_shell: killpg failed (non-ESRCH); descendant may linger"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1963,6 +2046,114 @@ mod tests {
         reg.kill("s1", &shell_id).await.expect("kill on done is ok");
     }
 
+    /// N19 (2026-09-29), tier wiring ①: the SINGLE-kill tier carries
+    /// the grace payload through the channel — an ignore-TERM group
+    /// (`trap ''` sets SIG_IGN, inherited by children) survives the
+    /// SIGTERM window and dies only at the SIGKILL escalation. The
+    /// ≥2.5s lower bound IS the wiring proof: if `kill()` shipped the
+    /// batch tier's 0, the Killed flip would land in <1s. Runs ~3s at
+    /// the default grace — accepted because the tier split has no
+    /// cheaper deterministic probe that doesn't mutate process-wide
+    /// env (parallel tests would race the var). Holds
+    /// [`crate::tools::shell::GRACE_ENV_TEST_MUTEX`] for the whole
+    /// body: `registry.kill()` reads the env var, and the shell.rs
+    /// env-override test's set-var window must not shrink this
+    /// test's grace under parallel load.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn kill_single_grace_payload_survives_ignore_term_group() {
+        let _guard = crate::tools::shell::GRACE_ENV_TEST_MUTEX.lock().await;
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let marker = tmp.path().join("ready");
+        let shell_id = reg
+            .start(
+                "s1",
+                format!(
+                    "trap '' TERM; touch {}; while true; do sleep 0.1; done",
+                    marker.display()
+                ),
+                tmp.path().to_path_buf(),
+                Some(120_000),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // Wait for the script to install its trap (readiness marker).
+        for _ in 0..200 {
+            if marker.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let started = std::time::Instant::now();
+        reg.kill("s1", &shell_id).await.expect("kill ok");
+        for _ in 0..200 {
+            if let BackgroundShellStatus::Killed { .. } = reg.status("s1", &shell_id).await.unwrap()
+            {
+                assert!(
+                    started.elapsed() >= std::time::Duration::from_millis(2_500),
+                    "ignore-TERM group must outlive the grace window before SIGKILL, took {:?}",
+                    started.elapsed()
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("shell did not transition to Killed within 10s");
+    }
+
+    /// N19 (2026-09-29), tier wiring ②: the BATCH tier (`kill_all`,
+    /// the daemon-shutdown / GUI-exit path) pins 0 — an ignore-TERM
+    /// group is hard-killed immediately, no hidden grace window.
+    /// The <1.5s upper bound is the proof: if the batch path wrongly
+    /// shipped the 3s single-kill grace, the flip would take ≥3s.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn kill_all_immediate_on_ignore_term_group() {
+        let tmp = tempdir().unwrap();
+        let reg = InMemoryBackgroundShellRegistry::new();
+        let marker = tmp.path().join("ready");
+        let shell_id = reg
+            .start(
+                "s1",
+                format!(
+                    "trap '' TERM; touch {}; while true; do sleep 0.1; done",
+                    marker.display()
+                ),
+                tmp.path().to_path_buf(),
+                Some(120_000),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if marker.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let started = std::time::Instant::now();
+        reg.kill_all().await.expect("kill_all ok");
+        for _ in 0..100 {
+            if let BackgroundShellStatus::Killed { .. } = reg.status("s1", &shell_id).await.unwrap()
+            {
+                assert!(
+                    started.elapsed() < std::time::Duration::from_millis(1_500),
+                    "batch kill must be Immediate (no grace), took {:?}",
+                    started.elapsed()
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("shell did not transition to Killed within 2s");
+    }
+
     /// `status()` for an unknown shell_session_id returns NotFound.
     #[tokio::test(flavor = "multi_thread")]
     async fn status_unknown_returns_not_found() {
@@ -2393,10 +2584,21 @@ mod tests {
             .unwrap();
 
         // `started` must already be in the log (synchronous emit
-        // inside start()).
+        // inside start()). `exited` MAY also have landed by this
+        // first lock: `echo` completes in ~1ms and the watcher task
+        // runs on the same multi-thread runtime — whether the
+        // terminal event beats us here is pure scheduling (N19
+        // 2026-09-29: the new kill-tier tests' parallel load made
+        // the old strict `len == 1` assert flake ~1/3 runs). The
+        // invariant under test is ORDER: started first, exited (if
+        // present) second — not the absence of exited.
         {
             let g = log.lock().unwrap();
-            assert_eq!(g.len(), 1, "started emitted synchronously: {g:?}");
+            assert!(
+                (g.len() == 1 && g[0].1["kind"] == "started")
+                    || (g.len() == 2 && g[0].1["kind"] == "started" && g[1].1["kind"] == "exited"),
+                "started must be emitted synchronously (exited may have raced in): {g:?}"
+            );
             assert_eq!(g[0].0, EVENT_NAME);
             assert_eq!(g[0].1["kind"], "started");
             assert_eq!(g[0].1["sessionId"], "s1");

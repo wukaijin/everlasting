@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/archive/2026-09/09-29-n19-mcode-semantics-research/research/n19-semantics-gap-analysis.md", "reason": "验收对照:三件+测试锚的改动面与不变量清单(RULE-E-002 必死保持/时长预算/配对完整性)"}
+{"file": ".trellis/spec/backend/daemon-server/pattern-shutdown-checklist.md", "reason": "check:shutdown 顺序不变量与测试要求是否被遵守/更新"}
+{"file": ".trellis/spec/backend/tool-contract/06-background-shell.md", "reason": "check:RULE-E-002 语义升级注记与档位表是否回填"}
+{"file": ".trellis/spec/backend/agent-loop-architecture/tests-required.md", "reason": "check:测试纪律(新增行为必须钉测,取消/时序类测试的确定性要求)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check:后端质量通用约束"}

@@ -83,26 +83,36 @@ pub fn build_synthetic_tool_result_message(
 ) -> ChatMessage {
     let blocks: Vec<ContentBlock> = tool_calls
         .iter()
-        .map(|(id, name, _input)| {
-            let content = format!(
-                "Tool execution was interrupted: the user stopped the request or the \
-session was cancelled before the tool could run. The tool {} did not run.",
-                name
-            );
-            ContentBlock::ToolResult {
-                tool_use_id: id.clone(),
-                content,
-                is_error: true,
-                images: None,
-                resolved: None,
-            }
-        })
+        .map(|(id, name, _input)| synthetic_tool_result_block(id, name))
         .collect();
     ChatMessage {
         role: Role::User,
         content: MessageContent::Blocks(blocks),
         speaker: None,
         attachments: None,
+    }
+}
+
+/// ONE synthetic `is_error` ToolResult block for a tool_use that
+/// never produced a real result. Single source for both synthetic
+/// sites (N19, 2026-09-29): the send-stage cancel
+/// ([`build_synthetic_tool_result_message`] — all tool_calls) and
+/// the execution-stage cancel difference set (`finalize_turn`'s
+/// cancelled arm — only the tool_uses lacking a real result). Both
+/// sites must keep the copy byte-identical so the LLM cannot tell
+/// which layer produced the block.
+pub fn synthetic_tool_result_block(id: &str, name: &str) -> ContentBlock {
+    let content = format!(
+        "Tool execution was interrupted: the user stopped the request or the \
+session was cancelled before the tool could run. The tool {} did not run.",
+        name
+    );
+    ContentBlock::ToolResult {
+        tool_use_id: id.to_string(),
+        content,
+        is_error: true,
+        images: None,
+        resolved: None,
     }
 }
 

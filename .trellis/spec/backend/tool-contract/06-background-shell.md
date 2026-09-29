@@ -15,7 +15,9 @@ test suites, dev servers. L1a adds a sibling toolset so the LLM
 can start a long-running command, return a handle immediately,
 and react to its completion when the next agent-loop turn begins.
 Same `sh -c <command>` execution model, same env-allowlist
-(RULE-E-001), same process-group SIGKILL (RULE-E-002), same
+(RULE-E-001), same process-group kill (RULE-E-002 — two-stage
+since N19 2026-09-29, see the kill-tier table under §3 "Lifecycle
+hooks"), same
 30 KB disk-spill threshold — but the lifetime crosses both the
 `execute_tool` call AND the `invoke("chat")` call.
 
@@ -248,13 +250,49 @@ classification algorithm (2026-07-04).
 
 | Hook | Where | Trigger |
 |---|---|---|
-| `kill_all_for_session(session_id)` | `commands/sessions.rs::delete_session` | User deletes the chat session; every bg shell under that session is SIGKILLed |
-| `kill_all()` | `lib.rs::run`'s `RunEvent::Exit` closure | App shutdown; every bg shell across every session is SIGKILLed |
-| `kill(session_id, shell_session_id)` | `shell_kill::execute` | LLM-driven kill; SIGKILLs one shell |
+| `kill_all_for_session(session_id)` | `commands/sessions.rs::delete_session` | User deletes the chat session; every bg shell under that session is killed (Immediate tier) |
+| `kill_all()` | `lib.rs::run`'s `RunEvent::Exit` closure **and** `daemon/server.rs::shutdown_signal` (N19, 2026-09-29) | App / daemon shutdown; every bg shell across every session is killed (Immediate tier) |
+| `kill(session_id, shell_session_id)` | `shell_kill::execute` | LLM-driven kill; kills one shell (grace tier) |
 
-All three use the registry's process-group SIGKILL (RULE-E-002)
-so descendants of `&` / `nohup` / pipelines are reaped along
-with the direct child.
+All three use the registry's process-group kill (RULE-E-002) so
+descendants of `&` / `nohup` / pipelines are reaped along with the
+direct child.
+
+##### Kill tiers — two-stage since N19 (2026-09-29, task `09-29-n19-mcode-semantics-impl`)
+
+RULE-E-002's semantics upgraded from "SIGKILL the entire process
+group" to "**必死且先礼后兵**": single-kill paths send
+`kill(-pid, SIGTERM)` first and wait a grace window (default 3s,
+env `EVERLASTING_SHELL_KILL_GRACE_MS` overrides; read per call,
+no caching — see `tools/shell.rs::shell_kill_grace_ms`) so trap
+handlers in the script (npm / cargo / make all trap TERM) get a
+chance to clean up (temp files, port teardown, lock release);
+only on window expiry does the SIGKILL land. The "must die"
+invariant is unchanged — worst case = old behavior + grace.
+
+| Trigger path | Tier | Payload on `kill_tx: oneshot::Sender<u64>` |
+|---|---|---|
+| Foreground `shell` cancel arm / timeout arm (`shell.rs::spawn_and_collect`) | grace | `shell_kill_grace_ms()` passed directly |
+| Background max-runtime timeout arm (`run_background_task` sleep) | grace | `shell_kill_grace_ms()` passed directly |
+| `kill()` (the `shell_kill` tool) | grace | sends `shell_kill_grace_ms()` |
+| `kill_all_for_session` (session delete) | **Immediate** | sends `0` |
+| `kill_all` (daemon shutdown / GUI exit) | **Immediate** | sends `0` |
+
+Batch paths deliberately pin 0: they run under the daemon shutdown
+budget (SIGTERM→SIGKILL window 15s; drain 8s + axum grace already
+consume most of it) and the GUI exit must not stall 3s per tier.
+`ShellExitTrigger::Killed` / `BackgroundShellOutcome::Killed` do
+NOT distinguish the stages — killed is killed (the graceful exit
+code only surfaces on the foreground `[exit code: N]` line, never
+in the background outcome, which classify pins to -1). Windows
+stays on `child.kill()` (TerminateProcess); the grace parameter
+is ignored there — no group TERM stage exists. ESRCH tolerance
+holds on both stages. Implementation note: the foreground
+(`tools/shell.rs::kill_and_collect`) and background
+(`background_shell/in_memory.rs::kill_and_collect`) two-stage
+killers are intentionally two same-shape impls, not one shared
+fn — return shapes differ and each evolves with its caller
+(historical duplication rationale).
 
 ### 4. Validation & Error Matrix
 
@@ -269,8 +307,8 @@ with the direct child.
 | `shell_status` / `shell_kill` cross-session access | `is_error: true`, "Background shell <id> is not owned by this chat session" |
 | `shell_kill` on already-completed shell | `Ok(())` — idempotent no-op |
 | `notification_queue` overflows past 100 entries | Oldest entry dropped + `tracing::warn!` (no panic) |
-| `delete_session` with running bg shells | `kill_all_for_session` called; SIGKILLs sent synchronously, teardown async (does not block IPC) |
-| App `RunEvent::Exit` with running bg shells | `kill_all` called; SIGKILLs sent before OS process reaping |
+| `delete_session` with running bg shells | `kill_all_for_session` called (Immediate tier: SIGKILLs sent synchronously), teardown async (does not block IPC) |
+| App `RunEvent::Exit` / daemon shutdown with running bg shells | `kill_all` called (Immediate tier); kills sent before OS process reaping |
 | `agent_loop` empty notification queue | Skip injection (no extra `.clone()`, no extra `push()`) |
 
 ### 5. Good / Base / Bad Cases

@@ -8,6 +8,7 @@ use super::tests_common;
 mod basic;
 mod budget;
 mod cache_head_stability;
+mod cancel_pairing;
 mod checklist;
 mod checkpoint;
 mod compaction_summary;

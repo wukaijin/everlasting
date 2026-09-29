@@ -48,10 +48,12 @@ destructive-command 路径(`delete_session` / `detach_worktree` /
 **shutdown 顺序(收到 SIGINT/SIGTERM 后)**:
 ```
 signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
+       → background_shells.kill_all(Immediate 档)
        → axum drain(SHUTDOWN_GRACE_SECS=3s) → 进程退出
 ```
-最坏 8s + 3s = 11s,故 `scripts/daemon.sh` 的 SIGTERM→SIGKILL 窗口从 8s
-拉到 **15s**(留 4s 余量),保证 SIGKILL 永远是「等不过来」的最后手段而非
+最坏 8s + 3s = 11s(kill_all Immediate 档毫秒级,不占预算),故
+`scripts/daemon.sh` 的 SIGTERM→SIGKILL 窗口从 8s 拉到 **15s**
+(留 4s 余量),保证 SIGKILL 永远是「等不过来」的最后手段而非
 抢先于 drain。
 
 **关键不变量(本场景特有)**:
@@ -71,6 +73,47 @@ signal → sse.shutdown() → cancel_and_drain_all_agent_loops(8s)
   agent_loop_cancel_in_turn_2_kills_loop` 在 agent loop 层单测覆盖
   (daemon 路径注入 provider 成本过高,见该任务 design.md §6.2 方案 (b))。
 - 两个 SIGTERM 测试共享 `SIGNAL_TEST_MUTEX` 串行(同进程信号不可并发)。
+
+---
+
+## ✅ 已覆盖:后台 shell kill_all(N19 件④缺口 A, 2026-09-29)
+
+> task `09-29-n19-mcode-semantics-impl`。修复前本链覆盖 SSE / tunnel /
+> scheduler / agent loop,唯独没有 kill_all —— Thin/sidecar GUI 退出、
+> `daemon.sh stop`、Ctrl+C 都经 SIGTERM 走这条链,活跃后台 shell 全部
+> 随 daemon 退出孤儿化(唯一挂 kill_all 的位置是 GUI Full 模式的
+> `RunEvent::Exit`,daemon 进程自己无人收尸)。
+
+**闭合方式**:`shutdown_signal` 在 `cancel_and_drain_all_agent_loops`
+之后追加 `state.background_shells.kill_all().await`(log-only warn,与
+GUI Exit hook 同款;单个 shell 杀失败不阻塞进程退出)。
+
+**顺序不变量:kill_all 必须排在 agent loop drain 之后** —— in-flight 的
+`run_background_shell` 启动调用在 drain 内完成,启动后 registry 才有
+entry 可杀;drain 前 kill_all 会漏掉「正在启动、还没入表」的那批。
+(axum grace 3s 是 kill_all 的天然时间兜底;kill_all Immediate 档
+毫秒级完成,不受影响。)
+
+**档位:kill_all 走 Immediate(0 宽限、直 SIGKILL)**,不吃单杀宽限 ——
+daemon.sh 的 SIGTERM→SIGKILL 窗口 15s,drain 8s + axum grace 已占大头,
+批量收尸优先确定性;GUI 退出也不拖 3s。档位契约详见
+`tool-contract/06-background-shell.md` 的 kill 档位表。
+
+**模式覆盖矩阵(修复后)**:
+
+| 场景 | 覆盖 |
+|------|------|
+| GUI Full 模式正常退出 | `RunEvent::Exit` → kill_all(既有) |
+| Thin/sidecar GUI 退出 → daemon SIGTERM | 本链 kill_all ✅ |
+| `daemon.sh stop` / Ctrl+C | 本链 kill_all ✅ |
+| daemon SIGKILL / panic / 断电 | ❌ 崩溃面无守卫(缺口 B,BACKLOG C.3 记注,等 N11 崩溃收集或实际撞到再立项) |
+
+**测试**:
+- `daemon::server::tests::serve_daemon_shutdown_kills_background_shells` —
+  真实 TCP + 经 registry 植入活跃 `sleep 60` 后台 shell + 真实 SIGTERM,
+  断言 `serve_daemon` 在窗口内返回**且** shell 状态翻 `Killed`
+  (带 deadline 轮询:kill_all 只发信号,Done entry 由 spawn task 异步写)。
+  共享 `SIGNAL_TEST_MUTEX` 串行(本测试也发真实 SIGTERM)。
 
 
 ---

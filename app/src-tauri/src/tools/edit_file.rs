@@ -725,4 +725,88 @@ mod tests {
         // First hit should be the exact-match line.
         assert!(hints[0].1.contains("alpha beta"));
     }
+
+    /// N19 (2026-09-29) ①: CJK 全角字符往返保真测试锚。edit_file 是纯
+    /// 精确字节匹配(`match_indices` 按 UTF-8 边界、`replacen` 原串拼接,
+    /// 无 fuzzy 路径、零 Unicode 归一化)——这是现状优点而非缺口。本测试
+    /// 是防未来退化的第一道闸:若有人引入 fuzzy 匹配或 NFKC 类归一化
+    /// (pi-mono 教训:fuzzy edit 对整个文件归一化,破坏智能引号与全角
+    /// 字符),未触及区域的逐字节断言在这里失败。
+    #[tokio::test]
+    async fn cjk_fullwidth_roundtrip_preserved() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("cjk.md");
+        // 未触及区域的全角样本:全角标点 / 全角字母数字 / 智能引号
+        // (U+201C/201D/2018/2019)/ 全角空格(U+3000),外加半角混排。
+        const CJK_PUNCT: &str = "，。：；！？";
+        const CJK_ALNUM: &str = "ＡＢＣ１２３";
+        const SMART_QUOTES: &str = "\u{201c}\u{201d}\u{2018}\u{2019}";
+        const FULLWIDTH_SPACE: &str = "\u{3000}";
+        let untouched = format!(
+            "标题：{CJK_PUNCT}\n版本 {CJK_ALNUM} 与 half-width mix\n引言 {SMART_QUOTES} 引用\n缩进{FULLWIDTH_SPACE}块\n"
+        );
+        // edit 邻近片段:old/new 均为纯 ASCII,不触及任何全角字符。
+        let anchor = "plain ascii segment";
+        let replacement = "edited ascii segment";
+        let original = format!("{untouched}{anchor}\ntrailing tail 42\n");
+        std::fs::write(&p, original.as_bytes()).unwrap();
+
+        let ctx = test_ctx(&tmp);
+        let guard = ReadGuard::new();
+        mark_read(&guard, "s1", &p).await;
+        let (msg, is_err) = execute(
+            &serde_json::json!({
+                "path": p.to_string_lossy(),
+                "old_string": anchor,
+                "new_string": replacement,
+            }),
+            &ctx,
+            &guard,
+            "s1",
+        )
+        .await;
+        assert!(!is_err, "{}", msg);
+
+        // 断言:按唯一匹配处把原文件切成 prefix/suffix,两者在结果中
+        // 必须逐字节保留,且中间恰好是 replacement(替换本身精确、
+        // 未触及区域零改写 —— 归一化会在这里现形)。
+        let original_bytes = original.as_bytes();
+        let after_bytes = std::fs::read(&p).unwrap();
+        let idx = original_bytes
+            .windows(anchor.len())
+            .position(|w| w == anchor.as_bytes())
+            .expect("anchor present exactly once (checked below)");
+        assert_eq!(
+            original_bytes
+                .windows(anchor.len())
+                .filter(|w| *w == anchor.as_bytes())
+                .count(),
+            1,
+            "test fixture: anchor must be unique"
+        );
+        let (pre, rest) = original_bytes.split_at(idx);
+        let post = &rest[anchor.len()..];
+        assert!(
+            after_bytes.starts_with(pre),
+            "untouched prefix must be byte-identical"
+        );
+        assert!(
+            after_bytes.ends_with(post),
+            "untouched suffix must be byte-identical"
+        );
+        assert_eq!(
+            &after_bytes[pre.len()..after_bytes.len() - post.len()],
+            replacement.as_bytes(),
+            "exactly the anchor span may change"
+        );
+        // 显式守卫:每个全角样本在结果中仍以原字节序列存在。
+        for sample in [CJK_PUNCT, CJK_ALNUM, SMART_QUOTES, FULLWIDTH_SPACE] {
+            assert!(
+                after_bytes
+                    .windows(sample.len())
+                    .any(|w| w == sample.as_bytes()),
+                "fullwidth sample must survive byte-identical: {sample:?}"
+            );
+        }
+    }
 }

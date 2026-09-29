@@ -39,6 +39,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::background_shell::in_memory::{SHELL_RETENTION_MS, SWEEP_INTERVAL_MS};
+use crate::background_shell::BackgroundShellRegistry;
 use crate::daemon::routes;
 use crate::db::backup;
 use crate::state::AppState;
@@ -463,8 +464,9 @@ pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()
 /// SIGTERM (Unix only). Windows builds fall back to Ctrl+C only,
 /// which matches the Tauri GUI's signal handling convention.
 ///
-/// 信号触发后,**返回前**按顺序做两件事(都在 axum 的 graceful drain
-/// 开始之前):
+/// 信号触发后,**返回前**按顺序做这几件事(都在 axum 的 graceful drain
+/// 开始之前;1.5-1.7 的 tunnel / scheduler / disk-governor 步骤见函数
+/// 体内行内注释):
 ///
 /// 1. **[`SseRegistry::shutdown`]** —— 主动结束所有 SSE 长连接。这是
 ///    让 axum `with_graceful_shutdown` 不被永不完成的 SSE 连接卡住的
@@ -475,9 +477,15 @@ pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()
 ///    [`DAEMON_SHUTDOWN_LOOP_DRAIN_SECS`])。让正在跑的 loop 走 cancel
 ///    路径(同用户点 Stop),把 in-flight tool 的 `persist_turn` 跑完落库,
 ///    避免进程退出时 runtime 销毁硬斩 spawn task 丢一轮结果。
+/// 3. **`state.background_shells.kill_all()`** —— 清杀所有后台 shell
+///    进程组(Immediate 档)。必须排在 drain 之后:启动中的后台 shell
+///    要等 drain 完才在 registry 有 entry 可杀。没有这一步,Thin/sidecar
+///    GUI 退出与 `daemon.sh stop` 场景的后台 shell 会随 daemon 退出
+///    孤儿化(N19 件④缺口 A)。
 ///
-/// 接收完整 `Arc<AppState>` 而非只接 `SseRegistry`,是因为第 2 步要访问
-/// `state.cancellations` + `state.inflight_exits`(参见
+/// 接收完整 `Arc<AppState>` 而非只接 `SseRegistry`,是因为第 2/3 步要
+/// 访问 `state.cancellations` + `state.inflight_exits` +
+/// `state.background_shells`(参见
 /// `agent::helpers::cancel_and_drain_all_agent_loops` 的三件套)。
 async fn shutdown_signal(state: Arc<AppState>) {
     let ctrl_c = async {
@@ -533,19 +541,46 @@ async fn shutdown_signal(state: Arc<AppState>) {
         Duration::from_secs(DAEMON_SHUTDOWN_LOOP_DRAIN_SECS),
     )
     .await;
+
+    // 步骤 2.5(N19, 2026-09-29, task `09-29-n19-mcode-semantics-impl`):
+    // 清杀所有后台 shell 进程组。此前本链覆盖 SSE / tunnel / scheduler /
+    // agent loop,唯独没有 kill_all —— Thin/sidecar 的 GUI 退出、
+    // `daemon.sh stop`、Ctrl+C 都经 SIGTERM 走这条链,活跃后台 shell
+    // 全部孤儿化(修复前唯一挂 kill_all 的位置是 GUI Full 模式的
+    // `RunEvent::Exit`,daemon 进程自己退出时无人收尸)。
+    //
+    // 必须排在 agent loop drain **之后**:in-flight 的
+    // run_background_shell 启动调用在 drain 内完成,启动后 registry
+    // 才有 entry 可杀;drain 前 kill_all 会漏掉「正在启动、还没入表」
+    // 的那一批。
+    //
+    // kill_all 走 Immediate 档(0 宽限、直 SIGKILL,见
+    // `tools::shell::kill_and_collect` 的档位注释):daemon.sh 的
+    // SIGTERM→SIGKILL 窗口 15s,drain 8s + axum grace 已占大头,批量
+    // 收尸优先确定性(与 GUI Full 模式 Exit hook 同款语义)。失败
+    // log-only:单个 shell 杀失败不阻塞其余清杀与进程退出(kill_all
+    // 内部逐 entry 发信号,已如此)。
+    if let Err(e) = state.background_shells.kill_all().await {
+        tracing::warn!(
+            error = %e,
+            "shutdown: background_shells.kill_all failed (non-fatal)"
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 进程级互斥锁:两个发真实 SIGTERM 给 `getpid()` 的集成测试
-    /// (`serve_daemon_shutdown_completes_with_active_sse` 与
-    /// `serve_daemon_shutdown_drains_active_agent_loop`)**必须串行**。
-    /// 否则 cargo test 默认多线程下,A 的 SIGTERM 会被 B 的
-    /// `shutdown_signal` select 臂捕获(同一进程,同一信号),造成
-    /// 「daemon 起不来 / shutdown 被对端抢先触发」的假失败。二者
-    /// 共享本锁,确保任一时刻只有一个 SIGTERM 测试在跑。
+    /// 进程级互斥锁:发真实 SIGTERM 给 `getpid()` 的集成测试
+    /// (`serve_daemon_shutdown_completes_with_active_sse` /
+    /// `serve_daemon_shutdown_drains_active_agent_loop` /
+    /// `serve_daemon_shutdown_kills_background_shells`)与虽不发信号但
+    /// 共享进程级 handler 的 `serve_daemon_keeps_serving_without_signal_
+    /// past_grace_window`**必须串行**。否则 cargo test 默认多线程下,A 的
+    /// SIGTERM 会被 B 的 `shutdown_signal` select 臂捕获(同一进程,同一
+    /// 信号),造成「daemon 起不来 / shutdown 被对端抢先触发」的假失败。
+    /// 共享本锁,确保任一时刻只有一个 SIGTERM 相关测试在跑。
     static SIGNAL_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Q1 port resolution precedence: CLI > env > default. The bin
@@ -889,6 +924,142 @@ mod tests {
             token.is_cancelled(),
             "the hung agent loop's token must be cancelled by the shutdown drain"
         );
+    }
+
+    /// N19(2026-09-29, task `09-29-n19-mcode-semantics-impl`):shutdown 链
+    /// 步骤 2.5 —— 后台 shell kill_all 的回归守卫。
+    ///
+    /// 修复前 `shutdown_signal` 覆盖 SSE / tunnel / scheduler / agent loop,
+    /// 唯独没有 kill_all;Thin/sidecar GUI 退出、`daemon.sh stop`、Ctrl+C
+    /// 都经 SIGTERM 走这条链 → 活跃后台 shell 随 daemon 退出孤儿化(唯一
+    /// 挂 kill_all 的位置是 GUI Full 模式的 `RunEvent::Exit`,daemon 进程
+    /// 自己无人收尸)。
+    ///
+    /// 构造:起 `serve_daemon` → 经同一 registry start 一个 `sleep 60` 后台
+    /// shell(轮询等 Running,确保 entry 已入表)→ 发真实 SIGTERM → 断言:
+    ///   1. `serve_daemon` 在 drain + grace + 余量窗口内返回(kill_all 的
+    ///      Immediate 档毫秒级,不应卡住 shutdown);
+    ///   2. 该 shell 状态翻到 `Killed`(kill_all 只发信号不等 task 完成,
+    ///      状态翻转是 spawn task 异步写的,故用带 deadline 的轮询而非
+    ///      立即断言)。
+    /// 若 shutdown_signal 漏挂 kill_all,断言 2 会超时失败 —— shell 60s
+    /// 内仍是 Running。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serve_daemon_shutdown_kills_background_shells() {
+        use std::sync::Arc;
+        use tempfile::TempDir;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        use crate::background_shell::{BackgroundShellRegistry, BackgroundShellStatus};
+
+        // 本测试向 getpid() 发真实 SIGTERM,与其余 SIGTERM 测试共享进程
+        // 信号,必须串行(见 SIGNAL_TEST_MUTEX)。
+        let _guard = SIGNAL_TEST_MUTEX.lock().await;
+
+        // 预占 ephemeral port。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
+        let dir = TempDir::new().expect("tempdir");
+        let state = load_daemon_state(dir.path().to_path_buf()).await;
+
+        // 植入一个活跃后台 shell(sleep 60:不 trap 任何信号,Immediate
+        // 档直 SIGKILL 下毫秒级退出,不给 shutdown 窗口添堵)。
+        let chat_sid = "sid-shutdown-kill";
+        let shell_id = state
+            .background_shells
+            .start(
+                chat_sid,
+                "sleep 60".to_string(),
+                dir.path().to_path_buf(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("start background shell");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                panic!("background shell did not reach Running in 5s");
+            }
+            if let Ok(BackgroundShellStatus::Running { .. }) =
+                state.background_shells.status(chat_sid, &shell_id).await
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let serve_handle = tokio::spawn(serve_daemon(Arc::clone(&state), port));
+
+        // 等 daemon 起来(轮询 health)。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                panic!("daemon did not become healthy in 5s");
+            }
+            if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await {
+                let req =
+                    b"GET /api/v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+                let _ = s.write_all(req).await;
+                let mut buf = Vec::new();
+                let _ = s.read_to_end(&mut buf).await;
+                if buf.starts_with(b"HTTP/1.1 200") {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 发真实 SIGTERM。
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
+
+        // 核心断言 1:serve_daemon 在窗口内返回。无活跃 agent loop →
+        // drain 立即完成;kill_all Immediate 档毫秒级;预算取 drain 上限
+        // + grace + 3s 余量防 CI 慢机器(与其余 SIGTERM 测试同款)。
+        let worst = DAEMON_SHUTDOWN_LOOP_DRAIN_SECS + SHUTDOWN_GRACE_SECS + 3;
+        let completion =
+            tokio::time::timeout(std::time::Duration::from_secs(worst), serve_handle).await;
+        match completion {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => panic!("serve_daemon returned error: {e}"),
+            Err(_) => {
+                panic!(
+                    "serve_daemon did NOT complete within {}s of SIGTERM — \
+                     the background-shell kill_all step is stalling the shutdown",
+                    worst
+                );
+            }
+        }
+
+        // 核心断言 2:shell 被 kill_all 收尸(状态翻 Killed)。kill_all 只
+        // 发 kill 信号、不等 spawn task 写回 Done entry,这里轮询等待异步
+        // 翻转;deadline 兜底防挂死。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let st = state.background_shells.status(chat_sid, &shell_id).await;
+            match st {
+                Ok(BackgroundShellStatus::Killed { .. }) => break,
+                Ok(BackgroundShellStatus::Running { .. })
+                    if std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                other => panic!(
+                    "background shell must be Killed after shutdown kill_all, got: {:?}",
+                    other.map(|s| serde_json::to_value(&s).unwrap_or_default())
+                ),
+            }
+        }
     }
 
     /// `serve_daemon` 在**不发任何信号**时必须持续服务 —— 这是

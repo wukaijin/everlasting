@@ -66,6 +66,11 @@
 //!   `.trellis/reviews/DEBT.md §RULE-E-002`.
 //!   Windows behaviour is unchanged (it stays on `child.kill()`);
 //!   full Windows `CREATE_NEW_PROCESS_GROUP` is a follow-up.
+//! - N19 (2026-09-29) upgraded the kill to two-stage on Unix:
+//!   SIGTERM (grace window, default 3s, env
+//!   `EVERLASTING_SHELL_KILL_GRACE_MS`) → SIGKILL. See
+//!   [`kill_and_collect`] for the tier rationale; batch kill paths
+//!   stay on the Immediate (direct SIGKILL) tier.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -89,6 +94,52 @@ pub(crate) const SPILL_DIR: &str = ".everlasting/outputs";
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Maximum allowed timeout in milliseconds (10 minutes).
 pub(crate) const MAX_TIMEOUT_MS: u64 = 600_000;
+
+/// Default SIGTERM grace window (N19, 2026-09-29) for the two-stage
+/// process-group kill: `kill(-pid, SIGTERM)` → wait up to
+/// [`shell_kill_grace_ms`] → `kill(-pid, SIGKILL)`. Gives trap
+/// handlers in the script (and well-behaved children like npm /
+/// cargo / make, which all trap TERM) a window to run their cleanup
+/// — temp files, port teardown, partial reports — before the hard
+/// kill. RULE-E-002's "process group must die" invariant is
+/// unchanged: the two stages only move the death moment by at most
+/// the grace.
+pub(crate) const DEFAULT_SHELL_KILL_GRACE_MS: u64 = 3_000;
+
+/// The grace tier for single-kill paths (foreground cancel /
+/// timeout arms + the background `shell_kill` tool). Sourced from
+/// the `EVERLASTING_SHELL_KILL_GRACE_MS` env var; batch paths
+/// (`kill_all_for_session` / `kill_all`) deliberately do NOT consult
+/// this — they hard-code 0 (Immediate, direct SIGKILL) because they
+/// run under the daemon shutdown budget (SIGTERM→SIGKILL window
+/// 15s, drain 8s + axum grace already consume most of it) and the
+/// GUI exit must not stall 3s per tier.
+///
+/// Read once per call (no caching) — same discipline as
+/// `delegation_max_concurrent_children`: tests that override the env
+/// var in-process see the new value on the next kill, and a test
+/// that sets the env var MUST unset it. Unparseable / missing →
+/// [`DEFAULT_SHELL_KILL_GRACE_MS`].
+pub(crate) fn shell_kill_grace_ms() -> u64 {
+    match std::env::var("EVERLASTING_SHELL_KILL_GRACE_MS") {
+        Ok(v) => v
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(DEFAULT_SHELL_KILL_GRACE_MS),
+        Err(_) => DEFAULT_SHELL_KILL_GRACE_MS,
+    }
+}
+
+/// Test-only process-wide mutex serializing the tests that WRITE
+/// `EVERLASTING_SHELL_KILL_GRACE_MS` (shell.rs's env-override test)
+/// against the tests whose tier assertions DEPEND on the default
+/// value (in_memory.rs's `kill_single_grace_payload_...` reads the
+/// env inside `registry.kill()` and asserts a ≥2.5s floor). cargo
+/// test runs tests in parallel per core; without this lock the
+/// override's set-var window can shrink the other test's grace to
+/// 250ms and flake the floor assertion (N19 check pass, 2026-09-29).
+#[cfg(test)]
+pub(crate) static GRACE_ENV_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Variables re-injected into the child process after `env_clear()`
 /// (RULE-E-001). Adding a variable here is an intentional trust
@@ -148,51 +199,114 @@ pub(crate) struct ShellResult {
     pub(crate) timed_out: bool,
 }
 
-/// Kill the child process. Output collection is the caller's job:
-/// the pipes are taken out and drained on spawned tasks BEFORE the
-/// wait/kill select (see `execute`), so after the group kill closes
-/// the write ends, those tasks complete with the partial output.
+/// Send `sig` to the child's whole process group. Shared by both
+/// stages of [`kill_and_collect`]. ESRCH (group already exited) is
+/// treated as success; other failures are logged at `warn!` but
+/// never propagated — the worst case is that a descendant lingers
+/// briefly, which the eventual `child.wait()` below will catch once
+/// stdout/stderr pipes close.
+#[cfg(unix)]
+fn kill_group(pid: i32, sig: i32) {
+    // Negative pid => "send signal to the process group whose
+    // PGID is |pid|". Safe because process_group(0) made
+    // `pid` == PGID.
+    let ret = unsafe { libc::kill(-pid, sig) };
+    if ret != 0 {
+        let errno = std::io::Error::last_os_error();
+        if errno.raw_os_error() != Some(libc::ESRCH) {
+            tracing::warn!(
+                error = %errno,
+                pid,
+                signal = sig,
+                "shell: killpg failed (non-ESRCH); descendant may linger"
+            );
+        }
+    }
+}
+
+/// Kill the child process — two-stage when `grace_ms > 0`, hard
+/// when `grace_ms == 0` (N19, 2026-09-29). Output collection is the
+/// caller's job: the pipes are taken out and drained on spawned
+/// tasks BEFORE the wait/kill select (see `execute`), so after the
+/// group kill closes the write ends, those tasks complete with the
+/// partial output.
 ///
 /// On Unix the child was spawned with `process_group(0)`, so the
 /// `sh` process is the leader of a new process group whose PGID
-/// equals `child.id()`. Killing the group with `kill(-pid, SIGKILL)`
-/// reaches the `sh` shell AND any descendants it forked (`&` /
-/// pipelines / `nohup`), closing the RULE-E-002 orphan-process
-/// leak that the plain `child.kill().await` left behind. ESRCH
-/// (process already exited) is treated as success; other kill
-/// failures are logged at `warn!` level but never propagated to
-/// the caller — the worst case is that a descendant lingers
-/// briefly, which the eventual `child.wait()` below will
-/// catch once stdout/stderr pipes close.
-pub(crate) async fn kill_and_collect(child: &mut Child) -> ShellResult {
-    // 1. Send the kill signal.
+/// equals `child.id()` — every signal below targets the group so
+/// descendants of `&` / pipelines / `nohup` die along with the
+/// direct child (RULE-E-002).
+///
+/// **Two-stage (grace_ms > 0)**: `kill(-pid, SIGTERM)` first, then
+/// wait up to `grace_ms`. A group whose scripts trap TERM (npm /
+/// cargo / make all do) gets exactly one window to run cleanup
+/// (temp files, port teardown, lock release) before the hard kill —
+/// the mcode/pi-mono lesson: under unconditional SIGKILL that
+/// cleanup logic NEVER gets a chance to execute. A group that
+/// ignores TERM (or a wedged trap) escalates to SIGKILL after the
+/// window: worst case = the old behavior plus `grace_ms`, so the
+/// "必死" invariant is preserved, only deferred by at most the
+/// grace.
+///
+/// **Hard (grace_ms == 0)**: direct SIGKILL — byte-identical to the
+/// pre-N19 behavior. The batch paths (kill_all_for_session /
+/// kill_all / daemon shutdown) pin this tier: they run under the
+/// daemon's 15s SIGTERM→SIGKILL budget where determinism beats
+/// politeness.
+///
+/// The caller-visible semantics do NOT distinguish the stages:
+/// this returns `cancelled: true` either way ("killed is killed").
+/// The reported `exit_code` may differ — a graceful TERM exit
+/// carries the script's own code (e.g. a trap's `exit 0`), a hard
+/// kill reports -1 — that's data for the `[exit code: N]` line, not
+/// a different outcome.
+pub(crate) async fn kill_and_collect(child: &mut Child, grace_ms: u64) -> ShellResult {
+    // 1a. Grace stage (only when armed): TERM the group, wait once
+    //     inside the window.
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
             let pid_raw = pid as i32;
-            // Negative pid => "send signal to the process group whose
-            // PGID is |pid|". Safe because process_group(0) made
-            // `pid` == PGID.
-            let ret = unsafe { libc::kill(-pid_raw, libc::SIGKILL) };
-            if ret != 0 {
-                let errno = std::io::Error::last_os_error();
-                if errno.raw_os_error() != Some(libc::ESRCH) {
-                    tracing::warn!(
-                        error = %errno,
-                        pid = pid_raw,
-                        "shell: killpg failed (non-ESRCH); descendant may linger"
-                    );
+            if grace_ms > 0 {
+                kill_group(pid_raw, libc::SIGTERM);
+                match tokio::time::timeout(std::time::Duration::from_millis(grace_ms), child.wait())
+                    .await
+                {
+                    // Group exited within the grace window — trap
+                    // cleanup ran; skip the hard kill entirely.
+                    Ok(status) => {
+                        return ShellResult {
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                            exit_code: status.ok().and_then(|s| s.code()).unwrap_or(-1),
+                            cancelled: true,
+                            timed_out: false,
+                        };
+                    }
+                    Err(_) => {
+                        tracing::info!(
+                            pid = pid_raw,
+                            grace_ms,
+                            "shell: SIGTERM grace expired, escalating to SIGKILL"
+                        );
+                    }
                 }
             }
+            // 1b. Hard stage: reached directly (grace_ms == 0) or
+            //     after the window expired.
+            kill_group(pid_raw, libc::SIGKILL);
         }
     }
     #[cfg(not(unix))]
     {
         // Windows path (MVP, not yet hardened per RULE-E-002). We
         // fall back to tokio's `child.kill()` which only reaches the
-        // direct child — the same orphan-leak window the Unix
-        // fix closes remains open here until `CREATE_NEW_PROCESS_GROUP`
-        // is wired up.
+        // direct child — the same orphan-leak window the Unix fix
+        // closes remains open here until `CREATE_NEW_PROCESS_GROUP`
+        // is wired up. `grace_ms` is deliberately IGNORED: tokio's
+        // kill maps to an unconditional TerminateProcess; there is
+        // no group-wide TERM stage to run first on this platform.
+        let _ = grace_ms;
         let _ = child.kill().await;
     }
 
@@ -230,14 +344,14 @@ async fn spawn_and_collect(
         biased;
         _ = cancel.cancelled() => {
             tracing::info!("shell: cancellation requested, killing process group");
-            let mut r = kill_and_collect(&mut child).await;
+            let mut r = kill_and_collect(&mut child, shell_kill_grace_ms()).await;
             r.stdout = collect_drain(stdout_task).await;
             r.stderr = collect_drain(stderr_task).await;
             r
         }
         _ = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
             tracing::info!("shell: timeout after {}ms, killing process group", timeout_ms);
-            let mut r = kill_and_collect(&mut child).await;
+            let mut r = kill_and_collect(&mut child, shell_kill_grace_ms()).await;
             r.stdout = collect_drain(stdout_task).await;
             r.stderr = collect_drain(stderr_task).await;
             r.timed_out = true;
@@ -864,5 +978,151 @@ pub async fn cleanup_outputs_dir(cwd: &Path) {
             spill_dir = %dir.display(),
             "shell: failed to clean up legacy disk-spilled outputs on session delete"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Spawn `sh -c <script>` in its own process group — the same
+    /// RULE-E-002 spawn shape as `execute`, minus the sandbox / env
+    /// layers (`kill_and_collect`'s contract only depends on the
+    /// PGID setup, not the env allowlist).
+    fn spawn_script(script: &str) -> Child {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        cmd.process_group(0);
+        cmd.spawn().expect("spawn sh -c")
+    }
+
+    /// Poll until `marker` exists (the script's readiness signal —
+    /// `touch` after installing its trap). Keeps the TERM-delivery
+    /// assertions race-free on slow CI: without it, a kill could
+    /// land before sh parsed the trap line.
+    async fn wait_ready(marker: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "script never touched its readiness marker"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// N19 ①: grace-armed kill delivers SIGTERM first — a script
+    /// that traps TERM runs its handler and exits WITHIN the window.
+    /// The trap's own exit code (42) must surface through the
+    /// `ShellResult` (a graceful exit carries the script's code; a
+    /// hard kill reports -1 — that difference is the observable
+    /// proof the TERM stage ran).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_grace_trap_term_exits_within_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("ready");
+        let mut child = spawn_script(&format!(
+            "trap 'exit 42' TERM; touch {}; while true; do sleep 0.1; done",
+            marker.display()
+        ));
+        wait_ready(&marker).await;
+
+        let grace = 2_000u64;
+        let started = std::time::Instant::now();
+        let r = kill_and_collect(&mut child, grace).await;
+        assert!(r.cancelled, "graceful exit is still a kill outcome");
+        assert!(!r.timed_out);
+        assert_eq!(
+            r.exit_code, 42,
+            "trap exit code must surface on the grace path"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(grace),
+            "trap-armed script must exit inside the grace window, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// N19 ②: a group that IGNORES TERM (`trap ''` — and children
+    /// inherit the SIG_IGN disposition) survives the grace window
+    /// and is then hard-killed by the SIGKILL escalation. RULE-E-002
+    /// "必死" preserved: worst case = old behavior + grace.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_grace_ignoring_term_escalates_to_sigkill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("ready");
+        let mut child = spawn_script(&format!(
+            "trap '' TERM; touch {}; while true; do sleep 0.1; done",
+            marker.display()
+        ));
+        wait_ready(&marker).await;
+
+        let grace = 800u64;
+        let started = std::time::Instant::now();
+        let r = kill_and_collect(&mut child, grace).await;
+        assert!(r.cancelled);
+        // The full window must elapse before SIGKILL lands. If the
+        // implementation skipped the TERM stage (direct SIGKILL),
+        // elapsed collapses to ~0ms — the discriminating assertion
+        // of the two-stage wiring. 100ms slack for scheduler jitter.
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(grace - 100),
+            "grace must elapse before SIGKILL escalation, took {:?}",
+            started.elapsed()
+        );
+        // Hard-killed: death by signal has no exit code → -1.
+        assert_eq!(r.exit_code, -1);
+    }
+
+    /// N19 ③: grace=0 is the Immediate tier — byte-identical to the
+    /// pre-N19 direct SIGKILL. Even a TERM-ignoring group dies
+    /// without waiting: the batch paths (kill_all_for_session /
+    /// kill_all / daemon shutdown) pin this tier and must not
+    /// smuggle in a hidden default grace.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_grace_zero_is_immediate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("ready");
+        let mut child = spawn_script(&format!(
+            "trap '' TERM; touch {}; while true; do sleep 0.1; done",
+            marker.display()
+        ));
+        wait_ready(&marker).await;
+
+        let started = std::time::Instant::now();
+        let r = kill_and_collect(&mut child, 0).await;
+        assert!(r.cancelled);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1_000),
+            "grace=0 must kill immediately, took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(r.exit_code, -1);
+    }
+
+    /// Env override hook parses and falls back to the default on
+    /// garbage. No caching (same discipline as
+    /// `delegation_max_concurrent_children`) — read per call.
+    /// Holds [`GRACE_ENV_TEST_MUTEX`] for the whole body: the
+    /// set-var window is process-global, and in_memory.rs's
+    /// single-tier wiring test asserts a floor derived from the
+    /// DEFAULT grace — parallel pollution would flake it.
+    #[tokio::test]
+    async fn shell_kill_grace_env_override() {
+        let _guard = GRACE_ENV_TEST_MUTEX.lock().await;
+        assert_eq!(shell_kill_grace_ms(), DEFAULT_SHELL_KILL_GRACE_MS);
+        std::env::set_var("EVERLASTING_SHELL_KILL_GRACE_MS", "250");
+        assert_eq!(shell_kill_grace_ms(), 250);
+        std::env::set_var("EVERLASTING_SHELL_KILL_GRACE_MS", "not-a-number");
+        assert_eq!(shell_kill_grace_ms(), DEFAULT_SHELL_KILL_GRACE_MS);
+        std::env::remove_var("EVERLASTING_SHELL_KILL_GRACE_MS");
+        assert_eq!(shell_kill_grace_ms(), DEFAULT_SHELL_KILL_GRACE_MS);
     }
 }

@@ -859,6 +859,14 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
             crate::agent::checkpoint::WriteSignals::for_tool_calls(&tool_calls)
                 .with_background(drive_outcome.background_writes);
 
+        // N19 (2026-09-29): snapshot the turn's tool_use triples for
+        // the finalize-stage cancel difference set (see
+        // `finalize_turn`'s cancelled arm). Cloned here because
+        // DispatchCtx consumes the original below — one per-turn
+        // clone, same magnitude as the parallel path's per-task
+        // clones; the no-cancel fast path never reads it.
+        let tool_calls_snapshot = tool_calls.clone();
+
         let dispatch_outcome = dispatch_tool_calls(
             &request,
             &deps,
@@ -898,6 +906,7 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
                 seq,
                 messages: &mut messages,
                 last_cwd: &hot.last_cwd,
+                tool_calls: &tool_calls_snapshot,
             },
         )
         .await

@@ -442,6 +442,14 @@ pub(crate) struct FinalizeFrame<'a> {
     pub(crate) seq: i64,
     pub(crate) messages: &'a mut Vec<ChatMessage>,
     pub(crate) last_cwd: &'a Option<PathBuf>,
+    /// 本轮全部 tool_use（id, name, input）——N19（2026-09-29）为
+    /// 取消臂的差集补齐引入：serial 派发在 cancel 处 `break`，未
+    /// 执行/未出结果的 tool_use 没有 result block，finalize 落库前
+    /// 对缺 result 的 id 追加 synthetic is_error block，保证 DB 尾部
+    /// assistant(tool_use×N) 的下一条 user 消息恒含 N 个 tool_result
+    /// （与 drive.rs send 阶段取消的全量 synthetic 语义对齐）。input
+    /// 不参与构造，保留三元组形状省调用点转换。
+    pub(crate) tool_calls: &'a [(String, String, serde_json::Value)],
 }
 
 /// attempt_summary_compaction 的一次压缩作业参数（C3 PR2 摘要旁路）。
