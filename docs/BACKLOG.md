@@ -260,7 +260,7 @@
 - **N16**:fork 语义定义(种子 = 截止 seq + 记忆状态?)与 D3 / handoff / N2 checkpoint 的关系矩阵;存储面(新 session 行 + 事件前缀复制 vs 引用)。
 - **N17**:外部 CLI 的授权 / 进程 / 计费模型,与现有 subagent 契约(`subagent-runs-schema`)的融合方式;仅在 N15 落地且 subagent 面稳定后再评。
 - **N18**:架构决策(daemon Rust 侧驱动 vs 前端 Node 侧驱动 vs 独立辅助进程—— everlasting 前端 E2E 已有 Playwright 真浏览器经验但 daemon 侧无浏览器栈)、会话级生命周期与资源上限、安全面设计(禁任意 JS 执行 / 敏感操作确认 / mcode `safety.requiredNextTool` 强制下一步的等价物)、token 成本(快照分页 / 可视化观察图上限)与 C7 tools[] 治理接入。
-- **N19**:逐件核验 everlasting 现状——edit_file fuzzy 路径有无归一化破坏 CJK、edit/diff 有无大小限界(Myers 二次方卡死风险)、后台 shell 停止是否直 SIGKILL、宿主崩溃后后台进程组回收现状、并行只读批取消时 tool_use/result 配对完整性;按 N12 同形「件①测试锚 / 件②③收口」拆分单 PR 收口。
+- ~~**N19**:逐件核验 everlasting 现状——edit_file fuzzy 路径有无归一化破坏 CJK、edit/diff 有无大小限界(Myers 二次方卡死风险)、后台 shell 停止是否直 SIGKILL、宿主崩溃后后台进程组回收现状、并行只读批取消时 tool_use/result 配对完整性;按 N12 同形「件①测试锚 / 件②③收口」拆分单 PR 收口。~~ → ✅ 调研完成(2026-09-29):结论见 task `09-29-n19-mcode-semantics-research` 的 `research/n19-semantics-gap-analysis.md`。五件判定:①缺陷形态不存在(无 fuzzy 路径/零归一化,精确字节匹配)→测试锚;②三层结构天然规避(edit 无 diff 计算/libgit2 C+untracked 64KiB cap/前端 N7 双守卫)→记注不实施;③真实缺口(全终止路径直 SIGKILL,RULE-E-002)→两段式 SIGTERM→3s 宽限→SIGKILL;④真实缺口且比预想实——**daemon graceful shutdown 链漏 kill_all**(只挂 GUI Full 的 RunEvent::Exit,Thin/sidecar/daemon.sh 优雅退出也孤儿化后台 shell,崩溃面零守卫),缺口 A(shutdown 链补 kill_all ~10-20 行)为实施主体,缺口 B(崩溃面 lease/PDEATHSIG)记注 C.3 等 N11;⑤形态存在但有下游自愈(serial 执行中途取消部分落库+悬空,靠 wire 层每 turn 注入 synthetic 兜住;send 阶段取消已全量补齐)→finalize_turn 取消臂补齐差集对齐层次。实施范围建议:④A+③+⑤+①测试锚单 PR。
 
 ### C.3 未立项记注(不单开候选行)
 
@@ -273,3 +273,5 @@
 - **task_append 语义**(mcode):向运行中后台任务/subagent 注入后续工作(activated/steered/duplicate 三态)——everlasting L1 APPEND 仅用户通知面、dispatch_subagent 无中途注入,subagent/L1 线增量参照。
 - **压缩「归档可回读」思路**(mcode):老 tool result 归档为引用 + agent 需要时 read 回读(ToolResultArchiver),比机械丢组多一个「瘦身不销毁」层次;C3+ 后续增强候选,与 N12 无进展熔断正交(注:mcode 无无进展熔断,everlasting 领先)。
 - **N15 优先级修正注**(mcode):mcode 无 LSP 工具(dsh 有)——「行业标配」证据削弱,但真实能力 gap 不变,定档仍待 N15 专项调研裁决。
+- **后台 shell 崩溃面孤儿(N19 件④缺口 B,2026-09-29 调研衍生)**:daemon SIGKILL/panic 下后台进程组永久孤儿(无 PDEATHSIG/lease 守卫,max_runtime 计时器随 daemon 进程死,registry 纯内存重启失忆)。优雅路径缺口 A 已并入 N19 实施;崩溃面守卫(PDEATHSIG 只护一层且有线程归属语义 / pipe-lease wrapper 完整但与 sandbox pre_exec·env_clear·进程组语义全交互)不单独立项——真实发生频率未知(无崩溃收集,N11 未做),等 N11 落地有数据或实际撞到再评估,方案两方向已记 N19 调研 `件④改动面`。
+- **tracked diff patch 无 per-file 上限(N19 件②残余,2026-09-29)**:`git/diff.rs` tracked delta 的 `Patch::to_buf` 全量构建后才被下游裁剪(C6 截断管 LLM 输出面,前端另有守卫),构建期 CPU/内存无闸。libgit2 C 实现 + 非热路径,风险低;mcode 的 20k 行 167s 教训是 TS 归一化+diff 叠加,形态不同。撞到 TurnCard「本轮 diff」超大仓库卡顿再评估 per-file 早退。
