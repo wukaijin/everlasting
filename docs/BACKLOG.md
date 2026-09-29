@@ -233,8 +233,8 @@
 
 ## 附录 C: 调研衍生候选(2026-09-27)
 
-> 来源:DeepSeek Harness(dsh)对比调研([`docs/_history/research/deepseek-harness-survey.md`](./_history/research/deepseek-harness-survey.md))。与附录 B 同规则:N-x 为候选临时编号(续 B 编号),**立项进 ROADMAP §2 时换正式编号**;排期归 [ROADMAP](./ROADMAP.md),本文档只记评估。
-> 收录立场:dsh 处于 dev preview,只借鉴设计不引入依赖(TS 生态亦无法直接复用);**所有条目立项前须先做专项调研**(C.2 逐项列出),本附录只记一句话价值与调研范围,不预支结论。
+> 来源:harness 对比调研两场——DeepSeek Harness(dsh)([2026-09-27](./_history/research/deepseek-harness-survey.md))+ MiniMax Code(mcode)([2026-09-29](./_history/research/minimax-code-survey.md))。与附录 B 同规则:N-x 为候选临时编号(续 B 编号),**立项进 ROADMAP §2 时换正式编号**;排期归 [ROADMAP](./ROADMAP.md),本文档只记评估。
+> 收录立场:两者均只借鉴设计不引入依赖(TS 生态无法直接复用;mcode 开源部分是源码快照非开发仓库);**所有条目立项前须先做专项调研**(C.2 逐项列出),本附录只记一句话价值与调研范围,不预支结论。
 
 ### C.1 新增候选
 
@@ -246,6 +246,8 @@
 | N15 | LSP 工具(代码导航 / 引用 / 诊断) | P1-P2 | 后端 | dsh 有而本项目没有的最大能力实 gap,对 coding agent 质量影响直接;但依赖与进程模型复杂,调研后定档 |
 | N16 | 会话 fork(带种子从任意点分叉) | P2-P3 | 产品 | 对 D3 edit/resend + handoff 是自然延伸;需先厘清与 N2 checkpoint 的重叠度 |
 | N17 | Claude Code / Codex 作子 agent 宿主(hooks 桥) | P3 | 拓扑 | 与 dispatch_subagent 自定义 worker 路线互补的生态位思路,依赖外部 CLI,优先级最低 |
+| N18 | 会话级 browser 自动化工具(Playwright 型) | P2 | 前端+后端 | 双 harness 印证(dsh browser-use / mcode browser 单工具 24-action 分发 + 快照分页 + 每回合可视化图片上限 + 不支持任意 JS 执行的安全面);everlasting 浏览器面为零(调研 [minimax-code-survey §3.8](./_history/research/minimax-code-survey.md)) |
+| N19 | mcode 语义吸收小件包(edit_file fuzzy 匹配 CJK 保真自查 / diff 大小限界 / 后台任务 SIGTERM 宽限终止 / 父进程死亡守卫 / 并行批次取消配对补齐) | P2 | 后端 | pi-mono 补丁账本实锤级教训(fuzzy edit NFKC 归一化破坏全角字符、20k 行 diff 167s→0.2s;调研 [minimax-code-survey §3.2-3.5](./_history/research/minimax-code-survey.md));自查先行,按 N12「先核验现有行为再收口」同形推进 |
 
 ### C.2 立项前专项调研要求
 
@@ -257,8 +259,17 @@
 - **N15**:Rust LSP client 生态调研(crate 选型 vs 起外部 binary:rust-analyzer / gopls / typescript-language-server 等)、工具面设计(暴露哪些能力:定义跳转 / 引用查找 / 诊断,与 read_file / grep / glob 的分工)、多 project 进程生命周期与资源上限、token 成本与 C7 tools[] 治理的接入。
 - **N16**:fork 语义定义(种子 = 截止 seq + 记忆状态?)与 D3 / handoff / N2 checkpoint 的关系矩阵;存储面(新 session 行 + 事件前缀复制 vs 引用)。
 - **N17**:外部 CLI 的授权 / 进程 / 计费模型,与现有 subagent 契约(`subagent-runs-schema`)的融合方式;仅在 N15 落地且 subagent 面稳定后再评。
+- **N18**:架构决策(daemon Rust 侧驱动 vs 前端 Node 侧驱动 vs 独立辅助进程—— everlasting 前端 E2E 已有 Playwright 真浏览器经验但 daemon 侧无浏览器栈)、会话级生命周期与资源上限、安全面设计(禁任意 JS 执行 / 敏感操作确认 / mcode `safety.requiredNextTool` 强制下一步的等价物)、token 成本(快照分页 / 可视化观察图上限)与 C7 tools[] 治理接入。
+- **N19**:逐件核验 everlasting 现状——edit_file fuzzy 路径有无归一化破坏 CJK、edit/diff 有无大小限界(Myers 二次方卡死风险)、后台 shell 停止是否直 SIGKILL、宿主崩溃后后台进程组回收现状、并行只读批取消时 tool_use/result 配对完整性;按 N12 同形「件①测试锚 / 件②③收口」拆分单 PR 收口。
 
 ### C.3 未立项记注(不单开候选行)
 
 - **「模型可见即已记录」不变量**:dsh 的验收表述(模型请求可从持久日志完整重建)——不单独立项,作为 N8 混沌冒烟 / E2 TracePanel 回放扩展 / N14 纪律的验收标准引用。
 - **沙盒 seam 化**(`SandboxExecutor` trait 边界):现有 spec 已接近薄 trait;不立项,仅在 bwrap / 网络白名单(BACKLOG 余留)动工时保持边界、不为远程形态预做抽象。
+- **egress 代理沙箱参照**(mcode):bwrap `--unshare-net` 全断 + 宿主 socat 代理桥开洞 + seccomp 只拦 `socket(AF_UNIX)` 创建 + 凭据假文件替换(maskedFileBinds),域名过滤妥协在宿主代理层的取舍有明文记录——正是 sandbox-executor 余留「bwrap 增强档 / 网络白名单」的完整落地参照,动工时读 [minimax-code-survey §3.1](./_history/research/minimax-code-survey.md),不重新摸索;NetPolicy 三态与代理桥可拼。
+- **B10 飞书架构蓝图**(mcode):feishu/telegram/wechat 三通道(channels:adapter-registry + access-control 独立策略/存储 + channel binding + permission-bridge IM 内权限审批 + questionnaire-bridge 问卷回流 + 媒体归一)——B10 收窄形态评估时的现成参照;权限审批回流 IM 是值得注意的形态。
+- **F6 通知语义清单**(mcode):四事件(turn-complete/turn-failed/permission-required/question-required)+ when 三档(unfocused/always/never)+ method 多路回退(auto/osc9/osc777/bel)+ 前台焦点抑制与去重——F6 余留系统级通知实施时直接抄作业。
+- **A2+ 判定深化参照**(mcode):bash 判定 AST 级文件族(wrapper-unwrap 剥命令包装 / slow-command-scan / windows-native-delete + 本地 dangerous-patterns 词表),比 P1+P2 深一层;云分类器不跟进,本地规则词表可扩充参照。
+- **task_append 语义**(mcode):向运行中后台任务/subagent 注入后续工作(activated/steered/duplicate 三态)——everlasting L1 APPEND 仅用户通知面、dispatch_subagent 无中途注入,subagent/L1 线增量参照。
+- **压缩「归档可回读」思路**(mcode):老 tool result 归档为引用 + agent 需要时 read 回读(ToolResultArchiver),比机械丢组多一个「瘦身不销毁」层次;C3+ 后续增强候选,与 N12 无进展熔断正交(注:mcode 无无进展熔断,everlasting 领先)。
+- **N15 优先级修正注**(mcode):mcode 无 LSP 工具(dsh 有)——「行业标配」证据削弱,但真实能力 gap 不变,定档仍待 N15 专项调研裁决。
