@@ -670,17 +670,6 @@ async fn remap_task_plugin_on_switch(db: &sqlx::SqlitePool, session_id: &str, ne
     );
 }
 
-/// W1 (Workflow integration, Step 2.2 — 2026-07-08):
-/// discover available workflow plugins under
-/// `<project>/.everlasting/workflow/<dir>/workflow.json`.
-/// Returns the list of valid plugin names (alphabetical) so
-/// the frontend's `PluginSelect.vue` popover can populate
-/// itself without hard-coding "dev".
-///
-/// **Discovery rule**: a directory is a valid plugin iff
-/// `workflow.json` exists inside it. Empty directories
-/// are ignored (no warning — they're typical scratch
-/// state). Missing root dir → empty list (matches the
 // ---------------------------------------------------------------------------
 // F5 (LLM Latency Tracking): per-message latency + per-tool duration IPCs
 //

@@ -32,21 +32,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Tauri 2 在 Linux 上 build.rs 编译期就要 pkg-config 找到 webkit/gtk,
-      # 即使只跑 `cargo test --lib` 也必须装。reqwest 用 rustls 故省 libssl-dev。
-      - name: Install Tauri system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            librsvg2-dev \
-            libayatana-appindicator3-dev
-
+      # de-Tauri (2026-09-30, task 09-30-de-tauri): the Tauri system
+      # deps step (webkit2gtk/gtk/appindicator 全家桶) is GONE — the
+      # crate has zero system-lib deps now (reqwest uses rustls, so
+      # no libssl-dev either). This job doubles as AC1: a bare
+      # ubuntu-latest container with NO pkg-config'd GTK/WebKit must
+      # build + test everything below.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -62,32 +53,21 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --check
 
-      # 必须先 build daemon sidecar,再跑 cargo test --lib。
-      #
-      # tauri.conf.json 的 bundle.externalBin = ["binaries/everlasting-daemon"]
-      # 让 Tauri 在 build.rs 阶段(而非仅 bundle 阶段)就校验
-      # binaries/everlasting-daemon-<triple> 存在 —— 校验不过连编译都起不来,
-      # 也就跑不了测试。而该文件是构建产物,被 app/src-tauri/.gitignore 忽略,
-      # CI checkout 出来 binaries/ 是空的。
-      #
-      # build.rs::stage_daemon_sidecar() 只在 target/<profile>/everlasting-daemon
-      # 已存在时才把它拷到 binaries/。所以必须先 build 一次 daemon bin,
-      # build.rs 会顺带把它 stage 进去;之后 cargo test --lib 触发 everlasting
-      # crate 的 build.rs 时就能通过 externalBin 校验。(本地之所以不挂,是
-      # 因为工作树里那个被 gitignore 的 388MB 产物一直存在。)
-      #
-      # 代价:CI 首次多 ~2min 编译 daemon;rust-cache 命中后增量很快。
-      - name: cargo build daemon sidecar (stages binaries/ for externalBin)
+      # bin 编译门(de-Tauri 2026-09-30 修订):这是全 CI 唯一构建
+      # `bin/everlasting-daemon.rs` 的步骤(`--lib` / `--test e2e` /
+      # clippy 面不编译 bin target)。历史上它服务 tauri sidecar
+      # staging(externalBin 校验),staging 已随 GUI 删除;职责保留——
+      # daemon bin 的编译回归必须在 CI 暴露。
+      - name: cargo build daemon bin (bin-target compile gate)
         run: cargo build --bin everlasting-daemon
 
-      # clippy gate (RULE-CI-001, 08-26-p2-debt-cleanup):`--lib` 只 gate
-      # app crate(与 test 同范围);必须在 daemon sidecar build 之后 ——
-      # clippy 的 check 编译同样触发 build.rs 的 externalBin 校验。
-      # 剩余 too_many_arguments 为有意豁免(db CRUD/tauri 命令等参数镜像面);
-      # chat_loop 家族重灾区已由 08-27-rule-args-001-param-object 清零闭合,
-      # 债务台账见 .trellis/reviews/DEBT.md(RULE-ARGS-001)。
-      - name: cargo clippy --lib
-        run: cargo clippy --lib -- -D warnings
+      # clippy gate (RULE-CI-001, 08-26-p2-debt-cleanup):`--lib --bins`
+      # 覆盖 lib + daemon bin(--tests 面的既有基线警告不在 -D 门内,
+      # 与历史口径一致)。chat_loop 家族重灾区已由
+      # 08-27-rule-args-001-param-object 清零闭合,债务台账见
+      # .trellis/reviews/DEBT.md(RULE-ARGS-001)。
+      - name: cargo clippy --lib --bins
+        run: cargo clippy --lib --bins -- -D warnings
 
       # N9 bench 编译门(09-19-n9-perf-benchmark):bench 数字不进门禁
       # (抖动),但 bench 代码的编译面必须进——无人跑的 bench 会悄悄腐烂

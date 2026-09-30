@@ -19,9 +19,9 @@
            ↓
    ① 前端校验 ──────── 拒
            ↓
-   ② transport 边界(httpTransport/tauriTransport) ──── 拒
+   ② transport 边界(httpTransport) ──── 拒
            ↓
-   ③ daemon 路由入口(axum / Tauri command)
+   ③ daemon 路由入口(axum)
        │  ├ 请求去重(request_id)
        │  └ session 路由
            ↓
@@ -77,7 +77,7 @@
 
 ### 2.2 16 关详解
 
-> 📜 **叙事载体说明(daemon 化后)**:以下 16 关最初用"目标态 + Channel Router"语言写就。2026-07 daemon 化落地后,实际没有 `Channel` trait / `Channel Router` —— 关卡③的"Channel 入口"实际是 daemon 的 axum HTTP 路由(`daemon/routes/`),关卡⑮的"Channel 输出"实际是 `HttpSseSink`(`daemon/sse.rs`)经同源 SSE 广播。Full 模式逃生时则对应 Tauri command / Tauri event emit。关卡本身的**逻辑顺序与职责划分不变**,只是载体从"多 channel 抽象"收敛为"HTTP/SSE 单端点(+ Tauri IPC 逃生)"。
+> 📜 **叙事载体说明(daemon 化后)**:以下 16 关最初用"目标态 + Channel Router"语言写就。2026-07 daemon 化落地后,实际没有 `Channel` trait / `Channel Router` —— 关卡③的"Channel 入口"实际是 daemon 的 axum HTTP 路由(`daemon/routes/`),关卡⑮的"Channel 输出"实际是 `HttpSseSink`(`daemon/sse.rs`)经同源 SSE 广播。关卡本身的**逻辑顺序与职责划分不变**,载体从"多 channel 抽象"收敛为"HTTP/SSE 单端点"(de-Tauri 2026-09-30 后无第二载体)。
 
 #### ① 前端校验(Vue 3)
 
@@ -91,16 +91,15 @@
 - **关卡点**:空消息、过长输入、并发请求、session 锁定
 - **失败后果**:UI 拦截,不发请求
 
-#### ② transport 边界(httpTransport 默认 / tauriTransport 逃生)
+#### ② transport 边界(httpTransport)
 
 ```ts
 await transport.invoke("chat", { requestId, messages })
 // 默认 httpTransport:fetch POST /api/v1/chat(同源 → daemon axum 路由)
-// 逃生 tauriTransport:tauri.invoke('chat', ...)(Full 模式,GUI 进程内)
 ```
 
 ```
-  ├─ 参数反序列化(JSON → Rust struct;axum extractor / Tauri command 两路共享同一 handler)
+  ├─ 参数反序列化(JSON → Rust struct;axum extractor)
   ├─ 命令是否在白名单?(Tauri capability 限制 — Full 模式;daemon 模式无 capability 层)
   ├─ rate limit?(每 session 每分钟 N 条)
   └─ spawn 异步任务处理 LLM stream

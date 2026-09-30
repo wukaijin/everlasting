@@ -7,39 +7,36 @@
 
 ## 1. 系统架构
 
-> ✅ **当前状态(2026-08-31)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 6 个续接特性(2026-08-19~27:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建 / F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 + F3 并发闸)+ F2·F2b 定时任务(08-28)+ 08-29~31 批(schedule_task 工具家族 / C6 输出截断统一 / ShellCard / 审计 keyset 分页 / Playwright 浏览器回归流水线 / Sandbox P3b / 定时任务 per_run 三档)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化)。
+> ✅ **当前状态(2026-08-31)**:**daemon 化(2026-07-23)+ remote-control epic S1~S6b(2026-08-11~13 收官,merge `94828cb`)+ 6 个跨层特性(2026-08-14~18:C7 tools token / C7D stub 注册 / memory-gov 指令块治理 / B1 image multimodal / D2 跨 session 全文搜索 / C3+ LLM 摘要式压缩)+ 6 个续接特性(2026-08-19~27:unified-context-budget 统一 token 预算 + 关卡⑤硬卡 / MAX_TURNS 软卡 / 手动 /compact / 跨 session 接力 handoff / worker per-turn 度量 + turn_trace 表重建 / F1 消息队列 / F4 web_search / F5 文档提取 / F6 异步可观测性 + F3 并发闸)+ F2·F2b 定时任务(08-28)+ 08-29~31 批(schedule_task 工具家族 / C6 输出截断统一 / ShellCard / 审计 keyset 分页 / Playwright 浏览器回归流水线 / Sandbox P3b / 定时任务 per_run 三档)**。agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。**de-Tauri(2026-09-30,任务 09-30-de-tauri)后 daemon + web 是唯一形态**:Tauri GUI 进程、sidecar 生命周期与 `?transport=tauri` 逃生舱已整链移除;前端只走 `httpTransport`(同源 HTTP + SSE),daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,本地浏览器访问 `http://127.0.0.1:7456`(`scripts/daemon.sh start` 拉起)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化)。
 >
 > 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
 ### 1.1 进程拓扑(daemon 化后,2026-07 落地)
 
 ```
-三种运行形态,共享同一份 agent core 代码(AppState + agent loop)。
+两种运行形态,共享同一份 agent core 代码(AppState + agent loop)。
 
-╔══ 形态 A:Tauri GUI + sidecar daemon(默认,Thin 模式)══════════════╗
+╔══ 形态 A:本地浏览器(daemon serve dist,唯一本地形态)════════════╗
 ║                                                                        ║
-║  ┌─ Tauri GUI Process(瘦客户端)──────────────┐                       ║
-║  │  Vue UI (SPA)   TitleBar (window 控)        │  sidecar.rs::        ║
-║  │                                              │  spawn_and_manage    ║
-║  │  transport.invoke()  ── httpTransport(默认)  │  (tauri-plugin-shell)║
-║  │    fetch POST + SSE                         │                       ║
-║  │  (逃生:?transport=tauri → Tauri IPC,Full)   │── spawn args:        ║
-║  │                                              │   --port 7456        ║
-║  └──────────────────────────────────────────────┘   --data-dir <dir>   ║
+║  ┌─ Browser(任意浏览器)──────────────┐                              ║
+║  │  Vue UI (SPA)   BrowserHeader       │  http://127.0.0.1:7456/     ║
+║  │  transport.invoke() ─ httpTransport │ ◄── ServeDir 返回 dist SPA  ║
+║  │    (fetch POST + SSE)               │                              ║
+║  └──────────────────────────────────────┘                              ║
 ║                           │                                            ║
 ║                           │ 同源 HTTP/SSE(0.0.0.0:7456)              ║
 ║                           ▼                                            ║
 ║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
 ║  │  axum router (daemon/server.rs::build_router)            │          ║
-║  │   · 116 个 #[tauri::command] 镜像为 REST 路由(2026-09-07 │          ║
-║  │     实测)                                              │          ║
+║  │   · REST 路由(*_inner 函数族,唯一 API 面;de-Tauri    │          ║
+║  │     后无 IPC 壳)                                     │          ║
 ║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
 ║  │   · /api/v1/attachments/<id> GET 二进制(B1 08-16,首个    │          ║
 ║  │     非 JSON REST 路由,手机 PWA 看图路径)                │          ║
 ║  │   · ServeDir fallback(同源服务 dist/ SPA)              │          ║
 ║  │  ──────────────────────────────────────────────────────  │          ║
 ║  │  AppState (Arc,axum 每个 handler clone 一份)             │          ║
-║  │   · SQLite pool(持有 WAL writer;Thin 模式 GUI 不开)   │          ║
+║  │   · SQLite pool(持有 WAL writer,唯一 writer)   │          ║
 ║  │   · agent core(Agent Loop / Tool Registry 28 builtin     │          ║
 ║  │     + 1 stub 元工具 load_tool_schemas + 1 动态 dispatch  │          ║
 ║  │     dispatch_subagent = 30 注册名;                         │          ║
@@ -50,21 +47,7 @@
 ║                                                                        ║
 ╚════════════════════════════════════════════════════════════════════════╝
 
-╔══ 形态 B:纯浏览器模式(同一 daemon,无 Tauri)════════════════════╗
-║                                                                        ║
-║  ┌─ Browser(任意浏览器)──────────────┐                                ║
-║  │  isTauriWebview() = false           │  http://localhost:7456/       ║
-║  │  → BrowserHeader(替代 TitleBar)    │ ◄── ServeDir 返回 dist/ SPA   ║
-║  │  transport 仍走 httpTransport       │    (transport 载体不变)       ║
-║  └─────────────────────────────────────┘                                ║
-║                           │                                            ║
-║                           │ 同源 HTTP/SSE                              ║
-║                           ▼                                            ║
-║              (连同一份 everlasting-daemon,见形态 A)                   ║
-║                                                                        ║
-╚════════════════════════════════════════════════════════════════════════╝
-
-╔══ 形态 C:手机 PWA / 远程浏览器 → 云 everlasting-remote(2026-08 epic)══╗
+╔══ 形态 B:手机 PWA / 远程浏览器 → 云 everlasting-remote(2026-08 epic)══╗
 ║                                                                          ║
 ║  ┌─ 手机 PWA / 远程浏览器 ─────────────────────────┐                    ║
 ║  │  pwa-remote 模式(httpTransport 第三态):          │  HTTPS + WSS       ║
@@ -95,34 +78,31 @@
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
-   daemon 进程外部依赖(三种形态共用):
+   daemon 进程外部依赖(两种形态共用):
          ↓ LLM API                  ↓ Local FS / Git
     (Anthropic / OpenAI)         (WSL 内 $HOME/projects)
 ```
 **进程边界说明**:
-- **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
-- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 116 个原 `#[tauri::command]` handler 镜像为 REST 路由(2026-09-07 实测),前端同一份 handler 代码服务 IPC 与 HTTP。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 暴露 REST 路由(`*_inner` 函数族,de-Tauri 后唯一 API 面;历史上的 116 个 `#[tauri::command]` 壳已删)。
 - **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
-- **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
 - **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client(GUI + 浏览器 + 经 remote daemon 的远程 PWA client)共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
 - **everlasting-remote Process(云上,2026-08 remote epic)**:axum 云服务端(`crates/everlasting-remote/`,国内 2C2G 服务器):shared_secret auth(防伪 daemon)+ device_token 认证、配对码 60s 一次性 + per-IP 限速(`ratelimit.rs` 10 次/分)、WSS 隧道服务端 + 反向代理 + SSE 桥。DB 只存 `nodes` / `devices` / `pairing_codes` 三表(节点身份 / device_token / 配对码),**不存 agent 数据**。
 - **PC daemon 的 tunnel client(`daemon/tunnel/`)**:出站 WSS 长连接连云上 remote,把远程请求 loopback 转发到本地 agent core(子模块 client / config / dispatcher / manager / node_id / sse_bridge)。取消只停转发(`sse_bridge` `select!`),不终止本地会话。**PC daemon 本地功能零依赖 remote** —— 云上 remote 或隧道断线不影响本地 GUI / 浏览器使用。
 
 ### 1.2 关键数据流:用户发一条消息(daemon 化后,默认 httpTransport)
 
-> 📌 **当前默认路径(Thin 模式)**:Frontend → `transport.invoke('chat', ...)`(`httpTransport`:fetch POST 到 daemon `/api/v1/chat`)→ daemon 进程的 axum 路由调同一份 `chat` handler → `chat_stream_with_tools()`(reqwest + 手写 SSE)→ `HttpSseSink`(`daemon/sse.rs`)经 `/api/v1/stream` 同源 SSE 广播 `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(`streamController.ts`,按 `request_id` 路由到对应 session 的 streamController,`chat-event` payload 自 2026-08-27 起回填 **`session_id`**,支持跨客户端(remote PWA)按 session 认领)→ Pinia store 增量更新。
-> 逃生路径(Full 模式 `?transport=tauri`):`tauriTransport` 走 Tauri IPC,handler 在 GUI 进程内,事件经 Tauri event emit。两条路径共享同一 `#[tauri::command]`/REST 双暴露 handler。
+> 📌 **当前路径(daemon + web 单形态)**:Frontend → `transport.invoke('chat', ...)`(`httpTransport`:fetch POST 到 daemon `/api/v1/chat`)→ daemon 进程的 axum 路由调同一份 `chat` handler → `chat_stream_with_tools()`(reqwest + 手写 SSE)→ `HttpSseSink`(`daemon/sse.rs`)经 `/api/v1/stream` 同源 SSE 广播 `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(`streamController.ts`,按 `request_id` 路由到对应 session 的 streamController,`chat-event` payload 自 2026-08-27 起回填 **`session_id`**,支持跨客户端(remote PWA)按 session 认领)→ Pinia store 增量更新。
+> (历史逃生路径 Full 模式已随 de-Tauri 2026-09-30 删除;HTTP/SSE 是唯一路径。)
 >
-> 📌 **远程 PWA 语境(2026-08 remote epic)**:`httpTransport` 内部有第三态 **pwa-remote** —— 前端持有 `device_token` 时(`transport/auth.ts` 的 `isRemoteContext()`),请求自动加 `/api/v1/proxy` 前缀 + `Authorization: Bearer <device_token>`(`http.ts`),SSE 经 `/api/v1/stream?access_token=...`;请求先到云上 `everlasting-remote`,由它经 WSS 隧道反代到 PC daemon,远程 PWA 与本地 GUI / 浏览器共用同一 agent core(拓扑见 §1.1 形态 C)。
+> 📌 **远程 PWA 语境(2026-08 remote epic)**:`httpTransport` 内部有第三态 **pwa-remote** —— 前端持有 `device_token` 时(`transport/auth.ts` 的 `isRemoteContext()`),请求自动加 `/api/v1/proxy` 前缀 + `Authorization: Bearer <device_token>`(`http.ts`),SSE 经 `/api/v1/stream?access_token=...`;请求先到云上 `everlasting-remote`,由它经 WSS 隧道反代到 PC daemon,远程 PWA 与本地浏览器共用同一 agent core(拓扑见 §1.1 形态 B)。
 
 ```
 [1] Frontend (Vue 3)
     用户输入消息 → transport.invoke('chat', { requestId, messages })
       └ 默认 httpTransport:fetch POST /api/v1/chat(同源 daemon)
-      └ 逃生 tauriTransport:tauri.invoke('chat', ...)(Full 模式,GUI 进程内)
 
-[2] everlasting-daemon Process(axum)  /  Full 模式下的 Tauri GUI Process
-    axum 路由 / Tauri command 收到请求 → spawn 异步任务处理
+[2] everlasting-daemon Process(axum)
+    axum 路由收到请求 → spawn 异步任务处理
     invoke/fetch resolve 立即返回("已受理",非"已完成")
 
 [3] agent core(同一份 handler 代码,两种入口)
@@ -145,7 +125,7 @@
         stream = llm.stream(messages, tools)
         for chunk in stream {
           match chunk {
-            TextDelta(t)  => sink.send(ChatToken(t)),       // HttpSseSink(daemon)/Tauri emit(Full)
+            TextDelta(t)  => sink.send(ChatToken(t)),       // HttpSseSink(SSE)
             ToolUse(...)  => 权限检查(per-mode) → 执行 → 构造 tool_result 回填,
             UiRender(...) => sink.send(UiCard(...)),
           }
@@ -163,14 +143,14 @@
 
 ### 1.3 关键数据流:session 切换(daemon 化后)
 
-> 📌 **当前默认路径(daemon 化后)**:`switchSession(id)` → `chatStore` 委托 `streamController.ensureLoaded(id)` → LRU 命中则从 `messagesBySession` Map 拿;未命中则 `transport.invoke('load_session', { sessionId })`(默认 httpTransport → daemon,Full 模式 → Tauri IPC)从 SQLite 读 → 写入 Map → `currentSessionId.value = id` → `currentCwd` 更新 → UI 重新渲染。**前 session 的 in-flight SSE 流不受影响**(流指示器在 SessionList 蓝点继续 pulse 直到 `done` 到达)。详细架构见 `.trellis/spec/frontend/state-management.md` §"Stream Controller Pattern"。
+> 📌 **当前默认路径(daemon 化后)**:`switchSession(id)` → `chatStore` 委托 `streamController.ensureLoaded(id)` → LRU 命中则从 `messagesBySession` Map 拿;未命中则 `transport.invoke('load_session', { sessionId })`(httpTransport → daemon)从 SQLite 读 → 写入 Map → `currentSessionId.value = id` → `currentCwd` 更新 → UI 重新渲染。**前 session 的 in-flight SSE 流不受影响**(流指示器在 SessionList 蓝点继续 pulse 直到 `done` 到达)。详细架构见 `.trellis/spec/frontend/state-management.md` §"Stream Controller Pattern"。
 >
 > 📌 **远程 PWA 语境**:session 加载走同一 `load_session` 路径 —— pwa-remote 态下 transport 请求经 remote daemon 反代到 PC daemon(pwa-remote 三态见 §1.2),对 agent core 语义与本地一致。
 
 ```
 [1] User clicks project A → session B
 [2] Frontend: transport.invoke('load_session', { sessionId: B })
-[3] daemon / Tauri backend: 从 SQLite 读 messages → 返回 SessionSnapshot
+[3] daemon: 从 SQLite 读 messages → 返回 SessionSnapshot
 ```
 
 ### 1.4 群聊模式(group chat,2026-07-29 落地,08-04~08-07 迭代加固)
@@ -203,7 +183,7 @@
 
 **首个非 JSON REST 路由(B1 08-16)**:`GET /api/v1/attachments/<id>` 返回二进制(图片 / 附件),同源 daemon / 手机 PWA 都可达,用于 inline 预览 `messages.metadata.attachments`(B1 image multimodal 详见 §1.6)。
 
-> 拓扑 ASCII + 三形态(形态 A Tauri GUI + sidecar / 形态 B 纯浏览器 / 形态 C 手机 PWA + 云 remote)见 §1.1 图示;**形态 C 即 §1.1 形态 C**(2026-08 epic 引入,详见 §1.1)。
+> 拓扑 ASCII + 两形态(形态 A 本地浏览器 / 形态 B 手机 PWA + 云 remote)见 §1.1 图示;**远程形态即 §1.1 形态 B**(2026-08 epic 引入,详见 §1.1)。de-Tauri 前的历史三形态(含 Tauri GUI + sidecar)见 git 历史。
 
 > 📌 手机 PWA / 远程浏览器经 HTTPS 访问云上 `everlasting-remote`,由它经 WSS 长连接接到 PC daemon 的 tunnel client,loopback 打到本地 agent core(拓扑见 §1.1 形态 C)。**remote 只存 token/devices/配对码,不存 agent 数据;PC daemon 本地功能零依赖 remote。** 中继方案变更:Cloudflare Workers + D1 → 国内 2C2G 服务器 + 自研 Rust remote daemon(HTTPS 用户自理,nginx 反代,非 Cloudflare Tunnel)。部署见 [REMOTE-DEPLOY.md](./REMOTE-DEPLOY.md),端到端验证见 [REMOTE-ACCESS-E2E.md](./REMOTE-ACCESS-E2E.md)。
 
@@ -212,7 +192,7 @@
 2. 手机 PWA `redeem` 配对码 → 换取 64-hex `device_token`(per-IP 限速,`ratelimit.rs` 10 次/分)
 3. 绑定后的 PC 出现在 nodes 列表(`app/src/views/NodeListView.vue`),此后 PWA 经 `/api/v1/proxy` + `Authorization: Bearer <device_token>` 访问
 
-**vue-router 守卫**:`app/src/router/index.ts` 带 `isRemoteContext()` 守卫 —— 仅 remote-served 语境 gate 配对页(先配对再进 `/chat`);daemon / Tauri 语境直进 `/chat`(现状不变)。前端页面:`PairingView`(配对码兑换)/ `NodeListView`(节点列表)/ `ChatView`(聊天)。
+**vue-router 守卫**:`app/src/router/index.ts` 带 `isRemoteContext()` 守卫 —— 仅 remote-served 语境 gate 配对页(先配对再进 `/chat`);本地 daemon 语境直进 `/chat`(现状不变)。前端页面:`PairingView`(配对码兑换)/ `NodeListView`(节点列表)/ `ChatView`(聊天)。
 
 **PWA 壳**:vite-plugin-pwa + `public/icons/`,手机浏览器可安装为 PWA。脚本:`scripts/remote.sh`(本地隧道)/ `deploy-remote.sh`(云端部署)/ `remote-e2e-smoke.mjs`(端到端冒烟)。
 
@@ -252,21 +232,21 @@
 
 > **状态**:已实施(2026-07)。
 
-**核心变更**:agent core 从 Tauri 进程内拆出,变成独立 `everlasting-daemon` 进程。Tauri GUI 降级为瘦客户端(Thin 模式),与浏览器 client 并列,都经同源 HTTP/SSE 连同一 daemon。
+**核心变更**:agent core 从 Tauri 进程内拆出,变成独立 `everlasting-daemon` 进程。历史上 Tauri GUI 曾降级为瘦客户端(Thin 模式)与浏览器 client 并列;de-Tauri(2026-09-30)后浏览器 client 是唯一本地形态,都经同源 HTTP/SSE 连同一 daemon。
 
 > 这条决策的完整动机与编排见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md)(daemon 化于 2026-07-23 收官)。本节只讲架构本身。
 
 **为什么必须**:
-- 远程/浏览器访问 —— agent core 要能脱离 Tauri webview 被浏览器触达(daemon 用 ServeDir 同源服务 SPA)
+- 远程/浏览器访问 —— agent core 要能被浏览器直接触达(daemon 用 ServeDir 同源服务 SPA;de-Tauri 后这是唯一形态)
 - 多 client 共用同一 agent core —— 桌面 GUI + 纯浏览器连同一 daemon,共享 session 状态(早期设想的飞书/CLI 多 channel 是后续项,见 [§5](#5-决策channel-adapter-抽象早期设想未实施))
 - agent core 与 GUI 解耦 —— GUI 重启不影响 daemon 里的长跑 session(Thin 模式 GUI 不持有任何状态)
 
 **架构影响(实际落地)**:
-- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 28 个路由域文件,2026-09-07 现状)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)+ `src-tauri/src/sidecar.rs`(GUI 侧 spawn + 生命周期管理)
-- 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
+- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 28 个路由域文件,2026-09-07 现状)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)(历史另含 `src-tauri/src/sidecar.rs` GUI 侧生命周期管理——de-Tauri 2026-09-30 删除)
+- 前端新增 `app/src/transport/` 抽象层(httpTransport;历史 tauriTransport 逃生已随 de-Tauri 删)
 - 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
-- 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
-- 116 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用;**2026-09-07 实测 116**(08-31 为 107,09-01 增 update_project_sandbox_policy,09-02~09-07 再增 8:list/kill_background_shell、get_disk_usage/run_disk_cleanup、resume_group_chat、preempt_group_chat、set_provider_disabled/set_model_disabled);旧 118 为含注释的 grep 口径)
+- 进程管理:`scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— 脚本托管即全部(de-Tauri 后 GUI sidecar 托管链已删;历史 sidecar 形态见 git 历史)。**不用** systemd/pm2 —— 脚本托管即全部
+- REST 路由直接实现于 `*_inner` 函数族(de-Tauri 2026-09-30 起;历史 Q0 决策曾把 116 个 `#[tauri::command]` handler 双暴露 IPC + HTTP,壳已删,历史计数见 git 历史)
 - 新增 `crates/everlasting-remote/`(axum 云服务端:shared_secret auth + device_token、配对码 60s 一次性 + per-IP 限速(`ratelimit.rs`)、WSS 隧道服务端、反向代理、SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表)+ `crates/everlasting-remote-protocol/`(2026-08-11 workspace 翻转:根 `Cargo.toml` members 3 个,default-members 只含 remote 两 crate,Cargo.lock / target 在根)
 - PC daemon 新增 `src-tauri/src/daemon/tunnel/`(client / config / dispatcher / manager / node_id / sse_bridge;WSS 长连接 + loopback 转发,取消只停转发)
 - 前端新增 `app/src/transport/auth.ts`(device_token / `isRemoteContext()`)+ `app/src/router/index.ts` vue-router `isRemoteContext()` 守卫 + `PairingView` / `NodeListView` / `ChatView` / `RemoteTab.vue` + PWA 壳(vite-plugin-pwa + `public/icons/`);配对流程:PC Remote tab 生成 6 位配对码 → 手机 PWA redeem 换 64-hex device_token → nodes 列表

@@ -412,28 +412,6 @@ mod tests {
         assert!(!sidecar_flag_from_env(Some("true".into())));
     }
 
-    /// P2.1 path-consistency invariant: the daemon's data dir MUST end
-    /// with the same identifier the GUI's `app_data_dir()` uses
-    /// (`config.identifier` from tauri.conf.json, baked in here via
-    /// `EVERLASTING_APP_IDENTIFIER`). A standalone daemon run opening a
-    /// different subdirectory than the GUI would silently split the
-    /// SQLite store — this test catches that regression at the
-    /// identifier-join level (platform data_dir base is host-dependent,
-    /// so only the trailing component is asserted).
-    #[test]
-    fn resolve_data_dir_ends_with_app_identifier() {
-        let dir = resolve_data_dir();
-        let expected = OsStr::new(env!("EVERLASTING_APP_IDENTIFIER"));
-        assert_eq!(
-            dir.file_name(),
-            Some(expected),
-            "resolve_data_dir() should end with the bundle identifier \
-             ({}), got {} — GUI/daemon db will split",
-            env!("EVERLASTING_APP_IDENTIFIER"),
-            dir.display()
-        );
-    }
-
     /// The identifier must not be the old hardcoded `"everlasting"`
     /// (the bug). Guards against a build.rs regression that fails to
     /// read tauri.conf.json and falls back to a wrong default.

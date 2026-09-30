@@ -34,15 +34,11 @@ Playwright 流水线(2026-08-30,RULE-TEST-001,见 `.trellis/spec/frontend/browse
 
 pnpm 版本统一(2026-09-11):各包 `package.json` 的 `packageManager` 字段是唯一事实源(`app`/`scripts` 均 11.24.0,CI 同源取版本);pnpm ≥ 10 自带版本自管(`manage-package-manager-versions` 默认开),进目录自动切到字段版本,新机器装任意 pnpm ≥ 10 即可,勿手动锁旧版。corepack 勿作主路径(Node 25 起不再随附)。
 
-**Backend** (Rust `cargo test`). 2026-08-11 workspace 翻转后根目录有 `Cargo.toml`(members = app/src-tauri + crates/everlasting-remote(-protocol);default-members 只含 remote 两 crate)——**根目录裸 `cargo test` 只跑 default-members(remote 两 crate,不会跑 app)**;app 的测试需显式 `-p everlasting`,或 cd app/src-tauri 后裸命令。On WSL you must export `PKG_CONFIG_PATH` or system libs (gdk-pixbuf / webkit2gtk) won't be found — see [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) 坑 1:
+**Backend** (Rust `cargo test`). 2026-08-11 workspace 翻转后根目录有 `Cargo.toml`(members = app/src-tauri + crates/everlasting-remote(-protocol)/everlasting-acp;default-members 只含 remote 两 crate)——**根目录裸 `cargo test` 只跑 default-members(remote 两 crate,不会跑 app)**;app 的测试需显式 `-p everlasting`,或 cd app/src-tauri 后裸命令。**de-Tauri(2026-09-30,任务 09-30-de-tauri)后 everlasting 零系统库依赖**——GUI bin 与 tauri 依赖链(webkit2gtk/gdk-pixbuf + `PKG_CONFIG_PATH`)已整链移除,daemon + web(daemon serve dist,浏览器访问 `:7456`)是唯一形态:
 
 ```bash
-cd app/src-tauri && \
-  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo test --lib             # ~2484 unit tests (2026-09-18 实测,较 08-28 的 1995 增 ~490,含 openai_responses provider 新增);default is multi-threaded (= nproc)
-# 根 workspace 等价写法(推荐从根跑):
-cargo test -p everlasting --lib               # 结果同 cd app/src-tauri && cargo test --lib(PKG_CONFIG_PATH 仍需)
-cargo test -p everlasting-remote              # remote crate:零系统库依赖,无需 PKG_CONFIG_PATH,远快于 everlasting
+cargo test -p everlasting --lib               # ~2617 unit tests(2026-09-30 de-Tauri 后实测);无需任何环境变量;结果同 cd app/src-tauri && cargo test --lib
+cargo test -p everlasting-remote              # remote crate:同样零系统库,远快于 everlasting
 ```
 
 Notes:
@@ -55,7 +51,7 @@ Notes:
 
 ## DB / 单轮烟测速查
 
-- **SQLite DB(daemon + GUI 共用)**:`~/.local/share/dev.everlasting.app/everlasting.db`(WSL/Linux;macOS `~/Library/Application Support/...`,见 [docs/DEBUG_DB.md](./docs/DEBUG_DB.md) §1,schema 索引 + 常用查询都在那)。**WAL writer 是 daemon 进程** — `sqlite3 -readonly` 查询随时安全;直连写要先 `./scripts/daemon.sh stop`(GUI Thin 模式不开 pool,不影响)。
+- **SQLite DB(daemon 唯一 writer)**:`~/.local/share/dev.everlasting.app/everlasting.db`(WSL/Linux;macOS `~/Library/Application Support/...`,见 [docs/DEBUG_DB.md](./docs/DEBUG_DB.md) §1,schema 索引 + 常用查询都在那)。**WAL writer 是 daemon 进程** — `sqlite3 -readonly` 查询随时安全;直连写要先 `./scripts/daemon.sh stop`。
 - **单轮烟测**:`scripts/turn-smoke.sh` — 经 daemon HTTP API(`:7456`)建临时 session 实跑一轮 LLM,轮询 `turn_trace` 报 per-turn token(tools_token / context_input / 占比),跑完自动删 session。改了 agent loop / trace / tools 链路后用它做 live 验证,别手翻 DB。
 - **群聊审议驱动(GCE-M1)**:`node scripts/group-chat-run.mjs run --preset review --topic "..."` — 一条命令召集跨模型审议(建群→发题→轮询→导转录到 `{app_data_dir}/discussions/`,09-15 起与定时/MCP 场三场同源);`projects`/`models`/`presets` 三内省查建群信息,`--dry-run` 零成本冒烟(不建 session 不发 LLM;预设目录经本地 daemon 拉取,失败降级内置),`--token-budget <n>` 声明预算帽(四计费字段口径,超限轮头停 `stop_reason=budget`,无收束轮;建议不填——帽是防失控保险丝而非省钱手段,压帽必中途截断且无 summary;转录统计段带 per-speaker 核算),模型引用只认 UUID(名字由脚本解析)。GCE-P2(09-12)起 `--preset` 三趟解析:内置 key / 用户预设行 id(UUID)/ 用户行名称(精确→忽略大小写),用户预设与内置覆盖行运行时从 daemon 拉取合并(daemon 不在降级内置五档)。LLM 调用方指引见 `.agents/skills/group-chat/`。改了群聊编排/prompt 后跑一场 live 验证质量(一场 5-15min,慎用)。引擎纯函数单测:`node --test scripts/group-chat-run.test.mjs`(23 用例;vitest 不收 scripts/,走 node 内建 runner)。
 - **群聊 MCP 接口(GCE-M2,09-06;stdio 面 09-15 P4 退役)**:宿主 agent 经**用户级** MCP 配置(`~/.zcode/cli/config.json` 的 `mcp.servers`)挂八工具(M3 起控制面:`start_discussion`/`discussion_status`/`discussion_result`/`cancel_discussion`/`interrupt_discussion` 收束打断/`inject_message` 注入;09-11 起 `list_models` 只读内省可用模型,名字/UUID 皆可作引用;GCE-P2 09-12 起 `list_presets` 只读内省合并预设——内置五档 + 用户档(key=行 UUID)+ 覆盖标记)。`start_discussion.preset` 同 M1 三趟解析(内置 key / 用户行 UUID / 用户行名称)。09-13 起 `discussion_status` 两可选参:`wait_seconds`(1-25 有界长轮询——上限 09-19 起 30→25,避开宿主 30s 工具执行超时;信号 = busy/stop_reason 翻转或消息数/末 seq 变化,变化即返、到点返 `wait_timed_out:true`)与 `detail`(messages/last_speaker/tokens/token_budget 进度富化,wait 隐含 detail)。原 stdio 壳实现(`scripts/group-chat-mcp.mjs` + standalone bin 部署面 + 31 单测)随 P3 挂载切 HTTP + P4 退役全删(任务 09-15-gce-mcp-stdio-retire),唯一实现 = 下条 `/mcp` 端点;`scripts/` 依赖仅剩 SDK(http-smoke 客户端用,zod 已删,lockfile 收敛 pnpm 单源)。

@@ -2,6 +2,8 @@
 
 > Everlasting 的"是什么、为什么、边界在哪"。这是文档的入口。
 > 架构设计见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+>
+> ⚠️ **形态演进**:本文写就时(2026-06)的形态假设是「Tauri 2 桌面应用」;2026-07 daemon 化、2026-09-30 de-Tauri(任务 09-30-de-tauri)后**产品形态 = everlasting-daemon(axum)+ 浏览器**(`scripts/daemon.sh start` + `http://127.0.0.1:7456`),Tauri 选型章节是历史决策记录(将来重启桌面包 = 纯壳 crate,前端载体无关)。
 
 ---
 

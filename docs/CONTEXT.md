@@ -153,21 +153,16 @@ L3b PR1-PR4(L3b = subagent isolation 维)落地的 worker 隔离机制(branch �
 
 ### daemon 化进程模型(07-20~23 remote-access epic 落地)
 
-agent core 从 Tauri GUI 进程拆出为独立 daemon 进程后引入的术语。详见 [ARCHITECTURE §1/§4](./ARCHITECTURE.md)。实现细节(phase 拆分 / transport 抽象 / SSE / sidecar 管理)见 [ROADMAP §1.2 "daemon 化" 行](./ROADMAP.md#12-路线图外完成)。
+agent core 从(历史的)Tauri GUI 进程拆出为独立 daemon 进程后引入的术语。详见 [ARCHITECTURE §1/§4](./ARCHITECTURE.md)。**de-Tauri(2026-09-30,任务 09-30-de-tauri)后 daemon + web 是唯一形态**——GUI bin、sidecar 生命周期、GuiMode(Thin/Full)、tauriTransport 与 `?transport=tauri` 逃生舱已整链移除(历史词条见 git 历史);实现细节见 [ROADMAP §1.2 "daemon 化" 行](./ROADMAP.md#12-路线图外完成)。
 
-- **everlasting-daemon** — cargo bin target(`app/src-tauri/src/bin/everlasting-daemon.rs`),跑 agent core 的独立进程。axum HTTP server,监听 `0.0.0.0:7456`,持有 SQLite pool(WAL writer)。
-- **sidecar** — GUI 进程(Tauri)把 daemon 作为子进程 spawn 出来的模式(`sidecar.rs::spawn_and_manage`)。`RunEvent::Exit` 钩子 kill sidecar,无孤儿进程。spawn args:`--port` + `--data-dir`(对齐 GUI 的 `app_data_dir`,保证开同一个 SQLite)。
-- **GuiMode**(`sidecar.rs` 枚举)—— GUI 运行模式:
-  - **Thin**(默认):GUI 不加载 `AppState`、不开 DB pool、不跑 sweep/hygiene;只 spawn daemon sidecar 并经 `httpTransport` 通信。
-  - **Full**(`?transport=tauri` 或 `EVERLASTING_GUI_FULL_STATE=1`):legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时的逃生舱。
-- **transport 抽象层**(`app/src/transport/`)—— 前端把 `invoke`/`listen` 与载体解耦:
-  - **httpTransport**(默认):fetch POST 到 daemon `/api/v1/*` + EventSource 订阅 `/api/v1/stream` SSE。Tauri webview 和纯浏览器都用它。
-  - **tauriTransport**(逃生):`@tauri-apps/api` 的 `invoke`/`listen` 透传,仅 Full 模式。`?transport=tauri` URL query 触发。
-  - `resolveTransport()`(`index.ts`)按 URL query 选;`health.ts` 轮询 daemon health 必要时降级。
-- **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。**2026-08-27 起 `chat-event` payload 回填 `session_id`**(`daemon/sse.rs` 注释契约),非发起端(remote PWA)可跨客户端按 session 认领。Full 模式下对应 Tauri `app.emit`。
-- **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,使纯浏览器访问 `http://localhost:7456/` 直接拿到前端(浏览器模式)。
-- **浏览器模式** — 无 Tauri 运行时的纯浏览器访问形态。前端 `isTauriWebview()`(`transport/env.ts`)=false 时用 `BrowserHeader.vue` 替代 `TitleBar.vue`。管理脚本 `scripts/daemon.sh`。
-- **handler 双暴露(Q0 决策)** —— **2026-09-07 实测 116** 处 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(08-31 为 107,09-01 增 `update_project_sandbox_policy`,09-02~09-07 再增 8:list/kill_background_shell、get_disk_usage/run_disk_cleanup、resume_group_chat、preempt_group_chat、set_provider_disabled/set_model_disabled;旧 118 为含注释/测试文件引用的 grep 口径,已修正);同一份 handler 代码既服务 Tauri IPC 又服务 HTTP,代码复用不分裂。
+- **everlasting-daemon** — cargo bin target(`app/src-tauri/src/bin/everlasting-daemon.rs`),唯一产品进程。axum HTTP server,监听 `0.0.0.0:7456`,持有 SQLite pool(WAL writer)。管理脚本 `scripts/daemon.sh`(start/bg/stop/restart/status/logs)。
+- **transport 抽象层**(`app/src/transport/`)—— 前端 `invoke`/`listen` 的 facade:
+  - **httpTransport**(唯一实现):fetch POST 到 daemon `/api/v1/*` + EventSource 订阅 `/api/v1/stream` SSE。
+  - facade 保留的意义:组件测试统一 mock `../../transport` 边界。
+  - `health.ts` 启动握手(`main.ts::bootstrap`),daemon 不健康渲染 fail-loud 覆盖层。
+- **HttpSseSink**(`daemon/sse.rs`)—— agent loop 的事件广播出口:把 `ChatEvent`(`chat-event`/`tool:call`/`tool:result` 等)经同源 SSE 推给前端。**2026-08-27 起 `chat-event` payload 回填 `session_id`**(`daemon/sse.rs` 注释契约),非发起端(remote PWA)可跨客户端按 session 认领。
+- **ServeDir**(`tower-http`)—— daemon 同源服务前端 `dist/` SPA 的 fallback,浏览器访问 `http://127.0.0.1:7456/` 直接拿到前端。
+- **`*_inner` 函数族** —— daemon REST 路由的实现面(daemon/routes/ 调用)。历史上 116 处 handler 曾双暴露 Tauri IPC + HTTP(Q0 决策);de-Tauri 后 IPC 壳全删,inner 是唯一 API 面。
 - **everlasting-remote** — 独立二进制(`crates/everlasting-remote/` + `crates/everlasting-remote-protocol/`,2026-08-11 workspace 翻转后为 workspace members),云端 axum 服务端(国内 2C2G 服务器,nginx 反代 HTTPS)。shared_secret auth(防伪 daemon)+ device_token 认证;配对码 60s 一次性 + per-IP 限速;WSS 隧道服务端 + 反向代理 + SSE 桥;DB `nodes` / `devices` / `pairing_codes` 三表。只存 token/devices/配对码,**不存 agent 数据**;PC daemon 本地功能零依赖 remote。
 - **tunnel client / TunnelManager**(`app/src-tauri/src/daemon/tunnel/`,子模块 client / config / dispatcher / manager / node_id / sse_bridge)—— PC daemon 侧出站 WSS 长连接 + loopback 转发,把云上 remote 的请求转发到本地 agent core。取消只停转发(`sse_bridge` 的 `select!`),不终止本地会话。
 - **node_id** — PC daemon 在 remote 上的节点身份(`devices` 表),WSS 长连接与 `/api/v1/proxy` 按 node_id 路由。

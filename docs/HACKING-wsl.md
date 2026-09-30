@@ -308,15 +308,15 @@ Layout=
 
 ---
 
-## 坑 11:Tauri 2 IPC arg 默认 `rename_all = "camelCase"`
+## 坑 11:Tauri 2 IPC arg 默认 `rename_all = "camelCase"`(✅ 已随 de-Tauri 消失,2026-09-30;HTTP wire 是 JSON snake_case)
 
-**现象**:Rust 端 `async fn create_session(state: ..., project_id: String, initial_cwd: String, model: Option<String>)`,JS 端用 snake_case 调:
+**历史现象**:Rust 端 `async fn create_session(state: ..., project_id: String, initial_cwd: String, model: Option<String>)`,JS 端用 snake_case 调:
 ```ts
 invoke("create_session", { project_id, initial_cwd, model: null })
 ```
 报错:`Unhandled Promise Rejection: invalid args 'projectId' for command 'create_session': command create_session missing required key projectId`
 
-**根因**:Tauri 2 IPC 边界对 Rust command 函数参数默认 `rename_all = "camelCase"` —— Rust 的 `project_id: String` 暴露给 JS 时是 `projectId`,`initial_cwd` 暴露是 `initialCwd`。JS 端用 snake_case 调用,key 找不到。
+**历史根因**:Tauri 2 IPC 边界(已随 GUI bin 删除,任务 09-30-de-tauri)对 Rust command 函数参数默认 `rename_all = "camelCase"` —— Rust 的 `project_id: String` 暴露给 JS 时是 `projectId`,`initial_cwd` 暴露是 `initialCwd`。JS 端用 snake_case 调用,key 找不到。
 
 **修法**:JS 端 invoke 参数全用 camelCase:
 ```ts
@@ -334,35 +334,11 @@ invoke("create_session", { projectId, initialCwd })  // 正确
 
 ---
 
-## 坑 1:linuxbrew 的 pkg-config 不搜系统路径
+## 坑 1:linuxbrew 的 pkg-config 不搜系统路径(✅ 已随 de-Tauri 消失,2026-09-30)
 
-**现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使 `apt install libwebkit2gtk-4.1-dev` 装过了。`ls /usr/lib/x86_64-linux-gnu/pkgconfig/` 能看到 `webkit2gtk-4.1.pc`。**同样症状**:`cargo check` / `cargo test --lib` 在 `app/src-tauri/` 下报 `gdk-pixbuf-2.0` / `webkit2gtk-4.1` not found。
+**历史现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found(linuxbrew 的 pkg-config 覆盖搜索路径),`cargo test --lib` 撞 `gdk-pixbuf not found`,需要 `PKG_CONFIG_PATH` 前缀。
 
-**根因**:linuxbrew 的 pkg-config 把搜索路径**完全覆盖**到 `/home/linuxbrew/.linuxbrew/{lib,share,...}/pkgconfig`,不搜系统标准路径。
-
-**修法**(持久):
-```bash
-# 加到 ~/.bashrc 和 ~/.zshrc
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
-```
-
-**一次性使用**(避免改 shell rc,适合 CI 或临时验证):
-```bash
-cd app/src-tauri && \
-  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo check
-# 或
-cd app/src-tauri && \
-  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo test --lib
-```
-
-**注意**:**完整 Tauri runtime 需要 `pnpm tauri dev/build`**(走 `.cargo/config` 路径),`cargo test` 和 `cargo test --lib` 都需带 `PKG_CONFIG_PATH`,否则撞 `gdk-pixbuf not found`。
-
-**验证**:
-```bash
-pkg-config --modversion webkit2gtk-4.1   # 应返回 2.50.x
-```
-
-**关联**:CLAUDE.md §Common Commands 同步记录了 `PKG_CONFIG_PATH=...` 的 cargo check / test 命令,与本坑修法等价。
+**现状**:de-Tauri(任务 09-30-de-tauri)删除了 GUI bin 与整条 tauri 依赖链,everlasting crate **零系统库依赖**——webkit2gtk/gdk-pixbuf 不再被任何构建目标引用,本坑对本仓库不再触发(`cargo test -p everlasting --lib` 裸跑即可)。linuxbrew pkg-config 的行为本身仍在(linuxbrew 用户对其他 -sys crate 仍可能撞),修法留档:export `PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"`。
 
 ---
 
@@ -651,7 +627,7 @@ agent loop 是 daemon 进程里的 fire-and-forget tokio task —— **客户端
 
 ### 调度边界:定时任务只在 daemon 进程跑(F2,2026-08-28)
 
-`spawn_task_scheduler` 与 backup/sweeper 同款**只在 `bin/everlasting-daemon.rs` 装配**——GUI Full 模式(`?transport=tauri` 逃生)零 timer,**Settings「定时任务」面板可建/改任务但永不触发**(面板顶部有提示)。30s tick;停机跨过 fire 点重启后补跑一次(`last_fired_at` 判定);显式 disable→enable 不补跑存量。全局 kill switch `app_config` `scheduled_tasks_enabled`(fail-open)。
+`spawn_task_scheduler` 与 backup/sweeper 同款**只在 `bin/everlasting-daemon.rs` 装配**(de-Tauri 后唯一进程,无历史 Full 模式零 timer 的例外)。30s tick;停机跨过 fire 点重启后补跑一次(`last_fired_at` 判定);显式 disable→enable 不补跑存量。全局 kill switch `app_config` `scheduled_tasks_enabled`(fail-open)。
 
 ### 生产模式(裸二进制,手动部署)
 
