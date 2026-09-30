@@ -195,13 +195,6 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpStream;
 
-        // 预占 ephemeral port,取出后立即 drop,交给 serve_remote 重绑。
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind ephemeral");
-        let port = listener.local_addr().expect("local_addr").port();
-        drop(listener);
-
         // Step 3:serve_remote 需要 `Arc<RemoteState>`(tempdir db + migration)。
         let dir = tempfile::tempdir().expect("create tempdir");
         let config = crate::config::RemoteConfig {
@@ -213,11 +206,41 @@ mod tests {
             .await
             .expect("state loads");
 
-        let mut serve_handle = tokio::spawn(serve_remote(state, port));
+        // 预占 ephemeral port,取出后立即 drop,交给 serve_remote 重绑。
+        let mut port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind ephemeral");
+            listener.local_addr().expect("local_addr").port()
+        };
+        let mut serve_handle = tokio::spawn(serve_remote(state.clone(), port));
 
         // 等 remote 起来(轮询 health)。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
+            // 取号(drop)与 serve_remote 重绑之间是 TOCTOU:该端口可能已被
+            // 内核并发分配给机器的其他出站连接,bind 报 AddrInUse —— 这是
+            // 测试取端口方式的竞态,不是 serve 行为缺陷(2026-09-30 实证
+            // ~1/3 频率偶发)。换新端口重来;真正的守卫断言(自发退出)只在
+            // health 200 之后判。
+            if serve_handle.is_finished() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "remote did not become healthy in 5s"
+                );
+                let res = (&mut serve_handle).await.expect("serve task panicked");
+                assert!(
+                    matches!(&res, Err(err) if err.kind() == std::io::ErrorKind::AddrInUse),
+                    "serve_remote exited during startup unexpectedly: {res:?}"
+                );
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("rebind ephemeral");
+                port = listener.local_addr().expect("local_addr").port();
+                drop(listener);
+                serve_handle = tokio::spawn(serve_remote(state.clone(), port));
+                continue;
+            }
             if std::time::Instant::now() >= deadline {
                 panic!("remote did not become healthy in 5s");
             }
