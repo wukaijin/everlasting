@@ -178,3 +178,27 @@ BACKLOG 附录 B N7 立项(推荐采纳后用户 OK)。brainstorm 三问裁定(�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 161: N20 ACP shim MVP:everlasting-acp bin 交付(Zed 可用)
+
+**Date**: 2026-09-30
+**Task**: N20 ACP shim MVP:everlasting-acp bin 交付(Zed 可用)
+**Branch**: `main`
+
+### Summary
+
+N20 立项实施(前置调研 09-29-n20-acp-integration-research):新 crate crates/everlasting-acp(workspace member 不进 default-members)——ACP v1 agent 侧 stdio shim 连回 daemon HTTP/SSE,第五客户端形态,daemon/agent core 零改动。全功能面:initialize(能力合法降级)/session new·list·load(官方时序重放,cwd strict)/prompt 全链(SSE 启动即挂+Last-Event-ID 重连,delta/thinking/tool 两态/usage 流式,stop_reason 值域表全生产点钉死)/request_permission 反向桥(reject_once→deny rename,逐 ask spawn 支持多 ask 并发)/cancel/set_mode。4 轮 implement+check 双绿:check 抓修 SSE 健康判据空闲误拒(45s 窗口)、daemon 重启/宕机 prompt 悬挂×2、cancel 事件循环 10s 停摆、content_filter→Refusal 漏项。60 单测+11 集成(spawn 真子进程+axum 状态化假 daemon)+真 LLM live 冒烟三轮;前端 2096/remote 89 无回归;CI 接 clippy+test。文档:docs/ACP.md(注册指引+手测清单,GUI 实测留用户)+BACKLOG N20 闭环;spec 沉淀:backend/acp-shim.md + daemon-server/pattern-external-sse-client.md(外部 SSE 客户端契约含 http_proxy 回环劫持坑)。follow-up 四项:Permission 恢复面/图片/MCP over ACP/daemon 自动拉起。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `76d9653b` | (see git log) |
+| `73864161` | (see git log) |
+| `9af080b7` | (see git log) |
+| `99034215` | (see git log) |
+
+### Status
+
+[OK] **Completed**
