@@ -24,6 +24,7 @@
 - [scenario-new-ipc-command.md](./daemon-server/scenario-new-ipc-command.md) — 新增一个 IPC 命令(4 处齐全;八节全)
 - [scenario-tunnel-node-id.md](./daemon-server/scenario-tunnel-node-id.md) — tunnel node_id 派生与自定义(含 set_tunnel_display_name 镜像契约)
 - [pattern-deprecate-ipc-and-health.md](./daemon-server/pattern-deprecate-ipc-and-health.md) — 下线弃用 IPC 命令(RULE-SHIM-001)+ `/api/v1/health` stateless(RULE-HEALTH-001)
+- [pattern-external-sse-client.md](./daemon-server/pattern-external-sse-client.md) — 外部进程消费 daemon SSE 的客户端侧契约(启动即挂/Last-Event-ID/健康窗口/casing 不对称/http_proxy 回环劫持;N20 09-30,evl+acp 双先例)
 
 ## Pattern: SessionSummary 运行时态 enrich(busy 字段,F6 2026-08-27)
 

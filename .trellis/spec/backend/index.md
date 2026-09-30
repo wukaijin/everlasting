@@ -11,6 +11,7 @@
 | [Directory Structure](./directory-structure.md) | 后端目录结构 + 模块组织 | 占位待补(仅 Large-File Splitting 对照表) |
 | [Agent Loop Architecture](./agent-loop-architecture.md) | agent loop / 关卡 / turn 模式(含子目录 pattern-*) | ✅ 有实质内容 |
 | [Daemon Server](./daemon-server.md) | daemon HTTP server 契约(axum 路由 / SSE / 进程模型;8 分篇已拆至子目录 `daemon-server/`) | ✅ 有实质内容 |
+| [ACP Shim](./acp-shim.md) | `everlasting-acp` crate(第五客户端形态,ACP agent 侧;SDK API 形状 / 映射决策 / 测试模式;N20 09-30) | ✅ 有实质内容 |
 | [Scheduled Tasks](./scheduled-tasks.md) | F2 定时任务执行契约(30s tick / due 落账 / 三档 target_mode,08-31 per_run + 09-07 group_chat;origin 链 / LLM 家族 / group_chat fire 分篇已拆至子目录 `scheduled-tasks/`) | ✅ 有实质内容 |
 | [Disk Governance](./disk-governance.md) | F3 磁盘治理(governor 每日节拍 / 孤儿回收 / 备份预算 / 日志进程内轮转) | ✅ 有实质内容 |
 | [Sandbox Executor](./sandbox-executor.md) | 执行期沙盒(P3b Landlock+seccomp / P3c 三态 + Plan 只读面 / P3d 后台升级闭环 / 2026-09-21 listen 识别缺口修复 + 长期方案;§10-§14 分篇已拆至子目录 `sandbox-executor/`) | ✅ 有实质内容 |
