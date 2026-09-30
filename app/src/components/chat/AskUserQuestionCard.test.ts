@@ -28,16 +28,16 @@
 //      in the parent component tree (no Teleport to body, no
 //      portal-class element on document.body).
 //
-// Tauri invoke is mocked at the `@tauri-apps/api/core` boundary
-// so the test doesn't need a Tauri runtime. The mock records
-// every invoke call so we can assert the exact wire payload.
+// The transport is mocked at the `../../transport` boundary so the
+// test doesn't need a daemon. The mock records every invoke call so
+// we can assert the exact wire payload.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { nextTick } from "vue";
 
-// Mock @tauri-apps/api/core so resolveToolQuestion → invoke
-// doesn't reach `window.__TAURI_INTERNALS__`. The mock records
+// Mock the transport so resolveToolQuestion → invoke
+// stays local. The mock records
 // every call so we can assert the wire payload.
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({
@@ -410,7 +410,7 @@ describe("AskUserQuestionCard — submit IPC", () => {
           multi_select: true,
         },
       ],
-      // `cancelled` is omitted by Tauri arg-binder (undefined keys
+      // `cancelled` is omitted by the JSON serializer (undefined keys
       // dropped) — `answer` is the live path.
       cancelled: undefined,
     });

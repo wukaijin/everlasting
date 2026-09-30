@@ -22,7 +22,7 @@
 //      hint while streaming. See `ModeSelect.vue` for the
 //      toast contract.
 //
-// Tauri IPC is mocked via `vi.mock("@tauri-apps/api/core")` so
+// The transport invoke is mocked (module boundary) so
 // these tests run under vitest's jsdom env without Tauri.
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";

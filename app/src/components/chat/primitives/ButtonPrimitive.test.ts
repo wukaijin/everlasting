@@ -27,7 +27,7 @@ import type {
   UiButtonAction,
 } from "../uiCard.types";
 
-// Mock @tauri-apps/api/core so we can spy on the invoke call without
+// Mock the transport so we can spy on the invoke call without
 // touching the real backend.
 const invokeMock = vi.fn();
 vi.mock("../../../transport", () => ({

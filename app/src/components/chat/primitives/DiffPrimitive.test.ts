@@ -24,7 +24,7 @@ import { nextTick } from "vue";
 import DiffPrimitive from "./DiffPrimitive.vue";
 import type { UiPrimitive } from "../uiCard.types";
 
-// Mock @tauri-apps/api/core so we can spy on the invoke call without
+// Mock the transport so we can spy on the invoke call without
 // touching the real backend. Mirrors the chat store test pattern.
 const invokeMock = vi.fn();
 vi.mock("../../../transport", () => ({

@@ -21,16 +21,16 @@
 //   8. State prop renders the appropriate non-pending view
 //      directly on mount (rehydrated historical path).
 //
-// Tauri invoke is mocked at the `@tauri-apps/api/core` boundary
-// so the test doesn't need a Tauri runtime. The mock records
-// every invoke call so we can assert the exact wire payload.
+// The transport is mocked at the `../../transport` boundary so the
+// test doesn't need a daemon. The mock records every invoke call so
+// we can assert the exact wire payload.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
-// Mock @tauri-apps/api/core so cardsStore.resolveModeChange →
-// invoke doesn't reach `window.__TAURI_INTERNALS__`. The mock
+// Mock the transport so cardsStore.resolveModeChange →
+// invoke stays local. The mock
 // records every call so we can assert the wire payload.
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({

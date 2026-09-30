@@ -41,11 +41,10 @@ import { useQuestionCardsStore } from "../../stores/questionCards";
 import type { ChatMessage } from "../../stores/chat.types";
 import type { Question } from "../../stores/questionCards.types";
 
-// Tauri APIs aren't used in this component tree (no invoke calls
-// from MessageItem itself — the AskUserQuestionCard does its own
-// invoke, mocked inside the existing AskUserQuestionCard test).
-// We still stub the Tauri modules to avoid the vue-test-utils
-// renderer complaining about missing globals in jsdom.
+// The transport isn't used by this component tree directly (no
+// invoke calls from MessageItem itself — the AskUserQuestionCard
+// does its own invoke, mocked inside its own test). We still stub
+// the transport to keep the tree inert in jsdom.
 vi.mock("../../transport", () => ({
   transport: {
     invoke: vi.fn(async () => null),

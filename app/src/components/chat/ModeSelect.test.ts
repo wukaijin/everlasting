@@ -14,7 +14,7 @@ import { mount, VueWrapper, flushPromises } from "@vue/test-utils";
 import { nextTick } from "vue";
 
 // Mock Tauri so `chatStore.requestSetMode` doesn't try to
-// hit `window.__TAURI_INTERNALS__`.
+// hit a live transport.
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({
   transport: {

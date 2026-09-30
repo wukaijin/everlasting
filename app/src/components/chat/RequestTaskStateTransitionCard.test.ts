@@ -14,14 +14,14 @@
 //      historical path).
 //   5. AC10 inline red line: card mounts inline (no Teleport).
 //
-// Tauri invoke is mocked at the `@tauri-apps/api/core` boundary.
+// The transport invoke is mocked at the module boundary.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
-// Mock @tauri-apps/api/core so cardsStore.resolveTaskStateTransition
-// → invoke doesn't reach `window.__TAURI_INTERNALS__`. The mock
+// Mock the transport so cardsStore.resolveTaskStateTransition
+// → invoke doesn't reach the network. The mock
 // records every call so we can assert the wire payload.
 const invokeMock = vi.fn();
 vi.mock("../../transport", () => ({

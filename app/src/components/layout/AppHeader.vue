@@ -1,25 +1,17 @@
 <script setup lang="ts">
-// AppHeader — top of the application. Picks the top-bar shell based on
-// the runtime context, then fills it with the SHARED top-bar content
-// (project tabs + hidden-projects menu + pending badge).
+// AppHeader — top of the application: BrowserHeader (logo + slot +
+// spacer) filled with the SHARED top-bar content (project tabs +
+// hidden-projects menu + pending badge).
 //
-// Two shells, same slot contract:
-//   - Tauri webview  → TitleBar (drag region + window controls + OS
-//     platform detection). Calls `getCurrentWindow()` / `platform()`
-//     which only exist under the Tauri runtime.
-//   - Plain browser   → BrowserHeader (logo + slot + spacer only).
-//     Strips all Tauri-only chrome; the browser owns window controls.
+// de-Tauri (2026-09-30, task `09-30-de-tauri`): the Tauri-webview
+// shell (drag region + window controls) died with the GUI bin — the
+// browser owns window controls, so BrowserHeader is the only shell.
+// The historical runtime split existed because the old shell's setup
+// called `getCurrentWindow()` which throws in a plain browser; that
+// whole class of crash left with it.
 //
-// Why the split (P2 browser-degrade fix, 2026-07-23): TitleBar's
-// `<script setup>` calls `getCurrentWindow()` synchronously at the top
-// level (not inside a try/catch). In a plain browser that throws →
-// component setup crashes → the whole AppHeader subtree (including
-// ProjectTabs, the project switcher) disappears. Routing browsers to
-// BrowserHeader (which has zero `@tauri-apps/api` imports) avoids the
-// crash entirely. `isTauriWebview()` gates the choice.
-//
-// The shared slot content is declared once here (not duplicated in
-// either shell) so adding a top-bar element only touches this file.
+// The shared slot content is declared once here so adding a top-bar
+// element only touches this file.
 //
 // PR3 of `06-07-6-ui-bug-markdown-sse`: the red-dot "this project has
 // a streaming session" set moved out of the chat store into the
@@ -34,8 +26,6 @@
 import { computed } from "vue";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { useProjectsStore } from "../../stores/projects";
-import { isTauriWebview } from "../../transport/env";
-import TitleBar from "./TitleBar.vue";
 import BrowserHeader from "./BrowserHeader.vue";
 import ProjectTabs from "../ProjectTabs.vue";
 import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
@@ -50,27 +40,20 @@ const { mobileNavOpen, toggle: toggleMobileNav } = useMobileNav();
 // D2 (08-17-cross-session-search): global search entry. Mobile: the
 // old sidebar Cmd+K hop lived inside the nav drawer, which is
 // invisible unless the drawer is open — the header button gives an
-// always-visible trigger. Browser/PWA desktop (08-17 hotfix): also
-// shown, because Edge/Chrome don't reliably let pages override
-// Ctrl+K (omnibox search). Tauri desktop keeps it hidden (Ctrl+K
-// works uncontested there).
+// always-visible trigger. Desktop browsers don't reliably let pages
+// override Ctrl+K (omnibox search), so the button is always shown.
 const { open: openSearch } = useSearchModal();
-const showSearchButton = !isTauriWebview();
+const showSearchButton = true;
 // S5: 无项目时隐藏汉堡(与 Sidebar v-if="showSidebar" 对称,review P3-3)。
 // 空状态本身有"+ 添加项目"入口,汉堡点了也没东西弹。
 const showHamburger = computed(
   () => projectsStore.currentProjectId !== null,
 );
-
-// Resolve the shell component once at setup. `<component :is>` below
-// picks TitleBar or BrowserHeader; both expose the same default slot
-// and the shared content is injected either way.
-const shell = isTauriWebview() ? TitleBar : BrowserHeader;
 </script>
 
 <template>
   <header class="app-header">
-    <component :is="shell">
+    <BrowserHeader>
       <!-- S5 移动端汉堡(桌面 .app-header__menu-toggle display:none,
            移动端 inline-flex)。无项目时 v-if 隐藏(review P3-3)。 -->
       <button
@@ -111,13 +94,13 @@ const shell = isTauriWebview() ? TitleBar : BrowserHeader;
            moved into the ChatInput hint-row token popover
            (`ChatInputTokenUsage.vue`). -->
       <PendingBadge />
-    </component>
+    </BrowserHeader>
   </header>
 </template>
 
 <style scoped>
 /* AppHeader owns the top-of-body divider. Per 2026-06-27 top-tab-bar
-   boundary fix: TitleBar used to carry `border-bottom` itself, which
+   boundary fix: the old Tauri shell used to carry `border-bottom` itself, which
    conflicted with ProjectTabs' active-state `::after` accent (both
    rendered at the same pixel band). Hoisting the border here gives
    ProjectTabs a stable "anchor" to draw its accent above (z-axis) the

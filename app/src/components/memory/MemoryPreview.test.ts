@@ -21,7 +21,7 @@
 //      `store.layers` is populated.
 //
 // Tauri IPC is mocked at the file level (jsdom cannot import
-// `@tauri-apps/api/core` for real). The store is driven directly
+// a real transport). The store is driven directly
 // per-test via `storeToRefs(...).runtimeMemories.value = [...]`
 // — Pinia setup stores do NOT support direct proxy property
 // assignment for refs (only `.value` via the refs handle works).

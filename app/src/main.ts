@@ -4,8 +4,6 @@ import App from "./App.vue";
 import "./style.css";
 import { router } from "./router";
 import { useErrorBus, isBenignBrowserNoise } from "./utils/useErrorBus";
-import { transport } from "./transport";
-import { tauriTransport } from "./transport/tauri";
 import { awaitDaemonHealthy, type DaemonHealth } from "./transport/health";
 import { useTheme } from "./composables/useTheme";
 
@@ -62,19 +60,12 @@ app.config.errorHandler = (err, _instance, info) => {
 };
 
 // P2.4 D3.4: 在 `app.mount` 前等 daemon 健康(Q5 分层校验)。
-// httpTransport 是默认(P2.4 D3.1),若 daemon 未就绪 GUI 完全无功能,
-// 故 fail-loud:超时/协议不匹配 → 渲染全屏错误覆盖层,不静默降级。
-// `?transport=tauri` 逃生模式下无 daemon,跳过握手(Rust 侧 Full 模式直连 IPC)。
+// httpTransport 是唯一实现(de-Tauri 2026-09-30),daemon 未就绪则
+// 前端完全无功能,故 fail-loud:超时/协议不匹配 → 渲染全屏错误
+// 覆盖层,不静默降级。
 //
 // 暴露 handshake 结果到 window 供 App.vue 启动诊断 + 测试断言用。
 async function bootstrap(): Promise<void> {
-  if (transport === tauriTransport) {
-    // 逃生模式:Rust Full GUI 模式,无 sidecar,直接挂载。
-    app.use(router);
-    app.mount("#app");
-    return;
-  }
-
   try {
     const health = await awaitDaemonHealthy();
     (window as unknown as { __DAEMON_HEALTH__?: DaemonHealth }).__DAEMON_HEALTH__ =
@@ -99,7 +90,7 @@ function renderFatalOverlay(message: string): void {
       <div style="max-width:640px;">
         <h1 style="font-size:1.25rem;margin:0 0 1rem;color:#f87171;">Everlasting daemon 不可用</h1>
         <pre style="white-space:pre-wrap;font-size:0.875rem;line-height:1.5;color:#d4d4d4;">${escapeHtml(message)}</pre>
-        <p style="margin-top:1.5rem;font-size:0.8125rem;color:#a3a3a3;">关闭此窗口后重试,或在 URL 加 <code style="background:#333;padding:0 0.25rem;">?transport=tauri</code> 走 Full 模式逃生。</p>
+        <p style="margin-top:1.5rem;font-size:0.8125rem;color:#a3a3a3;">确认 daemon 已启动(<code style="background:#333;padding:0 0.25rem;">scripts/daemon.sh start</code>)后刷新重试。</p>
       </div>
     </div>`;
 }

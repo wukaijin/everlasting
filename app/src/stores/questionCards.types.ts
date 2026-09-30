@@ -77,7 +77,7 @@ export const REQUEST_MODE_CHANGE_TOOL_NAME = "request_mode_change";
 export const REQUEST_TASK_STATE_TRANSITION_TOOL_NAME =
   "request_task_state_transition";
 
-/** Tauri event channel name (backend → frontend). Distinct from
+/** SSE event name (historical) (backend → frontend). Distinct from
  *  `tool:call` / `tool:result` / `permission:ask` so the listener
  *  can be wired independently (per the design's §5.4 routing). */
 export const TOOL_QUESTION_EVENT = "tool:question";
@@ -440,26 +440,26 @@ export interface PendingInteractionEntry {
   payload: PendingInteraction;
 }
 
-/** Tauri event channel name for `request_mode_change` (backend →
+/** SSE event name (historical) for `request_mode_change` (backend →
  *  frontend). Distinct from `tool:question` so the listener can
  *  be wired independently. Mirrors the Rust `app.emit("mode:change:request",
  *  payload)` site in `state.rs::AppHandleSink::emit_mode_change_request`. */
 export const MODE_CHANGE_EVENT = "mode:change:request";
 
-/** Tauri command name for `resolve_mode_change` (frontend →
+/** daemon route name for `resolve_mode_change` (frontend →
  *  backend). Routes to `commands::question::resolve_mode_change`,
  *  which calls `QuestionStore.resolve(session_id, response)`
  *  AFTER applying the mode via `set_session_mode_internal`. */
 export const RESOLVE_MODE_CHANGE_CMD = "resolve_mode_change";
 
-/** Tauri event channel name for `request_task_state_transition`
+/** SSE event name (historical) for `request_task_state_transition`
  *  (backend → frontend, 2026-07-09). Distinct from the two channels
  *  above so the listener wires independently. Mirrors the Rust
  *  `app.emit("task:state:transition:request", payload)` site in
  *  `state.rs::AppHandleSink::emit_task_state_transition`. */
 export const TASK_STATE_TRANSITION_EVENT = "task:state:transition:request";
 
-/** Tauri command name for `resolve_task_state_transition` (frontend
+/** daemon route name for `resolve_task_state_transition` (frontend
  *  → backend). Routes to
  *  `commands::question::resolve_task_state_transition`, which calls
  *  `workflow::set_task_state` (BEFORE resolving the oneshot) when
@@ -468,7 +468,7 @@ export const TASK_STATE_TRANSITION_EVENT = "task:state:transition:request";
 export const RESOLVE_TASK_STATE_TRANSITION_CMD =
   "resolve_task_state_transition";
 
-/** Tauri command name for `get_pending_interaction` (frontend →
+/** daemon route name for `get_pending_interaction` (frontend →
  *  backend). Routes to `commands::question::get_pending_interaction`,
  *  which calls `QuestionStore.get_payload(session_id)`. Returns
  *  `Option<PendingInteractionEntry>` (snake_case payload), `null`
