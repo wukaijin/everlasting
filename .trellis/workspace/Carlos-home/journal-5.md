@@ -157,3 +157,24 @@ BACKLOG 附录 B N7 立项(推荐采纳后用户 OK)。brainstorm 三问裁定(�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 160: N20 ACP 接入调研:协议面映射与工作量评估
+
+**Date**: 2026-09-30
+**Task**: N20 ACP 接入调研:协议面映射与工作量评估
+**Branch**: `main`
+
+### Summary
+
+评估 everlasting 接入 ACP(Zed 的编辑器↔agent JSON-RPC 协议)的工作量并按 C.2 纪律完成立项前调研(task 09-29-n20-acp-integration-research)。结论:可立项——架构 = 新增 everlasting-acp shim bin(Zed spawn 的 stdio JSON-RPC 子进程)连回 daemon HTTP/SSE,第五客户端形态,agent core MVP 零改动;evl chat 已验证外部瘦客户端驱动全链路。协议匹配度高:权限选项 allow_once/allow_always/deny 与 ACP PermissionOption 同名同义,delta/thinking token 级流直映射,fs/terminal/elicitation 走能力不声明零成本降级,worktree 默认 none 直连工作区零语义冲突。官方 Rust crate agent-client-protocol(475 万下载)锚 1.x=协议 v1 stable。缺口 5 项(最大 = 在途 permission ask 无恢复面,MVP「先挂 SSE」规避);改动面 4 PR(PR1 生命周期/PR2 翻译层/PR3 交互桥/PR4 测试+Zed 实测),与 N2 checkpoint 同级。BACKLOG C.1 加 N20 候选行(P2,立项待用户裁定)+ C.2 调研条目闭环。全程一次 Edit 误写 N19 行当即发现并恢复,终态落点已验证。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `08b90f89` | (see git log) |
+
+### Status
+
+[OK] **Completed**

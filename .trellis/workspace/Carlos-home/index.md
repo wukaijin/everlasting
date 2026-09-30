@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-5.md`
-- **Total Sessions**: 159
-- **Last Active**: 2026-09-27
+- **Total Sessions**: 160
+- **Last Active**: 2026-09-30
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-5.md` | ~159 | Active |
+| `journal-5.md` | ~180 | Active |
 | `journal-4.md` | ~1991 | Archived |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
@@ -33,6 +33,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 160 | 2026-09-30 | N20 ACP 接入调研:协议面映射与工作量评估 | `08b90f89` | `main` |
 | 159 | 2026-09-27 | N12 压缩无进展熔断交付(单 PR 三件:无进展熔断 + 摘要取消收口 + retry 测试锚) | `d9b584fc`, `3c4c80aa`, `469e508c` | `main` |
 | 158 | 2026-09-27 | N12 专项调研:agent-loop 三小件语义差距核验 | `07e000ca`, `07ac8387` | `main` |
 | 157 | 2026-09-27 | N7 DiffView 增强:行内高亮 + side-by-side 全链交付 | `073c7f5a` | `main` |
