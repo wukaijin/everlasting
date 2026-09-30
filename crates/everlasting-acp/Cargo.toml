@@ -1,0 +1,37 @@
+[package]
+name = "everlasting-acp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "ACP (Agent Client Protocol) shim: stdio JSON-RPC agent side that bridges an ACP client (e.g. Zed) to the everlasting daemon's HTTP/SSE surface. Daemon-side zero-change thin client."
+
+[[bin]]
+name = "everlasting-acp"
+path = "src/main.rs"
+
+# Anchored to the 1.x line = protocol v1 stable (design §2). No
+# `unstable_*` features — those gate protocol v2 draft surfaces.
+[dependencies]
+agent-client-protocol = "1.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-std"] }
+# rustls: zero system-library deps (matches everlasting-remote policy);
+# stream: SSE consumption needs `bytes_stream` (PR2); json: DTO round-trips.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# SSE 消费:reqwest `bytes_stream` 返回 futures Stream,StreamExt 在此 crate
+# (reqwest 只拉 futures-core;remote crate 同款先例)。
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+thiserror = "2"
+tracing = "0.1"
+# stderr-only output: ACP reserves stdout for JSON-RPC frames.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+# 集成测试(tests/integration.rs)的假 daemon:真流式 SSE(axum Sse)+ 状态化
+# 路由表 —— cancel/load 用例需要「按测试时序推帧」「捕获请求体取动态 rid」,
+# wiremock 的静态 body 做不到(PR1 预案在此兑现);版本/特性与 daemon 同源,
+# lockfile 零新增编译。
+axum = { version = "0.7", features = ["json"] }
+tokio-stream = { version = "0.1", features = ["sync"] }

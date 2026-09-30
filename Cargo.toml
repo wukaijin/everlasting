@@ -9,6 +9,7 @@ members = [
     "app/src-tauri",
     "crates/everlasting-remote",
     "crates/everlasting-remote-protocol",
+    "crates/everlasting-acp",
 ]
 resolver = "2"
 
@@ -23,6 +24,9 @@ resolver = "2"
 # 日常迭代 daemon 用 `--profile daemon`(见下方 [profile.daemon],
 # 2026-08-29:无 LTO + 增量,改后端代码 ~1-2min 出二进制);
 # `--release`(fat LTO + CGU=1)留给发布 / sidecar。
+# 2026-09-30 (N20 ACP shim): everlasting-acp 同样不进 default-members ——
+# 裸 `cargo build` 不构建它;显式 `cargo build/test/clippy -p everlasting-acp`
+# (零系统库,无需 PKG_CONFIG_PATH),CI 接线见 implement.md PR4。
 default-members = [
     "crates/everlasting-remote",
     "crates/everlasting-remote-protocol",

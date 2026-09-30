@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/09-30-n20-acp-shim-mvp/research/acp-integration-analysis.md", "reason": "验收对照源:映射表(§3)逐项是否全落地、取舍 8 项(§4.3)是否被违反(queued 必须拒绝/worktree 恒 none/text-only/不声明 fs·terminal·mcp 等)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量检查标准/forbidden patterns"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误处理契约检查(兜底禁则/prompt 请求不得悬挂等)"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "shim 对 daemon 的消费是否符合服务端契约(SSE 事件名/payload casing/受理语义)"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "日志合规:stdout 零日志输出(只准 JSON-RPC 帧)是 ACP 硬约束,check 时须验证"}

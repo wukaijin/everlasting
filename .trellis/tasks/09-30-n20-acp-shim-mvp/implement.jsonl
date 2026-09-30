@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/09-30-n20-acp-shim-mvp/research/acp-integration-analysis.md", "reason": "前置调研全量报告:ACP 协议面盘点(§1)、daemon 现状行号证据(§2)、ACP↔daemon 全量映射表(§3)、缺口 5 项/4 PR 拆分/取舍 8 项(§4)——实施的第一手依据"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon HTTP/SSE 契约(axum 路由/SSE/进程模型):shim 是 daemon 的客户端,消费面契约在此"}
+{"file": ".trellis/spec/backend/daemon-server/pattern-sse-resync-and-tests.md", "reason": "SSE 断线重连 sentinel(stream-resync)与 replay buffer 语义——sse.rs 重连逻辑必须对齐"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "权限 ask/permission_response 桥语义与 mode 值域——permission.rs 与 set_mode 的语义依据"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "四层错误模型/兜底禁则——shim 错误模型(design §6)要对齐项目约定,尤其「turn 不死」类约束"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust 代码质量标准与 forbidden patterns——新 crate 从第一天就守"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "结构化日志约定——shim 日志走 stderr(ACP 规定 stdout 只准协议帧),级别与格式对齐"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "project path 与 cwd 边界约定——session/new 的 project path 解析(list 比对/建)相关"}

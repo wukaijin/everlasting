@@ -110,6 +110,16 @@ jobs:
       - name: cargo test --test e2e
         run: cargo test --test e2e
 
+      # ACP shim gate (N20, 09-30-n20-acp-shim-mvp):crates/everlasting-acp
+      # 零系统库依赖(纯 rustls/纯内存测试),无需 PKG_CONFIG_PATH 与 sidecar
+      # 前置。不在 default-members,必须显式 -p;`-p` 从 workspace 任一成员
+      # 目录都可解析(working-directory: app/src-tauri 即可)。clippy 同 gate
+      # 口径(-D warnings,--tests 含集成测试);fmt 已是上面 workspace 级。
+      - name: cargo clippy everlasting-acp
+        run: cargo clippy -p everlasting-acp --tests -- -D warnings
+      - name: cargo test everlasting-acp
+        run: cargo test -p everlasting-acp
+
   frontend:
     name: Frontend (vitest + vue-tsc + playwright)
     runs-on: ubuntu-latest
