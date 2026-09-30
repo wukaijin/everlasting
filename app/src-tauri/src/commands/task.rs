@@ -56,8 +56,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::agent::workflow::{archive_task_init, create_task_init, TaskError, TaskJson};
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -115,44 +113,6 @@ fn map_task_error(e: TaskError) -> AppCommandError {
     }
 }
 
-/// W1 (Workflow integration, Phase 0 Step 0.4):
-/// `create_task` IPC — seed `.everlasting/tasks/<slug>/`
-/// with a v1 `task.json` + `prd.md` skeleton.
-///
-/// **Inputs**:
-/// - `project_id`: the project whose `.everlasting/tasks/`
-///   receives the new task. We look up the project path
-///   from SQLite (mirrors `create_session`'s pattern) so the
-///   frontend doesn't need to know the absolute path.
-/// - `title`: free-text human title. Trimmed; non-empty
-///   validated by `create_task_init`.
-/// - `slug`: ASCII `[a-z0-9-]{1,64}` (see
-///   `agent::workflow::validate_slug`). Rejected with
-///   `InvalidRequest` on bad input.
-/// - `parent`: optional slug of the parent task — B8 DAG
-///   slot (Phase 3+). Phase 0 accepts and persists the
-///   field verbatim.
-///
-/// **Returns**: the fresh `TaskJson` row (so the frontend
-/// can navigate to the task directory, jump to its first
-/// item, etc., without re-reading the file).
-///
-/// **Concurrency**: none enforced. Two concurrent calls
-/// with the same `(project_id, slug)` race; the second one
-/// sees `Err(AlreadyExists)`. The frontend is expected to
-/// prompt "another agent / tab beat you to it" rather than
-/// silently overwrite.
-#[tauri::command]
-pub async fn create_task(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    title: String,
-    slug: String,
-    parent: Option<String>,
-) -> Result<TaskJson, AppCommandError> {
-    create_task_inner(&state, project_id, title, slug, parent).await
-}
-
 /// Phase 2.2 `_inner` (Q0): shared business logic, callable from
 /// the Tauri command wrapper above + the axum route handler in
 /// `daemon::routes::task`.
@@ -203,50 +163,6 @@ pub async fn create_task_inner(
         "dev",
     )
     .map_err(map_task_error)
-}
-
-/// W1 (Workflow integration, Phase 3 Step 3.3 — 2026-07-09):
-/// `archive_task` IPC — finalize a workflow task by
-/// moving it under `.everlasting/tasks/archive/<YYYY-MM>/`
-/// and flipping `task.json` to `status = completed` with
-/// `completed_at` set. The post-archive task is **not**
-/// resolvable by `inject::resolve_current_task` — the
-/// workflow engine treats it as closed.
-///
-/// **Inputs**:
-/// - `project_id`: the project whose `.everlasting/tasks/`
-///   receives the move. Same lookup pattern as
-///   `create_task` — the frontend doesn't pass absolute
-///   paths.
-/// - `slug`: the task's slug. Refused with `InvalidRequest`
-///   if the slug doesn't match `[a-z0-9-]{1,64}`, if the
-///   task doesn't exist (`NotFound`), if the task isn't
-///   `Done` yet (`NotInDoneStatus`), or if the archive
-///   target is already occupied (`AlreadyArchived`).
-/// - `no_commit`: when `true`, skip the post-archive
-///   `git add` + `git commit` — useful for tests and
-///   for dry-runs on non-git project dirs.
-///
-/// **Returns**: the post-archive `TaskJson` (status
-/// `Completed`, `completed_at` set). The frontend uses
-/// this to navigate to the archive dir, update any in-app
-/// task list, etc.
-///
-/// **Concurrency**: the IPC is racy on a multi-tab
-/// frontend — two concurrent `archive_task` calls for the
-/// same slug will both read `Done`, but only the first
-/// will reach the `fs::rename`; the second sees
-/// `AlreadyArchived`. The frontend should treat
-/// `AlreadyArchived` as "the other tab already did it"
-/// rather than retry.
-#[tauri::command]
-pub async fn archive_task(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    slug: String,
-    no_commit: bool,
-) -> Result<TaskJson, AppCommandError> {
-    archive_task_inner(&state, project_id, slug, no_commit).await
 }
 
 /// Phase 2.2 `_inner` (Q0): shared business logic, callable from

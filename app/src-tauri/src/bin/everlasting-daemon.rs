@@ -171,6 +171,12 @@ async fn main() -> ExitCode {
     // skipped (no AppHandle available; P2.3 wires the SSE sink).
     let state = server::load_daemon_state(data_dir.clone()).await;
 
+    // F3 P2-b(de-Tauri 迁移 2026-09-30):WebKitCache 阈值清理的历史
+    // 存量回收 —— 原装配点(GUI lib.rs setup 公共区)随 GUI bin 移除,
+    // 装配级守护断言见 `disk/webkit_cache.rs` tests。GUI webview 已
+    // 不存在,此处只回收既有缓存;模块的最终删除见 BACKLOG。
+    everlasting_lib::disk::webkit_cache::spawn_startup_clean(data_dir.clone());
+
     // RULE-DB-001 backup loop (2026-08-24, task
     // `08-24-p1-db-backup-log-rotation`): startup snapshot + every 24h,
     // `VACUUM INTO` into `<data_dir>/backups/`. Detached task; backup

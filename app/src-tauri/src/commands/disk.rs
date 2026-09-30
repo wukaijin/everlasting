@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::disk::governor::{self, DiskGovernorOutcome};
 use crate::error::{AppCommandError, ErrorCategory};
@@ -129,13 +128,6 @@ pub async fn get_disk_usage_inner(
     })
 }
 
-#[tauri::command]
-pub async fn get_disk_usage(
-    state: State<'_, Arc<AppState>>,
-) -> Result<DiskUsageReport, AppCommandError> {
-    get_disk_usage_inner(&state).await
-}
-
 /// `run_disk_cleanup` 业务本体:手动「立即清理」。直调
 /// `run_governor_pass_inner`(四项:worker sweep / 孤儿 session
 /// worktree / outputs / 备份 prune),**不查 kill-switch**(AC9 手动
@@ -145,13 +137,6 @@ pub async fn run_disk_cleanup_inner(
     state: &Arc<AppState>,
 ) -> Result<DiskGovernorOutcome, AppCommandError> {
     Ok(governor::run_governor_pass_inner(&state.db, &state.app_data_dir).await)
-}
-
-#[tauri::command]
-pub async fn run_disk_cleanup(
-    state: State<'_, Arc<AppState>>,
-) -> Result<DiskGovernorOutcome, AppCommandError> {
-    run_disk_cleanup_inner(&state).await
 }
 
 #[cfg(test)]

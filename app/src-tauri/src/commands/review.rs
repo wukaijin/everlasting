@@ -21,7 +21,7 @@
 //!   exists. The frontend has no task-slug state of its own.
 //!
 //! Both commands follow the Q0 single-source-of-truth dual-path
-//! pattern: a `#[tauri::command]` wrapper + a shared `_inner`
+//! pattern: a IPC wrapper (historical) + a shared `_inner`
 //! function that the axum handler in
 //! `daemon::routes::review` forwards to. Mirrors
 //! `list_workflow_plugins` (commands/sessions.rs +
@@ -269,14 +269,6 @@ pub fn get_review_state_inner(project_path: &str, task_slug: &str) -> ReviewStat
     }
 }
 
-#[tauri::command]
-pub async fn get_review_state(
-    project_path: String,
-    task_slug: String,
-) -> Result<ReviewStatePayload, AppCommandError> {
-    Ok(get_review_state_inner(&project_path, &task_slug))
-}
-
 // ---------------------------------------------------------------------------
 // get_current_task_slug
 // ---------------------------------------------------------------------------
@@ -312,18 +304,6 @@ pub async fn get_current_task_slug_inner(
         // (which would give "InProgress").
         status: t.status.as_str().to_string(),
     }))
-}
-
-#[tauri::command]
-pub async fn get_current_task_slug(
-    project_path: String,
-) -> Result<Option<CurrentTaskInfo>, AppCommandError> {
-    // Mirrors `list_workflow_plugins` (no AppState dependency —
-    // the lookup is a pure filesystem scan via
-    // `resolve_current_task`). The frontend supplies
-    // `project_path` from `currentSession.current_cwd`, the same
-    // source PluginSelect uses.
-    get_current_task_slug_inner(project_path).await
 }
 
 // ---------------------------------------------------------------------------

@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::db;
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -88,21 +86,4 @@ pub async fn set_quota_settings_inner(
         }
     }
     Ok(())
-}
-
-#[tauri::command]
-pub async fn usage_window(
-    state: State<'_, Arc<AppState>>,
-    provider_id: Option<String>,
-) -> Result<db::usage::UsageWindowReport, AppCommandError> {
-    usage_window_inner(&state, provider_id).await
-}
-
-#[tauri::command]
-pub async fn set_quota_settings(
-    state: State<'_, Arc<AppState>>,
-    window_hours: Option<i64>,
-    limit_tokens: Option<i64>,
-) -> Result<(), AppCommandError> {
-    set_quota_settings_inner(&state, window_hours, limit_tokens).await
 }

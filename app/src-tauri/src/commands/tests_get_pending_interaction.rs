@@ -5,7 +5,7 @@
 //! (the unified `Option<PendingInteractionEntry>` IPC that replaces
 //! legacy shims, since removed). The IPC handler is a
 //! thin wrapper around `QuestionStore::get_payload`, so we exercise
-//! that method directly — `tauri::test::mock_app` is not used in
+//! that method directly — no mock app runtime is used in
 //! this codebase (per the established `permission_response`
 //! precedent; see `commands/permissions.rs::permission_response`'s
 //! docstring for the rationale).

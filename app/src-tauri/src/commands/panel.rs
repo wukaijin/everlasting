@@ -32,7 +32,6 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::error::AppCommandError;
 use crate::resource_loader::{list_all as list_commands_all, CommandInfo, BUILTIN_COMMANDS};
@@ -108,14 +107,6 @@ pub async fn list_subagents_inner(
             tools: l.def.tools,
         })
         .collect())
-}
-
-#[tauri::command]
-pub async fn list_subagents(
-    state: State<'_, Arc<AppState>>,
-    project_id: Option<String>,
-) -> Result<Vec<SubagentInfo>, AppCommandError> {
-    list_subagents_inner(&state, project_id).await
 }
 
 pub async fn list_panel_items_inner(
@@ -195,14 +186,6 @@ pub async fn list_panel_items_inner(
     Ok(dedup_panel(&builtins, &commands, &skills))
 }
 
-#[tauri::command]
-pub async fn list_panel_items(
-    state: State<'_, Arc<AppState>>,
-    project_id: Option<String>,
-) -> Result<Vec<PanelItem>, AppCommandError> {
-    list_panel_items_inner(&state, project_id).await
-}
-
 /// Fetch a skill's body for the user-message path. Mirrors
 /// `get_command_body`: returns `Some(body)` when the skill exists,
 /// `None` otherwise. The frontend treats `None` as a "skill
@@ -225,15 +208,6 @@ pub async fn get_skill_body_inner(
         }
         None => Ok(None),
     }
-}
-
-#[tauri::command]
-pub async fn get_skill_body(
-    state: State<'_, Arc<AppState>>,
-    name: String,
-    project_id: Option<String>,
-) -> Result<Option<String>, AppCommandError> {
-    get_skill_body_inner(&state, name, project_id).await
 }
 
 /// Resolve a project id to its path, mirroring `command_palette`'s

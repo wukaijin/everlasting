@@ -26,8 +26,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
@@ -45,7 +43,7 @@ use crate::state::AppState;
 /// Empty session → empty `Vec` (NOT an error). DB failure →
 /// wrapped `String` for the frontend toast path.
 ///
-/// `allow(dead_code)` on the `#[tauri::command]` attribute
+/// `allow(dead_code)` on the wrapper attribute (historical)
 /// would be wrong here — the macro generates the IPC handler
 /// that the frontend invokes. The `dead_code` allow is on the
 /// `#[allow(dead_code)]` for `_state: &State<'_, Arc<AppState>>`
@@ -58,14 +56,6 @@ pub async fn list_subagent_runs_by_session_inner(
     db::subagent_runs::list_runs_summary_by_session(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_subagent_runs_by_session failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_subagent_runs_by_session(
-    session_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<db::subagent_runs::SubagentRunSummary>, AppCommandError> {
-    list_subagent_runs_by_session_inner(session_id, &state).await
 }
 
 // ---------------------------------------------------------------------------
@@ -88,14 +78,6 @@ pub async fn get_subagent_run_inner(
     db::subagent_runs::get_run(&state.db, &run_id)
         .await
         .map_err(|e| anyhow::anyhow!("get_subagent_run failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn get_subagent_run(
-    run_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Option<db::subagent_runs::SubagentRunRow>, AppCommandError> {
-    get_subagent_run_inner(run_id, &state).await
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +237,7 @@ pub async fn merge_worker_run_inner(
     let run_id_for_task = run_id.clone();
     let parent_session_id_for_task = parent_session_id.clone();
     let parent_wt_for_task = parent_wt;
-    let merge_result = tauri::async_runtime::spawn_blocking(move || {
+    let merge_result = tokio::task::spawn_blocking(move || {
         crate::tools::merge_worker::do_merge_blocking(
             &parent_wt_for_task,
             &parent_session_id_for_task,
@@ -292,14 +274,6 @@ pub async fn merge_worker_run_inner(
     }
 }
 
-#[tauri::command]
-pub async fn merge_worker_run(
-    run_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<MergeWorkerResult, AppCommandError> {
-    merge_worker_run_inner(run_id, &state).await
-}
-
 /// Discard a worker's preserved branch + worktree. See
 /// `tools::discard_worker` for the full contract (fail-fast on
 /// already-destroyed; no idempotency in MVP).
@@ -310,12 +284,4 @@ pub async fn discard_worker_run_inner(
     crate::tools::discard_worker::do_discard(&state.db, &run_id)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e).into())
-}
-
-#[tauri::command]
-pub async fn discard_worker_run(
-    run_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, AppCommandError> {
-    discard_worker_run_inner(run_id, &state).await
 }

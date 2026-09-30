@@ -9,7 +9,6 @@ use crate::agent::message_queue::{self, QueueError, QueuedMessage};
 use crate::error::AppCommandError;
 use crate::state::AppState;
 use std::sync::Arc;
-use tauri::State;
 
 /// `list_queued_messages(session_id)` — 排队视图水合的 SoT 读
 /// (design §7;切 session / 页面刷新 / PWA 第二端均从后端重建)。
@@ -18,14 +17,6 @@ pub async fn list_queued_messages_inner(
     session_id: String,
 ) -> Result<Vec<QueuedMessage>, AppCommandError> {
     Ok(message_queue::list_session(&state.message_queues, &session_id).await)
-}
-
-#[tauri::command]
-pub async fn list_queued_messages(
-    state: State<'_, Arc<AppState>>,
-    #[allow(non_snake_case)] sessionId: String,
-) -> Result<Vec<QueuedMessage>, AppCommandError> {
-    list_queued_messages_inner(state.inner(), sessionId).await
 }
 
 /// `remove_queued_message(session_id, id)` — R8 撤销(删除单条)。
@@ -47,15 +38,6 @@ pub async fn remove_queued_message_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn remove_queued_message(
-    state: State<'_, Arc<AppState>>,
-    #[allow(non_snake_case)] sessionId: String,
-    id: String,
-) -> Result<(), AppCommandError> {
-    remove_queued_message_inner(state.inner(), sessionId, id).await
-}
-
 /// `recall_queued_message(session_id, id)` — R8 修改 = 单条退回输入框:
 /// 从队列移除并返回原文(含 attachments 引用),由前端回填 composer。
 pub async fn recall_queued_message_inner(
@@ -73,13 +55,4 @@ pub async fn recall_queued_message_inner(
         })?;
     tracing::info!(session_id = %session_id, queued_id = %id, "queued message recalled to composer");
     Ok(msg)
-}
-
-#[tauri::command]
-pub async fn recall_queued_message(
-    state: State<'_, Arc<AppState>>,
-    #[allow(non_snake_case)] sessionId: String,
-    id: String,
-) -> Result<QueuedMessage, AppCommandError> {
-    recall_queued_message_inner(state.inner(), sessionId, id).await
 }

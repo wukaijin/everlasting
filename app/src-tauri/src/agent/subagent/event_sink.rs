@@ -26,12 +26,7 @@
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use tauri::AppHandle;
-use tauri::Emitter;
-
-use super::transcript::{
-    build_subagent_event_payload, build_subagent_finished_payload, TranscriptKind,
-};
+use super::transcript::{build_subagent_event_payload, TranscriptKind};
 use crate::agent::permissions::PermissionAskPayload;
 
 thread_local! {
@@ -107,60 +102,11 @@ pub trait SubagentEventSink: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Production impl: AppHandle-backed (Tauri IPC)
+// de-Tauri (2026-09-30): the GUI-side `AppHandleSubagentSink` impl was
+// removed with the GUI bin. Production impls: the daemon's
+// `HttpSseSubagentSink` (daemon/routes/agent.rs) + tests'
+// `ThreadLocalSubagentSink`.
 // ---------------------------------------------------------------------------
-
-/// Production `SubagentEventSink` — wraps a `tauri::AppHandle` and
-/// forwards each method to the corresponding `app.emit` channel.
-/// This is the implementation that runs in `pnpm tauri dev` and
-/// shipped builds; `run_subagent` injects it via
-/// `SubagentBufferSink::new(app_handle, ...)` when an app handle
-/// is in scope.
-pub struct AppHandleSubagentSink {
-    pub app: AppHandle,
-}
-
-impl SubagentEventSink for AppHandleSubagentSink {
-    fn emit_subagent_event(
-        &self,
-        run_id: &str,
-        session_id: &str,
-        kind: TranscriptKind,
-        payload_json: serde_json::Value,
-    ) {
-        let ipc_payload = build_subagent_event_payload(run_id, session_id, kind, payload_json);
-        if let Err(e) = self.app.emit("subagent:event", ipc_payload) {
-            tracing::warn!(
-                error = %e,
-                run_id,
-                "subagent:event emit failed (non-fatal; transcript still recorded)"
-            );
-        }
-    }
-
-    fn emit_subagent_finished(
-        &self,
-        run_id: &str,
-        session_id: &str,
-        status_db: &str,
-        finished_at: &str,
-    ) {
-        let payload = build_subagent_finished_payload(run_id, session_id, status_db, finished_at);
-        if let Err(e) = self.app.emit("subagent:finished", payload) {
-            tracing::warn!(
-                run_id,
-                error = %e,
-                "subagent:finished emit failed (non-fatal; DB row already terminal)"
-            );
-        }
-    }
-
-    fn emit_permission_ask(&self, payload: &PermissionAskPayload) {
-        if let Err(e) = self.app.emit("permission:ask", payload.clone()) {
-            tracing::warn!(error = %e, "AppHandleSubagentSink: permission:ask emit failed");
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Test impl: thread-local collector

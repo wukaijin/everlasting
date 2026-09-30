@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::State;
 
 use crate::db;
 use crate::error::AppCommandError;
@@ -26,13 +25,6 @@ pub async fn list_providers_inner(
     db::list_providers(&state.db)
         .await
         .map_err(|e| anyhow::anyhow!("list_providers failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_providers(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<db::ProviderRow>, AppCommandError> {
-    list_providers_inner(&state).await
 }
 
 pub async fn add_provider_inner(
@@ -49,17 +41,6 @@ pub async fn add_provider_inner(
     Ok(row)
 }
 
-#[tauri::command]
-pub async fn add_provider(
-    state: State<'_, Arc<AppState>>,
-    protocol: String,
-    display_name: String,
-    base_url: String,
-    api_key: String,
-) -> Result<db::ProviderRow, AppCommandError> {
-    add_provider_inner(&state, protocol, display_name, base_url, api_key).await
-}
-
 // RULE-D-001 (2026-06-24): `None` = 保持原 key (留空覆盖 UX);
 // `Some(v)` = 加密覆盖. 前端编辑 provider 时 apiKey input 留空
 // 传 undefined → Tauri 反序列化为 `None`.
@@ -68,7 +49,7 @@ pub async fn add_provider(
 // the body was extracted into `update_provider_inner` so the
 // daemon axum handler (`daemon::routes::providers::update_provider`)
 // can call the same logic without going through the Tauri
-// `#[tauri::command]` wrapper. The Q0 decision (design.md §5
+// IPC wrapper (historical). The Q0 decision (design.md §5
 // "handler vs service") keeps the business logic single-sourced.
 pub async fn update_provider_inner(
     state: &Arc<AppState>,
@@ -92,18 +73,6 @@ pub async fn update_provider_inner(
     Ok(row)
 }
 
-#[tauri::command]
-pub async fn update_provider(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    protocol: String,
-    display_name: String,
-    base_url: String,
-    api_key: Option<String>,
-) -> Result<Option<db::ProviderRow>, AppCommandError> {
-    update_provider_inner(&state, id, protocol, display_name, base_url, api_key).await
-}
-
 pub async fn delete_provider_inner(
     state: &Arc<AppState>,
     id: String,
@@ -113,14 +82,6 @@ pub async fn delete_provider_inner(
         .map_err(|e| anyhow::anyhow!("delete_provider failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(ok)
-}
-
-#[tauri::command]
-pub async fn delete_provider(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<bool, AppCommandError> {
-    delete_provider_inner(&state, id).await
 }
 
 // 2026-09-07 (provider-model-disable): 禁用/启用开关。语义是「选用层
@@ -138,28 +99,12 @@ pub async fn set_provider_disabled_inner(
         .map_err(|e| anyhow::anyhow!("set_provider_disabled failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn set_provider_disabled(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    disabled: bool,
-) -> Result<Option<db::ProviderRow>, AppCommandError> {
-    set_provider_disabled_inner(&state, id, disabled).await
-}
-
 pub async fn list_models_inner(
     state: &Arc<AppState>,
 ) -> Result<Vec<db::ModelWithProvider>, AppCommandError> {
     db::list_models(&state.db)
         .await
         .map_err(|e| anyhow::anyhow!("list_models failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_models(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<db::ModelWithProvider>, AppCommandError> {
-    list_models_inner(&state).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -194,33 +139,6 @@ pub async fn add_model_inner(
     .map_err(|e| anyhow::anyhow!("add_model failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(row)
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn add_model(
-    state: State<'_, Arc<AppState>>,
-    provider_id: String,
-    model_name: String,
-    display_name: String,
-    max_tokens: Option<u32>,
-    thinking_effort: Option<String>,
-    supports_thinking: bool,
-    supports_images: bool,
-    context_window: u32,
-) -> Result<db::ModelRow, AppCommandError> {
-    add_model_inner(
-        &state,
-        provider_id,
-        model_name,
-        display_name,
-        max_tokens,
-        thinking_effort,
-        supports_thinking,
-        supports_images,
-        context_window,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -259,35 +177,6 @@ pub async fn update_model_inner(
     Ok(row)
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn update_model(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    provider_id: String,
-    model_name: String,
-    display_name: String,
-    max_tokens: Option<u32>,
-    thinking_effort: Option<String>,
-    supports_thinking: bool,
-    supports_images: bool,
-    context_window: u32,
-) -> Result<Option<db::ModelRow>, AppCommandError> {
-    update_model_inner(
-        &state,
-        id,
-        provider_id,
-        model_name,
-        display_name,
-        max_tokens,
-        thinking_effort,
-        supports_thinking,
-        supports_images,
-        context_window,
-    )
-    .await
-}
-
 pub async fn delete_model_inner(
     state: &Arc<AppState>,
     id: String,
@@ -297,14 +186,6 @@ pub async fn delete_model_inner(
         .map_err(|e| anyhow::anyhow!("delete_model failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(ok)
-}
-
-#[tauri::command]
-pub async fn delete_model(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<bool, AppCommandError> {
-    delete_model_inner(&state, id).await
 }
 
 /// 2026-09-07 (provider-model-disable): 模型级禁用/启用。同
@@ -318,15 +199,6 @@ pub async fn set_model_disabled_inner(
     db::set_model_disabled(&state.db, &id, disabled)
         .await
         .map_err(|e| anyhow::anyhow!("set_model_disabled failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn set_model_disabled(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    disabled: bool,
-) -> Result<Option<db::ModelRow>, AppCommandError> {
-    set_model_disabled_inner(&state, id, disabled).await
 }
 
 pub async fn get_default_model_inner(
@@ -345,13 +217,6 @@ pub async fn get_default_model_inner(
     Ok(models.into_iter().find(|m| m.model.id == id))
 }
 
-#[tauri::command]
-pub async fn get_default_model(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Option<db::ModelWithProvider>, AppCommandError> {
-    get_default_model_inner(&state).await
-}
-
 pub async fn set_default_model_inner(
     state: &Arc<AppState>,
     model_id: String,
@@ -359,14 +224,6 @@ pub async fn set_default_model_inner(
     db::set_config_value(&state.db, "default_model_id", &model_id)
         .await
         .map_err(|e| anyhow::anyhow!("set_default_model failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn set_default_model(
-    state: State<'_, Arc<AppState>>,
-    model_id: String,
-) -> Result<(), AppCommandError> {
-    set_default_model_inner(&state, model_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -386,15 +243,6 @@ pub async fn update_session_model_id_inner(
     db::update_session_model_id(&state.db, &session_id, &model_id)
         .await
         .map_err(|e| anyhow::anyhow!("update_session_model_id failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn update_session_model_id(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    model_id: String,
-) -> Result<(), AppCommandError> {
-    update_session_model_id_inner(&state, session_id, model_id).await
 }
 
 /// Test a specific model (looked up in the catalog) by sending a
@@ -639,12 +487,4 @@ fn responses_probe_hint(status: u16, body: &str) -> Option<String> {
         ),
         _ => None,
     }
-}
-
-#[tauri::command]
-pub async fn test_model(
-    state: State<'_, Arc<AppState>>,
-    model_id: String,
-) -> Result<serde_json::Value, AppCommandError> {
-    test_model_inner(&state.db, model_id).await
 }

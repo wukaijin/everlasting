@@ -24,8 +24,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::db;
 use crate::db::memories::list_memories as db_list_memories;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -66,14 +64,6 @@ pub async fn read_memory_layers_inner(
         &flags,
     );
     Ok(layers.iter().map(MemoryLayerInfo::from).collect())
-}
-
-#[tauri::command]
-pub async fn read_memory_layers(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-) -> Result<Vec<MemoryLayerInfo>, AppCommandError> {
-    read_memory_layers_inner(&state, project_id).await
 }
 
 /// Detect pre-rename CLAUDE.md files left behind by the
@@ -129,14 +119,6 @@ pub async fn read_legacy_memory_files_inner(
         out.push(p.to_string_lossy().into_owned());
     }
     Ok(out)
-}
-
-#[tauri::command]
-pub async fn read_legacy_memory_files(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-) -> Result<Vec<String>, AppCommandError> {
-    read_legacy_memory_files_inner(&state, project_id).await
 }
 
 /// Read the body of a single memory file. `path` must be one of
@@ -207,15 +189,6 @@ pub async fn read_memory_content_inner(
         )
         .into()
     })
-}
-
-#[tauri::command]
-pub async fn read_memory_content(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    path: String,
-) -> Result<String, AppCommandError> {
-    read_memory_content_inner(&state, project_id, path).await
 }
 
 /// Spawn the user's editor to edit a memory file. The
@@ -332,15 +305,6 @@ pub async fn open_memory_in_editor_inner(
     }
 }
 
-#[tauri::command]
-pub async fn open_memory_in_editor(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    path: String,
-) -> Result<(), AppCommandError> {
-    open_memory_in_editor_inner(&state, project_id, path).await
-}
-
 /// Best-effort OS-level "open with default app" command. We
 /// never block on this — the spawn is fire-and-forget.
 #[cfg(target_os = "linux")]
@@ -437,14 +401,6 @@ pub async fn list_autonomous_memories_inner(
         .map_err(|e| anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn list_autonomous_memories(
-    state: State<'_, Arc<AppState>>,
-    project_id: Option<String>,
-) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
-    list_autonomous_memories_inner(&state, project_id).await
-}
-
 /// Delete a runtime memory by its `memory_id` UUID. Best-effort
 /// idempotent: deleting an already-deleted memory returns Ok(0).
 ///
@@ -462,14 +418,6 @@ pub async fn delete_autonomous_memory_inner(
     crate::db::memories::delete_memory(&state.db, &memory_id)
         .await
         .map_err(|e| anyhow::anyhow!("delete_autonomous_memory: delete failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn delete_autonomous_memory(
-    state: State<'_, Arc<AppState>>,
-    memory_id: String,
-) -> Result<u64, AppCommandError> {
-    delete_autonomous_memory_inner(&state, memory_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -528,16 +476,6 @@ pub async fn update_autonomous_memory_status_inner(
         })
 }
 
-#[tauri::command]
-pub async fn update_autonomous_memory_status(
-    state: State<'_, Arc<AppState>>,
-    memory_id: String,
-    new_status: String,
-    demoted_reason: Option<String>,
-) -> Result<(), AppCommandError> {
-    update_autonomous_memory_status_inner(&state, memory_id, new_status, demoted_reason).await
-}
-
 /// User-initiated edit of a memory's `title` + `content` (R4 /
 /// AC5). Wraps [`crate::db::memories::update_memory`] which
 /// re-applies the same write safety net as `insert_memory`
@@ -562,14 +500,4 @@ pub async fn update_autonomous_memory_inner(
     crate::db::memories::update_memory(&state.db, &memory_id, &title, &content)
         .await
         .map_err(|e| anyhow::anyhow!("update_autonomous_memory: update failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn update_autonomous_memory(
-    state: State<'_, Arc<AppState>>,
-    memory_id: String,
-    title: String,
-    content: String,
-) -> Result<crate::db::memories::MemoryRow, AppCommandError> {
-    update_autonomous_memory_inner(&state, memory_id, title, content).await
 }

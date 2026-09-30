@@ -24,8 +24,6 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
-
 use crate::agent::permissions::check::{classify_tool, ToolKind};
 use crate::agent::permissions::PermissionResponse;
 use crate::db;
@@ -115,15 +113,6 @@ pub async fn set_session_mode_inner(
     Ok(result.session)
 }
 
-#[tauri::command]
-pub async fn set_session_mode(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    mode: String,
-) -> Result<db::SessionRow, AppCommandError> {
-    set_session_mode_inner(&state, session_id, mode).await
-}
-
 // ---------------------------------------------------------------------------
 // permission_response — IPC bridge for the Tier 3 await
 // ---------------------------------------------------------------------------
@@ -145,7 +134,7 @@ pub async fn set_session_mode(
 /// the body lives in `permission_response_inner` so the daemon
 /// axum handler (`daemon::routes::permissions::permission_response`)
 /// can call the same logic without going through the Tauri
-/// `#[tauri::command]` wrapper. The Q0 decision (design.md §5
+/// IPC wrapper (historical). The Q0 decision (design.md §5
 /// "handler vs service") keeps the business logic single-sourced.
 pub async fn permission_response_inner(
     state: &Arc<AppState>,
@@ -179,17 +168,6 @@ pub async fn permission_response_inner(
         );
     }
     Ok(resolved)
-}
-
-#[tauri::command]
-pub async fn permission_response(
-    _app: AppHandle,
-    state: State<'_, Arc<AppState>>,
-    rid: String,
-    decision: String,
-    reason: Option<String>,
-) -> Result<bool, AppCommandError> {
-    permission_response_inner(&state, rid, decision, reason).await
 }
 
 // ---------------------------------------------------------------------------
@@ -278,18 +256,6 @@ pub async fn grant_tool_permission_inner(
     }
 }
 
-#[tauri::command]
-#[allow(dead_code)]
-pub async fn grant_tool_permission(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    tool_name: String,
-    match_kind: Option<String>,
-    match_value: Option<String>,
-) -> Result<(), AppCommandError> {
-    grant_tool_permission_inner(&state, session_id, tool_name, match_kind, match_value).await
-}
-
 /// Validate that `kind` is the single legal `match_kind` for the
 /// tool's class (RULE-PERM-002, 2026-08-27). Dispatch mirrors
 /// [`classify_tool`] — the same dispatch the Tier 4 read side uses —
@@ -347,14 +313,6 @@ pub async fn list_session_tool_permissions_inner(
         .map_err(|e| anyhow::anyhow!("list_session_tool_permissions failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn list_session_tool_permissions(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Vec<db::PermissionGrantRow>, AppCommandError> {
-    list_session_tool_permissions_inner(&state, session_id).await
-}
-
 /// Revoke ONE "always allow" row by its full PK. `match_value` is
 /// `None` for `match_kind = "tool"` (matches the NULL the DB stores);
 /// `Some(...)` for `prefix` / `path`. The NULL branch is handled in
@@ -392,17 +350,6 @@ pub async fn revoke_tool_permission_inner(
     .map_err(|e| anyhow::anyhow!("revoke_tool_permission failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn revoke_tool_permission(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    tool_name: String,
-    match_kind: String,
-    match_value: Option<String>,
-) -> Result<(), AppCommandError> {
-    revoke_tool_permission_inner(&state, session_id, tool_name, match_kind, match_value).await
-}
-
 // ---------------------------------------------------------------------------
 // Durable shell-prefix grant management (09-21-durable-prefix-grant, R2)
 // ---------------------------------------------------------------------------
@@ -418,14 +365,6 @@ pub async fn list_project_shell_grants_inner(
     db::list_project_shell_grants(&state.db, &project_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_project_shell_grants failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_project_shell_grants(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-) -> Result<Vec<db::ProjectShellGrantRow>, AppCommandError> {
-    list_project_shell_grants_inner(&state, project_id).await
 }
 
 /// Revoke ONE durable shell-prefix grant by its exact three-part key
@@ -474,18 +413,6 @@ pub async fn revoke_project_shell_grant_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn revoke_project_shell_grant(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    worktree_key: String,
-    prefix_tokens: String,
-    session_id: Option<String>,
-) -> Result<(), AppCommandError> {
-    revoke_project_shell_grant_inner(&state, project_id, worktree_key, prefix_tokens, session_id)
-        .await
-}
-
 // ---------------------------------------------------------------------------
 // C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events
 // ---------------------------------------------------------------------------
@@ -510,14 +437,6 @@ pub async fn list_session_audit_events_inner(
     db::list_audit_events(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_session_audit_events failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_session_audit_events(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Vec<db::AuditEventRow>, AppCommandError> {
-    list_session_audit_events_inner(&state, session_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -554,34 +473,6 @@ pub async fn list_session_audit_events_page_inner(
         .map_err(|e| anyhow::anyhow!("list_session_audit_events_page failed: {}", e).into())
 }
 
-/// Tauri args are camelCase on the wire (`sessionId`, `beforeTs`,
-/// `beforeId`, `criticalOnly` — Tauri 2 camelCases the snake_case
-/// Rust parameter names); `criticalOnly` is `Option<bool>` so the
-/// frontend may omit it entirely.
-#[tauri::command]
-pub async fn list_session_audit_events_page(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    limit: Option<i64>,
-    before_ts: Option<String>,
-    before_id: Option<i64>,
-    kind: Option<String>,
-    critical_only: Option<bool>,
-) -> Result<db::AuditEventPageRow, AppCommandError> {
-    list_session_audit_events_page_inner(
-        &state,
-        session_id,
-        db::AuditEventPageQuery {
-            limit,
-            before_ts,
-            before_id,
-            kind,
-            critical_only: critical_only.unwrap_or(false),
-        },
-    )
-    .await
-}
-
 // E2 (harness trace pipeline, 2026-07-14) — list_turn_traces +
 // clear_session_trace IPCs for the trace viewer (child-2 frontend).
 // ---------------------------------------------------------------------------
@@ -597,14 +488,6 @@ pub async fn list_turn_traces_inner(
     db::trace::list_turn_traces(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_turn_traces failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_turn_traces(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
-    list_turn_traces_inner(&state, session_id).await
 }
 
 /// 08-20-worker-turn-trace-persist: read one worker run's per-turn
@@ -623,14 +506,6 @@ pub async fn list_worker_turn_traces_inner(
         .map_err(|e| anyhow::anyhow!("list_worker_turn_traces failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn list_worker_turn_traces(
-    state: State<'_, Arc<AppState>>,
-    run_id: String,
-) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
-    list_worker_turn_traces_inner(&state, run_id).await
-}
-
 /// Delete all `turn_trace` rows for `session_id`. Wired to the trace
 /// viewer's "清理" button. The `ON DELETE CASCADE` on the `session_id`
 /// FK also fires this automatically when a session is deleted, so
@@ -642,14 +517,6 @@ pub async fn clear_session_trace_inner(
     db::trace::clear_session_trace(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("clear_session_trace failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn clear_session_trace(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<(), AppCommandError> {
-    clear_session_trace_inner(&state, session_id).await
 }
 
 #[cfg(test)]

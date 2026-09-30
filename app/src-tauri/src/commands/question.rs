@@ -29,8 +29,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::agent::permissions::AuditKind;
 use crate::agent::question_store::{InteractionResponse, PendingInteractionEntry, QuestionAnswer};
 // Test-only imports — gated by `#[cfg(test)]` so non-test builds
@@ -104,21 +102,10 @@ pub async fn resolve_tool_question_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn resolve_tool_question(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    tool_use_id: String,
-    answer: Option<Vec<QuestionAnswer>>,
-    cancelled: Option<bool>,
-) -> Result<(), AppCommandError> {
-    resolve_tool_question_inner(&state, session_id, tool_use_id, answer, cancelled).await
-}
-
 /// Map the scalar IPC args to an `InteractionResponse` for the
 /// `ask_user_question` case. Pure function extracted from
 /// `resolve_tool_question` so the `cancelled`-vs-`answer`
-/// branch is unit-testable without a Tauri `mock_app` (which
+/// branch is unit-testable without a mock app runtime (historical) (which
 /// this project doesn't use — see the "Why scalar args" note
 /// on `resolve_tool_question` for why the invoke serde
 /// boundary itself is covered by the `permission_response`
@@ -193,20 +180,9 @@ pub async fn resolve_mode_change_inner(
     .await
 }
 
-#[tauri::command]
-pub async fn resolve_mode_change(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    tool_use_id: String,
-    target_mode: String,
-    allow: bool,
-) -> Result<db::SessionRow, AppCommandError> {
-    resolve_mode_change_inner(&state, session_id, tool_use_id, target_mode, allow).await
-}
-
 /// Pure-Rust core of [`resolve_mode_change`] — extracted into a
 /// free-standing function so it can be unit-tested WITHOUT a
-/// `tauri::test::mock_app` (which this project doesn't use; see
+/// a Tauri mock runtime (historical; which this project doesn't use; see
 /// the existing `permission_response` precedent). The IPC
 /// wrapper is a thin shell that just threads the `&Arc<AppState>`
 /// deps through.
@@ -496,14 +472,6 @@ pub async fn get_pending_interaction_inner(
     Ok(state.question_store.get_payload(&session_id).await)
 }
 
-#[tauri::command]
-pub async fn get_pending_interaction(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Option<PendingInteractionEntry>, AppCommandError> {
-    get_pending_interaction_inner(&state, session_id).await
-}
-
 /// Reload a session row by id; the thin wrapper around
 /// `db::load_session` that the `resolve_mode_change` handler
 /// uses on the deny path (and any other handler that needs to
@@ -597,22 +565,9 @@ pub async fn resolve_task_state_transition_inner(
     .await
 }
 
-#[tauri::command]
-pub async fn resolve_task_state_transition(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    tool_use_id: String,
-    target_state: String,
-    slug: String,
-    allow: bool,
-) -> Result<db::SessionRow, AppCommandError> {
-    resolve_task_state_transition_inner(&state, session_id, tool_use_id, target_state, slug, allow)
-        .await
-}
-
 /// Pure-Rust core of [`resolve_task_state_transition`].
 /// Extracted into a free-standing function so it can be
-/// unit-tested WITHOUT a `tauri::test::mock_app`.
+/// unit-tested without a mock app runtime.
 ///
 /// `project_path` MUST be the absolute path to the project
 /// root (i.e. the directory containing `.everlasting/`). The
@@ -1035,7 +990,7 @@ mod tests {
 // - `tests_get_pending_interaction` (E2) — covers the
 //   `get_pending_interaction` IPC behavior by exercising
 //   `QuestionStore::get_payload` directly (the IPC handler is
-//   a thin wrapper around it; `mock_app` is not used in this
+//   a thin wrapper around it; no mock app runtime is used in this
 //   codebase per the `permission_response` precedent).
 // - `tests_resolve_mode_change` (E3) — covers the
 //   `resolve_mode_change` IPC behavior by exercising

@@ -31,7 +31,7 @@
 //! - Does NOT own the `AppHandle` / cancellation token
 //!   registration — callers register the token in the
 //!   `cancellations` map and pass the clone here.
-//! - Does NOT call `tauri::async_runtime::spawn`. The caller
+//! - Does NOT call `tokio::spawn`. The caller
 //!   decides whether to run inline (tests) or in a background
 //!   task (production). Production callers MUST `spawn` to
 //!   preserve the existing Tauri command's "return immediately"
@@ -350,7 +350,7 @@ pub async fn run_chat_loop(mut request: ChatLoopRequest, deps: ChatLoopDeps, rol
 
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
-    // guard. The `tauri::async_runtime::spawn` inside `Drop` is
+    // guard. The `tokio::spawn` inside `Drop` is
     // a no-op in the in-process test path (it just enqueues to
     // the global Tokio runtime), but it does no harm and keeps
     // the cancellation-map invariant identical to production.

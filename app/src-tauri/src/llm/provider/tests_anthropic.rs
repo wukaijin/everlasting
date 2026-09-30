@@ -91,7 +91,7 @@ mod tests {
     /// call `send` on the same instance. The relevant invariant:
     /// `Send + Sync` (the trait's super-trait) is satisfied, so the
     /// chat command's `Box<dyn Provider>` can move into a
-    /// `tauri::async_runtime::spawn` task.
+    /// `tokio::spawn` task.
     #[test]
     fn anthropic_provider_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}

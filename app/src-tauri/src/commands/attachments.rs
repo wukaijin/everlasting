@@ -10,7 +10,6 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
-use tauri::State;
 
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -37,14 +36,4 @@ pub async fn save_attachment_inner(
             .await
             .map_err(|e| anyhow::anyhow!("save_attachment failed: {}", e))?;
     Ok(SaveAttachmentResponse { file })
-}
-
-#[tauri::command]
-pub async fn save_attachment(
-    state: State<'_, std::sync::Arc<AppState>>,
-    session_id: String,
-    media_type: String,
-    data_base64: String,
-) -> Result<SaveAttachmentResponse, AppCommandError> {
-    save_attachment_inner(&state, session_id, media_type, data_base64).await
 }

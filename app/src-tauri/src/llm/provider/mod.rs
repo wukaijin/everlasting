@@ -115,7 +115,7 @@ fn is_full_prefix_cache_miss(usage: &TokenUsage) -> bool {
 /// turn and consumes the resulting stream inside a `tokio::select!`.
 ///
 /// The returned stream is `Send + 'static` so it can be moved into a
-/// `tauri::async_runtime::spawn` task and the `Box::pin` wrapper used
+/// `tokio::spawn` task and the `Box::pin` wrapper used
 /// by the chat command works without further wrapping.
 pub trait Provider: Send + Sync {
     /// Issue one LLM request and return a stream of `ChatEvent`s.

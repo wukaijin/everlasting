@@ -1,5 +1,5 @@
 //! Git errors surfaced to Tauri commands. The `String` conversion
-//! in `#[tauri::command]` handlers will turn these into user-facing
+//! in IPC handlers (historical) will turn these into user-facing
 //! error messages — keep them concise and actionable.
 
 use thiserror::Error;

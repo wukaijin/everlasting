@@ -13,8 +13,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::error::AppCommandError;
 use crate::state::AppState;
 
@@ -85,14 +83,6 @@ pub async fn cancel_chat_inner(
     })
 }
 
-#[tauri::command]
-pub async fn cancel_chat(
-    request_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<CancelOutcome, AppCommandError> {
-    cancel_chat_inner(&state, request_id).await
-}
-
 /// 09-06-gc-p0-preempt-min-semantics R2:preempt a LIVE group-chat
 /// discussion by session. Unlike `cancel_chat` (rid-scoped hard Stop:
 /// kills the in-flight speaker, `stop_reason=cancelled`, no summary),
@@ -130,12 +120,4 @@ pub async fn preempt_group_chat_inner(
         }
         None => Err(anyhow::anyhow!("该会话当前没有进行中的群聊讨论").into()),
     }
-}
-
-#[tauri::command]
-pub async fn preempt_group_chat(
-    session_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<PreemptOutcome, AppCommandError> {
-    preempt_group_chat_inner(&state, session_id).await
 }

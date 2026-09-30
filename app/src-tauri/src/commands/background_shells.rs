@@ -24,8 +24,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::background_shell::{BackgroundShellRegistry, BackgroundShellSummary};
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -38,14 +36,6 @@ pub async fn list_background_shells_inner(
     state: &Arc<AppState>,
 ) -> Result<Vec<BackgroundShellSummary>, AppCommandError> {
     Ok(state.background_shells.list_for_session(&session_id).await)
-}
-
-#[tauri::command]
-pub async fn list_background_shells(
-    session_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<BackgroundShellSummary>, AppCommandError> {
-    list_background_shells_inner(session_id, &state).await
 }
 
 /// Kill one background shell's process group. Idempotent (`Ok(())`
@@ -62,13 +52,4 @@ pub async fn kill_background_shell_inner(
         .kill(&session_id, &shell_session_id)
         .await
         .map_err(AppCommandError::from)
-}
-
-#[tauri::command]
-pub async fn kill_background_shell(
-    session_id: String,
-    shell_session_id: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), AppCommandError> {
-    kill_background_shell_inner(session_id, shell_session_id, &state).await
 }

@@ -2,7 +2,7 @@
 //! 预设 CRUD IPC 四件:list / create / update / delete。
 //!
 //! 双形态三层先例(scheduled_tasks 同款):`_inner` 业务(Q0 单源)+
-//! `#[tauri::command]` 包装 + daemon route(`daemon/routes/
+//! daemon route(`daemon/routes/
 //! group_chat_presets.rs`)。**内置五档预设(review / fe_review / arch /
 //! retro)不经过本模块** —— 它们是 `scripts/group-chat-presets.json`
 //! 的单一事实源(M1 CLI / MCP / 前端三处消费),只读;本模块只管
@@ -29,7 +29,6 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::db::group_chat_presets as gc;
 use crate::db::group_chat_presets::{GcPresetParticipant, GcPresetRow};
@@ -207,13 +206,6 @@ pub async fn list_group_chat_presets_inner(
     Ok(rows)
 }
 
-#[tauri::command]
-pub async fn list_group_chat_presets(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<GcPresetRow>, AppCommandError> {
-    list_group_chat_presets_inner(state.inner()).await
-}
-
 // ---------------------------------------------------------------------------
 // create
 // ---------------------------------------------------------------------------
@@ -286,26 +278,6 @@ pub async fn create_group_chat_preset_inner(
     Ok(row)
 }
 
-#[tauri::command]
-pub async fn create_group_chat_preset(
-    state: State<'_, Arc<AppState>>,
-    name: String,
-    description: String,
-    moderator_model_id: String,
-    participants: Vec<GcPresetParticipant>,
-    builtin_key: Option<String>,
-) -> Result<GcPresetRow, AppCommandError> {
-    create_group_chat_preset_inner(
-        state.inner(),
-        name,
-        description,
-        moderator_model_id,
-        participants,
-        builtin_key,
-    )
-    .await
-}
-
 // ---------------------------------------------------------------------------
 // update
 // ---------------------------------------------------------------------------
@@ -344,26 +316,6 @@ pub async fn update_group_chat_preset_inner(
     Ok(row)
 }
 
-#[tauri::command]
-pub async fn update_group_chat_preset(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    name: String,
-    description: String,
-    moderator_model_id: String,
-    participants: Vec<GcPresetParticipant>,
-) -> Result<GcPresetRow, AppCommandError> {
-    update_group_chat_preset_inner(
-        state.inner(),
-        id,
-        name,
-        description,
-        moderator_model_id,
-        participants,
-    )
-    .await
-}
-
 // ---------------------------------------------------------------------------
 // delete
 // ---------------------------------------------------------------------------
@@ -379,14 +331,6 @@ pub async fn delete_group_chat_preset_inner(
         .await
         .map_err(|e| anyhow::anyhow!("delete_group_chat_preset failed: {}", e))?;
     Ok(DeletedGroupChatPreset { ok: true })
-}
-
-#[tauri::command]
-pub async fn delete_group_chat_preset(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<DeletedGroupChatPreset, AppCommandError> {
-    delete_group_chat_preset_inner(state.inner(), id).await
 }
 
 // ---------------------------------------------------------------------------

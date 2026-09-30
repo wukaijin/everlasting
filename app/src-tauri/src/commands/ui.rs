@@ -49,7 +49,6 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::agent::permissions::record_ui_diff_applied_audit;
 use crate::db;
@@ -267,25 +266,6 @@ pub async fn apply_ui_diff_inner(
         kind: None,
         error: None,
     })
-}
-
-#[tauri::command]
-pub async fn apply_ui_diff(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    diff_text: String,
-) -> Result<ApplyUiDiffResult, String> {
-    // Phase 2.2: delegate to `apply_ui_diff_inner`. The Tauri
-    // command keeps the legacy `Result<_, String>` signature
-    // (frontend contract); the inner returns the structured
-    // `ApplyUiDiffResult` so the daemon route handler can surface
-    // structured errors. `apply_ui_diff_inner` never returns
-    // `Err(AppCommandError)` today (every failure path is encoded
-    // as `Ok(ApplyUiDiffResult { ok: false, kind, error })`), so
-    // the `map_err` here is defense-in-depth.
-    apply_ui_diff_inner(&state, session_id, diff_text)
-        .await
-        .map_err(|e| e.message)
 }
 
 #[cfg(test)]

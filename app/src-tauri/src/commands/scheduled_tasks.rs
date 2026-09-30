@@ -2,7 +2,7 @@
 //! IPC 四件:list / create / update / delete。
 //!
 //! 双形态三层同 tunnel config / web_search 先例:`_inner` 业务(Q0 单源)
-//! + `#[tauri::command]` 包装 + daemon route(`daemon/routes/scheduled_tasks.rs`)。
+//! + daemon route(`daemon/routes/scheduled_tasks.rs`)。
 //! 校验(design §6):目标 session 必须存在且 `session_type='chat'`(群聊
 //! 拒绝,AC7;复用 WP1 的 [`crate::db::scheduled_tasks::validate_target_session`]),
 //! project 归属一致,schedule JSON 经 [`crate::scheduler::compute::parse_schedule`]
@@ -16,7 +16,6 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::db::scheduled_tasks as st;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -130,14 +129,6 @@ pub async fn list_scheduled_tasks_inner(
         .await
         .map_err(|e| anyhow::anyhow!("list_scheduled_tasks failed: {}", e))?;
     Ok(rows.iter().map(ScheduledTaskPayload::from).collect())
-}
-
-#[tauri::command]
-pub async fn list_scheduled_tasks(
-    state: State<'_, Arc<AppState>>,
-    project_id: Option<String>,
-) -> Result<Vec<ScheduledTaskPayload>, AppCommandError> {
-    list_scheduled_tasks_inner(state.inner(), project_id).await
 }
 
 /// `target_mode` 归一化 + 校验:None/空 = fixed(缺省向后兼容);
@@ -457,40 +448,6 @@ pub async fn create_scheduled_task_in_pool(
     Ok(ScheduledTaskPayload::from(&row))
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn create_scheduled_task(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    target_session_id: Option<String>,
-    target_mode: Option<String>,
-    name: String,
-    prompt: String,
-    schedule: String,
-    enabled: Option<bool>,
-    max_runs: Option<i64>,
-    ends_at: Option<i64>,
-    model_id: Option<String>,
-    group_chat_config: Option<st::GroupChatTaskConfig>,
-) -> Result<ScheduledTaskPayload, AppCommandError> {
-    create_scheduled_task_inner(
-        state.inner(),
-        project_id,
-        target_session_id,
-        target_mode,
-        name,
-        prompt,
-        schedule,
-        enabled,
-        "user".to_string(),
-        max_runs,
-        ends_at,
-        model_id,
-        group_chat_config,
-    )
-    .await
-}
-
 /// `update_scheduled_task` — 部分更新(`None` 字段不动存量)。schedule /
 /// target 变更时同样过校验;enabled false→true 由 WP1 db 层置
 /// `last_fired_at = now` + `run_count = 0`(重启用不补跑、计数重置,
@@ -726,39 +683,6 @@ pub async fn update_scheduled_task_inner(
     Ok(ScheduledTaskPayload::from(&updated))
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn update_scheduled_task(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    name: Option<String>,
-    prompt: Option<String>,
-    schedule: Option<String>,
-    target_session_id: Option<Option<String>>,
-    target_mode: Option<String>,
-    model_id: Option<Option<String>>,
-    enabled: Option<bool>,
-    max_runs: Option<Option<i64>>,
-    ends_at: Option<Option<i64>>,
-    group_chat_config: Option<Option<st::GroupChatTaskConfig>>,
-) -> Result<ScheduledTaskPayload, AppCommandError> {
-    update_scheduled_task_inner(
-        state.inner(),
-        id,
-        name,
-        prompt,
-        schedule,
-        target_session_id,
-        target_mode,
-        model_id,
-        enabled,
-        max_runs,
-        ends_at,
-        group_chat_config,
-    )
-    .await
-}
-
 /// `delete_scheduled_task` — 硬删。返回是否真删了一行(`false` = 已被
 /// 他端删除,前端按幂等成功处理)。
 pub async fn delete_scheduled_task_inner(
@@ -769,12 +693,4 @@ pub async fn delete_scheduled_task_inner(
         .await
         .map_err(|e| anyhow::anyhow!("delete_scheduled_task failed: {}", e))?;
     Ok(deleted)
-}
-
-#[tauri::command]
-pub async fn delete_scheduled_task(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<bool, AppCommandError> {
-    delete_scheduled_task_inner(state.inner(), id).await
 }

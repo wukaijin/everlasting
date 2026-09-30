@@ -43,7 +43,7 @@ mod tests {
     }
 
     fn sink_with_resolved(rid: &str, outcome: &str) -> Vec<TranscriptEntry> {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_permission_ask_resolved(rid, outcome);
         sink.transcript_snapshot()
     }
@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_accumulates_text_deltas() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         let rid = "rid-test".to_string();
         for t in ["hello", " ", "world"] {
             sink.emit_chat_event(&ChatEventPayload {
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_tracks_cancelled_done() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         let rid = "rid-cancel".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn buffer_sink_tracks_error_event() {
         use crate::llm::LlmErrorCategory;
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         let rid = "rid-err".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_records_transcript_entries() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         let rid = "rid-transcript".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
@@ -139,7 +139,7 @@ mod tests {
     /// (会破 `persists_subagent_run` 的 transcript 计数断言)。
     #[test]
     fn buffer_sink_skips_turn_usage_transcript_record() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-u".into(),
             session_id: "sess-test".into(),
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_accumulates_token_usage_per_turn() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&done_with_usage(50, 10));
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_drain_per_turn_usage_clears_buffer() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(10, 5));
         let drained = sink.drain_per_turn_usage();
         assert_eq!(drained.input_tokens, 10);
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_done_without_usage_does_not_accumulate() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
             session_id: "sess-test".into(),
@@ -217,7 +217,7 @@ mod tests {
     /// skips the push for synthetic terminals).
     #[test]
     fn buffer_sink_max_turns_terminal_does_not_double_count_last_turn() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&done_with_usage(50, 10));
@@ -251,7 +251,7 @@ mod tests {
     /// cumulative_usage().
     #[test]
     fn buffer_sink_cancelled_terminal_does_not_affect_cumulative_usage() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&ChatEventPayload {
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn buffer_sink_turns_completed_tracks_real_per_turn_dones() {
         // (a) Clean end_turn: 3 per-turn Dones → turns_completed == 3.
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&done_with_usage(50, 10));
@@ -283,7 +283,7 @@ mod tests {
         );
 
         // (b) Cancelled: 2 per-turn Dones + 1 synthetic cancelled.
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&ChatEventPayload {
@@ -301,7 +301,7 @@ mod tests {
         );
 
         // (c) max_turns: 200 per-turn Dones + 1 synthetic max_turns.
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         for _ in 0..200 {
             sink.emit_chat_event(&done_with_usage(100, 50));
         }
@@ -330,7 +330,7 @@ mod tests {
     /// stay 1:1 (same discriminator guards both).
     #[test]
     fn buffer_sink_turns_completed_equals_per_turn_usage_len() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&done_with_usage(50, 10));
@@ -351,7 +351,7 @@ mod tests {
     /// R3 was_incomplete: set on synthetic `Done{max_turns}`.
     #[test]
     fn buffer_sink_max_turns_terminal_sets_was_incomplete() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
@@ -375,7 +375,7 @@ mod tests {
     /// R3 was_cancelled: set on synthetic `Done{cancelled}`.
     #[test]
     fn buffer_sink_cancelled_terminal_sets_was_cancelled_only() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
@@ -398,7 +398,7 @@ mod tests {
     /// R3: clean `end_turn` exit sets neither flag.
     #[test]
     fn buffer_sink_end_turn_terminal_does_not_set_incomplete_or_cancelled() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
@@ -494,11 +494,11 @@ mod tests {
         crate::agent::subagent::clear_test_collector();
     }
 
-    /// `new_without_app_handle` does NOT emit IPC events.
+    /// `new_without_ipc` does NOT emit wire events.
     #[test]
     fn subagent_buffer_sink_without_app_handle_does_not_emit_ipc() {
         crate::agent::subagent::clear_test_collector();
-        let sink = SubagentBufferSink::new_without_app_handle("rid-noop".into(), "sid-noop".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid-noop".into(), "sid-noop".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid-noop".into(),
             session_id: "sess-test".into(),
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn tool_call_payload_json_includes_tool_use_id() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
             session_id: "sess-test".into(),
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn tool_result_payload_json_includes_duration_ms() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
             session_id: "sess-test".into(),
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn orphan_tool_result_gets_duration_ms_zero() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_tool_result(&ToolResultPayload {
             request_id: "rid".into(),
             session_id: "sess-test".into(),
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn consecutive_pairs_get_independent_durations() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_tool_call(&ToolCallPayload {
             request_id: "rid".into(),
             session_id: "sess-test".into(),
@@ -691,10 +691,8 @@ mod tests {
     /// transcript entry whose payload carries the PARENT session id.
     #[test]
     fn emit_permission_ask_populates_transcript_with_parent_session_id() {
-        let sink = SubagentBufferSink::new_without_app_handle(
-            "worker-rid-1".into(),
-            "parent-sess-1".into(),
-        );
+        let sink =
+            SubagentBufferSink::new_without_ipc("worker-rid-1".into(), "parent-sess-1".into());
         sink.emit_permission_ask(crate::agent::permissions::PermissionAskPayload {
             rid: "ask-rid-1".into(),
             session_id: "parent-sess-1".into(),
@@ -855,7 +853,7 @@ mod tests {
     /// (the sink does NOT deduplicate by rid).
     #[test]
     fn emit_permission_ask_resolved_multiple_outcomes_for_same_rid() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         sink.emit_permission_ask_resolved("same-rid", "allow");
         sink.emit_permission_ask_resolved("same-rid", "deny");
         let transcript = sink.transcript_snapshot();
@@ -892,21 +890,18 @@ mod tests {
     ///     worker's sink impl is in `sink/events.rs::emit_chat_event`; that
     ///     block does not reference `self.app_handle` at all
     ///     (a `grep` of the impl confirms it). The chat-event
-    ///     IPC forwarding is the `AppHandleSink`'s
+    ///     wire forwarding is the injected sink's
     ///     responsibility, NOT the worker's. The `Recall` event
     ///     is recorded into the worker's transcript (per
     ///     line 528-529 in `emit_chat_event`); that's the
     ///     intended scope.
-    /// (b) **Constructed without an `app_handle`**: the test
-    ///     constructor `new_without_app_handle` (line 198)
-    ///     sets `app_handle: None`. The worker's nested
-    ///     `run_chat_loop` (production path) constructs
-    ///     `SubagentBufferSink::new_without_app_handle` too —
-    ///     the production worker has no `app_handle` to forward
-    ///     to. So even if a future refactor accidentally added
-    ///     `self.app_handle.as_ref().map(|h| h.emit(...))` to
-    ///     the chat-event path, the `None` case would silently
-    ///     no-op (no `app` to emit on).
+    /// (b) **Constructed without a forward sink**: the test
+    ///     constructor `new_without_ipc` wires only the
+    ///     thread-local no-op sink. The worker's nested
+    ///     `run_chat_loop` (production path) uses the same
+    ///     shape — the worker has no parent-forward path for
+    ///     chat events (de-Tauri 2026-09-30 removed the last
+    ///     `Option<AppHandle>` carrier).
     ///
     /// Net effect: the worker's `Recall` events land in the
     /// worker's transcript; the main chat's IPC is structurally
@@ -915,16 +910,11 @@ mod tests {
     /// recall (AC7).
     #[test]
     fn worker_sink_does_not_forward_recall_to_main_chat() {
-        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        let sink = SubagentBufferSink::new_without_ipc("rid".into(), "sid".into());
         // (a) The worker's sink constructor exposes NO way to
-        // forward chat events to the main chat IPC. `app_handle`
-        // is `None`; even if a future refactor added
-        // `self.app_handle.as_ref().map(|h| h.emit("chat-event", ...))`,
-        // it would be a `None`-no-op (no `app` to emit on).
-        assert!(
-            sink.app_handle.is_none(),
-            "worker sink must be constructed without an app_handle (no IPC forward path)"
-        );
+        // forward chat events to the main chat (no parent sink
+        // parameter exists — structurally unreachable).
+
         // (b) The worker's emit_chat_event must NOT panic on
         // the new `Recall` variant. The match has a wildcard
         // arm that drops it into the transcript record (no

@@ -88,10 +88,13 @@ mod transcript;
 mod truncate_summary;
 mod worktree;
 
-// transport-abstraction 2026-07-20 (P1.3): re-export the new
-// subagent event sink trait + its two impls so callers reach it
-// via `crate::agent::subagent::{SubagentEventSink,
-// AppHandleSubagentSink, ThreadLocalSubagentSink}`. Test-only
+// transport-abstraction 2026-07-20 (P1.3): re-export the
+// subagent event sink trait + impls so callers reach it via
+// `crate::agent::subagent::{SubagentEventSink,
+// ThreadLocalSubagentSink}` (the GUI-side
+// `AppHandleSubagentSink` impl was removed with the GUI bin —
+// de-Tauri 2026-09-30; the daemon's `HttpSseSubagentSink` lives
+// in `daemon::sse` and is not re-exported here). Test-only
 // helpers `arm_test_collector` / `clear_test_collector` are
 // re-exported at `pub(crate)` so the `#[cfg(test)]` blocks in
 // `sink.rs` can reach them via `super::super::arm_test_collector` /
@@ -105,7 +108,7 @@ mod worktree;
 // `unused_imports` warning.
 #[cfg(test)]
 pub(crate) use event_sink::{arm_test_collector, clear_test_collector};
-pub use event_sink::{AppHandleSubagentSink, SubagentEventSink, ThreadLocalSubagentSink};
+pub use event_sink::{SubagentEventSink, ThreadLocalSubagentSink};
 
 // L3d PR2 (2026-06-25): re-export the loader's public surface so
 // callers reach it via `crate::agent::subagent::{SubagentCache,
@@ -126,8 +129,7 @@ pub use transcript::TranscriptEntry;
 // `TranscriptKind` + the two wire-shape builders are consumed by
 // `cfg(test)` code (`db/tests.rs`, `agent/tests.rs`) AND, since P2.3
 // (2026-07-21, task `07-20-remote-access-daemon-split`), by
-// `daemon::sse::HttpSseSubagentSink` — the HTTP/SSE counterpart of
-// `AppHandleSubagentSink`. Both sinks must emit the *same*
+// `daemon::sse::HttpSseSubagentSink`. Any sink must emit the *same*
 // `subagent:event` / `subagent:finished` JSON, so the builders stay
 // the single source of truth and are re-exported crate-wide. The
 // earlier `cfg(test)`-only re-export reflected a time when no non-test

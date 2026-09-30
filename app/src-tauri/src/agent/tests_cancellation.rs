@@ -121,7 +121,7 @@ async fn two_concurrent_requests_are_independent() {
 
 /// CancellationGuard removes the entry on Drop. We construct a
 /// guard, drop it, and verify the map is empty. The Drop runs
-/// `tauri::async_runtime::spawn`, so the test is wrapped in
+/// `tokio::spawn`, so the test is wrapped in
 /// `#[tokio::test]` to provide a runtime (the guard's spawn
 /// borrows the current Tokio runtime via the Tauri shim; in
 /// unit tests we route through the global runtime).

@@ -266,7 +266,7 @@ async fn sse_stream_forwarded_as_chunks() {
 /// (design §6.2:配置错误,重连无意义)。
 ///
 /// `result_large_err`:tungstenite `accept_hdr_async` 的握手 callback 签名
-/// 强制返回 `Result<Response, tauri::http::Response<Option<String>>>`(Err
+/// 强制返回 `Result<Response, tokio_tungstenite::tungstenite::http::Response<Option<String>>>`(Err
 /// 变体 136 字节)—— 由库签名决定,无法缩减,故就地 allow。
 #[tokio::test]
 #[allow(clippy::result_large_err)]
@@ -283,14 +283,14 @@ async fn auth_reject_stops_reconnect() {
             a2.fetch_add(1, Ordering::SeqCst);
             // 拒绝握手:401(auth 类错误)。ErrorResponse 的 body 类型是
             // `Option<String>`(tungstenite 0.24 握手错误体),builder 直接
-            // 构造 `tauri::http::Response`(与 tungstenite 同 instance)。
+            // 构造 `http::Response`(tungstenite re-export 的同一 instance)。
             let cb = |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
                       _: tokio_tungstenite::tungstenite::handshake::server::Response|
              -> Result<
                 tokio_tungstenite::tungstenite::handshake::server::Response,
-                tauri::http::Response<Option<String>>,
+                tokio_tungstenite::tungstenite::http::Response<Option<String>>,
             > {
-                Err(tauri::http::Response::builder()
+                Err(tokio_tungstenite::tungstenite::http::Response::builder()
                     .status(401)
                     .body(None)
                     .expect("build 401 response"))

@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use everlasting_remote_protocol::Frame;
 use serde::Serialize;
-use tauri::State;
 
 use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
@@ -78,11 +77,4 @@ pub async fn generate_pairing_code_inner(
         "pairing code generated via remote RPC"
     );
     Ok(PairingCodePayload { code, expires_in })
-}
-
-#[tauri::command]
-pub async fn generate_pairing_code(
-    state: State<'_, Arc<AppState>>,
-) -> Result<PairingCodePayload, AppCommandError> {
-    generate_pairing_code_inner(&state).await
 }

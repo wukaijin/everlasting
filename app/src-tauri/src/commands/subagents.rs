@@ -33,7 +33,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::agent::subagent::SubagentSource;
 use crate::agent::subagent::{locate_agent_file, write_frontmatter_model};
@@ -152,14 +151,6 @@ pub async fn list_subagents_with_model_inner(
         });
     }
     Ok(out)
-}
-
-#[tauri::command]
-pub async fn list_subagents_with_model(
-    project_path: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<SubagentWithModelRow>, AppCommandError> {
-    list_subagents_with_model_inner(project_path, &state).await
 }
 
 // ---------------------------------------------------------------------------
@@ -328,15 +319,4 @@ pub async fn set_subagent_model_inner(
         has_db_override: db_override.is_some(),
         writable: !matches!(after.source, SubagentSource::Builtin),
     })
-}
-
-#[tauri::command]
-pub async fn set_subagent_model(
-    name: String,
-    source: String,
-    project_path: String,
-    model_id: Option<String>,
-    state: State<'_, Arc<AppState>>,
-) -> Result<SubagentWithModelRow, AppCommandError> {
-    set_subagent_model_inner(name, source, project_path, model_id, &state).await
 }

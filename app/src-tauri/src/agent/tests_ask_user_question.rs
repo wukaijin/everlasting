@@ -1021,17 +1021,15 @@ async fn question_store_get_payload_register_resolve_round_trip() {
 // ---------------------------------------------------------------------------
 // F3 Test — `resolve_tool_question` scalar-arg → InteractionResponse mapping.
 //
-// `resolve_tool_question` is a thin Tauri command whose only
-// non-trivial logic is the `cancelled`-vs-`answer` branch. That
-// branch lives in the pure helper `commands::question::
-// resolve_response_from_args` (extracted for testability — the
-// command's `State<'_, _>` arg rules out a direct call here
-// without a `tauri::test` mock_app, which this project doesn't
-// use). The invoke serde boundary itself (JS
-// `{ sessionId, toolUseId, answer, cancelled }` → Rust scalar
-// args) is covered by the `permission_response` precedent +
-// manual `tauri dev` verification per the command's doc
-// comment, not by this unit test.
+// `resolve_tool_question_inner`'s only non-trivial logic is the
+// `cancelled`-vs-`answer` branch. That branch lives in the pure
+// helper `commands::question::resolve_response_from_args`
+// (extracted for testability — the historical Tauri-command
+// wrapper died with the GUI bin, de-Tauri 2026-09-30). The wire
+// serde boundary itself (JS `{ sessionId, toolUseId, answer,
+// cancelled }` → Rust scalar args) is covered by the
+// `permission_response` precedent + manual daemon verification,
+// not by this unit test.
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn resolve_response_from_args_maps_scalar_inputs() {

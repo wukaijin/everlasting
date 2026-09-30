@@ -6,13 +6,11 @@
 //! webview 尚未大量使用,是最安全窗口。Linux webkitgtk 持 fd 场景下
 //! unlink 语义安全(缓存可再生,webview 会重建)。
 //!
-//! **装配位置(最高风险点,design §4 ⚠ 陷阱警示)**:`lib.rs` setup 钩子
-//! 的**公共区**——mode resolve 之后、Thin 分支 `return Ok(())` 之前。
-//! 现有 sweep / hygiene 装配点全在 Thin return **之后**的 Full 分支内,
-//! **勿照搬**:WebKitCache 正是默认 Thin GUI 的 webview 产物(摸底实测
-//! 136M 大头),照 Full 分支装配 = 默认模式永不清理。装配级回归由
-//! [`tests::startup_clean_is_wired_in_the_thin_full_common_area`] 源码
-//! 静态断言守护(函数级测试抓不到装配缺失)。
+//! **装配位置**:daemon bin(`bin/everlasting-daemon.rs`)的
+//! `load_daemon_state` 之后一行(de-Tauri 2026-09-30 迁移;原装配点
+//! GUI lib.rs setup 公共区随 GUI bin 移除)。装配级回归由
+//! [`tests::startup_clean_is_wired_after_state_load_in_daemon_bin`]
+//! 源码静态断言守护(函数级测试抓不到装配缺失)。
 //!
 //! **边界**:浏览器 remote 模式的缓存归浏览器管,与本模块无关
 //! (PRD Out of Scope)。
@@ -100,11 +98,13 @@ pub fn maybe_clean_webkit_cache(cache_dir: &Path, threshold_bytes: u64) -> WebKi
     }
 }
 
-/// GUI 启动入口(lib.rs setup 公共区一行装配):异步 spawn 一次阈值
-/// 清理,不等结果(不阻塞首帧)。Thin / Full 两条模式都过本入口;
-/// 每次启动至多一次,无周期 timer(「GUI 主进程零 timer task」约束)。
+/// daemon 启动入口(daemon bin `load_daemon_state` 后一行装配):
+/// 异步 spawn 一次阈值清理,不等结果(不阻塞启动)。每次启动至多
+/// 一次,无周期 timer。de-Tauri(2026-09-30)后 GUI webview 不再产生
+/// 新缓存,本清理只负责历史存量的回收 —— 模块与 `commands/disk.rs`
+/// 的 webkit_cache key 的最终删除见 BACKLOG(de-Tauri 后续项)。
 pub fn spawn_startup_clean(app_data_dir: std::path::PathBuf) {
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         let cache_dir = app_data_dir.join(WEBKIT_CACHE_DIR);
         let result = maybe_clean_webkit_cache(&cache_dir, resolve_webkit_cache_threshold());
         if result.cleaned {
@@ -191,36 +191,24 @@ mod tests {
         );
     }
 
-    /// **装配级守护**(design §4 ⚠ 陷阱):静态断言 `spawn_startup_clean`
-    /// 的调用点在 `lib.rs` setup 的公共区 —— 即 `GuiMode::resolve` 之后、
-    /// Thin 分支 `return Ok(())` 之前。函数级测试抓不到装配缺失(外部
-    /// 评审 2026-09-03 指出的 AC6 风险):把调用点挪进 Full 分支(Thin
-    /// return 之后)会让默认模式永不清理,本断言即红。沿
-    /// `transport/http.routes-sync.test.ts` 「解析源码守卫装配」先例。
+    /// **装配级守护**:静态断言 `spawn_startup_clean` 的调用点在
+    /// daemon bin(`bin/everlasting-daemon.rs`)的
+    /// `load_daemon_state` 之后。函数级测试抓不到装配缺失;沿
+    /// `transport/http.routes-sync.test.ts`「解析源码守卫装配」先例。
+    /// de-Tauri(2026-09-30):装配点从 GUI lib.rs setup 迁到 daemon bin。
     #[test]
-    fn startup_clean_is_wired_in_the_thin_full_common_area() {
-        let src = include_str!("../lib.rs");
-        let resolve = src
-            .find("GuiMode::resolve")
-            .expect("lib.rs must resolve the GUI mode in setup");
-        // setup 钩子里唯一的显式 `return Ok(());` 即 Thin 分支早退
-        // (Full 分支收尾是裸 `Ok(())`,无 return 关键字)。
-        let thin_return = src
-            .find("return Ok(());")
-            .expect("lib.rs must have the Thin-branch early return");
+    fn startup_clean_is_wired_after_state_load_in_daemon_bin() {
+        let src = include_str!("../../src/bin/everlasting-daemon.rs");
+        let state_load = src
+            .find("load_daemon_state")
+            .expect("daemon bin must load AppState");
         let call_site = src
             .find("webkit_cache::spawn_startup_clean")
-            .expect("lib.rs must call webkit_cache::spawn_startup_clean at startup");
+            .expect("daemon bin must call webkit_cache::spawn_startup_clean at startup");
         assert!(
-            resolve < call_site,
-            "WebKitCache cleanup must run AFTER mode resolve (common area needs app_data_dir)"
-        );
-        assert!(
-            call_site < thin_return,
-            "WebKitCache cleanup MUST be wired BEFORE the Thin early-return — \
-             WebKitCache is the default-Thin GUI's webview product; wiring it \
-             in the Full branch (after the Thin return) means the default \
-             mode NEVER cleans it (design §4 trap, external review 2026-09-03)"
+            state_load < call_site,
+            "WebKitCache cleanup must be wired AFTER load_daemon_state \
+             (needs the resolved data dir)"
         );
     }
 }

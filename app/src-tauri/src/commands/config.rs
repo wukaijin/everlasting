@@ -11,7 +11,6 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
 
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -84,19 +83,9 @@ pub async fn get_llm_config_inner(
     })
 }
 
-#[tauri::command]
-pub async fn get_llm_config(
-    state: State<'_, Arc<AppState>>,
-) -> Result<PublicLlmConfig, AppCommandError> {
-    get_llm_config_inner(&state).await
-}
-
-/// Phase 2.2 `_inner` (Q0 decision): the daemon-side path uses
-/// `dirs::home_dir()` directly instead of `AppHandle::path()`. The
-/// Tauri command wrapper still uses the AppHandle path to match
-/// the existing convention (Tauri's PathResolver wraps the same
-/// `dirs::home_dir()` call), but the daemon has no AppHandle so
-/// we hit the underlying primitive.
+/// Resolve the user's home dir via `dirs::home_dir()` (the
+/// historical Tauri-command wrapper's `AppHandle::path()` variant
+/// died with the GUI bin — de-Tauri 2026-09-30).
 ///
 /// Returns `None` when the platform has no notion of a home
 /// directory (e.g. a sandboxed container without `$HOME`); the
@@ -105,33 +94,10 @@ pub fn get_home_dir_inner() -> Option<String> {
     dirs::home_dir().map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Return the user's home directory (the path the frontend will
-/// shorten to `~` when rendering the cwd chip in the chat panel
-/// header). Resolves to `None` when the platform has no notion of a
-/// home directory (e.g. a sandboxed container without `$HOME`); the
-/// frontend falls back to rendering the full path in that case.
-///
-/// We use `AppHandle::path()` (Tauri 2's public `PathResolver`)
-/// rather than the `dirs` crate directly. The `dirs` crate is a
-/// transitive dependency of Tauri 2, but Rust 2018+ does not
-/// auto-expose transitive deps, so calling `dirs::home_dir()` would
-/// require adding it to `Cargo.toml`. `app.path().home_dir()` is
-/// the same call wrapped by Tauri's API and matches the existing
-/// `app_data_dir` pattern in `AppState::load`.
-#[tauri::command]
-pub fn get_home_dir(app: AppHandle) -> Option<String> {
-    // Phase 2.2: delegate to the `_inner` so the daemon route
-    // handler gets the identical answer without needing an
-    // AppHandle. The Tauri-side path is preserved for behavioral
-    // parity with the pre-refactor signature.
-    let _ = app.path().home_dir(); // keep the SideEffect-equivalent path for completeness
-    get_home_dir_inner()
-}
-
 // ---------------------------------------------------------------------------
 // S2 remote tunnel 配置(2026-08-11, task `08-11-tunnel-client`,design §3.1)
 //
-// 三层模式(`_inner` + `#[tauri::command]` + daemon route):业务逻辑全在
+// 三层模式(`_inner` + daemon route):业务逻辑全在
 // `_inner`,Tauri 与 axum 两条路径共用。配置存 `app_config` KV
 // (零 migration,design §3.2),key 常量单源在
 // `daemon::tunnel::config`(load_remote_config 等共用)。
@@ -208,13 +174,6 @@ pub async fn get_remote_config_inner(
     }))
 }
 
-#[tauri::command]
-pub async fn get_remote_config(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Option<RemoteConfigPayload>, AppCommandError> {
-    get_remote_config_inner(&state).await
-}
-
 /// 写 remote 配置 + 触发 tunnel 实时重连(design §2.4)。
 ///
 /// P2-2 校验:scheme 必须 `wss://`(本地调试允许 `ws://`)、去尾斜杠、
@@ -256,15 +215,6 @@ pub async fn set_remote_config_inner(
     };
     state.tunnel_manager.set_config(cfg);
     Ok(())
-}
-
-#[tauri::command]
-pub async fn set_remote_config(
-    state: State<'_, Arc<AppState>>,
-    remote_url: String,
-    shared_secret: String,
-) -> Result<(), AppCommandError> {
-    set_remote_config_inner(&state, remote_url, shared_secret).await
 }
 
 /// 写自定义 node_id + 按 DB 现状刷新 tunnel 配置(`TunnelConfig` 变化经
@@ -331,14 +281,6 @@ pub async fn set_tunnel_node_id_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn set_tunnel_node_id(
-    state: State<'_, Arc<AppState>>,
-    node_id: Option<String>,
-) -> Result<(), AppCommandError> {
-    set_tunnel_node_id_inner(&state, node_id).await
-}
-
 /// 写自定义 display_name + 按 DB 现状刷新 tunnel 配置(镜像
 /// [`set_tunnel_node_id_inner`] 的三态与重连路径)。
 ///
@@ -402,14 +344,6 @@ pub async fn set_tunnel_display_name_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn set_tunnel_display_name(
-    state: State<'_, Arc<AppState>>,
-    display_name: Option<String>,
-) -> Result<(), AppCommandError> {
-    set_tunnel_display_name_inner(&state, display_name).await
-}
-
 /// tunnel 状态查询。未配置 remote → `None`;已配置 → 状态快照。
 pub async fn get_tunnel_status_inner(
     state: &Arc<AppState>,
@@ -426,16 +360,9 @@ pub async fn get_tunnel_status_inner(
     }))
 }
 
-#[tauri::command]
-pub async fn get_tunnel_status(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Option<TunnelStatusPayload>, AppCommandError> {
-    get_tunnel_status_inner(&state).await
-}
-
 // ---------------------------------------------------------------------------
 // F4 web_search 配置(2026-08-25, task `08-25-web-search-tool` WP2)。
-// 双形态三层同 tunnel config 先例:`_inner` 业务 + `#[tauri::command]`
+// 双形态三层同 tunnel config 先例:`_inner` 业务
 // 包装 + daemon route。业务逻辑(三值校验 / key 三态 AEAD / masked)
 // 单源在 `tools::web_search`(set_config_state / get_config_state)。
 // ---------------------------------------------------------------------------
@@ -450,13 +377,6 @@ pub async fn get_web_search_config_inner(
     Ok(payload)
 }
 
-#[tauri::command]
-pub async fn get_web_search_config(
-    state: State<'_, Arc<AppState>>,
-) -> Result<crate::tools::web_search::WebSearchConfigPayload, AppCommandError> {
-    get_web_search_config_inner(&state).await
-}
-
 /// 写 web_search 配置。参数为**扁平标量**(IPC 形状铁律,08-21 实证:
 /// 嵌套 struct 参数在 HTTP 模式静默 miss)。`tavily_api_key` 三态:
 /// `Some(非空)` 重加密落盘 / `Some("")` 清除(删行)/ `None` 不动。
@@ -468,15 +388,6 @@ pub async fn set_web_search_config_inner(
     crate::tools::web_search::set_config_state(&state.db, &provider, tavily_api_key.as_deref())
         .await
         .map_err(|msg| AppCommandError::new(ErrorCategory::InvalidRequest, msg))
-}
-
-#[tauri::command]
-pub async fn set_web_search_config(
-    state: State<'_, Arc<AppState>>,
-    provider: String,
-    tavily_api_key: Option<String>,
-) -> Result<(), AppCommandError> {
-    set_web_search_config_inner(&state, provider, tavily_api_key).await
 }
 
 // ---------------------------------------------------------------------------
@@ -653,13 +564,6 @@ pub async fn get_app_config_inner(
     })
 }
 
-#[tauri::command]
-pub async fn get_app_config(
-    state: State<'_, Arc<AppState>>,
-) -> Result<AppConfigPayload, AppCommandError> {
-    get_app_config_inner(&state).await
-}
-
 // ---------------------------------------------------------------------------
 // Settings「通用」开关写入口(2026-08-29, settings-shell 重构)。
 // 与 `get_app_config` 组成读写对;存值语义不变(仅字面 `"false"` 关,
@@ -715,15 +619,6 @@ pub async fn set_app_config_flag_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn set_app_config_flag(
-    state: State<'_, Arc<AppState>>,
-    key: String,
-    value: bool,
-) -> Result<(), AppCommandError> {
-    set_app_config_flag_inner(&state, key, value).await
-}
-
 // ---------------------------------------------------------------------------
 // P3b(2026-08-31,评审 W1):列表型 app_config 字段的写入口。布尔专用
 // 的 `set_app_config_flag` 写不了字符串数组,新增同款白名单命令;PR3
@@ -756,15 +651,6 @@ pub async fn set_app_config_list_inner(
         .await
         .map_err(|e| anyhow::anyhow!("set_app_config_list failed: {}", e))?;
     Ok(())
-}
-
-#[tauri::command]
-pub async fn set_app_config_list(
-    state: State<'_, Arc<AppState>>,
-    key: String,
-    value: Vec<String>,
-) -> Result<(), AppCommandError> {
-    set_app_config_list_inner(&state, key, value).await
 }
 
 #[cfg(test)]

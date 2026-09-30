@@ -1,22 +1,17 @@
 //! Phase E3 (07-07-request-mode-change-tool) — `resolve_mode_change`
 //! IPC handler behavior tests.
 //!
-//! These tests verify the `resolve_mode_change` Tauri command (the
-//! LLM-driven `request_mode_change` tool's IPC resolver — frontend
-//! invokes on `允许` / `拒绝` of the `<RequestModeChangeCard>`).
+//! These tests verify `resolve_mode_change_inner` (the
+//! LLM-driven `request_mode_change` tool's resolver — the daemon
+//! route's implementation, invoked by the frontend on `允许` /
+//! `拒绝` of the `<RequestModeChangeCard>`).
 //!
-//! ## Why we test the internal function, not the IPC handler
+//! ## Why we test the internal function, not the route
 //!
-//! `resolve_mode_change` is a `#[tauri::command]` taking
-//! `State<'_, Arc<AppState>>`. We can't easily call it without
-//! `tauri::test::mock_app`, which this project doesn't use (per
-//! existing precedent: `permission_response` and other IPCs have
-//! only manual `tauri dev` smoke tests, not unit tests). The clean
-//! approach (mirroring how `set_session_mode` was refactored into
-//! `set_session_mode_internal`) is to extract the core logic into
-//! a `pub(crate)` pure function and have the IPC wrapper be a thin
-//! shell. That's exactly what `resolve_mode_change_internal` is —
-//! we test it directly here.
+//! The route layer is a thin axum shim; all logic lives in the
+//! `pub(crate)` core. The historical Tauri-command wrapper (and
+//! its `State<'_, Arc<AppState>>` shape) died with the GUI bin
+//! (de-Tauri 2026-09-30); we test the core directly.
 //!
 //! ## Coverage
 //!

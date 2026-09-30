@@ -6,7 +6,7 @@
 //! the whole god-module in.
 //!
 //! Contents:
-//! - [`AppState`] — owned by `tauri::State<Arc<AppState>>`; carries
+//! - [`AppState`] — process-wide state; carries
 //!   DB pool, LLM config + tool registry, in-flight cancellation
 //!   map, session→active-request map, read guard, and the
 //!   catalog-resolved `ProviderCatalog` (PR1 grill decision #3).
@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -65,7 +64,7 @@ pub type ProviderCatalog = HashMap<String, Arc<dyn Provider>>;
 // AppState
 // ---------------------------------------------------------------------------
 
-/// Process-wide state, owned by `tauri::State<Arc<AppState>>`.
+/// Process-wide state, owned by the daemon (one per process).
 ///
 /// Grill decision #2 (locked): the `catalog` field sits immediately
 /// after `db`, so the "data plane" (DB + provider catalog) is
@@ -249,11 +248,9 @@ pub struct AppState {
     pub stub_loaded: std::sync::Arc<crate::tools::stub::StubRegistry>,
 
     /// P2.3 C4 (2026-07-21, task `07-20-remote-access-daemon-split`):
-    /// 进程级 SSE 分发中心(`daemon::sse::SseRegistry`)。daemon 路径
-    /// 的 chat handler(C5)从这里构造 `HttpSseSink`,`GET /api/v1/stream`
-    /// 从这里 subscribe。Tauri 路径**不读**它(Tauri 用 `AppHandleSink`
-    /// 直发 IPC),所以给 Tauri 进程也初始化一个空 registry 是无害的
-    /// ——它只是没人 emit、没人 subscribe 的空壳。
+    /// 进程级 SSE 分发中心(`daemon::sse::SseRegistry`)。daemon 的
+    /// chat handler 从这里构造 `HttpSseSink`,`GET /api/v1/stream`
+    /// 从这里 subscribe。de-Tauri(2026-09-30)后这是唯一生产事件通道。
     pub sse: Arc<crate::daemon::sse::SseRegistry>,
     /// S2 (2026-08-11, task `08-11-tunnel-client`):remote 隧道管理器
     /// (design §2.4 Q-T4)。**只有 daemon bin 的 main 调 `start()`**——
@@ -280,66 +277,25 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Bootstrap app state from a Tauri `AppHandle`. Called from
-    /// `lib.rs::run`'s setup closure via `tauri::async_runtime::block_on`.
+    /// Bootstrap app state from an explicit data dir. Called by the
+    /// `everlasting-daemon` bin.
     ///
-    /// Phase 2.1 (2026-07-21, task `07-20-remote-access-daemon-split`):
-    /// this is now a thin Tauri-side wrapper that resolves
-    /// `app_data_dir` from the `AppHandle`'s `PathResolver` and
-    /// delegates to [`AppState::load_inner`]. The wrapper preserves
-    /// the existing `projects:refreshed` emit path (P1 §3.3 closure)
-    /// by passing `Some(app.clone())` so the fire-and-forget backfill
-    /// spawn can call `app.emit(...)` when stale project rows are
-    /// re-probed.
-    ///
-    /// Responsibilities (delegated to `load_inner`):
+    /// Responsibilities:
     /// 1. Load the env-derived LLM config (cold-start fallback).
     /// 2. Open the SQLite pool + run migrations.
     /// 3. Spawn the git-metadata backfill task for pre-PR2 projects.
-    /// 4. **NEW (grill decision #3)**: build the `ProviderCatalog`
-    ///    from `db::list_providers`. Failures are logged + the
-    ///    provider is skipped; the catalog is still returned
-    ///    (possibly empty) so `AppState::load` doesn't unwind on
-    ///    a single bad row.
-    pub async fn load(app: &AppHandle) -> Self {
-        let app_data_dir = app
-            .path()
-            .app_data_dir()
-            .expect("failed to resolve app_data_dir");
-        Self::load_inner(app_data_dir, Some(app.clone())).await
-    }
-
-    /// Daemon-entry bootstrap (Phase 2.1, 2026-07-21). Used by the
-    /// `bin/everlasting-daemon.rs` (P2.2) where no Tauri
-    /// `AppHandle` exists. Equivalent to [`AppState::load`] minus the
-    /// `projects:refreshed` Tauri emit — the daemon path will get
-    /// its own SSE-based system-event sink in P2.3 per design.md §2.2
-    /// / Q3 decision (single global `/api/v1/stream` + event
-    /// dispatch table). For now the backfill spawn still runs (so
-    /// the DB row updates land), but the frontend notification is
-    /// skipped because there's no AppHandle to carry the emit.
-    ///
-    /// `#[allow(dead_code)]`: the first production caller lands in
-    /// P2.2 (`src/bin/everlasting-daemon.rs`). Exercised today only
-    /// by `tests::state_load_path_consistency`.
-    #[allow(dead_code)]
+    /// 4. build the `ProviderCatalog` from `db::list_providers`.
+    ///    Failures are logged + the provider is skipped; the catalog
+    ///    is still returned (possibly empty) so this doesn't unwind
+    ///    on a single bad row.
     pub async fn load_from_dir(app_data_dir: std::path::PathBuf) -> Self {
-        Self::load_inner(app_data_dir, None).await
+        Self::load_inner(app_data_dir).await
     }
 
-    /// Shared bootstrap. `app: Option<AppHandle>` carries the Tauri
-    /// handle for the `projects:refreshed` emit (P1 §3.3 closure).
-    /// `None` is the daemon entry — backfill spawn still runs (DB
-    /// row updates land) but the Tauri emit is skipped (Phase 2.3
-    /// will replace it with an SSE-based system-event sink; see
-    /// design.md §2.2 / Q3 / R6).
-    ///
-    /// Path-consistency invariant (Phase 2.1 A5): both entry points
-    /// share this single DB-path derivation, so
-    /// `load(AppHandle).app_data_dir == load_from_dir(p).app_data_dir`
-    /// whenever `p == app.path().app_data_dir().unwrap()`. Enforced
-    /// by construction + verified by `tests::state_load_path_consistency`.
-    async fn load_inner(app_data_dir: std::path::PathBuf, app: Option<AppHandle>) -> Self {
+    /// Shared bootstrap (single entry — de-Tauri 2026-09-30 folded the
+    /// former `load(AppHandle)` wrapper into `load_from_dir`; both
+    /// historical entries always converged here).
+    async fn load_inner(app_data_dir: std::path::PathBuf) -> Self {
         let tools = crate::tools::builtin_tools();
         tracing::info!(tools_count = tools.len(), "AppState loading");
 
@@ -458,42 +414,18 @@ impl AppState {
         // a reload command. Builtins are merged in at list time.
         let subagent_cache = SubagentCache::arc();
 
-        // Startup batch backfill of pre-PR2 project rows. The fix:
-        // spawn a fire-and-forget task that re-probes the git
-        // status of every stale project, writes the result, and
-        // (when an AppHandle is available) emits a Tauri event so
-        // the frontend can refresh its in-memory list. The spawn
-        // happens AFTER migrations run and is
-        // `tauri::async_runtime::spawn`-based.
-        //
-        // Phase 2.1 (2026-07-21): the `app: Option<AppHandle>`
-        // shape carries the P1 §3.3 emit closure. Tauri path
-        // (`Some`) preserves the existing `projects:refreshed`
-        // emit; daemon path (`None`) skips the emit — Phase 2.3
-        // will re-wire it through the SSE single-global stream
-        // (design.md §2.2 / Q3 / R6).
+        // Startup batch backfill of pre-PR2 project rows: spawn a
+        // fire-and-forget task that re-probes the git status of
+        // every stale project and writes the result (the frontend
+        // re-reads via its next `list_projects`; the historical
+        // Tauri `projects:refreshed` emit died with the GUI —
+        // de-Tauri 2026-09-30).
         let backfill_pool = db.clone();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             match crate::projects::store::batch_reprobe_git_metadata(&backfill_pool).await {
                 Ok(updated) => {
                     if updated > 0 {
-                        if let Some(app) = app.as_ref() {
-                            if let Err(e) = app.emit("projects:refreshed", updated) {
-                                tracing::warn!(
-                                    error = %e,
-                                    updated,
-                                    "emit projects:refreshed failed"
-                                );
-                            }
-                        } else {
-                            // Daemon path: DB rows updated, no
-                            // AppHandle-carried emit available.
-                            // SSE re-wire lands in P2.3.
-                            tracing::debug!(
-                                updated,
-                                "projects:refreshed emit skipped (no AppHandle; daemon path)"
-                            );
-                        }
+                        tracing::debug!(updated, "projects git metadata backfill landed");
                     }
                 }
                 Err(e) => {
@@ -666,11 +598,6 @@ async fn build_provider_catalog(db: &SqlitePool) -> ProviderCatalog {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (Phase 2.1 A5 — 2026-07-21, task `07-20-remote-access-daemon-split`)
-// See the single `mod tests` block at the bottom of this file.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // CancellationGuard
 // ---------------------------------------------------------------------------
 
@@ -719,14 +646,63 @@ pub struct CancellationGuard {
 }
 
 impl Drop for CancellationGuard {
+    /// de-Tauri D9 (2026-09-30, task `09-30-de-tauri`): the historical
+    /// `tokio::spawn` (historical) here relied on tauri's
+    /// "lazily start a global runtime when none exists" semantics.
+    /// `tokio::spawn` panics outside a runtime, and silently
+    /// dropping the cleanup would leave the session **permanently
+    /// busy** (the maps keep the stale request). Strategy:
+    /// synchronous `try_lock` fast path (the maps' critical sections
+    /// are pure insert/remove — contention at Drop time is
+    /// vanishingly rare), then `Handle::try_current()` fallback
+    /// spawn when a runtime exists, then a loud `error!` so a lost
+    /// cleanup is at least observable.
     fn drop(&mut self) {
+        // Fast path 1: cancellations map.
+        let mut need_async = false;
+        if !self.skip_cancellations {
+            match self.cancellations.try_lock() {
+                Ok(mut map) => {
+                    map.remove(&self.request_id);
+                }
+                Err(_) => need_async = true,
+            }
+        }
+        // Fast path 2: session_active_request map.
+        if !self.skip_session_active {
+            match self.session_active_request.try_lock() {
+                Ok(mut map) => {
+                    map.remove(&self.session_id);
+                }
+                Err(_) => need_async = true,
+            }
+        }
+        if !need_async {
+            return;
+        }
+
+        // Slow path: at least one map is contended. Re-run the whole
+        // cleanup (both removes, honoring the skip flags) on the
+        // current runtime when one exists; otherwise the cleanup is
+        // LOST — log loudly (a stale entry means a permanently-busy
+        // session; silent loss was the exact failure D9 exists to
+        // prevent).
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::error!(
+                request_id = %self.request_id,
+                session_id = %self.session_id,
+                "CancellationGuard::drop: map contended and no tokio runtime — \
+                 cancellation cleanup LOST (session may render busy)"
+            );
+            return;
+        };
         let cancellations = self.cancellations.clone();
         let session_active_request = self.session_active_request.clone();
         let request_id = self.request_id.clone();
         let session_id = self.session_id.clone();
         let skip_session_active = self.skip_session_active;
         let skip_cancellations = self.skip_cancellations;
-        tauri::async_runtime::spawn(async move {
+        handle.spawn(async move {
             if !skip_cancellations {
                 let mut map = cancellations.lock().await;
                 map.remove(&request_id);
@@ -796,32 +772,30 @@ pub struct ToolResultPayload {
 // ---------------------------------------------------------------------------
 // ChatEventSink — abstracted emit surface (P1 RULE-A-006)
 //
-// The agent loop's only Tauri-side dependency is `AppHandle::emit`
-// for three event channels: `chat-event` / `tool:call` / `tool:result`.
-// The trait abstracts that surface so the agent loop can run
-// against a `MockEmitter` in integration tests, and the production
-// `AppHandle` simply implements the same trait (via a one-line
-// wrapper struct, see `AppHandleSink`).
+// The trait abstracts the agent loop's event-emit surface so the
+// loop can run against a `MockEmitter` in integration tests while
+// the daemon's `HttpSseSink` forwards each event over SSE in
+// production (de-Tauri 2026-09-30: the former GUI-side
+// `AppHandleSink` was removed with the GUI bin).
 //
-// The trait is split into 3 non-generic methods (one per channel)
+// The trait is split into non-generic methods (one per channel)
 // so it remains dyn-compatible — Rust requires that trait objects
 // (`dyn Trait`) do not have generic methods. Each method takes
 // the typed payload directly; serde dispatch happens at the
-// `AppHandle::emit` boundary in production, or is recorded
+// SSE serialization boundary in production, or is recorded
 // verbatim in `MockEmitter` for tests.
 // ---------------------------------------------------------------------------
 
-/// The three Tauri channels the agent loop emits on. A test
+/// The event channels the agent loop emits on. A test
 /// implementation (e.g. `MockEmitter`) records events into a Vec
-/// for assertion; the production `AppHandleSink` forwards to
-/// `app.emit(name, payload)` for live IPC dispatch.
+/// for assertion; the daemon's `HttpSseSink` forwards them over
+/// the global SSE stream.
 ///
-/// All four methods are exercised in production (P1 RULE-A-006
+/// All methods are exercised in production (P1 RULE-A-006
 /// closure, 2026-06-15): `chat_loop::run_chat_loop` dispatches
-/// every agent-loop emit through the trait, with the production
-/// `AppHandleSink` forwarding to `tauri::AppHandle::emit` for
-/// live IPC dispatch. The test variant (`MockEmitter` in
-/// `agent/tests.rs`) records events into a Vec for assertion.
+/// every agent-loop emit through the trait. The test variant
+/// (`MockEmitter` in `agent/tests.rs`) records events into a Vec
+/// for assertion.
 pub trait ChatEventSink: Send + Sync + 'static {
     /// Emit a `ChatEvent` on the `chat-event` channel.
     fn emit_chat_event(&self, payload: &ChatEventPayload);
@@ -844,8 +818,8 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// overrides it to record a `TranscriptKind
     /// ::PermissionAskResolved` entry into the worker's
     /// transcript (for historical-replay rendering in the drawer).
-    /// `AppHandleSink` and the test `MockEmitter` use the default
-    /// no-op (no parent-side audit / IPC for worker resolve).
+    /// The test `MockEmitter` and the daemon's `HttpSseSink`
+    /// use the default no-op (no parent-side audit for worker resolve).
     fn emit_permission_ask_resolved(&self, _rid: &str, _outcome: &str) {}
     /// Emit a `ToolQuestionPayload` on the `tool:question`
     /// channel (2026-06-30, `ask_user_question` task). Used by
@@ -855,7 +829,7 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// Default impl is a **silent** no-op (not `warn!` — matches
     /// `emit_permission_ask_resolved`'s default style; a noisy warn
     /// on every call would spam logs if a future sink forgot to
-    /// override and the tool somehow fired). Only `AppHandleSink`
+    /// override and the tool somehow fired). Only the daemon's `HttpSseSink`
     /// (production) and the test `MockEmitter` implement it for real;
     /// `SubagentBufferSink` inherits the no-op — but
     /// `ask_user_question` is structurally disabled for workers (see
@@ -873,8 +847,8 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// Default impl is a **silent** no-op (same shape as
     /// `emit_tool_question`'s default — a noisy warn on every
     /// call would spam logs if a future sink forgot to override).
-    /// Only `AppHandleSink` (production) and the test
-    /// `MockEmitter` implement it for real; `SubagentBufferSink`
+    /// Only the daemon's `HttpSseSink` (production) and the
+    /// test `MockEmitter` implement it for real; `SubagentBufferSink`
     /// inherits the no-op — but `request_mode_change` is
     /// structurally disabled for workers (see
     /// `agent::subagent::STRUCTURALLY_DISABLED`), so the worker
@@ -893,7 +867,7 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// Default impl is a **silent** no-op (same shape as
     /// `emit_tool_question` / `emit_mode_change_request` —
     /// a noisy warn on every call would spam logs if a future
-    /// sink forgot to override). Only `AppHandleSink`
+    /// sink forgot to override). Only the daemon's `HttpSseSink`
     /// (production) and the test `MockEmitter` implement it for
     /// real; `SubagentBufferSink` inherits the no-op — but
     /// `request_task_state_transition` is structurally disabled
@@ -925,8 +899,8 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// `SubagentBufferSink`, which overrides it to stash the snapshot
     /// for `run_subagent` to read after the loop returns (mirrors
     /// `emit_permission_ask_resolved`'s default-no-op shape).
-    /// `AppHandleSink` and the test `MockEmitter` use the default
-    /// no-op — they have no resume consumer.
+    /// The daemon's `HttpSseSink` and the test `MockEmitter` use the
+    /// default no-op — they have no resume consumer.
     fn record_worker_messages(&self, _messages: &[crate::llm::types::ChatMessage]) {
         // Silent no-op — see the doc comment above.
     }
@@ -941,8 +915,7 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// 19-min discussion), observer present → the normal 120s window.
     ///
     /// Default `true` is the CONSERVATIVE answer ("assume someone is
-    /// watching") — `AppHandleSink` (Tauri GUI, the window is the
-    /// observer) and every test sink inherit it unchanged. The only
+    /// watching") — every test sink inherits it unchanged. The only
     /// production override is the daemon's `HttpSseSink`, whose
     /// global SSE registry knows the real subscriber count. The
     /// `ask_no_timeout` user switch takes precedence over BOTH paths
@@ -952,112 +925,46 @@ pub trait ChatEventSink: Send + Sync + 'static {
     }
 }
 
-/// Production `AppHandle` adapter. The Tauri trait `Emitter` is in
-/// scope; we forward each method to `app.emit(name, payload)`.
-pub struct AppHandleSink {
-    pub app: AppHandle,
-}
-
-impl ChatEventSink for AppHandleSink {
-    fn emit_chat_event(&self, payload: &ChatEventPayload) {
-        if let Err(e) = self.app.emit("chat-event", payload.clone()) {
-            tracing::warn!(error = %e, "AppHandleSink: chat-event emit failed");
-        }
-    }
-    fn emit_tool_call(&self, payload: &ToolCallPayload) {
-        if let Err(e) = self.app.emit("tool:call", payload.clone()) {
-            tracing::warn!(error = %e, "AppHandleSink: tool:call emit failed");
-        }
-    }
-    fn emit_tool_result(&self, payload: &ToolResultPayload) {
-        if let Err(e) = self.app.emit("tool:result", payload.clone()) {
-            tracing::warn!(error = %e, "AppHandleSink: tool:result emit failed");
-        }
-    }
-    fn emit_permission_ask(&self, payload: PermissionAskPayload) {
-        if let Err(e) = self.app.emit("permission:ask", payload) {
-            tracing::warn!(error = %e, "AppHandleSink: permission:ask emit failed");
-        }
-    }
-    fn emit_tool_question(&self, payload: &crate::agent::question_store::ToolQuestionPayload) {
-        // 2026-06-30 (`ask_user_question` task): production
-        // `AppHandleSink` forwards the question payload to the
-        // Tauri `tool:question` channel. The frontend
-        // `streamController` listens on this channel (Phase C,
-        // task `06-30-ask-user-question-tool`) and inserts the
-        // payload into `questionCardsStore.pendingBySession`.
-        if let Err(e) = self.app.emit("tool:question", payload.clone()) {
-            tracing::warn!(error = %e, "AppHandleSink: tool:question emit failed");
-        }
-    }
-    fn emit_mode_change_request(&self, payload: &ModeChangePayload) {
-        // 2026-07-07 (`request_mode_change` task): production
-        // `AppHandleSink` forwards the mode-change payload to
-        // the Tauri `mode:change:request` channel. The
-        // frontend `streamController` listens on this channel
-        // (Phase B, task `07-07-request-mode-change-tool`) and
-        // inserts the payload into
-        // `questionCardsStore.pendingBySession` under the
-        // `kind: "mode_change"` discriminator.
-        if let Err(e) = self.app.emit("mode:change:request", payload.clone()) {
-            tracing::warn!(error = %e, "AppHandleSink: mode:change:request emit failed");
-        }
-    }
-    fn emit_task_state_transition(&self, payload: &TaskStateTransitionPayload) {
-        // 2026-07-08 (`07-08-workflow-integration` Phase 3
-        // Step 3.1): production `AppHandleSink` forwards the
-        // task-state-transition payload to the Tauri
-        // `task:state:transition:request` channel. The frontend
-        // will listen on this channel and insert the payload
-        // into `questionCardsStore.pendingBySession` under
-        // the `kind: "task_state_transition"` discriminator.
-        if let Err(e) = self
-            .app
-            .emit("task:state:transition:request", payload.clone())
-        {
-            tracing::warn!(error = %e, "AppHandleSink: task:state:transition:request emit failed");
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Tests (Phase 2.1 A5 — 2026-07-21, task `07-20-remote-access-daemon-split`)
+// Tests
 //
-// Path-consistency invariant: `AppState::load(AppHandle)` and
-// `AppState::load_from_dir(PathBuf)` must produce identical
-// `app_data_dir` + `db_path` derivations whenever the input PathBuf
-// equals `app.path().app_data_dir().unwrap()`. The invariant is
-// enforced structurally — the `AppHandle` wrapper is a 3-line
-// delegation that resolves `app_data_dir` and forwards to the shared
-// private `load_inner`. The tests below exercise the `PathBuf` entry
-// end-to-end (real tempdir + real SqlitePool + real migrations) so
-// any drift in the inner DB-path derivation would surface here. The
-// `AppHandle` half cannot be exercised without `tauri::test::mock_app`
-// (which this project doesn't use, per the convention documented in
-// `commands/question.rs`), so its correctness is verified by code
-// review + the path round-trip assertion on `state.app_data_dir`.
+// `load_from_dir(PathBuf)` is the single bootstrap entry (de-Tauri
+// 2026-09-30 folded the former `load(AppHandle)` wrapper away). The
+// test below exercises the entry end-to-end (real tempdir + real
+// SqlitePool + real migrations) so any drift in the DB-path
+// derivation surfaces here.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// de-Tauri R4(2026-09-30, task `09-30-de-tauri`)——**data dir 兼容
+    /// 防漂锚点**:identifier 从 tauri.conf.json 迁到 build.rs 常量后,
+    /// 该值决定 `resolve_data_dir()` = `dirs::data_dir().join(...)`,
+    /// 即全体用户 SQLite DB / 附件 / 群聊转录的落盘根。任何漂移 =
+    /// 静默搬走数据目录。历史上 bin target 里的守卫
+    /// (`file_name()` 对比 `env!`)是自指断言——值漂则两边一起漂,
+    /// 恒不红;本断言用字面量对照,漂移即红,且落在 lib target
+    /// (CI `--lib` 恒跑;bin 内测试 CI 从不执行)。
+    #[test]
+    fn app_identifier_is_frozen_for_data_dir_compatibility() {
+        assert_eq!(
+            env!("EVERLASTING_APP_IDENTIFIER"),
+            "dev.everlasting.app",
+            "EVERLASTING_APP_IDENTIFIER drifted — user data dir moved! \
+             See build.rs PATH-COMPAT ANCHOR (task 09-30-de-tauri)"
+        );
+    }
+
     /// P2.1 A5: `load_from_dir(PathBuf)` produces a state whose
     /// `app_data_dir` equals the input, whose SQLite file lives at
     /// `<input>/everlasting.db`, and whose migrations have been
     /// applied (the `sessions` table is queryable).
     ///
-    /// This is the `PathBuf`-half of the path-consistency
-    /// invariant. The `AppHandle`-half is verified structurally:
-    /// `AppState::load(app)` resolves `app_data_dir` via
-    /// `app.path().app_data_dir().unwrap()` and forwards to the
-    /// same private `load_inner`, so both entry points share a
-    /// single DB-path derivation.
-    ///
     /// `multi_thread` flavor matches `tests_cancellation.rs` — the
-    /// fire-and-forget backfill spawn inside `load_inner` calls
-    /// `tauri::async_runtime::spawn`, which borrows the current
-    /// Tokio runtime via the Tauri shim.
+    /// fire-and-forget backfill spawn inside `load_inner` borrows
+    /// the current Tokio runtime.
     #[tokio::test(flavor = "multi_thread")]
     async fn state_load_path_consistency() {
         let tmp = tempfile::tempdir().expect("failed to create tempdir");
@@ -1104,11 +1011,6 @@ mod tests {
 
         // 4. `home_dir` consistency note: `home_dir` is NOT stored
         //    on `AppState` (it's resolved per-IPC via
-        //    `app.path().home_dir()` — see `commands::config::get_home_dir`).
-        //    The "home_dir" half of the path-consistency invariant
-        //    is therefore trivially satisfied for the `PathBuf`
-        //    entry (no resolution happens at all inside
-        //    `load_inner`), and the `AppHandle` half remains the
-        //    Tauri wrapper's responsibility at IPC time.
+        //    `dirs::home_dir()` — see `commands::config::get_home_dir_inner`).
     }
 }

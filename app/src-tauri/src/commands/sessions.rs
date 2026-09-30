@@ -11,8 +11,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::background_shell::BackgroundShellRegistry;
 use crate::db;
@@ -43,14 +41,6 @@ pub async fn list_sessions_inner(
         }
     }
     Ok(sessions)
-}
-
-#[tauri::command]
-pub async fn list_sessions(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-) -> Result<Vec<db::SessionSummary>, AppCommandError> {
-    list_sessions_inner(&state, project_id).await
 }
 
 pub async fn create_session_inner(
@@ -169,30 +159,6 @@ pub async fn create_session_in_pool(
     .map_err(|e| anyhow::anyhow!("create_session: db insert failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn create_session(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    initial_cwd: String,
-    model: Option<String>,
-    // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E2):
-    // optional session type + metadata. Both null in the
-    // classic-chat path (the existing IPC contract for the 1
-    // production caller — `chat.ts::createNewSession`).
-    session_type: Option<String>,
-    metadata: Option<serde_json::Value>,
-) -> Result<db::SessionRow, AppCommandError> {
-    create_session_inner(
-        &state,
-        project_id,
-        initial_cwd,
-        model,
-        session_type,
-        metadata,
-    )
-    .await
-}
-
 pub async fn load_session_inner(
     state: &Arc<AppState>,
     session_id: String,
@@ -200,14 +166,6 @@ pub async fn load_session_inner(
     db::load_session(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("load_session failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn load_session(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Option<db::LoadedSession>, AppCommandError> {
-    load_session_inner(&state, session_id).await
 }
 
 // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E3/E5):
@@ -265,15 +223,6 @@ pub async fn update_session_metadata_inner(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn update_session_metadata(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    metadata: serde_json::Value,
-) -> Result<(), AppCommandError> {
-    update_session_metadata_inner(&state, session_id, metadata).await
-}
-
 pub async fn diff_worktree_inner(
     state: &Arc<AppState>,
     session_id: String,
@@ -306,14 +255,6 @@ pub async fn diff_worktree_inner(
 
     git::diff::diff_worktree(std::path::Path::new(worktree_path), &session_id)
         .map_err(|e| anyhow::anyhow!("diff_worktree: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn diff_worktree(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<git::diff::DiffResult, AppCommandError> {
-    diff_worktree_inner(&state, session_id).await
 }
 
 pub async fn delete_session_inner(
@@ -507,14 +448,6 @@ pub async fn delete_session_inner(
         .map_err(|e| anyhow::anyhow!("delete_session failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn delete_session(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<(), AppCommandError> {
-    delete_session_inner(&state, session_id).await
-}
-
 /// B3 `/clear`: clear the current session's messages but keep the
 /// session row (title/color/mode/model/project/timestamps).
 ///
@@ -553,14 +486,6 @@ pub async fn clear_session_messages_inner(
         .map_err(|e| anyhow::anyhow!("clear_session_messages failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn clear_session_messages(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<(), AppCommandError> {
-    clear_session_messages_inner(&state, session_id).await
-}
-
 pub async fn rename_session_inner(
     state: &Arc<AppState>,
     session_id: String,
@@ -577,15 +502,6 @@ pub async fn rename_session_inner(
         .map_err(|e| anyhow::anyhow!("rename_session failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn rename_session(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    new_title: String,
-) -> Result<(), AppCommandError> {
-    rename_session_inner(&state, session_id, new_title).await
-}
-
 pub async fn set_session_color_inner(
     state: &Arc<AppState>,
     session_id: String,
@@ -594,15 +510,6 @@ pub async fn set_session_color_inner(
     db::set_session_color(&state.db, &session_id, color_tag)
         .await
         .map_err(|e| anyhow::anyhow!("set_session_color failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn set_session_color(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    color_tag: Option<i32>,
-) -> Result<(), AppCommandError> {
-    set_session_color_inner(&state, session_id, color_tag).await
 }
 
 /// W1 (Workflow integration, Step 0.2 — 2026-07-08):
@@ -640,15 +547,6 @@ pub async fn set_session_workflow_enabled_inner(
     db::set_session_workflow_enabled(&state.db, &session_id, enabled)
         .await
         .map_err(|e| anyhow::anyhow!("set_session_workflow_enabled failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn set_session_workflow_enabled(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    enabled: bool,
-) -> Result<(), AppCommandError> {
-    set_session_workflow_enabled_inner(&state, session_id, enabled).await
 }
 
 /// W1 (Workflow integration, Step 2.2 — 2026-07-08):
@@ -772,15 +670,6 @@ async fn remap_task_plugin_on_switch(db: &sqlx::SqlitePool, session_id: &str, ne
     );
 }
 
-#[tauri::command]
-pub async fn set_session_plugin_name(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    name: String,
-) -> Result<(), AppCommandError> {
-    set_session_plugin_name_inner(&state, session_id, name).await
-}
-
 /// W1 (Workflow integration, Step 2.2 — 2026-07-08):
 /// discover available workflow plugins under
 /// `<project>/.everlasting/workflow/<dir>/workflow.json`.
@@ -792,18 +681,6 @@ pub async fn set_session_plugin_name(
 /// `workflow.json` exists inside it. Empty directories
 /// are ignored (no warning — they're typical scratch
 /// state). Missing root dir → empty list (matches the
-/// `load_workflow` not-found contract: no plugins = just
-/// the default dev workflow).
-///
-/// Returns `Vec<String>` (just names, not full
-/// `WorkflowDef`s — `PluginSelect` only needs the
-/// identifier; `load_workflow` does the heavy lifting on
-/// the engine side).
-#[tauri::command]
-pub async fn list_workflow_plugins(project_path: String) -> Result<Vec<String>, AppCommandError> {
-    Ok(crate::agent::workflow::list_plugins(&project_path))
-}
-
 // ---------------------------------------------------------------------------
 // F5 (LLM Latency Tracking): per-message latency + per-tool duration IPCs
 //
@@ -874,28 +751,6 @@ pub async fn update_message_latency_inner(
     Ok(true)
 }
 
-#[tauri::command]
-pub async fn update_message_latency(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    seq: i64,
-    ttfb_ms: Option<i64>,
-    gen_ms: Option<i64>,
-    total_ms: Option<i64>,
-    thinking_ms: Option<i64>,
-) -> Result<bool, AppCommandError> {
-    update_message_latency_inner(
-        &state,
-        session_id,
-        seq,
-        ttfb_ms,
-        gen_ms,
-        total_ms,
-        thinking_ms,
-    )
-    .await
-}
-
 /// Patch a `duration_ms` field onto the `tool_result` block
 /// inside `messages.content` JSON for the given `tool_use_id`.
 /// Per PRD ADR-lite decision 1, the per-tool duration lives in
@@ -917,16 +772,6 @@ pub async fn record_tool_duration_inner(
     crate::db::record_tool_duration(&state.db, &session_id, &tool_use_id, duration_ms)
         .await
         .map_err(|e| anyhow::anyhow!("record_tool_duration failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn record_tool_duration(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    tool_use_id: String,
-    duration_ms: i64,
-) -> Result<bool, AppCommandError> {
-    record_tool_duration_inner(&state, session_id, tool_use_id, duration_ms).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,16 +927,6 @@ pub async fn edit_user_message_inner(
     Ok(EditMessageOutcome { cleared_queued })
 }
 
-#[tauri::command]
-pub async fn edit_user_message(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    message_seq: i64,
-    new_content: MessageContent,
-) -> Result<EditMessageOutcome, AppCommandError> {
-    edit_user_message_inner(&state, session_id, message_seq, new_content).await
-}
-
 // ---------------------------------------------------------------------------
 // Group-chat cache rates (08-10-group-chat-cache-rate)
 // ---------------------------------------------------------------------------
@@ -1110,14 +945,6 @@ pub async fn group_chat_cache_rates_inner(
     db::trace::list_speaker_cache_usage(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("group_chat_cache_rates failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn group_chat_cache_rates(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Vec<db::trace::SpeakerCacheUsage>, AppCommandError> {
-    group_chat_cache_rates_inner(&state, session_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,14 +967,6 @@ pub async fn group_chat_token_usage_inner(
         .map_err(|e| anyhow::anyhow!("group_chat_token_usage failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn group_chat_token_usage(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<db::trace::GroupChatTokenUsage, AppCommandError> {
-    group_chat_token_usage_inner(&state, session_id).await
-}
-
 // ---------------------------------------------------------------------------
 // D2 cross-session full-text search (08-17-cross-session-search)
 // ---------------------------------------------------------------------------
@@ -1168,16 +987,6 @@ pub async fn search_messages_inner(
     db::search::search_messages(&state.db, &query, project_id.as_deref(), limit)
         .await
         .map_err(|e| anyhow::anyhow!("search_messages failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn search_messages(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-    project_id: Option<String>,
-    limit: Option<u32>,
-) -> Result<Vec<db::search::MessageSearchHit>, AppCommandError> {
-    search_messages_inner(&state, query, project_id, limit).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1214,15 +1023,6 @@ pub async fn list_group_chat_sessions_inner(
     .map_err(|e| anyhow::anyhow!("list_group_chat_sessions failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn list_group_chat_sessions(
-    state: State<'_, Arc<AppState>>,
-    project_id: Option<String>,
-    stop_reason: Option<String>,
-) -> Result<Vec<db::search_group_chat::GroupChatSessionHit>, AppCommandError> {
-    list_group_chat_sessions_inner(&state, project_id, stop_reason).await
-}
-
 /// Keyword search over group-chat discussion sessions: a hit when the
 /// query matches title / discussion_summary / task_name / any
 /// participant name (LIKE, wildcards escaped). Empty query degrades to
@@ -1240,16 +1040,6 @@ pub async fn search_group_chat_discussions_inner(
     )
     .await
     .map_err(|e| anyhow::anyhow!("search_group_chat_discussions failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn search_group_chat_discussions(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-    project_id: Option<String>,
-    stop_reason: Option<String>,
-) -> Result<Vec<db::search_group_chat::GroupChatSessionHit>, AppCommandError> {
-    search_group_chat_discussions_inner(&state, query, project_id, stop_reason).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1341,15 +1131,6 @@ pub async fn compact_session_inner(
             "摘要落库失败,上下文未改动",
         )),
     }
-}
-
-#[tauri::command]
-pub async fn compact_session(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    focus: Option<String>,
-) -> Result<crate::agent::compaction::ManualCompactionOutcome, AppCommandError> {
-    compact_session_inner(&state, session_id, focus).await
 }
 
 /// 接力子会话标题:`接力: {parent 去掉一层已有 "接力: " 前缀}` —— 防
@@ -1617,13 +1398,4 @@ pub async fn handoff_session_inner(
     };
 
     persist_handoff_child(&state.db, &loaded.session, &gen, focus.as_deref()).await
-}
-
-#[tauri::command]
-pub async fn handoff_session(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    focus: Option<String>,
-) -> Result<crate::agent::compaction::HandoffOutcome, AppCommandError> {
-    handoff_session_inner(&state, session_id, focus).await
 }

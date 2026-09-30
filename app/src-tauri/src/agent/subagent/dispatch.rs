@@ -107,7 +107,7 @@ pub(crate) async fn run_subagent(
     // task 07-03-subagent-frontmatter-model: the process-wide provider
     // catalog, threaded so the worker can resolve its own provider when
     // `def.model` is `Some(model_id)`. `None` in unit tests (no
-    // `AppState`) and on any production path without an `AppHandle`;
+    // `AppState`) and on any production path without a sink;
     // `run_subagent` falls back to the parent provider on `None` or
     // catalog miss (see `resolve_worker_provider` below). The value is
     // `Arc<RwLock<ProviderCatalog>>` (clone-cheap) so the caller can
@@ -130,15 +130,15 @@ pub(crate) async fn run_subagent(
     parent_token: &CancellationToken,
     _parent_sink: &Arc<dyn ChatEventSink>,
     // P2.4 C5 (2026-07-22): the worker's `SubagentEventSink`,
-    // replacing the `app_handle: Option<AppHandle>` 渐进方案.
+    // replacing the historical `Option<AppHandle>` 渐进方案.
     // Injected into the worker's `SubagentBufferSink` (via
     // `new_with_event_sink`) so worker `subagent:event` /
     // `subagent:finished` reach the transport live. Tauri passes
-    // `AppHandleSubagentSink` (IPC); daemon passes
+    // Tauri IPC (historical); daemon passes
     // `HttpSseSubagentSink` (SSE — was buffer-only pre-C5, the
     // gap this closes); tests pass `ThreadLocalSubagentSink`. The
     // sibling `catalog` param (line ~244) covers the model-
-    // resolution use the old `app_handle` also served.
+    // resolution the old `app_handle` field also served.
     worker_event_sink: Arc<dyn SubagentEventSink>,
     // L3a (2026-06-24) / L3b PR2 (2026-06-27): when `true`, the
     // worker's toolset is additionally forced down to read-only

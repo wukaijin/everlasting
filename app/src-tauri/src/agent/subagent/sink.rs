@@ -22,10 +22,10 @@ pub(crate) mod events;
 #[allow(unused_imports)]
 pub(crate) use events::*;
 
-// Test-only thread-local collector for `subagent:event` IPC
+// Test-only thread-local collector for `subagent:event` wire
 // payloads. The test constructor `SubagentBufferSink::new_with_collector`
-// arms this cell; `record()` forwards the IPC payload here when
-// no `app_handle` is wired. Production code never reads the
+// arms this cell; `record()` forwards the wire payload here when
+// no event sink is wired. Production code never reads the
 // cell (the cell is always `None`). The
 // `Arc<StdMutex<Vec>>` lets the test snapshot the collected
 // payloads after the run.
@@ -33,9 +33,9 @@ pub(crate) use events::*;
 // The thread-local is declared at module scope (not under
 // `#[cfg(test)]`) because `record()` consults it from the
 // production code path — without the declaration, a non-test
-// binary that constructs a sink with `app_handle = None` (which
-// the codebase never does in production, but the compiler still
-// has to verify the code path) would fail to compile. The cell
+// binary that constructs a sink with a bare thread-local sink
+// (which the codebase never does in production, but the compiler
+// still has to verify the code path) would fail to compile. The cell
 // stays `None` for the entire production lifetime; only test
 // code arms it.
 thread_local! {
@@ -57,13 +57,12 @@ thread_local! {
 /// PR3: ToolCallCard expand UI).
 ///
 /// **PR2 hotfix (B6 PR3, 2026-06-20)**: each emit ALSO fires the
-/// `subagent:event` Tauri event on the parent `AppHandle`, so the
+/// `subagent:event` wire event through the injected sink, so the
 /// frontend `<SubagentDrawer>` (PR3b) can stream the worker's
 /// transcript live (debounced 200ms in the frontend store) without
-/// waiting for the worker to finish. The `app_handle` is `None` in
-/// tests where no Tauri runtime is present — the emit becomes a
-/// no-op and the transcript-only path still works (test coverage
-/// of `transcript_snapshot` is unchanged).
+/// waiting for the worker to finish. In tests the thread-local
+/// sink makes the emit a no-op and the transcript-only path still
+/// works (test coverage of `transcript_snapshot` is unchanged).
 pub struct SubagentBufferSink {
     pub(crate) transcript: StdMutex<Vec<TranscriptEntry>>,
     /// Accumulated assistant text deltas. Read by `run_subagent`
@@ -142,27 +141,11 @@ pub struct SubagentBufferSink {
     /// per_turn_usage.len() at exit.
     pub(crate) turns_completed: std::sync::atomic::AtomicU64,
     /// transport-abstraction 2026-07-20 (P1.3): the worker's
-    /// event-injection sink. Replaces the `Option<AppHandle>` +
-    /// inline `app.emit` + `TEST_COLLECTOR` branches that used to
-    /// live in `record()` and `emit_permission_ask`. Production
-    /// injects `Arc::new(AppHandleSubagentSink { app: app_handle })`;
+    /// event-injection sink. The daemon injects its SSE sink;
     /// tests inject `Arc::new(ThreadLocalSubagentSink)`. The
-    /// `Option<tauri::AppHandle>` field is kept below ONLY because
-    /// the existing test constructor `new_with_collector` (which
-    /// routes through a thread-local cell) was easier to thread
-    /// through this way; new code should use
-    /// `new_with_event_sink` instead.
+    /// historical `Option<AppHandle>` field died with the GUI
+    /// (de-Tauri 2026-09-30).
     pub(crate) event_sink: Arc<dyn super::SubagentEventSink>,
-    /// PR2 hotfix (B6 PR3, 2026-06-20): kept for the
-    /// `new_with_collector` test constructor (which arms a
-    /// thread-local collector; the collector path predates the
-    /// `SubagentEventSink` trait). Production constructors
-    /// (`new` / `new_without_app_handle`) leave this as `None`.
-    /// The field is no longer read by `record()` /
-    /// `emit_permission_ask` (those route through the trait) but
-    /// stays for `new_with_collector`'s use.
-    #[allow(dead_code)]
-    pub(crate) app_handle: Option<tauri::AppHandle>,
     /// PR2 hotfix: the worker's `run_id` (the `parent_rid-sub-<seq>`
     /// string `run_subagent` builds at subagent/dispatch.rs). Carried
     /// on the sink so each `subagent:event` payload can identify
@@ -201,11 +184,11 @@ pub struct SubagentBufferSink {
 }
 
 impl SubagentBufferSink {
-    /// Construct a sink without Tauri IPC (test path). The emit
-    /// side becomes a silent no-op; transcript accumulation works
-    /// identically.
-    #[allow(dead_code)] // exposed for unit tests that exercise the sink in isolation
-    pub fn new_without_app_handle(run_id: String, session_id: String) -> Self {
+    /// Construct a sink without an event sink (worker-internal /
+    /// test path). The emit side becomes a silent no-op; transcript
+    /// accumulation works identically.
+    #[allow(dead_code)] // exposed for tests + finalize.rs' sink-less worker path
+    pub fn new_without_ipc(run_id: String, session_id: String) -> Self {
         Self {
             transcript: StdMutex::new(Vec::new()),
             text_parts: StdMutex::new(Vec::new()),
@@ -216,7 +199,6 @@ impl SubagentBufferSink {
             was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
             turns_completed: std::sync::atomic::AtomicU64::new(0),
             event_sink: Arc::new(super::ThreadLocalSubagentSink),
-            app_handle: None,
             run_id,
             session_id,
             tool_call_received_at: StdMutex::new(HashMap::new()),
@@ -227,10 +209,8 @@ impl SubagentBufferSink {
     /// Construct a sink with an explicitly-injected
     /// `SubagentEventSink`. P2.4 C5 (2026-07-22): this is now the
     /// SINGLE production constructor — `dispatch.rs` injects the
-    /// transport's sink (Tauri `AppHandleSubagentSink` / daemon
-    /// `HttpSseSubagentSink` / test `ThreadLocalSubagentSink`)
-    /// here, replacing the old `new` / `new_without_app_handle`
-    /// AppHandle split.
+    /// transport's sink (daemon `HttpSseSubagentSink` / test
+    /// `ThreadLocalSubagentSink`) here.
     pub fn new_with_event_sink(
         run_id: String,
         session_id: String,
@@ -246,7 +226,6 @@ impl SubagentBufferSink {
             was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
             turns_completed: std::sync::atomic::AtomicU64::new(0),
             event_sink,
-            app_handle: None,
             run_id,
             session_id,
             tool_call_received_at: StdMutex::new(HashMap::new()),
@@ -254,10 +233,9 @@ impl SubagentBufferSink {
         }
     }
 
-    /// Construct a sink whose IPC path is delegated to an injected
-    /// collector. The collector runs in place of `app_handle.emit`
-    /// so tests can assert the exact IPC payload shape without
-    /// needing a real Tauri runtime. Used by the
+    /// Construct a sink whose wire path is delegated to an injected
+    /// collector, so tests can assert the exact wire payload shape
+    /// without a live SSE stream. Used by the
     /// `subagent_buffer_sink_emits_ipc_event` test to lock the
     /// `subagent:event` wire shape end-to-end.
     #[cfg(test)]
@@ -269,9 +247,7 @@ impl SubagentBufferSink {
         // transport-abstraction 2026-07-20 (P1.3): wire the
         // collector through the `SubagentEventSink` trait
         // (`arm_test_collector` arms a thread-local cell that
-        // `ThreadLocalSubagentSink` reads). The `app_handle`
-        // field stays `None` so the test path is unchanged
-        // from the caller's perspective.
+        // `ThreadLocalSubagentSink` reads).
         let sink = Self {
             transcript: StdMutex::new(Vec::new()),
             text_parts: StdMutex::new(Vec::new()),
@@ -282,7 +258,6 @@ impl SubagentBufferSink {
             was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
             turns_completed: std::sync::atomic::AtomicU64::new(0),
             event_sink: Arc::new(super::ThreadLocalSubagentSink),
-            app_handle: None,
             run_id,
             session_id,
             tool_call_received_at: StdMutex::new(HashMap::new()),

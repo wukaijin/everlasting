@@ -32,13 +32,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::{run_chat_loop, CallerRole, ChatLoopDeps, ChatLoopRequest};
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
-use crate::agent::subagent::{AppHandleSubagentSink, SubagentEventSink};
+use crate::agent::subagent::SubagentEventSink;
 use crate::error::AppCommandError;
 use crate::llm::{ChatEvent, ChatMessage};
 use crate::state::{AppState, ChatEventPayload, ChatEventSink, ProviderCatalog};
@@ -49,76 +48,6 @@ use crate::state::{AppState, ChatEventPayload, ChatEventSink, ProviderCatalog};
 // during the RULE-A-006 closure migration (2026-06-15). See
 // `chat_loop::build_turn_latency` for the implementation.
 // ---------------------------------------------------------------------------
-
-/// `chat` Tauri command entry. Returns immediately after spawning
-/// the agent loop; the actual work runs in the background and
-/// communicates with the frontend via `chat-event` / `tool:call` /
-/// `tool:result` Tauri events.
-///
-/// P2.3 C5 (2026-07-21): this is now a thin wrapper that builds the
-/// Tauri `AppHandleSink` and forwards to [`chat_inner`] — the
-/// transport-agnostic orchestration shared with the daemon's HTTP
-/// `chat` handler (`daemon::routes::agent`). The Tauri path passes
-/// `Some(app)` so `run_chat_loop` can wire the worker's
-/// `SubagentBufferSink` with a live IPC emit; the daemon path passes
-/// `None` (渐进方案 — worker events stay buffer-only on the HTTP path
-/// until the full `SubagentEventSink` injection lands; parent chat is
-/// fully wired via `HttpSseSink`).
-#[tauri::command]
-pub async fn chat(
-    request_id: String,
-    session_id: String,
-    messages: Vec<ChatMessage>,
-    state: State<'_, Arc<AppState>>,
-    app: AppHandle,
-    // D3 PR3 (2026-06-17): resend context. When the user clicks
-    // Resend on an existing user message, the frontend fires
-    // `chat` again with the same content (the original user
-    // message is still in `messages`) plus this optional seq.
-    // The agent loop's user-message persist site detects the
-    // flag and writes a `resend_message` audit row (best-
-    // effort). `None` for normal first-time sends. Field
-    // name is snake_case to match the other IPC args; serde
-    // auto-converts the JS-side `resendSeq: number | null`.
-    #[allow(non_snake_case)] resendSeq: Option<i64>,
-    // explicit-agent-dispatch (2026-06-30): `@@<agent> <task>` prefix
-    // parsed by the frontend (`chat.ts send()`). When `Some`,
-    // `run_chat_loop`'s turn-1 prefix short-circuits the LLM and
-    // dispatches the named worker directly (no `provider.stream`).
-    // `None` for normal sends. Mutually exclusive with `resendSeq`
-    // (a resend never carries a forced dispatch).
-    #[allow(non_snake_case)] forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
-) -> Result<ChatAcceptance, AppCommandError> {
-    // Build the `ChatEventSink` adapter BEFORE delegating so the
-    // pre-flight error path inside `chat_inner` also emits through
-    // the trait (no direct `app.emit` — closes the bypass flagged in
-    // REVIEW-remote-access-research-2026-07-20 §P0-D). The sink
-    // carries the only `app.clone()` it needs; `chat_inner` reuses
-    // the same trait object for both pre-flight + the spawn closure.
-    let sink: Arc<dyn ChatEventSink> = Arc::new(crate::state::AppHandleSink { app: app.clone() });
-    // P2.4 C5 (2026-07-22): the worker's `SubagentEventSink` — Tauri
-    // path forwards worker `subagent:event` over IPC. The daemon path
-    // injects `HttpSseSubagentSink` instead (daemon/routes/agent.rs);
-    // both flow through `new_with_event_sink` in dispatch.rs.
-    let worker_event_sink: Arc<dyn SubagentEventSink> =
-        Arc::new(AppHandleSubagentSink { app: app.clone() });
-    chat_inner(
-        state.inner(),
-        crate::agent::chat::ChatEntry {
-            request_id,
-            session_id,
-            messages,
-            sink,
-            worker_catalog: Some(state.inner().catalog.clone()),
-            worker_event_sink,
-            resend_seq: resendSeq,
-            forced_dispatch: forcedDispatch,
-            origin: None,
-            resume_group_chat: None,
-        },
-    )
-    .await
-}
 
 // ---------------------------------------------------------------------------
 // GCE P1a (2026-09-06, task 09-06-gc-p1a-checkpoint-resume):
@@ -235,22 +164,6 @@ pub(crate) async fn resume_group_chat_inner(
     .await
 }
 
-/// `resume_group_chat` Tauri command entry (GUI's 续跑 button).
-/// Thin wrapper: builds the `AppHandleSink` and forwards to
-/// [`resume_group_chat_inner`] — returns `Started` on acceptance and
-/// the discussion streams over the usual `chat-event` channel.
-#[tauri::command]
-pub async fn resume_group_chat(
-    session_id: String,
-    state: State<'_, Arc<AppState>>,
-    app: AppHandle,
-) -> Result<ChatAcceptance, AppCommandError> {
-    let sink: Arc<dyn ChatEventSink> = Arc::new(crate::state::AppHandleSink { app: app.clone() });
-    let worker_event_sink: Arc<dyn SubagentEventSink> =
-        Arc::new(AppHandleSubagentSink { app: app.clone() });
-    resume_group_chat_inner(&state, session_id, sink, worker_event_sink).await
-}
-
 /// Transport-agnostic chat orchestration (P2.3 C5, 2026-07-21).
 ///
 /// Shared by the Tauri `chat` command (sink = `AppHandleSink`,
@@ -260,11 +173,11 @@ pub async fn resume_group_chat(
 /// here for the identical pre-flight + cancellation-registration +
 /// `run_chat_loop` spawn.
 ///
-/// **spawn runtime**: `tokio::spawn` (was `tauri::async_runtime::spawn`
+/// **spawn runtime**: `tokio::spawn` (was `tokio::spawn`
 /// pre-P2.3). In the Tauri process, Tauri 2's `async_runtime` is a
 /// tokio multi-thread runtime, so a Tauri command executes inside a
 /// tokio runtime context — `tokio::spawn` resolves to the same handle
-/// `tauri::async_runtime::spawn` used, i.e. zero behavior change for
+/// `tokio::spawn` used, i.e. zero behavior change for
 /// the Tauri path. In the daemon process (`#[tokio::main]`), this is
 /// the native spawn. Unifying on `tokio::spawn` is what lets one
 /// function serve both transports.

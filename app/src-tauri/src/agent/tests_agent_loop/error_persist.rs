@@ -385,7 +385,7 @@ async fn worker_error_exit_snapshots_messages_for_resume() {
     use crate::llm::error::LlmError;
 
     let h = make_harness().await;
-    let worker_sink = Arc::new(SubagentBufferSink::new_without_app_handle(
+    let worker_sink = Arc::new(SubagentBufferSink::new_without_ipc(
         "run-err-resume".into(),
         h.session_id.clone(),
     ));

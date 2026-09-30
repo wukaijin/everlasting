@@ -490,7 +490,7 @@ mod tests_resume_hint {
         worker_messages: Vec<ChatMessage>,
     ) -> (String, bool) {
         let db = crate::tools::test_default_pool();
-        let worker_sink = Arc::new(SubagentBufferSink::new_without_app_handle(
+        let worker_sink = Arc::new(SubagentBufferSink::new_without_ipc(
             "run-hint".into(),
             "sess-hint".into(),
         ));

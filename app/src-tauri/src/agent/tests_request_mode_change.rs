@@ -33,8 +33,8 @@
 //! handler delegates to) is covered by
 //! `commands/tests_resolve_mode_change.rs` (allow/deny paths,
 //! root guard, unknown session, pending unregister — real DB
-//! pool, no `tauri::test::mock_app` needed thanks to the
-//! pure-core extraction).
+//! pool, no mock app runtime needed thanks to the pure-core
+//! extraction).
 
 #![cfg(test)]
 

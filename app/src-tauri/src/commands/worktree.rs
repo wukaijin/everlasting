@@ -8,8 +8,6 @@
 
 use std::sync::Arc;
 
-use tauri::State;
-
 use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -73,14 +71,6 @@ pub async fn publish_session_to_main_inner(
     .await
     .map_err(|e| anyhow::anyhow!("publish_session_to_main: join: {}", e))?
     .map_err(|e| anyhow::anyhow!("publish_session_to_main: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn publish_session_to_main(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<String, AppCommandError> {
-    publish_session_to_main_inner(&state, session_id).await
 }
 
 pub async fn attach_worktree_inner(
@@ -170,14 +160,6 @@ pub async fn attach_worktree_inner(
             )
         })?;
     Ok(updated.session)
-}
-
-#[tauri::command]
-pub async fn attach_worktree(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<db::SessionRow, AppCommandError> {
-    attach_worktree_inner(&state, session_id).await
 }
 
 pub async fn detach_worktree_inner(
@@ -274,14 +256,6 @@ pub async fn detach_worktree_inner(
             )
         })?;
     Ok(updated.session)
-}
-
-#[tauri::command]
-pub async fn detach_worktree(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<db::SessionRow, AppCommandError> {
-    detach_worktree_inner(&state, session_id).await
 }
 
 pub async fn delete_worktree_inner(
@@ -406,12 +380,4 @@ pub async fn delete_worktree_inner(
             )
         })?;
     Ok(updated.session)
-}
-
-#[tauri::command]
-pub async fn delete_worktree(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<db::SessionRow, AppCommandError> {
-    delete_worktree_inner(&state, session_id).await
 }

@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/09-30-de-tauri/prd.md", "reason": "需求/AC/兼容性硬约束（R4 data dir 不变是最高风险点）"}
+{"file": ".trellis/tasks/09-30-de-tauri/design.md", "reason": "决策 D1-D8 + 删留边界表 + 评审六问"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由/SSE/MCP 契约——inner 函数族是其实现面，壳删除不得触碰"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "crate 模块结构不变式（D1：纯减法不重排）"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "7 处 tauri::test 构造改造需守测试模型契约（load_from_dir/tempdir 语义）"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR2 前端收敛（AppHeader/CloseGuard/transport facade）组件规范"}

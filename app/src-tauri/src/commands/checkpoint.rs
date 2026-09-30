@@ -53,7 +53,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -252,14 +251,6 @@ pub async fn list_turn_checkpoints_inner(
     Ok(summaries)
 }
 
-#[tauri::command]
-pub async fn list_turn_checkpoints(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Result<Vec<TurnCheckpointSummary>, AppCommandError> {
-    list_turn_checkpoints_inner(&state, session_id).await
-}
-
 // ---------------------------------------------------------------------------
 // get_turn_checkpoint_diff
 // ---------------------------------------------------------------------------
@@ -295,15 +286,6 @@ pub async fn get_turn_checkpoint_diff_inner(
             .map_err(|e| checkpoint_broken(format!("checkpoint snapshot diff failed: {}", e)))?
     };
     Ok(result)
-}
-
-#[tauri::command]
-pub async fn get_turn_checkpoint_diff(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    seq: i64,
-) -> Result<crate::git::diff::DiffResult, AppCommandError> {
-    get_turn_checkpoint_diff_inner(&state, session_id, seq).await
 }
 
 // ---------------------------------------------------------------------------
@@ -562,15 +544,6 @@ pub async fn revert_to_checkpoint_preview_inner(
     })
 }
 
-#[tauri::command]
-pub async fn revert_to_checkpoint_preview(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    target_seq: i64,
-) -> Result<RevertPreview, AppCommandError> {
-    revert_to_checkpoint_preview_inner(&state, session_id, target_seq).await
-}
-
 pub async fn revert_to_checkpoint_execute_inner(
     state: &Arc<AppState>,
     session_id: String,
@@ -659,16 +632,6 @@ pub async fn revert_to_checkpoint_execute_inner(
         restored: outcome.restored,
         deleted: outcome.deleted,
     })
-}
-
-#[tauri::command]
-pub async fn revert_to_checkpoint_execute(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    target_seq: i64,
-    preview_token: String,
-) -> Result<RevertResult, AppCommandError> {
-    revert_to_checkpoint_execute_inner(&state, session_id, target_seq, preview_token).await
 }
 
 // ---------------------------------------------------------------------------

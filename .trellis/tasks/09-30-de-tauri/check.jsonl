@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/09-30-de-tauri/prd.md", "reason": "AC1-AC7 验收清单 + Out of Scope 边界"}
+{"file": ".trellis/tasks/09-30-de-tauri/implement.md", "reason": "验证命令与风险文件清单（build.rs/state.rs 高危单点）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门（壳删除大 diff 的抽查标准）"}
+{"file": ".trellis/spec/frontend/browser-regression.md", "reason": "AC5 ui-review 视觉回归的流水线契约"}

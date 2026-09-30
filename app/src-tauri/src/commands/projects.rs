@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
@@ -45,27 +44,12 @@ pub async fn list_projects_inner(
         .map_err(|e| anyhow::anyhow!("list_projects failed: {}", e).into())
 }
 
-#[tauri::command]
-pub async fn list_projects(
-    state: State<'_, Arc<AppState>>,
-    filter: Option<ListProjectsFilter>,
-) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
-    list_projects_inner(&state, filter).await
-}
-
 pub async fn list_hidden_projects_inner(
     state: &Arc<AppState>,
 ) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
     db::list_hidden_projects(&state.db)
         .await
         .map_err(|e| anyhow::anyhow!("list_hidden_projects failed: {}", e).into())
-}
-
-#[tauri::command]
-pub async fn list_hidden_projects(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
-    list_hidden_projects_inner(&state).await
 }
 
 pub async fn create_project_inner(
@@ -75,14 +59,6 @@ pub async fn create_project_inner(
     projects::store::create_project(&state.db, &path)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
-}
-
-#[tauri::command]
-pub async fn create_project(
-    state: State<'_, Arc<AppState>>,
-    path: String,
-) -> Result<projects::ProjectRow, AppCommandError> {
-    create_project_inner(&state, path).await
 }
 
 pub async fn update_project_path_inner(
@@ -95,15 +71,6 @@ pub async fn update_project_path_inner(
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
 
-#[tauri::command]
-pub async fn update_project_path(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    new_path: String,
-) -> Result<projects::ProjectRow, AppCommandError> {
-    update_project_path_inner(&state, id, new_path).await
-}
-
 pub async fn update_project_name_inner(
     state: &Arc<AppState>,
     id: String,
@@ -112,15 +79,6 @@ pub async fn update_project_name_inner(
     projects::store::update_project_name(&state.db, &id, &new_name)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
-}
-
-#[tauri::command]
-pub async fn update_project_name(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    new_name: String,
-) -> Result<projects::ProjectRow, AppCommandError> {
-    update_project_name_inner(&state, id, new_name).await
 }
 
 /// P3c(design §2):`update_project_sandbox_policy` 允许写的档位
@@ -146,15 +104,6 @@ pub async fn update_project_sandbox_policy_inner(
     crate::db::projects::set_project_sandbox_policy(&state.db, &id, &policy)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e.to_string()))
-}
-
-#[tauri::command]
-pub async fn update_project_sandbox_policy(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    policy: String,
-) -> Result<projects::ProjectRow, AppCommandError> {
-    update_project_sandbox_policy_inner(&state, id, policy).await
 }
 
 // ---------------------------------------------------------------------------
@@ -343,66 +292,10 @@ pub async fn reject_net_proposal_inner(
     get_project_net_state_inner(state, id).await
 }
 
-#[tauri::command]
-pub async fn get_project_net_state(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<ProjectNetState, AppCommandError> {
-    get_project_net_state_inner(&state, id).await
-}
-
-#[tauri::command]
-pub async fn set_project_sandbox_net(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    net: String,
-) -> Result<projects::ProjectRow, AppCommandError> {
-    set_project_sandbox_net_inner(&state, id, net).await
-}
-
-#[tauri::command]
-pub async fn propose_net_ports(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    worktree_key: String,
-    ports: Vec<u16>,
-    source: String,
-) -> Result<(), AppCommandError> {
-    propose_net_ports_inner(&state, id, worktree_key, ports, source).await
-}
-
-#[tauri::command]
-pub async fn confirm_net_snapshot(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    worktree_key: String,
-    ports: Vec<u16>,
-    confirmed_by: Option<String>,
-) -> Result<ProjectNetState, AppCommandError> {
-    confirm_net_snapshot_inner(&state, id, worktree_key, ports, confirmed_by).await
-}
-
-#[tauri::command]
-pub async fn reject_net_proposal(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    worktree_key: String,
-) -> Result<ProjectNetState, AppCommandError> {
-    reject_net_proposal_inner(&state, id, worktree_key).await
-}
-
 pub async fn hide_project_inner(state: &Arc<AppState>, id: String) -> Result<(), AppCommandError> {
     projects::store::hide_project(&state.db, &id)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
-}
-
-#[tauri::command]
-pub async fn hide_project(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<(), AppCommandError> {
-    hide_project_inner(&state, id).await
 }
 
 pub async fn unhide_project_inner(
@@ -412,14 +305,6 @@ pub async fn unhide_project_inner(
     projects::store::unhide_project(&state.db, &id)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
-}
-
-#[tauri::command]
-pub async fn unhide_project(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<(), AppCommandError> {
-    unhide_project_inner(&state, id).await
 }
 
 /// One subdirectory row of the directory browser (`browse_dir`).
@@ -519,18 +404,6 @@ pub async fn browse_dir_inner(
         parent: canonical.parent().map(|p| p.to_string_lossy().into_owned()),
         entries,
     })
-}
-
-/// Tauri wrapper around [`browse_dir_inner`]. Also routed on the
-/// daemon (`POST /api/v1/projects/browse_dir`) — that is the path
-/// the modal exercises under httpTransport (sidecar / browser /
-/// remote).
-#[tauri::command]
-pub async fn browse_dir(
-    path: String,
-    show_hidden: bool,
-) -> Result<BrowseDirPayload, AppCommandError> {
-    browse_dir_inner(path, show_hidden).await
 }
 
 #[cfg(test)]

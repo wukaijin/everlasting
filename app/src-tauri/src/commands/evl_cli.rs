@@ -25,7 +25,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
@@ -486,20 +485,6 @@ fn create_symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
 // ---------------------------------------------------------------------------
 // Tauri command 薄包装
 // ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub async fn detect_evl(
-    state: State<'_, Arc<AppState>>,
-) -> Result<EvlCliStatusPayload, AppCommandError> {
-    detect_evl_inner(&state).await
-}
-
-#[tauri::command]
-pub async fn install_evl(
-    state: State<'_, Arc<AppState>>,
-) -> Result<EvlCliStatusPayload, AppCommandError> {
-    install_evl_inner(&state).await
-}
 
 #[cfg(test)]
 mod tests {
