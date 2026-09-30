@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 60
-- **Last Active**: 2026-09-29
+- **Total Sessions**: 61
+- **Last Active**: 2026-10-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1072 | Active |
+| `journal-2.md` | ~1096 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 61 | 2026-10-01 | de-Tauri:移除 GUI 壳与 Tauri 依赖链,daemon+web 单形态(评审→规划→三 PR 交付) | `5808450a`, `d52342c8`, `0a6c255e`, `5b0e704b` | `main` |
 | 60 | 2026-09-29 | N19 mcode 语义吸收:调研五件核验+实施三件收口 | `2e9b06d6`, `5ca66678` | `main` |
 | 59 | 2026-09-22 | 沙箱 NetPolicy 三态落地完成 + 重启后实测回归 | `03770a6a` | `main` |
 | 58 | 2026-09-11 | 记忆层 CLAUDE.md 硬切换 EVERLASTING.md + 4 槽位植入开关 | `fac5fb05`, `ee65a1d4` | `main` |

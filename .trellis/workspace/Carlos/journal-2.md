@@ -1070,3 +1070,27 @@ GCE-M4b 交付:历史群聊审议场级检索 + GUI 讨论库。课题=ROADMAP M
 ### Status
 
 [OK] **Completed**
+
+
+## Session 61: de-Tauri:移除 GUI 壳与 Tauri 依赖链,daemon+web 单形态(评审→规划→三 PR 交付)
+
+**Date**: 2026-10-01
+**Task**: de-Tauri:移除 GUI 壳与 Tauri 依赖链,daemon+web 单形态(评审→规划→三 PR 交付)
+**Branch**: `main`
+
+### Summary
+
+用户确认使用已 100% 走 web 后拍板移除 Tauri。trellis-brainstorm 建任务 09-30-de-tauri(prd/design/implement 三文档+jsonl);review 评审团(session 720948b8,66 轮)六问定案并纠错三处:步骤7 幽灵任务(全仓无 tauri::test::mock_app)、防漂断言自指且 CI 从不跑、CancellationGuard::drop 不得机械替换;补九条遗漏面(webkit_cache 断言必炸/tunnel tauri::http/CI bin 门等)。三 PR 交付:PR1 后端(5808450a,GUI bin/run()/sidecar/137 command 壳/AppHandle 三链/D9 try_lock 重写/identifier 常量化+lib 字面量防漂/webkit_cache 重接 daemon bin),PR2 前端(d52342c8,BrowserHeader 固定/transport 单实现留 facade/CloseGuard 删除/@tauri-apps deps 清),PR3 CI+文档(0a6c255e,系统依赖步骤删/bin 编译门改形/AGENTS+HACKING-wsl 坑1+ARCHITECTURE 拓扑两形态+CONTEXT 术语表/BACKLOG N21+webkit_cache follow-up)。指标:依赖图 584→377 crate(-35%),零系统库(webkit2gtk/PKG_CONFIG_PATH 消失),常驻 daemon RSS 57.9→29MB,AC4 新旧二进制 data_dir 对拍门禁过;2617 后端+2080 前端测试绿,turn-smoke/MCP http-smoke/ui-review 截图全过。既有 flaky 留档:ScheduledTasksTab/GroupChatPresetsTab 全量并发时偶发漂移失败,与本次无关。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5808450a` | (see git log) |
+| `d52342c8` | (see git log) |
+| `0a6c255e` | (see git log) |
+| `5b0e704b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
