@@ -535,6 +535,26 @@ pub async fn check(
             }
         }
         ToolKind::WebFetch => {
+            // Group-chat ask-free follow-up (2026-10-13, user decision):
+            // the research whitelist advertises web_fetch to every
+            // speaker, but a discussion is ask-free (C1.1, 09-08) — the
+            // modal path below can never be answered (fresh session has
+            // no tool-grant rows, speakers carry no run grants), so the
+            // advertised tool was permanently deny-only. Allow silently;
+            // network egress stays guarded by the SSRF blocklist +
+            // redirect policy in tools/web_fetch.rs.
+            if ctx.group_chat_ask_free {
+                let _ = record_audit(
+                    db,
+                    ctx,
+                    AuditKind::ToolAllowed,
+                    tool_name,
+                    tool_input,
+                    Some("group chat ask-free: web_fetch silent allow"),
+                )
+                .await;
+                return Decision::Allow;
+            }
             // Web fetch is always external — check
             // session_tool_permissions match_kind='tool' for
             // `web_fetch`. If hit, Allow; else modal.

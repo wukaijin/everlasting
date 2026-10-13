@@ -73,6 +73,11 @@ Tier 4. Path / Prefix / External policy
        │   (match_kind='path') → hit Allow / miss silent(in) / miss ask(out)
        ├─ Shell:classify_prefix → Allow(whitelist) / Ask(asklist + 未知)
        └─ Web Fetch:查 match_kind='tool' for 'web_fetch' → hit Allow / miss ask
+          (群聊 speaker 例外,2026-10-13:`group_chat_ask_free=true` → silent Allow
+          —— 研究白名单向每 speaker 广告 web_fetch,而讨论 ask-free(C1.1)使
+          modal 路径永不可答、授权行永不存在;网络出口防线 = tools/web_fetch.rs
+          的 SSRF blocklist + redirect policy。audit 记 ToolAllowed,reason
+          = "group chat ask-free: web_fetch silent allow")
        (Yolo:整段 bypass,直接 Allow;Tier 2 仍 hard wall)
 Tier 5. Allow rules     (default allow-all)
 Tier 6. Audit           (写 session_audit_events)

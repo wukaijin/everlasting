@@ -797,6 +797,106 @@ async fn tier4_allow_trusted_external_skips_ask() {
     );
 }
 
+/// Group-chat ask-free follow-up (2026-10-13): web_fetch is in the
+/// group-chat research whitelist and advertised in the speaker prompt,
+/// but a discussion is ask-free — the grant checks can never hit (fresh
+/// session, speakers carry no run grants) and `ask_path` would auto-deny,
+/// leaving the advertised tool permanently unusable. A group-chat speaker
+/// turn must get a silent Allow instead. Wrapped in 5s so a regression
+/// (fall-through to ask_path's instant ask-free Deny) fails fast.
+#[tokio::test]
+async fn tier4_web_fetch_group_chat_ask_free_allows_silently() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "gc-discussion".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        group_chat_ask_free: true,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "web_fetch",
+            &serde_json::json!({"url": "https://example.com"}),
+            "tu-gc-webfetch",
+            &token,
+        ),
+    )
+    .await
+    .expect("regression: fall-through would deny via ask-free, not hang");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "group-chat speaker web_fetch must silently Allow (research whitelist)"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "group-chat web_fetch must NOT emit permission:ask"
+    );
+}
+
+/// Contrast for the test above: the CLASSIC (non-group-chat) web_fetch
+/// path is unchanged — no grant means the interactive ask round-trip,
+/// proven by check() NOT settling within the 5s window (a silent-allow
+/// regression would return Ok promptly).
+#[tokio::test]
+async fn tier4_web_fetch_classic_without_grant_still_asks() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink: std::sync::Arc<dyn crate::state::ChatEventSink> =
+        std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        group_chat_ask_free: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
+        turn_seq: None,
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink,
+            "web_fetch",
+            &serde_json::json!({"url": "https://example.com"}),
+            "tu-classic-webfetch",
+            &token,
+        ),
+    )
+    .await;
+    assert!(
+        outcome.is_err(),
+        "classic web_fetch without grant must enter the ask round-trip (still pending at 5s), not settle"
+    );
+}
+
 /// Symlink escape: a project-internal symlink pointing at a project-
 /// external sensitive file must still be denied. Restores the
 /// canonicalize protection the old tool-layer `assert_within_root` had
