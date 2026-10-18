@@ -353,10 +353,16 @@ mod tests {
         let root = fixture_root();
         // 存在的绝对路径(join 整体替换 base)→ OutsideRoot,不读内容。
         let etc_hosts = Path::new("/etc/hosts").canonicalize().unwrap();
+        // 穿越锚点:上溯 16 级保证从任何 tempdir 深度都触到文件系统根
+        // (Linux /tmp/.tmp 上溯 2 级即根,但 macOS tempdir 在
+        // /var/folders/<hash>/<hash>/T/ 四层深处,3 级不够 —— 解析结果
+        // 不存在的路径 canonicalize 失败会误入 NotFound 臂)。"/.." 在
+        // 根再上溯是幂等的,超出级数无害。
+        let escape = format!("{}etc/passwd", "../".repeat(16));
         let mut d = detail_from(json!({
             "conclusions": [{"claim": "c", "anchors": [
                 {"path": etc_hosts.to_string_lossy().to_string(), "line": 1},
-                {"path": "../../../etc/passwd"}
+                {"path": escape}
             ]}]
         }));
         validate_anchors(&mut d, Some(&root));

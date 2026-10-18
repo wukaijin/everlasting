@@ -429,9 +429,10 @@ mod tests {
             vec!["alpha", "Zeta"],
             "大小写不敏感排序、隐藏目录与文件被过滤"
         );
+        // macOS: /var → /private/var symlink — compare canonical forms.
         assert_eq!(
             payload.path,
-            tmp.path().to_string_lossy(),
+            tmp.path().canonicalize().unwrap().to_string_lossy(),
             "返回 canonical 路径"
         );
         assert!(payload.parent.is_some(), "tempdir 有父目录");

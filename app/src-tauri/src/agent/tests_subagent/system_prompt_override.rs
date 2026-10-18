@@ -179,6 +179,10 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
             .clone()
             .unwrap_or_else(|| project.path.clone()),
     );
+    // The chat-loop pre-flight (init.rs assert_within_root) canonicalizes
+    // the worktree before use — on macOS that resolves /var → /private/var
+    // (the tempdir symlink), so the expectation must mirror it.
+    let worktree_path = worktree_path.canonicalize().unwrap_or(worktree_path);
     let head_sha = lookup_head_sha(&worktree_path);
     let base_prompt = build_system_prompt(&loaded.session, &project, &worktree_path);
     // D3: the SHA no longer rides the system prompt; it rides the

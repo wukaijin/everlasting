@@ -493,11 +493,12 @@ mod tests {
     async fn execute_reads_outside_root_file() {
         // read-side boundary decouple (2026-07-01): tool layer no longer
         // rejects project-outside paths — the permission layer gates them
-        // (Tier 2.5 deny / Tier 4 allow / ask_path). /etc/hostname exists
-        // and is outside the tempdir project root, so the read succeeds.
+        // (Tier 2.5 deny / Tier 4 allow / ask_path). /etc/hosts exists
+        // on Linux AND macOS (unlike /etc/hostname) and is outside the
+        // tempdir project root, so the read succeeds.
         let tmp = tempdir().unwrap();
         let (msg, is_error, _images) = execute(
-            &serde_json::json!({"path": "/etc/hostname"}),
+            &serde_json::json!({"path": "/etc/hosts"}),
             &test_ctx(&tmp),
             None,
             None,

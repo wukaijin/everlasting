@@ -197,58 +197,71 @@ async fn sse_stream_forwarded_as_chunks() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind remote");
     let remote_port = listener.local_addr().expect("local_addr").port();
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept");
-        let mut ws = tokio_tungstenite::accept_async(stream)
-            .await
-            .expect("handshake");
+    // 时序门控(本机 macOS 实测):connect → 流转发 → End → close 全程
+    // <10ms,20ms 间隔的 connected 轮询可能整窗错过(wait_for_connected
+    // 误报超时,链路本身没问题)。让 fake remote 等测试侧观察到
+    // connected 后再发首帧 —— 显式定序,替代隐式竞速。
+    let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = {
+        let go = go.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("handshake");
+            while !go.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
 
-        // remote → PC:SSE 请求
-        let req = Frame::Request {
-            id: 88,
-            method: "GET".into(),
-            path: "/api/v1/stream".into(),
-            headers: vec![("Last-Event-ID".into(), "0".into())],
-            body: vec![],
-        };
-        ws.send(Message::Text(serde_json::to_string(&req).unwrap()))
-            .await
-            .expect("send sse request");
+            // remote → PC:SSE 请求
+            let req = Frame::Request {
+                id: 88,
+                method: "GET".into(),
+                path: "/api/v1/stream".into(),
+                headers: vec![("Last-Event-ID".into(), "0".into())],
+                body: vec![],
+            };
+            ws.send(Message::Text(serde_json::to_string(&req).unwrap()))
+                .await
+                .expect("send sse request");
 
-        // 收 Stream 帧直到 End;不得出现 Response 帧
-        let mut total = Vec::new();
-        let mut chunk_count = 0usize;
-        loop {
-            let frame = next_frame(&mut ws).await;
-            match frame {
-                Frame::Stream { id, event } => {
-                    assert_eq!(id, 88);
-                    match event {
-                        everlasting_remote_protocol::StreamEvent::Chunk { bytes } => {
-                            chunk_count += 1;
-                            total.extend_from_slice(&bytes);
-                        }
-                        everlasting_remote_protocol::StreamEvent::End => break,
-                        everlasting_remote_protocol::StreamEvent::Error { message } => {
-                            panic!("unexpected Stream::Error: {message}")
+            // 收 Stream 帧直到 End;不得出现 Response 帧
+            let mut total = Vec::new();
+            let mut chunk_count = 0usize;
+            loop {
+                let frame = next_frame(&mut ws).await;
+                match frame {
+                    Frame::Stream { id, event } => {
+                        assert_eq!(id, 88);
+                        match event {
+                            everlasting_remote_protocol::StreamEvent::Chunk { bytes } => {
+                                chunk_count += 1;
+                                total.extend_from_slice(&bytes);
+                            }
+                            everlasting_remote_protocol::StreamEvent::End => break,
+                            everlasting_remote_protocol::StreamEvent::Error { message } => {
+                                panic!("unexpected Stream::Error: {message}")
+                            }
                         }
                     }
+                    other => panic!("expected Stream frame, got {other:?}"),
                 }
-                other => panic!("expected Stream frame, got {other:?}"),
             }
-        }
-        // 纯字节透传:拼接结果等于 SSE 原文
-        assert_eq!(total, b"id:1\ndata:{\"a\":1}\n\nid:2\ndata:{\"b\":2}\n\n");
-        assert!(chunk_count >= 2, "chunk_count = {chunk_count}");
+            // 纯字节透传:拼接结果等于 SSE 原文
+            assert_eq!(total, b"id:1\ndata:{\"a\":1}\n\nid:2\ndata:{\"b\":2}\n\n");
+            assert!(chunk_count >= 2, "chunk_count = {chunk_count}");
 
-        let _ = ws.close(None).await;
-    });
+            let _ = ws.close(None).await;
+        })
+    };
 
     let manager = TunnelManager::new();
     manager.set_local_port(loopback_port);
     manager.start();
     manager.set_config(Some(test_cfg(remote_port)));
     wait_for_connected(&manager, Duration::from_secs(5)).await;
+    // 连接已确认(状态机 register_conn 已跑)→ 放行 fake remote 发请求。
+    go.store(true, Ordering::SeqCst);
 
     tokio::time::timeout(Duration::from_secs(10), server)
         .await

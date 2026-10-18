@@ -319,9 +319,15 @@ mod tests {
             .map(|e| e["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, vec!["alpha"]);
+        // macOS: /var → /private/var symlink — compare canonical forms.
         assert_eq!(
             v["parent"].as_str().unwrap(),
-            tmp.path().parent().unwrap().to_string_lossy()
+            tmp.path()
+                .parent()
+                .unwrap()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
         );
 
         // show_hidden = true:.secret 出现

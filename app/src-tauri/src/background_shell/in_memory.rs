@@ -2758,6 +2758,10 @@ mod tests_ready {
     /// through `start()` (iron rule 3: the port is bound at spawn —
     /// the Running status exposes the probe state, proving the
     /// binding).
+    // Attribution rides procnet (/proc). macOS has no /proc → the
+    // probe can never attribute → loud-skip (same rationale as the
+    // procnet::tests gate).
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread")]
     async fn ready_probe_reports_ready_with_attribution() {
         if !has_python3() {

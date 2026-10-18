@@ -154,6 +154,10 @@ mod tests {
     /// child (own process group), then attribute: find_listeners
     /// must return it with the correct pgid (= its pid, group
     /// leader) and comm.
+    // /proc is the entire observation surface; macOS has no /proc so
+    // find_listeners degrades to empty by design — loud-skip there
+    // instead of a platform-noise failure.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn attributes_a_real_listener_with_pgid() {
         let port = pick_test_port();
@@ -218,6 +222,8 @@ mod tests {
         );
     }
 
+    // Only the Linux-gated attribution test reads an ephemeral port.
+    #[cfg(target_os = "linux")]
     fn pick_test_port() -> u16 {
         // Bind an ephemeral socket, read its port, close it: a port
         // that was free microseconds ago.
