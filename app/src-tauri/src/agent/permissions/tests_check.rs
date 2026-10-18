@@ -1415,6 +1415,12 @@ async fn set_project_tier(pool: &sqlx::SqlitePool, tier: &str) {
 /// the command fails out-of-face.
 #[tokio::test]
 async fn tier4_shell_short_circuits_to_allow_when_sandbox_face_active() {
+    // Tier-4 face short-circuit requires a passing capability probe;
+    // on macOS the probe fails → classic ask path → this test would
+    // hang on the oneshot. Loud-skip like the sandbox suite.
+    if !crate::sandbox::require_sandbox_cap("tier4_shell_short_circuits_to_allow") {
+        return;
+    }
     use crate::agent::permissions::{new_permission_store, PermissionContext};
     let pool = super::tests_common::worker_test_pool().await;
     set_project_tier(&pool, "readwrite").await;
@@ -1606,6 +1612,11 @@ async fn tier4_shell_classic_ask_path_survives_under_off_tier() {
 /// comes from the FACE (worktree read-only spec), not from approvals.
 #[tokio::test]
 async fn tier4_plan_sideeffect_short_circuits_under_sandbox_face() {
+    // Capability-gated (see tier4_shell_short_circuits_to_allow):
+    // the face short-circuit is dead when the probe fails.
+    if !crate::sandbox::require_sandbox_cap("tier4_plan_sideeffect_short_circuits") {
+        return;
+    }
     use crate::agent::permissions::{new_permission_store, PermissionContext};
     let pool = super::tests_common::worker_test_pool().await;
     set_project_tier(&pool, "readwrite").await;

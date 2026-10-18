@@ -185,6 +185,9 @@ impl NetPolicy {
     /// first rejected the snapshot at write time; 7456 must stay
     /// structurally outside the agent's reachable set even if the
     /// two checks drift).
+    // Linux-only consumers (mod.rs prepare()); dead on other
+    // platforms where the BindOnly tier never assembles.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn connect_ports(set: &BindSet) -> std::collections::BTreeSet<u16> {
         let mut out = std::collections::BTreeSet::new();
         out.insert(80);
@@ -197,6 +200,7 @@ impl NetPolicy {
 
     /// Bind ports after the defensive daemon-port subtraction (same
     /// clamp rationale as [`Self::connect_ports`]).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn bind_ports_clamped(set: &BindSet) -> std::collections::BTreeSet<u16> {
         let reserved = daemon_listen_ports();
         set.ports()

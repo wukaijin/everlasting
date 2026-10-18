@@ -14,7 +14,11 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Capability, SandboxSpec, DEVICE_WRITE_PATHS};
+use super::{Capability, DEVICE_WRITE_PATHS};
+// SandboxSpec only appears in Linux-gated tests (integration spec
+// builders); on other platforms the import would be dead.
+#[cfg(target_os = "linux")]
+use super::SandboxSpec;
 use crate::db::Mode;
 
 // ---------------------------------------------------------------------------
@@ -22,6 +26,9 @@ use crate::db::Mode;
 // distro headers; these ARE our constants, test-pinned)
 // ---------------------------------------------------------------------------
 
+// Linux-only: landlock UAPI constants do not exist in the macOS
+// libc crate (the whole ABI-pin layer is a Linux kernel contract).
+#[cfg(target_os = "linux")]
 #[test]
 fn abi_landlock_access_fs_bits() {
     use super::landlock::bits::*;
@@ -40,6 +47,7 @@ fn abi_landlock_access_fs_bits() {
     assert_eq!(MAKE_SYM, 1 << 12, "ABI v1 tops out at MAKE_SYM (no APPEND)");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn abi_handled_mask_is_execute_plus_write_family() {
     use super::landlock::bits::*;
@@ -60,6 +68,7 @@ fn abi_handled_mask_is_execute_plus_write_family() {
     assert_eq!(super::landlock::HANDLED_ACCESS_FS & READ_DIR, 0);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn abi_prctl_and_seccomp_constants() {
     use super::landlock::{PR_GET_SECCOMP, PR_SET_NO_NEW_PRIVS, PR_SET_SECCOMP};
@@ -94,6 +103,7 @@ fn abi_libc_syscall_numbers_match_arch_uapi() {
     assert_eq!(libc::SYS_socket, 41);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn abi_struct_layouts() {
     // landlock_path_beneath_attr is packed in C (12 bytes, fields @0/@8);
@@ -126,6 +136,7 @@ fn abi_struct_layouts() {
 // AccessSet ⊆ handled (C5 / spike trap 2 — type-level guarantee)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 #[test]
 fn access_set_constants_are_subsets_of_handled() {
     use super::landlock::AccessSet;
@@ -155,6 +166,7 @@ fn access_set_constants_are_subsets_of_handled() {
 /// Minimal BPF interpreter: walks the cBPF program with a synthetic
 /// seccomp_data (nr + arg0), returns the RET value. Enough to verify
 /// the jump topology of the 8-instruction filter.
+#[cfg(target_os = "linux")]
 fn bpf_eval(prog: &[libc::sock_filter], nr: u32, arg0_lo: u32) -> u32 {
     let mut pc = 0usize;
     let mut a: u32 = 0;
@@ -189,6 +201,7 @@ fn bpf_eval(prog: &[libc::sock_filter], nr: u32, arg0_lo: u32) -> u32 {
     panic!("BPF program did not terminate");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn bpf_golden_layout() {
     let p = super::seccomp::build_inet_block_filter();
@@ -219,6 +232,7 @@ fn bpf_golden_layout() {
     assert_eq!(p[7].k, libc::SECCOMP_RET_ALLOW);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn bpf_logic_walk() {
     let p = super::seccomp::build_inet_block_filter();
@@ -304,11 +318,15 @@ async fn spec_roots_follow_server_side_sources() {
             "sess-1"
         )));
     // Exec face covers the writable roots + /dev + /tmp + toolchain;
-    // NEVER /init or /mnt/c.
+    // NEVER /init or /mnt/c. Exec roots are canonicalized (F1) while
+    // writable roots stay literal, so compare canonical forms — on
+    // macOS /tmp is a symlink to /private/tmp, on Linux they're
+    // identical (the kernel follows symlinks at O_PATH either way).
     for w in &spec.writable_roots {
+        let canonical = std::fs::canonicalize(w).unwrap_or_else(|_| w.clone());
         assert!(
-            spec.exec_allow_roots.contains(w),
-            "{w:?} must be executable"
+            spec.exec_allow_roots.contains(&canonical),
+            "{w:?} must be executable (canonical {canonical:?})"
         );
     }
     assert!(spec.exec_allow_roots.contains(&PathBuf::from("/dev")));
@@ -746,6 +764,7 @@ async fn net_default_spec_carries_block() {
 /// Trap 1 discipline for the ABI v4 net constants: pinned against
 /// the kernel UAPI (`linux/landlock.h`): rule type 2, bits 1<<13 /
 /// 1<<14, struct layouts by size/offset.
+#[cfg(target_os = "linux")]
 #[test]
 fn abi_net_constants() {
     use super::landlock::{
@@ -772,6 +791,7 @@ fn abi_net_constants() {
 
 /// Trap 2 discipline, net side: both NetAccessSet constants are
 /// strict subsets of HANDLED_ACCESS_NET (no raw constructor exists).
+#[cfg(target_os = "linux")]
 #[test]
 fn net_access_set_subsets_of_handled() {
     use super::landlock::{NetAccessSet, HANDLED_ACCESS_NET};
@@ -916,6 +936,10 @@ async fn policy_pool(project_id: &str, tier: PSP, session_id: &str) -> sqlx::Sql
 /// DB resolution: a readwrite-tier project resolves Face(ReadWrite)
 /// for Edit and Face(ReadOnly) for Plan; the readonly tier maps to
 /// the readonly face in both.
+// Linux-only at runtime: resolve_session_policy starts from
+// Capability::probe(), which fails on macOS → Face assertions
+// would never hold there (fail-open is by design, not a bug).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resolve_session_policy_follows_project_tier() {
     let pool = policy_pool("proj-rw", PSP::ReadWrite, "sess-rw").await;
@@ -938,6 +962,7 @@ async fn resolve_session_policy_follows_project_tier() {
 /// DB resolution: project `off` + kill-switch config both resolve
 /// Off; the kill-switch read is SKIPPED for off projects (the staged
 /// reads — SBX-004).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resolve_session_policy_off_and_kill_switch() {
     let pool = policy_pool("proj-off", PSP::Off, "sess-off").await;
@@ -968,6 +993,7 @@ async fn resolve_session_policy_off_and_kill_switch() {
 /// PSP::Off` in `read_project_sandbox_policy`), so its cause reads
 /// `ProjectOff` — the closest vocabulary slot for "no project face
 /// to resolve"; Yolo carries its own cause.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resolve_session_policy_missing_session_and_yolo() {
     let pool = policy_pool("proj-x", PSP::ReadWrite, "sess-x").await;
@@ -988,6 +1014,9 @@ async fn resolve_session_policy_missing_session_and_yolo() {
 /// decide() end-to-end: readwrite tier sandboxes a SideEffect command
 /// (the P3c behavior change — pre-P3c it skipped), off tier keeps the
 /// legacy skip, and a None session id skips (no policy to resolve).
+// Linux-only at runtime (see resolve_session_policy tests): the
+// Face tier arms require a passing capability probe.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn decide_sandboxes_all_tiers_under_readwrite() {
     use crate::sandbox::Decision;
@@ -1022,6 +1051,7 @@ async fn decide_sandboxes_all_tiers_under_readwrite() {
 /// sandboxed; Plan NEVER exempts; Face(ReadOnly) under Edit mode is
 /// deliberately bypassed by an operator approval (PRD AC anchor —
 /// approval outranks the project face default).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn decide_durable_grant_hit_skips_sandbox() {
     use crate::sandbox::Decision;

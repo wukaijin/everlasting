@@ -55,8 +55,17 @@
 //! by [`landlock::AccessSet`], whose only constructors are subsets
 //! of the handled mask.
 
+// landlock / seccomp are Linux-only (kernel LSM / BPF UAPI; macOS
+// libc lacks every symbol). The platform gate lives HERE, on the
+// `mod` declarations, so policy.rs / tests stay cross-platform and
+// the sandbox module graph below the policy layer compiles as
+// stub-free dead weight only where it can actually run. The
+// non-Linux fail-open story is unchanged (probe_once → Capability
+// all-false → Policy::Off { FailOpen }).
+#[cfg(target_os = "linux")]
 pub mod landlock;
 pub mod policy;
+#[cfg(target_os = "linux")]
 pub mod seccomp;
 
 use std::path::PathBuf;
@@ -705,12 +714,23 @@ pub fn prepare(spec: &SandboxSpec) -> std::io::Result<PreparedSandbox> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = spec;
-        // Unreachable in practice: the policy never resolves a face when
-        // the probe fails, and the probe always fails off-Linux. The
-        // stub exists so the tool layer needs no cfg.
-        Ok(PreparedSandbox {
-            data: Arc::new(PreparedData),
-        })
+        // Unreachable from the policy layer: `resolve_policy` returns
+        // `Off { FailOpen }` whenever the probe fails, and the probe
+        // always fails off-Linux, so no `Decision::Sandbox` is ever
+        // produced here. If some future caller reaches this arm
+        // anyway, FAIL CLOSED — the previous stub returned an
+        // Ok(PreparedSandbox) that enforced nothing, which would have
+        // handed back a "sandboxed" audit row for an unprotected
+        // spawn. An error here surfaces as the tool layer's usual
+        // `[sandbox] Failed to prepare sandbox: …`.
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!(
+                "sandbox enforcement is Linux-only (landlock/seccomp); \
+                 refusing to report an unenforced {} face as sandboxed",
+                spec.face.as_str()
+            ),
+        ))
     }
 }
 
@@ -823,6 +843,10 @@ fn pre_exec_apply(data: &PreparedData) -> std::io::Result<()> {
 /// child has already exec'd or died by then — the parent-side close
 /// cannot race the child's use).
 pub struct PreparedSandbox {
+    // Off-Linux, `prepare` always fails (enforcement is Linux-only),
+    // so this struct is never constructed there and nothing reads the
+    // field — silence dead_code.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     data: Arc<PreparedData>,
 }
 
