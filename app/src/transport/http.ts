@@ -44,7 +44,7 @@ import { currentDeviceToken, dropCurrentNodeToken } from "./auth";
 import { categoryRetryable, type AppErrorCategory } from "../utils/error";
 
 // ---------------------------------------------------------------------------
-// cmd → domain 映射(81 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
+// cmd → domain 映射(87 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
 // 的 `.route("/<cmd>", ...)` 提取)。invoke("cmd", args) →
 // POST `{daemonBase}/api/v1/{domain}/cmd`。新增 command 时同步加这里
 // (Rust 侧 routes 注册 + 此映射是两处需手工对齐的点)。
@@ -200,6 +200,10 @@ export const CMD_TO_DOMAIN: Record<string, string> = {
   set_model_disabled: "providers",
   set_provider_disabled: "providers",
   test_model: "providers",
+  // 2026-10-19 (task 10-19-merge-provider-model-settings):供应商模型
+  // 列表探测 + 按名字查 models.dev 能力目录。
+  probe_provider_models: "providers",
+  lookup_model_metadata: "providers",
   update_model: "providers",
   update_provider: "providers",
   update_session_model_id: "providers",

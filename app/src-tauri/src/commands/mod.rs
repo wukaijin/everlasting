@@ -49,6 +49,10 @@ pub mod files;
 pub mod group_chat_presets;
 pub mod memory;
 pub mod message_queue;
+// 模型探测 + 在线能力匹配(2026-10-19, task
+// `10-19-merge-provider-model-settings`):供应商模型列表探测 +
+// models.dev 能力目录查询两条 IPC,`_inner` 单源供 daemon route 消费。
+pub mod model_metadata;
 pub mod panel;
 // S2 (2026-08-11, task `08-11-tunnel-client`):配对码生成 IPC —— 经 tunnel
 // WSS 调 remote 的 `/internal/pairing/generate` 内部 RPC(design §2.5)。
@@ -122,6 +126,10 @@ pub fn all_command_names() -> Vec<&'static str> {
         "set_default_model",
         "update_session_model_id",
         "test_model",
+        // 2026-10-19 (task 10-19-merge-provider-model-settings):供应商
+        // 模型列表探测 + 按模型名匹配在线能力目录。
+        "probe_provider_models",
+        "lookup_model_metadata",
         "list_sessions",
         // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
         // `create_task` — seed `.everlasting/tasks/<slug>/`

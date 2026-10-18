@@ -19,7 +19,7 @@
 //! → `fetch("/api/v1/" + domain + "/" + cmd, {method: "POST", body:
 //! JSON.stringify(args)})` translation.
 //!
-//! Domain → module map (85 handlers total):
+//! Domain → module map (87 handlers total):
 //! - `agent` (1): `chat`
 //! - `attachments`: attachment save
 //! - `background_shells` (2): `list_background_shells`, `kill_background_shell` (2026-09-02)
@@ -38,7 +38,8 @@
 //! - `permissions` (8): `set_session_mode`, `permission_response`, ...
 //! - `projects` (9): `list_projects`, `create_project`, `browse_dir`
 //!   (2026-09-02 目录浏览模态框), ...
-//! - `providers` (13): `list_providers`, `add_provider`, ...
+//! - `providers` (15): `list_providers`, `add_provider`, ... (`probe_provider_models` /
+//!   `lookup_model_metadata` 2026-10-19 起同域)
 //! - `question` (5): `resolve_tool_question`, `resolve_mode_change`, ...
 //! - `review` (2): `get_review_state`, `get_current_task_slug` (C2)
 //! - `sessions` (16): `list_sessions`, `create_session`, ...

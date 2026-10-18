@@ -11,6 +11,7 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::model_metadata::{lookup_model_metadata_inner, probe_provider_models_inner};
 use crate::commands::providers::{
     add_model_inner, add_provider_inner, delete_model_inner, delete_provider_inner,
     get_default_model_inner, list_models_inner, list_providers_inner, set_default_model_inner,
@@ -258,6 +259,43 @@ pub async fn test_model(
     Ok(Json(result))
 }
 
+// ---------------------------------------------------------------------------
+// 2026-10-19 (task 10-19-merge-provider-model-settings):模型探测 +
+// 在线能力匹配。wire 与 `test_model` 同族 —— 业务失败走 `{success:false,
+// error}` JSON 而非 HTTP 错误,前端统一内联渲染。
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ProbeProviderModelsRequest {
+    pub provider_id: String,
+}
+
+/// 拉一次供应商的模型列表端点(GET /models / /v1/models),附带在线
+/// 能力富化。见 `commands::model_metadata`。
+pub async fn probe_provider_models(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProbeProviderModelsRequest>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    let result = probe_provider_models_inner(&state, req.provider_id).await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LookupModelMetadataRequest {
+    pub model_name: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+}
+
+/// 按模型名查 models.dev 能力目录,返回候选列表(首个=最佳匹配)。
+pub async fn lookup_model_metadata(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LookupModelMetadataRequest>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    let result = lookup_model_metadata_inner(&state, req.model_name, req.provider_id).await?;
+    Ok(Json(result))
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/list_providers", post(list_providers))
@@ -274,5 +312,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/set_default_model", post(set_default_model))
         .route("/update_session_model_id", post(update_session_model_id))
         .route("/test_model", post(test_model))
+        .route("/probe_provider_models", post(probe_provider_models))
+        .route("/lookup_model_metadata", post(lookup_model_metadata))
         .with_state(state)
 }

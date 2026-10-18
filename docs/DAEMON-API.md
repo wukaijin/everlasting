@@ -428,6 +428,28 @@ preview_token 双 oid 拼接、Unavailable/Broken/StalePreview/SessionBusy 类�
 本地路径直连(两条取字节 + 一条存在性探针,见下);`/api/v1` 域外另有 MCP 端点
 `/mcp`(POST/GET/DELETE 三态,§6.5);其余全 POST。
 
+### providers 域模型目录两条(2026-10-19 起):模型探测 + 在线能力匹配
+
+镜像 `commands::model_metadata`(Q0 单源),都返回「业务失败也 200」的
+`{success, error}` 载荷(与 `test_model` 同族):
+
+- `POST /api/v1/providers/probe_provider_models`(入参 `{"provider_id"}`)
+  — 按协议调供应商模型列表端点(anthropic `GET {base}/v1/models?limit=1000`;
+  openai / openai_responses `GET {base}/models`),返回去重后的
+  `{success, latencyMs, models:[{modelName, displayName, spec|null}], truncated,
+  metadataSource, metadataFetchedAt, metadataCached, metadataStale,
+  metadataWarning, error}`。目录不可用时列表照常返回、`metadataWarning`
+  带原因。
+- `POST /api/v1/providers/lookup_model_metadata`(入参
+  `{"model_name", "provider_id"?}`)— 查 `https://models.dev/api.json`
+  (daemon 侧缓存 `{app_data_dir}/cache/models-dev.json`,TTL 24h;网络失败
+  降级过期缓存并标 `stale`),返回最多 8 条候选
+  `{success, source, fetchedAt, cached, stale, matches:[ModelSpec], error}`,
+  首条为最佳匹配。
+
+匹配算法(归一化 / 分级打分 / 跨网关去重按一方厂商优先级)与字段折算
+契约见 `.trellis/spec/backend/model-catalog-contract.md`。
+
 ### evl_cli 域(09-21 起):宿主机 evl CLI 检测 / 一键安装
 
 Settings「CLI (evl)」分类两条(镜像 `commands::evl_cli`,Q0 单源;**检测与

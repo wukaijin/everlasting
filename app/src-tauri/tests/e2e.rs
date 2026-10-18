@@ -618,6 +618,10 @@ mod e1e_router_smoke {
             "/api/v1/providers/set_default_model",
             "/api/v1/providers/update_session_model_id",
             "/api/v1/providers/test_model",
+            // 2026-10-19 (task 10-19-merge-provider-model-settings):模型探测
+            // + models.dev 能力匹配两条。
+            "/api/v1/providers/probe_provider_models",
+            "/api/v1/providers/lookup_model_metadata",
             // question
             "/api/v1/question/resolve_tool_question",
             "/api/v1/question/resolve_mode_change",
@@ -676,5 +680,115 @@ mod e1e_router_smoke {
             missing.is_empty(),
             "these routes returned 404 (not mounted on the router): {missing:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E1f — model probe (2026-10-19, task 10-19-merge-provider-model-settings)
+// ---------------------------------------------------------------------------
+
+mod e1f_model_probe {
+    use super::*;
+
+    /// `probe_provider_models` against an httpmock OpenAI-compatible
+    /// `/models` endpoint: the daemon must call the provider with the
+    /// configured key, parse the standard `{data:[{id,...}]}` shape,
+    /// and return one entry per unique id. The metadata enrichment is
+    /// best-effort (models.dev may be unreachable in CI) — this test
+    /// only pins the **probe** contract, not the catalog fetch.
+    #[tokio::test]
+    async fn probe_provider_models_lists_remote_models() {
+        let Rig { router, _dir } = rig().await;
+        let mock = MockServer::start();
+
+        let models_mock = mock.mock(|when, then| {
+            when.method(Method::GET)
+                .path("/models")
+                .header("authorization", "Bearer test-key-nonempty");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "data": [
+                        { "id": "gpt-4o", "object": "model" },
+                        { "id": "gpt-4o-mini", "object": "model" },
+                        // 重复 id 必须去重。
+                        { "id": "gpt-4o", "object": "model" }
+                    ]
+                }));
+        });
+
+        // Provider pointing at the mock (protocol openai → GET /models).
+        let resp = post_json(
+            &router,
+            "/api/v1/providers/add_provider",
+            json!({
+                "protocol": "openai",
+                "display_name": "mock-openai",
+                "base_url": mock.base_url(),
+                "api_key": "test-key-nonempty",
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let provider = body_json(resp).await;
+        let provider_id = provider["id"].as_str().unwrap().to_string();
+
+        let resp = post_json(
+            &router,
+            "/api/v1/providers/probe_provider_models",
+            json!({ "provider_id": provider_id }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "probe should be 200");
+        let body = body_json(resp).await;
+        assert_eq!(body["success"], json!(true), "probe body: {body}");
+        let names: Vec<&str> = body["models"]
+            .as_array()
+            .expect("models array")
+            .iter()
+            .map(|m| m["modelName"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["gpt-4o", "gpt-4o-mini"]);
+        assert_eq!(models_mock.hits(), 1);
+    }
+
+    /// Unknown provider id → `{success:false, error}` (never a 500),
+    /// same failure family as `test_model`.
+    #[tokio::test]
+    async fn probe_unknown_provider_returns_error_payload() {
+        let Rig { router, _dir } = rig().await;
+        let resp = post_json(
+            &router,
+            "/api/v1/providers/probe_provider_models",
+            json!({ "provider_id": "no-such-provider" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["success"], json!(false));
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not found"),
+            "unexpected body: {body}"
+        );
+    }
+
+    /// Empty model name → `{success:false}` short-circuit (no catalog
+    /// fetch attempted).
+    #[tokio::test]
+    async fn lookup_metadata_rejects_empty_name() {
+        let Rig { router, _dir } = rig().await;
+        let resp = post_json(
+            &router,
+            "/api/v1/providers/lookup_model_metadata",
+            json!({ "model_name": "   " }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["success"], json!(false));
+        assert_eq!(body["matches"], json!([]));
     }
 }
