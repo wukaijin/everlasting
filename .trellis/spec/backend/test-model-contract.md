@@ -8,8 +8,9 @@
 > - [worktree-contract.md](./worktree-contract.md) — attach/detach/delete + cancel + system prompt
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider trait + catalog + Anthropic/OpenAI 分发
 > - [test-model-contract.md](./test-model-contract.md) (本文) — `test_model` IPC
+> - [model-catalog-contract.md](./model-catalog-contract.md) — `probe_provider_models`(供应商模型列表)+ `lookup_model_metadata`(models.dev 能力匹配),2026-10-19
 >
-> **何时读本文**:涉及 `test_model` IPC / ModelsTab "测试"按钮 / per-model round-trip探测时。
+> **何时读本文**:涉及 `test_model` IPC / 模型行"测试"按钮 / per-model round-trip探测时。
 
 ---
 

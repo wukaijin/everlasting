@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "核对探测/匹配的 URL、请求头、失败面与既有 test_model 契约一致"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量标准与 forbidden patterns"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "本任务零 schema 变更需显式确认;app_data_dir 落盘纪律"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端 spec 索引与 Review 检查项"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量标准"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 变更后的整表刷新与跨 store 失效纪律(modelsStore.add 后 refresh)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性:IPC 名 / domain 映射 / e2e 路由清单 / 前端 transport 四处同步"}

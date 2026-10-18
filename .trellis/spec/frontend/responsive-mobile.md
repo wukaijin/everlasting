@@ -521,3 +521,39 @@ Conventions:
   `<DialogContent class="...">` line. A wrong selector silently fails.
 - ❌ JS `isMobile` detection for conditional render — use double-mount
   + CSS `display` control (robust across resize/SSR).
+
+---
+
+## 9. 设置面合并后的卡片布局(2026-10-19, task `10-19-merge-provider-model-settings`)
+
+供应商卡片从「单行 info + actions」变成「头部行 + 模型面板」:
+
+```vue
+<div class="providers-tab__row">            <!-- flex column -->
+  <div class="providers-tab__head">         <!-- 原单行布局 -->
+    <button class="providers-tab__chevron">…</button>
+    <div class="providers-tab__row-info">…</div>
+    <div class="providers-tab__row-actions">…</div>
+  </div>
+  <ProviderModelsPanel v-show="expanded" :provider="p" />
+</div>
+```
+
+**坑 1 — `flex-wrap` 会拆散头部语义**:桌面 `.providers-tab__row` 原本
+`flex-wrap: wrap` 的规则在移动端块里写给头部行。若把 `flex-wrap` 留在
+外层(现在是 column),`align-items` 等属性会作用错层。合并后外层
+`flex-direction: column; align-items: stretch`,移动端 wrap 只写
+`.providers-tab__head`。
+
+**坑 2 — URL 占满整行**:head 内 URL 用 `flex-basis: 100%` 独占第二行,
+否则 chevron / 名称 / 协议徽标 / 模型数会被 long URL 挤到第三行,头部
+读起来像碎片。实证:390px 下不加这条时 chevron 单独悬在左上。
+
+**坑 3 — 全局 44px 触摸目标**:`.settings-modal button` 的 44px 规则会
+把卡片内 icon 按钮(chevron / 重探测 / 关闭)撑爆。沿用既有做法:卡片内
+低频操作显式回 32px(chevron 22px,探测面板右上 26px),主操作(「探测
+模型」「添加模型」)保持可点高度。移动端把两个工具按钮 `flex: 1` 平分
+一行,避免文字被截断。
+
+**面板状态与 `v-show`**:折叠用 `v-show` 而非 `v-if` —— 折叠不应该丢掉
+探测结果 / 表单草稿。代价是 DOM 常驻(模型多时略重),可接受。

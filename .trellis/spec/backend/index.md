@@ -35,6 +35,7 @@
 | [Quality Guidelines](./quality-guidelines.md) | 代码质量标准 / forbidden patterns | 有实质内容(残留少量模板句可清) |
 | [Logging Guidelines](./logging-guidelines.md) | 结构化日志 / log 级别 | 有实质内容(残留少量模板句可清) |
 | [Test Model Contract](./test-model-contract.md) | per-model 连通性探测契约 | ✅ 有实质内容 |
+| [Model Catalog Contract](./model-catalog-contract.md) | 模型探测(供应商 `/models`)+ models.dev 在线能力匹配(归一化/打分/跨网关去重/缓存 TTL) | ✅ 有实质内容(2026-10-19) |
 | [Perf Baseline](./perf-baseline.md) | N9 性能基准基线与口径(criterion benches / `bench` feature 门勿滥用 / 复跑与更新纪律触发器) | ✅ 有实质内容 |
 
 > 子目录(pattern-* / tool-contract 分篇 / llm-contract 分篇等)由顶层 `.md` 入口的链接承接;加新 spec 时同步本表。跨层 thinking guide(代码复用 / 跨层数据流 / docs 维护 / debt 演进)见 [guides](../guides/index.md)。

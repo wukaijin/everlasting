@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 spec 索引:确认 daemon route / commands 双层单源约定与新增 spec 同步义务"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "模型探测必须沿用 test_model 的协议 URL 约定(/v1 归属)、失败面({success:false,error} + HTTP 200)与 max_tokens 语义"}
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "daemon 路由 domain 布局与 _inner 单源/Q0 决策"}
+{"file": ".trellis/spec/frontend/transport-and-pwa-modes.md", "reason": "CMD_TO_DOMAIN 同步纪律 + HTTP body camel→snake 转换,新 IPC 必须双侧对齐"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "SelectContent portal 的 :deep() 陷阱(表单内下拉样式)"}
+{"file": ".trellis/spec/frontend/test-environment.md", "reason": "vitest/jsdom 的 transport mock 约定与 reka-ui portal 清理"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Icon registry 未注册静默空 span / flex 卡 min-width:0 两个实证陷阱"}
+{"file": ".trellis/spec/frontend/responsive-mobile.md", "reason": "设置弹窗 44px 触摸目标与移动端收紧规则(卡片内按钮需显式回 32px)"}
