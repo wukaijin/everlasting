@@ -74,6 +74,20 @@ const props = defineProps<{
     saving: boolean;
     /** Whether the Save button should be enabled. */
     canSave: boolean;
+    /** 2026-10-19 (task 10-19-merge-provider-model-settings): merged
+     *  provider+model settings page opens this form inline under a
+     *  provider card. Non-empty → the provider is fixed (the select is
+     *  replaced by a read-only label) so a model can never be saved
+     *  under a different provider than the card it was created from. */
+    providerLabel?: string;
+    /** True while the parent's `lookup_model_metadata` call is running. */
+    matching?: boolean;
+    /** Result of the last auto-match attempt (null = never tried). */
+    matchHint?: { kind: "ok" | "fail" | "info"; text: string } | null;
+    /** Other candidates from the last auto-match (best match excluded).
+     *  Rendered inline under the match row so switching is one click
+     *  without leaving the form's field group. */
+    alternatives?: Array<{ key: string; label: string }>;
 }>();
 
 const emit = defineEmits<{
@@ -83,6 +97,13 @@ const emit = defineEmits<{
     /** User clicked Cancel — parent resets the form and goes
      *  back to idle. */
     cancel: [];
+    /** 2026-10-19: user clicked「按名称自动匹配能力」— the parent
+     *  queries models.dev (`lookup_model_metadata`) and fills in
+     *  context window / max tokens / vision / thinking. */
+    "auto-match": [];
+    /** User clicked one of the alternative catalog entries — the parent
+     *  re-applies the capability fields from that entry. */
+    "apply-alternative": [key: string];
 }>();
 
 // --- Thinking-effort options, filtered by provider protocol (task
@@ -143,7 +164,14 @@ const effortOptions = computed<EffortOption[]>(() => {
 
         <Label class="model-form__field">
             <span class="model-form__label">Provider</span>
-            <SelectRoot v-model="form.providerId">
+            <!-- 2026-10-19 (merged settings): inline mode under a
+                 provider card pins the provider — no cross-provider
+                 mistakes, and the form stays single-column. -->
+            <span v-if="providerLabel" class="model-form__provider-fixed">
+                <Icon name="server" :size="12" />
+                {{ providerLabel }}
+            </span>
+            <SelectRoot v-else v-model="form.providerId">
                 <SelectTrigger class="model-form__trigger" aria-label="Provider">
                     <SelectValue placeholder="Select provider" />
                     <SelectIcon class="model-form__trigger-icon">
@@ -193,6 +221,49 @@ const effortOptions = computed<EffortOption[]>(() => {
                 />
             </Label>
         </div>
+
+        <!-- 2026-10-19: auto-match row — queries models.dev by model
+             name and fills context window / max output / vision /
+             thinking. Result is inline (ok / fail / info), no toast. -->
+        <div class="model-form__auto-match">
+            <button
+                type="button"
+                class="model-form__btn model-form__btn--match btn btn--muted"
+                :disabled="matching || form.modelName.trim() === ''"
+                :title="form.modelName.trim() === ''
+                    ? '先填写 Model Name'
+                    : '按模型名从 models.dev 查询上下文窗口 / 最大输出 / 视觉 / 思考能力'"
+                data-testid="model-auto-match"
+                @click="emit('auto-match')"
+            >
+                <Icon name="refresh" :size="12" :class="{ 'model-form__spin': matching }" />
+                {{ matching ? "匹配中…" : "按名称自动匹配能力" }}
+            </button>
+            <span v-if="matchHint" class="model-form__match-hint" :class="`model-form__match-hint--${matchHint.kind}`">
+                <Icon :name="matchHint.kind === 'fail' ? 'warn' : matchHint.kind === 'ok' ? 'check' : 'info'" :size="12" />
+                {{ matchHint.text }}
+            </span>
+            <span v-else class="model-form__match-hint model-form__match-hint--info">
+                数据源 models.dev(需联网);匹配后可再手动微调
+            </span>
+        </div>
+
+        <!-- 2026-10-19: 其它候选 —— 目录里同一归一化名可能对应多个供应商
+             / 日期变体。点一下即换用该条的能力字段(不覆盖用户已填的
+             Model Name / Display Name)。 -->
+        <div v-if="alternatives && alternatives.length > 0" class="model-form__alts">
+            <span class="model-form__alts-label">其它候选:</span>
+            <button
+                v-for="alt in alternatives"
+                :key="alt.key"
+                type="button"
+                class="model-form__alt btn btn--muted"
+                @click="emit('apply-alternative', alt.key)"
+            >
+                {{ alt.label }}
+            </button>
+        </div>
+
 
         <div class="model-form__row-pair">
             <Label class="model-form__field">
@@ -472,6 +543,80 @@ const effortOptions = computed<EffortOption[]>(() => {
     display: flex;
     gap: 8px;
     justify-content: flex-end;
+}
+
+/* --- 2026-10-19: auto-match row + fixed provider label --- */
+
+.model-form__provider-fixed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--color-bg-app);
+    border: 1px dashed var(--color-bg-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    font-size: var(--text-base);
+    box-sizing: border-box;
+}
+
+.model-form__auto-match {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.model-form__btn--match {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+/* 旋转 = 加载;matching 期间禁用按钮(父级在途防重入)。 */
+.model-form__spin {
+    animation: model-form-spin 1s linear infinite;
+}
+
+@keyframes model-form-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.model-form__match-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    min-width: 0;
+}
+
+.model-form__match-hint--ok {
+    color: var(--color-tool-write);
+}
+
+.model-form__match-hint--fail {
+    color: var(--color-tool-error-text);
+}
+
+.model-form__alts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.model-form__alts-label {
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+}
+
+.model-form__alt {
+    font-size: var(--text-2xs);
+    padding: 2px 8px;
+    min-height: 22px;
 }
 
 /* 按钮样式由全局 .btn 家族承载(primary = primary / secondary =

@@ -2,16 +2,18 @@
 // ProvidersTab — CRUD for LLM providers. Each provider has a protocol
 // (anthropic/openai/openai_responses), display name, base URL, and API key.
 //
+// 2026-10-19 (task `10-19-merge-provider-model-settings`): 供应商与模型
+// **合并为一处**。原 Models 分类从设置导航移除,模型 CRUD 内嵌到每个
+// 供应商卡片下(`ProviderModelsPanel`:列表 / 新增 / 编辑 / 删除 /
+// 连通性测试 / 禁用开关),并新增「探测模型」(拉供应商模型列表 → 勾选
+// 批量导入)与表单里的「按名称自动匹配能力」(models.dev 在线目录)。
+// 这样供应商的 key / base URL 与它的模型永远在同一屏,不再跨页往返。
+//
 // PR5 follow-up: the Test button that previously lived here has
-// been removed. The user-perceived "Test" flow now lives on the
-// Models tab (per-row "测试" button) and runs `test_model` —
-// validating that a specific model_name can be reached end-to-end
-// is the user-meaningful connectivity check. A provider-level
-// protocol-reachability probe (the old `test_provider` IPC) was
-// only a subset of that and surfaced confusing results when a
-// provider routed to a GLM-style proxy with multiple model names
-// where some were 404. (The old `test_provider` IPC has since
-// been removed from the Rust registry — zero frontend callers.)
+// been removed. The user-perceived "Test" flow lives on each model
+// row inside the provider card and runs `test_model` — validating
+// that a specific model_name can be reached end-to-end is the
+// user-meaningful connectivity check.
 //
 // R1 polish: form controls now use reka-ui `SelectRoot` /
 // `SelectTrigger` / `SelectItem` for the protocol dropdown, and
@@ -37,6 +39,7 @@ import {
 } from "reka-ui";
 import { useProvidersStore, type ProviderRow } from "../../stores/providers";
 import { useModelsStore } from "../../stores/models";
+import ProviderModelsPanel from "./ProviderModelsPanel.vue";
 import Icon from "../Icon.vue";
 
 const providersStore = useProvidersStore();
@@ -60,10 +63,32 @@ const saving = ref(false);
 const showApiKey = ref(false);
 const deleteConfirmId = ref<string | null>(null);
 
+// 2026-10-19 (merged settings): each provider card hosts its own model
+// list. Cards default to **expanded** (the merge exists so users see a
+// provider's models right where its key/base URL live); the chevron
+// folds a long list away. `collapsed` stores explicit collapses so the
+// default stays "open" without seeding every provider id up front.
+const collapsed = ref<Set<string>>(new Set());
+
+function isExpanded(providerId: string): boolean {
+  return !collapsed.value.has(providerId);
+}
+
+function toggleExpanded(providerId: string): void {
+  const next = new Set(collapsed.value);
+  if (next.has(providerId)) next.delete(providerId);
+  else next.add(providerId);
+  collapsed.value = next;
+}
+
+function modelCount(providerId: string): number {
+  return modelsStore.models.filter((m) => m.providerId === providerId).length;
+}
+
 /** PR5: Save is enabled when required fields are filled and the
  *  form isn't mid-save. The pre-PR5 gate also required
  *  `testPassed` — that gate is gone now that the Test button
- *  moved to ModelsTab. */
+ *  moved into each provider card's model panel. */
 const canSave = computed(() => {
   if (saving.value) return false;
   if (!form.displayName.trim() || !form.baseUrl.trim()) return false;
@@ -236,71 +261,100 @@ function protocolBadgeClass(protocol: string): string {
         class="providers-tab__row"
         :class="{ 'providers-tab__row--disabled': p.disabled }"
       >
-        <div class="providers-tab__row-info">
-          <span class="providers-tab__name">{{ p.displayName }}</span>
-          <span :class="['providers-tab__badge', protocolBadgeClass(p.protocol)]">
-            {{ p.protocol }}
-          </span>
-          <!-- 2026-09-07 (provider-model-disable): 禁用徽标 —— 禁用是
-               选用层开关(该 provider 及其全部模型从选择列表隐藏),
-               分发不受影响,徽标用 muted 色相而非错误红。 -->
-          <span
-            v-if="p.disabled"
-            class="providers-tab__badge providers-tab__badge--disabled"
-            title="已禁用:该 provider 及其模型不再出现在模型选择列表;已在用的会话不受影响"
+        <div class="providers-tab__head">
+          <button
+            type="button"
+            class="providers-tab__chevron btn btn--icon btn--ghost"
+            :aria-expanded="isExpanded(p.id)"
+            :aria-label="isExpanded(p.id) ? `收起 ${p.displayName} 的模型` : `展开 ${p.displayName} 的模型`"
+            :data-testid="`providers-expand-${p.id}`"
+            @click="toggleExpanded(p.id)"
           >
-            已禁用
-          </span>
-          <span class="providers-tab__url">{{ p.baseUrl }}</span>
-          <span
-            class="providers-tab__key-hint"
-            :aria-label="keyStatusLabel(p.hasKey)"
-            :title="keyStatusLabel(p.hasKey)"
-          >
-            <Icon name="key" :size="12" />
-            <!-- S6b: 文字包一层 span,移动端隐藏只留 key 图标(见下方移动端块)。
-                 aria-label 补回 a11y:图标本身 aria-hidden,文字隐藏后 SR
-                 仍能读出 已加密保存/未设置(design §4 风险表声称"图标+组件
-                 语义"已保留 —— 不成立,Icon.vue 的图标全部 aria-hidden)。
-                 08-14 ux-polish-r1 WP3 3.3(评审 C4):"已加密保存"是逐行
-                 常驻的状态噪音,桌面也降级为 title tooltip(移动端文字本就
-                 隐藏,补 title 后 hover/长按可查);"未设置"是可行动的警告,
-                 保留可见文字(桌面)。 -->
-            <span v-if="!p.hasKey" class="providers-tab__key-hint-text">未设置</span>
-          </span>
+            <Icon :name="isExpanded(p.id) ? 'chevron-down' : 'chevron-right'" :size="12" />
+          </button>
+          <div class="providers-tab__row-info">
+            <span class="providers-tab__name">{{ p.displayName }}</span>
+            <span :class="['providers-tab__badge', protocolBadgeClass(p.protocol)]">
+              {{ p.protocol }}
+            </span>
+            <!-- 2026-09-07 (provider-model-disable): 禁用徽标 —— 禁用是
+                 选用层开关(该 provider 及其全部模型从选择列表隐藏),
+                 分发不受影响,徽标用 muted 色相而非错误红。 -->
+            <span
+              v-if="p.disabled"
+              class="providers-tab__badge providers-tab__badge--disabled"
+              title="已禁用:该 provider 及其模型不再出现在模型选择列表;已在用的会话不受影响"
+            >
+              已禁用
+            </span>
+            <!-- 2026-10-19 (merged settings): 模型数常驻徽标 —— 折叠时
+                 也能一眼看出该供应商下有几个模型。 -->
+            <span
+              class="providers-tab__badge providers-tab__badge--count"
+              :title="`${modelCount(p.id)} 个模型`"
+              :data-testid="`providers-model-count-${p.id}`"
+            >
+              {{ modelCount(p.id) }} 模型
+            </span>
+            <span class="providers-tab__url">{{ p.baseUrl }}</span>
+            <span
+              class="providers-tab__key-hint"
+              :aria-label="keyStatusLabel(p.hasKey)"
+              :title="keyStatusLabel(p.hasKey)"
+            >
+              <Icon name="key" :size="12" />
+              <!-- S6b: 文字包一层 span,移动端隐藏只留 key 图标(见下方移动端块)。
+                   aria-label 补回 a11y:图标本身 aria-hidden,文字隐藏后 SR
+                   仍能读出 已加密保存/未设置(design §4 风险表声称"图标+组件
+                   语义"已保留 —— 不成立,Icon.vue 的图标全部 aria-hidden)。
+                   08-14 ux-polish-r1 WP3 3.3(评审 C4):"已加密保存"是逐行
+                   常驻的状态噪音,桌面也降级为 title tooltip(移动端文字本就
+                   隐藏,补 title 后 hover/长按可查);"未设置"是可行动的警告,
+                   保留可见文字(桌面)。 -->
+              <span v-if="!p.hasKey" class="providers-tab__key-hint-text">未设置</span>
+            </span>
+          </div>
+          <div class="providers-tab__row-actions">
+            <button
+              type="button"
+              class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
+              :class="{ 'providers-tab__btn--off': p.disabled }"
+              :disabled="toggleLocked(p)"
+              :title="toggleTitle(p)"
+              :aria-label="toggleAriaLabel(p)"
+              :data-testid="`providers-toggle-disabled-${p.id}`"
+              @click="toggleDisabled(p)"
+            >
+              <Icon name="power" :size="12" />
+            </button>
+            <button
+              type="button"
+              class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
+              title="编辑"
+              aria-label="编辑 provider"
+              @click="startEdit(p)"
+            >
+              <Icon name="pencil" :size="12" />
+            </button>
+            <button
+              type="button"
+              class="providers-tab__btn providers-tab__btn--ghost providers-tab__btn--danger btn btn--icon btn--danger-soft"
+              title="删除"
+              aria-label="删除 provider"
+              @click="deleteConfirmId = p.id"
+            >
+              <Icon name="trash" :size="12" />
+            </button>
+          </div>
         </div>
-        <div class="providers-tab__row-actions">
-          <button
-            type="button"
-            class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
-            :class="{ 'providers-tab__btn--off': p.disabled }"
-            :disabled="toggleLocked(p)"
-            :title="toggleTitle(p)"
-            :aria-label="toggleAriaLabel(p)"
-            :data-testid="`providers-toggle-disabled-${p.id}`"
-            @click="toggleDisabled(p)"
-          >
-            <Icon name="power" :size="12" />
-          </button>
-          <button
-            type="button"
-            class="providers-tab__btn providers-tab__btn--ghost btn btn--icon btn--ghost"
-            title="编辑"
-            aria-label="编辑 provider"
-            @click="startEdit(p)"
-          >
-            <Icon name="pencil" :size="12" />
-          </button>
-          <button
-            type="button"
-            class="providers-tab__btn providers-tab__btn--ghost providers-tab__btn--danger btn btn--icon btn--danger-soft"
-            title="删除"
-            aria-label="删除 provider"
-            @click="deleteConfirmId = p.id"
-          >
-            <Icon name="trash" :size="12" />
-          </button>
-        </div>
+
+        <!-- 2026-10-19 (merged settings): 供应商的模型管理区,默认展开。
+             原独立 Models 分类的全部能力都在这里(列表 / 测试 / 禁用 /
+             编辑 / 删除 + 新增「探测模型」)。 -->
+        <ProviderModelsPanel
+          v-show="isExpanded(p.id)"
+          :provider="p"
+        />
       </div>
 
       <div
@@ -459,15 +513,43 @@ function protocolBadgeClass(protocol: string): string {
   gap: 8px;
 }
 
+/* 2026-10-19 (merged settings): 卡片从「单行」变成「头部行 + 模型区」。
+   头部行(.providers-tab__head)保留原单行的水平布局;模型区在下方
+   默认展开(见模板 ProviderModelsPanel)。 */
 .providers-tab__row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding: 8px 12px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
+}
+
+.providers-tab__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.providers-tab__chevron {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  justify-content: center;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* 模型数徽标(muted 实底,与协议色相区分)。 */
+.providers-tab__badge--count {
+  background: var(--color-bg-border);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
 }
 
 .providers-tab__row-info {
@@ -775,7 +857,7 @@ function protocolBadgeClass(protocol: string): string {
  * 桌面样式块零改动,以下全部放 @media (max-width: 767px) 内。 */
 @media (max-width: 767px) {
   /* B6/B7/B8:Provider 卡片信息密度降级 —— 允许两行堆叠 */
-  .providers-tab__row {
+  .providers-tab__head {
     flex-wrap: wrap; /* 卡片允许两行 */
   }
   .providers-tab__row-info {
@@ -796,6 +878,11 @@ function protocolBadgeClass(protocol: string): string {
     white-space: normal;
     overflow-wrap: anywhere;
     max-width: 100%;
+    /* 2026-10-19 (merged settings): URL 独占一行,让 chevron / 名称 /
+       协议徽标 / 模型数留在第一行与右侧操作按钮同居 —— 否则 chevron
+       被挤到独立一行,卡片头部读起来像三段碎片。 */
+    flex-basis: 100%;
+    order: 1;
   }
 
   .providers-tab__key-hint {

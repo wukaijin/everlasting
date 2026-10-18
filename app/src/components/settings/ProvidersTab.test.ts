@@ -1,7 +1,12 @@
-// 2026-09-07 (provider-model-disable) — ProvidersTab 测试。
-// 覆盖:provider 级「默认模型拦截」—— 拥有当前默认模型的 provider
-// 禁用开关被禁用;不含默认模型的 provider 正常可点;已禁用 provider
-// 的「启用」方向不误伤。
+// ProvidersTab 测试。
+//
+// 2026-09-07 (provider-model-disable):provider 级「默认模型拦截」——
+// 拥有当前默认模型的 provider 禁用开关被禁用;不含默认模型的 provider
+// 正常可点;已禁用 provider 的「启用」方向不误伤。
+//
+// 2026-10-19 (task 10-19-merge-provider-model-settings):供应商与模型
+// 合并为一处 —— 每个供应商卡片下内嵌模型管理区(默认展开,chevron 可
+// 折叠),卡片头部常驻模型数徽标;原独立 Models 分类已删除。
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -104,9 +109,48 @@ describe("ProvidersTab — default model disable guard", () => {
     await flushPromises();
     const btn = wrapper.find('[data-testid="providers-toggle-disabled-p-1"]');
     // 启用方向不锁(恢复正常态);连 disabled provider 的连带禁用态
-    // (providerDisabled)由 Models 页徽标呈现,这里只验证开关可点。
+    // (providerDisabled)由 ModelRow 徽标呈现,这里只验证开关可点。
     expect(btn.attributes("disabled")).toBeUndefined();
     expect(btn.attributes("title")).toContain("启用");
+  });
+});
+
+// 2026-10-19 (merged settings): 卡片内嵌模型管理区。
+describe("ProvidersTab — 卡片内嵌模型管理(2026-10-19 合并)", () => {
+  let pinia: Pinia;
+
+  beforeEach(() => {
+    pinia = createPinia();
+    setActivePinia(pinia);
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue([]);
+  });
+
+  it("每个供应商卡片下渲染模型面板,并显示模型数徽标", async () => {
+    seed(pinia);
+    const wrapper = mount(ProvidersTab, { global: { plugins: [pinia] } });
+    await flushPromises();
+    expect(wrapper.findAll(".provider-models")).toHaveLength(2);
+    // 模型数徽标:p-1 有 1 个,p-2 有 1 个(seed 两条)。
+    expect(wrapper.find('[data-testid="providers-model-count-p-1"]').text()).toBe("1 模型");
+    // 卡片内的模型行来自 ProviderModelsPanel(ModelRow 渲染 displayName)。
+    expect(wrapper.text()).toContain("GLM-5.3");
+  });
+
+  it("chevron 折叠该供应商的模型面板(aria-expanded 同步)", async () => {
+    seed(pinia);
+    const wrapper = mount(ProvidersTab, { global: { plugins: [pinia] } });
+    await flushPromises();
+    const toggle = wrapper.find('[data-testid="providers-expand-p-1"]');
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    const panel = wrapper.findAll(".provider-models")[0]!;
+    expect((panel.element as HTMLElement).style.display).not.toBe("none");
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    // v-show 折叠:面板仍在 DOM(保留探测/编辑状态),只是不可见。
+    expect((panel.element as HTMLElement).style.display).toBe("none");
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
   });
 });
 
