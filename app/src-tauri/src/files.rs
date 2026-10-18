@@ -84,8 +84,16 @@ pub(crate) const MAX_DEPTH: usize = 15;
 pub(crate) const MAX_FILES: usize = 5000;
 
 /// Open the git repo at `root` if it is one. Returns `(repo, workdir)`
-/// for ignore checks; `None` when `root` is not inside a git repo
-/// (non-git fallback: exclude-list only).
+/// for ignore checks; `None` when `root` is not a git repo (non-git
+/// fallback: exclude-list only).
+///
+/// `workdir` is the **repository** workdir as git2 reports it — on
+/// macOS that is the physical form (`/private/var/...` for `/var`),
+/// while walked paths carry `root` verbatim. Equating the two is not
+/// this function's job: [`is_git_ignored`] handles the spelling
+/// mismatch, and keeping the repo root here preserves `.gitignore`
+/// anchoring (replacing it with the walk root would re-anchor
+/// patterns and drop repo-root rules like `/sub/x.log`).
 fn open_repo(root: &Path) -> Option<(Repository, PathBuf)> {
     let repo = Repository::open(root).ok()?;
     let workdir = repo.workdir()?.to_path_buf();
@@ -94,12 +102,26 @@ fn open_repo(root: &Path) -> Option<(Repository, PathBuf)> {
 
 /// True if `abs_path` is git-ignored. `False` on any error or when the
 /// path is outside the workdir (shouldn't happen — we walk under root).
+///
+/// The lexical `strip_prefix` is tried first (fast path, and correct
+/// whenever `root` and the workdir share a spelling). On a miss the
+/// absolute path is canonicalized and retried — that is the macOS
+/// `/var` → `/private/var` case, and it also covers a project reached
+/// through a symlinked parent on any platform. A path that is
+/// canonicalizable to somewhere outside the workdir is NOT ignored
+/// (fail-open on the ignore check, never on the boundary).
 fn is_git_ignored(repo: &Repository, workdir: &Path, abs_path: &Path) -> bool {
     let rel = match abs_path.strip_prefix(workdir) {
-        Ok(r) => r,
-        Err(_) => return false,
+        Ok(r) => r.to_path_buf(),
+        Err(_) => match abs_path.canonicalize() {
+            Ok(canon) => match canon.strip_prefix(workdir) {
+                Ok(r) => r.to_path_buf(),
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        },
     };
-    repo.is_path_ignored(rel).unwrap_or(false)
+    repo.is_path_ignored(&rel).unwrap_or(false)
 }
 
 /// Convert a root-relative `Path` to a forward-slash string
