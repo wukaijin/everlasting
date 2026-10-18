@@ -59,7 +59,7 @@ const groups = computed(() => {
     </div>
 
     <div v-if="modelsStore.models.length === 0" class="default-tab__empty">
-      No models available. Add models in the Models tab first.
+      No models available. Add models in Settings → Providers first.
     </div>
 
     <div v-else class="default-tab__groups">

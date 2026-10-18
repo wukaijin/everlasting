@@ -7,8 +7,9 @@
 //      are still loading).
 //   2. No providers → card A (3-step guide + CTA) and the CTA opens
 //      Settings landing on the "providers" category.
-//   3. Providers but no models → card B; CTA lands on "models".
-//   4. Models but no default → card C; CTA lands on "models".
+//   3. Providers but no models → card B; CTA lands on "providers"
+//      (2026-10-19 settings merge: models live inside provider cards).
+//   4. Models but no default → card C; CTA lands on "default".
 //   5. Fully configured → the original empty state, byte-for-byte
 //      behavior (no card).
 //
@@ -122,7 +123,7 @@ describe("ChatPanel — empty state four-way split (N1)", () => {
     expect(settings.initialCategory).toBe("providers");
   });
 
-  it("有 provider 无模型 → 卡 B,CTA 落 models", async () => {
+  it("有 provider 无模型 → 卡 B,CTA 落 providers", async () => {
     const config = useConfigStore();
     const providers = useProvidersStore();
     const models = useModelsStore();
@@ -137,10 +138,10 @@ describe("ChatPanel — empty state four-way split (N1)", () => {
     await card.get("[data-testid='chat-empty-open-settings']").trigger("click");
     const settings = useSettingsModalStore();
     expect(settings.open).toBe(true);
-    expect(settings.initialCategory).toBe("models");
+    expect(settings.initialCategory).toBe("providers");
   });
 
-  it("有模型未设默认 → 卡 C,CTA 落 models", async () => {
+  it("有模型未设默认 → 卡 C,CTA 落 default", async () => {
     const config = useConfigStore();
     const providers = useProvidersStore();
     const models = useModelsStore();
@@ -155,7 +156,7 @@ describe("ChatPanel — empty state four-way split (N1)", () => {
     await card.get("[data-testid='chat-empty-open-settings']").trigger("click");
     const settings = useSettingsModalStore();
     expect(settings.open).toBe(true);
-    expect(settings.initialCategory).toBe("models");
+    expect(settings.initialCategory).toBe("default");
   });
 
   it("配置齐 → 原「开始对话」空状态,无引导卡", () => {

@@ -410,7 +410,7 @@ const speakerModelLabel = computed<string | null>(() => {
 //
 // footer 保持零 store(纯展示),这里持有三态结果并调
 // transport.invoke("test_model")(三传输模式全通,零新命令映射);
-// 照 ModelsTab runTest 形制(running / ok(latencyMs) / fail(error)),
+// 照 ProviderModelsPanel runTest 形制(running / ok(latencyMs) / fail(error)),
 // 经 prop 回传 footer 行内渲染。
 
 /** 待测模型解析链(先例 = 上方 speakerModelLabel 的 moderator /

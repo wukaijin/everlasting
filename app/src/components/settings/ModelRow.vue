@@ -7,7 +7,7 @@
 // `.models-tab__row-test` (now `.model-row__test` after 8-PR3)
 // and persists until either (a) the user clicks Test again, or
 // (b) the row is deleted. The test state lives in the parent
-// (ModelsTab) so it survives switching tabs — switching
+// (ProviderModelsPanel) so it survives switching tabs — switching
 // providers or editing the model fields intentionally does NOT
 // clear the result.
 
@@ -311,7 +311,7 @@ const testTitle = computed<string>(() =>
    效果不保留。下方移动端块是 32px 触摸目标守卫的显式几何,保留。 */
 
 /* --- S6b 移动端适配(08-13-mobile-settings, 320-430px) ---
- * Models tab 溢出检查:行内 3 个操作按钮被 44px 全局块放大后,长
+ * 模型行溢出检查:行内 3 个操作按钮被 44px 全局块放大后,长
  * provider/model 名在窄屏被挤爆 —— 轻量补 name ellipsis 守卫,不改布局。 */
 @media (max-width: 767px) {
     /* 真机迭代第三轮(2026-08-13):"放不下就弄两行"。

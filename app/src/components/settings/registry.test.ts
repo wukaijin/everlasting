@@ -19,6 +19,8 @@ import {
   filterCategories,
   groupCategories,
   findCategory,
+  legacyCategoryId,
+  LEGACY_CATEGORY_ALIASES,
 } from "./registry";
 
 describe("settings registry", () => {
@@ -75,9 +77,10 @@ describe("settings registry", () => {
     const labels = groups.slice(1).map((g) => g.label);
     // F3(2026-09-03):新增「存储」组(集成之后、远程之前)。
     expect(labels).toEqual(["模型", "智能体", "集成", "存储", "远程"]);
-    // 模型组内顺序:Providers → Models → Default。
+    // 模型组内顺序:Providers → Default(2026-10-19 合并设置:独立的
+    // Models 分类已并入 Providers 卡片内嵌模型管理)。
     const modelGroup = groups.find((g) => g.label === "模型");
-    expect(modelGroup?.items.map((c) => c.id)).toEqual(["providers", "models", "default"]);
+    expect(modelGroup?.items.map((c) => c.id)).toEqual(["providers", "default"]);
     // 智能体组内顺序:Memory → Subagents → 群聊预设(GCE-P1,2026-09-12)。
     const agentGroup = groups.find((g) => g.label === "智能体");
     expect(agentGroup?.items.map((c) => c.id)).toEqual(["memory", "subagents", "gc-presets"]);
@@ -94,5 +97,20 @@ describe("settings registry", () => {
     expect(findCategory("general")?.scope).toBe("global");
     expect(findCategory("project-memory")?.scope).toBe("project");
     expect(findCategory("no-such-category")).toBeUndefined();
+  });
+
+  it("2026-10-19 合并设置:models 分类并入 providers,历史 id 走别名", () => {
+    // 导航里不再出现独立 Models 分类。
+    expect(SETTINGS_CATEGORIES.some((c) => c.id === "models")).toBe(false);
+    // 但按 id 查找仍能落到合并后的分类 —— 老 localStorage / 引导卡 /
+    // 书签不会因分类消失被扔回「通用」。
+    expect(findCategory("models")?.id).toBe("providers");
+    expect(legacyCategoryId("models")).toBe("providers");
+    expect(LEGACY_CATEGORY_ALIASES.models).toBe("providers");
+    // 原 Models 的搜索词随迁到 Providers。
+    expect(filterCategories("模型", "global").map((c) => c.id)).toContain("providers");
+    expect(filterCategories("探测", "global").map((c) => c.id)).toContain("providers");
+    // 无别名 id 原样返回。
+    expect(legacyCategoryId("general")).toBe("general");
   });
 });

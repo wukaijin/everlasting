@@ -14,7 +14,7 @@ import { ref } from "vue";
  *  localStorage「上次停留」恢复)并经 consumeInitialCategory 清空
  *  —— 一次性语义,不污染用户上次停留记忆;普通入口(gear 按钮)
  *  行为不变。分类 id 见 components/settings/registry.ts
- *  (如 "providers" / "models")。 */
+ *  (如 "providers" / "default";历史 "models" 由别名表落到 providers)。 */
 export const useSettingsModalStore = defineStore("settingsModal", () => {
   const open = ref(false);
   const initialCategory = ref<string | null>(null);

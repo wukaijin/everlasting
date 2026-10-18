@@ -54,7 +54,7 @@ export const useModelsStore = defineStore("models", () => {
   });
 
   /** Models grouped by provider — for the ModelSelect dropdown in
-   *  the chat input and the Models tab grouped list. Each group
+   *  the chat input and the Settings → Providers model panels. Each group
    *  carries the provider's display name and protocol alongside
    *  its models. */
   const modelsGroupedByProvider = computed(() => {

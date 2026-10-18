@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // DeleteModelConfirm — overlay confirmation for deleting a model.
-// 8-PR3: extracted from ModelsTab.vue. Renders a backdrop + a
+// 8-PR3: extracted from the old ModelsTab (now rendered by
+// ProviderModelsPanel after the 2026-10-19 settings merge). Renders a backdrop + a
 // small confirmation card with a Delete (danger) and Cancel
 // (secondary) button pair. The parent owns the actual deletion
 // IPC.

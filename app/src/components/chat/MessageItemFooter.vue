@@ -46,7 +46,7 @@
 //   - 仍然零 store:按钮只 emit("test-connection"),`test_model`
 //     IPC 由父(MessageItem.vue)编排,testState 三态(running /
 //     ok(latencyMs) / fail(error))经 prop 回传行内渲染 —— 与
-//     retry 同款「父编排、子渲染」分工(照 ModelsTab runTest 形制)。
+//     retry 同款「父编排、子渲染」分工(照 ProviderModelsPanel runTest 形制)。
 
 import { computed } from "vue";
 import {
@@ -59,7 +59,7 @@ import {
 } from "reka-ui";
 import { abbreviateDuration } from "../../utils/duration";
 import { categoryRetryable } from "../../utils/error";
-// 跨 settings/ 的 type-only 导入(单源:与 ModelsTab/ModelRow 的
+// 跨 settings/ 的 type-only 导入(单源:与 ModelRow 的
 // 行内测试结果同形);运行时零依赖(类型擦除)。
 import type { TestState } from "../settings/ModelRow.vue";
 import Icon from "../Icon.vue";
@@ -108,7 +108,7 @@ const props = withDefaults(
      *  does not render (nothing to test against). */
     modelId?: string;
     /** N1 (R1.2): the inline test result owned by the parent
-     *  (same shape as ModelsTab's per-row TestState). Null /
+     *  (same shape as ModelRow's per-row TestState). Null /
      *  undefined = never tested; `running` disables the button
      *  and flips its label; `ok` / `fail` render the inline
      *  result text next to the error row. */

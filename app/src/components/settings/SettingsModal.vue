@@ -53,7 +53,10 @@ import {
   type SettingsScope,
 } from "./registry";
 import ProvidersTab from "./ProvidersTab.vue";
-import ModelsTab from "./ModelsTab.vue";
+// 2026-10-19 (task `10-19-merge-provider-model-settings`):独立的 Models
+// 分类已并入 Providers(供应商卡片内嵌模型管理),`ModelsTab.vue` 因此
+// 删除。`models` 分类 id 经 registry 的 LEGACY_CATEGORY_ALIASES 落到
+// providers,老 localStorage / 引导卡入口不失效。
 import DefaultTab from "./DefaultTab.vue";
 import MemoryTab from "./MemoryTab.vue";
 import SubagentsTab from "./SubagentsTab.vue";
@@ -78,8 +81,10 @@ const open = defineModel<boolean>("open", { required: true });
 // 发),这里只读;消费后向上 emit,由调用方清空 store。
 const props = defineProps<{
   /** 一次性初始分类 id(registry 的分类 id,如 "providers" /
-   *  "models")。非空时本次打开跳过 localStorage 恢复直落该分类;
-   *  无效 id 回退正常恢复。缺省 = 普通打开,行为不变。 */
+   *  "default")。非空时本次打开跳过 localStorage 恢复直落该分类;
+   *  无效 id 回退正常恢复。缺省 = 普通打开,行为不变。
+   *  历史 id("models")经 registry 的 LEGACY_CATEGORY_ALIASES 落到
+   *  合并后的分类(2026-10-19 设置合并)。 */
   initialCategory?: string | null;
 }>();
 
@@ -97,7 +102,6 @@ const projectsStore = useProjectsStore();
 const CATEGORY_COMPONENTS: Record<string, Component> = {
   general: GeneralTab,
   providers: ProvidersTab,
-  models: ModelsTab,
   default: DefaultTab,
   memory: MemoryTab,
   subagents: SubagentsTab,

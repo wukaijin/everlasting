@@ -95,7 +95,7 @@ pub async fn execute(
             Ok(_) => {
                 return (
                     "test_llm_connection: no model to test — no model_id given and no \
-                     default model is configured. Set one in Settings → Models, or pass \
+                     default model is configured. Set one in Settings → Default, or pass \
                      an explicit model_id (see llm_diagnostics)."
                         .to_string(),
                     true,

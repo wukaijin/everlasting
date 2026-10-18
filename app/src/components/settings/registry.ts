@@ -56,16 +56,28 @@ export const SETTINGS_CATEGORIES: ReadonlyArray<SettingsCategory> = [
     scope: "global",
     group: "模型",
     title: "Providers",
-    description: "LLM 服务商接入:协议、Base URL 与 API Key。",
-    keywords: ["provider", "服务商", "api key", "base url", "anthropic", "openai", "密钥"],
-  },
-  {
-    id: "models",
-    scope: "global",
-    group: "模型",
-    title: "Models",
-    description: "按服务商管理模型,支持连通性测试。",
-    keywords: ["model", "模型", "测试", "连通", "connectivity"],
+    description: "LLM 服务商接入 + 其下模型:协议、Base URL、API Key 与模型探测。",
+    keywords: [
+      "provider",
+      "服务商",
+      "api key",
+      "base url",
+      "anthropic",
+      "openai",
+      "密钥",
+      // 2026-10-19 (合并设置):原 Models 分类并入,搜索词随迁。
+      "model",
+      "模型",
+      "测试",
+      "连通",
+      "connectivity",
+      "探测",
+      "probe",
+      "models.dev",
+      "自动匹配",
+      "context window",
+      "上下文",
+    ],
   },
   {
     id: "default",
@@ -252,7 +264,29 @@ export function groupCategories(
 /** 按 id 查分类(找不到返回 undefined —— localStorage 里存的 id 可能
  *  因分类更名/删除而失效,调用方需回退默认值)。 */
 export function findCategory(id: string): SettingsCategory | undefined {
-  return SETTINGS_CATEGORIES.find((c) => c.id === id);
+  return SETTINGS_CATEGORIES.find((c) => c.id === legacyCategoryId(id));
+}
+
+/**
+ * 历史分类 id 的别名表(2026-10-19, task
+ * `10-19-merge-provider-model-settings`)。
+ *
+ * 独立的 `models` 分类已并入 `providers`(供应商卡片内嵌模型管理)。
+ * 但该 id 仍可能出现在三处:`localStorage` 记住的上次停留位置、
+ * 聊天空状态引导卡的 `openSettings("models")`、以及用户书签/脚本。
+ * 一张别名表让这些入口全部落到合并后的分类,而不是「无效 id → 回退
+ * 通用页」—— 后者会让「去添加模型」的按钮把用户扔到无关页面。
+ *
+ * 注意:`models` **不再出现在导航里**(`SETTINGS_CATEGORIES` 无此条目),
+ * 所以 `filterCategories` 不会搜到它;别名只服务「按 id 找落点」。
+ */
+export const LEGACY_CATEGORY_ALIASES: Readonly<Record<string, string>> = {
+  models: "providers",
+};
+
+/** 把历史 id 映射到现行分类 id(无别名时原样返回)。 */
+export function legacyCategoryId(id: string): string {
+  return LEGACY_CATEGORY_ALIASES[id] ?? id;
 }
 
 /** 新分类加入时的默认落点:全局 scope 首项。 */

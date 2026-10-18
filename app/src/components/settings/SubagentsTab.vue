@@ -142,7 +142,7 @@ function isLoading(name: string): boolean {
 async function refresh() {
   // Ensure the models catalog is loaded (the dropdown depends
   // on it). The SettingsModal opens the tab on demand; the
-  // user may not have visited the Models tab yet.
+  // user may not have visited the Providers tab yet.
   if (!models.loaded) {
     await models.load().catch(() => {
       // The toast below catches the same error; the store
@@ -252,7 +252,7 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
       Top-of-tab invalid-model warning. Shows when at least one
       row's DB override points at a deleted model. Click to
       re-fetch (the user may have just re-added the model in the
-      Models tab).
+      Providers tab).
     -->
     <div v-if="hasAnyInvalid" class="subagents-tab__warn" role="alert">
       <span>

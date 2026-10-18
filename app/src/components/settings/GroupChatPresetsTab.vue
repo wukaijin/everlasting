@@ -423,7 +423,7 @@ async function confirmRestore(): Promise<void> {
 // --- 加载 -----------------------------------------------------------------
 
 onMounted(async () => {
-  // 模型目录(表单下拉与摘要显示的数据源;可能没逛过 Models tab)。
+  // 模型目录(表单下拉与摘要显示的数据源;可能没逛过 Providers 页)。
   if (!models.loaded) {
     await models.load().catch(() => {
       // 失败静默:下拉为空 + 摘要回退 UUID 前 8 位,store.loaded 保持

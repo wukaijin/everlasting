@@ -15,8 +15,8 @@ allowed-tools: [llm_diagnostics, test_llm_connection]
 ## 配置步骤
 
 1. Settings → Providers → 新增：选 protocol、填 base_url、display_name、API key（key 只填在这里）。
-2. Settings → Models → 在该 provider 下新增模型：`model_name` 必须与提供商文档/控制台的模型 ID 逐字一致（display_name 是本地别名，随意）。
-3. Settings → Models → 选默认模型。
+2. Settings → Providers → 展开该 provider 卡片 → 用「探测模型」拉取模型列表勾选导入，或「添加模型」手填：`model_name` 必须与提供商文档/控制台的模型 ID 逐字一致（display_name 是本地别名，随意）。2026-10-19 起模型配置内嵌在供应商卡片下（原独立 Models 页已并入）；表单里的「按名称自动匹配能力」可按模型名从 models.dev 自动填上下文窗口 / 最大输出 / vision / thinking。
+3. Settings → Default → 选默认模型。
 4. 调 `test_llm_connection`（可传 model_id，缺省测默认模型）实测：成功返回延迟毫秒数；失败按错误文案定位（排障流程见 doctor skill）。
 
 ## base_url 拼接规则（最高频错误源）

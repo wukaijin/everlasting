@@ -154,7 +154,8 @@ const showDefaultEmpty = computed(
 );
 
 /** 引导卡 CTA:一键打开 Settings 并落在指定分类
- *  ("providers" / "models",registry 分类 id)。 */
+ *  ("providers" / "default",registry 分类 id)。2026-10-19 起合并前的
+ *  "models" 已并入 "providers"(registry 仍保留该 id 的别名兜底)。 */
 function openOnboardingSettings(category: string) {
   settingsModalStore.openSettings(category);
 }
@@ -1219,7 +1220,7 @@ onUnmounted(() => reviewStateStore.stop());
           配好后可在对话里输入 /llm-setup 让 AI 帮你配置模型，出问题用 /doctor 排障
         </p>
       </div>
-      <!-- 卡 B:有 provider 无模型 —— 落 Models。 -->
+      <!-- 卡 B:有 provider 无模型 —— 落 Providers(2026-10-19 起模型内嵌在供应商卡片下)。 -->
       <div
         v-else-if="!hasMessages && emptyStateKind === 'no-models'"
         class="chat-panel__empty"
@@ -1229,17 +1230,17 @@ onUnmounted(() => reviewStateStore.stop());
           <Icon name="bolt" :size="28" />
         </div>
         <p class="chat-panel__empty-title">provider 已就绪,去添加模型</p>
-        <p class="chat-panel__empty-hint">在 Models 里添加一个模型并测试连通</p>
+        <p class="chat-panel__empty-hint">在供应商卡片里探测或添加模型并测试连通</p>
         <button
           type="button"
           class="chat-panel__onboard-cta btn btn--primary"
           data-testid="chat-empty-open-settings"
-          @click="openOnboardingSettings('models')"
+          @click="openOnboardingSettings('providers')"
         >
-          打开设置 → Models
+          打开设置 → Providers
         </button>
       </div>
-      <!-- 卡 C:有模型未设默认 —— 落 Models。 -->
+      <!-- 卡 C:有模型未设默认 —— 落 Default(默认模型单选页)。 -->
       <div
         v-else-if="!hasMessages && emptyStateKind === 'no-default'"
         class="chat-panel__empty"
@@ -1254,9 +1255,9 @@ onUnmounted(() => reviewStateStore.stop());
           type="button"
           class="chat-panel__onboard-cta btn btn--primary"
           data-testid="chat-empty-open-settings"
-          @click="openOnboardingSettings('models')"
+          @click="openOnboardingSettings('default')"
         >
-          打开设置 → Models
+          打开设置 → Default
         </button>
       </div>
       <MessageList v-else />

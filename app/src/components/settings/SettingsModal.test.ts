@@ -3,7 +3,8 @@
 //
 // Coverage:
 //   1. Guided open (initialCategory="models"): the nav lands on the
-//      Models category this time, skipping the localStorage restore.
+//      Providers category this time (2026-10-19 settings merge aliases
+//      the retired `models` id), skipping the localStorage restore.
 //   2. The one-shot does NOT pollute the "last visited" memory —
 //      localStorage keeps its previous entry, and a subsequent plain
 //      open restores it (not the guided category).
@@ -69,11 +70,14 @@ describe("SettingsModal — initialCategory one-shot landing", () => {
     });
   }
 
-  it("guided open(initialCategory='models'):直落 Models 分类", async () => {
+  it("guided open(initialCategory='models'):历史 id 落到 Providers(2026-10-19 合并)", async () => {
+    // 独立 Models 分类已并入 Providers(供应商卡片内嵌模型管理),
+    // `models` 经 registry 别名表落到 providers —— 引导卡/老 localStorage
+    // 不会因分类消失被扔回「通用」。
     wrapper = mountModal({ initialCategory: "models" });
     await wrapper.setProps({ open: true });
     await flushPromises();
-    expect(activeNavText()).toBe("Models");
+    expect(activeNavText()).toBe("Providers");
     expect(wrapper.emitted("initial-category-consumed")).toBeTruthy();
   });
 
@@ -84,7 +88,7 @@ describe("SettingsModal — initialCategory one-shot landing", () => {
     );
     wrapper = mountModal({ initialCategory: "models" });
     await wrapper.setProps({ open: true });
-    expect(activeNavText()).toBe("Models");
+    expect(activeNavText()).toBe("Providers");
     // 消费后 store 清空(Sidebar 侧的回写以 prop 变 null 表达)。
     await wrapper.setProps({ initialCategory: null, open: false });
     await wrapper.setProps({ open: true });
